@@ -1,6 +1,11 @@
 import { readDashboardAutomations } from './dashboard-automations.ts';
 import { buildDashboardOverview } from './dashboard-overview.ts';
-import type { DashboardOverviewQuery } from '@open-mercato/cezar-contract';
+import {
+  buildDashboardInsights,
+  projectInsightRow,
+  type InsightRow,
+} from './dashboard-insights.ts';
+import type { DashboardInsightsQuery, DashboardOverviewQuery } from '@open-mercato/cezar-contract';
 import { randomUUID } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -35,6 +40,7 @@ type Projection = {
   generation: number;
   rows: DashboardTaskRow[];
   costRows: DashboardCostTask[];
+  insightRows: InsightRow[];
   coverage: DashboardCoverage;
   projects: Project[];
 };
@@ -43,6 +49,7 @@ type Cached = {
   identity: string;
   rows: DashboardTaskRow[];
   costRows: DashboardCostTask[];
+  insightRows: InsightRow[];
   coverage: DashboardCoverage['projects'][number];
   builtAt: number;
 };
@@ -202,6 +209,7 @@ export class DashboardReader {
     if (generation !== this.generation) return undefined;
     const rows: DashboardTaskRow[] = [];
     const costRows: DashboardCostTask[] = [];
+    const insightRows: InsightRow[] = [];
     const coverage: DashboardCoverage = { projects: [] };
     for (const project of projects) {
       let identity: string;
@@ -271,6 +279,7 @@ export class DashboardReader {
           identity,
           rows: slim,
           costRows: diagnostic.runs.map((run) => projectCostTask(project.id, run)),
+          insightRows: diagnostic.runs.map((run) => projectInsightRow(project.id, run)),
           builtAt: this.now(),
           coverage: {
             projectId: project.id,
@@ -292,9 +301,10 @@ export class DashboardReader {
       }
       rows.push(...cached.rows);
       costRows.push(...cached.costRows);
+      insightRows.push(...cached.insightRows);
       coverage.projects.push(cached.coverage);
     }
-    return { generation, rows, costRows, coverage, projects };
+    return { generation, rows, costRows, insightRows, coverage, projects };
   }
 
   async costs(query: DashboardCostsQuery, policy: CostVisibility | (() => CostVisibility)) {
@@ -312,6 +322,24 @@ export class DashboardReader {
       projection.projects,
       query,
       visibility,
+    );
+  }
+
+  async insights(
+    query: DashboardInsightsQuery,
+    policy: CostVisibility | (() => CostVisibility),
+  ) {
+    let projection = await this.projection();
+    while (projection.generation !== this.generation) projection = await this.projection();
+    this.ensureActive();
+    // Resolved after the read, as in `costs`: a measure hidden mid-read stays hidden.
+    const visibility = typeof policy === 'function' ? policy() : policy;
+    return buildDashboardInsights(
+      projection.insightRows,
+      projection.coverage,
+      query,
+      visibility,
+      this.now(),
     );
   }
 

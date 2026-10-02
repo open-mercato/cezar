@@ -361,8 +361,11 @@ export class ClaudeCliRunner implements AgentRunner {
 }
 
 /**
- * Build the headless argv. `--input-format stream-json` reads user messages
- * from stdin; `--output-format stream-json --verbose` gives per-event NDJSON;
+ * Build the headless argv. `--print` is spelled out because both stream-json
+ * formats are documented as "only works with --print"; `--input-format
+ * stream-json` reads user messages from stdin; `--output-format stream-json
+ * --verbose` gives per-event NDJSON, and `--include-partial-messages` adds the
+ * `stream_event` token deltas the cockpit renders as live text;
  * `--permission-mode dontAsk` keeps headless runs non-interactive: tools in
  * `--allowedTools` proceed and everything else is denied instead of prompting.
  * `CEZ_APPROVAL_GATE=1` opts back into Claude's approval UI (#435).
@@ -372,11 +375,13 @@ export function buildClaudeArgs(
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   const args: string[] = [
+    '--print',
     '--input-format',
     'stream-json',
     '--output-format',
     'stream-json',
     '--verbose',
+    '--include-partial-messages',
     '--permission-mode',
     env.CEZ_APPROVAL_GATE === '1' ? 'acceptEdits' : 'dontAsk',
   ];

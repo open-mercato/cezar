@@ -30,7 +30,7 @@ describe('AGENT_DESCRIPTORS', () => {
   // `pi` has no entry on purpose — no pi-owned config file is cataloged yet, so its pane would
   // be three empty groups (see the descriptor table's header comment).
   it('has one entry per config-owning runner; Cursor has settings+mcp (no memory group yet)', () => {
-    expect(AGENT_DESCRIPTORS.map((d) => d.id)).toEqual(['claude', 'codex', 'opencode', 'cursor'])
+    expect(AGENT_DESCRIPTORS.map((d) => d.id)).toEqual(['claude', 'codex', 'copilot', 'opencode', 'cursor'])
     for (const d of AGENT_DESCRIPTORS.filter((d) => d.id !== 'cursor')) {
       expect(d.groups.map((g) => g.id)).toEqual(['settings', 'mcp', 'memory'])
       expect(d.groups.find((g) => g.id === 'mcp')?.note).toBeTruthy()
@@ -39,9 +39,10 @@ describe('AGENT_DESCRIPTORS', () => {
   })
 
   it('membership uses runners[] inclusion — shared files belong to every reader', () => {
-    const shared = fileOf({ id: 'project.agents', runners: ['codex', 'opencode'], kind: 'memory', format: 'markdown' })
+    const shared = fileOf({ id: 'project.agents', runners: ['codex', 'opencode', 'copilot'], kind: 'memory', format: 'markdown' })
     expect(descriptorFor('codex').groups.find((g) => g.id === 'memory')!.files(shared)).toBe(true)
     expect(descriptorFor('opencode').groups.find((g) => g.id === 'memory')!.files(shared)).toBe(true)
+    expect(descriptorFor('copilot').groups.find((g) => g.id === 'memory')!.files(shared)).toBe(true)
     expect(descriptorFor('claude').groups.find((g) => g.id === 'memory')!.files(shared)).toBe(false)
   })
 

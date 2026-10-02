@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { Markdown } from './markdown'
+import { isLocalFilesystemDestination, Markdown } from './markdown'
 
 afterEach(cleanup)
 
@@ -13,6 +13,49 @@ afterEach(cleanup)
  * crashing the message.
  */
 describe('Markdown', () => {
+  describe('transcript destination policy', () => {
+    it.each([
+      '/tmp/example/report.md',
+      '/Users/alice/report.md',
+      '/home/alice/report.md',
+      'file:///tmp/example/report.md',
+      'C:\\Users\\alice\\report.md',
+      '\\\\server\\share\\report.md',
+    ])('classifies %s as a local filesystem destination', (destination) => {
+      expect(isLocalFilesystemDestination(destination)).toBe(true)
+    })
+
+    it.each(['/p/project/tasks/123', '/api/v1/health', '/settings/global', 'https://example.com'])(
+      'keeps supported destination %s navigable',
+      (destination) => {
+        expect(isLocalFilesystemDestination(destination)).toBe(false)
+      },
+    )
+
+    it('renders a local filesystem destination as explicit non-navigating text', () => {
+      const { container } = render(<Markdown>{'[Open report](/tmp/example/report.md)'}</Markdown>)
+
+      expect(container.querySelector('a, button')).toBeNull()
+      expect(container.textContent).toContain('Open report')
+      expect(container.querySelector('[data-local-only-link]')).not.toBeNull()
+      expect(container.querySelector('[data-local-only-link]')?.getAttribute('title')).toContain(
+        'local filesystem',
+      )
+    })
+
+    it('keeps supported cockpit-relative destinations behind the safety dialog', () => {
+      const openMock = vi.spyOn(window, 'open').mockImplementation(() => null)
+      const { container } = render(<Markdown>{'[task](/p/project/tasks/123)'}</Markdown>)
+
+      fireEvent.click(container.querySelector('[data-streamdown="link"]') as HTMLElement)
+
+      expect(document.querySelector('[data-slot="link-safety-dialog"]')).not.toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: 'Open link' }))
+      expect(openMock).toHaveBeenCalledWith('/p/project/tasks/123', '_blank', 'noreferrer')
+      openMock.mockRestore()
+    })
+  })
+
   it('renders a ts fence as a code block with language chip and copy button, tokens on --syn-*', async () => {
     render(<Markdown>{'Before.\n\n```ts\nconst answer: number = 42;\n```'}</Markdown>)
 
@@ -29,7 +72,9 @@ describe('Markdown', () => {
     await waitFor(
       () => {
         const spans = [...document.querySelectorAll('[data-streamdown="code-block-body"] span')]
-        const colors = spans.map((s) => (s as HTMLElement).style.getPropertyValue('--sdm-c')).filter(Boolean)
+        const colors = spans
+          .map((s) => (s as HTMLElement).style.getPropertyValue('--sdm-c'))
+          .filter(Boolean)
         expect(colors).toContain('var(--syn-key)')
         expect(colors.some((c) => /#[0-9a-f]{3,8}/i.test(c))).toBe(false)
       },
@@ -58,7 +103,9 @@ describe('Markdown', () => {
 
   it('inline mode keeps formatting but unwraps links and block structure for compact previews', () => {
     const { container } = render(
-      <Markdown inline>{'**bold** with `code` and [docs](https://example.com)\n\n- detail'}</Markdown>,
+      <Markdown inline>
+        {'**bold** with `code` and [docs](https://example.com)\n\n- detail'}
+      </Markdown>,
     )
     expect(container.querySelector('[data-streamdown="strong"]')?.textContent).toBe('bold')
     expect(container.querySelector('[data-streamdown="inline-code"]')?.textContent).toBe('code')
@@ -132,7 +179,9 @@ describe('Markdown', () => {
 
     it('never emits a javascript: href', () => {
       const { container } = render(<Markdown breaks>{'[x](javascript:pwn(1))'}</Markdown>)
-      const hrefs = [...container.querySelectorAll('a, button')].map((el) => el.getAttribute('href'))
+      const hrefs = [...container.querySelectorAll('a, button')].map((el) =>
+        el.getAttribute('href'),
+      )
       expect(hrefs.some((href) => href?.startsWith('javascript:'))).toBe(false)
     })
 

@@ -62,6 +62,7 @@ import {
   getSkillsUpdate,
   getSelfUpdate,
   getSelfUpdateDevelopment,
+  getStarCount,
   refreshSelfUpdate,
   setSelfUpdateChannel,
   applySelfUpdate,
@@ -396,6 +397,9 @@ export const workspaceQueryKeys = {
   /** cezar's own updater via `GET /api/v1/workspace/self-update` (self-update PoC). */
   selfUpdate: ['workspace', 'self-update'] as const,
   selfUpdateDevelopment: ['workspace', 'self-update', 'development'] as const,
+  /** cezar's own GitHub star count via `GET /api/v1/star-count`, behind the sidebar's ⭐ ask.
+   *  Workspace-led: the number is about cezar, not about whichever project is on screen. */
+  starCount: ['workspace', 'star-count'] as const,
   /** One directory listing from `GET /api/fs/browse` (step 4.2's folder picker). Keyed by the
    *  browsed path — `null` is the browse root, whose absolute location only the server knows.
    *  Not scope-led: there is one filesystem behind the workspace, not one per project. */
@@ -446,7 +450,9 @@ export function useRunnerModelCatalogs(
   const opencode = useRunnerModels('opencode', enabled)
   const cursor = useRunnerModels('cursor', enabled)
   const pi = useRunnerModels('pi', enabled)
-  return { claude, codex, opencode, cursor, pi }
+  const junie = useRunnerModels('junie', enabled)
+  const copilot = useRunnerModels('copilot', enabled)
+  return { claude, codex, junie, opencode, cursor, pi, copilot }
 }
 
 export function useProviderStatus() {
@@ -1356,6 +1362,24 @@ export function useAgentProfiles() {
   return useQuery({
     queryKey: workspaceQueryKeys.agentProfiles,
     queryFn: ({ signal }) => getAgentProfiles({ signal }),
+  })
+}
+
+/**
+ * cezar's own star count, for the sidebar's ⭐ ask.
+ *
+ * `staleTime: Infinity` and no retry, both deliberate. The server already caches the number for
+ * six hours and answers `{ available: false }` for every failure, so refetching it costs a round
+ * trip that cannot produce a different answer — and a decorative count is the last thing in the
+ * cockpit that should retry, poll, or hold the query client's attention. One read per session.
+ */
+export function useStarCount() {
+  return useQuery({
+    queryKey: workspaceQueryKeys.starCount,
+    queryFn: ({ signal }) => getStarCount({ signal }),
+    staleTime: Infinity,
+    retry: false,
+    refetchOnMount: false,
   })
 }
 

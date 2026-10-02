@@ -4,6 +4,7 @@ import {
   dashboardAutomationsQuerySchema,
   type DashboardTaskRow,
   dashboardCostsQuerySchema,
+  dashboardInsightsQuerySchema,
   dashboardFeedQuerySchema,
   dashboardTasksQuerySchema,
 } from '@open-mercato/cezar-contract';
@@ -104,6 +105,11 @@ export function dashboardRoutes(
               409,
             );
       },
+    )
+    .get(
+      '/workspace/dashboard/insights',
+      queryZodValidator(dashboardInsightsQuerySchema),
+      async (c) => c.json(await reader.insights(c.req.valid('query'), visibility)),
     )
     .get('/workspace/dashboard/telemetry', async (c) => c.json(await reader.telemetry()))
     .get('/workspace/dashboard/feed', queryZodValidator(dashboardFeedQuerySchema), async (c) => {

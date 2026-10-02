@@ -190,3 +190,11 @@ describe('endCodexAppServer watchdog', () => {
     }
   });
 });
+
+describe('CodexAppServerRpc stdin errors', () => {
+  it('swallows an async EPIPE from a child that already exited instead of leaving it unhandled', () => {
+    const { child } = fakeChild();
+    new CodexAppServerRpc(child);
+    expect(() => child.stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))).not.toThrow();
+  });
+});

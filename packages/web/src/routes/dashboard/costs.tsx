@@ -1,5 +1,5 @@
 import { useSheetState, useSheetPosition, newSheetSelection, useSheetTrigger } from './sheet-state'
-import { Freshness } from './presentation'
+import { DisclosureChevron, disclosureSummary, FilterSelect, filterLabel, Freshness, widgetHeader, widgetHeading } from './presentation'
 import { useDashboardFilter } from './url-filter'
 import { formatAmount } from './format'
 import { useState } from 'react'
@@ -34,10 +34,6 @@ const labels = {
   output: 'Output tokens',
 } as const
 type Sort = DashboardCosts['sort']
-/** The two pickers in this card. The focus half is the cockpit's ring (lime dark / ink light) —
- *  a bare native `<select>` gets the browser's blue one instead, and blue means `--info` here. */
-const selectClass =
-  'min-h-11 rounded-md border bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50'
 function contentChanged(a: DashboardCosts, b: DashboardCosts) {
   return (
     JSON.stringify([a.totals, a.projects, a.tasks, a.visibility, a.coverage, a.invalidDateTasks]) !==
@@ -63,10 +59,9 @@ function SortSelect({
   visibility: UsageMetricVisibility
 }) {
   return (
-    <label className="flex min-h-11 items-center gap-2 text-sm">
+    <label className={filterLabel}>
       Sort by
-      <select
-        className={selectClass}
+      <FilterSelect
         value={value}
         onChange={(e) => onChange(e.target.value as Sort)}
       >
@@ -75,7 +70,7 @@ function SortSelect({
             {labels[sort]}
           </option>
         ))}
-      </select>
+      </FilterSelect>
     </label>
   )
 }
@@ -86,8 +81,8 @@ export function DashboardUsageCosts() {
 export function UsageCosts({ visibility }: { visibility: UsageMetricVisibility }) {
   return (
     <Card className="gap-0 py-0">
-      <div className="border-b px-4 py-3">
-        <h2 className="text-sm font-semibold">Usage &amp; cost</h2>
+      <div className={widgetHeader}>
+        <h2 className={widgetHeading}>Usage &amp; cost</h2>
       </div>
       {!visibility.cost && !visibility.tokens ? (
         <p className="p-4 text-sm">Usage metrics are hidden by workspace settings</p>
@@ -213,8 +208,9 @@ function CostPeriod({
           <details className="mt-1 text-xs text-muted-foreground">
             <summary
               data-export-heading="Metric definitions"
-              className="min-h-11 cursor-pointer py-3"
+              className={`${disclosureSummary} min-h-11`}
             >
+              <DisclosureChevron />
               How these metrics work
             </summary>
             <p>
@@ -224,17 +220,16 @@ function CostPeriod({
             </p>
           </details>
         </div>
-        <label className="flex min-h-11 items-center gap-2">
+        <label className={filterLabel}>
           Tasks created
-          <select
-            className={selectClass}
+          <FilterSelect
             value={period}
             onChange={(e) => setPeriod(e.target.value as DashboardCosts['period'])}
           >
             <option value="all">All time</option>
             <option value="7d">Last 7 days</option>
             <option value="30d">Last 30 days</option>
-          </select>
+          </FilterSelect>
         </label>
       </div>
       {period !== 'all' && (
@@ -490,7 +485,7 @@ function CostTaskPage({
       )}
       {data && (
         <>
-          <p>
+          <p className="border-b pb-2 font-mono text-[11px] text-soft-foreground">
             {data.tasks.rows.length} of {data.tasks.total} retained tasks
           </p>
           {data.tasks.total === 0 && (
@@ -504,6 +499,7 @@ function CostTaskPage({
             <CostTaskRow
               key={`${row.projectId}:${row.id}`}
               row={row}
+              sort={effectiveSort}
               visibility={policy}
               disabled={
                 !validProject ||
@@ -536,43 +532,67 @@ function CostTaskPage({
 }
 function CostTaskRow({
   row,
+  sort,
   visibility,
   disabled,
 }: {
   row: DashboardCostTask
+  sort: Sort
   visibility: UsageMetricVisibility
   disabled: boolean
 }) {
   const truth = useDashboardTruth(row)
   disabled = disabled || truth === null
   const attention = deriveAttention({ status: truth?.status ?? row.status })
+  const metrics = choices(visibility)
+  const secondary = metrics.filter((metric) => metric !== sort)
+  // "Unavailable" three times a row buried the numbers; a dash reads as absent at a glance.
+  // The full "Label: value" stays on each value for assistive tech.
+  const shown = (metric: Sort) => {
+    const value = row[fields[metric]]
+    return value == null ? '—' : format(value, metric)
+  }
+  const label = (metric: Sort) => `${labels[metric]}: ${format(row[fields[metric]], metric)}`
   return (
-    <div className="border-b py-3">
-      <div className="flex items-center gap-2">
-        <StatusDot tone={attention.tone} pulse={attention.pulse} />
-        <Link
-          className="flex min-h-11 items-center break-words font-medium hover:underline"
-          to={`/p/${encodeURIComponent(row.projectId)}/tasks/${encodeURIComponent(row.id)}`}
-          aria-disabled={disabled || undefined}
-          tabIndex={disabled ? -1 : undefined}
-          onClick={(e) => {
-            if (disabled) e.preventDefault()
-          }}
-        >
-          {row.title}
-        </Link>
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 border-b py-3 last:border-0">
+      <div className="min-w-0">
+        <div className="flex items-start gap-2">
+          <StatusDot tone={attention.tone} pulse={attention.pulse} className="mt-[7px]" />
+          <Link
+            className="line-clamp-2 break-words font-medium leading-snug hover:underline no-hover:min-h-11"
+            title={row.title}
+            to={`/p/${encodeURIComponent(row.projectId)}/tasks/${encodeURIComponent(row.id)}`}
+            aria-disabled={disabled || undefined}
+            tabIndex={disabled ? -1 : undefined}
+            onClick={(e) => {
+              if (disabled) e.preventDefault()
+            }}
+          >
+            {row.title}
+          </Link>
+        </div>
+        <p className="mt-1 pl-[15px] font-mono text-[11px] text-soft-foreground">
+          {row.projectId} · {disabled ? 'Checking current state…' : (truth?.status ?? row.status)}
+          {row.archived ? ' · Archived' : ''}
+          {row.subtask ? ' · Subtask' : ''}
+        </p>
       </div>
-      <p className="text-muted-foreground">
-        {row.projectId} · {disabled ? 'Checking current state…' : (truth?.status ?? row.status)}
-        {row.archived ? ' · Archived' : ''}
-        {row.subtask ? ' · Subtask' : ''}
-      </p>
-      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 tabular-nums">
-        {choices(visibility).map((metric) => (
-          <span key={metric}>
-            {labels[metric]}: {format(row[fields[metric]], metric)}
+      <div className="text-right tabular-nums">
+        <span
+          aria-label={label(sort)}
+          className={`block font-semibold ${row[fields[sort]] == null ? 'text-soft-foreground' : ''}`}
+        >
+          {shown(sort)}
+        </span>
+        {secondary.length > 0 && (
+          <span className="mt-1 flex justify-end gap-3 font-mono text-[11px] text-soft-foreground">
+            {secondary.map((metric) => (
+              <span key={metric} aria-label={label(metric)}>
+                {shown(metric)} {metric === 'cost' ? '' : metric === 'input' ? 'in' : 'out'}
+              </span>
+            ))}
           </span>
-        ))}
+        )}
       </div>
     </div>
   )

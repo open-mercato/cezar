@@ -27,9 +27,27 @@ describe('WorkspaceSemaphore', () => {
   it('defaults to the workspace schema defaults before any refresh', () => {
     const sem = new WorkspaceSemaphore();
     expect(sem.maxParallel()).toBe(2);
+    expect(sem.idleTimeoutMinutes()).toBe(15);
     expect(sem.memoryLimitMb()).toBeNull();
     expect(sem.monitoringWakeIntervalMinutes()).toBe(5); // #810 — monitoring must self-resume
     expect(sem.busy()).toBe(0);
+  });
+
+  describe('idleTimeoutMinutes (#992)', () => {
+    it('preserves explicit null and zero as disabled', () => {
+      expect(new WorkspaceSemaphore({ initial: { idleTimeoutMinutes: null } }).idleTimeoutMinutes()).toBeNull();
+      expect(new WorkspaceSemaphore({ initial: { idleTimeoutMinutes: 0 } }).idleTimeoutMinutes()).toBe(0);
+    });
+
+    it('refreshes the cached timeout', async () => {
+      let timeout: number | null = 15;
+      const sem = new WorkspaceSemaphore({
+        load: () => Promise.resolve({ maxParallel: 2, memoryLimitMb: null, idleTimeoutMinutes: timeout }),
+      });
+      timeout = 30;
+      await sem.refresh();
+      expect(sem.idleTimeoutMinutes()).toBe(30);
+    });
   });
 
   /** #810 — the getter used to be `?? null`. Flipping the default to 5 made that a trap:

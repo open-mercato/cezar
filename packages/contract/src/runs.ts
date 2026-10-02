@@ -801,7 +801,7 @@ export function sanitizeAttachmentName(name: string, mediaType: string): string 
   const base = name.split(/[/\\]/).pop() ?? '';
   const cleaned = base
     // eslint-disable-next-line no-control-regex -- stripping control characters is the point
-    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/[\u0000-\u001f\u007f\u200e-\u200f\u202a-\u202e\u2066-\u2069]/g, '')
     .replace(/[<>:"|?*]/g, '-')
     .replace(/\s+/g, ' ')
     // Leading dots would make the copy a hidden file (and `.`/`..` a path operation).

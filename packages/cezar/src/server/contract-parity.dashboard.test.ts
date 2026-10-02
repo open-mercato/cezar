@@ -8,6 +8,7 @@ import type {
   DashboardTasksPage,
   DashboardTelemetry,
   DashboardFeed,
+  DashboardInsights,
 } from '@open-mercato/cezar-contract';
 import type { AppType } from './app-type.ts';
 const client = hc<AppType>('http://127.0.0.1');
@@ -26,12 +27,19 @@ type Tasks = Assert<
 type Telemetry = Assert<
   Exact<DashboardTelemetry, InferResponseType<typeof dashboard.telemetry.$get, 200>>
 >;
+type Insights = Assert<
+  Exact<DashboardInsights, InferResponseType<typeof dashboard.insights.$get, 200>>
+>;
 type Feed = Assert<Exact<DashboardFeed, InferResponseType<typeof dashboard.feed.$get, 200>>>;
 // Never invoked: compile-time guarantees that query validators reached AppType.
 function typedQueries() {
   dashboard.automations.$get({ query: { projectId: 'p' } });
   // @ts-expect-error project id is required middleware input
   dashboard.automations.$get({ query: {} });
+
+  dashboard.insights.$get({ query: { period: '30d', tzOffsetMinutes: '-120' } });
+  // @ts-expect-error insights have no lifetime cohort
+  dashboard.insights.$get({ query: { period: 'all' } });
 
   dashboard.costs.$get({ query: { period: '7d', sort: 'input', limit: '20', offset: '0' } });
   // @ts-expect-error unknown metric

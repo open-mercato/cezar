@@ -73,6 +73,35 @@ describe('resolveTaskDiffBase — the freshest base ref', () => {
     expect(calls).not.toContainEqual(['merge-base', 'origin/main', 'HEAD']);
   });
 
+  it('on a DIVERGED base, keeps the local ref when the task forked from it', async () => {
+    // A zero-config task forked from the user's own diverged branch (keepDiverged).
+    const { run } = stubGit({
+      [HAS_REMOTE]: { ok: true, stdout: 'b61ae485b61ae485\n' },
+      [HEAD_BRANCH]: { ok: true, stdout: 'cez/ab12cd34\n' },
+      [MERGE_BASE]: { ok: true, stdout: 'localtiplocaltip\n' },
+      [MERGE_BASE_REMOTE]: { ok: true, stdout: 'olderolderolder0\n' },
+      'merge-base --is-ancestor olderolderolder0 localtiplocaltip': { ok: true, stdout: '' },
+    });
+
+    expect(await resolveTaskDiffBase(run, 'main', { taskBranch: 'cez/ab12cd34' })).toEqual({
+      base: 'localtiplocaltip',
+    });
+  });
+
+  it('on a DIVERGED base, measures against origin when the task forked from origin', async () => {
+    // A configured base: stale diverged local main, the task forked from origin/main.
+    const { run } = stubGit({
+      [HAS_REMOTE]: { ok: true, stdout: 'b61ae485b61ae485\n' },
+      [HEAD_BRANCH]: { ok: true, stdout: 'cez/ab12cd34\n' },
+      [MERGE_BASE]: { ok: true, stdout: 'olderolderolder0\n' },
+      [MERGE_BASE_REMOTE]: { ok: true, stdout: 'freshfreshfresh0\n' },
+    });
+
+    expect(await resolveTaskDiffBase(run, 'main', { taskBranch: 'cez/ab12cd34' })).toEqual({
+      base: 'freshfreshfresh0',
+    });
+  });
+
   it('leaves an already-remote base and a pinned commit sha alone', async () => {
     const { run, calls } = stubGit({ 'merge-base origin/develop HEAD': { ok: true, stdout: 'abc123abc123\n' } });
 

@@ -95,8 +95,10 @@ const configSchema = z.object({
       claude: z.string().trim().min(1).max(200).optional(),
       codex: z.string().trim().min(1).max(200).optional(),
       opencode: z.string().trim().min(1).max(200).optional(),
+      junie: z.string().trim().min(1).max(200).optional(),
       cursor: z.string().trim().min(1).max(200).optional(),
       pi: z.string().trim().min(1).max(200).optional(),
+      copilot: z.string().trim().min(1).max(200).optional(),
     })
     .optional()
     .catch(undefined),

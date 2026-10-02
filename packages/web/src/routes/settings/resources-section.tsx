@@ -33,6 +33,7 @@ import { SettingsField } from './settings-field'
 const MAX_PARALLEL_MIN = 1
 const MAX_PARALLEL_MAX = 16
 const MAX_MONITORING_MAX = 16
+const IDLE_TIMEOUT_MAX = 1440
 const WAKE_INTERVAL_MIN = 1
 const WAKE_INTERVAL_MAX = 60
 /** Below this a limit would pause almost any real agent immediately — reject it as a footgun. */
@@ -160,6 +161,23 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
             Configure per-project limits
           </Link>
           .
+        </p>
+      </SettingsField>
+
+      <SettingsField
+        title="Waiting-session idle timeout"
+        hint="How long a plain waiting session may stay open without activity before its live backend session ends. Continue resumes it; set 0 to keep it open indefinitely."
+      >
+        <IntegerStepper
+          aria-label="Waiting-session idle timeout"
+          data-slot="resources-idle-timeout"
+          value={config.resources.idleTimeoutMinutes ?? 0}
+          min={0}
+          max={IDLE_TIMEOUT_MAX}
+          onCommit={(minutes) => save.mutateAsync({ resources: { idleTimeoutMinutes: minutes ?? 0 } })}
+        />
+        <p className="text-[11px] text-soft-foreground">
+          Minutes; 0 keeps plain waiting sessions alive. Monitoring sessions are already exempt.
         </p>
       </SettingsField>
 

@@ -1,3 +1,51 @@
+# 0.14.0 (2026-10-02)
+
+## Highlights
+Two more agent CLIs join the roster — GitHub Copilot CLI and JetBrains' Junie, both over the Agent Client Protocol — so a task now runs on any of seven backends. Claude's replies stream into the cockpit as they are written instead of landing whole, so the first words arrive while the agent is still typing. The workspace Dashboard is redesigned toward the cockpits it sits beside — underline tabs, a live connection pill, flat metric tiles — and gains four views of data cezar already kept but never showed: what was delivered, why tasks failed, what each backend and model costs per completed task, and how every automation is doing. The desktop app learns a development channel, so it can run any cezar worktree or an open PR's preview build, and the GitHub tab can finally be worked from the oldest row up. The fixes are mostly about a run telling the truth about itself: a task stays on the account you picked, a new worktree forks from a freshly fetched base tip rather than a stale one, a renamed task keeps its title, every PR a task touched is remembered instead of only the last, a monitoring park survives an autonomous nudge, and a skill invocation stops counting as a running sub-agent. The waiting-session idle timeout is configurable now, from 0 to 1440 minutes. Two display-layer holes are closed: an attachment name can no longer carry bidi controls, and a transcript's local filesystem path renders as text instead of a link. And cezar asks — once, quietly, and only when you are actually at the screen — for a GitHub star.
+
+## ✨ Features
+- ✨ GitHub Copilot CLI is a first-class runner, driven over its Agent Client Protocol server — launch, follow up, cancel and resume a task on Copilot exactly as on the runners before it, with golden fixtures and an offline mock under `CEZ_DRY_RUN=1` (fixes #582). The shared ACP client it carries is taken verbatim from @aleksanderw1992's #1049. (#1113) *(@pat-lewczuk)*
+- ✨ JetBrains' Junie CLI joins as a backend on the same ACP seam — provider detection, profiles, model settings, accounts, the composer and thread recovery, with a dry-run mock and golden fixtures. (#1111) *(@rengare)*
+- ✨ The Dashboard is redesigned — underline tabs, a LIVE/OFFLINE pill, flat metric tiles, lucide chevrons and compact task rows — and adds `GET /api/v1/workspace/dashboard/insights`: what was delivered (PRs, issues, lines, files), why tasks failed grouped by reason, backend and model cost per completed task, and per-automation outcomes, all derived from retained run records alone. (#1197) *(@pat-lewczuk)*
+- ✨ A development release channel runs the desktop app (or `cezar`) on any cezar worktree or an open PR's preview build — `cezar link`/`unlink`, worktree and pull-request tabs in the version dialog, and a build-before-switch for stale checkouts. (#1195) *(@patzick)*
+- ✨ The GitHub tab sorts newest or oldest first, remembered across reloads, so the backlog can be worked from the other end. (#1201) *(@pat-lewczuk)*
+- ✨ cezar asks for a GitHub star: a ⭐ chip with the live count in the sidebar, a line in the `serve` banner, and one dialog that opens only after three successful runs and only while you are demonstrably at the screen. Nothing is gated, delayed or degraded for anyone who never stars, and there is no way for cezar to learn whether they did. (#1200, #1239) *(@pat-lewczuk)*
+
+## ⚡ Performance
+- ⚡ Claude runs with `--print --include-partial-messages` and the v2 mapper turns `content_block_delta` frames into `item.delta`, so an answer appears in the cockpit as it is generated instead of only when the whole block closes — seven to eight seconds earlier in an indicative two-run measurement. (#1178) *(@lbajsarowicz)*
+
+## 🔒 Security
+- 🔒 Attachment filenames are stripped of bidi display-control characters, so a name can no longer reorder what the cockpit shows it as; ordinary Unicode names and media-type extension pinning are preserved (fixes #988). (#1177) *(@pat-lewczuk)*
+
+## 🐛 Fixes
+- 🐛 A transcript's local filesystem path renders as non-navigating text; supported web and cockpit links keep their confirmation before navigation (fixes #923). (#1175) *(@pat-lewczuk)*
+- 🐛 A task stays on the account you picked — the runner pill resolves the machine-wide default the same way the server does, and a Continue that switches account records its own session id instead of resuming the old account's session. Ships desktop shell 0.1.3. (#1196) *(@patzick)*
+- 🔧 A new task worktree forks from a freshly fetched base tip: the base ref is fetched before it is resolved, and the zero-config current-branch default consults origin instead of the stale local branch. (#1199) *(@patzick)*
+- 🐛 A skill invocation no longer counts as a running sub-agent, so `Agents · 1/1 — starting…` stops appearing above the composer when nothing was dispatched. (#1202) *(@pat-lewczuk)*
+- 🐛 The waiting-session idle timeout is configurable from 0 to 1440 minutes, keeping the 15-minute default; null or zero disables it and monitoring behaviour is unchanged (fixes #992). (#1176) *(@pat-lewczuk)*
+- 🐛 A renamed task keeps its title against stale SSE and reconnect frames, and every relevant cockpit cache follows the rename (fixes #1059). (#1125) *(@pat-lewczuk)*
+- 🐛 A task remembers every PR it touched, not just the last one — created, declared, derived and cross-repository associations stay distinct, and an authoritatively closed-unmerged PR is deprioritized rather than dropped (fixes #779). (#1151) *(@pat-lewczuk)*
+- 🐛 An inbox re-prompt survives a monitoring park, and an autonomous `CEZ:MONITORING` turn stays in running/monitoring at both turn-end sites; a sticky over-budget waiting park now explains itself with spent-versus-ceiling values (fixes #1046). (#1150) *(@pat-lewczuk)*
+- 🐛 Native selects carry the cockpit's focus ring instead of the browser's default blue one. (#1122) *(@pat-lewczuk)*
+
+## 🧪 Testing
+- 🧪 A `RunStore` cancels the `runs.json` save still pending when a case ends, so a timer firing into a deleted temp dir can no longer fail the whole suite with an `EnvironmentTeardownError` — the race that failed the 0.13.0 Release run while CI on the same commit passed. (#1147) *(@pat-lewczuk)*
+- 🧪 A browser-level spec pins the foldable Tasks-table columns (fixes #822). (#866) *(@wojciechszyjka)*
+
+## 📝 Specs & Documentation
+- 📝 Container-aware effective host telemetry v2.3 — cgroup quota, cpuset and a pressure pin. (#1041) *(@michal-codes)*
+- 📝 An adaptive admission governor that reduces dispatch below the user's ceiling. (#1043) *(@michal-codes)*
+
+## 👥 Contributors
+
+- @pat-lewczuk
+- @rengare
+- @patzick
+- @lbajsarowicz
+- @wojciechszyjka
+- @michal-codes
+- @aleksanderw1992
+
 # 0.13.0 (2026-09-28)
 
 ## Highlights

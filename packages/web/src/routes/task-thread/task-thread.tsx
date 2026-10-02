@@ -33,7 +33,8 @@ import { useDeliverPrompt } from './deliver-prompt'
 import { useContinueAction } from './follow-up-engine'
 import { AgentsDock } from './agents-dock'
 import { PlanDock, planCounts } from './plan-dock'
-import { collectSubagents, findSubagent, subagentChildren } from './subagent-dock'
+import { SkillsDock } from './skills-dock'
+import { collectSkills, collectSubagents, findSubagent, subagentChildren } from './subagent-dock'
 import { SubagentSheet } from './subagent-sheet'
 import { AcceptCelebration, ReviewPanel } from './review-panel'
 import { queuePosition } from './run-actions'
@@ -217,6 +218,10 @@ export function ThreadView({
     () => collectSubagents(currentThread.turns, runIsTerminal),
     [currentThread.turns, runIsTerminal],
   )
+  // The Skills dock's data (#1202): the skills governing the run. Separate from `agents` on
+  // purpose — a skill used to be collected as a sub-agent, which reported a fan-out that never
+  // happened. Not scoped to the latest turn: a skill's instructions keep governing the run.
+  const skills = useMemo(() => collectSkills(currentThread.turns), [currentThread.turns])
   // The drill-down's whole state: which agent is open. Ephemeral by design (spec Q2/Q5) —
   // sub-agents have no stable identity outside their run, so there is nothing to persist.
   const [openAgentId, setOpenAgentId] = useState<string | undefined>(undefined)
@@ -445,6 +450,10 @@ export function ThreadView({
           {/* Agents above the plan: the fan-out is the more urgent "what is happening now",
               and it is transient — the plan outlives it. Keyed by run id like the plan dock. */}
           <AgentsDock key={`agents:${run.id}`} runId={run.id} agents={agents} onSelect={setOpenAgentId} />
+
+          {/* Below the agents: a skill is standing context for the whole run, not the volatile
+              "what is happening now" the fan-out reports (#1202). */}
+          <SkillsDock skills={skills} />
 
           {plan !== undefined && plan.length > 0 ? (
             // Keyed by run id: the collapse default re-derives per task (see PlanDock). Settled

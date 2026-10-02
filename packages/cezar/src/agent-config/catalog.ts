@@ -35,6 +35,10 @@ export interface AgentHomePaths {
   opencodeConfig: string;
   /** `$CURSOR_CONFIG_DIR` or `~/.cursor` */
   cursor: string;
+  /** `$COPILOT_HOME` or `~/.copilot` */
+  copilot: string;
+  /** `~/.junie` — no relocation var documented (see `PROFILE_ENV_VAR.junie`) */
+  junie: string;
 }
 
 export interface ConfigFileDef {
@@ -77,6 +81,10 @@ const CODEX_AGENTS_DOCS = 'https://developers.openai.com/codex/guides/agents-md'
 const OPENCODE_CONFIG_DOCS = 'https://opencode.ai/docs/config/';
 const OPENCODE_RULES_DOCS = 'https://opencode.ai/docs/rules/';
 const CURSOR_CLI_CONFIG_DOCS = 'https://cursor.com/docs/cli/reference/configuration';
+const COPILOT_CONFIG_DOCS = 'https://docs.github.com/en/copilot/how-tos/copilot-cli';
+const COPILOT_MCP_DOCS = 'https://docs.github.com/en/copilot/how-tos/copilot-cli#mcp-servers';
+const COPILOT_INSTRUCTIONS_DOCS =
+  'https://docs.github.com/en/copilot/customizing-copilot/adding-repository-custom-instructions-for-github-copilot';
 
 /**
  * The table. Order is presentation order: per runner, then user → project →
@@ -285,6 +293,90 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     docsUrl: OPENCODE_RULES_DOCS,
   },
 
+  // ---- GitHub Copilot CLI ----
+  // Paths verified against @github/copilot 1.0.88 on 2026-09-27: the CLI's home is COPILOT_HOME
+  // (default ~/.copilot) and holds config.json, mcp-config.json, lsp-config, permissions-config
+  // and copilot-instructions.md; the project scope is .github/copilot/settings.json,
+  // .github/copilot/settings.local.json and .github/copilot-instructions.md, plus AGENTS.md.
+  // Record: .ai/runs/2026-09-27-copilot-cli-runner/copilot-acp-notes.md.
+  {
+    id: 'copilot.user.config',
+    runners: ['copilot'],
+    kind: 'settings',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.copilot, 'config.json'),
+    label: '~/.copilot/config.json',
+    format: 'json',
+    tracked: 'outside-repo',
+    precedence:
+      'The CLI\'s own persisted settings, including the model chosen with /model. A --model flag or COPILOT_MODEL overrides it for one run; cezar always passes --model, so this is what a run would get otherwise.',
+    docsUrl: COPILOT_CONFIG_DOCS,
+  },
+  {
+    id: 'copilot.user.mcp',
+    runners: ['copilot'],
+    kind: 'mcp',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.copilot, 'mcp-config.json'),
+    label: '~/.copilot/mcp-config.json',
+    format: 'json',
+    tracked: 'outside-repo',
+    holdsMcp: true,
+    precedence:
+      'The MCP servers every session starts with. --additional-mcp-config AUGMENTS this file for one run rather than replacing it; --disable-mcp-server turns one off.',
+    docsUrl: COPILOT_MCP_DOCS,
+  },
+  {
+    id: 'copilot.project.settings',
+    runners: ['copilot'],
+    kind: 'settings',
+    scope: 'project',
+    resolve: (repo) => join(repo, '.github', 'copilot', 'settings.json'),
+    label: '.github/copilot/settings.json',
+    format: 'json',
+    tracked: 'tracked',
+    precedence: 'Repository settings, read over the user config. Runs read the committed copy.',
+    docsUrl: COPILOT_CONFIG_DOCS,
+  },
+  {
+    id: 'copilot.local.settings',
+    runners: ['copilot'],
+    kind: 'settings',
+    scope: 'local',
+    resolve: (repo) => join(repo, '.github', 'copilot', 'settings.local.json'),
+    label: '.github/copilot/settings.local.json',
+    format: 'json',
+    tracked: 'gitignored',
+    precedence:
+      'The personal layer over the repository settings. Not committed, so a run only sees it if the file is in the worktree.',
+    docsUrl: COPILOT_CONFIG_DOCS,
+  },
+  {
+    id: 'copilot.user.memory',
+    runners: ['copilot'],
+    kind: 'memory',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.copilot, 'copilot-instructions.md'),
+    label: '~/.copilot/copilot-instructions.md',
+    format: 'markdown',
+    tracked: 'outside-repo',
+    precedence: 'Personal instructions applied to every repository.',
+    docsUrl: COPILOT_INSTRUCTIONS_DOCS,
+  },
+  {
+    id: 'copilot.project.memory',
+    runners: ['copilot'],
+    kind: 'memory',
+    scope: 'project',
+    resolve: (repo) => join(repo, '.github', 'copilot-instructions.md'),
+    label: '.github/copilot-instructions.md',
+    format: 'markdown',
+    tracked: 'tracked',
+    precedence:
+      'Repository instructions, read alongside AGENTS.md rather than instead of it. --no-custom-instructions turns both off. Runs read the committed copy.',
+    docsUrl: COPILOT_INSTRUCTIONS_DOCS,
+  },
+
   // ---- Cursor Agent CLI ----
   {
     id: 'cursor.user.settings',
@@ -342,10 +434,10 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     docsUrl: CURSOR_CLI_CONFIG_DOCS,
   },
 
-  // ---- Shared: <repo>/AGENTS.md is read by BOTH Codex and OpenCode ----
+  // ---- Shared: <repo>/AGENTS.md is read by Codex, OpenCode AND Copilot ----
   {
     id: 'project.agents',
-    runners: ['codex', 'opencode'],
+    runners: ['codex', 'opencode', 'copilot'],
     kind: 'memory',
     scope: 'project',
     resolve: (repo) => join(repo, 'AGENTS.md'),
@@ -353,7 +445,7 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     format: 'markdown',
     tracked: 'tracked',
     precedence:
-      'Read by Codex and OpenCode (Claude ignores it). Codex concatenates it root-down; OpenCode uses the first match and prefers it over CLAUDE.md. Runs read the committed copy.',
+      'Read by Codex, OpenCode and Copilot CLI (Claude ignores it). Codex concatenates it root-down; OpenCode uses the first match and prefers it over CLAUDE.md; Copilot reads it alongside .github/copilot-instructions.md unless --no-custom-instructions is set. Runs read the committed copy.',
     docsUrl: OPENCODE_RULES_DOCS,
   },
 ];

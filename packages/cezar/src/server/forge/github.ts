@@ -698,7 +698,10 @@ export async function searchGithubItems(
 function mockGithub(): GithubData {
   const mk = (over: Partial<GithubItem> & Pick<GithubItem, 'kind' | 'number' | 'title' | 'body'>): GithubItem => ({
     author: 'mock',
-    createdAt: new Date(Date.now() - over.number * 3_600_000).toISOString(),
+    // A HIGHER number is MORE RECENT, because GitHub hands numbers out in creation order. The
+    // subtraction used to run the other way, which made the demo's hand-written descending list
+    // ascending by age — invisible until the tab grew a newest/oldest sort that reads this field.
+    createdAt: new Date(Date.now() - (200 - over.number) * 3_600_000).toISOString(),
     labels: [],
     url: `https://github.com/mock/repo/${over.kind === 'pr' ? 'pull' : 'issues'}/${over.number}`,
     comments: 0,

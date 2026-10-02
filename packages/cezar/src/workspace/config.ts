@@ -80,12 +80,17 @@ export type WorkspaceProject = z.infer<typeof workspaceProjectSchema>;
  */
 export const DEFAULT_MONITORING_WAKE_MINUTES = 5;
 
+/** Plain user-wait sessions retain a bounded liveness safeguard by default (#992). */
+export const DEFAULT_IDLE_TIMEOUT_MINUTES = 15;
+
 const resourcesSchema = z
   .object({
     /** Workspace-wide parallel-task cap (moved from per-repo config.json). */
     maxParallel: z.number().int().min(1).max(16).default(2).catch(2),
     /** Extra durable `CEZ:MONITORING` sessions exempt from the active-task cap. */
     maxMonitoringSessions: z.number().int().min(0).max(16).default(2).catch(2),
+    /** Plain `waiting`/`CEZ:ASK` session idle timeout; null or 0 disables this safeguard. */
+    idleTimeoutMinutes: z.number().int().min(0).max(1440).nullable().default(DEFAULT_IDLE_TIMEOUT_MINUTES).catch(DEFAULT_IDLE_TIMEOUT_MINUTES),
     /**
      * Cadence for re-checking monitored work; `null` parks at zero model cost until a
      * user (or an external integration) resumes the session.
@@ -152,6 +157,8 @@ const agentDefaultsSchema = z
         opencode: z.string().trim().min(1).max(200).optional().catch(undefined),
         cursor: z.string().trim().min(1).max(200).optional().catch(undefined),
         pi: z.string().trim().min(1).max(200).optional().catch(undefined),
+        junie: z.string().trim().min(1).max(200).optional().catch(undefined),
+        copilot: z.string().trim().min(1).max(200).optional().catch(undefined),
       })
       .passthrough()
       .optional()

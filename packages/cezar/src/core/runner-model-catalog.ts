@@ -96,14 +96,18 @@ export class RunnerModelCatalog {
   }
 }
 
+/** One label per runner. A ternary chain defaulted every id it did not name to "OpenCode", so
+ *  `pi` — and now `copilot` — would have reported another vendor's outage as their own. */
+const RUNNER_LABEL: Record<RunnerId, string> = {
+  claude: 'Claude',
+  codex: 'Codex',
+  opencode: 'OpenCode',
+  cursor: 'Cursor',
+  pi: 'pi',
+  junie: 'Junie',
+  copilot: 'GitHub Copilot',
+};
+
 function unavailableReason(runner: RunnerId): string {
-  const name =
-    runner === 'codex'
-      ? 'Codex'
-      : runner === 'claude'
-        ? 'Claude'
-        : runner === 'cursor'
-          ? 'Cursor'
-          : 'OpenCode';
-  return `${name} model discovery is temporarily unavailable`;
+  return `${RUNNER_LABEL[runner]} model discovery is temporarily unavailable`;
 }

@@ -103,6 +103,7 @@ describe('the workspace settings API (step 2.7)', () => {
       resources: {
         maxParallel: 2,
         maxMonitoringSessions: 2,
+        idleTimeoutMinutes: 15,
         monitoringWakeIntervalMinutes: 5,
         autoResumeOnUsageLimit: true,
         memoryLimitMb: null,
@@ -153,6 +154,7 @@ describe('the workspace settings API (step 2.7)', () => {
       resources: {
         maxParallel: 5,
         maxMonitoringSessions: 3,
+        idleTimeoutMinutes: 15,
         monitoringWakeIntervalMinutes: 5,
         autoResumeOnUsageLimit: false,
         memoryLimitMb: 2048,
@@ -173,6 +175,7 @@ describe('the workspace settings API (step 2.7)', () => {
       resources: {
         maxParallel: 5,
         maxMonitoringSessions: 3,
+        idleTimeoutMinutes: 15,
         monitoringWakeIntervalMinutes: 5,
         autoResumeOnUsageLimit: false,
         memoryLimitMb: 2048,
@@ -217,6 +220,7 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(((await (await getConfig()).json()) as WorkspaceConfigResponse).resources).toEqual({
       maxParallel: 5,
       maxMonitoringSessions: 2,
+      idleTimeoutMinutes: 15,
       monitoringWakeIntervalMinutes: 5,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,

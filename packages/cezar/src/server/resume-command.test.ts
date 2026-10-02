@@ -17,6 +17,9 @@ describe('resumeCommand — session id validation', () => {
     expect(resumeCommand('opencode', id)).toBe(`opencode --session ${id}`);
     expect(resumeCommand('cursor', id)).toBe(`agent --resume ${id}`);
     expect(resumeCommand('pi', id)).toBe(`pi --session ${id}`);
+    // Verified live (`junie --help`, 26.9.22): `--resume` alone reopens the last session; the
+    // target is named by the separate `--session-id=<id>` flag, not a positional argument.
+    expect(resumeCommand('junie', id)).toBe(`junie --resume --session-id=${id}`);
   });
 
   // Every runner id must map to a command — an id that fell through to the `claude` default

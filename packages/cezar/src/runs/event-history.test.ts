@@ -270,6 +270,28 @@ describe('live cursor replay and compact context', () => {
     expect(context.contextEvents.length).toBeLessThan(10);
   });
 
+  // #1202 — a skill is not a sub-agent episode. `Skill` answered to `toolKind: 'task'` until
+  // then, so invoking one opened a root episode with no children under it and no fan-out behind
+  // it, and the retention walk anchored on it as if it were live work.
+  it('does not retain a skill as a root agent episode, but still retains a real task', async () => {
+    const events = [
+      { seq: 1, type: 'turn.started', turnId: 't1' },
+      {
+        seq: 2,
+        type: 'item.completed',
+        item: { kind: 'tool', id: 'skill-1', toolKind: 'skill', status: 'completed', title: 'Skill: om-auto-create-pr' },
+      },
+      {
+        seq: 3,
+        type: 'item.started',
+        item: { kind: 'tool', id: 'task-1', toolKind: 'task', status: 'running', title: 'Task: one' },
+      },
+    ] satisfies Array<Partial<RunEvent> & Pick<RunEvent, 'seq' | 'type'>>;
+    const context = await deriveRunContextEvents(fixture(events));
+    const itemEvents = context.contextEvents.filter(({ type }) => type.startsWith('item.'));
+    expect(itemEvents.map(({ seq }) => seq)).toEqual([3]);
+  });
+
   it('preserves the current plan and lets a settled earlier fan-out bound carry-over', async () => {
     const events = [
       { seq: 1, type: 'turn.started', turnId: 't1' },

@@ -126,6 +126,8 @@ const selectionSchema = z
     opencode: z.string().max(64).optional().catch(undefined),
     cursor: z.string().max(64).optional().catch(undefined),
     pi: z.string().max(64).optional().catch(undefined),
+    junie: z.string().max(64).optional().catch(undefined),
+    copilot: z.string().max(64).optional().catch(undefined),
   })
   .passthrough();
 

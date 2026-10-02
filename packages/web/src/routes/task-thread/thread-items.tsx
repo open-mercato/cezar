@@ -9,6 +9,7 @@ import {
   LoaderCircleIcon,
   PaperclipIcon,
   SearchIcon,
+  SparklesIcon,
   SquarePenIcon,
   SquareTerminalIcon,
   Trash2Icon,
@@ -320,9 +321,11 @@ export function NoteLine({ note }: { note: ThreadNote }) {
 const PROVIDER_LABEL: Record<ThreadProviderAuthRequired['provider'], string> = {
   claude: 'Claude Code',
   codex: 'Codex',
+  junie: 'Junie',
   opencode: 'OpenCode',
   cursor: 'Cursor',
   pi: 'pi',
+  copilot: 'GitHub Copilot CLI',
 }
 
 /** Persisted recovery guidance for an authoritative runtime authentication rejection. */
@@ -444,7 +447,10 @@ const TOOL_ICONS: Record<ToolKind, typeof WrenchIcon> = {
   execute: SquareTerminalIcon,
   think: BrainIcon,
   fetch: GlobeIcon,
+  // A skill is not an agent (#1202): the bot belongs to `task` alone, so a reader can tell a
+  // dispatched sub-agent from a skill the main agent loaded at a glance.
   task: BotIcon,
+  skill: SparklesIcon,
   plan: ListTodoIcon,
   other: WrenchIcon,
 }
