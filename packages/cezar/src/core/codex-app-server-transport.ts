@@ -69,10 +69,13 @@ export class CodexAppServerRpc {
   }
 
   dispatchResponse(message: CodexAppServerMessage): boolean {
-    if (typeof message.id !== 'number' || (message.result === undefined && message.error === undefined)) return false;
-    const pending = this.pending.get(message.id);
+    if (message.result === undefined && message.error === undefined) return false;
+    // JSON-RPC lets a server echo the id as a string; cezar only ever allocates integers.
+    const id = typeof message.id === 'string' && /^(0|[1-9]\d*)$/.test(message.id) ? Number(message.id) : message.id;
+    if (typeof id !== 'number' || !Number.isSafeInteger(id)) return false;
+    const pending = this.pending.get(id);
     if (!pending) return false;
-    this.pending.delete(message.id);
+    this.pending.delete(id);
     if (message.error) pending.reject(new Error(codexErrorText(message.error)));
     else pending.resolve((message.result as Record<string, unknown>) ?? {});
     return true;
