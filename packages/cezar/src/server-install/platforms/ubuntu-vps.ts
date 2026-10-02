@@ -3,7 +3,19 @@ import { homedir, userInfo } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CANCEL, PreflightError, type InstallContext, type InstallStep, type PlatformStrategy, type StepArtifact } from '../types.ts';
-import { depCheckStep, generatePassword, owned, shared, shquote, StepAborted, StepCancelled, StepSkipped, sudoStep, verifyCommand } from '../steps.ts';
+import {
+  depCheckStep,
+  generatePassword,
+  owned,
+  shared,
+  shquote,
+  StepAborted,
+  StepCancelled,
+  StepSkipped,
+  sudoStep,
+  verifyCommand,
+  type VerifyFailure,
+} from '../steps.ts';
 
 /**
  * The `ubuntu-vps` strategy: stand up an authenticated, proxied cezar on a bare
@@ -614,6 +626,32 @@ const nginxProxyStep: InstallStep = {
 const HOSTNAME_RE = /^(?=.{1,253}$)([a-z0-9](-?[a-z0-9])*\.)+[a-z]{2,}$/i;
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
+/**
+ * Certbot invokes nginx while editing the vhost. If the config cannot parse,
+ * retrying certbot repeats the same deterministic failure; expose nginx's own
+ * diagnostic instead of offering the generic retry/skip choice.
+ */
+export async function nginxConfigTestFailure(ctx: InstallContext): Promise<VerifyFailure | undefined> {
+  const result = await ctx.runner.capture('nginx', ['-t']);
+  const output = [result.stderr.trim(), result.stdout.trim()].filter(Boolean).join('\n');
+  // `nginx -t` also reports operational failures (for example, an unprivileged
+  // probe cannot open a root-only certificate or log). Only classify explicit
+  // syntax/configuration diagnostics as terminal; certbot and other transient
+  // failures must keep the normal retry/skip path.
+  const parseFailure =
+    /unknown directive|unexpected (?:end|\S+)|directive .*not allowed|invalid (?:number of arguments|parameter)|duplicate /i.test(
+      output,
+    );
+  if (result.code === 0 || !output || result.code === 127 || /command not found/i.test(output) || !parseFailure) {
+    return undefined;
+  }
+  return {
+    retryable: false,
+    message:
+      'nginx configuration test failed; fix the generated configuration before rerunning this step.\n' + output,
+  };
+}
+
 const sslStep: InstallStep = {
   id: 'ssl',
   title: 'Domain + SSL (Let’s Encrypt)',
@@ -703,6 +741,7 @@ const sslStep: InstallStep = {
       // issued. certbot --nginx writes `ssl_certificate …` into the vhost, which
       // is world-readable, so grepping it works without root.
       verify: (c) => verifyCommand(c, 'sh', ['-c', `grep -qs ssl_certificate ${vhostAvail} ${vhostEnbl}`]),
+      verifyFailure: async (c) => nginxConfigTestFailure(c),
     });
 
     // The certificate is in place, so a TLS listener now exists. On nginx
