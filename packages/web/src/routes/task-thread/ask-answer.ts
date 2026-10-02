@@ -38,7 +38,7 @@ export const IDLE_TEARDOWN_RETRY_DELAYS_MS = [50, 100, 200, 400, 800, 1_000, 1_0
 const delayIdleTeardownRetry = (delayMs: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, delayMs))
 
-function isIdleTeardownRefusal(error: unknown): error is ApiError {
+export function isIdleTeardownRefusal(error: unknown): error is ApiError {
   return error instanceof ApiError && error.status === 409 && error.message === 'run is still active'
 }
 
