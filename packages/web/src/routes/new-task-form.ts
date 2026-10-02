@@ -55,6 +55,7 @@ export const RUNNERS: readonly RunnerOption[] = [
   { id: 'opencode', label: 'opencode', desc: 'OpenCode (serve)' },
   { id: 'cursor', label: 'cursor', desc: 'Cursor Agent CLI' },
   { id: 'pi', label: 'pi', desc: 'pi CLI (provider/model)' },
+  { id: 'copilot', label: 'copilot', desc: 'GitHub Copilot CLI (ACP)' },
 ]
 
 export interface ModelPreset {
@@ -99,6 +100,13 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
     { id: 'anthropic/claude-opus-4-8', label: 'claude-opus-4.8', desc: 'via Anthropic' },
     { id: 'anthropic/claude-sonnet-5', label: 'claude-sonnet-5', desc: 'via Anthropic' },
     { id: 'openai/gpt-5.1', label: 'gpt-5.1', desc: 'via OpenAI' },
+  ],
+  // Copilot has no host catalog here (it stays out of `MODEL_DISCOVERY_RUNNERS`), and its own
+  // catalog is fetched from GitHub per account, so nothing dated can be listed truthfully. `auto`
+  // is Copilot's own documented value for "let Copilot pick" (`copilot --help`), and the field
+  // stays free text for anything the account is entitled to.
+  copilot: [
+    { id: '', label: 'auto', desc: 'Let Copilot pick the model' },
   ],
 }
 

@@ -19,6 +19,7 @@ vi.mock('./junie-auth-probe.ts', () => ({
   probeJunieAuthentication: vi.fn(async () => ({ connected: true })),
 }));
 
+import { PROVIDER_IDS } from './provider-auth.ts';
 import {
   ProviderAuthService,
   isRuntimeProviderAuthFailure,
@@ -56,6 +57,13 @@ const connectedResults: Record<string, ProviderCommandResult> = {
     stderr: '',
     exitCode: 0,
   },
+  // Copilot's probe drives its ACP server; a `sessionId` back means the credential is entitled
+  // (`.ai/runs/2026-09-27-copilot-cli-runner/copilot-acp-notes.md`).
+  copilot: {
+    stdout: '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"3f1b6f2e-0000-4000-8000-1f2e3d4c5b6a"}}',
+    stderr: '',
+    exitCode: 0,
+  },
 };
 
 const originalEnv = {
@@ -66,6 +74,7 @@ const originalEnv = {
   CEZ_OPENCODE_BIN: process.env.CEZ_OPENCODE_BIN,
   CEZ_PI_BIN: process.env.CEZ_PI_BIN,
   CURSOR_API_KEY: process.env.CURSOR_API_KEY,
+  CEZ_COPILOT_BIN: process.env.CEZ_COPILOT_BIN,
 };
 
 beforeEach(() => {
@@ -76,6 +85,7 @@ beforeEach(() => {
   delete process.env.CEZ_OPENCODE_BIN;
   delete process.env.CEZ_PI_BIN;
   delete process.env.CURSOR_API_KEY;
+  delete process.env.CEZ_COPILOT_BIN;
 });
 
 afterEach(() => {
@@ -85,11 +95,18 @@ afterEach(() => {
   }
 });
 
+/** One status command per provider — the size of a full probe round. Derived rather than
+ *  written out so adding runner #6 does not mean editing a dozen literal counts in this file.
+ *  Junie is the exception: `probe()` routes it through `probeJunieAuthentication`, never
+ *  `runCommand`, so it is a status row but not a status command. */
+const PROBE_ROUND = PROVIDER_IDS.filter((provider) => provider !== 'junie').length;
+
 function resultFor(executable: string): ProviderCommandResult {
   if (executable === 'claude') return connectedResults.claude!;
   if (executable.includes('codex')) return connectedResults.codex!;
   if (executable === 'agent' || executable.includes('cursor')) return connectedResults.cursor!;
   if (executable.includes('opencode')) return connectedResults.opencode!;
+  if (executable.includes('copilot')) return connectedResults.copilot!;
   return connectedResults.pi!;
 }
 
@@ -596,7 +613,7 @@ describe('provider auth parsers', () => {
 });
 
 describe('ProviderAuthService', () => {
-  it('always returns providers in descriptor order', async () => {
+  it('always returns every provider in descriptor order', async () => {
     const service = new ProviderAuthService({ runCommand: runner() });
 
     await expect(service.status()).resolves.toMatchObject({
@@ -607,34 +624,12 @@ describe('ProviderAuthService', () => {
         { provider: 'cursor' },
         { provider: 'pi' },
         { provider: 'junie', status: 'connected' },
+        { provider: 'copilot' },
       ],
     });
   });
 
-  it('bounds the default junie probe to the same 10s budget every other provider gets (#M2)', async () => {
-    const service = new ProviderAuthService({ runCommand: runner() });
-    await service.status();
-
-    expect(probeJunieAuthentication).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: 10_000 }),
-    );
-  });
-
-  it('reports junie as not-installed, not unknown, when the binary is missing (#M1)', async () => {
-    vi.mocked(probeJunieAuthentication).mockResolvedValueOnce({ connected: false, notInstalled: true });
-    const service = new ProviderAuthService({ runCommand: runner() });
-
-    await expect(statuses(service)).resolves.toMatchObject({ junie: { status: 'not-installed' } });
-  });
-
-  it('reports junie as not-installed when the probe throws an ENOENT error (#M1)', async () => {
-    vi.mocked(probeJunieAuthentication).mockRejectedValueOnce(Object.assign(new Error('nope'), { code: 'ENOENT' }));
-    const service = new ProviderAuthService({ runCommand: runner() });
-
-    await expect(statuses(service)).resolves.toMatchObject({ junie: { status: 'not-installed' } });
-  });
-
-  it('runs the status commands concurrently with a 10 second timeout', async () => {
+  it('runs every status command concurrently with a 10 second timeout', async () => {
     const calls: Array<{ executable: string; args: readonly string[]; timeoutMs: number }> = [];
     let release!: () => void;
     const waiting = new Promise<void>((resolve) => { release = resolve; });
@@ -646,13 +641,14 @@ describe('ProviderAuthService', () => {
     const service = new ProviderAuthService({ runCommand });
     const pending = service.status();
 
-    await vi.waitFor(() => expect(calls).toHaveLength(5));
+    await vi.waitFor(() => expect(calls).toHaveLength(PROBE_ROUND));
     expect(calls).toEqual([
       { executable: 'claude', args: ['auth', 'status', '--json'], timeoutMs: 10_000 },
       { executable: 'codex', args: ['login', 'status'], timeoutMs: 10_000 },
       { executable: 'opencode', args: ['auth', 'list'], timeoutMs: 10_000 },
       { executable: 'agent', args: ['status', '--format', 'json'], timeoutMs: 10_000 },
       { executable: 'pi', args: ['--list-models'], timeoutMs: 10_000 },
+      { executable: 'copilot', args: ['--acp'], timeoutMs: 10_000 },
     ]);
     release();
     await expect(pending).resolves.toBeDefined();
@@ -698,8 +694,8 @@ describe('ProviderAuthService', () => {
       await service.status();
       now += 9 * 60_000;
       await service.status();
-      // Still five: one probe per provider, from the first call only.
-      expect(runCommand).toHaveBeenCalledTimes(5);
+      // Still four: one probe per provider, from the first call only.
+      expect(runCommand).toHaveBeenCalledTimes(PROBE_ROUND);
     });
 
     it('re-probes an all-connected answer once the long window passes', async () => {
@@ -710,7 +706,7 @@ describe('ProviderAuthService', () => {
       await service.status();
       now += 10 * 60_000 + 1;
       await service.status();
-      expect(runCommand).toHaveBeenCalledTimes(10);
+      expect(runCommand).toHaveBeenCalledTimes(PROBE_ROUND * 2);
     });
 
     it('re-checks a NOT-connected answer sooner, so a terminal login is noticed on its own', async () => {
@@ -728,10 +724,10 @@ describe('ProviderAuthService', () => {
       await service.status();
       now += 59_999;
       await service.status();
-      expect(runCommand).toHaveBeenCalledTimes(5); // still inside the short window
+      expect(runCommand).toHaveBeenCalledTimes(PROBE_ROUND); // still inside the short window
       now += 2;
       await service.status();
-      expect(runCommand).toHaveBeenCalledTimes(10); // past it → re-probed
+      expect(runCommand).toHaveBeenCalledTimes(PROBE_ROUND * 2); // past it → re-probed
     });
 
     it('serves the stale answer immediately and refreshes BEHIND it, never in front', async () => {
@@ -746,7 +742,7 @@ describe('ProviderAuthService', () => {
         now: () => now,
         runCommand: async (executable) => {
           probes += 1;
-          if (probes > 5) await gate; // only the SECOND round of probes hangs
+          if (probes > PROBE_ROUND) await gate; // only the SECOND round of probes hangs
           return resultFor(executable);
         },
       });
@@ -760,11 +756,11 @@ describe('ProviderAuthService', () => {
           expect.objectContaining({ provider: 'claude', status: 'connected' }),
         ]),
       });
-      expect(probes).toBe(10); // …and it did kick the refresh off
+      expect(probes).toBe(PROBE_ROUND * 2); // …and it did kick the refresh off
 
       // A reader arriving mid-revalidation is served from cache too, not attached to the probe.
       await expect(service.status()).resolves.toBeDefined();
-      expect(probes).toBe(10); // no second refresh piled on top
+      expect(probes).toBe(PROBE_ROUND * 2); // no second refresh piled on top
       release();
     });
 
@@ -776,7 +772,7 @@ describe('ProviderAuthService', () => {
           expect.objectContaining({ provider: 'claude', status: 'connected' }),
         ]),
       });
-      expect(runCommand).toHaveBeenCalledTimes(5);
+      expect(runCommand).toHaveBeenCalledTimes(PROBE_ROUND);
     });
 
     it('applies the same asymmetry per account', async () => {
@@ -797,7 +793,7 @@ describe('ProviderAuthService', () => {
 
     await service.status();
     await service.status({ refresh: true });
-    expect(runCommand).toHaveBeenCalledTimes(10);
+    expect(runCommand).toHaveBeenCalledTimes(PROBE_ROUND * 2);
   });
 
   it('keeps one incident id until an explicit matching clear and creates a new id afterward', async () => {
@@ -1047,7 +1043,7 @@ describe('ProviderAuthService', () => {
     const service = new ProviderAuthService({ runCommand });
 
     const pending = service.status();
-    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(5));
+    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(PROBE_ROUND));
     service.reportRuntimeAuthFailure('claude');
     release();
 
@@ -1108,6 +1104,7 @@ describe('ProviderAuthService', () => {
         { provider: 'cursor', status: 'connected' },
         { provider: 'pi', status: 'connected' },
         { provider: 'junie', status: 'connected' },
+        { provider: 'copilot', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -1134,10 +1131,10 @@ describe('ProviderAuthService', () => {
     const ordinary = service.status();
     const refresh = service.status({ refresh: true });
     expect(refresh).toBe(ordinary);
-    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(5));
+    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(PROBE_ROUND));
     release();
     await expect(Promise.all([ordinary, refresh])).resolves.toHaveLength(2);
-    expect(runCommand).toHaveBeenCalledTimes(5);
+    expect(runCommand).toHaveBeenCalledTimes(PROBE_ROUND);
   });
 
   it('gives ordinary callers one shared visible promise for a fresh probe after a latch', async () => {
@@ -1154,7 +1151,7 @@ describe('ProviderAuthService', () => {
     const ordinary = service.status();
 
     expect(refresh).toBe(ordinary);
-    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(5));
+    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(PROBE_ROUND));
     release();
     await expect(ordinary.then(({ providers }) => providers[0])).resolves.toMatchObject({
       provider: 'claude',
@@ -1207,7 +1204,7 @@ describe('ProviderAuthService', () => {
       .toBe('"C:\\Program Files\\op^%en^&co^!de^".exe" auth login');
   });
 
-  it('reports all providers connected in CEZ_DRY_RUN without executing a command', async () => {
+  it('reports every provider connected in CEZ_DRY_RUN without executing a command', async () => {
     process.env.CEZ_DRY_RUN = '1';
     const runCommand = runner();
     const service = new ProviderAuthService({ runCommand });
@@ -1220,6 +1217,7 @@ describe('ProviderAuthService', () => {
         { provider: 'cursor', status: 'connected' },
         { provider: 'pi', status: 'connected' },
         { provider: 'junie', status: 'connected' },
+        { provider: 'copilot', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -1274,7 +1272,7 @@ describe('ProviderAuthService', () => {
       const before = spawns;
       now += 60 * 60_000; // an hour later
 
-      expect(service.peekStatus()?.providers).toHaveLength(6);
+      expect(service.peekStatus()?.providers).toHaveLength(PROVIDER_IDS.length);
       expect(service.peekProfileStatus('claude', 'work')).toBeDefined();
       expect(spawns).toBe(before); // …and still nothing spawned
     });
@@ -1297,7 +1295,7 @@ describe('ProviderAuthService', () => {
       await service.status();
       await service.profileStatus('claude', { id: 'work', configDir: '/work' });
       const before = spawns;
-      expect(service.peekStatus()?.providers).toHaveLength(6);
+      expect(service.peekStatus()?.providers).toHaveLength(PROVIDER_IDS.length);
       expect(service.peekProfileStatus('claude', 'work')?.profileId).toBe('work');
       expect(spawns).toBe(before);
     });

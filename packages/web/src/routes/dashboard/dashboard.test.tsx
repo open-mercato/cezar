@@ -257,7 +257,7 @@ it('renders usage alone when action and feed tiles are hidden, then unmounts on 
   fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
   fireEvent.click(screen.getByRole('checkbox', { name: 'Usage & cost' }))
   expect(screen.queryByRole('heading', { name: 'Usage & cost' })).toBeNull()
-  expect(await screen.findByText('All modules in this view are hidden')).toBeTruthy()
+  expect(await screen.findByText('Optional modules in this view are hidden.')).toBeTruthy()
   expect(calls.some((url) => url.includes('/dashboard/costs'))).toBe(true)
 })
 

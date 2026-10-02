@@ -14,6 +14,7 @@ const LABEL: Record<ProviderId, string> = {
   cursor: 'Cursor',
   pi: 'pi',
   junie: 'Junie',
+  copilot: 'GitHub Copilot CLI',
 };
 
 export function providersRequiredByWorkflow(

@@ -44,6 +44,11 @@ import type { ProviderId } from './provider-auth.ts';
  *   `config.json`, `sessions/` — lives under `~/.junie` with no override var in `junie --help`
  *   (`--config-location`/`--cache-dir` add or redirect narrower pieces, not the whole home). `null`
  *   until junie documents one, same rule as OpenCode/pi.
+ * - **copilot** → `COPILOT_HOME` moves config and state, but whether it also moves the stored
+ *   login has not been tested, and Copilot reads `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` /
+ *   `GITHUB_TOKEN` ahead of any stored credential regardless. `null` until a test proves one
+ *   variable moves both (spec 2026-09-19-runner-seam-native-backends Q14) — being wrong here
+ *   bills the wrong account.
  */
 export const PROFILE_ENV_VAR: Record<ProviderId, string | null> = {
   claude: 'CLAUDE_CONFIG_DIR',
@@ -52,6 +57,7 @@ export const PROFILE_ENV_VAR: Record<ProviderId, string | null> = {
   cursor: null,
   pi: null,
   junie: null,
+  copilot: null,
 };
 
 /** Providers that can carry more than one account — what the UI offers "Add account" for. */
@@ -108,4 +114,6 @@ const PROFILE_DIR_MARKERS: Record<ProviderId, readonly string[]> = {
   pi: [],
   // junie cannot carry profiles either (`PROFILE_ENV_VAR.junie === null`) — same reason.
   junie: [],
+  // Same for copilot (`PROFILE_ENV_VAR.copilot === null`).
+  copilot: [],
 };

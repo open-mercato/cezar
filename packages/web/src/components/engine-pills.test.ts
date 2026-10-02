@@ -272,7 +272,7 @@ describe('engineBody', () => {
     expect(body).toEqual({ runner: undefined, model: undefined })
   })
 
-  it.each<Runner>(['claude', 'codex', 'junie', 'opencode', 'cursor', 'pi'])(
+  it.each<Runner>(['claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot'])(
     'is symmetric for %s as the host default',
     (runner) => {
       expect(engineBody(resolved({ runner, defaultRunner: runner })).runner).toBeUndefined()

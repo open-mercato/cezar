@@ -7,7 +7,7 @@ import { createQueryClient } from '@/api/query-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { resolveConflictsPrompt } from '@/routes/task-thread/run-actions'
 
-import { ResolveConflictsButton } from './reference-conflict-action'
+import { ResolveConflictsButton, TaskReferenceChip } from './reference-conflict-action'
 
 /**
  * The one button every surface hands a conflicting chip.
@@ -143,5 +143,26 @@ describe('ResolveConflictsButton', () => {
     fireEvent.click(button())
 
     await waitFor(() => expect(screen.getByText(/session closed/)).not.toBeNull())
+  })
+})
+
+describe('TaskReferenceChip', () => {
+  it('keeps the supplied primary and exposes additional PR associations', () => {
+    render(
+      <TaskReferenceChip
+        run={
+          run('done', {
+            pullRequestUrl: 'https://github.com/o/r/pull/10',
+            referencedPullRequestUrl: 'https://github.com/o/r/pull/9',
+            markerRefs: { pr: 9 },
+          })
+        }
+        reference={{ kind: 'PR', number: 10, url: 'https://github.com/o/r/pull/10' }}
+      />,
+    )
+    expect(screen.getAllByRole('link').map((link) => link.getAttribute('href'))).toEqual([
+      'https://github.com/o/r/pull/10',
+      'https://github.com/o/r/pull/9',
+    ])
   })
 })

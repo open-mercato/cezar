@@ -160,10 +160,10 @@ describe('model option resolution', () => {
     expect(modelConflictsWithRunner('my-org/custom-tune', 'codex')).toBe(false)
   })
 
-  it('every runner cezar ships reads its models from the host', () => {
-    // #794 gave OpenCode a catalog and #784 gave Claude one, so the picker no longer has a
-    // preset-only runner. The contract's list is the single source both the route and the picker
-    // compile against — this asserts they still agree on who discovers.
+  it('exactly the runners with a host catalog discover their models', () => {
+    // #794 gave OpenCode a catalog, #784 gave Claude one and #807 gave Cursor one. The contract's
+    // list is the single source both the route and the picker compile against — this asserts they
+    // still agree on who discovers, and that a runner is never added to it by accident.
     expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode', 'cursor', 'junie'])
     expect(MODEL_DISCOVERY_RUNNERS.every((runner) => runnerDiscoversModels(runner))).toBe(true)
   })
@@ -171,6 +171,24 @@ describe('model option resolution', () => {
   it('reports Cursor catalog status the same way', () => {
     expect(modelCatalogStatus('cursor', { runner: 'cursor', models: [], source: 'unavailable', stale: false })).toBe('Latest Cursor models unavailable')
     expect(modelCatalogStatus('cursor', undefined, true)).toBe('Latest Cursor models unavailable')
+  })
+
+  it('copilot stays OUT of discovery: free text plus its own presets, and no /models request', () => {
+    // Copilot's catalog is fetched from GitHub per account, so cezar cannot list it truthfully and
+    // `GET /models?runner=copilot` would 400. The picker therefore offers Copilot's own documented
+    // `auto` and whatever the user types (#582; spec § API Contracts, same rule as pi).
+    expect(runnerDiscoversModels('copilot')).toBe(false)
+    expect(MODEL_DISCOVERY_RUNNERS).not.toContain('copilot')
+    expect(modelsForRunner('copilot').map((m) => m.id)).toEqual([''])
+    // …and a host catalog handed in anyway is ignored rather than rendered.
+    expect(
+      modelsForRunner('copilot', {
+        runner: 'copilot',
+        models: [{ id: 'gpt-5.4', label: 'gpt-5.4', description: 'via GitHub' }],
+        source: 'live',
+        stale: false,
+      }).map((m) => m.id),
+    ).toEqual([''])
   })
 
   it('opencode: auto alone until the host catalog answers (#794)', () => {

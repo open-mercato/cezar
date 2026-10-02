@@ -164,6 +164,32 @@ describe('mergeRun', () => {
     expect(mergeRun(run('r1'), run('r1')).usage).toBeUndefined()
     expect(mergeRun(undefined, run('r1')).usage).toBeUndefined()
   })
+
+  it.each([
+    ['user', { title: 'My task', titleSummary: 'My task', titleOrigin: 'user' as const }],
+    ['marker', { title: 'PR #12', titleSummary: 'PR #12', titleOrigin: 'marker' as const }],
+  ])('keeps a %s-owned title when a stale auto frame arrives', (_owner, owned) => {
+    const previous = run('r1', owned)
+    const stale = run('r1', { title: 'auto title', titleSummary: 'auto title', titleOrigin: 'auto', status: 'done' })
+
+    expect(mergeRun(previous, stale)).toMatchObject({ ...owned, status: 'done' })
+  })
+
+  it('allows a later explicit user rename to replace an auto title', () => {
+    expect(mergeRun(run('r1', { title: 'auto title', titleOrigin: 'auto' }), run('r1', {
+      title: 'My task',
+      titleSummary: 'My task',
+      titleOrigin: 'user',
+    }))).toMatchObject({ title: 'My task', titleSummary: 'My task', titleOrigin: 'user' })
+  })
+
+  it('keeps a user rename ahead of a stale marker frame', () => {
+    expect(mergeRun(run('r1', { title: 'My task', titleOrigin: 'user' }), run('r1', {
+      title: 'PR #12',
+      titleSummary: 'PR #12',
+      titleOrigin: 'marker',
+    }))).toMatchObject({ title: 'My task', titleOrigin: 'user' })
+  })
 })
 
 describe('applyRunDeleted', () => {

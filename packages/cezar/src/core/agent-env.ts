@@ -236,6 +236,10 @@ const BACKEND_ALLOW_PREFIXES: Record<AgentBackend, readonly string[]> = {
   // cezar never passes, and nothing documents junie reading the provider env vars —
   // so no provider prefix is granted on the strength of a flag.
   junie: ['JUNIE_'],
+  // Copilot routes every model through GitHub, so it needs only its own family. The `gh` names
+  // it authenticates with (`GH_TOKEN`, `GITHUB_TOKEN`, `GH_HOST`) are already forwarded to every
+  // backend below, and `COPILOT_GITHUB_TOKEN` is covered by this prefix — so nothing else widens.
+  copilot: ['COPILOT_'],
 };
 
 /** `gh` handoff (draft PRs) works in every backend — the one credential the

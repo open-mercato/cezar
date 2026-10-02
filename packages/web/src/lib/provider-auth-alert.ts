@@ -4,7 +4,7 @@ import type {
   WorkspaceUiState,
 } from '@open-mercato/cezar-api-client'
 
-const PROVIDERS: readonly ProviderId[] = ['claude', 'codex', 'junie', 'opencode', 'cursor', 'pi']
+const PROVIDERS: readonly ProviderId[] = ['claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot']
 const LABELS: Record<ProviderId, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
@@ -12,6 +12,7 @@ const LABELS: Record<ProviderId, string> = {
   cursor: 'Cursor',
   pi: 'pi',
   junie: 'Junie',
+  copilot: 'GitHub Copilot CLI',
 }
 
 export interface ProviderAuthIncident {

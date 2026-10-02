@@ -44,6 +44,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { StatusDot, type StatusDotTone } from '@/components/status-dot'
+import { RUNNER_ORDER } from '@/lib/provider-status'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toaster'
 import { OpenInMenu, cliTargetRunner } from '@/components/open-in-menu'
@@ -95,6 +96,7 @@ const PROVIDER_LABEL: Record<ProviderId, string> = {
   opencode: 'OpenCode',
   cursor: 'Cursor',
   pi: 'pi',
+  copilot: 'GitHub Copilot CLI',
 }
 
 /** The vendor's own install/login instruction, shown when the CLI is not on this machine. */
@@ -105,6 +107,7 @@ const PROVIDER_INSTALL: Record<ProviderId, string> = {
   opencode: 'https://opencode.ai',
   cursor: 'curl https://cursor.com/install -fsS | bash',
   pi: 'https://github.com/badlogic/pi-mono',
+  copilot: 'npm i -g @github/copilot',
 }
 
 /** Same vocabulary the Providers card uses — one wording for "is this logged in?". */
@@ -147,8 +150,9 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
 
   // Every agent gets a tab, including one that cannot carry a second login: the tab is where its
   // install state and config folder live, and hiding OpenCode would just move the question
-  // "is OpenCode set up?" somewhere else.
-  const providers: ProviderId[] = ['claude', 'codex', 'junie', 'opencode', 'cursor', 'pi']
+  // "is OpenCode set up?" somewhere else. Derived, not written out: as a literal this list went
+  // stale the moment a fifth runner existed, and "every agent" quietly became "four of them".
+  const providers: readonly ProviderId[] = RUNNER_ORDER
 
   if (!data.editable) {
     return (

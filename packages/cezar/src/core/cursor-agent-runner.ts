@@ -24,6 +24,7 @@ import type {
 } from './agent-runner.ts';
 import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
+import { disclaimedCommand } from './disclaim-spawn.ts';
 import { readNdjson } from './ndjson.ts';
 import {
   createCursorUiState,
@@ -137,14 +138,13 @@ export class CursorAgentRunner implements AgentRunner {
     let child: ChildProcessWithoutNullStreams;
     try {
       const isNodeScript = /\.[cm]?js$/.test(this.bin);
-      child = nodeSpawn(
+      const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
+      const [file, argv] = disclaimedCommand(
         isNodeScript ? process.execPath : this.bin,
         isNodeScript ? [this.bin, ...args] : args,
-        {
-          cwd: spec.cwd,
-          env: buildChildEnv({ backend: this.backend, extraEnv: spec.env }),
-        },
+        env,
       );
+      child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       throw new Error(`failed to spawn Cursor agent (${this.bin}): ${message}`);

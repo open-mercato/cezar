@@ -35,7 +35,7 @@ const SAFE_SESSION_ID = /^[A-Za-z0-9._][A-Za-z0-9._-]{0,199}$/
  *  `Record<Runner, string>` rather than a `switch`/`default`: the previous shape silently
  *  mislabelled an unhandled runner as Claude instead of failing to compile, which is exactly
  *  how the cursor gap here stayed invisible through two reviews and a full green gate (#807) —
- *  adding a fifth backend without a row here is now a type error, not a silent wrong command. */
+ *  adding a backend without a row here is now a type error, not a silent wrong command. */
 const RESUME_COMMAND_PREFIX: Record<Runner, string> = {
   claude: 'claude --resume',
   codex: 'codex resume',
@@ -44,6 +44,7 @@ const RESUME_COMMAND_PREFIX: Record<Runner, string> = {
   // Junie names the session by flag, not positionally — handled in resumeCommand.
   junie: 'junie --resume',
   pi: 'pi --session',
+  copilot: 'copilot --resume',
 }
 
 /** The per-backend take-over command. Records without a runner recorded predate the runner

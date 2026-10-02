@@ -21,6 +21,8 @@ export * from './dispatch.ts';
 export * from './dashboard.ts';
 export * from './dashboard-costs.ts';
 export * from './dashboard-overview.ts';
+export * from './dashboard-insights.ts';
 export * from './host.ts';
 export * from './tracker.ts';
 export * from './self-update.ts';
+export * from './star-count.ts';

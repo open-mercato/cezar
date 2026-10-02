@@ -1,4 +1,9 @@
-import type { ProcessUsage, RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
+import type {
+  ProcessUsage,
+  ReferenceStatus,
+  RunRecord,
+  RunStatus,
+} from '@open-mercato/cezar-api-client'
 import { groupTitle, runTitle, type ListView } from '@/lib/task-groups'
 
 /**
@@ -132,8 +137,30 @@ export function githubRepoBase(remote: string | undefined): string | undefined {
  *  is about (#407 — review/continue tasks reference an existing PR instead of opening one).
  *  Action gates (Draft PR, Create PR→View PR) must keep reading `pullRequestUrl` directly:
  *  a task that reviewed PR X must still be able to open its own PR from its branch. */
+export interface TaskPrRef {
+  number: number
+  url?: string
+  origin: 'created' | 'marker' | 'legacy' | 'derived'
+}
+
 export function taskPrUrl(run: TaskReferenceInput): string | undefined {
-  return prUrls(run)[0]
+  return taskPrRefs(run)[0]?.url ?? prUrls(run)[0]
+}
+
+/** Ordered PR associations, with a compatibility projection for records written before prRefs. */
+export function taskPrRefs(run: TaskReferenceInput, repoBase?: string): TaskPrRef[] {
+  if (!run.prRefs?.length) {
+    return prUrls(run)
+      .map((url) => ({ number: Number(prNumber(url)), url, origin: 'legacy' as const }))
+      .filter((ref) => Number.isInteger(ref.number) && ref.number > 0)
+  }
+  const rank = { created: 0, marker: 1, legacy: 2, derived: 3 } as const
+  const refs = [...run.prRefs].sort((a, b) => rank[a.origin] - rank[b.origin])
+  return refs.map((ref) => ({
+    number: ref.number,
+    url: ref.url ?? synthesizeUrl('PR', ref.number, repoBase),
+    origin: ref.origin,
+  }))
 }
 
 /**
@@ -190,12 +217,28 @@ export type TaskReferenceInput = Pick<
   | 'issueNumber'
   | 'referencedIssueUrl'
   | 'markerRefs'
->
+> & { prRefs?: readonly TaskPrRef[] }
 
 export interface TaskReference {
   kind: 'PR' | 'Issue'
   number: number
   url?: string
+}
+
+/** Keep historical associations visible, but do not let a PR authoritatively closed without a
+ * merge outrank a live or merged association. Unknown/loading statuses preserve stored order. */
+export function prioritizeTaskReferences(
+  references: readonly TaskReference[],
+  statusOf: (reference: TaskReference) => ReferenceStatus | undefined,
+): TaskReference[] {
+  return references
+    .map((reference, index) => ({ reference, index }))
+    .sort((a, b) => {
+      const aClosed = a.reference.kind === 'PR' && statusOf(a.reference) === 'closed'
+      const bClosed = b.reference.kind === 'PR' && statusOf(b.reference) === 'closed'
+      return Number(aClosed) - Number(bClosed) || a.index - b.index
+    })
+    .map(({ reference }) => reference)
 }
 
 /**
@@ -246,16 +289,18 @@ export interface TaskReference {
  * Deduped by kind+number, so one reference reached through two fields stays one chip.
  */
 export function taskReferences(run: TaskReferenceInput, repoBase?: string): TaskReference[] {
-  const prs = prUrls(run)
+  const prs = run.prRefs?.length
+    ? taskPrRefs(run, repoBase).map((ref) => ({ number: ref.number, url: ref.url }))
+    : prUrls(run).map((url) => ({ url, number: Number(prNumber(url)) || undefined }))
   const declared = run.markerRefs?.pr
   const sources: { kind: TaskReference['kind']; url?: string; number?: number }[] = [
     // The uncorroborated declaration, ahead of everything (see above). When a URL below does name
     // it, this entry is omitted entirely rather than added and deduped — that keeps the ORDER the
     // ordinary case had, with the created PR first.
-    ...(declared === undefined || prs.some((url) => prNumber(url) === String(declared))
+    ...(declared === undefined || prs.some((ref) => ref.number === declared)
       ? []
       : [{ kind: 'PR' as const, number: declared }]),
-    ...prs.map((url) => ({ kind: 'PR' as const, url })),
+    ...prs.map((ref) => ({ kind: 'PR' as const, url: ref.url, number: ref.number })),
     // Numeric-only: a reference known by number before any URL was scraped. `repoBase` turns it
     // into a real link — see the synthesis note below.
     { kind: 'PR', number: run.prNumber },
@@ -268,14 +313,24 @@ export function taskReferences(run: TaskReferenceInput, repoBase?: string): Task
   for (const source of sources) {
     const number = source.url ? Number(prNumber(source.url)) : source.number
     if (!number || !Number.isInteger(number)) continue
-    const key = `${source.kind}#${number}`
-    if (seen.has(key)) continue
-    seen.add(key)
     // A number with no URL becomes one from the PROJECT's own repo — the same synthesis rule
     // `taskIssueUrl` already applies, and the same hard limit: only ever the project's repo,
     // never a URL scraped from a transcript, which routinely names another repository (#526).
     // Without a `repoBase` the chip stays inert text rather than linking somewhere invented.
     const url = source.url ?? synthesizeUrl(source.kind, number, repoBase)
+    const existingIndex = references.findIndex(
+      (reference) =>
+        reference.kind === source.kind &&
+        reference.number === number &&
+        (!reference.url || !url || reference.url === url),
+    )
+    if (existingIndex >= 0) {
+      if (!references[existingIndex]!.url && url) references[existingIndex] = { ...references[existingIndex]!, url }
+      continue
+    }
+    const key = `${source.kind}#${number}#${url ?? ''}`
+    if (seen.has(key)) continue
+    seen.add(key)
     references.push({ kind: source.kind, number, ...(url ? { url } : {}) })
   }
   return references

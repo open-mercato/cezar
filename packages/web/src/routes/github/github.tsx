@@ -38,6 +38,7 @@ import { CenteredState } from '@/components/centered-state'
 import { Diff, type DiffFileChange } from '@/components/diff'
 import type { EnginePick } from '@/components/engine-pills'
 import { GithubIcon } from '@/components/icons'
+import { Segmented } from '@/components/segmented'
 import { TabLink } from '@/components/tab-link'
 import { Button } from '@/components/ui/button'
 import {
@@ -58,7 +59,14 @@ import { orderSkillsByUsage } from '@/lib/skills'
 import { cn, isHttpUrl } from '@/lib/utils'
 
 import { Markdown } from '../task-thread/markdown'
-import { allLabels, filterGithubItems, labelChipStyle, shouldSearchForge } from './github-filter'
+import {
+  allLabels,
+  filterGithubItems,
+  labelChipStyle,
+  shouldSearchForge,
+  sortGithubItems,
+  type GithubSort,
+} from './github-filter'
 import { GithubLoading } from './github-loading'
 import { HandToAgent } from './hand-to-agent'
 import { readFollowupSelection, writeFollowupSelection } from './hand-to-agent-draft'
@@ -150,8 +158,19 @@ export function GithubRoute({
   const automationsAvailable = useHealth().data?.capabilities?.automations === true
   const gh = list.data
 
+  // The remembered list order (#gh-sort). Read up here, above the checks window below, because
+  // that window is "the PRs the user can see" and flipping to oldest-first changes which ones
+  // those are. Anything but the stored `oldest` — absent key, old ui-state.json, a value from a
+  // newer cockpit — means the default, which is the order `gh` already returns.
+  const uiState = useUiState()
+  const sort: GithubSort = uiState.data?.githubSort === 'oldest' ? 'oldest' : 'newest'
+  const sortedPrs = useMemo(
+    () => (gh?.available ? sortGithubItems(gh.prs, sort) : []),
+    [gh, sort],
+  )
+
   // Lazy checks glyphs for the on-screen PR window (#664). Hooks must run before the early
-  // returns below, so derive the PR numbers straight from the list payload rather than the
+  // returns below, so derive the PR numbers from the sorted list payload rather than the
   // post-filter `items`. The URL-selected PR is pinned into the window so the detail badge
   // hydrates even when it sits past the row cap.
   const selectedNumber = n === undefined ? null : Number.parseInt(n, 10)
@@ -161,12 +180,12 @@ export function GithubRoute({
     if (view === 'prs' && selectedNumber !== null && Number.isInteger(selectedNumber)) {
       nums.add(selectedNumber)
     }
-    for (const pr of gh.prs) {
+    for (const pr of sortedPrs) {
       if (nums.size >= CHECKS_WINDOW) break
       nums.add(pr.number)
     }
     return [...nums]
-  }, [gh, view, selectedNumber])
+  }, [gh, sortedPrs, view, selectedNumber])
   const checksQuery = useGithubChecks(checkPrNumbers, view === 'prs')
   const checksMap = checksQuery.data?.available ? checksQuery.data.checks : undefined
 
@@ -185,6 +204,23 @@ export function GithubRoute({
         toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
         // The write failed — fall back to the server's truth rather than keep the tab
         // claiming a persistence it never got.
+        void queryClient.invalidateQueries({ queryKey: queryKeys.uiState })
+      })
+  }
+
+  // The list order (#gh-sort), remembered the same way the sub-tab is. A presentation pref, not a
+  // fetch parameter: `LIST_LIMIT` pulls the whole open set in one shot, so flipping the order
+  // re-renders what is already in hand and never re-slices which items were fetched.
+  //
+  // Same read-then-write shape as `saveGithubView`, including the eager cache patch — without it
+  // the toggle would render the OLD order until the PUT resolved, which on a slow write reads as
+  // a click that did nothing.
+  const saveGithubSort = (next: GithubSort) => {
+    queryClient.setQueryData<UiState>(queryKeys.uiState, (prev) => ({ ...prev, githubSort: next }))
+    putUiState({ githubSort: next })
+      .then((merged) => queryClient.setQueryData(queryKeys.uiState, merged))
+      .catch((error: unknown) => {
+        toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
         void queryClient.invalidateQueries({ queryKey: queryKeys.uiState })
       })
   }
@@ -242,7 +278,6 @@ export function GithubRoute({
   // page reload too — previously this was plain route state, gone on refresh.
   const workflows = useWorkflows()
   const skills = useSkills()
-  const uiState = useUiState()
   const [workflow, setWorkflow] = useState<string | null>(() => readFollowupSelection().workflow)
   const [selectedSkills, setSelectedSkills] = useState<readonly string[]>(
     () => readFollowupSelection().skills,
@@ -287,9 +322,12 @@ export function GithubRoute({
   // ask the forge instead. Like the checks window above, these hooks must sit ABOVE the early
   // returns, so the open set is derived from the payload rather than from the post-filter `items`.
   const debouncedQuery = useDebouncedValue(query, SEARCH_DEBOUNCE_MS)
+  // Sorted here rather than at render time so every consumer below — the filter, the row list,
+  // the checks window — agrees on one order, and so the up-to-`LIST_LIMIT` sort is paid once per
+  // (payload, view, order) instead of on every keystroke.
   const openItems = useMemo(
-    () => (gh?.available ? (view === 'issues' ? gh.issues : gh.prs) : []),
-    [gh, view],
+    () => (gh?.available ? (view === 'issues' ? sortGithubItems(gh.issues, sort) : sortedPrs) : []),
+    [gh, view, sort, sortedPrs],
   )
   // Evaluated against the DEBOUNCED query, not the live one: the fallback must be decided by the
   // same text the request will carry, or a fast typist fires a `gh` subprocess per keystroke.
@@ -376,9 +414,14 @@ export function GithubRoute({
   // query text, so without this an open item could occupy both lists at once (#856). "Found on
   // GitHub" only ever means "past the open list", so an overlap is never information.
   const listedNumbers = new Set(items.map((item) => item.number))
+  // Sorted by the same control as the list above: the two lists sit one under the other, and an
+  // order the user chose that visibly stops applying halfway down the page reads as a bug.
   const searchHits = searchPayload
-    ? filterGithubItems(searchPayload.items, { labels: labelFilter }).filter(
-        (item) => !listedNumbers.has(item.number),
+    ? sortGithubItems(
+        filterGithubItems(searchPayload.items, { labels: labelFilter }).filter(
+          (item) => !listedNumbers.has(item.number),
+        ),
+        sort,
       )
     : []
   // "A search is coming or running" — the debounce window counts. Without it, the moment between
@@ -496,8 +539,12 @@ export function GithubRoute({
               Pull requests · {countLabel(gh.prs.length)}
             </TabLink>
           </div>
-          <div className="mt-2.5 flex items-center gap-2 pb-3">
-            <div className="relative min-w-0 flex-1">
+          {/* Wraps rather than squeezes: on a phone the sort control below is ~145px, and with
+              a non-wrapping row the search field shrank to about a quarter of its placeholder.
+              The field's `min-w` is what forces the wrap — `flex-1` alone would keep shrinking
+              it to nothing instead. Nothing wraps once there is room, so desktop is unchanged. */}
+          <div className="mt-2.5 flex flex-wrap items-center gap-2 pb-3">
+            <div className="relative min-w-[11rem] flex-1">
               <SearchIcon
                 aria-hidden="true"
                 className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-soft-foreground"
@@ -517,6 +564,20 @@ export function GithubRoute({
               colors={labelColors}
               selected={labelFilter}
               onChange={setLabelFilter}
+            />
+            {/* One click to work the backlog from the long-waiting end instead of the newest.
+                No `allowRelease`: there is no third "unordered" state to fall back to — the
+                payload's incoming order is itself `newest`. */}
+            <Segmented<GithubSort>
+              slot="gh-sort"
+              label="Sort order"
+              value={sort}
+              options={[
+                { value: 'newest', label: 'Newest' },
+                { value: 'oldest', label: 'Oldest' },
+              ]}
+              onChange={saveGithubSort}
+              className="shrink-0"
             />
           </div>
         </header>
@@ -1061,7 +1122,7 @@ function GithubMergeBox({ number }: { number: number }) {
                 aria-label="Merge method"
                 value={selectedMethod ?? ''}
                 onChange={(event) => setMethod(event.target.value as GithubMergeMethod)}
-                className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm"
+                className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
               >
                 {state.methods.map((candidate) => <option key={candidate} value={candidate}>{mergeLabels[candidate]}</option>)}
               </select>
@@ -1143,7 +1204,7 @@ function GithubPrChanges({ item }: { item: GithubItem }) {
       <div className="mt-4 grid min-w-0 gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
         <aside className="min-w-0">
           <input aria-label="Filter changed files" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter files…" className="min-h-11 w-full rounded-md border border-input bg-background px-3 text-sm" />
-          <select aria-label="Select changed file" value={selected ?? ''} onChange={(e) => setSelected(e.target.value)} className="mt-2 min-h-11 w-full rounded-md border border-input bg-background px-2 text-sm lg:hidden">
+          <select aria-label="Select changed file" value={selected ?? ''} onChange={(e) => setSelected(e.target.value)} className="mt-2 min-h-11 w-full rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 lg:hidden">
             {files.map((file) => <option key={file.path}>{file.path}</option>)}
           </select>
           <ul className="mt-2 hidden max-h-[60vh] overflow-auto lg:block">

@@ -299,10 +299,11 @@ checksum = "6d43a04d8753f35258c91f8ec639f792891f748a1edbd759cf1dcea3382ad83c"
 
 [[package]]
 name = "cezar-desktop"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "ctrlc",
  "junction",
+ "libc",
  "serde",
  "serde_json",
  "tauri",

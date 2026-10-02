@@ -28,6 +28,7 @@ import {
   getSkillsWhenReady,
   getTodos,
   getUiState,
+  getWorkspaceConfig,
   getWorkflows,
   openRunInCli,
   patchRun,
@@ -377,6 +378,41 @@ describe('project scope (multi-project spec, step 3.1)', () => {
 })
 
 describe('response parsing', () => {
+  const workspaceConfig = (resources: Record<string, unknown>) => ({
+    browseRoot: '~/',
+    projectsDir: '~/cezar/projects',
+    skillsAutoUpdate: null,
+    effectiveSkillsAutoUpdate: true,
+    composerDefaults: {
+      autonomous: null,
+      worktree: null,
+      inheritedAutonomous: 'source-dependent',
+      inheritedWorktree: true,
+    },
+    resources: {
+      maxParallel: 2,
+      maxMonitoringSessions: 2,
+      monitoringWakeIntervalMinutes: 5,
+      autoResumeOnUsageLimit: true,
+      memoryLimitMb: null,
+      worktreeRetentionDefault: 10,
+      ...resources,
+    },
+    agentDefaults: {},
+  })
+
+  it.each([
+    ['absent defaults to 15', {}, 15],
+    ['null stays disabled', { idleTimeoutMinutes: null }, null],
+    ['zero stays disabled', { idleTimeoutMinutes: 0 }, 0],
+    ['positive values pass through', { idleTimeoutMinutes: 30 }, 30],
+  ])('normalizes idle timeout: %s', async (_label, resources, expected) => {
+    reply(workspaceConfig(resources))
+    await expect(getWorkspaceConfig()).resolves.toMatchObject({
+      resources: { idleTimeoutMinutes: expected },
+    })
+  })
+
   it('normalizes provider status into canonical order without unexpected fields', async () => {
     reply({
       ignored: 'top-level raw value',

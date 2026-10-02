@@ -364,6 +364,20 @@
   --radius-md: var(--radius);
 }
 
+/* The landing's `//` eyebrow before a dashboard module heading. CSS generated content IS part
+ * of an element's accessible name, so the slashes carry empty alt text (`/ ""`): a screen
+ * reader announces "Usage & cost", not "slash slash Usage & cost". The plain declaration first
+ * is the fallback for engines without content alt text, which drop the second one. */
+@utility section-mark {
+  &::before {
+    content: '//';
+    content: '//' / '';
+    margin-right: 0.375rem;
+    letter-spacing: normal;
+    color: var(--violet);
+  }
+}
+
 /* ---------- base ---------- */
 
 @layer base {

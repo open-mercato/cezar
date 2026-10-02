@@ -114,6 +114,11 @@ export const BACKEND_MODEL_MAP: Readonly<Record<AgentBackend, BackendModelMap>> 
   // `foo/bar` string is still rejected loudly, matching a real foreign
   // provider on any other single-provider backend.
   junie: { defaultProvider: 'junie' },
+  // Copilot's `--model` takes a bare, provider-less id (`auto`, `gpt-5.4`, `claude-sonnet-4`):
+  // GitHub routes it, whichever vendor ultimately answers, so GitHub is the provider that served
+  // the run (#405's invariant). Rejecting a bare id the way opencode and pi do would reject the
+  // only form Copilot accepts.
+  copilot: { defaultProvider: 'github' },
 };
 
 const SLASH = '/';

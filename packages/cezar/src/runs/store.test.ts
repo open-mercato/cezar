@@ -849,6 +849,43 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     return { store, run };
   };
 
+  it('keeps earlier PR associations when a follow-up declaration arrives', () => {
+    const { store, run } = freshRun('Address GitHub pull request #4326');
+    store.applyMarkerRefs(run.id, { pr: 4326 });
+    store.applyMarkerRefs(run.id, { pr: 5366 });
+    expect(store.getRun(run.id)?.prRefs?.map((ref) => ref.number)).toEqual([4326, 5366]);
+    expect(store.getRun(run.id)?.prNumber).toBe(4326);
+  });
+
+  it('deduplicates repeated declarations and preserves a URL when it arrives later', () => {
+    const { store, run } = freshRun();
+    store.applyMarkerRefs(run.id, { pr: 42 });
+    store.recordPrRef(run.id, {
+      number: 42,
+      url: 'https://github.com/open-mercato/cezar/pull/42',
+      origin: 'marker',
+    });
+    expect(store.getRun(run.id)?.prRefs).toHaveLength(1);
+    expect(store.getRun(run.id)?.prRefs?.[0]?.url).toBe('https://github.com/open-mercato/cezar/pull/42');
+  });
+
+  it('preserves legacy scalar associations before a replacement patch is applied', () => {
+    const { store, run } = freshRun();
+    store.updateRun(run.id, { pullRequestUrl: 'https://github.com/o/r/pull/7' });
+    store.updateRun(run.id, { pullRequestUrl: 'https://github.com/o/r/pull/8' });
+    expect(store.getRun(run.id)?.prRefs?.map((ref) => ref.number)).toEqual([7, 8]);
+  });
+
+  it('keeps same-number PRs from different repositories as separate links', () => {
+    const { store, run } = freshRun();
+    store.recordPrRef(run.id, { number: 7, url: 'https://github.com/o/r/pull/7', origin: 'created' });
+    store.recordPrRef(run.id, { number: 7, url: 'https://github.com/other/r/pull/7', origin: 'marker' });
+    expect(store.getRun(run.id)?.prRefs?.map((ref) => ref.url)).toEqual([
+      'https://github.com/o/r/pull/7',
+      'https://github.com/other/r/pull/7',
+    ]);
+  });
+
   it('marker numbers land on the record and persist', () => {
     const { store, run } = freshRun();
     store.applyMarkerRefs(run.id, { pr: 442, issue: 433 });
@@ -958,9 +995,8 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     expect(loaded?.referencedPullRequestUrl).toBe(
       'https://github.com/open-mercato/open-mercato/pull/4326',
     );
-    // The about-number too: it is what paints a numeric-only chip, and the created PR already
-    // has a field of its own.
-    expect(loaded?.prNumber).toBe(4326);
+    // The compatibility projection follows the created tier; the about PR remains in prRefs.
+    expect(loaded?.prNumber).toBe(5366);
     expect(loaded?.markerRefs?.pr).toBe(5366);
   });
 
@@ -1035,7 +1071,7 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     );
   });
 
-  it('a declaration naming some OTHER PR still overrides the fuzzy tier', () => {
+  it('a declaration naming some OTHER PR stays alongside the created PR', () => {
     const { store, run } = freshRun('task');
     store.appendEvent(run.id, {
       type: 'result',
@@ -1043,7 +1079,9 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     });
     store.applyMarkerRefs(run.id, { pr: 500 });
     const loaded = store.getRun(run.id);
-    expect(loaded?.prNumber).toBe(500);
+    // Created provenance is stronger than a later marker; both remain reachable in prRefs.
+    expect(loaded?.prNumber).toBe(42);
+    expect(loaded?.prRefs?.map((ref) => ref.number)).toEqual([42, 500]);
     expect(loaded?.referencedPullRequestUrl).toBeUndefined(); // no candidate ends in /500
   });
 });

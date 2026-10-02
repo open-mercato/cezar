@@ -8,7 +8,7 @@ import { useNow } from '@/lib/use-now'
 import { dayTime, relativeIn } from '@/lib/automation-format'
 import { enabledAutomations, useDashboardAutomations } from './automations-data'
 import { ExportRows } from './export-rows'
-import { Freshness } from './presentation'
+import { DisclosureChevron, disclosureSummary, Freshness, widgetHeader, widgetHeading } from './presentation'
 
 export function DashboardAutomations() {
   const gate = useAutomationsGate()
@@ -26,13 +26,13 @@ export function DashboardAutomations() {
       data-export-context={`Enabled automations · showing ${visible.length} of ${rows.length} loaded · ${failed ? 'partial coverage' : 'available projects'}`}
       className="min-w-0 gap-0 py-0"
     >
-      <div className="flex items-center justify-between gap-2 border-b px-4 py-3">
-        <h2 className="flex items-center gap-2 text-sm font-semibold">
-          <CalendarClock className="size-4 text-muted-foreground" />
+      <div className={widgetHeader}>
+        <h2 className={`flex items-center ${widgetHeading}`}>
           Automations
+          <CalendarClock className="ml-2 size-3.5 text-soft-foreground" aria-hidden="true" />
         </h2>
         {!gate.off && query.data && (
-          <span className="text-xs text-muted-foreground">
+          <span className="font-mono text-[11px] text-soft-foreground">
             {rows.length} enabled{failed ? ' · partial' : ''}
           </span>
         )}
@@ -96,7 +96,7 @@ export function DashboardAutomations() {
               <div
                 key={`${project.id}:${a.id}`}
                 data-export-row
-                className="border-b px-4 py-3 last:border-0"
+                className="border-b px-4 py-3 transition-colors last:border-0 hover:bg-muted/30"
               >
                 <Link
                   className="block min-h-11 text-sm font-medium hover:underline"
@@ -148,9 +148,10 @@ export function DashboardAutomations() {
           {!pending && (
             <details className="border-t px-4 py-2 text-xs text-muted-foreground">
               <summary
-                className="min-h-11 cursor-pointer py-3"
+                className={`${disclosureSummary} min-h-11`}
                 data-export-heading="Project automations"
               >
+                <DisclosureChevron />
                 Manage automations by project
               </summary>
               {query.data?.map((p) => (

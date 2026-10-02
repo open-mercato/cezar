@@ -219,7 +219,13 @@ export function templatePick(template: AutomationTemplate): TemplatePick {
 }
 
 const isRunner = (value: string): value is Runner =>
-  value === 'claude' || value === 'codex' || value === 'junie' || value === 'opencode' || value === 'pi'
+  value === 'claude' ||
+  value === 'codex' ||
+  value === 'junie' ||
+  value === 'opencode' ||
+  value === 'cursor' ||
+  value === 'pi' ||
+  value === 'copilot'
 
 /** "Use this": the template fills name, kind, trigger, prompt and task; everything else stays. */
 export function applyTemplate(draft: EditorDraft, template: TemplatePick): EditorDraft {

@@ -1,6 +1,10 @@
 import type { ProviderStatus, ProviderStatusResponse, Runner } from '@open-mercato/cezar-api-client'
 
-const RUNNER_ORDER: readonly Runner[] = ['claude', 'codex', 'junie', 'opencode', 'cursor', 'pi']
+/** The cockpit's canonical runner order, exported so a surface that renders one row per
+ *  provider derives it instead of keeping a fifth hand-written copy — the copy in
+ *  `accounts-section.tsx` silently dropped Copilot when #582 added it, and nothing in the
+ *  type system noticed, because a `ProviderId[]` literal is under-wide, never wrong. */
+export const RUNNER_ORDER: readonly Runner[] = ['claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot']
 const PROVIDER_STATES = new Set(['connected', 'disconnected', 'not-installed', 'unknown'])
 
 function isRecord(value: unknown): value is Record<string, unknown> {

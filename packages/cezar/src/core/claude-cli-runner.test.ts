@@ -51,6 +51,18 @@ describe('buildClaudeArgs systemPrompt', () => {
   });
 });
 
+describe('buildClaudeArgs output mode', () => {
+  const spec = { userPrompt: 'do it', cwd: '/tmp' };
+
+  it('runs in print mode, which both stream-json formats require', () => {
+    expect(buildClaudeArgs(spec)).toContain('--print');
+  });
+
+  it('asks for partial messages so text streams as deltas', () => {
+    expect(buildClaudeArgs(spec)).toContain('--include-partial-messages');
+  });
+});
+
 describe('buildClaudeArgs approval gate', () => {
   const spec = { userPrompt: 'do it', cwd: '/tmp' };
 
