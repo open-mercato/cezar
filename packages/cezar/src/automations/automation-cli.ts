@@ -42,7 +42,7 @@ const USAGE = `cez automation — create and manage automations (GitHub/Jira/Lin
                                                 create one from a JSON definition (stdin when neither flag is given);
                                                 paused unless --enable
   cez automation add --name <name> (--cron "<M H * * *>" | --on <event>[,<event>] --every <5m|1h>)
-                     [--prompt <text> | --prompt-file <path>] [--workflow <w>] [--runner claude|codex|opencode]
+                     [--prompt <text> | --prompt-file <path>] [--workflow <w>] [--runner claude|codex|opencode|pi|gemini|omp]
                      [--model <m>] [--autonomous | --no-autonomous] [--dispatch [--max-subtasks N] [--review-child]]
                      [--label <l>]... [--author <a>]... [--enable]
                                                 the same, from flags: --cron takes "M H * * *" (daily), "M H * * 1-5"

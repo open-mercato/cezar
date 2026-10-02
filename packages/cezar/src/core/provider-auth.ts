@@ -1,11 +1,14 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { AGENT_MODELS_LOCKED_ENV } from './agent-model-policy.ts';
 import { profileEnv } from './agent-profiles.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
 import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
+import { agentHomePaths } from '../paths.ts';
 
-export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi'] as const;
+export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'omp'] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 export type ProviderConnectionState =
   | 'connected'
@@ -253,6 +256,50 @@ function parsePiStatus(result: ProviderCommandResult): ProviderConnectionState |
   return null;
 }
 
+/**
+ * omp has no auth-status subcommand: `--version` proves the CLI is there. Credentials live in
+ * omp's own `agent.db` / OS keychain plus the provider-key environment (the same MULTI_PROVIDER_*
+ * set `buildChildEnv` forwards). Evidence — a NON-EMPTY provider key in the environment, or an
+ * agent.db in the active agent dir (`$PI_CODING_AGENT_DIR` or `~/.omp/agent`) — counts as
+ * `connected`; its absence is `unknown`, never `disconnected` (a keychain-only login is invisible
+ * from outside), and carries the auth hint.
+ */
+const OMP_AUTH_HINT =
+  'omp keeps its login in its own auth store — run `omp` once and log in; provider API keys in the environment (e.g. OPENROUTER_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY) also work';
+
+function parseOmpStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+  if (result.exitCode !== 0 || !/\d+\.\d+/.test(result.stdout)) return null;
+  return ompHasConfiguredCredential() ? 'connected' : 'unknown';
+}
+
+function ompHasConfiguredCredential(): boolean {
+  // A name match is not enough: `OPENROUTER_API_KEY=` (set but empty) is no credential.
+  const hasNonEmptyEnvKey = Object.keys(process.env).some((name) =>
+    OMP_CREDENTIAL_PREFIXES.some((prefix) =>
+      name.toUpperCase().startsWith(prefix) && (process.env[name] ?? '').trim() !== '',
+    ),
+  );
+  if (hasNonEmptyEnvKey) return true;
+  // omp persists logins in its own auth store; its presence is the file-shaped evidence.
+  return existsSync(join(agentHomePaths(process.env).omp, 'agent.db'));
+}
+
+/** The provider-key families omp resolves from the environment (mirrors MULTI_PROVIDER_PREFIXES in agent-env.ts). */
+const OMP_CREDENTIAL_PREFIXES: readonly string[] = [
+  'OPENAI_',
+  'ANTHROPIC_',
+  'AZURE_OPENAI_',
+  'OPENROUTER_',
+  'GROQ_',
+  'MISTRAL_',
+  'GEMINI_',
+  'GOOGLE_GENERATIVE_AI_',
+  'DEEPSEEK_',
+  'XAI_',
+  'PERPLEXITY_',
+  'TOGETHER_',
+  'FIREWORKS_',
+];
 const DESCRIPTORS: readonly ProviderDescriptor[] = [
   {
     id: 'claude',
@@ -296,6 +343,15 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     loginArgs: ['/login'],
     installHint: 'Install pi, then run `pi /login`.',
     parse: parsePiStatus,
+  },
+  {
+    id: 'omp',
+    executable: () => process.env.CEZ_OMP_BIN ?? 'omp',
+    statusArgs: ['--version'],
+    // No login subcommand: the interactive CLI's own auth flow (agent.db / keychain) is the entry.
+    loginArgs: [],
+    installHint: `Install OMP (brew install can1357/tap/omp). ${OMP_AUTH_HINT}`,
+    parse: parseOmpStatus,
   },
 ];
 

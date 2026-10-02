@@ -1,0 +1,420 @@
+[
+  {
+    "type": "turn.started",
+    "turnId": "turn_1"
+  },
+  {
+    "type": "session.started",
+    "sessionId": "01a0e802-32f8-75e2-87bb-85d6172d97db",
+    "backend": "omp",
+    "model": "deepseek/deepseek-v4-flash-0731"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "reasoning",
+      "id": "msg-2_reasoning_0",
+      "text": ""
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": "The"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": " user asks"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": " for a long essay about the"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": " history of computing, at least"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": " 200 words, no tools"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": ". This is a straightforward writing"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": " task - no"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": " tools"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": " needed,"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": " no code"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": "base investigation. I should just"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": " write the"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": " essay directly.\n\nLet me write"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": " a solid"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": ", factual"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": " essay covering"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": " the history of computing, at"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": " least 200 words."
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "reasoning",
+      "id": "msg-2_reasoning_0",
+      "text": "The user asks for a long essay about the history of computing, at least 200 words, no tools. This is a straightforward writing task - no tools needed, no codebase investigation. I should just write the essay directly.\n\nLet me write a solid, factual essay covering the history of computing, at least 200 words."
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "msg-2_text_1",
+      "role": "assistant",
+      "text": ""
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": "#"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " A"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " Brief History of Computing\n\nComput"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": "ing began not"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " with electronics"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " but with mechanism"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " and"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " logic. The ab"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": "acus, thousands"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " of years old, gave"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " humans"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " a physical"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " device for arithmetic"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": ". In"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " the seventeenth century, Bla"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": "ise Pascal's adding"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " machine and Gott"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": "fried Wilhelm Leibniz's stepped"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " reck"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": "oner automated"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " calculation"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " itself, while"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " Leibniz also"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " dreamed of"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " a universal"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " symbolic"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " language. The nineteenth"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " century brought the crucial"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " conceptual"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " leap: Charles B"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": "abbage's Analytical"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " Engine, a design"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " with"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " mill"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": ","
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " store"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": ", and punched"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": "-card"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " input"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": ", was"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " programmable"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " in principle"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " though"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " never built"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_text_1",
+    "field": "text",
+    "delta": " in his"
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "cancelled"
+  }
+]

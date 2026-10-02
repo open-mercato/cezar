@@ -42,6 +42,9 @@ export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
   // overlap (`anthropic/claude-sonnet-5`), and a shared id present in pi's list but absent from
   // OpenCode's empty one would read as "another runner's preset" and be refused.
   pi: [],
+  // omp is pi's successor with the same `provider/model` convention and no default provider
+  // (#387's reasoning for pi applies verbatim); its picker gets the same structural guard.
+  omp: [],
 };
 
 /**

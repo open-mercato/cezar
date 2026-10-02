@@ -1,0 +1,393 @@
+[
+  {
+    "type": "turn.started",
+    "turnId": "turn_1"
+  },
+  {
+    "type": "session.started",
+    "sessionId": "01a0e801-1999-734d-8ba2-827ae1eae206",
+    "backend": "omp",
+    "model": "deepseek/deepseek-v4-flash-0731"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "reasoning",
+      "id": "msg-2_reasoning_0",
+      "text": ""
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": "The"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": " user wants me to edit calc"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": ".py, changing"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": " `a - b` to"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": " `a + b`, then"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": " run a"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": " shell command, then reply with"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": " one word:"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": " done.\n\nLet"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": " me first read calc"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": ".py to know the"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": " exact line before editing ("
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": "edit tool requires reading first"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-2_reasoning_0",
+    "field": "reasoning",
+    "delta": ")."
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "reasoning",
+      "id": "msg-2_reasoning_0",
+      "text": "The user wants me to edit calc.py, changing `a - b` to `a + b`, then run a shell command, then reply with one word: done.\n\nLet me first read calc.py to know the exact line before editing (edit tool requires reading first)."
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "call_8115570aa5ba4dc79033a87f|fc_tmp_1khahl2oe0j",
+      "name": "read",
+      "toolKind": "read",
+      "title": "Read calc.py",
+      "status": "pending",
+      "input": {
+        "i": "Reading calc.py before edit",
+        "path": "calc.py"
+      }
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 88,
+      "output": 120,
+      "total": 7888,
+      "cacheRead": 7680,
+      "cacheWrite": 0
+    },
+    "costUsd": 0.000163128
+  },
+  {
+    "type": "item.updated",
+    "item": {
+      "kind": "tool",
+      "id": "call_8115570aa5ba4dc79033a87f|fc_tmp_1khahl2oe0j",
+      "name": "read",
+      "toolKind": "read",
+      "title": "Read calc.py",
+      "status": "running",
+      "input": {
+        "path": "calc.py"
+      }
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "call_8115570aa5ba4dc79033a87f|fc_tmp_1khahl2oe0j",
+      "name": "read",
+      "toolKind": "read",
+      "title": "Read calc.py",
+      "status": "completed",
+      "input": {
+        "path": "calc.py"
+      },
+      "output": "def add(a,b):\n    return a - b  # bug\n"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "call_2a11839822c94e80b793fc39|fc_tmp_98rlcd5bnih",
+      "name": "edit",
+      "toolKind": "edit",
+      "title": "Edit calc.py",
+      "status": "pending",
+      "input": {
+        "i": "Fixing subtraction to addition",
+        "path": "calc.py",
+        "old_string": "return a - b  # bug",
+        "new_string": "return a + b  # bug",
+        "replace_all": null
+      },
+      "diffs": [
+        {
+          "path": "calc.py",
+          "oldText": "return a - b  # bug",
+          "newText": "return a + b  # bug"
+        }
+      ]
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 321,
+      "output": 250,
+      "total": 15931,
+      "cacheRead": 15360,
+      "cacheWrite": 0
+    },
+    "costUsd": 0.000332501
+  },
+  {
+    "type": "item.updated",
+    "item": {
+      "kind": "tool",
+      "id": "call_2a11839822c94e80b793fc39|fc_tmp_98rlcd5bnih",
+      "name": "edit",
+      "toolKind": "edit",
+      "title": "Edit calc.py",
+      "status": "running",
+      "input": {
+        "path": "calc.py",
+        "old_string": "return a - b  # bug",
+        "new_string": "return a + b  # bug"
+      },
+      "diffs": [
+        {
+          "path": "calc.py",
+          "oldText": "return a - b  # bug",
+          "newText": "return a + b  # bug"
+        }
+      ]
+    }
+  },
+  {
+    "type": "item.updated",
+    "item": {
+      "kind": "tool",
+      "id": "call_2a11839822c94e80b793fc39|fc_tmp_98rlcd5bnih",
+      "name": "edit",
+      "toolKind": "edit",
+      "title": "Edit calc.py",
+      "status": "running",
+      "input": {
+        "path": "calc.py",
+        "old_string": "return a - b  # bug",
+        "new_string": "return a + b  # bug"
+      },
+      "diffs": [
+        {
+          "path": "calc.py",
+          "oldText": null,
+          "unified": " 1|def add(a,b):\n-2|    return a - b  # bug\n+2|    return a + b  # bug\n 3|"
+        }
+      ]
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "call_2a11839822c94e80b793fc39|fc_tmp_98rlcd5bnih",
+      "name": "edit",
+      "toolKind": "edit",
+      "title": "Edit calc.py",
+      "status": "completed",
+      "input": {
+        "path": "calc.py",
+        "old_string": "return a - b  # bug",
+        "new_string": "return a + b  # bug"
+      },
+      "diffs": [
+        {
+          "path": "calc.py",
+          "oldText": null,
+          "unified": " 1|def add(a,b):\n-2|    return a - b  # bug\n+2|    return a + b  # bug\n 3|"
+        }
+      ],
+      "output": "[calc.py]\n1:def add(a,b):\n2:    return a + b  # bug\n3:"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "call_5afd3492a2a548079672df48|fc_tmp_begic1oq4mn",
+      "name": "bash",
+      "toolKind": "execute",
+      "title": "Ran python3 -c \"import sys; sys.exit(3)\"",
+      "status": "pending",
+      "input": {
+        "command": "python3 -c \"import sys; sys.exit(3)\"",
+        "i": "Running exit code 3 command"
+      }
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 459,
+      "output": 327,
+      "total": 24082,
+      "cacheRead": 23296,
+      "cacheWrite": 0
+    },
+    "costUsd": 0.00048701500000000004
+  },
+  {
+    "type": "item.updated",
+    "item": {
+      "kind": "tool",
+      "id": "call_5afd3492a2a548079672df48|fc_tmp_begic1oq4mn",
+      "name": "bash",
+      "toolKind": "execute",
+      "title": "Ran python3 -c \"import sys; sys.exit(3)\"",
+      "status": "running",
+      "input": {
+        "command": "python3 -c \"import sys; sys.exit(3)\""
+      }
+    }
+  },
+  {
+    "type": "item.updated",
+    "item": {
+      "kind": "tool",
+      "id": "call_5afd3492a2a548079672df48|fc_tmp_begic1oq4mn",
+      "name": "bash",
+      "toolKind": "execute",
+      "title": "Ran python3 -c \"import sys; sys.exit(3)\"",
+      "status": "running",
+      "input": {
+        "command": "python3 -c \"import sys; sys.exit(3)\""
+      },
+      "output": "(no output)\n\nWall time: 0.07 seconds\n\nCommand exited with code 3"
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "call_5afd3492a2a548079672df48|fc_tmp_begic1oq4mn",
+      "name": "bash",
+      "toolKind": "execute",
+      "title": "Ran python3 -c \"import sys; sys.exit(3)\"",
+      "status": "failed",
+      "input": {
+        "command": "python3 -c \"import sys; sys.exit(3)\""
+      },
+      "output": "(no output)\n\nWall time: 0.07 seconds\n\nCommand exited with code 3",
+      "exitCode": 3,
+      "error": "(no output)\n\nWall time: 0.07 seconds\n\nCommand exited with code 3"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "msg-8_text_0",
+      "role": "assistant",
+      "text": ""
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg-8_text_0",
+    "field": "text",
+    "delta": "done"
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "msg-8_text_0",
+      "role": "assistant",
+      "text": "done"
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 703,
+      "output": 330,
+      "total": 32265,
+      "cacheRead": 31232,
+      "cacheWrite": 0
+    },
+    "costUsd": 0.0006200750000000001
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "end_turn",
+    "usage": {
+      "input": 703,
+      "output": 330,
+      "total": 32265,
+      "cacheRead": 31232,
+      "cacheWrite": 0
+    },
+    "costUsd": 0.0006200750000000001
+  }
+]

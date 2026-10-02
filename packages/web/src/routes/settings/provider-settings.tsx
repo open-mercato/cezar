@@ -21,6 +21,9 @@ const PROVIDERS = [
   { id: 'opencode', label: 'OpenCode', login: 'opencode auth login' },
   { id: 'cursor', label: 'Cursor', login: 'agent login' },
   { id: 'pi', label: 'pi', login: 'pi /login' },
+  // omp's auth lives in its own agent.db; `unknown` means "no credential cezar can see" and the
+  // hint points at the interactive CLI.
+  { id: 'omp', label: 'OMP', login: 'omp' },
 ] as const
 
 const providerWriteState = <T,>(value: T): Record<ProviderId, T> => ({
@@ -29,6 +32,8 @@ const providerWriteState = <T,>(value: T): Record<ProviderId, T> => ({
   opencode: value,
   cursor: value,
   pi: value,
+  omp: value,
+
 })
 
 const STATUS_PRESENTATION = {

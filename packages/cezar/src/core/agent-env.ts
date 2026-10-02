@@ -230,7 +230,13 @@ const BACKEND_ALLOW_PREFIXES: Record<AgentBackend, readonly string[]> = {
   // granting it here handed pi the whole `AWS_*` / `GOOGLE_CLOUD_*` family on any host that had
   // set `CLAUDE_CODE_USE_BEDROCK=1` for Claude Code, plus Claude's own config dir.
   pi: ['PI_', ...MULTI_PROVIDER_PREFIXES],
+  // omp (pi's successor, same stdio RPC family): reads `PI_*` for back-compat and its own
+  // `OMP_*` (auth broker, profile), and — like pi — selects models as `provider/model`, so it
+  // needs every provider a configured model id can name. Same deliberate exclusions as pi: no
+  // `CLAUDE_` (not Claude Code), so Bedrock/Vertex cloud credential families stay dropped.
+  omp: ['PI_', 'OMP_', ...MULTI_PROVIDER_PREFIXES],
 };
+
 
 /** `gh` handoff (draft PRs) works in every backend — the one credential the
  *  project deliberately keeps in the environment (AGENTS.md "No secrets in

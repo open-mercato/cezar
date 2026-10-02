@@ -1,5 +1,6 @@
 import { parse as parseToml } from 'smol-toml';
 import type { ConfigFormat } from './catalog.ts';
+import { parseYamlMapping } from './model-settings/shared.ts';
 
 /**
  * On save, cezar proves a config file PARSES in its own format — refusing to
@@ -75,6 +76,12 @@ export function validateConfig(content: string, format: ConfigFormat): Validatio
         return { ok: true };
       case 'toml':
         parseToml(content);
+        return { ok: true };
+      case 'yaml':
+        // The real YAML parser: accepts everything omp does (document markers, block
+        // scalars, anchors) and throws on malformed syntax — a broken settings file is
+        // never written where the agent would fail to read it.
+        parseYamlMapping(content);
         return { ok: true };
     }
   } catch (err) {

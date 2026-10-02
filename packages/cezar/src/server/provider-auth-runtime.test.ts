@@ -37,6 +37,7 @@ const CONNECTED_OUTPUT: Record<ProviderId, string> = {
     userInfo: { email: 'dev@example.com' },
   }),
   pi: 'provider  model  context  max-out  thinking  images\nanthropic  claude  200K  64K  yes  yes',
+  omp: '18.4.2',
 };
 
 const providerForExecutable = (executable: string): ProviderId => {

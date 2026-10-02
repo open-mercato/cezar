@@ -66,7 +66,8 @@ interface AgentRunner {
   `waiting`, interrupt and resume all work: claude = stream-json over
   stdin/stdout; codex = `codex app-server` JSON-RPC 2.0 (JSONL) over
   stdin/stdout; opencode = `opencode serve` over HTTP + SSE; pi =
-  `pi --mode rpc` over JSONL stdin/stdout.
+`pi --mode rpc` over JSONL stdin/stdout; omp = `omp --mode rpc`, pi's
+  successor on the same stdio family (own mapper, `omp-ui-mapper.ts`).
 
 ### `AgentSession`
 
@@ -313,7 +314,7 @@ Each backend has a mapper (`packages/cezar/src/core/<backend>-ui-mapper.ts`) tur
 transport into `UiEvent`s. The authoritative table is
 `agent-event-protocols.md` §7.1; the load-bearing rows:
 
-| v2 event / field | claude (stream-json) | codex (app-server JSON-RPC) | opencode (serve HTTP+SSE) | cursor (stream-json print mode) |
+| v2 event / field | claude (stream-json) | codex (app-server JSON-RPC) | opencode (serve HTTP+SSE) | cursor (stream-json print mode) | omp (rpc JSONL stdio) |
 |---|---|---|---|---|
 | `session.started` | `system/init` (model, tools, cwd) | `thread/started` / `thread/start` result | `POST /session` response | `system/init` (model, cwd) |
 | `turn.started` | each stdin user message | `turn/started` | each prompt POST | no stdin turn boundary in print mode — starts `turn_1` with the session |

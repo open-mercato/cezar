@@ -3251,6 +3251,7 @@ export function createApp(deps: ServerDeps) {
             opencode: z.string().trim().min(1).max(200).nullable().optional(),
             cursor: z.string().trim().min(1).max(200).nullable().optional(),
             pi: z.string().trim().min(1).max(200).nullable().optional(),
+            omp: z.string().trim().min(1).max(200).nullable().optional(),
           })
           .optional(),
       })
@@ -6724,6 +6725,10 @@ export function resumeCommand(runner: string | undefined, sessionId: string): st
     }
     case 'pi':
       return `pi --session ${sessionId}`;
+    case 'omp':
+      // The RPC session id is omp's own session id, which `--resume` accepts
+      // (`omp --mode rpc --resume <id>` spawns the same process resumed).
+      return `omp --resume ${sessionId}`;
     default:
       return `claude --resume ${sessionId}`;
   }

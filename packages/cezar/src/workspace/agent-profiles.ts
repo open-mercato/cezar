@@ -47,6 +47,7 @@ export function defaultAgentProfile(
     provider === 'codex' ? home.codex
     : provider === 'opencode' ? home.opencodeConfig
     : provider === 'cursor' ? home.cursor
+    : provider === 'omp' ? home.omp
     : home.claude;
   return {
     id: DEFAULT_AGENT_ACCOUNT_ID,

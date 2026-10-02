@@ -30,7 +30,7 @@ describe('AGENT_DESCRIPTORS', () => {
   // `pi` has no entry on purpose — no pi-owned config file is cataloged yet, so its pane would
   // be three empty groups (see the descriptor table's header comment).
   it('has one entry per config-owning runner; Cursor has settings+mcp (no memory group yet)', () => {
-    expect(AGENT_DESCRIPTORS.map((d) => d.id)).toEqual(['claude', 'codex', 'opencode', 'cursor'])
+    expect(AGENT_DESCRIPTORS.map((d) => d.id)).toEqual(['claude', 'codex', 'opencode', 'cursor', 'omp'])
     for (const d of AGENT_DESCRIPTORS.filter((d) => d.id !== 'cursor')) {
       expect(d.groups.map((g) => g.id)).toEqual(['settings', 'mcp', 'memory'])
       expect(d.groups.find((g) => g.id === 'mcp')?.note).toBeTruthy()

@@ -66,6 +66,7 @@ export const workspaceConfigResponseSchema = z.object({
       opencode: z.string().optional(),
       cursor: z.string().optional(),
       pi: z.string().optional(),
+      omp: z.string().optional(),
     }).optional(),
   }),
 });
@@ -100,6 +101,7 @@ export const setWorkspaceConfigInputSchema = z.object({
           opencode: z.string().trim().min(1).max(200).nullable().optional(),
           cursor: z.string().trim().min(1).max(200).nullable().optional(),
           pi: z.string().trim().min(1).max(200).nullable().optional(),
+          omp: z.string().trim().min(1).max(200).nullable().optional(),
         })
         .optional(),
     })
@@ -266,6 +268,7 @@ export const workspaceUiStateSchema = z.looseObject({
       opencode: z.string().optional(),
       cursor: z.string().optional(),
       pi: z.string().optional(),
+      omp: z.string().optional(),
     })
     .optional(),
   /** Settings → Appearance, GLOBAL since step 3.5: accent + density describe the person at the
@@ -362,6 +365,7 @@ export const runnerModelsSchema = z.object({
   opencode: z.string().optional(),
   cursor: z.string().optional(),
   pi: z.string().optional(),
+  omp: z.string().optional(),
 });
 export type RunnerModels = z.infer<typeof runnerModelsSchema>;
 

@@ -10,7 +10,8 @@
  * cover one — a named row fails here.
  *
  * `BACKENDS` lists every backend that owns a wire mapper. Pi uses its documented
- * RPC protocol and therefore has its own wire-faithful fixture set.
+ * RPC protocol and therefore has its own wire-faithful fixture set; omp's
+ * fixtures are real `omp --mode rpc` transcripts (`__fixtures__/omp/README.md`).
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -20,7 +21,7 @@ import { describe, expect, it } from 'vitest';
 import type { UiEvent, UiItem } from './ui-events.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const BACKENDS = ['claude', 'codex', 'opencode', 'cursor', 'pi'] as const;
+const BACKENDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'omp'] as const;
 
 /** Every event across every golden fixture of one backend. */
 function fixtureEvents(backend: (typeof BACKENDS)[number]): UiEvent[] {

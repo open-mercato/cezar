@@ -11,7 +11,8 @@
  *  - `opencode` — `opencode serve`, HTTP + SSE;
  *  - `cursor`   — Cursor Agent CLI, headless print mode (`stream-json`);
  *  - `pi`       — pi coding CLI, RPC over JSONL stdin/stdout, selecting its
- *                 model with `provider/model`.
+ *                 model with `provider/model`;
+ *  - `omp`      — OMP, pi's successor, the same RPC line protocol over stdio.
  */
 
 import type { UiEvent } from './ui-events.ts';
@@ -20,9 +21,9 @@ import type { UiEvent } from './ui-events.ts';
  * The user-selectable runners (what config/GUI expose), in display order — the SINGLE source of
  * truth for the set. Every runtime enumeration derives from this tuple (zod schemas, the
  * server-install "at least one agent CLI" gate, the CLI-handoff registry) rather than repeating
- * the literals, so adding runner #6 is a one-line change here and typecheck finds the rest.
+ * the literals, so adding runner #7 is a one-line change here and typecheck finds the rest.
  */
-export const RUNNER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi'] as const;
+export const RUNNER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'omp'] as const;
 
 /** The user-selectable runners (what config/GUI expose). */
 export type RunnerId = (typeof RUNNER_IDS)[number];

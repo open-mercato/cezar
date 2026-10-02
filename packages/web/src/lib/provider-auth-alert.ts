@@ -11,6 +11,7 @@ const LABELS: Record<ProviderId, string> = {
   opencode: 'OpenCode',
   cursor: 'Cursor',
   pi: 'pi',
+  omp: 'OMP',
 }
 
 export interface ProviderAuthIncident {

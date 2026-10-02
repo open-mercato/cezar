@@ -6,6 +6,7 @@ const HOME: AgentHomePaths = {
   codex: '/home/u/.codex',
   opencodeConfig: '/home/u/.config/opencode',
   cursor: '/home/u/.cursor',
+  omp: '/home/u/.omp/agent',
 };
 
 describe('agent-config catalog', () => {
@@ -22,10 +23,10 @@ describe('agent-config catalog', () => {
     }
   });
 
-  it('<repo>/AGENTS.md is ONE entry read by two runners', () => {
+  it('<repo>/AGENTS.md is ONE entry read by three runners', () => {
     const agents = CONFIG_FILES.filter((f) => f.label === 'AGENTS.md' && f.scope === 'project');
     expect(agents).toHaveLength(1);
-    expect(agents[0]!.runners).toEqual(['codex', 'opencode']);
+    expect(agents[0]!.runners).toEqual(['codex', 'opencode', 'omp']);
   });
 
   it('resolves repo-relative paths under the repo root', () => {
@@ -69,6 +70,8 @@ describe('agent-config catalog', () => {
       'codex.user.config',
       'cursor.project.mcp',
       'cursor.user.mcp',
+      'omp.project.mcp',
+      'omp.user.mcp',
       'opencode.project.config',
       'opencode.user.config',
     ]);

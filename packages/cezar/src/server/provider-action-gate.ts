@@ -13,6 +13,7 @@ const LABEL: Record<ProviderId, string> = {
   opencode: 'OpenCode',
   cursor: 'Cursor',
   pi: 'pi',
+  omp: 'OMP',
 };
 
 export function providersRequiredByWorkflow(

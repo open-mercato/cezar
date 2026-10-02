@@ -39,6 +39,8 @@ import type { ProviderId } from './provider-auth.ts';
  * - **pi** → nothing documented. pi ships no per-user home variable of its own, so — exactly like
  *   OpenCode — a second account cannot be carried without silently billing the wrong one. `null`
  *   until pi documents a single home variable that moves credentials as well as config.
+ * - **omp** → `PI_CODING_AGENT_DIR`. Documented (settings.md): the whole agent base moves —
+ *   `config.yml`, the auth store (`agent.db`), `AGENTS.md`, `mcp.json` — so credentials move too.
  */
 export const PROFILE_ENV_VAR: Record<ProviderId, string | null> = {
   claude: 'CLAUDE_CONFIG_DIR',
@@ -46,6 +48,7 @@ export const PROFILE_ENV_VAR: Record<ProviderId, string | null> = {
   opencode: null,
   cursor: null,
   pi: null,
+  omp: 'PI_CODING_AGENT_DIR',
 };
 
 /** Providers that can carry more than one account — what the UI offers "Add account" for. */
@@ -100,4 +103,6 @@ const PROFILE_DIR_MARKERS: Record<ProviderId, readonly string[]> = {
   // pi cannot carry profiles (`PROFILE_ENV_VAR.pi === null`), so nothing ever probes a pi
   // profile dir; the entry exists to keep this table exhaustive over `ProviderId`.
   pi: [],
+  // `PI_CODING_AGENT_DIR` moves the whole base; `config.yml` + `agent.db` are its signature files.
+  omp: ['config.yml', 'agent.db'],
 };

@@ -1,3 +1,8 @@
+# Unreleased
+
+## ✨ Features
+- ✨ New `omp` runner — OMP (`omp --mode rpc`, pi's successor) is selectable alongside claude/codex/opencode/cursor/pi: detection, a stdio-RPC runner and v2 mapper with real-transcript golden fixtures covering every parity row (tools, reasoning, diffs, plans via the `todo` tool, subagents, usage, abort), agent-config catalog entries (settings/memory/MCP incl. YAML), model defaults from `modelRoles.default`, profile support via `PI_CODING_AGENT_DIR`, provider status, and the full web/server plumbing.
+
 # 0.13.0 (2026-09-28)
 
 ## Highlights
@@ -98,6 +103,7 @@ This release is about seeing the work. A workspace Dashboard arrives with Overvi
 - @matkowalski
 - @tayfuryldz
 - @aleksanderw1992
+
 
 # 0.11.1 (2026-09-18)
 

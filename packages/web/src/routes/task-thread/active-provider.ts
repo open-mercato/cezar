@@ -8,6 +8,7 @@ const PROVIDER_LABEL: Record<Runner, string> = {
   opencode: 'OpenCode',
   cursor: 'Cursor',
   pi: 'pi',
+  omp: 'OMP',
 }
 
 /** Mirrors the server's providerForActiveRun for POST /runs/:id/messages. */

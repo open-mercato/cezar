@@ -4,6 +4,7 @@ import { CodexAppServerRunner } from './codex-app-server-runner.ts';
 import { OpencodeServerRunner } from './opencode-server-runner.ts';
 import { CursorAgentRunner } from './cursor-agent-runner.ts';
 import { PiRunner } from './pi-runner.ts';
+import { OmpRpcRunner } from './omp-rpc-runner.ts';
 
 /**
  * The single place that maps a backend id onto a concrete runner. Everything
@@ -21,6 +22,8 @@ export function createRunner(backend: AgentBackend | RunnerId | undefined): Agen
       return new CursorAgentRunner();
     case 'pi':
       return new PiRunner();
+    case 'omp':
+      return new OmpRpcRunner();
     case 'claude':
     case 'claude-cli':
     default:
