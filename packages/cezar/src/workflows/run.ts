@@ -104,7 +104,7 @@ import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
 import { WorkspaceSemaphore, type AccountHolds } from '../workspace/semaphore.ts';
 import { UiEventSink } from '../runs/ui-event-sink.ts';
 import type { UiEvent } from '../core/ui-events.ts';
-import { chainStepNote, DEFAULT_ALLOWED_TOOLS, stepKind, type WorkflowDef, type WorkflowStepDef } from './types.ts';
+import { agentStepTimeoutMs, chainStepNote, DEFAULT_ALLOWED_TOOLS, stepKind, type WorkflowDef, type WorkflowStepDef } from './types.ts';
 import { freshContinuationContext } from './continuation-context.ts';
 
 const CHECK_OUTPUT_CAP = 20_000;
@@ -4190,6 +4190,7 @@ export class RunManager {
           startImages,
           taskBackend,
           extraSystemPrompt,
+          agentStepTimeoutMs(step, config.agentTimeoutMs, interactive),
           chainStepNote(workflow.steps, i),
           startAttachments,
         );
@@ -4329,6 +4330,9 @@ export class RunManager {
     images: ContentBlock[] | undefined,
     taskBackend: RunnerId,
     extraSystemPrompt: string | undefined,
+    /** The step's resolved wall-clock limit (`agentStepTimeoutMs`, #880): `0` for the
+     *  interactive step, `undefined` to keep the runner's built-in default. */
+    timeoutMs: number | undefined,
     /** The chain-boundary note for this step (#410), or undefined when the
      *  workflow has a single agent step and there is no boundary to explain. */
     chainNote: string | undefined,
@@ -4725,7 +4729,8 @@ export class RunManager {
           sessionId,
           // Interactive sessions have no wall clock — the idle timer rules.
           //
-          // A non-final step keeps its wall clock (`DEFAULT_RUN_TIMEOUT_MS`)
+          // A non-final step keeps its wall clock — the step's `timeoutMs`, else
+          // the repo's `agentTimeoutMs`, else `DEFAULT_RUN_TIMEOUT_MS` (#880) —
           // even though it may now park on a `CEZ:ASK` and sit open waiting for
           // an answer (#917). Dropping it for every intermediate step is the
           // wrong trade: it would leave a runaway step with nothing to stop it,
@@ -4734,7 +4739,7 @@ export class RunManager {
           // strand the run — both close the session, and a park whose session
           // closed unanswered settles as `failed` with a Continue button (see
           // the `askPark` branch in `execute`), never as a run stuck `waiting`.
-          timeoutMs: interactive ? 0 : undefined,
+          timeoutMs,
         },
         onEvent,
         {

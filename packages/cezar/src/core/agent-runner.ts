@@ -35,6 +35,13 @@ export function isRunnerId(value: string): value is RunnerId {
   return (RUNNER_IDS as readonly string[]).includes(value);
 }
 
+/**
+ * Upper bound for a configured agent wall-clock timeout (#880): 24 hours. Node's `setTimeout`
+ * fires AT ONCE for any delay above 2^31-1 ms (~24.8 days), so an unbounded value would turn
+ * "a very long limit" into "killed on spawn". `0` stays the way to say "no wall clock at all".
+ */
+export const AGENT_TIMEOUT_MAX_MS = 24 * 60 * 60_000;
+
 export interface AgentRunSpec {
   /** Appended to the CLI's default system prompt (`--append-system-prompt`). */
   systemPrompt?: string;

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { RUNNER_IDS } from '../core/agent-runner.ts';
+import { AGENT_TIMEOUT_MAX_MS, RUNNER_IDS } from '../core/agent-runner.ts';
 
 /**
  * A workflow is an ordered list of steps. Two step kinds:
@@ -30,6 +30,10 @@ export const workflowStepSchema = z
     runner: z.enum(RUNNER_IDS).optional(),
     allowedTools: z.array(z.string()).optional(),
     bashAllowlist: z.array(z.string()).optional(),
+    /** Per-step agent wall-clock limit in ms (#880); `0` disables it. Wins over the repo's
+     *  `agentTimeoutMs`, which wins over the runner's built-in 30 minutes. The final
+     *  interactive step has no wall clock at all (the idle timer rules), so it ignores this. */
+    timeoutMs: z.number().int().min(0).max(AGENT_TIMEOUT_MAX_MS).optional(),
     // check step
     command: z.string().optional(),
     onFail: z
@@ -41,6 +45,9 @@ export const workflowStepSchema = z
   })
   .refine((s) => Boolean(s.command) !== Boolean(s.prompt ?? s.skill), {
     message: 'a step is either an agent step (prompt/skill) or a check step (command), not both',
+  })
+  .refine((s) => !(s.command && s.timeoutMs !== undefined), {
+    message: 'timeoutMs applies to agent steps only (a check step has no wall-clock limit)',
   });
 
 /**
@@ -115,7 +122,7 @@ export function skillStackOf(steps: WorkflowStepDef[]): string[] | null {
     if (stepKind(s) !== 'agent' || !s.skill) return null;
     if (s.prompt !== undefined && s.prompt !== '{{task}}') return null;
     if (s.name !== undefined && s.name !== s.skill) return null;
-    if (s.model || s.runner || s.allowedTools || s.bashAllowlist || s.onFail) return null;
+    if (s.model || s.runner || s.allowedTools || s.bashAllowlist || s.timeoutMs !== undefined || s.onFail) return null;
     skills.push(s.skill);
   }
   return skills.length ? skills : null;
@@ -188,6 +195,22 @@ export function stepsIssue(steps: WorkflowStepDef[]): string | null {
     }
   }
   return null;
+}
+
+/**
+ * The wall-clock limit an agent step hands its runner (`AgentRunSpec.timeoutMs`, #880).
+ * Precedence: the step's own `timeoutMs`, then the repo's `agentTimeoutMs`, then `undefined`,
+ * which leaves the runner's built-in default (`DEFAULT_RUN_TIMEOUT_MS`, 30 minutes) in charge.
+ * The final interactive step always answers `0`: its session stays open for follow-ups and the
+ * idle timer, not a wall clock, is what ends it.
+ */
+export function agentStepTimeoutMs(
+  step: Pick<WorkflowStepDef, 'timeoutMs'>,
+  repoDefault: number | undefined,
+  interactive: boolean,
+): number | undefined {
+  if (interactive) return 0;
+  return step.timeoutMs ?? repoDefault;
 }
 
 /** Tools an agent step gets when the workflow doesn't say otherwise. */
