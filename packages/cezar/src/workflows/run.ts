@@ -3,7 +3,7 @@ import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import {
   parseAskMarker,
   parseAskMarkerResult,
@@ -42,11 +42,17 @@ import {
   isImageMediaType,
   sanitizeAttachmentName,
 } from '@open-mercato/cezar-contract';
-import type { AgentEvent, ContentBlock } from '../core/agent-runner.ts';
+import type { AgentBackend, AgentEvent, ContentBlock } from '../core/agent-runner.ts';
 import { discoverSkills, type Skill } from '../skills.ts';
 import { automationsReachable } from '../automations/builtin-skill.ts';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
-import { materializeSkillDir } from '../skills-remote.ts';
+import {
+  copyProjectSkills,
+  materializeSkillDir,
+  PROJECT_SKILL_MIRRORS,
+  skillCopyMatches,
+  usableSkillCopy,
+} from '../skills-remote.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { readAgentModelProvider } from '../agent-config/models.ts';
 import { loadConfig, resolveWorktreeRetention } from '../config.ts';
@@ -3537,6 +3543,17 @@ export class RunManager {
     // expanded against an empty registry and leaked `/om-...` verbatim to the backend, which
     // answered "Unknown skill" (#811). Best-effort — discovery must never break Continue.
     state.skills = await discoverSkills(this.repoRoot).catch(() => [] as Skill[]);
+    // A reclaimed worktree is re-created without the copies `execute` made.
+    if (state.cwd !== this.repoRoot) {
+      const copied = await copyProjectSkills(state.cwd, state.skills).catch(() => [] as string[]);
+      const count = new Set(copied.map((rel) => basename(rel))).size;
+      if (count > 0) {
+        this.store.appendEvent(runId, {
+          type: 'note',
+          message: `copied ${count} project skill${count === 1 ? '' : 's'} into the worktree`,
+        });
+      }
+    }
     // The dispatch session snapshot — the SECOND of the two `ActiveRun` construction
     // sites (spec 2026-09-10-dispatch; AGENTS.md § "every construction site"). A Continue
     // that skipped this would resume a task with no dispatch prompt and no way to dispatch:
@@ -3849,7 +3866,12 @@ export class RunManager {
     // through `deliverMessage`, so it needs the SAME delivery-only `/skill` rewrite the
     // live path applies (#811). Delivery-only: the `user-message` event above already
     // persisted the user's original text, and the transcript must keep showing that.
-    const expandedPrompt = expandRegistrySlashSkillText(prompt, state.skills ?? []);
+    const continueTools = toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
+    const expandedPrompt = expandRegistrySlashSkillText(prompt, state.skills ?? [], {
+      backend: continueBackend,
+      cwd: state.cwd,
+      allowedTools: continueTools,
+    });
     // Reports that arrived while this run had no session (spec Q7) open the continuation, ahead
     // of whatever prompted it — a commander resumed by its own children's reports has to be told
     // what they said. Delivery-only, like the `/skill` rewrite above.
@@ -3879,7 +3901,7 @@ export class RunManager {
           : contextualOpeningPrompt,
         ...(openingImages.length ? { images: openingImages } : {}),
         cwd: state.cwd,
-        allowedTools: toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
+        allowedTools: continueTools,
         bashAllowlist: toolsStep?.bashAllowlist,
         additionalDirectories: agentDirectories(
           join(this.dataDir, 'runs'),
@@ -4111,6 +4133,11 @@ export class RunManager {
     // Every ActiveRun construction site must carry the registry — `runContinuation` builds
     // its own, and the one that skipped this leaked raw `/skill` text to the backend (#811).
     state.skills = skills;
+    if (state.cwd !== this.repoRoot) {
+      const copied = await copyProjectSkills(state.cwd, skills).catch(() => [] as string[]);
+      const count = new Set(copied.map((rel) => basename(rel))).size;
+      if (count > 0) emit({ type: 'note', message: `copied ${count} project skill${count === 1 ? '' : 's'} into the worktree` });
+    }
     // Same rule, same reason, for the dispatch session snapshot (the dispatch prompt; the child
     // role's prompt a spawn will need). This is the FIRST of the two construction sites; the
     // twin is in `runContinuation`.
@@ -4338,14 +4365,12 @@ export class RunManager {
     attachments: PersistedAttachment[] = [],
   ): Promise<string | null> {
     let systemPrompt: string | undefined;
+    let stepSkill: Skill | undefined;
+    const skillBackend = step.runner ?? taskBackend;
+    const skillTools = step.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
     if (step.skill) {
       const skill = skills.find((s) => s.name === step.skill);
       if (skill) {
-        // The body alone often does not identify the selected skill. Keep its
-        // name and catalog description in the normalized runner payload so a
-        // numeric task such as "432" still gives the model enough context to
-        // describe the work — and therefore derive a useful title (#432).
-        systemPrompt = skillSystemPrompt(skill);
         // Directory team skills (SKILL.md + references/) get materialized
         // into <cwd>/.claude/skills/<name>/ — the run's worktree when there
         // is one — so claude sees the companion files on disk; the shared
@@ -4360,6 +4385,14 @@ export class RunManager {
             });
           }
         }
+        // The body alone often does not identify the selected skill. Keep its
+        // name and catalog description in the normalized runner payload so a
+        // numeric task such as "432" still gives the model enough context to
+        // describe the work — and therefore derive a useful title (#432).
+        // An earlier step may have edited this skill's copy; rebuild it from the source first.
+        if (state.cwd !== this.repoRoot) await copyProjectSkills(state.cwd, [skill]).catch(() => [] as string[]);
+        systemPrompt = skillSystemPrompt(skill, skillDelivery(skill, skillBackend, state.cwd, skillTools));
+        stepSkill = skill;
       } else {
         emit({
           type: 'note',
@@ -4377,7 +4410,12 @@ export class RunManager {
     // Cezar lists the skill (#278). `state.skills` was populated by `discoverSkills` earlier in
     // `execute`. Expand before the chain/check/attachment prefixes so the leading slash still
     // matches; a leading `/name` that is not a known skill passes through byte-for-byte.
-    userPrompt = expandRegistrySlashSkillText(userPrompt, state.skills ?? []);
+    userPrompt = expandRegistrySlashSkillText(userPrompt, state.skills ?? [], {
+      backend: skillBackend,
+      cwd: state.cwd,
+      stepSkill: stepSkill?.name,
+      allowedTools: skillTools,
+    });
     if (chainNote) userPrompt = `${chainNote}\n\n---\n\n${userPrompt}`;
     // A commander recovered after a restart opens its first session holding whatever its children
     // reported while it was gone (spec Q7). Prepended and cleared here, after the slash expansion
@@ -5578,6 +5616,62 @@ export function makeRunTitle(task: string, workflow: WorkflowDef): string {
   return chars.length > 80 ? `${chars.slice(0, 79).join('').trimEnd()}…` : chars.join('');
 }
 
+/** How a selected skill reaches the agent: its whole body, or its identity and file path. */
+export type SkillDelivery = { mode: 'inline' } | { mode: 'path'; file: string };
+
+/* Verified to discover `SKILL.md` directories natively (spec 2026-09-30-skills-in-worktree). */
+const NATIVE_SKILL_BACKENDS: ReadonlySet<AgentBackend> = new Set(['claude', 'claude-cli', 'codex', 'opencode']);
+
+/** Claude's `--allowedTools` is default-deny, so a named file needs `Read`; the other native backends ignore it. */
+function canLoadSkillPath(backend: AgentBackend, allowedTools: readonly string[]): boolean {
+  if (backend !== 'claude' && backend !== 'claude-cli') return true;
+  return allowedTools.includes('Read');
+}
+
+/** Whether `file` is inside `cwd` (so no directory grant is needed to read it). */
+function isInside(cwd: string, file: string): boolean {
+  const rel = relative(cwd, file);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+/**
+ * Directory skills on a backend with a native skill loader travel as a path; everything else
+ * keeps the inlined body. The path is only ever a copy INSIDE `cwd` (written by
+ * `copyProjectSkills`, materialized for a team skill, or the installed copy of an in-place run)
+ * and only when that copy is readable and non-empty. A mirror copy must also match the selected
+ * skill's own source file for file: a tracked `.agents/skills/<name>` that discovery shadowed,
+ * or a copy an earlier step edited, carries other instructions under the same name. A source
+ * directory outside `cwd` is never named: reading it would take a `--add-dir` grant, which is
+ * read+WRITE and would let the agent rewrite a skill every other run shares. A Claude allowlist
+ * without `Read` inlines too, since a path it cannot read is worse than the body.
+ */
+export function skillDelivery(
+  skill: Pick<Skill, 'name' | 'path' | 'source'>,
+  backend: AgentBackend,
+  cwd: string,
+  allowedTools: readonly string[] = DEFAULT_ALLOWED_TOOLS,
+): SkillDelivery {
+  if (!NATIVE_SKILL_BACKENDS.has(backend) || !canLoadSkillPath(backend, allowedTools)) {
+    return { mode: 'inline' };
+  }
+  if (skill.source === 'team') {
+    const file = join(cwd, '.claude', 'skills', skill.name, 'SKILL.md');
+    return usableSkillCopy(file, skill.name) ? { mode: 'path', file } : { mode: 'inline' };
+  }
+  if (skill.source === 'builtin' || basename(skill.path) !== 'SKILL.md') return { mode: 'inline' };
+  for (const mirror of PROJECT_SKILL_MIRRORS) {
+    const file = join(cwd, mirror, skill.name, 'SKILL.md');
+    if (usableSkillCopy(file, skill.name) && skillCopyMatches(dirname(file), dirname(skill.path))) {
+      return { mode: 'path', file };
+    }
+  }
+  // An in-place run owns the installed copy; a worktree does not, so the body goes inline.
+  if (isInside(cwd, skill.path) && usableSkillCopy(skill.path, skill.name)) {
+    return { mode: 'path', file: skill.path };
+  }
+  return { mode: 'inline' };
+}
+
 /**
  * Skill identity is context, while the Markdown body remains instructions.
  *
@@ -5590,14 +5684,26 @@ export function makeRunTitle(task: string, workflow: WorkflowDef): string {
  * current `npx skills`-installed copy, so a worktree agent and the main
  * checkout read the exact same, up-to-date files. Team skills are omitted here:
  * they are materialized into the worktree separately (see the call site).
+ *
+ * A `path` delivery replaces the body with the skill file's path and an instruction to load it.
  */
 export function skillSystemPrompt(
   skill: Pick<Skill, 'name' | 'description' | 'body'> & Partial<Pick<Skill, 'path' | 'source'>>,
+  delivery: SkillDelivery = { mode: 'inline' },
 ): string {
   const lines = [
     `Selected skill: /${skill.name}`,
     ...(skill.description ? [`Description: ${skill.description}`] : []),
   ];
+  if (delivery.mode === 'path') {
+    lines.push(
+      '',
+      `Skill file: ${delivery.file}`,
+      `Load this skill with your skill tool, or read that file before acting. ` +
+        `Resolve any file it references (for example references/*.md) against its directory.`,
+    );
+    return lines.join('\n');
+  }
   if (skill.source && skill.source !== 'team' && skill.path) {
     const dir = dirname(skill.path);
     lines.push(
@@ -5609,6 +5715,12 @@ export function skillSystemPrompt(
   }
   lines.push('', 'Skill instructions:', skill.body.trim());
   return lines.join('\n');
+}
+
+/** The registry skill a prompt names with a leading `/name`, if any. */
+export function leadingSlashSkill(text: string, skills: readonly Skill[]): Skill | undefined {
+  const match = /^\/([A-Za-z0-9][A-Za-z0-9._-]*)(?=\s|$)/.exec(text);
+  return match ? skills.find((candidate) => candidate.name === match[1]) : undefined;
 }
 
 /**
@@ -5624,15 +5736,27 @@ export function skillSystemPrompt(
  * `expandRegistrySlashSkill`, and a continuation's opening prompt, which becomes
  * the session's `userPrompt` and never passes through `deliverMessage` at all
  * (#811).
+ *
+ * With `backend` + `cwd` the skill follows `skillDelivery`; without them the body is inlined
+ * (live chat, S9). `stepSkill` names the skill the step's system prompt already carries: that one
+ * is not delivered a second time, only the request is kept.
  */
-export function expandRegistrySlashSkillText(text: string, skills: readonly Skill[]): string {
-  const match = /^\/([A-Za-z0-9][A-Za-z0-9._-]*)(?=\s|$)/.exec(text);
-  if (!match) return text;
-  const skill = skills.find((candidate) => candidate.name === match[1]);
+export function expandRegistrySlashSkillText(
+  text: string,
+  skills: readonly Skill[],
+  opts: { backend?: AgentBackend; cwd?: string; stepSkill?: string; allowedTools?: readonly string[] } = {},
+): string {
+  const skill = leadingSlashSkill(text, skills);
   if (!skill) return text;
 
-  const request = text.slice(match[0].length).trim();
-  return request ? `${skillSystemPrompt(skill)}\n\nUser request:\n${request}` : skillSystemPrompt(skill);
+  const request = text.slice(skill.name.length + 1).trim();
+  if (opts.stepSkill === skill.name) return request || `Follow the selected skill /${skill.name}.`;
+  const delivery =
+    opts.backend && opts.cwd !== undefined
+      ? skillDelivery(skill, opts.backend, opts.cwd, opts.allowedTools ?? DEFAULT_ALLOWED_TOOLS)
+      : undefined;
+  const prompt = skillSystemPrompt(skill, delivery);
+  return request ? `${prompt}\n\nUser request:\n${request}` : prompt;
 }
 
 /**

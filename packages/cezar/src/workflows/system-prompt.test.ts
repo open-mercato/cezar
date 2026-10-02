@@ -456,14 +456,15 @@ describe('systemPrompt end-to-end (dry run)', () => {
     expect(named?.titleSummary).toBe('432: implementing cr fixes');
     expect(named?.titleOrigin).toBe('auto');
 
+    // This repo does not ignore its skill dirs, so nothing is copied into the worktree and the
+    // skill's source dir sits outside it: the body goes inline rather than name a path a
+    // `--add-dir` grant (read+write) would be needed to reach.
+    const skillFile = join(repoRoot, '.ai/skills/om-auto-review-pr/SKILL.md');
     const skillPrompt = skillSystemPrompt({
       name: 'om-auto-review-pr',
       description: SKILL_DESCRIPTION,
       body: SKILL_BODY,
-      // The runner passes the full discovered skill, so the prompt carries the
-      // absolute path of the installed copy (read from the MAIN repo even in a
-      // worktree). Mirror that here so the expected prompt matches.
-      path: join(repoRoot, '.ai/skills/om-auto-review-pr/SKILL.md'),
+      path: skillFile,
       source: 'ai',
     });
     expect(capturedSystemPrompt()).toBe(

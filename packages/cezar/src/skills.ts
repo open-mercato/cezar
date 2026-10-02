@@ -89,10 +89,7 @@ const GLOBAL_SKILL_DIRS: Array<{ dir: string; source: Skill['source'] }> = [
  */
 export async function discoverSkills(repoRoot: string): Promise<Skill[]> {
   const [lists, gatedRepos, uiState] = await Promise.all([
-    Promise.all([
-      ...SKILL_DIRS.map(({ dir, source }) => readMarkdownSkills(resolve(repoRoot, dir), source)),
-      ...GLOBAL_SKILL_DIRS.map(({ dir, source }) => readMarkdownSkills(dir, source)),
-    ]),
+    scanSkillDirs(repoRoot),
     gatedSkillsRepos(repoRoot),
     readWorkspaceUiState(),
   ]);
@@ -112,6 +109,45 @@ export async function discoverSkills(repoRoot: string): Promise<Skill[]> {
   }
   merged.sort((a, b) => a.name.localeCompare(b.name));
   return merged;
+}
+
+/** A path the last scan read, with the mtime it had then (-1: absent). */
+type ScanStamp = [path: string, mtimeMs: number];
+
+const scanMemo = new Map<string, { lists: Skill[][]; stamps: ScanStamp[] }>();
+
+async function mtimeOf(path: string): Promise<number> {
+  try {
+    return (await stat(path)).mtimeMs;
+  } catch {
+    return -1;
+  }
+}
+
+/**
+ * The on-disk half of `discoverSkills`, memoized per `repoRoot`. The memo is reused while every
+ * directory the last walk listed and every skill file it read still has the mtime it had then:
+ * a new or removed entry changes its directory's mtime, and an edit changes the file's.
+ */
+async function scanSkillDirs(repoRoot: string): Promise<Skill[][]> {
+  const memo = scanMemo.get(repoRoot);
+  if (memo) {
+    const current = await Promise.all(memo.stamps.map(([path]) => mtimeOf(path)));
+    if (current.every((mtime, i) => mtime === memo.stamps[i]?.[1])) return memo.lists;
+  }
+  const stamps: ScanStamp[] = [];
+  const lists = await Promise.all([
+    ...SKILL_DIRS.map(({ dir, source }) => readMarkdownSkills(resolve(repoRoot, dir), source, stamps)),
+    ...GLOBAL_SKILL_DIRS.map(({ dir, source }) => readMarkdownSkills(dir, source, stamps)),
+  ]);
+  scanMemo.set(repoRoot, { lists, stamps });
+  return lists;
+}
+
+/** Drop the memoized scan for one project (or all), so the next `discoverSkills` re-reads disk. */
+export function invalidateSkillsCache(repoRoot?: string): void {
+  if (repoRoot === undefined) scanMemo.clear();
+  else scanMemo.delete(repoRoot);
 }
 
 /**
@@ -159,12 +195,14 @@ async function skillEntryPaths(
   dir: string,
   depth: number,
   visited: Set<string>,
+  stamps: ScanStamp[],
 ): Promise<string[]> {
   if (depth < 0) return [];
   let real: string;
   try {
     real = await realpath(dir);
   } catch {
+    stamps.push([dir, -1]);
     return []; // missing dir or dangling symlink
   }
   if (visited.has(real)) return [];
@@ -172,6 +210,7 @@ async function skillEntryPaths(
 
   let entries;
   try {
+    stamps.push([dir, await mtimeOf(dir)]);
     entries = await readdir(dir, { withFileTypes: true });
   } catch {
     return [];
@@ -198,7 +237,7 @@ async function skillEntryPaths(
       }
     }
     if (isDir) {
-      paths.push(...(await skillEntryPaths(path, depth - 1, visited)));
+      paths.push(...(await skillEntryPaths(path, depth - 1, visited, stamps)));
     } else if (extname(entry.name).toLowerCase() === '.md') {
       paths.push(path);
     }
@@ -206,12 +245,17 @@ async function skillEntryPaths(
   return paths;
 }
 
-async function readMarkdownSkills(dir: string, source: Skill['source']): Promise<Skill[]> {
-  const paths = await skillEntryPaths(dir, 4, new Set());
+async function readMarkdownSkills(
+  dir: string,
+  source: Skill['source'],
+  stamps: ScanStamp[],
+): Promise<Skill[]> {
+  const paths = await skillEntryPaths(dir, 4, new Set(), stamps);
   const skills: Skill[] = [];
   for (const absPath of paths) {
     let raw: string;
     try {
+      stamps.push([absPath, await mtimeOf(absPath)]);
       raw = await readFile(absPath, 'utf8');
     } catch {
       continue;

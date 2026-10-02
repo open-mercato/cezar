@@ -3169,6 +3169,58 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
     expect(echoed?.text).not.toContain('/demo-review look at the diff');
   }, 40_000);
 
+  it('does not deliver the skill a second time when the step already selects it', async () => {
+    const workflow: WorkflowDef = {
+      name: 'demo',
+      source: 'file',
+      steps: [{ id: 'task', name: 'Task', skill: 'demo-review', prompt: '{{task}}' }],
+    };
+    const record = manager.startRun(workflow, { task: '/demo-review look at the diff', worktree: false });
+    runId = record.id;
+    await waitFor(() =>
+      eventsOf(record.id).some(
+        (e) => e.stepId === 'task' && e.type === 'text' && e.text?.includes('looking into'),
+      ),
+    );
+    const echoed = eventsOf(record.id).find(
+      (e) => e.stepId === 'task' && e.type === 'text' && e.text?.includes('looking into'),
+    );
+    expect(echoed?.text).toContain('look at the diff');
+    expect(echoed?.text).not.toContain('Selected skill: /demo-review');
+    expect(echoed?.text).not.toContain('Run the demo review playbook.');
+  }, 40_000);
+
+  it('copies an ignored directory skill into the worktree and names that path instead of the body', async () => {
+    writeFileSync(join(repoRoot, '.gitignore'), '.agents/\n.claude/skills\n');
+    await run('git', ['add', '.gitignore'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'ignore skills'], { cwd: repoRoot });
+    mkdirSync(join(repoRoot, '.agents/skills/demo-dir/references'), { recursive: true });
+    writeFileSync(
+      join(repoRoot, '.agents/skills/demo-dir/SKILL.md'),
+      '---\nname: demo-dir\ndescription: A directory skill.\n---\n\nDirectory skill body.\n',
+    );
+    writeFileSync(join(repoRoot, '.agents/skills/demo-dir/references/ref.md'), 'reference\n');
+
+    const record = manager.startRun(SINGLE_STEP, { task: '/demo-dir check it', worktree: true });
+    runId = record.id;
+    await waitFor(() =>
+      eventsOf(record.id).some(
+        (e) => e.stepId === 'task' && e.type === 'text' && e.text?.includes('looking into'),
+      ),
+    );
+    const worktree = store.getRun(record.id)?.worktreePath as string;
+    const echoed = eventsOf(record.id).find(
+      (e) => e.stepId === 'task' && e.type === 'text' && e.text?.includes('looking into'),
+    );
+    // The mock echoes a truncated prefix; the exact path is pinned in skill-system-prompt.test.ts.
+    expect(echoed?.text).toContain('Skill file: ');
+    expect(echoed?.text).not.toContain('Directory skill body.');
+    expect(readFileSync(join(worktree, '.agents/skills/demo-dir/references/ref.md'), 'utf8')).toBe('reference\n');
+    expect(readFileSync(join(worktree, '.claude/skills/demo-dir/references/ref.md'), 'utf8')).toBe('reference\n');
+    const status = await run('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: worktree });
+    expect(status.stdout).not.toContain('skills');
+  }, 40_000);
+
   it('leaves an unknown slash command untouched so backend-native commands still work', async () => {
     const record = manager.startRun(SINGLE_STEP, { task: '/compact please', worktree: false });
     runId = record.id;

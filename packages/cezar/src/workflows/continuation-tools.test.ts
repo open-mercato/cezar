@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -294,6 +294,25 @@ describe('a resumed session keeps its workflow step tools', () => {
     expect(spec.sessionId).toBe('sess-2');
     expect(spec.allowedTools).toEqual(TOOLS);
     expect(spec.bashAllowlist).toEqual(BASH);
+    await settled(id);
+  });
+
+  it("Continue never grants a skill's source directory (--add-dir is read+write)", async () => {
+    // A directory skill outside `.agents/skills` is read through its in-worktree path; granting
+    // its source dir would let the resumed agent rewrite the skill every concurrent run shares.
+    mkdirSync(join(repoRoot, '.ai/skills/demo-dir'), { recursive: true });
+    writeFileSync(join(repoRoot, '.ai/skills/demo-dir/SKILL.md'), '---\nname: demo-dir\n---\nbody\n');
+    const def: WorkflowDef = {
+      name: 'skilled-task',
+      source: 'file',
+      steps: [{ id: 'work', name: 'Work', prompt: '{{task}}', skill: 'demo-dir' }],
+    };
+    const id = terminalRun({ def, steps: [{ id: 'work', sessionId: 'sess-1', backend: 'claude' }] });
+
+    expect(manager!.continueRun(id, { text: 'keep going' })).toEqual({ ok: true });
+    const spec = await specAt(0);
+    expect(spec.additionalDirectories ?? []).not.toContain(join(repoRoot, '.ai/skills/demo-dir'));
+    expect(spec.additionalDirectories ?? []).not.toContain(join(repoRoot, '.ai/skills'));
     await settled(id);
   });
 
