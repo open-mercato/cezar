@@ -256,6 +256,31 @@ steps:
 back, its failing output is appended to the retried agent's prompt so the next
 attempt can see what broke.
 
+Check steps run through a hardened runner, because they are the one kind of step
+that executes repository code unattended:
+
+- **Wall clock.** Each command is bounded at 20 minutes
+  (`"checkTimeoutMs"` in `.ai/cezar/config.json`) and the whole gate — every
+  check the run executes, retries included — at 45 minutes
+  (`"checkGateTimeoutMs"`); `0` removes either limit.
+- **Process group.** The command gets its own process group, so a timeout or a
+  cancel SIGTERMs the group, waits 5 s, then SIGKILLs it — a grandchild that
+  traps SIGTERM still dies, and orphans left by a command that exits early are
+  reaped.
+- **Tail-preserving output.** The transcript keeps its last 20,000 characters
+  with a marker naming how much was elided; the failing line is at the tail, so
+  the old head-kept cap no longer hides the reason from the retried agent.
+- **Minimal environment.** A check gets no `GITHUB_TOKEN`/`GH_*`, no vendor API
+  or cloud credentials and no `CEZ_*` (the agent-step escape hatches
+  `CEZ_ENV_PASSTHROUGH`/`CEZ_AGENT_ENV_FULL` deliberately do not apply), and it
+  runs a non-login shell. This is **not a sandbox**: the check still runs as
+  your user and can read files by path; it only stops ambient credentials from
+  riding along.
+- **Non-green outcomes are named.** A timeout, a cancellation, a missing `bash`
+  (Windows, or a trimmed image) and a `CEZ_DRY_RUN=1` dry run all produce a
+  distinct non-green outcome — `timed-out`, `cancelled`, `could-not-run`,
+  `skipped` — so "it did not run" can never be read as "it passed".
+
 Prefer skills over steps? A workflow can also be written in the portable
 shorthand — an ordered list of skill names, each becoming one agent step:
 
@@ -285,7 +310,7 @@ Useful environment variables:
 
 | Var | Effect |
 |---|---|
-| `CEZ_DRY_RUN=1` | Use the bundled mock instead of the real `claude` CLI — the entire cockpit works offline, for demos and development. |
+| `CEZ_DRY_RUN=1` | Use the bundled mock instead of the real `claude` CLI — the entire cockpit works offline, for demos and development. Check steps (`command:`) spawn nothing either: the step is recorded `skipped` and the run ends `failed`, so a dry run can never report a gate it never ran as green. |
 | `CEZ_INSTANCE_ID` | Internal server-install identity set automatically in generated systemd/launchd services; normally leave unset. It is surfaced additively by `/api/v1/health` for install verification. |
 | `CEZ_AGENT_MODELS_LOCKED=1` | Globally lock each runner to the model configured in its native Claude/Codex/OpenCode settings while keeping runner selection available. Exact `1` also delegates authentication and provider enablement to those native agents, so Cezar skips its credential probes and provider-disable preferences. Existing Cezar presets are preserved but ignored, and an environment change requires a restart. The config-file equivalent is `"modelsLocked": true` in global `~/.cezar/config.json` or one repository's `.ai/cezar/config.json`; config-file locks do not disable provider checks. |
 | `CEZ_APPROVAL_GATE=1` | Opt into Claude's interactive approval UI; by default, unapproved tools are denied without interrupting the run. |
@@ -489,7 +514,9 @@ never blocks startup):
   "defaultRunner": "claude", // agent backend: "claude" (default) · "codex" · "opencode" · "pi"
   "modelsLocked": true,      // optional: native per-runner model is fixed/read-only; runner stays selectable
   "plannerModel": "sonnet",  // model the "Plan first" button uses to draft chains
-  "baseBranch": "develop"    // branch worktrees fork from + PRs target (also settable in the Git tab)
+  "baseBranch": "develop",   // branch worktrees fork from + PRs target (also settable in the Git tab)
+  "checkTimeoutMs": 1200000,     // optional: per check-step wall clock in ms (default 20 min; 0 = no per-command limit)
+  "checkGateTimeoutMs": 2700000  // optional: whole check gate deadline in ms — every check of one run, retries included (default 45 min; 0 = off)
 }
 ```
 

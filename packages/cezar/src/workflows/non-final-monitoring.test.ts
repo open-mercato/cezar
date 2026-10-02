@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore, type RunRecord } from '../runs/store.ts';
 import { RunManager } from './run.ts';
+import { mockAgentWithRealChecks } from './mock-agent.testkit.ts';
 import type { WorkflowDef } from './types.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 
@@ -17,7 +18,9 @@ describe('CEZ:MONITORING on a non-final workflow step (#1076)', () => {
   let store: RunStore;
   let manager: RunManager;
   let currentId: string | undefined;
-  const savedDryRun = process.env.CEZ_DRY_RUN;
+  // The trailing `verify` is a REAL check: it is what proves the workflow did
+  // not advance past the park. A dry run would skip it (and never run at all).
+  let restoreMockAgent: () => void = () => undefined;
 
   const workflow: WorkflowDef = {
     name: 'implement-verify',
@@ -30,7 +33,7 @@ describe('CEZ:MONITORING on a non-final workflow step (#1076)', () => {
 
   beforeEach(async () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-1076-'));
-    process.env.CEZ_DRY_RUN = '1';
+    restoreMockAgent = mockAgentWithRealChecks();
     await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
     writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
     await run('git', ['add', '-A'], { cwd: repoRoot });
@@ -43,8 +46,7 @@ describe('CEZ:MONITORING on a non-final workflow step (#1076)', () => {
   afterEach(() => {
     if (currentId) manager.cancel(currentId);
     manager.dispose();
-    if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
-    else process.env.CEZ_DRY_RUN = savedDryRun;
+    restoreMockAgent();
     store.flush();
     rmSync(repoRoot, { recursive: true, force: true });
   });

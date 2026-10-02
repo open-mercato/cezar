@@ -301,6 +301,55 @@ export interface BuildChildEnvOptions {
   source?: NodeJS.ProcessEnv;
 }
 
+/** Every vendor-auth prefix a backend may legitimately carry — the set a CHECK
+ *  command must never inherit, whichever backend the run happens to use. */
+const ALL_VENDOR_PREFIXES: readonly string[] = [
+  ...new Set([
+    ...MULTI_PROVIDER_PREFIXES,
+    ...Object.values(BACKEND_ALLOW_PREFIXES).flat(),
+    ...BEDROCK_ALLOW_PREFIXES,
+    ...VERTEX_ALLOW_PREFIXES,
+  ]),
+];
+
+/**
+ * The environment a CHECK command gets — the minimal sibling of
+ * `buildChildEnv`, and deliberately NOT a reuse of it.
+ *
+ * A check is repository-authored code that runs unattended, and it never talks
+ * to a model vendor: it has no use for `GITHUB_TOKEN`/`GH_TOKEN` (the `gh`
+ * handoff belongs to the agent steps that open draft PRs), for any vendor API
+ * key, for the AWS/Google credentials a Bedrock/Vertex toggle unlocks, or for
+ * cezar's own `CEZ_*` namespace. What is left is the base allowlist — a build
+ * tool needs PATH, HOME, a locale, a temp dir — filtered once more so even an
+ * allowlisted NAME that is credential-shaped is dropped (`SSH_AUTH_SOCK` is an
+ * agent handle; `SESSIONNAME` only trips the name patterns).
+ *
+ * The two agent-step escape hatches (`CEZ_ENV_PASSTHROUGH`, `CEZ_AGENT_ENV_FULL`)
+ * deliberately do NOT apply: widening a check's env is not a supported knob,
+ * because the thing being fenced off is repository code, not a backend that
+ * needs to authenticate.
+ *
+ * NOT a sandbox, and it does not pretend to be: the check still runs as the
+ * local user, in the worktree, and can read `~/.ssh`, `~/.config/gh` or any
+ * other file by path. The cut removes ambient credentials from `env` and from
+ * `/proc/<pid>/environ`; containment is an OS-level job (see the trust-boundary
+ * section of the landing-check design).
+ */
+export function buildCheckEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(source)) {
+    if (value === undefined) continue;
+    const key = name.toUpperCase();
+    if (key.startsWith('CEZ_')) continue; // cezar's own namespace (incl. CEZ_DRY_RUN)
+    if (GH_ALLOW_NAMES.has(key)) continue; // gh/PR handoff — agent steps only
+    if (matchesPrefix(key, ALL_VENDOR_PREFIXES)) continue; // vendor auth, cloud creds
+    if (looksSecret(key)) continue; // never ride in on a prefix family either
+    if (BASE_ALLOW_NAMES.has(key) || matchesPrefix(key, BASE_ALLOW_PREFIXES)) out[name] = value;
+  }
+  return out;
+}
+
 /**
  * Build the curated child environment for a spawned backend. `extraEnv`
  * (the runner's `spec.env`) is applied last so per-run vars always win.
