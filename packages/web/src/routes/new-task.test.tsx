@@ -338,6 +338,18 @@ function renderNewTask(entry = '/new') {
 }
 
 const textarea = () => screen.getByLabelText('Describe a task for the agent') as HTMLTextAreaElement
+
+const pngFile = (name = 'shot.png', bytes: number[] = [1, 2, 3]) =>
+  new File([new Uint8Array(bytes)], name, { type: 'image/png' })
+
+const paste = (target: HTMLTextAreaElement, files: File[]) =>
+  fireEvent.paste(target, {
+    clipboardData: {
+      items: files.map((file) => ({ kind: 'file', type: file.type, getAsFile: () => file })),
+    },
+  })
+
+const attachmentChips = () => screen.queryAllByLabelText(/^Remove /)
 const sourcePill = () => screen.getByRole('button', { name: 'Choose a skill or workflow' })
 const location = () => screen.getByTestId('location').textContent
 
@@ -1773,6 +1785,73 @@ describe('the Start | Plan first toggle', () => {
 })
 
 describe('the plan flow', () => {
+  it('restores the attachment chip when a plan is discarded', async () => {
+    serve()
+    renderNewTask()
+    await pillReady()
+    fireEvent.click(planToggle())
+    fireEvent.change(textarea(), { target: { value: 'look at this' } })
+    paste(textarea(), [pngFile()])
+    await waitFor(() => expect(attachmentChips()).toHaveLength(1))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Plan task' }))
+    await screen.findByText('Proposed chain')
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }))
+
+    await waitFor(() => expect(screen.queryByText('Proposed chain')).toBeNull())
+    expect(textarea().value).toBe('look at this')
+    expect(attachmentChips()).toHaveLength(1)
+  })
+
+  it('posts a planned attachment once and clears it after Start', async () => {
+    serve({ createRun: { id: 'planned-with-attachment' } })
+    renderNewTask()
+    await pillReady()
+    fireEvent.click(planToggle())
+    fireEvent.change(textarea(), { target: { value: 'run this with context' } })
+    paste(textarea(), [pngFile()])
+    await waitFor(() => expect(attachmentChips()).toHaveLength(1))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Plan task' }))
+    await screen.findByText('Proposed chain')
+    fireEvent.click(document.querySelector('[data-slot="plan-start"]') as HTMLElement)
+
+    await waitFor(() => expect(location()).toBe('/tasks/planned-with-attachment'))
+    const runRequests = requests.filter((request) => request.url === '/api/v1/runs' && request.method === 'POST')
+    expect(runRequests).toHaveLength(1)
+    expect((runRequests[0]?.body as { images?: unknown[] }).images).toHaveLength(1)
+
+    // The route unmounts after Start, so revisit the composer to prove the module-level
+    // per-project attachment store was cleared rather than merely hidden by navigation.
+    cleanup()
+    renderNewTask('/new')
+    await pillReady()
+    expect(attachmentChips()).toHaveLength(0)
+  })
+
+  it('restores the attachment when a plan request is rejected', async () => {
+    serve({
+      plan: () =>
+        Promise.resolve(
+          new Response(JSON.stringify({ error: 'planner unavailable' }), {
+            status: 500,
+            headers: { 'content-type': 'application/json' },
+          }),
+        ),
+    })
+    renderNewTask()
+    await pillReady()
+    fireEvent.click(planToggle())
+    fireEvent.change(textarea(), { target: { value: 'retry this plan' } })
+    paste(textarea(), [pngFile()])
+    await waitFor(() => expect(attachmentChips()).toHaveLength(1))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Plan task' }))
+    await waitFor(() => expect(screen.queryByText('Proposed chain')).toBeNull())
+    expect(textarea().value).toBe('retry this plan')
+    expect(attachmentChips()).toHaveLength(1)
+  })
+
   it('submit in plan mode POSTs /api/v1/plan (never /api/v1/runs) and opens the review overlay', async () => {
     serve()
     renderNewTask()
