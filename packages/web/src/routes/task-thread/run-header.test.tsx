@@ -103,6 +103,12 @@ function renderHeader(
   onMarkedUnread?: () => void,
   planTally?: { done: number; total: number },
   continuationEngine?: ReactNode,
+  continuationControl?: {
+    canContinue: boolean
+    pending: boolean
+    reason?: string
+    onContinue: () => void
+  },
 ) {
   return render(
     <QueryClientProvider client={createQueryClient()}>
@@ -116,6 +122,7 @@ function renderHeader(
                 onMarkedUnread={onMarkedUnread}
                 planTally={planTally}
                 continuationEngine={continuationEngine}
+                continuationControl={continuationControl}
               />
             }
           />
@@ -411,6 +418,32 @@ describe('Mark unread (#775)', () => {
 })
 
 describe('actions hit their endpoints', () => {
+  it('desktop and mobile Continue invoke the Session composer control (#887)', async () => {
+    const sent = stubFetch()
+    const onContinue = vi.fn(() => {
+      void fetch('/api/v1/runs/r1/continue', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ runner: 'codex', model: 'gpt-future' }),
+      })
+    })
+    renderHeader(run('done'), undefined, undefined, undefined, {
+      canContinue: true,
+      pending: false,
+      onContinue,
+    })
+
+    fireEvent.click(actionBar().getByRole('button', { name: 'Continue' }))
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Continue' }))
+
+    await waitFor(() => expect(onContinue).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(sent.filter((request) => request.path === '/api/v1/runs/r1/continue').map((request) => request.body)).toEqual([
+      { runner: 'codex', model: 'gpt-future' },
+      { runner: 'codex', model: 'gpt-future' },
+    ]))
+  })
+
   it('Finish → POST /finish', async () => {
     const sent = stubFetch()
     renderHeader(run('waiting'))

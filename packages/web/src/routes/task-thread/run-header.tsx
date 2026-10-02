@@ -129,6 +129,14 @@ interface RunHeaderProps {
   /** The Session tab's engine picker for the next continuation. Kept out of the three Git tabs:
    *  they share this header but do not own the continuation draft or its pending selection. */
   continuationEngine?: ReactNode
+  /** Session-owned Continue action. When present, both desktop and mobile controls invoke the
+   * same composer state; absent on the other tabs, the header keeps its standalone behavior. */
+  continuationControl?: {
+    canContinue: boolean
+    pending: boolean
+    reason?: string
+    onContinue: () => void
+  }
 }
 
 // Every prop must participate: adding one without a comparator is a compile error.
@@ -137,6 +145,7 @@ const headerPropComparators = {
   tab: (before, after) => before.tab === after.tab,
   onMarkedUnread: (before, after) => before.onMarkedUnread === after.onMarkedUnread,
   continuationEngine: (before, after) => before.continuationEngine === after.continuationEngine,
+  continuationControl: (before, after) => before.continuationControl === after.continuationControl,
   planTally: (before, after) => before.planTally?.done === after.planTally?.done &&
     before.planTally?.total === after.planTally?.total,
 } satisfies Record<keyof RunHeaderProps, (before: RunHeaderProps, after: RunHeaderProps) => boolean>
@@ -152,6 +161,7 @@ function RunHeaderView({
   tab = 'session',
   onMarkedUnread,
   continuationEngine,
+  continuationControl,
 }: RunHeaderProps) {
   const attention = deriveAttention(run)
   const budget = budgetStop(run)
@@ -228,7 +238,12 @@ function RunHeaderView({
                 className={cn('transition-transform', detailsOpen && 'rotate-180')}
               />
             </Button>
-            <ActionsKebab run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} />
+            <ActionsKebab
+              run={run}
+              actions={actions}
+              continuationControl={continuationControl}
+              onToggleNotes={() => setNotesOpen((open) => !open)}
+            />
           </span>
         </div>
 
@@ -283,9 +298,13 @@ function RunHeaderView({
               <Button
                 variant="outline"
                 size="sm"
-                title={actions.continuation.reason ?? 'Reopen the session'}
-                disabled={actions.continueRun.isPending || !actions.continuation.canContinue}
-                onClick={() => actions.continueRun.mutate()}
+                title={continuationControl?.reason ?? actions.continuation.reason ?? 'Reopen the session'}
+                disabled={
+                  continuationControl
+                    ? continuationControl.pending || !continuationControl.canContinue
+                    : actions.continueRun.isPending || !actions.continuation.canContinue
+                }
+                onClick={() => continuationControl ? continuationControl.onContinue() : actions.continueRun.mutate()}
               >
                 <PlayIcon aria-hidden="true" />
                 Continue
@@ -1097,10 +1116,12 @@ function AgentBadge({ run, continuationEngine }: { run: ApiRun; continuationEngi
 function ActionsKebab({
   run,
   actions,
+  continuationControl,
   onToggleNotes,
 }: {
   run: ApiRun
   actions: RunActions
+  continuationControl?: RunHeaderProps['continuationControl']
   onToggleNotes: () => void
 }) {
   const flags = runActionFlags(run)
@@ -1119,9 +1140,13 @@ function ActionsKebab({
         ) : null}
         {flags.continueRun ? (
           <DropdownMenuItem
-            disabled={!actions.continuation.canContinue || actions.continueRun.isPending}
-            title={actions.continuation.reason}
-            onSelect={() => actions.continueRun.mutate()}
+            disabled={
+              continuationControl
+                ? !continuationControl.canContinue || continuationControl.pending
+                : !actions.continuation.canContinue || actions.continueRun.isPending
+            }
+            title={continuationControl?.reason ?? actions.continuation.reason}
+            onSelect={() => continuationControl ? continuationControl.onContinue() : actions.continueRun.mutate()}
           >
             <PlayIcon aria-hidden="true" /> Continue
           </DropdownMenuItem>
