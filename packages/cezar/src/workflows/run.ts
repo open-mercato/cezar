@@ -13,7 +13,7 @@ import {
 } from '../core/ask.ts';
 import { AUTO_END_DELAY_MS, type AgentSession } from '../core/claude-cli-runner.ts';
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
-import { parseUsageLimit } from '../core/usage-limit.ts';
+import { LIMIT_PHRASE_RE, parseUsageLimit } from '../core/usage-limit.ts';
 import { createRunner } from '../core/runner-factory.ts';
 import type { RunnerId } from '../core/agent-runner.ts';
 import { modelConflictsWithRunner } from '../core/model-presets.ts';
@@ -915,6 +915,22 @@ interface PersistedAttachments {
 }
 
 /**
+ * Did the account/provider refuse the turn, as opposed to the backend losing the session? A retry
+ * must NOT fall back to a fresh session for these: the same usage limit or overload would refuse
+ * the fresh session too, after paying for the whole prompt again. Every other pre-turn error is
+ * read as "the session could not be reopened" — an allowlist of known missing-session wordings
+ * would instead dead-end a backend whose error text this file has never seen, which is exactly the
+ * behaviour the retry-resume feature exists to remove.
+ *
+ * Exported for its table test; the phrase set is `LIMIT_PHRASE_RE` reused from usage-limit.ts so a
+ * refusal with no reset instant (which `parseUsageLimit` deliberately rejects) still counts.
+ */
+export function isProviderRefusalError(message: string): boolean {
+  if (LIMIT_PHRASE_RE.test(message)) return true;
+  return /\b(?:429|529)\b|overloaded|rate[\s_-]?limit/i.test(message);
+}
+
+/**
  * The mini workflow engine: executes a `WorkflowDef` against a repo, one step
  * at a time, persisting every event to the RunStore (which the SSE endpoints
  * relay live to the GUI). No GitHub choreography — agent steps and shell
@@ -1554,9 +1570,12 @@ export class RunManager {
       // chosen one cannot be resumed without silently switching the login back.
       const sessionAccount = sessionStep.profileId ?? DEFAULT_AGENT_ACCOUNT_ID;
       const accountMatches = run.agentProfile === undefined || run.agentProfile === sessionAccount;
+      // A placeholder cezar pre-assigned but the provider never confirmed (the step died before its
+      // `session` event) resolves to nothing on the backend, so it is not resumable either.
+      const resumable = sessionBackend === backend && accountMatches && sessionStep.sessionConfirmed !== false;
       this.pendingContinuations.set(run.id, {
         stepId: queuedContinuation.id,
-        sessionId: sessionBackend === backend && accountMatches ? sessionStep.sessionId : undefined,
+        sessionId: resumable ? sessionStep.sessionId : undefined,
         backend,
         prompt: RESTART_CONTINUATION_PROMPT,
         images: [],
@@ -3344,7 +3363,11 @@ export class RunManager {
     const targetAccount = opts.agentProfile
       ?? (targetRunner === (run.runner ?? 'claude') ? run.agentProfile : undefined);
     const accountSwitched = targetAccount !== undefined && targetAccount !== sessionAccount;
-    const resume = sessionBackend === targetRunner && !accountSwitched;
+    // A placeholder cezar pre-assigned but the provider never confirmed (the step died before its
+    // `session` event) resolves to nothing on the backend, so it is not resumable: the
+    // continuation opens a fresh session with the portable context instead.
+    const resumable = sessionStep.sessionConfirmed !== false;
+    const resume = sessionBackend === targetRunner && !accountSwitched && resumable;
 
     // Follow-up runner/model/account override (#401, spec 2026-07-29-agent-profiles): the composer
     // lets the user pick which backend, model and login handle this continuation — the same flat
@@ -3471,12 +3494,22 @@ export class RunManager {
     // invisible to the enforcer forever. Best-effort; falls back to repoRoot.
     await rematerializeReclaimedWorktree(this.repoRoot, this.store, runId);
     const record = this.store.getRun(runId);
-    // A provider/account switch cannot resume the old provider-owned session. Reconstruct the
-    // portable context from Cezar's durable record + redacted event stream before this new turn's
-    // user-message is appended. This works even when the interrupted agent never wrote HANDOFF.md.
-    const portableContext = record && sessionId === undefined
-      ? freshContinuationContext(record, this.store.readEvents(runId))
-      : undefined;
+    // A provider/account switch cannot resume the old provider-owned session, so a fresh session
+    // gets the portable context reconstructed from Cezar's durable record + redacted event stream.
+    // The record describes what the PREVIOUS session left, but this continuation mutates it (status
+    // running, error cleared) before any prompt is built — so snapshot the cheap inputs now. The
+    // NDJSON read is deferred: only opencode's gone-session path asks for the fallback, and a
+    // normal resume must not pay for a full read + parse of the run's event log on the request path.
+    const portableRecord = record ? { ...record, steps: record.steps.map((step) => ({ ...step })) } : undefined;
+    const portableHandoff = readHandoff(this.dataDir, runId);
+    const buildPortableContext = (beforeSeq: number): string | undefined =>
+      portableRecord
+        ? freshContinuationContext(
+            portableRecord,
+            this.store.readEvents(runId).filter((event) => event.seq < beforeSeq),
+            portableHandoff,
+          )
+        : undefined;
     // A fresh session is pinned and recorded up front, exactly like a workflow step's
     // (`runAgentStep`): Claude emits no `session` event of its own, so an unpinned fresh
     // continuation left its step without a session id, and the NEXT Continue resumed the last
@@ -3564,6 +3597,9 @@ export class RunManager {
       startedAt: new Date().toISOString(),
       sessionId: spawnSessionId,
       backend,
+      // Resuming reuses a provider-minted id (already real); a fresh session is pinned by claude
+      // and only confirmed when an id-minting backend emits its `session` event.
+      sessionConfirmed: sessionId === undefined ? backend === 'claude' : true,
     });
     this.store.appendEvent(runId, { type: 'step-start', stepId, name: 'Continue', kind: 'agent', iteration: 1 });
     // Attachments pasted into the follow-up composer, on the same terms as a live-session
@@ -3575,7 +3611,7 @@ export class RunManager {
     const freshAttachments = this.persistPastedAttachments(runId, images);
     const openingImages = [...contentBlocksOf(images), ...persistedImages];
     const attachments = [...freshAttachments, ...persistedAttachments];
-    this.store.appendEvent(runId, {
+    const userMessage = this.store.appendEvent(runId, {
       type: 'user-message',
       stepId,
       text: prompt,
@@ -3612,7 +3648,7 @@ export class RunManager {
       }
       if (sessionError) return;
       if (event.type === 'session') {
-        this.store.updateStep(runId, stepId, { sessionId: event.sessionId, backend });
+        this.store.updateStep(runId, stepId, { sessionId: event.sessionId, backend, sessionConfirmed: true });
       }
       if (event.type === 'token-usage') {
         this.store.updateStep(runId, stepId, { tokensUsed: event.tokensUsed });
@@ -3857,11 +3893,28 @@ export class RunManager {
     const treeInbox = this.flushInbox(runId);
     const treeBlocks = [treeReports, treeInbox].filter((block): block is string => Boolean(block));
     const openingPrompt = treeBlocks.length ? `${treeBlocks.join('\n\n')}\n\n---\n\n${expandedPrompt}` : expandedPrompt;
-    // The previous runner's portable context (#954) opens the session first, then the tree
-    // blocks above, then the instruction that prompted this continuation.
+    // The previous runner's portable context (#954) opens a fresh session first, then the tree
+    // blocks above, then the instruction that prompted this continuation. A resumed session
+    // already holds that history, so it gets the instruction alone — but the runner is handed the
+    // same context as a LAZY fallback opening for when the stored session turns out to be gone
+    // (only opencode asks). A fresh session (backend switch) needs it up front.
+    const portableContext = sessionId === undefined ? buildPortableContext(userMessage.seq) : undefined;
     const contextualOpeningPrompt = portableContext
       ? `${portableContext}\n\n---\n\n## New user instruction\n${openingPrompt}`
       : openingPrompt;
+    const attachmentsSuffix = attachments.length
+      ? `\n\n${pastedAttachmentsText(attachments, this.attachmentLibraryHint(attachments))}`
+      : '';
+    const userPrompt = `${sessionId === undefined ? contextualOpeningPrompt : openingPrompt}${attachmentsSuffix}`;
+    const resumeFallbackPrompt = sessionId === undefined
+      ? undefined
+      : (): string => {
+          const fallback = buildPortableContext(userMessage.seq);
+          const freshOpening = fallback
+            ? `${fallback}\n\n---\n\n## New user instruction\n${openingPrompt}`
+            : openingPrompt;
+          return `${freshOpening}${attachmentsSuffix}`;
+        };
     const session = runner.startSession(
       {
         // The Continue step is a fresh agent session on the same run — the
@@ -3874,9 +3927,7 @@ export class RunManager {
           record?.systemPrompt,
           generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
         ),
-        userPrompt: attachments.length
-          ? `${contextualOpeningPrompt}\n\n${pastedAttachmentsText(attachments, this.attachmentLibraryHint(attachments))}`
-          : contextualOpeningPrompt,
+        userPrompt,
         ...(openingImages.length ? { images: openingImages } : {}),
         cwd: state.cwd,
         allowedTools: toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
@@ -3890,6 +3941,7 @@ export class RunManager {
         model: continueModel,
         sessionId: spawnSessionId,
         resume: sessionId !== undefined,
+        ...(resumeFallbackPrompt ? { resumeFallbackPrompt } : {}),
         timeoutMs: 0,
       },
       onEvent,
@@ -4336,6 +4388,9 @@ export class RunManager {
      *  paths are appended to `userPrompt` so the agent can operate on the
      *  real files, not just view the inline image blocks. */
     attachments: PersistedAttachment[] = [],
+    /** Set when a retry could not reopen its previous session: run fresh, carrying the tree
+     *  blocks that attempt already flushed. */
+    resumeFallback?: { treeBlocks: string[] },
   ): Promise<string | null> {
     let systemPrompt: string | undefined;
     if (step.skill) {
@@ -4382,13 +4437,13 @@ export class RunManager {
     // A commander recovered after a restart opens its first session holding whatever its children
     // reported while it was gone (spec Q7). Prepended and cleared here, after the slash expansion
     // so a leading `/skill` still matched, and before the failure/attachment suffixes.
-    const treeReports = this.flushPendingReports(runId);
-    const treeInbox = this.flushInbox(runId);
-    const treeBlocks = [treeReports, treeInbox].filter((block): block is string => Boolean(block));
+    const treeBlocks = resumeFallback?.treeBlocks
+      ?? [this.flushPendingReports(runId), this.flushInbox(runId)].filter((block): block is string => Boolean(block));
     if (treeBlocks.length) userPrompt = `${treeBlocks.join('\n\n')}\n\n---\n\n${userPrompt}`;
-    if (checkFailure) {
-      userPrompt += `\n\nA verification command failed after the previous attempt. Fix the cause. Failing output:\n\n${checkFailure}`;
-    }
+    const failureNote = checkFailure
+      ? `A verification command failed after the previous attempt. Fix the cause. Failing output:\n\n${checkFailure}`
+      : undefined;
+    if (failureNote) userPrompt += `\n\n${failureNote}`;
     if (images?.length) {
       emit({
         type: 'note',
@@ -4406,18 +4461,58 @@ export class RunManager {
       userPrompt += `\n\n${pastedAttachmentsText(attachments, this.attachmentLibraryHint(attachments))}`;
     }
 
-    const sessionId = randomUUID();
     const backend = step.runner ?? taskBackend;
-    this.store.updateStep(runId, step.id, { sessionId, backend });
+    // A retry reopens the session this step's previous attempt left behind: the agent keeps
+    // what it already read and is sent only the failure, not the whole task again.
+    const previous = failureNote && !resumeFallback
+      ? this.store.getRun(runId)?.steps.find((s) => s.id === step.id)
+      : undefined;
+    let resumeFrom = previous?.sessionId && previous.backend === backend && previous.sessionConfirmed !== false
+      ? { sessionId: previous.sessionId, profileId: previous.profileId }
+      : undefined;
+    const resumePrompt = treeBlocks.length ? `${treeBlocks.join('\n\n')}\n\n---\n\n${failureNote ?? ''}` : `${failureNote ?? ''}`;
+    let sessionId = resumeFrom?.sessionId ?? randomUUID();
+    // claude pins the id at spawn, so a fresh one is provider-owned immediately; the id-minting
+    // backends only confirm theirs when the `session` event arrives.
+    this.store.updateStep(runId, step.id, {
+      sessionId,
+      backend,
+      sessionConfirmed: resumeFrom ? previous?.sessionConfirmed : backend === 'claude',
+    });
+    const spokenText: string[] = [];
+    let usedTool = false;
+    let resumeFailure: string | undefined;
 
     const stepRecord = this.store.getRun(runId)?.steps.find((s) => s.id === step.id);
     const startTokens = stepRecord?.tokensUsed ?? 0;
     let stepCost = stepRecord?.costUsd ?? 0;
+    // A resume attempt that turns out never to open a turn is rolled back to these counters
+    // before the fresh retry. Without it the abandoned invocation leaves `started > observed`,
+    // and `updateStep` then clears the run's directional token totals for good (they require the
+    // two counts to agree) — the token panel and the cost dashboard would go blank on a retry.
+    const usageBaseline = resumeFrom && stepRecord
+      ? {
+          usageInvocationEpoch: stepRecord.usageInvocationEpoch,
+          usageInvocationsStarted: stepRecord.usageInvocationsStarted,
+          usageInvocationsObserved: stepRecord.usageInvocationsObserved,
+          usageTurnsStarted: stepRecord.usageTurnsStarted,
+          usageTurnsRecorded: stepRecord.usageTurnsRecorded,
+          inputTokens: stepRecord.inputTokens,
+          outputTokens: stepRecord.outputTokens,
+        }
+      : undefined;
     let turnText = '';
     let sessionError: string | undefined;
     const sink = this.makeUiSink(runId, step.id);
     const onEvent = (event: AgentEvent) => {
       if (state.cancelled || this.active.get(runId) !== state) return;
+      if (event.type === 'text') spokenText.push(event.text);
+      if (event.type === 'tool-call') usedTool = true;
+      if (event.type === 'error') {
+        // Claude echoes an error `result` frame's text as v1 `text`; that is the error, not the agent.
+        const echoed = spokenText.lastIndexOf(event.message);
+        if (echoed >= 0) spokenText.splice(echoed, 1);
+      }
       if (event.type === 'image') {
         const saved = this.persistAttachment(runId, event.mediaType, event.data);
         if (saved) emit({ type: 'image', stepId: step.id, ...saved });
@@ -4442,7 +4537,7 @@ export class RunManager {
       if (sessionError) return;
       if (event.type === 'session') {
         // Codex/OpenCode mint their own session id — persist it so resume works.
-        this.store.updateStep(runId, step.id, { sessionId: event.sessionId, backend });
+        this.store.updateStep(runId, step.id, { sessionId: event.sessionId, backend, sessionConfirmed: true });
       }
       if (event.type === 'token-usage') {
         this.store.updateStep(runId, step.id, { tokensUsed: startTokens + event.tokensUsed });
@@ -4680,6 +4775,7 @@ export class RunManager {
     try {
       stepProfile = await this.agentEnvForStep(runId, stepBackend, {
         generateFollowups: followupsEnabled() && input.generateFollowups !== false,
+        recordedProfileId: resumeFrom?.profileId,
       });
     } catch (err) {
       if (err instanceof AgentTempDirError || err instanceof TrackerAgentBindingError) return err.message;
@@ -4688,6 +4784,16 @@ export class RunManager {
     this.store.updateStep(runId, step.id, { profileId: stepProfile.profileId });
 
     const runner = createRunner(stepBackend);
+    // The session lives in its account's config dir, so under any other account it cannot reopen;
+    // and a runner that might quietly open a blank session would lose the task with it.
+    if (resumeFrom && (!runner.strictResume || (resumeFrom.profileId !== undefined && stepProfile.profileId !== resumeFrom.profileId))) {
+      resumeFrom = undefined;
+      sessionId = randomUUID();
+      this.store.updateStep(runId, step.id, { sessionId, backend });
+    }
+    if (resumeFrom) {
+      emit({ type: 'note', stepId: step.id, message: `retrying in this step's previous session — sending only the failure` });
+    }
     let session: AgentSession;
     state.currentStepId = step.id;
     this.beginUsageInvocation(runId, state, step.id);
@@ -4709,7 +4815,7 @@ export class RunManager {
               ? HANDOFF_INSTRUCTIONS
               : HANDOFF_ONLY_INSTRUCTIONS,
           ),
-          userPrompt,
+          userPrompt: resumeFrom ? resumePrompt : userPrompt,
           images,
           cwd: state.cwd,
           allowedTools: step.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
@@ -4723,6 +4829,7 @@ export class RunManager {
           env: stepProfile.env,
           model: backendModel,
           sessionId,
+          ...(resumeFrom ? { resume: true } : {}),
           // Interactive sessions have no wall clock — the idle timer rules.
           //
           // A non-final step keeps its wall clock (`DEFAULT_RUN_TIMEOUT_MS`)
@@ -4757,23 +4864,35 @@ export class RunManager {
     state.interrupt = () => session.interrupt();
     if (session.pid !== undefined) registerRunProcess(runId, session.pid);
 
+    // A reopened session that failed before the agent said or did anything never resumed at all
+    // (a missing claude conversation still answers with an error `result` frame). A turn that
+    // STARTED is proof the reopen worked — a usage limit or a provider 500 mid-turn is the same
+    // failure a fresh session would hit, and re-running it fresh would double the spend.
+    const unresumed = (message: string): boolean => {
+      if (!resumeFrom || usedTool || spokenText.length > 0 || state.cancelled || this.active.get(runId) !== state) return false;
+      if (state.usageInvocation?.observed) return false;
+      if (isProviderRefusalError(message)) return false;
+      resumeFailure = message;
+      return true;
+    };
     try {
       const result = await session.result;
       if (sessionError) {
         sink.sessionEnded('error', sessionError);
-        return sessionError;
+        if (!unresumed(sessionError)) return sessionError;
+      } else {
+        // v2 counterpart of v1's `done` (spec: the mappers leave session-close
+        // events to the RunManager — only it knows how the session settled).
+        sink.sessionEnded(state.cancelled ? 'cancelled' : 'end_turn');
+        if (!state.cancelled && this.active.get(runId) === state) {
+          this.store.updateStep(runId, step.id, { tokensUsed: startTokens + result.tokensUsed });
+        }
+        return null;
       }
-      // v2 counterpart of v1's `done` (spec: the mappers leave session-close
-      // events to the RunManager — only it knows how the session settled).
-      sink.sessionEnded(state.cancelled ? 'cancelled' : 'end_turn');
-      if (!state.cancelled && this.active.get(runId) === state) {
-        this.store.updateStep(runId, step.id, { tokensUsed: startTokens + result.tokensUsed });
-      }
-      return null;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       sink.sessionEnded('error', message); // alongside v1's fatal `error`
-      return message;
+      if (!unresumed(sessionError ?? message)) return message;
     } finally {
       this.recordUsagePeaks(runId, state);
       this.clearIdleTimer(state);
@@ -4786,6 +4905,24 @@ export class RunManager {
       state.currentStepId = undefined;
       state.interrupt = () => undefined;
     }
+    if (usageBaseline) this.store.updateStep(runId, step.id, { ...usageBaseline });
+    emit({ type: 'note', stepId: step.id, message: `could not reopen the previous session (${resumeFailure}) — retrying in a fresh session` });
+    return this.runAgentStep(
+      runId,
+      state,
+      step,
+      input,
+      skills,
+      checkFailure,
+      interactive,
+      emit,
+      images,
+      taskBackend,
+      extraSystemPrompt,
+      chainNote,
+      attachments,
+      { treeBlocks },
+    );
   }
 
   /**

@@ -83,6 +83,13 @@ const stepStateSchema = z.object({
   error: z.string().optional(),
   /** Latest backend-owned session id, used for same-backend Continue. */
   sessionId: z.string().optional(),
+  /** Whether `sessionId` is an id the PROVIDER minted, rather than cezar's pre-assigned
+   *  placeholder. claude pins its own id (`--session-id`), so it is confirmed at spawn; codex,
+   *  opencode, pi and cursor mint the id and announce it with a `session` event, so the
+   *  placeholder is unconfirmed until then. Only a confirmed id may be resumed — a placeholder
+   *  from a step that died before its session event resolves to nothing on the provider.
+   *  Absent on runs.json written before this field (treated as confirmed, their prior behaviour). */
+  sessionConfirmed: z.boolean().optional(),
   /** Backend that owns `sessionId`. Optional so pre-affinity runs.json files still parse;
    *  `storedRunnerSchema` so a legacy `claude-cli` folds to `claude` instead of failing (#547). */
   backend: storedRunnerSchema.optional(),

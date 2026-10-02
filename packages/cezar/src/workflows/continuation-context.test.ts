@@ -42,3 +42,79 @@ describe('freshContinuationContext', () => {
     expect(context).toContain('Assistant:\nlegacy answer');
   });
 });
+
+describe('freshContinuationContext and the handoff journal', () => {
+  const longConversation = (n: number): RunEvent[] =>
+    Array.from({ length: n }, (_, i) =>
+      event(i + 1, 'item.completed', { item: { id: `m${i}`, kind: 'message', role: 'assistant', text: `answer ${i} ${'x'.repeat(990)}` } }),
+    );
+  const handoff = [
+    '# Handoff — Fix it',
+    '',
+    '## Goal',
+    '',
+    'Fix the checkout bug',
+    '',
+    '## Progress log',
+    '',
+    '- 2026-09-04T10:00:00.000Z — turn complete — status=waiting',
+    '- 2026-09-04T09:50:00.000Z — fixed the API handler, tests green',
+    '- 2026-09-04T09:40:00.000Z — step "task" complete — status=done',
+    '',
+    '## Resume notes',
+    'Next: wire the UI to the new endpoint.',
+    '',
+  ].join('\n');
+
+  it('carries what the previous session wrote and drops cezar heartbeats', () => {
+    const context = freshContinuationContext(run(), [], handoff);
+    expect(context).toContain('## Handoff journal (kept by the previous session)');
+    expect(context).toContain('Next: wire the UI to the new endpoint.');
+    expect(context).toContain('fixed the API handler, tests green');
+    expect(context).not.toContain('status=waiting');
+    expect(context).not.toContain('step "task" complete');
+  });
+
+  it('leans on the journal and sends a shorter slice of the raw transcript', () => {
+    const withJournal = freshContinuationContext(run(), longConversation(100), handoff);
+    const without = freshContinuationContext(run(), longConversation(100));
+    const history = (context: string): string => context.slice(context.indexOf('## Conversation history'));
+    expect(history(withJournal).length).toBeLessThanOrEqual(12_100);
+    // Nothing else says where the task stands, so the journal-less hand-off keeps the full slice.
+    expect(history(without).length).toBeGreaterThan(59_000);
+    expect(history(without).length).toBeLessThanOrEqual(60_100);
+    expect(withJournal).toContain('answer 99');
+    expect(withJournal).toContain('(oldest messages truncated)');
+  });
+
+  it('adds no journal section for a handoff holding only heartbeats', () => {
+    const heartbeatsOnly = '## Progress log\n\n- 2026-09-04T10:00:00.000Z — turn complete — status=waiting\n\n## Resume notes\n';
+    expect(freshContinuationContext(run(), [], heartbeatsOnly)).not.toContain('Handoff journal');
+  });
+
+  it('keeps the full transcript when the journal carries no state', () => {
+    // One stray progress line is not "where the task stands": the old gate shortened the
+    // transcript on any non-empty journal, giving a provider hand-off a fifth of the conversation
+    // in exchange for nothing.
+    const thin = '## Progress log\n\n- 2026-09-04T09:50:00.000Z — started the refactor\n';
+    const context = freshContinuationContext(run(), longConversation(100), thin);
+    const history = context.slice(context.indexOf('## Conversation history'));
+    expect(context).toContain('## Handoff journal (kept by the previous session)');
+    expect(history.length).toBeGreaterThan(59_000);
+    expect(history.length).toBeLessThanOrEqual(60_100);
+  });
+
+  it('marks a journal that was cut at the cap', () => {
+    const oversized = `## Resume notes\n${'y'.repeat(9_000)}\n`;
+    expect(freshContinuationContext(run(), [], oversized)).toContain('_(journal truncated)_');
+  });
+
+  it('never cuts a surrogate pair in half when one message overflows the cap', () => {
+    // An odd tail after the pairs puts the cut on the low half of a pair.
+    const emoji = '🙂'.repeat(40_000);
+    const context = freshContinuationContext(run(), [
+      event(1, 'item.completed', { item: { id: 'm1', kind: 'message', role: 'assistant', text: `${emoji}y` } }),
+    ]);
+    expect(context).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  });
+});

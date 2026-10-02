@@ -79,6 +79,7 @@ export function resolveClaudeExecutable(override?: string): string {
  */
 export class ClaudeCliRunner implements AgentRunner {
   readonly backend = 'claude' as const;
+  readonly strictResume = true;
 
   private readonly bin: string;
   private readonly timeoutMs: number;
@@ -451,6 +452,7 @@ interface ClaudeStreamMessage {
   result?: string;
   usage?: RawUsage;
   is_error?: boolean;
+  errors?: unknown[];
   total_cost_usd?: number;
 }
 
@@ -524,11 +526,12 @@ function handleClaudeMessage(
       ctx.onEvent?.({ type: 'text', text: msg.result });
     }
     if (msg.is_error) {
+      const reasons = (msg.errors ?? []).filter((e): e is string => typeof e === 'string' && e.trim() !== '');
       ctx.onEvent?.({
         type: 'error',
         message: typeof msg.result === 'string' && msg.result.trim() !== ''
           ? msg.result
-          : `claude reported result error${msg.subtype ? ` (${msg.subtype})` : ''}`,
+          : `claude reported result error${msg.subtype ? ` (${msg.subtype})` : ''}${reasons.length ? `: ${reasons.join('; ')}` : ''}`,
       });
     }
     return costWeightedTokens(msg.usage);

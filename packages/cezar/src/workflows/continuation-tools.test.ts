@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, AgentRunResult, AgentRunSpec } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
 import { RunManager } from './run.ts';
+import { freshContinuationContext } from './continuation-context.ts';
 import { DEFAULT_ALLOWED_TOOLS, type WorkflowDef } from './types.ts';
 
 const run = promisify(execFile);
@@ -14,6 +15,14 @@ const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
 
 /** Every spec a (mocked) runner's `startSession` receives, in spawn order. */
 const captured = vi.hoisted(() => ({ specs: [] as AgentRunSpec[] }));
+
+// `freshContinuationContext` reads and parses the run's whole event log, so the continuation must
+// only build it when a session actually needs the portable context (a backend switch, or opencode's
+// gone-session fallback). Spy through to the real one so the content assertions below still hold.
+vi.mock('./continuation-context.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./continuation-context.ts')>();
+  return { ...actual, freshContinuationContext: vi.fn(actual.freshContinuationContext) };
+});
 
 // The seam under test is what `runContinuation` puts INTO the spec, so the runner is a
 // capture stub: the spec→argv mapping below it is `claude-cli-runner.test.ts`'s business
@@ -121,7 +130,7 @@ describe('a resumed session keeps its workflow step tools', () => {
   /** A terminal run whose `workflowDef` and steps are exactly what the caller says. */
   function terminalRun(input: {
     def?: WorkflowDef;
-    steps: { id: string; sessionId?: string; backend?: 'claude' | 'codex' }[];
+    steps: { id: string; sessionId?: string; backend?: 'claude' | 'codex' | 'opencode' }[];
     status?: 'done' | 'failed';
     error?: string;
     autoResumeAt?: string;
@@ -276,6 +285,64 @@ describe('a resumed session keeps its workflow step tools', () => {
     expect(spec.resume).toBe(true);
     expect(spec.userPrompt).toBe('keep going');
     await settled(id);
+  });
+
+  it('a resumed session also carries the portable context as its gone-session fallback', async () => {
+    const id = terminalRun({
+      def: SINGLE_DEF,
+      steps: [{ id: 'work', sessionId: 'sess-1', backend: 'opencode' }],
+      status: 'failed',
+      error: 'boom',
+    });
+    store.appendEvent(id, { type: 'user-message', text: 'first fix the API' });
+    store.appendEvent(id, { type: 'text', text: 'The API is fixed; UI remains.' });
+
+    expect(manager!.continueRun(id, { text: 'keep going', runner: 'opencode' })).toEqual({ ok: true });
+    const spec = await specAt(0);
+    expect(spec.resume).toBe(true);
+    expect(spec.sessionId).toBe('sess-1');
+    // The live resume gets the instruction alone; the fallback opening carries the whole portable
+    // context, so a stored session opencode has since dropped degrades instead of dead-ending.
+    expect(spec.userPrompt).toBe('keep going');
+    const fallback = spec.resumeFallbackPrompt?.();
+    expect(fallback).toContain('You are continuing an existing Cezar task');
+    expect(fallback).toContain('do the thing');
+    expect(fallback).toContain('User:\nfirst fix the API');
+    expect(fallback).toContain('## New user instruction\nkeep going');
+    await settled(id);
+  });
+
+  it('does not build the portable context for a successful same-backend resume', async () => {
+    vi.mocked(freshContinuationContext).mockClear();
+    const id = terminalRun({
+      def: SINGLE_DEF,
+      steps: [{ id: 'work', sessionId: 'sess-1', backend: 'claude' }],
+    });
+
+    expect(manager!.continueRun(id, { text: 'keep going', runner: 'claude' })).toEqual({ ok: true });
+    const spec = await specAt(0);
+    expect(spec.resume).toBe(true);
+    await settled(id);
+
+    // The NDJSON read + parse is the whole point of the lazy fallback: a normal resume must not pay.
+    expect(freshContinuationContext).not.toHaveBeenCalled();
+  });
+
+  it('builds the portable context up front for a backend switch', async () => {
+    vi.mocked(freshContinuationContext).mockClear();
+    const id = terminalRun({
+      def: SINGLE_DEF,
+      steps: [{ id: 'work', sessionId: 'sess-1', backend: 'codex' }],
+      status: 'failed',
+      error: 'boom',
+    });
+
+    expect(manager!.continueRun(id, { text: 'keep going', runner: 'claude' })).toEqual({ ok: true });
+    const spec = await specAt(0);
+    expect(spec.resume).toBe(false);
+    expect(spec.userPrompt).toContain('You are continuing an existing Cezar task');
+    await settled(id);
+    expect(freshContinuationContext).toHaveBeenCalled();
   });
 
   it('a second Continue — the session now owned by a synthetic continue-N step — keeps them too', async () => {

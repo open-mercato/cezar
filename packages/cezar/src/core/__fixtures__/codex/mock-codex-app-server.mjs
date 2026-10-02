@@ -8,6 +8,10 @@
 // `MOCK_CODEX_IGNORE_EOF=1` switches to the #703 teardown shape instead: the
 // server stays deaf to stdin EOF (the CLI hang the EOF watchdog exists for)
 // and handles SIGTERM itself, exiting 143 rather than dying from the signal.
+//
+// `MOCK_CODEX_TURNS_FILE=<path>` appends every turn/start input text (one JSON
+// string per line), so a test can assert exactly what reached the thread.
+import { appendFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 
 const emit = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
@@ -133,6 +137,7 @@ rl.on('line', (line) => {
     emit({ id: msg.id, result: {} });
   } else if (msg.method === 'turn/start') {
     const turnText = msg.params?.input?.map?.((part) => part.text ?? '').join('\n') ?? '';
+    if (process.env.MOCK_CODEX_TURNS_FILE) appendFileSync(process.env.MOCK_CODEX_TURNS_FILE, `${JSON.stringify(turnText)}\n`);
     turnSeq += 1;
     if (turnSeq === 1) {
       if (turnText.includes('mock:steer-reject')) scenario = 'steer-reject';
