@@ -224,6 +224,16 @@ function stripMonitoringMarker(text: string): string {
   return text.replace(/\s*CEZ:MONITORING\s*$/, '');
 }
 /**
+ * v1 runner events whose content a persisted v2 tool item already carries
+ * (`item.started` → `tool-call`, `item.completed` → `tool-result`). They ride
+ * the live in-process bus only; `deriveV1Events` rebuilds them on read.
+ *
+ * Assistant `text` stays on disk: a message item that never completes (the
+ * session dies mid-message) has its text only in live deltas, and v1 `text` is
+ * then the only persisted copy.
+ */
+const EPHEMERAL_V1_TYPES = new Set(['tool-call', 'tool-result']);
+/**
  * What one finished turn decided about dispatch (spec 2026-09-10-dispatch) — the facts the park
  * decision and the autonomous nudge both need. `hasDispatch` is false for every ordinary run, and
  * then the others are false too.
@@ -3604,7 +3614,7 @@ export class RunManager {
         if (text) this.store.appendEvent(runId, { type: 'text', text, stepId });
         return;
       }
-      this.store.appendEvent(runId, { ...event, stepId });
+      this.emitRunnerEvent(runId, { ...event, stepId });
       if (event.type === 'error') {
         sessionError ??= event.message;
         state.session?.interrupt();
@@ -3957,7 +3967,7 @@ export class RunManager {
     this.starting.delete(runId);
     const emit = (event: { type: string; stepId?: string; [k: string]: unknown }) => {
       if (this.active.get(runId) !== state || state.cancelled) return;
-      this.store.appendEvent(runId, event);
+      this.emitRunnerEvent(runId, event);
     };
 
     // Resolve the agent backend for this run: the task choice (GUI) wins over
@@ -4786,6 +4796,17 @@ export class RunManager {
       state.currentStepId = undefined;
       state.interrupt = () => undefined;
     }
+  }
+
+  /**
+   * The one seam every v1 runner event goes through, so both `onEvent`
+   * construction sites (`runAgentStep` and `runContinuation`) write to disk by
+   * the same rule: the v2-covered tool twins are fanned out live only,
+   * everything else is appended to the transcript.
+   */
+  private emitRunnerEvent(runId: string, event: { type: string; stepId?: string; [k: string]: unknown }): void {
+    if (EPHEMERAL_V1_TYPES.has(event.type)) this.store.emitEphemeral(runId, event);
+    else this.store.appendEvent(runId, event);
   }
 
   /**

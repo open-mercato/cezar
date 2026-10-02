@@ -411,6 +411,11 @@ const CREATED_PR_RE =
 /** Referenced-tier working-set cap (spec 2026-07-16-pr-autodiscovery): past
  *  this many distinct PRs the conversation is a survey, not a subject. */
 const MAX_PR_CANDIDATES = 8;
+/** Keeps `rehydrateSeq`'s resume above the ephemeral tail a client already saw. A heuristic,
+ *  not a bound: the sink persists `item.updated` only on a shape change, so a long uninterrupted
+ *  stream flushes deltas every `DELTA_FLUSH_MS` and burns seqs with nothing on disk. Persisting
+ *  the last emitted seq (#1187) is the real fix. */
+const SEQ_RESTART_HEADROOM = 10_000;
 
 /** The repository a project IS, as `resolveRepoHandle` reports it. `null`/absent means "unknown",
  *  which is a real and common state (no `gh`, no remote, a non-git root) — never an error. */
@@ -1568,13 +1573,19 @@ export class RunStore extends EventEmitter {
    *  keeps the history. Restarting from 1 would collide with the seqs a client
    *  already replayed — its `seq > maxSeq` dedup then silently drops every
    *  resumed event, even across a reload (the frozen-transcript symptom class
-   *  of #424). One file read on the first post-restart append per run. */
+   *  of #424). One file read on the first post-restart append per run.
+   *
+   *  The file max alone still rewinds: `emitEphemeral` stamps seqs that never
+   *  reach disk (delta flushes, the v1 twins of persisted v2 items), and a
+   *  client saw them live. Resuming `SEQ_RESTART_HEADROOM` above the file max
+   *  is meant to clear that burned tail; a gap is harmless because every dedup
+   *  compares with `>` and history cursors address byte offsets, not seqs. */
   private rehydrateSeq(runId: string): number {
     let max = 0;
     for (const event of this.readEvents(runId)) {
       if (typeof event.seq === 'number' && event.seq > max) max = event.seq;
     }
-    return max;
+    return max === 0 ? 0 : max + SEQ_RESTART_HEADROOM;
   }
 
   private eventsPath(runId: string): string {

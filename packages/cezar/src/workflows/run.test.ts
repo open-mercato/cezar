@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RunEvent } from '@open-mercato/cezar-contract';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { ClaudeCliRunner } from '../core/claude-cli-runner.ts';
@@ -19,6 +20,7 @@ import { createWorktree } from '../git-worktree.ts';
 import { RunStore, type RunRecord, type StepState } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { parseTaskMarkers } from '../runs/task-markers.ts';
+import { deriveV1Events } from '../runs/derive-v1.ts';
 import { appendTurnText, endsWithMonitoringMarker, RunManager, turnEndMarkerText } from './run.ts';
 import type { WorkflowDef } from './types.ts';
 
@@ -1257,6 +1259,74 @@ describe('a turn that parks on its sub-agents while declaring its PR is not "nee
     expect(v1Text.length).toBeGreaterThan(0);
     expect(v1Text.some((event) => String(event.text).includes('CEZ:MONITORING'))).toBe(false);
     expect(v1Text.some((event) => String(event.text).includes('CEZ:PR='))).toBe(false);
+  }, 30_000);
+});
+
+/**
+ * The v1 tool twins the v2 tool items already carry (`tool-call`,
+ * `tool-result`) are fanned out live but never written to the NDJSON, and
+ * `deriveV1Events` reconstructs them on read. Assistant `text` stays on disk.
+ */
+describe('persist v2 only — the v1 tool twins stay off disk', () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let manager: RunManager;
+  let currentId: string | undefined;
+  const savedEnv: Record<string, string | undefined> = {};
+  const SINGLE_STEP: WorkflowDef = {
+    name: 'quick-task',
+    source: 'built-in',
+    steps: [{ id: 'task', name: 'Task', prompt: '{{task}}' }],
+  };
+
+  beforeEach(async () => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-persist-v2-'));
+    savedEnv.CEZ_DRY_RUN = process.env.CEZ_DRY_RUN;
+    process.env.CEZ_DRY_RUN = '1';
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
+    await run('git', ['add', '-A'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    manager = new RunManager(store, repoRoot);
+    currentId = undefined;
+  });
+
+  afterEach(() => {
+    if (currentId) manager.cancel(currentId);
+    manager.dispose();
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  it('writes the v2 tool items and v1 text, and drops the v1 tool twins', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'inspect the repo', worktree: false });
+    currentId = record.id;
+    const deadline = Date.now() + 20_000;
+    while (!['waiting', 'done', 'review', 'failed'].includes(store.getRun(record.id)?.status ?? '')) {
+      if (Date.now() > deadline) throw new Error('condition not met in time');
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const events = readFileSync(join(repoRoot, '.ai/cezar/runs', `${record.id}.ndjson`), 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as RunEvent);
+
+    const types = events.map((event) => event.type);
+    expect(types).toContain('item.started');
+    expect(types).toContain('item.completed');
+    expect(types).toContain('turn-end');
+    expect(types).toContain('text');
+    expect(types).not.toContain('tool-call');
+    expect(types).not.toContain('tool-result');
+    const derived = deriveV1Events(events).map((event) => event.type);
+    expect(derived).toContain('tool-call');
+    expect(derived).toContain('tool-result');
   }, 30_000);
 });
 

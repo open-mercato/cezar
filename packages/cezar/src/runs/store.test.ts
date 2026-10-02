@@ -1511,9 +1511,25 @@ describe('RunStore — seq survives a restart (#424 symptom class)', () => {
     // process restarting seqs at 1 would have every resumed event dropped.
     const reopened = RunStore.open(dataDir, { keepLive: true });
     const resumed = reopened.appendEvent(run.id, { type: 'note', message: 'after restart' });
-    expect(resumed.seq).toBe(3);
+    expect(resumed.seq).toBeGreaterThan(2);
     const seqs = reopened.readEvents(run.id).map((e) => e.seq);
-    expect(seqs).toEqual([1, 2, 3]);
+    expect(seqs).toEqual([1, 2, resumed.seq]);
+  });
+
+  it('never reuses a seq a live client saw on an ephemeral event before the restart', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+    store.appendEvent(run.id, { type: 'note', message: 'persisted' });
+    const burned = [
+      store.emitEphemeral(run.id, { type: 'tool-call', id: 't1', tool: 'Bash', input: {} }),
+      store.emitEphemeral(run.id, { type: 'tool-result', toolCallId: 't1', result: 'ok', isError: false }),
+      store.emitEphemeral(run.id, { type: 'text', text: 'done' }),
+    ];
+    store.flush();
+
+    const reopened = RunStore.open(dataDir, { keepLive: true });
+    const resumed = reopened.appendEvent(run.id, { type: 'note', message: 'after restart' });
+    expect(resumed.seq).toBeGreaterThan(Math.max(...burned.map((event) => event.seq)));
   });
 
   it('starts at 1 for a run with no event file', () => {
