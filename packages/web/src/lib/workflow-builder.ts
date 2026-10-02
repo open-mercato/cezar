@@ -118,6 +118,7 @@ export function workflowYaml(
       if (s.allowedTools) lines.push(`    allowedTools: [${s.allowedTools.map(yamlScalar).join(', ')}]`)
       if (s.bashAllowlist) lines.push(`    bashAllowlist: [${s.bashAllowlist.map(yamlScalar).join(', ')}]`)
       if (s.command) lines.push(...yamlBlock('command', s.command, 4))
+      if (s.timeoutMs !== undefined) lines.push(`    timeoutMs: ${s.timeoutMs}`)
       if (s.onFail) {
         lines.push('    onFail:', `      retry: ${yamlScalar(s.onFail.retry)}`, `      max: ${s.onFail.max ?? 2}`)
       }

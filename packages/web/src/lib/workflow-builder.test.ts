@@ -150,6 +150,15 @@ describe('workflowYaml', () => {
     })
   })
 
+  it('serialises a check step’s timeoutMs, so preview/export/copy keep the bound', () => {
+    const steps: WorkflowStepDef[] = [{ id: 'verify', command: 'npm test', timeoutMs: 600_000 }]
+    const text = workflowYaml('bounded', '', steps)
+    expect(parse(text)).toEqual({
+      name: 'bounded',
+      steps: [{ id: 'verify', command: 'npm test', timeoutMs: 600_000 }],
+    })
+  })
+
   it('quotes scalars YAML would mistype and keeps plain ones bare', () => {
     const text = workflowYaml('true', '', [stackStep('2fast', 'no')])
     // `true`, `no` and `2fast` would parse as boolean/number-ish — they must come back strings.

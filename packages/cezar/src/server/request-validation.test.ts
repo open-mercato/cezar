@@ -130,6 +130,27 @@ describe('request validation bounds (#429)', () => {
     expect(((await res.json()) as { error: string }).error).toContain('description');
   });
 
+  it('round-trips a check step’s timeoutMs from POST to the reloaded catalog', async () => {
+    const res = await postJson('/api/v1/workflows', {
+      name: 'bounded-check',
+      steps: [{ id: 'verify', command: 'npm test', timeoutMs: 600_000 }],
+    });
+    expect(res.status).toBe(201);
+    const listed = await apiRequest(app, '/api/v1/workflows');
+    const body = (await listed.json()) as { workflows: WorkflowDef[] };
+    const saved = body.workflows.find((w) => w.name === 'bounded-check');
+    expect(saved?.steps[0]?.timeoutMs).toBe(600_000);
+  });
+
+  it('rejects a timeoutMs on an agent step with a 400', async () => {
+    const res = await postJson('/api/v1/workflows', {
+      name: 'bad-step',
+      steps: [{ id: 'work', prompt: '{{task}}', timeoutMs: 600_000 }],
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain('timeoutMs');
+  });
+
   // ---- archive schema ------------------------------------------------------
   it('archives with no body', async () => {
     const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });

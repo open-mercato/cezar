@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildChildEnv, looksSecret } from './agent-env.ts';
+import { buildCheckEnv, buildChildEnv, looksSecret } from './agent-env.ts';
 
 /**
  * #427: the spawned backend must NOT inherit the full host environment. It
@@ -348,4 +348,34 @@ it.each(['claude', 'codex', 'opencode'] as const)('does not forward tracker cred
   } });
   expect(env.JIRA_API_TOKEN).toBeUndefined();
   expect(env.LINEAR_API_KEY).toBeUndefined();
+});
+
+describe('buildCheckEnv', () => {
+  const host = {
+    PATH: '/usr/bin',
+    HOME: '/home/u',
+    LANG: 'en_US.UTF-8',
+    LC_ALL: 'C',
+    TERM: 'xterm',
+    CI: 'true',
+    CEZ_DRY_RUN: '1',
+    NODE_OPTIONS: '--max-old-space-size=4096',
+    GITHUB_TOKEN: 'gh',
+    ANTHROPIC_API_KEY: 'sk-a',
+    OPENAI_API_KEY: 'sk-o',
+    AWS_SECRET_ACCESS_KEY: 'aws',
+    DATABASE_URL: 'postgres://u:p@h/db',
+    NODE_AUTH_TOKEN: 'npm',
+  };
+
+  it('keeps the shell and toolchain base, CI, CEZ_* and gh auth, and drops everything else', () => {
+    expect(Object.keys(buildCheckEnv(host)).sort()).toEqual(
+      ['CEZ_DRY_RUN', 'CI', 'GITHUB_TOKEN', 'HOME', 'LANG', 'LC_ALL', 'NODE_OPTIONS', 'PATH', 'TERM'].sort(),
+    );
+  });
+
+  it('honours CEZ_ENV_PASSTHROUGH and CEZ_AGENT_ENV_FULL', () => {
+    expect(buildCheckEnv({ ...host, CEZ_ENV_PASSTHROUGH: 'database_url' }).DATABASE_URL).toBe(host.DATABASE_URL);
+    expect(buildCheckEnv({ ...host, CEZ_AGENT_ENV_FULL: '1' })).toEqual({ ...host, CEZ_AGENT_ENV_FULL: '1' });
+  });
 });

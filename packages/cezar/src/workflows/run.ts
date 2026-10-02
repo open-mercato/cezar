@@ -1,7 +1,6 @@
 import type { TrackerAssociation } from '@open-mercato/cezar-contract';
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
 import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import {
@@ -106,8 +105,8 @@ import { UiEventSink } from '../runs/ui-event-sink.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { chainStepNote, DEFAULT_ALLOWED_TOOLS, stepKind, type WorkflowDef, type WorkflowStepDef } from './types.ts';
 import { freshContinuationContext } from './continuation-context.ts';
-
-const CHECK_OUTPUT_CAP = 20_000;
+import { DEFAULT_CHECK_TIMEOUT_MS, checkExitHint, formatCheckFailure, formatDuration, runCheckCommand } from './check-step.ts';
+import { buildCheckEnv } from '../core/agent-env.ts';
 
 async function configuredModelProvider(
   backend: RunnerId,
@@ -4218,7 +4217,7 @@ export class RunManager {
         continue;
       }
 
-      const { ok, output } = await this.runCheckStep(state, step, emit);
+      const { ok, output, timedOut } = await this.runCheckStep(state, step, emit);
       if (state.cancelled) break;
       if (ok) {
         this.finishStep(runId, step.id, 'done', undefined, emit);
@@ -4246,7 +4245,10 @@ export class RunManager {
         continue;
       }
 
-      this.finishStep(runId, step.id, 'failed', `\`${step.command}\` exited non-zero`, emit);
+      const reason = timedOut
+        ? `\`${step.command}\` timed out after ${formatDuration(step.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS)} and was killed`
+        : `\`${step.command}\` exited non-zero`;
+      this.finishStep(runId, step.id, 'failed', reason, emit);
       runError = `check "${step.id}" failed${step.onFail ? ` after ${used + 1} attempts` : ''}`;
       break;
     }
@@ -4387,7 +4389,7 @@ export class RunManager {
     const treeBlocks = [treeReports, treeInbox].filter((block): block is string => Boolean(block));
     if (treeBlocks.length) userPrompt = `${treeBlocks.join('\n\n')}\n\n---\n\n${userPrompt}`;
     if (checkFailure) {
-      userPrompt += `\n\nA verification command failed after the previous attempt. Fix the cause. Failing output:\n\n${checkFailure}`;
+      userPrompt += `\n\nA verification command failed after the previous attempt. Fix the cause.\n\n${checkFailure}`;
     }
     if (images?.length) {
       emit({
@@ -5486,40 +5488,27 @@ export class RunManager {
     }
   }
 
-  private runCheckStep(
+  private async runCheckStep(
     state: ActiveRun,
     step: WorkflowStepDef,
     emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void,
-  ): Promise<{ ok: boolean; output: string }> {
+  ): Promise<{ ok: boolean; output: string; timedOut: boolean }> {
     const command = step.command as string;
+    const timeoutMs = step.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS;
     emit({ type: 'note', stepId: step.id, message: `$ ${command}` });
-    return new Promise((resolve) => {
-      // Check steps run in the same cwd as the agent steps — the worktree.
-      const child = spawn('bash', ['-lc', command], { cwd: state.cwd, env: process.env });
-      state.interrupt = () => child.kill('SIGTERM');
-
-      let output = '';
-      const collect = (chunk: Buffer) => {
-        if (output.length < CHECK_OUTPUT_CAP) {
-          output += chunk.toString('utf8');
-          if (output.length >= CHECK_OUTPUT_CAP) output += '\n… (output truncated)';
-        }
-      };
-      child.stdout.on('data', collect);
-      child.stderr.on('data', collect);
-      child.on('error', (err) => {
-        state.interrupt = () => undefined;
-        const message = `failed to spawn: ${err.message}`;
-        emit({ type: 'check-output', stepId: step.id, command, text: message, exitCode: -1 });
-        resolve({ ok: false, output: message });
-      });
-      child.on('close', (code) => {
-        state.interrupt = () => undefined;
-        const trimmed = output.trim() || '(no output)';
-        emit({ type: 'check-output', stepId: step.id, command, text: trimmed, exitCode: code ?? -1 });
-        resolve({ ok: code === 0, output: trimmed });
-      });
-    });
+    // Check steps run in the same cwd as the agent steps — the worktree.
+    const check = runCheckCommand({ command, cwd: state.cwd, env: buildCheckEnv(), timeoutMs });
+    state.interrupt = check.kill;
+    const result = await check.result;
+    state.interrupt = () => undefined;
+    const hint = checkExitHint(result);
+    const text = result.timedOut
+      ? `${result.output}\n(timed out after ${formatDuration(timeoutMs)} and was killed)`
+      : hint
+        ? `${result.output}\n(${hint})`
+        : result.output;
+    emit({ type: 'check-output', stepId: step.id, command, text, exitCode: result.exitCode });
+    return { ok: result.ok, output: formatCheckFailure(command, result, timeoutMs), timedOut: result.timedOut };
   }
 
   private finishStep(
