@@ -21,6 +21,7 @@ export const PROVIDERS = [
   { id: 'claude', label: 'Claude Code', login: 'claude auth login' },
   { id: 'codex', label: 'Codex', login: 'codex login' },
   { id: 'opencode', label: 'OpenCode', login: 'opencode auth login' },
+  { id: 'cursor', label: 'Cursor', login: 'agent login' },
   { id: 'pi', label: 'pi', login: 'pi /login' },
   { id: 'copilot', label: 'GitHub Copilot CLI', login: 'copilot login' },
 ] as const
@@ -29,6 +30,7 @@ const providerWriteState = <T,>(value: T): Record<ProviderId, T> => ({
   claude: value,
   codex: value,
   opencode: value,
+  cursor: value,
   pi: value,
   copilot: value,
 })

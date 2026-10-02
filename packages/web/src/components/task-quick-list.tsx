@@ -25,7 +25,7 @@ import {
   type QuickListRow,
 } from '@/lib/task-groups'
 import { dispatchKindLabel, subtaskLabel, taskTreeRows } from '@/lib/task-tree'
-import { formatCost, taskReference } from '@/lib/tasks-table'
+import { formatCost, taskReference, taskReferences } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
@@ -611,10 +611,13 @@ export function TaskQuickListContainer() {
     () =>
       projectId === undefined
         ? []
-        : (runs.data ?? []).flatMap((run) => {
-            const reference = taskReference(run)
-            return reference ? [{ projectId, kind: reference.kind, number: reference.number }] : []
-          }),
+        : (runs.data ?? []).flatMap((run) =>
+            taskReferences(run).map((reference) => ({
+              projectId,
+              kind: reference.kind,
+              number: reference.number,
+            })),
+          ),
     [runs.data, projectId],
   )
 

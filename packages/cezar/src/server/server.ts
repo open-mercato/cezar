@@ -48,6 +48,7 @@ import {
   type PickVariantResponse,
   type RunIndexEntry,
   type RunsIndexResponse,
+  type StarCountPayload,
 } from '@open-mercato/cezar-contract';
 // A contract VALUE, like `workspaceUiStateSchema` in workspace/migrations.ts — the request
 // schema this route validates with is the same one the client compiles against.
@@ -65,6 +66,7 @@ import type { ContentBlock } from '../core/agent-runner.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import { discoverClaudeModels } from '../core/claude-model-catalog.ts';
 import { discoverCodexModels } from '../core/codex-model-catalog.ts';
+import { discoverCursorModels } from '../core/cursor-model-catalog.ts';
 import { discoverOpencodeModels } from '../core/opencode-model-catalog.ts';
 import {
   PROVIDER_IDS,
@@ -92,6 +94,9 @@ import {
 import { planChain, slugify } from '../planner.ts';
 import { discoverSkills } from '../skills.ts';
 import { SkillsUpdateConflictError, SkillsUpdateCoordinator, SkillsUpdateService, type SkillsUpdateState } from '../skills-update.ts';
+import { selfUpdateApplyRequestSchema, selfUpdateChannelRequestSchema, selfUpdateDevelopmentQuerySchema } from '@open-mercato/cezar-contract';
+import { SelfUpdateBusyError, SelfUpdateService } from '../self-update/service.ts';
+import { StarCountReader } from './star-count.ts';
 import { getTeamSkillsCached, refreshTeamSkills, waitForTeamSkills } from '../skills-remote.ts';
 import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.ts';
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
@@ -299,6 +304,14 @@ export interface ServerDeps {
   /** Process-wide Open Mercato skills update detector. Injected in tests and
    * shared by every workspace route/project; createApp owns the default. */
   skillsUpdate?: SkillsUpdateService;
+  /** The cockpit's own updater (`/api/v1/workspace/self-update`, src/self-update/). Built by
+   *  the CLI, which knows the entry file, the port and how to restart; absent in tests and for
+   *  bare `createApp` callers, where the family answers a read-only "not available" status. */
+  selfUpdate?: SelfUpdateService;
+  /** cezar's own GitHub star count behind `GET /api/v1/star-count` (the cockpit's ⭐ ask).
+   *  Defaults to a reader that asks github.com at most once per six hours and caches the answer
+   *  under `~/.cache/cez/`; tests inject their own so no suite ever reaches the network. */
+  starCount?: { read(): Promise<StarCountPayload> };
   /** WebSocket subscription hub (`/api/v1/ws`, src/server/ws.ts). `createApp`
    *  only registers topics on it — `startServer` builds one and attaches it
    *  to the HTTP server it binds. Optional so legacy callers/tests change
@@ -574,6 +587,7 @@ export interface WorkspaceConfigResponse {
   resources: {
     maxParallel: number;
     maxMonitoringSessions: number;
+    idleTimeoutMinutes: number | null;
     monitoringWakeIntervalMinutes: number | null;
     autoResumeOnUsageLimit: boolean;
     memoryLimitMb: number | null;
@@ -812,6 +826,11 @@ const uiStateSchema = z
     // The GitHub tab's last-selected sub-tab (#417): issues or PRs. ADDITIVE — an old
     // ui-state.json without the key behaves as the default (issues).
     githubView: z.enum(['issues', 'prs']).optional(),
+    // The GitHub tab's list order: newest first (what `gh` returns) or oldest first, for working
+    // the backlog from the long-waiting end. ADDITIVE, like `githubView` above — an old
+    // ui-state.json without the key behaves as the default (newest), and the sort is applied
+    // client-side, so this key changes presentation only, never what `GET /github` fetches.
+    githubSort: z.enum(['newest', 'oldest']).optional(),
     // Settings → Appearance (redesign R6): accent + density. ADDITIVE — the theme itself
     // stays in the browser (`cez-theme` localStorage, pre-paint). The cockpit always PUTs
     // the whole object because the top-level merge below is shallow.
@@ -1135,6 +1154,7 @@ export function createApp(deps: ServerDeps) {
       claude: { discover: () => discoverClaudeModels({ cwd: bootRoot }) },
       codex: { discover: () => discoverCodexModels({ cwd: bootRoot }) },
       opencode: { discover: () => discoverOpencodeModels({ cwd: bootRoot }) },
+      cursor: { discover: () => discoverCursorModels() },
     },
   });
   const providerAuth = deps.providerAuth ?? new ProviderAuthService();
@@ -1190,6 +1210,20 @@ export function createApp(deps: ServerDeps) {
   const openFile = deps.openFile ?? openFileInDefaultApp;
   const openApp = deps.openApp ?? openInApp;
   const skillsUpdate = deps.skillsUpdate ?? new SkillsUpdateService();
+  // No injected updater (tests, embedded callers): a READ-ONLY service over the running entry.
+  // It has no way to restart the process, so it must not install either — an install that
+  // flips `current` under a process that keeps running the old code is the worst of both.
+  const selfUpdate =
+    deps.selfUpdate ??
+    new SelfUpdateService({
+      pkgName: '@open-mercato/cezar',
+      version: deps.version,
+      entry: process.argv[1] ?? '',
+      restart: () => {},
+      readOnly: true,
+      trimPaths: () => !capabilities().localHandoff,
+    });
+  const starCount = deps.starCount ?? new StarCountReader();
 
   // ---- workspace boot-project identity (multi-project spec) ----------------
   // The boot flow (`initWorkspace` in src/index.ts) registers the boot repo
@@ -1772,7 +1806,7 @@ export function createApp(deps: ServerDeps) {
     // `modelDiscoveryRunnerSchema` is the contract's own list of the runners with an
     // authoritative host-local catalog (#794, #784), so the client compiles against exactly what
     // this validates. A runner absent from it has no discovery path and this 400s.
-    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex or opencode' }), async (c) => {
+    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, or cursor' }), async (c) => {
       const query = { data: c.req.valid('query') };
       return c.json(await modelCatalog.get(query.data.runner));
     });
@@ -1896,7 +1930,7 @@ export function createApp(deps: ServerDeps) {
       },
     )
 
-    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, opencode, or pi' }), async (c) => {
+    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, opencode, cursor, or pi' }), async (c) => {
       const body = { data: c.req.valid('json') };
 
       const provider = body.data.provider as ProviderId;
@@ -1993,6 +2027,7 @@ export function createApp(deps: ServerDeps) {
       ...(profile.provider === 'claude' ? { claude: profile.path } : {}),
       ...(profile.provider === 'codex' ? { codex: profile.path } : {}),
       ...(profile.provider === 'opencode' ? { opencodeConfig: profile.path } : {}),
+      ...(profile.provider === 'cursor' ? { cursor: profile.path } : {}),
     };
     const defs = listConfigFiles().filter(
       (def) => def.scope === 'user' && def.runners.includes(profile.provider),
@@ -2943,6 +2978,61 @@ export function createApp(deps: ServerDeps) {
       }
     });
 
+  // ---- chained family: cezar self-update (workspace-level, PoC) ----
+  // The browser supplies a version STRING (validated shape, never a URL, a path or a tarball)
+  // and a channel; the server resolves both against the npm registry and its own managed
+  // layout. Allowed in hosted mode on purpose: an update pulls a published package from the
+  // registry, so the request cannot inject code, and a VPS behind the installer's Basic auth
+  // is exactly where "update from the cockpit" replaces `cezar server-deploy` — but hosted
+  // applies are FORWARD-ONLY (see the guard on /apply below).
+  // ---- chained family: the star ask (workspace-level) ----------------------
+  // cezar's own star count, for the cockpit's ⭐ button. Workspace-level and single-mount, like
+  // `/health`: it says nothing about any project, and there is nothing for a project scope to
+  // change about it. Never fails — `{ available: false }` is the ordinary offline answer, so the
+  // cockpit's chip simply is not there rather than showing an error nobody asked for.
+  const starCountRoutes = new Hono().get('/star-count', async (c) => c.json(await starCount.read()));
+
+  const selfUpdateRoutes = new Hono()
+    .get('/workspace/self-update', async (c) => c.json(await selfUpdate.status()))
+
+    .post('/workspace/self-update/refresh', async (c) => c.json(await selfUpdate.status({ refresh: true })))
+
+    // The development channel's pickers: cezar's own worktrees and its open PRs' preview builds.
+    // A separate read because it costs a git call per worktree and a GitHub round trip.
+    .get('/workspace/self-update/development', queryZodValidator(selfUpdateDevelopmentQuerySchema), async (c) =>
+      c.json(await selfUpdate.development({ refresh: c.req.valid('query').refresh === '1' })),
+    )
+
+    .put('/workspace/self-update/channel', jsonZodValidator(selfUpdateChannelRequestSchema, { message: 'body must be { channel: "stable" | "nightly" | "development" }' }), async (c) => {
+      const { channel } = c.req.valid('json');
+      await selfUpdate.setChannel(channel);
+      return c.json(await selfUpdate.status());
+    })
+
+    .post('/workspace/self-update/apply', jsonZodValidator(selfUpdateApplyRequestSchema, { message: 'body must be { version }' }), async (c) => {
+      const { version: target } = c.req.valid('json');
+      // SECURITY: a hosted cockpit may only move FORWARD. Installing a published package cannot
+      // inject code, but installing an OLDER one can: every hosted-mode guard — the `/api/*`
+      // request-origin check (#426), the `localHandoff` 409 that closes the agent-config hooks
+      // RCE path — lives in the running version, so a downgrade to a release that predates them
+      // re-opens exactly what they close, through a route those guards never get to see. A
+      // local cockpit keeps the full picker, downgrades included: there is no boundary left to
+      // escalate across when the caller already owns the machine. `forwardOnlyRefusal` decides
+      // what "forward" means — publish time, not just semver order, because a nightly for the
+      // next minor outranks every later patch of the current one.
+      if (!capabilities().localHandoff) {
+        const refusal = await selfUpdate.forwardOnlyRefusal(target);
+        if (refusal) return c.json({ error: refusal }, 409);
+      }
+      try {
+        selfUpdate.apply(target);
+      } catch (error) {
+        if (error instanceof SelfUpdateBusyError) return c.json({ error: error.message }, 409);
+        return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
+      }
+      return c.json(await selfUpdate.status());
+    });
+
   // ---- GUI clone (multi-project spec, step 4.3) ----------------------------
   // "Add project → Clone from GitHub": clone into the checkout root, then
   // register the result through `registerFolder` above (same guards, same
@@ -2988,6 +3078,7 @@ export function createApp(deps: ServerDeps) {
     resources: {
       maxParallel: config.resources.maxParallel,
       maxMonitoringSessions: config.resources.maxMonitoringSessions,
+      idleTimeoutMinutes: config.resources.idleTimeoutMinutes,
       monitoringWakeIntervalMinutes: config.resources.monitoringWakeIntervalMinutes,
       autoResumeOnUsageLimit: config.resources.autoResumeOnUsageLimit,
       memoryLimitMb: config.resources.memoryLimitMb,
@@ -3141,6 +3232,7 @@ export function createApp(deps: ServerDeps) {
       .object({
         maxParallel: z.number().int().min(1).max(16).optional(),
         maxMonitoringSessions: z.number().int().min(0).max(16).optional(),
+        idleTimeoutMinutes: z.number().int().min(0).max(1440).nullable().optional(),
         monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().optional(),
         autoResumeOnUsageLimit: z.boolean().optional(),
         memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
@@ -3157,6 +3249,7 @@ export function createApp(deps: ServerDeps) {
             claude: z.string().trim().min(1).max(200).nullable().optional(),
             codex: z.string().trim().min(1).max(200).nullable().optional(),
             opencode: z.string().trim().min(1).max(200).nullable().optional(),
+            cursor: z.string().trim().min(1).max(200).nullable().optional(),
             pi: z.string().trim().min(1).max(200).nullable().optional(),
             copilot: z.string().trim().min(1).max(200).nullable().optional(),
           })
@@ -5961,6 +6054,7 @@ export function createApp(deps: ServerDeps) {
         claude: modelPresetSchema,
         codex: modelPresetSchema,
         opencode: modelPresetSchema,
+        cursor: modelPresetSchema,
         pi: modelPresetSchema,
       })
       .optional(),
@@ -6107,6 +6201,7 @@ export function createApp(deps: ServerDeps) {
     for (const number of [run.prNumber, run.issueNumber, run.markerRefs?.pr, run.markerRefs?.issue]) {
       if (typeof number === 'number' && Number.isInteger(number) && number > 0) numbers.push(number);
     }
+    for (const ref of run.prRefs ?? []) numbers.push(ref.number);
     return numbers;
   };
 
@@ -6144,6 +6239,7 @@ export function createApp(deps: ServerDeps) {
       ? { referencedPullRequestUrl: run.referencedPullRequestUrl }
       : {}),
     ...(run.prNumber !== undefined ? { prNumber: run.prNumber } : {}),
+    ...(run.prRefs !== undefined ? { prRefs: run.prRefs } : {}),
     ...(run.issueNumber !== undefined ? { issueNumber: run.issueNumber } : {}),
     ...(run.referencedIssueUrl !== undefined ? { referencedIssueUrl: run.referencedIssueUrl } : {}),
     ...(run.markerRefs !== undefined ? { markerRefs: run.markerRefs } : {}),
@@ -6276,6 +6372,8 @@ export function createApp(deps: ServerDeps) {
     .route('/', projectsRoutes)
     .route('/', agentProfilesRoutes)
     .route('/', skillsUpdateRoutes)
+    .route('/', selfUpdateRoutes)
+    .route('/', starCountRoutes)
     .route('/', workspaceConfigRoutes)
     .route('/', fsBrowseRoutes)
     .route('/', automationChecksRoutes)
@@ -6589,11 +6687,20 @@ export function isSafeSessionId(sessionId: string): boolean {
   return SAFE_SESSION_ID.test(sessionId);
 }
 
+/** Only plain executable paths can cross both bash and cmd.exe safely. Refuse shell
+ * operators, expansions, controls and a trailing backslash (which can escape the closing
+ * quote). Paths with spaces remain supported, including Windows install directories. */
+export function quoteResumeBin(bin: string): string | null {
+  if (!bin.trim() || !/^[a-zA-Z0-9_./:\\ -]+$/.test(bin) || bin.endsWith('\\')) return null;
+  return /[\s\\]/.test(bin) ? `"${bin}"` : bin;
+}
+
 /**
  * The CLI command that reopens a run's session for interactive take-over, per
  * backend. Legacy/undefined records default to Claude. Returns null when the id
- * is not a shape we recognise — callers degrade (no take-over) rather than
- * splice it into a shell.
+ * is not a shape we recognise, or when a runner's overridable binary cannot be
+ * embedded safely (see {@link quoteResumeBin}) — callers degrade (no take-over)
+ * rather than splice either one into a shell.
  *
  * Validate, don't quote (#431): the session id is the only variable spliced
  * into the command string, and `openInTerminal` runs that string through bash
@@ -6612,6 +6719,10 @@ export function resumeCommand(runner: string | undefined, sessionId: string): st
       return `codex resume ${sessionId}`;
     case 'opencode':
       return `opencode --session ${sessionId}`;
+    case 'cursor': {
+      const bin = quoteResumeBin(process.env.CEZ_CURSOR_AGENT_BIN ?? 'agent');
+      return bin === null ? null : `${bin} --resume ${sessionId}`;
+    }
     case 'pi':
       return `pi --session ${sessionId}`;
     case 'copilot':

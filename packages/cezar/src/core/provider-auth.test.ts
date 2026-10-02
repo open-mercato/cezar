@@ -39,6 +39,15 @@ const connectedResults: Record<string, ProviderCommandResult> = {
     stderr: '',
     exitCode: 0,
   },
+  cursor: {
+    stdout: JSON.stringify({
+      status: 'authenticated',
+      isAuthenticated: true,
+      userInfo: { email: 'me@example.com' },
+    }),
+    stderr: '',
+    exitCode: 0,
+  },
   pi: {
     stdout: 'provider  model  context  max-out  thinking  images\nanthropic  claude  200K  64K  yes  yes',
     stderr: '',
@@ -60,6 +69,7 @@ const originalEnv = {
   CEZ_CODEX_BIN: process.env.CEZ_CODEX_BIN,
   CEZ_OPENCODE_BIN: process.env.CEZ_OPENCODE_BIN,
   CEZ_PI_BIN: process.env.CEZ_PI_BIN,
+  CURSOR_API_KEY: process.env.CURSOR_API_KEY,
   CEZ_COPILOT_BIN: process.env.CEZ_COPILOT_BIN,
 };
 
@@ -70,6 +80,7 @@ beforeEach(() => {
   delete process.env.CEZ_CODEX_BIN;
   delete process.env.CEZ_OPENCODE_BIN;
   delete process.env.CEZ_PI_BIN;
+  delete process.env.CURSOR_API_KEY;
   delete process.env.CEZ_COPILOT_BIN;
 });
 
@@ -87,6 +98,7 @@ const PROBE_ROUND = PROVIDER_IDS.length;
 function resultFor(executable: string): ProviderCommandResult {
   if (executable === 'claude') return connectedResults.claude!;
   if (executable.includes('codex')) return connectedResults.codex!;
+  if (executable === 'agent' || executable.includes('cursor')) return connectedResults.cursor!;
   if (executable.includes('opencode')) return connectedResults.opencode!;
   if (executable.includes('copilot')) return connectedResults.copilot!;
   return connectedResults.pi!;
@@ -491,6 +503,74 @@ describe('provider auth parsers', () => {
     await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'unknown' } });
   });
 
+  it('recognizes Cursor isAuthenticated: true as connected', async () => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => (executable === 'agent' || executable.includes('cursor'))
+        ? { stdout: JSON.stringify({ isAuthenticated: true }), stderr: '', exitCode: 0 }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ cursor: { status: 'connected' } });
+  });
+
+  it('recognizes Cursor isAuthenticated: false with no CURSOR_API_KEY as disconnected', async () => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => (executable === 'agent' || executable.includes('cursor'))
+        ? { stdout: JSON.stringify({ isAuthenticated: false }), stderr: '', exitCode: 0 }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ cursor: { status: 'disconnected' } });
+  });
+
+  it('treats malformed Cursor JSON with no CURSOR_API_KEY as unknown', async () => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => (executable === 'agent' || executable.includes('cursor'))
+        ? { stdout: 'not json', stderr: '', exitCode: 0 }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ cursor: { status: 'unknown' } });
+  });
+
+  describe('Cursor CURSOR_API_KEY precheck', () => {
+    it('reports connected WITHOUT spawning `agent status` at all when CURSOR_API_KEY is set', async () => {
+      process.env.CURSOR_API_KEY = 'sk-test-key';
+      const runCommand = vi.fn<RunProviderCommand>(async (executable) => resultFor(executable));
+      const service = new ProviderAuthService({ runCommand });
+
+      await expect(statuses(service)).resolves.toMatchObject({ cursor: { status: 'connected' } });
+      expect(runCommand).not.toHaveBeenCalledWith('agent', expect.anything(), expect.anything());
+    });
+
+    // The bug this pins (#patzick): `agent status` hanging until the probe timeout used to report
+    // 'unknown' regardless of a valid CURSOR_API_KEY, because probe()'s timedOut branch returned
+    // before parseCursorStatus's own (now-removed) fallback ever ran. The precheck answers before
+    // the process is even spawned, so a hang can no longer reach this outcome at all. Only the
+    // cursor executable is made to hang here — the other four providers resolve normally, so a
+    // regression that makes cursor wait on the real probe fails this test instead of hanging it.
+    it('is unaffected by `agent status` hanging past the probe timeout', async () => {
+      process.env.CURSOR_API_KEY = 'sk-test-key';
+      const runCommand = vi.fn<RunProviderCommand>(async (executable) =>
+        executable === 'agent' ? new Promise<never>(() => {}) : resultFor(executable));
+      const service = new ProviderAuthService({ runCommand });
+
+      await expect(statuses(service)).resolves.toMatchObject({ cursor: { status: 'connected' } });
+      expect(runCommand).not.toHaveBeenCalledWith('agent', expect.anything(), expect.anything());
+    });
+
+    it('ignores a whitespace-only CURSOR_API_KEY and falls back to the real probe', async () => {
+      process.env.CURSOR_API_KEY = '   ';
+      const service = new ProviderAuthService({
+        runCommand: runner((executable) => (executable === 'agent' || executable.includes('cursor'))
+          ? { stdout: JSON.stringify({ isAuthenticated: false }), stderr: '', exitCode: 0 }
+          : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+      });
+
+      await expect(statuses(service)).resolves.toMatchObject({ cursor: { status: 'disconnected' } });
+    });
+  });
+
   it('recognizes pi model availability as connected without reading credential files', async () => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable === 'pi'
@@ -535,6 +615,7 @@ describe('ProviderAuthService', () => {
         { provider: 'claude' },
         { provider: 'codex' },
         { provider: 'opencode' },
+        { provider: 'cursor' },
         { provider: 'pi' },
         { provider: 'copilot' },
       ],
@@ -558,6 +639,7 @@ describe('ProviderAuthService', () => {
       { executable: 'claude', args: ['auth', 'status', '--json'], timeoutMs: 10_000 },
       { executable: 'codex', args: ['login', 'status'], timeoutMs: 10_000 },
       { executable: 'opencode', args: ['auth', 'list'], timeoutMs: 10_000 },
+      { executable: 'agent', args: ['status', '--format', 'json'], timeoutMs: 10_000 },
       { executable: 'pi', args: ['--list-models'], timeoutMs: 10_000 },
       { executable: 'copilot', args: ['--acp'], timeoutMs: 10_000 },
     ]);
@@ -1012,6 +1094,7 @@ describe('ProviderAuthService', () => {
         { provider: 'claude', status: 'connected' },
         { provider: 'codex', status: 'connected' },
         { provider: 'opencode', status: 'connected' },
+        { provider: 'cursor', status: 'connected' },
         { provider: 'pi', status: 'connected' },
         { provider: 'copilot', status: 'connected' },
       ],
@@ -1123,6 +1206,7 @@ describe('ProviderAuthService', () => {
         { provider: 'claude', status: 'connected' },
         { provider: 'codex', status: 'connected' },
         { provider: 'opencode', status: 'connected' },
+        { provider: 'cursor', status: 'connected' },
         { provider: 'pi', status: 'connected' },
         { provider: 'copilot', status: 'connected' },
       ],

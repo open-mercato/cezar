@@ -37,6 +37,7 @@ function renderView(
       { provider: 'claude', status: 'connected', enabled: true },
       { provider: 'codex', status: 'not-installed', enabled: true },
       { provider: 'opencode', status: 'not-installed', enabled: true },
+    { provider: 'cursor', status: 'not-installed', enabled: true },
     ],
   },
   health: Partial<HealthResponse> = {},
@@ -260,6 +261,23 @@ describe('ThreadView', () => {
     expect(textarea.placeholder).toBe('Reply — / for skills, @ for files…')
   })
 
+  it('budget-stopped waiting → explains the spend brake with spent and ceiling', () => {
+    renderView(
+      <ThreadView
+        run={run('waiting', {
+          costUsd: 20.83,
+          dispatch: { rootRunId: 'root', budgetUsd: 10, overBudget: true },
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    expect(document.querySelector('[data-slot="budget-hint"]')?.textContent).toContain(
+      'Budget reached — spent $20.83 of $10.00; send a message to continue.',
+    )
+    expect(document.querySelector('[data-slot="paused-hint"]')).toBeNull()
+    expect(document.querySelector('[data-slot="pill"]')?.textContent).toContain('budget reached')
+  })
+
   it('failed by a usage limit → the dock says when it resumes itself, and links the setting', () => {
     renderView(
       <ThreadView
@@ -368,6 +386,7 @@ describe('ThreadView', () => {
           { provider: 'claude', status: 'connected', enabled: false },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+        { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     )

@@ -1,3 +1,5 @@
+import { StatusDot } from '@/components/status-dot'
+import { widgetHeader, widgetHeading } from './presentation'
 import { useDashboardLive } from '@/api/dashboard-live'
 import { useRef } from 'react'
 import type { DashboardSnapshot } from '@open-mercato/cezar-api-client'
@@ -22,11 +24,11 @@ export function Queue({
   const live = useDashboardLive()
   return (
     <Card className="min-w-0 gap-0 overflow-hidden py-0">
-      <div className="border-b p-4">
-        <h2 id="dashboard-needs-you" tabIndex={-1} className="text-sm font-semibold">
+      <div className={widgetHeader}>
+        <h2 id="dashboard-needs-you" tabIndex={-1} className={widgetHeading}>
           Needs you · {snapshot.counts.questions + snapshot.counts.reviews}
         </h2>
-        <p className="mt-1 text-xs text-muted-foreground">
+        <p className="font-mono text-[11px] text-soft-foreground">
           {snapshot.counts.questions} questions · {snapshot.counts.reviews} reviews
         </p>
       </div>
@@ -34,7 +36,10 @@ export function Queue({
       live.connected &&
       snapshot.counts.questions + snapshot.counts.reviews === 0 &&
       snapshot.coverage.projects.every((p) => p.state === 'complete') ? (
-        <p className="p-6 text-sm">All caught up — no tasks need your input</p>
+        <p className="flex items-center gap-2.5 px-4 py-8 text-sm text-muted-foreground">
+          <StatusDot tone="success" />
+          All caught up — no tasks need your input
+        </p>
       ) : null}
       <QueueSection snapshot={snapshot} group="questions" count={questions} more={more} />
       <QueueSection snapshot={snapshot} group="reviews" count={reviews} more={more} />
@@ -70,7 +75,7 @@ function QueueSection({
       <h3
         ref={heading}
         tabIndex={-1}
-        className="bg-muted/30 px-4 py-3 text-xs font-semibold uppercase tracking-wide"
+        className="border-b bg-card-2 px-4 py-2 font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground"
       >
         {group === 'questions' ? 'Questions' : 'Reviews'} · {initial.total}
       </h3>

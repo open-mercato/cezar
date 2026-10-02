@@ -1,19 +1,21 @@
+<p align="center">
+  <img src="docs/brand/cezar-icon-black.svg" alt="" width="104" />
+</p>
+
 <div align="center">
   <h1>Cezar：编排数百个 AI 编程智能体，7×24 小时不间断。</h1>
 </div>
 
-<h4 align="center">
+<p align="center">
   <a href="https://www.youtube.com/watch?v=nNLJm9gArnE">演示</a>&nbsp;·
   <a href="#快速开始">快速开始</a>&nbsp;·
   <a href="docs/reference.md">文档</a>&nbsp;·
   <a href="https://github.com/open-mercato/cezar/issues">问题反馈</a>
-</h4>
+</p>
 
 <p align="center">
   <a href="README.md">English</a> | 简体中文 | <a href="README.zh-TW.md">繁體中文</a>
 </p>
-
-> 本文译自 README.md @ 33aee0ee；如有出入，以英文版为准。
 
 <div align="center">
   <h2>
@@ -23,7 +25,11 @@
   </h2>
 </div>
 
+> 本文译自 README.md @ 33aee0ee；如有出入，以英文版为准。
+
 <p align="center">
+  <a href="https://cezar.run/">
+    <img alt="官网：cezar.run" src="https://img.shields.io/badge/website-cezar.run-9655FD" /></a>
   <a href="LICENSE">
     <img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
   <a href="https://www.npmjs.com/package/@open-mercato/cezar">
@@ -105,23 +111,23 @@
 
 ```bash
 cd your-repo
-npx cezar-cli
+npx cezar-run
 ```
 
 这会在 `http://localhost:4321` 打开驾驶舱。输入任务、选择工作流，然后点击 **Start**。
 
 ```bash
-npx cezar-cli run "add a --json flag to the export command"   # headless, no browser
-npx cezar-cli init                                            # scaffold .ai/cezar/
-npx cezar-cli@nightly                                         # try tonight's build
+npx cezar-run run "add a --json flag to the export command"   # headless, no browser
+npx cezar-run init                                            # scaffold .ai/cezar/
+npx cezar-run@nightly                                         # try tonight's build
 ```
 
-> 只是想先随便看看？运行 `CEZ_DRY_RUN=1 npx cezar-cli`。它使用内置的 mock agent，无需登录。
+> 只是想先随便看看？运行 `CEZ_DRY_RUN=1 npx cezar-run`。它使用内置的 mock agent，无需登录。
 
 ### 部署到服务器
 
 ```bash
-npx cezar-cli server-install --platform ubuntu-vps
+npx cezar-run server-install --platform ubuntu-vps
 ```
 
 它会配置好 HTTPS、登录认证和系统服务，让你可以从任何地方打开驾驶舱，包括手机。

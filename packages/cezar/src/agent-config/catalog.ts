@@ -33,6 +33,8 @@ export interface AgentHomePaths {
   codex: string;
   /** `$XDG_CONFIG_HOME/opencode` or `~/.config/opencode` */
   opencodeConfig: string;
+  /** `$CURSOR_CONFIG_DIR` or `~/.cursor` */
+  cursor: string;
   /** `$COPILOT_HOME` or `~/.copilot` */
   copilot: string;
 }
@@ -76,6 +78,7 @@ const CODEX_CONFIG_DOCS = 'https://developers.openai.com/codex/config-reference'
 const CODEX_AGENTS_DOCS = 'https://developers.openai.com/codex/guides/agents-md';
 const OPENCODE_CONFIG_DOCS = 'https://opencode.ai/docs/config/';
 const OPENCODE_RULES_DOCS = 'https://opencode.ai/docs/rules/';
+const CURSOR_CLI_CONFIG_DOCS = 'https://cursor.com/docs/cli/reference/configuration';
 const COPILOT_CONFIG_DOCS = 'https://docs.github.com/en/copilot/how-tos/copilot-cli';
 const COPILOT_MCP_DOCS = 'https://docs.github.com/en/copilot/how-tos/copilot-cli#mcp-servers';
 const COPILOT_INSTRUCTIONS_DOCS =
@@ -370,6 +373,63 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     precedence:
       'Repository instructions, read alongside AGENTS.md rather than instead of it. --no-custom-instructions turns both off. Runs read the committed copy.',
     docsUrl: COPILOT_INSTRUCTIONS_DOCS,
+  },
+
+  // ---- Cursor Agent CLI ----
+  {
+    id: 'cursor.user.settings',
+    runners: ['cursor'],
+    kind: 'settings',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.cursor, 'cli-config.json'),
+    label: '~/.cursor/cli-config.json',
+    format: 'json',
+    tracked: 'outside-repo',
+    modelKey: 'model.displayModelId',
+    modelKeys: ['model.displayModelId', 'model.modelId'],
+    modelPriority: 1,
+    precedence:
+      'Global Cursor Agent CLI settings (permissions, display, model, sandbox). All non-permission keys live here.',
+    docsUrl: CURSOR_CLI_CONFIG_DOCS,
+  },
+  {
+    id: 'cursor.project.settings',
+    runners: ['cursor'],
+    kind: 'settings',
+    scope: 'project',
+    resolve: (repo) => join(repo, '.cursor', 'cli.json'),
+    label: '.cursor/cli.json',
+    format: 'json',
+    tracked: 'tracked',
+    precedence:
+      'Project-level permissions only — Cursor docs: all other CLI settings must stay in the global cli-config.json.',
+    docsUrl: CURSOR_CLI_CONFIG_DOCS,
+  },
+  {
+    id: 'cursor.user.mcp',
+    runners: ['cursor'],
+    kind: 'mcp',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.cursor, 'mcp.json'),
+    label: '~/.cursor/mcp.json',
+    format: 'json',
+    tracked: 'outside-repo',
+    holdsMcp: true,
+    precedence: 'User-scoped MCP servers for Cursor Agent CLI (`agent mcp …`).',
+    docsUrl: CURSOR_CLI_CONFIG_DOCS,
+  },
+  {
+    id: 'cursor.project.mcp',
+    runners: ['cursor'],
+    kind: 'mcp',
+    scope: 'project',
+    resolve: (repo) => join(repo, '.cursor', 'mcp.json'),
+    label: '.cursor/mcp.json',
+    format: 'json',
+    tracked: 'tracked',
+    holdsMcp: true,
+    precedence: 'Project-scoped MCP servers for Cursor Agent CLI, shared via version control.',
+    docsUrl: CURSOR_CLI_CONFIG_DOCS,
   },
 
   // ---- Shared: <repo>/AGENTS.md is read by Codex, OpenCode AND Copilot ----

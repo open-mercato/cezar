@@ -87,6 +87,7 @@ function serve({
       { provider: 'claude', status: 'connected', enabled: true },
       { provider: 'codex', status: 'connected', enabled: true },
       { provider: 'opencode', status: 'connected', enabled: true },
+      { provider: 'cursor', status: 'connected', enabled: true },
       { provider: 'pi', status: 'connected', enabled: true },
     ],
   },
@@ -266,6 +267,7 @@ describe('the agents form', () => {
           { provider: 'claude', status: 'connected', enabled: true },
           { provider: 'codex', status: 'disconnected', enabled: true },
           { provider: 'opencode', status: 'connected', enabled: true },
+          { provider: 'cursor', status: 'connected', enabled: true },
         ],
       },
     })
@@ -290,6 +292,7 @@ describe('the agents form', () => {
           { provider: 'claude', status: 'connected', enabled: true },
           { provider: 'codex', status: 'connected', enabled: false },
           { provider: 'opencode', status: 'connected', enabled: true },
+          { provider: 'cursor', status: 'connected', enabled: true },
         ],
       },
     })
@@ -579,7 +582,14 @@ describe('the agents form', () => {
       await waitFor(() => expect(form()).not.toBeNull())
       // Settled: the default-models field below it has rendered, so the pane is not mid-load.
       await screen.findByLabelText('Default model for claude')
-      expect(rows().map((r) => r.getAttribute('data-value'))).toEqual(['claude', 'codex', 'opencode', 'pi', 'copilot'])
+      expect(rows().map((r) => r.getAttribute('data-value'))).toEqual([
+        'claude',
+        'codex',
+        'opencode',
+        'cursor',
+        'pi',
+        'copilot',
+      ])
       // …and it is still called what it always was, because there is no account in play.
       expect(document.body.textContent).toContain('Default runner')
     })
@@ -594,6 +604,7 @@ describe('the agents form', () => {
         'claude · Klaudiusz~/.claude-klaudiusz',
         'codexOpenAI Codex (app-server)',
         'opencodeOpenCode (serve)',
+        'cursorCursor Agent CLI',
         'pipi CLI (provider/model)',
         'copilotGitHub Copilot CLI (ACP)',
       ])

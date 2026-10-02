@@ -114,6 +114,7 @@ const CONNECTED_PROVIDERS: ProviderStatusResponse = {
     { provider: 'claude', status: 'connected', enabled: true },
     { provider: 'codex', status: 'connected', enabled: false },
     { provider: 'opencode', status: 'connected', enabled: true },
+    { provider: 'cursor', status: 'not-installed', enabled: true },
   ],
 }
 
@@ -630,6 +631,7 @@ describe('useGlobalEvents — provider status', () => {
         { provider: 'claude', status: 'connected', enabled: true },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'connected', enabled: true },
+      { provider: 'cursor', status: 'not-installed', enabled: true },
       ],
     }
     const latched = {
@@ -643,6 +645,7 @@ describe('useGlobalEvents — provider status', () => {
         },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'connected', enabled: true },
+      { provider: 'cursor', status: 'not-installed', enabled: true },
       ],
     }
     vi.mocked(fetch).mockReturnValueOnce(initial.promise).mockReturnValueOnce(replacement.promise)
@@ -689,6 +692,7 @@ describe('useGlobalEvents — provider status', () => {
         { provider: 'claude', status: 'connected', enabled: true },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'connected', enabled: true },
+      { provider: 'cursor', status: 'not-installed', enabled: true },
       ],
     }
     const onlyClaudeIncident = {
@@ -696,6 +700,7 @@ describe('useGlobalEvents — provider status', () => {
         { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'incident-a' },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'connected', enabled: true },
+      { provider: 'cursor', status: 'not-installed', enabled: true },
       ],
     }
     const bothIncidents = {
@@ -703,6 +708,7 @@ describe('useGlobalEvents — provider status', () => {
         { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'incident-a' },
         { provider: 'codex', status: 'disconnected', enabled: true, authFailureId: 'incident-b' },
         { provider: 'opencode', status: 'connected', enabled: true },
+      { provider: 'cursor', status: 'not-installed', enabled: true },
       ],
     }
     vi.mocked(fetch)

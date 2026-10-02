@@ -11,7 +11,7 @@
 // Reads the CI facts from GitHub Actions' env, decides via computeSnapshot,
 // stamps every manifest in the release set (intra-release dependencies pinned
 // exact), publishes the non-`private` ones in DEPENDENCY ORDER — api-client,
-// then the service, then the alias — always with an explicit --tag so a snapshot can never move
+// then the service, then the aliases — always with an explicit --tag so a snapshot can never move
 // `latest`, then emits a one-line JSON result to $GITHUB_OUTPUT for the
 // PR-comment and summary steps.
 //
@@ -54,6 +54,7 @@ const dirs = {
   apiClient: path.join(repoRoot, 'packages/api-client'),
   cezar: path.join(repoRoot, 'packages/cezar'),
   alias: path.join(repoRoot, 'alias-cezar'),
+  runAlias: path.join(repoRoot, 'alias-cezar-run'),
 };
 
 const readManifest = (dir) => JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8'));
@@ -77,6 +78,7 @@ const manifests = {
   apiClient: readManifest(dirs.apiClient),
   cezar: readManifest(dirs.cezar),
   alias: readManifest(dirs.alias),
+  runAlias: readManifest(dirs.runAlias),
 };
 
 const prNumberRaw = process.env.PR_NUMBER ?? '';
@@ -111,7 +113,7 @@ if (!dryRun && !token) {
 }
 
 const stamped = stampManifests(manifests, plan.version);
-const order = ['contract', 'apiClient', 'cezar', 'alias'];
+const order = ['contract', 'apiClient', 'cezar', 'alias', 'runAlias'];
 for (const key of order) writeManifest(dirs[key], stamped[key]);
 console.log(
   `release-snapshot: stamped ${order.map((key) => stamped[key].name).join(' + ')} to ${plan.version} (dist-tag ${plan.distTag}${dryRun ? ', dry run' : ''})`,
@@ -162,8 +164,10 @@ emitOutput({
   rootName: stamped.cezar.name,
   apiClientName: stamped.apiClient.name,
   aliasName: stamped.alias.name,
+  // The documented npx spelling — every copy-paste command CI prints uses it.
+  runAliasName: stamped.runAlias.name,
   version: plan.version,
   distTag: plan.distTag,
   publishedNames: published.join(','),
-  installLines: buildInstallLines(stamped.alias.name, plan.version),
+  installLines: buildInstallLines(stamped.runAlias.name, plan.version),
 });

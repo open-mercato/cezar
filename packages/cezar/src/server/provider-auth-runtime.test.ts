@@ -31,6 +31,11 @@ const CONNECTED_OUTPUT: Record<ProviderId, string> = {
     '●  Anthropic oauth',
     '└  1 credential',
   ].join('\n'),
+  cursor: JSON.stringify({
+    status: 'authenticated',
+    isAuthenticated: true,
+    userInfo: { email: 'dev@example.com' },
+  }),
   pi: 'provider  model  context  max-out  thinking  images\nanthropic  claude  200K  64K  yes  yes',
   // Copilot's probe drives its ACP server, so its "connected" evidence is the `session/new`
   // answer (`.ai/runs/2026-09-27-copilot-cli-runner/copilot-acp-notes.md`).
@@ -39,6 +44,7 @@ const CONNECTED_OUTPUT: Record<ProviderId, string> = {
 
 const providerForExecutable = (executable: string): ProviderId => {
   if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi' || executable === 'copilot') return executable;
+  if (executable === 'agent') return 'cursor';
   throw new Error(`unexpected executable: ${executable}`);
 };
 

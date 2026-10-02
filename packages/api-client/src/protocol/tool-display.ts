@@ -161,10 +161,15 @@ export function toolDisplay(name: string, input?: unknown): ToolDisplay {
 
     // claude's `Skill` invocation: `{skill, args?}` — the skill name is the
     // whole point of the row, so it goes in the title.
+    //
+    // `skill`, NOT `task`: a skill loads instructions into the CURRENT agent's turn, it does not
+    // spawn a second agent. It answered to `task` until #1202, which made the Agents dock count
+    // every skill as a sub-agent — one that reads `1/1` and `starting…` at the same time,
+    // because a `Skill` call settles at once and never adopts children.
     case 'skill': {
       const skill = field(input, 'skill', 'name', 'command')
       return {
-        toolKind: 'task',
+        toolKind: 'skill',
         title: skill ? `Skill: ${skill}` : 'Skill',
         subtitle: field(input, 'args', 'description'),
       }

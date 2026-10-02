@@ -36,6 +36,11 @@ const CONNECTED_OUTPUT: Record<ProviderId, string> = {
     '●  Anthropic oauth',
     '└  1 credential',
   ].join('\n'),
+  cursor: JSON.stringify({
+    status: 'authenticated',
+    isAuthenticated: true,
+    userInfo: { email: 'dev@example.com' },
+  }),
   pi: 'provider  model  context  max-out  thinking  images\nanthropic  claude  200K  64K  yes  yes',
   // Copilot's probe drives its ACP server, so its "connected" evidence is the `session/new`
   // answer (`.ai/runs/2026-09-27-copilot-cli-runner/copilot-acp-notes.md`).
@@ -49,12 +54,17 @@ const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
     '┌  Credentials ~/.local/share/opencode/auth.json',
     '└  0 credentials',
   ].join('\n'),
+  cursor: JSON.stringify({
+    status: 'unauthenticated',
+    isAuthenticated: false,
+  }),
   pi: 'No models available. Use /login to authenticate.',
   copilot: '{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"Authentication required"}}',
 };
 
 const providerForExecutable = (executable: string): ProviderId => {
   if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi' || executable === 'copilot') return executable;
+  if (executable === 'agent') return 'cursor';
   throw new Error(`unexpected executable: ${executable}`);
 };
 
@@ -180,6 +190,7 @@ describe('workspace provider API', () => {
           hint: 'Install OpenCode, then run `opencode auth login`.',
           enabled: true,
         },
+        { provider: 'cursor', status: 'connected', enabled: true },
         { provider: 'pi', status: 'connected', enabled: true },
         { provider: 'copilot', status: 'connected', enabled: true },
       ],
@@ -189,7 +200,7 @@ describe('workspace provider API', () => {
   it('GET /api/v1/providers/status skips probes and provider preferences under the explicit model lock', async () => {
     process.env.CEZ_AGENT_MODELS_LOCKED = '1';
     const runCommand = vi.fn<RunProviderCommand>();
-    const workspaceConfig = memoryWorkspaceConfig(['claude', 'codex', 'opencode', 'pi', 'copilot']);
+    const workspaceConfig = memoryWorkspaceConfig(['claude', 'codex', 'opencode', 'cursor', 'pi', 'copilot']);
     const response = await apiRequest(app({
       providerAuth: service({}, runCommand),
       workspaceConfig,
@@ -201,6 +212,7 @@ describe('workspace provider API', () => {
         { provider: 'claude', status: 'connected', enabled: true },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'connected', enabled: true },
+        { provider: 'cursor', status: 'connected', enabled: true },
         { provider: 'pi', status: 'connected', enabled: true },
         { provider: 'copilot', status: 'connected', enabled: true },
       ],
@@ -708,7 +720,7 @@ describe('workspace provider API', () => {
     });
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'provider must be claude, codex, opencode, or pi' });
+    expect(await response.json()).toEqual({ error: 'provider must be claude, codex, opencode, cursor, or pi' });
   });
 
   it('never places request-controlled text in the opened command', async () => {

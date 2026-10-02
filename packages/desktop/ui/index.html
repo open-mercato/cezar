@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Cezar</title>
+    <style>
+      /* The cockpit's own tokens (packages/web/src/styles/index.css) — dark is the cockpit's
+         default, light follows the system. The splash cannot read the cockpit's saved theme
+         (different origin), so this is the closest honest match. */
+      :root {
+        --background: #0d0d0d;
+        --foreground: #ffffff;
+        --card: #171717;
+        --muted-foreground: #a3a3a3;
+        --soft-foreground: #7b7b7b;
+        --border: #262626;
+        --accent: #a8f372;
+        --sans: 'Inter Variable', Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+        --mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --background: #ffffff;
+          --foreground: #171717;
+          --card: #ffffff;
+          --muted-foreground: #5c5c5c;
+          --soft-foreground: #a3a3a3;
+          --border: #ebebeb;
+        }
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: var(--background);
+        color: var(--foreground);
+        font: 13.5px/1.5 var(--sans);
+        -webkit-font-smoothing: antialiased;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      /* The same 28px title strip the cockpit paints under the traffic lights, draggable. */
+      .titlebar {
+        position: fixed;
+        inset: 0 0 auto 0;
+        height: 28px;
+      }
+      main {
+        height: 100%;
+        display: grid;
+        place-items: center;
+      }
+      .card {
+        width: min(460px, 88vw);
+        display: grid;
+        gap: 12px;
+        justify-items: center;
+        text-align: center;
+      }
+      .mark {
+        width: 52px;
+        height: 52px;
+        border-radius: 12px;
+        display: block;
+      }
+      h1 {
+        margin: 6px 0 0;
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      p {
+        margin: 0;
+        color: var(--muted-foreground);
+        font-size: 12.5px;
+        max-width: 100%;
+        overflow-wrap: anywhere;
+      }
+      .spinner {
+        width: 16px;
+        height: 16px;
+        border: 2px solid var(--border);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 0.9s linear infinite;
+        margin-top: 4px;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      pre {
+        -webkit-user-select: text;
+        user-select: text;
+        text-align: left;
+        width: 100%;
+        box-sizing: border-box;
+        margin: 6px 0 0;
+        padding: 8px 10px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--card);
+        color: var(--muted-foreground);
+        font: 11px/1.5 var(--mono);
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        max-height: 40vh;
+        overflow: auto;
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 6px;
+      }
+      .button {
+        appearance: none;
+        height: 30px;
+        padding: 0 12px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: var(--card);
+        color: var(--foreground);
+        font: 600 12.5px/28px var(--sans);
+        text-decoration: none;
+        cursor: pointer;
+      }
+      .button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #0d0d0d;
+      }
+      .button:hover {
+        filter: brightness(0.96);
+      }
+      .hidden {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="titlebar" data-tauri-drag-region></div>
+    <main>
+      <div class="card">
+        <img class="mark" src="icon.svg" alt="" aria-hidden="true" />
+        <h1 id="title">Starting cezar…</h1>
+        <p id="detail">Launching the local cockpit.</p>
+        <div id="spinner" class="spinner"></div>
+        <pre id="log" class="hidden"></pre>
+        <div id="actions" class="actions hidden">
+          <a class="button primary" href="https://nodejs.org/en/download" target="_blank" rel="noreferrer">Download Node.js</a>
+          <button id="retry" class="button" type="button">Try again</button>
+        </div>
+        <p id="hint" class="hidden"></p>
+      </div>
+    </main>
+    <script>
+      // The Rust side drives this page through `eval` — no Tauri IPC is needed for a splash.
+      window.cezarSplash = {
+        set(title, detail) {
+          document.getElementById('title').textContent = title
+          document.getElementById('detail').textContent = detail
+        },
+        fail(title, detail, log) {
+          this.set(title, detail)
+          document.getElementById('spinner').classList.add('hidden')
+          const pre = document.getElementById('log')
+          pre.textContent = log || ''
+          pre.classList.toggle('hidden', !log)
+        },
+        // Streamed progress (an install or update running in the shell): keep the spinner,
+        // append the line, follow the tail.
+        log(line) {
+          const pre = document.getElementById('log')
+          pre.classList.remove('hidden')
+          pre.textContent += (pre.textContent ? '\n' : '') + line
+          pre.scrollTop = pre.scrollHeight
+        },
+      }
+      const params = new URLSearchParams(location.search)
+      if (params.get('needs_node')) {
+        window.cezarSplash.fail(params.get('title') || 'cezar needs Node.js', params.get('error') || '', '')
+        const actions = document.getElementById('actions')
+        actions.classList.remove('hidden')
+        document.getElementById('retry').onclick = function () {
+          this.disabled = true
+          this.textContent = 'Checking…'
+          if (window.__TAURI_INTERNALS__) window.__TAURI_INTERNALS__.invoke('retry_start')
+          setTimeout(() => { this.disabled = false; this.textContent = 'Try again' }, 4000)
+        }
+      } else if (params.get('error')) {
+        window.cezarSplash.fail(params.get('title') || 'cezar stopped', params.get('error'), params.get('log') || '')
+      } else if (params.get('title')) {
+        window.cezarSplash.set(params.get('title'), params.get('detail') || '')
+      }
+    </script>
+  </body>
+</html>

@@ -4,6 +4,7 @@ import type { RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
 import type { StatusDotTone } from '@/components/status-dot'
 import {
   ATTENTION_RANK,
+  budgetStop,
   deriveAttention,
   wantsAttention,
   type Attention,
@@ -55,6 +56,17 @@ describe('deriveAttention', () => {
 
   it('answers for every status the API can send', () => {
     expect(cases.map(([status]) => status).sort()).toEqual([...ALL_STATUSES].sort())
+  })
+
+  it('explains a waiting dispatch run stopped by its spend ceiling', () => {
+    const stopped = run({
+      status: 'waiting',
+      costUsd: 20.83,
+      dispatch: { rootRunId: 'root', budgetUsd: 10, overBudget: true },
+    })
+    expect(deriveAttention(stopped).label).toBe('budget reached')
+    expect(budgetStop(stopped)).toEqual({ spent: 20.83, ceiling: 10 })
+    expect(wantsAttention(stopped)).toBe(true)
   })
 
   it('pulses exactly the transitioning states', () => {

@@ -1,19 +1,21 @@
+<p align="center">
+  <img src="docs/brand/cezar-icon-black.svg" alt="" width="104" />
+</p>
+
 <div align="center">
   <h1>Cezar：協調數百個 AI 編碼代理，全天候 24/7。</h1>
 </div>
 
-<h4 align="center">
+<p align="center">
   <a href="https://www.youtube.com/watch?v=nNLJm9gArnE">示範</a>&nbsp;·
   <a href="#快速開始">快速開始</a>&nbsp;·
   <a href="docs/reference.md">文件</a>&nbsp;·
   <a href="https://github.com/open-mercato/cezar/issues">問題回報</a>
-</h4>
+</p>
 
 <p align="center">
   <a href="README.md">English</a> | <a href="README.zh-CN.md">简体中文</a> | 繁體中文
 </p>
-
-> 本文譯自 README.md @ 33aee0ee；如有出入，以英文版為準。
 
 <div align="center">
   <h2>
@@ -23,7 +25,11 @@
   </h2>
 </div>
 
+> 本文譯自 README.md @ 33aee0ee；如有出入，以英文版為準。
+
 <p align="center">
+  <a href="https://cezar.run/">
+    <img alt="官網：cezar.run" src="https://img.shields.io/badge/website-cezar.run-9655FD" /></a>
   <a href="LICENSE">
     <img alt="MIT 授權條款" src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
   <a href="https://www.npmjs.com/package/@open-mercato/cezar">
@@ -105,23 +111,23 @@
 
 ```bash
 cd your-repo
-npx cezar-cli
+npx cezar-run
 ```
 
 這會在 `http://localhost:4321` 開啟座艙。輸入任務、選擇工作流程，然後按下 **Start**。
 
 ```bash
-npx cezar-cli run "add a --json flag to the export command"   # headless, no browser
-npx cezar-cli init                                            # scaffold .ai/cezar/
-npx cezar-cli@nightly                                         # try tonight's build
+npx cezar-run run "add a --json flag to the export command"   # headless, no browser
+npx cezar-run init                                            # scaffold .ai/cezar/
+npx cezar-run@nightly                                         # try tonight's build
 ```
 
-> 只是想先逛逛嗎？執行 `CEZ_DRY_RUN=1 npx cezar-cli`。它會使用內建的 mock agent，不需要登入。
+> 只是想先逛逛嗎？執行 `CEZ_DRY_RUN=1 npx cezar-run`。它會使用內建的 mock agent，不需要登入。
 
 ### 在伺服器上執行
 
 ```bash
-npx cezar-cli server-install --platform ubuntu-vps
+npx cezar-run server-install --platform ubuntu-vps
 ```
 
 這會設定好 HTTPS、登入機制與系統服務，讓你從任何地方開啟座艙，包括手機。

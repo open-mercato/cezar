@@ -93,6 +93,7 @@ const PROVIDER_LABEL: Record<ProviderId, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
   opencode: 'OpenCode',
+  cursor: 'Cursor',
   pi: 'pi',
   copilot: 'GitHub Copilot CLI',
 }
@@ -102,6 +103,7 @@ const PROVIDER_INSTALL: Record<ProviderId, string> = {
   claude: 'curl -fsSL https://claude.ai/install.sh | bash',
   codex: 'npm i -g @openai/codex',
   opencode: 'https://opencode.ai',
+  cursor: 'curl https://cursor.com/install -fsS | bash',
   pi: 'https://github.com/badlogic/pi-mono',
   copilot: 'npm i -g @github/copilot',
 }

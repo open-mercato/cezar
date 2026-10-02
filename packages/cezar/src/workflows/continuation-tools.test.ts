@@ -250,7 +250,9 @@ describe('a resumed session keeps its workflow step tools', () => {
     expect(manager!.continueRun(id, { text: 'keep going', runner: 'claude' })).toEqual({ ok: true });
     const spec = await specAt(0);
     expect(spec.resume).toBe(false);
-    expect(spec.sessionId).toBeUndefined();
+    // A fresh session is pinned to a NEW id (recorded on the step) — never the other backend's.
+    expect(spec.sessionId).toBeDefined();
+    expect(spec.sessionId).not.toBe('sess-1');
     expect(spec.allowedTools).toEqual(TAIL_TOOLS);
     expect(spec.bashAllowlist).toBeUndefined();
     expect(spec.userPrompt).toContain('You are continuing an existing Cezar task');

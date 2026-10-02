@@ -70,7 +70,7 @@ export interface ThreadAsk {
 export interface ThreadProviderAuthRequired {
   kind: 'provider-auth-required'
   id: string
-  provider: 'claude' | 'codex' | 'opencode' | 'pi' | 'copilot'
+  provider: 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'copilot'
   authFailureId: string
 }
 
@@ -217,7 +217,14 @@ function stamp(value: unknown): string | undefined {
 }
 
 function providerId(value: unknown): ThreadProviderAuthRequired['provider'] | undefined {
-  return value === 'claude' || value === 'codex' || value === 'opencode' || value === 'pi' || value === 'copilot'
+  return (
+    value === 'claude' ||
+    value === 'codex' ||
+    value === 'opencode' ||
+    value === 'cursor' ||
+    value === 'pi' ||
+    value === 'copilot'
+  )
     ? value
     : undefined
 }

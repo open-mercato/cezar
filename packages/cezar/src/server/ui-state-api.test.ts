@@ -110,6 +110,40 @@ describe('the ui-state API — skillUsage (#408)', () => {
     });
   });
 
+  // ---- githubSort: the GitHub tab's list order -----------------------------------------------
+  // Additive presentation pref, the twin of `githubView`. The whole point is that an OLD file
+  // (and an old cockpit) has no opinion here and must keep behaving as "newest first" — the key
+  // may never become something a user has to author or migrate.
+  describe('githubSort remembers the GitHub tab list order', () => {
+    it('round-trips both directions through GET and the file', async () => {
+      expect((await put({ githubSort: 'oldest' })).status).toBe(200);
+      expect(rawFile().githubSort).toBe('oldest');
+      expect(await (await get()).json()).toMatchObject({ githubSort: 'oldest' });
+      await put({ githubSort: 'newest' });
+      expect(rawFile().githubSort).toBe('newest');
+    });
+
+    it('is absent from a file written before it existed — and GET stays silent about it', async () => {
+      await put({ githubView: 'prs' });
+      expect(rawFile()).not.toHaveProperty('githubSort');
+      expect(await (await get()).json()).not.toHaveProperty('githubSort');
+    });
+
+    it('does not disturb githubView, and githubView does not disturb it', async () => {
+      await put({ githubView: 'prs' });
+      await put({ githubSort: 'oldest' });
+      expect(rawFile()).toMatchObject({ githubView: 'prs', githubSort: 'oldest' });
+      await put({ githubView: 'issues' });
+      expect(rawFile()).toMatchObject({ githubView: 'issues', githubSort: 'oldest' });
+    });
+
+    it('refuses an unknown order instead of writing it', async () => {
+      const res = await put({ githubSort: 'alphabetical' });
+      expect(res.status).toBe(400);
+      expect(() => readFileSync(uiStatePath(), 'utf8')).toThrow();
+    });
+  });
+
   // ---- bounds ------------------------------------------------------------------------------
   // The body is written straight to ui-state.json, which every cockpit load GETs back and every
   // later PUT re-reads — so an unbounded map is an unbounded file. Every other field in this

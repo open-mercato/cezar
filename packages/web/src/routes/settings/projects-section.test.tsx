@@ -112,6 +112,7 @@ function serve(answers: Answers = {}) {
     resources: {
       maxParallel: 2,
       maxMonitoringSessions: 2,
+      idleTimeoutMinutes: 15,
       monitoringWakeIntervalMinutes: null,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,

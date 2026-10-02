@@ -10,8 +10,8 @@ import { AgentBrowser, bootProjectId, readTestEnv } from './agent-browser'
  * Two viewports, two different writers, and the assertions jsdom cannot make:
  *
  *   - **1440×900**: the sidebar glance is mounted, it sits in the desktop sidebar above the
- *     footer's own rows, it links to Settings → Resources, and it draws a sparkline - which is
- *     only possible if the root subscription really held the `host` topic for the session.
+ *     footer's own rows, it links to Settings → Resources, and its store fills past one frame -
+ *     which is only possible if the root subscription really held the `host` topic for the session.
  *   - **390×844**: the widget is UNMOUNTED (not merely hidden), the drawer still opens, and the
  *     Machine card on Settings → Resources is still live - the card's own view subscription is
  *     the demand below `md`.
@@ -68,7 +68,10 @@ describe('host telemetry across the md breakpoint', () => {
         href: link ? link.getAttribute('href') : null,
         sidebarWidth: sidebar ? Math.round(sidebar.getBoundingClientRect().width) : null,
         cpu: widget.querySelector('[data-slot="host-usage-widget-cpu"]')?.textContent ?? null,
-        mem: widget.querySelector('[data-slot="host-usage-widget-mem"]')?.textContent ?? null,
+        memPct: widget.querySelector('[data-slot="host-usage-widget-mem-pct"]')?.textContent ?? null,
+        // The GB pair lives in the tooltip now - the line itself has no room for it.
+        summary: widget.getAttribute('title'),
+        height: Math.round(widget.getBoundingClientRect().height),
       }
     })()`) as {
       inSidebar: boolean
@@ -76,7 +79,9 @@ describe('host telemetry across the md breakpoint', () => {
       href: string | null
       sidebarWidth: number | null
       cpu: string | null
-      mem: string | null
+      memPct: string | null
+      summary: string | null
+      height: number
     } | null
 
     expect(info).not.toBeNull()
@@ -87,14 +92,19 @@ describe('host telemetry across the md breakpoint', () => {
     // link is asserted by target rather than by spelling, and then exercised for real below.
     expect(info.href?.endsWith('/settings/resources')).toBe(true)
     expect(info.sidebarWidth).toBe(DEFAULT_SIDEBAR_WIDTH)
-    // The row never renders a bare unitless value: it is a percentage, `sampling…`, `stale` or `—`.
+    // Neither meter ever renders a bare unitless value: a percentage, `sampling…`, `stale` or `—`.
     expect(info.cpu === null ? '' : info.cpu).toMatch(/^(sampling…|stale|—|\d+%)$/)
-    expect(info.mem === null ? '' : info.mem).toMatch(/(GB|MB|kB)/)
+    expect(info.memPct === null ? '' : info.memPct).toMatch(/^(stale|—|\d+%)$/)
+    expect(info.summary === null ? '' : info.summary).toMatch(/(GB|MB|kB)/)
+    // The assertion jsdom cannot make, and the reason this layout exists (#1120): the glance is
+    // ONE line. 24px is border + `py-1` + a 14px line box; the slack absorbs sub-pixel rounding
+    // and a font whose metrics differ, but a second stacked meter row (14px + a gap) cannot fit.
+    expect(info.height).toBeLessThanOrEqual(28)
 
-    // A sparkline needs two frames, i.e. ~4 s of a held `host` topic: this is the end-to-end
-    // proof that the root writer - not the card - is feeding the store on this viewport.
+    // Two frames in the store, i.e. ~4 s of a held `host` topic: this is the end-to-end proof
+    // that the root writer - not the card - is feeding the store on this viewport.
     browser.waitForFunction(
-      `document.querySelector('[data-slot="host-usage-widget-sparkline"]') !== null`,
+      `Number(document.querySelector('${WIDGET}')?.getAttribute('data-frames') ?? 0) >= 2`,
     )
     const cardMode = browser.text('[data-slot="machine-card-mode"]')
     expect(cardMode).toBe('live')

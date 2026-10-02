@@ -136,7 +136,7 @@ afterEach(() => {
 })
 
 describe('HostUsageWidget', () => {
-  it('shows the effective CPU, its sparkline and compact RAM, linked to Resources', async () => {
+  it('shows labelled CPU and RAM meters with percentages, linked to Resources', async () => {
     render(<HostUsageWidget />, {
       wrapper: wrapper([
         sample({ cpuPct: 38.4, sampledAt: '2026-09-20T00:00:00.000Z' }),
@@ -145,19 +145,66 @@ describe('HostUsageWidget', () => {
     })
 
     await waitFor(() => expect(screen.getByText('41%')).toBeTruthy())
-    expect(screen.getByText('12.0/32.0 GB')).toBeTruthy()
-    expect(document.querySelector('[data-slot="host-usage-widget-sparkline"]')).not.toBeNull()
+    // The labels are the point: without them the two numbers did not say which was which.
+    expect(screen.getByText('CPU')).toBeTruthy()
+    expect(screen.getByText('RAM')).toBeTruthy()
+    expect(screen.getByText('38%')).toBeTruthy() // 12 of 32 GB
+    const cpuBar = document.querySelector('[data-slot="host-usage-widget-cpu-bar"]')
+    expect(cpuBar?.getAttribute('aria-valuenow')).toBe('41')
+    expect(cpuBar?.getAttribute('data-level')).toBe('ok')
     const row = document.querySelector('[data-slot="host-usage-widget"]')
+    expect(row?.getAttribute('data-frames')).toBe('2')
     expect(row?.closest('a')?.getAttribute('href')).toBe('/settings/resources')
+    expect(row?.getAttribute('aria-label')).toContain('CPU 41%')
+    expect(row?.getAttribute('aria-label')).toContain('RAM 38% (12.0/32.0 GB)')
+  })
+
+  it('keeps the whole glance on ONE line - the GB pair rides the tooltip, not a second row', async () => {
+    render(<HostUsageWidget />, { wrapper: wrapper([sample({ cpuPct: 41.2 })]) })
+
+    await waitFor(() => expect(screen.getByText('41%')).toBeTruthy())
+    // Height is the budget (#1120): the GB pair is deliberately NOT painted, because at the
+    // 264px minimum sidebar it is what forces the meters onto a second row.
+    expect(screen.queryByText('12.0/32.0 GB')).toBeNull()
+    const row = document.querySelector('[data-slot="host-usage-widget"]')
+    // Tooltip and accessible name must not diverge - both are the detail's only home.
+    expect(row?.getAttribute('title')).toBe('CPU 41%, RAM 38% (12.0/32.0 GB)')
+    expect(row?.getAttribute('aria-label')).toBe(
+      'Machine usage: CPU 41%, RAM 38% (12.0/32.0 GB). Open Settings, Resources.',
+    )
+    // jsdom cannot measure a height, so the one-line layout is asserted where it is decided:
+    // six grid tracks (label · bar · value, twice) and no row gap. Stacking the meters again
+    // would have to change both.
+    const cls = row?.getAttribute('class') ?? ''
+    expect(cls).toContain('grid-cols-[auto_minmax(0,1fr)_auto_auto_minmax(0,1fr)_auto]')
+    expect(cls).not.toMatch(/\bgap-y-/)
+  })
+
+  it('flags memory pressure: amber past 80 %, red past 90 %', async () => {
+    render(<HostUsageWidget />, {
+      wrapper: wrapper([
+        sample({ cpuPct: 85, memUsedBytes: 30.4 * 1024 ** 3, memTotalBytes: 32 * 1024 ** 3 }),
+      ]),
+    })
+
+    await waitFor(() => expect(screen.getByText('95%')).toBeTruthy())
+    expect(
+      document.querySelector('[data-slot="host-usage-widget-ram-bar"]')?.getAttribute('data-level'),
+    ).toBe('critical')
+    expect(
+      document.querySelector('[data-slot="host-usage-widget-cpu-bar"]')?.getAttribute('data-level'),
+    ).toBe('warn')
   })
 
   it('reads `sampling…` before the first CPU point', async () => {
     render(<HostUsageWidget />, { wrapper: wrapper([sample()]) })
     await waitFor(() => expect(screen.getByText('sampling…')).toBeTruthy())
-    expect(document.querySelector('[data-slot="host-usage-widget-sparkline"]')).toBeNull()
+    expect(
+      document.querySelector('[data-slot="host-usage-widget-cpu-bar"]')?.hasAttribute('aria-valuenow'),
+    ).toBe(false)
   })
 
-  it('shows effective cores and — for a cgroup limit with no CPU value', async () => {
+  it('names effective cores in the tooltip and shows — for a cgroup limit with no CPU value', async () => {
     render(<HostUsageWidget />, {
       wrapper: wrapper([
         sample({
@@ -170,9 +217,14 @@ describe('HostUsageWidget', () => {
     })
 
     // The container's percentage is missing, so `—` - never the host's 31 % beside effective cores.
-    await waitFor(() => expect(screen.getByText('—')).toBeTruthy())
-    expect(screen.getByText('6 CPU')).toBeTruthy()
-    expect(screen.getByText('— / 8.0 GB')).toBeTruthy()
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="host-usage-widget-cpu"]')?.textContent).toBe('—'),
+    )
+    expect(document.querySelector('[data-slot="host-usage-widget-mem-pct"]')?.textContent).toBe('—')
+    // The details the line has no room for still have to reach the reader somewhere.
+    expect(document.querySelector('[data-slot="host-usage-widget"]')?.getAttribute('title')).toBe(
+      'CPU — of 6 CPU, RAM — (— / 8.0 GB)',
+    )
     expect(screen.queryByText('31%')).toBeNull()
   })
 
@@ -190,7 +242,11 @@ describe('HostUsageWidget', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(HOST_WIDGET_STALE_MS + 5_000)
     })
-    expect(screen.getByText('stale')).toBeTruthy()
+    // Both meters go stale together, and neither keeps drawing a bar for a dead number.
+    expect(screen.getAllByText('stale')).toHaveLength(2)
+    expect(
+      document.querySelector('[data-slot="host-usage-widget-cpu-bar"]')?.hasAttribute('aria-valuenow'),
+    ).toBe(false)
 
     // …and back: a new frame re-arms the timeout rather than leaving the row stale forever.
     act(() => {

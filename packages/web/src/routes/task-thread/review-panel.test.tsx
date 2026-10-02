@@ -80,6 +80,7 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
             { provider: 'claude', status: 'connected', enabled: true },
             { provider: 'codex', status: 'not-installed', enabled: true },
             { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
           ],
         })
       }
@@ -272,6 +273,7 @@ describe('the review gate on the thread', () => {
             { provider: 'claude', status: 'disconnected', enabled: true },
             { provider: 'codex', status: 'unknown', enabled: true },
             { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
           ],
         }),
     })
@@ -298,6 +300,7 @@ describe('the review gate on the thread', () => {
             { provider: 'claude', status: 'disconnected', enabled: true },
             { provider: 'codex', status: 'connected', enabled: true },
             { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
           ],
         }),
     })
