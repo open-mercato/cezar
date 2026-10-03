@@ -294,6 +294,8 @@ export const runRecordSchema = z.object({
    *  runs, on any run not yet opened, and on one deliberately put back to unread via
    *  `POST /runs/:id/unread` (#775) — all three count as unread. */
   seenAt: z.string().optional(),
+  /** Highest event `seq` handed out for this run (ephemeral frames included). Absent on older runs. */
+  lastSeq: z.number().int().nonnegative().optional(),
   currentStepId: z.string().optional(),
   error: z.string().optional(),
   steps: z.array(stepStateSchema),

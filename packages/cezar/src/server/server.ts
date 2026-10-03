@@ -107,6 +107,7 @@ import {
   deriveRunContextEvents,
   readEventsAfterLiveCursor,
   readRunHistoryPage,
+  streamRunEvents,
   validateLiveCursor,
 } from '../runs/event-history.ts';
 import { readRunIndexFromDisk } from '../runs/run-index.ts';
@@ -5323,9 +5324,10 @@ export function createApp(deps: ServerDeps) {
 
         const replay = query.cursor
           ? await readEventsAfterLiveCursor(eventsPath, query.cursor)
-          : { events: store.readEvents(id), boundarySeq: 0 };
+          : { events: streamRunEvents(eventsPath), boundarySeq: 0 };
         maxSeq = Math.max(maxSeq, replay.boundarySeq);
-        for (const event of replay.events) {
+        for await (const event of replay.events) {
+          if (stream.aborted) break;
           if (event.seq <= maxSeq) continue;
           await writeEvent(event);
           maxSeq = event.seq;
