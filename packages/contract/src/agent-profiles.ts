@@ -103,6 +103,7 @@ export const agentAccountSelectionSchema = z.object({
   cursor: z.string().optional(),
   pi: z.string().optional(),
   copilot: z.string().optional(),
+  omp: z.string().optional(),
 });
 export type AgentAccountSelection = z.infer<typeof agentAccountSelectionSchema>;
 

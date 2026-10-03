@@ -1,3 +1,8 @@
+# Unreleased
+
+## ✨ Features
+- ✨ New `omp` runner — OMP (`omp --mode rpc`, pi's successor) is selectable alongside the other agent CLIs: detection, a stdio-RPC runner and v2 mapper with real-transcript golden fixtures covering every parity row (tools, reasoning, diffs, plans via the `todo` tool, subagents, usage, abort), agent-config catalog entries (settings/memory/MCP incl. YAML), model defaults from `modelRoles.default`, profile support via `PI_CODING_AGENT_DIR`, provider status, and the full web/server plumbing. (#1139) *(@aleksanderw1992)*
+
 # 0.14.0 (2026-10-02)
 
 ## Highlights

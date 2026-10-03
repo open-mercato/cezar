@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
+import { runnerSchema } from '@open-mercato/cezar-api-client'
 import type { ProviderStatusResponse } from '@open-mercato/cezar-api-client'
 import {
+  RUNNER_ORDER,
   applyProviderStatusRow,
   mergeProviderStatusResponse,
   parseProviderStatusEventRow,
@@ -221,6 +223,17 @@ describe('parseProviderStatusResponse', () => {
         { provider: 'cursor', status: 'not-installed', enabled: true },
       ],
     })
+  })
+
+  // The server answers with one row per runner; a runner the parser does not know fails the
+  // whole response, which shows every provider as "Could not verify". Rows come back in the
+  // cockpit's own order (`RUNNER_ORDER`), whatever order the server sent them in.
+  it('accepts a row for every runner in the contract', () => {
+    const providers = runnerSchema.options.map((provider) => ({ provider, status: 'connected', enabled: true }))
+    const parsed = parseProviderStatusResponse({ providers: [...providers].reverse() })
+    expect(parsed?.providers.map((row) => row.provider)).toEqual(RUNNER_ORDER)
+    expect([...RUNNER_ORDER].sort()).toEqual([...runnerSchema.options].sort())
+    expect(usableRunners({ providers } as ProviderStatusResponse)).toEqual(RUNNER_ORDER)
   })
 
   it.each([

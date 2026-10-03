@@ -17,6 +17,7 @@ import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 import { trackerAutomationOptionsSchema, SCHEDULE_TYPES, parseCron, scheduleLabel, type AutomationSchedule } from '@open-mercato/cezar-contract';
 import { AUTOMATION_SCHEMA_REFERENCE } from './prompts.ts';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
 
 export interface AutomationCliEnv {
   CEZ_API_URL?: string;
@@ -42,7 +43,7 @@ const USAGE = `cez automation — create and manage automations (GitHub/Jira/Lin
                                                 create one from a JSON definition (stdin when neither flag is given);
                                                 paused unless --enable
   cez automation add --name <name> (--cron "<M H * * *>" | --on <event>[,<event>] --every <5m|1h>)
-                     [--prompt <text> | --prompt-file <path>] [--workflow <w>] [--runner claude|codex|opencode]
+                     [--prompt <text> | --prompt-file <path>] [--workflow <w>] [--runner ${RUNNER_IDS.join('|')}]
                      [--model <m>] [--autonomous | --no-autonomous] [--dispatch [--max-subtasks N] [--review-child]]
                      [--label <l>]... [--author <a>]... [--enable]
                                                 the same, from flags: --cron takes "M H * * *" (daily), "M H * * 1-5"

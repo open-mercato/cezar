@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { runnerSchema } from '@open-mercato/cezar-api-client'
 
 import { AgentBrowser, readTestEnv } from './agent-browser'
 
@@ -29,7 +30,7 @@ let baseUrl: string
 let previousConfig: string | null = null
 let modelsLocked = false
 
-const RUNNER_IDS = ['claude', 'codex', 'junie', 'opencode', 'pi', 'copilot'] as const
+const RUNNER_IDS = runnerSchema.options
 
 beforeAll(async () => {
   baseUrl = readTestEnv().baseUrl

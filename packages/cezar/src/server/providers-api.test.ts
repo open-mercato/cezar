@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -59,6 +59,7 @@ const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   // Copilot's probe drives its ACP server, so its "connected" evidence is the `session/new`
   // answer (`.ai/runs/2026-09-27-copilot-cli-runner/copilot-acp-notes.md`).
   copilot: '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"3f1b6f2e-0000-4000-8000-1f2e3d4c5b6a"}}',
+  omp: '18.4.2',
 };
 
 const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
@@ -75,10 +76,15 @@ const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
   pi: 'No models available. Use /login to authenticate.',
   junie: 'Junie version: 26.9.22 (3419.7)',
   copilot: '{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"Authentication required"}}',
+  // omp has no disconnected answer: `--version` is the only probe and it says nothing about a
+  // login. Its credential evidence is read off the injected env / agent dir (pinned in
+  // `beforeEach` below), so the state map's `disconnected` for omp exercises the exit-1 path only
+  // (→ `unknown`); the unknown/connected branches live in `core/provider-auth.test.ts`.
+  omp: '18.4.2',
 };
 
 const providerForExecutable = (executable: string): ProviderId => {
-  if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi' || executable === 'junie' || executable === 'copilot') return executable;
+  if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi' || executable === 'junie' || executable === 'copilot' || executable === 'omp') return executable;
   if (executable === 'agent') return 'cursor';
   throw new Error(`unexpected executable: ${executable}`);
 };
@@ -103,6 +109,8 @@ describe('workspace provider API', () => {
   const savedModelsLocked = process.env.CEZ_AGENT_MODELS_LOCKED;
   const savedDryRun = process.env.CEZ_DRY_RUN;
   const savedRemote = process.env.CEZ_REMOTE;
+  const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
+  let ompAgentDir: string;
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'cez-providers-api-'));
@@ -110,6 +118,10 @@ describe('workspace provider API', () => {
     delete process.env.CEZ_AGENT_MODELS_LOCKED;
     delete process.env.CEZ_DRY_RUN;
     delete process.env.CEZ_REMOTE;
+    // omp reads its login evidence off the host: pin an agent.db so the suite is hermetic.
+    ompAgentDir = mkdtempSync(join(tmpdir(), 'cez-omp-agent-'));
+    writeFileSync(join(ompAgentDir, 'agent.db'), '');
+    process.env.PI_CODING_AGENT_DIR = ompAgentDir;
   });
 
   afterEach(() => {
@@ -119,6 +131,9 @@ describe('workspace provider API', () => {
     else process.env.CEZ_AGENT_MODELS_LOCKED = savedModelsLocked;
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
+    rmSync(ompAgentDir, { recursive: true, force: true });
+    if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
     if (savedRemote === undefined) delete process.env.CEZ_REMOTE;
     else process.env.CEZ_REMOTE = savedRemote;
   });
@@ -209,6 +224,7 @@ describe('workspace provider API', () => {
         { provider: 'pi', status: 'connected', enabled: true },
         { provider: 'junie', status: 'connected', enabled: true },
         { provider: 'copilot', status: 'connected', enabled: true },
+        { provider: 'omp', status: 'connected', enabled: true },
       ],
     });
   });
@@ -232,6 +248,7 @@ describe('workspace provider API', () => {
         { provider: 'pi', status: 'connected', enabled: true },
         { provider: 'junie', status: 'connected', enabled: true },
         { provider: 'copilot', status: 'connected', enabled: true },
+        { provider: 'omp', status: 'connected', enabled: true },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();

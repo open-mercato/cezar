@@ -17,7 +17,14 @@ describe('PROFILE_ENV_VAR', () => {
   it('leaves OpenCode unsupported — its credentials do not follow its config dir', () => {
     expect(PROFILE_ENV_VAR.opencode).toBeNull();
     expect(supportsProfiles('opencode')).toBe(false);
-    expect(PROFILE_CAPABLE_PROVIDERS).toEqual(['claude', 'codex']);
+    // omp joined claude/codex: `PI_CODING_AGENT_DIR` moves the whole agent base, agent.db
+    // included, so a second OMP account can carry its own credentials.
+    expect(PROFILE_CAPABLE_PROVIDERS).toEqual(['claude', 'codex', 'omp']);
+  });
+
+  it('omp names the whole agent dir, credentials included', () => {
+    expect(PROFILE_ENV_VAR.omp).toBe('PI_CODING_AGENT_DIR');
+    expect(supportsProfiles('omp')).toBe(true);
   });
 
   it('covers every provider, so adding one forces a decision here', () => {

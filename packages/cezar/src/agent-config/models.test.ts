@@ -36,6 +36,23 @@ describe('readAgentModelDefaults', () => {
     });
   });
 
+  it('reads omp\'s modelRoles.default from real YAML (document marker, block scalar), project over user', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'cez-native-models-repo-'));
+    const home = mkdtempSync(join(tmpdir(), 'cez-native-models-home-'));
+    roots.push(repo, home);
+    mkdirSync(join(home, '.omp', 'agent'), { recursive: true });
+    mkdirSync(join(repo, '.omp'), { recursive: true });
+    writeFileSync(join(home, '.omp', 'agent', 'config.yml'), '---\nmodelRoles:\n  default: openrouter/deepseek/deepseek-v4-flash\nsystemPrompt: |\n  Be terse.\n');
+    await expect(readAgentModelDefaults(repo, { HOME: home })).resolves.toEqual({ omp: 'openrouter/deepseek/deepseek-v4-flash' });
+
+    writeFileSync(join(repo, '.omp', 'config.yml'), 'modelRoles:\n  default: anthropic/claude-sonnet-5\n');
+    await expect(readAgentModelDefaults(repo, { HOME: home })).resolves.toEqual({ omp: 'anthropic/claude-sonnet-5' });
+
+    // A malformed project file is skipped, not read as "no model": the user file still answers.
+    writeFileSync(join(repo, '.omp', 'config.yml'), 'modelRoles:\n  default: "unterminated\n');
+    await expect(readAgentModelDefaults(repo, { HOME: home })).resolves.toEqual({ omp: 'openrouter/deepseek/deepseek-v4-flash' });
+  });
+
   it('falls back when a higher-precedence file is missing or malformed', async () => {
     const repo = mkdtempSync(join(tmpdir(), 'cez-native-models-repo-'));
     const home = mkdtempSync(join(tmpdir(), 'cez-native-models-home-'));

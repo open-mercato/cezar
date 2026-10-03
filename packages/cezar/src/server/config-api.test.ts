@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { createApp } from './server.ts';
@@ -175,6 +176,15 @@ describe('the config API', () => {
     await put({ defaultModels: { codex: null } });
     expect(rawFile().defaultModels).toEqual({ claude: 'opus' });
     await put({ defaultModels: { claude: '' } });
+    expect(rawFile().defaultModels).toBeUndefined();
+  });
+
+  // A runner missing from the PUT schema is stripped silently: the request answers 200 and
+  // nothing is saved.
+  it.each(RUNNER_IDS)('PUT defaultModels persists and clears a %s model', async (runner) => {
+    expect((await put({ defaultModels: { [runner]: 'some-model' } })).status).toBe(200);
+    expect(rawFile().defaultModels).toEqual({ [runner]: 'some-model' });
+    await put({ defaultModels: { [runner]: null } });
     expect(rawFile().defaultModels).toBeUndefined();
   });
 

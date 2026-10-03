@@ -12,7 +12,8 @@
  * `BACKENDS` lists every backend that owns a wire mapper. Pi uses its documented
  * RPC protocol and therefore has its own wire-faithful fixture set. Copilot speaks ACP through
  * the shared mapper, but keeps its own fixtures and dialect for the same reason every backend
- * does — parity is asserted over what the wire really produces, per runner.
+ * does — parity is asserted over what the wire really produces, per runner. omp's fixtures are
+ * real `omp --mode rpc` transcripts (`__fixtures__/omp/README.md`).
  *
  * Every row below is a hard rule for every backend — see `BACKWARD_COMPATIBILITY.md`
  * §7 and `AGENT_PROTOCOL.md` §6 ("a new backend is not 'done' until it produces
@@ -42,7 +43,7 @@ import { describe, expect, it } from 'vitest';
 import type { UiEvent, UiItem } from './ui-events.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const BACKENDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot'] as const;
+const BACKENDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'omp'] as const;
 
 /** Every event across every golden fixture of one backend. */
 function fixtureEvents(backend: (typeof BACKENDS)[number]): UiEvent[] {

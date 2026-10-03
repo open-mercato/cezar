@@ -52,6 +52,9 @@ export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
   // `claude-sonnet-4`). Naming them here would make this guard reject a legitimate codex or
   // claude model as "another runner's preset" — the exact failure pi's comment warns about.
   copilot: [],
+  // omp is pi's successor with the same `provider/model` convention and no default provider
+  // (#387's reasoning for pi applies verbatim); its picker gets the same structural guard.
+  omp: [],
 };
 
 /**

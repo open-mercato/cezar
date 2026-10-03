@@ -136,6 +136,21 @@ export const AGENT_DESCRIPTORS: AgentDescriptor[] = [
       ),
     ],
   },
+  {
+    id: 'omp',
+    label: 'OMP',
+    note: EDITOR_PLUS_COMMIT,
+    groups: [
+      group('omp', 'settings', 'Settings'),
+      group(
+        'omp',
+        'mcp',
+        'MCP',
+        'A dedicated mcp.json (key: mcpServers) — project .omp/mcp.json, user ~/.omp/agent/mcp.json.',
+      ),
+      group('omp', 'memory', 'Memory & instructions'),
+    ],
+  },
 ]
 
 export function descriptorFor(agent: Runner): AgentDescriptor {

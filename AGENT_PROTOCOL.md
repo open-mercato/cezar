@@ -66,7 +66,8 @@ interface AgentRunner {
   `waiting`, interrupt and resume all work: claude = stream-json over
   stdin/stdout; codex = `codex app-server` JSON-RPC 2.0 (JSONL) over
   stdin/stdout; opencode = `opencode serve` over HTTP + SSE; pi =
-  `pi --mode rpc` over JSONL stdin/stdout.
+  `pi --mode rpc` over JSONL stdin/stdout; omp = `omp --mode rpc`, pi's
+  successor on the same stdio family (own mapper, `omp-ui-mapper.ts`).
 
 ### `AgentSession`
 
@@ -313,18 +314,18 @@ Each backend has a mapper (`packages/cezar/src/core/<backend>-ui-mapper.ts`) tur
 transport into `UiEvent`s. The authoritative table is
 `agent-event-protocols.md` §7.1; the load-bearing rows:
 
-| v2 event / field | claude (stream-json) | codex (app-server JSON-RPC) | opencode (serve HTTP+SSE) | cursor (stream-json print mode) | copilot (ACP over stdio) |
-|---|---|---|---|---|---|
-| `session.started` | `system/init` (model, tools, cwd) | `thread/started` / `thread/start` result | `POST /session` response | `system/init` (model, cwd) | `session/new` result (`sessionId`; the request's `cwd`) |
-| `turn.started` | each stdin user message | `turn/started` | each prompt POST | no stdin turn boundary in print mode — starts `turn_1` with the session | each outbound `session/prompt` |
-| `turn.completed` + `stopReason` | `result` subtype (`success→end_turn`, `error_max_turns→max_tokens`, `error_during_execution→error`) | `turn/completed→end_turn`, `turn/failed→error`, interrupt→`cancelled` | `session.idle→end_turn` (or `error` if a `session.error` preceded) | `result` (`is_error→error`, `subtype=error_max_turns→max_tokens`, else `end_turn`) | the `session/prompt` result's `stopReason` (`end_turn`, `max_tokens`, `max_turn_requests→max_tokens`, `refusal`, `cancelled`) |
-| message item | `assistant` `text` blocks (deltas via `--include-partial-messages`) | `agentMessage` items | text parts | `assistant` `text` content blocks | `agent_message_chunk` |
-| reasoning item | `thinking` blocks | `reasoning` items (+ `textDelta`) | `reasoning` parts | *(none — docs: `thinking` events are suppressed in print mode)* | `agent_thought_chunk` |
-| tool item | `tool_use`→running, `tool_result`→completed/failed, `permission_denials`→`declined` | `commandExecution`→execute (+`exitCode`, `outputDelta`), `fileChange`→edit (`diffs`), `mcpToolCall`→other, `webSearch`→fetch, collaboration spawn→task | tool parts (state `pending/running/completed/error→failed`, `patch` parts→`diffs`) | `tool_call` started/completed (`readToolCall`/`writeToolCall`/`editToolCall`/`shellToolCall`, or the generic `tool_call.function` wrapper) | `tool_call`→running (Copilot announces a STARTED tool as ACP `pending` and never sends `in_progress`), `tool_call_update`→completed/failed, `content[].type: "diff"`→`diffs` |
-| `item.delta` `output` (live terminal) | *(none — card fills on completion; per-capability degradation)* | `item/commandExecution/outputDelta` | running-state metadata | *(none)* | *(none — `tool.execution_progress` is dropped by Copilot's own ACP bridge)* |
-| `plan.updated` | `TodoWrite` input | `todoList` / `plan` items | `todowrite` tool | `TodoWrite` via `tool_call.function` — **tool name/shape not confirmed against a live CLI transcript** (#807) | the native `plan` update (`entries[] {content, priority, status}`) |
-| subagent nesting (`parentItemId`) | `parent_tool_use_id` | collaboration receiver thread id (review mode remains childless) | child-session parts under a `subtask` | *(none — print-mode wire has no parent attribution; the task-kind tool item is the matrix cell)* | `_meta["github.com/copilot"].agentId`, which IS the delegating `task` call's `toolCallId` |
-| `usage.updated` | `result.usage` + `total_cost_usd` | `thread/tokenUsage/updated` (no USD) | `message.updated` tokens/cost + `step-finish` | *(none — the documented terminal `result` frame carries no `usage`/`total_cost_usd` field)* | the `session/prompt` result's top-level `usage` (no USD). Its separate `usage_update` frame is a context-window gauge (`{used, size}`), NOT token counts, and is deliberately unmapped |
+| v2 event / field | claude (stream-json) | codex (app-server JSON-RPC) | opencode (serve HTTP+SSE) | cursor (stream-json print mode) | copilot (ACP over stdio) | omp (rpc JSONL stdio) |
+|---|---|---|---|---|---|---|
+| `session.started` | `system/init` (model, tools, cwd) | `thread/started` / `thread/start` result | `POST /session` response | `system/init` (model, cwd) | `session/new` result (`sessionId`; the request's `cwd`) | `get_state` response (`sessionId`, `model.id`) |
+| `turn.started` | each stdin user message | `turn/started` | each prompt POST | no stdin turn boundary in print mode — starts `turn_1` with the session | each outbound `session/prompt` | each `prompt` command cezar sends (turn = one user prompt) |
+| `turn.completed` + `stopReason` | `result` subtype (`success→end_turn`, `error_max_turns→max_tokens`, `error_during_execution→error`) | `turn/completed→end_turn`, `turn/failed→error`, interrupt→`cancelled` | `session.idle→end_turn` (or `error` if a `session.error` preceded) | `result` (`is_error→error`, `subtype=error_max_turns→max_tokens`, else `end_turn`) | the `session/prompt` result's `stopReason` (`end_turn`, `max_tokens`, `max_turn_requests→max_tokens`, `refusal`, `cancelled`) | `prompt_result` (`completed→end_turn`, `aborted→cancelled`, `error→error`); `agentInvoked: false` (a local slash command) still closes the turn the prompt opened — `end_turn`, no usage |
+| message item | `assistant` `text` blocks (deltas via `--include-partial-messages`) | `agentMessage` items | text parts | `assistant` `text` content blocks | `agent_message_chunk` | `message_update` `text_start/text_delta/text_end` (one item per `messageId` + content index) |
+| reasoning item | `thinking` blocks | `reasoning` items (+ `textDelta`) | `reasoning` parts | *(none — docs: `thinking` events are suppressed in print mode)* | `agent_thought_chunk` | `message_update` `thinking_start/thinking_delta/thinking_end` |
+| tool item | `tool_use`→running, `tool_result`→completed/failed, `permission_denials`→`declined` | `commandExecution`→execute (+`exitCode`, `outputDelta`), `fileChange`→edit (`diffs`), `mcpToolCall`→other, `webSearch`→fetch, collaboration spawn→task | tool parts (state `pending/running/completed/error→failed`, `patch` parts→`diffs`) | `tool_call` started/completed (`readToolCall`/`writeToolCall`/`editToolCall`/`shellToolCall`, or the generic `tool_call.function` wrapper) | `tool_call`→running (Copilot announces a STARTED tool as ACP `pending` and never sends `in_progress`), `tool_call_update`→completed/failed, `content[].type: "diff"`→`diffs` | `toolcall_end` (the streamed function call) → pending; `tool_execution_start`→running (real args); `tool_execution_end`→completed/failed (`isError`) |
+| `item.delta` `output` (live terminal) | *(none — card fills on completion; per-capability degradation)* | `item/commandExecution/outputDelta` | running-state metadata | *(none)* | *(none — `tool.execution_progress` is dropped by Copilot's own ACP bridge)* | *(none — card fills on completion)* |
+| `plan.updated` | `TodoWrite` input | `todoList` / `plan` items | `todowrite` tool | `TodoWrite` via `tool_call.function` — **tool name/shape not confirmed against a live CLI transcript** (#807) | the native `plan` update (`entries[] {content, priority, status}`) | the `todo` tool: `init` args (all pending) and the full phase snapshot in its result `details` |
+| subagent nesting (`parentItemId`) | `parent_tool_use_id` | collaboration receiver thread id (review mode remains childless) | child-session parts under a `subtask` | *(none — print-mode wire has no parent attribution; the task-kind tool item is the matrix cell)* | `_meta["github.com/copilot"].agentId`, which IS the delegating `task` call's `toolCallId` | *(none — the RPC wire carries no parent attribution)* |
+| `usage.updated` | `result.usage` + `total_cost_usd` | `thread/tokenUsage/updated` (no USD) | `message.updated` tokens/cost + `step-finish` | *(none — the documented terminal `result` frame carries no `usage`/`total_cost_usd` field)* | the `session/prompt` result's top-level `usage` (no USD). Its separate `usage_update` frame is a context-window gauge (`{used, size}`), NOT token counts, and is deliberately unmapped | assistant `message_end` `usage` — per-message, so the mapper accumulates: `usage.updated` is session-cumulative and the turn sum rides on `turn.completed` |
 
 `copilot` shares one vendor-neutral transport and mapper with any future ACP backend
 (`core/acp-client.ts`, `core/acp-ui-mapper.ts`); what differs per agent is a small `AcpDialect`
@@ -332,6 +333,9 @@ transport into `UiEvent`s. The authoritative table is
 `.ai/runs/2026-09-27-copilot-cli-runner/copilot-acp-notes.md`, and
 `__fixtures__/copilot/README.md` states exactly which of those frames are a live capture and
 which were read out of the CLI's own ACP bridge.
+
+`omp`'s column is backed by real `omp --mode rpc` transcripts (`__fixtures__/omp/README.md`),
+mapped by `core/omp-ui-mapper.ts`.
 
 **Mapper robustness contract.** Inputs come off the wire and may be `null`,
 partial or malformed. A mapper **must never throw**: unparseable NDJSON lines are

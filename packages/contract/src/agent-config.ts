@@ -6,7 +6,7 @@ import { runnerSchema } from './health.ts';
  * CLIs read, listed and edited through `GET/PUT /agent-config[/:id]`.
  */
 
-export const agentConfigFormatSchema = z.enum(['json', 'jsonc', 'toml', 'markdown']);
+export const agentConfigFormatSchema = z.enum(['json', 'jsonc', 'toml', 'markdown', 'yaml']);
 export type AgentConfigFormat = z.infer<typeof agentConfigFormatSchema>;
 
 export const agentConfigScopeSchema = z.enum(['user', 'project', 'local']);

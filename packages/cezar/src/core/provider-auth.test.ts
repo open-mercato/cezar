@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -22,6 +25,7 @@ vi.mock('./junie-auth-probe.ts', () => ({
 import { PROVIDER_IDS } from './provider-auth.ts';
 import {
   ProviderAuthService,
+  isOmpCredentialVariable,
   isRuntimeProviderAuthFailure,
   providerAuthChecksDisabled,
   type ProviderCommandResult,
@@ -30,6 +34,7 @@ import {
 import { probeJunieAuthentication } from './junie-auth-probe.ts';
 
 const connectedResults: Record<string, ProviderCommandResult> = {
+  omp: { stdout: '18.4.2', stderr: '', exitCode: 0 },
   claude: { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 },
   codex: { stdout: 'Logged in using ChatGPT', stderr: '', exitCode: 0 },
   opencode: {
@@ -75,9 +80,21 @@ const originalEnv = {
   CEZ_PI_BIN: process.env.CEZ_PI_BIN,
   CURSOR_API_KEY: process.env.CURSOR_API_KEY,
   CEZ_COPILOT_BIN: process.env.CEZ_COPILOT_BIN,
+  PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
 };
 
+/**
+ * omp's connectedness is file-shaped evidence (`agent.db` in its agent dir) or a non-empty
+ * provider key in the environment — both read from the HOST. Point the agent dir at a fresh temp
+ * dir holding an `agent.db` so every suite below sees omp connected regardless of who runs it;
+ * the omp-specific block strips that evidence again to pin the `unknown` path.
+ */
+let ompAgentDir: string;
+
 beforeEach(() => {
+  ompAgentDir = mkdtempSync(join(tmpdir(), 'cez-omp-agent-'));
+  writeFileSync(join(ompAgentDir, 'agent.db'), '');
+  process.env.PI_CODING_AGENT_DIR = ompAgentDir;
   delete process.env.CEZ_AGENT_MODELS_LOCKED;
   delete process.env.CEZ_DRY_RUN;
   delete process.env.CEZ_CLAUDE_BIN;
@@ -89,6 +106,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  rmSync(ompAgentDir, { recursive: true, force: true });
   for (const [key, value] of Object.entries(originalEnv)) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
@@ -102,6 +120,7 @@ afterEach(() => {
 const PROBE_ROUND = PROVIDER_IDS.filter((provider) => provider !== 'junie').length;
 
 function resultFor(executable: string): ProviderCommandResult {
+  if (executable === 'omp') return connectedResults.omp!;
   if (executable === 'claude') return connectedResults.claude!;
   if (executable.includes('codex')) return connectedResults.codex!;
   if (executable === 'agent' || executable.includes('cursor')) return connectedResults.cursor!;
@@ -625,6 +644,7 @@ describe('ProviderAuthService', () => {
         { provider: 'pi' },
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot' },
+        { provider: 'omp' },
       ],
     });
   });
@@ -649,6 +669,7 @@ describe('ProviderAuthService', () => {
       { executable: 'agent', args: ['status', '--format', 'json'], timeoutMs: 10_000 },
       { executable: 'pi', args: ['--list-models'], timeoutMs: 10_000 },
       { executable: 'copilot', args: ['--acp'], timeoutMs: 10_000 },
+      { executable: 'omp', args: ['--version'], timeoutMs: 10_000 },
     ]);
     release();
     await expect(pending).resolves.toBeDefined();
@@ -1105,6 +1126,7 @@ describe('ProviderAuthService', () => {
         { provider: 'pi', status: 'connected' },
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot', status: 'connected' },
+        { provider: 'omp', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -1218,6 +1240,7 @@ describe('ProviderAuthService', () => {
         { provider: 'pi', status: 'connected' },
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot', status: 'connected' },
+        { provider: 'omp', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -1386,5 +1409,108 @@ describe('ProviderAuthService', () => {
       expect(new ProviderAuthService({ platform: 'linux' }).loginCommand('opencode', '/oc-work'))
         .toBe("'opencode' auth login");
     });
+  });
+});
+
+describe('omp credential discovery', () => {
+  // omp's answer is evidence the service reads off its injected `env` — a provider KEY, or an
+  // `agent.db` under the agent dir that env names — so every case below pins the environment
+  // instead of asking (or stripping) the developer's shell. The agent dir is a fresh temp dir with
+  // no `agent.db`, so the host's own `~/.omp/agent` login never leaks in either.
+  const bare = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({ PI_CODING_AGENT_DIR: ompAgentDir, ...extra });
+  const probe = (env: NodeJS.ProcessEnv) => statuses(new ProviderAuthService({ runCommand: runner(), env }));
+
+  beforeEach(() => {
+    rmSync(join(ompAgentDir, 'agent.db'), { force: true });
+  });
+
+  it('is unknown — never disconnected — with the login hint when no credential is visible', async () => {
+    const rows = await probe(bare());
+    expect(rows.omp!.status).toBe('unknown');
+    expect(rows.omp!.hint).toMatch(/run `omp` once and log in/);
+  });
+
+  it('is connected on the agent.db a native login leaves in the active agent dir', async () => {
+    writeFileSync(join(ompAgentDir, 'agent.db'), '');
+    expect((await probe(bare())).omp).toEqual({ status: 'connected', hint: undefined });
+  });
+
+  it('is connected on a NON-EMPTY provider key, and a key that is set but empty is no credential', async () => {
+    expect((await probe(bare({ OPENROUTER_API_KEY: '' }))).omp!.status).toBe('unknown');
+    expect((await probe(bare({ OPENROUTER_API_KEY: '   ' }))).omp!.status).toBe('unknown');
+    expect((await probe(bare({ OPENROUTER_API_KEY: 'sk-or-test' }))).omp!.status).toBe('connected');
+    expect((await probe(bare({ ANTHROPIC_AUTH_TOKEN: 'tok' }))).omp!.status).toBe('connected');
+  });
+
+  it('a provider variable that is not a key (OPENAI_BASE_URL, ANTHROPIC_MODEL, …) is no credential', async () => {
+    const decoys = {
+      OPENAI_BASE_URL: 'http://localhost:1234/v1',
+      OPENAI_ORG_ID: 'org-1',
+      OPENAI_API_KEY_FILE: '/run/secrets/openai',
+      ANTHROPIC_MODEL: 'claude-sonnet-5',
+      ANTHROPIC_BASE_URL: 'http://localhost:4000',
+      ANTHROPIC_MAX_TOKENS: '4096',
+      AZURE_OPENAI_ENDPOINT: 'https://x.openai.azure.com',
+      GEMINI_MODEL: 'gemini-3.5-flash',
+    };
+    expect((await probe(bare(decoys))).omp!.status).toBe('unknown');
+    for (const name of Object.keys(decoys)) expect(isOmpCredentialVariable(name), name).toBe(false);
+    expect(isOmpCredentialVariable('OPENAI_API_KEY')).toBe(true);
+    expect(isOmpCredentialVariable('openrouter_api_key')).toBe(true);
+    expect(isOmpCredentialVariable('GEMINI_API_KEY')).toBe(true);
+    // A key of a family omp does not resolve is not omp's credential either.
+    expect(isOmpCredentialVariable('GITHUB_TOKEN')).toBe(false);
+    expect(isOmpCredentialVariable('CURSOR_API_KEY')).toBe(false);
+  });
+
+  it('does not read process.env at all when an env is injected', async () => {
+    const saved = process.env.OPENROUTER_API_KEY;
+    process.env.OPENROUTER_API_KEY = 'sk-or-leaked-from-the-shell';
+    try {
+      expect((await probe(bare())).omp!.status).toBe('unknown');
+    } finally {
+      if (saved === undefined) delete process.env.OPENROUTER_API_KEY;
+      else process.env.OPENROUTER_API_KEY = saved;
+    }
+  });
+
+  it('reads a second account\'s own agent dir, not the default account\'s store', async () => {
+    const second = mkdtempSync(join(tmpdir(), 'cez-omp-second-'));
+    try {
+      const service = new ProviderAuthService({ runCommand: runner(), env: bare() });
+      // Default account logged in, second one not: the second must not borrow the default's evidence.
+      writeFileSync(join(ompAgentDir, 'agent.db'), '');
+      expect((await service.profileStatus('omp', { id: 'work', configDir: second })).status).toBe('unknown');
+      // And the other way round.
+      rmSync(join(ompAgentDir, 'agent.db'), { force: true });
+      writeFileSync(join(second, 'agent.db'), '');
+      // A fresh service: profile answers are cached per account id for minutes.
+      expect((await probe(bare())).omp!.status).toBe('unknown');
+      expect((await new ProviderAuthService({ runCommand: runner(), env: bare() }).profileStatus('omp', { id: 'work', configDir: second })).status).toBe('connected');
+    } finally {
+      rmSync(second, { recursive: true, force: true });
+    }
+  });
+
+  it('is not-installed with the install hint when the CLI is absent', async () => {
+    const rows = await statuses(new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'omp'
+        ? { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' }
+        : resultFor(executable)),
+      env: bare({ OPENROUTER_API_KEY: 'sk-or-test' }), // a key is no substitute for the CLI
+    }));
+    expect(rows.omp!.status).toBe('not-installed');
+    expect(rows.omp!.hint).toMatch(/Install OMP/);
+  });
+
+  it('a `--version` that fails is unknown with the generic hint — omp has no disconnected answer', async () => {
+    const rows = await statuses(new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'omp'
+        ? { stdout: '', stderr: 'boom', exitCode: 1 }
+        : resultFor(executable)),
+      env: bare({ OPENROUTER_API_KEY: 'sk-or-test' }),
+    }));
+    expect(rows.omp!.status).toBe('unknown');
+    expect(rows.omp!.hint).not.toMatch(/run `omp` once/);
   });
 });

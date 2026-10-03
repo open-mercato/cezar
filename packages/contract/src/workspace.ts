@@ -68,6 +68,7 @@ export const workspaceConfigResponseSchema = z.object({
       pi: z.string().optional(),
       junie: z.string().optional(),
       copilot: z.string().optional(),
+      omp: z.string().optional(),
     }).optional(),
   }),
 });
@@ -104,6 +105,7 @@ export const setWorkspaceConfigInputSchema = z.object({
           cursor: z.string().trim().min(1).max(200).nullable().optional(),
           pi: z.string().trim().min(1).max(200).nullable().optional(),
           copilot: z.string().trim().min(1).max(200).nullable().optional(),
+          omp: z.string().trim().min(1).max(200).nullable().optional(),
         })
         .optional(),
     })
@@ -272,6 +274,7 @@ export const workspaceUiStateSchema = z.looseObject({
       pi: z.string().optional(),
       junie: z.string().optional(),
       copilot: z.string().optional(),
+      omp: z.string().optional(),
     })
     .optional(),
   /** Settings → Appearance, GLOBAL since step 3.5: accent + density describe the person at the
@@ -372,6 +375,7 @@ export const runnerModelsSchema = z.object({
   cursor: z.string().optional(),
   pi: z.string().optional(),
   copilot: z.string().optional(),
+  omp: z.string().optional(),
 });
 export type RunnerModels = z.infer<typeof runnerModelsSchema>;
 
@@ -420,7 +424,9 @@ export const setConfigInputSchema = z.object({
       opencode: z.string().trim().max(200).nullable().optional(),
       cursor: z.string().trim().max(200).nullable().optional(),
       pi: z.string().trim().max(200).nullable().optional(),
+      junie: z.string().trim().max(200).nullable().optional(),
       copilot: z.string().trim().max(200).nullable().optional(),
+      omp: z.string().trim().max(200).nullable().optional(),
     })
     .optional(),
   maxParallel: z.number().int().min(1).max(16).optional(),

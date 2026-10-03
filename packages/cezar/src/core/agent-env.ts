@@ -240,6 +240,11 @@ const BACKEND_ALLOW_PREFIXES: Record<AgentBackend, readonly string[]> = {
   // it authenticates with (`GH_TOKEN`, `GITHUB_TOKEN`, `GH_HOST`) are already forwarded to every
   // backend below, and `COPILOT_GITHUB_TOKEN` is covered by this prefix — so nothing else widens.
   copilot: ['COPILOT_'],
+  // omp (pi's successor, same stdio RPC family): reads `PI_*` for back-compat and its own
+  // `OMP_*` (auth broker, profile), and — like pi — selects models as `provider/model`, so it
+  // needs every provider a configured model id can name. Same deliberate exclusions as pi: no
+  // `CLAUDE_` (not Claude Code), so Bedrock/Vertex cloud credential families stay dropped.
+  omp: ['PI_', 'OMP_', ...MULTI_PROVIDER_PREFIXES],
 };
 
 /** `gh` handoff (draft PRs) works in every backend — the one credential the

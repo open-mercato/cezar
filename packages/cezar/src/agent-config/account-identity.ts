@@ -169,7 +169,9 @@ export async function readAccountIdentity(
   if (provider === 'cursor') return readCursorIdentity(configDir, opts.runCommand);
   return {
     available: false,
-    reason: 'OpenCode keeps its login outside its config folder, so cezar cannot read it.',
+    reason: provider === 'opencode'
+      ? 'OpenCode keeps its login outside its config folder, so cezar cannot read it.'
+      : 'cezar cannot read which account this agent is logged in as.',
     fields: [],
   };
 }

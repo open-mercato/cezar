@@ -169,6 +169,9 @@ export function agentHomePaths(env: NodeJS.ProcessEnv = process.env): AgentHomeP
     cursor: env.CURSOR_CONFIG_DIR?.trim() || join(home, '.cursor'),
     copilot: env.COPILOT_HOME?.trim() || join(home, '.copilot'),
     junie: join(home, '.junie'),
+    // OMP's agent dir: `$PI_CODING_AGENT_DIR` RELOCATES the whole base (config.yml,
+    // agent.db, AGENTS.md, mcp.json move with it), default `~/.omp/agent`.
+    omp: env.PI_CODING_AGENT_DIR?.trim() || join(home, '.omp', 'agent'),
   };
 }
 
