@@ -3155,6 +3155,9 @@ export function createApp(deps: ServerDeps) {
           if (resources?.maxMonitoringSessions !== undefined) {
             config.resources.maxMonitoringSessions = resources.maxMonitoringSessions;
           }
+          if (resources?.idleTimeoutMinutes !== undefined) {
+            config.resources.idleTimeoutMinutes = resources.idleTimeoutMinutes;
+          }
           if (resources?.monitoringWakeIntervalMinutes !== undefined) {
             config.resources.monitoringWakeIntervalMinutes = resources.monitoringWakeIntervalMinutes;
           }
