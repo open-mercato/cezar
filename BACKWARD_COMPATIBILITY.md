@@ -236,6 +236,23 @@ inert prose to older cezars, which is the property that keeps the vocabulary for
 Required path for a change: keep parsing the old spelling for at least one minor release while
 the instructions emit the new one.
 
+`CEZ:MONITORING` bound (recorded 2026-09-30). A monitoring park is no longer open-ended. With a
+wake interval configured, cez wakes the run on that cadence and, once the automatic-wakeup cap is
+reached, hands it to the user as an ordinary `waiting` park, unless a dispatched child is still
+in flight; with the interval `null` (park mode) it does the same after four times the configured
+`resources.idleTimeoutMinutes` (60 minutes at the default 15), unless a dispatched child is
+still in flight. When idle timeout is disabled
+(`null` or `0`), the monitoring bound falls back to `MONITORING_LIVENESS_MS`
+(4 × `DEFAULT_IDLE_TIMEOUT_MINUTES` = 60 minutes). At the cap the same bound is armed as a
+fallback; an in-flight child postpones the hand-off and re-arms that bound. The second half of
+the fuse follows the configured idle timeout: when enabled, an unanswered hand-off settles
+`failed` with Continue when the idle timer closes the session — never `done` or `review` on
+work the agent said was still pending. With idle timeout disabled, the hand-off raises attention
+and rests at `waiting` with the session open rather than settling. A cezar restart still settles
+a handed-off run `failed` the same way. The marker keeps its meaning ("still working on my own
+downstream work, not waiting on the user"); only the boundedness of the park changed, and the agent-facing text in
+`handoff.ts` and `dispatch/prompts.ts` now states the bound so an emitting agent knows it.
+
 ## 9. `~/.cezar/` per-user workspace files (`packages/cezar/src/workspace/`, `packages/cezar/src/paths.ts`)
 
 The multi-project workspace (spec `.ai/specs/2026-07-20-multi-project-workspace.md`) adds per-user state next to the per-repo files in section 3. Same contract, one extra twist: these files are shared by **every** cezar the user runs across all their repos, so an old CLI and a new one routinely read and write the *same file* — the `.passthrough()` rule cuts both ways (an **older writer must not lose keys a newer version wrote**, not just vice versa). All paths hang off `cezarHomeDir()`, so the `CEZ_HOME` override applies (tests and containers must pin it and never touch a real home).

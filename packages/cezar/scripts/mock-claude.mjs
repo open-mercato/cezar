@@ -67,6 +67,7 @@ let turn = 0;
 // rather than time out.
 let autonomousArmed = false;
 let askRepeat = false;
+let monitoringSticky = false;
 // Must stay a prefix of `AUTONOMOUS_NUDGE` in `src/workflows/run.ts`. This is a plain script
 // and cannot import it, so `autonomous-nudge.test.ts` reads this line back and asserts the
 // coupling — reword the nudge and that test fails HERE rather than as an opaque timeout.
@@ -133,12 +134,18 @@ async function respond(userText, imageCount) {
   // `mock:ask-repeat` → the SAME CEZ:ASK on this turn and on every later one (a nudge included):
   // the agent that is blocked on something no nudge can fix and keeps asking about it.
   if (userText.includes('mock:ask-repeat')) askRepeat = true;
+  // `mock:monitoring-sticky` → this turn and every later one (a wake-up nudge included) ends with
+  // CEZ:MONITORING: the watcher whose downstream work never finishes.
+  if (userText.includes('mock:monitoring-sticky')) monitoringSticky = true;
   // An inbox digest delivered into the session is answered with CEZ:DONE: the dry run proves the
   // message reached the model, then settles.
-  const doneMarker =
-    userText.includes('mock:done') ||
-    userText.includes('## Tree inbox') ||
-    (autonomousArmed && userText.includes(AUTONOMOUS_NUDGE_PREFIX))
+  // `mock:done-refs` → CEZ:DONE with a task-reference line AFTER it, the order an agent that
+  // declares its PR last really emits.
+  const doneMarker = userText.includes('mock:done-refs')
+    ? '\n\nCEZ:DONE\nCEZ:PR=4243'
+    : userText.includes('mock:done') ||
+        userText.includes('## Tree inbox') ||
+        (autonomousArmed && userText.includes(AUTONOMOUS_NUDGE_PREFIX))
       ? '\n\nCEZ:DONE'
       : '';
   // `mock:monitoring` → the reply ends with CEZ:MONITORING, the "still working
@@ -147,7 +154,7 @@ async function respond(userText, imageCount) {
   // (#933): the handoff contract asks for those "as soon as you know", so an agent that opens
   // its PR in the same turn it parks on its sub-agents emits exactly this shape. It used to
   // bury the marker and park the run as `waiting` ("needs you").
-  const monitoringMarker = userText.includes('mock:monitoring')
+  const monitoringMarker = monitoringSticky || userText.includes('mock:monitoring')
     ? userText.includes('mock:monitoring-refs')
       ? '\n\nCEZ:MONITORING\nCEZ:PR=4242\nCEZ:TITLE=waiting on dispatched sub-agents'
       : '\n\nCEZ:MONITORING'
