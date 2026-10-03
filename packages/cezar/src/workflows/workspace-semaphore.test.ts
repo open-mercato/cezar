@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore } from '../runs/store.ts';
+import { cleanupRunStores } from '../test-utils/run-store-cleanup.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
@@ -122,7 +123,7 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
         () => store.listRuns().every((r) => settled.includes(r.status)),
         'all runs to settle before teardown',
       ).catch(() => undefined);
-      store.flush();
+      cleanupRunStores();
     }
     for (const manager of managers.splice(0)) manager.dispose();
     stores.length = 0;

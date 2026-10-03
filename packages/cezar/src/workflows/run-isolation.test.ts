@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RunStore } from '../runs/store.ts';
+import { cleanupRunStores } from '../test-utils/run-store-cleanup.ts';
 import type { WorkflowDef } from './types.ts';
 
 vi.mock('../git-worktree.js', async (importOriginal) => {
@@ -48,6 +49,7 @@ async function waitFor(predicate: () => boolean, what: string): Promise<void> {
 }
 
 afterEach(() => {
+  cleanupRunStores();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
