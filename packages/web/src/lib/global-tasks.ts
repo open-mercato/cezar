@@ -34,6 +34,10 @@ import { runTitle } from '@/lib/task-groups'
 /** The Active/Archived split, shared with the per-project table via `lib/task-groups`. */
 export type { ListView } from '@/lib/task-groups'
 
+/** Every untagged row shares this array: `toGlobalTasks` runs on each index refetch, and a fresh
+ *  `[]` per call would break the row memo's `tags` identity for the common untagged project. */
+const NO_TAGS: readonly string[] = []
+
 /** One row of the global table: an index entry plus everything the registry knows about the
  *  project it came from. Resolved once, so no cell has to look a project up again. */
 export interface GlobalTask {
@@ -162,7 +166,7 @@ export function toGlobalTasks(
       run,
       project,
       projectName: project?.name || run.projectId,
-      tags: project?.tags ?? [],
+      tags: project?.tags ?? NO_TAGS,
     }
   })
 }

@@ -8,9 +8,17 @@ import type { ProjectListEntry, RunIndexEntry } from '@open-mercato/cezar-api-cl
 import { ListViewProvider, useListView } from '@/components/list-view'
 import { __clearRememberedStatusesForTests, workspaceQueryKeys } from '@/api/queries'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
+import { deriveAttention } from '@/lib/attention'
 
 import { GlobalTasksRoute } from './global-tasks'
 import { resolveConflictsPrompt } from './task-thread/run-actions'
+
+// Every row derives its attention once per render, which makes the call count a render count for
+// the rows without reaching into React internals.
+vi.mock('@/lib/attention', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/attention')>()
+  return { ...actual, deriveAttention: vi.fn(actual.deriveAttention) }
+})
 
 /**
  * The global Tasks page, wired to stubbed `/api/v1/projects` + `/api/v1/workspace/runs-index`.
@@ -1132,5 +1140,87 @@ describe('global tasks page', () => {
     expect(
       await screen.findByText('Tasks across projects did not load', {}, { timeout: 5000 }),
     ).toBeTruthy()
+  })
+})
+
+describe('global tasks page — cost of a long list', () => {
+  const many = (count: number, over: Partial<RunIndexEntry> = {}): RunIndexEntry[] =>
+    Array.from({ length: count }, (_, index) => ({
+      projectId: 'api',
+      id: `bulk-${index}`,
+      title: `Bulk task ${index}`,
+      status: 'done' as const,
+      createdAt: new Date(Date.parse('2026-07-14T10:00:00Z') - index * 60_000).toISOString(),
+      archived: false,
+      workflow: 'quick-task',
+      ...over,
+    }))
+
+  const runsIndexInterval = (client: ReturnType<typeof createQueryClient>) => {
+    const query = client.getQueryCache().find({ queryKey: workspaceQueryKeys.runsIndex })
+    const interval = query?.observers[0]?.options.refetchInterval
+    return typeof interval === 'function' ? interval(query as never) : interval
+  }
+
+  it('mounts only the rows near the viewport once a table passes the window threshold', async () => {
+    stubFetch({ runs: many(150) })
+    renderPage()
+    await waitFor(() => expect(rowIds().length).toBeGreaterThan(0))
+    expect(rowIds().length).toBeLessThan(150)
+    expect(rowIds()[0]).toBe('bulk-0')
+    expect(document.querySelector('[data-row-spacer]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="global-tasks-table"] table')?.getAttribute('aria-rowcount')).toBe('151')
+    expect(document.querySelector('[data-slot="global-task-row"]')?.getAttribute('aria-rowindex')).toBe('2')
+  })
+
+  it('mounts every row of a table under the threshold', async () => {
+    stubFetch({ runs: many(60) })
+    renderPage()
+    await waitFor(() => expect(rowIds()).toHaveLength(60))
+    expect(document.querySelector('[data-row-spacer]')).toBeNull()
+  })
+
+  it('does not poll the index while nothing on it carries a live usage sample', async () => {
+    stubFetch({ runs: many(3) })
+    const client = createQueryClient()
+    renderPage(client)
+    await waitFor(() => expect(rowIds()).toHaveLength(3))
+    expect(runsIndexInterval(client)).toBe(false)
+  })
+
+  it('keeps polling the index while a row carries a live usage sample — its CPU and Mem cells read it', async () => {
+    stubFetch({ runs: many(3, { status: 'running', usage: { cpuPct: 5, rssBytes: 1024, procCount: 1 } }) })
+    const client = createQueryClient()
+    renderPage(client)
+    await waitFor(() => expect(rowIds()).toHaveLength(3))
+    expect(runsIndexInterval(client)).toBe(15_000)
+  })
+})
+
+describe('global tasks page — row memoization', () => {
+  const rowRenders = vi.mocked(deriveAttention)
+
+  it('re-renders only the row whose run changed when the index reshapes untagged rows', async () => {
+    // The default workspace: no project carries tags. `toGlobalTasks` must hand every row the same
+    // tags array, or the memo's identity check fails for all of them whenever the index changes.
+    stubFetch({ projects: PROJECTS.map((project) => ({ ...project, tags: undefined })) })
+    const client = createQueryClient()
+    renderPage(client)
+    await screen.findByText('Add checkout endpoint')
+
+    const key = workspaceQueryKeys.runsIndex
+    const data = client.getQueryData<{ runs: RunIndexEntry[] }>(key)!
+    rowRenders.mockClear()
+    await act(async () => {
+      client.setQueryData(key, {
+        ...data,
+        runs: data.runs.map((run) => (run.id === 'a1' ? { ...run, title: 'Renamed' } : run)),
+      })
+    })
+    await screen.findByText('Renamed')
+
+    // Only a1 changed. The untagged rows around it keep their run identity through the cache's
+    // structural sharing, so they must not re-render.
+    expect(rowRenders.mock.calls.map(([run]) => (run as RunIndexEntry).id)).toEqual(['a1'])
   })
 })
