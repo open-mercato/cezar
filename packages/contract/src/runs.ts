@@ -249,6 +249,8 @@ export const runRecordSchema = z.object({
   /** 'user' = renamed via PATCH, never auto-overwritten; 'marker' = agent-declared via
    *  CEZ:TITLE (spec 2026-07-18-task-ref-markers); 'auto' = namer-owned. */
   titleOrigin: z.enum(['user', 'auto', 'marker']).optional(),
+  /** The live title refresh already fired; the title no longer follows the conversation. */
+  titleSettled: z.boolean().optional(),
   /** References the agent declared via CEZ:PR/CEZ:ISSUE markers — authoritative over the namer
    *  for the matching kind. */
   markerRefs: z.object({ pr: z.number().optional(), issue: z.number().optional() }).optional(),

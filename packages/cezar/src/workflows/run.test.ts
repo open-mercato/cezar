@@ -406,6 +406,15 @@ describe('RunManager.recordTurnEnd', () => {
     expect(after?.prNumber).toBe(500);
   });
 
+  it('the first marker title sticks — a later CEZ:TITLE does not rename the task', async () => {
+    const record = store.createRun({ title: 't', workflow: 'w', task: 'task', steps: [] });
+    await manager.recordTurnEnd(record.id, 'CEZ:TITLE=adding comment threads');
+    await manager.recordTurnEnd(record.id, 'CEZ:TITLE=fixing the sse watchdog');
+    const after = store.getRun(record.id);
+    expect(after?.titleSummary).toBe('adding comment threads');
+    expect(after?.titleOrigin).toBe('marker');
+  });
+
   it('a junk CEZ:TITLE never blanks the title', async () => {
     const record = store.createRun({ title: 't', workflow: 'w', task: 'task', steps: [] });
     await manager.recordTurnEnd(record.id, 'CEZ:PR=500\nCEZ:TITLE=...');

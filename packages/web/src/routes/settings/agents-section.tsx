@@ -247,7 +247,7 @@ function AgentsForm({
 
       <Field
         title="Live title updates"
-        hint="Refresh a task's short title through the namer model as the run progresses. A manual rename always wins and stops updates for that task."
+        hint="Rename a task once through the namer model after its first turn, then keep that title. A manual rename always wins."
       >
         <label className="flex w-fit items-center gap-3">
           <Switch

@@ -358,6 +358,11 @@ describe('systemPrompt end-to-end (dry run)', () => {
       store.updateRun(record.id, { titleOrigin: 'auto' });
       await seam.maybeRefreshTitle(record.id, 'progress worth naming');
       expect(seam.lastNamerKey.get(record.id)).toContain('progress worth naming');
+      expect(store.getRun(record.id)?.titleSettled).toBe(true);
+
+      // Settled → later turns on a different topic never re-run the namer.
+      await seam.maybeRefreshTitle(record.id, 'moved on to another topic');
+      expect(seam.lastNamerKey.get(record.id)).toContain('progress worth naming');
     } finally {
       if (savedDry === undefined) delete process.env.CEZ_DRY_RUN;
       else process.env.CEZ_DRY_RUN = savedDry;
