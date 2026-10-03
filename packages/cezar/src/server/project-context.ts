@@ -221,7 +221,7 @@ export class ProjectContexts {
       // Startup reconcile (spec 006) + count-based retention (#483) — the same
       // best-effort sweeps serveCommand runs for the boot project, gated on the
       // root actually being a git repo.
-      if (await getRepoInfo(project.root)) {
+      if (await getRepoInfo(project.root, { fresh: true })) {
         await pruneOrphans(project.root, new Set(store.listRuns().map((r) => r.id))).catch(
           () => [] as string[],
         );

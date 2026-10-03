@@ -4001,7 +4001,7 @@ export class RunManager {
     // `.ai/cezar/worktrees/<id>`, never in the user's working tree. A Git task
     // that requests isolation fails closed if the worktree cannot be
     // established; only explicit opt-out and non-Git modes run in place.
-    const repo = await getRepoInfo(this.repoRoot);
+    const repo = await getRepoInfo(this.repoRoot, { fresh: true });
     if (state.cancelled) {
       this.dropActive(runId, state);
       return;

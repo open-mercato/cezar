@@ -1,5 +1,5 @@
-import { execFile } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFile, execFileSync } from 'node:child_process';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -7,11 +7,15 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   branchFor,
   chooseForkBase,
+  clearWorktreeDiffStatCache,
+  clearWorktreeSizeCache,
   createWorktree,
   parseShortstat,
   resolveBaseRef,
+  worktreeDiffStatForRun,
   worktreeShortstat,
   worktreeSizeBytes,
+  worktreeSizeForRun,
 } from './git-worktree.ts';
 
 const run = promisify(execFile);
@@ -98,6 +102,80 @@ describe('worktreeSizeBytes (#483)', () => {
 
   it('degrades to null for a path that does not exist (du errors)', async () => {
     expect(await worktreeSizeBytes(join(tmpdir(), 'cez-du-nope-does-not-exist-12345'))).toBeNull();
+  });
+});
+
+describe('worktreeSizeForRun (#483)', () => {
+  function installDuShim(): { calls: () => number; restore: () => void } {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-du-shim-'));
+    const log = join(dir, 'calls.log');
+    const realDu = execFileSync('which', ['du'], { encoding: 'utf8' }).trim();
+    writeFileSync(
+      join(dir, 'du'),
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(log)}\nexec ${JSON.stringify(realDu)} "$@"\n`,
+    );
+    chmodSync(join(dir, 'du'), 0o755);
+    const previous = process.env.PATH;
+    process.env.PATH = `${dir}:${previous ?? ''}`;
+    return {
+      calls: () => {
+        try {
+          return readFileSync(log, 'utf8').split('\n').filter(Boolean).length;
+        } catch {
+          return 0;
+        }
+      },
+      restore: () => {
+        process.env.PATH = previous;
+        rmSync(dir, { recursive: true, force: true });
+      },
+    };
+  }
+
+  it('memoizes a finalized run and recomputes an active one, dropping the memo', async () => {
+    const repo = await fixtureRepo('cez-du-cache-');
+    const shim = installDuShim();
+    try {
+      clearWorktreeSizeCache();
+      const start = shim.calls();
+      await worktreeSizeForRun('run-a', repo, true);
+      const first = shim.calls();
+      expect(first - start).toBe(1);
+      // A second look at a finalized run is free.
+      await worktreeSizeForRun('run-a', repo, true);
+      expect(shim.calls()).toBe(first);
+      // An active run must not serve the memo, and drops it so a later finalize recomputes.
+      await worktreeSizeForRun('run-a', repo, false);
+      expect(shim.calls()).toBe(first + 1);
+      await worktreeSizeForRun('run-a', repo, true);
+      expect(shim.calls()).toBe(first + 2);
+      await worktreeSizeForRun('run-a', repo, true);
+      expect(shim.calls()).toBe(first + 2);
+    } finally {
+      shim.restore();
+      clearWorktreeSizeCache();
+    }
+  });
+});
+
+describe('worktreeDiffStatForRun', () => {
+  it('memoizes the table for a finalized run and re-reads an active one', async () => {
+    const repo = await fixtureRepo('cez-diffstat-cache-');
+    writeFileSync(join(repo, 'base.txt'), 'base changed\n');
+    try {
+      clearWorktreeDiffStatCache();
+      const first = await worktreeDiffStatForRun('run-a', repo, 'main', true);
+      expect(first).toContain('base.txt');
+      // Editing the worktree does not change a finalized run's memoized answer.
+      writeFileSync(join(repo, 'later.txt'), 'later\n');
+      expect(await worktreeDiffStatForRun('run-a', repo, 'main', true)).toBe(first);
+      // An active run re-reads and drops the memo, so the next finalize is current.
+      const active = await worktreeDiffStatForRun('run-a', repo, 'main', false);
+      expect(active).toContain('later.txt');
+      expect(await worktreeDiffStatForRun('run-a', repo, 'main', true)).toBe(active);
+    } finally {
+      clearWorktreeDiffStatCache();
+    }
   });
 });
 
