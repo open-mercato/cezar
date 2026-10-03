@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -1940,10 +1940,94 @@ describe('RunStore — the legacy `claude-cli` runner id (#547)', () => {
     // a parse failure, which is what keeps the enum meaningful.
     writeFileSync(
       join(dataDir, 'runs.json'),
-      JSON.stringify([{ ...LEGACY_RUN, runner: 'gemini' }]),
+      JSON.stringify([{ ...LEGACY_RUN, runner: 'no-such-runner' }]),
       'utf8',
     );
     expect(RunStore.open(dataDir).getRun('legacy-1')).toBeUndefined();
+  });
+});
+
+describe('RunStore — per-record salvage of records this version cannot read (Phase 0, #581)', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const readable = { ...LEGACY_RUN, id: 'good-1', createdAt: '2026-01-02T00:00:00.000Z' };
+  // A record a NEWER cezar wrote: a runner id and a field this version has never heard of.
+  const unreadable = { ...LEGACY_RUN, id: 'future-1', runner: 'no-such-runner', createdAt: '2026-01-03T00:00:00.000Z', novelField: { nested: true } };
+  const write = (entries: unknown[]) => writeFileSync(join(dataDir, 'runs.json'), JSON.stringify(entries), 'utf8');
+  const onDisk = (): Array<Record<string, unknown>> => JSON.parse(readFileSync(join(dataDir, 'runs.json'), 'utf8'));
+
+  it('loads the records it can read, keeps the other one unread, and writes it back verbatim in order', () => {
+    write([unreadable, readable]);
+    const store = RunStore.open(dataDir);
+    expect(store.getRun('good-1')?.id).toBe('good-1');
+    expect(store.getRun('future-1')).toBeUndefined();
+    expect(store.listRuns().map((r) => r.id)).toEqual(['good-1']);
+    expect(store.getIndexReadHealth()).toEqual({ state: 'complete', omittedRuns: 1, reason: 'Some task records could not be read by this server' });
+
+    store.createRun({ title: 'new', workflow: 'quick-task', task: 'new', steps: [] });
+    store.flush();
+    const saved = onDisk();
+    expect(saved.map((r) => r.id)).toEqual([expect.any(String), 'future-1', 'good-1']); // createdAt-descending
+    expect(saved.find((r) => r.id === 'future-1')).toEqual(unreadable); // byte-for-byte the element that came in
+  });
+
+  it('deleteRun removes a salvaged record and its companions, and it stays gone after the next save', () => {
+    write([unreadable, readable]);
+    const store = RunStore.open(dataDir); // creates <dataDir>/runs
+    writeFileSync(join(dataDir, 'runs', 'future-1.ndjson'), '{"type":"note"}\n', 'utf8');
+    expect(store.deleteRun('future-1')).toBe(true);
+    expect(existsSync(join(dataDir, 'runs', 'future-1.ndjson'))).toBe(false);
+    store.flush();
+    expect(onDisk().map((r) => r.id)).toEqual(['good-1']);
+    expect(store.deleteRun('future-1')).toBe(false);
+  });
+
+  it('retention counts salvaged records, so the pool is bounded by the same caps as the file', () => {
+    // MAX_RUNS_KEPT is 300: 300 readable records newer than two salvaged ones push both out.
+    const many = Array.from({ length: 300 }, (_, i) => ({
+      ...LEGACY_RUN,
+      id: `live-${String(i).padStart(3, '0')}`,
+      createdAt: `2026-02-01T00:${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}.000Z`,
+    }));
+    const oldSalvaged = [
+      { ...unreadable, id: 'future-old-a', createdAt: '2025-12-01T00:00:00.000Z' },
+      { ...unreadable, id: 'future-old-b', createdAt: '2025-12-02T00:00:00.000Z' },
+    ];
+    write([...oldSalvaged, ...many]);
+    const store = RunStore.open(dataDir);
+    store.createRun({ title: 'new', workflow: 'quick-task', task: 'new', steps: [] });
+    store.flush();
+    const ids = onDisk().map((r) => r.id);
+    expect(ids).not.toContain('future-old-a');
+    expect(ids).not.toContain('future-old-b');
+    expect(ids).toHaveLength(300);
+  });
+
+  it('drops an element with no usable id/createdAt and counts it, instead of failing the whole file', () => {
+    write([readable, { runner: 'no-such-runner', title: 'no header' }, { id: 'no-created-at', title: 'x' }]);
+    const store = RunStore.open(dataDir);
+    expect(store.listRuns().map((r) => r.id)).toEqual(['good-1']);
+    expect(store.getIndexReadHealth().omittedRuns).toBe(2);
+    store.flush();
+    expect(onDisk().map((r) => r.id)).toEqual(['good-1']);
+  });
+
+  it('carries over a record another (newer) process wrote that this version cannot read', () => {
+    write([readable]);
+    const store = RunStore.open(dataDir);
+    // The other process appends a record while this store is open.
+    write([unreadable, readable]);
+    store.createRun({ title: 'mine', workflow: 'quick-task', task: 'mine', steps: [] });
+    store.flush();
+    expect(onDisk().find((r) => r.id === 'future-1')).toEqual(unreadable);
   });
 });
 

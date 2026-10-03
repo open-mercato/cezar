@@ -65,6 +65,24 @@ describe('collectChanges — structured diff vs base', () => {
 
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
+  it('works for a project registered at a subdirectory of its repository (#581 follow-up)', async () => {
+    // A monorepo package is a legitimate project root: git must still discover the repository
+    // above it. The earlier Gemini branch pinned `GIT_CEILING_DIRECTORIES` to the parent of `cwd`
+    // for test isolation, which made every git call from such a root answer "not a git
+    // repository"; this pins the discovery so that cannot come back.
+    mkdirSync(join(dir, 'packages', 'app'), { recursive: true });
+    writeFileSync(join(dir, 'packages', 'app', 'index.ts'), 'export const v = 1;\n');
+    g(dir, 'add', '-A');
+    g(dir, 'commit', '-m', 'base');
+    g(dir, 'checkout', '-b', 'task');
+    writeFileSync(join(dir, 'packages', 'app', 'index.ts'), 'export const v = 2;\n');
+
+    const result = await collectChanges(join(dir, 'packages', 'app'), 'main');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.changes.files.map((f) => f.path)).toEqual(['packages/app/index.ts']);
+  });
+
   it('reports modified, added, deleted, renamed and binary files with counts and patches', async () => {
     writeFileSync(join(dir, 'mod.txt'), 'line one\nline two\n');
     writeFileSync(join(dir, 'del.txt'), 'goes away\n');

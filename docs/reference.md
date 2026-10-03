@@ -300,6 +300,7 @@ Useful environment variables:
 | `CEZ_CURSOR_AGENT_BIN=/path/to/agent` | Override which Cursor Agent CLI (`agent`) binary is used. |
 | `CEZ_PI_BIN=/path/to/pi` | Override which `pi` binary is used. |
 | `CEZ_COPILOT_BIN=/path/to/copilot` | Override which GitHub Copilot CLI binary is used. |
+| `CEZ_GEMINI_BIN=/path/to/gemini` | Override which `gemini` binary (Gemini CLI, run as `gemini --acp`) is used. |
 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME` | The agents' **own** variables, honoured where the vendor documents one. Setting one moves that agent's **default account** — the config folder cezar discovers. A *second* login of the same CLI is deliberately not an environment setting, since one process-wide value cannot differ per project: add it under **Settings → Agent accounts** and pick it per project. |
 | `CEZ_BROWSE_ROOT=~/` | Default root for **Add project → Open local folder…**. The picker cannot navigate above it; a saved workspace value overrides the environment default and must name an existing folder. |
 | `CEZ_PROJECTS_DIR=~/cezar/projects` | Default destination for **Clone from GitHub**. Saved workspace settings override it, and missing directories are created recursively. |

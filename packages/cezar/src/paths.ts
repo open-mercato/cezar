@@ -169,6 +169,8 @@ export function agentHomePaths(env: NodeJS.ProcessEnv = process.env): AgentHomeP
     cursor: env.CURSOR_CONFIG_DIR?.trim() || join(home, '.cursor'),
     copilot: env.COPILOT_HOME?.trim() || join(home, '.copilot'),
     junie: join(home, '.junie'),
+    // Gemini CLI relocates its whole `.gemini` dir under `$GEMINI_CLI_HOME` (its `homedir()`).
+    gemini: join(env.GEMINI_CLI_HOME?.trim() || home, '.gemini'),
   };
 }
 

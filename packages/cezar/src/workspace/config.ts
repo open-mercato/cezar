@@ -6,7 +6,7 @@ import { z } from 'zod';
 // Contract VALUES, like `workspaceUiStateSchema` in workspace/migrations.ts: the tag bounds this
 // file must not `.catch` away are the same constants the PATCH route validates against, so they
 // are imported rather than repeated.
-import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH } from '@open-mercato/cezar-contract';
+import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH, perRunner } from '@open-mercato/cezar-contract';
 import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
 import { assertCezarHomeWriteIsSandboxed, workspaceConfigPath } from '../paths.ts';
 
@@ -150,16 +150,7 @@ const composerDefaultsSchema = z
 const agentDefaultsSchema = z
   .object({
     runner: z.enum(PROVIDER_IDS).optional().catch(undefined),
-    models: z
-      .object({
-        claude: z.string().trim().min(1).max(200).optional().catch(undefined),
-        codex: z.string().trim().min(1).max(200).optional().catch(undefined),
-        opencode: z.string().trim().min(1).max(200).optional().catch(undefined),
-        cursor: z.string().trim().min(1).max(200).optional().catch(undefined),
-        pi: z.string().trim().min(1).max(200).optional().catch(undefined),
-        junie: z.string().trim().min(1).max(200).optional().catch(undefined),
-        copilot: z.string().trim().min(1).max(200).optional().catch(undefined),
-      })
+    models: perRunner(z.string().trim().min(1).max(200).optional().catch(undefined))
       .passthrough()
       .optional()
       .catch(undefined),

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { type Runner, runnerSchema } from './health.ts';
+import { type Runner, runnerSchema, perRunner } from './runners.ts';
 
 /**
  * The workspace + settings families: `~/.cezar/config.json`'s settings slice, both GUI-pref bags
@@ -60,15 +60,7 @@ export const workspaceConfigResponseSchema = z.object({
    */
   agentDefaults: z.object({
     runner: runnerSchema.optional(),
-    models: z.object({
-      claude: z.string().optional(),
-      codex: z.string().optional(),
-      opencode: z.string().optional(),
-      cursor: z.string().optional(),
-      pi: z.string().optional(),
-      junie: z.string().optional(),
-      copilot: z.string().optional(),
-    }).optional(),
+    models: perRunner(z.string().optional()).optional(),
   }),
 });
 export type WorkspaceConfigResponse = z.infer<typeof workspaceConfigResponseSchema>;
@@ -95,16 +87,7 @@ export const setWorkspaceConfigInputSchema = z.object({
   agentDefaults: z
     .object({
       runner: runnerSchema.nullable().optional(),
-      models: z
-        .object({
-          claude: z.string().trim().min(1).max(200).nullable().optional(),
-          codex: z.string().trim().min(1).max(200).nullable().optional(),
-          opencode: z.string().trim().min(1).max(200).nullable().optional(),
-          junie: z.string().trim().min(1).max(200).nullable().optional(),
-          cursor: z.string().trim().min(1).max(200).nullable().optional(),
-          pi: z.string().trim().min(1).max(200).nullable().optional(),
-          copilot: z.string().trim().min(1).max(200).nullable().optional(),
-        })
+      models: perRunner(z.string().trim().min(1).max(200).nullable().optional())
         .optional(),
     })
     .optional(),
@@ -263,16 +246,7 @@ export const workspaceUiStateSchema = z.looseObject({
   /** Dismissed runtime-auth incident IDs, keyed by provider. An ID is only dismissed until the
    *  provider reports a different incident, so this stays workspace-global with the browser
    *  rather than one project checkout. */
-  dismissedProviderAuthFailures: z
-    .object({
-      claude: z.string().optional(),
-      codex: z.string().optional(),
-      opencode: z.string().optional(),
-      cursor: z.string().optional(),
-      pi: z.string().optional(),
-      junie: z.string().optional(),
-      copilot: z.string().optional(),
-    })
+  dismissedProviderAuthFailures: perRunner(z.string().optional())
     .optional(),
   /** Settings → Appearance, GLOBAL since step 3.5: accent + density describe the person at the
    *  keyboard, not a repo. */
@@ -323,15 +297,9 @@ export const setWorkspaceUiStateInputSchema = z
           .optional(),
       })
       .optional(),
-    dismissedProviderAuthFailures: z
-      .strictObject({
-        claude: z.string().min(1).max(128).optional(),
-        codex: z.string().min(1).max(128).optional(),
-        opencode: z.string().min(1).max(128).optional(),
-        pi: z.string().min(1).max(128).optional(),
-        junie: z.string().min(1).max(128).optional(),
-        copilot: z.string().min(1).max(128).optional(),
-      })
+    dismissedProviderAuthFailures: perRunner(z.string().min(1).max(128).optional())
+      .strict()
+      .partial()
       .optional(),
     importedSkills: z
       .array(z.string().min(1).max(200))
@@ -361,18 +329,10 @@ export type SetWorkspaceUiStateInput = z.infer<typeof setWorkspaceUiStateInputSc
 // ---- per-repo agent knobs (`GET/PUT /api/v1/config`) ----------------------------------------
 
 /** Per-runner default model preset (Settings → Agents): the composer preselects this model id for
- *  the runner. Absent = auto (the runner decides). Keyed by runner name rather than derived from
- *  `runnerSchema` because the server's own `defaultModels` object (src/config.ts:92) is spelled
- *  the same way — one key per runner, each independently optional. */
-export const runnerModelsSchema = z.object({
-  claude: z.string().optional(),
-  codex: z.string().optional(),
-  junie: z.string().optional(),
-  opencode: z.string().optional(),
-  cursor: z.string().optional(),
-  pi: z.string().optional(),
-  copilot: z.string().optional(),
-});
+ *  the runner. Absent = auto (the runner decides). One key per runner, each independently
+ *  optional, derived from `runnerSchema` through `perRunner` — as is the server's own
+ *  `defaultModels` object (src/config.ts). */
+export const runnerModelsSchema = perRunner(z.string().optional());
 export type RunnerModels = z.infer<typeof runnerModelsSchema>;
 
 /** `GET /api/v1/config` — every Settings → Agents knob in one read. */
@@ -413,15 +373,7 @@ export const setConfigInputSchema = z.object({
   baseBranch: z.string().trim().min(1).max(200).nullable().optional(),
   defaultRunner: runnerSchema.optional(),
   systemPrompt: z.string().trim().max(20_000).nullable().optional(),
-  defaultModels: z
-    .object({
-      claude: z.string().trim().max(200).nullable().optional(),
-      codex: z.string().trim().max(200).nullable().optional(),
-      opencode: z.string().trim().max(200).nullable().optional(),
-      cursor: z.string().trim().max(200).nullable().optional(),
-      pi: z.string().trim().max(200).nullable().optional(),
-      copilot: z.string().trim().max(200).nullable().optional(),
-    })
+  defaultModels: perRunner(z.string().trim().max(200).nullable().optional())
     .optional(),
   maxParallel: z.number().int().min(1).max(16).optional(),
   /** null or 0 clears the ceiling back to "no limit". */
