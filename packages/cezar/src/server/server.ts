@@ -1588,7 +1588,7 @@ export function createApp(deps: ServerDeps) {
   app.get('/open-mercato.svg', staticFile('icon.svg', 'image/svg+xml'));
 
   // ---- meta ----------------------------------------------------------------
-  // CORS — deliberately for /api/health ONLY (spec 011): the bookmarklets
+  // CORS — deliberately for /api/v1/health ONLY (spec 011): the bookmarklets
   // fetch it cross-origin from github.com to discover which local ports run a
   // cockpit and which repo each serves. Health exposes no secrets beyond the
   // repo path/remote; every other endpoint stays same-origin.
@@ -1603,7 +1603,7 @@ export function createApp(deps: ServerDeps) {
     await next();
   };
   app.use(`${V1_PREFIX}/health`, healthCors);
-  // One builder for both transports: `GET /api/health` (the authoritative,
+  // One builder for both transports: `GET /api/v1/health` (the authoritative,
   // CORS-open discovery endpoint) and the `health` topic on `/api/v1/ws` below
   // push the byte-identical shape, so the two can never drift.
   // Deliberately UNANNOTATED: this literal is the source of the `/health` shape. Annotating it

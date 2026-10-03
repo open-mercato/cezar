@@ -60,7 +60,18 @@ export class AutomationStore {
   private readonly secrets = collectSecretValues();
 
   static open(dataDir: string, options: AutomationStoreOptions = {}): AutomationStore {
-    const store = new AutomationStore(dataDir, options);
+    let writable = true;
+    try {
+      mkdirSync(dataDir, { recursive: true });
+    } catch (error) {
+      // A read-only checkout still boots: definitions and state are served from the files that
+      // exist, and every write below becomes a no-op for this session.
+      writable = false;
+      const message = error instanceof Error ? error.message : String(error);
+      const warn = options.warn ?? ((text: string) => console.warn(`[cez] ${text}`));
+      warn(`${dataDir} is not writable (${message}) — automations stay in memory for this session`);
+    }
+    const store = new AutomationStore(dataDir, options, writable);
     store.load();
     return store;
   }
@@ -68,6 +79,7 @@ export class AutomationStore {
   private constructor(
     readonly dataDir: string,
     private readonly options: AutomationStoreOptions,
+    private readonly writable = true,
   ) {
     this.now = options.now ?? (() => new Date());
   }
@@ -284,6 +296,7 @@ export class AutomationStore {
    * fallback for a lock whose pid we cannot read or trust.
    */
   acquireLease(staleAfterMs = 10 * 60_000, filename = POLL_LOCK): AutomationLease | undefined {
+    if (!this.writable) return undefined;
     mkdirSync(this.dataDir, { recursive: true });
     return this.tryAcquireLease(join(this.dataDir, filename), staleAfterMs);
   }
@@ -337,7 +350,7 @@ export class AutomationStore {
   }
 
   private load(): void {
-    mkdirSync(this.dataDir, { recursive: true });
+    if (this.writable) mkdirSync(this.dataDir, { recursive: true });
     this.loadDefinitions();
     this.stateFile = this.readJson(STATE, automationStateFileSchema, {
       version: 1,
@@ -418,6 +431,7 @@ export class AutomationStore {
   }
 
   private atomicJson(filename: string, value: unknown): void {
+    if (!this.writable) return;
     mkdirSync(this.dataDir, { recursive: true });
     const path = join(this.dataDir, filename);
     const temporary = `${path}.tmp`;
@@ -426,6 +440,7 @@ export class AutomationStore {
   }
 
   private appendNdjson(filename: string, value: unknown): void {
+    if (!this.writable) return;
     mkdirSync(this.dataDir, { recursive: true });
     const path = join(this.dataDir, filename);
     const fd = openSync(path, 'a', 0o600);
@@ -437,6 +452,7 @@ export class AutomationStore {
   }
 
   private rewriteNdjson(filename: string, rows: unknown[]): void {
+    if (!this.writable) return;
     const path = join(this.dataDir, filename);
     const temporary = `${path}.tmp`;
     writeFileSync(temporary, rows.map((row) => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''), {

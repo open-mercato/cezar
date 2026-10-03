@@ -1,7 +1,7 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunStore } from './store.ts';
 
 import type { RunRecord } from './store.ts';
@@ -2189,5 +2189,111 @@ describe('RunStore — a save never drops another process’s runs', () => {
     store.updateRun(kept, { status: 'running' });
     store.flush();
     expect(idsOnDisk()).toEqual([kept]);
+  });
+});
+
+describe('RunStore — read-only data dir (zero-config degradation)', () => {
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'opens as an in-memory store with one warning instead of throwing',
+    () => {
+      const root = mkdtempSync(join(tmpdir(), 'cez-ro-'));
+      chmodSync(root, 0o500);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const store = RunStore.open(join(root, 'data'));
+        const run = store.createRun({
+          title: 'read-only task',
+          workflow: 'quick-task',
+          task: 'read-only task',
+          steps: [{ id: 'task', name: 'Do the task', kind: 'agent' }],
+        });
+        expect(() => store.appendEvent(run.id, { type: 'text', text: 'hello' })).not.toThrow();
+        expect(() => store.appendEvent(run.id, { type: 'text', text: 'again' })).not.toThrow();
+        store.flush();
+        expect(store.getRun(run.id)?.id).toBe(run.id);
+        expect(store.readEvents(run.id).map((event) => (event as { text?: string }).text)).toEqual([
+          'hello',
+          'again',
+        ]);
+        expect(warn).toHaveBeenCalledTimes(1);
+      } finally {
+        warn.mockRestore();
+        chmodSync(root, 0o700);
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    "drops a pruned run's buffered transcript instead of leaking it for the process lifetime",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), 'cez-ro-prune-'));
+      chmodSync(root, 0o500);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      try {
+        const store = RunStore.open(join(root, 'data'));
+        const ids: string[] = [];
+        for (let i = 0; i < 306; i++) {
+          const created = store.createRun({
+            title: `run ${i}`,
+            workflow: 'quick-task',
+            task: `run ${i}`,
+            steps: [],
+          });
+          store.appendEvent(created.id, { type: 'text', text: `event ${i}` });
+          ids.push(created.id);
+          vi.advanceTimersByTime(1);
+        }
+        const pruned = ids.filter((id) => store.getRun(id) === undefined);
+        expect(pruned).toHaveLength(6);
+        for (const id of pruned) expect(store.readEvents(id)).toEqual([]);
+        const kept = ids.filter((id) => store.getRun(id) !== undefined);
+        expect(store.readEvents(kept[0]!)).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+        warn.mockRestore();
+        chmodSync(root, 0o700);
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
+describe('RunStore — a failed index save on a writable data dir', () => {
+  it('keeps persisting on the next save', () => {
+    const root = mkdtempSync(join(tmpdir(), 'cez-save-retry-'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const dataDir = join(root, 'data');
+      const store = RunStore.open(dataDir);
+      const blocker = join(dataDir, 'runs.json.tmp');
+      mkdirSync(blocker);
+      const first = store.createRun({
+        title: 'first',
+        workflow: 'quick-task',
+        task: 'first',
+        steps: [{ id: 'task', name: 'Do the task', kind: 'agent' }],
+      });
+      store.flush();
+      expect(error).toHaveBeenCalled();
+
+      rmSync(blocker, { recursive: true });
+      const second = store.createRun({
+        title: 'second',
+        workflow: 'quick-task',
+        task: 'second',
+        steps: [{ id: 'task', name: 'Do the task', kind: 'agent' }],
+      });
+      store.appendEvent(second.id, { type: 'text', text: 'hello' });
+      store.flush();
+      const saved = JSON.parse(readFileSync(join(dataDir, 'runs.json'), 'utf8')) as RunRecord[];
+      expect(saved.map((r) => r.id).sort()).toEqual([first.id, second.id].sort());
+      expect(readFileSync(join(dataDir, 'runs', `${second.id}.ndjson`), 'utf8')).toContain('hello');
+    } finally {
+      error.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

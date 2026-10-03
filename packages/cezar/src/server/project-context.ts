@@ -1,10 +1,8 @@
 import { join } from 'node:path';
 import { AutomationStore } from '../automations/store.ts';
 import { reconcileAutomationReceipts } from '../automations/task-template.ts';
-import { DEFAULT_WORKTREE_RETENTION, resolveWorktreeRetention } from '../config.ts';
-import { pruneOrphans } from '../git-worktree.ts';
 import { armRepoHandle } from '../runs/arm-repo-handle.ts';
-import { reclaimWorktrees } from '../runs/retention.ts';
+import { sweepStartupWorktrees } from '../runs/startup-sweep.ts';
 import { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunManager } from '../workflows/run.ts';
@@ -218,18 +216,6 @@ export class ProjectContexts {
     const manager = new RunManager(store, project.root, { semaphore: this.semaphore, projectId: project.id, resolveTrackerEnv: resolveTrackerAgentEnv });
     try {
       const launchKey = ensureLaunchKey(dataDir);
-      // Startup reconcile (spec 006) + count-based retention (#483) — the same
-      // best-effort sweeps serveCommand runs for the boot project, gated on the
-      // root actually being a git repo.
-      if (await getRepoInfo(project.root)) {
-        await pruneOrphans(project.root, new Set(store.listRuns().map((r) => r.id))).catch(
-          () => [] as string[],
-        );
-        const keep = await resolveWorktreeRetention(project.root).catch(
-          () => DEFAULT_WORKTREE_RETENTION,
-        );
-        await reclaimWorktrees(project.root, store, keep).catch(() => [] as string[]);
-      }
       await manager.recover();
       // Which repository this project IS (#945), so the referenced tier stops adopting another
       // repo's PR/issue as a task's subject. Fire-and-forget on purpose — it costs a `gh` spawn
@@ -240,6 +226,13 @@ export class ProjectContexts {
       // every listener, and a healed record would then `touch()` a store whose lifecycle had
       // ended — scheduling a `runs.json` write from a context nobody owns any more.
       armRepoHandle(store, project.root);
+      // Startup reconcile (spec 006) + count-based retention (#483) — the same best-effort sweep
+      // serveCommand runs for the boot project, gated on the root actually being a git repo.
+      // Deliberately off the build path: the first request that opened this project must not wait
+      // on a disk-only sweep. `sweepStartupWorktrees` never throws; the catch is a floor.
+      if (await getRepoInfo(project.root)) {
+        void sweepStartupWorktrees(project.root, store).catch(() => {});
+      }
       return { id: project.id, root: project.root, dataDir, store, manager, automationStore, launchKey };
     } catch (err) {
       // A failed build must not leak the half-built context's subscriptions.

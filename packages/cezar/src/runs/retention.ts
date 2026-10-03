@@ -46,6 +46,10 @@ export function selectReclaimableWorktrees(runs: readonly RunRecord[], keep: num
  *  enforcer stays easy to test and never imports the concrete store. */
 export interface RetentionStore {
   listRuns(): RunRecord[];
+  /** Live read, so the enforcer sees a run that was continued since the
+   *  snapshot. RunStore returns the in-memory record, which `updateRun` mutates
+   *  in place — but the enforcer only needs the freshest view, not identity. */
+  getRun(id: string): RunRecord | undefined;
   updateRun(id: string, patch: { worktreeReclaimedAt?: string }): unknown;
 }
 
@@ -92,6 +96,11 @@ export async function rematerializeReclaimedWorktree(
  * — a locked/permission failure leaves the stamp unset so the next pass retries.
  * Idempotent under races: `removeWorktree` is `--force` + `prune` and a repeated
  * stamp is harmless.
+ *
+ * Coordinates with continuation through the store: the sweep is scheduled off the
+ * request path, so a run it selected can be resumed before its turn in the loop.
+ * Each candidate is re-read immediately before its deletion and skipped when it has
+ * left the finished set since the snapshot (see the loop).
  */
 export interface ReclaimOptions {
   /** Timestamp source for the stamp — injectable for deterministic tests. */
@@ -112,15 +121,30 @@ export async function reclaimWorktrees(
   const remove = opts.remove ?? ((root, path) => removeWorktree(root, path)); // branch kept
   const runs = store.listRuns();
   const byId = new Map(runs.map((r) => [r.id, r]));
-  const reclaimed: string[] = [];
-  for (const id of selectReclaimableWorktrees(runs, keep)) {
+  // Capture each candidate's eligibility BEFORE the loop's first await: the sweep
+  // runs in the background, so a Continue can start between here and a deletion.
+  // `stepCount` is the early continuation signal — `continueRun` records the new
+  // `continue-*` step synchronously, while the status only flips to `running`
+  // once the resumed session is under way.
+  const candidates = selectReclaimableWorktrees(runs, keep).flatMap((id) => {
     const run = byId.get(id);
-    if (!run?.worktreePath) continue;
+    return run?.worktreePath
+      ? [{ id, worktreePath: run.worktreePath, stepCount: run.steps.length }]
+      : [];
+  });
+  const reclaimed: string[] = [];
+  for (const candidate of candidates) {
+    // Re-read the run right before deleting: a run that has left the finished set
+    // (continued, re-queued, or freshly stamped) or grown a step owns its worktree
+    // again, and deleting it would strand a live session.
+    const live = store.getRun(candidate.id);
+    if (!live || !isReclaimable(live) || live.worktreePath !== candidate.worktreePath) continue;
+    if (live.steps.length !== candidate.stepCount) continue;
     try {
-      await remove(repoRoot, run.worktreePath);
-      if (existsSync(run.worktreePath)) continue; // reclaim failed; retry next pass
-      store.updateRun(id, { worktreeReclaimedAt: now() });
-      reclaimed.push(id);
+      await remove(repoRoot, candidate.worktreePath);
+      if (existsSync(candidate.worktreePath)) continue; // reclaim failed; retry next pass
+      store.updateRun(candidate.id, { worktreeReclaimedAt: now() });
+      reclaimed.push(candidate.id);
     } catch {
       // best-effort: never let retention crash a terminal transition or startup.
     }

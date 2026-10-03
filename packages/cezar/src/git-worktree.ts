@@ -642,7 +642,7 @@ export async function worktreeShortstat(
  */
 export async function pruneOrphans(
   repoRoot: string,
-  validIds: ReadonlySet<string>,
+  validIds: Pick<ReadonlySet<string>, 'has'>,
 ): Promise<string[]> {
   await git(repoRoot, ['worktree', 'prune']);
   let entries: Dirent[];
