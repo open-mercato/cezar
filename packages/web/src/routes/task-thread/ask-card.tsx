@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
@@ -6,6 +6,7 @@ import { Link } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 
 import { useAskAnswer } from './ask-answer'
+import { type AskSelections, forgetAskSelections, readAskSelections, writeAskSelections } from './ask-selections'
 import type { ThreadAsk } from './thread-state'
 import type { UiAskQuestion } from '@open-mercato/cezar-api-client'
 
@@ -29,6 +30,10 @@ function formatAnswer(question: UiAskQuestion, labels: string[]): string {
  * "Other". Once resolved, the card collapses to a compact summary.
  */
 export function AskCard({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
+  // Answered — by Send or by a free-form reply in the composer — so the held picks are spent.
+  useEffect(() => {
+    if (ask.resolved) forgetAskSelections(run.id, ask)
+  }, [ask, run.id])
   // An answered card is a static summary — split so the delivery hook (two mutations and a
   // provider-status subscription) only mounts for a question that can still be answered.
   // Threads accumulate asks; every resolved one would otherwise carry live machinery for a
@@ -58,12 +63,24 @@ function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
   // One-tap only when there is a single single-select question; every other
   // shape needs a combined Send so no question's answer is dropped.
   const oneTap = questions.length === 1 && questions[0]?.multiSelect !== true
-  const [selections, setSelections] = useState<Record<number, string[]>>({})
+  // Seeded from, and mirrored into, the store outside the card: the thread unmounts this row
+  // whenever it scrolls out of a virtualized viewport, and the picks must outlive that (#1247).
+  const [selections, setSelections] = useState<AskSelections>(() => readAskSelections(run.id, ask))
 
   const setQuestion = (index: number, labels: string[]) =>
-    setSelections((prev) => ({ ...prev, [index]: labels }))
+    setSelections((prev) => {
+      const next = { ...prev, [index]: labels }
+      writeAskSelections(run.id, ask, next)
+      return next
+    })
 
-  const allAnswered = questions.every((_, index) => (selections[index]?.length ?? 0) > 0)
+  const answered = (index: number) => (selections[index]?.length ?? 0) > 0
+  const allAnswered = questions.every((_, index) => answered(index))
+  // Named only once the user has started answering: a fresh card listing every header would be
+  // noise, but a half-answered one is exactly where a missed question hides off-screen.
+  const unanswered = questions.some((_, index) => answered(index))
+    ? questions.filter((_, index) => !answered(index)).map((q) => q.header)
+    : []
 
   const sendAll = () =>
     void delivery.send(
@@ -122,6 +139,13 @@ function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
           </span>
         </div>
       )}
+      {/* Send stays disabled until every question has a pick; say which ones lack it, since a
+          long card scrolls its earlier questions out of sight (#1247). */}
+      {!oneTap && unanswered.length > 0 ? (
+        <p data-slot="ask-unanswered" className="mt-2 text-[11.5px] text-soft-foreground">
+          unanswered: {unanswered.join(', ')}
+        </p>
+      ) : null}
       {delivery.blockedBy === 'provider' ? (
         <div data-slot="ask-provider-gate" className="mt-3 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
           <span>{delivery.reason}</span>
