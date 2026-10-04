@@ -72,6 +72,8 @@ inherited case still shows the parent's catalog.
 
 ## Progress
 
+PR: #1269
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Follow the subtask runner's catalog
