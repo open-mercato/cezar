@@ -20,12 +20,12 @@ When switching the new-task project pill, refuse to overwrite either typed text 
 
 ### Phase 1: Guard and feedback
 
-- [ ] 1.1 Treat destination attachments as busy and preserve both sides.
-- [ ] 1.2 Surface a display-name toast only when a handoff is declined, including the boot-project null alias.
+- [x] 1.1 Treat destination attachments as busy and preserve both sides. — 2605e698
+- [x] 1.2 Surface a display-name toast only when a handoff is declined, including the boot-project null alias. — 2605e698
 
 ### Phase 2: Verification
 
-- [ ] 2.1 Add regression coverage for text-only and attachment-only destination conflicts and route feedback/silence.
+- [x] 2.1 Add regression coverage for text-only and attachment-only destination conflicts and route feedback/silence. — 2605e698
 - [ ] 2.2 Run the configured validation gate and browser QA evidence.
 
 ## Risks
@@ -38,10 +38,10 @@ The route remounts on project navigation, so the handoff must happen before navi
 
 ### Phase 1: Guard and feedback
 
-- [ ] 1.1 Treat destination attachments as busy and preserve both sides.
-- [ ] 1.2 Surface a display-name toast only when a handoff is declined, including the boot-project null alias.
+- [x] 1.1 Treat destination attachments as busy and preserve both sides. — 2605e698
+- [x] 1.2 Surface a display-name toast only when a handoff is declined, including the boot-project null alias. — 2605e698
 
 ### Phase 2: Verification
 
-- [ ] 2.1 Add regression coverage for text-only and attachment-only destination conflicts and route feedback/silence.
+- [x] 2.1 Add regression coverage for text-only and attachment-only destination conflicts and route feedback/silence. — 2605e698
 - [ ] 2.2 Run the configured validation gate and browser QA evidence.
