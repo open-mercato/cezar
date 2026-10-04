@@ -320,7 +320,12 @@ export function handOffComposition(
     return { moved: false, reason: 'nothing-to-move' }
   }
   const arriving = readDraft(to)
-  if (arriving.text !== '') return { moved: false, reason: 'destination-busy' }
+  // Attachments are unsent work too. A destination with only a pasted image must win just like
+  // one with typed text; otherwise the write below replaces its attachment array and silently
+  // destroys the image when the project pill navigates away.
+  if (arriving.text !== '' || readAttachments(to).length > 0) {
+    return { moved: false, reason: 'destination-busy' }
+  }
   writeDraft({ ...arriving, text: departing.text }, to)
   writeDraft({ ...departing, text: '' }, from)
   writeAttachments(carried, to)

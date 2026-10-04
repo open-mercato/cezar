@@ -661,7 +661,15 @@ export function NewTaskRoute() {
                     // route remounts on the way in and reads the arriving project's draft the
                     // moment it does. `handOffComposition` decides whether the move happens —
                     // it refuses to overwrite an unsent draft already waiting over there.
-                    handOffComposition(draftProjectId, scopeKeyOf(next))
+                    const result = handOffComposition(draftProjectId, scopeKeyOf(next))
+                    if (!result.moved && result.reason === 'destination-busy') {
+                      const destinationName =
+                        projectList.find((project) => project.id === next)?.name ?? next
+                      toast(
+                        `Kept your draft in ${destinationName} — that project already has an unsent draft.`,
+                        { tone: 'danger' },
+                      )
+                    }
                     navigate(`/p/${encodeURIComponent(next)}/new`, { replace: true })
                   }}
                 />
