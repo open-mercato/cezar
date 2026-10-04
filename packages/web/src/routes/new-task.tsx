@@ -663,10 +663,16 @@ export function NewTaskRoute() {
                     // it refuses to overwrite an unsent draft already waiting over there.
                     const result = handOffComposition(draftProjectId, scopeKeyOf(next))
                     if (!result.moved && result.reason === 'destination-busy') {
-                      const destinationName =
-                        projectList.find((project) => project.id === next)?.name ?? next
+                      // `draftProjectId` is the API scope key, so null means the boot project.
+                      // Resolve both ends through the registry: the user needs to know where
+                      // their composition remains as well as which destination was occupied.
+                      const departingName =
+                        projectList.find(
+                          (project) => project.id === (draftProjectId ?? projects.data?.bootProject),
+                        )?.name ?? urlProjectId
+                      const destinationName = projectList.find((project) => project.id === next)?.name ?? next
                       toast(
-                        `Kept your draft in ${destinationName} — that project already has an unsent draft.`,
+                        `Kept your draft in ${departingName}; ${destinationName} already has an unsent draft.`,
                         { tone: 'danger' },
                       )
                     }

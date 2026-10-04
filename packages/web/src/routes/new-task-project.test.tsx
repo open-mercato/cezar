@@ -375,7 +375,7 @@ describe('switching project', () => {
     // Their work in progress wins …
     expect(textarea().value).toBe('ship the storefront')
     expect(document.querySelector('[data-slot="toast"]')?.textContent).toContain(
-      'Kept your draft in shop-frontend — that project already has an unsent draft.',
+      'Kept your draft in cezar; shop-frontend already has an unsent draft.',
     )
 
     // … and nothing was lost: switching back finds the cezar draft exactly where it was typed.
@@ -409,7 +409,7 @@ describe('switching project', () => {
     expect(textarea().value).toBe('')
     expect(attachmentChips().map((node) => node.getAttribute('aria-label'))).toEqual(['Remove shop.png'])
     expect(document.querySelector('[data-slot="toast"]')?.textContent).toContain(
-      'Kept your draft in shop-frontend — that project already has an unsent draft.',
+      'Kept your draft in cezar; shop-frontend already has an unsent draft.',
     )
   })
 
