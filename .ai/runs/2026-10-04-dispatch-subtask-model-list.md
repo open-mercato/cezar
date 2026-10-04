@@ -81,4 +81,23 @@ inherited case still shows the parent's catalog.
 
 ### Phase 2: Validate
 
-- [ ] 2.1 Run the full validation gate
+- [x] 2.1 Run the full validation gate
+
+Gate result (2026-10-04, this worktree, every `CEZ_*`/`TMP*` var cleared):
+
+| Command | Result |
+| --- | --- |
+| `npm run typecheck` | pass |
+| `npm test` | 8784 passed, 3 skipped, **1 pre-existing failure** (below) |
+| `npm run test:unit` | 36/36 pass |
+| `npm run build` | pass (`check:pack ok — 741 files`) |
+| `npm run test:package` | 17/17 pass |
+
+The one failure is `packages/web/src/routes/github/hand-to-agent-draft.test.ts` →
+*"degrades a runner this build does not know, and a non-string model, to null"*. It uses
+`'cursor'` as its stand-in for an unknown runner, and `cursor` has been a real entry in `RUNNERS`
+since #807, so `normalizeSelection` correctly keeps it. The production code is right; the test
+data is stale. It arrived with c6f1a061 (`fix(ui): remember the engine pick…`, #907), the
+second commit on `main`, and `main`'s last CI run predates it — so it is red on `main`, not here.
+Proven by checking out this branch's source at `origin/main` state and re-running the file in
+isolation: still red.
