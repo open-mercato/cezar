@@ -15,13 +15,13 @@ Non-goals: changing server project registration, service cache behavior, or unre
 
 ### Phase 1: Coordinator ownership
 
-- [ ] 1.1 Deduplicate queued work by root while retaining every project-id alias.
-- [ ] 1.2 Evict a root only after its final alias is removed, including stop cleanup.
+- [x] 1.1 Deduplicate queued work by root while retaining every project-id alias. — 19474759
+- [x] 1.2 Evict a root only after its final alias is removed, including stop cleanup. — 19474759
 
 ### Phase 2: Regression coverage
 
-- [ ] 2.1 Add tests covering duplicate aliases, alias removal, replacement, and preserved lifecycle behavior.
-- [ ] 2.2 Run targeted and repository validation gates; review the final diff.
+- [x] 2.1 Add tests covering duplicate aliases, alias removal, replacement, and preserved lifecycle behavior. — 19474759
+- [x] 2.2 Run targeted and repository validation gates; review the final diff. — pending plan commit
 
 ## Risks
 
