@@ -72,7 +72,9 @@ describe('the remembered engine pick (#906)', () => {
   })
 
   it('degrades a runner this build does not know, and a non-string model, to null', () => {
-    localStorage.setItem('cez-followup-selection', '{"runner":"cursor","model":{"id":"opus"}}')
+    // NOT a real runner id: `cursor` used to stand in here and became one in #807, so the case
+    // silently stopped testing anything. Keep this value off the `RUNNERS` catalog.
+    localStorage.setItem('cez-followup-selection', '{"runner":"kiro","model":{"id":"opus"}}')
     expect(readFollowupSelection()).toMatchObject({ runner: null, model: null })
   })
 
