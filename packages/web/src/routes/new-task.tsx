@@ -784,10 +784,10 @@ export function NewTaskRoute() {
                 onSettingsOpenChange={setDispatchSettingsOpen}
                 runners={runners}
                 parentRunner={displayRunner}
-                // The parent's runner gets the composer's live catalog (one fetch, shared);
-                // any other runner its static presets — a second discovery per runner for a
-                // setting this rarely touched is not worth the request.
-                modelsFor={(id) => (id === displayRunner ? models : modelsForRunner(id))}
+                // The composer's own catalog, already fetched for the runner this task runs as —
+                // the list "same as parent" resolves to. A subtask runner the user changes to
+                // discovers its own inside the toggle, which is the only place that knows it.
+                parentModels={models}
               />
               {repo.data?.info ? <PillDivider /> : null}
               {repo.data ? <BaseBranchPill repo={repo.data} /> : null}
