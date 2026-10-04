@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { loadWorkspaceConfig, type WorkspaceConfig } from './workspace/config.ts';
 import { RUNNER_IDS } from './core/agent-runner.ts';
+import { CHECK_COMMAND_TIMEOUT_MS, CHECK_GATE_TIMEOUT_MS } from './workflows/check-runner.ts';
 
 /**
  * Optional advanced config at `.ai/cezar/config.json`. Zero-config rule:
@@ -131,6 +132,24 @@ const configSchema = z.object({
    * false preserves the ordinary per-runner model selector.
    */
   modelsLocked: z.boolean().optional().catch(undefined),
+  /**
+   * Wall clock for ONE `command:` check step, in ms. 20 minutes by default —
+   * bounded because a hung check otherwise holds a `maxParallel` slot until the
+   * process dies. `0` removes the per-command limit; the gate deadline below
+   * still applies. A check step's own workflow YAML deliberately has no
+   * wall-clock field: `timeoutMs` belongs to AGENT steps, and a check's limits
+   * are a property of the gate, not of one authored step.
+   * `.catch(default)` keeps the key additive-safe: a bad value degrades to the
+   * default instead of discarding the rest of the config.
+   */
+  checkTimeoutMs: z.number().int().min(0).max(24 * 60 * 60_000).default(CHECK_COMMAND_TIMEOUT_MS).catch(CHECK_COMMAND_TIMEOUT_MS),
+  /**
+   * Wall clock for a whole GATE — every check step one run's workflow executes,
+   * retries (`onFail`) included — in ms, 45 minutes by default. The per-command
+   * limit bounds one command; this bounds their sum, so a check that loops back
+   * into its agent cannot retry for hours. `0` removes it.
+   */
+  checkGateTimeoutMs: z.number().int().min(0).max(24 * 60 * 60_000).default(CHECK_GATE_TIMEOUT_MS).catch(CHECK_GATE_TIMEOUT_MS),
 });
 
 export type CezConfig = z.infer<typeof configSchema>;

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunManager } from './run.ts';
+import { mockAgentWithRealChecks } from './mock-agent.testkit.ts';
 import type { WorkflowDef } from './types.ts';
 
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -16,7 +17,8 @@ const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
  * caps concurrent runs at the global `resources.maxParallel`, replacing the
  * old per-repo count. Three contracts, each against real managers on real
  * fixture repos (run.test.ts conventions — check-step slot holders, and the
- * CEZ_DRY_RUN mock agent where a live session is needed):
+ * bundled mock agent where a live session is needed; `CEZ_DRY_RUN=1` would
+ * skip the holders, since a dry run never executes a check):
  *
  *  1. two managers, cap 2 → a third run queues ACROSS projects;
  *  2. the #347 exemption survives the move: a `waiting` run holds no slot,
@@ -70,7 +72,7 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
   const roots: string[] = [];
   const managers: RunManager[] = [];
   const stores: RunStore[] = [];
-  const savedEnv: Record<string, string | undefined> = {};
+  let restoreMockAgent: () => void = () => undefined;
 
   /** A project: fixture repo + store + manager on the SHARED semaphore. */
   function project(
@@ -86,8 +88,7 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
   }
 
   beforeEach(() => {
-    savedEnv.CEZ_DRY_RUN = process.env.CEZ_DRY_RUN;
-    process.env.CEZ_DRY_RUN = '1';
+    restoreMockAgent = mockAgentWithRealChecks();
   });
 
   it('exempts only the configured number of durable monitoring sessions', () => {
@@ -127,8 +128,7 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
     for (const manager of managers.splice(0)) manager.dispose();
     stores.length = 0;
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
-    if (savedEnv.CEZ_DRY_RUN === undefined) delete process.env.CEZ_DRY_RUN;
-    else process.env.CEZ_DRY_RUN = savedEnv.CEZ_DRY_RUN;
+    restoreMockAgent();
   });
 
   it('caps concurrent runs across two projects: with cap 2, the third run queues', async () => {
