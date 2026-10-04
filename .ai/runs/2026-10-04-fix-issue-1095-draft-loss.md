@@ -33,6 +33,8 @@ When switching the new-task project pill, refuse to overwrite either typed text 
 The route remounts on project navigation, so the handoff must happen before navigation and use the same null-to-boot mapping as the draft store. Toasting on successful/no-op results would add noise and is explicitly avoided.
 
 ## Progress
+PR: #1255
+
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
@@ -44,4 +46,8 @@ The route remounts on project navigation, so the handoff must happen before navi
 ### Phase 2: Verification
 
 - [x] 2.1 Add regression coverage for text-only and attachment-only destination conflicts and route feedback/silence. — 2605e698
-- [ ] 2.2 Run the configured validation gate and browser QA evidence.
+- [x] 2.2 Run the configured validation gate and browser QA evidence. — 631f2871; validation and independent review completed
+
+## Final verification
+
+Implementation source at `631f2871` was independently reviewed by dispatch task `9ac8a721`; final verdict approve, no findings. All configured validation commands passed with full-suite evidence on the PR. The completion update changes this plan only; source remains the reviewed version.
