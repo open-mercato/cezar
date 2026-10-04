@@ -21,7 +21,7 @@ Non-goals: changing server project registration, service cache behavior, or unre
 ### Phase 2: Regression coverage
 
 - [x] 2.1 Add tests covering duplicate aliases, alias removal, replacement, and preserved lifecycle behavior. — 19474759
-- [x] 2.2 Run targeted and repository validation gates; review the final diff. — pending plan commit
+- [x] 2.2 Run targeted and repository validation gates; review the final diff. — a82c18f8
 
 ## Risks
 
