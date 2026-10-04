@@ -207,6 +207,27 @@ describe('SkillsUpdateService', () => {
 });
 
 describe('SkillsUpdateCoordinator', () => {
+  it('deduplicates aliases by root and evicts only after the final alias is removed', async () => {
+    const service = {
+      check: vi.fn(async () => ({ available: false })),
+      update: vi.fn(),
+      evict: vi.fn(),
+    } as unknown as SkillsUpdateService;
+    const coordinator = new SkillsUpdateCoordinator(service, async () => true);
+    coordinator.add('default', '/boot');
+    coordinator.add('slug', '/boot');
+    coordinator.remove('default');
+    await coordinator.settled();
+
+    expect(service.check).toHaveBeenCalledTimes(1);
+    expect(service.check).toHaveBeenCalledWith('/boot');
+    expect(service.evict).not.toHaveBeenCalled();
+
+    coordinator.remove('slug');
+    expect(service.evict).toHaveBeenCalledTimes(1);
+    expect(service.evict).toHaveBeenCalledWith('/boot');
+  });
+
   it('queues lifecycle work, excludes missing/removed projects, owns auto apply, and swallows failures', async () => {
     const service = {
       check: vi.fn(async (root: string) => {

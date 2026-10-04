@@ -363,9 +363,13 @@ export class SkillsUpdateCoordinator {
 
   add(id: string, root: string): void {
     if (this.stopped) return;
+    const previous = this.roots.get(id);
+    if (previous === root) return;
     this.roots.set(id, root);
+    if (previous && !this.hasRoot(previous)) this.service.evict(previous);
+    if (this.hasRoot(root, id)) return;
     this.tail = this.tail.then(async () => {
-      if (this.stopped || this.roots.get(id) !== root) return;
+      if (this.stopped || !this.hasRoot(root)) return;
       const state = await this.service.check(root);
       if (state.available && await this.autoUpdateEnabled()) await this.service.update(root);
     }).catch(() => undefined);
@@ -374,15 +378,22 @@ export class SkillsUpdateCoordinator {
   remove(id: string): void {
     const root = this.roots.get(id);
     this.roots.delete(id);
-    if (root) this.service.evict(root);
+    if (root && !this.hasRoot(root)) this.service.evict(root);
   }
 
   stop(): void {
     this.stopped = true;
-    for (const root of this.roots.values()) this.service.evict(root);
+    for (const root of new Set(this.roots.values())) this.service.evict(root);
     this.roots.clear();
   }
 
   /** Test/lifecycle hook: resolves after all work queued so far. */
   settled(): Promise<void> { return this.tail; }
+
+  private hasRoot(root: string, excludingId?: string): boolean {
+    for (const [id, candidate] of this.roots) {
+      if (id !== excludingId && candidate === root) return true;
+    }
+    return false;
+  }
 }
