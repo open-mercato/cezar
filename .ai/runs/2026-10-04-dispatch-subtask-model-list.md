@@ -101,3 +101,15 @@ data is stale. It arrived with c6f1a061 (`fix(ui): remember the engine pick…`,
 second commit on `main`, and `main`'s last CI run predates it — so it is red on `main`, not here.
 Proven by checking out this branch's source at `origin/main` state and re-running the file in
 isolation: still red.
+
+### Autofix (om-auto-review-pr, 2026-10-04)
+
+- [x] 3.1 Blocker from the gate: `hand-to-agent-draft.test.ts` used `cursor` — a real `RUNNERS`
+  entry since #807 — as its "runner this build does not know" case, so it asserted `null` against
+  a value `normalizeSelection` rightly keeps. Red on `main` since c6f1a061 (#907), which landed
+  after `main`'s last CI run. Fixed by naming an id no build knows — 0d549085
+
+Gate after the fix: `npm test` **8785 passed, 3 skipped, 0 failed**; `npm run typecheck` pass.
+(One intermediate run flaked on `repo-git.test.tsx > a clean tree renders the honest empty state`
+under full-suite load; it passes in isolation and on the clean re-run, and is untouched by this
+branch.)
