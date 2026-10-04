@@ -76,8 +76,8 @@ inherited case still shows the parent's catalog.
 
 ### Phase 1: Follow the subtask runner's catalog
 
-- [ ] 1.1 Fetch the selected subtask runner's catalog in DispatchToggle
-- [ ] 1.2 Cover a Codex subtask under a Claude parent in the popover tests
+- [x] 1.1 Fetch the selected subtask runner's catalog in DispatchToggle — 20332797
+- [x] 1.2 Cover a Codex subtask under a Claude parent in the popover tests — 20332797
 
 ### Phase 2: Validate
 
