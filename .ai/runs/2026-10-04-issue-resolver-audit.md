@@ -30,9 +30,13 @@ Full gates run on a shared host and may encounter unrelated flakes. Report evide
 
 ### Phase 1: Delegate
 - [x] 1.1 Audit open issues and PRs; select independent candidates
-- [ ] 1.2 Dispatch five issue-specific PR implementers
+- [x] 1.2 Dispatch five issue-specific PR implementers
 
 ### Phase 2: Validate and review
 - [ ] 2.1 Validate five reports and targeted tests
 - [ ] 2.2 Dispatch and await one final independent review
 - [ ] 2.3 Report PR outcomes and unresolved limits
+
+## Dispatch record
+
+#1095 bd164496 → PR #1255 (worker session stopped after final handoff to free capacity; changes preserved). #1248 07a28baf → PR #1256. #987 cfdc5132 → PR #1257. #1233 034cf8af → repurposed PR #1258 after stale #1107 rejected. #875 0f80244c dispatched fifth. All codex/gpt-5.6-luna. Five subtasks used; final reviewer remains reserved.
