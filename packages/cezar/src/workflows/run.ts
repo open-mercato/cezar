@@ -1636,8 +1636,9 @@ export class RunManager {
    *    workflowDef (or the catalog by name for older records);
    *  - `waiting` → the turn was over and the ball was in the user's court —
    *    settle exactly like a closed session (review/done, Continue still works),
-   *    unless `askParked` says the workflow stopped mid-way on a question (#917),
-   *    which settles `failed` instead so unrun steps are not reported as done;
+   *    unless `askParked` says the run stopped on an unanswered `CEZ:ASK` (#917),
+   *    which settles `failed` instead so unrun steps are not reported as done,
+   *    with `awaitingAnswerSince` so the task still reads as "needs you";
    *  - `running` → mark interrupted, then immediately resume the last agent
    *    session via the Continue path, pointing the agent at its handoff file.
    * Call once, before the server starts taking requests.
@@ -1680,6 +1681,8 @@ export class RunManager {
             error: 'interrupted — cezar process exited while the task was waiting for an answer',
             finishedAt: interruptedAt,
             currentStepId: undefined,
+            // A restart does not answer the question: the task stays under "needs you".
+            awaitingAnswerSince: interruptedAt,
           });
           this.store.appendEvent(run.id, {
             type: 'lifecycle',
@@ -3681,6 +3684,14 @@ export class RunManager {
           (dispatchTurn.dispatched || endsWithMonitoringMarker(turnText));
         turnText = '';
         for (const note of askNotes) this.store.appendEvent(runId, { type: 'note', ...note, stepId });
+        // The twin of `runAgentStep`'s rule (#1282): a turn retires the question park an earlier
+        // turn left standing, and the waiting branch below sets it again only when THIS turn asks
+        // and parks. A stale park would settle an idle close as an unanswered question and keep
+        // a task under "needs you" that is no longer asking anything.
+        if (state.askPark === 'waiting') {
+          state.askPark = undefined;
+          if (this.store.getRun(runId)?.askParked) this.store.updateRun(runId, { askParked: undefined });
+        }
         if (done) {
           // Goal achieved (agent contract, #347) — same as in runAgentStep.
           this.store.appendEvent(runId, { type: 'lifecycle', message: 'goal achieved — session closed' });
@@ -3938,6 +3949,8 @@ export class RunManager {
           finishedAt: failedAt,
           currentStepId: undefined,
           askParked: undefined,
+          // The question is still unanswered: the run stays under "needs you" (see `execute`).
+          awaitingAnswerSince: failedAt,
         });
         this.store.appendEvent(runId, { type: 'lifecycle', message: `run stopped — ${message}` });
       } else if (this.active.get(runId) === state && (await this.idleClosedFails(runId, state))) {
@@ -4368,7 +4381,15 @@ export class RunManager {
       const error =
         'the session closed before the question was answered — continue to answer it, ' +
         'but the remaining workflow steps will not resume automatically';
-      this.store.updateRun(runId, { status: 'failed', error, finishedAt, currentStepId: undefined });
+      // `awaitingAnswerSince`: closing the session freed the process and the slot, but the
+      // question is still the user's to answer, so the task keeps reading as "needs you".
+      this.store.updateRun(runId, {
+        status: 'failed',
+        error,
+        finishedAt,
+        currentStepId: undefined,
+        awaitingAnswerSince: finishedAt,
+      });
       emit({ type: 'lifecycle', message: `run stopped — ${error}` });
     } else if (idleFailed) {
       const error = this.inactivityFailureMessage();

@@ -47,10 +47,17 @@ const STATUS_ORDER: Partial<Record<RunRecord['status'], number>> = {
  *  is the same rule the status pill and the sidebar bucket read (`lib/attention.ts`). */
 const SCHEDULED_WEIGHT = 3
 
+/** A `failed` run whose session closed on an unanswered `CEZ:ASK`: still a question for the user,
+ *  so it reads, sorts and counts as `waiting` everywhere the list does (`lib/attention.ts`). */
+const isAwaitingAnswer = (run: RunRecord): boolean =>
+  run.status === 'failed' && run.awaitingAnswerSince !== undefined
+
 const statusWeight = (run: RunRecord): number =>
   run.status === 'failed' && run.autoResumeAt !== undefined
     ? SCHEDULED_WEIGHT
-    : STATUS_ORDER[run.status] ?? 9
+    : isAwaitingAnswer(run)
+      ? STATUS_ORDER.waiting ?? 0
+      : STATUS_ORDER[run.status] ?? 9
 
 /** One row of the quick-list: either a single run, or a collapsed variant group (spec 010). */
 export type QuickListRow =
@@ -91,7 +98,7 @@ export interface QuickListBucket {
 export function bucketOf(run: RunRecord, view: ListView): BucketLabel {
   if (view === 'archived') return 'Archived'
   if (run.pinned) return 'Pinned'
-  if (run.status === 'waiting' || run.status === 'review') return 'Needs you'
+  if (run.status === 'waiting' || run.status === 'review' || isAwaitingAnswer(run)) return 'Needs you'
   if (run.status === 'running' || run.status === 'queued') return 'Working'
   // A run waiting out a provider usage limit is `failed` on the record but has an appointment to
   // resume itself (spec 2026-08-03-auto-resume-after-usage-limit) — it belongs with the work in
@@ -325,7 +332,7 @@ export function listCounts(runs: readonly RunRecord[]): {
       continue
     }
     active += 1
-    if (run.status === 'waiting' || run.status === 'review') waiting += 1
+    if (run.status === 'waiting' || run.status === 'review' || isAwaitingAnswer(run)) waiting += 1
   }
   return { active, archived, waiting }
 }

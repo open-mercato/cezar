@@ -149,6 +149,21 @@ describe('a run waiting out a usage limit', () => {
   })
 })
 
+describe('a run whose session closed on an unanswered question', () => {
+  const awaiting = done({ status: 'failed', awaitingAnswerSince: '2026-10-05T10:00:00.000Z' })
+
+  it('is neither unread nor read history — its signal is "needs you"', () => {
+    expect(isUnread(awaiting)).toBe(false)
+    expect(isReadDoneItem(awaiting)).toBe(false)
+    expect(canBeUnread(awaiting)).toBe(false)
+    expect(unreadDoneCount([awaiting])).toBe(0)
+  })
+
+  it('goes back to the ordinary rule once the question is retired', () => {
+    expect(isUnread({ ...awaiting, awaitingAnswerSince: undefined })).toBe(true)
+  })
+})
+
 describe('unreadDoneCount', () => {
   it('counts only the unread done items', () => {
     const runs: ReadStateInput[] = [

@@ -22,6 +22,7 @@ export type InsightRow = {
   startedAt?: string;
   finishedAt?: string;
   autoResumeAt?: string;
+  awaitingAnswerSince?: string;
   archived: boolean;
   diff?: { adds: number; dels: number; files: number };
   prs: { number: number; created: boolean }[];
@@ -65,6 +66,7 @@ export function projectInsightRow(projectId: string, run: RunRecord): InsightRow
     ...(run.startedAt !== undefined ? { startedAt: run.startedAt } : {}),
     ...(run.finishedAt !== undefined ? { finishedAt: run.finishedAt } : {}),
     ...(run.autoResumeAt !== undefined ? { autoResumeAt: run.autoResumeAt } : {}),
+    ...(run.awaitingAnswerSince !== undefined ? { awaitingAnswerSince: run.awaitingAnswerSince } : {}),
     archived: run.archived ?? false,
     ...(run.diffStat
       ? { diff: { adds: run.diffStat.adds, dels: run.diffStat.dels, files: run.diffStat.files } }
@@ -133,9 +135,11 @@ function costMetric(rows: InsightRow[]): DashboardCostMetric {
   return { value: values.length && Number.isFinite(sum) ? sum : null, reportedTasks: values.length };
 }
 const ACTIVE: RunStatus[] = ['queued', 'running', 'waiting', 'review'];
-/** In flight, waiting on a person, or parked until a usage limit resets. */
+/** In flight, waiting on a person (including a closed session's unanswered question), or parked
+ *  until a usage limit resets. */
 const isActive = (r: InsightRow) =>
-  !r.archived && (ACTIVE.includes(r.status) || (r.status === 'failed' && !!r.autoResumeAt));
+  !r.archived &&
+  (ACTIVE.includes(r.status) || (r.status === 'failed' && (!!r.autoResumeAt || !!r.awaitingAnswerSince)));
 
 /** Same window rule as the overview: local midnight `period - 1` days ago through now. */
 export function buildDashboardInsights(
@@ -154,9 +158,14 @@ export function buildDashboardInsights(
     const t = Date.parse(iso ?? '');
     return Number.isFinite(t) && t >= start && t <= at;
   };
-  // A usage-limit park is `failed` with a resume booked: waiting, not an outcome.
+  // A usage-limit park is `failed` with a resume booked, and an unanswered question is `failed`
+  // with a session to reopen: both are waiting, not outcomes.
   const finished = rows.filter(
-    (r) => (r.status === 'done' || r.status === 'failed') && !r.autoResumeAt && inWindow(r.finishedAt),
+    (r) =>
+      (r.status === 'done' || r.status === 'failed') &&
+      !r.autoResumeAt &&
+      !r.awaitingAnswerSince &&
+      inWindow(r.finishedAt),
   );
   const done = finished.filter((r) => r.status === 'done');
   const failed = finished.filter((r) => r.status === 'failed');
@@ -239,7 +248,7 @@ export function buildDashboardInsights(
         automationId: latest.automationId!,
         tasks: group.length,
         done: group.filter((r) => r.status === 'done').length,
-        failed: group.filter((r) => r.status === 'failed' && !r.autoResumeAt).length,
+        failed: group.filter((r) => r.status === 'failed' && !r.autoResumeAt && !r.awaitingAnswerSince).length,
         active: group.filter(isActive).length,
         ...(Number.isFinite(lastRunAt) ? { lastRunAt: new Date(lastRunAt).toISOString() } : {}),
         lastStatus: latest.status,

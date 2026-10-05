@@ -76,7 +76,10 @@ function isUnseen(_run: AttentionInput): boolean {
  *  surfaces that only have a status — the compare view's `GroupVariant` columns — can use the
  *  same canonical function instead of inventing a second status-to-tone mapping. `activity` is
  *  optional (#490), so status-only callers keep working unchanged. */
-export type AttentionInput = Pick<RunRecord, 'status' | 'activity' | 'autoResumeAt' | 'dispatch' | 'costUsd'>
+export type AttentionInput = Pick<
+  RunRecord,
+  'status' | 'activity' | 'autoResumeAt' | 'awaitingAnswerSince' | 'dispatch' | 'costUsd'
+>
 
 export type BudgetStop = {
   spent: number
@@ -117,6 +120,13 @@ export function deriveAttention(run: AttentionInput): Attention {
   // chain is first-match-wins.
   if (run.status === 'failed' && run.autoResumeAt) {
     return { bucket: 'none', tone: 'pending', pulse: false, label: 'scheduled' }
+  }
+  // A session that closed on an unanswered `CEZ:ASK` — the inactivity timer, a crash, a restart —
+  // is `failed` on the record because the process is gone, but the question is still the user's to
+  // answer. Reporting it as a failure (or, before that, as done) hid a task that was waiting on
+  // you; it wears the `waiting` rung instead, and the answer reopens the session.
+  if (run.status === 'failed' && run.awaitingAnswerSince) {
+    return { bucket: 'waiting', tone: 'pending', pulse: true, label: 'needs you' }
   }
   if (run.status === 'failed') {
     return { bucket: 'error', tone: 'danger', pulse: false, label: 'failed' }

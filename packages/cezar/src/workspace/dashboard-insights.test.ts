@@ -66,6 +66,19 @@ describe('dashboard insights', () => {
     expect(result.backends).toEqual([]);
   });
 
+  it('leaves a run awaiting an answer out of every outcome — it is still a question', () => {
+    const result = build([
+      run({
+        status: 'failed',
+        error: 'the session closed before the question was answered',
+        awaitingAnswerSince: '2026-09-30T11:00:00.000Z',
+      }),
+    ]);
+    expect(result.failures.total).toBe(0);
+    expect(result.delivered.completedTasks).toBe(0);
+    expect(result.backends).toEqual([]);
+  });
+
   it('groups failures by classified reason and keeps the most recent example', () => {
     const result = build([
       run({ status: 'failed', error: 'HTTP 429: rate limit', finishedAt: '2026-09-29T09:00:00.000Z' }),
@@ -191,6 +204,23 @@ describe('dashboard insights', () => {
         },
         status: 'failed',
         autoResumeAt: '2026-09-30T13:00:00.000Z',
+      }),
+    ]);
+    expect(result.automations[0]).toMatchObject({ tasks: 1, done: 0, failed: 0, active: 1 });
+  });
+
+  it('counts an automation task awaiting an answer as active, not failed', () => {
+    const result = build([
+      run({
+        automationTrigger: {
+          automationId: 'nightly',
+          automationRevision: 1,
+          receiptId: 'y',
+          trigger: 'schedule',
+          occurrenceAt: '2026-09-29T02:00:00.000Z',
+        },
+        status: 'failed',
+        awaitingAnswerSince: '2026-09-30T11:00:00.000Z',
       }),
     ]);
     expect(result.automations[0]).toMatchObject({ tasks: 1, done: 0, failed: 0, active: 1 });

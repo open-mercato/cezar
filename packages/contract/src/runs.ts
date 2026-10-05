@@ -229,6 +229,10 @@ export const runRecordSchema = z.object({
   autoResumeAt: z.string().optional(),
   /** Consecutive automatic resumes since the last human turn, against the safety cap. */
   autoResumeAttempts: z.number().optional(),
+  /** ISO-8601 instant the run's session ended (inactivity, a crash, a restart) while a `CEZ:ASK`
+   *  question was still unanswered. Present only on a `failed` run; the cockpit keeps such a run
+   *  under "needs you" until the answer reopens it. Absent on records written before it existed. */
+  awaitingAnswerSince: z.string().optional(),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
@@ -365,6 +369,9 @@ export const runIndexEntrySchema = z.object({
    *  it, so without it here a cross-project row would show a red "failed" dot and land in
    *  Recently finished for work that is simply waiting for its appointment. */
   autoResumeAt: z.string().optional(),
+  /** A `failed` run whose session closed on an unanswered `CEZ:ASK` — `deriveAttention` reads it,
+   *  so a cross-project row says "needs you" like every other surface rather than "failed". */
+  awaitingAnswerSince: z.string().optional(),
   /** The workflow the run executes — the global Tasks page shows it in a column and groups by
    *  it. Always present on the record (`RunRecord.workflow`), so required here; the display
    *  refinement `workflowLabel` applies needs `steps[]`, which this row deliberately omits, so
