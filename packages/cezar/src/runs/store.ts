@@ -262,6 +262,11 @@ export const runRecordSchema = z.object({
    *  parked. Invariant: only a `waiting` run carries it — `updateRun` and
    *  `reconcileLoadedRun` retire it on any other status, so no caller has to. */
   askParked: z.boolean().optional(),
+  /** True when an autonomous session parked because it exhausted the automatic continue cap.
+   *  Additive and optional so old run records remain readable; unlike `askParked`, this marker
+   *  must survive the waiting park and terminal settlement so a dispatched parent hears `partial`.
+   *  A human Continue retires it before opening the new session. */
+  autoContinueCapReached: z.boolean().optional(),
   /**
    * Exact deadline at which a run stopped by a provider USAGE LIMIT resumes itself
    * (spec 2026-08-03-auto-resume-after-usage-limit) — the reset instant the provider named plus a

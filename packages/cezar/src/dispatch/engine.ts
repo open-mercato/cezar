@@ -137,7 +137,8 @@ export function handoffSectionExcerpt(text: string, header: string, maxLines = 4
 /** What a settled run's cezar status means as a REPORT status, for a child that never filed a
  *  report of its own (`cez task report`). `review` is work finished and waiting for a human, not
  *  a failure; `cancelled` is neither done nor failed — somebody stopped it, which is a block. */
-function statusToReportStatus(status: string): DispatchReport['status'] {
+function statusToReportStatus(status: string, autoContinueCapReached = false): DispatchReport['status'] {
+  if (autoContinueCapReached) return 'partial';
   if (status === 'done' || status === 'review') return 'done';
   if (status === 'failed') return 'failed';
   if (status === 'cancelled') return 'blocked';
@@ -158,13 +159,21 @@ export function childSettleReport(
   context: { resumeNotes?: string } = {},
 ): { text: string; report: DispatchReport } {
   const own = child.dispatch?.report;
+  const capReached = child.autoContinueCapReached === true;
+  const capNote = 'automatic continue cap reached; the child stopped before reporting completion';
   // A run that settled while still parked on its own question never got its answer: that is a
   // BLOCK, whatever cezar's terminal status says. A restart force-settles every `waiting` run as
   // `done`, and reporting that upward as success would turn "I stopped and asked before doing
   // something irreversible" into a clean `done` nobody ever answered — the Guard's whole premise.
   const unanswered = own ? undefined : child.dispatch?.pendingAsk;
   const report: DispatchReport =
-    own ??
+    (capReached && own
+      ? {
+          ...own,
+          status: 'partial',
+          result: `${capNote} — ${own.result}`,
+        }
+      : own) ??
     (unanswered
       ? ({
           status: 'blocked',
@@ -175,11 +184,17 @@ export function childSettleReport(
           suggestions: [],
         } satisfies DispatchReport)
       : ({
-          status: statusToReportStatus(child.status),
-          result:
-            context.resumeNotes?.trim() ||
-            child.error?.trim() ||
-            'no structured report — the run settled without calling `cez task report`',
+          status: statusToReportStatus(child.status, capReached),
+          result: capReached
+            ? [
+                capNote,
+                context.resumeNotes?.trim(),
+                child.error?.trim(),
+                'no structured report — the run settled without calling `cez task report`',
+              ].filter(Boolean).join(' — ')
+            : context.resumeNotes?.trim() ||
+              child.error?.trim() ||
+              'no structured report — the run settled without calling `cez task report`',
           evidence: [],
           side_effects: [],
           errors: child.error ? [child.error] : [],
