@@ -73,6 +73,6 @@ Mirrors the spec's Implementation Plan (Phases 1–3, Steps 1–17).
 
 ### Phase 3: Cockpit
 
-- [ ] 3.1 Waiter indicator + Stop waiting
-- [ ] 3.2 Wait for task dialog
-- [ ] 3.3 Created by chip + hidden-when-off
+- [x] 3.1 Waiter indicator + Stop waiting — d73c2371
+- [x] 3.2 Wait for task dialog — d73c2371
+- [x] 3.3 Created by chip + hidden-when-off — d73c2371
