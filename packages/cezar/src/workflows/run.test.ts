@@ -1478,6 +1478,32 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
   }, 30_000);
 
   /**
+   * A parked step can wake WITHOUT cezar delivering anything: Claude Code re-invokes the model
+   * itself when a background command or sub-agent it started finishes. Writing straight into the
+   * session reproduces that — `manager.sendMessage`, the only path that clears the park, never
+   * runs. A later turn that declares `CEZ:DONE` must still finish the step and run the next one,
+   * not be settled as a question nobody answered (live run 2c2d2e34).
+   */
+  it('a self-woken intermediate monitoring park that ends with CEZ:DONE resumes the workflow', async () => {
+    const record = manager.startRun(PASSING_CHECK, { task: 'mock:monitoring keep going', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.activity === 'monitoring');
+
+    const live = (manager as unknown as {
+      active: Map<string, { session?: { sendMessage(content: { type: 'text'; text: string }[]): boolean } }>;
+    }).active.get(record.id);
+    expect(live?.session?.sendMessage([{ type: 'text', text: 'mock:done background task finished' }])).toBe(true);
+
+    await waitFor(record.id, (r) => r?.status === 'done' || r?.status === 'failed');
+    expect(store.getRun(record.id)?.status).toBe('done');
+    expect(steps(record.id)).toEqual([
+      { id: 'implement', status: 'done' },
+      { id: 'verify', status: 'done' },
+    ]);
+    expect(manager.isActive(record.id)).toBe(false);
+  }, 30_000);
+
+  /**
    * The park has to have EXITS, not just an entrance. Everything below drives one
    * of them: without them a run parked at an intermediate ask could never be
    * cancelled, finished or settled once its session closed, and — never reaching
