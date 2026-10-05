@@ -53,23 +53,23 @@ Mirrors the spec's Implementation Plan (Phases 1–3, Steps 1–17).
 
 ### Phase 1: Wait on an existing task
 
-- [ ] 1.1 Contract: wait schemas, RunRecord.waits, capabilities.taskWaits
-- [ ] 1.2 Env + capability CEZ_TASK_WAITS
-- [ ] 1.3 WaitResolver core
-- [ ] 1.4 Registry wiring
-- [ ] 1.5 Refactor enterMonitoring to a park reason
-- [ ] 1.6 Engine park for awaiting
-- [ ] 1.7 Delivery
-- [ ] 1.8 Routes
-- [ ] 1.9 CLI + prompt
-- [ ] 1.10 Dry-run e2e
+- [x] 1.1 Contract: wait schemas, RunRecord.waits, capabilities.taskWaits — 08c8346d
+- [x] 1.2 Env + capability CEZ_TASK_WAITS — 19841746
+- [x] 1.3 WaitResolver core — 61dc9198
+- [x] 1.4 Registry wiring — 0e7529b3
+- [x] 1.5 Refactor enterMonitoring to a park reason — 93a6a21e
+- [x] 1.6 Engine park for awaiting — 99b015cf
+- [x] 1.7 Delivery — 0e7529b3
+- [x] 1.8 Routes — 0e7529b3
+- [x] 1.9 CLI + prompt — 0e151579
+- [x] 1.10 Dry-run e2e — c3511698
 
 ### Phase 2: Create and wait in another project
 
-- [ ] 2.1 Contract create branch + waitedBy
-- [ ] 2.2 Create path
-- [ ] 2.3 Budget
-- [ ] 2.4 CLI + exception
+- [x] 2.1 Contract create branch + waitedBy — 08c8346d
+- [x] 2.2 Create path — 5d469235
+- [x] 2.3 Budget — 5d469235
+- [x] 2.4 CLI + exception — 291d5c94
 
 ### Phase 3: Cockpit
 
