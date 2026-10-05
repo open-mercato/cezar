@@ -8,6 +8,7 @@ const HOME: AgentHomePaths = {
   cursor: '/home/u/.cursor',
   copilot: '/home/u/.copilot',
   junie: '/home/u/.junie',
+  gemini: '/home/u/.gemini',
 };
 
 describe('agent-config catalog', () => {
@@ -73,6 +74,8 @@ describe('agent-config catalog', () => {
       'copilot.user.mcp',
       'cursor.project.mcp',
       'cursor.user.mcp',
+      'gemini.project.settings',
+      'gemini.user.settings',
       'opencode.project.config',
       'opencode.user.config',
     ]);

@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -20,6 +23,7 @@ vi.mock('./junie-auth-probe.ts', () => ({
 }));
 
 import { PROVIDER_IDS } from './provider-auth.ts';
+import { GEMINI_AUTH_FAILURE_MESSAGE, GEMINI_AUTH_HINT } from './gemini-ui-mapper.ts';
 import {
   ProviderAuthService,
   isRuntimeProviderAuthFailure,
@@ -64,6 +68,9 @@ const connectedResults: Record<string, ProviderCommandResult> = {
     stderr: '',
     exitCode: 0,
   },
+  // `gemini --version`: Gemini CLI has no auth-status command, so this only proves the install; the
+  // credentials come from the environment (`gemini-credentials.ts`).
+  gemini: { stdout: '0.60.0\n', stderr: '', exitCode: 0 },
 };
 
 const originalEnv = {
@@ -75,6 +82,9 @@ const originalEnv = {
   CEZ_PI_BIN: process.env.CEZ_PI_BIN,
   CURSOR_API_KEY: process.env.CURSOR_API_KEY,
   CEZ_COPILOT_BIN: process.env.CEZ_COPILOT_BIN,
+  CEZ_GEMINI_BIN: process.env.CEZ_GEMINI_BIN,
+  GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+  GEMINI_CLI_HOME: process.env.GEMINI_CLI_HOME,
 };
 
 beforeEach(() => {
@@ -86,6 +96,10 @@ beforeEach(() => {
   delete process.env.CEZ_PI_BIN;
   delete process.env.CURSOR_API_KEY;
   delete process.env.CEZ_COPILOT_BIN;
+  delete process.env.CEZ_GEMINI_BIN;
+  // Gemini's connected-ness is an environment read (the setup file strips the host's): give every
+  // case a key so "all connected" still means every provider. The gemini block below removes it.
+  process.env.GEMINI_API_KEY = 'AIza-test-key';
 });
 
 afterEach(() => {
@@ -107,6 +121,7 @@ function resultFor(executable: string): ProviderCommandResult {
   if (executable === 'agent' || executable.includes('cursor')) return connectedResults.cursor!;
   if (executable.includes('opencode')) return connectedResults.opencode!;
   if (executable.includes('copilot')) return connectedResults.copilot!;
+  if (executable.includes('gemini')) return connectedResults.gemini!;
   return connectedResults.pi!;
 }
 
@@ -625,6 +640,7 @@ describe('ProviderAuthService', () => {
         { provider: 'pi' },
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot' },
+        { provider: 'gemini' },
       ],
     });
   });
@@ -649,6 +665,7 @@ describe('ProviderAuthService', () => {
       { executable: 'agent', args: ['status', '--format', 'json'], timeoutMs: 10_000 },
       { executable: 'pi', args: ['--list-models'], timeoutMs: 10_000 },
       { executable: 'copilot', args: ['--acp'], timeoutMs: 10_000 },
+      { executable: 'gemini', args: ['--version'], timeoutMs: 10_000 },
     ]);
     release();
     await expect(pending).resolves.toBeDefined();
@@ -1105,6 +1122,7 @@ describe('ProviderAuthService', () => {
         { provider: 'pi', status: 'connected' },
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot', status: 'connected' },
+        { provider: 'gemini', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -1218,6 +1236,7 @@ describe('ProviderAuthService', () => {
         { provider: 'pi', status: 'connected' },
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot', status: 'connected' },
+        { provider: 'gemini', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -1386,5 +1405,68 @@ describe('ProviderAuthService', () => {
       expect(new ProviderAuthService({ platform: 'linux' }).loginCommand('opencode', '/oc-work'))
         .toBe("'opencode' auth login");
     });
+  });
+});
+
+describe('gemini provider status (#581): an environment read, never a login probe', () => {
+  let geminiHome: string;
+  beforeEach(() => {
+    geminiHome = mkdtempSync(join(tmpdir(), 'cez-gemini-home-'));
+    process.env.GEMINI_CLI_HOME = geminiHome;
+    delete process.env.GEMINI_API_KEY;
+  });
+  afterEach(() => {
+    rmSync(geminiHome, { recursive: true, force: true });
+  });
+
+  it('is connected when GEMINI_API_KEY is in the environment', async () => {
+    process.env.GEMINI_API_KEY = 'AIza-test';
+    const runCommand = runner();
+    const rows = await statuses(new ProviderAuthService({ runCommand, platform: 'linux' }));
+    expect(rows.gemini).toEqual({ status: 'connected', hint: undefined });
+    expect(runCommand).toHaveBeenCalledWith('gemini', ['--version'], 10_000);
+  });
+
+  it('is connected when the .env Gemini CLI loads itself names a key (the value is never read out)', async () => {
+    mkdirSync(join(geminiHome, '.gemini'));
+    writeFileSync(join(geminiHome, '.gemini', '.env'), 'GEMINI_API_KEY=AIza-from-file\n');
+    const rows = await statuses(new ProviderAuthService({ runCommand: runner(), platform: 'linux' }));
+    expect(rows.gemini!.status).toBe('connected');
+  });
+
+  it('is connected when the CLI is configured for an auth method that still works (a keychain key is invisible)', async () => {
+    mkdirSync(join(geminiHome, '.gemini'));
+    writeFileSync(join(geminiHome, '.gemini', 'settings.json'), '{"security":{"auth":{"selectedType":"gemini-api-key"}}}');
+    const rows = await statuses(new ProviderAuthService({ runCommand: runner(), platform: 'linux' }));
+    expect(rows.gemini!.status).toBe('connected');
+  });
+
+  it('a host configured only for Google sign-in is not evidence of working credentials (UNSUPPORTED_CLIENT)', async () => {
+    mkdirSync(join(geminiHome, '.gemini'));
+    writeFileSync(join(geminiHome, '.gemini', 'settings.json'), '{"security":{"auth":{"selectedType":"oauth-personal"}}}');
+    const rows = await statuses(new ProviderAuthService({ runCommand: runner(), platform: 'linux' }));
+    expect(rows.gemini).toEqual({ status: 'unknown', hint: GEMINI_AUTH_HINT });
+  });
+
+  it('is unknown — never disconnected — with the API-key hint when no credential is visible', async () => {
+    const rows = await statuses(new ProviderAuthService({ runCommand: runner(), platform: 'linux' }));
+    expect(rows.gemini).toEqual({ status: 'unknown', hint: GEMINI_AUTH_HINT });
+  });
+
+  it('is not-installed with an install hint when the CLI is absent, and honours CEZ_GEMINI_BIN', async () => {
+    process.env.CEZ_GEMINI_BIN = '/tools/gemini custom';
+    const runCommand = runner((executable) =>
+      executable === '/tools/gemini custom'
+        ? { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' }
+        : resultFor(executable));
+    const service = new ProviderAuthService({ runCommand, platform: 'linux' });
+    const rows = await statuses(service);
+    expect(rows.gemini!.status).toBe('not-installed');
+    expect(rows.gemini!.hint).toContain('npm i -g @google/gemini-cli');
+    expect(service.loginCommand('gemini')).toBe("'/tools/gemini custom'");
+  });
+
+  it('a runtime Gemini auth failure is recognized by the server-side latch', () => {
+    expect(isRuntimeProviderAuthFailure(GEMINI_AUTH_FAILURE_MESSAGE)).toBe(true);
   });
 });

@@ -1,0 +1,14 @@
+[
+  {
+    "type": "session.started",
+    "sessionId": "1a98a5ab-ca67-4ff1-8657-840944cbe209",
+    "backend": "gemini",
+    "model": "gemini-3-flash-preview",
+    "cwd": "/tmp/claude-1000/acp/repo"
+  },
+  {
+    "type": "session.error",
+    "message": "Internal error: Invalid session identifier \"00000000-0000-4000-8000-000000000000\".\n  Searched for sessions in /home/user/.gemini/tmp/repo/chats.\n  Use --list-sessions to see available sessions, then use --resume {number}, --resume {uuid}, or --resume latest.",
+    "fatal": false
+  }
+]

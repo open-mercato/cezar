@@ -2,7 +2,7 @@ import { realpathSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { posix, resolve, win32 } from 'node:path';
 import { z } from 'zod';
-import { DEFAULT_AGENT_ACCOUNT_ID } from '@open-mercato/cezar-contract';
+import { DEFAULT_AGENT_ACCOUNT_ID, perRunner } from '@open-mercato/cezar-contract';
 import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
 import { supportsProfiles } from '../core/agent-profiles.ts';
 import { agentAccountsPath, workspaceConfigPath } from '../paths.ts';
@@ -117,18 +117,9 @@ const agentAccountSchema = z
 
 export type AgentAccount = z.infer<typeof agentAccountSchema>;
 
-/** One project's choice, per provider. Explicit keys so `PROVIDER_IDS` stays the one source of
- *  truth and the value is bounded. An absent key means the discovered default. */
-const selectionSchema = z
-  .object({
-    claude: z.string().max(64).optional().catch(undefined),
-    codex: z.string().max(64).optional().catch(undefined),
-    opencode: z.string().max(64).optional().catch(undefined),
-    cursor: z.string().max(64).optional().catch(undefined),
-    pi: z.string().max(64).optional().catch(undefined),
-    junie: z.string().max(64).optional().catch(undefined),
-    copilot: z.string().max(64).optional().catch(undefined),
-  })
+/** One project's choice, per provider — one bounded key per runner, derived from the contract's
+ *  runner tuple. An absent key means the discovered default. */
+const selectionSchema = perRunner(z.string().max(64).optional().catch(undefined))
   .passthrough();
 
 export type AgentAccountSelection = z.infer<typeof selectionSchema>;

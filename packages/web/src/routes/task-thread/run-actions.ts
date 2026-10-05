@@ -45,6 +45,7 @@ const RESUME_COMMAND_PREFIX: Record<Runner, string> = {
   junie: 'junie --resume',
   pi: 'pi --session',
   copilot: 'copilot --resume',
+  gemini: 'gemini --resume',
 }
 
 /** The per-backend take-over command. Records without a runner recorded predate the runner

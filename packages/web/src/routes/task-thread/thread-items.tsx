@@ -344,6 +344,7 @@ const PROVIDER_LABEL: Record<ThreadProviderAuthRequired['provider'], string> = {
   cursor: 'Cursor',
   pi: 'pi',
   copilot: 'GitHub Copilot CLI',
+  gemini: 'Gemini CLI',
 }
 
 /** Persisted recovery guidance for an authoritative runtime authentication rejection. */

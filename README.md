@@ -52,7 +52,7 @@
 ## Features
 
 - 💯&nbsp;Free and open source.
-- 🖥️&nbsp;Uses your own `claude`, `codex`, `copilot`, `cursor`, `junie`, `opencode` or `pi` login. No API key needed.
+- 🖥️&nbsp;Uses your own `claude`, `codex`, `copilot`, `cursor`, `gemini`, `junie`, `opencode` or `pi` login. No API key needed.
 - ☁️&nbsp;Easy to set up on a VPS, so your agents keep working when your laptop is closed.
 - 📱&nbsp;Fully responsive. Start and review tasks from your phone.
 - 🔀&nbsp;Every task gets its own git worktree, so several agents can work at the same time. Extra tasks wait in a queue.
@@ -122,7 +122,8 @@
 You need **Node 20+** and at least one agent CLI you're logged into:
 [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex),
 [GitHub Copilot CLI](https://github.com/github/copilot-cli), [OpenCode](https://opencode.ai),
-[Cursor Agent](https://cursor.com/docs/cli/overview), [Junie](https://junie.jetbrains.com/cli) or [pi](https://github.com/badlogic/pi-mono).
+[Cursor Agent](https://cursor.com/docs/cli/overview), [Junie](https://junie.jetbrains.com/cli), [pi](https://github.com/badlogic/pi-mono) or
+[Gemini CLI](https://github.com/google-gemini/gemini-cli) (needs an API key, Vertex AI or a Workspace licence — personal Google sign-in no longer works for it).
 `git` and `gh` are optional.
 
 ```bash

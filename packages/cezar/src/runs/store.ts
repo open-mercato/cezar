@@ -400,6 +400,28 @@ export interface RunEvent {
 const MAX_RUNS_KEPT = 300;
 const MAX_ARCHIVED_KEPT = 500;
 
+/**
+ * A record this version cannot read, kept verbatim (spec 2026-09-19-runner-seam-native-backends,
+ * Phase 0 — `runs.json` downgrade safety). A newer cezar may have written a runner id, a status or
+ * a field this one does not know; parsing the index as one array used to fail on that element,
+ * start empty, and the next save then overwrote every run. Salvaged records are invisible to the
+ * read API — nothing that consumes a `RunRecord` can be handed a shape it does not know — but not
+ * to lifecycle: `deleteRun` and `pruneOldRuns` address them through this header, and `saveNow`
+ * writes `raw` back unchanged, so an upgrade reads the record again exactly as it was.
+ */
+interface SalvagedRecord {
+  id: string;
+  createdAt: string;
+  archived: boolean;
+  raw: unknown;
+}
+/** The minimal header a record needs to be addressed and ordered; anything less is dropped as today. */
+const salvageHeaderSchema = z.object({
+  id: z.string().min(1),
+  createdAt: z.string().min(1),
+  archived: z.boolean().catch(false),
+});
+
 const PR_URL_RE = /https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
 const ISSUE_URL_RE = /https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/issues\/\d+/;
 // The transcript auto-link is convenience only (the cockpit's own `gh pr create` path sets the
@@ -816,6 +838,8 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
  */
 export class RunStore extends EventEmitter {
   private runs = new Map<string, RunRecord>();
+  /** Records preserved unread — see `SalvagedRecord`. Keyed like `runs`; an id is in one or the other. */
+  private readonly salvaged = new Map<string, SalvagedRecord>();
   /** Ids this process removed on purpose — see `forget`, which is the only thing that writes it. */
   private forgotten = new Set<string>();
   private saveTimer: NodeJS.Timeout | null = null;
@@ -843,13 +867,34 @@ export class RunStore extends EventEmitter {
     if (existsSync(indexPath)) {
       try {
         const raw = JSON.parse(readFileSync(indexPath, 'utf8'));
-        const parsed = z.array(runRecordSchema).safeParse(raw);
-        if (parsed.success) {
-          for (const run of parsed.data) {
-            store.runs.set(run.id, reconcileLoadedRun(run, opts));
+        if (Array.isArray(raw)) {
+          // Per-record salvage: one element this version cannot read costs only itself. It is kept
+          // verbatim under its header (see `SalvagedRecord`) so the next save carries it over and a
+          // later version reads it again; an element without a usable header cannot be addressed
+          // or ordered and is dropped, as the whole-array parse used to drop everything.
+          let dropped = 0;
+          for (const entry of raw) {
+            const parsed = runRecordSchema.safeParse(entry);
+            if (parsed.success) {
+              // A readable copy wins over an unreadable one of the same id, whichever came first.
+              store.salvaged.delete(parsed.data.id);
+              store.runs.set(parsed.data.id, reconcileLoadedRun(parsed.data, opts));
+              continue;
+            }
+            const header = salvageHeaderSchema.safeParse(entry);
+            if (header.success && !store.runs.has(header.data.id)) store.salvaged.set(header.data.id, { ...header.data, raw: entry });
+            else dropped++;
+          }
+          if (store.salvaged.size > 0 || dropped > 0) {
+            const preserved = store.salvaged.size;
+            console.warn(
+              `[cez] runs.json: ${preserved} task record${preserved === 1 ? '' : 's'} this version cannot read ${preserved === 1 ? 'was' : 'were'} preserved unread` +
+                (dropped > 0 ? `; ${dropped} without a usable id/createdAt header ${dropped === 1 ? 'was' : 'were'} dropped` : ''),
+            );
+            store.indexReadHealth = { state: 'complete', omittedRuns: preserved + dropped, reason: 'Some task records could not be read by this server' };
           }
         } else {
-          store.indexReadHealth = { state: 'unavailable', omittedRuns: Array.isArray(raw) ? raw.length : 0, reason: 'Task index could not be loaded by this server' };
+          store.indexReadHealth = { state: 'unavailable', omittedRuns: 0, reason: 'Task index could not be loaded by this server' };
         }
       } catch {
         store.indexReadHealth = { state: 'unavailable', omittedRuns: 0, reason: 'Task index could not be loaded by this server' };
@@ -1526,7 +1571,8 @@ export class RunStore extends EventEmitter {
   }
 
   deleteRun(id: string): boolean {
-    const existed = this.forget(id);
+    // A record this version cannot read is still the user's to delete, prompt text included.
+    const existed = this.forget(id) || this.salvaged.delete(id);
     if (existed) {
       try {
         rmSync(this.eventsPath(id), { force: true });
@@ -1608,13 +1654,18 @@ export class RunStore extends EventEmitter {
   }
 
   private pruneOldRuns(): void {
-    const all = this.listRuns();
+    // Retention is applied to the union of live and salvaged headers, in the order `listRuns`
+    // uses, so records this version cannot read are bounded by the same caps as the file and the
+    // pool cannot grow across repeated downgrade/upgrade cycles.
+    const all: Array<{ id: string; createdAt: string; archived: boolean }> = [...this.listRuns(), ...this.salvaged.values()]
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
     const stalePool = [
       ...all.filter((r) => !r.archived).slice(MAX_RUNS_KEPT),
       ...all.filter((r) => r.archived).slice(MAX_ARCHIVED_KEPT),
     ];
     for (const stale of stalePool) {
       this.forget(stale.id);
+      this.salvaged.delete(stale.id);
       try {
         rmSync(this.eventsPath(stale.id), { force: true });
         rmSync(this.handoffPath(stale.id), { force: true });
@@ -1672,29 +1723,38 @@ export class RunStore extends EventEmitter {
    * owns it. An index that cannot be read contributes nothing rather than costing us our own runs,
    * exactly as in `open()`.
    */
-  private mergeWithIndexOnDisk(indexPath: string): RunRecord[] {
+  private mergeWithIndexOnDisk(indexPath: string): unknown[] {
     const mine = this.listRuns();
     const foreign = this.foreignRecordsOnDisk(indexPath);
-    if (foreign.length === 0) return mine;
-    // Same ordering rule `listRuns` applies, so the file's shape is unchanged.
-    return [...mine, ...foreign].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    if (foreign.length === 0 && this.salvaged.size === 0) return mine;
+    // Same ordering rule `listRuns` applies (ties broken by id, so a round trip through a salvaged
+    // record leaves the file's order unchanged); salvaged and unreadable foreign records go back
+    // as the verbatim element they came from.
+    const entries: Array<{ id: string; createdAt: string; value: unknown }> = [
+      ...mine.map((run) => ({ id: run.id, createdAt: run.createdAt, value: run })),
+      ...foreign,
+      ...[...this.salvaged.values()].map((record) => ({ id: record.id, createdAt: record.createdAt, value: record.raw })),
+    ];
+    return entries
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id))
+      .map((entry) => entry.value);
   }
 
   /**
    * The records in `runs.json` this process knows nothing about — the ones a save has to carry
    * over rather than overwrite.
    *
-   * Validated one record at a time, and only for the ids we are actually adopting, which is the
-   * difference between this and `open()`'s whole-array parse. `saveNow` runs on a 300 ms debounce
+   * Validated one record at a time, and only for the ids we are actually adopting — `open()` parses
+   * per record too, but it has to look at every row once. `saveNow` runs on a 300 ms debounce
    * for as long as an agent is streaming, so this runs several times a second on the main thread of
    * the process also serving the cockpit's SSE, while retention lets the index reach
    * `MAX_RUNS_KEPT + MAX_ARCHIVED_KEPT` records — and in the ordinary single-process case every one
    * of them is ours, so a `z.array(...)` parse would spend all of its time validating records the
    * next line throws away. The id check is cheap and rejects nearly everything; zod sees what is
-   * left, which is normally nothing. Per-record also degrades better than `open()` can afford to:
-   * one unreadable row costs only itself instead of every foreign record in the file.
+   * left, which is normally nothing. One unreadable row costs only itself: a row with a readable
+   * header is carried over verbatim, a row without one is skipped, never the rest of the file.
    */
-  private foreignRecordsOnDisk(indexPath: string): RunRecord[] {
+  private foreignRecordsOnDisk(indexPath: string): Array<{ id: string; createdAt: string; value: unknown }> {
     if (!existsSync(indexPath)) return [];
     let raw: unknown;
     try {
@@ -1703,12 +1763,19 @@ export class RunStore extends EventEmitter {
       return []; // not JSON — an index we cannot read contributes nothing, and costs us nothing
     }
     if (!Array.isArray(raw)) return [];
-    const foreign: RunRecord[] = [];
+    const foreign: Array<{ id: string; createdAt: string; value: unknown }> = [];
     for (const entry of raw) {
       const id: unknown = (entry as { id?: unknown } | null)?.id;
-      if (typeof id !== 'string' || this.runs.has(id) || this.forgotten.has(id)) continue;
+      if (typeof id !== 'string' || this.runs.has(id) || this.salvaged.has(id) || this.forgotten.has(id)) continue;
       const parsed = runRecordSchema.safeParse(entry);
-      if (parsed.success) foreign.push(parsed.data);
+      if (parsed.success) {
+        foreign.push({ id, createdAt: parsed.data.createdAt, value: parsed.data });
+        continue;
+      }
+      // Another process (a newer cezar sharing this data dir) wrote a record this version cannot
+      // read: carry it over verbatim like a salvaged one rather than delete it on our next save.
+      const header = salvageHeaderSchema.safeParse(entry);
+      if (header.success) foreign.push({ id, createdAt: header.data.createdAt, value: entry });
     }
     return foreign;
   }

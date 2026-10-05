@@ -162,6 +162,9 @@ describe('resumeCommand — per backend, mirroring the server', () => {
     ['opencode', 'opencode --session s1'],
     ['junie', 'junie --resume --session-id=s1'],
     ['cursor', 'agent --resume s1'],
+    // Each backend resumes with its OWN CLI — the old `default` branch handed these `claude`.
+    ['pi', 'pi --session s1'],
+    ['gemini', 'gemini --resume s1'],
   ] as Array<[RunRecord['runner'], string]>)('%s → %s', (runner, expected) => {
     expect(resumeCommand(runner, 's1')).toBe(expected)
   })

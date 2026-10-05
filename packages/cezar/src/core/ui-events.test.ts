@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { RunnerId } from './agent-runner.ts';
+import type { Runner } from '@open-mercato/cezar-contract';
 import type {
   PlanEntry,
   StopReason,
@@ -29,7 +30,9 @@ function assertType<_T extends true>(): void {}
 describe('UiEvent vocabulary (compile-time contract)', () => {
   it('UiBackend stays in lockstep with RunnerId (no drift with agent-runner.ts)', () => {
     assertType<Equal<UiBackend, RunnerId>>();
-    expect<UiBackend[]>(['claude', 'codex', 'opencode', 'cursor', 'pi', 'copilot']).toBeDefined();
+    // …and both to the contract's own union, the single source every enumeration derives from.
+    assertType<Equal<UiBackend, Runner>>();
+    expect<UiBackend[]>(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'gemini']).toBeDefined();
   });
 
   it('enums match the research §7 vocabulary exactly', () => {
