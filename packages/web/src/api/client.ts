@@ -2,6 +2,9 @@ import { trackerReadScope } from '@open-mercato/cezar-api-client'
 import type { TrackerAutomationOptions } from '@open-mercato/cezar-api-client'
 import { trackerWatchHandleSchema, trackerWatchSnapshotSchema, type TrackerWatchInput } from "@open-mercato/cezar-api-client"
 import type {
+  WaitCancelResponse,
+  WaitDeclareResponse,
+  WaitInput,
   AgentConfigFileContent,
   AgentAccountDetailsResponse,
   AgentAccountStatusResponse,
@@ -1296,6 +1299,32 @@ export async function pinRun(id: string, pinned = true): Promise<RunRecord> {
       json: { pinned },
     }),
     runPath(id, '/pin'),
+  )
+}
+
+/**
+ * Declare that run `id` waits for another task — `POST /runs/:id/waits` (spec
+ * 2026-10-05-cross-task-waits). From the cockpit this is always the USER's wait: the route derives
+ * `origin` from the request, and only the `cez task` CLI sends the task-id header that makes it
+ * the agent's. Answers the edge, or the target's outcome when it had already settled.
+ */
+export async function declareWait(id: string, input: WaitInput): Promise<WaitDeclareResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].waits.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: input,
+    }),
+    runPath(id, '/waits'),
+  )
+}
+
+/** "Stop waiting" — `DELETE /runs/:id/waits/:waitId`; answers the edge, now `cancelled`. */
+export async function cancelWait(id: string, waitId: string): Promise<WaitCancelResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].waits[':waitId'].$delete({
+      param: { projectId: queryScope(), id: encodeURIComponent(id), waitId: encodeURIComponent(waitId) },
+    }),
+    runPath(id, `/waits/${encodeURIComponent(waitId)}`),
   )
 }
 

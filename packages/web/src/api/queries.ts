@@ -7,6 +7,8 @@ import { mergeRun } from './events'
 import {
   ApiError,
   browseFs,
+  cancelWait,
+  declareWait,
   checkoutProject,
   connectProvider,
   continueRun,
@@ -96,6 +98,7 @@ import { githubRepoBase } from '@/lib/tasks-table'
 import { normalizeTagsForDisplay } from '@/lib/project-tags'
 import type { ContinueOptions } from './client'
 import type {
+  WaitInput,
   CheckoutProjectInput,
   CreateAgentProfileInput,
   ApiRun,
@@ -1662,6 +1665,28 @@ export function usePinRun(projectId?: string, cacheScope?: string) {
       queryClient.invalidateQueries({
         queryKey: cacheScope === undefined ? queryKeys.runs.all : ([cacheScope, 'runs'] as const),
       }),
+  })
+}
+
+/**
+ * "Wait for task…" from the cockpit (spec 2026-10-05-cross-task-waits) — the user's wait on run
+ * `id`. Invalidate, like the pin: the edge rides the run record, and the SSE run stream patches
+ * the rest (the waiter's note, its park) as it happens.
+ */
+export function useDeclareWait(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: WaitInput) => declareWait(id, input),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
+  })
+}
+
+/** "Stop waiting" on one of run `id`'s pending edges. */
+export function useCancelWait(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (waitId: string) => cancelWait(id, waitId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
   })
 }
 

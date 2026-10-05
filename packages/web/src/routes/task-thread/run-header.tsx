@@ -9,6 +9,7 @@ import {
   CopyIcon,
   EllipsisVerticalIcon,
   FileTextIcon,
+  HourglassIcon,
   MailIcon,
   PencilIcon,
   PinIcon,
@@ -45,6 +46,7 @@ import { ResolveConflictsButton } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
 import { TabLink } from '@/components/tab-link'
+import { CreatedByLine, TaskWaitsLine, WaitForTaskDialog, useTaskWaitsAvailable } from '@/components/task-waits'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -159,6 +161,11 @@ function RunHeaderView({
   const hint = resumeHint(run)
   const [notesOpen, setNotesOpen] = useState(false)
   const actions = useRunActions(run, onMarkedUnread)
+  // "Wait for task…" (spec 2026-10-05-cross-task-waits): offered on a live task — the engine
+  // refuses a queued or settled waiter anyway — and only while the server has waits on.
+  const waitsAvailable = useTaskWaitsAvailable()
+  const canWait = waitsAvailable && (run.status === 'running' || run.status === 'waiting')
+  const [waitDialogOpen, setWaitDialogOpen] = useState(false)
 
   // The phone-width meta disclosure (#765). The map is the state — a re-render bump rather than a
   // mirrored `useState` — so switching runs reads that run's own answer instead of the last one's.
@@ -228,7 +235,12 @@ function RunHeaderView({
                 className={cn('transition-transform', detailsOpen && 'rotate-180')}
               />
             </Button>
-            <ActionsKebab run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} />
+            <ActionsKebab
+              run={run}
+              actions={actions}
+              onToggleNotes={() => setNotesOpen((open) => !open)}
+              onWaitFor={canWait ? () => setWaitDialogOpen(true) : undefined}
+            />
           </span>
         </div>
 
@@ -257,6 +269,10 @@ function RunHeaderView({
             are what the run IS doing right now, not metadata about how it started. */}
         <DispatchParentLine run={run} />
         <DispatchChildrenLine run={run} />
+        {/* Cross-task waits: what this task is parked on, and who created it to wait for it. */}
+        <TaskWaitsLine run={run} />
+        <CreatedByLine run={run} />
+        {canWait ? <WaitForTaskDialog run={run} open={waitDialogOpen} onOpenChange={setWaitDialogOpen} /> : null}
 
         <div data-slot="run-tabs" className="mt-1.5 flex items-end gap-1 md:mt-2.5">
           <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
@@ -303,6 +319,18 @@ function RunHeaderView({
               <FileTextIcon aria-hidden="true" />
               Notes
             </Button>
+            {canWait ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                data-slot="wait-for-task"
+                title="Park this task until another task — here or in another project — settles"
+                onClick={() => setWaitDialogOpen(true)}
+              >
+                <HourglassIcon aria-hidden="true" />
+                Wait for…
+              </Button>
+            ) : null}
             {flags.markUnread ? (
               <Button
                 variant="ghost"
@@ -1098,10 +1126,13 @@ function ActionsKebab({
   run,
   actions,
   onToggleNotes,
+  onWaitFor,
 }: {
   run: ApiRun
   actions: RunActions
   onToggleNotes: () => void
+  /** "Wait for task…" — present only when the run may wait (live, capability on). */
+  onWaitFor?: () => void
 }) {
   const flags = runActionFlags(run)
   return (
@@ -1134,6 +1165,11 @@ function ActionsKebab({
         <DropdownMenuItem onSelect={onToggleNotes}>
           <FileTextIcon aria-hidden="true" /> Notes
         </DropdownMenuItem>
+        {onWaitFor ? (
+          <DropdownMenuItem data-slot="wait-for-task-item" onSelect={onWaitFor}>
+            <HourglassIcon aria-hidden="true" /> Wait for task…
+          </DropdownMenuItem>
+        ) : null}
         {flags.markUnread ? (
           <DropdownMenuItem
             disabled={actions.markUnread.isPending}

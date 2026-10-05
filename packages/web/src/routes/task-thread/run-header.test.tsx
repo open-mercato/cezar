@@ -1586,3 +1586,104 @@ describe('dispatch lines', () => {
     expect(document.querySelector('[data-slot="unit-role"]')).toBeNull()
   })
 })
+
+describe('cross-task waits (spec 2026-10-05-cross-task-waits)', () => {
+  const capabilities = (taskWaits: boolean) => ({
+    localHandoff: true, followups: false, singleProject: false, automations: false, dispatch: true, taskWaits,
+    tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true,
+  })
+  const health = (taskWaits: boolean) => () => jsonResponse({ bootProject: 'web', capabilities: capabilities(taskWaits) })
+  const edge = {
+    id: 'w-1',
+    target: { projectId: 'api', runId: 'target-run-0001' },
+    targetTitle: 'Add export endpoint',
+    origin: 'agent' as const,
+    createdAt: '2026-10-05T10:00:00.000Z',
+    deadline: new Date(Date.now() + 23 * 60 * 60_000).toISOString(),
+    state: 'pending' as const,
+  }
+  const waiter = () => run('running', { activity: 'monitoring', waits: [edge] })
+
+  it('shows what the task waits for, across projects, with the time left and Stop waiting', async () => {
+    const sent = stubFetch({
+      '/api/v1/health': health(true),
+      '/api/v1/runs/r1/waits/w-1': () => jsonResponse({ edge: { ...edge, state: 'cancelled' } }),
+    })
+    renderHeader(waiter())
+    const row = await waitFor(() => {
+      const found = document.querySelector('[data-slot="task-wait"]')
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    expect(row.textContent).toContain('Waiting for')
+    expect(row.textContent).toContain('api / Add export endpoint')
+    expect(row.textContent).toMatch(/times out in 2[23] h/)
+    const link = row.querySelector('[data-slot="task-wait-target"]') as HTMLAnchorElement
+    expect(link.getAttribute('href')).toBe('/p/api/tasks/target-run-0001')
+    fireEvent.click(within(row).getByRole('button', { name: /Stop waiting/ }))
+    await waitFor(() =>
+      expect(sent.some((request) => request.method === 'DELETE' && request.path === '/api/v1/runs/r1/waits/w-1')).toBe(true),
+    )
+  })
+
+  it('offers "Wait for…" on a live task and declares the user’s wait from the dialog', async () => {
+    const candidates = [
+      run('running', { id: 'aaaa1111-run', title: 'Other running task', titleSummary: undefined, createdAt: '2026-07-14T12:05:00.000Z' }),
+      run('done', { id: 'bbbb2222-run', title: 'Finished one', titleSummary: undefined }),
+    ]
+    const sent = stubFetch({
+      '/api/v1/health': health(true),
+      '/api/v1/projects': () => jsonResponse({ projects: [], bootProject: 'web', projectsDir: '/x' }),
+      '/api/v1/runs': () => jsonResponse(candidates),
+      '/api/v1/runs/r1/waits': () => jsonResponse({ kind: 'pending', edge: { ...edge, target: { projectId: 'web', runId: 'aaaa1111-run' }, targetTitle: 'Other running task' } }),
+    })
+    renderHeader(run('running'))
+    fireEvent.click(await within(document.querySelector('[data-slot="run-actions"]') as HTMLElement).findByRole('button', { name: /Wait for/ }))
+    const dialog = await screen.findByRole('dialog')
+    // Only unsettled runs, never the waiter itself.
+    const option = await within(dialog).findByRole('option', { name: /Other running task/ })
+    expect(within(dialog).queryByRole('option', { name: /Finished one/ })).toBeNull()
+    expect((within(dialog).getByLabelText('Timeout (minutes)') as HTMLInputElement).value).toBe('1440')
+    fireEvent.click(option)
+    fireEvent.change(within(dialog).getByLabelText('Timeout (minutes)'), { target: { value: '90' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: /Wait for it/ }))
+    await waitFor(() => {
+      const post = sent.find((request) => request.method === 'POST' && request.path === '/api/v1/runs/r1/waits')
+      expect(post?.body).toEqual({ target: { projectId: 'web', runId: 'aaaa1111-run' }, timeoutMinutes: 90 })
+    })
+  })
+
+  it('shows who created a task that another task waits for', async () => {
+    stubFetch({
+      '/api/v1/health': health(true),
+      '/api/v1/p/other/runs': () => jsonResponse([run('running', { id: 'creator-1', title: 'Build the export page', titleSummary: undefined })]),
+    })
+    renderHeader(run('running', { waitedBy: { projectId: 'other', runId: 'creator-1' } }))
+    const line = await waitFor(() => {
+      const found = document.querySelector('[data-slot="created-by"]')
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    await waitFor(() => expect(line.textContent).toContain('other / Build the export page'))
+    expect(line.querySelector('a')?.getAttribute('href')).toBe('/p/other/tasks/creator-1')
+  })
+
+  it('hides every wait affordance while capabilities.taskWaits is false', async () => {
+    stubFetch({ '/api/v1/health': health(false) })
+    renderHeader(run('running', { activity: 'monitoring', waits: [edge], waitedBy: { projectId: 'other', runId: 'creator-1' } }))
+    await waitFor(() => expect(document.querySelector('[data-slot="run-actions"]')).not.toBeNull())
+    // Let the health answer land before asserting absence.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(document.querySelector('[data-slot="task-wait"]')).toBeNull()
+    expect(document.querySelector('[data-slot="created-by"]')).toBeNull()
+    expect(document.querySelector('[data-slot="wait-for-task"]')).toBeNull()
+  })
+
+  it('never offers "Wait for…" on a settled task', async () => {
+    stubFetch({ '/api/v1/health': health(true) })
+    renderHeader(run('done'))
+    await waitFor(() => expect(document.querySelector('[data-slot="run-actions"]')).not.toBeNull())
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(document.querySelector('[data-slot="wait-for-task"]')).toBeNull()
+  })
+})

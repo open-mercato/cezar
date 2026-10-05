@@ -1,4 +1,4 @@
-import { ChevronDownIcon, ScaleIcon } from 'lucide-react'
+import { ChevronDownIcon, HourglassIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
 import { useHealth, usePinRun, useReferenceProjectId, useRunsForProject } from '@/api/queries'
 import { Link, scopeTo, useActiveProjectId, useProjectMatch } from '@/lib/project-router'
@@ -28,6 +28,7 @@ import { dispatchKindLabel, subtaskLabel, taskTreeRows } from '@/lib/task-tree'
 import { formatCost, taskReference, taskReferences } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
+import { pendingWaits } from '@/lib/waits'
 import { cn } from '@/lib/utils'
 
 /**
@@ -45,6 +46,7 @@ export function TaskQuickList({
   currentRunId = null,
   now = Date.now(),
   showTokens = true,
+  showWaits = false,
   showCost = true,
   onTogglePin,
 }: {
@@ -57,6 +59,8 @@ export function TaskQuickList({
   now?: number
   /** Presentation capability; defaults visible for older health responses and direct renders. */
   showTokens?: boolean
+  /** Cross-task waits are on (`capabilities.taskWaits`): rows of parked waiters wear an hourglass. */
+  showWaits?: boolean
   showCost?: boolean
   /** Pin/unpin one row (#935). The container owns the mutation, because WHICH project a row
    *  belongs to is a container's question — this list is painted for other projects too. */
@@ -97,6 +101,7 @@ export function TaskQuickList({
           currentRunId={currentRunId}
           now={now}
           showTokens={showTokens}
+          showWaits={showWaits}
           showCost={showCost}
           onTogglePin={pinToggle}
         />
@@ -118,6 +123,7 @@ export function QuickListBuckets({
   now = Date.now(),
   scope = null,
   showTokens = true,
+  showWaits = false,
   showCost = true,
   onTogglePin,
 }: {
@@ -126,6 +132,8 @@ export function QuickListBuckets({
   now?: number
   scope?: string | null
   showTokens?: boolean
+  /** Cross-task waits are on (`capabilities.taskWaits`): rows of parked waiters wear an hourglass. */
+  showWaits?: boolean
   showCost?: boolean
   onTogglePin?: (run: RunRecord, pinned: boolean) => void
 }) {
@@ -155,6 +163,7 @@ export function QuickListBuckets({
               now={now}
               scope={scope}
               showTokens={showTokens}
+              showWaits={showWaits}
               showCost={showCost}
               expanded={node.run.row.kind === 'group' && expanded.has(node.run.row.groupId)}
               onToggle={toggleGroup}
@@ -235,6 +244,7 @@ function Row({
   expanded,
   onToggle,
   showTokens,
+  showWaits,
   showCost,
   onTogglePin,
 }: {
@@ -249,6 +259,7 @@ function Row({
   expanded: boolean
   onToggle: (groupId: string) => void
   showTokens: boolean
+  showWaits?: boolean
   showCost: boolean
   onTogglePin?: (run: RunRecord, pinned: boolean) => void
 }) {
@@ -263,6 +274,7 @@ function Row({
         now={now}
         scope={scope}
         showTokens={showTokens}
+        showWaits={showWaits}
         showCost={showCost}
         onTogglePin={onTogglePin}
       />
@@ -316,6 +328,7 @@ function Row({
               scope={scope}
               variant
               showTokens={showTokens}
+              showWaits={showWaits}
               showCost={showCost}
               onTogglePin={onTogglePin}
             />
@@ -383,6 +396,7 @@ const RunRow = React.memo(function RunRow({
   scope,
   variant = false,
   showTokens,
+  showWaits,
   showCost,
   onTogglePin,
 }: {
@@ -401,6 +415,7 @@ const RunRow = React.memo(function RunRow({
    *  actually distinguishes the variants (runner and spend) rather than the shared title. */
   variant?: boolean
   showTokens: boolean
+  showWaits?: boolean
   showCost: boolean
   onTogglePin?: (run: RunRecord, pinned: boolean) => void
 }) {
@@ -429,6 +444,7 @@ const RunRow = React.memo(function RunRow({
 
   const subtasks = subtaskLabel(childCount)
   const dispatchKind = dispatchKindLabel(run)
+  const waiting = showWaits ? pendingWaits(run) : []
 
   return (
     <div
@@ -492,6 +508,19 @@ const RunRow = React.memo(function RunRow({
         {/* What a DISPATCHED row is for — `review` or `implement`. NOT droppable metadata like
             the pair below: it is the one thing that tells a child from a task a person typed, so
             it stays at every width, in the sidebar's smaller chip size. Null on every root. */}
+        {/* Parked on another task (spec 2026-10-05-cross-task-waits): an hourglass that names the
+            targets on hover. Kept at every width like the kind chip — it explains the row's dot. */}
+        {waiting.length > 0 ? (
+          <span
+            data-slot="task-row-waiting"
+            title={`Waiting for ${waiting.map((edge) => edge.targetTitle).join(', ')}`}
+            aria-label={`Waiting for ${waiting.length} task${waiting.length === 1 ? '' : 's'}`}
+            role="img"
+            className="inline-flex shrink-0 items-center text-muted-foreground"
+          >
+            <HourglassIcon aria-hidden="true" className="size-3" />
+          </span>
+        ) : null}
         {dispatchKind ? (
           <span
             data-slot="dispatch-kind"
@@ -635,6 +664,7 @@ export function TaskQuickListContainer() {
         currentRunId={match?.params.id ?? exact?.params.id ?? null}
         now={now}
         showTokens={visibility.tokens}
+        showWaits={health.data?.capabilities?.taskWaits === true}
         showCost={visibility.cost}
         // This list is the ACTIVE project's, so the mutation needs no explicit project: the
         // scoped client already addresses the one the URL names.
