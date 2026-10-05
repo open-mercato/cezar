@@ -20,6 +20,7 @@ import { CenteredState } from '@/components/centered-state'
 import { Composer } from '@/components/composer/composer'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
+import { toast } from '@/components/ui/toaster'
 import { useKeyboardInsetVar } from '@/lib/keyboard-inset'
 import { budgetStop } from '@/lib/attention'
 import { isUnread } from '@/lib/read-state'
@@ -250,6 +251,11 @@ export function ThreadView({
   // (deliver-prompt.ts). Without that, a lost record update meant every send bounced until the
   // page was reloaded.
   const deliverPrompt = useDeliverPrompt(run, continueAction)
+  const continueFromHeader = useCallback(() => {
+    void deliverPrompt('', []).catch((error: unknown) => {
+      toast(error instanceof Error ? error.message : 'Could not continue the session.', { tone: 'danger' })
+    })
+  }, [deliverPrompt])
   // The reply composer's unsent content (#939) — server-side, per run, restored on return.
   const draft = useDraft(run.id, 'composer')
   const activeProvider = useActiveProviderAvailability(run)
@@ -329,6 +335,14 @@ export function ThreadView({
         // continuation choice as the dock. One hook owns both renderings, so a header pick is
         // exactly what the next composer submission sends — no second, drifting engine state.
         continuationEngine={continuable ? continueAction.pills : undefined}
+        continuationControl={
+          hasContinuation ? {
+            canContinue: continueAction.canContinue,
+            pending: continueAction.pending,
+            reason: continueAction.reason,
+            onContinue: continueFromHeader,
+          } : undefined
+        }
       />
 
       {/* Row spacing lives on each thread row (pb-2.5, both render modes measure alike);

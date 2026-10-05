@@ -26,6 +26,8 @@ export interface ContinueAction {
   reason?: string
   /** True while provider status is still loading. */
   providerPending: boolean
+  /** True while a continuation request is in flight. */
+  pending: boolean
   /** The runner + model pills — which backend and model the reopened session runs on. */
   pills: ReactNode
   /**
@@ -128,6 +130,7 @@ export function useContinueAction(run: ApiRun): ContinueAction {
     canContinue,
     reason: continuation.reason,
     providerPending: continuation.providerPending,
+    pending: mutation.isPending,
     pills: (
       <div data-slot="follow-up-engine" className="flex flex-wrap items-center gap-1.5">
         {/* Shown when there is a choice to make: more than one runner, or more than one login for
