@@ -107,6 +107,43 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
     expect(semaphore.busy()).toBe(1);
   });
 
+  // The park-reason refactor (spec 2026-10-05-cross-task-waits, step 5) must leave both halves of
+  // the old boolean exactly where they were: a spawned parent uncapped, a plain watcher capped.
+  // `awaiting` joins the uncapped half.
+  it('exempts spawned and awaiting parks outright, and keeps plain watchers under the cap', () => {
+    const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 2, maxMonitoringSessions: 1 } });
+    const projectA = project('cez-monitor-reason-', semaphore);
+    const internals = projectA.manager as unknown as {
+      active: Map<string, object>;
+      waiting: Set<string>;
+      busySlots(): number;
+      enterMonitoring(runId: string, reason: 'watching' | 'spawned' | 'awaiting'): void;
+      leaveMonitoring(runId: string): void;
+    };
+    const park = (id: string, reason: 'watching' | 'spawned' | 'awaiting') => {
+      internals.active.set(id, {});
+      internals.waiting.add(id);
+      internals.enterMonitoring(id, reason);
+    };
+    park('w1', 'watching');
+    park('w2', 'watching');
+    park('s1', 'spawned');
+    park('s2', 'spawned');
+    park('a1', 'awaiting');
+    park('a2', 'awaiting');
+    // One watcher is exempt (the cap is 1), the second holds a slot; every spawned and awaiting
+    // park is exempt however many there are.
+    expect(internals.busySlots()).toBe(1);
+    // A spawned parent that parks again on a plain CEZ:MONITORING is an ordinary watcher again.
+    internals.enterMonitoring('s1', 'watching');
+    expect(internals.busySlots()).toBe(2);
+    // Leaving the monitoring set drops the exemption with it.
+    internals.enterMonitoring('a1', 'awaiting');
+    internals.leaveMonitoring('a1');
+    internals.waiting.delete('a1');
+    expect(internals.busySlots()).toBe(3);
+  });
+
   afterEach(async () => {
     // Settle everything before tearing the fixtures down: cancel whatever is
     // still live and wait for terminal statuses, so no check-step child or

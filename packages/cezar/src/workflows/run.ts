@@ -901,6 +901,14 @@ const VARIANT_HINTS: Record<string, string | undefined> = {
   C: 'Approach hint: prefer a thorough, structural approach.',
 };
 
+/**
+ * Why a run parked as a monitor (`activity: 'monitoring'`): `watching` — a plain `CEZ:MONITORING`,
+ * capped by `maxMonitoringSessions`; `spawned` — this turn dispatched children (spec
+ * 2026-09-10-dispatch A5); `awaiting` — the run holds pending wait edges on other tasks (spec
+ * 2026-10-05-cross-task-waits). The last two are slot-exempt outright (`busySlots`).
+ */
+export type MonitoringParkReason = 'watching' | 'spawned' | 'awaiting';
+
 const RESTART_CONTINUATION_PROMPT =
   'The cezar process restarted while you were working on this task. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.';
 
@@ -951,21 +959,25 @@ export class RunManager {
   /** Durable monitoring subset. Only the configured number receives the waiting-slot exemption. */
   private readonly monitoring = new Set<string>();
   /**
-   * The subset of `monitoring` parked because it SPAWNED children (spec
-   * 2026-09-10-dispatch A5), rather than because an agent asked to watch its own
-   * downstream work.
+   * The subset of `monitoring` whose park is EXEMPT from the slot count outright, with WHY:
    *
-   * These are exempt from the slot count OUTRIGHT — `maxMonitoringSessions` does not bound them
-   * (see `busySlots`), and it must not: a commander parks precisely so that its children can
-   * have its slot. Counting the third such parent as busy is what makes a tree whose tasks
-   * each dispatch children queue itself forever (`busySlots === maxParallel`, no exit), and
-   * starve every other project on the shared semaphore with it. A parked commander's process is
-   * idle; the runs it waits for are the ones that need the capacity.
+   *  - `spawned` — it dispatched children this turn (spec 2026-09-10-dispatch A5), rather than
+   *    asking to watch its own downstream work;
+   *  - `awaiting` — it holds pending wait edges on other tasks (spec
+   *    2026-10-05-cross-task-waits): parked until the engine wakes it with a target's outcome.
    *
-   * Invariant `unitParents ⊆ monitoring`, held by routing every add/delete through
-   * `enterMonitoring` / `leaveMonitoring` — nothing else writes either set.
+   * Exempt OUTRIGHT — `maxMonitoringSessions` does not bound them (see `busySlots`), and it must
+   * not: a commander parks precisely so that its children can have its slot, and a waiter parks
+   * so that the task it waits for can run. Counting the third such run as busy is what makes a
+   * tree whose tasks each dispatch children — or three tasks that each wait on another — queue
+   * themselves forever (`busySlots === maxParallel`, no exit), and starve every other project on
+   * the shared semaphore with them. A parked run's process is idle; the runs it waits for are the
+   * ones that need the capacity. A plain `watching` park is absent from this map and stays capped.
+   *
+   * Invariant `exemptParks ⊆ monitoring`, held by routing every add/delete through
+   * `enterMonitoring` / `leaveMonitoring` — nothing else writes either.
    */
-  private readonly unitParents = new Set<string>();
+  private readonly exemptParks = new Map<string, 'spawned' | 'awaiting'>();
   private readonly pendingJobs = new Map<string, { workflow: WorkflowDef; input: StartRunInput }>();
   /** Interrupted agent turns recovered after a process restart. Unlike an
    *  explicit user Continue, these are bulk scheduler work and must re-enter
@@ -1096,7 +1108,7 @@ export class RunManager {
     // The monitoring subsets are cleared with `waiting`, whose subset they are: a disposed
     // manager holds no slots and must not keep claiming exemptions for runs it no longer owns.
     this.monitoring.clear();
-    this.unitParents.clear();
+    this.exemptParks.clear();
     this.starting.clear();
     this.queue.length = 0;
     this.pendingJobs.clear();
@@ -1345,38 +1357,40 @@ export class RunManager {
     // but a spawned parent's children ARE those tasks, so bounding it makes the tree wait on
     // itself: three parents parked on their children is `busySlots === maxParallel` with no
     // exit, in this project and in every other one sharing the semaphore.
-    let spawnParked = 0;
-    for (const runId of this.unitParents) if (this.monitoring.has(runId)) spawnParked += 1;
-    const watchers = this.monitoring.size - spawnParked;
+    // A task parked on its own WAITS is exempt the same way and for the same reason (spec
+    // 2026-10-05-cross-task-waits): a waiter capped here can hold the slot its own target needs.
+    let exemptParked = 0;
+    for (const runId of this.exemptParks.keys()) if (this.monitoring.has(runId)) exemptParked += 1;
+    const watchers = this.monitoring.size - exemptParked;
     const exemptMonitoring = Math.min(watchers, this.semaphore.maxMonitoringSessions());
-    return this.active.size + this.starting.size - ordinaryWaiting - exemptMonitoring - spawnParked;
+    return this.active.size + this.starting.size - ordinaryWaiting - exemptMonitoring - exemptParked;
   }
 
   /**
-   * Park a run in the monitoring set — the ONE entry, so `unitParents ⊆ monitoring` cannot be
+   * Park a run in the monitoring set — the ONE entry, so `exemptParks ⊆ monitoring` cannot be
    * half-applied across the two near-identical turn-end handlers (AGENTS.md § "Find every
    * construction site of a shared in-memory object").
    *
-   * `spawnParked` says WHY it parked: `true` only when this turn dispatched children.
-   * A commander that parks again on a plain `CEZ:MONITORING` after its children reported is an
-   * ordinary watcher again, which is why the flag is rewritten on every park, never OR-ed.
+   * `reason` says WHY it parked: `spawned` only when this turn dispatched children, `awaiting`
+   * when the run holds pending wait edges, `watching` for a plain `CEZ:MONITORING`. A commander
+   * that parks again on a plain `CEZ:MONITORING` after its children reported is an ordinary
+   * watcher again, which is why the reason is rewritten on every park, never OR-ed.
    */
-  private enterMonitoring(runId: string, spawnParked: boolean): void {
+  private enterMonitoring(runId: string, reason: MonitoringParkReason): void {
     this.monitoring.add(runId);
-    if (spawnParked) this.unitParents.add(runId);
-    else this.unitParents.delete(runId);
+    if (reason === 'watching') this.exemptParks.delete(runId);
+    else this.exemptParks.set(runId, reason);
   }
 
-  /**
-   * Leave the monitoring set — the ONE exit, and every transition out of the state goes through
-   * it: a child's report or a user message (`deliverMessage`), the next turn ending in anything
-   * but a park, a native `ask.requested`, the session's own teardown, and `dropActive` (cancel,
-   * settle, restart recovery). The monitoring wake timer is deliberately NOT one: its nudge is
-   * delivered into the same parked session and the turn it starts ends back here.
-   */
+  /** Why a monitoring run is parked — `undefined` when it is not parked as a monitor at all. */
+  private monitoringParkReason(runId: string): MonitoringParkReason | undefined {
+    if (!this.monitoring.has(runId)) return undefined;
+    return this.exemptParks.get(runId) ?? 'watching';
+  }
+
   private leaveMonitoring(runId: string): void {
     this.monitoring.delete(runId);
-    this.unitParents.delete(runId);
+    this.exemptParks.delete(runId);
   }
 
   /** Epoch ms of this manager's oldest queued run (the semaphore's fairness
@@ -3710,7 +3724,7 @@ export class RunManager {
               this.store.updateStep(runId, stepId, { status: 'running' });
               // A park caused by this turn's own dispatch is slot-exempt outright — see
               // `enterMonitoring` and `busySlots`.
-              this.enterMonitoring(runId, dispatchTurn.dispatched);
+              this.enterMonitoring(runId, dispatchTurn.dispatched ? 'spawned' : 'watching');
               this.clearIdleTimer(state);
               this.armMonitoringWakeTimer(runId, state);
             } else {
@@ -4607,7 +4621,7 @@ export class RunManager {
             this.store.updateStep(runId, step.id, { status: 'running' });
             // The twin of `runContinuation`'s park: a spawn-caused park is slot-exempt outright
             // (`enterMonitoring` / `busySlots`), a plain `CEZ:MONITORING` one is capped.
-            this.enterMonitoring(runId, dispatchTurn.dispatched);
+            this.enterMonitoring(runId, dispatchTurn.dispatched ? 'spawned' : 'watching');
             this.clearIdleTimer(state);
             this.armMonitoringWakeTimer(runId, state);
           } else {
