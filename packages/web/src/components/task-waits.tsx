@@ -240,7 +240,7 @@ export function WaitForTaskDialog({
                 setProjectId(event.target.value)
                 setTargetId(null)
               }}
-              className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+              className="h-9 rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
             >
               {registry.some((project) => project.id === ownProject) ? null : <option value={ownProject}>This project</option>}
               {registry.map((project) => (
