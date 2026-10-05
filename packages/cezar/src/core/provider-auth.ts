@@ -229,6 +229,11 @@ function parseCodexStatus(result: ProviderCommandResult): ProviderConnectionStat
 function parseOpenCodeStatus(result: ProviderCommandResult): ProviderConnectionState | null {
   if (result.exitCode !== 0) return null;
   const lines = normalizedLines(result.stdout);
+  if (lines.length === 0) return normalizedLines(result.stderr).length === 0 ? 'disconnected' : null;
+  // V2 prints a three-column table instead of V1's decorated count summaries.
+  // Require every row to match; warnings or truncated output stay unknown.
+  const credentialRow = /^\S.*?\s{2,}(?:oauth|api key|opencode go|[a-z_][a-z0-9_]*)\s+(?:stored|environment)$/;
+  if (lines.length > 0 && lines.every((line) => credentialRow.test(line))) return 'connected';
   const storedSummaries = lines
     .map((line) => line.match(/^[^a-z0-9]*(\d+)\s+credentials?$/)?.[1])
     .filter((count): count is string => count !== undefined);
