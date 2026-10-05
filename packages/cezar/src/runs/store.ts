@@ -1531,6 +1531,21 @@ export class RunStore extends EventEmitter {
     }
   }
 
+  /**
+   * Announce that a run reached a terminal status (spec 2026-10-05-cross-task-waits): emits
+   * `'settled'` with the run id. Fired by the run's `RunManager` from every terminal transition —
+   * NOT derived from `'run'` status writes, because restart recovery writes a transient `failed`
+   * onto a run it is about to re-queue. Listeners (the workspace wait resolver) must not throw
+   * into the lifecycle, so a failing one is contained here.
+   */
+  notifySettled(id: string): void {
+    try {
+      this.emit('settled', id);
+    } catch {
+      // a listener's failure is its own
+    }
+  }
+
   deleteRun(id: string): boolean {
     const existed = this.forget(id);
     if (existed) {
