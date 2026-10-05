@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
@@ -32,7 +32,7 @@ describe('POST /runs/:id/waits — create in another project', () => {
   const savedEnv: Record<string, string | undefined> = {};
 
   beforeEach(async () => {
-    for (const key of ['CEZ_HOME', 'CEZ_DRY_RUN', 'CEZ_TASK_WAITS', 'CEZ_DISPATCH']) savedEnv[key] = process.env[key];
+    for (const key of ['CEZ_HOME', 'CEZ_DRY_RUN', 'CEZ_TASK_WAITS', 'CEZ_DISPATCH', 'CEZ_MOCK_STDIN_FILE']) savedEnv[key] = process.env[key];
     home = mkdtempSync(join(tmpdir(), 'cez-waits-create-home-'));
     bootRoot = mkdtempSync(join(tmpdir(), 'cez-waits-create-boot-'));
     otherRoot = mkdtempSync(join(tmpdir(), 'cez-waits-create-other-'));
@@ -176,4 +176,42 @@ describe('POST /runs/:id/waits — create in another project', () => {
     expect(second.status).toBe(409);
     expect(((await second.json()) as { error: string }).error).toMatch(/only \$1\.00 of the budget is left/);
   }, 30_000);
+
+  it('dry run end to end: A creates a task in Q, parks awaiting, and wakes with Q’s outcome', async () => {
+    const stdinFile = join(bootRoot, 'mock-stdin.ndjson');
+    savedEnv.CEZ_MOCK_STDIN_FILE = process.env.CEZ_MOCK_STDIN_FILE;
+    process.env.CEZ_MOCK_STDIN_FILE = stdinFile;
+    const waiter = manager.startRun(
+      { name: 'quick-task', source: 'built-in', steps: [{ id: 'task', name: 'Task', prompt: '{{task}}' }] },
+      { task: 'mock:pause build the export page', autonomous: true },
+    );
+    const until = async (pred: () => boolean) => {
+      const deadline = Date.now() + 25_000;
+      while (!pred()) {
+        if (Date.now() > deadline) throw new Error('condition not met in time');
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    };
+    try {
+      await until(() => store.getRun(waiter.id)?.status === 'running');
+      const res = await create(waiter.id, { title: 'Add export endpoint' });
+      expect(res.status).toBe(200);
+      const { edge } = (await res.json()) as { edge: WaitEdge };
+      await until(() => store.getRun(waiter.id)?.activity === 'monitoring');
+      await until(() => store.getRun(waiter.id)?.waits?.[0]?.state === 'settled');
+      const target = contexts.peek(otherId)!.store.getRun(edge.target.runId)!;
+      expect(['done', 'review']).toContain(target.status);
+      await until(() => {
+        try {
+          return readFileSync(stdinFile, 'utf8').includes(`The task you were waiting for (${otherId}/${edge.target.runId.slice(0, 8)})`);
+        } catch {
+          return false;
+        }
+      });
+    } finally {
+      manager.cancel(waiter.id);
+      const deadline = Date.now() + 10_000;
+      while (manager.isActive(waiter.id) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+    }
+  }, 60_000);
 });
