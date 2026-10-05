@@ -284,7 +284,8 @@ describe('systemPrompt end-to-end (dry run)', () => {
       process.env.CEZ_TASK_WAITS = '0';
       delete process.env.CEZ_API_URL;
     }
-  });
+    // Two dry runs end to end — give them the room the single-run cases get from one.
+  }, 30_000);
 
   // The automations twin of the two dispatch cases above (spec 2026-09-13-automations-from-prompt):
   // the part rides only when the flag is on AND the cockpit is reachable, at the same session

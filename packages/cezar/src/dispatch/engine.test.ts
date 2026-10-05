@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { WaitEdge } from '@open-mercato/cezar-contract';
 import { RunStore, type RunRecord } from '../runs/store.ts';
 import {
   MAX_CHILDREN_IN_FLIGHT,
@@ -12,6 +13,8 @@ import {
   handoffSectionExcerpt,
   inFlightChildren,
   isTerminalStatus,
+  createdCharge,
+  pendingCreated,
   pendingReportsBlock,
   remainingBudgetUsd,
   withPendingReport,
@@ -39,6 +42,43 @@ describe('the settled statuses', () => {
     for (const status of ['done', 'review', 'failed', 'cancelled']) expect(isTerminalStatus(status)).toBe(true);
     for (const status of ['queued', 'running', 'waiting']) expect(isTerminalStatus(status)).toBe(false);
     expect(MAX_CHILDREN_IN_FLIGHT).toBe(4);
+  });
+});
+
+describe('remainingBudgetUsd — tasks created in other projects (spec 2026-10-05-cross-task-waits)', () => {
+  const parent = (budgetUsd: number, costUsd = 0): RunRecord => record({ id: 'p', costUsd, dispatch: { rootRunId: 'p', budgetUsd } });
+  const edge = (over: Partial<WaitEdge>): WaitEdge => ({
+    id: 'w',
+    target: { projectId: 'api', runId: 't' },
+    targetTitle: 't',
+    origin: 'agent',
+    created: true,
+    budgetUsd: 3,
+    createdAt: 'x',
+    deadline: 'y',
+    state: 'pending',
+    ...over,
+  });
+
+  it('a pending created task reserves its whole budget', () => {
+    expect(remainingBudgetUsd(parent(10, 1), [], [edge({})])).toBeCloseTo(6);
+  });
+
+  it('a settled one is charged what it cost; a zero or missing cost keeps the reservation', () => {
+    expect(remainingBudgetUsd(parent(10), [], [edge({ state: 'settled', outcome: { status: 'done', costUsd: 1.2 } })])).toBeCloseTo(8.8);
+    expect(remainingBudgetUsd(parent(10), [], [edge({ state: 'settled', outcome: { status: 'done', costUsd: 0 } })])).toBeCloseTo(7);
+    expect(remainingBudgetUsd(parent(10), [], [edge({ state: 'timed-out' })])).toBeCloseTo(7);
+  });
+
+  it('plain waits (not created by this task) cost nothing, and an uncapped creator stays uncapped', () => {
+    expect(remainingBudgetUsd(parent(10), [], [edge({ created: undefined })])).toBeCloseTo(10);
+    expect(createdCharge(edge({ created: undefined }))).toBe(0);
+    expect(remainingBudgetUsd(record({ id: 'p' }), [], [edge({})])).toBeUndefined();
+  });
+
+  it('counts only pending created edges as in flight', () => {
+    const run = record({ waits: [edge({ id: 'a' }), edge({ id: 'b', state: 'settled' }), edge({ id: 'c', created: undefined })] });
+    expect(pendingCreated(run).map((e) => e.id)).toEqual(['a']);
   });
 });
 

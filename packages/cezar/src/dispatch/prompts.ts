@@ -63,7 +63,7 @@ export function waitsPrompt(options: { create: boolean; standalone: boolean }): 
       '',
       '  cez task create "<objective>" --project <projectId> [--title "…"] [--budget <usd>] [--runner claude|codex|opencode] [--model <model>] [--scope "…"] [--success "…"] [--timeout <minutes>]',
       '',
-      'That task runs in its own worktree off that project\'s base branch and ends at its own review gate; it counts against your children in flight, and when you have a budget, --budget is required and carved from it.',
+      'That task runs autonomously in its own worktree off that project\'s base branch, on its own branch — it is never merged into yours; it counts against your children in flight, and when you have a budget, --budget is required and carved from it.',
     );
   }
   lines.push(

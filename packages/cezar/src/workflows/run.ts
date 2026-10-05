@@ -82,6 +82,7 @@ import {
   childrenOf,
   handoffSectionExcerpt,
   inFlightChildren,
+  pendingCreated,
   isTerminalStatus,
   pendingReportsBlock,
   remainingBudgetUsd,
@@ -2198,7 +2199,9 @@ export class RunManager {
     // only tighten the engine's own caps, and the child defaults they name fill an order's gaps.
     const intent = runs.find((r) => r.id === (parent.dispatch?.rootRunId ?? parent.id))?.dispatch?.intent;
     const inFlightCap = Math.min(MAX_CHILDREN_IN_FLIGHT, intent?.inFlight ?? MAX_CHILDREN_IN_FLIGHT);
-    const inFlight = inFlightChildren(runs, parentId).length;
+    // Tasks this run created in OTHER projects and still waits for count too (spec
+    // 2026-10-05-cross-task-waits, Phase 2): one brake across both ways of starting work.
+    const inFlight = inFlightChildren(runs, parentId).length + (this.waitsEnabled() ? pendingCreated(parent).length : 0);
     if (inFlight + 1 > inFlightCap) {
       const refused = `${inFlight} child run${inFlight === 1 ? '' : 's'} already in flight; the cap is ${inFlightCap} per task${intent?.inFlight !== undefined && intent.inFlight < MAX_CHILDREN_IN_FLIGHT ? ' (set by the user)' : ''}. Wait for reports, then dispatch again.`;
       note(`dispatch refused — ${refused}`, 'danger');
@@ -2312,6 +2315,81 @@ export class RunManager {
   }
 
   /**
+   * The CREATOR's half of `cez task create --project` (spec 2026-10-05-cross-task-waits, Phase 2):
+   * may this run start one more task in another project, and with what budget? The dispatch
+   * brakes, applied unchanged — the in-flight cap counts dispatch children and pending created
+   * tasks alike, and a creator with a budget must name one (`--budget`), carved out of what it has
+   * left. Writes nothing; a refusal is noted on the creator's transcript, like a dispatch refusal.
+   */
+  reserveWaitCreate(creatorId: string, budget: number | undefined): { budgetUsd: number | undefined } | { refused: string } {
+    const creator = this.store.getRun(creatorId);
+    if (!creator) return { refused: `no such run: ${creatorId}` };
+    const note = (message: string) =>
+      this.store.appendEvent(creatorId, { type: 'note', stepId: this.active.get(creatorId)?.currentStepId, message, tone: 'danger' });
+    const runs = this.store.listRuns();
+    const intent = runs.find((r) => r.id === (creator.dispatch?.rootRunId ?? creator.id))?.dispatch?.intent;
+    const inFlightCap = Math.min(MAX_CHILDREN_IN_FLIGHT, intent?.inFlight ?? MAX_CHILDREN_IN_FLIGHT);
+    const inFlight = inFlightChildren(runs, creatorId).length + pendingCreated(creator).length;
+    if (inFlight + 1 > inFlightCap) {
+      const refused = `${inFlight} task${inFlight === 1 ? '' : 's'} already in flight under this one (dispatched children and tasks created in other projects); the cap is ${inFlightCap}. Wait for one to settle first.`;
+      note(`create refused — ${refused}`);
+      return { refused };
+    }
+    if (creator.dispatch?.budgetUsd !== undefined && budget === undefined) {
+      const refused = `this task has a budget (${usd(creator.dispatch.budgetUsd)}), so a task it creates elsewhere must name its own: add --budget <usd>, carved out of what is left.`;
+      note(`create refused — ${refused}`);
+      return { refused };
+    }
+    const carved = this.carveChildBudget(creator, runs, budget);
+    if ('refused' in carved) {
+      note(`create refused — ${carved.refused}`);
+      return carved;
+    }
+    return carved;
+  }
+
+  /**
+   * The TARGET project's half of `cez task create --project`: start an independent, autonomous
+   * ROOT task here — its own worktree off this project's base branch, its own review gate — that
+   * remembers who created it (`waitedBy`). Not a dispatch child: it merges nowhere but its own PR.
+   * A budget, when the creator carved one, becomes this run's own ceiling (the dispatch brake).
+   */
+  startWaitTarget(
+    input: { objective: string; title?: string; runner?: RunnerId; model?: string; scope?: string; success?: string },
+    creator: { projectId: string; runId: string; title: string },
+    budgetUsd: number | undefined,
+  ): RunRecord {
+    const title = input.title ?? input.objective.split('\n')[0]?.slice(0, 120) ?? 'created task';
+    const order = [
+      ...(input.scope ? [`- Scope: ${input.scope}`] : []),
+      ...(budgetUsd !== undefined ? [`- Max cost: ${usd(budgetUsd)}`] : []),
+      ...(input.success ? [`- Success criteria: ${input.success}`] : []),
+      `- Created by: task "${creator.title}" (${creator.projectId}/${creator.runId.slice(0, 8)}) in project ${creator.projectId}, which waits for this task to settle and then reads its outcome — status, branch, PR, cost and any \`cez task report\` you file.`,
+    ];
+    const workflow: WorkflowDef = {
+      name: '(planned)',
+      source: 'built-in',
+      steps: [{ id: 'task', name: title, prompt: '{{task}}' }],
+    };
+    const record = this.startRun(workflow, {
+      task: `${input.objective}\n\n## Task order\n${order.join('\n')}`,
+      ...(input.runner ? { runner: input.runner } : {}),
+      ...(input.model ? { model: input.model } : {}),
+      autonomous: true,
+    });
+    this.store.updateRun(record.id, {
+      title,
+      waitedBy: { projectId: creator.projectId, runId: creator.runId },
+      ...(budgetUsd !== undefined ? { dispatch: { rootRunId: record.id, budgetUsd } } : {}),
+    });
+    this.store.appendEvent(record.id, {
+      type: 'note',
+      message: `created by task "${creator.title}" (${creator.projectId}/${creator.runId.slice(0, 8)}), which waits for it${budgetUsd !== undefined ? ` — budget ${usd(budgetUsd)}` : ''}`,
+    });
+    return this.store.getRun(record.id) ?? record;
+  }
+
+  /**
    * Carve one child's ceiling out of what the parent has left. A parent with no ceiling of its
    * own carves nothing: the child inherits whatever cap it named, or none. A child that names no
    * cost under a capped parent gets the whole remainder — one child at a time, there is nobody
@@ -2322,7 +2400,7 @@ export class RunManager {
     runs: readonly RunRecord[],
     maxCost: number | undefined,
   ): { budgetUsd: number | undefined } | { refused: string } {
-    const remaining = remainingBudgetUsd(parent, childrenOf(runs, parent.id));
+    const remaining = remainingBudgetUsd(parent, childrenOf(runs, parent.id), this.waitsEnabled() ? parent.waits ?? [] : []);
     if (remaining === undefined) return { budgetUsd: maxCost };
     if (remaining <= 0) {
       return {

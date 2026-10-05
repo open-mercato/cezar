@@ -1397,6 +1397,32 @@ export function createApp(deps: ServerDeps) {
           const selector = capabilities().singleProject ? { projectId: await resolveBootProject() } : undefined;
           return listProjects(selector);
         },
+        // Phase 2 — `cez task create --project`: an independent task in ANOTHER project, created
+        // and waited for in one request. It is dispatch-class exposure (an agent starting an
+        // agent), so it rides dispatch's switch as well as this one's, and dispatch's brakes.
+        createTarget: async (waiter, target, input) => {
+          if (!capabilities().dispatch) {
+            return { status: 409, error: 'creating a task in another project rides task dispatch, which is off on this cockpit (CEZ_DISPATCH=0). Do not do that work yourself: stop and report that it is blocked on another project.' };
+          }
+          if (target.id === waiter.projectId) {
+            return { status: 400, error: 'that is this task\'s own project — dispatch a child instead (cez task create without --project)' };
+          }
+          const creatorCtx = waiter.projectId === bootContext.id ? bootContext : contexts.peek(waiter.projectId);
+          const targetCtx = target.id === bootContext.id ? bootContext : contexts.peek(target.id);
+          if (!creatorCtx || !targetCtx) return { status: 404, error: `unknown project: ${creatorCtx ? target.id : waiter.projectId}` };
+          const reserved = creatorCtx.manager.reserveWaitCreate(waiter.run.id, input.budget);
+          if ('refused' in reserved) return { status: 409, error: reserved.refused };
+          try {
+            const run = targetCtx.manager.startWaitTarget(
+              input,
+              { projectId: waiter.projectId, runId: waiter.run.id, title: waiter.run.titleSummary ?? waiter.run.title },
+              reserved.budgetUsd,
+            );
+            return { run, ...(reserved.budgetUsd !== undefined ? { budgetUsd: reserved.budgetUsd } : {}) };
+          } catch (err) {
+            return { status: 409, error: `could not start the task in ${target.id}: ${err instanceof Error ? err.message : String(err)}` };
+          }
+        },
       })
     : undefined;
   const waitResolver = waits?.resolver;
