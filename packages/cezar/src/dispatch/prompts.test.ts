@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DISPATCH_PROMPT, REVIEW_PROMPT, composeDispatchPrompt, dispatchIntentPrompt } from './prompts.ts';
+import { DISPATCH_PROMPT, REVIEW_PROMPT, composeDispatchPrompt, dispatchIntentPrompt, waitsPrompt } from './prompts.ts';
 
 /** The prompt is the ONLY place an agent learns the CLI, so it must name every flag the
  *  contract accepts and the rules the engine enforces. */
@@ -81,4 +81,31 @@ describe('the dispatch prompt', () => {
       expect(bare).not.toContain('Subtasks run with');
     });
   });
+
+describe('the waits paragraph (spec 2026-10-05-cross-task-waits)', () => {
+  it('rides the dispatch prompt only while waits are on', () => {
+    expect(composeDispatchPrompt(undefined)).not.toContain('cez task wait');
+    const withWaits = composeDispatchPrompt(undefined, undefined, true);
+    expect(withWaits.startsWith(DISPATCH_PROMPT)).toBe(true);
+    expect(withWaits).toContain('cez task wait <projectId>/<runId> [--timeout <minutes>]');
+    expect(withWaits).toContain('cez task create "<objective>" --project <projectId>');
+    expect(withWaits).toContain('Never poll a task you can wait on');
+  });
+
+  it('says when to wait and when to dispatch', () => {
+    const text = waitsPrompt({ create: true, standalone: false });
+    expect(text).toContain('same repository and the result should merge into YOUR branch → dispatch a child');
+    expect(text).toContain('Another project, or an independent change with its own review and PR');
+    expect(text).toContain('Already running somewhere');
+    expect(text).toContain('At most 4 at once');
+  });
+
+  it('standing alone (dispatch off), it names the binary and never the create-elsewhere path', () => {
+    const text = waitsPrompt({ create: false, standalone: true });
+    expect(text).toContain('node "$CEZ_BIN" task');
+    expect(text).toContain('cez task wait');
+    expect(text).not.toContain('--project');
+    expect(text).not.toContain('dispatch a child');
+  });
+});
 });

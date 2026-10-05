@@ -121,6 +121,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
     savedEnv.CEZ_FOLLOWUPS = process.env.CEZ_FOLLOWUPS;
     savedEnv.CEZ_AUTONAME = process.env.CEZ_AUTONAME;
     savedEnv.CEZ_DISPATCH = process.env.CEZ_DISPATCH;
+    savedEnv.CEZ_TASK_WAITS = process.env.CEZ_TASK_WAITS;
     savedEnv.CEZ_AUTOMATIONS = process.env.CEZ_AUTOMATIONS;
     // The dispatch and automations tests below set and clear this; restore whatever the outer process had.
     savedEnv.CEZ_API_URL = process.env.CEZ_API_URL;
@@ -129,6 +130,10 @@ describe('systemPrompt end-to-end (dry run)', () => {
     // ahead of everything asserted here. These goldens are about the BASE composition, so they
     // run with it off; the default-on part is pinned by its own test below.
     process.env.CEZ_DISPATCH = '0';
+    // Cross-task waits are on by default too (spec 2026-10-05-cross-task-waits) and, when the
+    // cockpit is reachable, compose their paragraph into the same part. Off for the goldens; the
+    // part is pinned by its own test below.
+    process.env.CEZ_TASK_WAITS = '0';
     // GitHub automations are opt-in (#801) and compose their own prompt part when on AND
     // reachable (spec 2026-09-13-automations-from-prompt); the goldens run without it and the
     // part is pinned by its own tests below.
@@ -254,6 +259,31 @@ describe('systemPrompt end-to-end (dry run)', () => {
     const prompt = capturedSystemPrompt();
     expect(prompt).not.toContain('cez task create');
     expect(prompt).toContain(CONFIG_PROMPT);
+  });
+
+  // Cross-task waits (spec 2026-10-05-cross-task-waits): on and reachable, the waits paragraph
+  // rides the dispatch part — and stands alone, without the create-elsewhere path, when dispatch
+  // is off.
+  it('waits on and reachable: every task is taught cez task wait — with dispatch, and on its own', async () => {
+    delete process.env.CEZ_TASK_WAITS;
+    process.env.CEZ_API_URL = 'http://127.0.0.1:4321';
+    try {
+      await runToEnd({ task: 'do the thing mock:done' });
+      const alone = capturedSystemPrompt();
+      expect(alone).toContain('cez task wait <projectId>/<runId>');
+      expect(alone).toContain('node "$CEZ_BIN" task');
+      expect(alone).not.toContain('--project');
+      expect(alone).not.toContain('cez task create');
+      delete process.env.CEZ_DISPATCH;
+      await runToEnd({ task: 'do the thing mock:done' });
+      const withDispatch = capturedSystemPrompt();
+      expect(withDispatch).toContain('cez task create "<objective>" --project <projectId>');
+      expect(withDispatch).toContain('cez task wait <projectId>/<runId>');
+    } finally {
+      process.env.CEZ_DISPATCH = '0';
+      process.env.CEZ_TASK_WAITS = '0';
+      delete process.env.CEZ_API_URL;
+    }
   });
 
   // The automations twin of the two dispatch cases above (spec 2026-09-13-automations-from-prompt):
@@ -552,7 +582,9 @@ describe('the global follow-up gate (dry run)', () => {
     savedEnv.CEZ_FOLLOWUPS = process.env.CEZ_FOLLOWUPS;
     savedEnv.CEZ_DISPATCH = process.env.CEZ_DISPATCH;
     process.env.CEZ_DRY_RUN = '1';
+    savedEnv.CEZ_TASK_WAITS = process.env.CEZ_TASK_WAITS;
     process.env.CEZ_DISPATCH = '0'; // base composition only — see the first suite
+    process.env.CEZ_TASK_WAITS = '0';
     process.env.CEZ_MOCK_ARGS_FILE = argsFile;
     // A parent cezar's inbox, as in the suite above: the gate must not leak into it either.
     process.env.CEZ_TODOS_FILE = inheritedTodos;

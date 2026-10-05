@@ -59,7 +59,7 @@ import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/stor
 // takes byte-for-byte the path it took before this feature existed.
 import type { DispatchInput, DispatchIntent, DispatchReport, RunDispatch, WaitEdge } from '@open-mercato/cezar-contract';
 import { resolveCapabilities } from '../server/capabilities.ts';
-import { composeDispatchPrompt } from '../dispatch/prompts.ts';
+import { composeDispatchPrompt, waitsPrompt } from '../dispatch/prompts.ts';
 import {
   appendLedger,
   inboxDigest,
@@ -1180,7 +1180,9 @@ export class RunManager {
     const dispatch = this.dispatchOf(runId);
     // The same ONE gate the dispatch prompt uses, so an agent is never told about a CLI whose
     // address it was not given (and never given an address it was not told about).
-    const apiUrl = this.dispatchReachable() ? process.env.CEZ_API_URL : undefined;
+    // Cross-task waits (spec 2026-10-05-cross-task-waits) reach the same routes through the same
+    // CLI, so either capability being reachable hands the agent the address.
+    const apiUrl = this.dispatchReachable() || this.waitsReachable() ? process.env.CEZ_API_URL : undefined;
     return {
       CEZ_HANDOFF_FILE: handoffPath(this.dataDir, runId),
       CEZ_TASK_ID: runId,
@@ -1893,10 +1895,16 @@ export class RunManager {
    * gets no dispatch prompt and behaves exactly as it did before this feature existed.
    */
   private prepareDispatchSession(runId: string, state: ActiveRun): void {
-    if (!this.dispatchReachable()) return;
+    const waits = this.waitsReachable();
+    if (!this.dispatchReachable()) {
+      // Waits on, dispatch off: the waits paragraph alone, without the create-elsewhere path
+      // (dispatch-class exposure — it rides dispatch's switch too).
+      if (waits) state.dispatchPrompt = waitsPrompt({ create: false, standalone: true });
+      return;
+    }
     const dispatch = this.store.getRun(runId)?.dispatch;
     // The intent block belongs to the ROOT the user started; a child reads its order instead.
-    state.dispatchPrompt = composeDispatchPrompt(dispatch?.kind, dispatch?.parentRunId ? undefined : dispatch?.intent);
+    state.dispatchPrompt = composeDispatchPrompt(dispatch?.kind, dispatch?.parentRunId ? undefined : dispatch?.intent, waits);
   }
 
   /**
@@ -1940,6 +1948,11 @@ export class RunManager {
   /** Is the waits feature on at all? One read, like `dispatchEnabled`. */
   private waitsEnabled(): boolean {
     return resolveCapabilities().taskWaits;
+  }
+
+  /** Can a task REACH the wait routes? The `dispatchReachable` rule: the flag AND a cockpit. */
+  private waitsReachable(): boolean {
+    return this.waitsEnabled() && Boolean(process.env.CEZ_API_URL);
   }
 
   /** The run's pending wait edges — empty when the feature is off (`CEZ_TASK_WAITS=0` leaves

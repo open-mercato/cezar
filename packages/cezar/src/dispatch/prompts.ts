@@ -9,7 +9,7 @@
  * The CLI contract below is the ONLY place an agent is told the `cez task` commands, so it
  * restates the flags of `dispatchInputSchema` and `dispatchReportSchema` key for key.
  */
-import { DISPATCH_MAX_IN_FLIGHT, type DispatchIntent, type DispatchKind } from '@open-mercato/cezar-contract';
+import { DISPATCH_MAX_IN_FLIGHT, WAIT_MAX_PENDING, type DispatchIntent, type DispatchKind } from '@open-mercato/cezar-contract';
 
 export const DISPATCH_PROMPT = `Dispatching tasks. cezar can run other cezar tasks for you, each in its own git worktree forked off YOUR branch as you last committed it, each reporting back into this session when it settles. Use it for work that is genuinely INDEPENDENT of what you are doing — several unrelated fixes, a review of a branch by a fresh pair of eyes, a wide read-only investigation, work on disjoint parts of the repository — and NOT for one tightly coupled change: splitting coupled work across tasks makes it slower, more expensive and inconsistent, and the evidence on that is clear. When in doubt, do it yourself.
 
@@ -40,10 +40,48 @@ The Guard. Before anything irreversible, financial, or outside the scope you wer
 
 export const REVIEW_PROMPT = `Your KIND is review. You did not write the work you were given — you judge it. Read the diff of every branch or run named in your order's "Review of" line (git diff <fork point>..<branch>; the task's report.md and notes.md in the tree directory tell you what it claimed). Run the repository's tests and checks against that branch yourself and read the output. Judge the work against a checklist you try to FALSIFY: does the diff do what the order asked, does every claim in the report match the diff and the test output, does anything touch files outside the stated scope, is anything untested or destructive. Then report with --verdict: approve when the work does what its order asked and the evidence holds; changes with the exact findings (file and line) when it is close; reject when it is wrong or unsafe. You edit nothing on the reviewed branch and commit nothing of your own beyond your notes — a reviewer that fixes the code is no longer a reviewer. The verdict is required.`;
 
-/** The prompt part one task runs under: the dispatch instructions, plus the review addendum. */
-export function composeDispatchPrompt(kind: DispatchKind | undefined, intent?: DispatchIntent): string {
+/**
+ * Cross-task waits (spec `.ai/specs/2026-10-05-cross-task-waits.md`): when to wait vs. dispatch,
+ * the two commands, and the one rule that is the feature's whole point — never poll a task you can
+ * wait on. `create` is false while dispatch is off: creating a task in another project is
+ * dispatch-class exposure, so it rides that capability's switch too, and a capability an agent
+ * cannot use is never described to it.
+ */
+export function waitsPrompt(options: { create: boolean; standalone: boolean }): string {
+  const lines: string[] = [];
+  lines.push(
+    'Waiting for other tasks. When your work cannot finish without another cezar task — one already running in this or another project' +
+      (options.create ? ', or work that belongs in another repository' : '') +
+      ' — do not poll it: wait for it.',
+  );
+  if (options.standalone) {
+    lines.push('Run the commands from your shell, always through the cockpit\'s own binary — every "cez task …" below means node "$CEZ_BIN" task ….');
+  }
+  if (options.create) {
+    lines.push(
+      'Choose: same repository and the result should merge into YOUR branch → dispatch a child (cez task create, above). Another project, or an independent change with its own review and PR → create it there and wait for it in one step:',
+      '',
+      '  cez task create "<objective>" --project <projectId> [--title "…"] [--budget <usd>] [--runner claude|codex|opencode] [--model <model>] [--scope "…"] [--success "…"] [--timeout <minutes>]',
+      '',
+      'That task runs in its own worktree off that project\'s base branch and ends at its own review gate; it counts against your children in flight, and when you have a budget, --budget is required and carved from it.',
+    );
+  }
+  lines.push(
+    'Already running somewhere (its run id is in the cockpit or in a task list) →',
+    '',
+    '  cez task wait <projectId>/<runId> [--timeout <minutes>]     (a bare <runId> means this project; the first 8 characters are enough)',
+    '',
+    `A wait answers at once when the target has already settled. Otherwise end your turn: cezar parks you without holding a slot and wakes you with the target's outcome — status, branch, PR, cost, its report — when it settles (done, review, failed or cancelled), is deleted, or the wait times out (24 h unless --timeout says otherwise, at most 7 days). cez task waits lists your waits. At most ${WAIT_MAX_PENDING} at once. Never poll a task you can wait on — no sleep loops, no repeated gh or cez checks, no CEZ:MONITORING for it.`,
+  );
+  return lines.join('\n');
+}
+
+/** The prompt part one task runs under: the dispatch instructions, plus the review addendum, plus
+ *  the waits paragraph while cross-task waits are on. */
+export function composeDispatchPrompt(kind: DispatchKind | undefined, intent?: DispatchIntent, waits = false): string {
   const base = kind === 'review' ? `${DISPATCH_PROMPT}\n\n${REVIEW_PROMPT}` : DISPATCH_PROMPT;
-  return intent ? `${base}\n\n${dispatchIntentPrompt(intent)}` : base;
+  const withIntent = intent ? `${base}\n\n${dispatchIntentPrompt(intent)}` : base;
+  return waits ? `${withIntent}\n\n${waitsPrompt({ create: true, standalone: false })}` : withIntent;
 }
 
 /**

@@ -104,7 +104,7 @@ describe('the wait routes', () => {
     store.updateRun(settledWaiter.id, { status: 'done' });
     const res = await post(`/api/v1/runs/${settledWaiter.id}/waits`, { target: { runId: waiter.id } });
     expect(res.status).toBe(409);
-    expect((await res.json()).error).toContain('only a live task can wait');
+    expect(((await res.json()) as { error: string }).error).toContain('only a live task can wait');
   });
 
   it('stops a wait with DELETE and answers the cancelled edge', async () => {
@@ -125,7 +125,7 @@ describe('the wait routes', () => {
     const waiter = live('waiter');
     const res = await post(`/api/v1/runs/${waiter.id}/waits`, { target: { runId: 'x' } });
     expect(res.status).toBe(409);
-    expect((await res.json()).error).toContain('CEZ_TASK_WAITS=0');
+    expect(((await res.json()) as { error: string }).error).toContain('CEZ_TASK_WAITS=0');
     expect((await apiRequest(app, `/api/v1/runs/${waiter.id}/waits/w`, { method: 'DELETE' })).status).toBe(409);
   });
 });
