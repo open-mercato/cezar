@@ -297,7 +297,7 @@ describe('action bar visibility per status (the legacy rules, rendered)', () => 
   // Pin (#935) is in every row: unlike every other action here it asks nothing of the engine,
   // so it is offered whatever the run is doing — only archiving takes it away.
   const matrix: Array<{ status: RunStatus; visible: string[] }> = [
-    { status: 'queued', visible: ['Notes', 'Pin', 'Cancel'] },
+    { status: 'queued', visible: ['Notes', 'Run First', 'Pin', 'Cancel'] },
     { status: 'running', visible: ['Notes', 'Pin', 'Cancel'] },
     { status: 'waiting', visible: ['Finish', 'Notes', 'Pin', 'Cancel'] },
     // Terminal folded into the Open in… menu — it shows whenever the session can be resumed.
@@ -563,6 +563,24 @@ describe('actions hit their endpoints', () => {
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
     const menu = within(await screen.findByRole('menu'))
     expect(menu.getByRole('menuitem', { name: 'Pin' })).not.toBeNull()
+  })
+
+  it('Run First → POST /promote on a queued task, in the bar and in the kebab', async () => {
+    const sent = stubFetch()
+    renderHeader(run('queued'))
+    fireEvent.click(actionBar().getByRole('button', { name: 'Run First' }))
+    await waitFor(() => {
+      expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/promote')).toBe(true)
+    })
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
+    const menu = within(await screen.findByRole('menu'))
+    expect(menu.getByRole('menuitem', { name: 'Run First' })).not.toBeNull()
+  })
+
+  it('Run First is offered only while the task waits in the queue', () => {
+    stubFetch()
+    renderHeader(run('running'))
+    expect(actionBar().queryByRole('button', { name: 'Run First' })).toBeNull()
   })
 
   it('Cancel asks first — the POST fires only after the confirm dialog', async () => {
