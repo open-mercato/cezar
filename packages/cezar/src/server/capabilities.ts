@@ -42,6 +42,13 @@
  * `/runs/:id/{dispatch,report}` routes answer 409 and no task's system prompt mentions
  * dispatching; the `dispatch` field on existing run records survives the flag being off.
  *
+ * `taskWaits` (spec 2026-10-05-cross-task-waits): a task waiting for another task — in its own
+ * project or another — is **on by default** and `CEZ_TASK_WAITS=0` turns it off. Waiting widens no
+ * exposure (it starts no process and touches no network); creating a task in another project to
+ * wait for is the dispatch-class exposure recorded in AGENTS.md § Zero config. Off, the
+ * `/runs/:id/waits` routes answer 409, no prompt mentions waiting, the workspace wait resolver is
+ * not started, and the `waits` already on records are left inert. Boot-time, like `dispatch`.
+ *
  * Usage presentation: token counts and monetary cost stay visible by default.
  * `CEZ_HIDE_TOKEN_USAGE=1` and `CEZ_HIDE_COST=1` hide them independently;
  * legacy `CEZ_HIDE_TOKEN_METRICS=1` remains the master hide-all switch. None
@@ -142,6 +149,7 @@ export function isLoopbackHostHeader(host: string | null | undefined): boolean {
  *  `CEZ_FOLLOWUPS=1` ⇒ the follow-up inbox exists (#471).
  *  `CEZ_AUTOMATIONS=1` ⇒ GitHub automations exist (#801).
  *  `CEZ_DISPATCH=0` ⇒ task dispatch is OFF (spec 2026-09-10-dispatch); on otherwise.
+ *  `CEZ_TASK_WAITS=0` ⇒ cross-task waits are OFF (spec 2026-10-05-cross-task-waits); on otherwise.
  *
  *  Read per request — cheap, and tests/ops can flip `CEZ_REMOTE` live. `followups` is honest
  *  per request too, but flipping it ON at runtime is only half a switch: the per-dataDir
@@ -168,6 +176,7 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
     singleProject: env.CEZ_SINGLE_PROJECT === '1',
     automations: env.CEZ_AUTOMATIONS !== '0',
     dispatch: env.CEZ_DISPATCH !== '0',
+    taskWaits: env.CEZ_TASK_WAITS !== '0',
     tokenMetrics: tokenUsageMetrics && costMetrics,
     tokenUsageMetrics,
     costMetrics,

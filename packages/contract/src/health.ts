@@ -56,6 +56,13 @@ export const capabilitiesSchema = z.object({
    */
   dispatch: z.boolean(),
   /**
+   * `true` means cross-task waits are on — the default; `CEZ_TASK_WAITS=0` turns them off (spec
+   * `.ai/specs/2026-10-05-cross-task-waits.md`): `cez task wait`, the `/runs/:id/waits` routes, the
+   * prompt paragraph, the workspace wait resolver and the cockpit's wait affordances. Off, the
+   * routes answer 409 and existing edges are left inert on their records.
+   */
+  taskWaits: z.boolean(),
+  /**
    * `false` means `CEZ_HIDE_TOKEN_METRICS=1` asks the browser to omit token counts and monetary
    * cost (#481). The telemetry itself still rides in run/event payloads — this is presentation
    * only.
