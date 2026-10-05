@@ -126,11 +126,15 @@ export function TaskWaitsLine({ run }: { run: ApiRun }) {
 /** "Created by <project> / <task>" on a task another task created and waits for (Phase 2). */
 export function CreatedByLine({ run }: { run: ApiRun }) {
   const available = useTaskWaitsAvailable()
+  // Split so the creator's project list is only fetched for a run that HAS a creator.
+  if (!available || !run.waitedBy) return null
+  return <CreatedByLink creatorRef={run.waitedBy} />
+}
+
+function CreatedByLink({ creatorRef }: { creatorRef: NonNullable<ApiRun['waitedBy']> }) {
   const activeProjectId = useActiveProjectId()
   const bootProjectId = useHealth().data?.bootProject
-  const creatorRef = run.waitedBy
-  const creatorRuns = useRunsForProject(creatorRef?.projectId ?? 'default', bootProjectId)
-  if (!available || !creatorRef) return null
+  const creatorRuns = useRunsForProject(creatorRef.projectId, bootProjectId)
   const creator = listOf(creatorRuns.data).find((candidate) => candidate.id === creatorRef.runId)
   const attention = creator ? deriveAttention(creator) : null
   return (

@@ -76,9 +76,26 @@ describe('remainingBudgetUsd — tasks created in other projects (spec 2026-10-0
     expect(remainingBudgetUsd(record({ id: 'p' }), [], [edge({})])).toBeUndefined();
   });
 
-  it('counts only pending created edges as in flight', () => {
-    const run = record({ waits: [edge({ id: 'a' }), edge({ id: 'b', state: 'settled' }), edge({ id: 'c', created: undefined })] });
-    expect(pendingCreated(run).map((e) => e.id)).toEqual(['a']);
+  it('counts a created task as in flight until its TARGET settles — not just while the wait is pending', () => {
+    const run = record({
+      waits: [
+        edge({ id: 'pending' }),
+        edge({ id: 'settled', state: 'settled', outcome: { status: 'done', costUsd: 1 } }),
+        edge({ id: 'stopped-running', state: 'cancelled', outcome: { status: 'running', costUsd: 1 } }),
+        edge({ id: 'stopped-done', state: 'cancelled', outcome: { status: 'done', costUsd: 1 } }),
+        edge({ id: 'plain', created: undefined }),
+      ],
+    });
+    expect(pendingCreated(run).map((e) => e.id)).toEqual(['pending', 'stopped-running']);
+  });
+
+  it('REGRESSION: a wait stopped while the created task still runs keeps its whole reservation', () => {
+    // Stop waiting at $1 spent of an $8 carve: the task keeps running and may spend all $8.
+    const stopped = edge({ state: 'cancelled', budgetUsd: 8, outcome: { status: 'running', costUsd: 1 } });
+    expect(createdCharge(stopped)).toBe(8);
+    expect(remainingBudgetUsd(parent(10), [], [stopped])).toBeCloseTo(2);
+    // Once the resolver records its settle, the actual cost is charged.
+    expect(createdCharge({ ...stopped, outcome: { status: 'done', costUsd: 3 } })).toBe(3);
   });
 });
 

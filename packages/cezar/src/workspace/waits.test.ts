@@ -365,4 +365,90 @@ describe('WaitResolver', () => {
     expect(edges.filter((e) => e.state === 'pending')).toHaveLength(1);
     expect(edges.find((e) => e.targetTitle === 't0')).toBeUndefined();
   });
+
+  // ---- review fixes ----------------------------------------------------------------------------
+
+  it('refuses a dispatched task waiting on its own ancestor — a deadlock the wait graph cannot see', async () => {
+    const web = project('web');
+    boot(['web']);
+    const root = runIn(web, 'root');
+    const child = runIn(web, 'child');
+    const grandchild = runIn(web, 'grandchild');
+    web.store.updateRun(child.id, { dispatch: { rootRunId: root.id, parentRunId: root.id } });
+    web.store.updateRun(grandchild.id, { dispatch: { rootRunId: root.id, parentRunId: child.id } });
+    const direct = await refusal([web, web.store.getRun(child.id)!], [undefined, root.id]);
+    expect(direct.status).toBe(409);
+    expect(direct.error).toContain('deadlock');
+    expect((await refusal([web, web.store.getRun(grandchild.id)!], [undefined, root.id])).status).toBe(409);
+    // The other direction is fine: a parent may wait on its own child.
+    await pendingEdge([web, root], [undefined, child.id]);
+  });
+
+  it('re-checks the waiter after a slow project build — a waiter that settled meanwhile records nothing', async () => {
+    const web = project('web');
+    const api = project('api');
+    boot(['web']);
+    const waiter = runIn(web, 'waiter');
+    const target = runIn(api, 'target');
+    // The build of `api` takes a while; the waiter finishes during it.
+    const slow = new WaitResolver({
+      canonical: async (id) => id,
+      peek: (id) => (built.has(id) ? contexts.get(id) : undefined),
+      build: async (id) => {
+        web.store.updateRun(waiter.id, { status: 'done' });
+        built.add(id);
+        return contexts.get(id)!;
+      },
+      listProjects: async () => [],
+    });
+    try {
+      const result = await slow.declare('web', waiter.id, { target: { projectId: 'api', runId: target.id } }, 'agent');
+      expect(isWaitRefusal(result) && result.status).toBe(409);
+      expect(web.store.getRun(waiter.id)?.waits).toBeUndefined();
+    } finally {
+      slow.dispose();
+    }
+  });
+
+  it('keeps tracking a CREATED task after its wait was stopped, and records its settle for the budget', async () => {
+    const web = project('web');
+    const api = project('api');
+    boot(['web', 'api']);
+    const waiter = runIn(web, 'creator');
+    const target = runIn(api, 'created elsewhere');
+    // A created edge, as the create path records it.
+    const edge = await pendingEdge([web, waiter], ['api', target.id]);
+    web.store.updateRun(waiter.id, { waits: [{ ...edge, created: true, budgetUsd: 8 }] });
+    resolver.contextBuilt('web');
+    api.store.updateRun(target.id, { costUsd: 1 });
+    resolver.cancel('web', waiter.id, edge.id);
+    expect(edgesOf(web, waiter.id)[0]).toMatchObject({ state: 'cancelled', outcome: { status: 'running', costUsd: 1 } });
+    delivered.length = 0;
+    api.store.updateRun(target.id, { costUsd: 3 });
+    settle(api, target.id, 'review');
+    expect(edgesOf(web, waiter.id)[0]).toMatchObject({ state: 'cancelled', outcome: { status: 'review', costUsd: 3 } });
+    // Silently: the wait is long over.
+    expect(delivered).toEqual([]);
+  });
+
+  it('never trims a created edge out of the history — it is the only record of what it cost', async () => {
+    const web = project('web');
+    boot(['web']);
+    const waiter = runIn(web, 'waiter');
+    const first = runIn(web, 'created first');
+    const edge = await pendingEdge([web, waiter], [undefined, first.id]);
+    web.store.updateRun(waiter.id, { waits: [{ ...edge, created: true, budgetUsd: 2 }] });
+    resolver.dispose();
+    built.clear();
+    boot(['web']);
+    settle(web, first.id);
+    for (let i = 0; i < 22; i += 1) {
+      const t = runIn(web, `t${i}`);
+      await pendingEdge([web, waiter], [undefined, t.id]);
+      settle(web, t.id);
+    }
+    const edges = edgesOf(web, waiter.id);
+    expect(edges.find((e) => e.targetTitle === 'created first')).toMatchObject({ created: true, state: 'settled' });
+    expect(edges.filter((e) => !e.created)).toHaveLength(20);
+  });
 });

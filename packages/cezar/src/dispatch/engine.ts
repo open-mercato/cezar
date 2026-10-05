@@ -90,22 +90,33 @@ export function remainingBudgetUsd(
 }
 
 /**
- * What one created-elsewhere task costs its creator's budget: a pending edge reserves the whole
- * `budgetUsd` it was given; a resolved one is charged what the target actually cost when the edge
- * recorded it (a positive `outcome.costUsd`), else still its reservation — a zero or missing cost
+ * What one created-elsewhere task costs its creator's budget: its whole reservation (`budgetUsd`)
+ * while it may still spend — the edge is pending, or it resolved early (cancelled, timed out) and
+ * the target was still running — and what it actually cost once the TARGET is known to have
+ * settled (a positive `outcome.costUsd` with a terminal `outcome.status`). A zero or missing cost
  * is no evidence the work was free, exactly as for a settled child above.
  */
 export function createdCharge(edge: WaitEdge): number {
   if (!edge.created) return 0;
   const reserved = edge.budgetUsd ?? 0;
-  if (edge.state === 'pending') return reserved;
+  if (!createdTargetSettled(edge)) return reserved;
   const actual = edge.outcome?.costUsd;
   return actual !== undefined && actual > 0 ? actual : reserved;
 }
 
-/** The pending tasks a run created in other projects — what counts against its in-flight cap. */
+/** Has a created edge's TARGET settled, as far as the edge knows? A pending edge, or one resolved
+ *  early while its target still ran, says no — the target may still be spending. */
+function createdTargetSettled(edge: WaitEdge): boolean {
+  if (edge.state === 'pending') return false;
+  if (edge.state === 'target-deleted' || edge.state === 'target-unavailable') return true;
+  return edge.outcome !== undefined && isTerminalStatus(edge.outcome.status);
+}
+
+/** The tasks a run created in other projects that may still be working — what counts against its
+ *  in-flight cap. Not just pending edges: "Stop waiting" or a deadline ends the WAIT, not the task
+ *  it created, which keeps running (and is tracked to its settle by the resolver). */
 export function pendingCreated(run: RunRecord): WaitEdge[] {
-  return (run.waits ?? []).filter((edge) => edge.created && edge.state === 'pending');
+  return (run.waits ?? []).filter((edge) => edge.created && !createdTargetSettled(edge));
 }
 
 /** A dollar amount as the transcript and the task order spell it. */

@@ -63,12 +63,15 @@ export function isWaitRefusal(value: unknown): value is WaitRefusal {
 }
 
 /** The `create` half of a declaration (Phase 2) — injected so this module stays free of the
- *  manager's task-creation machinery. Answers the created run, or a refusal. */
+ *  manager's task-creation machinery. Answers the created run, or a refusal. SYNCHRONOUS on
+ *  purpose: the creator's brakes (cap, budget) are checked inside it and the edge is written right
+ *  after it returns, with no `await` in between — two concurrent declarations can therefore never
+ *  both pass the brakes before either edge exists. */
 export type WaitCreateTarget = (
   waiter: { projectId: string; run: RunRecord },
   target: WaitProjectContext,
   input: Extract<WaitInput, { create: unknown }>['create'],
-) => Promise<{ run: RunRecord; budgetUsd?: number } | WaitRefusal>;
+) => { run: RunRecord; budgetUsd?: number } | WaitRefusal;
 
 export interface WaitResolverDeps {
   /** Map an id as a caller spells it onto the id the resolver keys projects by: `default` and the
@@ -156,6 +159,13 @@ export class WaitResolver {
   private readonly byTarget = new Map<string, Set<string>>();
   private readonly byWaiter = new Map<string, Set<string>>();
   private readonly timers = new Map<string, NodeJS.Timeout>();
+  /**
+   * Created tasks whose WAIT ended before they settled ("Stop waiting", a deadline, the creator
+   * finishing): `targetKey → waiterKey\u0000edgeId`. The task keeps running and keeps spending, so
+   * its creator's budget and in-flight cap must keep counting it (`createdCharge`,
+   * `pendingCreated`) until it settles — at which point its edge's `outcome` is updated, silently.
+   */
+  private readonly trailing = new Map<string, Set<string>>();
   /** Per-project store subscriptions, released on project removal and on dispose. */
   private readonly attached = new Map<string, { store: RunStore; off: () => void }>();
   private disposed = false;
@@ -210,6 +220,28 @@ export class WaitResolver {
       }
       for (const edge of pending) this.index(projectId, run.id, edge);
     }
+    // Created tasks whose wait ended early: keep tracking them to their settle (lost on restart).
+    for (const run of ctx.store.listRuns()) {
+      for (const edge of run.waits ?? []) {
+        if (!edge.created || edge.state === 'pending' || edge.state === 'target-deleted' || edge.state === 'target-unavailable') continue;
+        if (edge.outcome && isTerminalStatus(edge.outcome.status)) continue;
+        this.trail(edge.target.projectId, edge.target.runId, projectId, run.id, edge.id);
+      }
+    }
+    for (const targetKey of [...this.trailing.keys()]) {
+      const [targetProjectId, targetRunId] = targetKey.split('\u0000') as [string, string];
+      const targetCtx = this.deps.peek(targetProjectId);
+      if (!targetCtx) continue;
+      const target = targetCtx.store.getRun(targetRunId);
+      if (!target) this.settleTrailing(targetKey, { status: 'cancelled' });
+      else if (isTerminalStatus(target.status)) {
+        this.settleTrailing(targetKey, {
+          status: target.status,
+          ...(target.pullRequestUrl ? { prUrl: target.pullRequestUrl } : {}),
+          ...(target.costUsd !== undefined ? { costUsd: target.costUsd } : {}),
+        });
+      }
+    }
     for (const [edgeKey, indexed] of [...this.edges]) {
       if (indexed.waiterProjectId === projectId || indexed.targetKey.startsWith(`${projectId}\u0000`)) {
         this.evaluate(edgeKey);
@@ -250,6 +282,9 @@ export class WaitResolver {
   projectRemoved(projectId: string): void {
     this.attached.get(projectId)?.off();
     this.attached.delete(projectId);
+    for (const targetKey of [...this.trailing.keys()]) {
+      if (targetKey.startsWith(`${projectId}\u0000`)) this.settleTrailing(targetKey, { status: 'cancelled' });
+    }
     for (const [edgeKey, indexed] of [...this.edges]) {
       if (indexed.waiterProjectId === projectId) this.unindex(edgeKey);
       else if (indexed.targetKey.startsWith(`${projectId}\u0000`)) this.resolve(edgeKey, 'target-unavailable');
@@ -267,6 +302,7 @@ export class WaitResolver {
     this.edges.clear();
     this.byTarget.clear();
     this.byWaiter.clear();
+    this.trailing.clear();
   }
 
   // ---- declare / cancel ----------------------------------------------------------------------
@@ -282,25 +318,42 @@ export class WaitResolver {
     input: WaitInput,
     origin: WaitOrigin,
   ): Promise<WaitDeclareResponse | WaitRefusal> {
-    const waiterCtx = this.deps.peek(waiterProjectId);
-    const waiter = waiterCtx?.store.getRun(waiterRunId);
-    if (!waiterCtx || !waiter) return { status: 404, error: `no run ${waiterRunId}` };
-    if (waiter.status !== 'running' && waiter.status !== 'waiting') {
-      return { status: 409, error: `run ${waiterRunId.slice(0, 8)} is ${waiter.status} — only a live task can wait` };
+    // Read before AND after every await: a project build or a context build can take seconds,
+    // and the waiter may settle, or another declaration land, meanwhile.
+    const live = (): { ctx: WaitProjectContext; waiter: RunRecord; pending: WaitEdge[] } | WaitRefusal => {
+      const ctx = this.deps.peek(waiterProjectId);
+      const waiter = ctx?.store.getRun(waiterRunId);
+      if (!ctx || !waiter) return { status: 404, error: `no run ${waiterRunId}` };
+      if (waiter.status !== 'running' && waiter.status !== 'waiting') {
+        return { status: 409, error: `run ${waiterRunId.slice(0, 8)} is ${waiter.status} — only a live task can wait` };
+      }
+      const pending = (waiter.waits ?? []).filter((edge) => edge.state === 'pending');
+      if (pending.length >= WAIT_MAX_PENDING) {
+        return { status: 409, error: `this task already waits for ${pending.length} tasks — the cap is ${WAIT_MAX_PENDING}; wait for one to settle first` };
+      }
+      return { ctx, waiter, pending };
+    };
+    const before = live();
+    if (isWaitRefusal(before)) {
+      // A re-declaration of an edge that already exists answers that edge even at the cap.
+      if ('target' in input && before.status === 409 && before.error.includes('the cap is')) {
+        const existing = this.existingEdge(waiterProjectId, waiterRunId, input.target);
+        if (existing) return { kind: 'pending', edge: existing };
+      }
+      return before;
     }
-    const pending = (waiter.waits ?? []).filter((edge) => edge.state === 'pending');
     const timeoutMinutes = input.timeoutMinutes ?? WAIT_DEFAULT_TIMEOUT_MINUTES;
 
     if ('create' in input) {
       if (!this.deps.createTarget) return { status: 409, error: 'creating a task in another project is not available on this cockpit' };
-      if (pending.length >= WAIT_MAX_PENDING) {
-        return { status: 409, error: `this task already waits for ${pending.length} tasks — the cap is ${WAIT_MAX_PENDING}; wait for one to settle first` };
-      }
       const resolved = await this.resolveProject(input.create.projectId);
       if (isWaitRefusal(resolved)) return resolved;
-      const created = await this.deps.createTarget({ projectId: waiterProjectId, run: waiter }, resolved, input.create);
+      const now = live();
+      if (isWaitRefusal(now)) return now;
+      // No await from here to `record`: see `WaitCreateTarget`.
+      const created = this.deps.createTarget({ projectId: waiterProjectId, run: now.waiter }, resolved, input.create);
       if (isWaitRefusal(created)) return created;
-      const edge = this.record(waiterCtx, waiterRunId, resolved.id, created.run, origin, timeoutMinutes, {
+      const edge = this.record(now.ctx, waiterRunId, resolved.id, created.run, origin, timeoutMinutes, {
         created: true,
         ...(created.budgetUsd !== undefined ? { budgetUsd: created.budgetUsd } : {}),
       });
@@ -309,28 +362,55 @@ export class WaitResolver {
 
     const resolvedProject = input.target.projectId
       ? await this.resolveProject(input.target.projectId)
-      : waiterCtx;
+      : before.ctx;
     if (isWaitRefusal(resolvedProject)) return resolvedProject;
+    const now = live();
+    if (isWaitRefusal(now)) return now;
     const found = this.resolveRun(resolvedProject, input.target.runId);
     if (isWaitRefusal(found)) return found;
     const target = found;
     if (resolvedProject.id === waiterProjectId && target.id === waiterRunId) {
       return { status: 400, error: 'a task cannot wait for itself' };
     }
-    const existing = pending.find((edge) => edge.target.projectId === resolvedProject.id && edge.target.runId === target.id);
+    const existing = now.pending.find((edge) => edge.target.projectId === resolvedProject.id && edge.target.runId === target.id);
     if (existing) return { kind: 'pending', edge: existing };
     if (isTerminalStatus(target.status)) return { kind: 'settled', outcome: waitOutcomeOf(resolvedProject.id, target) };
-    if (pending.length >= WAIT_MAX_PENDING) {
-      return { status: 409, error: `this task already waits for ${pending.length} tasks — the cap is ${WAIT_MAX_PENDING}; wait for one to settle first` };
+    // A dispatched task waiting on its own ancestor is a deadlock the wait graph cannot see: the
+    // ancestor is parked on its children (slot-exempt), the child on the ancestor.
+    if (resolvedProject.id === waiterProjectId && this.isDispatchAncestor(now.ctx, now.waiter, target.id)) {
+      return { status: 409, error: `waiting would deadlock: ${waitRef(resolvedProject.id, target.id)} dispatched this task (directly or through its tree) and waits for its report — report instead (cez task report), or finish` };
     }
     const loop = this.cycle(key(waiterProjectId, waiterRunId), key(resolvedProject.id, target.id));
     if (loop) return { status: 409, error: `waiting would create a cycle: ${loop}` };
-    const edge = this.record(waiterCtx, waiterRunId, resolvedProject.id, target, origin, timeoutMinutes);
+    const edge = this.record(now.ctx, waiterRunId, resolvedProject.id, target, origin, timeoutMinutes);
     if (origin === 'user') {
       const text = `The user asked you to wait for "${edge.targetTitle}" (${waitRef(edge.target.projectId, edge.target.runId)}) — when you have nothing else to do, end your turn; cezar wakes you when it settles.`;
-      waiterCtx.manager.deliverWaitNotice(waiterRunId, text);
+      now.ctx.manager.deliverWaitNotice(waiterRunId, text);
     }
     return { kind: 'pending', edge };
+  }
+
+  /** The pending edge a re-declaration names, matched loosely (id prefix, project alias-free). */
+  private existingEdge(waiterProjectId: string, waiterRunId: string, target: { projectId?: string; runId: string }): WaitEdge | undefined {
+    const waiter = this.deps.peek(waiterProjectId)?.store.getRun(waiterRunId);
+    return waiter?.waits?.find(
+      (edge) =>
+        edge.state === 'pending' &&
+        edge.target.runId.startsWith(target.runId) &&
+        (target.projectId === undefined ? edge.target.projectId === waiterProjectId : edge.target.projectId === target.projectId),
+    );
+  }
+
+  /** Is `candidateId` the waiter's dispatch parent, or that parent's parent, …? */
+  private isDispatchAncestor(ctx: WaitProjectContext, waiter: RunRecord, candidateId: string): boolean {
+    const seen = new Set<string>();
+    let parentId = waiter.dispatch?.parentRunId;
+    while (parentId && !seen.has(parentId)) {
+      if (parentId === candidateId) return true;
+      seen.add(parentId);
+      parentId = ctx.store.getRun(parentId)?.dispatch?.parentRunId;
+    }
+    return false;
   }
 
   /** "Stop waiting": resolve one pending edge as `cancelled` and tell the waiter. */
@@ -526,14 +606,49 @@ export class WaitResolver {
     }
   }
 
+  private trail(targetProjectId: string, targetRunId: string, waiterProjectId: string, waiterRunId: string, edgeId: string): void {
+    const targetKey = key(targetProjectId, targetRunId);
+    if (!this.trailing.has(targetKey)) this.trailing.set(targetKey, new Set());
+    this.trailing.get(targetKey)!.add(`${key(waiterProjectId, waiterRunId)}\u0000${edgeId}`);
+  }
+
+  /** A trailing created task settled (or vanished): record what it ended as on its creator's
+   *  resolved edge — no delivery, the wait is long over; the budget and cap now see the truth. */
+  private settleTrailing(targetKey: string, outcome: { status: RunRecord['status']; prUrl?: string; costUsd?: number }): void {
+    const entries = this.trailing.get(targetKey);
+    if (!entries) return;
+    this.trailing.delete(targetKey);
+    for (const entry of entries) {
+      const [waiterProjectId, waiterRunId, edgeId] = entry.split('\u0000') as [string, string, string];
+      const ctx = this.deps.peek(waiterProjectId);
+      const waiter = ctx?.store.getRun(waiterRunId);
+      if (!ctx || !waiter?.waits?.some((edge) => edge.id === edgeId)) continue;
+      ctx.store.updateRun(waiterRunId, {
+        waits: waiter.waits.map((edge) => (edge.id === edgeId ? { ...edge, outcome } : edge)),
+      });
+    }
+  }
+
   private onSettled(projectId: string, runId: string): void {
     const runKey = key(projectId, runId);
+    if (this.trailing.has(runKey)) {
+      const target = this.deps.peek(projectId)?.store.getRun(runId);
+      if (target) {
+        this.settleTrailing(runKey, {
+          status: target.status,
+          ...(target.pullRequestUrl ? { prUrl: target.pullRequestUrl } : {}),
+          ...(target.costUsd !== undefined ? { costUsd: target.costUsd } : {}),
+        });
+      }
+    }
     for (const edgeKey of [...(this.byTarget.get(runKey) ?? [])]) this.resolve(edgeKey, 'settled');
     for (const edgeKey of [...(this.byWaiter.get(runKey) ?? [])]) this.resolve(edgeKey, 'waiter-ended');
   }
 
   private onDeleted(projectId: string, runId: string): void {
     const runKey = key(projectId, runId);
+    // A deleted task spends nothing more: its last known cost stands (or the reservation).
+    this.settleTrailing(runKey, { status: 'cancelled' });
     for (const edgeKey of [...(this.byTarget.get(runKey) ?? [])]) this.resolve(edgeKey, 'target-deleted');
     // The waiter's record is gone with its edges — nothing to write, only the index to drop.
     for (const edgeKey of [...(this.byWaiter.get(runKey) ?? [])]) this.unindex(edgeKey);
@@ -565,7 +680,7 @@ export class WaitResolver {
       ...edge,
       state,
       resolvedAt: new Date(this.now()).toISOString(),
-      ...(target && state !== 'waiter-ended'
+      ...(target && (state !== 'waiter-ended' || edge.created)
         ? {
             outcome: {
               status: target.status,
@@ -577,9 +692,15 @@ export class WaitResolver {
     };
     const all = (waiter.waits ?? []).map((candidate) => (candidate.id === edgeId ? resolved : candidate));
     const stillPending = all.filter((candidate) => candidate.state === 'pending');
-    const history = all.filter((candidate) => candidate.state !== 'pending').slice(-WAIT_MAX_HISTORY);
-    const keep = new Set([...stillPending, ...history].map((candidate) => candidate.id));
+    // Created edges are never trimmed: they are the only record of what a created task cost its
+    // creator's budget (`remainingBudgetUsd`). Plain waits keep the newest `WAIT_MAX_HISTORY`.
+    const history = all.filter((candidate) => candidate.state !== 'pending' && !candidate.created).slice(-WAIT_MAX_HISTORY);
+    const createdHistory = all.filter((candidate) => candidate.state !== 'pending' && candidate.created);
+    const keep = new Set([...stillPending, ...history, ...createdHistory].map((candidate) => candidate.id));
     ctx.store.updateRun(waiterRunId, { waits: all.filter((candidate) => keep.has(candidate.id)) });
+    if (edge.created && target && !isTerminalStatus(target.status)) {
+      this.trail(edge.target.projectId, edge.target.runId, ctx.id, waiterRunId, edgeId);
+    }
 
     const name = `"${edge.targetTitle}" (${waitRef(edge.target.projectId, edge.target.runId)})`;
     ctx.store.appendEvent(waiterRunId, {

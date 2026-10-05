@@ -1391,6 +1391,15 @@ export class RunManager {
     return this.exemptParks.get(runId) ?? 'watching';
   }
 
+  /**
+   * Leave the monitoring set — the ONE exit, and every transition out of the state goes through
+   * it: a child's report, a wait's resolution (`deliverWaitNotice`) or a user message
+   * (`deliverMessage`), the next turn ending in anything but a park, a native `ask.requested`, the
+   * session's own teardown, and `dropActive` (cancel, settle, restart recovery). The monitoring
+   * wake timer is deliberately NOT one: its nudge is delivered into the same parked session and
+   * the turn it starts ends back here. An `awaiting` park arms no wake timer at all — its exits
+   * are the resolver's, every one engine-fired (settle, delete, removal, mandatory deadline).
+   */
   private leaveMonitoring(runId: string): void {
     this.monitoring.delete(runId);
     this.exemptParks.delete(runId);
@@ -2016,6 +2025,10 @@ export class RunManager {
    * still-queued prompt stack (a restarted or reopened waiter), else the starting-up buffer.
    * A SETTLED waiter is not continued — its edges already resolved `waiter-ended`. Not
    * user-authored: no bubble in the waiter's thread; the resolver writes its own note.
+   *
+   * A waiter parked on its own `CEZ:ASK` is woken like a dispatch parent is by a child's report
+   * (`reportSettledChildToParent` uses the same `deliverMessage`): the outcome is new information
+   * the question may depend on, and holding it back would leave the agent answering blind.
    */
   deliverWaitNotice(runId: string, text: string): boolean {
     const blocks: PastedContent[] = [{ type: 'text', text }];
@@ -2380,7 +2393,10 @@ export class RunManager {
     this.store.updateRun(record.id, {
       title,
       waitedBy: { projectId: creator.projectId, runId: creator.runId },
-      ...(budgetUsd !== undefined ? { dispatch: { rootRunId: record.id, budgetUsd } } : {}),
+      // Always a dispatch ROOT of its own, budget or not: that is what lets it file the
+      // `cez task report` its order mentions (`recordReport` needs a `dispatch` record), and what
+      // carries a carved budget as its ceiling (the dispatch brake).
+      dispatch: { rootRunId: record.id, ...(budgetUsd !== undefined ? { budgetUsd } : {}) },
     });
     this.store.appendEvent(record.id, {
       type: 'note',

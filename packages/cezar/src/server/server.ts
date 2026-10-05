@@ -1400,7 +1400,7 @@ export function createApp(deps: ServerDeps) {
         // Phase 2 — `cez task create --project`: an independent task in ANOTHER project, created
         // and waited for in one request. It is dispatch-class exposure (an agent starting an
         // agent), so it rides dispatch's switch as well as this one's, and dispatch's brakes.
-        createTarget: async (waiter, target, input) => {
+        createTarget: (waiter, target, input) => {
           if (!capabilities().dispatch) {
             return { status: 409, error: 'creating a task in another project rides task dispatch, which is off on this cockpit (CEZ_DISPATCH=0). Do not do that work yourself: stop and report that it is blocked on another project.' };
           }

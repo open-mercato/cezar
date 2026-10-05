@@ -102,7 +102,8 @@ describe('POST /runs/:id/waits — create in another project', () => {
     expect(target.title).toBe('Add export endpoint');
     expect(target.autonomous).toBe(true);
     expect(target.waitedBy).toEqual({ projectId: 'default', runId: waiter.id });
-    expect(target.dispatch).toBeUndefined();
+    // Its own dispatch root, budget or not — so it can file the report its order mentions.
+    expect(target.dispatch).toEqual({ rootRunId: target.id });
     expect(target.task).toContain('## Task order');
     expect(target.task).toContain('- Success criteria: GET /export answers CSV');
     expect(target.task).toContain('- Created by: task "Build the export page"');
