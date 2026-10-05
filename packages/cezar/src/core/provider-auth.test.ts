@@ -157,6 +157,52 @@ describe('runtime provider authentication failures', () => {
 });
 
 describe('provider auth parsers', () => {
+  it.each([
+    'OpenAI                           OAuth                       stored',
+    'Alibaba Token Plan               API key                     stored',
+    'GitHub Copilot                   GITHUB_TOKEN                environment',
+    'OpenCode Go                      OpenCode Go                 stored',
+    'OpenAI  OAuth stored',
+    'OpenAI                           OAuth                       stored\nMiniMax (minimax.io)              MINIMAX_API_KEY             environment',
+  ])('recognizes OpenCode V2 credential rows: %s', async (stdout) => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'opencode'
+        ? { stdout, stderr: '', exitCode: 0 }
+        : resultFor(executable)),
+    });
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'connected' } });
+  });
+
+  it.each([
+    'unexpected output', 'OpenAI  OAuth  stored\nfailed to read credentials',
+    'OpenAI OAuth stored', 'OpenAI  OAuth  unknown',
+  ])('keeps ambiguous OpenCode V2 output unknown: %s', async (stdout) => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'opencode'
+        ? { stdout, stderr: '', exitCode: 0 }
+        : resultFor(executable)),
+    });
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'unknown' } });
+  });
+
+  it('recognizes a successful empty V2 credential list as disconnected', async () => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'opencode'
+        ? { stdout: '\n  ', stderr: '', exitCode: 0 }
+        : resultFor(executable)),
+    });
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'disconnected' } });
+  });
+
+  it('does not trust an empty credential list with a diagnostic on stderr', async () => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'opencode'
+        ? { stdout: '', stderr: 'service unavailable', exitCode: 0 }
+        : resultFor(executable)),
+    });
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'unknown' } });
+  });
+
   it('accepts only Claude JSON with loggedIn true as connected', async () => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable === 'claude'
