@@ -47,3 +47,13 @@ Non-goals: no new run status, no LLM classifier (#689's broader idea), no change
 
 - `failed` status with a "needs you" reading: consumers that branch on raw status (e.g. third-party API clients) still see `failed`. That is honest (no process is running). The field is additive and documented in `BACKWARD_COMPATIBILITY.md`.
 - Stacked on #1245: merge #1245 first, or merge this PR instead of it.
+
+### Phase 4: Review fixes
+
+- [x] 4.1 Dashboard queue/overview keep awaiting rows actionable; live overlay and cost rows carry the field; crash/timeout stamps; thread footer; "Archive finished" leaves open questions; stable cold-read stamp.
+
+## Follow-ups (not in this PR)
+
+- Codex's native `requestUserInput` question parks `waiting` without `askPark`, so an idle close or restart still does not keep it under "needs you".
+- An awaiting run can only leave "needs you" by being answered or archived; Finish is not offered on a closed session.
+
