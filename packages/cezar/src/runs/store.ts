@@ -13,7 +13,7 @@ import { MAX_REF } from './task-refs.ts';
 import { workflowDefSchema } from '../workflows/types.ts';
 // A contract VALUE, like `workspaceUiStateSchema` in `workspace/migrations.ts`: the persisted
 // `dispatch` object and its wire half are literally the same schema, so they cannot drift.
-import { dispatchSchema, trackerAssociationSchema, trackerAutomationEventSchema } from '@open-mercato/cezar-contract';
+import { dispatchSchema, trackerAssociationSchema, trackerAutomationEventSchema, waitEdgeSchema, waitedBySchema } from '@open-mercato/cezar-contract';
 
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
@@ -242,6 +242,12 @@ export const runRecordSchema = z.object({
    *  a `dispatch` that no longer fits must drop the FIELD, never the whole index. The run then reads
    *  as an ordinary flat task — degraded, but running. */
   dispatch: dispatchSchema.optional().catch(undefined),
+  /** Wait edges (spec 2026-10-05-cross-task-waits) — the contract's own schema, imported like
+   *  `dispatchSchema` above and `.catch`ed the same way: a hand-edited edge that no longer fits
+   *  drops the FIELD (the run simply stops waiting), never the whole index. */
+  waits: z.array(waitEdgeSchema).optional().catch(undefined),
+  /** The task that created this one and waits for it (Phase 2). */
+  waitedBy: waitedBySchema.optional().catch(undefined),
   status: z.enum(['queued', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled']),
   /** Sub-state of `running` (spec 2026-07-18-subagent-monitoring-status, #490):
    *  `monitoring` while the agent is still working on its own downstream work.
