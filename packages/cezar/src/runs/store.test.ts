@@ -1850,15 +1850,22 @@ describe('RunStore — awaitingAnswerSince', () => {
     },
   );
 
-  it('is retired by archiving — one run and in bulk', () => {
+  it('is retired by archiving that one run', () => {
     const store = RunStore.open(dataDir);
     const one = awaiting(store);
     store.setArchived(one, true);
     expect(store.getRun(one)?.awaitingAnswerSince).toBeUndefined();
+  });
 
-    const swept = awaiting(store);
-    expect(store.archiveFinished()).toBeGreaterThanOrEqual(1);
-    expect(store.getRun(swept)?.awaitingAnswerSince).toBeUndefined();
+  it('is a gate the "Archive finished" sweep leaves alone, like review', () => {
+    const store = RunStore.open(dataDir);
+    const open = awaiting(store);
+    const outcome = store.createRun({ title: 'o', workflow: 'quick-task', task: 'o', steps: [] });
+    store.updateRun(outcome.id, { status: 'failed', finishedAt: AT });
+    expect(store.archiveFinished()).toBe(1);
+    expect(store.getRun(outcome.id)?.archived).toBe(true);
+    expect(store.getRun(open)?.archived).toBe(false);
+    expect(store.getRun(open)?.awaitingAnswerSince).toBe(AT);
   });
 
   it('markAllRead leaves an awaiting run alone, exactly as the cockpit rule does', () => {
@@ -1878,7 +1885,8 @@ describe('RunStore — awaitingAnswerSince', () => {
 
     const reopened = RunStore.open(dataDir);
     expect(reopened.getRun(parked.id)?.status).toBe('failed');
-    expect(reopened.getRun(parked.id)?.awaitingAnswerSince).toBeDefined();
+    // Stamped from `finishedAt`, so repeated cold reads agree on the instant.
+    expect(reopened.getRun(parked.id)?.awaitingAnswerSince).toBe(reopened.getRun(parked.id)?.finishedAt);
     expect(reopened.getRun(parked.id)?.askParked).toBeUndefined();
     expect(reopened.getRun(plain.id)?.status).toBe('failed');
     expect(reopened.getRun(plain.id)?.awaitingAnswerSince).toBeUndefined();

@@ -778,10 +778,12 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   ) {
     // A run parked on an unanswered `CEZ:ASK` still owes the user that question — the same
     // answer `RunManager.recover()` gives, so this reader and the manager agree on "needs you".
-    if (run.status === 'waiting' && run.askParked) run.awaitingAnswerSince = new Date().toISOString();
+    const askParked = run.status === 'waiting' && run.askParked === true;
     run.status = 'failed';
     run.error = 'interrupted — cezar process exited during the run';
     run.finishedAt = run.finishedAt ?? new Date().toISOString();
+    // Stamped from `finishedAt`, so every cold read of the same record agrees on the instant.
+    if (askParked) run.awaitingAnswerSince = run.finishedAt;
     for (const step of run.steps) {
       if (step.status === 'running' || step.status === 'waiting') step.status = 'failed';
     }
@@ -1184,7 +1186,12 @@ export class RunStore extends EventEmitter {
   archiveFinished(): number {
     let count = 0;
     for (const run of this.runs.values()) {
-      if (!run.archived && ['done', 'failed', 'cancelled'].includes(run.status)) {
+      // An unanswered question is a gate, not an outcome — like `review`, the bulk sweep leaves it.
+      if (
+        !run.archived &&
+        ['done', 'failed', 'cancelled'].includes(run.status) &&
+        run.awaitingAnswerSince === undefined
+      ) {
         run.archived = true;
         run.archivedAt = new Date().toISOString();
         clearPendingAutoResume(run);

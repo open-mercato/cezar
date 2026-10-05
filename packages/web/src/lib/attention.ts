@@ -96,6 +96,19 @@ export function budgetStop(run: Pick<RunRecord, 'status' | 'dispatch' | 'costUsd
 }
 
 /**
+ * A `failed` run whose session closed on an unanswered `CEZ:ASK`: no process is left, but the
+ * question is still the user's. Every surface that asks "does this need you?" reads it the same way.
+ */
+export function isAwaitingAnswer(run: Pick<RunRecord, 'status' | 'awaitingAnswerSince'>): boolean {
+  return run.status === 'failed' && run.awaitingAnswerSince !== undefined
+}
+
+/** The runs a "needs you" list keeps: waiting, in review, or awaiting an answer. */
+export function isNeedsYouStatus(run: Pick<RunRecord, 'status' | 'awaitingAnswerSince'>): boolean {
+  return run.status === 'waiting' || run.status === 'review' || isAwaitingAnswer(run)
+}
+
+/**
  * `RunRecord` → attention.
  *
  * The chain below *is* the priority order — first match wins, so `error` can never be masked by a
@@ -125,7 +138,7 @@ export function deriveAttention(run: AttentionInput): Attention {
   // is `failed` on the record because the process is gone, but the question is still the user's to
   // answer. Reporting it as a failure (or, before that, as done) hid a task that was waiting on
   // you; it wears the `waiting` rung instead, and the answer reopens the session.
-  if (run.status === 'failed' && run.awaitingAnswerSince) {
+  if (isAwaitingAnswer(run)) {
     return { bucket: 'waiting', tone: 'pending', pulse: true, label: 'needs you' }
   }
   if (run.status === 'failed') {

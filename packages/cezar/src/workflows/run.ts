@@ -3976,11 +3976,14 @@ export class RunManager {
       if (!state.cancelled && this.active.get(runId) === state) {
         this.store.updateStep(runId, stepId, { status: 'failed', error: message, finishedAt: finishedAt() });
         appendHandoffHeartbeat(this.dataDir, runId, `step "${stepId}" complete — status=failed`);
+        const failedAt = finishedAt();
         this.store.updateRun(runId, {
           status: 'failed',
           error: `continue failed: ${message}`,
-          finishedAt: finishedAt(),
+          finishedAt: failedAt,
           currentStepId: undefined,
+          // A session that crashed while parked on a question leaves that question unanswered.
+          ...(state.askPark === 'waiting' ? { awaitingAnswerSince: failedAt } : {}),
         });
         this.store.appendEvent(runId, { type: 'lifecycle', message: `continue failed — ${message}` });
       }
@@ -4361,7 +4364,14 @@ export class RunManager {
       this.store.updateRun(runId, { status: 'cancelled', finishedAt, currentStepId: undefined });
       emit({ type: 'lifecycle', message: 'run cancelled' });
     } else if (runError) {
-      this.store.updateRun(runId, { status: 'failed', error: runError, finishedAt, currentStepId: undefined });
+      this.store.updateRun(runId, {
+        status: 'failed',
+        error: runError,
+        finishedAt,
+        currentStepId: undefined,
+        // A crash or a wall-clock timeout while parked on a question does not answer it either.
+        ...(askPark === 'waiting' ? { awaitingAnswerSince: finishedAt } : {}),
+      });
       emit({ type: 'lifecycle', message: `run failed — ${runError}` });
     } else if (askPark === 'waiting') {
       // The question was never answered, so the steps behind it never ran.

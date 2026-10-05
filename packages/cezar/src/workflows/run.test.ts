@@ -1679,6 +1679,20 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(store.getRun(record.id)?.awaitingAnswerSince).toBeUndefined();
   }, 40_000);
 
+  it('keeps an unanswered ask awaiting the user when the parked session fails instead of idling out', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:ask which library?', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    const live = (manager as unknown as {
+      active: Map<string, { session?: { sendMessage(content: { type: 'text'; text: string }[]): boolean } }>;
+    }).active.get(record.id)!;
+    // A raw write (no `deliverMessage`, so the question stays pending) whose turn errors out —
+    // the session dies with the question still open.
+    expect(live.session!.sendMessage([{ type: 'text', text: 'mock:auth-error' }])).toBe(true);
+    await waitFor(record.id, (r) => r?.status === 'failed');
+    expect(store.getRun(record.id)?.awaitingAnswerSince).toBeDefined();
+  }, 40_000);
+
   it('keeps an ask raised on a continuation awaiting the user after its idle close', async () => {
     const record = manager.startRun(SINGLE_STEP, { task: 'do the first thing', worktree: false });
     currentId = record.id;
