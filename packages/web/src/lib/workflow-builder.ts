@@ -120,6 +120,11 @@ export function workflowYaml(
       if (s.command) lines.push(...yamlBlock('command', s.command, 4))
       if (s.onFail) {
         lines.push('    onFail:', `      retry: ${yamlScalar(s.onFail.retry)}`, `      max: ${s.onFail.max ?? 2}`)
+        // The builder has no editor for `retryOn`, so it can only arrive from a loaded
+        // file — which is exactly why it has to be written back: a user who opens such a
+        // workflow and saves it would otherwise lose the gate and get the retry loop
+        // back on the check's infrastructure failures, silently.
+        if (s.onFail.retryOn?.length) lines.push(`      retryOn: [${s.onFail.retryOn.join(', ')}]`)
       }
     }
   } else {

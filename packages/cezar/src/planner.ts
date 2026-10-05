@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { createRunner } from './core/runner-factory.ts';
@@ -124,13 +124,23 @@ function buildPlannerPrompt(task: string, skills: Skill[], verifyCommands: strin
   ].join('\n');
 }
 
+/** Config files that mean the repo has an agentic browser/device suite (`e2e`). */
+const E2E_CONFIG_FILES = ['e2e.config.ts', 'e2e.config.mts', 'e2e.config.js', 'e2e.config.mjs'];
+
 /**
  * Detect verification commands the planner may propose as `check` steps:
- * `package.json` scripts (test/lint/build) and Makefile targets (first 50
- * lines). Best effort — an unreadable file just contributes nothing.
+ * `package.json` scripts (test/lint/build/test:e2e), an `e2e.config.*`, and
+ * Makefile targets (first 50 lines). Best effort — an unreadable file just
+ * contributes nothing.
+ *
+ * The end-to-end command goes LAST, after the cheap checks, because that is
+ * the order a chain wants it in: a browser suite that drives the app is the
+ * slowest and (with agent steps in it) the only one that costs model calls, so
+ * it is worth reaching only once the unit tests are green.
  */
-async function detectVerifyCommands(repoRoot: string): Promise<string[]> {
+export async function detectVerifyCommands(repoRoot: string): Promise<string[]> {
   const out: string[] = [];
+  let e2e: string | undefined;
   const pkgSchema = z.object({ scripts: z.record(z.string(), z.string()).default({}) });
   try {
     const raw: unknown = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8'));
@@ -139,9 +149,20 @@ async function detectVerifyCommands(repoRoot: string): Promise<string[]> {
       if (pkg.data.scripts['test']) out.push('npm test');
       if (pkg.data.scripts['lint']) out.push('npm run lint');
       if (pkg.data.scripts['build']) out.push('npm run build');
+      // Whatever the repo's own suite is — `e2e`, Playwright, Cypress — the script
+      // is the project's answer for how to run it, so prefer it over our guess.
+      if (pkg.data.scripts['test:e2e']) e2e = 'npm run test:e2e';
     }
   } catch {
     // no package.json — fine
+  }
+  if (!e2e) {
+    for (const file of E2E_CONFIG_FILES) {
+      if (await exists(join(repoRoot, file))) {
+        e2e = 'npx e2e run';
+        break;
+      }
+    }
   }
   try {
     const make = await readFile(join(repoRoot, 'Makefile'), 'utf8');
@@ -153,7 +174,17 @@ async function detectVerifyCommands(repoRoot: string): Promise<string[]> {
   } catch {
     // no Makefile — fine
   }
+  if (e2e) out.push(e2e);
   return out;
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

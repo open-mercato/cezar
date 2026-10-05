@@ -250,11 +250,23 @@ steps:
     onFail:
       retry: implement           # loop back to an earlier step…
       max: 2                     # …at most twice
+      # retryOn: [1]             # optional: only these exit codes loop back
 ```
 
 `{{task}}` is replaced with the task text you typed. When a check fails and loops
 back, its failing output is appended to the retried agent's prompt so the next
 attempt can see what broke.
+
+`onFail.retryOn` narrows the loop to the exit codes that mean *the work is
+wrong*. Omitted, any non-zero code loops back — right for `npm test`, which
+exits 1 whether a test failed or the runner could not start. A richer check
+distinguishes the two: an `e2e` browser run exits 1 on a failed test, but 2 on a
+config or credential error and 3 on an engine failure, none of which the agent
+can fix and each of which would otherwise cost a full agent attempt per retry.
+`retryOn: [1]` loops on the verdict and fails the run on the infrastructure,
+naming the code. See [browser and mobile e2e as a verification
+step](e2e-verification.md) for the worked chains, including an independent QA
+exploration as the gate.
 
 Prefer skills over steps? A workflow can also be written in the portable
 shorthand — an ordered list of skill names, each becoming one agent step:

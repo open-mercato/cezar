@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   chainStepNote,
   normalizeWorkflowDoc,
+  retryableExit,
   skillStackOf,
   skillsToSteps,
   stepsIssue,
@@ -136,4 +137,38 @@ test('chainStepNote labels a step by its name first, then its skill, then generi
 
   const bare = chainStepNote([{ id: 'step-1', prompt: '{{task}}' }, { id: 'step-2', prompt: '{{task}}' }], 0);
   assert.ok(bare?.includes('this step'));
+});
+
+test('retryableExit treats no list and an empty list as "any failure retries"', () => {
+  // Every workflow written before `retryOn` existed, and every GUI that
+  // serializes "nothing selected" as `[]`, must keep the old loop.
+  for (const list of [undefined, []]) {
+    assert.equal(retryableExit(list, 1), true);
+    assert.equal(retryableExit(list, 2), true);
+    assert.equal(retryableExit(list, -1), true);
+  }
+});
+
+test('retryableExit loops only on the listed codes', () => {
+  // `e2e`: 1 is the verdict on the diff, 2-4 are config / engine / internal
+  // failures the coding agent cannot fix, 130 is an interrupt.
+  assert.equal(retryableExit([1], 1), true);
+  for (const code of [2, 3, 4, 130, -1]) assert.equal(retryableExit([1], code), false);
+});
+
+test('a retryOn of 0 is a load-time error, not a silent no-op', () => {
+  const file = (retryOn: number[]) => ({
+    name: 'implement-and-e2e',
+    steps: [
+      { id: 'implement', prompt: '{{task}}' },
+      { id: 'e2e', command: 'npx e2e run', onFail: { retry: 'implement', max: 2, retryOn } },
+    ],
+  });
+
+  // A check that exits 0 passed and never reaches the loop, so listing it is a
+  // misreading of the field — one the loader says out loud.
+  assert.equal(workflowFileSchema.safeParse(file([0, 1])).success, false);
+  const ok = workflowFileSchema.safeParse(file([1]));
+  assert.equal(ok.success, true);
+  assert.deepEqual(ok.success && ok.data.steps?.[1]?.onFail, { retry: 'implement', max: 2, retryOn: [1] });
 });

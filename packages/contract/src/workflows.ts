@@ -37,6 +37,8 @@ export const workflowStepDefSchema = z
       .object({
         retry: z.string().min(1),
         max: z.number().int().positive().default(2),
+        /** Exit codes that loop back; omitted or empty means any non-zero one does. */
+        retryOn: z.array(z.number().int().positive()).optional(),
       })
       .optional(),
   })
