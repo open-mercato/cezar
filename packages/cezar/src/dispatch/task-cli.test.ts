@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { runTaskCommand, type TaskCliIo } from './task-cli.ts';
+
+function containsRunnerToken(text: string, runner: string): boolean {
+  return new RegExp(`(?:^|[^A-Za-z0-9_-])${runner}(?=$|[^A-Za-z0-9_-])`).test(text);
+}
 
 /** The `cez task` CLI is a thin client: what is pinned is the request it builds from flags and
  *  env, and how it answers a refusal — never the engine, which has its own tests. */
@@ -83,6 +88,12 @@ describe('cez task', () => {
     expect(await runTaskCommand(['create', '--help'], env, h.io)).toBe(0);
     expect(h.out[0]).toContain('cez task create');
     expect(h.calls).toHaveLength(0);
+  });
+
+  it('advertises every supported runner in help as a standalone token', async () => {
+    const h = harness({ status: 200, body: {} });
+    expect(await runTaskCommand(['help'], {}, h.io)).toBe(0);
+    for (const runner of RUNNER_IDS) expect(containsRunnerToken(h.out[0] ?? '', runner)).toBe(true);
   });
 
   it('list prints the tree this task belongs to, indented, with status, cost and verdicts', async () => {

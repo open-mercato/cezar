@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { DISPATCH_PROMPT, REVIEW_PROMPT, composeDispatchPrompt, dispatchIntentPrompt, waitsPrompt } from './prompts.ts';
+
+function containsRunnerToken(text: string, runner: string): boolean {
+  return new RegExp(`(?:^|[^A-Za-z0-9_-])${runner}(?=$|[^A-Za-z0-9_-])`).test(text);
+}
 
 /** The prompt is the ONLY place an agent learns the CLI, so it must name every flag the
  *  contract accepts and the rules the engine enforces. */
@@ -21,6 +26,7 @@ describe('the dispatch prompt', () => {
     expect(DISPATCH_PROMPT).toContain('--runner and --model choose who runs the child; omitted, it inherits yours');
     expect(DISPATCH_PROMPT).toContain("If the user's instructions name a runner or model, use that");
     expect(DISPATCH_PROMPT).toContain('cheaper or faster model');
+    for (const runner of RUNNER_IDS) expect(containsRunnerToken(DISPATCH_PROMPT, runner)).toBe(true);
   });
 
   it('keeps --budget optional so an uncapped parent does not invent a cap for its children', () => {
@@ -98,6 +104,14 @@ describe('the waits paragraph (spec 2026-10-05-cross-task-waits)', () => {
     expect(text).toContain('Another project, or an independent change with its own review and PR');
     expect(text).toContain('Already running somewhere');
     expect(text).toContain('At most 4 at once');
+  });
+
+  it('offers every runner on create --project, derived like the dispatch prompt (#1236)', () => {
+    const createLine = waitsPrompt({ create: true, standalone: false })
+      .split('\n')
+      .find((line) => line.includes('--project <projectId>'));
+    expect(createLine).toBeDefined();
+    for (const runner of RUNNER_IDS) expect(containsRunnerToken(createLine!, runner)).toBe(true);
   });
 
   it('standing alone (dispatch off), it names the binary and never the create-elsewhere path', () => {
