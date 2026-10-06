@@ -319,6 +319,47 @@ export function compileSteps(steps: readonly WorkflowStepDef[]): WorkflowGraph {
   return { nodes, edges }
 }
 
+/**
+ * The skills of a graph that is nothing but a stack of them — start → agents that each apply one
+ * skill to `{{task}}` → a success end — or null for anything richer. Such a graph saves in the
+ * portable compact `skills:` form (spec 012; mirror of the server's `skillStackOf`), so a stack
+ * built here still drops into another repo as three lines of YAML.
+ */
+export function skillStackOfGraph(graph: WorkflowGraph): string[] | null {
+  const starts = graph.nodes.filter((n) => n.type === 'start')
+  if (starts.length !== 1) return null
+  const skills: string[] = []
+  let cur = targetOf(graph, starts[0]!.id, 'next')
+  for (;;) {
+    const node = graph.nodes.find((n) => n.id === cur)
+    if (!node) return null
+    if (node.type === 'end') {
+      if (node.status !== 'success' || node.name !== undefined) return null
+      break
+    }
+    // More agents than nodes means the walk came round: not a stack.
+    if (node.type !== 'agent' || !node.skill || skills.length >= graph.nodes.length) return null
+    const plain = Object.keys(node).every((k) => ['id', 'type', 'name', 'prompt', 'skill'].includes(k))
+    if (!plain || (node.prompt !== undefined && node.prompt !== '{{task}}')) return null
+    if ((node.name !== undefined && node.name !== node.skill) || targetOf(graph, node.id, 'failed')) return null
+    skills.push(node.skill)
+    cur = targetOf(graph, node.id, 'done')
+  }
+  // Nothing beside the stack: no stray nodes, no second edge.
+  if (!skills.length || graph.nodes.length !== skills.length + 2 || graph.edges.length !== skills.length + 1) return null
+  return skills
+}
+
+/** A planner's proposed chain (`POST /plan`) as steps with unique ids, ready to open as a graph. */
+export function stepsFromPlan(steps: readonly WorkflowStepDef[]): WorkflowStepDef[] {
+  const used = new Set<string>()
+  return steps.map((step) => {
+    const id = uniqueId(step.id || 'step', used)
+    used.add(id)
+    return { ...step, id }
+  })
+}
+
 /** Node geometry, shared with the canvas renderer (`graph-node.tsx`) so the layout sizes a node
  *  exactly as it is drawn. */
 export const TILE = 64
@@ -624,10 +665,14 @@ function yamlField(key: string, value: unknown, pad: string): string[] {
   return [`${pad}${key}: ${yamlScalar(value)}`]
 }
 
-/** The `version: 2` file the YAML tab previews and Export downloads (same keys the server writes). */
+/** The file the YAML tab previews and Export downloads — what Save writes: the compact `skills:`
+ *  form for a pure skill stack, a `version: 2` graph otherwise (same keys the server writes). */
 export function graphYaml(name: string, description: string, graph: WorkflowGraph): string {
-  const lines = ['version: 2', `name: ${yamlScalar(name.trim() || 'my-workflow')}`]
-  if (description.trim()) lines.push(...yamlField('description', description.trim(), ''))
+  const head = [`name: ${yamlScalar(name.trim() || 'my-workflow')}`]
+  if (description.trim()) head.push(...yamlField('description', description.trim(), ''))
+  const stack = skillStackOfGraph(graph)
+  if (stack) return `${[...head, 'skills:', ...stack.map((s) => `  - ${yamlScalar(s)}`)].join('\n')}\n`
+  const lines = ['version: 2', ...head]
   lines.push('nodes:')
   for (const n of graph.nodes) {
     const { id, ...rest } = n

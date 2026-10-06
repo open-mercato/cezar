@@ -35,7 +35,15 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import { useParams } from 'react-router'
 
-import { ApiError, parseWorkflow, saveWorkflowGraph, validateWorkflowGraph } from '@/api/client'
+import {
+  ApiError,
+  createWorkflow,
+  deleteWorkflow,
+  parseWorkflow,
+  postPlan,
+  saveWorkflowGraph,
+  validateWorkflowGraph,
+} from '@/api/client'
 import { queryKeys, useSkills, useWorkflowNodes, useWorkflows } from '@/api/queries'
 import type { WorkflowGraph, WorkflowGraphNode } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
@@ -73,6 +81,8 @@ import {
   advanceFork,
   forkBranchIds,
   setForkBranches,
+  skillStackOfGraph,
+  stepsFromPlan,
   portsOf,
   portTone,
   removeNode,
@@ -252,6 +262,7 @@ function WorkflowGraphEditor() {
   const [sim, setSim] = useState<SimState | null>(null)
   const [issues, setIssues] = useState<string[]>([])
   const [importText, setImportText] = useState('')
+  const [planText, setPlanText] = useState('')
   const [rfNodes, setRfNodes] = useState<Node<FlowNodeData>[]>([])
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null)
   /** Set by a port's `+`: the next node picked in the palette is placed after it and wired to it. */
@@ -281,7 +292,7 @@ function WorkflowGraphEditor() {
   const nodesInitialized = useNodesInitialized()
   /** A pending confirmation: replace an existing file on save, or leave unsaved edits. */
   const [confirm, setConfirm] = useState<
-    { kind: 'overwrite' } | { kind: 'shadow' } | { kind: 'discard'; to: string } | null
+    { kind: 'overwrite' } | { kind: 'shadow' } | { kind: 'discard'; to: string } | { kind: 'delete'; name: string } | null
   >(null)
 
   // Load once per route name — a background refetch must never clobber edits in progress.
@@ -533,13 +544,15 @@ function WorkflowGraphEditor() {
   }, [confirm, selectedId, workflowPanel])
 
   const save = useMutation({
-    mutationFn: (overwrite: boolean) =>
-      saveWorkflowGraph({
-        name: name.trim(),
-        ...(description.trim() ? { description: description.trim() } : {}),
-        graph,
-        overwrite,
-      }),
+    mutationFn: (overwrite: boolean) => {
+      const head = { name: name.trim(), ...(description.trim() ? { description: description.trim() } : {}) }
+      // A pure stack of skills stays in the portable compact form (spec 012); anything richer is
+      // a `version: 2` graph.
+      const stack = skillStackOfGraph(graph)
+      return stack
+        ? createWorkflow({ ...head, skills: stack, ...(overwrite ? { overwrite: true } : {}) })
+        : saveWorkflowGraph({ ...head, graph, overwrite })
+    },
     onSuccess: (res) => {
       setDirty(false)
       toast(`Saved ${res.path.split('/').pop() ?? res.path}`)
@@ -566,6 +579,34 @@ function WorkflowGraphEditor() {
       setDescription(parsed.description ?? '')
       setImportText('')
       pendingFit.current = true
+    },
+    onError: (err) => toast(err instanceof Error ? err.message : String(err), { tone: 'danger' }),
+  })
+
+  // The planner turns a plain-language brief into a proposed chain, opened on the canvas to
+  // review and Save (#414). It never hard-fails: a degraded answer is a one-step plan.
+  const autoPlan = useMutation({
+    mutationFn: () => postPlan(planText.trim()),
+    onSuccess: (plan) => {
+      edit(() => graphForWorkflow({ steps: stepsFromPlan(plan.steps) }))
+      if (plan.name?.trim()) setName(plan.name.trim())
+      setPlanText('')
+      pendingFit.current = true
+      toast(
+        plan.fallback ? 'Planner unavailable — added a single step. Edit, then Save.' : 'Built a workflow — review, tweak, then Save.',
+        plan.fallback ? { tone: 'danger' } : undefined,
+      )
+    },
+    onError: (err) => toast(err instanceof Error ? err.message : String(err), { tone: 'danger' }),
+  })
+
+  const del = useMutation({
+    mutationFn: (workflowName: string) => deleteWorkflow(workflowName),
+    onSuccess: (_, workflowName) => {
+      toast(`Deleted “${workflowName}”.`)
+      setDirty(false)
+      void queryClient.invalidateQueries({ queryKey: queryKeys.workflows })
+      void navigate('/workflows')
     },
     onError: (err) => toast(err instanceof Error ? err.message : String(err), { tone: 'danger' }),
   })
@@ -922,6 +963,29 @@ function WorkflowGraphEditor() {
               >
                 Import
               </Button>
+              <Field label="build from a description — replaces the canvas">
+                <Textarea
+                  value={planText}
+                  onChange={(e) => setPlanText(e.target.value)}
+                  rows={3}
+                  placeholder="implement, run the tests, then review…"
+                />
+              </Field>
+              <Button size="sm" variant="outline" disabled={!planText.trim() || autoPlan.isPending} onClick={() => autoPlan.mutate()}>
+                {autoPlan.isPending ? 'Building…' : 'Build workflow'}
+              </Button>
+              {opened?.source === 'file' && (
+                <div className="border-t border-border pt-3">
+                  <Button
+                    size="sm"
+                    variant="danger-ghost"
+                    disabled={del.isPending}
+                    onClick={() => setConfirm({ kind: 'delete', name: opened.name })}
+                  >
+                    <Trash2Icon /> Delete workflow
+                  </Button>
+                </div>
+              )}
             </div>
           </FloatingPanel>
         ) : null}
@@ -966,14 +1030,18 @@ function WorkflowGraphEditor() {
                 ? `“${name.trim()}” already exists`
                 : confirm?.kind === 'shadow'
                   ? `Replace the built-in “${name.trim()}”?`
-                  : 'Discard unsaved changes?'}
+                  : confirm?.kind === 'delete'
+                    ? `Delete “${confirm.name}”?`
+                    : 'Discard unsaved changes?'}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {confirm?.kind === 'overwrite'
                 ? 'Saving replaces the existing workflow file — including a v1 file of the same name. There is no undo.'
                 : confirm?.kind === 'shadow'
                   ? 'A saved file with a built-in name takes its place for every task in this repository, including tasks that use the default. Rename it to keep the built-in; delete the file to bring it back.'
-                  : 'The edits on this canvas have not been saved.'}
+                  : confirm?.kind === 'delete'
+                    ? 'This removes the workflow file from the repository. Tasks already started with it keep running; there is no undo.'
+                    : 'The edits on this canvas have not been saved.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -983,6 +1051,7 @@ function WorkflowGraphEditor() {
               onClick={() => {
                 if (confirm?.kind === 'overwrite') save.mutate(true)
                 else if (confirm?.kind === 'shadow') save.mutate(false)
+                else if (confirm?.kind === 'delete') del.mutate(confirm.name)
                 else if (confirm?.kind === 'discard') {
                   setDirty(false)
                   void navigate(confirm.to)
@@ -990,7 +1059,13 @@ function WorkflowGraphEditor() {
                 setConfirm(null)
               }}
             >
-              {confirm?.kind === 'overwrite' ? 'Overwrite' : confirm?.kind === 'shadow' ? 'Replace built-in' : 'Discard'}
+              {confirm?.kind === 'overwrite'
+                ? 'Overwrite'
+                : confirm?.kind === 'shadow'
+                  ? 'Replace built-in'
+                  : confirm?.kind === 'delete'
+                    ? 'Delete'
+                    : 'Discard'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

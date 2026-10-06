@@ -19,6 +19,8 @@ import {
   graphForWorkflow,
   graphYaml,
   graphYamlFilename,
+  skillStackOfGraph,
+  stepsFromPlan,
   newNode,
   portsOf,
   portTone,
@@ -209,6 +211,49 @@ describe('graphYaml', () => {
     // What a block cannot carry faithfully is quoted instead.
     expect(promptLines('  indented\ntwo')).toEqual(['    prompt: "  indented\\ntwo"'])
     expect(promptLines('one\n\n')).toEqual(['    prompt: "one\\n\\n"'])
+  })
+})
+
+describe('skillStackOfGraph', () => {
+  const STACK = compileSteps([
+    { id: 'om-fix', name: 'om-fix', skill: 'om-fix', prompt: '{{task}}' },
+    { id: 'om-review', skill: 'om-review' },
+  ])
+
+  it('reads a start → skill agents → end graph as its skills, in walk order', () => {
+    expect(skillStackOfGraph(STACK)).toEqual(['om-fix', 'om-review'])
+    // Layout is the editor's own business — it never makes a stack "richer".
+    expect(skillStackOfGraph({ ...STACK, layout: { 'om-fix': { x: 1, y: 2 } } })).toEqual(['om-fix', 'om-review'])
+  })
+
+  it('is null for anything the compact form cannot say', () => {
+    const edit = (patch: object) => updateNode(STACK, 'om-fix', { ...STACK.nodes[1]!, ...patch } as WorkflowGraph['nodes'][number])
+    expect(skillStackOfGraph(edit({ prompt: 'do it my way' }))).toBeNull()
+    expect(skillStackOfGraph(edit({ name: 'Fixer' }))).toBeNull()
+    expect(skillStackOfGraph(edit({ runner: 'codex' }))).toBeNull()
+    expect(skillStackOfGraph(edit({ verdicts: ['ok'] }))).toBeNull()
+    // A stray node, a failed-port edge, a failed end, no skill at all.
+    expect(skillStackOfGraph({ ...STACK, nodes: [...STACK.nodes, { id: 'c', type: 'check', command: 'true' }] })).toBeNull()
+    expect(skillStackOfGraph(connect(STACK, 'om-fix', 'failed', 'end'))).toBeNull()
+    expect(skillStackOfGraph(updateNode(STACK, 'end', { id: 'end', type: 'end', status: 'failed' }))).toBeNull()
+    expect(skillStackOfGraph(compileSteps([{ id: 'a', prompt: '{{task}}' }]))).toBeNull()
+    expect(skillStackOfGraph(compileSteps([]))).toBeNull()
+  })
+
+  it('graphYaml writes a stack in the compact form Save uses', () => {
+    expect(graphYaml('Ship it', 'Fix then review.', STACK)).toBe(
+      ['name: Ship it', 'description: Fix then review.', 'skills:', '  - om-fix', '  - om-review', ''].join('\n'),
+    )
+  })
+})
+
+describe('stepsFromPlan', () => {
+  it('gives every planned step a unique id', () => {
+    expect(stepsFromPlan([{ id: 'fix', prompt: 'a' }, { id: 'fix', prompt: 'b' }, { id: '', prompt: 'c' }]).map((s) => s.id)).toEqual([
+      'fix',
+      'fix-2',
+      'step',
+    ])
   })
 })
 

@@ -267,6 +267,21 @@ validator and editor: `{ type, category, configSchema (zod), ports, outputs }`.
 - **`github.wait-ci` leaves by `failed` when the task has no PR**, not `red`: `red` is the fixer's
   branch, and `fix-ci` on a task without a PR spent three agent rounds on it.
 
+## Builder parity (2026-10-06)
+
+What the old builder did and the editor had dropped when it took over `/workflows`:
+
+- **Delete** — Workflow settings → Delete workflow (file workflows only, behind a confirm).
+- **Build from a description** — Workflow settings; `POST /plan` proposes a chain that opens on the
+  canvas as its graph (#414). Replaces the canvas; nothing is saved until Save.
+- **Compact `skills:` save** — a graph that is nothing but start → skill agents → success end
+  (`skillStackOfGraph`, the mirror of `skillStackOf`) saves through `POST /workflows` in the
+  portable form; anything richer is a `version: 2` graph. The YAML preview and Export show the
+  form Save writes.
+- **Export** — a top-bar button downloads `<slug>.yaml`.
+- **Route tests** — `routes/workflow-graph/workflow-graph.test.tsx` (ResizeObserver stubbed; the
+  canvas itself stays with the e2e suite).
+
 ## Open questions
 
 None at the moment.
