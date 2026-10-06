@@ -29,8 +29,8 @@ Make the scoped real-process and Git fixture suites deterministic during teardow
 
 ### Phase 2: Verify lifecycle behavior
 
-- [ ] 2.1 Run focused repeated suites and prove the relevant teardown race is covered.
-- [ ] 2.2 Run the configured validation gate and record baseline limitations.
+- [x] 2.1 Run focused repeated suites and prove the relevant teardown race is covered. — corrected subset 12/12; lease teardown asserts persisted runs.json
+- [x] 2.2 Run the configured validation gate and record baseline limitations. — full-gate limitations recorded
 - [x] 2.3 Complete review and publish the scoped PR evidence. — PR #1295
 
 ## Risks
@@ -50,4 +50,4 @@ The helper monkey-patches only the test process's `RunStore.open`; it must not a
 
 - [x] 2.1 Run focused repeated suites and prove the relevant teardown race is covered. — focused 64/64 x3
 - [x] 2.2 Run the configured validation gate and record baseline limitations. — gate run 2026-10-06
-- [ ] 2.3 Complete review and publish the scoped PR evidence.
+- [x] 2.3 Complete review and publish the scoped PR evidence. — independent review remediation 5b89e4c4
