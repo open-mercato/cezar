@@ -181,20 +181,20 @@ time, after a human click; everything inside the run can only ever append to a l
 |---|---|
 | `packages/contract/src/runs.ts:178-182`, `:913-916` | `RunRecord.shadow?: true`; `createRunInputBaseSchema.shadow?: boolean` (which `automationTaskSchema` inherits). |
 | `packages/cezar/src/runs/store.ts:190-194`, `:979-1002` | The persistence twin of the record field; `createRun` takes and stores it. |
-| `packages/cezar/src/workflows/run.ts:1312` | `startRun` persists `shadow` on the record. |
-| `packages/cezar/src/workflows/run.ts:1222-1280` | `agentEnvForStep` arms the run (`armShadow`), merges its env LAST, withholds tracker credentials; `armShadow` re-arms and re-verifies per spawn and announces once per process. |
+| `packages/cezar/src/workflows/run.ts:1313` | `startRun` persists `shadow` on the record. |
+| `packages/cezar/src/workflows/run.ts:1223-1276` | `agentEnvForStep` arms the run (`armShadow`), merges its env LAST, withholds tracker credentials; `armShadow` re-arms and re-verifies per spawn and announces once per process. |
 | `packages/cezar/src/workflows/run.ts` (both `agentEnvForStep` callers) | `ShadowSetupError` fails the step before spawn, exactly like `AgentTempDirError` - in `execute` AND in the Continue path. |
-| `packages/cezar/src/workflows/run.ts:3957`, `:4882` | `SHADOW_INSTRUCTIONS` in both `composeSystemPrompt` sites. |
-| `packages/cezar/src/workflows/run.ts:5688` | `runCheckStep` arms too: a check script that pushes hits the shadow. |
-| `packages/cezar/src/workflows/run.ts:2202` | A dispatched child of a shadow run is a shadow run. |
+| `packages/cezar/src/workflows/run.ts:3962`, `:4887` | `SHADOW_INSTRUCTIONS` in both `composeSystemPrompt` sites. |
+| `packages/cezar/src/workflows/run.ts:5693` | `runCheckStep` arms too: a check script that pushes hits the shadow. |
+| `packages/cezar/src/workflows/run.ts:2207` | A dispatched child of a shadow run is a shadow run. |
 | `packages/cezar/src/server/server.ts:659`, `:692`, `:4173` | `POST /runs` accepts and forwards `shadow`. |
-| `packages/cezar/src/server/server.ts:4776`, `:4805` | `/runs/:id/git/push` and `/runs/:id/pr` answer 409 for a shadow run. |
-| `packages/cezar/src/server/server.ts:4861` | `DELETE /runs/:id` removes the shadow state and pins. |
-| `packages/cezar/src/server/server.ts:6238` | `.route('/', shadowRoutes())` in the `v1` chain. |
+| `packages/cezar/src/server/server.ts:4779`, `:4808` | `/runs/:id/git/push` and `/runs/:id/pr` answer 409 for a shadow run. |
+| `packages/cezar/src/server/server.ts:4864` | `DELETE /runs/:id` removes the shadow state and pins. |
+| `packages/cezar/src/server/server.ts:6241` | `.route('/', shadowRoutes())` in the `v1` chain. |
 | `packages/cezar/src/automations/types.ts`, `task-template.ts:150` | Storage schema and launch mapping for `task.shadow`; a tracker automation with `task.shadow` is refused (Q12). |
 | `packages/cezar/src/automations/prompts.ts` | `shadow` documented in the definition reference agents read. |
-| `packages/cezar/src/workflows/run.ts` (`prepareAutomationsSession`, both call sites) | The automations prompt is withheld from shadow runs (Q11). |
-| `packages/cezar/src/server/server.ts` (`/runs/:id/open-in-cli`) | 409 for a shadow run (Q6). |
+| `packages/cezar/src/workflows/run.ts:1948` (`prepareAutomationsSession`, both call sites) | The automations prompt is withheld from shadow runs (Q11). |
+| `packages/cezar/src/server/server.ts:4448` (`/runs/:id/open-in-cli`) | 409 for a shadow run (Q6). |
 | `packages/cezar/src/data-gitignore.ts:31` | `shadow/` is run data. |
 | `.env.example` | `CEZ_SHADOW`, `CEZ_SHADOW_BIN`, `CEZ_SHADOW_COMMAND` and the `GIT_CONFIG_*` entries, in the block of variables cezar sets for child processes. |
 | `BACKWARD_COMPATIBILITY.md` §2, §3 | The routes and the state directory, inventoried. |
@@ -547,9 +547,11 @@ Each step leaves the application working and is verified by a test.
 
 ## 📝 Review limits
 
-- **Verified by reading the code on `47cc6e1d`:** every file and line cited above, the absence of
-  any shadow, canary, side-effect capture or `refs/cezar/*` use in the codebase, and the absence of
-  any overlapping issue, PR or spec (all 772 PRs and 540 issues were swept, open and closed).
+- **Verified by reading the code:** lines cited in the Problem Statement and Proposed Solution are
+  the merge base `47cc6e1d`; lines in the Changed files table are this branch after the review
+  fixes. On the merge base: the absence of any shadow, canary, side-effect capture or
+  `refs/cezar/*` use in the codebase, and of any overlapping issue, PR or spec (all 772 PRs and 540
+  issues were swept, open and closed).
 - **Observed, not inferred:** the Phase 1 suites pass on Windows 11 with git 2.55 and Node 25 (158
   shadow, route, wiring and guard tests), `npm run typecheck` is clean across all four workspaces,
   and an independent `om-code-review` pass was run against `CODE_REVIEW.md`, its findings fixed.
