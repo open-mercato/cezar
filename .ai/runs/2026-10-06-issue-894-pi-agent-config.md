@@ -54,5 +54,7 @@ Risks: Pi's config directory relocation is documented, but credentials and other
 
 ### Phase 3: Verification and handoff
 
-- [ ] 3.1 Run focused tests and the configured validation gate; prove the focused regression is red before the fix and green after it.
-- [ ] 3.2 Run the authoritative PR review/autofix pass, record evidence, and hand off the ready PR.
+- [x] 3.1 Run focused tests and the configured validation gate; prove the focused regression is red before the fix and green after it. — focused 48 passed; baseline gate failures recorded in `.ai/qa/issue-894-pi-agent-config.md`
+- [x] 3.2 Run the authoritative PR review/autofix pass, record evidence, and hand off the ready PR. — self-review found no scoped findings; browser QA blocked by missing `libnspr4.so`
+
+Verification evidence: `.ai/qa/issue-894-pi-agent-config.md`.
