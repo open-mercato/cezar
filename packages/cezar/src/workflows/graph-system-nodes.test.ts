@@ -247,28 +247,59 @@ describe('graph system nodes', () => {
     ]);
   }, 40_000);
 
-  it('wait-ci with no PR takes red; the rail lists system nodes as check rows', async () => {
+  it('wait-ci with no PR takes failed, not red; the rail lists system nodes as check rows', async () => {
     const graph: WorkflowGraph = {
       nodes: [
         { id: 'start', type: 'start' },
         { id: 'ci', type: 'github.wait-ci', timeoutMs: 60_000, pollMs: 10_000 },
+        { id: 'fixer', type: 'check', command: 'true' },
         { id: 'fallback', type: 'check', command: 'true' },
       ],
       edges: [
         { from: 'start', to: 'ci' },
-        { from: 'ci.red', to: 'fallback' },
+        // `red` is CI that failed — the fixer's branch. No PR must not look like it.
+        { from: 'ci.red', to: 'fixer' },
+        { from: 'ci.failed', to: 'fallback' },
       ],
     };
     expect(graphRailSteps(graph)).toEqual([
       { id: 'ci', name: 'Wait for CI', kind: 'check' },
+      { id: 'fixer', name: 'fixer', kind: 'check' },
       { id: 'fallback', name: 'fallback', kind: 'check' },
     ]);
     const final = await until(manager.startRun(def(graph), { task: 'x', worktree: false }).id, terminal);
     expect(final.steps.map((s) => [s.id, s.status])).toEqual([
       ['ci', 'failed'],
+      ['fixer', 'pending'],
       ['fallback', 'done'],
     ]);
   }, 30_000);
+
+  it('a dispatch a loop comes back through sends a NEW child each round', async () => {
+    const graph: WorkflowGraph = {
+      nodes: [
+        { id: 'start', type: 'start' },
+        { id: 'sub', type: 'dispatch', prompt: 'round work mock:done' },
+        // Fails the first time through, passes the second.
+        { id: 'gate', type: 'check', command: 'test -f seen.txt || { touch seen.txt; exit 1; }' },
+        { id: 'again', type: 'loop', max: 2 },
+      ],
+      edges: [
+        { from: 'start', to: 'sub' },
+        { from: 'sub.done', to: 'gate' },
+        { from: 'gate.fail', to: 'again' },
+        { from: 'again.repeat', to: 'sub' },
+      ],
+    };
+    const id = manager.startRun(def(graph), { task: 'x', worktree: false }).id;
+    const final = await until(id, terminal, 60_000);
+    expect(final.status).not.toBe('failed');
+    const children = store.listRuns().filter((r) => r.dispatch?.parentRunId === id);
+    expect(children).toHaveLength(2);
+    // The node reports the round that just ran, not the first one.
+    const latest = [...children].sort((a, b) => a.createdAt.localeCompare(b.createdAt))[1];
+    expect(final.graphState?.outputs?.sub?.runId).toBe(latest?.id);
+  }, 70_000);
 
   it('dispatch waits for its child and takes done when the child settles', async () => {
     const graph: WorkflowGraph = {

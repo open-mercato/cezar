@@ -118,7 +118,7 @@ Rules:
 | Scripts | `check` | `command`, `timeoutMs` | `pass`, `fail` | `exitCode`, `output` (tail-capped) |
 | Git | `git.commit` | message template | `done`, `nothing`, `failed` | `sha` |
 | Git | `github.draft-pr` | title/body templates | `created`, `failed` | `url`, `number` |
-| Git | `github.wait-ci` | `timeoutMs` (required, default 60 min) | `green`, `red`, `timeout` | `failedChecks` |
+| Git | `github.wait-ci` | `timeoutMs` (required, default 60 min) | `green`, `red`, `timeout`, `failed` | `status` |
 | Git | `github.pr-comment` | body template | `done`, `failed` | — |
 
 Categories are data (`category` on each node definition) so the palette groups them and new
@@ -253,6 +253,19 @@ validator and editor: `{ type, category, configSchema (zod), ports, outputs }`.
   `docs/adding-issue-tracker.md` names vendor writes a separate design change for the connection
   model. Automations already launch any catalog workflow (graphs and built-in templates
   included) through their workflow picker; nothing was needed there.
+
+## Review fixes (2026-10-06)
+
+- **A loop coming back through `fork` / `dispatch` / `workflow` dispatches afresh.** "Wait for the
+  children already sent" is for a walk RESUMING at that node after a restart only; on an ordinary
+  second visit it returned the first round's children (`review-council` reviewed nothing in round 2).
+- **Only a loop's `repeat` port bounds a cycle.** The validator removes `repeat` edges, not loop
+  nodes: a way back through `exhausted` is taken on every visit past `max` and never ends.
+- **`compileV1` survives any v1 step id.** The start/end nodes take ids no step uses, every
+  compiled edge names its port, and `parseEdgeFrom` splits at the LAST dot — a step called `start`
+  or `lint.fix` used to end the run after one step.
+- **`github.wait-ci` leaves by `failed` when the task has no PR**, not `red`: `red` is the fixer's
+  branch, and `fix-ci` on a task without a PR spent three agent rounds on it.
 
 ## Open questions
 

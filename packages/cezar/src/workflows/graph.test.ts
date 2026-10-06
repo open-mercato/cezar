@@ -53,6 +53,23 @@ describe('graphIssues', () => {
     expect(graphIssues(g).join()).toMatch(/does not pass a loop node/);
   });
 
+  it('rejects a cycle that comes back through a loop\'s exhausted port — only repeat is bounded', () => {
+    // tests.fail → retry; exhausted → escalate → tests: past `max` the loop takes `exhausted` on
+    // every visit, so this lap never ends.
+    const g: WorkflowGraph = {
+      nodes: [...EXAMPLE.nodes, { id: 'escalate', type: 'agent', prompt: 'try harder' }],
+      edges: [
+        ...EXAMPLE.edges.filter((e) => e.from !== 'retry.exhausted'),
+        { from: 'retry.exhausted', to: 'escalate' },
+        { from: 'escalate.done', to: 'tests' },
+      ],
+    };
+    expect(graphIssues(g).join()).toMatch(/does not pass a loop node's repeat port/);
+    // …and the walk it would have allowed really is endless: no end after far more than `max` laps.
+    const loops = new Map<string, number>();
+    for (let lap = 0; lap < 20; lap++) expect(advance(g, 'tests', 'fail', loops).kind).toBe('node');
+  });
+
   it('rejects unknown ports, double-wired ports, missing start and unknown node refs', () => {
     const g: WorkflowGraph = {
       nodes: [
@@ -123,6 +140,27 @@ describe('compileV1', () => {
     // v1: after `max` retries the run fails.
     expect(advance(g, 'verify', 'fail', loops)).toMatchObject({ kind: 'end', status: 'failed' });
     expect(advance(g, 'verify', 'pass', loops)).toMatchObject({ kind: 'end', status: 'success' });
+  });
+
+  it('walks every step of a v1 chain whose ids are not graph-safe (`start`, `end`, a dot)', () => {
+    // v1 step ids are any string, and every v1 workflow runs through this compile.
+    const steps = [
+      { id: 'start', prompt: '{{task}}' },
+      { id: 'lint.fix', command: 'npm run lint', onFail: { retry: 'start', max: 1 } },
+      { id: 'end', prompt: 'wrap up' },
+    ];
+    const g = compileV1(steps);
+    expect(graphIssues(g)).toEqual([]);
+    const loops = new Map<string, number>();
+    expect(enterGraph(g, loops)).toMatchObject({ kind: 'node', node: { id: 'start', type: 'agent' } });
+    // The first step is not the interactive tail: its `done` leads on, not to the end.
+    expect(isTerminalAgent(g, 'start')).toBe(false);
+    expect(advance(g, 'start', 'done', loops)).toMatchObject({ kind: 'node', node: { id: 'lint.fix' } });
+    expect(advance(g, 'lint.fix', 'fail', loops)).toMatchObject({ kind: 'node', node: { id: 'start', type: 'agent' } });
+    expect(advance(g, 'lint.fix', 'pass', loops)).toMatchObject({ kind: 'node', node: { id: 'end', type: 'agent' } });
+    expect(isTerminalAgent(g, 'end')).toBe(true);
+    expect(advance(g, 'end', 'done', loops)).toMatchObject({ kind: 'end', status: 'success' });
+    expect(graphToSteps(g).map((s) => s.id)).toEqual(['start', 'lint.fix', 'end']);
   });
 
   it('round-trips the steps back out in order', () => {

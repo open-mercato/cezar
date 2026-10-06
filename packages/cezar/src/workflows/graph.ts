@@ -174,7 +174,7 @@ export const NODE_PORTS: Record<GraphNodeType, readonly string[]> = {
   dispatch: ['done', 'failed'],
   'git.commit': ['done', 'nothing', 'failed'],
   'github.draft-pr': ['created', 'failed'],
-  'github.wait-ci': ['green', 'red', 'timeout'],
+  'github.wait-ci': ['green', 'red', 'timeout', 'failed'],
   'github.pr-comment': ['done', 'failed'],
   fork: ['1', '2', '3'],
   join: ['done', 'failed'],
@@ -211,7 +211,7 @@ export const NODE_CATALOG: NodeCatalogEntry[] = [
   { type: 'dispatch', category: 'agents', label: 'Dispatch subtask', description: 'A child task in its own worktree, budget carved from this run.', ports: ['done', 'failed'], outputs: ['runId', 'status', 'summary'] },
   { type: 'git.commit', category: 'git', label: 'Commit', description: 'Commit everything in the worktree.', ports: ['done', 'nothing', 'failed'], outputs: ['sha'] },
   { type: 'github.draft-pr', category: 'git', label: 'Draft PR', description: 'Push the branch and open a draft PR through gh.', ports: ['created', 'failed'], outputs: ['url', 'number'] },
-  { type: 'github.wait-ci', category: 'git', label: 'Wait for CI', description: "Park until the PR's checks pass or fail (timeout required).", ports: ['green', 'red', 'timeout'], outputs: ['status'] },
+  { type: 'github.wait-ci', category: 'git', label: 'Wait for CI', description: "Park until the PR's checks pass or fail (timeout required).", ports: ['green', 'red', 'timeout', 'failed'], outputs: ['status'] },
   { type: 'github.pr-comment', category: 'git', label: 'PR comment', description: 'Comment on the task PR.', ports: ['done', 'failed'], outputs: [] },
   { type: 'fork', category: 'flow', label: 'Fork', description: 'Split into 2–4 agents that run at once, each a fresh subtask. Wire every branch into one Join.', ports: ['1', '2', '3'], outputs: ['runIds'] },
   { type: 'join', category: 'flow', label: 'Join', description: "Where a fork's agents meet: wait for all, or the first to succeed.", ports: ['done', 'failed'], outputs: ['succeeded', 'failed'] },
@@ -243,14 +243,19 @@ export function portsOfNode(node: GraphNode): readonly string[] {
 }
 
 export function parseEdgeFrom(from: string, nodes: readonly GraphNode[]): { node: string; port: string } | null {
-  const dot = from.indexOf('.');
-  const node = dot < 0 ? from : from.slice(0, dot);
-  const found = nodes.find((n) => n.id === node);
-  if (!found) return null;
-  const ports = portsOfNode(found);
-  const port = dot < 0 ? ports[0] : from.slice(dot + 1);
-  if (!port || !ports.includes(port)) return null;
-  return { node, port };
+  // The port is what follows the LAST dot: a port name never holds one, while a node compiled
+  // from a v1 step may (`lint.fix` — v1 step ids are any string). `compileV1` always names the
+  // port, so a dotted id is never read as `<node>.<port>`.
+  const dot = from.lastIndexOf('.');
+  const split = dot < 0 ? undefined : nodes.find((n) => n.id === from.slice(0, dot));
+  if (split) {
+    const port = from.slice(dot + 1);
+    return portsOfNode(split).includes(port) ? { node: split.id, port } : null;
+  }
+  if (dot >= 0) return null;
+  const found = nodes.find((n) => n.id === from);
+  const port = found ? portsOfNode(found)[0] : undefined;
+  return found && port ? { node: found.id, port } : null;
 }
 
 const VERDICT_MARKER_RE = /CEZ:VERDICT[ \t:=]+([A-Za-z0-9][A-Za-z0-9_-]*)\s*$/;
@@ -340,14 +345,15 @@ export function graphIssues(graph: WorkflowGraph): string[] {
     if (n.type === 'join' && !joined.has(n.id) && !forkIssue) issues.push(`join node "${n.id}" has no fork leading into it`);
   }
 
-  // A cycle that avoids every loop node would never terminate: look for one in the graph with
-  // the loop nodes removed.
+  // Only a loop's `repeat` port is bounded (its counter never resets, D18), so every cycle must
+  // go round through one: look for a cycle in the graph with the `repeat` edges removed. A way
+  // back through `exhausted` is NOT bounded — past `max` the loop takes it on every visit.
   const next = new Map<string, string[]>();
   for (const e of graph.edges) {
     const from = parseEdgeFrom(e.from, graph.nodes);
     if (!from) continue;
-    const isLoop = (id: string) => graph.nodes.find((n) => n.id === id)?.type === 'loop';
-    if (isLoop(from.node) || isLoop(e.to)) continue;
+    const isLoop = graph.nodes.find((n) => n.id === from.node)?.type === 'loop';
+    if (isLoop && from.port === 'repeat') continue;
     next.set(from.node, [...(next.get(from.node) ?? []), e.to]);
   }
   const state = new Map<string, 'open' | 'done'>();
@@ -365,7 +371,7 @@ export function graphIssues(graph: WorkflowGraph): string[] {
   for (const id of ids) {
     const hit = visit(id);
     if (hit) {
-      issues.push(`the cycle through "${hit}" does not pass a loop node — it could run forever`);
+      issues.push(`the cycle through "${hit}" does not pass a loop node's repeat port — it could run forever`);
       break;
     }
   }
@@ -474,7 +480,6 @@ export function nodeToStep(node: Extract<GraphNode, { type: 'agent' | 'check' }>
  * tests). `check.onFail {retry, max}` becomes `check.fail → loop(max) → retry target`.
  */
 export function compileV1(steps: readonly WorkflowStepDef[]): WorkflowGraph {
-  const nodes: GraphNode[] = [{ id: 'start', type: 'start' }];
   const edges: GraphEdge[] = [];
   const used = new Set(steps.map((s) => s.id));
   const fresh = (base: string) => {
@@ -483,11 +488,16 @@ export function compileV1(steps: readonly WorkflowStepDef[]): WorkflowGraph {
     used.add(id);
     return id;
   };
+  // A v1 step id is any string — `start`, `end`, `lint.fix` — so the structural nodes take ids
+  // no step uses, and every edge names its port (see `parseEdgeFrom`).
+  const startId = fresh('start');
   const endId = fresh('end');
+  const nodes: GraphNode[] = [{ id: startId, type: 'start' }];
+  const out = (s: WorkflowStepDef) => `${s.id}.${s.command ? 'pass' : 'done'}`;
   steps.forEach((s, i) => {
     const { onFail, command, ...rest } = s;
     nodes.push(command ? { ...rest, type: 'check', command } : { ...rest, type: 'agent' });
-    edges.push({ from: i === 0 ? 'start' : steps[i - 1]!.id, to: s.id });
+    edges.push({ from: i === 0 ? `${startId}.next` : out(steps[i - 1]!), to: s.id });
     if (command && onFail) {
       const loopId = fresh(`${s.id}-retry`);
       nodes.push({ id: loopId, type: 'loop', max: onFail.max });
@@ -495,8 +505,7 @@ export function compileV1(steps: readonly WorkflowStepDef[]): WorkflowGraph {
     }
   });
   nodes.push({ id: endId, type: 'end', status: 'success' });
-  if (steps.length) edges.push({ from: steps[steps.length - 1]!.id, to: endId });
-  else edges.push({ from: 'start', to: endId });
+  edges.push({ from: steps.length ? out(steps[steps.length - 1]!) : `${startId}.next`, to: endId });
   return { nodes, edges };
 }
 

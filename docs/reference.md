@@ -327,7 +327,7 @@ whose counter never resets within a run, so every run is finite.
 | `dispatch` (`prompt`, `runner?`, `budgetUsd?`) | `done`, `failed` | `runId`, `status`, `summary` |
 | `git.commit` (`message`) | `done`, `nothing`, `failed` | `sha` |
 | `github.draft-pr` (`title?`) | `created`, `failed` | `url`, `number` |
-| `github.wait-ci` (`timeoutMs`, `pollMs`) | `green`, `red`, `timeout` | `status` |
+| `github.wait-ci` (`timeoutMs`, `pollMs`) | `green`, `red`, `timeout`, `failed` (the task has no PR) | `status` |
 | `github.pr-comment` (`body`) | `done`, `failed` | — |
 | `fork` (`branches: 2–4`) | `1` … `4`, each wired to an agent | `runIds` |
 | `join` (`wait: all\|any`) | `done`, `failed` | `succeeded`, `failed` |

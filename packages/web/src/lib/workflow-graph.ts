@@ -26,7 +26,7 @@ const PORTS: Record<GraphNodeType, readonly string[]> = {
   dispatch: ['done', 'failed'],
   'git.commit': ['done', 'nothing', 'failed'],
   'github.draft-pr': ['created', 'failed'],
-  'github.wait-ci': ['green', 'red', 'timeout'],
+  'github.wait-ci': ['green', 'red', 'timeout', 'failed'],
   'github.pr-comment': ['done', 'failed'],
   fork: ['1', '2', '3'],
   join: ['done', 'failed'],
@@ -56,13 +56,18 @@ export function portTone(node: WorkflowGraphNode, port: string): PortTone {
 
 /** `<node>` or `<node>.<port>` → both halves, or null when the node/port does not exist. */
 export function parseFrom(from: string, nodes: readonly WorkflowGraphNode[]): { node: string; port: string } | null {
-  const dot = from.indexOf('.')
-  const id = dot < 0 ? from : from.slice(0, dot)
-  const node = nodes.find((n) => n.id === id)
-  if (!node) return null
-  const ports = portsOf(node)
-  const port = dot < 0 ? ports[0] : from.slice(dot + 1)
-  return port && ports.includes(port) ? { node: id, port } : null
+  // The port follows the LAST dot — a node compiled from a v1 step may hold dots itself
+  // (mirror of the server's `parseEdgeFrom`).
+  const dot = from.lastIndexOf('.')
+  const split = dot < 0 ? undefined : nodes.find((n) => n.id === from.slice(0, dot))
+  if (split) {
+    const port = from.slice(dot + 1)
+    return portsOf(split).includes(port) ? { node: split.id, port } : null
+  }
+  if (dot >= 0) return null
+  const node = nodes.find((n) => n.id === from)
+  const port = node ? portsOf(node)[0] : undefined
+  return node && port ? { node: node.id, port } : null
 }
 
 /** The target wired to `node.port`, if any. */
@@ -287,7 +292,6 @@ export function blankGraph(): WorkflowGraph {
 
 /** v1 steps → the equivalent graph (mirror of the server's `compileV1`). */
 export function compileSteps(steps: readonly WorkflowStepDef[]): WorkflowGraph {
-  const nodes: WorkflowGraphNode[] = [{ id: 'start', type: 'start' }]
   const edges: WorkflowGraph['edges'] = []
   const used = new Set(steps.map((s) => s.id))
   const fresh = (base: string) => {
@@ -295,11 +299,15 @@ export function compileSteps(steps: readonly WorkflowStepDef[]): WorkflowGraph {
     used.add(id)
     return id
   }
+  // Structural ids no step uses, and a named port on every edge (a v1 step id is any string).
+  const startId = fresh('start')
   const endId = fresh('end')
+  const nodes: WorkflowGraphNode[] = [{ id: startId, type: 'start' }]
+  const out = (s: WorkflowStepDef) => `${s.id}.${s.command ? 'pass' : 'done'}`
   steps.forEach((s, i) => {
     const { onFail, command, ...rest } = s
     nodes.push(command ? { ...rest, type: 'check', command } : { ...rest, type: 'agent' })
-    edges.push({ from: i === 0 ? 'start' : steps[i - 1]!.id, to: s.id })
+    edges.push({ from: i === 0 ? `${startId}.next` : out(steps[i - 1]!), to: s.id })
     if (command && onFail) {
       const loopId = fresh(`${s.id}-retry`)
       nodes.push({ id: loopId, type: 'loop', max: onFail.max })
@@ -307,7 +315,7 @@ export function compileSteps(steps: readonly WorkflowStepDef[]): WorkflowGraph {
     }
   })
   nodes.push({ id: endId, type: 'end', status: 'success' })
-  edges.push({ from: steps.length ? steps[steps.length - 1]!.id : 'start', to: endId })
+  edges.push({ from: steps.length ? out(steps[steps.length - 1]!) : `${startId}.next`, to: endId })
   return { nodes, edges }
 }
 

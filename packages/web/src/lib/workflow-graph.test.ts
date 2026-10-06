@@ -120,6 +120,18 @@ describe('simulation (mirror of the server advance)', () => {
 })
 
 describe('opening workflows', () => {
+  it('compiles a v1 chain whose ids are not graph-safe into a walkable graph', () => {
+    const g = compileSteps([
+      { id: 'start', prompt: '{{task}}' },
+      { id: 'lint.fix', command: 'npm run lint', onFail: { retry: 'start', max: 1 } },
+    ])
+    expect(g.nodes.filter((n) => n.type === 'start').map((n) => n.id)).toEqual(['start-2'])
+    expect(targetOf(g, 'start-2', 'next')).toBe('start')
+    expect(targetOf(g, 'start', 'done')).toBe('lint.fix')
+    expect(targetOf(g, 'lint.fix', 'pass')).toBe('end')
+    expect(targetOf(g, 'lint.fix-retry', 'repeat')).toBe('start')
+  })
+
   it('compiles v1 onFail into a loop node', () => {
     const g = compileSteps([
       { id: 'implement', prompt: '{{task}}' },
@@ -189,14 +201,14 @@ describe('graphYaml', () => {
   })
 
   it('writes multi-line text so it reads back unchanged', () => {
-    const prompt = (value: string) =>
+    const promptLines = (value: string) =>
       graphYaml('f', '', { nodes: [{ id: 'a', type: 'agent', prompt: value }], edges: [] }).split('\n').slice(5, -2)
     // No final newline: `|-`, or the import would add one.
-    expect(prompt('one\n\ntwo')).toEqual(['    prompt: |-', '      one', '', '      two'])
-    expect(prompt('one\ntwo\n')).toEqual(['    prompt: |', '      one', '      two'])
+    expect(promptLines('one\n\ntwo')).toEqual(['    prompt: |-', '      one', '', '      two'])
+    expect(promptLines('one\ntwo\n')).toEqual(['    prompt: |', '      one', '      two'])
     // What a block cannot carry faithfully is quoted instead.
-    expect(prompt('  indented\ntwo')).toEqual(['    prompt: "  indented\\ntwo"'])
-    expect(prompt('one\n\n')).toEqual(['    prompt: "one\\n\\n"'])
+    expect(promptLines('  indented\ntwo')).toEqual(['    prompt: "  indented\\ntwo"'])
+    expect(promptLines('one\n\n')).toEqual(['    prompt: "one\\n\\n"'])
   })
 })
 

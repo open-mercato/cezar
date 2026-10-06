@@ -4594,7 +4594,7 @@ export class RunManager {
       if (node.type === 'fork') {
         const shape = forkShape(graph, node.id);
         const outcome =
-          typeof shape === 'string' ? shape : await this.runFork(graph, runId, state, node, shape, outputs, input.task, emit, persistWalk);
+          typeof shape === 'string' ? shape : await this.runFork(graph, runId, state, node, shape, outputs, input.task, emit, persistWalk, resuming);
         if (state.cancelled) return null;
         if (outcome === 'finished') {
           this.finishStep(runId, node.id, 'done', undefined, emit);
@@ -4616,7 +4616,7 @@ export class RunManager {
         port = 'failed';
       } else if (node.type !== 'agent' && node.type !== 'check') {
         // Nodes cezar runs itself: gates, questions, dispatch, git and GitHub (phase 1c).
-        const outcome = await this.runSystemNode(runId, state, node, outputs, input.task, emit, persistWalk);
+        const outcome = await this.runSystemNode(runId, state, node, outputs, input.task, emit, persistWalk, resuming);
         if (state.cancelled) return null;
         // Finish on a parked gate/question is "stop here and accept" — the same settlement a
         // Finish on a parked agent step gets (`askPark === 'abandoned'`).
@@ -4769,7 +4769,8 @@ export class RunManager {
    * off this task's branch, budget carved from this run's), and the walk waits at the join. The
    * task's work is committed first — a child forks from the committed branch, so without it a
    * reviewer would read the code as it was BEFORE the agent that just ran. Resumed after a
-   * restart, the fork waits for the children it already dispatched, never a second set.
+   * restart (`resuming`), the fork waits for the children it already dispatched, never a second
+   * set — but a loop coming back through it is a new round and dispatches afresh.
    */
   private async runFork(
     graph: WorkflowGraph,
@@ -4781,12 +4782,13 @@ export class RunManager {
     task: string,
     emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void,
     onOutputs: () => void,
+    resuming: boolean,
   ): Promise<{ port: 'done' | 'failed'; join: string; transitions: GraphTransition[] } | 'finished'> {
     const render = (text: string) => applyTemplate(renderNodeRefs(text, outputs), task);
     const note = (message: string, tone?: 'danger') =>
       emit({ type: 'note', stepId: fork.id, message, ...(tone ? { tone } : {}) });
     const byChild = new Map<string, (typeof shape.branches)[number]>();
-    const earlier = outputs.get(fork.id)?.runIds;
+    const earlier = resuming ? outputs.get(fork.id)?.runIds : undefined;
     const earlierIds = typeof earlier === 'string' && earlier ? earlier.split(',') : [];
     if (earlierIds.length === shape.branches.length) {
       shape.branches.forEach((b, i) => byChild.set(earlierIds[i] as string, b));
@@ -4891,6 +4893,10 @@ export class RunManager {
     emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void,
     /** Persist `outputs` now (a node that waits records what a restart must not redo). */
     onOutputs: () => void = () => undefined,
+    /** The walk is RESUMING at this node after a restart: a child it already dispatched is
+     *  awaited, not sent again. False on every ordinary visit — a loop coming back through a
+     *  dispatch is a new round, and its earlier child's result is not this round's. */
+    resuming = false,
   ): Promise<string | 'finished'> {
     const render = (text: string) => applyTemplate(renderNodeRefs(text, outputs), task);
     const note = (message: string, tone?: 'danger') =>
@@ -4931,7 +4937,7 @@ export class RunManager {
       }
       case 'dispatch': {
         // Resumed after a restart: wait for the child this node already dispatched, never a second.
-        const earlier = outputs.get(node.id)?.runId;
+        const earlier = resuming ? outputs.get(node.id)?.runId : undefined;
         const existing = typeof earlier === 'string' ? this.store.getRun(earlier) : undefined;
         const spawned = existing ? { id: existing.id } : this.dispatch(runId, {
           objective: render(node.prompt).slice(0, 4_000),
@@ -5017,7 +5023,7 @@ export class RunManager {
         return 'done';
       }
       case 'workflow': {
-        const earlier = outputs.get(node.id)?.runId;
+        const earlier = resuming ? outputs.get(node.id)?.runId : undefined;
         const existing = typeof earlier === 'string' ? this.store.getRun(earlier) : undefined;
         let childId = existing?.id;
         if (!childId) {
@@ -5166,9 +5172,11 @@ export class RunManager {
       case 'github.wait-ci': {
         const number = prNumber();
         if (number === undefined) {
+          // Not `red`: red is CI that ran and failed, which a graph answers with a fixer. A task
+          // with no PR has nothing to fix, and looping an agent on it only burns rounds.
           note('no PR on this task — nothing to wait for', 'danger');
           outputs.set(node.id, { status: 'no-pr' });
-          return 'red';
+          return 'failed';
         }
         if (process.env.CEZ_DRY_RUN === '1') {
           note(`dry run — CI on PR #${number} reported green`);
