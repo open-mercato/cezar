@@ -54,6 +54,7 @@ A GitHub poll:
     "variants": 1,                                   // 1 | 2 | 3 competing runs per match
     "worktree": true,                                // isolate each run in its own git worktree (recommended)
     "autonomous": true,                              // never park to ask — an automation has no one watching (recommended)
+    "shadow": false,                                 // optional: true records each run's pushes and GitHub writes for a human to promote instead of executing them (not for tracker automations)
     "generateFollowups": false,
     "systemPrompt": "Extra guidance for every launched run",  // optional
     "dispatch": { "maxSubtasks": 4, "reviewChild": true }     // optional: let each run dispatch up to N subtasks, and ask it to dispatch a final review task

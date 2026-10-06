@@ -147,6 +147,7 @@ function startInput(definition: AutomationDefinition, task: string, dispatchEnab
     systemPrompt: definition.task.systemPrompt,
     worktree: definition.task.worktree,
     autonomous: definition.task.autonomous,
+    shadow: definition.task.shadow,
     generateFollowups: definition.task.generateFollowups,
     ...(intent ? { dispatchIntent: intent } : {}),
   };

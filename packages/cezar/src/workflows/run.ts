@@ -99,6 +99,14 @@ import { extractTaskRefs, refineTaskRefs, titleRefNumber } from '../runs/task-re
 import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.ts';
 import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, postValidateTitle } from '../runs/auto-name.ts';
 import { reviewGateEnabled } from '../runs/review-gate.ts';
+import {
+  SHADOW_CHECK_WRAPPER,
+  SHADOW_INSTRUCTIONS,
+  ShadowSetupError,
+  prepareShadowRun,
+  withEnvOverrides,
+  type ShadowEnvironment,
+} from '../shadow/setup.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
 import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
 import { WorkspaceSemaphore, type AccountHolds } from '../workspace/semaphore.ts';
@@ -609,6 +617,11 @@ export interface StartRunInput {
    *  user — turn-ends auto-continue until the agent signals done or the safety
    *  cap is hit. No "needs you" is ever raised. */
   autonomous?: boolean;
+  /** Shadow run (spec 2026-10-06-shadow-runs): every agent and check step runs with pushes
+   *  redirected to a recording shadow remote and `gh` behind a recording shim, so outward side
+   *  effects become intents a human promotes. Persisted on the record; inherited by variants and
+   *  by every task a shadow run dispatches. */
+  shadow?: boolean;
   /** Follow-up inbox generation (spec 007, #444). Omitted means enabled for
    *  compatibility; the handoff journal runs either way. */
   generateFollowups?: boolean;
@@ -1216,8 +1229,14 @@ export class RunManager {
     const profileId = options.recordedProfileId
       ?? (backend === (run?.runner ?? 'claude') ? run?.agentProfile : undefined);
     const resolved = await resolveProfileEnvForRoot(this.repoRoot, backend, profileId);
+    // Shadow mode (spec 2026-10-06-shadow-runs) is armed here because this is the last common
+    // path before EVERY backend spawn - a fresh step and a Continue alike. A run whose redirect
+    // cannot be proven throws `ShadowSetupError` and never spawns unshadowed.
+    const shadow = run?.shadow === true ? await this.armShadow(runId) : undefined;
     const association = run?.automationTracker?.association;
-    const trackerEnv = association && this.resolveTrackerEnv && process.env.CEZ_DRY_RUN !== '1'
+    // A shadow run gets no tracker credentials: a Jira or Linear write would leave the machine
+    // through a door the shim does not watch.
+    const trackerEnv = association && this.resolveTrackerEnv && process.env.CEZ_DRY_RUN !== '1' && !shadow
       ? await this.resolveTrackerEnv(this.repoRoot, association)
       : {};
     const secrets = [trackerEnv.JIRA_API_TOKEN, trackerEnv.LINEAR_API_KEY].filter((value): value is string => Boolean(value));
@@ -1226,9 +1245,34 @@ export class RunManager {
     }
     this.store.registerRunSecrets(runId, secrets);
     return {
-      env: { ...this.agentEnv(runId, options.generateFollowups), ...trackerEnv, ...resolved.env },
+      // Shadow last: no per-step or per-account variable may undo the redirect.
+      env: { ...this.agentEnv(runId, options.generateFollowups), ...trackerEnv, ...resolved.env, ...(shadow?.env ?? {}) },
       profileId: resolved.profile.id,
     };
+  }
+
+  /** Runs whose shadow arming this process has already announced in the transcript. */
+  private readonly shadowAnnounced = new Set<string>();
+
+  /**
+   * Arm shadow mode for the run's next spawn (spec 2026-10-06-shadow-runs § Arming). Re-armed and
+   * re-verified on EVERY spawn - first turn, Continue, restart recovery, each check step - rather
+   * than cached on one of those paths: an arming that lived on `execute` alone would be the #811
+   * shape, a guarantee that holds on new tasks and silently lapses on every continuation.
+   */
+  private async armShadow(runId: string): Promise<ShadowEnvironment> {
+    const shadow = await prepareShadowRun({ dataDir: this.dataDir, runId, repoRoot: this.repoRoot });
+    if (!this.shadowAnnounced.has(runId)) {
+      this.shadowAnnounced.add(runId);
+      const pushes = shadow.remotes.length > 0
+        ? `pushes to ${shadow.remotes.join(', ')} are recorded, not sent`
+        : 'no remote is configured';
+      this.store.appendEvent(runId, {
+        type: 'lifecycle',
+        message: `shadow mode armed: ${pushes}; gh writes are recorded${shadow.realGh ? '' : ' (gh is not installed)'}`,
+      });
+    }
+    return shadow;
   }
 
   startRun(
@@ -1263,6 +1307,10 @@ export class RunManager {
       // auto-nudge reads `input.autonomous` (`execute`), but the record is the
       // only source those after-the-fact consumers have.
       autonomous: input.autonomous === true,
+      // Shadow mode lives on the RECORD, never only on the input: `agentEnvForStep` and the
+      // check-step spawn read it from there, and so do Continue and restart recovery - the
+      // paths that rebuild a run without its original input.
+      shadow: input.shadow === true ? true : undefined,
       // Persist the explicit opt-out so queued-run restart recovery and the
       // session Git routes can distinguish it from a removed isolated worktree.
       worktree: !group && !input.dispatchIntent && input.worktree === false ? false : undefined,
@@ -1897,8 +1945,12 @@ export class RunManager {
    * AND the transport — so a headless run, or a cockpit with `CEZ_AUTOMATIONS` unset, composes
    * nothing and behaves exactly as it did before the feature existed.
    */
-  private prepareAutomationsSession(state: ActiveRun): void {
-    state.automationsPrompt = automationsReachable() ? AUTOMATIONS_PROMPT : undefined;
+  private prepareAutomationsSession(runId: string, state: ActiveRun): void {
+    // A shadow run is not taught to create automations (spec 2026-10-06-shadow-runs): an
+    // automation it set up would launch ORDINARY runs later, which push and comment for real -
+    // the way around its own boundary that dispatch inheritance closes for `cez task`.
+    const shadow = this.store.getRun(runId)?.shadow === true;
+    state.automationsPrompt = automationsReachable() && !shadow ? AUTOMATIONS_PROMPT : undefined;
   }
 
   /**
@@ -2150,6 +2202,9 @@ export class RunManager {
       runner: input.runner ?? intent?.runner ?? parent.runner,
       ...(input.model ?? intent?.model ?? parent.model ? { model: input.model ?? intent?.model ?? parent.model } : {}),
       autonomous: true,
+      // A shadow tree stays shadowed all the way down (spec 2026-10-06-shadow-runs): a child that
+      // could push would be the parent's way around its own boundary.
+      ...(parent.shadow === true ? { shadow: true } : {}),
       dispatch: {
         rootRunId,
         parentRunId: parentId,
@@ -3559,7 +3614,7 @@ export class RunManager {
     // that skipped this would resume a task with no dispatch prompt and no way to dispatch:
     // a run that quietly degrades into an ordinary task.
     this.prepareDispatchSession(runId, state);
-    this.prepareAutomationsSession(state);
+    this.prepareAutomationsSession(runId, state);
 
     // Cancellation may have retired this continuation while its async preparation was running.
     // Do not let the late promise make a durably cancelled run look active again.
@@ -3861,7 +3916,11 @@ export class RunManager {
         recordedProfileId: resumedProfileId,
       });
     } catch (err) {
-      if (!(err instanceof AgentTempDirError) && !(err instanceof TrackerAgentBindingError)) throw err;
+      if (
+        !(err instanceof AgentTempDirError)
+        && !(err instanceof TrackerAgentBindingError)
+        && !(err instanceof ShadowSetupError)
+      ) throw err;
       failBeforeSpawn(err.message);
       return;
     }
@@ -3898,6 +3957,9 @@ export class RunManager {
           dispatchPromptPart(state.dispatchPrompt, record?.systemPrompt),
           state.automationsPrompt,
           record?.systemPrompt,
+          // After the run's own extra prompt, so no project default can talk it out of shadow
+          // mode (spec 2026-10-06-shadow-runs). The same position as the fresh-step site below.
+          record?.shadow === true ? SHADOW_INSTRUCTIONS : undefined,
           generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
         ),
         userPrompt: attachments.length
@@ -4171,7 +4233,7 @@ export class RunManager {
     // role's prompt a spawn will need). This is the FIRST of the two construction sites; the
     // twin is in `runContinuation`.
     this.prepareDispatchSession(runId, state);
-    this.prepareAutomationsSession(state);
+    this.prepareAutomationsSession(runId, state);
     const retriesUsed = new Map<string, number>();
     let checkFailure: string | null = null;
     let runError: string | null = null;
@@ -4282,7 +4344,7 @@ export class RunManager {
         continue;
       }
 
-      const { ok, output, exitCode } = await this.runCheckStep(state, step, emit);
+      const { ok, output, exitCode } = await this.runCheckStep(runId, state, step, emit);
       if (state.cancelled) break;
       if (ok) {
         this.finishStep(runId, step.id, 'done', undefined, emit);
@@ -4796,7 +4858,9 @@ export class RunManager {
         generateFollowups: followupsEnabled() && input.generateFollowups !== false,
       });
     } catch (err) {
-      if (err instanceof AgentTempDirError || err instanceof TrackerAgentBindingError) return err.message;
+      if (err instanceof AgentTempDirError || err instanceof TrackerAgentBindingError || err instanceof ShadowSetupError) {
+        return err.message;
+      }
       throw err;
     }
     this.store.updateStep(runId, step.id, { profileId: stepProfile.profileId });
@@ -4819,6 +4883,8 @@ export class RunManager {
             dispatchPromptPart(state.dispatchPrompt, extraSystemPrompt),
             state.automationsPrompt,
             extraSystemPrompt,
+            // Shadow mode (spec 2026-10-06-shadow-runs), after the extra prompt - as in Continue.
+            this.store.getRun(runId)?.shadow === true ? SHADOW_INSTRUCTIONS : undefined,
             followupsEnabled() && input.generateFollowups !== false
               ? HANDOFF_INSTRUCTIONS
               : HANDOFF_ONLY_INSTRUCTIONS,
@@ -5624,16 +5690,36 @@ export class RunManager {
     }
   }
 
-  private runCheckStep(
+  private async runCheckStep(
+    runId: string,
     state: ActiveRun,
     step: WorkflowStepDef,
     emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void,
   ): Promise<{ ok: boolean; output: string; exitCode: number }> {
     const command = step.command as string;
+    // A check step is a process in the run's tree like any other: in a shadow run a script that
+    // pushes must hit the shadow remote too (spec 2026-10-06-shadow-runs). Unarmable means the
+    // check does not run - the same fail-closed answer an agent step gets.
+    let env: NodeJS.ProcessEnv = process.env;
+    let script = command;
+    if (this.store.getRun(runId)?.shadow === true) {
+      try {
+        env = withEnvOverrides(process.env, { ...(await this.armShadow(runId)).env, CEZ_SHADOW_COMMAND: command });
+        // The wrapper re-asserts the shim after the login profiles rewrite PATH (setup.ts).
+        script = SHADOW_CHECK_WRAPPER;
+      } catch (err) {
+        if (!(err instanceof ShadowSetupError)) throw err;
+        emit({ type: 'check-output', stepId: step.id, command, text: err.message, exitCode: -1 });
+        return { ok: false, output: err.message, exitCode: -1 };
+      }
+      // A cancel that landed while the run was being armed must not start the check anyway: the
+      // `interrupt` it called was the previous one, and nothing would stop this child.
+      if (state.cancelled) return { ok: false, output: 'cancelled', exitCode: -1 };
+    }
     emit({ type: 'note', stepId: step.id, message: `$ ${command}` });
     return new Promise((resolve) => {
       // Check steps run in the same cwd as the agent steps — the worktree.
-      const child = spawn('bash', ['-lc', command], { cwd: state.cwd, env: process.env });
+      const child = spawn('bash', ['-lc', script], { cwd: state.cwd, env });
       state.interrupt = () => child.kill('SIGTERM');
 
       let output = '';

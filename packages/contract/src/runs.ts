@@ -175,6 +175,11 @@ export const runRecordSchema = z.object({
   /** Autonomous mode (#autonomous): the run never parks at `waiting` or the terminal `review`
    *  gate. Absent = falsy = not autonomous. */
   autonomous: z.boolean().optional(),
+  /** Shadow run (spec 2026-10-06-shadow-runs): outward side effects - `git push`, `gh` writes -
+   *  are captured as intents for a human to promote instead of executed. `true` or absent, never
+   *  `false`, like `worktree`'s mirror image: absent IS an ordinary run, which is what every
+   *  record written before this carries. */
+  shadow: z.literal(true).optional(),
   /**
    * Provenance for a task a project GitHub automation launched (#694). Absent on every ordinary
    * run, which is what makes it additive — the cockpit shows the "from automation" link only when
@@ -905,6 +910,10 @@ export const createRunInputBaseSchema = z
     worktree: z.boolean().optional(),
     /** true → autonomous run: never parks at "waiting"; auto-continues until done. */
     autonomous: z.boolean().optional(),
+    /** true → shadow run (spec 2026-10-06-shadow-runs): pushes and `gh` writes are recorded as
+     *  intents for a human to promote, never executed by the agent. Inherited by variants and by
+     *  every task a shadow run dispatches. */
+    shadow: z.boolean().optional(),
     /** false → keep the handoff journal but do not expose or request a follow-up todos file.
      *  Omit for the default (enabled); a server with the capability off pins it to false. */
     generateFollowups: z.boolean().optional(),
