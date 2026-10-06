@@ -107,6 +107,7 @@ describe('the workspace settings API (step 2.7)', () => {
         monitoringWakeIntervalMinutes: 5,
         autoResumeOnUsageLimit: true,
         memoryLimitMb: null,
+        dispatchMaxConcurrent: null,
         worktreeRetentionDefault: 10,
       },
       // Machine-wide agent defaults (spec 2026-07-29-agent-profiles). EMPTY, not populated: absent
@@ -179,6 +180,7 @@ describe('the workspace settings API (step 2.7)', () => {
         monitoringWakeIntervalMinutes: 5,
         autoResumeOnUsageLimit: false,
         memoryLimitMb: 2048,
+        dispatchMaxConcurrent: null,
         worktreeRetentionDefault: 10,
       },
       // Untouched by a resources write, and still empty — the two live in the same file but answer
@@ -197,6 +199,22 @@ describe('the workspace settings API (step 2.7)', () => {
     // asks, not just the file.
     expect(semaphore.autoResumeOnUsageLimit()).toBe(false);
     expect(semaphore.memoryLimitMb()).toBe(2048);
+  });
+
+  /** Dispatch admission cap (spec 2026-09-20-dispatch-admission-scheduler): a write must reach
+   *  the shared semaphore cache the engine's `pump()` asks — no restart — and `null` must clear
+   *  it back to "no cap" rather than persisting a stale ceiling. */
+  it('PUT dispatchMaxConcurrent round-trips through the semaphore and clears with null', async () => {
+    const res = await putConfig({ resources: { dispatchMaxConcurrent: 2 } });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as WorkspaceConfigResponse).resources.dispatchMaxConcurrent).toBe(2);
+    expect(((await (await getConfig()).json()) as WorkspaceConfigResponse).resources.dispatchMaxConcurrent).toBe(2);
+    expect((rawConfig().resources as Record<string, unknown>).dispatchMaxConcurrent).toBe(2);
+    expect(semaphore.dispatchMaxConcurrent()).toBe(2);
+
+    await putConfig({ resources: { dispatchMaxConcurrent: null } });
+    expect(((await (await getConfig()).json()) as WorkspaceConfigResponse).resources.dispatchMaxConcurrent).toBeNull();
+    expect(semaphore.dispatchMaxConcurrent()).toBeNull();
   });
 
   /** #810 — the cadence now ships ON, so the write worth pinning is the one that turns it
@@ -224,6 +242,7 @@ describe('the workspace settings API (step 2.7)', () => {
       monitoringWakeIntervalMinutes: 5,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
+      dispatchMaxConcurrent: null,
       worktreeRetentionDefault: 3,
     });
   });
@@ -271,7 +290,7 @@ describe('the workspace settings API (step 2.7)', () => {
   });
 
   it('rejects out-of-bounds resources with 400 and writes nothing', async () => {
-    for (const resources of [{ maxParallel: 0 }, { maxParallel: 17 }, { memoryLimitMb: -1 }]) {
+    for (const resources of [{ maxParallel: 0 }, { maxParallel: 17 }, { memoryLimitMb: -1 }, { dispatchMaxConcurrent: 17 }]) {
       const res = await putConfig({ resources });
       expect(res.status, JSON.stringify(resources)).toBe(400);
       expect((await res.json()) as { error: string }).toHaveProperty('error');

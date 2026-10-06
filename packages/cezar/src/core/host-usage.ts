@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { availableParallelism, cpus, freemem, loadavg, totalmem } from 'node:os';
 import type { HostUsage, HostUsageContainer } from '@open-mercato/cezar-contract';
 
+import { admissionStatusSnapshot } from './admission-status.ts';
 import {
   createCgroupProbe,
   hostCoreCount,
@@ -34,6 +35,11 @@ import {
  *    keeps the v1 payload byte-identical, and `hostCpuCount` rides only with `container`. Nothing
  *    is mixed: `container.cpuPct` is the cgroup's own delta against effective cores, and a limit
  *    whose value is unreadable is omitted rather than replaced by the host figure.
+ * 4. **The dispatch governor is REPORTED, never driven** (spec
+ *    `.ai/specs/2026-09-20-adaptive-admission-governor.md`). The semaphore owns the governor and
+ *    registers its snapshot in `admission-status.ts`; this sampler reads it once per sample and
+ *    emits it as the additive `admission` key only while a `dispatchMaxConcurrent` ceiling is
+ *    configured, so a workspace without one keeps the v1 payload byte-identical.
  *
  * Cost, stated accurately (review minor): one `os.cpus()`-equivalent read plus a handful of small
  * `/proc` and cgroup reads per sample. With no subscriber the timer never starts, so a workspace
@@ -273,6 +279,9 @@ export function createHostSampler(options: HostSamplerOptions = {}): HostSampler
     // Windows reports `[0, 0, 0]` — absent on the wire, hidden by the card, never a fake row.
     const load = platform === 'win32' ? undefined : loadavg();
     const facts = probe();
+    // One read of the semaphore's snapshot per sample: absent stays absent on the wire, so a
+    // workspace without a dispatch ceiling emits no `admission` key at all.
+    const admission = admissionStatusSnapshot();
     const effective = composeHostContainer({
       facts,
       cpuCount: availableParallelism(),
@@ -298,6 +307,7 @@ export function createHostSampler(options: HostSamplerOptions = {}): HostSampler
       ...(effective.container === undefined ? {} : { container: effective.container }),
       ...(effective.hostCpuCount === undefined ? {} : { hostCpuCount: effective.hostCpuCount }),
       ...(effective.cgroupProbe === undefined ? {} : { cgroupProbe: effective.cgroupProbe }),
+      ...(admission === undefined ? {} : { admission }),
     };
   };
 

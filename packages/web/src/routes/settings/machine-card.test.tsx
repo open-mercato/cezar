@@ -314,6 +314,74 @@ describe('MachineCard — local cockpit, desktop', () => {
     expect(screen.getByText('— / 8.0 GB')).toBeTruthy()
     expect(screen.queryByText(/22%/)).toBeNull()
   })
+
+  it('prints the dispatch admission readout under the limits line, verbatim', async () => {
+    serve(HEALTH)
+    render(<MachineCard />, { wrapper: wrapper() })
+    const socket = await subscribedSocket()
+
+    act(() => {
+      socket.deliver(
+        'host',
+        sample({
+          cpuPct: 18,
+          container: {
+            source: 'cgroup-v2',
+            memLimitBytes: 2 * 1024 ** 3,
+            memUsedBytes: 1024 ** 3,
+          },
+          hostCpuCount: 8,
+          admission: {
+            state: 'elevated',
+            configured: 4,
+            effective: 2,
+            since: '2026-09-20T00:00:00.000Z',
+          },
+        }),
+      )
+    })
+
+    await waitFor(() => expect(screen.getByText('cgroup limits detected · cgroup-v2')).toBeTruthy())
+    const line = screen.getByText('Dispatch admission: elevated · 2 of 4')
+    expect(line.getAttribute('data-slot')).toBe('machine-card-admission')
+    // "Under the limits line" is the point: the ceiling's owner reads the two together.
+    const limits = screen.getByText('cgroup limits detected · cgroup-v2')
+    expect(
+      (limits.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+    ).toBe(true)
+  })
+
+  it('carries no admission line when the sample has no ceiling', async () => {
+    serve(HEALTH)
+    render(<MachineCard />, { wrapper: wrapper() })
+    const socket = await subscribedSocket()
+
+    act(() => {
+      socket.deliver('host', sample({ cpuPct: 24, sampledAt: '2026-09-20T00:00:02.000Z' }))
+    })
+    await waitFor(() => expect(screen.getByText('24%')).toBeTruthy())
+    expect(document.querySelector('[data-slot="machine-card-admission"]')).toBeNull()
+    expect(screen.queryByText(/Dispatch admission/)).toBeNull()
+  })
+
+  it('drops a snapshot whose ceiling pair is incomplete instead of rendering half a line', async () => {
+    serve(HEALTH)
+    render(<MachineCard />, { wrapper: wrapper() })
+    const socket = await subscribedSocket()
+
+    // `configured` and `effective` ship together inside the `admission` object, or the key is
+    // absent. A producer that sends half of the pair is rejected at the store boundary (the one
+    // place untrusted frames enter), so the card keeps `sampling…` rather than printing
+    // `Dispatch admission: normal ·  of `.
+    act(() => {
+      socket.deliver('host', {
+        ...sample({ cpuPct: 27, sampledAt: '2026-09-20T00:00:02.000Z' }),
+        admission: { state: 'normal' },
+      })
+    })
+    await waitFor(() => expect(screen.getByText('sampling…')).toBeTruthy())
+    expect(document.querySelector('[data-slot="machine-card-admission"]')).toBeNull()
+  })
 })
 
 describe('MachineCard — local cockpit, below md', () => {

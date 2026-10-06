@@ -44,7 +44,18 @@ Five moves that make the cockpit worth the browser tab:
   holds the rest in a FIFO queue with visible positions (`#1`, `#2`, …). Cancel a
   queued task before it starts; the queue even survives a cockpit restart —
   everything still `queued` is re-enqueued in order. It's the orchestration layer
-  that turns "one agent at a time" into a backlog that drains itself.
+  that turns "one agent at a time" into a backlog that drains itself. Tasks that
+  dispatch other tasks can be bounded separately: **Settings → Resources → Max
+  dispatched tasks started at once** (`dispatchMaxConcurrent`, default *no limit*) admits a
+  dispatched child **from the queue** only while fewer than N dispatch children
+  hold a slot workspace-wide. It is an admission ceiling rather than a running
+  one: a parked child woken back into its own session (a delivered child report,
+  the monitoring wake) is never re-gated — the same #347 exemption `maxParallel`
+  carries — so the running count may transiently exceed N. An auto-resume after a
+  usage limit is the exception: it goes through the ordinary queued-continuation
+  path, so it obeys the cap like any other queued work. Ordinary tasks keep their
+  normal share of `maxParallel` and a capped child simply waits in the queue, and lowering
+  the value never stops a child that is already running.
 - 🧠 **Memory-aware runs.** Each run's whole process tree is sampled (~2 s) for CPU
   and RSS, and its **peak memory** is recorded and shown in the task table. Set an
   optional per-task **memory ceiling** (`memoryLimitMb`) and a run that crosses it
@@ -544,7 +555,11 @@ value. The 60 s sparkline is **local-only**: a remote cockpit's route answers ar
 sparse, so it shows the instantaneous bar and no chart rather than plotting
 minutes as if they were seconds. A remount always re-reads the route (the host
 query overrides the workspace's five-minute `staleTime`), so a cached sample can
-never be stamped as fresh.
+never be stamped as fresh. While a dispatch ceiling is configured (**Max dispatched tasks started at
+once**), that same payload also reports the dispatch admission state and the
+ceiling the gate was enforcing when the sample was taken (a cached route read
+can be up to the sampler's freshness window behind), which the card prints as
+`Dispatch admission: elevated · 2 of 4`.
 
 **Which numbers are effective.** The plain process reads **host totals**. When
 cezar runs inside a cgroup with a real limit - a Docker `--cpus`/`--cpuset-cpus`,

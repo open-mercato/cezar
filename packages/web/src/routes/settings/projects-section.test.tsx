@@ -116,6 +116,7 @@ function serve(answers: Answers = {}) {
       monitoringWakeIntervalMinutes: null,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
+      dispatchMaxConcurrent: null,
       worktreeRetentionDefault: 10,
     },
   }

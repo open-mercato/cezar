@@ -33,6 +33,7 @@ function serve(
       monitoringWakeIntervalMinutes: null,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
+      dispatchMaxConcurrent: null,
       worktreeRetentionDefault: 10,
     },
     agentDefaults: {},

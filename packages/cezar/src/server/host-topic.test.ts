@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hostUsageSchema, type HostUsage } from '@open-mercato/cezar-contract';
+import { setAdmissionStatusProvider } from '../core/admission-status.ts';
 import { HOST_SAMPLE_INTERVAL_MS, hostUsageSampler } from '../core/host-usage.ts';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
@@ -47,6 +48,8 @@ describe('host topic + sampler (live-server path)', () => {
   });
 
   afterEach(() => {
+    // The governor's provider is module state: a test that registers one must not leave it behind.
+    setAdmissionStatusProvider(undefined);
     hostUsageSampler.dispose();
     vi.useRealTimers();
     store.flush();
@@ -184,10 +187,74 @@ describe('host topic + sampler (live-server path)', () => {
     expect(await res.json()).toEqual(sample);
   });
 
-  it('sends no container keys at all on a usage-only host', async () => {
+  it('carries an admission frame over both transports, verbatim', async () => {
+    const sample = {
+      ...baseSample,
+      admission: {
+        state: 'elevated' as const,
+        configured: 4,
+        effective: 2,
+        since: '2026-09-20T00:00:00.000Z',
+      },
+    };
+    const { app, topic } = buildWithSample(sample);
+
+    const viaSocket = await topic.publisher.snapshot();
+    const parsed = hostUsageSchema.safeParse(viaSocket);
+    expect(parsed.success).toBe(true);
+    // The PARSED object is the proof the schema knows the key: zod strips what a schema does not
+    // declare, so a contract without `admission` would drop it here without ever failing.
+    expect(parsed.success ? parsed.data.admission : undefined).toEqual(sample.admission);
+    expect(viaSocket).toMatchObject({
+      admission: { state: 'elevated', configured: 4, effective: 2 },
+    });
+
+    const res = await app.request('/api/v1/workspace/host-usage', {
+      headers: { host: '127.0.0.1:4321' },
+    });
+    expect(await res.json()).toEqual(sample);
+  });
+
+  it('sends no additive keys at all on a usage-only host with no ceiling', async () => {
     const { topic } = buildWithSample({ ...baseSample });
     const frame = (await topic.publisher.snapshot()) as Record<string, unknown>;
     expect('container' in frame).toBe(false);
     expect('hostCpuCount' in frame).toBe(false);
+    // No semaphore is registered here, so there is no ceiling to report and no `admission` key.
+    expect('admission' in frame).toBe(false);
+  });
+
+  it('reads the semaphore snapshot through the real sampler, and stops when it goes away', async () => {
+    const { app, topic } = build();
+    const read = async (): Promise<Record<string, unknown>> => {
+      const res = await app.request('/api/v1/workspace/host-usage', {
+        headers: { host: '127.0.0.1:4321' },
+      });
+      expect(res.status).toBe(200);
+      return (await res.json()) as Record<string, unknown>;
+    };
+
+    // The fixture tests above prove the wire contract; this one proves the sampler's own read,
+    // which is the half that would silently stay absent if `buildSample` never asked.
+    expect('admission' in (await read())).toBe(false);
+
+    setAdmissionStatusProvider(() => ({
+      state: 'critical',
+      configured: 4,
+      effective: 1,
+      since: '2026-09-20T00:00:00.000Z',
+    }));
+    expect(await topic.publisher.snapshot()).toMatchObject({
+      admission: { state: 'critical', configured: 4, effective: 1 },
+    });
+    expect(hostUsageSchema.safeParse(await read()).success).toBe(true);
+    expect(await read()).toMatchObject({ admission: { state: 'critical', effective: 1 } });
+
+    // Clearing the ceiling drops the key with it: the reduction never outlives its ceiling. The
+    // last sample stays in the sampler's cache until it goes stale (the same bounded staleness
+    // that governs `cpuPct`), so this asks for a fresh read rather than a cached one.
+    setAdmissionStatusProvider(undefined);
+    hostUsageSampler.dispose();
+    expect('admission' in (await read())).toBe(false);
   });
 });
