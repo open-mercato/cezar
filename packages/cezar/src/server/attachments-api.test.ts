@@ -164,12 +164,7 @@ describe('attachment routes (#950)', () => {
       expect(res.status).toBe(201);
     });
 
-    /**
-     * A named image is filed as a side effect of building `images` (#960) — before this,
-     * `variants > 1` outside a git repo still built it ahead of its own 400, so a request that
-     * never started a run left the file behind anyway. The manager's `startVariants` is
-     * deliberately absent from the mock: reaching it at all would be its own failure here.
-     */
+    // Refusing variants must not file an image, even though conversion precedes the git check.
     it('refuses parallel variants outside a git repo without filing the image first', async () => {
       const res = await post('/api/v1/runs', {
         ...base,

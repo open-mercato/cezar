@@ -4135,20 +4135,6 @@ export function createApp(deps: ServerDeps) {
         const account = await resolveWorkspaceProfile(fallback, parsed.data.agentProfile);
         if ('error' in account) return c.json({ error: account.error }, 400);
       }
-      const variants = parsed.data.variants ?? 1;
-      if (variants > 1) {
-        // Variants require git worktrees to isolate their changes.
-        const repo = await getRepoInfo(repoRoot);
-        if (!repo) {
-          return c.json(
-            {
-              error:
-                'parallel variants need a git repository (each variant runs in its own worktree) — run ×1 here, or start cezar inside a git repo',
-            },
-            400,
-          );
-        }
-      }
       const images = parsed.data.images?.map((image) => toPastedContent(image));
       const input = {
         task: parsed.data.task,
@@ -4167,7 +4153,19 @@ export function createApp(deps: ServerDeps) {
         generateFollowups: capabilities().followups ? parsed.data.generateFollowups : false,
         ...(parsed.data.dispatch && capabilities().dispatch ? { dispatchIntent: parsed.data.dispatch } : {}),
       };
+      const variants = parsed.data.variants ?? 1;
       if (variants > 1) {
+        // Variants require git worktrees to isolate their changes.
+        const repo = await getRepoInfo(repoRoot);
+        if (!repo) {
+          return c.json(
+            {
+              error:
+                'parallel variants need a git repository (each variant runs in its own worktree) — run ×1 here, or start cezar inside a git repo',
+            },
+            400,
+          );
+        }
         const runs = manager.startVariants(workflow, input, variants);
         // The entry points at the first variant — the thread the composer navigates to.
         const first = runs[0];
@@ -4357,7 +4355,6 @@ export function createApp(deps: ServerDeps) {
         );
       }
 
-      if (run.status !== 'queued') return c.json({ error: 'run already started' }, 409);
       const images: PastedContent[] | undefined = parsed.data.images?.map((image) => toPastedContent(image));
       const message = manager.editQueuedMessage(id, msgId, {
         ...(parsed.data.text !== undefined ? { text: parsed.data.text } : {}),
