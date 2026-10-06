@@ -29,3 +29,6 @@ Issue labels can be stale; urgency ranking is provisional until source verificat
 ### Phase 3: Verify
 - [ ] 3.1 Validate child reports and evidence
 - [ ] 3.2 Obtain final independent review and report
+
+## Audit verification
+The first audit report is not accepted: #997 is covered by #1154, #1001 by #1174, and #1077 is discussed in #1127 with contrary root-cause evidence. Assignee-only conflicts must follow ANY-signal claim rules, not an all-three requirement. #870 belongs to another assignee and needs explicit stale-lock evidence before takeover. Commission a corrected read-only audit (second child); retain #890 as a candidate. Eight-task allowance now reserved as two audits, five implementers, one final reviewer.
