@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  automationScheduleSchema,
   cronOf,
   nextOccurrence,
+  onceInstant,
+  parseScheduleDate,
   normalizeSchedule,
   occurrencesBetween,
   parseCron,
@@ -14,6 +17,7 @@ import {
 const WARSAW = 'Europe/Warsaw';
 const NEW_YORK = 'America/New_York';
 const at = (iso: string) => Date.parse(iso);
+const HOUR_MS = 3_600_000;
 const wall = (ms: number, tz: string) => {
   const p = zonedParts(ms, tz)!;
   return `${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')} ${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')} wd${p.weekday}`;
@@ -125,5 +129,46 @@ describe('zonedWallTimeToUtc', () => {
     const ms = zonedWallTimeToUtc(2026, 9, 14, 4, 0, WARSAW)!;
     expect(new Date(ms).toISOString()).toBe('2026-09-14T02:00:00.000Z');
     expect(wall(zonedWallTimeToUtc(2026, 1, 14, 4, 0, NEW_YORK)!, NEW_YORK)).toBe('2026-01-14 04:00 wd3');
+  });
+});
+
+describe('once (#771)', () => {
+  const once = (date: string, hour: number, minute = 0): AutomationSchedule => ({ type: 'once', date, hour, minute });
+
+  it('labels it and derives a display-only cron that parseCron never maps back', () => {
+    expect(scheduleLabel(once('2026-10-05', 23, 0))).toBe('once on 2026-10-05 at 23:00');
+    expect(scheduleLabel({ type: 'once' })).toBe('once (no date set)');
+    expect(cronOf(once('2026-10-05', 23, 5))).toBe('5 23 5 10 *');
+    expect(parseCron('5 23 5 10 *')).toBeNull();
+  });
+
+  it('is a single instant at the wall time in the zone', () => {
+    const ms = onceInstant(once('2026-10-05', 23), WARSAW)!;
+    expect(new Date(ms).toISOString()).toBe('2026-10-05T21:00:00.000Z');
+    expect(occurrencesBetween(once('2026-10-05', 23), at('2026-10-01T00:00:00Z'), at('2026-10-10T00:00:00Z'), WARSAW)).toEqual([ms]);
+    expect(occurrencesBetween(once('2026-10-05', 23), ms + 1, at('2026-10-10T00:00:00Z'), WARSAW)).toEqual([]);
+  });
+
+  it('is next until it passes, however far ahead it is, and never again after', () => {
+    const ms = onceInstant(once('2027-06-01', 9), WARSAW)!;
+    expect(nextOccurrence(once('2027-06-01', 9), at('2026-10-04T00:00:00Z'), WARSAW)).toBe(ms);
+    expect(nextOccurrence(once('2027-06-01', 9), ms, WARSAW)).toBeNull();
+    expect(nextOccurrence({ type: 'once', hour: 9 }, 0, WARSAW)).toBeNull();
+  });
+
+  it('still fires once in a spring-forward gap', () => {
+    // 2026-03-29 02:30 does not exist in Warsaw; it resolves to one instant near the gap.
+    const ms = onceInstant(once('2026-03-29', 2, 30), WARSAW);
+    expect(ms).not.toBeNull();
+    expect(Math.abs(ms! - at('2026-03-29T01:00:00Z'))).toBeLessThanOrEqual(HOUR_MS);
+  });
+
+  it('accepts only real calendar days', () => {
+    expect(parseScheduleDate('2026-02-28')).toEqual([2026, 2, 28]);
+    for (const bad of ['2026-02-30', '2026-13-01', '2026-1-01', 'tomorrow']) {
+      expect(parseScheduleDate(bad), bad).toBeNull();
+      expect(automationScheduleSchema.safeParse({ type: 'once', date: bad }).success, bad).toBe(false);
+    }
+    expect(automationScheduleSchema.safeParse(once('2026-10-05', 23)).success).toBe(true);
   });
 });

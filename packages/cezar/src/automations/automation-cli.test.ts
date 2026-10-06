@@ -288,6 +288,16 @@ describe('cez automation add / run (spec 2026-09-14)', () => {
     expect(() => parseEvery('soon')).toThrow('--every');
     expect(bodyFromAddFlags({ name: 'w', cron: '30 7 * * 1-5' }, 'p')).toMatchObject({ kind: 'schedule', schedule: { type: 'weekdays', hour: 7, minute: 30 } });
   });
+
+  it('maps --at to a one-time schedule and refuses what is not a date and time (#771)', () => {
+    expect(bodyFromAddFlags({ name: 'later', at: '2026-10-05 23:00' }, 'p')).toMatchObject({ kind: 'schedule', schedule: { type: 'once', date: '2026-10-05', hour: 23, minute: 0 } });
+    expect(bodyFromAddFlags({ name: 'later', at: '2026-10-05T07:30', kind: 'schedule' }, 'p')).toMatchObject({ schedule: { type: 'once', date: '2026-10-05', hour: 7, minute: 30 } });
+    for (const bad of ['2026-02-30 10:00', '2026-10-05 24:00', 'tonight']) {
+      expect(() => bodyFromAddFlags({ name: 'later', at: bad }, 'p'), bad).toThrow('--at');
+    }
+    expect(() => bodyFromAddFlags({ name: 'later', at: '2026-10-05 23:00', cron: '0 4 * * *' }, 'p')).toThrow('not both');
+    expect(() => bodyFromAddFlags({ name: 'later', at: '2026-10-05 23:00', on: 'issue.opened' }, 'p')).toThrow('not both');
+  });
 });
 
 it('tracker flags build a provider event trigger with a 30 minute default', () => {

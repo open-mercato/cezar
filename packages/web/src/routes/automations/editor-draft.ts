@@ -255,6 +255,7 @@ export function scheduleBody(schedule: AutomationSchedule): AutomationSchedule {
   switch (s.type) {
     case 'hours': return { type: 'hours', every: s.every }
     case 'weekly': return { type: 'weekly', hour: s.hour, minute: s.minute, day: s.day }
+    case 'once': return { type: 'once', hour: s.hour, minute: s.minute, ...(s.date ? { date: s.date } : {}) }
     default: return { type: s.type, hour: s.hour, minute: s.minute }
   }
 }

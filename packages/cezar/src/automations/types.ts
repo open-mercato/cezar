@@ -110,6 +110,8 @@ export const automationDefinitionObjectSchema = z
     if (definition.kind === 'schedule') {
       if (!definition.schedule) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['schedule'], message: 'a scheduled automation needs a schedule' });
+      } else if (definition.schedule.type === 'once' && !definition.schedule.date) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['schedule', 'date'], message: 'a one-time schedule needs a date' });
       }
       return;
     }

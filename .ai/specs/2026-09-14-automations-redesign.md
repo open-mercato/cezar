@@ -733,3 +733,35 @@ dispatch (Q3), a `reviewChild` field on the dispatch INTENT (Q4 — the automati
 `task.dispatch.reviewChild` is stored and becomes a prompt suffix), full cron expressions, automations while the
 server is stopped, a dedicated "New automation from prompt" composer screen (the skill picker
 and template are the composer's affordances, per the patch's spec).
+
+## Amendment — `once` schedule (2026-10-04, #771)
+
+A fifth schedule shape covers the postponed task of #770/#771 ("run this tonight at 23:00")
+without a second scheduling stack: `{ type: 'once', date: 'YYYY-MM-DD', hour, minute }`, a wall
+time in the server's zone like every other shape.
+
+- **Math** (`automation-schedule.ts`): `onceInstant` resolves the single instant (a DST gap
+  resolves to one instant near it, as for the recurring shapes); `nextOccurrence` returns it while
+  it is ahead and `null` after; `occurrencesBetween` returns it when it falls in the window.
+  `cronOf` is display-only (`M H D Mo *` — cron has no year) and `parseCron` never yields `once`.
+- **Validation**: `date` is required for `once` (storage `superRefine` and the route's kind
+  rules) and must be a real calendar day. Enabling a `once` whose instant has passed is refused —
+  400 on create/update with `enabled`, 409 on `POST /automations/:id/enable`; saved paused it is
+  a draft and stays editable.
+- **Lifecycle**: the age rule above applies unchanged — on time it fires `scheduled`, within 24 h
+  as one `catch-up`, older it is `skipped`. That is the boot-storm bound #770's review asked for:
+  N postponed tasks missed during a long closure launch nothing. Whichever way the occurrence is
+  consumed (launched, caught up, skipped, met as a `duplicate` receipt, written as a detection-only
+  `launch-error`, or a failed launch — those two receipts stay retryable from the log), the runner
+  then pauses the automation, so it never sits enabled with nothing to fire, and appends a
+  `skipped` log row saying why. If the pause itself cannot be written (a mutation lease held
+  elsewhere), an `error` row says the automation is still enabled with nothing left to fire; a
+  revision conflict means the user changed it first and stays silent. Run now neither consumes
+  nor pauses it.
+- **CLI**: `cez automation add --at "YYYY-MM-DD HH:MM"`; Copy as CLI prints `--at` for a `once`.
+- **Cockpit**: a `Once` chip with a date picker (default: tomorrow), no cron row, a note when the
+  time has passed; the preview shows the single run however far ahead it is.
+- **Compatibility**: additive for every existing file and client. A cezar older than this change
+  ignores a `once` definition as invalid (`loadDefinitions` per-entry salvage, one warning) and
+  drops it from `automations.json` on its next definition write — the cost of downgrading across
+  a new enum value; the other definitions are untouched.

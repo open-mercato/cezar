@@ -159,6 +159,7 @@ describe('scheduleBody', () => {
     expect(scheduleBody({ type: 'hours', every: 6, hour: 4, minute: 0 })).toEqual({ type: 'hours', every: 6 })
     expect(scheduleBody({ type: 'daily', day: 3 })).toEqual({ type: 'daily', hour: 4, minute: 0 })
     expect(scheduleBody({ type: 'weekly' })).toEqual({ type: 'weekly', hour: 4, minute: 0, day: 1 })
+    expect(scheduleBody({ type: 'once', date: '2026-10-05', hour: 23, every: 6 })).toEqual({ type: 'once', date: '2026-10-05', hour: 23, minute: 0 })
   })
 })
 

@@ -11,6 +11,12 @@ Tracker automations add `automation add --kind tracker --on <event> --to-status 
 `create`/`update` JSON and `check` preview/execute support the same `trackerTrigger` contract;
 existing GitHub/schedule flags and exit semantics remain unchanged.
 
+One-time schedules (#771) add `automation add --at "<YYYY-MM-DD HH:MM>"` (a `T` between date and
+time is accepted too): one run at that wall time in the cockpit's time zone, as a `once` schedule.
+It is mutually exclusive with `--cron` — both, or a malformed `--at`, exit 2 like any flag the
+command cannot express — and `--kind schedule` now accepts either. Copy as CLI prints `--at` for a
+`once`. Additive: no existing flag, default or exit code changes.
+
 - **`cez tracker-connections`**: offline `list` and `remove <64-hex-id>`; inventory omits secrets,
   removal is explicit and idempotent for an absent record. Exit 0 success, 1 invalid arguments or
   storage failures. Uses CEZ_HOME; dry-run cannot access real credential files.
@@ -396,6 +402,22 @@ config exception names it.
 - **Rollback**: `CEZ_AUTOMATIONS=0` restores the opted-out surface without touching any file; a
   pre-redesign cezar ignores `kind: 'schedule'` definitions as invalid (one warning, the rest of
   the file intact) and never fires them.
+- **Additive for issue #771** (spec amendment "`once` schedule"): `SCHEDULE_TYPES` gains a fifth
+  member, `once`, and `schedule` gains an optional `date` (`YYYY-MM-DD`, a real calendar day),
+  required for — and only read on — a `once`; on every other shape it stays absent. Every existing
+  definition, request and response is unchanged. Three refusals are new and apply only to a
+  `once`: `POST /automations` with `enable: true` and `PUT /automations/:id` with `enabled: true`
+  answer `400` when its instant is not in the future, and `POST /automations/:id/enable` answers
+  `409` for the same reason; saved paused it is a draft and is accepted, and `run` still works on
+  it. A `once` without a `date` is a `400` on create and update. The runner pauses a `once`
+  itself once its single occurrence is consumed — launched, caught up, skipped, met as a
+  `duplicate` or written as a detection-only `launch-error` — and appends a `skipped` log row
+  saying so (an `error` row if the pause itself could not be written); no new log result value.
+  **Downgrade is heavier than the `pinnedCursor` precedent below**: an older cezar does not drop
+  a key, it drops the whole definition. It ignores a `once` row as invalid (`loadDefinitions`
+  per-entry salvage, one warning — the other definitions are untouched) and removes it from
+  `automations.json` on its next definition write, so a user's postponed task silently
+  disappears. Pause or run pending one-time automations before downgrading across this change.
 - **Additive for issue #982**: runtime state gains optional `pinnedCursor`
   (`{timestamp, tieBreaker?}`), written **only** when a widening re-poll could not get the cursor
   past a 120-second overlap band that is saturated at the search API's own 100-record ceiling.

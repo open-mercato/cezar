@@ -27,7 +27,7 @@ import {
   isScheduleAutomation,
   type AutomationDefinition,
 } from '../automations/types.ts';
-import { trackerTriggerSchema, trackerAutomationOptionsSchema, trackerAutomationOptionsQuerySchema, automationScheduleSchema, localTimeZone, nextOccurrence } from '@open-mercato/cezar-contract';
+import { trackerTriggerSchema, trackerAutomationOptionsSchema, trackerAutomationOptionsQuerySchema, automationScheduleSchema, localTimeZone, nextOccurrence, scheduleLabel, type AutomationSchedule } from '@open-mercato/cezar-contract';
 import type { IncomingMessage } from 'node:http';
 import { access, constants as fsConstants, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -431,6 +431,7 @@ function automationKindIssue(body: AutomationEditableBody, kind: 'github' | 'sch
   if (kind === 'tracker') return body.trackerTrigger ? null : 'Choose an event to finish configuring this automation';
   if (kind === 'schedule') {
     if (!body.schedule) return 'a scheduled automation needs a schedule';
+    if (body.schedule.type === 'once' && !body.schedule.date) return 'a one-time schedule needs a date';
     if (body.events || body.filters || body.intervalSeconds !== undefined) return 'a scheduled automation has no GitHub filter';
     return null;
   }
@@ -439,6 +440,16 @@ function automationKindIssue(body: AutomationEditableBody, kind: 'github' | 'sch
   if (!body.filters) return 'a GitHub automation needs its bounded filter';
   if (body.schedule) return 'a GitHub automation has no schedule';
   return null;
+}
+/**
+ * A one-time schedule can only be ENABLED while its instant is still ahead (#771): enabling one
+ * that has passed would arm nothing and sit "enabled" forever. Saved paused, it is a draft and is
+ * accepted; Run now still works on it.
+ */
+function oncePassedIssue(schedule: AutomationSchedule | undefined, enabled: boolean, now = Date.now()): string | null {
+  if (!enabled || schedule?.type !== 'once') return null;
+  if (nextOccurrence(schedule, now, localTimeZone()) !== null) return null;
+  return `the one-time schedule (${scheduleLabel(schedule)}, ${localTimeZone()}) is not in the future; pick a later time`;
 }
 const automationCreateSchema = automationEditableSchema.extend({ enable: z.boolean().optional() });
 const automationUpdateSchema = automationEditableSchema.extend({ expectedRevision: z.number().int().positive() });
@@ -3671,6 +3682,8 @@ export function createApp(deps: ServerDeps) {
         const issue = await trackerTriggerIssue(c.get('project'), parsed.data.trackerTrigger);
         if (issue) return c.json({ error: issue }, 400);
       }
+      const passedIssue = oncePassedIssue(parsed.data.schedule, parsed.data.enable === true);
+      if (passedIssue) return c.json({ error: passedIssue }, 400);
       const promptIssue = validateAutomationPrompt(parsed.data.task.prompt, kind);
       if (promptIssue) return c.json({ error: promptIssue }, 400);
       const accountIssue = await automationAccountIssue(c.get('project').root, parsed.data.task);
@@ -3718,6 +3731,8 @@ export function createApp(deps: ServerDeps) {
         const issue = await trackerTriggerIssue(c.get('project'), parsed.data.trackerTrigger);
         if (issue) return c.json({ error: issue }, 400);
       }
+      const passedIssue = oncePassedIssue(parsed.data.schedule, parsed.data.enabled === true);
+      if (passedIssue) return c.json({ error: passedIssue }, 400);
       const promptIssue = validateAutomationPrompt(parsed.data.task.prompt, kind);
       if (promptIssue) return c.json({ error: promptIssue }, 400);
       const accountIssue = await automationAccountIssue(c.get('project').root, parsed.data.task);
@@ -3783,6 +3798,8 @@ export function createApp(deps: ServerDeps) {
         const issue = await trackerTriggerIssue(c.get('project'), current.trackerTrigger);
         if (issue) return c.json({ error: issue }, 400);
       }
+      const passedIssue = oncePassedIssue(current.schedule, true);
+      if (passedIssue) return c.json({ error: passedIssue }, 409);
       let automation: AutomationDefinition;
       try {
         automation = store.update(
