@@ -18,6 +18,7 @@ import {
   nodeFootprint,
   graphForWorkflow,
   graphYaml,
+  graphYamlFilename,
   newNode,
   portsOf,
   portTone,
@@ -169,7 +170,7 @@ describe('graphYaml', () => {
         '    type: start',
         '  - id: fix',
         '    type: agent',
-        '    prompt: |',
+        '    prompt: |-',
         '      line one',
         '      line two',
         '    session:',
@@ -185,6 +186,24 @@ describe('graphYaml', () => {
         '',
       ].join('\n'),
     )
+  })
+
+  it('writes multi-line text so it reads back unchanged', () => {
+    const prompt = (value: string) =>
+      graphYaml('f', '', { nodes: [{ id: 'a', type: 'agent', prompt: value }], edges: [] }).split('\n').slice(5, -2)
+    // No final newline: `|-`, or the import would add one.
+    expect(prompt('one\n\ntwo')).toEqual(['    prompt: |-', '      one', '', '      two'])
+    expect(prompt('one\ntwo\n')).toEqual(['    prompt: |', '      one', '      two'])
+    // What a block cannot carry faithfully is quoted instead.
+    expect(prompt('  indented\ntwo')).toEqual(['    prompt: "  indented\\ntwo"'])
+    expect(prompt('one\n\n')).toEqual(['    prompt: "one\\n\\n"'])
+  })
+})
+
+describe('graphYamlFilename', () => {
+  it('slugs the name into a .yaml file name, with a fallback', () => {
+    expect(graphYamlFilename(' Implement & Review PR ')).toBe('implement-review-pr.yaml')
+    expect(graphYamlFilename('  ')).toBe('workflow.yaml')
   })
 })
 

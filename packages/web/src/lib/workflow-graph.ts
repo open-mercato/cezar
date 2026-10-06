@@ -605,8 +605,13 @@ function yamlField(key: string, value: unknown, pad: string): string[] {
   if (value && typeof value === 'object') {
     return [`${pad}${key}:`, ...Object.entries(value).flatMap(([k, v]) => yamlField(k, v, `${pad}  `))]
   }
-  if (typeof value === 'string' && value.includes('\n')) {
-    return [`${pad}${key}: |`, ...value.split('\n').map((l) => `${pad}  ${l}`)]
+  // A block scalar must read back as the same string: `|-` when the text has no final newline
+  // (a plain `|` would add one on import), `|` when it has exactly one. Anything a block cannot
+  // carry faithfully (leading whitespace, several trailing newlines) falls through to a quoted string.
+  if (typeof value === 'string' && value.includes('\n') && !/^\s/.test(value) && !/\n\n$/.test(value) && !value.includes('\r')) {
+    const keep = value.endsWith('\n')
+    const lines = (keep ? value.slice(0, -1) : value).split('\n')
+    return [`${pad}${key}: ${keep ? '|' : '|-'}`, ...lines.map((l) => (l ? `${pad}  ${l}` : ''))]
   }
   return [`${pad}${key}: ${yamlScalar(value)}`]
 }
@@ -629,6 +634,16 @@ export function graphYaml(name: string, description: string, graph: WorkflowGrap
     }
   }
   return `${lines.join('\n')}\n`
+}
+
+/** The file name Export downloads a workflow as — the same slug the server saves it under. */
+export function graphYamlFilename(name: string): string {
+  const slug = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return `${slug || 'workflow'}.yaml`
 }
 
 /** One node's state in a live run (phase 3 — the task view's graph tab). */

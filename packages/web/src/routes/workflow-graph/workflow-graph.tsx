@@ -21,6 +21,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangleIcon,
   CheckCircle2Icon,
+  DownloadIcon,
   LayoutGridIcon,
   PlayIcon,
   PlusIcon,
@@ -64,6 +65,7 @@ import {
   uniqueId,
   graphForWorkflow,
   graphYaml,
+  graphYamlFilename,
   LAYOUT_DY,
   loopEdges,
   newNode,
@@ -568,6 +570,18 @@ function WorkflowGraphEditor() {
     onError: (err) => toast(err instanceof Error ? err.message : String(err), { tone: 'danger' }),
   })
 
+  // Export is the canvas as it stands — unsaved edits included — in the file the server would write.
+  const exportYaml = () => {
+    const url = URL.createObjectURL(new Blob([graphYaml(name, description, graph)], { type: 'application/yaml;charset=utf-8' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = graphYamlFilename(name)
+    document.body.append(link)
+    link.click()
+    link.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+
   if (catalog.isPending || (routeName && workflows.isPending)) return <WorkflowsLoading />
   if (catalog.isError) {
     return (
@@ -687,6 +701,9 @@ function WorkflowGraphEditor() {
             }}
           >
             <Settings2Icon />
+          </Button>
+          <Button size="sm" variant="ghost" title="Export as a .yaml file" aria-label="Export YAML" onClick={exportYaml}>
+            <DownloadIcon />
           </Button>
           <Button
             size="sm"
