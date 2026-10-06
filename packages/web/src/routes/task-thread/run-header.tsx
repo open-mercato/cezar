@@ -68,7 +68,7 @@ import { OpenInMenu, type OpenInChoice } from '@/components/open-in-menu'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { DirectionalUsage } from '@/components/directional-usage'
-import { budgetStop, deriveAttention } from '@/lib/attention'
+import { ATTENTION_RANK, budgetStop, deriveAttention } from '@/lib/attention'
 import { queuePositions, runTitle } from '@/lib/task-groups'
 import { usableRunners } from '@/lib/provider-status'
 import {
@@ -256,7 +256,7 @@ function RunHeaderView({
         {/* Also outside it, for the same reason: who ordered this task, and what it dispatched,
             are what the run IS doing right now, not metadata about how it started. */}
         <DispatchParentLine run={run} />
-        <DispatchChildrenLine run={run} />
+        <DispatchChildrenLine key={run.id} run={run} />
 
         <div data-slot="run-tabs" className="mt-1.5 flex items-end gap-1 md:mt-2.5">
           <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
@@ -900,48 +900,60 @@ function DispatchParentLine({ run }: { run: ApiRun }) {
   )
 }
 
-/**
- * "Subtasks: <child> · <child> …" — one collapsed row naming the tasks this one dispatched.
- *
- * Derived from the run list this page already holds rather than fetched: a child's link is its
- * id and its dot is its status, both of which `useRuns()` carries and keeps live over the run
- * stream. Nothing renders for a run that dispatched nothing — which is every run on a server
- * that never turned dispatch on.
- *
- * Deliberately ONE row, truncated: the full tree is the task list, and a header that grew a list
- * would push the transcript off the screen exactly when a parent has the most children.
- */
+/** Header-only disclosure: never let a dispatch tree consume the conversation viewport.
+ * Existing attention signals choose the compact view; nothing about execution or stored state
+ * changes. Every child remains reachable through Show all in the same bounded scroll region. */
 function DispatchChildrenLine({ run }: { run: ApiRun }) {
   const runs = useRuns()
+  const [expanded, setExpanded] = useState(true)
+  const [showAll, setShowAll] = useState(false)
+  const listId = useId()
   const children = (runs.data ?? []).filter(
     (candidate) => candidate.dispatch?.parentRunId === run.id,
   )
   if (children.length === 0) return null
+  const large = children.length > 6
+  const prioritized = [...children].sort((a, b) => {
+    const rank = (child: ApiRun) => ATTENTION_RANK[deriveAttention(child).bucket]
+    return rank(a) - rank(b) || b.createdAt.localeCompare(a.createdAt)
+  })
+  // Keep the familiar ordering for a small tree. A large tree defaults to at most three
+  // attention/current tasks rather than dozens of historical completions.
+  const visible = large && !showAll ? prioritized.slice(0, 3) : children
+  const needsYou = children.filter((child) => deriveAttention(child).bucket === 'waiting').length
+  const active = children.filter((child) => child.status === 'running' || child.status === 'queued').length
   return (
-    <div
-      data-slot="dispatch-children"
-      className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs text-muted-foreground"
-    >
-      <span className="shrink-0">Subtasks</span>
-      <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 overflow-hidden">
-        {children.map((child) => {
-          const attention = deriveAttention(child)
-          return (
-            <Link
-              key={child.id}
-              to={`/tasks/${child.id}`}
-              data-slot="dispatch-child"
-              data-run-id={child.id}
-              title={`${runTitle(child)} — ${attention.label}`}
-              className="inline-flex max-w-52 items-center gap-1.5 truncate hover:text-foreground"
-            >
+    <section data-slot="dispatch-children" aria-label="Subtasks"
+      className="mt-1 min-w-0 text-xs text-muted-foreground">
+      <div className="flex min-w-0 items-center gap-2">
+        <button type="button" aria-expanded={expanded} aria-controls={listId}
+          onClick={() => setExpanded((value) => !value)}
+          className="inline-flex shrink-0 items-center gap-1 rounded py-1 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
+          <ChevronDownIcon aria-hidden="true" className={cn('size-3 transition-transform', !expanded && '-rotate-90')} />
+          Subtasks ({children.length})
+        </button>
+        <span className="min-w-0 truncate">{needsYou ? `${needsYou} needs you · ` : ''}{active} active</span>
+        {large ? <button type="button" className="ml-auto shrink-0 rounded py-1 underline hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+          onClick={() => { setShowAll((value) => !value); setExpanded(true) }}>
+          {showAll ? 'Show current' : `Show all (${children.length})`}
+        </button> : null}
+      </div>
+      {expanded ? <div id={listId} data-slot="dispatch-children-list" tabIndex={0}
+        aria-label={showAll ? 'All subtasks' : 'Current subtasks'}
+        className="max-h-[min(4rem,15dvh)] overflow-y-auto overscroll-contain rounded focus-visible:outline-2 focus-visible:outline-ring">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 pb-1">
+          {visible.map((child) => {
+            const attention = deriveAttention(child)
+            return <Link key={child.id} to={`/tasks/${child.id}`} data-slot="dispatch-child"
+              data-run-id={child.id} title={`${runTitle(child)} — ${attention.label}`}
+              className="inline-flex max-w-52 items-center gap-1.5 truncate py-0.5 hover:text-foreground">
               <StatusDot tone={attention.tone} pulse={attention.pulse} />
               <span className="truncate">{runTitle(child)}</span>
             </Link>
-          )
-        })}
-      </span>
-    </div>
+          })}
+        </div>
+      </div> : null}
+    </section>
   )
 }
 

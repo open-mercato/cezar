@@ -1578,6 +1578,41 @@ describe('dispatch lines', () => {
     expect(childLinks().map((a) => a.getAttribute('href'))).toEqual(['/tasks/k1', '/tasks/k2'])
   })
 
+  it.each([50, 100])('bounds %i subtasks, prioritizes attention, and keeps every child accessible', async (count) => {
+    const children = Array.from({ length: count }, (_, i) => run('done', {
+      id: `large-${count}-${i}`, titleSummary: `Historical child ${i}`,
+      dispatch: { rootRunId: 'large-parent', parentRunId: 'large-parent' },
+    }))
+    children[count - 1] = run('waiting', { ...children[count - 1], status: 'waiting', titleSummary: 'Approval needed' })
+    children[count - 2] = run('running', { ...children[count - 2], status: 'running', titleSummary: 'Current work' })
+    stubFetch({ '/api/v1/runs': () => jsonResponse(children) })
+    renderHeader(run('waiting', { id: 'large-parent' }))
+    await waitFor(() => expect(childLinks()).toHaveLength(3))
+    expect(childLinks()[0]?.textContent).toContain('Approval needed')
+    expect(childLinks()[1]?.textContent).toContain('Current work')
+    expect(childrenLine()?.textContent).toContain(`${count}`)
+    expect(childrenLine()?.textContent).toContain('1 needs you')
+    const list = () => document.querySelector('[data-slot="dispatch-children-list"]')
+    expect(list()?.className).toContain('max-h-[min(4rem,15dvh)]')
+    expect(list()?.className).toContain('overflow-y-auto')
+    const toggle = screen.getByRole('button', { name: `Subtasks (${count})` })
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(childLinks()).toHaveLength(0)
+    expect(list()).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: `Show all (${count})` }))
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(childLinks()).toHaveLength(count)
+    expect(list()?.getAttribute('id')).toBe(toggle.getAttribute('aria-controls'))
+    expect(childLinks().map((link) => link.getAttribute('href'))).toEqual(children.map((child) => `/tasks/${child.id}`))
+    fireEvent.click(screen.getByRole('button', { name: 'Show current' }))
+    expect(childLinks()).toHaveLength(3)
+    for (const name of ['Session', 'Changes', 'Commits', 'Files']) expect(screen.getByRole('link', { name })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Finish' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Notes' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Pin' })).toBeTruthy()
+  })
+
   // The role chip is gone with the ranks it named — nothing in the header may reintroduce it.
   it('wears no rank chip', async () => {
     stubFetch()
