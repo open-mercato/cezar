@@ -1,24 +1,19 @@
 import { RunStore } from '../runs/store.ts';
 
 const openedStores = new Set<RunStore>();
-const openStore = RunStore.open.bind(RunStore);
 
-// Test-only registry: production RunStore lifecycle remains unchanged. Keeping this
-// in one helper makes every fixture teardown use the same late-write protection.
-RunStore.open = (dataDir, opts) => {
-  const store = openStore(dataDir, opts);
+/** Register a fixture store for explicit teardown. The helper deliberately does not
+ * intercept RunStore.open: a test must retain the real save lifecycle it is trying to
+ * exercise, and a late write must remain observable rather than being silently dropped. */
+export function registerRunStore(store: RunStore): RunStore {
   openedStores.add(store);
   return store;
-};
+}
 
-/** Flush stores before fixture removal and reject saves scheduled afterwards. */
+/** Flush stores before fixture removal. Callers must dispose/drain their managers first. */
 export function cleanupRunStores(): void {
   for (const store of openedStores) {
     store.flush();
-    // A manager can schedule one final save while it is being disposed. A flush
-    // cannot catch that later schedule, so make the test instance inert before
-    // its temporary directory is removed.
-    (store as unknown as { scheduleSave: () => void }).scheduleSave = () => {};
   }
   openedStores.clear();
 }

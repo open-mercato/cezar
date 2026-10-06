@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RunStore } from '../runs/store.ts';
-import { cleanupRunStores } from '../test-utils/run-store-cleanup.ts';
+import { cleanupRunStores, registerRunStore } from '../test-utils/run-store-cleanup.ts';
 import type { WorkflowDef } from './types.ts';
 
 // Root-lease fixtures measure command overlap, not developer login-profile
@@ -76,7 +76,7 @@ describe('RunManager repository-root isolation', { timeout: 20_000 }, () => {
     const root = mkdtempSync(join(tmpdir(), 'cez-unborn-isolation-'));
     roots.push(root);
     execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root });
-    const store = RunStore.open(join(root, '.ai/cezar'));
+    const store = registerRunStore(RunStore.open(join(root, '.ai/cezar')));
     const manager = new RunManager(store, root);
     managers.push(manager);
     try {
@@ -97,7 +97,7 @@ describe('RunManager repository-root isolation', { timeout: 20_000 }, () => {
 
   it('fails closed without executing a workflow step when worktree creation fails', async () => {
     const root = fixtureRepo();
-    const store = RunStore.open(join(root, '.ai/cezar'));
+    const store = registerRunStore(RunStore.open(join(root, '.ai/cezar')));
     const manager = new RunManager(store, root);
     managers.push(manager);
     const workflow: WorkflowDef = {
@@ -121,7 +121,7 @@ describe('RunManager repository-root isolation', { timeout: 20_000 }, () => {
 
   it('serializes parallel runs that explicitly opt out of worktrees', async () => {
     const root = fixtureRepo();
-    const store = RunStore.open(join(root, '.ai/cezar'));
+    const store = registerRunStore(RunStore.open(join(root, '.ai/cezar')));
     const manager = new RunManager(store, root);
     managers.push(manager);
     const workflow: WorkflowDef = {
@@ -154,7 +154,7 @@ describe('RunManager repository-root isolation', { timeout: 20_000 }, () => {
     process.env.CEZ_DISABLE_REPO_LOCK = '1';
     try {
       const root = fixtureRepo();
-      const store = RunStore.open(join(root, '.ai/cezar'));
+      const store = registerRunStore(RunStore.open(join(root, '.ai/cezar')));
       const manager = new RunManager(store, root);
       managers.push(manager);
       const workflow: WorkflowDef = {
