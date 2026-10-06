@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { autosaveCommit, createWorktree } from '../git-worktree.ts';
 import { RunStore } from '../runs/store.ts';
+import { cleanupRunStores } from '../test-utils/run-store-cleanup.ts';
 import { AUTOSAVE_INTERVAL_MS, periodicAutosaveEnabled, RunManager } from './run.ts';
 
 const run = promisify(execFile);
@@ -37,6 +38,7 @@ describe('periodic autosave gate (#471)', () => {
   let manager: TimerSeam;
   let worktreePath: string;
   let runId: string;
+  let managerInstance: RunManager;
   const savedEnv = process.env.CEZ_AUTOSAVE;
 
   beforeAll(async () => {
@@ -46,13 +48,16 @@ describe('periodic autosave gate (#471)', () => {
     await run('git', ['add', '-A'], { cwd: repoRoot });
     await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
-    manager = new RunManager(store, repoRoot) as unknown as TimerSeam;
+    managerInstance = new RunManager(store, repoRoot);
+    manager = managerInstance as unknown as TimerSeam;
     const record = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
     runId = record.id;
     worktreePath = (await createWorktree(repoRoot, runId, 'main')).path;
   });
 
   afterAll(() => {
+    managerInstance.dispose();
+    cleanupRunStores();
     store.flush();
     rmSync(repoRoot, { recursive: true, force: true });
   });

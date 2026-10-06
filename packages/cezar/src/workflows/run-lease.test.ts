@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { RunStore } from '../runs/store.ts';
+import { cleanupRunStores } from '../test-utils/run-store-cleanup.ts';
 import { RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
 
@@ -169,6 +170,7 @@ afterEach(async () => {
       // subscription and its semaphore membership alive for the rest of the suite.
       fixture.manager.dispose();
     }
+    cleanupRunStores();
     // Reached only once nothing is still writing into the fixture. A failed
     // drain therefore leaks a temp directory, which is strictly better than
     // deleting one out from under a live run — the failure this file is fixing.
