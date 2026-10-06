@@ -12,9 +12,10 @@ left, the file's content on the right, syntax-colored through the existing Shiki
 rendered as formatted Markdown for `.md`, with an instant filter box over the tree. Two additive
 routes back it: `GET /repo/tree` (the whole path index in one bounded response, from
 `git ls-files`) and `GET /repo/files?path=` (one file, reusing `readWorktreePath`). Because the
-index is git's own view of the repository, `node_modules` and `.env` never appear — and the
-content route refuses any path the index does not contain, which is what keeps an ignored secret
-unreadable through a route that would otherwise happily serve it.
+index is git's own view of the repository, ignored **untracked** `node_modules` and `.env` files do
+not appear; tracked copies remain visible by design. The content route refuses any path the index
+does not contain, which keeps an ignored untracked secret unreadable through a route that would
+otherwise happily serve it.
 
 Implementation follows separately; this document is the design.
 
@@ -32,7 +33,7 @@ spec's PR before implementation starts.
 | Q4 | Does the tree show `.gitignore`d files? | **No.** The tree is exactly what the index lists: tracked, plus untracked-but-not-ignored. | Keeps tree and search showing the same set (an index-backed search cannot find what a wider tree displays), keeps build output and `node_modules` out of a repository browser, and is what "browse the repo" means in GitHub, Gitea and VS Code's source-control view. A `?showIgnored=1` toggle is a later, additive change if anyone misses it. |
 | Q5 | Does `GET /repo/files` serve any path inside the root, or only indexed ones? | **Only paths present in the index**, re-derived per request; anything else is `409`. | `readWorktreePath` guards against escaping the root — it knows nothing about `.gitignore`, so without this check `?path=.env` would be served verbatim. AGENTS.md § Zero config states a repository `.env` is never auto-loaded; making it one fetch away from any cockpit client would walk that back. The check is one set membership. |
 | Q6 | Search matches paths, or file contents too? | **Paths only.** | Content search is a grep surface with its own cost, cancellation and abuse profile, and the brief asked to "search in that file tree". Deferred to its own spec, where it belongs. |
-| Q7 | Gate the new routes behind hosted mode (`CEZ_REMOTE`)? | **No new gate**, consistent with the existing `/repo/*` family. | The index holds tracked and not-ignored files — content already in the git remote — and `GET /repo/changes` already serves the working tree's full diffs, untracked files included, with no gate. The new routes expose no category the `/repo` family does not already expose, and Q5 is the control that keeps ignored secrets out. Reversible: adding a gate later is additive. |
+| Q7 | Gate the new routes behind hosted mode (`CEZ_REMOTE`)? | **No new route-specific gate**, consistent with the existing `/repo/*` family. | The index holds tracked and not-ignored files — content already in the git remote — and `GET /repo/changes` already serves the working tree's full diffs, untracked files included, with no route-specific gate. The new routes inherit the server-wide `/api/*` request-origin guard, remain same-origin/non-CORS, and in hosted mode rely on the deployment's reverse-proxy TLS/auth perimeter. Q5 is the control that keeps ignored untracked secrets out. Reversible: adding a narrower gate later is additive. |
 | Q8 | `.md` default view: rendered or raw? | **Rendered**, with a toggle to raw source that persists for the session. | The brief asks for "MD file formatting" by name. Raw stays one click away for anyone reading a spec's table syntax. |
 | Q9 | Virtualize the tree? | **No.** Cap rendered search results instead. | Folders start closed, so rendered rows stay in the dozens however large the index is; the one unbounded case is a filter matching thousands of paths, and a result cap with an honest "N more" answers it without taking on `virtua` and the measurement cache it needs. `diff-scroll.ts`'s own doctrine is not to virtualize prematurely. |
 
@@ -136,7 +137,8 @@ HTTP API — a loose statement vanishes from `AppType` and the typed client stop
   matching `/repo/changes`. Then a new `listRepoPaths(root)` in
   `packages/cezar/src/server/git.ts` (beside `getStatus`/`getBranches`, which already own the
   `git` subprocess idiom) runs `git ls-files -z --cached --others --exclude-standard`, splits on
-  NUL, sorts, and caps.
+  NUL, sorts, and caps both the number of entries and the captured bytes. The helper must return a
+  bounded failure rather than a partial tree when the byte cap is exceeded.
 - `GET /repo/files?path=` → the same handler shape as `/runs/:id/files` with the run lookup
   replaced by `getRepoInfo`, plus the Q5 membership check before `readWorktreePath`.
 
@@ -146,10 +148,14 @@ re-containment for symlinked intermediate directories, plus `FILE_CONTENT_CAP` (
 `sniffBinary` NUL check. Hand-rolling a second resolver is the failure mode this reuse exists to
 prevent.
 
-**Contract** (`packages/contract/src/repo.ts`) — `repoTreeSchema` is new;
-`worktreeEntrySchema` (`:133`) already describes exactly what `/repo/files` returns and is reused
-verbatim. Both request and response shapes are zod schemas with types inferred via `z.infer`, and
-the query string is validated as middleware through `queryZodValidator`, per AGENTS.md.
+**Contract** (`packages/contract/src/repo.ts`) — `repoTreeSchema` is new; `repoFileQuerySchema`
+is also new and is the single source for the file route's request shape:
+`{path: z.string().min(1), raw: z.enum(['0', '1']).optional()}`. Missing/invalid query values are
+rejected by `queryZodValidator` before the handler. `worktreeEntrySchema` (`:133`) describes the
+JSON representation and is reused verbatim; the opt-in `raw=1` image representation is explicitly
+bytes with the existing response headers, not JSON and not passed through `unwrap`. Both JSON
+request/response shapes are zod schemas with types inferred via `z.infer`, and the implementation
+must add route-parity tests for the JSON branch plus a raw-image response test.
 
 **Client** — `getRepoTree()` and `getRepoFile(path)` in `packages/web/src/api/client.ts` beside
 `getRepoChanges` (`:738`), plus `repoFileRawUrl(path)` mirroring `runFileRawUrl` (`:1111`) for
@@ -205,7 +211,8 @@ every indexed path is a file. Behavior mirrors `/runs/:id/files` exactly, includ
 
 - `200` `{ type: 'file', path, size, binary, tooLarge, content? }` — `content` absent exactly when
   `binary` or `tooLarge`, as the schema already documents.
-- `200` raw image bytes for `?raw=1` on an image extension within the cap.
+- `200` raw image bytes for `?raw=1` on an image extension within the cap; this is the documented
+  non-JSON branch of the mixed-format route, selected only by the validated `raw` query value.
 - `409 { error: 'not a git repository' }`.
 - `409 { error: 'path is not in the repository index: <path>' }` — **the Q5 guard**: the path is
   absent from (or excluded by) `git ls-files`. Deliberately the same wording for "ignored",
@@ -213,6 +220,7 @@ every indexed path is a file. Behavior mirrors `/runs/:id/files` exactly, includ
   ignored file is present on disk.
 - `409 { error: … }` — `readWorktreePath`'s own refusals (symlink, `.git`, escaping, NUL), in the
   server's existing words.
+- `400` for a missing/empty `path` or a `raw` value other than `0`/`1`, from query middleware.
 - `409` for `?raw=1` on a non-image or an over-cap file, reusing the current message shapes.
 
 Both routes are **additive**: no existing route, field, status or message changes. `GET` stays a
@@ -335,12 +343,16 @@ Each step leaves the application working and is verifiable by a test.
 3. **`GET /repo/tree`.** Chain it into `repoRoutes`; `getRepoInfo` → 409 wording identical to
    `/repo/changes`. *Test:* 200 shape, 409 outside a repo, 409 on a failing `ls-files`, and a
    `contract-parity` assertion that the route's inferred type matches `repoTreeSchema`.
-4. **`GET /repo/files`.** Chain it in with `queryZodValidator` middleware; derive the index,
-   reject non-members with the Q5 message, then `readWorktreePath`; mirror the raw-image
-   negotiation and headers from `/runs/:id/files`. *Test (the security-critical one, written
-   first):* `.env` present on disk and `.gitignore`d → 409; `../outside` → 409; a symlink → 409;
-   `.git/config` → 409; a tracked text file → content; a tracked PNG with `?raw=1` → bytes with
-   `nosniff` and the sandbox CSP; an over-cap file → `tooLarge`, no `content`.
+4. **`GET /repo/files`.** Chain it in with the new `repoFileQuerySchema` through
+   `queryZodValidator`; derive the index, reject non-members with the Q5 message, then
+   `readWorktreePath`; mirror the raw-image negotiation and headers from `/runs/:id/files`. The
+   helper uses an explicit byte cap below its `execFile` `maxBuffer` (or a streaming equivalent),
+   so the 20,000-entry count cap is not the only bound. *Test (the security-critical one, written
+   first):* an ignored untracked `.env` present on disk → 409; a tracked `.env` is served because
+   it is in the index; `../outside` → 409; a symlink → 409; `.git/config` → 409; a tracked text
+   file → content; a tracked PNG with `?raw=1` → bytes with `nosniff` and the sandbox CSP; an
+   over-cap file → `tooLarge`, no `content`; local and hosted requests retain the server-wide
+   origin/auth boundary and the route is not CORS-enabled.
 5. **Client + hooks.** `getRepoTree`, `getRepoFile`, `repoFileRawUrl` in `client.ts`;
    `useRepoTree`, `useRepoFile` in `queries.ts`, both `retry: false`. *Test:* the existing
    api-client suites; a query test asserting no retry on 409.
