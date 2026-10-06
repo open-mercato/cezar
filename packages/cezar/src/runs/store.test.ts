@@ -3,27 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore } from './store.ts';
+import { cleanupRunStores } from '../test-utils/run-store-cleanup.ts';
 
 import type { RunRecord } from './store.ts';
 
-/** Every store a case opens schedules its debounced runs.json write 300ms out, and every case
- *  removes its data dir in `afterEach` — so the timer fires into a deleted directory and logs
- *  "failed to save runs.json" after the case settled. A log landing while the worker tears down
- *  fails the whole run (`EnvironmentTeardownError: Closing rpc while "onUserConsoleLog" was
- *  pending`, the 0.13.0 release run). Cancel what is still pending once each case ends. */
-const openedStores = new Set<RunStore>();
-const openStore = RunStore.open.bind(RunStore);
-RunStore.open = (dataDir, opts) => {
-  const store = openStore(dataDir, opts);
-  openedStores.add(store);
-  return store;
-};
-afterEach(() => {
-  for (const store of openedStores) {
-    clearTimeout((store as unknown as { saveTimer: NodeJS.Timeout | null }).saveTimer ?? undefined);
-  }
-  openedStores.clear();
-});
+afterEach(cleanupRunStores);
 
 /** A minimal pre-#389 record, exactly as an old runs.json holds it — no
  *  titleSummary, no diffStat. Loading it must keep working (additive proof). */

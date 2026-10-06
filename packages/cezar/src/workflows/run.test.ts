@@ -14,6 +14,7 @@ import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import type { UiEvent } from '../core/ui-events.ts';
+import { cleanupRunStores } from '../test-utils/run-store-cleanup.ts';
 import { ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import { createWorktree } from '../git-worktree.ts';
 import { RunStore, type RunRecord, type StepState } from '../runs/store.ts';
@@ -90,7 +91,7 @@ describe('RunManager directional usage accounting', () => {
 
   afterEach(() => {
     manager.dispose(); // see DISPOSE at the top of this file
-    store.flush();
+    cleanupRunStores();
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
@@ -245,7 +246,7 @@ it('parallel variants ignore a worktree opt-out and retain isolated mode', () =>
 
     expect(records.map((record) => record.worktree)).toEqual([undefined, undefined]);
   } finally {
-    store.flush();
+    cleanupRunStores();
     rmSync(repoRoot, { recursive: true, force: true });
   }
 });
@@ -283,7 +284,7 @@ describe('RunManager.recordTurnEnd', () => {
 
   afterAll(() => {
     manager.dispose(); // see DISPOSE at the top of this file
-    store.flush();
+    cleanupRunStores();
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
@@ -448,7 +449,7 @@ describe('RunManager.continueRun override', () => {
 
   afterEach(() => {
     manager.dispose(); // see DISPOSE at the top of this file
-    store.flush();
+    cleanupRunStores();
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
@@ -701,7 +702,7 @@ describe('RunManager.settleSuccess — optional review gate', () => {
   });
 
   afterAll(() => {
-    store.flush();
+    cleanupRunStores();
     rmSync(repoRoot, { recursive: true, force: true });
     if (savedGate === undefined) delete process.env.CEZ_REVIEW_GATE;
     else process.env.CEZ_REVIEW_GATE = savedGate;
@@ -807,7 +808,7 @@ describe('a chain of 2 selected skills runs BOTH steps, in order (#410)', () => 
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
-    store.flush();
+    cleanupRunStores();
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
@@ -897,7 +898,7 @@ describe('a single agent step plus a check step gets NO chain note (#410)', () =
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
-    store.flush();
+    cleanupRunStores();
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
@@ -978,7 +979,7 @@ describe('CEZ:MONITORING parks as running/monitoring, not waiting (#490)', () =>
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
-    store.flush();
+    cleanupRunStores();
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
@@ -1196,7 +1197,7 @@ describe('a turn that parks on its sub-agents while declaring its PR is not "nee
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
-    store.flush();
+    cleanupRunStores();
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
@@ -1320,7 +1321,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
-    store.flush();
+    cleanupRunStores();
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
@@ -2153,7 +2154,7 @@ describe('recover() over a mid-workflow ask park (#917)', () => {
   });
 
   afterEach(() => {
-    store.flush();
+    cleanupRunStores();
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
@@ -2833,7 +2834,7 @@ describe('queued stacking reaches the backend (#472)', () => {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
-    store.flush();
+    cleanupRunStores();
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
@@ -2957,7 +2958,7 @@ describe('native Codex requestUserInput parks and resumes the run (#565)', () =>
     manager.dispose(); // see DISPOSE at the top of this file — after the cancel it enables
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN; else process.env.CEZ_DRY_RUN = savedDryRun;
     if (savedCodexBin === undefined) delete process.env.CEZ_CODEX_BIN; else process.env.CEZ_CODEX_BIN = savedCodexBin;
-    store.flush();
+    cleanupRunStores();
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
@@ -3025,7 +3026,7 @@ describe('a context-compaction boundary keeps the run working (#955)', () => {
     manager.dispose(); // see DISPOSE at the top of this file — after the cancel it enables
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN; else process.env.CEZ_DRY_RUN = savedDryRun;
     if (savedCodexBin === undefined) delete process.env.CEZ_CODEX_BIN; else process.env.CEZ_CODEX_BIN = savedCodexBin;
-    store.flush();
+    cleanupRunStores();
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
@@ -3221,7 +3222,7 @@ describe('registry /skill expansion survives a continuation (#811)', () => {
     manager.dispose(); // see DISPOSE at the top of this file — after the cancel it enables
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
-    store.flush();
+    cleanupRunStores();
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
@@ -3381,7 +3382,7 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
     if (runId) manager.cancel(runId);
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
-    store.flush();
+    cleanupRunStores();
     rmSync(repoRoot, { recursive: true, force: true });
   });
 

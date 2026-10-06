@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore, type RunRecord } from '../runs/store.ts';
+import { cleanupRunStores } from '../test-utils/run-store-cleanup.ts';
 import { RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
@@ -45,7 +46,7 @@ describe('CEZ:MONITORING on a non-final workflow step (#1076)', () => {
     manager.dispose();
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
-    store.flush();
+    cleanupRunStores();
     rmSync(repoRoot, { recursive: true, force: true });
   });
 

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore, type RunRecord } from '../runs/store.ts';
+import { cleanupRunStores } from '../test-utils/run-store-cleanup.ts';
 import { RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
 
@@ -57,7 +58,7 @@ describe('a parked in-place run releases the working-tree lease', () => {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
-    store.flush();
+    cleanupRunStores();
     rmSync(repoRoot, { recursive: true, force: true });
   });
 

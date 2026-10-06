@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
 import { HANDOFF_INSTRUCTIONS, HANDOFF_ONLY_INSTRUCTIONS } from '../handoff.ts';
 import { RunStore } from '../runs/store.ts';
+import { cleanupRunStores } from '../test-utils/run-store-cleanup.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import type { WorkflowDef } from './types.ts';
 import {
@@ -175,7 +176,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
-    store.flush();
+    cleanupRunStores();
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
@@ -579,7 +580,7 @@ describe('the global follow-up gate (dry run)', () => {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
-    store.flush();
+    cleanupRunStores();
     rmSync(repoRoot, { recursive: true, force: true });
   });
 

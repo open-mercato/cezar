@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore } from '../runs/store.ts';
+import { cleanupRunStores } from '../test-utils/run-store-cleanup.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import {
   AUTO_RESUME_GRACE_MS,
@@ -73,7 +74,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
-    store.flush();
+    cleanupRunStores();
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
