@@ -11,24 +11,25 @@
  * (`baseContext`), whatever the boot registered (`registerTelemetryContext`: run counts, install
  * kind…) and the caller's specifics — so a report is debuggable without a second search.
  *
- * Anonymous: the only identity is a random install id in `~/.cezar/telemetry-id`
+ * Anonymous: the only identity is `cezarId`, a random UUIDv7 in `~/.cezar/config.json`
  * (written, never required — a read-only home falls back to a per-process id), and
  * the user's home directory is scrubbed from every error message and stack.
  */
-import { randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { cezarHomeDir } from './paths.ts';
+import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from './workspace/config.ts';
 
-export const DEFAULT_TELEMETRY_URL = 'https://telemetry-ingest.patzick.workers.dev';
+// TEMPORARY (local ingest testing): restore 'https://telemetry-ingest.patzick.workers.dev' before shipping.
+export const DEFAULT_TELEMETRY_URL = 'http://localhost:8787';
 const SERVICE = 'cezar';
 const TIMEOUT_MS = 3_000;
 /** At most one report per minute for the same error (the worker's "don't flood" rule). */
 const ERROR_THROTTLE_MS = 60_000;
 
 let version = '0.0.0';
-let installId: string | undefined;
+/** One lookup per `~/.cezar` (keyed, so a `CEZ_HOME` switch never reuses another home's id). */
+const cezarIds = new Map<string, Promise<string>>();
 const pending = new Set<Promise<unknown>>();
 const lastReported = new Map<string, number>();
 
@@ -51,31 +52,57 @@ function platform(): string {
   return process.platform;
 }
 
+/** How this cezar was launched — the worker's `runtime` field on every event and report: `app`
+ *  when the Tauri desktop shell spawned it (the shell sets `CEZ_DESKTOP=1` on its sidecar), `cli`
+ *  for every npm/npx/terminal launch. A browser tab against the desktop's server is still `app`:
+ *  this names the process, the page's own surface is `client.surface` on error reports. */
+export function telemetryRuntime(): 'app' | 'cli' {
+  return process.env.CEZ_DESKTOP === '1' ? 'app' : 'cli';
+}
+
 /** Set once at boot; every event carries it. */
 export function initTelemetry(opts: { version: string }): void {
   version = opts.version;
 }
 
-function getInstallId(): string {
-  if (installId) return installId;
-  const file = join(cezarHomeDir(), 'telemetry-id');
-  try {
-    const existing = readFileSync(file, 'utf8').trim();
-    if (existing) return (installId = existing);
-  } catch {
-    // first run — generate below
-  }
-  installId = randomUUID();
-  try {
-    mkdirSync(cezarHomeDir(), { recursive: true, mode: 0o700 });
-    writeFileSync(file, `${installId}\n`, { mode: 0o600 });
-  } catch {
-    // read-only home: a per-process id is still anonymous, just not stable
-  }
-  return installId;
+/** RFC 9562 UUIDv7: 48-bit Unix-ms timestamp, then random bits — sortable by creation time. */
+export function uuidv7(now: number = Date.now()): string {
+  const b = randomBytes(16);
+  b.writeUIntBE(now, 0, 6);
+  b[6] = (b[6]! & 0x0f) | 0x70;
+  b[8] = (b[8]! & 0x3f) | 0x80;
+  const h = b.toString('hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
 
-function post(path: string, body: Record<string, unknown>): Promise<unknown> {
+/** This machine's `cezarId`, created on first use. The merge-write keeps an id another process
+ *  wrote first; a read-only home degrades to a per-process id. */
+function cezarId(): Promise<string> {
+  const home = cezarHomeDir();
+  const cached = cezarIds.get(home);
+  if (cached) return cached;
+  const lookup = (async () => {
+    const fresh = uuidv7();
+    try {
+      const written = await mergeWriteWorkspaceConfig((config) => {
+        config.cezarId ??= fresh;
+      });
+      return written.cezarId ?? fresh;
+    } catch {
+      return fresh;
+    }
+  })();
+  cezarIds.set(home, lookup);
+  return lookup;
+}
+
+/** Track a send (including the id lookup before it) so `flushTelemetry` can wait for it. */
+function inFlight(p: Promise<unknown>): void {
+  const tracked = p.catch(() => undefined).finally(() => pending.delete(tracked));
+  pending.add(tracked);
+}
+
+function post(path: string, body: Record<string, unknown>): Promise<boolean> {
   const p = fetch(`${telemetryUrl()}${path}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -86,9 +113,11 @@ function post(path: string, body: Record<string, unknown>): Promise<unknown> {
       if (process.env.CEZ_TELEMETRY_DEBUG === '1') {
         console.log(`  [telemetry] ${path} → ${res.status} ${await res.text().catch(() => '')}\n    ${JSON.stringify(body)}`);
       }
+      return res.ok;
     })
     .catch((err: unknown) => {
       if (process.env.CEZ_TELEMETRY_DEBUG === '1') console.log(`  [telemetry] ${path} failed: ${String(err)}`);
+      return false;
     })
     .finally(() => pending.delete(p));
   pending.add(p);
@@ -99,13 +128,33 @@ function post(path: string, body: Record<string, unknown>): Promise<unknown> {
 export function track(event: string, extra: Record<string, string | number | boolean | undefined> = {}): void {
   if (!telemetryEnabled()) return;
   if (!/^[a-z][a-z0-9_]{0,47}$/.test(event)) return;
-  void post(`/track/${event}`, {
-    service: SERVICE,
-    version,
-    platform: platform(),
-    indexKey: getInstallId(),
-    ...extra,
-  });
+  const body = { service: SERVICE, version, platform: platform(), runtime: telemetryRuntime(), ...extra };
+  inFlight(cezarId().then((indexKey) => post(`/track/${event}`, { ...body, indexKey })));
+}
+
+/** Once per UTC day: `cezar_run`, or `telemetry_opt_out` (no id) when opted out. */
+export async function sendDailyPing(): Promise<void> {
+  const env = process.env;
+  const optedOut = env.CEZ_TELEMETRY === '0' || env.DO_NOT_TRACK === '1';
+  const quiet = env.CEZ_TELEMETRY !== '1' && Boolean(env.VITEST || env.NODE_TEST_CONTEXT || env.CI || env.CEZ_DRY_RUN === '1');
+  if (quiet) return;
+  const today = new Date().toISOString().slice(0, 10);
+  if ((await loadWorkspaceConfig()).lastActiveOn === today) return;
+  const base = { service: SERVICE, version, platform: platform(), runtime: telemetryRuntime() };
+  const ok = optedOut
+    ? await post('/track/telemetry_opt_out', base)
+    : await post('/track/cezar_run', { ...base, indexKey: await cezarId() });
+  if (ok) {
+    await mergeWriteWorkspaceConfig((config) => {
+      config.lastActiveOn = today;
+    }).catch(() => undefined);
+  }
+}
+
+/** The daily ping at boot, then hourly so a cockpit left running crosses midnight. */
+export function startDailyPing(): void {
+  void sendDailyPing();
+  setInterval(() => void sendDailyPing(), 60 * 60 * 1000).unref();
 }
 
 /** Replace the home directory (it carries the OS username) with `~`. */
@@ -136,7 +185,6 @@ function flag(name: string): boolean {
 function baseContext(): Context {
   const mem = process.memoryUsage();
   return {
-    'app.surface': flag('CEZ_DESKTOP') ? 'desktop' : 'cli',
     'app.supervised': flag('CEZ_SUPERVISED'),
     'app.remote': flag('CEZ_REMOTE'),
     'app.dry_run': flag('CEZ_DRY_RUN'),
@@ -196,22 +244,24 @@ export function reportError(
         flat[k] = typeof v === 'string' ? scrub(v).slice(0, 1024) : v;
       }
     }
-    void post('/track/error', {
+    const occurredAt = new Date().toISOString();
+    inFlight(cezarId().then((indexKey) => post('/track/error', {
       service: SERVICE,
       version,
       platform: platform(),
-      occurredAt: new Date().toISOString(),
+      runtime: telemetryRuntime(),
+      occurredAt,
       error: {
         type,
         message,
         ...(code ? { code: code.slice(0, 128) } : {}),
         ...(err.stack ? { stack: scrub(err.stack).slice(0, 16_384) } : {}),
       },
-      user: { id: getInstallId() },
+      user: { id: indexKey },
       featureFlags: featureFlags(),
       context: flat,
       ...(opts.fingerprint ? { fingerprint: opts.fingerprint.slice(0, 128) } : {}),
-    });
+    })));
   } catch {
     // reporting must never throw
   }

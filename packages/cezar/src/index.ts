@@ -40,7 +40,7 @@ import { initWorkspace } from './workspace/boot.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 import { runProjectsCommand } from './workspace/projects-cli.ts';
 import { WorkspaceSemaphore } from './workspace/semaphore.ts';
-import { flushTelemetry, initTelemetry, registerTelemetryContext, reportError, track } from './telemetry.ts';
+import { flushTelemetry, initTelemetry, registerTelemetryContext, reportError, startDailyPing, track } from './telemetry.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
 
@@ -255,6 +255,7 @@ async function serveCommand(
     reportError(err, { source: 'process', handler: origin }, { code: 'uncaught_exception' }),
   );
   track('app_start');
+  startDailyPing();
 
   const checks = await detectEnvironment();
   const repo = await getRepoInfo(repoRoot);
