@@ -2,9 +2,9 @@
 
 ## Result
 
-⚠️ Not exercised in a live browser. The configured `agent-browser` provider installed its
-Chrome binary, but launch failed because the host lacks `libnspr4.so`; the provider's
-`install --with-deps` fallback requires passwordless sudo, which is unavailable.
+⚠️ Not passed in a live browser. A retry used staged user-space libraries and a healthy QA app,
+but Chrome exited before launch because the task TMP path made `SingletonSocket` too long. No live
+UI result is claimed.
 
 ## Automated evidence
 
@@ -22,4 +22,3 @@ Chrome binary, but launch failed because the host lacks `libnspr4.so`; the provi
 3. Verify Memory & instructions contains the Pi-owned global `AGENTS.md` and shared project
    `AGENTS.md`; verify no auth/models/MCP files appear.
 4. Repeat in hosted mode and verify the read-only banner and no Save action.
-
