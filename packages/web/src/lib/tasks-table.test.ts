@@ -190,6 +190,8 @@ describe('finishedRunCount', () => {
         run({ status: 'waiting' }),
         run({ status: 'running' }),
         run({ status: 'queued' }),
+        // A closed session's unanswered question is a gate too.
+        run({ status: 'failed', awaitingAnswerSince: '2026-10-05T10:00:00.000Z' }),
         // Already archived — nothing to archive again.
         run({ status: 'done', archived: true }),
       ]),

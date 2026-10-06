@@ -5,6 +5,7 @@ import type {
   RunStatus,
 } from '@open-mercato/cezar-api-client'
 import { groupTitle, runTitle, type ListView } from '@/lib/task-groups'
+import { isAwaitingAnswer } from '@/lib/attention'
 
 /**
  * The pure half of the Tasks table (the `/` overview): search, the header's archive count, the
@@ -108,7 +109,8 @@ export function filterRuns(runs: readonly RunRecord[], query: string): RunRecord
 /** How many active runs "Archive finished" would sweep. The button only exists when this is
  *  nonzero — a broom over an empty floor is noise (legacy showed the same count-gated button). */
 export function finishedRunCount(runs: readonly RunRecord[]): number {
-  return runs.filter((run) => !run.archived && FINISHED_STATUSES.has(run.status)).length
+  // An unanswered question is a gate like `review`; the server's sweep skips it, so the count does.
+  return runs.filter((run) => !run.archived && FINISHED_STATUSES.has(run.status) && !isAwaitingAnswer(run)).length
 }
 
 /** A git remote as a GitHub web root (`https://github.com/owner/repo`) — the caller passes the

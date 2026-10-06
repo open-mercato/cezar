@@ -27,6 +27,12 @@ describe('reported lifetime costs', () => {
       costUsd: 0,
     });
     expect(row('missing', { tokensUsed: 999 })).not.toHaveProperty('inputTokens');
+    // A failed run still awaiting an answer keeps that on its cost row, so the dashboard's live
+    // overlay — which reconciles from these rows — does not turn the question into an outcome.
+    expect(
+      row('asked', { status: 'failed', awaitingAnswerSince: '2026-09-19T11:00:00.000Z' }),
+    ).toMatchObject({ status: 'failed', awaitingAnswerSince: '2026-09-19T11:00:00.000Z' });
+    expect(row('plain')).not.toHaveProperty('awaitingAnswerSince');
     expect(row('positive', { costUsd: 2, steps: [{ costUsd: 0 }] }).costUsd).toBe(2);
     expect(row('historical', { steps: [{ costUsd: 1 }, { costUsd: 2 }] }).costUsd).toBe(3);
     expect(

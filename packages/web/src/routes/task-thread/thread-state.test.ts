@@ -652,6 +652,16 @@ describe('threadFooter', () => {
       expect(threadFooter(status, error)).toEqual(expected)
     })
   }
+
+  it('a failed run awaiting an answer says so instead of announcing a failure', () => {
+    expect(threadFooter('failed', 'the session closed before the question was answered', true)).toEqual({
+      state: 'closed',
+      tone: 'dim',
+      label: 'Session closed — waiting for your answer, which reopens it',
+    })
+    // The flag means nothing on any other status.
+    expect(threadFooter('done', undefined, true)).toEqual({ state: 'closed', tone: 'dim', label: 'Session closed' })
+  })
 })
 
 describe('threadFilePaths — the @ mention source (today: what the tools touched)', () => {

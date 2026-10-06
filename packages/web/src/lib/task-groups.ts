@@ -1,4 +1,5 @@
 import type { RunRecord } from '@open-mercato/cezar-api-client'
+import { isAwaitingAnswer, isNeedsYouStatus } from './attention'
 
 /**
  * How the task list is bucketed, sorted and collapsed — the pure half of the sidebar quick-list
@@ -50,7 +51,9 @@ const SCHEDULED_WEIGHT = 3
 const statusWeight = (run: RunRecord): number =>
   run.status === 'failed' && run.autoResumeAt !== undefined
     ? SCHEDULED_WEIGHT
-    : STATUS_ORDER[run.status] ?? 9
+    : isAwaitingAnswer(run)
+      ? STATUS_ORDER.waiting ?? 0
+      : STATUS_ORDER[run.status] ?? 9
 
 /** One row of the quick-list: either a single run, or a collapsed variant group (spec 010). */
 export type QuickListRow =
@@ -91,7 +94,7 @@ export interface QuickListBucket {
 export function bucketOf(run: RunRecord, view: ListView): BucketLabel {
   if (view === 'archived') return 'Archived'
   if (run.pinned) return 'Pinned'
-  if (run.status === 'waiting' || run.status === 'review') return 'Needs you'
+  if (isNeedsYouStatus(run)) return 'Needs you'
   if (run.status === 'running' || run.status === 'queued') return 'Working'
   // A run waiting out a provider usage limit is `failed` on the record but has an appointment to
   // resume itself (spec 2026-08-03-auto-resume-after-usage-limit) — it belongs with the work in
@@ -325,7 +328,7 @@ export function listCounts(runs: readonly RunRecord[]): {
       continue
     }
     active += 1
-    if (run.status === 'waiting' || run.status === 'review') waiting += 1
+    if (isNeedsYouStatus(run)) waiting += 1
   }
   return { active, archived, waiting }
 }

@@ -22,7 +22,7 @@ const UNREAD_ELIGIBLE: readonly RunRecord['status'][] = ['done', 'failed']
  *  record can call it without a full `RunRecord`. */
 export type ReadStateInput = Pick<
   RunRecord,
-  'status' | 'finishedAt' | 'seenAt' | 'archived' | 'autoResumeAt'
+  'status' | 'finishedAt' | 'seenAt' | 'archived' | 'autoResumeAt' | 'awaitingAnswerSince'
 >
 
 /**
@@ -36,6 +36,15 @@ export type ReadStateInput = Pick<
  */
 function isScheduledResume(run: ReadStateInput): boolean {
   return run.status === 'failed' && run.autoResumeAt !== undefined
+}
+
+/**
+ * A run whose session closed on an unanswered `CEZ:ASK`. Like a scheduled resume it is `failed` on
+ * the record without being a done item: it sits under "needs you" (`lib/attention.ts`), so the
+ * question is its signal — never an unread outcome, never a dimmed read row.
+ */
+function isAwaitingAnswer(run: ReadStateInput): boolean {
+  return run.status === 'failed' && run.awaitingAnswerSince !== undefined
 }
 
 /** A finished run — done, failed, or cancelled. These are the rows the read/unread treatment
@@ -63,7 +72,7 @@ export function isDoneItem(status: RunRecord['status']): boolean {
  */
 export function canBeUnread(run: ReadStateInput): boolean {
   if (run.archived) return false
-  if (isScheduledResume(run)) return false
+  if (isScheduledResume(run) || isAwaitingAnswer(run)) return false
   if (!UNREAD_ELIGIBLE.includes(run.status)) return false
   return run.finishedAt !== undefined
 }
@@ -96,7 +105,7 @@ export function isUnread(run: ReadStateInput): boolean {
  * their live attention state, not a past outcome — so they are excluded here.
  */
 export function isReadDoneItem(run: ReadStateInput): boolean {
-  if (isScheduledResume(run)) return false
+  if (isScheduledResume(run) || isAwaitingAnswer(run)) return false
   return isDoneItem(run.status) && !isUnread(run)
 }
 
