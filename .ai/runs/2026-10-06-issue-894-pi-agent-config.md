@@ -44,13 +44,13 @@ Risks: Pi's config directory relocation is documented, but credentials and other
 
 ### Phase 1: Catalog and resolution
 
-- [x] 1.1 Add Pi's resolved home path and settings entries (`settings.json`, JSON/JSONC, user and project), with documented precedence and safe labels. — pending code commit
-- [x] 1.2 Add regression tests for default/override paths, catalog IDs/ownership, absent files, and credential/MCP exclusion. — pending code commit
+- [x] 1.1 Add Pi's resolved home path and settings entries (`settings.json`, JSON/JSONC, user and project), with documented precedence and safe labels. — 7a6dc317
+- [x] 1.2 Add regression tests for default/override paths, catalog IDs/ownership, absent files, and credential/MCP exclusion. — 7a6dc317
 
 ### Phase 2: Settings UI
 
-- [x] 2.1 Add the Pi descriptor with Settings and Memory & instructions groups, and update descriptor tests. — pending code commit
-- [x] 2.2 Add Agent Config section coverage for the Pi tab, grouped files, absent files, and hosted read-only rendering. — pending code commit
+- [x] 2.1 Add the Pi descriptor with Settings and Memory & instructions groups, and update descriptor tests. — 7a6dc317
+- [x] 2.2 Add Agent Config section coverage for the Pi tab, grouped files, absent files, and hosted read-only rendering. — 7a6dc317
 
 ### Phase 3: Verification and handoff
 
