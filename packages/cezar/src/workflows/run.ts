@@ -188,6 +188,10 @@ export function turnEndMarkerText(turnText: string): string {
 export function endsWithMonitoringMarker(turnText: string): boolean {
   return MONITORING_MARKER_RE.test(turnEndMarkerText(turnText));
 }
+/** Strict superset of the historical DONE suffix check, accepting trailing task references. */
+export function endsWithDoneMarker(turnText: string): boolean {
+  return DONE_MARKER_RE.test(turnEndMarkerText(turnText));
+}
 /**
  * The follow-up cezar sends when a turn ended on nothing but the backend compacting its own
  * context (#955). Not a user message: it never enters the transcript as one, and it is written
@@ -294,7 +298,7 @@ type AskTurnOutcome = {
  * is interactive); when false there is no marker to look for. */
 function resolveAskTurn(turnText: string, enabled: boolean): AskTurnOutcome {
   if (!enabled) return { ask: null, notes: [] };
-  const result = parseAskMarkerResult(turnText);
+  const result = parseAskMarkerResult(turnEndMarkerText(turnText));
   const notes: AskTurnOutcome['notes'] = [];
   const rejection = askMarkerRejection(result);
   if (rejection) notes.push({ message: rejection, tone: 'danger' });
@@ -316,7 +320,6 @@ function resolveAskTurn(turnText: string, enabled: boolean): AskTurnOutcome {
  * question the user needs to see, not an invitation to keep going.
  */
 function markerlessTurn(turnText: string): boolean {
-  const trimmed = turnText.trimEnd();
   // Through `turnEndMarkerText` (#933), the same reading the monitoring decision uses: a turn
   // that ends `CEZ:MONITORING` followed by a `CEZ:PR=` line spoke, and must not be continued.
   const markerText = turnEndMarkerText(turnText);
@@ -326,7 +329,7 @@ function markerlessTurn(turnText: string): boolean {
   // see — would read as ordinary prose and authorize a continuation. The parser's looser
   // `none` test is the right question here, and its known over-reach (an earlier PROSE mention
   // of the keyword also counts as spoken) errs towards parking, which is today's behavior.
-  return parseAskMarkerResult(trimmed).kind === 'none';
+  return parseAskMarkerResult(markerText).kind === 'none';
 }
 /** Periodic "cezar autosave" commit in the task worktree (spec 006). */
 export const AUTOSAVE_INTERVAL_MS = 90_000;
@@ -1959,10 +1962,16 @@ export class RunManager {
    * working. Delivered into the still-open session so the run is working again, not parking —
    * a task that never parks still hears its parent within one turn. Not on a turn that asked: a
    * run parking on the Guard waits for the human, and a message must not stand in for the answer.
+   *
+   * The ask is read through `turnEndMarkerText` (#997), the same normalization `resolveAskTurn`
+   * uses: this guard runs BEFORE the ask is resolved, and a delivery sets `rePrompted` — which
+   * auto-continues the turn and suppresses the ask card entirely. Reading the raw text here
+   * would let a question with a trailing `CEZ:PR=` line be answered by a sibling's message
+   * instead of by the human, which is exactly what this guard exists to prevent.
    */
   private deliverOwnInbox(runId: string, state: ActiveRun, stepId: string, turnText: string): boolean {
     if (!state.autonomous || state.cancelled || !state.session?.open) return false;
-    if (parseAskMarker(turnText) !== null) return false;
+    if (parseAskMarker(turnEndMarkerText(turnText)) !== null) return false;
     if ((state.autoContinues ?? 0) >= MAX_AUTO_CONTINUES) return false;
     const digest = this.flushInbox(runId);
     if (!digest || !state.session.sendMessage([{ type: 'text', text: digest }])) return false;
@@ -3658,7 +3667,7 @@ export class RunManager {
         // working again, so the anti-spin budget is restored. Before the early returns below,
         // because a turn that finished or dispatched is progress too.
         if (!compacted) state.compactionContinues = 0;
-        const done = sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
+        const done = sessionOpen && endsWithDoneMarker(turnText);
         // The dispatch facts of this turn (spec 2026-09-10-dispatch), through the ONE helper both
         // turn-end handlers call. Inert for a run with no `dispatch`.
         const dispatchTurn = this.handleDispatchTurn(runId, turnText, {
@@ -4567,7 +4576,7 @@ export class RunManager {
         const compacted = event.reason === 'context-compaction';
         const markerless = compacted && markerlessTurn(turnText);
         if (!compacted) state.compactionContinues = 0;
-        const done = interactive && sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
+        const done = interactive && sessionOpen && endsWithDoneMarker(turnText);
         // The dispatch facts, through the same ONE helper `runContinuation` calls (spec
         // 2026-09-10-dispatch A5). Not gated on `interactive`: a report and a dispatch
         // are the agent telling cezar what it did, and a chained workflow's non-final step that
