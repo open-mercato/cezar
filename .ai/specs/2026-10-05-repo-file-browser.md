@@ -195,8 +195,10 @@ export const repoTreeSchema = z.object({
 export type RepoTree = z.infer<typeof repoTreeSchema>
 ```
 
-- `200` — the index. `REPO_TREE_CAP = 20_000` paths (this repository: 1,939 paths / 99 KB, so
-  the cap is ~10× headroom and ~1 MB worst case).
+- `200` — the index. `REPO_TREE_CAP = 20_000` paths and `REPO_TREE_BYTES_CAP = 8 MiB` of
+  captured `git ls-files` output (this repository: 1,939 paths / 99 KB, so the count cap is ~10×
+  headroom). The byte cap is the hard bound for unusually long paths; exceeding it is a 409 git
+  failure, never a partial successful tree.
 - `409 { error: 'not a git repository' }` — same wording and status as `/repo/changes`.
 - `409 { error: <first line of git's stderr> }` — `git ls-files` failed; `gitReason` already
   produces this one-line form.
@@ -334,12 +336,13 @@ Each step leaves the application working and is verifiable by a test.
 1. **Contract.** Add `repoTreeSchema` + `RepoTree` to `packages/contract/src/repo.ts`, with the
    doc comment naming the route. *Test:* the contract's existing parity suite compiles; a schema
    unit test pins `truncated` as required.
-2. **Index helper.** Add `listRepoPaths(root, cap = REPO_TREE_CAP)` to
+2. **Index helper.** Add `listRepoPaths(root, cap = REPO_TREE_CAP, bytesCap = REPO_TREE_BYTES_CAP)` to
    `packages/cezar/src/server/git.ts` — `git ls-files -z --cached --others --exclude-standard`,
    NUL split, drop the trailing empty, sort, slice, return `{ paths, truncated }`. *Test:* a
    fixture repo with a tracked file, an untracked file, a `.gitignore`d file and a file with a
    space and a UTF-8 name; assert the ignored one is absent, ordering is stable, and `truncated`
-   flips at the cap. Non-repo → `{ ok: false }` path.
+   flips at the cap; a generated long-path fixture exceeds `bytesCap` and returns `{ ok: false }`
+   without a partial list. Non-repo → `{ ok: false }` path.
 3. **`GET /repo/tree`.** Chain it into `repoRoutes`; `getRepoInfo` → 409 wording identical to
    `/repo/changes`. *Test:* 200 shape, 409 outside a repo, 409 on a failing `ls-files`, and a
    `contract-parity` assertion that the route's inferred type matches `repoTreeSchema`.
