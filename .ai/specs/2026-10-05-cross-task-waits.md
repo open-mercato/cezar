@@ -23,7 +23,7 @@ project removal, cancel, deadline — default 24 h), it survives a restart, it i
 |---|---|---|
 | Q1 | Scope | `cez task wait` for a RUNNING task in this spec. "Start after" for a new task (`--after`) is a follow-up spec reusing the same edge. **Added by the owner:** a task that cannot finish without work in another project must be able to *create* that task and wait for it — in scope (Phase 2). |
 | Q2 | Cross-project in v1 | Yes — it is the motivating case. |
-| Q3 | What wakes the waiter | Any settle (`done | review | failed | cancelled`), outcome delivered verbatim; the agent judges. Same rule dispatch uses (`TERMINAL_STATUSES`). |
+| Q3 | What wakes the waiter | Any settle (`done | review | failed | cancelled`), outcome delivered verbatim; the agent judges. Same rule dispatch uses (`TERMINAL_STATUSES`). **Refined by the owner 2026-10-06 (merge of #1290):** a `failed` target carrying `awaitingAnswerSince` — its session closed on an unanswered `CEZ:ASK` — is "needs you", not an outcome, so it does NOT settle the edge (`targetSettled` in `workspace/waits.ts`); the answer (Continue → a real settle), an archive/Finish/cancel, a delete or the deadline does. |
 | Q4 | Who declares a wait | Both: the agent (`cez task wait`) and the user (cockpit). |
 | Q5 | Default | On. `CEZ_TASK_WAITS=0` turns the whole feature off. |
 | Q6 | Bound | Every edge carries a deadline: default 24 h, `--timeout <minutes>` overrides (1 min – 7 days). |
@@ -163,7 +163,7 @@ can wait on".
 
 | Trigger | Who fires it | Edge becomes | Waiter receives |
 |---|---|---|---|
-| Target reaches `done`/`review`/`failed`/`cancelled` | target store `'run'` event → resolver | `settled` | outcome message: status, title, branch, PR URL, cost, `cez task report` result if the target filed one, last error |
+| Target reaches `done`/`review`/`failed`/`cancelled` (not a `failed` left on an unanswered question — Q3) | target store `'settled'` event → resolver | `settled` | outcome message: status, title, branch, PR URL, cost, `cez task report` result if the target filed one, last error |
 | Target run deleted | target store `'deleted'` → resolver | `target-deleted` | "the task you waited for was deleted" |
 | Target's project removed from the registry | `ProjectContextRegistry.dispose` → resolver | `target-unavailable` | "project Q was removed" |
 | Deadline passes | resolver timer (re-armed on context build) | `timed-out` | "timed out after N min; target is still <status>" — the agent may wait again |
@@ -266,6 +266,7 @@ was approved for; its step adds the AGENTS.md § Zero config owner-approved exce
 | A waits B, B waits A (any length, any projects) | `409` naming the loop at the second declare. |
 | Target is `review` and the user later Continues it | Edge resolved at the first settle; later activity does not re-wake A. A may wait again. |
 | Target is itself a long monitor / awaiting | Fine — A waits; the deadline bounds it. |
+| Target's session closes on an unanswered `CEZ:ASK` (#1290: `failed` + `awaitingAnswerSince`) | Edge stays pending — the question is the user's, not an outcome. Answering it reopens the target and its real settle wakes A; archiving, Finishing or cancelling it retires the question and settles the edge at once (`RunStore.notifyQuestionRetired`); otherwise the deadline ends it. A re-wait on such a target records a pending edge rather than answering "already settled". |
 | Waiter's session was closed (idle, crash) when B settles | `enqueueMessage` → queued continuation reopens the session; obeys `maxParallel` like any queued work. |
 | Server down when B settles (B settled in recovery) | A's context build catch-up resolves it. |
 | `runs.json` corrupt in Q | Q degrades to fresh (store rule); A's edge resolves `target-deleted` at catch-up — loud, not silent. |

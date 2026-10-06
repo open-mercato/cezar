@@ -451,4 +451,97 @@ describe('WaitResolver', () => {
     expect(edges.find((e) => e.targetTitle === 'created first')).toMatchObject({ created: true, state: 'settled' });
     expect(edges.filter((e) => !e.created)).toHaveLength(20);
   });
+
+  // #1290 merged into the waits feature: a `failed` run whose session closed on an unanswered
+  // CEZ:ASK carries `awaitingAnswerSince` and is "needs you", not an outcome.
+  const leaveOnQuestion = (ctx: WaitProjectContext, runId: string) => {
+    ctx.store.updateRun(runId, { status: 'failed', error: 'the session closed before the question was answered', awaitingAnswerSince: new Date().toISOString() });
+    ctx.store.notifySettled(runId);
+  };
+
+  it('REGRESSION: a target left on an unanswered question does not settle the wait — its answer does', async () => {
+    const web = project('web');
+    const api = project('api');
+    boot(['web', 'api']);
+    const waiter = runIn(web, 'waiter');
+    const target = runIn(api, 'asks the user');
+    await pendingEdge([web, waiter], ['api', target.id]);
+    leaveOnQuestion(api, target.id);
+    expect(edgesOf(web, waiter.id)[0]?.state).toBe('pending');
+    expect(delivered).toEqual([]);
+    // The user answers: Continue reopens it, and its real settle wakes the waiter.
+    api.store.updateRun(target.id, { status: 'running' });
+    settle(api, target.id, 'review');
+    expect(edgesOf(web, waiter.id)[0]).toMatchObject({ state: 'settled', outcome: { status: 'review' } });
+    expect(delivered[0]?.text).toContain('has settled — review');
+  });
+
+  it('REGRESSION: a re-wait on a target left on a question waits rather than answering "settled" at once', async () => {
+    const web = project('web');
+    boot(['web']);
+    const waiter = runIn(web, 'waiter');
+    const target = runIn(web, 'asks the user');
+    leaveOnQuestion(web, target.id);
+    const edge = await pendingEdge([web, waiter], [undefined, target.id]);
+    expect(edge.state).toBe('pending');
+  });
+
+  it('archiving a target left on a question settles the wait with its final failed outcome', async () => {
+    const web = project('web');
+    boot(['web']);
+    const waiter = runIn(web, 'waiter');
+    const target = runIn(web, 'asks the user');
+    await pendingEdge([web, waiter], [undefined, target.id]);
+    leaveOnQuestion(web, target.id);
+    expect(edgesOf(web, waiter.id)[0]?.state).toBe('pending');
+    web.store.setArchived(target.id, true);
+    expect(edgesOf(web, waiter.id)[0]).toMatchObject({ state: 'settled', outcome: { status: 'failed' } });
+    expect(delivered).toHaveLength(1);
+  });
+
+  it('a Finish or cancel of a target left on a question settles the wait', async () => {
+    const web = project('web');
+    boot(['web']);
+    const waiter = runIn(web, 'waiter');
+    const first = runIn(web, 'finished by the user');
+    const second = runIn(web, 'cancelled by the user');
+    await pendingEdge([web, waiter], [undefined, first.id]);
+    await pendingEdge([web, waiter], [undefined, second.id]);
+    leaveOnQuestion(web, first.id);
+    leaveOnQuestion(web, second.id);
+    web.store.updateRun(first.id, { status: 'done' });
+    web.store.updateRun(second.id, { status: 'cancelled' });
+    const states = Object.fromEntries(edgesOf(web, waiter.id).map((e) => [e.targetTitle, e.outcome?.status]));
+    expect(states).toEqual({ 'finished by the user': 'done', 'cancelled by the user': 'cancelled' });
+  });
+
+  it('the catch-up keeps an edge on a target left on a question pending', async () => {
+    const web = project('web');
+    const api = project('api');
+    boot(['web', 'api']);
+    const waiter = runIn(web, 'waiter');
+    const target = runIn(api, 'asks the user');
+    await pendingEdge([web, waiter], ['api', target.id]);
+    leaveOnQuestion(api, target.id);
+    resolver.contextBuilt('web');
+    resolver.contextBuilt('api');
+    expect(edgesOf(web, waiter.id)[0]?.state).toBe('pending');
+  });
+
+  it('a CREATED target left on a question keeps its reservation until it really settles', async () => {
+    const web = project('web');
+    const api = project('api');
+    boot(['web', 'api']);
+    const waiter = runIn(web, 'creator');
+    const target = runIn(api, 'created elsewhere');
+    const edge = await pendingEdge([web, waiter], ['api', target.id]);
+    web.store.updateRun(waiter.id, { waits: [{ ...edge, created: true, budgetUsd: 8 }] });
+    resolver.contextBuilt('web');
+    resolver.cancel('web', waiter.id, edge.id);
+    leaveOnQuestion(api, target.id);
+    expect(edgesOf(web, waiter.id)[0]?.outcome?.status).toBe('running');
+    api.store.updateRun(target.id, { status: 'running' });
+    settle(api, target.id, 'done');
+    expect(edgesOf(web, waiter.id)[0]?.outcome?.status).toBe('done');
+  });
 });

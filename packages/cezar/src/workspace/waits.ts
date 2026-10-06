@@ -8,6 +8,8 @@
  * index `target → edges`, and resolving each edge exactly once, when
  *
  *  - its target settles (`done | review | failed | cancelled`)   → `settled`
+ *    — except a `failed` target left on an unanswered `CEZ:ASK` (`awaitingAnswerSince`, #1290):
+ *    that is "needs you", not an outcome, so the edge stays pending (`targetSettled`)
  *  - its target run is deleted                                    → `target-deleted`
  *  - its target's project is removed from the registry           → `target-unavailable`
  *  - its deadline passes (mandatory, default 24 h)                → `timed-out`
@@ -104,6 +106,19 @@ interface IndexedEdge {
 /** The short, stable way a run is named in messages: `<project>/<id8>`. */
 export function waitRef(projectId: string, runId: string): string {
   return `${projectId}/${runId.slice(0, 8)}`;
+}
+
+/**
+ * Whether a wait TARGET has settled: a terminal status that is an outcome. A `failed` run whose
+ * session closed on an unanswered `CEZ:ASK` (`awaitingAnswerSince`, #1290) is the user's to answer
+ * — Continue reopens it — so waking its waiter with "failed" would report a question as a result,
+ * and a re-wait would answer "already settled" at once, leaving no way to wait for the answer. The
+ * edge stays pending instead; the question's retirement (Continue → a real settle later; archive,
+ * Finish or cancel → `RunStore.notifyQuestionRetired`), a delete, or the deadline ends it. Only
+ * TARGETS are read this way — a waiter that settles, question or not, ends its own edges.
+ */
+export function targetSettled(run: Pick<RunRecord, 'status' | 'awaitingAnswerSince'>): boolean {
+  return isTerminalStatus(run.status) && !(run.status === 'failed' && run.awaitingAnswerSince !== undefined);
 }
 
 /** What the route answers when the target had already settled at declare time. */
@@ -234,7 +249,7 @@ export class WaitResolver {
       if (!targetCtx) continue;
       const target = targetCtx.store.getRun(targetRunId);
       if (!target) this.settleTrailing(targetKey, { status: 'cancelled' });
-      else if (isTerminalStatus(target.status)) {
+      else if (targetSettled(target)) {
         this.settleTrailing(targetKey, {
           status: target.status,
           ...(target.pullRequestUrl ? { prUrl: target.pullRequestUrl } : {}),
@@ -374,7 +389,7 @@ export class WaitResolver {
     }
     const existing = now.pending.find((edge) => edge.target.projectId === resolvedProject.id && edge.target.runId === target.id);
     if (existing) return { kind: 'pending', edge: existing };
-    if (isTerminalStatus(target.status)) return { kind: 'settled', outcome: waitOutcomeOf(resolvedProject.id, target) };
+    if (targetSettled(target)) return { kind: 'settled', outcome: waitOutcomeOf(resolvedProject.id, target) };
     // A dispatched task waiting on its own ancestor is a deadlock the wait graph cannot see: the
     // ancestor is parked on its children (slot-exempt), the child on the ancestor.
     if (resolvedProject.id === waiterProjectId && this.isDispatchAncestor(now.ctx, now.waiter, target.id)) {
@@ -577,7 +592,7 @@ export class WaitResolver {
       this.resolve(edgeKey, 'target-deleted');
       return;
     }
-    if (target && isTerminalStatus(target.status)) {
+    if (target && targetSettled(target)) {
       this.resolve(edgeKey, 'settled');
       return;
     }
@@ -631,17 +646,19 @@ export class WaitResolver {
 
   private onSettled(projectId: string, runId: string): void {
     const runKey = key(projectId, runId);
-    if (this.trailing.has(runKey)) {
-      const target = this.deps.peek(projectId)?.store.getRun(runId);
-      if (target) {
+    const run = this.deps.peek(projectId)?.store.getRun(runId);
+    // As a TARGET, a run parked on an unanswered question has not settled (`targetSettled`): its
+    // waiters and its trailing creator keep waiting for the real outcome.
+    if (!run || targetSettled(run)) {
+      if (run && this.trailing.has(runKey)) {
         this.settleTrailing(runKey, {
-          status: target.status,
-          ...(target.pullRequestUrl ? { prUrl: target.pullRequestUrl } : {}),
-          ...(target.costUsd !== undefined ? { costUsd: target.costUsd } : {}),
+          status: run.status,
+          ...(run.pullRequestUrl ? { prUrl: run.pullRequestUrl } : {}),
+          ...(run.costUsd !== undefined ? { costUsd: run.costUsd } : {}),
         });
       }
+      for (const edgeKey of [...(this.byTarget.get(runKey) ?? [])]) this.resolve(edgeKey, 'settled');
     }
-    for (const edgeKey of [...(this.byTarget.get(runKey) ?? [])]) this.resolve(edgeKey, 'settled');
     for (const edgeKey of [...(this.byWaiter.get(runKey) ?? [])]) this.resolve(edgeKey, 'waiter-ended');
   }
 
@@ -698,7 +715,7 @@ export class WaitResolver {
     const createdHistory = all.filter((candidate) => candidate.state !== 'pending' && candidate.created);
     const keep = new Set([...stillPending, ...history, ...createdHistory].map((candidate) => candidate.id));
     ctx.store.updateRun(waiterRunId, { waits: all.filter((candidate) => keep.has(candidate.id)) });
-    if (edge.created && target && !isTerminalStatus(target.status)) {
+    if (edge.created && target && !targetSettled(target)) {
       this.trail(edge.target.projectId, edge.target.runId, ctx.id, waiterRunId, edgeId);
     }
 
