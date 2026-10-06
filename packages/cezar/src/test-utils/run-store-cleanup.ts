@@ -1,4 +1,3 @@
-import { afterEach } from 'vitest';
 import { RunStore } from '../runs/store.ts';
 
 const openedStores = new Set<RunStore>();
@@ -23,6 +22,3 @@ export function cleanupRunStores(): void {
   }
   openedStores.clear();
 }
-
-// Suites with fixture-specific teardown call cleanupRunStores explicitly before rm.
-afterEach(cleanupRunStores);

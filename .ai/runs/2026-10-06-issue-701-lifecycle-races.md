@@ -43,11 +43,11 @@ The helper monkey-patches only the test process's `RunStore.open`; it must not a
 
 ### Phase 1: Establish teardown guard
 
-- [ ] 1.1 Add a test-only RunStore registry/cleanup helper that flushes and blocks late scheduled saves.
-- [ ] 1.2 Apply the helper and awaited manager/store cleanup to the scoped suites with temporary fixtures.
+- [x] 1.1 Add a test-only RunStore registry/cleanup helper that flushes and blocks late scheduled saves. — 9a4d4f89
+- [x] 1.2 Apply the helper and awaited manager/store cleanup to the scoped suites with temporary fixtures. — 9a4d4f89
 
 ### Phase 2: Verify lifecycle behavior
 
-- [ ] 2.1 Run focused repeated suites and prove the relevant teardown race is covered.
-- [ ] 2.2 Run the configured validation gate and record baseline limitations.
+- [x] 2.1 Run focused repeated suites and prove the relevant teardown race is covered. — focused 64/64 x3
+- [x] 2.2 Run the configured validation gate and record baseline limitations. — gate run 2026-10-06
 - [ ] 2.3 Complete review and publish the scoped PR evidence.
