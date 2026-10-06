@@ -329,6 +329,19 @@ describe('handOffComposition', () => {
     expect(readAttachments(null).map((a) => a.name)).toEqual(['cezar.png'])
   })
 
+  it('refuses to clobber attachments waiting in an otherwise empty destination', () => {
+    writeDraft({ ...EMPTY_DRAFT, text: 'from cezar' }, null)
+    writeAttachments([shot('cezar.png')], null)
+    writeAttachments([shot('shop.png')], 'shop')
+
+    expect(handOffComposition(null, 'shop')).toEqual({ moved: false, reason: 'destination-busy' })
+
+    expect(readDraft('shop').text).toBe('')
+    expect(readAttachments('shop').map((a) => a.name)).toEqual(['shop.png'])
+    expect(readDraft(null).text).toBe('from cezar')
+    expect(readAttachments(null).map((a) => a.name)).toEqual(['cezar.png'])
+  })
+
   it('carries an attachment pasted before a word was typed', () => {
     writeAttachments([shot()], null)
 

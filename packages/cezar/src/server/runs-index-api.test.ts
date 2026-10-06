@@ -292,6 +292,28 @@ describe('workspace runs index API', () => {
     });
   });
 
+  it('carries `awaitingAnswerSince`, so an unanswered question still reads as "needs you"', async () => {
+    await registerProject(repoRoot);
+    await registerProject(otherRoot);
+    seedColdProject(otherRoot, [
+      storedRun({
+        id: 'asked',
+        title: 'Waiting on an answer',
+        status: 'failed',
+        finishedAt: '2026-07-14T11:00:00Z',
+        awaitingAnswerSince: '2026-07-14T11:00:00.000Z',
+      }),
+    ]);
+
+    const body = await getIndex();
+
+    expect(body.runs[0]).toMatchObject({
+      id: 'asked',
+      status: 'failed',
+      awaitingAnswerSince: '2026-07-14T11:00:00.000Z',
+    });
+  });
+
   it('reads a crashed process’s `running` row as interrupted, exactly as opening it would', async () => {
     await registerProject(repoRoot);
     await registerProject(otherRoot);

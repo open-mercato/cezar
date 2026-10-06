@@ -170,7 +170,10 @@ steps:
     onFail: { retry: implement, max: 2 }
 ```
 
-The built-in `quick-task` workflow runs with no setup.
+The built-in `quick-task` workflow runs with no setup. A check can also be a
+browser: [browser and mobile e2e as a verification step](docs/e2e-verification.md)
+turns an agentic e2e run — or an independent QA exploration — into the gate a
+task has to pass.
 
 ## Automations
 

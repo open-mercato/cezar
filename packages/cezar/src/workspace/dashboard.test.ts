@@ -169,6 +169,8 @@ describe('dashboard complete summary snapshots', () => {
       { status: 'queued' as const },
       { status: 'failed' as const, autoResumeAt: '2026-09-19T00:00:00Z' },
       { status: 'failed' as const },
+      // A session closed on an unanswered CEZ:ASK is still a question for the user.
+      { status: 'failed' as const, awaitingAnswerSince: '2026-09-19T00:00:00.000Z' },
       { status: 'review' as const, pinned: true },
     ]) {
       const r = store.createRun({ title: 'r', workflow: 'build', task: 't', steps: [] });
@@ -188,9 +190,11 @@ describe('dashboard complete summary snapshots', () => {
       monitoring: 1,
       queued: 1,
       scheduled: 1,
-      questions: 0,
+      questions: 1,
       reviews: 1,
     });
+    const needsYou = await reader.tasks(first.snapshotId, 'needs-you', 0, 20);
+    expect(needsYou?.page.rows.map((r) => r.status)).toEqual(['failed', 'review']);
     for (let i = 0; i < 3; i++) {
       store.createRun({ title: `new ${i}`, workflow: 'build', task: 't', steps: [] });
       now += 1001;

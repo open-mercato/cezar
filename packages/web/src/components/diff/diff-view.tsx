@@ -1,8 +1,9 @@
 import { ChevronRightIcon } from 'lucide-react'
-import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Virtualizer, type VirtualizerHandle } from 'virtua'
 
 import type { DiffStat } from '@open-mercato/cezar-api-client'
+import { CommentCount } from '@/components/comment-count'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { highlight, highlightSync, langForPath, type SynToken } from '@/lib/highlighter'
 import { cn } from '@/lib/utils'
@@ -15,6 +16,21 @@ import {
   widestLineChars,
 } from './diff-scroll'
 import { ImagePreview, shouldPreviewImage } from './image-preview'
+import {
+  AddCommentButton,
+  anchorForLine,
+  anchorKey,
+  LineCommentsContext,
+  FileLinesContext,
+  LineCommentThread,
+  markClass,
+  rangeTarget,
+  tapToComment,
+  useLineComments,
+  type FileLines,
+  type LineCommentsApi,
+  type LineSelection,
+} from './line-comments'
 
 import {
   buildSplitRows,
@@ -30,7 +46,14 @@ import {
   type SplitRow,
   type UnifiedRow,
 } from './parse-patch'
-import type { DiffFileChange, DiffProps } from './types'
+import type {
+  DiffFileChange,
+  DiffLineAnchor,
+  DiffLineComment,
+  DiffLineEnd,
+  DiffProps,
+  DiffRevealTarget,
+} from './types'
 import { overlaySegments } from './word-diff'
 
 /**
@@ -64,6 +87,31 @@ export function findFileElement(root: ParentNode | null, path: string): HTMLElem
   return undefined
 }
 
+/** The comment card with this id, else the row that counts `line` on `side`, within `path`. */
+export function findRevealElement(root: ParentNode | null, target: DiffRevealTarget): HTMLElement | undefined {
+  const card = findFileElement(root, target.path)
+  if (!card) return undefined
+  if (target.commentId !== undefined) {
+    for (const element of card.querySelectorAll<HTMLElement>('[data-slot="diff-line-comment"]')) {
+      if (element.dataset.commentId === target.commentId) return element
+    }
+  }
+  if (target.line === undefined) return undefined
+  const wanted = String(target.line)
+  for (const row of card.querySelectorAll<HTMLElement>('[data-slot="diff-line"], [data-slot="diff-cell"]')) {
+    if ((target.side === 'old' ? row.dataset.oldLine : row.dataset.newLine) === wanted) return row
+  }
+  return undefined
+}
+
+/** A brief highlight on what a reveal landed on — the eye finds it in a screen of code. */
+function flash(element: HTMLElement) {
+  element.dataset.flash = 'true'
+  setTimeout(() => {
+    delete element.dataset.flash
+  }, 1600)
+}
+
 export function DiffView({
   files,
   mode = 'unified',
@@ -72,6 +120,10 @@ export function DiffView({
   imageSrc,
   onOpenInApp,
   viewRef,
+  comments,
+  onAddComment,
+  onEditComment,
+  onRemoveComment,
   className,
 }: DiffProps) {
   const stat: DiffStat = useMemo(
@@ -113,6 +165,157 @@ export function DiffView({
     [loadFileText],
   )
 
+  // The open line-comment editor lives here for the same reason as `collapsed`: its row can be
+  // virtualized away and back while the user is still deciding what to write.
+  const [editing, setEditing] = useState<LineCommentsApi['editing']>(null)
+  const pendingText = useRef(new Map<string, string>()).current
+  const focusRequest = useRef<string | null>(null)
+  // A range being dragged out with the "+". The dragged file's line list rides a ref: the release
+  // handler needs it, and it never has to re-render anything.
+  const [selection, setSelection] = useState<LineSelection | null>(null)
+  // Mirrored synchronously: the release handler reads THIS, so a fast release cannot finish on a
+  // render that had not yet caught up with the last row the pointer entered.
+  const selectionRef = useRef<LineSelection | null>(null)
+  const selectionLines = useRef<readonly HunkLine[]>([])
+  const selecting = selection !== null
+  const editingRef = useRef(editing)
+  editingRef.current = editing
+  // Where focus goes back to when the editor closes (Comment, Save, Cancel, Escape): the control
+  // that opened it, or — when that one is gone, as an Edit button is once its card turns into the
+  // editor — the comment's card. Without this, focus fell to <body> and a keyboard user restarted
+  // from the top of the page after every comment.
+  const returnFocus = useRef<{ element: HTMLElement | null; commentId?: string }>({ element: null })
+  const rootForFocus = useRef<HTMLDivElement | null>(null)
+  const captureOpener = (commentId?: string) => {
+    const active = document.activeElement
+    returnFocus.current = {
+      element: active instanceof HTMLElement && rootForFocus.current?.contains(active) ? active : null,
+      ...(commentId ? { commentId } : {}),
+    }
+  }
+  const restoreFocus = () => {
+    const { element, commentId } = returnFocus.current
+    returnFocus.current = { element: null }
+    // After the commit that removed the editor, so the target exists (or is known to be gone).
+    setTimeout(() => {
+      if (element?.isConnected) {
+        element.focus({ preventScroll: true })
+        return
+      }
+      if (commentId === undefined) return
+      for (const card of rootForFocus.current?.querySelectorAll<HTMLElement>('[data-slot="diff-line-comment"]') ?? []) {
+        if (card.dataset.commentId === commentId) {
+          card.querySelector<HTMLElement>('button')?.focus({ preventScroll: true })
+          return
+        }
+      }
+    }, 0)
+  }
+  const focusHelpers = useRef({ captureOpener, restoreFocus })
+  focusHelpers.current = { captureOpener, restoreFocus }
+
+  const openEditor = useCallback(
+    (anchor: DiffLineAnchor, excerpt: string, start?: DiffLineEnd, stretch = false) => {
+      const threadKey = anchorKey(anchor)
+      const key = start ? `${threadKey}\u0000${start.side}:${start.line}` : threadKey
+      // Stretching an open range must not lose what was already typed into it. Only a STRETCH
+      // carries the text: opening a fresh editor elsewhere starts empty (the old one's text stays
+      // filed under its own line, for when the user comes back to it).
+      const previous = editingRef.current
+      if (stretch && previous && previous.commentId === undefined && previous.key !== key) {
+        const typed = pendingText.get(previous.key)
+        if (typed !== undefined) {
+          pendingText.set(key, typed)
+          pendingText.delete(previous.key)
+        }
+      }
+      // A removed line's number belongs to the pre-rename file, so it travels with its path.
+      const oldPath =
+        anchor.side === 'old' || start?.side === 'old' ? files.find((file) => file.path === anchor.path)?.oldPath : undefined
+      focusRequest.current = key
+      if (!stretch) focusHelpers.current.captureOpener()
+      setEditing({ key, threadKey, anchor, excerpt, ...(start ? { start } : {}), ...(oldPath ? { oldPath } : {}) })
+    },
+    [files, pendingText],
+  )
+
+  // Releasing the button ANYWHERE ends the drag — over a row, between rows, or off the diff.
+  useEffect(() => {
+    if (!selecting) return
+    const finish = () => {
+      const done = selectionRef.current
+      selectionRef.current = null
+      setSelection(null)
+      if (!done) return
+      const target = rangeTarget(done.path, selectionLines.current, done.from, done.to)
+      if (target) openEditor(target.anchor, target.excerpt, target.start)
+    }
+    window.addEventListener('mouseup', finish)
+    return () => window.removeEventListener('mouseup', finish)
+  }, [openEditor, selecting])
+  const commentsApi = useMemo((): LineCommentsApi | null => {
+    if (!onAddComment && (comments?.length ?? 0) === 0) return null
+    const byKey = new Map<string, DiffLineComment[]>()
+    for (const comment of comments ?? []) {
+      const key = anchorKey(comment)
+      byKey.set(key, [...(byKey.get(key) ?? []), comment])
+    }
+    return {
+      comments: comments ?? [],
+      byKey,
+      editing,
+      selection,
+      canAdd: onAddComment !== undefined,
+      open: openEditor,
+      beginSelect: (path, order, lines) => {
+        selectionLines.current = lines
+        selectionRef.current = { path, from: order, to: order }
+        setSelection(selectionRef.current)
+      },
+      extendSelect: (path, order) => {
+        const current = selectionRef.current
+        if (current === null || current.path !== path || current.to === order) return
+        selectionRef.current = { ...current, to: order }
+        setSelection(selectionRef.current)
+      },
+      edit: onEditComment
+        ? (comment: DiffLineComment) => {
+            focusRequest.current = `edit:${comment.id}`
+            focusHelpers.current.captureOpener(comment.id)
+            setEditing({
+              key: `edit:${comment.id}`,
+              threadKey: anchorKey(comment),
+              anchor: comment,
+              ...(comment.start ? { start: comment.start } : {}),
+              excerpt: '',
+              commentId: comment.id,
+              initial: comment.body,
+            })
+          }
+        : undefined,
+      cancel: () => {
+        setEditing(null)
+        focusHelpers.current.restoreFocus()
+      },
+      // A refused comment keeps its editor (and its text) open rather than vanishing unsaved.
+      submit: (comment) => {
+        if (onAddComment?.(comment) === false) return false
+        setEditing(null)
+        focusHelpers.current.restoreFocus()
+        return true
+      },
+      update: (id, body) => {
+        if (onEditComment?.(id, body) === false) return false
+        setEditing(null)
+        focusHelpers.current.restoreFocus()
+        return true
+      },
+      remove: onRemoveComment,
+      pendingText,
+      focusRequest,
+    }
+  }, [comments, editing, onAddComment, onEditComment, onRemoveComment, openEditor, pendingText, selection])
+
   const rowCount = useMemo(() => diffRowCount(files), [files])
   // The `?diff=` override is a measurement/debugging seam, not reactive state — read once so
   // this module stays router-free (it renders in tests and in the repo view alike).
@@ -125,17 +328,62 @@ export function DiffView({
 
   useImperativeHandle(
     viewRef,
-    () => ({
-      scrollToPath: (path: string) => {
+    () => {
+      const scrollToPath = (path: string) => {
         const index = files.findIndex((file) => file.path === path)
         if (index === -1) return
         const handle = virtualizerRef.current
         // Virtualized: the target may not be mounted, so the scroll goes through the index.
-        // Flat: the element is always there, and scrollIntoView keeps the smooth behavior.
-        if (handle) handle.scrollToIndex(index, { align: 'start' })
-        else findFileElement(rootRef.current, path)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
-      },
-    }),
+        // Reserve the sticky chrome above the file in both modes. Flat jumps must be
+        // immediate: lazy content measurement can invalidate a smooth-scroll destination.
+        const root = rootRef.current
+        const offset = root ? Number.parseFloat(getComputedStyle(root).scrollMarginTop) || 0 : 0
+        if (handle) handle.scrollToIndex(index, { align: 'start', offset: -offset })
+        else findFileElement(root, path)?.scrollIntoView?.({ block: 'start', behavior: 'instant' })
+      }
+      return {
+        scrollToPath: (path: string) => scrollToPath(path),
+        reveal: (target) => {
+          const file = files.find((candidate) => candidate.path === target.path)
+          if (!file) return
+          // A collapsed card has no rows to find.
+          setCollapsed((previous) => {
+            if (!previous.has(fileKey(file))) return previous
+            const next = new Set(previous)
+            next.delete(fileKey(file))
+            return next
+          })
+          scrollToPath(target.path)
+          // The rows may not exist yet — a virtualized card mounts after the scroll, an expanded
+          // one after the next commit — so look for a few frames before settling for the file.
+          let frames = 0
+          const look = () => {
+            const element = findRevealElement(rootRef.current, target)
+            if (element) {
+              const scroller = scrollElRef.current
+              const handle = virtualizerRef.current
+              if (scroller && handle) {
+                // Cancel the virtualizer's pending file jump with another virtualizer scroll.
+                // A DOM scroll races its measurement corrections and can leave a deep comment
+                // off screen even though we found and flashed the right element.
+                const box = element.getBoundingClientRect()
+                const margin = Number.parseFloat(getComputedStyle(element).scrollMarginBottom) || 0
+                handle.scrollTo(scroller.scrollTop + box.top - scroller.getBoundingClientRect().top
+                  - (scroller.clientHeight - margin - box.height) / 2)
+              } else {
+                // An immediate jump lets content-visibility finish measuring before the next
+                // paint; a smooth jump can stop at the off-screen placeholder's old position.
+                element.scrollIntoView?.({ block: 'center', behavior: 'instant' })
+              }
+              flash(element)
+              return
+            }
+            if (++frames < 30) requestAnimationFrame(look)
+          }
+          requestAnimationFrame(look)
+        },
+      }
+    },
     [files],
   )
 
@@ -158,14 +406,16 @@ export function DiffView({
   }
 
   return (
+    <LineCommentsContext.Provider value={commentsApi}>
     <div
       ref={(el) => {
         rootRef.current = el
+        rootForFocus.current = el
         if (el) scrollElRef.current = el.closest<HTMLElement>('[data-slot="main"]')
       }}
       data-slot="diff"
       data-mode={mode}
-      className={cn('flex min-w-0 flex-col', className)}
+      className={cn('flex min-w-0 flex-col scroll-mt-[var(--diff-sticky-top,0px)]', className)}
     >
       <p data-slot="diff-totals" className="flex items-center gap-2 px-1 pb-3 text-xs text-muted-foreground">
         <span>
@@ -194,6 +444,7 @@ export function DiffView({
         </div>
       )}
     </div>
+    </LineCommentsContext.Provider>
   )
 }
 
@@ -305,11 +556,12 @@ function DiffFileCard({
   onOpenInApp?: (path: string) => void
 }) {
   const badge = STATUS_BADGE[file.status]
+  const commentCount = useLineComments()?.comments.filter((comment) => comment.path === file.path).length ?? 0
   return (
     <section
       data-slot="diff-file"
       data-path={file.path}
-      className="min-w-0 overflow-clip rounded-md border border-border bg-card"
+      className="min-w-0 scroll-mt-[var(--diff-sticky-top,0px)] overflow-clip rounded-md border border-border bg-card"
     >
       {/* Sticky within the consumer's scroll container — the reader always knows which file.
           The offset is a consumer-set CSS var so the file header parks BELOW a sticky page
@@ -351,7 +603,8 @@ function DiffFileCard({
               binary
             </span>
           ) : null}
-          <span className="ml-auto shrink-0">
+          <span className="ml-auto flex shrink-0 items-center gap-2">
+            <CommentCount count={commentCount} />
             <DiffStatLabel stat={{ adds: file.adds, dels: file.dels, files: 1 }} className="text-[11px]" />
           </span>
         </button>
@@ -413,6 +666,37 @@ function DiffFileBody({
   const lineIndex = useMemo(() => new Map(lineList.map((line, index) => [line, index])), [lineList])
   const tokens = useFileTokens(file.path, lineList)
 
+  // Which rows a range or a comment covers, by position in `lineList`. Recomputed when comments,
+  // the open editor or a drag change — never per keystroke (the editor's text is not state).
+  const commentsApi = useLineComments()
+  const fileLines = useMemo((): FileLines | null => {
+    if (!commentsApi) return null
+    const orderByKey = new Map<string, number>()
+    lineList.forEach((line, order) => {
+      const at = anchorForLine(file.path, line)
+      if (at) orderByKey.set(anchorKey(at), order)
+    })
+    const orderOf = (end: DiffLineEnd) => orderByKey.get(anchorKey({ path: file.path, side: end.side, line: end.line }))
+    const marks = new Map<number, 'selected' | 'commented'>()
+    const mark = (a: number, b: number, kind: 'selected' | 'commented') => {
+      for (let order = Math.min(a, b); order <= Math.max(a, b); order++) {
+        if (kind === 'selected' || !marks.has(order)) marks.set(order, kind)
+      }
+    }
+    const markEnds = (end: DiffLineEnd, start: DiffLineEnd | undefined, kind: 'selected' | 'commented') => {
+      const to = orderOf(end)
+      if (to === undefined) return
+      mark(start ? (orderOf(start) ?? to) : to, to, kind)
+    }
+    for (const comment of commentsApi.comments) {
+      if (comment.path === file.path) markEnds(comment, comment.start, 'commented')
+    }
+    const { editing, selection } = commentsApi
+    if (editing && editing.anchor.path === file.path) markEnds(editing.anchor, editing.start, 'selected')
+    if (selection && selection.path === file.path) mark(selection.from, selection.to, 'selected')
+    return { path: file.path, lines: lineList, orderOf: lineIndex, markAt: (order) => marks.get(order) }
+  }, [commentsApi, file.path, lineList, lineIndex])
+
   const rows = useMemo(
     () => (mode === 'unified' ? buildUnifiedRows(parsed.hunks, gaps, expanded) : null),
     [mode, parsed.hunks, gaps, expanded],
@@ -465,6 +749,7 @@ function DiffFileBody({
           node per line is the very cost this is here to remove. The intrinsic-size hint is
           DIFF_ROW_ESTIMATE_PX; `auto` lets a once-rendered row remember its real height.
           `min-inline-size` is the horizontal-scroll floor — see `widestLineChars`. */}
+      <FileLinesContext.Provider value={fileLines}>
       <div
         data-slot="diff-rows"
         style={widthFloor}
@@ -472,15 +757,16 @@ function DiffFileBody({
       >
         {rows
           ? rows.map((row, index) => (
-              <UnifiedRowView key={index} row={row} wrap={wrap} tokensFor={tokensFor} onExpand={expandable ? onExpand : undefined} />
+              <UnifiedRowView key={index} path={file.path} row={row} wrap={wrap} tokensFor={tokensFor} onExpand={expandable ? onExpand : undefined} />
             ))
           : null}
         {splitRows
           ? splitRows.map((row, index) => (
-              <SplitRowView key={index} row={row} wrap={wrap} tokensFor={tokensFor} onExpand={expandable ? onExpand : undefined} />
+              <SplitRowView key={index} path={file.path} row={row} wrap={wrap} tokensFor={tokensFor} onExpand={expandable ? onExpand : undefined} />
             ))
           : null}
       </div>
+      </FileLinesContext.Provider>
       {parsed.truncated ? <Note>Patch truncated by the server — counts above remain exact.</Note> : null}
     </div>
   )
@@ -521,6 +807,8 @@ const LINE_BG: Record<HunkLine['kind'], string | undefined> = {
   context: undefined,
 }
 const MARKER: Record<HunkLine['kind'], string> = { add: '+', del: '−', context: ' ' }
+/** What a `reveal` flashes: an inset accent ring, gone after a moment (see `flash`). */
+const FLASH = 'transition-shadow duration-500 data-[flash=true]:ring-2 data-[flash=true]:ring-inset data-[flash=true]:ring-primary'
 
 function HunkHeaderRow({ hunk }: { hunk: Hunk }) {
   return (
@@ -582,35 +870,64 @@ function Gutter({ value }: { value: number | undefined }) {
 }
 
 function UnifiedRowView({
+  path,
   row,
   wrap,
   tokensFor,
   onExpand,
 }: {
+  path: string
   row: UnifiedRow
   wrap: boolean
   tokensFor: (line: HunkLine) => SynToken[] | null
   onExpand?: (gap: ContextGap) => void
 }) {
+  const comments = useLineComments()
+  const fileLines = useContext(FileLinesContext)
   if (row.type === 'hunk') return <HunkHeaderRow hunk={row.hunk} />
   if (row.type === 'gap') return <GapRow gap={row.gap} onExpand={onExpand} />
   const { line } = row.cell
+  const anchor = anchorForLine(path, line)
+  const tap = tapToComment(comments, anchor, line.text)
+  const order = fileLines?.orderOf.get(line)
+  const mark = order === undefined ? undefined : fileLines?.markAt(order)
+  // A fragment, not a wrapper: each row stays a direct child of `diff-rows`, which is what its
+  // per-row `content-visibility` selector targets.
   return (
-    <div data-slot="diff-line" data-line={line.kind} className={cn('flex', LINE_BG[line.kind])}>
-      <Gutter value={line.oldLine} />
-      <Gutter value={line.newLine} />
-      <span className="w-4 shrink-0 text-soft-foreground select-none">{MARKER[line.kind]}</span>
-      <LineContent cell={row.cell} tokens={tokensFor(line)} wrap={wrap} />
-    </div>
+    <>
+      <div
+        data-slot="diff-line"
+        data-line={line.kind}
+        data-old-line={line.oldLine}
+        data-new-line={line.newLine}
+        data-mark={mark}
+        {...tap}
+        onMouseEnter={
+          comments?.selection && order !== undefined ? () => comments.extendSelect(path, order) : undefined
+        }
+        className={cn('group/line flex', LINE_BG[line.kind], markClass(mark), FLASH)}
+      >
+        <Gutter value={line.oldLine} />
+        <Gutter value={line.newLine} />
+        <span className="relative w-4 shrink-0 text-soft-foreground select-none">
+          {MARKER[line.kind]}
+          <AddCommentButton anchor={anchor} excerpt={line.text} line={line} />
+        </span>
+        <LineContent cell={row.cell} tokens={tokensFor(line)} wrap={wrap} />
+      </div>
+      <LineCommentThread anchors={[anchor]} />
+    </>
   )
 }
 
 function SplitRowView({
+  path,
   row,
   wrap,
   tokensFor,
   onExpand,
 }: {
+  path: string
   row: SplitRow
   wrap: boolean
   tokensFor: (line: HunkLine) => SynToken[] | null
@@ -618,38 +935,65 @@ function SplitRowView({
 }) {
   if (row.type === 'hunk') return <HunkHeaderRow hunk={row.hunk} />
   if (row.type === 'gap') return <GapRow gap={row.gap} onExpand={onExpand} />
+  const leftAnchor = row.left ? anchorForLine(path, row.left.line) : undefined
+  const rightAnchor = row.right ? anchorForLine(path, row.right.line) : undefined
   return (
-    <div data-slot="diff-pair" className="grid grid-cols-2">
-      <SplitCell cell={row.left} side="old" tokensFor={tokensFor} wrap={wrap} />
-      <SplitCell cell={row.right} side="new" tokensFor={tokensFor} wrap={wrap} />
-    </div>
+    <>
+      <div data-slot="diff-pair" className="grid grid-cols-2">
+        <SplitCell cell={row.left} anchor={leftAnchor} side="old" tokensFor={tokensFor} wrap={wrap} />
+        <SplitCell cell={row.right} anchor={rightAnchor} side="new" tokensFor={tokensFor} wrap={wrap} />
+      </div>
+      <LineCommentThread anchors={[leftAnchor, rightAnchor]} />
+    </>
   )
 }
 
 function SplitCell({
   cell,
+  anchor,
   side,
   tokensFor,
   wrap,
 }: {
   cell?: DiffCell
+  anchor: DiffLineAnchor | undefined
   side: 'old' | 'new'
   tokensFor: (line: HunkLine) => SynToken[] | null
   wrap: boolean
 }) {
+  const comments = useLineComments()
+  const fileLines = useContext(FileLinesContext)
   if (!cell) {
     // The other side has no counterpart line — an honest hatch-free blank.
     return <div data-slot="diff-cell-empty" className={cn('bg-muted/20', side === 'new' && 'border-l border-border/40')} />
   }
   const { line } = cell
+  const order = fileLines?.orderOf.get(line)
+  const mark = order === undefined ? undefined : fileLines?.markAt(order)
   return (
     <div
       data-slot="diff-cell"
       data-line={line.kind}
-      className={cn('flex min-w-0 overflow-x-auto', LINE_BG[line.kind], side === 'new' && 'border-l border-border/40')}
+      data-old-line={line.oldLine}
+      data-new-line={line.newLine}
+      data-mark={mark}
+      {...tapToComment(comments, anchor, line.text)}
+      onMouseEnter={
+        comments?.selection && order !== undefined && anchor ? () => comments.extendSelect(anchor.path, order) : undefined
+      }
+      className={cn(
+        'group/line flex min-w-0 overflow-x-auto',
+        LINE_BG[line.kind],
+        side === 'new' && 'border-l border-border/40',
+        markClass(mark),
+        FLASH,
+      )}
     >
       <Gutter value={side === 'old' ? line.oldLine : line.newLine} />
-      <span className="w-4 shrink-0 text-soft-foreground select-none">{MARKER[line.kind]}</span>
+      <span className="relative w-4 shrink-0 text-soft-foreground select-none">
+        {MARKER[line.kind]}
+        <AddCommentButton anchor={anchor} excerpt={line.text} line={line} />
+      </span>
       <LineContent cell={cell} tokens={tokensFor(line)} wrap={wrap} />
     </div>
   )

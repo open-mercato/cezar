@@ -151,7 +151,7 @@ describe('the reveal handle (the Changes tab file tree)', () => {
 
     ref.current!.scrollToPath('b.ts')
 
-    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'start', behavior: 'smooth' })
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'start', behavior: 'instant' })
   })
 
   it('is a no-op for a path the changeset no longer carries', async () => {

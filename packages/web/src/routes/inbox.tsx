@@ -7,7 +7,7 @@ import { removeTodo, startTodo } from '@/api/client'
 import { queryKeys, useHealth, useRuns, useTodos, useUiState } from '@/api/queries'
 import type { TodoItem } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
-import { EnginePills, engineBody, useResolvedEngine, type EnginePick } from '@/components/engine-pills'
+import { EnginePills, engineBody, useResolvedEngine, useSeededEnginePick } from '@/components/engine-pills'
 import { PromptTemplateMenu } from '@/components/prompt-template-menu'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
@@ -160,7 +160,10 @@ function TodoCard({
   // must not silently re-aim the card below it. Reset is free — a started card leaves the list.
   // `account` stays null here: this card posts to `POST /todos/:id/start`, which has no
   // `agentProfile` field, so `EnginePills` is mounted without `accounts` and never sets one.
-  const [engine, setEngine] = useState<EnginePick>({ runner: null, model: null, account: null })
+  // Seeded from the remembered pick but never writing back to it (#906), which keeps both rules:
+  // an untouched card no longer falls through to the coding agent's own default model, and a pick
+  // made on THIS card still cannot re-aim its neighbours.
+  const [engine, setEngine] = useSeededEnginePick()
   const resolved = useResolvedEngine(engine)
 
   // "Add instructions" (#413): collapsed by default, local to the card (see the doc block

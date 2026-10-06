@@ -93,9 +93,31 @@ describe('bucketOf', () => {
     // Archived still collapses everything, schedule or not.
     expect(bucketOf({ ...scheduled, archived: true }, 'archived')).toBe('Archived')
   })
+
+  it('a run whose session closed on an unanswered question stays under Needs you', () => {
+    const awaiting = run({ status: 'failed', awaitingAnswerSince: '2026-10-05T10:00:00.000Z' })
+    expect(bucketOf(awaiting, 'active')).toBe('Needs you')
+    expect(bucketOf({ ...awaiting, pinned: true }, 'active')).toBe('Pinned')
+    expect(bucketOf({ ...awaiting, archived: true }, 'archived')).toBe('Archived')
+  })
 })
 
 describe('sortRuns', () => {
+  it('ranks a run awaiting an answer with the waiting runs, above outcomes', () => {
+    const runs = [
+      run({ id: 'done', status: 'done', createdAt: '2026-07-14T12:00:00.000Z' }),
+      run({ id: 'failed', status: 'failed', createdAt: '2026-07-14T11:00:00.000Z' }),
+      run({ id: 'running', status: 'running', createdAt: '2026-07-14T10:00:00.000Z' }),
+      run({
+        id: 'awaiting',
+        status: 'failed',
+        awaitingAnswerSince: '2026-07-14T09:30:00.000Z',
+        createdAt: '2026-07-14T09:00:00.000Z',
+      }),
+    ]
+    expect(sortRuns(runs, 'active').map((r) => r.id)).toEqual(['awaiting', 'running', 'done', 'failed'])
+  })
+
   it('orders by status priority, then newest first', () => {
     const runs = [
       run({ id: 'done-old', status: 'done', createdAt: '2026-07-14T09:00:00.000Z' }),
@@ -459,6 +481,14 @@ describe('listCounts', () => {
     ]
     // The archived `waiting` counts as archived only — an archived run is not asking for you.
     expect(listCounts(runs)).toEqual({ active: 4, archived: 2, waiting: 2 })
+  })
+
+  it('counts a run awaiting an answer among the runs that want you', () => {
+    const runs = [
+      run({ status: 'failed', awaitingAnswerSince: '2026-10-05T10:00:00.000Z' }),
+      run({ status: 'failed' }),
+    ]
+    expect(listCounts(runs)).toEqual({ active: 2, archived: 0, waiting: 1 })
   })
 
   it('is all zeroes for an empty list', () => {

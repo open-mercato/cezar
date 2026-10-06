@@ -156,11 +156,16 @@ export function threadFilePaths(state: ThreadState): string[] {
   return deduped
 }
 
-export function threadFooter(status: RunStatus, error?: string): ThreadFooter {
+export function threadFooter(status: RunStatus, error?: string, awaitingAnswer = false): ThreadFooter {
   switch (status) {
     case 'waiting':
       return { state: 'waiting' }
     case 'failed':
+      // The session closed on an unanswered question: the header says "needs you", so the footer
+      // must not announce a failure — the answer is the way forward, not a retry.
+      if (awaitingAnswer) {
+        return { state: 'closed', tone: 'dim', label: 'Session closed — waiting for your answer, which reopens it' }
+      }
       return { state: 'closed', tone: 'danger', label: error ? `Session failed — ${error}` : 'Session failed' }
     case 'review':
       return { state: 'closed', tone: 'dim', label: 'Session closed — waiting for your review' }

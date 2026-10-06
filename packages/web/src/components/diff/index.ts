@@ -4,4 +4,16 @@
  * modules are internal; they are exported nowhere on purpose.
  */
 export { Diff } from './diff'
-export type { DiffFileChange, DiffHandle, DiffMode, DiffProps } from './types'
+export { COMMENT_MAX } from './types'
+export { describeLines } from './line-label'
+export type {
+  DiffFileChange,
+  DiffHandle,
+  DiffLineAnchor,
+  DiffLineComment,
+  DiffLineEnd,
+  DiffMode,
+  DiffNewLineComment,
+  DiffProps,
+  DiffRevealTarget,
+} from './types'

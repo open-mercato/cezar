@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { bodyFromAddFlags, parseEvery, runAutomationCommand, type AutomationCliIo } from './automation-cli.ts';
 import { AUTOMATION_SCHEMA_REFERENCE } from './prompts.ts';
+
+function containsRunnerToken(text: string, runner: string): boolean {
+  return new RegExp(`(?:^|[^A-Za-z0-9_-])${runner}(?=$|[^A-Za-z0-9_-])`).test(text);
+}
 
 /** The `cez automation` CLI is a thin client: what is pinned is the request it builds from the
  *  definition and env, how it relays a refusal, and that it never talks to a server it was not
@@ -207,6 +212,7 @@ describe('cez automation', () => {
     const help = harness([]);
     expect(await runAutomationCommand(['help'], {}, help.io)).toBe(0);
     expect(help.out[0]).toContain('cez automation create');
+    for (const runner of RUNNER_IDS) expect(containsRunnerToken(help.out[0] ?? '', runner)).toBe(true);
     const unknown = harness([]);
     expect(await runAutomationCommand(['frobnicate'], env, unknown.io)).toBe(2);
     expect(unknown.err[0]).toContain('unknown command "frobnicate"');

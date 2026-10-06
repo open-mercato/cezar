@@ -388,6 +388,92 @@ describe('the review gate on the thread', () => {
   })
 })
 
+/**
+ * The review gate is the self-review moment: line comments drafted on the Changes tab must go
+ * back WITH the notes, through the thread's one comments instance (the composer shows the same
+ * chips), and be dropped only once the send-back landed.
+ */
+describe('the review gate and diff comments', () => {
+  const COMMENTS = [
+    { id: 'c1', path: 'src/server.ts', side: 'new', line: 7, body: 'port must come from env', excerpt: 'const port = 3000' },
+  ]
+  const withComments = () =>
+    stubFetch({
+      'GET /api/v1/runs/r1/drafts': () =>
+        jsonResponse({
+          surfaces: {
+            'diff-comments': { text: JSON.stringify(COMMENTS), images: [], updatedAt: '2026-10-02T00:00:00.000Z' },
+          },
+        }),
+    })
+  const continued = (sent: SentRequest[]) =>
+    sent.find((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/continue')?.body as { text: string } | undefined
+  const commentsCleared = (sent: SentRequest[]) =>
+    sent.some(
+      (r) =>
+        r.method === 'PUT' &&
+        r.path === '/api/v1/runs/r1/drafts/diff-comments' &&
+        (r.body as { text?: string } | undefined)?.text === '',
+    )
+
+  it('sends the drafted line comments back with the notes, then drops them', async () => {
+    const sent = withComments()
+    renderWithProviders(<ThreadView run={run('review')} thread={reduceThread([])} />)
+
+    // The panel says they will go, and the composer shows the same comment as a chip.
+    await screen.findByText(/1 comment on the diff — sent back with these notes/)
+    expect(screen.getByText('server.ts +7')).not.toBeNull()
+
+    fireEvent.change(screen.getByLabelText('Notes for the agent'), { target: { value: 'also add a test' } })
+    const sendBack = screen.getByRole<HTMLButtonElement>('button', { name: /Send back/ })
+    await waitFor(() => expect(sendBack.disabled).toBe(false))
+    fireEvent.click(sendBack)
+
+    await waitFor(() => expect(continued(sent)).toBeDefined())
+    expect(continued(sent)!.text).toBe(
+      'Review feedback:\nalso add a test\n\nReview comments on the diff:\n\n- `src/server.ts` line 7:\n\n  ```\n  const port = 3000\n  ```\n\n  port must come from env',
+    )
+    await waitFor(() => expect(commentsCleared(sent)).toBe(true))
+    // One instance: the composer chip went with them.
+    await waitFor(() => expect(screen.queryByText('server.ts +7')).toBeNull())
+  })
+
+  it('sends drafted comments back on their own, with no notes typed', async () => {
+    const sent = withComments()
+    renderWithProviders(<ThreadView run={run('review')} thread={reduceThread([])} />)
+    await screen.findByText(/1 comment on the diff/)
+
+    const sendBack = screen.getByRole<HTMLButtonElement>('button', { name: /Send back/ })
+    await waitFor(() => expect(sendBack.disabled).toBe(false))
+    fireEvent.click(sendBack)
+
+    await waitFor(() => expect(continued(sent)?.text).toMatch(/^Review feedback:\nReview comments on the diff:/))
+    expect(screen.queryByText('Write what to change first.')).toBeNull()
+  })
+
+  it('keeps the comments when the send-back is rejected', async () => {
+    const sent = stubFetch({
+      'GET /api/v1/runs/r1/drafts': () =>
+        jsonResponse({
+          surfaces: {
+            'diff-comments': { text: JSON.stringify(COMMENTS), images: [], updatedAt: '2026-10-02T00:00:00.000Z' },
+          },
+        }),
+      'POST /api/v1/runs/r1/continue': () => jsonResponse({ error: 'session gone' }, 500),
+    })
+    renderWithProviders(<ThreadView run={run('review')} thread={reduceThread([])} />)
+    await screen.findByText(/1 comment on the diff/)
+
+    const sendBack = screen.getByRole<HTMLButtonElement>('button', { name: /Send back/ })
+    await waitFor(() => expect(sendBack.disabled).toBe(false))
+    fireEvent.click(sendBack)
+
+    await screen.findByText('session gone')
+    expect(screen.getByText('server.ts +7')).not.toBeNull()
+    expect(commentsCleared(sent)).toBe(false)
+  })
+})
+
 describe('the accept celebration', () => {
   it('review → done shows the one-shot twinkle overlay and clears it after ~1.5s', () => {
     vi.useFakeTimers()

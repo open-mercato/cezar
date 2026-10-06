@@ -1808,6 +1808,103 @@ describe('RunStore — read receipts (#unread-done-items)', () => {
   });
 });
 
+/**
+ * `awaitingAnswerSince`: a `failed` run whose session closed on an unanswered `CEZ:ASK`. The
+ * cockpit keeps it under "needs you", so the store owns the invariant that only a `failed` run
+ * carries it — a Continue, a Finish, a cancel, an archive and a reload all retire it on their own.
+ */
+describe('RunStore — awaitingAnswerSince', () => {
+  let dataDir: string;
+  const AT = '2026-10-05T10:00:00.000Z';
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-awaiting-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const awaiting = (store: RunStore): string => {
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    store.updateRun(run.id, { status: 'failed', finishedAt: AT, awaitingAnswerSince: AT });
+    return run.id;
+  };
+
+  it('survives a failed-to-failed write and a reload', () => {
+    const store = RunStore.open(dataDir);
+    const id = awaiting(store);
+    store.updateRun(id, { status: 'failed', error: 'still unanswered' });
+    expect(store.getRun(id)?.awaitingAnswerSince).toBe(AT);
+    store.flush();
+    expect(RunStore.open(dataDir, { keepLive: true }).getRun(id)?.awaitingAnswerSince).toBe(AT);
+  });
+
+  it.each(['running', 'queued', 'waiting', 'done', 'review', 'cancelled'] as const)(
+    'is retired when the run moves to %s',
+    (status) => {
+      const store = RunStore.open(dataDir);
+      const id = awaiting(store);
+      store.updateRun(id, { status });
+      expect(store.getRun(id)?.awaitingAnswerSince).toBeUndefined();
+    },
+  );
+
+  it('is retired by archiving that one run', () => {
+    const store = RunStore.open(dataDir);
+    const one = awaiting(store);
+    store.setArchived(one, true);
+    expect(store.getRun(one)?.awaitingAnswerSince).toBeUndefined();
+  });
+
+  it('is a gate the "Archive finished" sweep leaves alone, like review', () => {
+    const store = RunStore.open(dataDir);
+    const open = awaiting(store);
+    const outcome = store.createRun({ title: 'o', workflow: 'quick-task', task: 'o', steps: [] });
+    store.updateRun(outcome.id, { status: 'failed', finishedAt: AT });
+    expect(store.archiveFinished()).toBe(1);
+    expect(store.getRun(outcome.id)?.archived).toBe(true);
+    expect(store.getRun(open)?.archived).toBe(false);
+    expect(store.getRun(open)?.awaitingAnswerSince).toBe(AT);
+  });
+
+  it('markAllRead leaves an awaiting run alone, exactly as the cockpit rule does', () => {
+    const store = RunStore.open(dataDir);
+    const id = awaiting(store);
+    expect(store.markAllRead()).toBe(0);
+    expect(store.getRun(id)?.seenAt).toBeUndefined();
+  });
+
+  it('a reader that does not recover turns a waiting ASK park into an awaiting failure', () => {
+    const store = RunStore.open(dataDir);
+    const parked = store.createRun({ title: 'p', workflow: 'quick-task', task: 'p', steps: [] });
+    store.updateRun(parked.id, { status: 'waiting', askParked: true });
+    const plain = store.createRun({ title: 'w', workflow: 'quick-task', task: 'w', steps: [] });
+    store.updateRun(plain.id, { status: 'waiting' });
+    store.flush();
+
+    const reopened = RunStore.open(dataDir);
+    expect(reopened.getRun(parked.id)?.status).toBe('failed');
+    // Stamped from `finishedAt`, so repeated cold reads agree on the instant.
+    expect(reopened.getRun(parked.id)?.awaitingAnswerSince).toBe(reopened.getRun(parked.id)?.finishedAt);
+    expect(reopened.getRun(parked.id)?.askParked).toBeUndefined();
+    expect(reopened.getRun(plain.id)?.status).toBe('failed');
+    expect(reopened.getRun(plain.id)?.awaitingAnswerSince).toBeUndefined();
+  });
+
+  it('drops a stray value from a non-failed record on load', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    store.updateRun(run.id, { status: 'done', finishedAt: AT });
+    store.flush();
+    const path = join(dataDir, 'runs.json');
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as Array<Record<string, unknown>>;
+    raw.find((r) => r.id === run.id)!.awaitingAnswerSince = AT;
+    writeFileSync(path, JSON.stringify(raw));
+    expect(RunStore.open(dataDir).getRun(run.id)?.awaitingAnswerSince).toBeUndefined();
+  });
+});
+
 describe('RunStore — the legacy `claude-cli` runner id (#547)', () => {
   let dataDir: string;
 

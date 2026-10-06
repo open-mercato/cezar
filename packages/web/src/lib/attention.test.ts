@@ -179,6 +179,28 @@ describe('a run waiting out a usage limit', () => {
   })
 })
 
+describe('a run whose session closed on an unanswered question', () => {
+  const awaiting = run({ status: 'failed', awaitingAnswerSince: '2026-10-05T10:00:00.000Z' })
+
+  it('still needs you — the question was never answered', () => {
+    // `failed` on the record because the idle close ended the process, but the user still owns
+    // the next move; neither "done" nor a red failure is true.
+    expect(deriveAttention(awaiting)).toEqual({
+      bucket: 'waiting',
+      tone: 'pending',
+      pulse: true,
+      label: 'needs you',
+    })
+    expect(wantsAttention(awaiting)).toBe(true)
+  })
+
+  it('only applies to a FAILED run — any other status reads as itself', () => {
+    expect(deriveAttention(run({ status: 'done', awaitingAnswerSince: '2026-10-05T10:00:00.000Z' })).label)
+      .toBe('done')
+    expect(deriveAttention(run({ status: 'failed' })).label).toBe('failed')
+  })
+})
+
 describe('wantsAttention', () => {
   it.each(ALL_STATUSES)('%s', (status) => {
     // The spec's notification trigger (Phase R6): "waiting/review/failed".

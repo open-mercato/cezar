@@ -543,7 +543,9 @@ function CostTaskRow({
 }) {
   const truth = useDashboardTruth(row)
   disabled = disabled || truth === null
-  const attention = deriveAttention({ status: truth?.status ?? row.status })
+  const attention = deriveAttention(
+    truth ? { status: truth.status, awaitingAnswerSince: truth.awaitingAnswerSince } : row,
+  )
   const metrics = choices(visibility)
   const secondary = metrics.filter((metric) => metric !== sort)
   // "Unavailable" three times a row buried the numbers; a dash reads as absent at a glance.

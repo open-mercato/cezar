@@ -2449,7 +2449,7 @@ describe('the Dispatch toggle', () => {
     expect((postedBody() as Record<string, unknown>).dispatch).toEqual({ maxSubtasks: 10, inFlight: 2 })
   })
 
-  it('the settings offer the host runners and the model presets of the chosen subtask runner', async () => {
+  it('the settings offer the host runners and the model catalog of the chosen subtask runner', async () => {
     const toggle = await readyWithDispatch({ health: { ...HEALTH_DISPATCH, checks: HEALTH_MULTI.checks }, providerStatus: PROVIDERS_MULTI })
     fireEvent.click(settingsTrigger()!)
     await waitFor(() => expect(settings()).not.toBeNull())
@@ -2461,20 +2461,46 @@ describe('the Dispatch toggle', () => {
     await waitFor(() => expect(Array.from(model().options).map((o) => o.value)).toEqual(['', 'opus', 'sonnet']))
 
     // Picking a model, then another runner: the model pin is dropped with it (presets are
-    // per-runner), and codex's list here is its static presets — auto only, which the select
-    // folds into "same as parent" — because only the parent's runner gets the live catalog.
+    // per-runner), and the list becomes CODEX's — its own discovered catalog, not the parent's
+    // and not the `auto`-only static presets discovery replaced (#784/#794).
     fireEvent.change(model(), { target: { value: 'sonnet' } })
     expect(readDraft().dispatch).toEqual({ model: 'sonnet' })
     fireEvent.change(runner, { target: { value: 'codex' } })
     expect(readDraft().dispatch).toEqual({ runner: 'codex' })
-    expect(Array.from(model().options).map((o) => o.value)).toEqual([''])
+    await waitFor(() => expect(Array.from(model().options).map((o) => o.value)).toEqual(['', 'gpt-future']))
+    fireEvent.change(model(), { target: { value: 'gpt-future' } })
+    expect(readDraft().dispatch).toEqual({ runner: 'codex', model: 'gpt-future' })
     fireEvent.change(screen.getByLabelText('Budget per subtask'), { target: { value: '2.5' } })
-    expect(readDraft().dispatch).toEqual({ runner: 'codex', budgetUsd: 2.5 })
+    expect(readDraft().dispatch).toEqual({ runner: 'codex', model: 'gpt-future', budgetUsd: 2.5 })
+
+    // Back to the parent's runner: the pin is dropped again and the parent's catalog returns.
+    fireEvent.change(runner, { target: { value: '' } })
+    expect(readDraft().dispatch).toEqual({ budgetUsd: 2.5 })
+    await waitFor(() => expect(Array.from(model().options).map((o) => o.value)).toEqual(['', 'opus', 'sonnet']))
 
     // The header switch is the same on/off as the pill.
     fireEvent.click(document.querySelector('[data-slot="dispatch-settings-switch"]')!)
     expect(toggle.getAttribute('aria-checked')).toBe('false')
     expect(readDraft().dispatch).toBeNull()
+  })
+
+  it("a Codex subtask under a Claude parent can pin a Codex model, and it rides the body", async () => {
+    await readyWithDispatch({ health: { ...HEALTH_DISPATCH, checks: HEALTH_MULTI.checks }, providerStatus: PROVIDERS_MULTI })
+    fireEvent.click(settingsTrigger()!)
+    await waitFor(() => expect(settings()).not.toBeNull())
+
+    // The composer itself stays on claude — only the SUBTASKS run as codex.
+    fireEvent.change(screen.getByLabelText('Subtask runner'), { target: { value: 'codex' } })
+    const model = () => screen.getByLabelText('Subtask model') as HTMLSelectElement
+    await waitFor(() => expect(Array.from(model().options).map((o) => o.value)).toEqual(['', 'gpt-future']))
+    fireEvent.change(model(), { target: { value: 'gpt-future' } })
+
+    fireEvent.change(textarea(), { target: { value: 'Fan this out to codex' } })
+    await startTask()
+    const body = postedBody() as Record<string, unknown>
+    expect(body.dispatch).toEqual({ runner: 'codex', model: 'gpt-future' })
+    // The parent's own engine is untouched by the subtask pick.
+    expect(body).not.toHaveProperty('model')
   })
 
   it('the keyboard reaches the settings with ArrowDown', async () => {
