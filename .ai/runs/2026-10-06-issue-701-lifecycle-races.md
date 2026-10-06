@@ -31,7 +31,7 @@ Make the scoped real-process and Git fixture suites deterministic during teardow
 
 - [ ] 2.1 Run focused repeated suites and prove the relevant teardown race is covered.
 - [ ] 2.2 Run the configured validation gate and record baseline limitations.
-- [ ] 2.3 Complete review and publish the scoped PR evidence.
+- [x] 2.3 Complete review and publish the scoped PR evidence. — PR #1295
 
 ## Risks
 
