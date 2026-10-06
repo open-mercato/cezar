@@ -24,8 +24,8 @@ Make the scoped real-process and Git fixture suites deterministic during teardow
 
 ### Phase 1: Establish teardown guard
 
-- [ ] 1.1 Add a test-only RunStore registry/cleanup helper that flushes and blocks late scheduled saves.
-- [ ] 1.2 Apply the helper and awaited manager/store cleanup to the scoped suites with temporary fixtures.
+- [x] 1.1 Add a test-only RunStore registry/cleanup helper that flushes and blocks late scheduled saves. — 9a4d4f89
+- [x] 1.2 Apply the helper and awaited manager/store cleanup to the scoped suites with temporary fixtures. — 9a4d4f89
 
 ### Phase 2: Verify lifecycle behavior
 
