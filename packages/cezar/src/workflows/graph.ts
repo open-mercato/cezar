@@ -70,7 +70,13 @@ export const graphNodeSchema = z.discriminatedUnion('type', [
     /** Fork branches only: the child task's budget, carved from this run's. */
     budgetUsd: z.number().positive().optional(),
   }),
-  z.object({ ...nodeBase, type: z.literal('check'), command: z.string().min(1) }),
+  z.object({
+    ...nodeBase,
+    type: z.literal('check'),
+    command: z.string().min(1),
+    /** v1 compatibility: only these non-zero exits are eligible for an onFail retry. */
+    retryOn: z.array(z.number().int().positive()).optional(),
+  }),
   // ---- phase 1c: nodes cezar executes itself (no agent session) ----
   /** Pause for the user's approve / reject (an ask card with two options). */
   z.object({ ...nodeBase, type: z.literal('gate.human'), message: z.string().min(1), timeoutMs: waitMs.optional() }),
@@ -496,7 +502,11 @@ export function compileV1(steps: readonly WorkflowStepDef[]): WorkflowGraph {
   const out = (s: WorkflowStepDef) => `${s.id}.${s.command ? 'pass' : 'done'}`;
   steps.forEach((s, i) => {
     const { onFail, command, ...rest } = s;
-    nodes.push(command ? { ...rest, type: 'check', command } : { ...rest, type: 'agent' });
+    nodes.push(
+      command
+        ? { ...rest, type: 'check', command, ...(onFail?.retryOn ? { retryOn: onFail.retryOn } : {}) }
+        : { ...rest, type: 'agent' },
+    );
     edges.push({ from: i === 0 ? `${startId}.next` : out(steps[i - 1]!), to: s.id });
     if (command && onFail) {
       const loopId = fresh(`${s.id}-retry`);

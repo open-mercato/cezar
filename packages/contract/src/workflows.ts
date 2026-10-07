@@ -87,7 +87,12 @@ export const workflowGraphNodeSchema = z.discriminatedUnion('type', [
     review: z.boolean().optional(),
     budgetUsd: z.number().optional(),
   }),
-  z.object({ ...graphNodeBase, type: z.literal('check'), command: z.string() }),
+  z.object({
+    ...graphNodeBase,
+    type: z.literal('check'),
+    command: z.string(),
+    retryOn: z.array(z.number().int().positive()).optional(),
+  }),
   z.object({ ...graphNodeBase, type: z.literal('gate.human'), message: z.string(), timeoutMs: z.number().optional() }),
   z.object({
     ...graphNodeBase,

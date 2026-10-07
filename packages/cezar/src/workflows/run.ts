@@ -4659,6 +4659,14 @@ export class RunManager {
           if (state.askPark === 'abandoned') this.finishStep(runId, node.id, 'done', undefined, emit);
           return null;
         }
+        // Preserve the v1 safety bound on an ordinary terminal wait: session closure caused by
+        // inactivity is not evidence that the task completed. The review-gate path remains a
+        // needs-you state with its changes available to the user.
+        if (await this.idleClosedFails(runId, state)) {
+          const error = this.inactivityFailureMessage();
+          this.finishStep(runId, node.id, 'failed', error, emit);
+          return error;
+        }
         let verdict: string | null = null;
         if (!failure && verdicts.length) {
           verdict = parseVerdict(lastTurn.text, verdicts);
@@ -4709,14 +4717,25 @@ export class RunManager {
       } else {
         const rendered = nodeToStep(node);
         if (rendered.command) rendered.command = renderNodeRefs(rendered.command, outputs);
-        const { ok, output } = await this.runCheckStep(state, rendered, emit);
+        const { ok, output, exitCode } = await this.runCheckStep(state, rendered, emit);
         if (state.cancelled) return null;
-        outputs.set(node.id, { exitCode: ok ? 0 : 1, output });
+        outputs.set(node.id, { exitCode, output });
         if (ok) {
           this.finishStep(runId, node.id, 'done', undefined, emit);
           port = 'pass';
         } else {
           checkFailure = output;
+          if (node.retryOn?.length && !node.retryOn.includes(exitCode)) {
+            const codes = node.retryOn.join(', ');
+            const error = `check "${node.id}" exited ${exitCode}, which onFail.retryOn (${codes}) does not retry`;
+            emit({
+              type: 'note',
+              stepId: node.id,
+              message: `check exited ${exitCode} — not retried (onFail.retryOn: ${codes})`,
+            });
+            this.finishStep(runId, node.id, 'failed', `\`${rendered.command}\` exited ${exitCode}`, emit);
+            return error;
+          }
           this.finishStep(runId, node.id, 'failed', `\`${rendered.command}\` exited non-zero`, emit);
           port = 'fail';
         }

@@ -153,8 +153,8 @@ describe('iOS sweep — every primary view at 390×844', () => {
     sweep('github', '/github', '[data-slot="gh-header"]')
   })
 
-  it('/workflows (builder)', () => {
-    sweep('workflows', '/workflows', '[data-slot="wb-main"]')
+  it('/workflows (node editor)', () => {
+    sweep('workflows', '/workflows', '.react-flow__node')
   })
 
   // Global settings live outside `/p/:projectId` (step 3.5) — swept at their real URLs.

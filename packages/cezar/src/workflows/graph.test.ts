@@ -128,12 +128,13 @@ describe('advance', () => {
 });
 
 describe('compileV1', () => {
-  it('turns onFail into check.fail → loop(max) → retry target, and stays valid', () => {
+  it('turns onFail into check.fail → loop(max) → retry target and preserves retryOn', () => {
     const g = compileV1([
       { id: 'implement', prompt: '{{task}}' },
-      { id: 'verify', command: 'npm test', onFail: { retry: 'implement', max: 2 } },
+      { id: 'verify', command: 'npm test', onFail: { retry: 'implement', max: 2, retryOn: [1] } },
     ]);
     expect(graphIssues(g)).toEqual([]);
+    expect(g.nodes.find((n) => n.id === 'verify')).toMatchObject({ retryOn: [1] });
     const loops = new Map<string, number>();
     expect(advance(g, 'verify', 'fail', loops)).toMatchObject({ kind: 'node', node: { id: 'implement' } });
     expect(advance(g, 'verify', 'fail', loops)).toMatchObject({ kind: 'node', node: { id: 'implement' } });

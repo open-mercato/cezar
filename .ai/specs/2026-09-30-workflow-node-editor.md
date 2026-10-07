@@ -101,6 +101,8 @@ Rules:
   success-type ports end the run successfully. The validator warns on every unwired port.
 - v1 → v2 is a pure, in-memory compile (`compileV1`), so one engine runs both. `check.onFail`
   compiles to `check.fail → loop(max) → retry target`, with the failing output injected as today.
+  Its optional `retryOn` exit-code filter stays on the compiled check: an unlisted exit fails the
+  run immediately instead of spending another agent attempt.
 - Saving from the editor writes v2 unless the graph is still expressible as a pure skill stack
   (then the compact `skills:` form, as spec 012 does).
 
