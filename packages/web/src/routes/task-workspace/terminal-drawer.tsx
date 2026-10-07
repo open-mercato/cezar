@@ -233,7 +233,10 @@ export function TerminalDrawer({
 
         {active ? (
           // The worktree, stated: a shell that does not say which tree it is typing into is a trap.
-          <span className="hidden min-w-0 shrink lg:block" title={active.cwd}>
+          // CAPPED, because a worktree path is long and the tab strip shares this row with it: an
+          // uncapped `shrink` takes its content width as its basis, which pushed every tab after
+          // the first out of view on a real path.
+          <span className="hidden max-w-[30%] shrink lg:block" title={active.cwd}>
             <span className="block truncate text-[11px] text-soft-foreground">{active.cwd}</span>
           </span>
         ) : null}
