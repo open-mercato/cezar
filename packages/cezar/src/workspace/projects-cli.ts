@@ -9,6 +9,7 @@ import {
   removeProject,
   shouldRegisterProject,
 } from './projects.ts';
+import { track } from '../telemetry.ts';
 
 /**
  * `cezar projects` (spec 2026-07-20-multi-project-workspace, step 5.2) — the
@@ -145,6 +146,7 @@ async function addCommand(root: string, io: ProjectsCommandIo): Promise<number> 
   // Registration dedupes by realpath, so a second `add` of the same folder
   // (or a symlink to it) reports the entry that already exists.
   io.log(known.has(entry.id) ? `  = ${entry.id} (already registered)  ${entry.root}` : `  + ${entry.id}  ${entry.root}`);
+  if (!known.has(entry.id)) track('project_added', { label: 'cli' });
   return 0;
 }
 
