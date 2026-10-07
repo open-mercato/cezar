@@ -1,9 +1,9 @@
-import { LayoutGridIcon, MessageSquareTextIcon, SearchXIcon } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { LayoutGridIcon, MessageSquareTextIcon, SearchXIcon, TerminalIcon } from 'lucide-react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router'
 
 import { ApiError } from '@/api/client'
-import { useMarkRunSeen, useRun } from '@/api/queries'
+import { useHealth, useMarkRunSeen, useRun } from '@/api/queries'
 import { useRunHistory } from '@/api/run-history'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
@@ -26,6 +26,13 @@ import { ViewPickerMenu } from './view-picker'
 import { WorkspaceColumns, type ColumnActions } from './workspace-columns'
 import { useWorkspaceLayouts } from './use-workspace-layouts'
 import type { ViewId } from './layout-state'
+
+/** Lazy because it carries the emulator (xterm, ~80 KB gz) and its stylesheet. A task whose
+ *  drawer is never opened must not pay for either — the drawer starts hidden on every visit
+ *  (spec §6), so that is most visits. */
+const TerminalDrawer = lazy(() =>
+  import('./terminal-drawer').then((m) => ({ default: m.TerminalDrawer })),
+)
 
 /**
  * `/tasks/:id` — the task workspace (spec `.ai/specs/2026-10-07-task-workspace.md`).
@@ -124,6 +131,14 @@ function WorkspaceView({
 
   const markedUnread = useCallback(() => onMarkedUnread(run.id), [onMarkedUnread, run.id])
 
+  // Hidden on a fresh visit and shown only by an explicit click (spec §6). Keyed to nothing
+  // persistent yet: restoring the drawer's open state across a reload belongs with the tabs and
+  // the draggable height, in the step that adds them.
+  const [terminalOpen, setTerminalOpen] = useState(false)
+  // Policy, read from the one place that knows it. A cockpit where a shell is not allowed shows
+  // no button at all rather than one that explains itself after the click.
+  const terminalAllowed = useHealth().data?.capabilities?.terminal === true
+
   // Memoized because `RunHeader` is `memo`'d on prop identity: a fresh element every render would
   // make that comparator always false and re-render the whole header on every thread frame.
   const tabs = useMemo(
@@ -172,6 +187,19 @@ function WorkspaceView({
   return (
     <div data-route="task-workspace" data-run-id={run.id} className="flex h-full min-h-0 flex-col">
       <RunHeader run={run} onMarkedUnread={markedUnread} tabs={tabs} />
+      {terminalAllowed && !terminalOpen ? (
+        <div className="flex shrink-0 justify-end border-b border-border px-2 py-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-xs text-muted-foreground"
+            onClick={() => setTerminalOpen(true)}
+          >
+            <TerminalIcon aria-hidden="true" className="size-3.5" />
+            Terminal
+          </Button>
+        </div>
+      ) : null}
       {layouts.layout ? (
         <WorkspaceColumns columns={layouts.layout.columns} actions={actions} renderView={renderView} />
       ) : (
@@ -193,6 +221,11 @@ function WorkspaceView({
           }
         />
       )}
+      {terminalAllowed && terminalOpen ? (
+        <Suspense fallback={null}>
+          <TerminalDrawer runId={run.id} onClose={() => setTerminalOpen(false)} />
+        </Suspense>
+      ) : null}
     </div>
   )
 }

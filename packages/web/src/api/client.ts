@@ -72,6 +72,10 @@ import type {
   MessageResponse,
   RemoveQueuedMessageResponse,
   OpenInCliResponse,
+  TerminalCreateInput,
+  TerminalOutput,
+  TerminalSession,
+  TerminalState,
   OpenProjectInResponse,
   OpenTargetsResponse,
   ParsedWorkflow,
@@ -1579,6 +1583,72 @@ export async function pickVariant(groupId: string, runId: string): Promise<PickV
 
 /** Hand the session off to a real terminal (spec 003), in the run's worktree when it still
  *  exists. On 409 the ApiError's `command` carries the manual `cd … && <resume>` to copy. */
+/* ── The workspace terminal (spec `2026-10-07-task-workspace` §6) ──────────────────────────────
+ *
+ * Output is read with a CURSOR rather than streamed: the same call serves a local cockpit (woken
+ * by the session's WebSocket topic, which carries only the cursor) and a hosted one (polling,
+ * because a browser WebSocket cannot carry reverse-proxy credentials). One format, one replay
+ * rule, and terminal bytes never touch the workspace-level socket bus.
+ */
+
+export async function getRunTerminal(id: string): Promise<TerminalState> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].terminal.$get({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/terminal'),
+  )
+}
+
+export async function createRunTerminal(id: string, body: TerminalCreateInput): Promise<TerminalSession> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].terminal.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: body,
+    }),
+    runPath(id, '/terminal'),
+  )
+}
+
+export async function readRunTerminal(id: string, sessionId: string, cursor: number): Promise<TerminalOutput> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].terminal[':sessionId'].output.$get({
+      param: { projectId: queryScope(), id: encodeURIComponent(id), sessionId },
+      query: { cursor: String(cursor) },
+    }),
+    runPath(id, `/terminal/${sessionId}/output`),
+  )
+}
+
+export async function writeRunTerminal(id: string, sessionId: string, data: string): Promise<void> {
+  await unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].terminal[':sessionId'].input.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id), sessionId },
+      json: { data },
+    }),
+    runPath(id, `/terminal/${sessionId}/input`),
+  )
+}
+
+export async function resizeRunTerminal(id: string, sessionId: string, cols: number, rows: number): Promise<void> {
+  await unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].terminal[':sessionId'].resize.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id), sessionId },
+      json: { cols, rows },
+    }),
+    runPath(id, `/terminal/${sessionId}/resize`),
+  )
+}
+
+export async function stopRunTerminal(id: string, sessionId: string): Promise<void> {
+  await unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].terminal[':sessionId'].$delete({
+      param: { projectId: queryScope(), id: encodeURIComponent(id), sessionId },
+    }),
+    runPath(id, `/terminal/${sessionId}`),
+  )
+}
+
 export async function openRunInCli(id: string): Promise<OpenInCliResponse> {
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id']['open-in-cli'].$post({
