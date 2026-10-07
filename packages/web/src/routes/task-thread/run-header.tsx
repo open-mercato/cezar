@@ -45,6 +45,7 @@ import { ResolveConflictsButton } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
 import { TabLink } from '@/components/tab-link'
+import { forgetViewMemory } from '@/lib/view-memory'
 import { forgetTask } from '@/routes/task-workspace/layout-state'
 import {
   AlertDialog,
@@ -551,6 +552,7 @@ function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
       // server route can reach — and a task id is never reused, so leaving them would be a leak
       // nothing ever cleans up.
       forgetTask(run.id)
+      forgetViewMemory(`${run.id}:`)
       // The run is gone — so is this page. Home is the only honest destination.
       void navigate('/')
     },

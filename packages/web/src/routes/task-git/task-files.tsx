@@ -7,6 +7,7 @@ import { useRun, useRunFile } from '@/api/queries'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { cn } from '@/lib/utils'
+import { useRememberedState } from '@/lib/view-memory'
 
 import { RunHeader } from '../task-thread/run-header'
 import { FilePreview } from './file-preview'
@@ -39,11 +40,22 @@ export function TaskFilesRoute() {
 /** `embedded` is the workspace column (spec `2026-10-07-task-workspace` §5.1): the ONE run header
  *  belongs to the workspace, so a column renders this view's body only. Everything else — the
  *  tree, the preview, the 409 empty state — is the same component, not a copy. */
-export function FilesView({ run, embedded = false }: { run: ApiRun; embedded?: boolean }) {
+export function FilesView({
+  run,
+  embedded = false,
+  stateKey,
+}: {
+  run: ApiRun
+  embedded?: boolean
+  /** Identifies this view instance so its file selection survives a layout switch, which
+   *  unmounts the column (spec `2026-10-07-task-workspace` §5.4). Absent outside a workspace
+   *  column, where nothing unmounts it and there is nothing to remember. */
+  stateKey?: string
+}) {
   // The root listing doubles as the "is there a worktree at all?" probe — a 409 here is the
   // server's answer for the whole view, same stance as the Changes tab's /changes 409.
   const root = useRunFile(run.id, '')
-  const [selected, setSelected] = useState<string | null>(null)
+  const [selected, setSelected] = useRememberedState<string | null>(stateKey, null)
 
   const refused = root.isError && root.error instanceof ApiError && root.error.status === 409
 

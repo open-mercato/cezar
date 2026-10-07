@@ -1,8 +1,15 @@
 # Task workspace — product and implementation specification
 
-> Status: Milestone 1 implemented (2026-10-07). Milestones 2-4 not started.
-> Implementation: `packages/web/src/routes/task-workspace/`; the four task URLs resolve to it in
-> `packages/web/src/routes.tsx`.
+> Status: Milestones 1-3 implemented (2026-10-08). Milestone 4 is deliberately not done — it asks
+> for refinements "based on actual use rather than adding them to the first cut", so it opens when
+> the feature has been used.
+> Implementation: `packages/web/src/routes/task-workspace/` (cockpit) and
+> `packages/cezar/src/server/terminal/` (PTY sessions, address detection, command discovery). The
+> four task URLs resolve to the workspace in `packages/web/src/routes.tsx`.
+>
+> **Corrections made during implementation are marked inline as `IMPLEMENTATION NOTE`.** Each one
+> records something this document assumed that the codebase or the platform does not support, with
+> the evidence. They are part of the spec now, not deviations from it.
 > Design reference: [`docs/mockups/task-workspace.html`](../../docs/mockups/task-workspace.html)
 > Related existing surfaces: `/tasks/:id`, `/tasks/:id/changes`, `/tasks/:id/files`, `/tasks/:id/commits`.
 
@@ -252,7 +259,55 @@ To change the view in a column, use the **hamburger menu** in the header to acce
   Conversation drafts and Changes comments. Replacing a view discards that view's local state; apply
   the specific warning and draft rules in §5.2.
 
-## 6. Terminal feature (separate milestone)
+  > **IMPLEMENTATION NOTE — how each of those actually survives.** Switching layouts UNMOUNTS the
+  > columns of the layout you left, because keeping every layout's columns mounted would mean a
+  > Conversation column subscribing to a transcript it is not showing. So each piece is kept by
+  > something that outlives the component:
+  >
+  > - Conversation drafts and Changes comments: already SERVER state (`putRunDraft`, keyed by run
+  >   and surface), which is also why the warning in §5.2 was removed — nothing is lost.
+  > - Conversation scroll: the thread's own module-level scroll memory (`thread-scroll.ts`).
+  > - File selection, in Files and Changes: `lib/view-memory.ts`, keyed per task and column, which
+  >   generalises the pattern the thread and the run header were already using. Session-lifetime
+  >   only — it is where you were looking, not what you chose, and a reload may start fresh.
+
+## 6. Terminal feature (implemented, Milestone 2)
+
+> **IMPLEMENTATION NOTE — the PTY is an optional dependency.** `@lydell/node-pty`, declared in
+> `optionalDependencies`. cezar ships zero native dependencies and zero install scripts, and its
+> self-update path runs `npm install` on the user's machine WITHOUT `--ignore-scripts`
+> (`src/self-update/installer.ts`), so upstream `node-pty` — whose install script is
+> `node scripts/prebuild.js || node-gyp rebuild` — would compile there, on whatever Node they
+> have, across four platforms, and a failure would break the whole cockpit rather than one panel.
+> The fork declares no install script and ships prebuilt binaries for linux/win32/darwin on
+> x64+arm64. A platform with no binary reports the terminal unavailable WITH A REASON and cezar
+> boots normally.
+>
+> **IMPLEMENTATION NOTE — `CEZ_TERMINAL` is a tri-state.** Unset it follows the deployment mode:
+> on locally, off on a hosted cockpit, the same line `localHandoff` draws for every other
+> host-machine affordance. `=1` opts a hosted cockpit in; `=0` turns it off everywhere. Hosted is
+> opt-in because cezar has no authentication of its own, so a shell there is handed to whoever the
+> reverse proxy admits — AGENTS.md's rule for a feature that widens exposure. Documented in
+> `.env.example` and `docs/reference.md`.
+>
+> **IMPLEMENTATION NOTE — tab names come from the process table, not from what was typed.**
+> `server/terminal/foreground.ts` reads a shell's live child. Typing is the wrong source: it
+> misses anything a script, a key binding or a shell rewrite started, and it would have to
+> re-implement line editing to know when a line was submitted. The same reading answers "is
+> something running", so a tab's name and the warning for closing it cannot disagree.
+>
+> **IMPLEMENTATION NOTE — "Stop" interrupts; the tab's X closes.** §11 reads as though Stop should
+> also close the tab. It does not: stopping a command is not the same as closing a terminal, and
+> you stop a build precisely so you can read why it was wrong. Stop sends Ctrl-C; closing a tab
+> with something running asks first and then takes the whole process tree.
+>
+> **IMPLEMENTATION NOTE — output never rides the WebSocket.** The per-session topic publishes a
+> cursor and nothing else; the bytes come back over the same authenticated HTTP as the rest of the
+> cockpit. The hub's topics are workspace-level and readable by anything its upgrade guard trusts,
+> which is the last place terminal content belongs. Browsers also send no `Sec-Fetch-*` headers on
+> a WebSocket handshake, so a connection that is not provably same-authority (a dev proxy, and
+> Safari and Firefox generally) is admitted untrusted and refused the topic — the view falls back
+> to polling, which costs latency and nothing else.
 
 Terminal is not just a panel around `openRunInCli`; it needs an interactive PTY transport and
 lifecycle. A future terminal spec must resolve:
@@ -276,7 +331,32 @@ lifecycle. A future terminal spec must resolve:
 - Terminal input executes arbitrary shell commands on the cezar host. It must be explicitly
   user-initiated and clearly identify host, project and worktree.
 
-## 7. Browser and app preview (separate milestone)
+## 7. Browser and app preview (implemented, Milestone 3 — with one part deliberately deferred)
+
+> **IMPLEMENTATION NOTE — tab labels come from the address, not the page title.** A cross-origin
+> document's title is unreadable; that is what an iframe boundary IS. The label is derived from
+> the address, which is also what this section asks for on failure — one rule, always true, rather
+> than a title that is silently wrong.
+>
+> **IMPLEMENTATION NOTE — a framing refusal is not observable.** A page that refuses to be framed
+> (`X-Frame-Options`, `frame-ancestors`) fires `load` for the refusal too, so an embedder cannot
+> tell it from a success. A load timeout is the only honest signal available, and the failure
+> message says only what it knows.
+>
+> **IMPLEMENTATION NOTE — the preview PROXY is deliberately not built, and hosted mode says so.**
+> On a hosted cockpit a loopback address means the VIEWER's machine, not the host the task runs
+> on, so framing it would show the wrong thing — or someone else's service. That case is refused
+> with the reason rather than framed. Routing it through the owning host needs the proxy this
+> section calls for, and a safe one is a larger piece of work than it looks: serving untrusted
+> worktree content from the cockpit's own ORIGIN would place it beside the authenticated API,
+> which is the one thing this section says not to do, and the obvious fix (an opaque-origin
+> sandbox) breaks the same-origin fetches every real SPA makes. A half-safe proxy would be worse
+> than an honest gap, so the gap is honest. Local cockpits — `npx cezar-cli`, the default
+> deployment — need no proxy at all and work fully.
+>
+> **IMPLEMENTATION NOTE — detected addresses have three states, not two.** Unprobed is not the
+> same claim as "nothing listening", and the strip renders them differently. Liveness is a TCP
+> connect and nothing more: cezar must not send a request to a server a task started.
 
 Browser is one of the selectable workspace views. Each Browser column has its own saved browser tabs.
 Tabs use the page title as their label, with the URL as the label when loading fails. They include
@@ -333,20 +413,23 @@ loads it in the current tab.
   user chooses a split.
 - Avoid any terminal or preview placeholder that could be mistaken for a working feature.
 
-### Milestone 2 — interactive terminal
+### Milestone 2 — interactive terminal (done)
 
-- Implement PTY lifecycle, validated API transport, reconnect behavior, UI and cleanup, then expose the
-  bottom terminal drawer only where the task host supports it.
+- PTY lifecycle, validated API transport, reconnect behaviour, UI and cleanup; the drawer is
+  exposed only where the host supports it, and says why when it does not.
 
-### Milestone 3 — task preview
+### Milestone 3 — task preview (done, except the proxy)
 
-- Implement explicit startup, port allocation, authenticated/proxied access, logs and cleanup. Enable
-  the Browser view only when preview is supported for the task's host.
+- Explicit startup (a discovered or typed command, run in a new terminal tab), address detection
+  with liveness, and cleanup on archive/delete/restart. The Browser view is enabled everywhere and
+  refuses, with the reason, the one case it cannot serve honestly: a loopback address on a hosted
+  cockpit. Port allocation and a proxied preview are not built — see the note in §7.
 
-### Milestone 4 — polish based on use
+### Milestone 4 — polish based on use (open by design)
 
 - Consider design-mode annotations and further mobile refinements based on actual use rather than
-  adding them to the first cut.
+  adding them to the first cut. Nothing here is scheduled: the milestone exists to be opened once
+  the feature has been lived with.
 
 ## 10. Acceptance criteria for Milestone 1
 

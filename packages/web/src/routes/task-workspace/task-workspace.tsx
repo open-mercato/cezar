@@ -197,11 +197,11 @@ function WorkspaceView({
         case 'session':
           return <ConversationColumn run={run} onMarkedUnread={onMarkedUnread} />
         case 'changes':
-          return <ChangesView run={run} embedded />
+          return <ChangesView run={run} embedded stateKey={`${run.id}:${index}:changes`} />
         case 'commits':
           return <CommitsView run={run} embedded />
         case 'files':
-          return <FilesView run={run} embedded />
+          return <FilesView run={run} embedded stateKey={`${run.id}:${index}:files`} />
         case 'browser':
           return (
             <BrowserView

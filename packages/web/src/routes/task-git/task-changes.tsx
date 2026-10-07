@@ -12,6 +12,7 @@ import { toast } from '@/components/ui/toaster'
 import { gitActionPolicy, type GitActionId } from '@/lib/git-actions'
 import { useIsDesktop } from '@/lib/use-desktop'
 import { cn } from '@/lib/utils'
+import { useRememberedState } from '@/lib/view-memory'
 
 import { useDiffComments } from '../task-thread/diff-comments'
 import { useContinueAction } from '../task-thread/follow-up-engine'
@@ -51,7 +52,17 @@ export function TaskChangesRoute() {
 }
 
 /** `embedded` drops the run header for a workspace column — see `FilesView`. */
-export function ChangesView({ run, embedded = false }: { run: ApiRun; embedded?: boolean }) {
+export function ChangesView({
+  run,
+  embedded = false,
+  stateKey,
+}: {
+  run: ApiRun
+  embedded?: boolean
+  /** Identifies this view instance so its selected file survives a layout switch — see
+   *  `FilesView`. */
+  stateKey?: string
+}) {
   const health = useHealth()
   // The remote that decides whether Push is offered comes from the PROJECT-scoped `/repo`, not
   // from `/api/health.repo`: health is bound to the boot folder, so a cezar booted outside a git
@@ -63,7 +74,7 @@ export function ChangesView({ run, embedded = false }: { run: ApiRun; embedded?:
 
   const [mode, setMode] = useState<DiffMode>('unified')
   const [wrap, setWrap] = useState(false)
-  const [selected, setSelected] = useState<string | null>(null)
+  const [selected, setSelected] = useRememberedState<string | null>(stateKey, null)
   const [commitOpen, setCommitOpen] = useState(false)
   const diffRef = useRef<DiffHandle | null>(null)
   // Line comments for the agent (self-review): drafted here, and sent from the SAME composer the
