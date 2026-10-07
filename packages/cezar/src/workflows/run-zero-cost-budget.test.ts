@@ -19,7 +19,8 @@ import {createServer} from 'node:http';
 let stream;
 const server=createServer((req,res)=>{
 req.resume();
-if(req.url==='/event'){stream=res;res.writeHead(200,{'content-type':'text/event-stream'});res.flushHeaders();}
+if(req.url==='/api/info'){res.writeHead(404);res.end('{}');}
+else if(req.url==='/event'){stream=res;res.writeHead(200,{'content-type':'text/event-stream'});res.flushHeaders();}
 else if(req.url==='/session'){res.end(JSON.stringify({id:'s'}));}
 else if(req.url.endsWith('/abort')){res.end('{}');}
 else {
