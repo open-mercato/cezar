@@ -52,21 +52,31 @@ export type WorkflowStepDef = z.infer<typeof workflowStepDefSchema>;
  * edges from a node's output port (`<node>` or `<node>.<port>`) to the next node. Mirrors
  * `src/workflows/graph.ts` exactly; `contract-parity.workflows.test.ts` keeps them in step.
  */
-const graphNodeBase = { id: z.string(), name: z.string().optional() };
+/** Mirrors `nodeId` in `src/workflows/graph.ts` exactly. */
+const nodeId = z
+  .string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/, 'node ids are letters, digits, "-" and "_" (no dots)');
+const graphNodeBase = { id: nodeId, name: z.string().optional() };
+
+/** Mirrors `verdictName` in `src/workflows/graph.ts` exactly. */
+const verdictName = z
+  .string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/, 'verdicts are letters, digits, "-" and "_"')
+  .refine((v) => v !== 'failed' && v !== 'done', 'verdicts cannot be named "done" or "failed"');
 
 /** An `if` node's condition — mirrors `conditionSchema` in `src/workflows/graph.ts`. */
 const numericOp = z.enum(['>', '>=', '<', '<=', '==']);
 export const workflowConditionSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('diff-lines'), op: numericOp, value: z.number() }),
-  z.object({ kind: z.literal('diff-files'), op: numericOp, value: z.number() }),
-  z.object({ kind: z.literal('paths-changed'), glob: z.string() }),
+  z.object({ kind: z.literal('diff-lines'), op: numericOp, value: z.number().nonnegative() }),
+  z.object({ kind: z.literal('diff-files'), op: numericOp, value: z.number().nonnegative() }),
+  z.object({ kind: z.literal('paths-changed'), glob: z.string().min(1) }),
   z.object({
     kind: z.literal('output'),
     ref: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]*\.[A-Za-z0-9_]+$/, 'ref is <node>.<field>'),
     op: z.enum(['equals', 'not-equals', 'contains', '>', '>=', '<', '<=']),
     value: z.union([z.string(), z.number()]),
   }),
-  z.object({ kind: z.literal('branch'), op: z.enum(['equals', 'matches']), value: z.string() }),
+  z.object({ kind: z.literal('branch'), op: z.enum(['equals', 'matches']), value: z.string().min(1) }),
 ]);
 export type WorkflowCondition = z.infer<typeof workflowConditionSchema>;
 export const workflowGraphNodeSchema = z.discriminatedUnion('type', [
@@ -82,34 +92,34 @@ export const workflowGraphNodeSchema = z.discriminatedUnion('type', [
     runner: runnerSchema.optional(),
     allowedTools: z.array(z.string()).optional(),
     bashAllowlist: z.array(z.string()).optional(),
-    verdicts: z.array(z.string()).optional(),
-    session: z.object({ continue: z.string() }).optional(),
+    verdicts: z.array(verdictName).min(1).optional(),
+    session: z.object({ continue: nodeId }).optional(),
     review: z.boolean().optional(),
-    budgetUsd: z.number().optional(),
+    budgetUsd: z.number().positive().optional(),
   }),
   z.object({
     ...graphNodeBase,
     type: z.literal('check'),
-    command: z.string(),
+    command: z.string().min(1),
     retryOn: z.array(z.number().int().positive()).optional(),
   }),
-  z.object({ ...graphNodeBase, type: z.literal('gate.human'), message: z.string(), timeoutMs: z.number().optional() }),
+  z.object({ ...graphNodeBase, type: z.literal('gate.human'), message: z.string().min(1), timeoutMs: z.number().optional() }),
   z.object({
     ...graphNodeBase,
     type: z.literal('ask-user'),
-    question: z.string(),
-    options: z.array(z.string()).optional(),
+    question: z.string().min(1),
+    options: z.array(z.string().min(1)).max(6).optional(),
     timeoutMs: z.number().optional(),
   }),
   z.object({
     ...graphNodeBase,
     type: z.literal('dispatch'),
-    prompt: z.string(),
+    prompt: z.string().min(1),
     runner: runnerSchema.optional(),
     model: z.string().optional(),
-    budgetUsd: z.number().optional(),
+    budgetUsd: z.number().positive().optional(),
   }),
-  z.object({ ...graphNodeBase, type: z.literal('git.commit'), message: z.string() }),
+  z.object({ ...graphNodeBase, type: z.literal('git.commit'), message: z.string().min(1) }),
   z.object({ ...graphNodeBase, type: z.literal('github.draft-pr'), title: z.string().optional() }),
   /** `timeoutMs`/`pollMs` carry defaults server-side, so the served shape always has them. */
   z.object({
@@ -118,17 +128,17 @@ export const workflowGraphNodeSchema = z.discriminatedUnion('type', [
     timeoutMs: z.number().int().min(60_000).max(7 * 24 * 60 * 60_000).default(60 * 60_000),
     pollMs: z.number().int().min(10_000).max(30 * 60_000).default(60_000),
   }),
-  z.object({ ...graphNodeBase, type: z.literal('github.pr-comment'), body: z.string() }),
+  z.object({ ...graphNodeBase, type: z.literal('github.pr-comment'), body: z.string().min(1) }),
   /** `branches` / `wait` are defaulted server-side, so the served shapes always carry them. */
   z.object({ ...graphNodeBase, type: z.literal('fork'), branches: z.number().int().min(2).max(4).default(3) }),
   z.object({ ...graphNodeBase, type: z.literal('join'), wait: z.enum(['all', 'any']).default('all') }),
   z.object({
     ...graphNodeBase,
     type: z.literal('workflow'),
-    workflow: z.string(),
+    workflow: z.string().min(1),
     prompt: z.string().optional(),
     runner: runnerSchema.optional(),
-    budgetUsd: z.number().optional(),
+    budgetUsd: z.number().positive().optional(),
   }),
   z.object({ ...graphNodeBase, type: z.literal('if'), condition: workflowConditionSchema }),
   z.object({ ...graphNodeBase, type: z.literal('git.push') }),
@@ -137,17 +147,17 @@ export const workflowGraphNodeSchema = z.discriminatedUnion('type', [
     ...graphNodeBase,
     type: z.literal('github.pr-update'),
     ready: z.boolean().optional(),
-    addLabels: z.array(z.string()).optional(),
-    reviewers: z.array(z.string()).optional(),
+    addLabels: z.array(z.string().min(1)).optional(),
+    reviewers: z.array(z.string().min(1)).optional(),
   }),
-  z.object({ ...graphNodeBase, type: z.literal('github.issue-comment'), issue: z.number().optional(), body: z.string() }),
-  z.object({ ...graphNodeBase, type: z.literal('notify.webhook'), url: z.string(), body: z.string().optional() }),
+  z.object({ ...graphNodeBase, type: z.literal('github.issue-comment'), issue: z.number().int().positive().optional(), body: z.string().min(1) }),
+  z.object({ ...graphNodeBase, type: z.literal('notify.webhook'), url: z.string().url().regex(/^https?:\/\//, 'http(s) URLs only'), body: z.string().optional() }),
 ]);
 export type WorkflowGraphNode = z.infer<typeof workflowGraphNodeSchema>;
 
 export const workflowGraphSchema = z.object({
-  nodes: z.array(workflowGraphNodeSchema),
-  edges: z.array(z.object({ from: z.string(), to: z.string() })),
+  nodes: z.array(workflowGraphNodeSchema).min(1),
+  edges: z.array(z.object({ from: z.string().min(1), to: nodeId })),
   layout: z.record(z.string(), z.object({ x: z.number(), y: z.number() })).optional(),
 });
 export type WorkflowGraph = z.infer<typeof workflowGraphSchema>;

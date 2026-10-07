@@ -239,7 +239,7 @@ export function isFailurePort(port: string): boolean {
 
 /** A concrete node's output ports: an agent with verdicts swaps `done` for one port per verdict. */
 export function portsOfNode(node: GraphNode): readonly string[] {
-  if (node.type === 'agent' && node.verdicts?.length) return [...node.verdicts, 'failed'];
+  if (node.type === 'agent' && node.verdicts?.length) return [...new Set(node.verdicts), 'failed'];
   // A human wait grows a `timeout` port only when it has a timeout to fire.
   if (node.type === 'fork') return Array.from({ length: node.branches }, (_, i) => String(i + 1));
   if ((node.type === 'gate.human' || node.type === 'ask-user') && node.timeoutMs) {
@@ -249,19 +249,24 @@ export function portsOfNode(node: GraphNode): readonly string[] {
 }
 
 export function parseEdgeFrom(from: string, nodes: readonly GraphNode[]): { node: string; port: string } | null {
-  // The port is what follows the LAST dot: a port name never holds one, while a node compiled
-  // from a v1 step may (`lint.fix` — v1 step ids are any string). `compileV1` always names the
-  // port, so a dotted id is never read as `<node>.<port>`.
-  const dot = from.lastIndexOf('.');
-  const split = dot < 0 ? undefined : nodes.find((n) => n.id === from.slice(0, dot));
-  if (split) {
-    const port = from.slice(dot + 1);
-    return portsOfNode(split).includes(port) ? { node: split.id, port } : null;
+  // Match against known node ids directly rather than splitting on a single dot position:
+  // a node compiled from a v1 step may hold a dot itself (`lint.fix` — v1 step ids are any
+  // string), and an agent's verdict name is free text with no character restriction, so it
+  // may hold one too. The longest node id that is a prefix of `from` wins, since a more
+  // specific (longer) id is never itself a port name of a shorter one.
+  let best: GraphNode | undefined;
+  for (const n of nodes) {
+    if (from === n.id || from.startsWith(`${n.id}.`)) {
+      if (!best || n.id.length > best.id.length) best = n;
+    }
   }
-  if (dot >= 0) return null;
-  const found = nodes.find((n) => n.id === from);
-  const port = found ? portsOfNode(found)[0] : undefined;
-  return found && port ? { node: found.id, port } : null;
+  if (!best) return null;
+  if (from === best.id) {
+    const port = portsOfNode(best)[0];
+    return port ? { node: best.id, port } : null;
+  }
+  const port = from.slice(best.id.length + 1);
+  return portsOfNode(best).includes(port) ? { node: best.id, port } : null;
 }
 
 const VERDICT_MARKER_RE = /CEZ:VERDICT[ \t:=]+([A-Za-z0-9][A-Za-z0-9_-]*)\s*$/;

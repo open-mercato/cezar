@@ -3485,8 +3485,12 @@ export function createApp(deps: ServerDeps) {
         const message = err instanceof Error ? err.message : String(err);
         return c.json({ error: `not valid YAML: ${message}` }, 400);
       }
-      if (raw && typeof raw === 'object' && (raw as { version?: unknown }).version === 2) {
-        const graphDoc = workflowGraphFileSchema.safeParse(raw);
+      const rawVersion = raw && typeof raw === 'object' ? (raw as { version?: unknown }).version : undefined;
+      // Accept a quoted `version: "2"` as the same intent as the numeric literal — a hand-edited
+      // YAML easily picks up the quotes, and without this it falls through to the v1 parser below
+      // with a confusing "missing steps" error instead of a graph validation message.
+      if (raw && typeof raw === 'object' && (rawVersion === 2 || rawVersion === '2')) {
+        const graphDoc = workflowGraphFileSchema.safeParse({ ...(raw as object), version: 2 });
         if (!graphDoc.success) {
           return c.json({ error: graphDoc.error.issues.map((i) => i.message).join('; ') }, 400);
         }

@@ -438,6 +438,7 @@ export async function commitAll(
   const commit = await git(dir, [...identityArgs, 'commit', '--no-verify', '-m', message]);
   if (!commit.ok) return { result: 'failed', error: (commit.stderr || commit.stdout).trim().split('\n')[0] || 'git commit failed' };
   const sha = await git(dir, ['rev-parse', 'HEAD']);
+  if (!sha.ok || !sha.stdout.trim()) return { result: 'failed', error: 'commit succeeded but rev-parse HEAD failed' };
   return { result: 'committed', sha: sha.stdout.trim() };
 }
 
@@ -644,7 +645,7 @@ export async function pushBranch(dir: string, branch: string): Promise<{ ok: tru
   const remote = await git(dir, ['remote', 'get-url', 'origin']);
   if (!remote.ok) return { ok: false, error: 'no origin remote' };
   const push = await git(dir, ['-c', 'credential.interactive=false', 'push', '-u', 'origin', branch]);
-  return push.ok ? { ok: true } : { ok: false, error: (push.stderr || push.stdout).trim().split('\n').pop() || 'git push failed' };
+  return push.ok ? { ok: true } : { ok: false, error: (push.stderr || push.stdout).trim().split('\n')[0] || 'git push failed' };
 }
 
 /**

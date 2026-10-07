@@ -4821,8 +4821,16 @@ export class RunManager {
     } else {
       await autosaveCommit(state.cwd, 'pre-dispatch');
       const reviewOf = this.store.getRun(runId)?.branch ?? runId;
-      const dispatchedIds: string[] = [];
-      for (const b of shape.branches) {
+      // Resume a partial dispatch (a restart between two branches) from where it left off —
+      // `earlierIds` already holds one entry per branch dispatched before the crash, including
+      // '' placeholders for refusals. Restore those as live children before continuing.
+      const dispatchedIds: string[] = [...earlierIds];
+      shape.branches.forEach((b, i) => {
+        const id = earlierIds[i];
+        if (id) byChild.set(id, b);
+      });
+      for (let i = earlierIds.length; i < shape.branches.length; i += 1) {
+        const b = shape.branches[i]!;
         const a = b.agent;
         const spawned = this.dispatch(
           runId,
@@ -4857,14 +4865,16 @@ export class RunManager {
           this.finishStep(runId, a.id, 'failed', spawned.refused, emit);
           outputs.set(a.id, { runId: '', status: 'refused', summary: spawned.refused });
           dispatchedIds.push('');
-          continue;
+        } else {
+          byChild.set(spawned.id, b);
+          outputs.set(a.id, { runId: spawned.id, status: 'running', summary: '' });
+          dispatchedIds.push(spawned.id);
         }
-        byChild.set(spawned.id, b);
-        outputs.set(a.id, { runId: spawned.id, status: 'running', summary: '' });
-        dispatchedIds.push(spawned.id);
+        // Persist after every branch, not just once at the end — a restart between two
+        // dispatches must see the ones that already happened, or it re-dispatches them.
+        outputs.set(fork.id, { runIds: dispatchedIds.join(',') });
+        onOutputs();
       }
-      outputs.set(fork.id, { runIds: dispatchedIds.join(',') });
-      onOutputs();
       if (byChild.size) {
         note(`forked ${byChild.size} agents (${shape.wait === 'any' ? 'first to succeed wins' : 'waiting for all'})`);
       }

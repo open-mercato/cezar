@@ -45,9 +45,12 @@ export async function loadWorkflows(
       const raw = await readFile(path, 'utf8');
       const doc: unknown = parseYaml(raw);
       // `version: 2` is a graph workflow (spec 2026-09-30-workflow-node-editor); anything else
-      // is the v1 `steps`/`skills` format, loaded exactly as before.
-      if (doc && typeof doc === 'object' && (doc as { version?: unknown }).version === 2) {
-        const graphDoc = workflowGraphFileSchema.safeParse(doc);
+      // is the v1 `steps`/`skills` format, loaded exactly as before. A hand-edited file may
+      // quote the version (`version: "2"`) — treated the same as the numeric literal, or this
+      // falls through to a confusing v1 "missing steps" error instead.
+      const docVersion = doc && typeof doc === 'object' ? (doc as { version?: unknown }).version : undefined;
+      if (doc && typeof doc === 'object' && (docVersion === 2 || docVersion === '2')) {
+        const graphDoc = workflowGraphFileSchema.safeParse({ ...(doc as object), version: 2 });
         if (!graphDoc.success) {
           issues.push({ path, message: graphDoc.error.issues.map((i) => i.message).join('; ') });
           continue;

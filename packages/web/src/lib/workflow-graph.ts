@@ -41,7 +41,7 @@ const PORTS: Record<GraphNodeType, readonly string[]> = {
 const FAILURE_PORTS = new Set(['failed', 'fail', 'exhausted', 'reject', 'red', 'timeout', 'conflict'])
 
 export function portsOf(node: WorkflowGraphNode): readonly string[] {
-  if (node.type === 'agent' && node.verdicts?.length) return [...node.verdicts, 'failed']
+  if (node.type === 'agent' && node.verdicts?.length) return [...new Set(node.verdicts), 'failed']
   if (node.type === 'fork') return Array.from({ length: node.branches }, (_, i) => String(i + 1))
   if ((node.type === 'gate.human' || node.type === 'ask-user') && node.timeoutMs) return [...PORTS[node.type], 'timeout']
   return PORTS[node.type]
@@ -54,20 +54,27 @@ export function portTone(node: WorkflowGraphNode, port: string): PortTone {
   return 'success'
 }
 
-/** `<node>` or `<node>.<port>` → both halves, or null when the node/port does not exist. */
+/** `<node>` or `<node>.<port>` → both halves, or null when the node/port does not exist.
+ *  Mirrors the server's `parseEdgeFrom`. */
 export function parseFrom(from: string, nodes: readonly WorkflowGraphNode[]): { node: string; port: string } | null {
-  // The port follows the LAST dot — a node compiled from a v1 step may hold dots itself
-  // (mirror of the server's `parseEdgeFrom`).
-  const dot = from.lastIndexOf('.')
-  const split = dot < 0 ? undefined : nodes.find((n) => n.id === from.slice(0, dot))
-  if (split) {
-    const port = from.slice(dot + 1)
-    return portsOf(split).includes(port) ? { node: split.id, port } : null
+  // Match against known node ids directly rather than splitting on a single dot position:
+  // a v1-compiled node id may hold a dot itself (`lint.fix`), and an agent's verdict name is
+  // free text with no character restriction, so it may hold one too. The longest node id
+  // that is a prefix of `from` wins, since a more specific (longer) id is never itself a
+  // port name of a shorter one.
+  let best: WorkflowGraphNode | undefined
+  for (const n of nodes) {
+    if (from === n.id || from.startsWith(`${n.id}.`)) {
+      if (!best || n.id.length > best.id.length) best = n
+    }
   }
-  if (dot >= 0) return null
-  const node = nodes.find((n) => n.id === from)
-  const port = node ? portsOf(node)[0] : undefined
-  return node && port ? { node: node.id, port } : null
+  if (!best) return null
+  if (from === best.id) {
+    const port = portsOf(best)[0]
+    return port ? { node: best.id, port } : null
+  }
+  const port = from.slice(best.id.length + 1)
+  return portsOf(best).includes(port) ? { node: best.id, port } : null
 }
 
 /** The target wired to `node.port`, if any. */
@@ -357,10 +364,15 @@ export function skillStackOfGraph(graph: WorkflowGraph): string[] | null {
   return skills
 }
 
-/** A planner's proposed chain (`POST /plan`) as steps with unique ids, ready to open as a graph. */
+/** A pure skill stack saves as `skills: [...]`, whose contract schema caps the array at 8
+ *  (`packages/contract/src/workflows.ts`) — matches the old builder's `WB_MAX_STEPS`. */
+const MAX_PLAN_STEPS = 8
+
+/** A planner's proposed chain (`POST /plan`) as steps with unique ids, ready to open as a graph.
+ *  Capped so a long plan can always be saved, not just built on the canvas. */
 export function stepsFromPlan(steps: readonly WorkflowStepDef[]): WorkflowStepDef[] {
   const used = new Set<string>()
-  return steps.map((step) => {
+  return steps.slice(0, MAX_PLAN_STEPS).map((step) => {
     const id = uniqueId(step.id || 'step', used)
     used.add(id)
     return { ...step, id }

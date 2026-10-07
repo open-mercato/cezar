@@ -373,6 +373,50 @@ describe('graph system nodes', () => {
     expect(shown.stdout.trim()).toBe('implemented');
   }, 70_000);
 
+  it('a restart between two fork dispatches resumes the still-missing branch, never the one already spawned (#1322)', async () => {
+    const id = manager.startRun(def(FORK), { task: 'x', worktree: true }).id;
+    const final = await until(id, terminal, 60_000);
+    expect(final.status).not.toBe('failed');
+    const before = store.listRuns().filter((r) => r.dispatch?.parentRunId === id);
+    expect(before).toHaveLength(2);
+    const correctness = before.find((c) => c.title === 'Correctness')!;
+    const tests = before.find((c) => c.title === 'tests')!;
+
+    // Roll the parent back to the exact crash window the fix closes: `correctness` was
+    // dispatched and its own output recorded, but cezar died before the fork's AGGREGATE
+    // `runIds` output (which used to persist only once, after the whole dispatch loop) ever
+    // saw the second branch — so `tests` never happened at all.
+    store.deleteRun(tests.id);
+    const { tests: _droppedTestsOutput, ...keptOutputs } = final.graphState?.outputs ?? {};
+    store.updateRun(id, {
+      status: 'running',
+      currentStepId: 'council',
+      graphState: {
+        loops: final.graphState?.loops ?? {},
+        taken: final.graphState?.taken ?? [],
+        cursor: 'council',
+        outputs: { ...keptOutputs, council: { runIds: correctness.id } },
+      },
+    });
+    store.updateStep(id, 'correctness', { status: 'running' });
+    store.updateStep(id, 'tests', { status: 'pending' });
+    store.updateStep(id, 'meet', { status: 'pending' });
+    store.updateStep(id, 'after', { status: 'pending' });
+
+    manager.dispose();
+    manager = new RunManager(store, repoRoot);
+    await manager.recover();
+    const resumed = await until(id, terminal, 60_000);
+    expect(resumed.status).not.toBe('failed');
+
+    const after = store.listRuns().filter((r) => r.dispatch?.parentRunId === id);
+    // Exactly one new child — for `tests`, the branch that truly never ran. `correctness`'s
+    // original child is reused, not re-dispatched into a costly duplicate.
+    expect(after).toHaveLength(2);
+    expect(after.find((c) => c.id === correctness.id)).toBeDefined();
+    expect(after.find((c) => c.title === 'tests' && c.id !== tests.id)).toBeDefined();
+  }, 70_000);
+
   it('workflow runs another catalog workflow as a subtask', async () => {
     const graph: WorkflowGraph = {
       nodes: [
