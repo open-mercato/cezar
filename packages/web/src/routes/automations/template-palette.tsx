@@ -57,7 +57,7 @@ export function TemplatePalette({ onPick }: { onPick: (template: TemplatePick) =
           <PaletteTab active={tab === 'mine'} onClick={() => setTab('mine')}>From your other projects</PaletteTab>
         </div>
         <span className="ml-auto min-w-0 overflow-hidden pb-2 text-xs text-ellipsis whitespace-nowrap text-soft-foreground">
-          {tab === 'builtin' ? 'Ship with cezar' : 'Registered in ~/.cezar/config.json'}
+          {tab === 'builtin' ? 'Built-in' : 'Registered in ~/.cezar/config.json'}
         </span>
       </div>
       {tab === 'mine' && others.isPending ? (

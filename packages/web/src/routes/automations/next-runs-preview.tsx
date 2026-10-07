@@ -44,8 +44,8 @@ export function NextRunsPreview({
       {kind !== 'schedule' ? (
         <p className="m-0 px-3.5 pb-1.5 text-[12.5px] leading-[1.5] text-muted-foreground">
           {kind === 'tracker'
-            ? <>Checks the project tracker every {Math.round(intervalSeconds / 60)} min while cezar is open. No webhook or public URL required.</>
-            : <>Checks GitHub every {Math.round(intervalSeconds / 60)} min while cezar is open, through your <code className="text-xs">gh</code>. No webhook or public URL required.</>}
+            ? <>Checks the project tracker every {Math.round(intervalSeconds / 60)} min while this cockpit is open. No webhook or public URL required.</>
+            : <>Checks GitHub every {Math.round(intervalSeconds / 60)} min while this cockpit is open, through your <code className="text-xs">gh</code>. No webhook or public URL required.</>}
         </p>
       ) : runs.length === 0 ? (
         <p className="m-0 px-3.5 pb-1.5 text-[12.5px] leading-[1.5] text-muted-foreground">Nothing in the next nine days.</p>
