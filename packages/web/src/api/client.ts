@@ -2114,6 +2114,9 @@ export async function getWorkspaceConfig(opts?: ReadOptions): Promise<WorkspaceC
   )
   return {
     ...answer,
+    // Brand settings are additive; a cockpit served against an older cezar build falls back
+    // cleanly to its built-in identity instead of failing during shell render.
+    branding: answer.branding ?? { name: 'cezar', logoUrl: null, primaryColor: null },
     agentDefaults: answer.agentDefaults ?? {},
     resources: {
       ...answer.resources,

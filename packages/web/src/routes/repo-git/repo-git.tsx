@@ -49,7 +49,7 @@ export function RepoGitRoute({ tab }: { tab: RepoTab }) {
           icon={<GitBranchIcon />}
           tone="neutral"
           title="Not a git repository"
-          subtitle="cezar is running outside a git repository — start it inside one to browse changes, commits and branches."
+          subtitle="The cockpit is running outside a git repository — start it inside one to browse changes, commits and branches."
         />
       </div>
     )

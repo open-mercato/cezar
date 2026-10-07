@@ -1,7 +1,12 @@
 import { MonitorIcon, MoonIcon, SunIcon } from 'lucide-react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
 import type { ComponentType, ReactNode, SVGProps } from 'react'
 
-import { useProjects } from '@/api/queries'
+import { useProjects, useWorkspaceConfig, workspaceQueryKeys } from '@/api/queries'
+import type { WorkspaceConfigResponse } from '@open-mercato/cezar-api-client'
+import { putWorkspaceConfig } from '@/api/client'
+import type { SetWorkspaceConfigInput } from '@open-mercato/cezar-api-client'
 import { useAppearance } from '@/components/appearance-provider'
 import { useTheme } from '@/components/theme-provider'
 import { Button } from '@/components/ui/button'
@@ -9,6 +14,7 @@ import { cn } from '@/lib/utils'
 import type { Accent, Density, Width } from '@/lib/appearance'
 import type { Theme } from '@/lib/theme'
 import { useProjectOrder } from '@/lib/use-project-order'
+import { toast } from '@/components/ui/toaster'
 
 /**
  * Settings → Appearance (R6 Step 1.3, spec §"Settings").
@@ -148,6 +154,87 @@ function ProjectOrderField() {
   )
 }
 
+function BrandingFields() {
+  const config = useWorkspaceConfig()
+  const queryClient = useQueryClient()
+  const [logoDraft, setLogoDraft] = useState<{ file: File; url: string } | null>(null)
+  useEffect(() => () => { if (logoDraft) URL.revokeObjectURL(logoDraft.url) }, [logoDraft])
+  const save = useMutation({
+    mutationFn: (patch: SetWorkspaceConfigInput) => putWorkspaceConfig(patch),
+    onSuccess: (result) => queryClient.setQueryData(workspaceQueryKeys.config, result),
+    onError: (error: Error) => toast(error.message, { tone: 'danger' }),
+  })
+  const upload = useMutation({
+    mutationFn: async (file: File | null) => {
+      if (!file) {
+        const response = await fetch('/api/v1/workspace/branding-logo', { method: 'DELETE' })
+        if (!response.ok) throw new Error('Could not remove logo')
+        return null
+      }
+      const form = new FormData()
+      form.set('file', file)
+      const response = await fetch('/api/v1/workspace/branding-logo', { method: 'POST', body: form })
+      if (!response.ok) throw new Error((await response.json() as { error?: string }).error ?? 'Could not upload logo')
+      return (await response.json() as { logoUrl: string }).logoUrl
+    },
+    onSuccess: (logoUrl) => {
+      const current = queryClient.getQueryData<WorkspaceConfigResponse>(workspaceQueryKeys.config)
+      if (current) queryClient.setQueryData(workspaceQueryKeys.config, { ...current, branding: { ...current.branding, logoUrl } })
+      setLogoDraft(null)
+    },
+    onError: (error: Error) => toast(error.message, { tone: 'danger' }),
+  })
+  const branding = config.data?.branding
+  const [name, setName] = useState(branding?.name ?? 'cezar')
+  const [lastName, setLastName] = useState(branding?.name ?? 'cezar')
+  useEffect(() => {
+    if (branding && name === lastName) {
+      setName(branding.name)
+      setLastName(branding.name)
+    }
+  }, [branding?.name])
+  return <>
+    <Field title="Instance name" hint="Shown in the sidebar and browser tab across this workspace.">
+      <div className="flex flex-wrap items-center gap-2">
+        <input data-slot="branding-name" aria-label="Instance name" maxLength={80} value={name} onChange={(event) => setName(event.currentTarget.value)}
+          onBlur={() => {
+            const value = name.trim()
+            if (!value) { setName(branding?.name ?? 'cezar'); return }
+            if (value !== branding?.name) save.mutate({ branding: { name: value } })
+            setLastName(value)
+          }}
+          className="h-9 w-64 rounded-md border border-border bg-background px-3 text-sm" />
+        <Button type="button" variant="outline" size="sm" disabled={!branding || branding.name === 'cezar' || save.isPending}
+          onClick={() => save.mutate({ branding: { name: null } })}>Reset name</Button>
+      </div>
+    </Field>
+    <Field title="Brand color" hint="Replaces the main action color and focus ring throughout this workspace.">
+      <div className="flex items-center gap-3">
+        <input data-slot="branding-color" aria-label="Brand color" type="color" value={branding?.primaryColor ?? getComputedStyle(document.documentElement).getPropertyValue('--accent-lime').trim()} disabled={!branding || save.isPending}
+          onChange={(event) => save.mutate({ branding: { primaryColor: event.currentTarget.value } })} className="size-10 cursor-pointer rounded border border-border bg-transparent p-1" />
+        <code className="text-xs text-muted-foreground">{branding?.primaryColor ?? 'Product default'}</code>
+        <Button type="button" variant="outline" size="sm" disabled={!branding?.primaryColor || save.isPending}
+          onClick={() => save.mutate({ branding: { primaryColor: null } })}>Reset color</Button>
+      </div>
+    </Field>
+    <Field title="Logo" hint="PNG, JPEG, WebP, GIF, AVIF, or safe SVG up to 2 MB. Stored on this machine and shared by its browsers.">
+      <div className="flex flex-wrap items-center gap-3">
+        {logoDraft ? <img src={logoDraft.url} alt="Logo preview" className="size-10 rounded object-contain" /> : branding?.logoUrl ? <img src={branding.logoUrl} alt="Current instance logo" className="size-10 rounded object-contain" /> : null}
+        <input data-slot="branding-logo" aria-label="Upload logo" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif,image/svg+xml" disabled={upload.isPending}
+          onChange={(event) => {
+            const file = event.currentTarget.files?.[0]
+            if (file) setLogoDraft({ file, url: URL.createObjectURL(file) })
+            event.currentTarget.value = ''
+          }} className="max-w-full text-sm" />
+        {logoDraft ? <>
+          <Button type="button" size="sm" disabled={upload.isPending} onClick={() => upload.mutate(logoDraft.file)}>Save logo</Button>
+          <Button type="button" variant="outline" size="sm" disabled={upload.isPending} onClick={() => setLogoDraft(null)}>Cancel</Button>
+        </> : branding?.logoUrl ? <Button type="button" variant="outline" size="sm" disabled={upload.isPending} onClick={() => upload.mutate(null)}>Remove logo</Button> : null}
+      </div>
+    </Field>
+  </>
+}
+
 export function AppearanceSection() {
   const { theme, setTheme } = useTheme()
   const { accent, density, width, setAccent, setDensity, setWidth } = useAppearance()
@@ -157,6 +244,7 @@ export function AppearanceSection() {
       data-slot="appearance-section"
       className="mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
     >
+      <BrandingFields />
       <Field title="Theme" hint="System follows your OS preference. Applies to this browser.">
         <Segmented slot="appearance-theme" label="Theme" value={theme} options={THEME_OPTIONS} onChange={setTheme} />
       </Field>

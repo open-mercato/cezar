@@ -112,6 +112,8 @@ export type AppShellProps = {
    *  still loading, or unreachable — the shell renders the single-project sidebar it always
    *  did, which is the honest degradation, not a special case. */
   projectGroups?: ReactNode
+  brandName?: string
+  brandLogoUrl?: string | null
 }
 
 /**
@@ -190,6 +192,8 @@ export const AppShell = React.memo(function AppShell({
   singleProject = false,
   banner,
   projectGroups,
+  brandName = 'cezar',
+  brandLogoUrl = null,
 }: AppShellProps) {
   const { pathname } = useLocation()
   // The nav's area rules reason about the flat route map — strip any `/p/:projectId` prefix
@@ -269,6 +273,8 @@ export const AppShell = React.memo(function AppShell({
     toolsMenu,
     projectGroups,
     singleProject,
+    brandName,
+    brandLogoUrl,
   }
 
   const desktop = useDesktopShell()
@@ -384,6 +390,8 @@ type NavProps = {
   hostWidget?: ReactNode
   toolsMenu?: ReactNode
   projectGroups?: ReactNode
+  brandName: string
+  brandLogoUrl: string | null
   singleProject: boolean
 }
 
@@ -578,10 +586,14 @@ function SidebarContent({
   toolsMenu,
   projectGroups,
   singleProject,
+  brandName,
+  brandLogoUrl,
   onNavigate,
   headerAction,
   compactHeader = false,
 }: NavProps & {
+  brandName: string
+  brandLogoUrl: string | null
   /** Fires on any in-drawer navigation. The route-change effect already closes the drawer for
    *  every *changed* route; this also covers re-clicking the active item (per the spec, Tasks
    *  navigates home even when already active), which changes no pathname at all. */
@@ -603,7 +615,7 @@ function SidebarContent({
       className="@container/sidebar flex min-h-0 flex-1 flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
     >
       <div className={cn('flex items-center gap-[9px] px-3.5 pb-2.5', compactHeader ? 'pt-1.5' : 'pt-3.5')}>
-        <BrandLockup />
+        <BrandLockup name={brandName} logoUrl={brandLogoUrl} />
         {/* With project groups mounted the boot repo/branch is one group header among many —
             a chip repeating it up here would just be the first group's header said twice. */}
         {repo && !projectGroups ? (

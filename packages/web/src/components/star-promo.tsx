@@ -2,7 +2,7 @@ import { hashKey, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { ArrowUpRightIcon, StarIcon } from 'lucide-react'
 
-import { queryKeys, useStarCount } from '@/api/queries'
+import { queryKeys, useStarCount, useWorkspaceConfig } from '@/api/queries'
 import { useDashboardInsights } from '@/api/dashboard-insights'
 import type { ApiRun, RunStatus } from '@open-mercato/cezar-api-client'
 import {
@@ -54,9 +54,14 @@ const otherDialogOpen = () => document.querySelector('[role="dialog"],[role="ale
  */
 export function StarPromo() {
   const queryClient = useQueryClient()
-  const starCount = useStarCount()
-  const allowed = starCount.data?.available === true
-  const count = starCount.data?.available ? (starCount.data.count ?? null) : null
+  const workspaceConfig = useWorkspaceConfig()
+  const branding = workspaceConfig.data?.branding
+  const customBranding = branding !== undefined && (
+    branding.name !== 'cezar' || branding.logoUrl !== null || branding.primaryColor !== null
+  )
+  const starCount = useStarCount(workspaceConfig.data !== undefined && !customBranding)
+  const allowed = !customBranding && starCount.data?.available === true
+  const count = !customBranding && starCount.data?.available ? (starCount.data.count ?? null) : null
   const [open, setOpen] = useState(false)
 
   // Refs, not effect dependencies: rebuilding the cache subscription when the count resolves
@@ -138,7 +143,7 @@ export function StarPromo() {
     }
   }, [queryClient])
 
-  return <StarAskDialog open={open} onOpenChange={setOpen} count={count} />
+  return customBranding ? null : <StarAskDialog open={open} onOpenChange={setOpen} count={count} />
 }
 
 /** The record update for each way out — every one of them is a single, equal-weight click. */
