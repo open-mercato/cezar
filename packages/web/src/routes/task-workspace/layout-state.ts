@@ -10,6 +10,8 @@
  * the per-host boundary the spec asks for, with no sync and no new API surface.
  */
 
+import { drawerStorageKey } from './drawer-state'
+
 /** The surfaces a column can show. `terminal` is deliberately absent — it is the bottom drawer,
  *  not a column — and an unavailable view must never be representable in saved state (spec §5.1,
  *  no placeholder that implies it works). */
@@ -273,6 +275,24 @@ export function clearState(taskId: string): void {
     localStorage.removeItem(storageKey(taskId))
   } catch {
     // Nothing to do and nothing to say.
+  }
+}
+
+/**
+ * Everything this browser remembers about a task: its layouts AND its drawer.
+ *
+ * Called when a task is permanently DELETED, never when it is archived — §5.3 keeps layouts for
+ * the unarchive, and §6 keeps the Browser tabs inside them. The server drops its own half (the
+ * shells, their process trees, the detected addresses); this is the browser-local half, which no
+ * server route could reach.
+ */
+export function forgetTask(taskId: string): void {
+  clearState(taskId)
+  try {
+    // The key comes from the module that owns it; spelling it again here is how the two drift.
+    localStorage.removeItem(drawerStorageKey(taskId))
+  } catch {
+    // Storage disabled — there was nothing stored to forget either.
   }
 }
 

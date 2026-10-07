@@ -45,6 +45,7 @@ import { ResolveConflictsButton } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
 import { TabLink } from '@/components/tab-link'
+import { forgetTask } from '@/routes/task-workspace/layout-state'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -544,6 +545,12 @@ function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
     mutationFn: () => deleteRun(run.id),
     onSuccess: () => {
       invalidate()
+      // The task is gone for good, so its browser-local state goes with it (spec
+      // `2026-10-07-task-workspace` §5.3). The server drops the shells, their process trees and
+      // the addresses they printed; the layouts and the drawer live in localStorage, which no
+      // server route can reach — and a task id is never reused, so leaving them would be a leak
+      // nothing ever cleans up.
+      forgetTask(run.id)
       // The run is gone — so is this page. Home is the only honest destination.
       void navigate('/')
     },

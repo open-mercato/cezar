@@ -10,6 +10,7 @@ import {
   defaultState,
   DEFAULT_LAYOUT_NAME,
   findLayout,
+  forgetTask,
   MAX_COLUMNS,
   MIN_COLUMN_WIDTH,
   moveColumn,
@@ -29,6 +30,7 @@ import {
   writeState,
   type WorkspaceState,
 } from './layout-state'
+import { drawerStorageKey } from './drawer-state'
 
 beforeEach(() => {
   localStorage.clear()
@@ -475,5 +477,24 @@ describe('splitCards', () => {
     // The strip stays exactly `max` long, and the displaced card is reachable in the menu.
     expect(visible).toHaveLength(6)
     expect(overflow.map((layout) => layout.name)).toEqual(['L6', 'L5', 'L8'])
+  })
+})
+
+describe('forgetTask', () => {
+  it('drops both halves of what a browser remembers about a deleted task', () => {
+    writeState('run-1', addLayout(defaultState(), 'files'))
+    localStorage.setItem(drawerStorageKey('run-1'), JSON.stringify({ open: true, height: 300 }))
+
+    forgetTask('run-1')
+
+    expect(localStorage.getItem(storageKey('run-1'))).toBeNull()
+    expect(localStorage.getItem(drawerStorageKey('run-1'))).toBeNull()
+  })
+
+  it('leaves every other task alone', () => {
+    writeState('run-1', addLayout(defaultState(), 'files'))
+    writeState('run-2', addLayout(defaultState(), 'commits'))
+    forgetTask('run-1')
+    expect(readState('run-2').layouts.map((layout) => layout.name)).toEqual(['Czat', 'Commity'])
   })
 })

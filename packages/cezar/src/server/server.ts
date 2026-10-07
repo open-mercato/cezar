@@ -1385,6 +1385,18 @@ export function createApp(deps: ServerDeps) {
   const detectedUrls = new DetectedUrls();
   const terminalSessions = deps.terminalSessions ?? new TerminalSessions(undefined, detectedUrls);
   deps.onDispose?.(() => terminalSessions.closeAll());
+
+  /**
+   * Stop everything a task's terminals own: the shells, their process trees (a `npm run dev` and
+   * the server under it), and the record of the addresses they printed.
+   *
+   * One helper because archive and delete need exactly the same thing, and a lifecycle rule
+   * implemented twice is a lifecycle rule that will eventually be implemented once.
+   */
+  const stopTaskProcesses = (runId: string) => {
+    for (const session of terminalSessions.listFor(runId)) terminalSessions.kill(session.id);
+    detectedUrls.forget(runId);
+  };
   const capabilities = () => resolveCapabilities(process.env, bindHost);
   const singleProjectRefusal = (
     action: 'adding projects' | 'editing projects' | 'removing projects' | 'folder browsing',
@@ -4199,7 +4211,13 @@ export function createApp(deps: ServerDeps) {
       // `setArchived` itself — the bulk sweep must obey it too (spec
       // 2026-08-03-auto-resume-after-usage-limit).
       const parsed = { data: c.req.valid('json') };
-      const run = store.setArchived(id, parsed.data.archived !== false);
+      const archived = parsed.data.archived !== false;
+      const run = store.setArchived(id, archived);
+      // Archiving stops this task's terminals and everything they started, and forgets the
+      // addresses they printed (spec §6). Its LAYOUTS are untouched: they are browser-local and
+      // the spec keeps them for the unarchive. Unarchiving starts nothing — the drawer comes
+      // back hidden with no tabs, which is what `listFor` returning empty produces.
+      if (run && archived) stopTaskProcesses(id);
       return run ? c.json(run) : c.json({ error: 'not found' }, 404);
     })
 
@@ -4976,7 +4994,10 @@ export function createApp(deps: ServerDeps) {
       if (manager.isActive(id)) return c.json({ error: 'run is active — cancel it first' }, 409);
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
-      // Delete cleans up after itself: worktree + branch go with the run (spec 006).
+      // Delete cleans up after itself: worktree + branch go with the run (spec 006), and so do
+      // its terminals, their process trees and the addresses they printed. The browser-local
+      // layouts are the cockpit's to drop — it does so when the delete succeeds.
+      stopTaskProcesses(id);
       if (run.worktreePath) await removeWorktree(repoRoot, run.worktreePath, run.branch);
       return store.deleteRun(id) ? c.json({ deleted: true }) : c.json({ error: 'not found' }, 404);
     });
