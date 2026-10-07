@@ -35,6 +35,7 @@ import type {
   starCountSchema,
   uiStateSchema,
   workspaceConfigResponseSchema,
+  workspaceBrandingLogoResponseSchema,
   workspaceUiStateSchema,
 } from '@open-mercato/cezar-contract';
 import type { AppType } from './app-type.ts';
@@ -93,6 +94,8 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
   // ---- workspace settings + the per-repo agent knobs ---------------------------------------
   type WorkspaceConfig200 = InferResponseType<typeof client.api.v1.workspace.config.$get, 200>;
   type SetWorkspaceConfig200 = InferResponseType<typeof client.api.v1.workspace.config.$put, 200>;
+  type BrandingLogoUpload200 = InferResponseType<(typeof client.api.v1.workspace)['branding-logo']['$post'], 200>;
+  type BrandingLogoDelete200 = InferResponseType<(typeof client.api.v1.workspace)['branding-logo']['$delete'], 200>;
   type HostUsage200 = InferResponseType<(typeof client.api.v1.workspace)['host-usage']['$get'], 200>;
   type UiState200 = InferResponseType<(typeof client.api.v1)['ui-state']['$get'], 200>;
   type SetUiState200 = InferResponseType<(typeof client.api.v1)['ui-state']['$put'], 200>;
@@ -189,6 +192,8 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     // workspace settings + prefs
     Assert<Exact<z.infer<typeof workspaceConfigResponseSchema>, WorkspaceConfig200>>,
     Assert<Exact<z.infer<typeof workspaceConfigResponseSchema>, SetWorkspaceConfig200>>,
+    Assert<Exact<z.infer<typeof workspaceBrandingLogoResponseSchema>, BrandingLogoUpload200>>,
+    Assert<Exact<z.infer<typeof workspaceBrandingLogoResponseSchema>, BrandingLogoDelete200>>,
     Assert<Exact<z.infer<typeof hostUsageSchema>, HostUsage200>>,
     // the two open GUI-pref bags — GET and the merged answer the PUT sends back
     Assert<ExactOpen<z.infer<typeof uiStateSchema>, UiState200>>,
