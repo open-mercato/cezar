@@ -26,7 +26,24 @@ import { AGENT_DESCRIPTORS, descriptorFor, type AgentDescriptor } from './agent-
  */
 
 /** What this file actually governs for a run — the honest label the spec insists on. */
+const PRIVATE_MCP_STARTER = `{
+  "mcpServers": {
+    "example-stdio": {
+      "command": "npx",
+      "args": ["-y", "some-mcp-server"],
+      "env": { "API_TOKEN": "your-personal-token" }
+    },
+    "example-http": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp",
+      "headers": { "Authorization": "Bearer your-personal-token" }
+    }
+  }
+}
+`
+
 function effectLabel(file: AgentConfigFile): string {
+  if (file.private) return 'Private to this project — added to every run at launch, takes effect on the next session. Never committed.'
   if (file.seeded) return 'Copied into each run’s worktree — takes effect on your next run.'
   if (file.tracked === 'tracked') return 'Runs read the committed copy — this edit applies after you commit it.'
   if (file.tracked === 'outside-repo') return 'Applies to every session on this machine.'
@@ -183,6 +200,11 @@ function AgentPane({
                         seeded
                       </Badge>
                     )}
+                    {file.private && (
+                      <Badge variant="outline" className="shrink-0 text-[10px]">
+                        private
+                      </Badge>
+                    )}
                     {!file.exists && <span className="shrink-0 text-[11px] text-soft-foreground">absent</span>}
                   </button>
                 </li>
@@ -244,7 +266,9 @@ export function FileEditor({ file }: { file: AgentConfigFile }) {
     }
   }, [fileQuery.data?.version, fileQuery.data])
 
-  const content = draft ?? fileQuery.data?.content ?? ''
+  // An absent private MCP file opens on a starter in the `.mcp.json` shape rather than a blank page.
+  const starter = file.private && fileQuery.data && !fileQuery.data.exists ? PRIVATE_MCP_STARTER : undefined
+  const content = draft ?? starter ?? fileQuery.data?.content ?? ''
   const dirty = fileQuery.data ? content !== fileQuery.data.content : false
   const canWrite = file.writable
 

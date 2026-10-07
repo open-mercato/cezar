@@ -12,6 +12,13 @@ import {
   type AskRequest,
 } from '../core/ask.ts';
 import { AUTO_END_DELAY_MS, type AgentSession } from '../core/claude-cli-runner.ts';
+import {
+  loadPrivateMcp,
+  PRIVATE_MCP_FILE,
+  skippedServersNote,
+  supportsPrivateMcp,
+  type PrivateMcpServer,
+} from '../core/private-mcp.ts';
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import { createRunner } from '../core/runner-factory.ts';
@@ -1188,6 +1195,28 @@ export class RunManager {
       // The tree directory — brief, notes, inbox — for a run in a dispatch tree only.
       ...(dispatch ? { CEZ_TREE_DIR: treeDir(this.dataDir, dispatch.rootRunId) } : {}),
     };
+  }
+
+  /**
+   * The project's private MCP servers for one agent session (spec
+   * 2026-10-07-private-project-mcp), with a note naming what was attached — or why not. Read
+   * fresh per launch, like `agentEnvForStep`, so an edit applies to the very next session.
+   * Never throws: an unreadable or broken file means a run without them, plus a note.
+   */
+  private async privateMcpForLaunch(
+    backend: RunnerId,
+    onEvent: (event: AgentEvent) => void,
+  ): Promise<PrivateMcpServer[] | undefined> {
+    const { servers, problems } = await loadPrivateMcp(this.repoRoot);
+    for (const problem of problems) onEvent({ type: 'note', message: `private MCP: ${problem}` });
+    if (servers.length === 0) return undefined;
+    const names = servers.map((s) => s.name);
+    if (!supportsPrivateMcp(backend)) {
+      onEvent({ type: 'note', message: skippedServersNote(backend, names, `${backend} has no launch-time MCP channel`) });
+      return undefined;
+    }
+    onEvent({ type: 'note', message: `private MCP servers from .ai/cezar/${PRIVATE_MCP_FILE}: ${names.join(', ')}` });
+    return servers;
   }
 
   /**
@@ -3882,6 +3911,7 @@ export class RunManager {
     this.store.updateStep(runId, stepId, { profileId: continueProfile.profileId });
 
     const runner = createRunner(continueBackend);
+    const continueMcp = await this.privateMcpForLaunch(continueBackend, onEvent);
     if (state.cancelled) return;
     state.currentStepId = stepId;
     this.beginUsageInvocation(runId, state, stepId);
@@ -3927,6 +3957,7 @@ export class RunManager {
           continueProfile.env,
         ),
         env: continueProfile.env,
+        mcpServers: continueMcp,
         model: continueModel,
         sessionId: spawnSessionId,
         resume: sessionId !== undefined,
@@ -4816,6 +4847,7 @@ export class RunManager {
     this.store.updateStep(runId, step.id, { profileId: stepProfile.profileId });
 
     const runner = createRunner(stepBackend);
+    const stepMcp = await this.privateMcpForLaunch(stepBackend, onEvent);
     let session: AgentSession;
     state.currentStepId = step.id;
     this.beginUsageInvocation(runId, state, step.id);
@@ -4849,6 +4881,7 @@ export class RunManager {
             stepProfile.env,
           ),
           env: stepProfile.env,
+          mcpServers: stepMcp,
           model: backendModel,
           sessionId,
           // Interactive sessions have no wall clock — the idle timer rules.

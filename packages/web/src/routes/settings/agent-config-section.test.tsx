@@ -25,6 +25,7 @@ function fileOf(over: Partial<AgentConfigFile> & Pick<AgentConfigFile, 'id' | 'l
     tracked: 'tracked',
     seeded: false,
     holdsMcp: false,
+    private: false,
     precedence: 'Overrides user settings key by key.',
     docsUrl: 'https://code.claude.com/docs/en/settings',
     path: `/repo/${over.label}`,

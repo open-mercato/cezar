@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -303,6 +303,32 @@ describe('ClaudeCliRunner token usage', () => {
       expect(events.filter((event) => event.type === 'token-usage')).toEqual([
         { type: 'token-usage', tokensUsed: 1_455 },
       ]);
+    } finally {
+      rmSync(cwd, { force: true, recursive: true });
+    }
+  });
+});
+
+describe('ClaudeCliRunner private MCP (spec 2026-10-07-private-project-mcp)', () => {
+  it('spawns with --mcp-config pointing at a 0600 file that is gone once the session ends', async () => {
+    const mockBin = fileURLToPath(new URL('../../scripts/mock-claude.mjs', import.meta.url));
+    const runner = new ClaudeCliRunner({ bin: mockBin, timeoutMs: 60_000 });
+    const cwd = mkdtempSync(join(tmpdir(), 'cez-claude-private-mcp-'));
+    const argsFile = join(cwd, 'args.ndjson');
+    try {
+      await runner.run({
+        userPrompt: 'do it',
+        cwd,
+        env: { CEZ_HANDOFF_FILE: '', CEZ_MOCK_ARGS_FILE: argsFile, CEZ_TODOS_FILE: '' },
+        allowedTools: ['Read'],
+        mcpServers: [{ name: 'tracker', transport: 'stdio', command: 'tracker-mcp', args: [], env: { TOKEN: 's3cret' }, headers: {} }],
+      });
+      const argv = JSON.parse(readFileSync(argsFile, 'utf8').trim().split('\n')[0]!) as string[];
+      const configPath = argv[argv.indexOf('--mcp-config') + 1]!;
+      expect(argv).toContain('--mcp-config');
+      expect(argv[argv.indexOf('--allowedTools') + 1]).toBe('Read,mcp__tracker');
+      expect(argv.join(' ')).not.toContain('s3cret');
+      expect(existsSync(configPath)).toBe(false);
     } finally {
       rmSync(cwd, { force: true, recursive: true });
     }

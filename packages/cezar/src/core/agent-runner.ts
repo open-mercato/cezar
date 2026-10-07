@@ -17,6 +17,7 @@
  */
 
 import type { UiEvent } from './ui-events.ts';
+import type { PrivateMcpServer } from './private-mcp.ts';
 
 /**
  * The user-selectable runners (what config/GUI expose), in display order — the SINGLE source of
@@ -58,6 +59,9 @@ export interface AgentRunSpec {
   /** Extra env vars for the agent process (merged over `process.env`) —
    *  e.g. CEZ_HANDOFF_FILE / CEZ_TODOS_FILE / CEZ_TASK_ID (spec 007). */
   env?: Record<string, string>;
+  /** The project's private MCP servers (`.ai/cezar/mcp.local.json`), injected at launch through
+   *  each backend's own channel — never written into `cwd` (spec 2026-10-07-private-project-mcp). */
+  mcpServers?: PrivateMcpServer[];
   model?: string;
   /** Wall-clock kill switch for the run (ms). */
   timeoutMs?: number;

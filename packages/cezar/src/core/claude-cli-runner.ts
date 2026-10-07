@@ -1,6 +1,8 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve as resolvePath } from 'node:path';
+import { dirname, join, resolve as resolvePath } from 'node:path';
 import type {
   AgentEvent,
   AgentRunResult,
@@ -20,6 +22,7 @@ import { disclaimedCommand } from './disclaim-spawn.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
 import { costWeightedTokens, type RawUsage } from './usage.ts';
 import { readNdjson } from './ndjson.ts';
+import { claudeMcpAllowRules, toClaudeMcpConfig, type PrivateMcpServer } from './private-mcp.ts';
 import {
   claudeTurnStarted,
   createClaudeUiState,
@@ -117,7 +120,8 @@ export class ClaudeCliRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
-    const args = buildClaudeArgs(spec);
+    const mcpConfig = writeClaudeMcpConfig(spec.mcpServers);
+    const args = buildClaudeArgs(spec, process.env, mcpConfig?.path);
 
     let child: ChildProcessWithoutNullStreams;
     try {
@@ -125,6 +129,7 @@ export class ClaudeCliRunner implements AgentRunner {
       const [file, argv] = disclaimedCommand(this.bin, args, env);
       child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
     } catch (err) {
+      mcpConfig?.cleanup();
       throw wrapSpawnError(err, this.bin);
     }
 
@@ -313,6 +318,8 @@ export class ClaudeCliRunner implements AgentRunner {
         if (hardKillTimer) clearTimeout(hardKillTimer);
         if (autoEndTimer) clearTimeout(autoEndTimer);
         stdinOpen = false;
+        // stdout closed: the CLI read `--mcp-config` at startup long ago, so the file can go.
+        mcpConfig?.cleanup();
       }
 
       const exitCode = await waitForExit(child);
@@ -388,6 +395,7 @@ export class ClaudeCliRunner implements AgentRunner {
 export function buildClaudeArgs(
   spec: AgentRunSpec,
   env: NodeJS.ProcessEnv = process.env,
+  mcpConfigPath?: string,
 ): string[] {
   const args: string[] = [
     '--print',
@@ -412,6 +420,12 @@ export function buildClaudeArgs(
     }
   }
   const allowed = buildAllowedTools(spec.allowedTools ?? [], spec.bashAllowlist);
+  // Private MCP servers (spec 2026-10-07-private-project-mcp): `--mcp-config` ADDS to the repo's
+  // own MCP config, and their tools are allowed — `dontAsk` would deny every one of them otherwise.
+  if (mcpConfigPath && spec.mcpServers?.length) {
+    args.push('--mcp-config', mcpConfigPath);
+    allowed.push(...claudeMcpAllowRules(spec.mcpServers));
+  }
   if (allowed.length > 0) {
     args.push('--allowedTools', allowed.join(','));
   }
@@ -422,6 +436,26 @@ export function buildClaudeArgs(
     args.push('--add-dir', dir);
   }
   return args;
+}
+
+/**
+ * Write the private MCP servers to a `0600` temp file for `--mcp-config` — a file, not an inline
+ * JSON argument, because argv is world-readable through `ps` and these entries carry tokens.
+ * Removed when the session's process exits. Undefined when there is nothing to attach or the
+ * temp dir is unwritable (the run then simply starts without them).
+ */
+export function writeClaudeMcpConfig(
+  servers: readonly PrivateMcpServer[] | undefined,
+): { path: string; cleanup: () => void } | undefined {
+  if (!servers?.length) return undefined;
+  try {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-mcp-'));
+    const path = join(dir, 'mcp.json');
+    writeFileSync(path, JSON.stringify(toClaudeMcpConfig(servers)), { mode: 0o600 });
+    return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  } catch {
+    return undefined;
+  }
 }
 
 /**
