@@ -51,7 +51,7 @@ export function WorkspaceColumns({
 }: {
   columns: readonly WorkspaceColumn[]
   actions: ColumnActions
-  renderView: (view: ViewId, index: number) => ReactNode
+  renderView: (view: ViewId, index: number, column: WorkspaceColumn) => ReactNode
 }) {
   const desktop = useIsDesktop()
   const rowRef = useRef<HTMLDivElement>(null)
@@ -102,7 +102,7 @@ export function WorkspaceColumns({
           <span className="ml-auto flex shrink-0 items-center">{columnMenu(activeNarrow, column)}</span>
         </div>
         <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          {renderView(column.view, activeNarrow)}
+          {renderView(column.view, activeNarrow, column)}
         </div>
       </div>
     )
@@ -144,7 +144,7 @@ export function WorkspaceColumns({
             menu={columnMenu(index, column)}
           />
           <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-            {renderView(column.view, index)}
+            {renderView(column.view, index, column)}
           </div>
         </div>
       ))}

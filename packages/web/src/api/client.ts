@@ -72,6 +72,8 @@ import type {
   MessageResponse,
   RemoveQueuedMessageResponse,
   OpenInCliResponse,
+  DetectedUrlsResponse,
+  DiscoveredCommandsResponse,
   TerminalCreateInput,
   TerminalOutput,
   TerminalSession,
@@ -1646,6 +1648,27 @@ export async function stopRunTerminal(id: string, sessionId: string): Promise<vo
       param: { projectId: queryScope(), id: encodeURIComponent(id), sessionId },
     }),
     runPath(id, `/terminal/${sessionId}`),
+  )
+}
+
+/** Addresses this task's terminals printed, each probed for whether anything is listening
+ *  (spec §7). Nothing is opened by reading this — that is the user's click. */
+export async function getRunTerminalUrls(id: string): Promise<DetectedUrlsResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].terminal.urls.$get({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/terminal/urls'),
+  )
+}
+
+/** Commands the task's own project defines, each with the file it came from (spec §6). */
+export async function getRunTerminalCommands(id: string): Promise<DiscoveredCommandsResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].terminal.commands.$get({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/terminal/commands'),
   )
 }
 

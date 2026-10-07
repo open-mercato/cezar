@@ -21,12 +21,13 @@ import { ThreadView } from '../task-thread/task-thread'
 import { useRunRecordReconcile } from '../task-thread/run-reconcile'
 import { reduceThread } from '../task-thread/thread-state'
 
+import { BrowserView } from './browser-view'
 import { LayoutCards } from './layout-cards'
 import { ViewPickerMenu } from './view-picker'
 import { WorkspaceColumns, type ColumnActions } from './workspace-columns'
 import { useWorkspaceLayouts } from './use-workspace-layouts'
 import { readDrawerState, writeDrawerState, type DrawerState } from './drawer-state'
-import type { ViewId } from './layout-state'
+import { emptyBrowserState, type ViewId, type WorkspaceColumn } from './layout-state'
 
 /** Lazy because it carries the emulator (xterm, ~80 KB gz) and its stylesheet. A task whose
  *  drawer is never opened must not pay for either — the drawer starts hidden on every visit
@@ -121,7 +122,8 @@ function WorkspaceView({
   onMarkedUnread: (runId: string) => void
 }) {
   const layouts = useWorkspaceLayouts(run.id)
-  const { openDeepLink, addLayout, closeLayout, selectLayout, renameLayout } = layouts
+  const { openDeepLink, addLayout, closeLayout, selectLayout, renameLayout, setColumnBrowser, openInBrowser } =
+    layouts
 
   // The deep-link hop. Keyed on the run id as well as the view: task A `/changes` → task B
   // `/changes` changes neither the path nor `openDeepLink`, and without the id in the deps task B
@@ -190,7 +192,7 @@ function WorkspaceView({
   // One run, one worktree: every column is handed the SAME record (spec §3.3), so no column can
   // drift onto another task's state or the boot repo.
   const renderView = useCallback(
-    (view: ViewId) => {
+    (view: ViewId, index: number, column: WorkspaceColumn) => {
       switch (view) {
         case 'session':
           return <ConversationColumn run={run} onMarkedUnread={onMarkedUnread} />
@@ -200,9 +202,16 @@ function WorkspaceView({
           return <CommitsView run={run} embedded />
         case 'files':
           return <FilesView run={run} embedded />
+        case 'browser':
+          return (
+            <BrowserView
+              state={column.browser ?? emptyBrowserState()}
+              onChange={(browser) => setColumnBrowser(index, browser)}
+            />
+          )
       }
     },
-    [run, onMarkedUnread],
+    [onMarkedUnread, run, setColumnBrowser],
   )
 
   return (
@@ -249,6 +258,7 @@ function WorkspaceView({
             height={drawer.height}
             onHeightChange={(height) => updateDrawer({ height })}
             onClose={() => updateDrawer({ open: false })}
+            onOpenInBrowser={openInBrowser}
           />
         </Suspense>
       ) : null}

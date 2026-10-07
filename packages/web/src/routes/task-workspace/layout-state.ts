@@ -10,12 +10,12 @@
  * the per-host boundary the spec asks for, with no sync and no new API surface.
  */
 
-/** The four task surfaces a column can show. `browser` and `terminal` are later milestones and
- *  deliberately absent from this union: an unavailable view must not be representable in saved
- *  state (spec §5.1 — no placeholder that implies it works). */
-export type ViewId = 'session' | 'changes' | 'commits' | 'files'
+/** The surfaces a column can show. `terminal` is deliberately absent — it is the bottom drawer,
+ *  not a column — and an unavailable view must never be representable in saved state (spec §5.1,
+ *  no placeholder that implies it works). */
+export type ViewId = 'session' | 'changes' | 'commits' | 'files' | 'browser'
 
-export const VIEW_IDS: readonly ViewId[] = ['session', 'changes', 'commits', 'files']
+export const VIEW_IDS: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'browser']
 
 /** The Polish labels the spec names: `Czat`, `Zmiany`, `Commity`, `Pliki`. These are what the
  *  layout cards and column headers read, and what an automatic layout name is derived from. */
@@ -24,6 +24,7 @@ const VIEW_LABELS: Record<ViewId, string> = {
   changes: 'Zmiany',
   commits: 'Commity',
   files: 'Pliki',
+  browser: 'Przeglądarka',
 }
 
 export function viewLabel(view: ViewId): string {
@@ -34,12 +35,52 @@ export function isViewId(raw: unknown): raw is ViewId {
   return typeof raw === 'string' && (VIEW_IDS as readonly string[]).includes(raw)
 }
 
-/** One column: which view it shows, and how wide it is as a percentage of the view area. */
+/**
+ * A Browser column's own tabs (spec §7: "Each Browser column has its own saved browser tabs").
+ *
+ * Only SUCCESSFULLY loaded addresses are stored, which is the spec's rule and the reason this
+ * holds plain strings rather than tab objects: a tab whose last attempt failed comes back blank,
+ * so there is nothing about the failure worth persisting. An empty string IS a blank tab.
+ */
+export interface BrowserState {
+  tabs: string[]
+  /** Index into `tabs`. Clamped on read, so a stored value can never point past the end. */
+  active: number
+}
+
+/** One column: which view it shows, how wide it is, and — for a Browser — its own tabs. */
 export interface WorkspaceColumn {
   view: ViewId
   /** Percent of the row. The columns of a layout always sum to 100. */
   width: number
+  /** Present only on a Browser column. Carried in the column rather than beside it so a column
+   *  and its tabs cannot drift apart when columns are reordered or closed. */
+  browser?: BrowserState
 }
+
+/** A Browser column with nothing loaded: one blank tab, which is what `+` and a fresh column
+ *  both produce. */
+export function emptyBrowserState(): BrowserState {
+  return { tabs: [''], active: 0 }
+}
+
+/** Anything → a Browser state the view can paint. Total, like every other reviver here: the
+ *  input can be a hand-edited storage value. */
+export function reviveBrowserState(raw: unknown): BrowserState {
+  if (typeof raw !== 'object' || raw === null) return emptyBrowserState()
+  const source = raw as { tabs?: unknown; active?: unknown }
+  if (!Array.isArray(source.tabs)) return emptyBrowserState()
+  const tabs = source.tabs.filter((tab): tab is string => typeof tab === 'string').slice(0, MAX_BROWSER_TABS)
+  if (tabs.length === 0) return emptyBrowserState()
+  const active = typeof source.active === 'number' && Number.isFinite(source.active)
+    ? Math.min(tabs.length - 1, Math.max(0, Math.trunc(source.active)))
+    : 0
+  return { tabs, active }
+}
+
+/** A bound on tabs per Browser column — enough for any real comparison, few enough that a
+ *  hand-edited file cannot make the strip unusable. */
+export const MAX_BROWSER_TABS = 12
 
 export interface WorkspaceLayout {
   /** Unique within the task, and the card's label. Renameable (spec §5.2). */
@@ -129,7 +170,7 @@ function round2(value: number): number {
  *  column widths"), which is also the confirmed answer to what a close does to the survivors. */
 function withEqualWidths(columns: readonly WorkspaceColumn[]): WorkspaceColumn[] {
   const widths = equalWidths(columns.length)
-  return columns.map((column, index) => ({ view: column.view, width: widths[index] ?? 0 }))
+  return columns.map((column, index) => ({ ...column, width: widths[index] ?? 0 }))
 }
 
 /* ── Reading and writing ─────────────────────────────────────────────────────────────────────── */
@@ -185,16 +226,18 @@ function reviveLayout(entry: unknown, taken: readonly WorkspaceLayout[]): Worksp
   if (typeof source.name !== 'string' || source.name.trim() === '') return null
   if (!Array.isArray(source.columns)) return null
 
-  // Drop columns naming a view this build does not have — a layout saved by a cezar that already
-  // had `Przeglądarka` must still open here, minus that column, rather than failing the whole file.
+  // Drop columns naming a view this build does not have — a layout saved by a later cezar must
+  // still open here, minus that column, rather than failing the whole file.
   const views: ViewId[] = []
   const widths: number[] = []
+  const browsers: Array<BrowserState | undefined> = []
   for (const column of source.columns.slice(0, MAX_COLUMNS)) {
     if (typeof column !== 'object' || column === null) continue
-    const candidate = column as { view?: unknown; width?: unknown }
+    const candidate = column as { view?: unknown; width?: unknown; browser?: unknown }
     if (!isViewId(candidate.view)) continue
     views.push(candidate.view)
     widths.push(typeof candidate.width === 'number' ? candidate.width : Number.NaN)
+    browsers.push(candidate.view === 'browser' ? reviveBrowserState(candidate.browser) : undefined)
   }
   // A layout the user emptied is not a layout: closing the last column closes the card (confirmed
   // decision, 2026-10-07), so a saved zero-column entry can only be drift. Drop it.
@@ -202,7 +245,14 @@ function reviveLayout(entry: unknown, taken: readonly WorkspaceLayout[]): Worksp
 
   const name = uniqueName(source.name.trim(), taken)
   const normalized = normalizeWidths(widths)
-  return { name, columns: views.map((view, index) => ({ view, width: normalized[index] ?? 0 })) }
+  return {
+    name,
+    columns: views.map((view, index) => ({
+      view,
+      width: normalized[index] ?? 0,
+      ...(browsers[index] ? { browser: browsers[index] } : {}),
+    })),
+  }
 }
 
 /** Persist the state. Normalized on the way in as well as on the way out, so a bad value can
@@ -273,7 +323,7 @@ function replaceLayout(state: WorkspaceState, name: string, next: WorkspaceLayou
 export function addLayout(state: WorkspaceState, view: ViewId): WorkspaceState {
   const name = uniqueName(viewLabel(view), state.layouts)
   return {
-    layouts: [...state.layouts, { name, columns: [{ view, width: 100 }] }],
+    layouts: [...state.layouts, { name, columns: [{ ...newColumn(view), width: 100 }] }],
     active: name,
   }
 }
@@ -319,7 +369,38 @@ export function addColumn(state: WorkspaceState, name: string, view: ViewId): Wo
   if (!layout || layout.columns.length >= MAX_COLUMNS) return state
   return replaceLayout(state, name, {
     ...layout,
-    columns: withEqualWidths([...layout.columns, { view, width: 0 }]),
+    columns: withEqualWidths([...layout.columns, newColumn(view)]),
+  })
+}
+
+/** A fresh column. A Browser starts with one blank tab, which is what §7 asks a new one to be. */
+function newColumn(view: ViewId): WorkspaceColumn {
+  return view === 'browser'
+    ? { view, width: 0, browser: emptyBrowserState() }
+    : { view, width: 0 }
+}
+
+/**
+ * Replace a Browser column's tabs.
+ *
+ * Its own transition rather than a general column patch, because this is the one piece of column
+ * state the VIEW owns and writes back: everything else about a column is decided by the strip
+ * around it.
+ */
+export function setColumnBrowser(
+  state: WorkspaceState,
+  name: string,
+  index: number,
+  browser: BrowserState,
+): WorkspaceState {
+  const layout = findLayout(state, name)
+  const column = layout?.columns[index]
+  if (!layout || !column || column.view !== 'browser') return state
+  return replaceLayout(state, name, {
+    ...layout,
+    columns: layout.columns.map((entry, position) =>
+      position === index ? { ...entry, browser } : entry,
+    ),
   })
 }
 
@@ -350,7 +431,9 @@ export function setColumnView(
   return replaceLayout(state, name, {
     ...layout,
     columns: layout.columns.map((column, position) =>
-      position === index ? { ...column, view } : column,
+      // Re-pointing a column REPLACES it, tabs and all: the Browser state belonged to the view
+      // that is going away, and keeping it would resurrect those tabs if the user came back.
+      position === index ? { ...newColumn(view), width: column.width } : column,
     ),
   })
 }

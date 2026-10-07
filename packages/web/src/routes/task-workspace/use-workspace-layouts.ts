@@ -12,8 +12,10 @@ import {
   renameLayout as renameLayoutOf,
   resizeColumns as resizeColumnsOf,
   selectLayout as selectLayoutOf,
+  setColumnBrowser as setColumnBrowserOf,
   setColumnView as setColumnViewOf,
   writeState,
+  type BrowserState,
   type ViewId,
   type WorkspaceLayout,
   type WorkspaceState,
@@ -44,6 +46,12 @@ export interface WorkspaceLayouts {
   setColumnView: (index: number, view: ViewId) => void
   resizeColumns: (index: number, delta: number) => void
   moveColumn: (from: number, to: number) => void
+  setColumnBrowser: (index: number, browser: BrowserState) => void
+  /** Open an address in a Browser column of the active layout — the terminal's detected-URL
+   *  list is the only caller (spec §7, `Otwórz w Przeglądarce`). Reuses a Browser column when the
+   *  layout has one and adds one otherwise; returns false when there was no room, so the caller
+   *  can say so rather than appearing to do nothing. */
+  openInBrowser: (url: string) => boolean
   /** The deep-link entry (`/tasks/:id/changes` and friends) — idempotent, so a refresh does not
    *  pile up cards. Called from an effect by the route, not during render. */
   openDeepLink: (view: ViewId) => void
@@ -108,5 +116,33 @@ export function useWorkspaceLayouts(taskId: string): WorkspaceLayouts {
       [onActive],
     ),
     openDeepLink: useCallback((view: ViewId) => setState((current) => openDeepLinkOn(current, view)), []),
+    setColumnBrowser: useCallback(
+      (index: number, browser: BrowserState) =>
+        onActive((current, name) => setColumnBrowserOf(current, name, index, browser)),
+      [onActive],
+    ),
+    openInBrowser: useCallback((url: string) => {
+      let placed = false
+      setState((current) => {
+        const layout = activeLayoutOf(current)
+        if (!layout) return current
+        const index = layout.columns.findIndex((column) => column.view === 'browser')
+        if (index >= 0) {
+          // An existing Browser column gets the address as a new tab, activated.
+          const browser = layout.columns[index]!.browser ?? { tabs: [''], active: 0 }
+          // A blank tab is a slot, not a tab worth keeping beside the new one.
+          const tabs = browser.tabs.filter((tab) => tab !== '')
+          placed = true
+          return setColumnBrowserOf(current, layout.name, index, { tabs: [...tabs, url], active: tabs.length })
+        }
+        const added = addColumnTo(current, layout.name, 'browser')
+        // `addColumn` is a no-op at the column cap; saying so beats silently doing nothing.
+        if (added === current) return current
+        placed = true
+        const grown = activeLayoutOf(added)!
+        return setColumnBrowserOf(added, grown.name, grown.columns.length - 1, { tabs: [url], active: 0 })
+      })
+      return placed
+    }, []),
   }
 }

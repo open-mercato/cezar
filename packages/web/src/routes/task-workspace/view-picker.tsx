@@ -17,6 +17,7 @@ const VIEW_ICONS: Record<ViewId, ComponentType<{ className?: string }>> = {
   changes: FileDiffIcon,
   commits: GitCommitHorizontalIcon,
   files: FolderTreeIcon,
+  browser: GlobeIcon,
 }
 
 /**
@@ -26,11 +27,8 @@ const VIEW_ICONS: Record<ViewId, ComponentType<{ className?: string }>> = {
  * column header's `Zmień widok` and its `Dodaj kolumnę` — three places that must never offer
  * different views, and would if each wrote its own list.
  *
- * `Przeglądarka` is listed and DISABLED rather than omitted, which is the spec's explicit wording
- * ("remains visible but disabled until built") and the honest form of a later milestone: the user
- * can see the workspace is meant to hold a browser, and cannot pick one that would render a
- * placeholder pretending to work. `Terminal` is deliberately absent — it is the bottom drawer,
- * not a column.
+ * `Przeglądarka` is enabled as of Milestone 3. `Terminal` is deliberately absent from this list —
+ * it is the bottom drawer, not a column.
  */
 export function ViewItems({
   onPick,
@@ -51,11 +49,6 @@ export function ViewItems({
           </DropdownMenuItem>
         )
       })}
-      <DropdownMenuItem disabled title="Przeglądarka pojawi się w kolejnym etapie">
-        <GlobeIcon aria-hidden="true" />
-        Przeglądarka
-        <span className="ml-auto text-[10px] uppercase tracking-wide text-soft-foreground">wkrótce</span>
-      </DropdownMenuItem>
     </>
   )
 }

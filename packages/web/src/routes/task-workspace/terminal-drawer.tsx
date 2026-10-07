@@ -23,6 +23,7 @@ import {
   MIN_DRAWER_HEIGHT,
   clampDrawerHeight,
 } from './drawer-state'
+import { CommandPicker, DetectedUrlsStrip } from './terminal-extras'
 import { TerminalPane } from './terminal-pane'
 
 /**
@@ -50,11 +51,15 @@ export function TerminalDrawer({
   height,
   onHeightChange,
   onClose,
+  onOpenInBrowser,
 }: {
   runId: string
   height: number
   onHeightChange: (height: number) => void
   onClose: () => void
+  /** Opens a detected address in a Browser column (spec §7). Returns false when the layout had
+   *  no room, so the strip can say so. */
+  onOpenInBrowser: (url: string) => boolean
 }) {
   const [sessions, setSessions] = useState<TerminalSession[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -156,6 +161,26 @@ export function TerminalDrawer({
     [onClose, runId],
   )
 
+  /**
+   * Run a discovered (or typed) command in a NEW tab — never in the one being looked at.
+   *
+   * The spec is explicit that a selected command runs in a new terminal tab, and the reason is
+   * worth stating: the tab you are looking at may be mid-build, and a command typed into it
+   * would either queue behind that or interleave with it.
+   */
+  const runCommand = useCallback(
+    (command: string) => {
+      void createRunTerminal(runId, {})
+        .then(async (session) => {
+          setSessions((current) => [...current, session])
+          setActiveId(session.id)
+          await writeRunTerminal(runId, session.id, `${command}\r`)
+        })
+        .catch(() => {})
+    },
+    [runId],
+  )
+
   /** Interrupt whatever is running, the way Ctrl-C does in any terminal. The tab and its
    *  scrollback stay, which is the point. */
   const interrupt = useCallback(
@@ -175,6 +200,8 @@ export function TerminalDrawer({
       style={{ height: `${height}px` }}
     >
       <DrawerResizeHandle height={height} onHeightChange={onHeightChange} />
+
+      {unavailable ? null : <DetectedUrlsStrip runId={runId} onOpen={onOpenInBrowser} />}
 
       <header className="flex h-8 shrink-0 items-center gap-1 border-b border-border pl-1 pr-2">
         <div
@@ -210,6 +237,7 @@ export function TerminalDrawer({
             <span className="block truncate text-[11px] text-soft-foreground">{active.cwd}</span>
           </span>
         ) : null}
+        {unavailable ? null : <CommandPicker runId={runId} onRun={runCommand} />}
         {active?.busy ? (
           <Button
             variant="ghost"

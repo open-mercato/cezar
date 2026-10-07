@@ -345,17 +345,49 @@ describe('reviveState', () => {
   })
 
   it('drops a column naming a view this build does not have', () => {
+    // A layout saved by a LATER cezar, carrying a view this build has never heard of.
     const state = reviveState({
-      layouts: [{ name: 'Mixed', columns: [{ view: 'session', width: 50 }, { view: 'browser', width: 50 }] }],
+      layouts: [{ name: 'Mixed', columns: [{ view: 'session', width: 50 }, { view: 'hologram', width: 50 }] }],
       active: 'Mixed',
     })
     expect(state.layouts[0]!.columns).toEqual([{ view: 'session', width: 100 }])
   })
 
+  it('restores a Browser column together with its own tabs', () => {
+    const state = reviveState({
+      layouts: [{
+        name: 'Podgląd',
+        columns: [{ view: 'browser', width: 100, browser: { tabs: ['http://localhost:3000', ''], active: 1 } }],
+      }],
+      active: 'Podgląd',
+    })
+    expect(state.layouts[0]!.columns[0]).toEqual({
+      view: 'browser',
+      width: 100,
+      browser: { tabs: ['http://localhost:3000', ''], active: 1 },
+    })
+  })
+
+  it('repairs a Browser column whose stored tabs are junk', () => {
+    const state = reviveState({
+      layouts: [{ name: 'P', columns: [{ view: 'browser', width: 100, browser: { tabs: 'nope', active: 7 } }] }],
+      active: 'P',
+    })
+    expect(state.layouts[0]!.columns[0]!.browser).toEqual({ tabs: [''], active: 0 })
+  })
+
+  it('clamps a stored active tab that points past the end', () => {
+    const state = reviveState({
+      layouts: [{ name: 'P', columns: [{ view: 'browser', width: 100, browser: { tabs: ['a'], active: 9 } }] }],
+      active: 'P',
+    })
+    expect(state.layouts[0]!.columns[0]!.browser).toEqual({ tabs: ['a'], active: 0 })
+  })
+
   it('drops a layout left with no columns at all', () => {
     const state = reviveState({
       layouts: [
-        { name: 'Gone', columns: [{ view: 'browser', width: 100 }] },
+        { name: 'Gone', columns: [{ view: 'hologram', width: 100 }] },
         { name: 'Kept', columns: [{ view: 'files', width: 100 }] },
       ],
       active: 'Gone',
