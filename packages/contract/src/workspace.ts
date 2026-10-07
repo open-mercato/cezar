@@ -86,7 +86,7 @@ export type WorkspaceConfigResponse = z.infer<typeof workspaceConfigResponseSche
  */
 export const setWorkspaceConfigInputSchema = z.object({
   branding: z.object({
-    name: z.string().trim().max(80).nullable().optional(),
+    name: z.string().trim().min(1).max(80).nullable().optional(),
   }).optional(),
   browseRoot: z.string().trim().min(1).max(4096).optional(),
   projectsDir: z.string().trim().min(1).max(4096).optional(),
