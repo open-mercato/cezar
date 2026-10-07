@@ -1,9 +1,14 @@
-import { lazy, useEffect, useRef, type ComponentType, type LazyExoticComponent } from 'react'
+import { lazy, useEffect, type ComponentType, type LazyExoticComponent } from 'react'
 import { useLocation } from 'react-router'
 
-import type { TelemetryErrorInput, TelemetryPage } from '@open-mercato/cezar-api-client'
+import {
+  TELEMETRY_ROUTE_SEGMENTS,
+  type MessageSurface,
+  type TelemetryErrorInput,
+} from '@open-mercato/cezar-api-client'
 
 import { useHealth } from '@/api/queries'
+import { SID_HEADER, sid } from '@/lib/sid'
 
 /**
  * Cockpit half of the anonymous, opt-out telemetry (`packages/cezar/src/telemetry.ts`). The
@@ -15,16 +20,17 @@ import { useHealth } from '@/api/queries'
  * adds its half (its version, whether this page's bundle is still the one being served).
  */
 
-export type { TelemetryPage }
-
 type ContextValue = string | number | boolean | null
 type Context = Record<string, ContextValue>
 
 function send(path: string, body: unknown): void {
+  // Unit tests stub `fetch` and count its calls; telemetry must not be one of them (the server
+  // drops test-run telemetry too).
+  if (import.meta.env.MODE === 'test') return
   try {
     void fetch(path, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', [SID_HEADER]: sid() },
       body: JSON.stringify(body),
       keepalive: true,
     }).catch(() => {})
@@ -33,33 +39,34 @@ function send(path: string, body: unknown): void {
   }
 }
 
-export function trackPage(page: TelemetryPage): void {
-  send('/api/v1/telemetry/page', { page })
+/** A message the user sent to an agent, labelled with where they sent it from. Call it after
+ *  the send succeeded, never before — a failed send is not a sent message. */
+export function trackMessageSent(surface: Exclude<MessageSurface, 'cli'>): void {
+  send('/api/v1/telemetry/event', { event: 'message_sent', label: surface })
 }
 
-/** Which tracked page a pathname is: `/dashboard`, the global `/tasks` (All tasks), and any
- *  settings page — project (`/p/:id/settings…`) or global (`/settings/global…`). Legacy flat
- *  settings URLs redirect onto a scoped one, so only canonical spellings count. */
-export function telemetryPageFor(pathname: string): TelemetryPage | undefined {
-  if (pathname === '/dashboard') return 'dashboard'
-  if (pathname === '/tasks') return 'tasks'
-  if (pathname === '/settings/global' || pathname.startsWith('/settings/global/')) return 'settings'
-  const scoped = /^\/p\/[^/]+(\/.*)?$/.exec(pathname)
-  if (!scoped) return undefined
-  const rest = scoped[1] ?? '/'
-  return rest === '/settings' || rest.startsWith('/settings/') ? 'settings' : undefined
+/** Whether a pathname is a page the user actually sees. Everything else outside these roots is
+ *  a legacy flat URL that redirects into a project (`/` → `/p/<boot>/`) — counting it would put
+ *  a phantom step before every real one. */
+export function isCanonicalRoute(pathname: string): boolean {
+  return (
+    pathname.startsWith('/p/') ||
+    pathname === '/tasks' ||
+    pathname === '/dashboard' ||
+    pathname === '/settings/global' ||
+    pathname.startsWith('/settings/global/')
+  )
 }
 
-/** Static URL segments the cockpit's routes are made of. Anything else — a project slug, a run
- *  id, a PR number, a workflow or skill name — is the user's data and becomes `:param`, so a
- *  reported route is the route's SHAPE and never identifies a project or a task. */
-const ROUTE_SEGMENTS = new Set([
-  'p', 'new', 'tasks', 'changes', 'files', 'commits', 'compare', 'git', 'branches', 'log',
-  'github', 'prs', 'issues', 'tracker', 'skills', 'inbox', 'workflows', 'automations',
-  'dashboard', 'settings', 'global', 'agents', 'agent-config', 'worktrees', 'bookmarklets',
-  'prompt-templates', 'appearance', 'notifications', 'resources', 'accounts', 'projects',
-  'keyboard',
-])
+/** One `page_viewed` per navigation, labelled with the route's shape (see `routeShape`). */
+export function trackPage(route: string): void {
+  send('/api/v1/telemetry/page', { route })
+}
+
+/** Every segment outside the contract's vocabulary — a project slug, a run id, a PR number, a
+ *  workflow or skill name — is the user's data and becomes `:param`, so a reported route is the
+ *  route's SHAPE and never identifies a project or a task. */
+const ROUTE_SEGMENTS = new Set(TELEMETRY_ROUTE_SEGMENTS)
 
 export function routeShape(pathname: string): string {
   const shape = pathname
@@ -217,12 +224,10 @@ export function lazyRoute<T extends ComponentType<any>>(
 
 let handlersInstalled = false
 
-/** Renders nothing: one view each time the user enters a tracked page (moving between settings
- *  sections is one visit), keeps the session state the error reports carry, and installs the
- *  window-level error hooks. */
+/** Renders nothing: one `page_viewed` per route the user moves to, the session state the error
+ *  reports carry, and the window-level error hooks. */
 export function Telemetry() {
   const { pathname } = useLocation()
-  const last = useRef<TelemetryPage | undefined>(undefined)
   const health = useHealth()
 
   useEffect(() => {
@@ -259,16 +264,17 @@ export function Telemetry() {
   }, [])
 
   useEffect(() => {
+    if (!isCanonicalRoute(pathname)) return
     const route = routeShape(pathname)
-    if (route !== session.route) {
-      session.previousRoute = session.route
+    // The first render counts too (the page the user landed on); a re-render on the same
+    // route does not.
+    if (route !== session.route || session.navigations === 0) {
+      if (session.navigations > 0) session.previousRoute = session.route
       session.route = route
       session.routeEnteredAt = performance.now()
       session.navigations += 1
+      trackPage(route)
     }
-    const page = telemetryPageFor(pathname)
-    if (page && page !== last.current) trackPage(page)
-    last.current = page
   }, [pathname])
 
   return null

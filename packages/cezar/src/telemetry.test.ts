@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { flushTelemetry, registerTelemetryContext, reportError, sendDailyPing, telemetryEnabled, telemetryRuntime, uuidv7 } from './telemetry.ts';
+import { deviceSid, flushTelemetry, registerTelemetryContext, reportError, sendDailyPing, telemetryEnabled, telemetryRuntime, track, uuidv7 } from './telemetry.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 
 describe('telemetry', () => {
@@ -62,6 +62,29 @@ describe('telemetry', () => {
     const b = uuidv7(1_700_000_000_001);
     expect(a).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     expect(a < b).toBe(true);
+  });
+
+  it('keys a device as <cezarId>:<sid>, the process as the bare cezarId', async () => {
+    vi.stubEnv('CEZ_TELEMETRY', '1');
+    vi.stubEnv('CEZ_HOME', mkdtempSync(join(tmpdir(), 'cez-sid-')));
+    const sid = uuidv7();
+    track('settings_view', {}, { sid: deviceSid(sid) });
+    track('app_start');
+    reportError(new Error('device error'), {}, { sid: deviceSid(sid) });
+    await flushTelemetry();
+    const { cezarId } = await loadWorkspaceConfig();
+    const keys = fetchMock.mock.calls.map((c) => {
+      const body = JSON.parse(String((c as unknown as [string, RequestInit])[1].body));
+      return body.indexKey ?? body.user.id;
+    });
+    expect(keys).toEqual([`${cezarId}:${sid}`, cezarId, `${cezarId}:${sid}`]);
+    expect(keys[0]!.length).toBeLessThanOrEqual(96);
+  });
+
+  it('ignores a device header that is not a v7 uuid', () => {
+    expect(deviceSid('../../etc')).toBeUndefined();
+    expect(deviceSid(crypto.randomUUID())).toBeUndefined(); // v4
+    expect(deviceSid(undefined)).toBeUndefined();
   });
 
   describe('daily ping', () => {

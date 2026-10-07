@@ -218,8 +218,8 @@ import {
   withResolvedClaudeBin,
 } from './open-in-app.ts';
 import { createDraftPr } from './pr.ts';
-import { reportError, track } from '../telemetry.ts';
-import { telemetryErrorInputSchema, telemetryPageInputSchema } from '@open-mercato/cezar-contract';
+import { deviceSid, reportError, track } from '../telemetry.ts';
+import { telemetryErrorInputSchema, telemetryEventInputSchema, telemetryPageInputSchema } from '@open-mercato/cezar-contract';
 import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.ts';
 import {
   providerForActiveRun,
@@ -1385,7 +1385,7 @@ export function createApp(deps: ServerDeps) {
       'http.method': c.req.method,
       'http.route': c.req.routePath,
       'http.project_scoped': c.req.path.startsWith('/api/v1/p/'),
-    }, { code: 'http_handler_failed' });
+    }, { code: 'http_handler_failed', sid: deviceSid(c.req.header('x-cezar-sid')) });
     return c.text('Internal Server Error', 500);
   });
 
@@ -4182,6 +4182,7 @@ export function createApp(deps: ServerDeps) {
         // CEZ_TODOS_FILE alike (RunManager.agentEnv).
         generateFollowups: capabilities().followups ? parsed.data.generateFollowups : false,
         ...(parsed.data.dispatch && capabilities().dispatch ? { dispatchIntent: parsed.data.dispatch } : {}),
+        deviceSid: deviceSid(c.req.header('x-cezar-sid')),
       };
       if (variants > 1) {
         const runs = manager.startVariants(workflow, input, variants);
@@ -4447,6 +4448,7 @@ export function createApp(deps: ServerDeps) {
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
+      track('open_in', { label: 'resume_in_terminal' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       // Hosted mode: there is no "my machine" to open a terminal on. The UI
       // hides the button when localHandoff is false — this is defense in depth.
       if (!capabilities().localHandoff) {
@@ -4501,6 +4503,9 @@ export function createApp(deps: ServerDeps) {
       // injection guard, this just validates the shape.
       const parsedBody = { data: c.req.valid('json') };
       const { target, path: relPath } = parsedBody.data;
+      // The option the user picked; ids are the server's own target ids (`vscode`, `finder`,
+      // `cli:claude`, `default`), so the label set is bounded.
+      track('open_in', { label: target }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       const dir = run.worktreePath && existsSync(run.worktreePath) ? run.worktreePath : repoRoot;
 
       // Diff pane "open in OS default app" (#365): one worktree file, opened with the platform's
@@ -5079,6 +5084,7 @@ export function createApp(deps: ServerDeps) {
         );
       }
       const { target } = c.req.valid('json');
+      track('open_in', { label: `project:${target}` }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       // Refused here rather than left to the menu, on the same principle as the accounts route:
       // a `cli:<runner>` handoff would START AN AGENT in the checkout everything else runs in a
       // worktree to protect. Which app APPLIES is a property of the route, not of one client.
@@ -6460,9 +6466,18 @@ export function createApp(deps: ServerDeps) {
   const telemetryRoutes = new Hono()
     .post(
       '/telemetry/page',
-      jsonZodValidator(telemetryPageInputSchema, { message: 'invalid page' }),
+      jsonZodValidator(telemetryPageInputSchema, { message: 'invalid route' }),
       (c) => {
-        track(`${c.req.valid('json').page}_view`);
+        track('page_viewed', { label: c.req.valid('json').route }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
+        return c.body(null, 204);
+      },
+    )
+    .post(
+      '/telemetry/event',
+      jsonZodValidator(telemetryEventInputSchema, { message: 'invalid event' }),
+      (c) => {
+        const { event, label } = c.req.valid('json');
+        track(event, { label }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
         return c.body(null, 204);
       },
     )
@@ -6483,7 +6498,7 @@ export function createApp(deps: ServerDeps) {
             handler: body.handler,
             ...servedBuildContext(body.context?.['build.entry']),
           },
-          { code: body.code, fingerprint: body.fingerprint },
+          { code: body.code, fingerprint: body.fingerprint, sid: deviceSid(c.req.header('x-cezar-sid')) },
         );
         return c.body(null, 204);
       },

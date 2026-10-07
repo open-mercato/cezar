@@ -20,6 +20,7 @@ import { toast } from '@/components/ui/toaster'
 import { useNavigate } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 import { startedRunPath } from '@/routes/new-task-form'
+import { trackMessageSent } from '@/lib/telemetry'
 
 const SKILLS_REPO_URL = 'https://github.com/open-mercato/skills'
 
@@ -283,6 +284,7 @@ function SkillsUpdateCard({
         ],
       }),
     onSuccess: (created) => {
+      trackMessageSent('skills_import')
       setShowUpgradeNotesPrompt(false)
       void navigate(startedRunPath(created))
     },

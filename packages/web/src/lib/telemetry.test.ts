@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-import { clientSurface, isBenignError, routeShape, telemetryPageFor } from './telemetry'
+import { telemetryEventInputSchema, telemetryRouteSchema } from '@open-mercato/cezar-api-client'
+
+import { clientSurface, isBenignError, isCanonicalRoute, routeShape } from './telemetry'
 
 describe('routeShape', () => {
   it('keeps the route and drops every user value', () => {
@@ -12,15 +14,28 @@ describe('routeShape', () => {
   })
 })
 
-describe('telemetryPageFor', () => {
-  it('maps the tracked pages and nothing else', () => {
-    expect(telemetryPageFor('/dashboard')).toBe('dashboard')
-    expect(telemetryPageFor('/tasks')).toBe('tasks')
-    expect(telemetryPageFor('/settings/global')).toBe('settings')
-    expect(telemetryPageFor('/p/x/settings/agents')).toBe('settings')
-    expect(telemetryPageFor('/p/x')).toBeUndefined()
-    expect(telemetryPageFor('/p/x/tasks/abc')).toBeUndefined()
-    expect(telemetryPageFor('/settings/agents')).toBeUndefined()
+describe('isCanonicalRoute', () => {
+  it('counts pages, not the redirects in front of them', () => {
+    expect(isCanonicalRoute('/p/x')).toBe(true)
+    expect(isCanonicalRoute('/p/x/settings/agents')).toBe(true)
+    expect(isCanonicalRoute('/tasks')).toBe(true)
+    expect(isCanonicalRoute('/dashboard')).toBe(true)
+    expect(isCanonicalRoute('/settings/global/appearance')).toBe(true)
+    expect(isCanonicalRoute('/')).toBe(false)
+    expect(isCanonicalRoute('/settings/agents')).toBe(false)
+    expect(isCanonicalRoute('/inbox')).toBe(false)
+  })
+})
+
+describe('routeShape vs the server contract', () => {
+  it('always produces a label the server accepts', () => {
+    for (const path of ['/p/acme/tasks/3f1c/changes', '/p/a/settings/prompt-templates', '/dashboard', '/p/x', '/p/x/github/prs/12']) {
+      expect(telemetryRouteSchema.safeParse(routeShape(path)).success).toBe(true)
+    }
+    // A raw path never passes: a project slug is not in the vocabulary.
+    expect(telemetryRouteSchema.safeParse('/p/acme-shop/tasks').success).toBe(false)
+    expect(telemetryRouteSchema.safeParse('/p/3f1c9a52/tasks').success).toBe(false)
+    expect(telemetryRouteSchema.safeParse('/').success).toBe(true)
   })
 })
 
@@ -39,5 +54,14 @@ describe('clientSurface', () => {
     document.documentElement.dataset.cezDesktop = 'macos'
     expect(clientSurface()).toBe('desktop')
     delete document.documentElement.dataset.cezDesktop
+  })
+})
+
+describe('telemetry event relay contract', () => {
+  it('accepts only known surfaces, never free text, and leaves cli to the server', () => {
+    expect(telemetryEventInputSchema.safeParse({ event: 'message_sent', label: 'github' }).success).toBe(true)
+    expect(telemetryEventInputSchema.safeParse({ event: 'message_sent', label: 'cli' }).success).toBe(false)
+    expect(telemetryEventInputSchema.safeParse({ event: 'message_sent', label: 'fix the login bug' }).success).toBe(false)
+    expect(telemetryEventInputSchema.safeParse({ event: 'anything_else', label: 'new_task' }).success).toBe(false)
   })
 })

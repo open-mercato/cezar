@@ -7,6 +7,7 @@ import type { ApiRun, AttachmentInput, RunStatus } from '@open-mercato/cezar-api
 
 import type { ContinueAction } from './follow-up-engine'
 import { lastSessionId } from './run-actions'
+import { trackMessageSent } from '@/lib/telemetry'
 
 /**
  * The composer's one delivery path — and its recovery when the record it aimed by was stale.
@@ -54,8 +55,11 @@ export function useDeliverPrompt(run: ApiRun, continueAction: ContinueAction): D
 
   return useCallback(
     async (text: string, images: AttachmentInput[]) => {
-      const deliver = (path: DeliveryPath) =>
-        path === 'live' ? sendMessageAsync({ text, images }) : continueWith(text, images)
+      const deliver = async (path: DeliveryPath) => {
+        const result = await (path === 'live' ? sendMessageAsync({ text, images }) : continueWith(text, images))
+        trackMessageSent('existing_session')
+        return result
+      }
       const attempted = deliveryPath(run.status)
       try {
         return await deliver(attempted)

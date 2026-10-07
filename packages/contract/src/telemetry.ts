@@ -6,12 +6,39 @@ import { z } from 'zod';
  * is on (opt-out, `CEZ_TELEMETRY=0`). Both routes answer `204` with no body.
  */
 
-/** The closed set of cockpit pages that are counted: `/dashboard`, the global `/tasks` (All
- *  tasks), and any settings page. Forwarded as `<page>_view`. */
-export const telemetryPageSchema = z.enum(['dashboard', 'tasks', 'settings']);
-export type TelemetryPage = z.infer<typeof telemetryPageSchema>;
+/**
+ * A route SHAPE, never a real path: static segments stay, every user value (project slug, run
+ * id, PR number, workflow name) is `:param` — `/p/:param/tasks/:param/changes`. Forwarded as
+ * `page_viewed` with the shape as its `label`, so a journey reads as the click path. The server
+ * enforces the vocabulary below, so nothing identifying can pass even if a client sent a raw
+ * path. ≤64 is the worker's `label` limit.
+ */
+/** The static URL segments cockpit routes are made of. A segment outside this list is the
+ *  user's data and must arrive as `:param`. */
+export const TELEMETRY_ROUTE_SEGMENTS: readonly string[] = [
+  'p', 'new', 'tasks', 'changes', 'files', 'commits', 'compare', 'git', 'branches', 'log',
+  'github', 'prs', 'issues', 'tracker', 'skills', 'inbox', 'workflows', 'automations',
+  'dashboard', 'settings', 'global', 'agents', 'agent-config', 'worktrees', 'bookmarklets',
+  'prompt-templates', 'appearance', 'notifications', 'resources', 'accounts', 'projects',
+  'keyboard',
+];
 
-export const telemetryPageInputSchema = z.object({ page: telemetryPageSchema });
+export const telemetryRouteSchema = z
+  .string()
+  .max(64)
+  .refine(
+    (route) =>
+      route.startsWith('/') &&
+      route
+        .split('/')
+        .slice(1)
+        .every((segment, i, all) =>
+          segment === '' ? all.length === 1 : segment === ':param' || TELEMETRY_ROUTE_SEGMENTS.includes(segment),
+        ),
+    { message: 'a route shape: known segments and :param only' },
+  );
+
+export const telemetryPageInputSchema = z.object({ route: telemetryRouteSchema });
 export type TelemetryPageInput = z.infer<typeof telemetryPageInputSchema>;
 
 /** One flat wide-event field: the worker keeps strings ≤1024, numbers, booleans and null. */
@@ -40,3 +67,30 @@ export const telemetryErrorInputSchema = z.object({
     .optional(),
 });
 export type TelemetryErrorInput = z.infer<typeof telemetryErrorInputSchema>;
+
+/** Where a user's message to an agent came from — `message_sent`'s label. A closed set, so a
+ *  dashboard's breakdown has exactly these rows. `cli` is sent by the server for `cezar run`. */
+export const MESSAGE_SURFACES = [
+  'new_task',
+  'planned_task',
+  'bookmarklet',
+  'existing_session',
+  'ask_answer',
+  'review',
+  'github',
+  'tracker',
+  'inbox',
+  'skills_import',
+  'cli',
+] as const;
+export const messageSurfaceSchema = z.enum(MESSAGE_SURFACES);
+export type MessageSurface = z.infer<typeof messageSurfaceSchema>;
+
+/**
+ * `POST /api/v1/telemetry/event` — a user action only the cockpit can name. Every event has its
+ * own closed label set, so this relay can never carry free text. `204`, like the other two.
+ */
+export const telemetryEventInputSchema = z.discriminatedUnion('event', [
+  z.object({ event: z.literal('message_sent'), label: messageSurfaceSchema.exclude(['cli']) }),
+]);
+export type TelemetryEventInput = z.infer<typeof telemetryEventInputSchema>;

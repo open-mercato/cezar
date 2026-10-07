@@ -555,7 +555,10 @@ async function runCommand(
     }
   });
 
+  initTelemetry({ version: readOwnVersion() });
   const run = manager.startRun(workflow, { task, model });
+  // No cockpit device here: the CLI's message counts under the installation's own id.
+  track('message_sent', { label: 'cli' });
   // `review` is terminal here too (spec 009) — headless runs must not hang on
   // the GUI's review gate; the diff waits on the task branch/cockpit instead.
   const final = await new Promise<string>((resolveStatus) => {
@@ -570,6 +573,7 @@ async function runCommand(
   }
   console.log(`\nrun ${final} — ${record?.tokensUsed ?? 0} tokens — details in the cockpit: npx cezar`);
   process.exitCode = final === 'done' || final === 'review' ? 0 : 1;
+  await flushTelemetry();
 }
 
 // ---- server-install / server-uninstall --------------------------------------

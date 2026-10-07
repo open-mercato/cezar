@@ -17,6 +17,7 @@ import { deriveAttention } from '@/lib/attention'
 import { shortAge } from '@/lib/format'
 import { availablePromptTemplates, insertTemplate, normalizePromptTemplates } from '@/lib/prompt-templates'
 import { isHttpUrl } from '@/lib/utils'
+import { trackMessageSent } from '@/lib/telemetry'
 
 /**
  * `/inbox` — the follow-up inbox rebuilt in React (R6 Step 1.2, spec §"Skills, Workflows,
@@ -201,6 +202,7 @@ function TodoCard({
     },
     onSuccess: (result) => {
       if (result === null) return
+      trackMessageSent('inbox')
       const { run } = result
       // The server rewrote todos.json (SSE will confirm); the invalidations just refuse to
       // wait for the file watcher's debounce.

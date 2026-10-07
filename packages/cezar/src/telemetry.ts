@@ -125,11 +125,31 @@ function post(path: string, body: Record<string, unknown>): Promise<boolean> {
 }
 
 /** One metric event. `extra` rides along for breakdowns the worker may or may not keep. */
-export function track(event: string, extra: Record<string, string | number | boolean | undefined> = {}): void {
+/** A cockpit device id (`cezar:sid` in the browser's localStorage): a UUIDv7, or nothing. */
+const SID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** The header the cockpit sends its device id in; anything that is not a v7 UUID is ignored. */
+export function deviceSid(header: string | undefined | null): string | undefined {
+  return header && SID_RE.test(header) ? header.toLowerCase() : undefined;
+}
+
+/** `indexKey` / `user.id`: `<cezarId>:<sid>` for something a cockpit device did, the bare
+ *  `cezarId` for the process itself (boot, stop, daily ping, server errors). */
+function statsKey(id: string, sid: string | undefined): string {
+  return sid ? `${id}:${sid}` : id;
+}
+
+export function track(
+  event: string,
+  extra: Record<string, string | number | boolean | undefined> = {},
+  opts: { sid?: string } = {},
+): void {
   if (!telemetryEnabled()) return;
   if (!/^[a-z][a-z0-9_]{0,47}$/.test(event)) return;
-  const body = { service: SERVICE, version, platform: platform(), runtime: telemetryRuntime(), ...extra };
-  inFlight(cezarId().then((indexKey) => post(`/track/${event}`, { ...body, indexKey })));
+  const body: Record<string, unknown> = { service: SERVICE, version, platform: platform(), runtime: telemetryRuntime(), ...extra };
+  // The worker's `label` charset; anything else (a model's `[1m]`) would 400 the event.
+  if (typeof body.label === 'string') body.label = body.label.replace(/[^\w .:@/+-]/g, '_').slice(0, 64);
+  inFlight(cezarId().then((id) => post(`/track/${event}`, { ...body, indexKey: statsKey(id, opts.sid) })));
 }
 
 /** Once per UTC day: `cezar_run`, or `telemetry_opt_out` (no id) when opted out. */
@@ -212,7 +232,7 @@ function featureFlags(): Record<string, boolean> {
 export function reportError(
   error: unknown,
   context: Context = {},
-  opts: { code?: string; fingerprint?: string } = {},
+  opts: { code?: string; fingerprint?: string; sid?: string } = {},
 ): void {
   if (!telemetryEnabled()) return;
   try {
@@ -245,7 +265,7 @@ export function reportError(
       }
     }
     const occurredAt = new Date().toISOString();
-    inFlight(cezarId().then((indexKey) => post('/track/error', {
+    inFlight(cezarId().then((id) => post('/track/error', {
       service: SERVICE,
       version,
       platform: platform(),
@@ -257,7 +277,7 @@ export function reportError(
         ...(code ? { code: code.slice(0, 128) } : {}),
         ...(err.stack ? { stack: scrub(err.stack).slice(0, 16_384) } : {}),
       },
-      user: { id: indexKey },
+      user: { id: statsKey(id, opts.sid) },
       featureFlags: featureFlags(),
       context: flat,
       ...(opts.fingerprint ? { fingerprint: opts.fingerprint.slice(0, 128) } : {}),
