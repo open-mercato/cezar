@@ -261,6 +261,10 @@ function WorkflowGraphEditor() {
   const [workflowPanel, setWorkflowPanel] = useState(false)
   const [sim, setSim] = useState<SimState | null>(null)
   const [issues, setIssues] = useState<string[]>([])
+  // True whenever `issues` does not yet reflect the current graph — the debounce below hasn't
+  // fired yet, or its request is still in flight. Gates Save so it can't fire against a graph
+  // that hasn't actually been validated.
+  const [validating, setValidating] = useState(false)
   const [importText, setImportText] = useState('')
   const [planText, setPlanText] = useState('')
   const [rfNodes, setRfNodes] = useState<Node<FlowNodeData>[]>([])
@@ -309,6 +313,10 @@ function WorkflowGraphEditor() {
     setDirty(false)
     setSelectedId(null)
     setSim(null)
+    // Stale issues from the PREVIOUS workflow must not leave Save wrongly enabled or disabled
+    // for the ~350ms before the debounced validation below re-runs against the new graph.
+    setIssues([])
+    setValidating(true)
     if (routeName && !def) toast(`No workflow named “${routeName}” — starting a new one.`, { tone: 'danger' })
     pendingFit.current = true
   }, [routeName, workflows.data])
@@ -329,10 +337,12 @@ function WorkflowGraphEditor() {
   // dragging a node (a layout change) never re-validates.
   const { nodes: graphNodes, edges: graphEdges } = graph
   useEffect(() => {
+    setValidating(true)
     const t = setTimeout(() => {
       validateWorkflowGraph({ nodes: graphNodes, edges: graphEdges })
         .then((r) => setIssues(r.issues))
         .catch((err: unknown) => setIssues([err instanceof Error ? err.message : String(err)]))
+        .finally(() => setValidating(false))
     }, 350)
     return () => clearTimeout(t)
   }, [graphNodes, graphEdges])
@@ -638,7 +648,7 @@ function WorkflowGraphEditor() {
   const selected = graph.nodes.find((n) => n.id === selectedId) ?? null
   const cursorNode = sim?.cursor ? graph.nodes.find((n) => n.id === sim.cursor) : undefined
   const unwired = unwiredPorts(graph)
-  const canSave = name.trim().length > 0 && issues.length === 0 && !save.isPending
+  const canSave = name.trim().length > 0 && issues.length === 0 && !validating && !save.isPending
   // Re-saving the file this canvas was opened from overwrites silently; the confirm is only for
   // a name that collides with ANOTHER file (or a built-in-shadowing new one).
   const opened = routeName ? workflows.data?.workflows.find((w) => w.name === routeName) : undefined

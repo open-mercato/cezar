@@ -101,7 +101,10 @@ export function removeNode(graph: WorkflowGraph, id: string): WorkflowGraph {
   const layout = { ...graph.layout }
   delete layout[id]
   return {
-    nodes: graph.nodes.filter((n) => n.id !== id),
+    nodes: graph.nodes
+      .filter((n) => n.id !== id)
+      // A deleted node can no longer be reopened — drop any dangling `session.continue` to it.
+      .map((n) => (n.type === 'agent' && n.session?.continue === id ? { ...n, session: undefined } : n)),
     edges: graph.edges.filter((e) => e.to !== id && parseFrom(e.from, graph.nodes)?.node !== id),
     layout,
   }
@@ -306,7 +309,11 @@ export function compileSteps(steps: readonly WorkflowStepDef[]): WorkflowGraph {
   const out = (s: WorkflowStepDef) => `${s.id}.${s.command ? 'pass' : 'done'}`
   steps.forEach((s, i) => {
     const { onFail, command, ...rest } = s
-    nodes.push(command ? { ...rest, type: 'check', command } : { ...rest, type: 'agent' })
+    nodes.push(
+      command
+        ? { ...rest, type: 'check', command, ...(onFail?.retryOn ? { retryOn: onFail.retryOn } : {}) }
+        : { ...rest, type: 'agent' },
+    )
     edges.push({ from: i === 0 ? `${startId}.next` : out(steps[i - 1]!), to: s.id })
     if (command && onFail) {
       const loopId = fresh(`${s.id}-retry`)

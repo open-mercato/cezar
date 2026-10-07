@@ -4810,11 +4810,18 @@ export class RunManager {
     const earlier = resuming ? outputs.get(fork.id)?.runIds : undefined;
     const earlierIds = typeof earlier === 'string' && earlier ? earlier.split(',') : [];
     if (earlierIds.length === shape.branches.length) {
-      shape.branches.forEach((b, i) => byChild.set(earlierIds[i] as string, b));
-      note(`still waiting for ${earlierIds.length} branches`);
+      // One entry per branch, including empty-string placeholders for branches whose dispatch
+      // was refused — this keeps the length check above meaningful even when a prior pass only
+      // partially dispatched, so a resumed run never re-dispatches already-running branches.
+      shape.branches.forEach((b, i) => {
+        const id = earlierIds[i];
+        if (id) byChild.set(id, b);
+      });
+      note(`still waiting for ${byChild.size} branches`);
     } else {
       await autosaveCommit(state.cwd, 'pre-dispatch');
       const reviewOf = this.store.getRun(runId)?.branch ?? runId;
+      const dispatchedIds: string[] = [];
       for (const b of shape.branches) {
         const a = b.agent;
         const spawned = this.dispatch(
@@ -4849,12 +4856,14 @@ export class RunManager {
           note(`branch "${a.name ?? a.id}" refused — ${spawned.refused}`, 'danger');
           this.finishStep(runId, a.id, 'failed', spawned.refused, emit);
           outputs.set(a.id, { runId: '', status: 'refused', summary: spawned.refused });
+          dispatchedIds.push('');
           continue;
         }
         byChild.set(spawned.id, b);
         outputs.set(a.id, { runId: spawned.id, status: 'running', summary: '' });
+        dispatchedIds.push(spawned.id);
       }
-      outputs.set(fork.id, { runIds: [...byChild.keys()].join(',') });
+      outputs.set(fork.id, { runIds: dispatchedIds.join(',') });
       onOutputs();
       if (byChild.size) {
         note(`forked ${byChild.size} agents (${shape.wait === 'any' ? 'first to succeed wins' : 'waiting for all'})`);
@@ -5248,7 +5257,18 @@ export class RunManager {
     const settled = new Map<string, { status: string; summary: string }>();
     for (const id of childIds) {
       const rec = this.store.getRun(id);
-      if (!rec || isTerminalStatus(rec.status)) settled.set(id, { status: rec?.status ?? 'failed', summary: '' });
+      if (!rec) {
+        settled.set(id, { status: 'failed', summary: '' });
+        continue;
+      }
+      if (isTerminalStatus(rec.status)) {
+        // The child may have settled before this wait was registered (e.g. across a restart) and
+        // so never reached `reportSettledChildToParent`'s waiter hand-off — rebuild the same report
+        // text here rather than losing it to an empty summary.
+        const resumeNotes = handoffSectionExcerpt(readHandoff(this.dataDir, id), '## Resume notes');
+        const { text } = childSettleReport(rec, { resumeNotes });
+        settled.set(id, { status: rec.status, summary: text });
+      }
     }
     const done = () =>
       mode === 'any'

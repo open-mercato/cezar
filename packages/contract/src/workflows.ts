@@ -62,7 +62,7 @@ export const workflowConditionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('paths-changed'), glob: z.string() }),
   z.object({
     kind: z.literal('output'),
-    ref: z.string(),
+    ref: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]*\.[A-Za-z0-9_]+$/, 'ref is <node>.<field>'),
     op: z.enum(['equals', 'not-equals', 'contains', '>', '>=', '<', '<=']),
     value: z.union([z.string(), z.number()]),
   }),
@@ -115,12 +115,12 @@ export const workflowGraphNodeSchema = z.discriminatedUnion('type', [
   z.object({
     ...graphNodeBase,
     type: z.literal('github.wait-ci'),
-    timeoutMs: z.number().default(60 * 60_000),
-    pollMs: z.number().default(60_000),
+    timeoutMs: z.number().int().min(60_000).max(7 * 24 * 60 * 60_000).default(60 * 60_000),
+    pollMs: z.number().int().min(10_000).max(30 * 60_000).default(60_000),
   }),
   z.object({ ...graphNodeBase, type: z.literal('github.pr-comment'), body: z.string() }),
   /** `branches` / `wait` are defaulted server-side, so the served shapes always carry them. */
-  z.object({ ...graphNodeBase, type: z.literal('fork'), branches: z.number().int().default(3) }),
+  z.object({ ...graphNodeBase, type: z.literal('fork'), branches: z.number().int().min(2).max(4).default(3) }),
   z.object({ ...graphNodeBase, type: z.literal('join'), wait: z.enum(['all', 'any']).default('all') }),
   z.object({
     ...graphNodeBase,

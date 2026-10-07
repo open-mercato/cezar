@@ -117,6 +117,13 @@ function renderAt(entry: string) {
 const nameField = () => screen.findByLabelText<HTMLInputElement>('Workflow name')
 const sentTo = (sent: SentRequest[], method: string, path: string) => sent.filter((r) => r.method === method && r.path === path)
 
+/** Save is disabled until the debounced validate round-trip for the current graph settles. */
+async function clickSave() {
+  const btn = await screen.findByRole<HTMLButtonElement>('button', { name: /Save/ })
+  await waitFor(() => expect(btn.disabled).toBe(false))
+  fireEvent.click(btn)
+}
+
 describe('WorkflowGraphRoute', () => {
   it('opens a saved workflow by name, and a built-in as a copy to save under a new name', async () => {
     stubFetch()
@@ -133,7 +140,7 @@ describe('WorkflowGraphRoute', () => {
     })
     renderAt('/workflows/ship-it')
     await nameField()
-    fireEvent.click(screen.getByRole('button', { name: /Save/ }))
+    await clickSave()
     await waitFor(() => expect(sentTo(sent, 'POST', '/api/v1/workflows')).toHaveLength(1))
     expect(sentTo(sent, 'POST', '/api/v1/workflows')[0]?.body).toEqual({
       name: 'ship-it',
@@ -150,7 +157,7 @@ describe('WorkflowGraphRoute', () => {
     })
     renderAt('/workflows/verify')
     await nameField()
-    fireEvent.click(screen.getByRole('button', { name: /Save/ }))
+    await clickSave()
     await waitFor(() => expect(sentTo(sent, 'POST', '/api/v1/workflows/graph')).toHaveLength(1))
     const body = sentTo(sent, 'POST', '/api/v1/workflows/graph')[0]?.body as { name: string; overwrite: boolean; graph: { nodes: { id: string }[] } }
     expect(body).toMatchObject({ name: 'verify', overwrite: true })
@@ -168,7 +175,7 @@ describe('WorkflowGraphRoute', () => {
     })
     renderAt('/workflows/ship-it')
     fireEvent.change(await nameField(), { target: { value: 'verify' } })
-    fireEvent.click(screen.getByRole('button', { name: /Save/ }))
+    await clickSave()
     fireEvent.click(await screen.findByRole('button', { name: 'Overwrite' }))
     await waitFor(() => expect(sentTo(sent, 'POST', '/api/v1/workflows')).toHaveLength(2))
     expect(sentTo(sent, 'POST', '/api/v1/workflows').map((r) => (r.body as { overwrite?: boolean }).overwrite)).toEqual([undefined, true])

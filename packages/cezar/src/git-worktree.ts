@@ -450,7 +450,7 @@ export async function commitAll(
  * case — someone ran `git add` on a file they had not finished resolving, which
  * clears the `U` code but leaves `<<<<<<<` in the text.
  */
-async function unresolvedConflicts(dir: string, porcelain: string): Promise<string | null> {
+export async function unresolvedConflicts(dir: string, porcelain: string): Promise<string | null> {
   const entries = porcelain.split('\n').filter(Boolean);
   const unmerged = entries.filter((line) => {
     const xy = line.slice(0, 2);
@@ -530,7 +530,7 @@ function unquotePath(path: string): string {
 
 /** Does this repo/worktree resolve a git author identity (name + email)? Ambient config wins so
  *  autosave commits carry the user's own identity — see autosaveCommit. */
-async function gitHasIdentity(dir: string): Promise<boolean> {
+export async function gitHasIdentity(dir: string): Promise<boolean> {
   const [name, email] = await Promise.all([
     git(dir, ['config', 'user.name']),
     git(dir, ['config', 'user.email']),
