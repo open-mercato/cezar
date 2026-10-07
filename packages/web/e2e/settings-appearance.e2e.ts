@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { AgentBrowser, readTestEnv } from './agent-browser'
@@ -9,10 +9,9 @@ import { AgentBrowser, readTestEnv } from './agent-browser'
  * multi-project step 3.5) end-to-end against the shared dry-run environment.
  *
  * Reachability: everything here is honestly reachable — the settings routes need no forge, no
- * agent CLI and no seeded runs. The suite mutates exactly two stores and restores/neutralizes
- * both: the WORKSPACE `ui-state.json` (saved in beforeAll, restored in afterAll — the inbox
- * suite's save/restore discipline) and the browser session's localStorage theme mirror
- * (flipped back to dark in the same spec, and the session is unique per run anyway).
+ * agent CLI and no seeded runs. The suite restores the workspace UI state and branding files
+ * with their original contents and modes; the browser session's localStorage theme mirror is
+ * flipped back to dark, and its session is unique per run anyway.
  */
 
 const artifactsDir = resolve(import.meta.dirname, '../../../.ai/qa/artifacts_e2e')
@@ -25,22 +24,34 @@ const DESKTOP = { width: 1440, height: 900 }
 // the repo's `.ai/cezar` — is the file this suite reads and restores.
 const cezHomeDir = resolve(import.meta.dirname, '../../../.ai/qa/cez-home')
 const uiStateFile = resolve(cezHomeDir, 'ui-state.json')
+const brandingFiles = ['config.json', 'config.json.bak', 'branding-logo', '.png', '.jpg', '.webp', '.gif', '.avif', '.svg']
+  .map((name) => resolve(cezHomeDir, name.startsWith('config.json') || name === 'branding-logo' ? name : `branding-logo${name}`))
+const stateFiles = [uiStateFile, ...brandingFiles]
 
 let browser: AgentBrowser
 let baseUrl: string
-let previousUiState: string | null = null
+let previousStateFiles = new Map<string, { contents: Buffer; mode: number } | null>()
 
 beforeAll(() => {
   baseUrl = readTestEnv().baseUrl
-  previousUiState = existsSync(uiStateFile) ? readFileSync(uiStateFile, 'utf8') : null
+  previousStateFiles = new Map(stateFiles.map((path) => [
+    path,
+    existsSync(path) ? { contents: readFileSync(path), mode: statSync(path).mode & 0o7777 } : null,
+  ]))
   browser = AgentBrowser.open(sessionId)
   browser.setViewport(DESKTOP.width, DESKTOP.height)
 })
 
 afterAll(() => {
-  // Never leave a developer's cockpit wearing this test's appearance.
-  if (previousUiState === null) rmSync(uiStateFile, { force: true })
-  else writeFileSync(uiStateFile, previousUiState, 'utf8')
+  // Never leave the shared test home with this test's UI state or branding.
+  for (const [path, previous] of previousStateFiles) {
+    if (previous === null) rmSync(path, { force: true })
+    else {
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, previous.contents, { mode: previous.mode })
+      chmodSync(path, previous.mode)
+    }
+  }
   browser?.close()
 })
 
@@ -61,14 +72,15 @@ describe('settings → appearance against the live dry-run server', () => {
     browser.goto(`${baseUrl}/settings/global/appearance`)
     browser.waitForFunction(`document.querySelector('[data-route="settings-global-appearance"]') !== null`)
 
-    // The GLOBAL nav: the original four sections plus the Open Mercato skills preference,
-    // and nothing project-scoped.
+    // The GLOBAL nav: appearance, notifications, resources, skills, agent accounts and projects,
+    // with nothing project-scoped.
     const nav = '[data-slot="settings-nav"][data-scope="global"]'
-    expect(browser.count(`${nav} [data-section]`)).toBe(5)
+    expect(browser.count(`${nav} [data-section]`)).toBe(6)
     expect(browser.count(`${nav} [data-section="appearance"]`)).toBe(1)
     expect(browser.count(`${nav} [data-section="notifications"]`)).toBe(1)
     expect(browser.count(`${nav} [data-section="resources"]`)).toBe(1)
     expect(browser.count(`${nav} [data-section="skills"]`)).toBe(1)
+    expect(browser.count(`${nav} [data-section="accounts"]`)).toBe(1)
     expect(browser.count(`${nav} [data-section="projects"]`)).toBe(1)
     // Project sections live in the OTHER area; hidden registry entries are nowhere at all.
     expect(browser.count(`${nav} [data-section="agents"]`)).toBe(0)
@@ -124,5 +136,31 @@ describe('settings → appearance against the live dry-run server', () => {
     browser.waitForFunction(
       `document.documentElement.dataset.density === undefined && document.documentElement.dataset.accent === undefined`,
     )
+  })
+
+  it('saves workspace branding and renders it in the sidebar and browser tab after reload', async () => {
+    browser.goto(`${baseUrl}/settings/global/appearance`)
+    browser.waitForFunction(`document.querySelector('[data-slot="branding-name"]') !== null`)
+    browser.fill('[data-slot="branding-name"]', 'Acme Studio')
+    browser.press('Tab')
+    let savedName = false
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const current = await (await fetch(`${baseUrl}/api/v1/workspace/config`)).json() as { branding?: { name?: string } }
+      if (current.branding?.name === 'Acme Studio') { savedName = true; break }
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
+    expect(savedName).toBe(true)
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><path d="M0 0h10v10H0z"/></svg>'
+    const form = new FormData()
+    form.set('file', new File([svg], 'acme.svg', { type: 'image/svg+xml' }))
+    const uploaded = await fetch(`${baseUrl}/api/v1/workspace/branding-logo`, { method: 'POST', body: form })
+    expect(uploaded.status).toBe(200)
+
+    browser.goto(`${baseUrl}/settings/global/appearance`)
+    browser.waitForFunction(`document.querySelector('[data-slot="brand-name"]')?.textContent === 'Acme Studio' && document.querySelector('[data-slot="brand-logo"]') !== null`)
+    expect(browser.text('[data-slot="brand-lockup"]')).toContain('Acme Studio')
+    expect(String(browser.evaluate(`document.title`))).toContain('Acme Studio')
+    expect(String(browser.evaluate(`document.querySelector('link[rel="icon"]').href`))).toContain('/api/v1/workspace/branding-logo?v=')
+    expect(Number(browser.evaluate(`document.querySelector('[data-slot="brand-logo"]').naturalWidth`))).toBeGreaterThan(0)
   })
 })
