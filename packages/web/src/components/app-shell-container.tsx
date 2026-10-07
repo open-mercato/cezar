@@ -59,25 +59,9 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   const projectId = useActiveProjectId()
   const health = useHealth()
   const workspaceConfig = useWorkspaceConfig()
-  useEffect(() => {
-    const root = document.documentElement
-    const color = workspaceConfig.data?.branding.primaryColor
-    if (color) {
-      root.style.setProperty('--primary', color)
-      root.style.setProperty('--ring', color)
-      const channels = [0, 2, 4].map((offset) => Number.parseInt(color.slice(1 + offset, 3 + offset), 16) / 255)
-        .map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
-      const luminance = 0.2126 * channels[0]! + 0.7152 * channels[1]! + 0.0722 * channels[2]!
-      root.style.setProperty('--primary-foreground', luminance > 0.45 ? 'var(--brand-primary-ink-dark)' : 'var(--brand-primary-ink-light)')
-    } else {
-      root.style.removeProperty('--primary')
-      root.style.removeProperty('--ring')
-      root.style.removeProperty('--primary-foreground')
-    }
-  }, [workspaceConfig.data?.branding.primaryColor])
   const branding = workspaceConfig.data?.branding
   const customBranding = branding !== undefined && (
-    branding.name !== 'cezar' || branding.logoUrl !== null || branding.primaryColor !== null
+    branding.name !== 'cezar' || branding.logoUrl !== null
   )
   const starCount = useStarCount(!customBranding && workspaceConfig.data !== undefined)
   // The global inbox is opt-in (#471). With the capability off there is no Inbox nav item to

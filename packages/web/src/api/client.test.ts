@@ -379,7 +379,7 @@ describe('project scope (multi-project spec, step 3.1)', () => {
 
 describe('response parsing', () => {
   const workspaceConfig = (resources: Record<string, unknown>) => ({
-    branding: { name: 'cezar', logoUrl: null, primaryColor: null },
+    branding: { name: 'cezar', logoUrl: null },
     browseRoot: '~/',
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,

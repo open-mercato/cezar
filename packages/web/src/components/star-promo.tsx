@@ -57,7 +57,7 @@ export function StarPromo() {
   const workspaceConfig = useWorkspaceConfig()
   const branding = workspaceConfig.data?.branding
   const customBranding = branding !== undefined && (
-    branding.name !== 'cezar' || branding.logoUrl !== null || branding.primaryColor !== null
+    branding.name !== 'cezar' || branding.logoUrl !== null
   )
   const starCount = useStarCount(workspaceConfig.data !== undefined && !customBranding)
   const allowed = !customBranding && starCount.data?.available === true

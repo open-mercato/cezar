@@ -90,7 +90,7 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as WorkspaceConfigResponse & Record<string, unknown>;
     expect(body).toEqual({
-      branding: { name: 'cezar', logoUrl: null, primaryColor: null },
+      branding: { name: 'cezar', logoUrl: null },
       browseRoot: '~/',
       projectsDir: '~/cezar/projects',
       skillsAutoUpdate: null,
@@ -129,11 +129,11 @@ describe('the workspace settings API (step 2.7)', () => {
   });
 
   it('updates and clears the instance name through the workspace config', async () => {
-    const updated = await putConfig({ branding: { name: 'Acme Studio', primaryColor: '#123ABC' } });
+    const updated = await putConfig({ branding: { name: 'Acme Studio' } });
     expect(updated.status).toBe(200);
     expect((await updated.json() as WorkspaceConfigResponse).branding.name).toBe('Acme Studio');
-    expect((await (await getConfig()).json() as WorkspaceConfigResponse).branding.primaryColor).toBe('#123ABC');
-    expect(rawConfig().branding).toEqual({ name: 'Acme Studio', primaryColor: '#123ABC' });
+    expect((await (await getConfig()).json() as WorkspaceConfigResponse).branding.name).toBe('Acme Studio');
+    expect(rawConfig().branding).toEqual({ name: 'Acme Studio' });
     const cleared = await putConfig({ branding: { name: null } });
     expect((await cleared.json() as WorkspaceConfigResponse).branding.name).toBe('cezar');
   });
@@ -217,7 +217,7 @@ describe('the workspace settings API (step 2.7)', () => {
     });
     expect(res.status).toBe(200);
     expect((await res.json()) as WorkspaceConfigResponse).toEqual({
-      branding: { name: 'cezar', logoUrl: null, primaryColor: null },
+      branding: { name: 'cezar', logoUrl: null },
       browseRoot: '~/',
       projectsDir: '~/cezar/projects',
       skillsAutoUpdate: null,

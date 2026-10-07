@@ -3056,7 +3056,6 @@ export function createApp(deps: ServerDeps) {
     branding: {
       name: config.branding.name ?? 'cezar',
       logoUrl: logoAssetUrl(),
-      primaryColor: config.branding.primaryColor ?? null,
     },
     browseRoot: config.browseRoot,
     projectsDir: config.projectsDir,
@@ -3140,8 +3139,6 @@ export function createApp(deps: ServerDeps) {
         written = await mergeWriteWorkspaceConfig((config) => {
           if (branding?.name === null) delete config.branding.name;
           else if (branding?.name !== undefined) config.branding.name = branding.name;
-          if (branding?.primaryColor === null) delete config.branding.primaryColor;
-          else if (branding?.primaryColor !== undefined) config.branding.primaryColor = branding.primaryColor;
           // Roots are stored as written (`~` kept); only the probe expands them.
           if (browseRoot !== undefined) config.browseRoot = browseRoot;
           if (projectsDir !== undefined) config.projectsDir = projectsDir;
@@ -3268,7 +3265,6 @@ export function createApp(deps: ServerDeps) {
   const workspaceConfigUpdateSchema = z.object({
     branding: z.object({
       name: z.string().trim().min(1).max(80).nullable().optional(),
-      primaryColor: z.string().regex(/^#[\da-fA-F]{6}$/).nullable().optional(),
     }).optional(),
     browseRoot: z.string().trim().min(1).max(4096).optional(),
     projectsDir: z.string().trim().min(1).max(4096).optional(),
