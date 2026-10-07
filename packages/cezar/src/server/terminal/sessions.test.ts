@@ -247,3 +247,44 @@ describe('listing', () => {
     expect(sessions.listFor('run-2')).toHaveLength(1);
   });
 });
+
+describe('tab labels', () => {
+  it('starts at Terminal 1 and counts up within a task', async () => {
+    const { sessions } = harness();
+    const first = await open(sessions, 'run-1');
+    const second = await open(sessions, 'run-1');
+    expect([first.label, second.label]).toEqual(['Terminal 1', 'Terminal 2']);
+  });
+
+  it('numbers each task from one', async () => {
+    const { sessions } = harness();
+    await open(sessions, 'run-1');
+    const other = await open(sessions, 'run-2');
+    expect(other.label).toBe('Terminal 1');
+  });
+
+  it('names the tab after the running command, and KEEPS it once idle', async () => {
+    const { sessions } = harness();
+    const session = await open(sessions);
+    // The fake PTY reports pid 4242, so a child of 4242 is this session's foreground.
+    sessions.observe([{ pid: 1, ppid: 4242, command: 'npm run build' }]);
+    expect(sessions.get(session.id)).toMatchObject({ label: 'npm run build', busy: true });
+
+    // Command finished: the name stays, because the output under it is still worth reading.
+    sessions.observe([]);
+    expect(sessions.get(session.id)).toMatchObject({ label: 'npm run build', busy: false });
+
+    // …until another command replaces it.
+    sessions.observe([{ pid: 2, ppid: 4242, command: 'npm test' }]);
+    expect(sessions.get(session.id)?.label).toBe('npm test');
+  });
+
+  it('leaves an exited session last label alone', async () => {
+    const { sessions, spawned } = harness();
+    const session = await open(sessions);
+    sessions.observe([{ pid: 1, ppid: 4242, command: 'make dev' }]);
+    spawned[0]!.finish(1);
+    sessions.observe([{ pid: 9, ppid: 4242, command: 'something else' }]);
+    expect(sessions.get(session.id)).toMatchObject({ label: 'make dev', exitCode: 1 });
+  });
+});

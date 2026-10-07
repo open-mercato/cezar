@@ -25,6 +25,7 @@ import { LayoutCards } from './layout-cards'
 import { ViewPickerMenu } from './view-picker'
 import { WorkspaceColumns, type ColumnActions } from './workspace-columns'
 import { useWorkspaceLayouts } from './use-workspace-layouts'
+import { readDrawerState, writeDrawerState, type DrawerState } from './drawer-state'
 import type { ViewId } from './layout-state'
 
 /** Lazy because it carries the emulator (xterm, ~80 KB gz) and its stylesheet. A task whose
@@ -131,10 +132,30 @@ function WorkspaceView({
 
   const markedUnread = useCallback(() => onMarkedUnread(run.id), [onMarkedUnread, run.id])
 
-  // Hidden on a fresh visit and shown only by an explicit click (spec §6). Keyed to nothing
-  // persistent yet: restoring the drawer's open state across a reload belongs with the tabs and
-  // the draggable height, in the step that adds them.
-  const [terminalOpen, setTerminalOpen] = useState(false)
+  /**
+   * Whether the drawer is showing, and how tall (spec §6).
+   *
+   * Read during render on a CHANGED task id for the same reason the layouts are: run A → run B
+   * keeps the same route element, so React does not remount, and plain state would carry run A's
+   * drawer into run B. `readDrawerState` is also what enforces the spec's two different restores
+   * — a refresh reopens the drawer, a navigation does not — so this is a plain read either way.
+   */
+  const [drawer, setDrawer] = useState<DrawerState>(() => readDrawerState(run.id))
+  const drawerFor = useRef(run.id)
+  if (drawerFor.current !== run.id) {
+    drawerFor.current = run.id
+    setDrawer(readDrawerState(run.id))
+  }
+  const updateDrawer = useCallback(
+    (patch: Partial<DrawerState>) => {
+      setDrawer((current) => {
+        const next = { ...current, ...patch }
+        writeDrawerState(run.id, next)
+        return next
+      })
+    },
+    [run.id],
+  )
   // Policy, read from the one place that knows it. A cockpit where a shell is not allowed shows
   // no button at all rather than one that explains itself after the click.
   const terminalAllowed = useHealth().data?.capabilities?.terminal === true
@@ -187,13 +208,13 @@ function WorkspaceView({
   return (
     <div data-route="task-workspace" data-run-id={run.id} className="flex h-full min-h-0 flex-col">
       <RunHeader run={run} onMarkedUnread={markedUnread} tabs={tabs} />
-      {terminalAllowed && !terminalOpen ? (
+      {terminalAllowed && !drawer.open ? (
         <div className="flex shrink-0 justify-end border-b border-border px-2 py-1">
           <Button
             variant="ghost"
             size="sm"
             className="h-6 px-2 text-xs text-muted-foreground"
-            onClick={() => setTerminalOpen(true)}
+            onClick={() => updateDrawer({ open: true })}
           >
             <TerminalIcon aria-hidden="true" className="size-3.5" />
             Terminal
@@ -221,9 +242,14 @@ function WorkspaceView({
           }
         />
       )}
-      {terminalAllowed && terminalOpen ? (
+      {terminalAllowed && drawer.open ? (
         <Suspense fallback={null}>
-          <TerminalDrawer runId={run.id} onClose={() => setTerminalOpen(false)} />
+          <TerminalDrawer
+            runId={run.id}
+            height={drawer.height}
+            onHeightChange={(height) => updateDrawer({ height })}
+            onClose={() => updateDrawer({ open: false })}
+          />
         </Suspense>
       ) : null}
     </div>

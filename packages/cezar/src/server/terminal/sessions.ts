@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { foregroundCommand, hasForeground, type ProcessRow } from './foreground.ts';
 import { loadPty, type PtyProcess } from './pty-module.ts';
 
 /**
@@ -43,6 +44,15 @@ export interface TerminalSessionInfo {
   startedAt: string;
   /** Null while the shell is alive. */
   exitCode: number | null;
+  /**
+   * What the tab is called: the running (or last-run) command, falling back to `Terminal N`
+   * (spec §6). The command STICKS after it finishes — a tab that ran the build should still say
+   * so while you read its output — and is replaced only when another command starts.
+   */
+  label: string;
+  /** The shell has a live child. Drives the close warning, and is why that warning can never
+   *  disagree with the tab name: both come from the same process-table reading. */
+  busy: boolean;
 }
 
 export interface TerminalRead {
@@ -57,6 +67,9 @@ export interface TerminalRead {
 
 interface Entry {
   info: TerminalSessionInfo;
+  /** 1-based within its task — the `N` in the default `Terminal N`. Assigned once, so closing
+   *  tab 2 of three does not renumber the others under the user's cursor. */
+  ordinal: number;
   pty: PtyProcess;
   /** Retained output, newest-last, capped at `SCROLLBACK_LIMIT`. */
   buffer: string;
@@ -130,6 +143,7 @@ export class TerminalSessions {
       return { ok: false, reason: error instanceof Error ? error.message : String(error) };
     }
 
+    const ordinal = this.nextOrdinal(input.runId);
     const entry: Entry = {
       info: {
         id: randomUUID(),
@@ -140,7 +154,10 @@ export class TerminalSessions {
         rows,
         startedAt: new Date().toISOString(),
         exitCode: null,
+        label: `Terminal ${ordinal}`,
+        busy: false,
       },
+      ordinal,
       pty: child,
       buffer: '',
       dropped: 0,
@@ -165,6 +182,34 @@ export class TerminalSessions {
 
   get(id: string): TerminalSessionInfo | null {
     return this.entries.get(id)?.info ?? null;
+  }
+
+  /**
+   * Fold one `ps` snapshot into every live session's label and busy flag.
+   *
+   * Takes the rows rather than reading them so ONE snapshot serves every tab (and so this stays
+   * synchronous and testable). An exited session is left exactly as it was: its last command is
+   * the most useful thing its tab can still say.
+   */
+  observe(rows: readonly ProcessRow[]): void {
+    for (const entry of this.entries.values()) {
+      if (entry.info.exitCode !== null) continue;
+      entry.info.busy = hasForeground(rows, entry.pty.pid);
+      const running = foregroundCommand(rows, entry.pty.pid);
+      // Only a command REPLACES the label; going idle keeps the last one (spec §6).
+      if (running) entry.info.label = running;
+    }
+  }
+
+  /** The lowest `Terminal N` this task does not already have. Reusing a freed number keeps a
+   *  long-lived task from counting up to `Terminal 47` after a day of opening and closing. */
+  private nextOrdinal(runId: string): number {
+    const taken = new Set(
+      [...this.entries.values()].filter((entry) => entry.info.runId === runId).map((entry) => entry.ordinal),
+    );
+    let ordinal = 1;
+    while (taken.has(ordinal)) ordinal += 1;
+    return ordinal;
   }
 
   listFor(runId: string): TerminalSessionInfo[] {

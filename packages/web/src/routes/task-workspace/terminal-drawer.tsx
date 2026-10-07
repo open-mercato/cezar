@@ -1,90 +1,77 @@
-import { Loader2Icon, SquareIcon, TerminalIcon, XIcon } from 'lucide-react'
+import { Loader2Icon, PlusIcon, SquareIcon, XIcon } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import {
-  createRunTerminal,
-  getRunTerminal,
-  readRunTerminal,
-  resizeRunTerminal,
-  stopRunTerminal,
-  writeRunTerminal,
-} from '@/api/client'
-import { useHostTransport } from '@/api/host-usage'
-import { subscribeTopic } from '@/api/ws'
+import { createRunTerminal, getRunTerminal, stopRunTerminal, writeRunTerminal } from '@/api/client'
 import type { TerminalSession } from '@open-mercato/cezar-api-client'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
-import '@xterm/xterm/css/xterm.css'
+import {
+  DRAWER_HEIGHT_STEP,
+  DRAWER_HEIGHT_STEP_LARGE,
+  MAX_DRAWER_HEIGHT,
+  MIN_DRAWER_HEIGHT,
+  clampDrawerHeight,
+} from './drawer-state'
+import { TerminalPane } from './terminal-pane'
 
 /**
- * The bottom terminal drawer (spec `.ai/specs/2026-10-07-task-workspace.md` §6, Milestone 2).
+ * The bottom terminal drawer (spec `.ai/specs/2026-10-07-task-workspace.md` §6).
  *
- * This is the first cut: ONE session per task, started explicitly, with the drawer hidden until
- * the user asks for it (§3 "Explicit actions" — starting a shell is never a side effect of
- * opening a view). Tabs, command-named tabs, a draggable height and URL detection come next;
- * none of them change the transport or the lifecycle this validates.
+ * Several tabs, each its own PTY session in this task's worktree, shared by every saved layout —
+ * the drawer belongs to the TASK, not to a layout, so switching layouts keeps the same shells.
  *
- * TRANSPORT. Output is never pushed over the socket. On a local cockpit the session's topic wakes
- * us with a cursor and we read the bytes over authenticated HTTP; on a hosted one there is no
- * socket at all — a browser WebSocket cannot carry reverse-proxy credentials, which is why every
- * other WS consumer here is gated on `localHandoff` too — so the same read is polled. One code
- * path, one cursor, two clocks.
+ * Tab names come from the SERVER, which reads them off the process table rather than from what
+ * was typed (`server/terminal/foreground.ts`). That is also where `busy` comes from, so the name
+ * on a tab and the warning you get for closing it can never disagree.
  */
 
-/** How often a hosted cockpit asks for new output. Fast enough to feel live on a LAN, slow enough
- *  that an idle shell is not a request per frame. */
-const POLL_MS = 400
+/** How often the tab strip re-reads labels and busy flags. The output itself does not wait for
+ *  this — each pane streams on its own — so this only has to be quick enough that a tab renames
+ *  itself promptly when a command starts. */
+const STATE_REFRESH_MS = 2_000
 
-/** Written into the screen when scrollback was dropped. Deliberately plain text rather than a
- *  dimmed ANSI sequence: this is the cockpit talking, and it must not be mistakable for — or
- *  corrupt the state of — the program that is writing. */
-const TRUNCATION_NOTICE = '\r\n[... wcześniejsze wyjście wypadło ze scrollbacku ...]\r\n'
+/** Ctrl-C. What "Zatrzymaj" sends, because stopping a command is not the same as closing a tab:
+ *  you stop a build precisely so you can read why it was wrong. */
+const INTERRUPT = '\u0003'
 
-export function TerminalDrawer({ runId, onClose }: { runId: string; onClose: () => void }) {
-  const transport = useHostTransport()
-  const hostRef = useRef<HTMLDivElement>(null)
-  const [session, setSession] = useState<TerminalSession | null>(null)
+export function TerminalDrawer({
+  runId,
+  height,
+  onHeightChange,
+  onClose,
+}: {
+  runId: string
+  height: number
+  onHeightChange: (height: number) => void
+  onClose: () => void
+}) {
+  const [sessions, setSessions] = useState<TerminalSession[]>([])
+  const [activeId, setActiveId] = useState<string | null>(null)
   const [unavailable, setUnavailable] = useState<string | null>(null)
   const [starting, setStarting] = useState(true)
-  const [exited, setExited] = useState<number | null>(null)
-  /**
-   * The emulator is mounted and can be written to.
-   *
-   * Load-bearing, not cosmetic: the emulator arrives through a dynamic import, so for the first
-   * frames after a session opens there is nothing to write to. Reading output in that window
-   * ADVANCES THE CURSOR and drops what it read, and every later read returns nothing new — the
-   * screen then stays blank forever over a perfectly healthy shell. Gate the reads on the screen
-   * instead; the first read is from cursor 0, so nothing is lost by waiting.
-   */
-  const [screenReady, setScreenReady] = useState(false)
-  /**
-   * The session's topic is not readable on this connection, so fall back to polling.
-   *
-   * Not a dev-only path. The hub grades every upgrade, and a browser does NOT send `Sec-Fetch-*`
-   * headers on a WebSocket handshake, so a connection that is not provably same-authority — a
-   * Vite dev proxy, and Safari and Firefox generally — is admitted UNTRUSTED and may read only
-   * topics marked loopback-readable. The terminal's topic is deliberately not one of those. The
-   * socket is an optimisation here, never the mechanism: the bytes always come over HTTP, so
-   * losing the bell costs latency and nothing else. Same degradation `host-usage` makes.
-   */
-  const [socketRefused, setSocketRefused] = useState(false)
+  /** The tab a close is waiting on, because something is running in it (spec §6). */
+  const [confirming, setConfirming] = useState<TerminalSession | null>(null)
 
-  // The emulator and its cursor live in refs: they change on every frame of output and nothing
-  // renders from them.
-  const termRef = useRef<{ write(data: string): void } | null>(null)
-  const cursorRef = useRef(0)
-
-  // Open a session ---------------------------------------------------------------------------
+  // Opening the drawer reattaches to whatever this task already has, and creates a shell only
+  // when it has none (spec §6) — reopening must never lose a running build, and must never
+  // quietly fork a second shell beside it.
   useEffect(() => {
     let cancelled = false
     setStarting(true)
     setUnavailable(null)
-    setSession(null)
-    setExited(null)
-    setScreenReady(false)
-    setSocketRefused(false)
-    cursorRef.current = 0
+    setSessions([])
+    setActiveId(null)
 
     void (async () => {
       try {
@@ -94,11 +81,10 @@ export function TerminalDrawer({ runId, onClose }: { runId: string; onClose: () 
           setUnavailable(state.reason ?? 'Terminal nie jest dostępny w tym cockpicie.')
           return
         }
-        // Reattach to the session this task already has rather than forking a second shell —
-        // reopening the drawer must not lose a running build.
-        const existing = state.sessions.find((entry) => entry.exitCode === null) ?? state.sessions[0]
-        const opened = existing ?? (await createRunTerminal(runId, {}))
-        if (!cancelled) setSession(opened)
+        const live = state.sessions.length > 0 ? state.sessions : [await createRunTerminal(runId, {})]
+        if (cancelled) return
+        setSessions(live)
+        setActiveId(live[0]?.id ?? null)
       } catch (error) {
         if (!cancelled) setUnavailable(error instanceof Error ? error.message : String(error))
       } finally {
@@ -111,143 +97,140 @@ export function TerminalDrawer({ runId, onClose }: { runId: string; onClose: () 
     }
   }, [runId])
 
-  // Mount the emulator -----------------------------------------------------------------------
+  // Keep labels and busy flags current. Deliberately a poll rather than a socket topic: this is
+  // the strip's chrome, it changes at human speed, and it must work on a hosted cockpit, which
+  // opens no WebSocket at all.
   useEffect(() => {
-    const host = hostRef.current
-    if (!session || !host) return
-    let disposed = false
-    let detach: (() => void) | undefined
-
-    void (async () => {
-      // Imported here, not at module scope: the emulator is ~80 KB gzipped, and a user who never
-      // opens the drawer must not pay for it inside the workspace chunk.
-      const [{ Terminal }, { FitAddon }] = await Promise.all([
-        import('@xterm/xterm'),
-        import('@xterm/addon-fit'),
-      ])
-      if (disposed) return
-
-      const term = new Terminal({
-        cursorBlink: true,
-        fontSize: 12,
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-        // Transparent so the drawer's own themed background shows through in light and dark
-        // alike, instead of xterm painting its own black over the cockpit's palette.
-        theme: { background: 'rgba(0,0,0,0)' },
-        allowTransparency: true,
-        scrollback: 5_000,
-      })
-      const fit = new FitAddon()
-      term.loadAddon(fit)
-      term.open(host)
-      fit.fit()
-      term.focus()
-      termRef.current = term
-      setScreenReady(true)
-
-      term.onData((data) => {
-        void writeRunTerminal(runId, session.id, data).catch(() => {})
-      })
-      // The PTY has to learn the real size, or every program that draws in columns wraps wrongly.
-      term.onResize(({ cols, rows }) => {
-        void resizeRunTerminal(runId, session.id, cols, rows).catch(() => {})
-      })
-
-      const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => fit.fit())
-      observer?.observe(host)
-      detach = () => {
-        observer?.disconnect()
-        term.dispose()
-      }
-    })()
-
-    return () => {
-      disposed = true
-      termRef.current = null
-      setScreenReady(false)
-      detach?.()
-    }
-  }, [runId, session])
-
-  // Pull output ------------------------------------------------------------------------------
-  const pull = useCallback(async () => {
-    if (!session) return
-    const read = await readRunTerminal(runId, session.id, cursorRef.current)
-    cursorRef.current = read.cursor
-    // Say so rather than splicing a gap into the screen silently.
-    if (read.truncated) termRef.current?.write(TRUNCATION_NOTICE)
-    if (read.data) termRef.current?.write(read.data)
-    if (read.exitCode !== null) setExited(read.exitCode)
-  }, [runId, session])
-
-  useEffect(() => {
-    if (!session || transport === undefined || !screenReady) return
+    if (unavailable || starting) return
     let active = true
-    const safePull = () => {
-      if (active) void pull().catch(() => {})
-    }
-    safePull()
-
-    if (transport === 'local' && !socketRefused) {
-      // The topic carries a cursor and nothing else; this is the "there is more" bell.
-      const release = subscribeTopic(session.topic, safePull, () => {
-        // Refused (or the socket went away): stop waiting for a bell that will never ring and
-        // let the effect re-run into the polling branch.
-        setSocketRefused(true)
-      })
-      return () => {
-        active = false
-        release()
-      }
-    }
-    const timer = setInterval(safePull, POLL_MS)
+    const timer = setInterval(() => {
+      void getRunTerminal(runId)
+        .then((state) => {
+          if (!active || !state.available) return
+          setSessions(state.sessions)
+          // A session the server has forgotten (exited, then reaped) must not keep a tab.
+          setActiveId((current) =>
+            current && state.sessions.some((entry) => entry.id === current)
+              ? current
+              : (state.sessions[0]?.id ?? null),
+          )
+        })
+        .catch(() => {})
+    }, STATE_REFRESH_MS)
     return () => {
       active = false
       clearInterval(timer)
     }
-  }, [pull, screenReady, session, socketRefused, transport])
+  }, [runId, starting, unavailable])
 
-  const stop = useCallback(() => {
-    if (!session) return
-    void stopRunTerminal(runId, session.id).catch(() => {})
-  }, [runId, session])
+  const addTab = useCallback(() => {
+    void createRunTerminal(runId, {})
+      .then((session) => {
+        setSessions((current) => [...current, session])
+        setActiveId(session.id)
+      })
+      .catch((error: unknown) => {
+        setUnavailable(error instanceof Error ? error.message : String(error))
+      })
+  }, [runId])
+
+  /** Close a tab and stop its process tree. The last tab closing hides the drawer (spec §6). */
+  const closeTab = useCallback(
+    (session: TerminalSession) => {
+      setConfirming(null)
+      void stopRunTerminal(runId, session.id).catch(() => {})
+      setSessions((current) => {
+        const index = current.findIndex((entry) => entry.id === session.id)
+        const remaining = current.filter((entry) => entry.id !== session.id)
+        if (remaining.length === 0) onClose()
+        // The tab to the right, or the previous one when there is none — the grammar the layout
+        // cards use, and the one every editor uses.
+        else if (index >= 0) {
+          setActiveId((active) =>
+            active === session.id ? (remaining[Math.min(index, remaining.length - 1)]?.id ?? null) : active,
+          )
+        }
+        return remaining
+      })
+    },
+    [onClose, runId],
+  )
+
+  /** Interrupt whatever is running, the way Ctrl-C does in any terminal. The tab and its
+   *  scrollback stay, which is the point. */
+  const interrupt = useCallback(
+    (session: TerminalSession) => {
+      void writeRunTerminal(runId, session.id, INTERRUPT).catch(() => {})
+    },
+    [runId],
+  )
+
+  const active = sessions.find((entry) => entry.id === activeId) ?? null
 
   return (
     <section
       data-slot="terminal-drawer"
       aria-label="Terminal"
-      className="flex h-64 shrink-0 flex-col border-t border-border bg-background"
+      className="relative flex shrink-0 flex-col border-t border-border bg-background"
+      style={{ height: `${height}px` }}
     >
-      <header className="flex h-8 shrink-0 items-center gap-2 border-b border-border px-2">
-        <TerminalIcon aria-hidden="true" className="size-3.5 text-muted-foreground" />
-        <span className="shrink-0 text-xs font-medium text-muted-foreground">Terminal</span>
-        {session ? (
+      <DrawerResizeHandle height={height} onHeightChange={onHeightChange} />
+
+      <header className="flex h-8 shrink-0 items-center gap-1 border-b border-border pl-1 pr-2">
+        <div
+          role="tablist"
+          aria-label="Zakładki terminala"
+          className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto"
+        >
+          {sessions.map((session) => (
+            <TerminalTab
+              key={session.id}
+              session={session}
+              active={session.id === activeId}
+              onSelect={() => setActiveId(session.id)}
+              onClose={() => (session.busy ? setConfirming(session) : closeTab(session))}
+            />
+          ))}
+          {unavailable ? null : (
+            <button
+              type="button"
+              aria-label="Nowa zakładka terminala"
+              title="Nowa zakładka terminala"
+              onClick={addTab}
+              className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <PlusIcon aria-hidden="true" className="size-3.5" />
+            </button>
+          )}
+        </div>
+
+        {active ? (
           // The worktree, stated: a shell that does not say which tree it is typing into is a trap.
-          <span className="min-w-0 truncate text-[11px] text-soft-foreground" title={session.cwd}>
-            {session.cwd}
+          <span className="hidden min-w-0 shrink lg:block" title={active.cwd}>
+            <span className="block truncate text-[11px] text-soft-foreground">{active.cwd}</span>
           </span>
         ) : null}
-        {exited !== null ? (
-          <span data-slot="terminal-exit" className="shrink-0 text-[11px] text-soft-foreground tabular-nums">
-            zakończony ({exited})
-          </span>
-        ) : null}
-        <span className="ml-auto flex shrink-0 items-center gap-1">
-          {session && exited === null ? (
-            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={stop}>
-              <SquareIcon aria-hidden="true" className="size-3" />
-              Zatrzymaj
-            </Button>
-          ) : null}
-          <button
-            type="button"
-            aria-label="Zamknij terminal"
-            onClick={onClose}
-            className="grid size-6 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+        {active?.busy ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 shrink-0 px-2 text-xs"
+            title="Przerwij bieżące polecenie (Ctrl-C)"
+            onClick={() => interrupt(active)}
           >
-            <XIcon aria-hidden="true" className="size-3.5" />
-          </button>
-        </span>
+            <SquareIcon aria-hidden="true" className="size-3" />
+            Zatrzymaj
+          </Button>
+        ) : null}
+        <button
+          type="button"
+          aria-label="Ukryj terminal"
+          title="Ukryj terminal — procesy działają dalej"
+          onClick={onClose}
+          className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <XIcon aria-hidden="true" className="size-3.5" />
+        </button>
       </header>
 
       {unavailable ? (
@@ -262,12 +245,161 @@ export function TerminalDrawer({ runId, onClose }: { runId: string; onClose: () 
           Uruchamianie powłoki…
         </p>
       ) : (
-        <div
-          ref={hostRef}
-          data-slot="terminal-screen"
-          className={cn('min-h-0 flex-1 overflow-hidden px-2 py-1', exited !== null && 'opacity-60')}
-        />
+        // Every pane stays MOUNTED and only the active one is shown. A tab is a live shell with a
+        // screen full of scrollback; unmounting it to switch tabs would throw that screen away and
+        // make every switch replay the whole buffer from the server.
+        <div className="relative min-h-0 flex-1">
+          {sessions.map((session) => (
+            <TerminalPane key={session.id} runId={runId} session={session} active={session.id === activeId} />
+          ))}
+        </div>
       )}
+
+      <AlertDialog open={confirming !== null} onOpenChange={(open) => !open && setConfirming(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>W tej zakładce coś działa</AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirming ? `„${confirming.label}” wciąż działa. ` : ''}
+              Zamknięcie zakładki zatrzyma ten proces i wszystko, co uruchomił.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Anuluj</AlertDialogCancel>
+            <AlertDialogAction onClick={() => confirming && closeTab(confirming)}>
+              Zamknij mimo to
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
+  )
+}
+
+function TerminalTab({
+  session,
+  active,
+  onSelect,
+  onClose,
+}: {
+  session: TerminalSession
+  active: boolean
+  onSelect: () => void
+  onClose: () => void
+}) {
+  return (
+    <div
+      data-slot="terminal-tab"
+      data-active={active ? '' : undefined}
+      className={cn(
+        'group flex h-6 shrink-0 items-center rounded pl-2 pr-0.5 text-xs',
+        active ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground',
+      )}
+    >
+      <button
+        type="button"
+        role="tab"
+        aria-selected={active}
+        onClick={onSelect}
+        title={session.exitCode === null ? session.label : `${session.label} — zakończony (${session.exitCode})`}
+        className="max-w-40 truncate outline-none focus-visible:underline"
+      >
+        {session.label}
+      </button>
+      <button
+        type="button"
+        aria-label={`Zamknij ${session.label}`}
+        onClick={onClose}
+        className={cn(
+          'ml-1 grid size-4 shrink-0 place-items-center rounded opacity-0 transition-opacity hover:bg-background focus-visible:opacity-100 group-hover:opacity-100',
+          active && 'opacity-60',
+        )}
+      >
+        <XIcon aria-hidden="true" className="size-3" />
+      </button>
+    </div>
+  )
+}
+
+/**
+ * The drawer's top edge (spec §6: "Its top edge can be dragged to change drawer height").
+ *
+ * The same ARIA window-splitter pattern the sidebar's handle and the workspace's column dividers
+ * use — a `separator` is the one role that is both focusable and carries a value range, so one
+ * affordance serves a pointer and a keyboard. Horizontal here, so the keys that move it are Up
+ * and Down, and dragging UP makes the drawer taller.
+ */
+function DrawerResizeHandle({
+  height,
+  onHeightChange,
+}: {
+  height: number
+  onHeightChange: (height: number) => void
+}) {
+  const origin = useRef<{ y: number; height: number } | null>(null)
+
+  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    origin.current = { y: event.clientY, height }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    // Without this the drag selects the text of whatever it passes over…
+    event.preventDefault()
+    // …and preventing the default also suppresses the focus the press would have given this
+    // `tabIndex=0` element, leaving a mouse user unable to fine-tune with the arrows right after.
+    event.currentTarget.focus()
+  }
+
+  const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const start = origin.current
+    if (!start) return
+    onHeightChange(clampDrawerHeight(start.height - (event.clientY - start.y)))
+  }
+
+  const endDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!origin.current) return
+    origin.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? DRAWER_HEIGHT_STEP_LARGE : DRAWER_HEIGHT_STEP
+    const next =
+      event.key === 'ArrowUp'
+        ? height + step
+        : event.key === 'ArrowDown'
+          ? height - step
+          : event.key === 'Home'
+            ? MAX_DRAWER_HEIGHT
+            : event.key === 'End'
+              ? MIN_DRAWER_HEIGHT
+              : null
+    if (next === null) return
+    // Only for the keys we handled: Tab, Escape and the rest stay the browser's.
+    event.preventDefault()
+    onHeightChange(clampDrawerHeight(next))
+  }
+
+  return (
+    <div
+      data-slot="drawer-resize-handle"
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="Zmień wysokość terminala"
+      aria-valuenow={height}
+      aria-valuemin={MIN_DRAWER_HEIGHT}
+      aria-valuemax={MAX_DRAWER_HEIGHT}
+      tabIndex={0}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
+      onKeyDown={onKeyDown}
+      title="Przeciągnij, by zmienić wysokość — strzałki regulują precyzyjnie"
+      // A 5px grab strip straddling the top border, invisible until reached for. `touch-none` is
+      // load-bearing: without it a touch drag is claimed by the browser's panning.
+      className="absolute inset-x-0 -top-[3px] z-20 h-[5px] cursor-row-resize touch-none bg-transparent transition-colors hover:bg-violet/40 focus-visible:bg-violet/60 focus-visible:outline-none"
+    />
   )
 }

@@ -21,6 +21,10 @@ export const terminalSessionSchema = z.object({
   startedAt: z.string(),
   /** Null while the shell is alive; the exit status once it is gone. */
   exitCode: z.number().int().nullable(),
+  /** The tab's name: the running (or last-run) command, else `Terminal N` (spec §6). */
+  label: z.string(),
+  /** The shell has a live child — something would be lost by closing this tab. */
+  busy: z.boolean(),
   /** The WebSocket topic that wakes on new output. Local cockpits subscribe; hosted ones poll,
    *  because a browser WebSocket cannot carry reverse-proxy credentials. */
   topic: z.string(),

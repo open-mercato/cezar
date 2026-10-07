@@ -7,6 +7,7 @@ import {
 } from '@open-mercato/cezar-contract';
 import { createTrackerService } from './tracker/index.ts';
 import { TrackerWatches } from './tracker/watch.ts';
+import { processSnapshot } from './terminal/foreground.ts';
 import { loadPty } from './terminal/pty-module.ts';
 import { TerminalSessions, type TerminalSessionInfo } from './terminal/sessions.ts';
 import { readTrackerAssociation, writeTrackerAssociation, clearTrackerAssociation } from '../tracker-association.ts';
@@ -5745,6 +5746,8 @@ export function createApp(deps: ServerDeps) {
       const refusal = terminalPolicyRefusal(capabilities());
       if (refusal) return c.json(terminalStateSchema.parse({ available: false, reason: refusal, sessions: [] }));
       const binding = await loadPty();
+      // One `ps` reading names every tab and answers "is anything running" for all of them.
+      terminalSessions.observe(await processSnapshot());
       return c.json(terminalStateSchema.parse({
         available: binding.available,
         ...(binding.available ? {} : { reason: binding.reason }),
