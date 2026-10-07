@@ -25,6 +25,8 @@ import { CommitDialog } from './commit-dialog'
 import { buildFileTree } from './file-tree'
 import { GitTabLoadError, GitTabLoading } from './git-tab-loading'
 import { GitToolbar } from './git-toolbar'
+import type { DiffNewLineComment } from '@/components/diff/types'
+import { trackDiffCommentAdded } from '@/lib/telemetry'
 
 /**
  * `/tasks/:id/changes` — the session git view's Changes tab (spec §"Session git view —
@@ -64,6 +66,16 @@ function ChangesView({ run }: { run: ApiRun }) {
   // Session tab docks — floated here while there is something to send, so the review can be given
   // a message (or a skill) without leaving the diff. This route is the one host of both drafts.
   const diffComments = useDiffComments(run.id)
+  const { add: addDiffComment } = diffComments
+  // Counted only once the store accepted it; `start` is set exactly when the comment covers a range.
+  const addComment = useCallback(
+    (comment: DiffNewLineComment) => {
+      const added = addDiffComment(comment)
+      if (added) trackDiffCommentAdded(comment.start ? 'multi_line' : 'single_line')
+      return added
+    },
+    [addDiffComment],
+  )
   const commentCount = diffComments.comments.length
   const composerDraft = useDraft(run.id, 'composer')
   // Shown once there are comments, kept while a typed message is unsent — so deleting the last
@@ -298,7 +310,7 @@ function ChangesView({ run }: { run: ApiRun }) {
             }
             comments={diffComments.comments}
             // Not until the stored comments have loaded — see `DiffComments.ready`.
-            onAddComment={diffComments.ready ? diffComments.add : undefined}
+            onAddComment={diffComments.ready ? addComment : undefined}
             onEditComment={diffComments.update}
             onRemoveComment={diffComments.remove}
             // Reserve the dock's covered area on diff targets only. Scroll padding on `main`

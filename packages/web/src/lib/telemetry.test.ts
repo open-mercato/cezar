@@ -63,5 +63,7 @@ describe('telemetry event relay contract', () => {
     expect(telemetryEventInputSchema.safeParse({ event: 'message_sent', label: 'cli' }).success).toBe(false)
     expect(telemetryEventInputSchema.safeParse({ event: 'message_sent', label: 'fix the login bug' }).success).toBe(false)
     expect(telemetryEventInputSchema.safeParse({ event: 'anything_else', label: 'new_task' }).success).toBe(false)
+    expect(telemetryEventInputSchema.safeParse({ event: 'diff_comment_added', label: 'multi_line' }).success).toBe(true)
+    expect(telemetryEventInputSchema.safeParse({ event: 'diff_comment_added', label: 'new_task' }).success).toBe(false)
   })
 })

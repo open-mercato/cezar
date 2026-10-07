@@ -92,5 +92,7 @@ export type MessageSurface = z.infer<typeof messageSurfaceSchema>;
  */
 export const telemetryEventInputSchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('message_sent'), label: messageSurfaceSchema.exclude(['cli']) }),
+  /** A review comment left on the Changes tab's diff: on one line, or on a selected range. */
+  z.object({ event: z.literal('diff_comment_added'), label: z.enum(['single_line', 'multi_line']) }),
 ]);
 export type TelemetryEventInput = z.infer<typeof telemetryEventInputSchema>;

@@ -45,6 +45,12 @@ export function trackMessageSent(surface: Exclude<MessageSurface, 'cli'>): void 
   send('/api/v1/telemetry/event', { event: 'message_sent', label: surface })
 }
 
+/** A review comment added on the Changes tab's diff, after it was accepted (a duplicate the
+ *  store refuses is not counted). */
+export function trackDiffCommentAdded(kind: 'single_line' | 'multi_line'): void {
+  send('/api/v1/telemetry/event', { event: 'diff_comment_added', label: kind })
+}
+
 /** Whether a pathname is a page the user actually sees. Everything else outside these roots is
  *  a legacy flat URL that redirects into a project (`/` → `/p/<boot>/`) — counting it would put
  *  a phantom step before every real one. */
