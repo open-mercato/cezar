@@ -49,7 +49,7 @@ function mount(starCount: StarCountPayload | undefined = AVAILABLE, seed: RunRec
   const client = createQueryClient()
   clients.push(client)
   client.setQueryData(workspaceQueryKeys.config, {
-    branding: { name: 'cezar', logoUrl: null, primaryColor: null },
+    branding: { name: 'cezar', logoUrl: null },
   })
   if (starCount) client.setQueryData(workspaceQueryKeys.starCount, starCount)
   client.setQueryData(queryKeys.runs.list(), seed)
@@ -90,7 +90,7 @@ describe('StarPromo', () => {
     const client = createQueryClient()
     clients.push(client)
     client.setQueryData(workspaceQueryKeys.config, {
-      branding: { name: 'Acme Tools', logoUrl: null, primaryColor: null },
+      branding: { name: 'Acme Tools', logoUrl: null },
     })
     render(
       <QueryClientProvider client={client}>

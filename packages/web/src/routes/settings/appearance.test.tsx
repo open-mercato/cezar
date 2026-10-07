@@ -22,7 +22,7 @@ let requests: Array<{ method: string; url: string; body?: unknown }> = []
 function serve(uiState: Record<string, unknown> = {}) {
   requests = []
   let workspaceConfig = {
-    branding: { name: 'cezar', logoUrl: null as string | null, primaryColor: null as string | null },
+    branding: { name: 'cezar', logoUrl: null as string | null },
     browseRoot: '~/', projectsDir: '~/cezar/projects', skillsAutoUpdate: null, effectiveSkillsAutoUpdate: true,
     composerDefaults: { autonomous: null, worktree: null, inheritedAutonomous: 'source-dependent', inheritedWorktree: true },
     resources: { maxParallel: 2, maxMonitoringSessions: 2, idleTimeoutMinutes: 15, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10 },

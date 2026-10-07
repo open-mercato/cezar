@@ -191,7 +191,6 @@ const workspaceConfigSchema = z
     /** Optional instance name shown in the cockpit; absent keeps the product default. */
     branding: z.object({
       name: z.string().trim().min(1).max(80).optional().catch(undefined),
-      primaryColor: z.string().regex(/^#[\da-fA-F]{6}$/).optional().catch(undefined),
     }).passthrough().default(() => ({})).catch(() => ({})),
     /** Migration cursor (src/workspace/migrations.ts). Absent/bad → 0, which
      *  means "run every migration" — each one is idempotent, so that is safe. */

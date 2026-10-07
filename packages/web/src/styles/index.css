@@ -122,8 +122,6 @@
   /* accents — `--accent-lime` is the stable name for the brand lime; `--primary` points at
    * whichever accent family is active (Settings → Appearance swaps it via [data-accent]). */
   --accent-lime: #a8f372;
-  --brand-primary-ink-dark: #0d0d0d;
-  --brand-primary-ink-light: #ffffff;
   --primary: var(--accent-lime);
   --primary-foreground: #0d0d0d;
   --violet: #8f86e8;

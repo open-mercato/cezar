@@ -29,7 +29,6 @@ export const workspaceConfigResponseSchema = z.object({
   branding: z.object({
     name: z.string(),
     logoUrl: z.string().nullable(),
-    primaryColor: z.string().nullable(),
   }),
   /** Root exposed by the Add-project directory browser — stored as written (`~` kept). */
   browseRoot: z.string(),
@@ -88,7 +87,6 @@ export type WorkspaceConfigResponse = z.infer<typeof workspaceConfigResponseSche
 export const setWorkspaceConfigInputSchema = z.object({
   branding: z.object({
     name: z.string().trim().max(80).nullable().optional(),
-    primaryColor: z.string().regex(/^#[\da-fA-F]{6}$/).nullable().optional(),
   }).optional(),
   browseRoot: z.string().trim().min(1).max(4096).optional(),
   projectsDir: z.string().trim().min(1).max(4096).optional(),

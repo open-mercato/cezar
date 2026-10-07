@@ -208,15 +208,6 @@ function BrandingFields() {
           onClick={() => save.mutate({ branding: { name: null } })}>Reset name</Button>
       </div>
     </Field>
-    <Field title="Brand color" hint="Replaces the main action color and focus ring throughout this workspace.">
-      <div className="flex items-center gap-3">
-        <input data-slot="branding-color" aria-label="Brand color" type="color" value={branding?.primaryColor ?? getComputedStyle(document.documentElement).getPropertyValue('--accent-lime').trim()} disabled={!branding || save.isPending}
-          onChange={(event) => save.mutate({ branding: { primaryColor: event.currentTarget.value } })} className="size-10 cursor-pointer rounded border border-border bg-transparent p-1" />
-        <code className="text-xs text-muted-foreground">{branding?.primaryColor ?? 'Product default'}</code>
-        <Button type="button" variant="outline" size="sm" disabled={!branding?.primaryColor || save.isPending}
-          onClick={() => save.mutate({ branding: { primaryColor: null } })}>Reset color</Button>
-      </div>
-    </Field>
     <Field title="Logo" hint="PNG, JPEG, WebP, GIF, AVIF, or safe SVG up to 2 MB. Stored on this machine and shared by its browsers.">
       <div className="flex flex-wrap items-center gap-3">
         {logoDraft ? <img src={logoDraft.url} alt="Logo preview" className="size-10 rounded object-contain" /> : branding?.logoUrl ? <img src={branding.logoUrl} alt="Current instance logo" className="size-10 rounded object-contain" /> : null}

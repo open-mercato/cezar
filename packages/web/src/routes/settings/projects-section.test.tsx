@@ -98,7 +98,7 @@ function serve(answers: Answers = {}) {
     projectsDir: '~/cezar/projects',
   }
   const config: WorkspaceConfigResponse = {
-    branding: { name: 'cezar', logoUrl: null, primaryColor: null },
+    branding: { name: 'cezar', logoUrl: null },
     agentDefaults: {},
     browseRoot: '~/',
     projectsDir: '~/cezar/projects',
