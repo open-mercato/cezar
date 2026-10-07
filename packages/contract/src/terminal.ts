@@ -85,6 +85,37 @@ export const terminalOutputSchema = z.object({
 });
 export type TerminalOutput = z.infer<typeof terminalOutputSchema>;
 
+/**
+ * An address one of this task's terminals printed (spec §7).
+ *
+ * Collected, never opened: the spec is explicit that a detected address opens only when the user
+ * clicks `Otwórz w Przeglądarce`. `running` is the answer to a TCP connect and nothing more —
+ * cezar does not send a request to a server a task started.
+ */
+export const detectedUrlSchema = z.object({
+  url: z.string(),
+  lastSeenAt: z.string(),
+  /** Null until probed. Distinct from `false`, which means "probed, nothing listening". */
+  running: z.boolean().nullable(),
+});
+export type DetectedUrlEntry = z.infer<typeof detectedUrlSchema>;
+
+export const detectedUrlsSchema = z.object({ urls: z.array(detectedUrlSchema) });
+export type DetectedUrlsResponse = z.infer<typeof detectedUrlsSchema>;
+
+/** A command the task's own project defines (spec §6). Discovery only — nothing runs until the
+ *  user picks one, and then it runs in a new terminal tab. */
+export const discoveredCommandSchema = z.object({
+  command: z.string(),
+  /** The file it came from, so `dev` from a Makefile is never confused with `dev` from npm. */
+  source: z.string(),
+  detail: z.string().optional(),
+});
+export type DiscoveredCommandEntry = z.infer<typeof discoveredCommandSchema>;
+
+export const discoveredCommandsSchema = z.object({ commands: z.array(discoveredCommandSchema) });
+export type DiscoveredCommandsResponse = z.infer<typeof discoveredCommandsSchema>;
+
 export const terminalSessionParamsSchema = z.object({
   id: z.string(),
   sessionId: z.string(),

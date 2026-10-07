@@ -1,4 +1,5 @@
 import {
+  detectedUrlsSchema, discoveredCommandsSchema,
   terminalCreateSchema, terminalInputSchema, terminalOutputQuerySchema, terminalOutputSchema,
   terminalResizeSchema, terminalSessionParamsSchema, terminalSessionSchema, terminalStateSchema,
   trackerWatchInputSchema, trackerWatchParamsSchema, trackerWatchQuerySchema,
@@ -7,6 +8,8 @@ import {
 } from '@open-mercato/cezar-contract';
 import { createTrackerService } from './tracker/index.ts';
 import { TrackerWatches } from './tracker/watch.ts';
+import { discoverCommands } from './terminal/commands.ts';
+import { DetectedUrls } from './terminal/detected-urls.ts';
 import { processSnapshot } from './terminal/foreground.ts';
 import { loadPty } from './terminal/pty-module.ts';
 import { TerminalSessions, type TerminalSessionInfo } from './terminal/sessions.ts';
@@ -1377,7 +1380,10 @@ export function createApp(deps: ServerDeps) {
   // The workspace terminal's session registry (spec `2026-10-07-task-workspace` §6). One per
   // server, because a shell outlives the request that opened it and belongs to the host, not to
   // a project context — the cockpit may switch projects with a build still running.
-  const terminalSessions = deps.terminalSessions ?? new TerminalSessions();
+  // Addresses this task's terminals printed. Fed by the registry as output arrives, so a dev
+  // server announcing itself is noticed without anyone polling for it.
+  const detectedUrls = new DetectedUrls();
+  const terminalSessions = deps.terminalSessions ?? new TerminalSessions(undefined, detectedUrls);
   deps.onDispose?.(() => terminalSessions.closeAll());
   const capabilities = () => resolveCapabilities(process.env, bindHost);
   const singleProjectRefusal = (
@@ -5813,6 +5819,26 @@ export function createApp(deps: ServerDeps) {
         return c.json({ resized: terminalSessions.resize(session.id, cols, rows) });
       },
     )
+    .get('/runs/:id/terminal/urls', async (c) => {
+      const { store } = c.get('project');
+      const run = store.getRun(c.req.param('id'));
+      if (!run) return c.json({ error: 'not found' }, 404);
+      // Probed on read rather than on a timer: the list is only looked at while the drawer is
+      // open, and an idle cockpit should cost no connections at all.
+      const urls = await detectedUrls.refresh(run.id);
+      c.header('Cache-Control', 'no-store');
+      return c.json(detectedUrlsSchema.parse({ urls }));
+    })
+    .get('/runs/:id/terminal/commands', async (c) => {
+      const { store } = c.get('project');
+      const run = store.getRun(c.req.param('id'));
+      if (!run) return c.json({ error: 'not found' }, 404);
+      // The task's own worktree or nothing: suggesting the boot repo's scripts for a task would
+      // offer commands that run against the wrong tree (spec §3.3).
+      const worktree = run.worktreePath && existsSync(run.worktreePath) ? run.worktreePath : null;
+      const commands = worktree ? await discoverCommands(worktree) : [];
+      return c.json(discoveredCommandsSchema.parse({ commands }));
+    })
     .delete('/runs/:id/terminal/:sessionId', paramZodValidator(terminalSessionParamsSchema), async (c) => {
       const session = terminalFor(c.req.valid('param'));
       if (!session) return c.json({ error: 'terminal session not found' }, 404);

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { SCAN_OVERLAP, type DetectedUrls } from './detected-urls.ts';
 import { foregroundCommand, hasForeground, type ProcessRow } from './foreground.ts';
 import { loadPty, type PtyProcess } from './pty-module.ts';
 
@@ -77,6 +78,9 @@ interface Entry {
   dropped: number;
   listeners: Set<() => void>;
   disposers: Array<() => void>;
+  /** The tail of the previous chunk, re-scanned with the next one so an address split across two
+   *  PTY writes is still found whole. */
+  scanTail: string;
   reap?: ReturnType<typeof setTimeout>;
 }
 
@@ -113,8 +117,13 @@ export function closeAllTerminals(): void {
 export class TerminalSessions {
   private entries = new Map<string, Entry>();
 
-  /** Injectable so tests drive a fake PTY and never fork a real shell. */
-  constructor(private readonly binding: typeof loadPty = loadPty) {
+  /** `binding` is injectable so tests drive a fake PTY and never fork a real shell. `urls`, when
+   *  given, is fed every chunk of output so a task's printed addresses are collected as they
+   *  appear (spec §7) — optional because the registry is useful without it. */
+  constructor(
+    private readonly binding: typeof loadPty = loadPty,
+    private readonly urls?: DetectedUrls,
+  ) {
     registries.add(this);
   }
 
@@ -163,6 +172,7 @@ export class TerminalSessions {
       dropped: 0,
       listeners: new Set(),
       disposers: [],
+      scanTail: '',
     };
     this.entries.set(entry.info.id, entry);
 
@@ -304,6 +314,10 @@ export class TerminalSessions {
   }
 
   private append(entry: Entry, data: string): void {
+    if (this.urls) {
+      this.urls.record(entry.info.runId, entry.scanTail + data);
+      entry.scanTail = (entry.scanTail + data).slice(-SCAN_OVERLAP);
+    }
     entry.buffer += data;
     const overflow = entry.buffer.length - SCROLLBACK_LIMIT;
     if (overflow > 0) {
