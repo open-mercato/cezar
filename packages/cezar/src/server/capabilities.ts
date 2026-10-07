@@ -153,15 +153,34 @@ export function isLoopbackHostHeader(host: string | null | undefined): boolean {
  *  started once, on the server's `listening` event, so flipping the flag on afterwards gates
  *  the routes open without ever starting the poller. Boot-time flag, same wording.
  *
+ *  `CEZ_TERMINAL` is a tri-state (spec `2026-10-07-task-workspace` §6). Unset: the workspace
+ *  terminal exists on a LOCAL cockpit and not on a hosted one, which is the same line
+ *  `localHandoff` already draws for every other local-machine affordance. `=1` opts a hosted
+ *  cockpit in — deliberate, because cezar has no authentication of its own and an interactive
+ *  shell is the most exposure any feature here can add, so it follows AGENTS.md's rule that a
+ *  feature widening exposure is opt-in behind a `CEZ_*` flag, off by default. `=0` turns it off
+ *  everywhere, including locally.
+ *
+ *  This is POLICY only — whether a terminal is allowed here. Whether the optional PTY binding
+ *  actually loaded on this platform is a separate question, answered by the terminal family's own
+ *  endpoint, so an unsupported host gets an empty state with a reason instead of a dead button.
+ *
  *  `dispatch` is boot-time for a third reason: the dispatch prompt is composed into a run's system
  *  prompt when the run STARTS, so flipping the flag mid-flight would open (or close) the routes
  *  while every run already in the tree kept its prompt. Set it and restart. */
+function terminalEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
+  if (env.CEZ_TERMINAL === '1') return true;
+  if (env.CEZ_TERMINAL === '0') return false;
+  return env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost);
+}
+
 export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHost?: string): Capabilities {
   const hideAllUsage = env.CEZ_HIDE_TOKEN_METRICS === '1';
   const tokenUsageMetrics = !hideAllUsage && env.CEZ_HIDE_TOKEN_USAGE !== '1';
   const costMetrics = !hideAllUsage && env.CEZ_HIDE_COST !== '1';
   return {
     localHandoff: env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost),
+    terminal: terminalEnabled(env, bindHost),
     // Deliberately not re-derived here: RunManager enforces the same predicate,
     // and two spellings of "is the inbox on" would eventually disagree.
     followups: followupsEnabled(env),

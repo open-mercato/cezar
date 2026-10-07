@@ -46,7 +46,7 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: { kind: 'github', available: true },
-  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
 }
 
 /** The PROJECT-scoped `/repo` answer. The remote that gates Push is read from here rather than
@@ -338,10 +338,10 @@ describe('the Changes tab route', () => {
     expect(toolbarAction('create-pr')).toBeNull()
   })
 
-  it('hosted mode (localHandoff: false) hides the overflow menu entirely', async () => {
+  it('hosted mode (localHandoff: false, terminal: false) hides the overflow menu entirely', async () => {
     stubFetch({
       'GET /api/v1/health': () =>
-        jsonResponse({ ...HEALTH, capabilities: { localHandoff: false } }),
+        jsonResponse({ ...HEALTH, capabilities: { localHandoff: false, terminal: false } }),
     })
     renderChangesRoute()
     await waitFor(() => expect(document.querySelector('[data-slot="git-toolbar"]')).not.toBeNull())

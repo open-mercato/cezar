@@ -157,6 +157,7 @@ describe('resolveCapabilities — followups (#471)', () => {
   it('is independent of the deployment mode', () => {
     expect(resolveCapabilities({ CEZ_FOLLOWUPS: '1', CEZ_REMOTE: '1' }, '0.0.0.0')).toEqual({
       localHandoff: false,
+      terminal: false,
       followups: true,
       singleProject: false,
       automations: true,

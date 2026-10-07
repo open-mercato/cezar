@@ -1,10 +1,14 @@
 import {
+  terminalCreateSchema, terminalInputSchema, terminalOutputQuerySchema, terminalOutputSchema,
+  terminalResizeSchema, terminalSessionParamsSchema, terminalSessionSchema, terminalStateSchema,
   trackerWatchInputSchema, trackerWatchParamsSchema, trackerWatchQuerySchema,
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
   trackerCredentialsSchema, trackerItemParamsSchema, trackerAssociationInputSchema, type TrackerChangedEvent,
 } from '@open-mercato/cezar-contract';
 import { createTrackerService } from './tracker/index.ts';
 import { TrackerWatches } from './tracker/watch.ts';
+import { loadPty } from './terminal/pty-module.ts';
+import { TerminalSessions, type TerminalSessionInfo } from './terminal/sessions.ts';
 import { readTrackerAssociation, writeTrackerAssociation, clearTrackerAssociation } from '../tracker-association.ts';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
@@ -329,6 +333,9 @@ export interface ServerDeps {
    *  to the HTTP server it binds. Optional so legacy callers/tests change
    *  nothing: no hub, no topics, and the HTTP surface is byte-identical. */
   socketHub?: SocketHub;
+  /** The workspace terminal's session registry. Injectable so route tests drive a fake PTY
+   *  instead of forking a real shell; defaults to a real one per server. */
+  terminalSessions?: TerminalSessions;
   /** The host-telemetry sampler behind the `host` topic and the `/workspace/host-usage` route.
    *  Defaults to the process-wide singleton; injectable so tests can drive a frame shape (a
    *  container object, for instance) that CI machines do not have. */
@@ -1366,6 +1373,11 @@ export function createApp(deps: ServerDeps) {
   // CEZ_REMOTE flips take effect live (and tests can toggle it).
   const trackers = createTrackerService();
   const trackerWatches = new TrackerWatches(trackers, deps.socketHub);
+  // The workspace terminal's session registry (spec `2026-10-07-task-workspace` §6). One per
+  // server, because a shell outlives the request that opened it and belongs to the host, not to
+  // a project context — the cockpit may switch projects with a build still running.
+  const terminalSessions = deps.terminalSessions ?? new TerminalSessions();
+  deps.onDispose?.(() => terminalSessions.closeAll());
   const capabilities = () => resolveCapabilities(process.env, bindHost);
   const singleProjectRefusal = (
     action: 'adding projects' | 'editing projects' | 'removing projects' | 'folder browsing',
@@ -5672,6 +5684,139 @@ export function createApp(deps: ServerDeps) {
     };
     workspaceEvents.emit('tracker-changed', payload);
   };
+  /** One refusal sentence for every terminal route, or null when a shell is allowed here. */
+  const terminalPolicyRefusal = (caps: ReturnType<typeof capabilities>): string | null =>
+    caps.terminal
+      ? null
+      : 'the terminal is disabled on this cockpit — it is off in hosted mode unless CEZ_TERMINAL=1';
+
+  /** The topic a client subscribes to for "there is new output". Derived, never stored, so the
+   *  session id stays the only identity. */
+  const terminalTopic = (sessionId: string) => `terminal:${sessionId}`;
+  const withTopic = (session: TerminalSessionInfo) => ({ ...session, topic: terminalTopic(session.id) });
+
+  /**
+   * Publish a cursor — and ONLY a cursor — whenever a session produces output or exits.
+   *
+   * The hub's topics are workspace-level and readable by anything the upgrade guard trusts, so
+   * nothing that is terminal CONTENT may ride one. A monotonically growing number tells the
+   * cockpit "there is more", and it then reads the bytes over the same authenticated HTTP as
+   * everything else. The registration disposes itself when the session goes, the way a tracker
+   * watch does.
+   */
+  const registerTerminalTopic = (sessionId: string) => {
+    if (!deps.socketHub) return;
+    const read = () => ({ cursor: terminalSessions.read(sessionId, Number.MAX_SAFE_INTEGER)?.cursor ?? 0 });
+    const remove = deps.socketHub.registerTopic(terminalTopic(sessionId), {
+      snapshot: async () => read(),
+      start: (publish) => terminalSessions.subscribe(sessionId, () => publish(read())),
+    });
+    // The registry forgets an exited session a minute later; drop the topic with it rather than
+    // leaving a name that answers forever.
+    terminalSessions.subscribe(sessionId, () => {
+      if (!terminalSessions.get(sessionId)) remove();
+    });
+  };
+
+  /** The session named by this URL, but only if it really belongs to the run named by this URL. */
+  const terminalFor = ({ id, sessionId }: { id: string; sessionId: string }): TerminalSessionInfo | null => {
+    const session = terminalSessions.get(sessionId);
+    return session && session.runId === id ? session : null;
+  };
+
+  /**
+   * The workspace terminal (spec `.ai/specs/2026-10-07-task-workspace.md` §6, Milestone 2).
+   *
+   * Every route answers 409 unless `capabilities().terminal` allows a shell here — policy first,
+   * before anything touches a PTY. A session is addressed by id but ALWAYS re-checked against the
+   * run in the path, so one task's url can never drive another task's shell.
+   *
+   * Output is never pushed over the WebSocket. The topic carries a cursor and nothing else; the
+   * bytes come back over the same authenticated HTTP the rest of the cockpit uses. That keeps
+   * terminal content off a workspace-level bus entirely — the hub's topics are single-mount and
+   * readable by anything the upgrade guard trusts, and a shell's output is the last thing that
+   * should ride one.
+   */
+  const terminalRoutes = new Hono<ProjectApiEnv>()
+    .get('/runs/:id/terminal', async (c) => {
+      const { store } = c.get('project');
+      const run = store.getRun(c.req.param('id'));
+      if (!run) return c.json({ error: 'not found' }, 404);
+      const refusal = terminalPolicyRefusal(capabilities());
+      if (refusal) return c.json(terminalStateSchema.parse({ available: false, reason: refusal, sessions: [] }));
+      const binding = await loadPty();
+      return c.json(terminalStateSchema.parse({
+        available: binding.available,
+        ...(binding.available ? {} : { reason: binding.reason }),
+        sessions: terminalSessions.listFor(run.id).map(withTopic),
+      }));
+    })
+    .post('/runs/:id/terminal', jsonZodValidator(terminalCreateSchema), async (c) => {
+      const { store } = c.get('project');
+      const run = store.getRun(c.req.param('id'));
+      if (!run) return c.json({ error: 'not found' }, 404);
+      const refusal = terminalPolicyRefusal(capabilities());
+      if (refusal) return c.json({ error: refusal }, 409);
+      // The task's OWN worktree or nothing. Falling back to the repo root the way open-in-cli
+      // does would put the user in the boot checkout while the header says they are in a task —
+      // exactly the "panels must not silently display the boot repo" rule (spec §3.3).
+      if (!run.worktreePath || !existsSync(run.worktreePath)) {
+        return c.json({ error: 'this task has no worktree to open a terminal in' }, 409);
+      }
+      const created = await terminalSessions.create({
+        runId: run.id,
+        cwd: run.worktreePath,
+        ...c.req.valid('json'),
+      });
+      if (!created.ok) return c.json({ error: created.reason }, 409);
+      registerTerminalTopic(created.session.id);
+      return c.json(terminalSessionSchema.parse(withTopic(created.session)), 201);
+    })
+    .get(
+      '/runs/:id/terminal/:sessionId/output',
+      paramZodValidator(terminalSessionParamsSchema),
+      queryZodValidator(terminalOutputQuerySchema),
+      async (c) => {
+        const session = terminalFor(c.req.valid('param'));
+        if (!session) return c.json({ error: 'terminal session not found' }, 404);
+        const read = terminalSessions.read(session.id, c.req.valid('query').cursor ?? 0);
+        if (!read) return c.json({ error: 'terminal session not found' }, 404);
+        c.header('Cache-Control', 'no-store');
+        return c.json(terminalOutputSchema.parse(read));
+      },
+    )
+    .post(
+      '/runs/:id/terminal/:sessionId/input',
+      paramZodValidator(terminalSessionParamsSchema),
+      jsonZodValidator(terminalInputSchema),
+      async (c) => {
+        const session = terminalFor(c.req.valid('param'));
+        if (!session) return c.json({ error: 'terminal session not found' }, 404);
+        const refusal = terminalPolicyRefusal(capabilities());
+        if (refusal) return c.json({ error: refusal }, 409);
+        // A write to a shell that has already exited is not an error: the client may not have
+        // learned about the exit yet, and the exit code is in every output read anyway.
+        return c.json({ delivered: terminalSessions.write(session.id, c.req.valid('json').data) });
+      },
+    )
+    .post(
+      '/runs/:id/terminal/:sessionId/resize',
+      paramZodValidator(terminalSessionParamsSchema),
+      jsonZodValidator(terminalResizeSchema),
+      async (c) => {
+        const session = terminalFor(c.req.valid('param'));
+        if (!session) return c.json({ error: 'terminal session not found' }, 404);
+        const { cols, rows } = c.req.valid('json');
+        return c.json({ resized: terminalSessions.resize(session.id, cols, rows) });
+      },
+    )
+    .delete('/runs/:id/terminal/:sessionId', paramZodValidator(terminalSessionParamsSchema), async (c) => {
+      const session = terminalFor(c.req.valid('param'));
+      if (!session) return c.json({ error: 'terminal session not found' }, 404);
+      terminalSessions.kill(session.id);
+      return c.json({ stopped: true });
+    });
+
   const trackerRoutes = new Hono<ProjectApiEnv>()
     .get('/tracker/automation-options', queryZodValidator(trackerAutomationOptionsQuerySchema), async c => {
       const project = c.get('project');
@@ -6342,6 +6487,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', todosRoutes)
     .route('/', sseRoutes)
     .route('/', githubRoutes)
+    .route('/', terminalRoutes)
     .route('/', trackerRoutes)
     .route('/', repoRoutes)
     .route('/', configRoutes)

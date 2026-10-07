@@ -2,6 +2,7 @@
 import { parseArgs } from 'node:util';
 import { spawn, execFileSync } from 'node:child_process';
 import { createServer } from 'node:net';
+
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +14,7 @@ import {
 import { applyProviderEnablement } from './core/provider-availability.ts';
 import { ensureDataGitignore } from './data-gitignore.ts';
 import { pruneOrphans } from './git-worktree.ts';
+import { closeAllTerminals } from './server/terminal/sessions.ts';
 import { getRepoInfo } from './server/git.ts';
 import { DEFAULT_WORKTREE_RETENTION, loadConfig, resolveWorktreeRetention } from './config.ts';
 import { reclaimWorktrees } from './runs/retention.ts';
@@ -350,6 +352,11 @@ async function serveCommand(
 
   const shutdown = () => {
     store.flush();
+    // Terminal shells are PTYs, so each sits in its OWN process group and does NOT receive the
+    // Ctrl-C the TTY delivers to cezar's foreground group — without this they outlive the
+    // cockpit. Spec `2026-10-07-task-workspace` §6: a cezar restart stops every terminal session
+    // and its children.
+    closeAllTerminals();
     process.exit(0);
   };
   process.on('SIGINT', shutdown);

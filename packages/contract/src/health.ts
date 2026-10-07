@@ -38,6 +38,17 @@ export type ForgeInfo = z.infer<typeof forgeInfoSchema>;
 /** Server-side feature switches the cockpit reads once at boot. */
 export const capabilitiesSchema = z.object({
   localHandoff: z.boolean(),
+  /**
+   * `true` means this cockpit may open an interactive terminal in a task worktree (spec
+   * `.ai/specs/2026-10-07-task-workspace.md` §6). On by default LOCALLY and off on a hosted
+   * cockpit — the same line `localHandoff` draws — with `CEZ_TERMINAL=1` opting a hosted server
+   * in and `CEZ_TERMINAL=0` turning it off everywhere.
+   *
+   * Policy, not availability: `true` says a terminal is ALLOWED here, not that the optional PTY
+   * binding loaded. The terminal family's own endpoint answers that, so a platform with no
+   * prebuilt binary shows an empty state with a reason rather than a button that fails.
+   */
+  terminal: z.boolean(),
   followups: z.boolean(),
   singleProject: z.boolean(),
   /**
