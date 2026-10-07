@@ -39,30 +39,22 @@ const DashboardRoute = lazy(() =>
   import('./routes/dashboard').then((m) => ({ default: m.DashboardRoute })),
 )
 
-/** Lazy ON PURPOSE: the thread view carries the markdown stack (Streamdown + remark/rehype,
- *  ~140 KB gz) — as a static import it would sit in the main bundle every visitor pays for
- *  before any route renders. The Suspense fallback is the same loading state the route itself
- *  shows while fetching, so the split is invisible to the user. */
-const TaskThreadRoute = lazy(() =>
-  import('./routes/task-thread/task-thread').then((m) => ({ default: m.TaskThreadRoute })),
+/** The task workspace (spec `.ai/specs/2026-10-07-task-workspace.md`) — the task detail view
+ *  behind all four task URLs.
+ *
+ *  Lazy ON PURPOSE: it embeds the thread, which carries the markdown stack (Streamdown +
+ *  remark/rehype, ~140 KB gz), AND the three git views, which carry the Shiki diff chunk. As a
+ *  static import both would sit in the main bundle every visitor pays for before any route
+ *  renders. The Suspense fallback is the same loading state the route itself shows while
+ *  fetching, so the split is invisible to the user. */
+const TaskWorkspaceRoute = lazy(() =>
+  import('./routes/task-workspace/task-workspace').then((m) => ({ default: m.TaskWorkspaceRoute })),
 )
 
 /** Lazy for the same reason: the compare view renders Progress excerpts through Streamdown and
  *  full diffs through the Shiki singleton — thread-chunk weight the home screen must not pay. */
 const CompareVariantsRoute = lazy(() =>
   import('./routes/compare-variants').then((m) => ({ default: m.CompareVariantsRoute })),
-)
-
-/** Lazy because both tabs render the shared run header, which lives in the thread chunk
- *  (markdown stack and all) — a static import here would pull that into the main bundle. */
-const TaskChangesRoute = lazy(() =>
-  import('./routes/task-git/task-changes').then((m) => ({ default: m.TaskChangesRoute })),
-)
-const TaskFilesRoute = lazy(() =>
-  import('./routes/task-git/task-files').then((m) => ({ default: m.TaskFilesRoute })),
-)
-const TaskCommitsRoute = lazy(() =>
-  import('./routes/task-git/task-commits').then((m) => ({ default: m.TaskCommitsRoute })),
 )
 
 /** Lazy because the repo view renders through the `<Diff>` facade and the Shiki singleton —
@@ -342,11 +334,18 @@ export const AppRoutes = memo(function AppRoutes() {
         <Route index element={<TasksOverviewRoute />} />
         <Route path="new" element={<NewTaskProjectRoute />} />
 
+        {/* All four task URLs render the WORKSPACE (spec `2026-10-07-task-workspace` §5.3).
+            `/tasks/:id` is canonical and opens the saved layout; the other three keep their
+            meaning by opening their view as a one-column card, which is why each passes `view`
+            rather than resolving a different component. ONE element type across all five paths on
+            purpose: React reconciles by type, so a hop between them does not unmount the
+            workspace and throw away its columns, scroll positions and drafts — the same rule the
+            `github` routes below are built on. */}
         <Route
           path="tasks/:id"
           element={
             <Suspense fallback={<ThreadLoading />}>
-              <TaskThreadRoute />
+              <TaskWorkspaceRoute />
             </Suspense>
           }
         />
@@ -354,7 +353,7 @@ export const AppRoutes = memo(function AppRoutes() {
           path="tasks/:id/changes"
           element={
             <Suspense fallback={<GitTabLoading tab="changes" />}>
-              <TaskChangesRoute />
+              <TaskWorkspaceRoute view="changes" />
             </Suspense>
           }
         />
@@ -362,7 +361,7 @@ export const AppRoutes = memo(function AppRoutes() {
           path="tasks/:id/files"
           element={
             <Suspense fallback={<GitTabLoading tab="files" />}>
-              <TaskFilesRoute />
+              <TaskWorkspaceRoute view="files" />
             </Suspense>
           }
         />
@@ -378,7 +377,7 @@ export const AppRoutes = memo(function AppRoutes() {
           path="tasks/:id/commits"
           element={
             <Suspense fallback={<GitTabLoading tab="changes" />}>
-              <TaskCommitsRoute />
+              <TaskWorkspaceRoute view="commits" />
             </Suspense>
           }
         />
@@ -386,7 +385,7 @@ export const AppRoutes = memo(function AppRoutes() {
           path="tasks/:id/commits/:sha"
           element={
             <Suspense fallback={<GitTabLoading tab="changes" />}>
-              <TaskCommitsRoute />
+              <TaskWorkspaceRoute view="commits" />
             </Suspense>
           }
         />

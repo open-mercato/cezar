@@ -129,6 +129,12 @@ interface RunHeaderProps {
   /** The Session tab's engine picker for the next continuation. Kept out of the three Git tabs:
    *  they share this header but do not own the continuation draft or its pending selection. */
   continuationEngine?: ReactNode
+  /** REPLACES the Session | Changes | Commits | Files row (spec `2026-10-07-task-workspace` §2:
+   *  "Replace the current … tab strip with the saved-layout cards; do not show both strips").
+   *  A slot rather than a flag so this file keeps knowing nothing about layouts, and so the four
+   *  route tabs stay the default for every surface that still navigates by URL. The actions on
+   *  the right of that row are unaffected — they belong to the run, not to the navigation. */
+  tabs?: ReactNode
 }
 
 // Every prop must participate: adding one without a comparator is a compile error.
@@ -137,6 +143,8 @@ const headerPropComparators = {
   tab: (before, after) => before.tab === after.tab,
   onMarkedUnread: (before, after) => before.onMarkedUnread === after.onMarkedUnread,
   continuationEngine: (before, after) => before.continuationEngine === after.continuationEngine,
+  // The workspace memoizes the element it passes, so identity is a real comparison here.
+  tabs: (before, after) => before.tabs === after.tabs,
   planTally: (before, after) => before.planTally?.done === after.planTally?.done &&
     before.planTally?.total === after.planTally?.total,
 } satisfies Record<keyof RunHeaderProps, (before: RunHeaderProps, after: RunHeaderProps) => boolean>
@@ -152,6 +160,7 @@ function RunHeaderView({
   tab = 'session',
   onMarkedUnread,
   continuationEngine,
+  tabs,
 }: RunHeaderProps) {
   const attention = deriveAttention(run)
   const budget = budgetStop(run)
@@ -259,24 +268,32 @@ function RunHeaderView({
         <DispatchChildrenLine run={run} />
 
         <div data-slot="run-tabs" className="mt-1.5 flex items-end gap-1 md:mt-2.5">
-          <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
-            Session
-          </TabLink>
-          <TabLink to={`/tasks/${run.id}/changes`} active={tab === 'changes'}>
-            Changes
-          </TabLink>
-          <TabLink to={`/tasks/${run.id}/commits`} active={tab === 'commits'}>
-            Commits
-          </TabLink>
-          <TabLink to={`/tasks/${run.id}/files`} active={tab === 'files'}>
-            Files
-          </TabLink>
-          {/* The live workflow graph — every run with a definition: a step list opens as its graph. */}
-          {run.workflowDef ? (
-            <TabLink to={`/tasks/${run.id}/graph`} active={tab === 'graph'}>
-              Graph
-            </TabLink>
-          ) : null}
+          {/* `tabs` is the workspace's saved-layout strip, which REPLACES this row (spec
+              `2026-10-07-task-workspace` §5.2: "do not show both strips"). The fallback is what
+              every other consumer of this header still gets — including the Graph tab, which
+              belongs to the route strip rather than to the workspace's layout cards. */}
+          {tabs ?? (
+            <>
+              <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
+                Session
+              </TabLink>
+              <TabLink to={`/tasks/${run.id}/changes`} active={tab === 'changes'}>
+                Changes
+              </TabLink>
+              <TabLink to={`/tasks/${run.id}/commits`} active={tab === 'commits'}>
+                Commits
+              </TabLink>
+              <TabLink to={`/tasks/${run.id}/files`} active={tab === 'files'}>
+                Files
+              </TabLink>
+              {/* The live workflow graph — every run with a definition: a step list opens as its graph. */}
+              {run.workflowDef ? (
+                <TabLink to={`/tasks/${run.id}/graph`} active={tab === 'graph'}>
+                  Graph
+                </TabLink>
+              ) : null}
+            </>
+          )}
 
           <div data-slot="run-actions" className="ml-auto hidden items-center gap-1 pb-1 md:flex">
             {flags.finish ? (

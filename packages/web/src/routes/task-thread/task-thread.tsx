@@ -71,6 +71,10 @@ import {
  * (thread-scroller.tsx — flat, with content-visibility where scroll anchoring is available,
  * below ~300 rows; virtua above).
  */
+/** NOTE: no longer mounted by the router — `/tasks/:id` renders the workspace
+ *  (`routes/task-workspace/task-workspace.tsx`), which embeds `ThreadView` as a column. Kept
+ *  as the standalone entry point its own suite drives, and as the revert target while the
+ *  workspace is new; delete both together once the workspace has settled. */
 export function TaskThreadRoute() {
   const { id } = useParams<{ id: string }>()
   const run = useRun(id)
@@ -168,6 +172,7 @@ export function ThreadView({
   currentThread = thread,
   history,
   onMarkedUnread,
+  embedded = false,
 }: {
   run: ApiRun
   thread: ThreadState
@@ -177,6 +182,13 @@ export function ThreadView({
    *  auto-mark-read effect. Optional: every test that drives this view with a fixture, and the
    *  header's other three tabs, have no such effect to suppress. */
   onMarkedUnread?: (runId: string) => void
+  /** The workspace column (spec `2026-10-07-task-workspace` §5.1). The ONE run header belongs to
+   *  the workspace, so a column renders the thread body only — transcript, docks, review panel and
+   *  composer, all unchanged. The header's two Session-only slots (the plan mirror and the
+   *  continuation engine pills) are NOT lifted out: both are rendered again by the docks inside
+   *  this very column, and `useContinueAction().pills` is a fresh element every render, so
+   *  publishing it upward would re-render the workspace on every thread frame. */
+  embedded?: boolean
 }) {
   const footer = threadFooter(run.status, run.error, isAwaitingAnswer(run))
   const markedUnread = useCallback(() => onMarkedUnread?.(run.id), [onMarkedUnread, run.id])
@@ -309,6 +321,7 @@ export function ThreadView({
 
   return (
     <div data-route="task-thread" data-run-id={run.id} className="flex min-h-full flex-col">
+      {embedded ? null : (
       <RunHeader
         run={run}
         planTally={planTally}
@@ -318,6 +331,7 @@ export function ThreadView({
         // exactly what the next composer submission sends — no second, drifting engine state.
         continuationEngine={continuable ? continueAction.pills : undefined}
       />
+      )}
 
       {/* Row spacing lives on each thread row (pb-2.5, both render modes measure alike);
           this gap only separates the sections — rows, empty state, footer, review panel. */}

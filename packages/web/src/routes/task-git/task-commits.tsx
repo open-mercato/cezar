@@ -12,6 +12,7 @@ import { Diff, type DiffMode } from '@/components/diff'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { Button } from '@/components/ui/button'
 import { useIsDesktop } from '@/lib/use-desktop'
+import { cn } from '@/lib/utils'
 
 import { isRunActive } from '../task-thread/run-actions'
 import { RunHeader } from '../task-thread/run-header'
@@ -24,6 +25,10 @@ import { DiffViewToggles } from './diff-controls'
  * at `/tasks/:id/commits/:sha` through the SAME `<Diff>` facade the Changes tab and repo commit
  * view use. Mirrors the repo Commits segment, scoped to the task worktree.
  */
+/** NOTE: no longer mounted by the router — `/tasks/:id/commits` renders the workspace
+ *  (`routes/task-workspace/task-workspace.tsx`), which embeds `CommitsView` as a column. Kept as
+ *  the standalone entry point its own suite drives, and as the revert target while the
+ *  workspace is new; delete both together once the workspace has settled. */
 export function TaskCommitsRoute() {
   const { id } = useParams<{ id: string }>()
   const run = useRun(id)
@@ -33,15 +38,16 @@ export function TaskCommitsRoute() {
   return <CommitsView run={run.data} />
 }
 
-function CommitsView({ run }: { run: ApiRun }) {
+/** `embedded` drops the run header for a workspace column — see `FilesView`. */
+export function CommitsView({ run, embedded = false }: { run: ApiRun; embedded?: boolean }) {
   const { sha } = useParams<{ sha: string }>()
   const commits = useRunCommits(run.id, isRunActive(run.status))
 
   return (
     <div data-route="task-commits" className="flex min-h-full flex-col">
-      <RunHeader run={run} tab="commits" />
+      {embedded ? null : <RunHeader run={run} tab="commits" />}
       {sha ? (
-        <CommitDiffView runId={run.id} sha={sha} />
+        <CommitDiffView runId={run.id} sha={sha} embedded={embedded} />
       ) : commits.isPending ? (
         <p data-slot="commits-loading" className="px-4 py-6 text-center text-xs text-soft-foreground md:px-6">
           Loading commits…
@@ -81,7 +87,16 @@ function CommitsView({ run }: { run: ApiRun }) {
   )
 }
 
-function CommitDiffView({ runId, sha }: { runId: string; sha: string }) {
+function CommitDiffView({
+  runId,
+  sha,
+  embedded,
+}: {
+  runId: string
+  sha: string
+  /** Shortens the diff's sticky pin for a workspace column — see `CommitsView`. */
+  embedded: boolean
+}) {
   const commit = useRunCommit(runId, sha)
   const desktop = useIsDesktop()
   const [mode, setMode] = useState<DiffMode>('unified')
@@ -136,7 +151,7 @@ function CommitDiffView({ runId, sha }: { runId: string; sha: string }) {
               subtitle="This commit carries no diff of its own — a merge commit's changes live on the commits it merged."
             />
           ) : (
-            <div className="px-4 py-4 [--diff-sticky-top:10rem] md:px-6">
+            <div className={cn('px-4 py-4 md:px-6', embedded ? '[--diff-sticky-top:2.5rem]' : '[--diff-sticky-top:10rem]')}>
               <Diff files={commit.data.files} mode={effectiveMode} wrap={effectiveWrap} className="min-w-0" />
             </div>
           )}

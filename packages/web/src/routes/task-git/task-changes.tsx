@@ -11,6 +11,7 @@ import { Diff, type DiffHandle, type DiffMode, type DiffRevealTarget } from '@/c
 import { toast } from '@/components/ui/toaster'
 import { gitActionPolicy, type GitActionId } from '@/lib/git-actions'
 import { useIsDesktop } from '@/lib/use-desktop'
+import { cn } from '@/lib/utils'
 
 import { useDiffComments } from '../task-thread/diff-comments'
 import { useContinueAction } from '../task-thread/follow-up-engine'
@@ -36,6 +37,10 @@ import { GitToolbar } from './git-toolbar'
  * tree — the per-file sticky headers carry the file names, and a 360px phone has no honest
  * room for a second column.
  */
+/** NOTE: no longer mounted by the router — `/tasks/:id/changes` renders the workspace
+ *  (`routes/task-workspace/task-workspace.tsx`), which embeds `ChangesView` as a column. Kept as
+ *  the standalone entry point its own suite drives, and as the revert target while the
+ *  workspace is new; delete both together once the workspace has settled. */
 export function TaskChangesRoute() {
   const { id } = useParams<{ id: string }>()
   const run = useRun(id)
@@ -45,7 +50,8 @@ export function TaskChangesRoute() {
   return <ChangesView run={run.data} />
 }
 
-function ChangesView({ run }: { run: ApiRun }) {
+/** `embedded` drops the run header for a workspace column — see `FilesView`. */
+export function ChangesView({ run, embedded = false }: { run: ApiRun; embedded?: boolean }) {
   const health = useHealth()
   // The remote that decides whether Push is offered comes from the PROJECT-scoped `/repo`, not
   // from `/api/health.repo`: health is bound to the boot folder, so a cezar booted outside a git
@@ -219,7 +225,7 @@ function ChangesView({ run }: { run: ApiRun }) {
 
   return (
     <div data-route="task-changes" className="flex min-h-full flex-col">
-      <RunHeader run={run} tab="changes" />
+      {embedded ? null : <RunHeader run={run} tab="changes" />}
 
       <GitToolbar
         bar={bar}
@@ -262,7 +268,7 @@ function ChangesView({ run }: { run: ApiRun }) {
       ) : (
         // The run header scrolls away on mobile; only desktop reserves space for it.
         <div
-          className="flex min-h-0 flex-1 items-start gap-5 px-4 py-4 [--diff-sticky-top:0px] md:[--diff-sticky-top:10rem] md:px-6"
+          className={cn('flex min-h-0 flex-1 items-start gap-5 px-4 py-4 [--diff-sticky-top:0px] md:px-6', embedded ? 'md:[--diff-sticky-top:2.5rem]' : 'md:[--diff-sticky-top:10rem]')}
           style={
             {
               '--changes-dock': `${showDock ? dockHeight : 0}px`,
@@ -278,7 +284,7 @@ function ChangesView({ run }: { run: ApiRun }) {
               inside it from chaining into the diff once it bottoms out. */}
           <aside
             data-slot="changes-tree-pane"
-            className="sticky top-40 hidden max-h-[calc(100dvh_-_var(--diff-sticky-top)_-_1rem)] w-60 pb-[var(--changes-dock,0px)] shrink-0 overflow-y-auto overscroll-contain md:block lg:w-72"
+            className={cn('sticky', embedded ? 'top-10' : 'top-40', 'hidden max-h-[calc(100dvh_-_var(--diff-sticky-top)_-_1rem)] w-60 pb-[var(--changes-dock,0px)] shrink-0 overflow-y-auto overscroll-contain md:block lg:w-72')}
           >
             <ChangesTree root={tree} selected={selected} onSelect={selectFile} commentCounts={commentCounts} />
           </aside>

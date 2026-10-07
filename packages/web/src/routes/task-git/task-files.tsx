@@ -6,6 +6,7 @@ import { ApiError } from '@/api/client'
 import { useRun, useRunFile } from '@/api/queries'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
+import { cn } from '@/lib/utils'
 
 import { RunHeader } from '../task-thread/run-header'
 import { FilePreview } from './file-preview'
@@ -22,6 +23,10 @@ import { GitTabLoadError, GitTabLoading } from './git-tab-loading'
  * `md` the columns stack (tree first) — unlike Changes, the tree cannot be hidden on phones
  * because it is the only way to pick a file.
  */
+/** NOTE: no longer mounted by the router — `/tasks/:id/files` renders the workspace
+ *  (`routes/task-workspace/task-workspace.tsx`), which embeds `FilesView` as a column. Kept as
+ *  the standalone entry point its own suite drives, and as the revert target while the
+ *  workspace is new; delete both together once the workspace has settled. */
 export function TaskFilesRoute() {
   const { id } = useParams<{ id: string }>()
   const run = useRun(id)
@@ -31,7 +36,10 @@ export function TaskFilesRoute() {
   return <FilesView run={run.data} />
 }
 
-function FilesView({ run }: { run: ApiRun }) {
+/** `embedded` is the workspace column (spec `2026-10-07-task-workspace` §5.1): the ONE run header
+ *  belongs to the workspace, so a column renders this view's body only. Everything else — the
+ *  tree, the preview, the 409 empty state — is the same component, not a copy. */
+export function FilesView({ run, embedded = false }: { run: ApiRun; embedded?: boolean }) {
   // The root listing doubles as the "is there a worktree at all?" probe — a 409 here is the
   // server's answer for the whole view, same stance as the Changes tab's /changes 409.
   const root = useRunFile(run.id, '')
@@ -41,7 +49,7 @@ function FilesView({ run }: { run: ApiRun }) {
 
   return (
     <div data-route="task-files" className="flex min-h-full flex-col">
-      <RunHeader run={run} tab="files" />
+      {embedded ? null : <RunHeader run={run} tab="files" />}
 
       {root.isPending ? (
         <p data-slot="files-loading" className="px-4 py-6 text-center text-xs text-soft-foreground md:px-6">
@@ -56,7 +64,9 @@ function FilesView({ run }: { run: ApiRun }) {
           subtitle={root.error.message}
         />
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col items-stretch gap-5 px-4 py-4 [--diff-sticky-top:7rem] md:flex-row md:items-start md:px-6">
+        // The pin the sticky tree hangs from is the height of the chrome ABOVE it, so a column
+        // (whose chrome is one short header, not the whole run header) needs its own value.
+        <div className={cn('flex min-h-0 flex-1 flex-col items-stretch gap-5 px-4 py-4 md:flex-row md:items-start md:px-6', embedded ? '[--diff-sticky-top:2.5rem]' : '[--diff-sticky-top:7rem]')}>
           {/* Sticky beside a long preview on desktop, with its own scroller so a deep tree scrolls
               without dragging the preview along; first in the stack (and no scroller of its own) on
               phones, where the page IS the pane. The cap reads the same var the pin is set from, so
