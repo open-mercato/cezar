@@ -44,6 +44,7 @@ import { z } from 'zod';
 import {
   PROMPT_TEMPLATE_TEXT_MAX,
   setWorkspaceUiStateInputSchema,
+  setWorkspaceConfigInputSchema,
   type GroupResponse,
   type GroupVariant,
   type PickVariantResponse,
@@ -978,6 +979,14 @@ const BRANDING_LOGO_TYPES = {
   'image/svg+xml': { ext: '.svg', signature: (b: Buffer) => isSafeBrandSvg(b.toString('utf8')) },
 } as const;
 const BRANDING_LOGO_EXTENSIONS = Object.values(BRANDING_LOGO_TYPES).map(({ ext }) => ext);
+const BRANDING_LOGO_FILE = 'branding-logo';
+
+function brandingLogoType(bytes: Buffer): [string, (typeof BRANDING_LOGO_TYPES)[keyof typeof BRANDING_LOGO_TYPES]] | null {
+  for (const [mime, type] of Object.entries(BRANDING_LOGO_TYPES)) {
+    if (type.signature(bytes)) return [mime, type];
+  }
+  return null;
+}
 
 function isSafeBrandSvg(svg: string): boolean {
   const checked = svg.replace(/xmlns=(['"])http:\/\/www\.w3\.org\/2000\/svg\1/i, '');
@@ -986,11 +995,15 @@ function isSafeBrandSvg(svg: string): boolean {
 }
 
 function logoAssetUrl(): string | null {
-  for (const ext of BRANDING_LOGO_EXTENSIONS) {
-    const path = join(cezarHomeDir(), `branding-logo${ext}`);
+  for (const filename of [BRANDING_LOGO_FILE, ...BRANDING_LOGO_EXTENSIONS.map((ext) => `${BRANDING_LOGO_FILE}${ext}`)]) {
+    const path = join(cezarHomeDir(), filename);
     if (!existsSync(path)) continue;
-    const digest = createHash('sha256').update(readFileSync(path)).digest('hex').slice(0, 12);
-    return `/api/v1/workspace/branding-logo?v=${digest}`;
+    try {
+      const bytes = readFileSync(path);
+      if (!brandingLogoType(bytes)) continue;
+      const digest = createHash('sha256').update(bytes).digest('hex').slice(0, 12);
+      return `/api/v1/workspace/branding-logo?v=${digest}`;
+    } catch { /* unreadable logo degrades to no logo */ }
   }
   return null;
 }
@@ -3119,7 +3132,7 @@ export function createApp(deps: ServerDeps) {
     // window exists (the card renders `sampling…` and follows up once ~2.5 s later).
     .get('/workspace/host-usage', async (c) => c.json(hostSampler.sampleHostUsage()))
 
-    .put('/workspace/config', jsonZodValidator(() => workspaceConfigUpdateSchema), async (c) => {
+    .put('/workspace/config', jsonZodValidator(() => setWorkspaceConfigInputSchema), async (c) => {
       const parsed = { data: c.req.valid('json') };
       const { browseRoot, projectsDir, skillsAutoUpdate, composerDefaults, resources, agentDefaults, branding } = parsed.data;
       for (const [configuredRoot, create] of [
@@ -3212,9 +3225,12 @@ export function createApp(deps: ServerDeps) {
     .use('/workspace/branding-logo', bodyLimit({ maxSize: BRANDING_LOGO_MAX_BYTES + 64 * 1024 }))
 
     .get('/workspace/branding-logo', async (c) => {
-      for (const [mime, { ext }] of Object.entries(BRANDING_LOGO_TYPES)) {
+      for (const filename of [BRANDING_LOGO_FILE, ...BRANDING_LOGO_EXTENSIONS.map((ext) => `${BRANDING_LOGO_FILE}${ext}`)]) {
         try {
-          const bytes = await readFile(join(cezarHomeDir(), `branding-logo${ext}`));
+          const bytes = await readFile(join(cezarHomeDir(), filename));
+          const imageType = brandingLogoType(bytes);
+          if (!imageType) continue;
+          const [mime] = imageType;
           return c.body(new Uint8Array(bytes), 200, { 'content-type': mime, 'cache-control': 'public, max-age=31536000, immutable', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox" });
         } catch { /* check the next supported image */ }
       }
@@ -3230,7 +3246,7 @@ export function createApp(deps: ServerDeps) {
       const bytes = Buffer.from(await file.arrayBuffer());
       if (!imageType.signature(bytes)) return c.json({ error: 'File contents do not match a supported image format' }, 400);
       await mkdir(cezarHomeDir(), { recursive: true, mode: 0o700 });
-      const path = join(cezarHomeDir(), `branding-logo${imageType.ext}`);
+      const path = join(cezarHomeDir(), BRANDING_LOGO_FILE);
       const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
       try {
         await writeFile(tmp, bytes, { mode: 0o600, flag: 'wx' });
@@ -3239,11 +3255,11 @@ export function createApp(deps: ServerDeps) {
         await unlink(tmp).catch(() => {});
         throw error;
       }
-      await Promise.all(BRANDING_LOGO_EXTENSIONS.filter((ext) => ext !== imageType.ext).map((ext) => unlink(join(cezarHomeDir(), `branding-logo${ext}`)).catch(() => {})));
       return c.json(workspaceBrandingLogoResponseSchema.parse({ logoUrl: logoAssetUrl() }));
     })
     .delete('/workspace/branding-logo', async (c) => {
-      await Promise.all(BRANDING_LOGO_EXTENSIONS.map((ext) => unlink(join(cezarHomeDir(), `branding-logo${ext}`)).catch(() => {})));
+      await Promise.all([BRANDING_LOGO_FILE, ...BRANDING_LOGO_EXTENSIONS.map((ext) => `${BRANDING_LOGO_FILE}${ext}`)]
+        .map((filename) => unlink(join(cezarHomeDir(), filename)).catch(() => {})));
       return c.json(workspaceBrandingLogoResponseSchema.parse({ logoUrl: null }));
     })
 
@@ -3277,49 +3293,6 @@ export function createApp(deps: ServerDeps) {
   // Partial updates only — absent keys stay untouched. Bounds mirror the
   // workspace schema (src/workspace/config.ts, step 1.2) exactly, so a value
   // this route accepts can never be degraded away by the next load's `.catch`.
-  const workspaceConfigUpdateSchema = z.object({
-    branding: z.object({
-      name: z.string().trim().min(1).max(80).nullable().optional(),
-    }).optional(),
-    browseRoot: z.string().trim().min(1).max(4096).optional(),
-    projectsDir: z.string().trim().min(1).max(4096).optional(),
-    skillsAutoUpdate: z.boolean().nullable().optional(),
-    composerDefaults: z
-      .object({
-        autonomous: z.boolean().nullable().optional(),
-        worktree: z.boolean().nullable().optional(),
-      })
-      .optional(),
-    resources: z
-      .object({
-        maxParallel: z.number().int().min(1).max(16).optional(),
-        maxMonitoringSessions: z.number().int().min(0).max(16).optional(),
-        idleTimeoutMinutes: z.number().int().min(0).max(1440).nullable().optional(),
-        monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().optional(),
-        autoResumeOnUsageLimit: z.boolean().optional(),
-        memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
-        worktreeRetentionDefault: z.number().int().min(0).max(1000).optional(),
-      })
-      .optional(),
-    // Bounds mirror `src/workspace/config.ts`, so a value this accepts is never degraded away by
-    // the next load's `.catch`. `null` clears a key back to "no opinion".
-    agentDefaults: z
-      .object({
-        runner: z.enum(PROVIDER_IDS).nullable().optional(),
-        models: z
-          .object({
-            claude: z.string().trim().min(1).max(200).nullable().optional(),
-            codex: z.string().trim().min(1).max(200).nullable().optional(),
-            opencode: z.string().trim().min(1).max(200).nullable().optional(),
-            cursor: z.string().trim().min(1).max(200).nullable().optional(),
-            pi: z.string().trim().min(1).max(200).nullable().optional(),
-            junie: z.string().trim().min(1).max(200).nullable().optional(),
-            copilot: z.string().trim().min(1).max(200).nullable().optional(),
-          })
-          .optional(),
-      })
-      .optional(),
-  });
   // ---- chained family: filesystem browse (workspace-level) ----
   const fsBrowseRoutes = new Hono<ProjectApiEnv>()
     .get(
