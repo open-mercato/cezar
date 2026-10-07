@@ -1,11 +1,11 @@
-import { MonitorIcon, MoonIcon, SunIcon } from 'lucide-react'
+import { MonitorIcon, MoonIcon, SunIcon, UploadIcon } from 'lucide-react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ComponentType, ReactNode, SVGProps } from 'react'
 
 import { useProjects, useWorkspaceConfig, workspaceQueryKeys } from '@/api/queries'
 import type { WorkspaceConfigResponse } from '@open-mercato/cezar-api-client'
-import { putWorkspaceConfig } from '@/api/client'
+import { deleteWorkspaceBrandingLogo, putWorkspaceConfig, uploadWorkspaceBrandingLogo } from '@/api/client'
 import type { SetWorkspaceConfigInput } from '@open-mercato/cezar-api-client'
 import { useAppearance } from '@/components/appearance-provider'
 import { useTheme } from '@/components/theme-provider'
@@ -157,6 +157,7 @@ function ProjectOrderField() {
 function BrandingFields() {
   const config = useWorkspaceConfig()
   const queryClient = useQueryClient()
+  const logoInput = useRef<HTMLInputElement>(null)
   const [logoDraft, setLogoDraft] = useState<{ file: File; url: string } | null>(null)
   useEffect(() => () => { if (logoDraft) URL.revokeObjectURL(logoDraft.url) }, [logoDraft])
   const save = useMutation({
@@ -166,16 +167,7 @@ function BrandingFields() {
   })
   const upload = useMutation({
     mutationFn: async (file: File | null) => {
-      if (!file) {
-        const response = await fetch('/api/v1/workspace/branding-logo', { method: 'DELETE' })
-        if (!response.ok) throw new Error('Could not remove logo')
-        return null
-      }
-      const form = new FormData()
-      form.set('file', file)
-      const response = await fetch('/api/v1/workspace/branding-logo', { method: 'POST', body: form })
-      if (!response.ok) throw new Error((await response.json() as { error?: string }).error ?? 'Could not upload logo')
-      return (await response.json() as { logoUrl: string }).logoUrl
+      return file ? uploadWorkspaceBrandingLogo(file) : deleteWorkspaceBrandingLogo()
     },
     onSuccess: (logoUrl) => {
       const current = queryClient.getQueryData<WorkspaceConfigResponse>(workspaceQueryKeys.config)
@@ -209,14 +201,22 @@ function BrandingFields() {
       </div>
     </Field>
     <Field title="Logo" hint="PNG, JPEG, WebP, GIF, AVIF, or safe SVG up to 2 MB. Stored on this machine and shared by its browsers.">
-      <div className="flex flex-wrap items-center gap-3">
-        {logoDraft ? <img src={logoDraft.url} alt="Logo preview" className="size-10 rounded object-contain" /> : branding?.logoUrl ? <img src={branding.logoUrl} alt="Current instance logo" className="size-10 rounded object-contain" /> : null}
-        <input data-slot="branding-logo" aria-label="Upload logo" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif,image/svg+xml" disabled={upload.isPending}
+      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card p-3">
+        {logoDraft ? <img src={logoDraft.url} alt="Logo preview" className="size-10 rounded-md border border-border bg-background object-contain p-1" /> : branding?.logoUrl ? <img src={branding.logoUrl} alt="Current instance logo" className="size-10 rounded-md border border-border bg-background object-contain p-1" /> : <span aria-hidden="true" className="size-10 rounded-md border border-dashed border-border bg-background" />}
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium text-foreground">{logoDraft?.file.name ?? (branding?.logoUrl ? 'Current logo' : 'No logo selected')}</p>
+          <p className="text-xs text-muted-foreground">Choose an image to preview it before saving.</p>
+        </div>
+        <input ref={logoInput} data-slot="branding-logo" aria-label="Upload logo" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif,image/svg+xml" disabled={upload.isPending} hidden
           onChange={(event) => {
             const file = event.currentTarget.files?.[0]
             if (file) setLogoDraft({ file, url: URL.createObjectURL(file) })
             event.currentTarget.value = ''
-          }} className="max-w-full text-sm" />
+          }} />
+        <Button type="button" variant="outline" size="sm" disabled={!branding || upload.isPending} onClick={() => logoInput.current?.click()}>
+          <UploadIcon aria-hidden="true" className="size-3.5" />
+          Choose logo
+        </Button>
         {logoDraft ? <>
           <Button type="button" size="sm" disabled={upload.isPending} onClick={() => upload.mutate(logoDraft.file)}>Save logo</Button>
           <Button type="button" variant="outline" size="sm" disabled={upload.isPending} onClick={() => setLogoDraft(null)}>Cancel</Button>

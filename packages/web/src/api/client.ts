@@ -1,4 +1,4 @@
-import { trackerReadScope } from '@open-mercato/cezar-api-client'
+import { trackerReadScope, resolveApiUrl, workspaceBrandingLogoResponseSchema } from '@open-mercato/cezar-api-client'
 import type { TrackerAutomationOptions } from '@open-mercato/cezar-api-client'
 import { trackerWatchHandleSchema, trackerWatchSnapshotSchema, type TrackerWatchInput } from "@open-mercato/cezar-api-client"
 import type {
@@ -2082,7 +2082,9 @@ export async function getWorkspaceConfig(opts?: ReadOptions): Promise<WorkspaceC
     ...answer,
     // Brand settings are additive; a cockpit served against an older cezar build falls back
     // cleanly to its built-in identity instead of failing during shell render.
-    branding: answer.branding ?? { name: 'cezar', logoUrl: null },
+    branding: answer.branding
+      ? { ...answer.branding, logoUrl: answer.branding.logoUrl ? resolveApiUrl(answer.branding.logoUrl) : null }
+      : { name: 'cezar', logoUrl: null },
     agentDefaults: answer.agentDefaults ?? {},
     resources: {
       ...answer.resources,
@@ -2093,6 +2095,29 @@ export async function getWorkspaceConfig(opts?: ReadOptions): Promise<WorkspaceC
         : answer.resources.idleTimeoutMinutes,
     },
   }
+}
+
+/** Upload the workspace logo through the shared API boundary (base URL, credentials, and errors). */
+export async function uploadWorkspaceBrandingLogo(file: File): Promise<string | null> {
+  const form = new FormData()
+  form.set('file', file)
+  const response = await send('/workspace/branding-logo', { method: 'POST', body: form })
+  const body = await response.text()
+  if (!response.ok) throw errorFor(response.status, response.statusText, body)
+  const parsed = parseJson(body)
+  const result = workspaceBrandingLogoResponseSchema.safeParse(parsed)
+  if (!result.success) throw new ApiError(response.status, 'the cezar server answered /workspace/branding-logo with an unexpected body')
+  return result.data.logoUrl ? resolveApiUrl(result.data.logoUrl) : null
+}
+
+/** Remove the workspace logo through the shared API boundary. */
+export async function deleteWorkspaceBrandingLogo(): Promise<string | null> {
+  const response = await send('/workspace/branding-logo', { method: 'DELETE' })
+  const body = await response.text()
+  if (!response.ok) throw errorFor(response.status, response.statusText, body)
+  const result = workspaceBrandingLogoResponseSchema.safeParse(parseJson(body))
+  if (!result.success) throw new ApiError(response.status, 'the cezar server answered /workspace/branding-logo with an unexpected body')
+  return result.data.logoUrl ? resolveApiUrl(result.data.logoUrl) : null
 }
 
 /**
