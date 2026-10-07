@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,7 +19,7 @@ const MOCK = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scrip
 
 let cwd: string;
 beforeEach(() => {
-  cwd = mkdtempSync(join(tmpdir(), 'cez-copilot-run-'));
+  cwd = realpathSync(mkdtempSync(join(tmpdir(), 'cez-copilot-run-')));
 });
 afterEach(() => {
   rmSync(cwd, { recursive: true, force: true });
