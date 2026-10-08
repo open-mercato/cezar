@@ -45,14 +45,19 @@ export type PtyBinding = { available: true; module: PtyModule } | PtyUnavailable
 
 let cached: Promise<PtyBinding> | undefined;
 
+/** How the binding is reached. A seam, not a strategy: the only reason it exists is that the
+ *  failure paths below — not installed, no `spawn`, a binary that will not load — are the whole
+ *  point of this module and cannot be exercised against a machine where the real package works. */
+export type PtyImporter = (specifier: string) => Promise<unknown>;
+
 /**
  * Resolve the PTY binding once per process.
  *
  * Cached as the PROMISE, not the result: two columns opening a terminal in the same tick must not
  * race two dynamic imports of a native module.
  */
-export function loadPty(): Promise<PtyBinding> {
-  cached ??= importPty();
+export function loadPty(importer?: PtyImporter): Promise<PtyBinding> {
+  cached ??= importPty(importer);
   return cached;
 }
 
@@ -66,12 +71,12 @@ export function setPtyBindingForTest(binding: PtyBinding): void {
   cached = Promise.resolve(binding);
 }
 
-async function importPty(): Promise<PtyBinding> {
+async function importPty(importer?: PtyImporter): Promise<PtyBinding> {
   try {
     // The specifier is a variable so a bundler cannot try to resolve an optional dependency at
     // build time — the same reason the cockpit's own optional imports are written this way.
     const specifier = '@lydell/node-pty';
-    const imported: unknown = await import(specifier);
+    const imported: unknown = await (importer ? importer(specifier) : import(specifier));
     const candidate = pickModule(imported);
     if (!candidate) {
       return { available: false, reason: 'The terminal backend loaded but exposes no spawn().' };

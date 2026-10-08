@@ -105,6 +105,44 @@ export function TerminalPane({
       fitRef.current()
       setScreenReady(true)
 
+      /**
+       * Copy and paste (spec §6).
+       *
+       * xterm draws its own selection, which the browser's native copy cannot see, so the
+       * shortcuts have to be bound explicitly. The bindings follow terminal convention rather
+       * than document convention, and the reason is Ctrl-C: in a terminal that is the INTERRUPT,
+       * so plain Ctrl-C must keep falling through to the shell. Copy is therefore Cmd-C on macOS
+       * and Ctrl-Shift-C elsewhere — and even then only when there is a selection, so a stray
+       * Cmd-C on an empty screen still interrupts.
+       */
+      term.attachCustomKeyEventHandler((event) => {
+        if (event.type !== 'keydown') return true
+        if (!event.metaKey && !event.ctrlKey) return true
+        const key = event.key.toLowerCase()
+        // `metaKey` is macOS's modifier; `shiftKey` is the Ctrl-Shift- form everywhere else.
+        const clipboardChord = event.metaKey || event.shiftKey
+        if (!clipboardChord) return true
+        if (key === 'c' && term.hasSelection()) {
+          void navigator.clipboard?.writeText(term.getSelection()).catch(() => {})
+          return false
+        }
+        if (key === 'v') {
+          void navigator.clipboard
+            ?.readText()
+            .then((text) => {
+              // Straight to the PTY, not through `onData`: the shell is what interprets a paste,
+              // including a multi-line one, exactly as it would from any other terminal.
+              if (text) return writeRunTerminal(runId, session.id, text)
+              return undefined
+            })
+            // A browser that refuses clipboard read (no permission, an insecure origin) leaves
+            // the user their own Cmd-V through the textarea; nothing to report.
+            .catch(() => {})
+          return false
+        }
+        return true
+      })
+
       term.onData((data) => {
         void writeRunTerminal(runId, session.id, data).catch(() => {})
       })
