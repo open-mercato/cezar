@@ -20,7 +20,7 @@ const HEALTH: HealthResponse = {
   forge: null,
   capabilities: {
     localHandoff: true,
-    terminal: true,
+    terminal: true, preview: true,
     followups: true,
     singleProject: false,
     automations: false,

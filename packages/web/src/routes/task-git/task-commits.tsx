@@ -12,6 +12,7 @@ import { Diff, type DiffMode } from '@/components/diff'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { Button } from '@/components/ui/button'
 import { useIsDesktop } from '@/lib/use-desktop'
+import { useRememberedState } from '@/lib/view-memory'
 import { cn } from '@/lib/utils'
 
 import { isRunActive } from '../task-thread/run-actions'
@@ -38,16 +39,41 @@ export function TaskCommitsRoute() {
   return <CommitsView run={run.data} />
 }
 
-/** `embedded` drops the run header for a workspace column — see `FilesView`. */
-export function CommitsView({ run, embedded = false }: { run: ApiRun; embedded?: boolean }) {
-  const { sha } = useParams<{ sha: string }>()
+/**
+ * `embedded` drops the run header for a workspace column — see `FilesView`.
+ *
+ * `stateKey` makes the SELECTION the column's own (spec §5.4: each layout's view state comes
+ * back when you switch to it). Without it the selected commit is the URL's, which two Commits
+ * columns cannot each have — they would show the same diff, and switching layouts would not
+ * restore what each was looking at. The standalone route passes no key and keeps its URL, so a
+ * commit link stays shareable.
+ */
+export function CommitsView({
+  run,
+  embedded = false,
+  stateKey,
+}: {
+  run: ApiRun
+  embedded?: boolean
+  stateKey?: string
+}) {
+  const { sha: shaFromUrl } = useParams<{ sha: string }>()
+  const [picked, setPicked] = useRememberedState<string | null>(stateKey, null)
+  const sha = stateKey === undefined ? shaFromUrl : (picked ?? undefined)
   const commits = useRunCommits(run.id, isRunActive(run.status))
 
   return (
     <div data-route="task-commits" className="flex min-h-full flex-col">
       {embedded ? null : <RunHeader run={run} tab="commits" />}
       {sha ? (
-        <CommitDiffView runId={run.id} sha={sha} embedded={embedded} />
+        <CommitDiffView
+          runId={run.id}
+          sha={sha}
+          embedded={embedded}
+          // In a column the selection is the column's, so "All commits" clears it rather than
+          // navigating — a URL change here would move every other column's view too.
+          onBack={stateKey === undefined ? undefined : () => setPicked(null)}
+        />
       ) : commits.isPending ? (
         <p data-slot="commits-loading" className="px-4 py-6 text-center text-xs text-soft-foreground md:px-6">
           Loading commits…
@@ -81,6 +107,7 @@ export function CommitsView({ run, embedded = false }: { run: ApiRun; embedded?:
             shaLabel: commit.sha.slice(0, 8),
             href: `/tasks/${run.id}/commits/${commit.sha}`,
           }))}
+          onSelect={stateKey === undefined ? undefined : setPicked}
         />
       )}
     </div>
@@ -91,11 +118,14 @@ function CommitDiffView({
   runId,
   sha,
   embedded,
+  onBack,
 }: {
   runId: string
   sha: string
   /** Shortens the diff's sticky pin for a workspace column — see `CommitsView`. */
   embedded: boolean
+  /** Clear the column's own selection instead of navigating — see the call site. */
+  onBack?: () => void
 }) {
   const commit = useRunCommit(runId, sha)
   const desktop = useIsDesktop()
@@ -109,12 +139,19 @@ function CommitDiffView({
   return (
     <section data-slot="task-commit" data-sha={sha} className="mx-auto flex min-h-0 w-full max-w-[var(--measure)] flex-1 flex-col">
       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 border-b border-border px-4 py-2 md:px-6">
-        <Button asChild variant="ghost" size="sm" data-slot="commit-back">
-          <Link to={`/tasks/${runId}/commits`}>
+        {onBack ? (
+          <Button variant="ghost" size="sm" data-slot="commit-back" onClick={onBack}>
             <ArrowLeftIcon aria-hidden="true" />
             All commits
-          </Link>
-        </Button>
+          </Button>
+        ) : (
+          <Button asChild variant="ghost" size="sm" data-slot="commit-back">
+            <Link to={`/tasks/${runId}/commits`}>
+              <ArrowLeftIcon aria-hidden="true" />
+              All commits
+            </Link>
+          </Button>
+        )}
         {commit.data ? <DiffStatLabel stat={commit.data.stat} /> : null}
         <span className="ml-auto hidden items-center gap-1 md:flex">
           <DiffViewToggles mode={mode} wrap={wrap} onModeChange={setMode} onWrapChange={setWrap} />

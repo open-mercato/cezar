@@ -49,7 +49,7 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: { kind: 'github', available: true },
-  capabilities: { localHandoff: true, terminal: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: true, preview: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
 }
 
 const jsonResponse = (body: unknown, status = 200) =>
@@ -292,7 +292,7 @@ describe('the task workspace', () => {
 
     await waitFor(() => expect(cardNames()).toEqual(['Debug']))
     // …and it survives a reload of the very same task.
-    expect(savedLayouts('r1').layouts.map((layout) => layout.name)).toEqual(['Debug'])
+    await waitFor(() => expect(savedLayouts('r1').layouts.map((layout) => layout.name)).toEqual(['Debug']))
   })
 
   it('renames a card on a double-click, which is the gesture the spec names', async () => {
@@ -320,8 +320,49 @@ describe('the task workspace', () => {
     pickView('Pliki', 'add')
     await waitFor(() => expect(columnViews()).toEqual(['session', 'files']))
 
-    const saved = savedLayouts('r1')
-    expect(saved.layouts[0]!.columns.map((column) => column.view)).toEqual(['session', 'files'])
+    // The save is debounced (spec §5.3 — a divider drag must not be one write per pointermove),
+    // so this waits for it rather than sampling the instant after the click.
+    await waitFor(() =>
+      expect(savedLayouts('r1').layouts[0]!.columns.map((column) => column.view)).toEqual([
+        'session',
+        'files',
+      ]),
+    )
+  })
+
+  it('coalesces a divider drag into one save', async () => {
+    // Spec §5.3 names high-frequency divider movement as the thing NOT to persist per event.
+    // Without a debounce each `pointermove` was its own PUT, and each PUT an atomic file write
+    // on the host.
+    const puts: string[] = []
+    stubFetch()
+    const realFetch = globalThis.fetch as unknown as (...args: never[]) => Promise<Response>
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+        if ((init.method ?? 'GET') === 'PUT' && String(input).endsWith('/layouts')) {
+          puts.push(String(init.body ?? ''))
+        }
+        return realFetch(input as never, init as never)
+      }),
+    )
+    renderWorkspace()
+    await ready()
+
+    await openColumnMenu()
+    pickView('Zmiany', 'add')
+    await waitFor(() => expect(columnViews()).toEqual(['session', 'changes']))
+    await waitFor(() => expect(puts.length).toBeGreaterThan(0))
+    const afterAdd = puts.length
+
+    const divider = dividers()[0]!
+    for (let step = 0; step < 12; step += 1) {
+      fireEvent.keyDown(divider, { key: 'ArrowRight' })
+    }
+    await waitFor(() => expect(savedLayouts('r1').layouts[0]!.columns[0]!.width).toBeGreaterThan(50))
+
+    // Twelve moves, one save — not twelve.
+    expect(puts.length - afterAdd).toBe(1)
   })
 
   it('opens a deep link as its own card and leaves the saved layouts alone', async () => {
@@ -336,7 +377,7 @@ describe('the task workspace', () => {
     await waitFor(() => expect(cardNames()).toEqual(['Czat', 'Układ 2']))
     expect(columnViews()).toEqual(['changes'])
     // The layout that was already there is untouched (spec §5.3).
-    expect(savedLayouts('r1').layouts[0]!.columns).toEqual([{ view: 'session', width: 100 }])
+    await waitFor(() => expect(savedLayouts('r1').layouts[0]!.columns).toEqual([{ view: 'session', width: 100 }]))
   })
 
   it('recovers a malformed saved workspace to the one-column default without an error', async () => {
@@ -403,6 +444,6 @@ describe('the task workspace', () => {
     await waitFor(() => expect(cardNames()).toEqual(['Tylko r1']))
 
     // r2 has nothing saved, so it must open on its own default — never r1's card (spec §5.3).
-    expect(savedLayouts('r2').layouts.map((layout) => layout.name)).toEqual(['Czat'])
+    await waitFor(() => expect(savedLayouts('r2').layouts.map((layout) => layout.name)).toEqual(['Czat']))
   })
 })

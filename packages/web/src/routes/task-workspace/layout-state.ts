@@ -1,13 +1,13 @@
 /* The task workspace's saved layouts: the pure half (spec `.ai/specs/2026-10-07-task-workspace.md`
- * §5.2 "Layout model", §5.3 "Persistence and URLs"). No React, no side effects beyond
- * `localStorage`, so every transition — add, close, rename, resize, reorder — is table-testable.
- * Same shape `lib/sidebar-width.ts` uses for the other browser-local preference the cockpit keeps.
+ * §5.2 "Layout model", §5.3 "Persistence and URLs"). No React and no I/O at all — every
+ * transition (add, close, rename, resize, reorder) is a plain function of the previous state, so
+ * the whole model is table-testable.
  *
- * Why browser-local (confirmed decision, 2026-10-07): a layout is a property of the SCREEN you are
- * sitting at. The same task opened on a 13" laptop and a 34" ultrawide wants different splits, and
- * one `~/.cezar/config.json` value can only hold one answer. Each host therefore keeps its own
- * layouts — a local cezar and a VPS behind `cezar.example.com` are two origins, which is exactly
- * the per-host boundary the spec asks for, with no sync and no new API surface.
+ * WHERE IT IS STORED is not this module's business and deliberately not its decision: §5.3 says
+ * layouts live "on the Cezar host that owns the task", and `use-workspace-layouts.ts` does that
+ * over `GET/PUT /api/v1/runs/:id/layouts`. What stays here is the repair path — `reviveState`
+ * takes whatever the host sends, including something a later cezar wrote, and returns a workspace
+ * this build can paint.
  */
 
 import { drawerStorageKey } from './drawer-state'
@@ -263,7 +263,7 @@ export function forgetTask(taskId: string): void {
 /* ── Transitions ─────────────────────────────────────────────────────────────────────────────── */
 
 /**
- * Which card a returning visit opens (confirmed decision, 2026-10-07): the one named `Czat` when
+ * Which card a returning visit opens when the stored selection is unreadable: the one named `Czat` when
  * it is still there, otherwise the first. Deliberately not "the last active" — reopening a task
  * should land somewhere predictable, and `Czat` is where the task's own conversation lives.
  */
@@ -400,9 +400,9 @@ export function setColumnBrowser(
 }
 
 /**
- * Close a column, equalizing the survivors — and when it was the last one, close the whole card
- * (confirmed decision, 2026-10-07: "Automatycznie zamyka cały layout"). That is why this returns
- * a whole state rather than a layout: the close can cascade.
+ * Close a column and divide its width equally among the survivors (spec §5.2). Closing the LAST
+ * one empties the card rather than closing it — see the note in the body. Returns a whole state
+ * rather than a layout because the caller only ever holds the state.
  */
 export function closeColumn(state: WorkspaceState, name: string, index: number): WorkspaceState {
   const layout = findLayout(state, name)

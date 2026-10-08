@@ -144,7 +144,9 @@ header: the plan mirror (`planTally`) and the continuation engine pills. Both ar
 by the docks inside that column, and `useContinueAction().pills` is a freshly built element on
 every render, so publishing it upward would re-render the workspace on every transcript frame.
 
-To change the view in a column, use the **hamburger menu** in the header to access the view picker.
+To change the view in a column, use the **menu** in its header. To ADD a column, use the `+` at the
+right edge of the view area (§5.2), which opens the tile picker; the column menu offers the same
+list as a shortcut.
 
 ### 5.2 Layout model
 
@@ -161,14 +163,17 @@ To change the view in a column, use the **hamburger menu** in the header to acce
   > nothing about what each card holds, and the name is editable either way.
 - Available view tiles are `Czat`, `Zmiany`, `Commity`, `Pliki` and `Przeglądarka`. The first four
   are enabled in Milestone 1. `Przeglądarka` remains visible but disabled until built. Terminal is separate.
-- Layout names are unique within the task. **Right-click a card** to open context menu with:
+- Layout names are unique within the task. **Double-click a card to rename it** (§5.2). Right-click
+  opens a context menu carrying the same actions:
   - Rename: Enter edit mode, save on Enter or click outside
   - Close: Remove layout immediately without confirmation
   
   If the entered name already exists, append the next available number (e.g., `Debug 2`).
 - **Layout cards overflow:** If there are >5-6 layouts, show first 5-6 cards + "Pozostali..." dropdown
   listing remaining layouts. Clicking a layout in dropdown activates it.
-- **Closing the last column in a layout:** Automatically closes the entire layout card (no empty state).
+- **Closing the last column in a layout:** leaves the card in place with an empty area and the `+`
+  control to add another view (§5.2); §10 — "A saved layout may intentionally have no columns".
+  Closing the CARD is a separate act, with its own X.
 - Reopening a task: If all layouts were deleted, create a fresh default `Czat` layout.
 
 #### Columns within a layout
@@ -176,7 +181,8 @@ To change the view in a column, use the **hamburger menu** in the header to acce
 - A layout contains 1 to 3 side-by-side columns. Rows and nested splits are not supported.
   The same view may appear in more than one column (duplicates allowed).
 - A new layout starts with one full-width column showing the chosen view.
-- To add another column, click the **hamburger menu button** in any column header and select "Add column".
+- To add another column, click the `+` at the **right edge of the view area**; the column menu
+  offers the same picker.
   It opens the view picker. Selecting a tile adds and activates a column at the right.
 - Column width distribution:
   - 2 columns: 50% each
@@ -198,7 +204,12 @@ To change the view in a column, use the **hamburger menu** in the header to acce
     - View picker (to change view)
     - Close button (to remove column)
   - Close (X) button shortcut
-- **Changing or closing a column: no warning, because nothing is lost.**
+- **Changing a column's view: no warning when it was Czat.** When it was Zmiany and unsent diff
+  comments exist, the last Zmiany column asks first — `Zamknij mimo to` / `Wróć` (§5.2).
+
+  > **IMPLEMENTATION NOTE.** The comments are server state (`putRunDraft`), so they are not in
+  > fact destroyed; the warning is built because §5.2 asks for it, and it is the one place where
+  > literal compliance costs a redundant dialog.
 
   > CORRECTED DURING IMPLEMENTATION (2026-10-07). Earlier drafts of this spec asked for a
   > `Zamknij mimo to` / `Wróć` warning when a Zmiany column holding an unsent diff comment was
@@ -465,7 +476,7 @@ loads it in the current tab.
 
 - With a clean browser state, opening a task preserves the current Cezar task chrome and shows
   Conversation in one full-size column.
-- A user can select Changes, Commits or Files in a column via the hamburger menu, and add a second or third column. The same view may appear more than once in one layout.
+- A user can select Changes, Commits or Files in a column via its menu, and add a second or third column with the `+` at the right edge of the view area. The same view may appear more than once in one layout.
 - Users can add up to two more columns on the right and resize every divider by pointer and keyboard.
 - Closing a column divides the remaining columns equally. Closing the last column closes the entire layout.
 - Switching task ids restores the correct task-specific layout and never shows data from the prior
@@ -490,14 +501,14 @@ loads it in the current tab.
 - **Adding layouts:** Click `Nowy układ` button
 - **Renaming:** Right-click card → context menu → Rename
 - **Overflow:** Max 5-6 visible cards, rest in "Pozostali..." dropdown
-- **Closing last column:** Automatically closes the entire layout (no empty state)
+- **Closing last column:** empties the card, which keeps its place and its `+` (§5.2, §10)
 
 ### Columns & Views
 - **Column count:** 1-3 per layout
 - **View duplication:** Allowed (same view in multiple columns OK)
 - **Column header:** Simple design with name + close button only
-- **Adding column:** Click hamburger menu → "Add column"
-- **Changing view:** Use hamburger menu → view picker; warn only if unsaved changes exist
+- **Adding column:** the `+` at the right edge of the view area → tile picker
+- **Changing view:** the column menu → view list; the last Zmiany column warns when unsent diff comments exist
 - **Resizing after column close:** Remaining columns divide space equally
 - **Reordering columns:** Drag by header; resets all widths to equal
 
@@ -524,7 +535,7 @@ These details can be resolved by the implementation plan without changing the ag
 
 - Choose localStorage key structure (e.g., `layout_state_${taskId}`)
 - Define column minimum widths and divider hit target size
-- Design hamburger menu trigger (icon style, placement)
+- Design the column menu trigger (icon style, placement)
 - Implement column reorder drag UX (CSS Grid, CSS Flexbox, or absolute positioning)
 - Pick localStorage max size handling (when to warn user about overflow)
 - Define error handling for corrupted layout JSON

@@ -923,7 +923,7 @@ describe('workspace projects API', () => {
       expect(body.forge).toBeNull();
       expect(body.capabilities).toEqual({
         localHandoff: true,
-        terminal: true,
+        terminal: true, preview: true,
         followups: false,
         singleProject: false,
         automations: true,

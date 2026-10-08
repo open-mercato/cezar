@@ -143,9 +143,33 @@ function WorkspaceView({
   // Gated on `ready`, because the layouts now come from the host: applied to the placeholder
   // state the hook starts with, the new card would be built on top of a workspace this task does
   // not have, and the host's answer would then replace it wholesale a tick later.
+  //
+  // BACK UNDOES IT. §5.3 asks the URL to "preserve its intent and browser Back behavior", and a
+  // deep link that activates a card has to give that card up when the user presses Back to
+  // `/tasks/:id` — otherwise the canonical URL silently shows the surface the previous entry
+  // asked for. The card itself stays (the spec saves it); only the SELECTION is restored, to
+  // whatever was active before the hop.
+  const beforeDeepLink = useRef<{ runId: string; name: string } | null>(null)
   useEffect(() => {
-    if (layouts.ready && deepLinkView) openDeepLink(deepLinkView)
-  }, [deepLinkView, layouts.ready, openDeepLink, run.id])
+    if (!layouts.ready) return
+    if (deepLinkView) {
+      // Remember once per hop: a re-render inside the same deep link must not overwrite the
+      // layout we are meant to come back to with the one the link itself activated.
+      if (beforeDeepLink.current?.runId !== run.id) {
+        beforeDeepLink.current = { runId: run.id, name: layouts.state.active }
+      }
+      openDeepLink(deepLinkView)
+      return
+    }
+    const previous = beforeDeepLink.current
+    beforeDeepLink.current = null
+    if (previous && previous.runId === run.id && previous.name !== layouts.state.active) {
+      selectLayout(previous.name)
+    }
+    // `layouts.state.active` is deliberately NOT a dependency: this runs on a navigation, and
+    // re-running it whenever the user picks another card would drag them back to the old one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepLinkView, layouts.ready, openDeepLink, run.id, selectLayout])
 
   const markedUnread = useCallback(() => onMarkedUnread(run.id), [onMarkedUnread, run.id])
 
@@ -198,12 +222,19 @@ function WorkspaceView({
    * §5.2: warn, with `Zamknij mimo to` to discard and change, or `Wróć` to keep it and stay).
    * Czat's composer text is discarded without a warning, which the same paragraph says.
    */
+  // Run-level, because that is what the comments ARE: `useDiffComments` is keyed by run, the
+  // draft behind it is one server surface per run, and every Zmiany column in every layout shows
+  // the same set. So this asks before leaving the LAST Zmiany column — once there is no column
+  // left showing them, the comments are genuinely out of sight — rather than once per column,
+  // which would ask while an identical column next door still displays them.
   const diffComments = useDiffComments(run.id)
   const [pendingView, setPendingView] = useState<{ index: number; view: ViewId } | null>(null)
   const columns = layouts.layout?.columns
   const requestColumnView = useCallback(
     (index: number, view: ViewId) => {
-      if (columns?.[index]?.view === 'changes' && diffComments.comments.length > 0) {
+      const leavingChanges = columns?.[index]?.view === 'changes'
+      const lastChangesColumn = columns?.filter((column) => column.view === 'changes').length === 1
+      if (leavingChanges && lastChangesColumn && diffComments.comments.length > 0) {
         setPendingView({ index, view })
         return
       }
@@ -245,7 +276,7 @@ function WorkspaceView({
         case 'changes':
           return <ChangesView run={run} embedded stateKey={`${run.id}:${activeName}:${index}:changes`} />
         case 'commits':
-          return <CommitsView run={run} embedded />
+          return <CommitsView run={run} embedded stateKey={`${run.id}:${activeName}:${index}:commits`} />
         case 'files':
           return <FilesView run={run} embedded stateKey={`${run.id}:${activeName}:${index}:files`} />
         case 'browser':
@@ -274,6 +305,19 @@ function WorkspaceView({
             <TerminalIcon aria-hidden="true" className="size-3.5" />
             Terminal
           </Button>
+        </div>
+      ) : null}
+      {layouts.saveFailed ? (
+        // Spec §2: a capability that cannot work degrades to a CLEAR state. The workspace still
+        // works from memory for the rest of the visit — what is lost is only the remembering —
+        // so this says exactly that rather than blocking anything.
+        <div
+          data-slot="layouts-unsaved"
+          role="status"
+          className="shrink-0 border-b border-border bg-muted/40 px-3 py-1 text-xs text-muted-foreground"
+        >
+          Nie udało się zapisać układu na tym hoście — działa dalej w tej karcie, ale nie wróci po
+          odświeżeniu.
         </div>
       ) : null}
       {!layouts.ready ? (
@@ -307,9 +351,10 @@ function WorkspaceView({
           <AlertDialogHeader>
             <AlertDialogTitle>Masz niewysłany komentarz</AlertDialogTitle>
             <AlertDialogDescription>
-              W tej kolumnie jest {diffComments.comments.length === 1 ? 'komentarz' : 'komentarze'} do
-              zmian, {diffComments.comments.length === 1 ? 'którego' : 'których'} jeszcze nie wysłano.
-              Zmiana widoku zabierze stąd Zmiany.
+              {diffComments.comments.length === 1
+                ? 'Jeden komentarz do zmian nie został jeszcze wysłany.'
+                : `${diffComments.comments.length} komentarzy do zmian nie zostało jeszcze wysłanych.`}{' '}
+              To ostatnia kolumna, która je pokazuje.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

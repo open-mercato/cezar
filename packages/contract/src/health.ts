@@ -49,6 +49,17 @@ export const capabilitiesSchema = z.object({
    * prebuilt binary shows an empty state with a reason rather than a button that fails.
    */
   terminal: z.boolean(),
+  /**
+   * `true` means a task's own app can be previewed in a Browser column from this cockpit (spec
+   * §9, Milestone 3: "Enable the Browser view only when preview is supported for the task's
+   * host"). True on a LOCAL cockpit, where a loopback address really is the task's app and sits
+   * on its own origin; false on a hosted one, where loopback means the viewer's machine and the
+   * proxy §7 calls for does not exist yet.
+   *
+   * The Browser VIEW still exists either way — it loads any address a user types. What this
+   * gates is the claim that it can show THIS TASK's app.
+   */
+  preview: z.boolean(),
   followups: z.boolean(),
   singleProject: z.boolean(),
   /**

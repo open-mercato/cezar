@@ -47,6 +47,9 @@ export interface WorkspaceLayouts {
   /** False until this task's layouts have come back from the host. The route shows its loading
    *  skeleton meanwhile, so no card is painted before it is known to be this task's. */
   ready: boolean
+  /** The owning host could not store the last change. The workspace keeps working from memory;
+   *  the route says so rather than letting the user find out on the next reload. */
+  saveFailed: boolean
   /** The selected card, or `undefined` while the workspace is intentionally empty. */
   layout: WorkspaceLayout | undefined
   addLayout: (view: ViewId) => void
@@ -69,9 +72,17 @@ export interface WorkspaceLayouts {
   openDeepLink: (view: ViewId) => void
 }
 
+/** How long a burst of changes is collected before one save goes out. Long enough that a whole
+ *  divider drag is one write, short enough that closing the tab right after a change still saves
+ *  it in practice. */
+const SAVE_DEBOUNCE_MS = 400
+
 export function useWorkspaceLayouts(taskId: string): WorkspaceLayouts {
   const [state, setState] = useState<WorkspaceState>(defaultState)
   const [ready, setReady] = useState(false)
+  /** The host refused the last save (a read-only home, a full disk). Surfaced, never swallowed:
+   *  §2 asks that a degraded capability produce a CLEAR state, not an invisible one. */
+  const [saveFailed, setSaveFailed] = useState(false)
   // Which task `state` belongs to, and the exact object the host gave us for it. The first tells
   // us when to re-read; the second keeps the arrival from being written straight back, so merely
   // VISITING a task never writes to the host.
@@ -108,10 +119,42 @@ export function useWorkspaceLayouts(taskId: string): WorkspaceLayouts {
     }
   }, [taskId])
 
+  /**
+   * Save, but COALESCED — spec §5.3 singles out high-frequency divider movement as the thing not
+   * to persist per event.
+   *
+   * A drag calls `resizeColumns` on every `pointermove`, so a naive write-on-change turns one
+   * drag into dozens of PUTs, each a synchronous atomic file write on the host. The trailing
+   * debounce collapses a drag into one save; structural changes (a card added, a column closed)
+   * are debounced by the same timer and land a moment later, which is invisible and keeps one
+   * rule instead of two.
+   *
+   * `seq` guards ORDER rather than rate: responses can arrive out of order, so a save that was
+   * superseded while in flight must not be the last writer. Only the newest issued save is
+   * allowed to report an outcome.
+   */
+  const pending = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const seq = useRef(0)
   useEffect(() => {
     // Nothing to save until the host has answered, and never an echo of what it just sent.
     if (!ready || loaded.current.taskId !== taskId || state === loaded.current.state) return
-    void putRunLayouts(taskId, state).catch(() => {})
+    if (pending.current) clearTimeout(pending.current)
+    pending.current = setTimeout(() => {
+      pending.current = null
+      const ticket = (seq.current += 1)
+      void putRunLayouts(taskId, state)
+        .then(() => {
+          if (ticket === seq.current) setSaveFailed(false)
+        })
+        .catch(() => {
+          // Only the newest save speaks: an older one failing says nothing about what is stored.
+          if (ticket === seq.current) setSaveFailed(true)
+        })
+    }, SAVE_DEBOUNCE_MS)
+    return () => {
+      if (pending.current) clearTimeout(pending.current)
+      pending.current = null
+    }
   }, [ready, taskId, state])
 
   // Every action is the pure transition applied to the LATEST state (the updater form), so a
@@ -127,6 +170,7 @@ export function useWorkspaceLayouts(taskId: string): WorkspaceLayouts {
   return {
     state,
     ready,
+    saveFailed,
     layout: activeLayoutOf(state),
     addLayout: useCallback((view: ViewId) => setState((current) => addLayoutTo(current, view)), []),
     closeLayout: useCallback((name: string) => setState((current) => closeLayoutOf(current, name)), []),

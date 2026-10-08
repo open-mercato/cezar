@@ -10,7 +10,27 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 
+import { useHealth } from '@/api/queries'
+
 import { VIEW_IDS, viewLabel, type ViewId } from './layout-state'
+
+/**
+ * Why a view may not be pickable here (spec §9, Milestone 3: "Enable the Browser view only when
+ * preview is supported for the task's host"; §5.1: an unavailable panel shows an "explicitly
+ * labeled, actionable unavailable state" rather than looking functional).
+ *
+ * Only Browser has one today, and only on a hosted cockpit, where a loopback address resolves on
+ * the VIEWER's machine instead of the host the task runs on — so the column could not show this
+ * task's app however convincingly it rendered.
+ */
+function useViewBlock(): (view: ViewId) => string | undefined {
+  const health = useHealth()
+  const preview = health.data?.capabilities?.preview ?? true
+  return (view) =>
+    view === 'browser' && !preview
+      ? 'Podgląd aplikacji zadania jest dostępny tylko na lokalnym cockpicie — ten działa na zdalnym hoście.'
+      : undefined
+}
 
 const VIEW_ICONS: Record<ViewId, ComponentType<{ className?: string }>> = {
   session: MessageSquareTextIcon,
@@ -45,10 +65,12 @@ export function ViewItems({
    */
   purpose?: 'set' | 'add'
 }) {
+  const blocked = useViewBlock()
   return (
     <>
       {VIEW_IDS.map((view) => {
         const Icon = VIEW_ICONS[view]
+        const block = blocked(view)
         return (
           <DropdownMenuItem
             key={view}
@@ -56,7 +78,9 @@ export function ViewItems({
                thing a copy change would move, and the view id is the thing that cannot. */
             data-view={view}
             data-view-action={purpose}
-            disabled={view === disabled}
+            data-unavailable={block ? '' : undefined}
+            title={block}
+            disabled={view === disabled || block !== undefined}
             onSelect={() => onPick(view)}
           >
             <Icon aria-hidden="true" />
@@ -92,6 +116,7 @@ export function ViewPickerMenu({
   onPick: (view: ViewId) => void
   align?: 'start' | 'end'
 }) {
+  const blocked = useViewBlock()
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
@@ -101,11 +126,15 @@ export function ViewPickerMenu({
         <div data-slot="view-tiles" className="grid grid-cols-3 gap-1 p-1">
           {VIEW_IDS.map((view) => {
             const Icon = VIEW_ICONS[view]
+            const block = blocked(view)
             return (
               <DropdownMenuItem
                 key={view}
                 data-view={view}
                 data-view-action="create"
+                data-unavailable={block ? '' : undefined}
+                title={block}
+                disabled={block !== undefined}
                 onSelect={() => onPick(view)}
                 className="flex h-16 flex-col items-center justify-center gap-1 rounded-md border border-border text-center text-xs"
               >

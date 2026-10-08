@@ -158,6 +158,7 @@ describe('resolveCapabilities — followups (#471)', () => {
     expect(resolveCapabilities({ CEZ_FOLLOWUPS: '1', CEZ_REMOTE: '1' }, '0.0.0.0')).toEqual({
       localHandoff: false,
       terminal: false,
+      preview: false,
       followups: true,
       singleProject: false,
       automations: true,
@@ -290,5 +291,19 @@ describe('resolveCapabilities — usage presentation', () => {
       tokenUsageMetrics: true,
       costMetrics: true,
     });
+  });
+});
+
+describe('preview', () => {
+  // Spec §9, Milestone 3: "Enable the Browser view only when preview is supported for the task's
+  // host." A loopback address on a hosted cockpit resolves on the VIEWER's machine, so there is
+  // nothing of the task's to show until the proxy §7 calls for exists.
+  it('is on for a local cockpit', () => {
+    expect(resolveCapabilities({}, '127.0.0.1').preview).toBe(true);
+  });
+
+  it('is off once the cockpit is hosted', () => {
+    expect(resolveCapabilities({ CEZ_REMOTE: '1' }, '127.0.0.1').preview).toBe(false);
+    expect(resolveCapabilities({}, '0.0.0.0').preview).toBe(false);
   });
 });

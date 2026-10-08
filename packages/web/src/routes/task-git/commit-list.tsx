@@ -43,7 +43,23 @@ export interface CommitListItem {
   shaLabel: string
 }
 
-export function CommitList({ slot, commits, className }: { slot: string; commits: CommitListItem[]; className?: string }) {
+export function CommitList({
+  slot,
+  commits,
+  className,
+  onSelect,
+}: {
+  slot: string
+  commits: CommitListItem[]
+  className?: string
+  /**
+   * Select IN PLACE instead of navigating (a workspace column — spec §5.4 asks that each
+   * layout's view state come back when you switch to it, which a shared URL cannot give two
+   * Commits columns). When absent the rows stay links, which is what both standalone routes want
+   * and what keeps a commit URL shareable.
+   */
+  onSelect?: (sha: string) => void
+}) {
   const virtual = commits.length > COMMIT_VIRTUALIZE_THRESHOLD
   const containerRef = useRef<HTMLDivElement | null>(null)
   const scrollElRef = useRef<HTMLElement | null>(null)
@@ -71,7 +87,7 @@ export function CommitList({ slot, commits, className }: { slot: string; commits
     return () => window.removeEventListener('resize', measure)
   }, [virtual])
 
-  const rows = commits.map((commit) => <CommitRow key={commit.sha} commit={commit} />)
+  const rows = commits.map((commit) => <CommitRow key={commit.sha} commit={commit} onSelect={onSelect} />)
 
   return (
     <div
@@ -96,24 +112,45 @@ export function CommitList({ slot, commits, className }: { slot: string; commits
   )
 }
 
-function CommitRow({ commit }: { commit: CommitListItem }) {
+function CommitRow({ commit, onSelect }: { commit: CommitListItem; onSelect?: (sha: string) => void }) {
   return (
     // Not a <ul>/<li>: virtua inserts its own positioned wrapper between the list and the
     // items, which would break that parent/child contract. A plain list of links reads the
     // same to a screen reader here — each row's accessible name is its own link text.
     <div className="[contain-intrinsic-block-size:auto_41px] [content-visibility:auto]">
+      {onSelect ? (
+        <button
+          type="button"
+          data-slot="commit-row"
+          data-sha={commit.sha}
+          onClick={() => onSelect(commit.sha)}
+          className="flex w-full min-w-0 items-baseline gap-3 rounded-sm px-2 py-2.5 text-left hover:bg-muted"
+        >
+          <CommitRowBody commit={commit} />
+        </button>
+      ) : (
       <Link
         data-slot="commit-row"
         data-sha={commit.sha}
         to={commit.href}
         className="flex min-w-0 items-baseline gap-3 rounded-sm px-2 py-2.5 hover:bg-muted"
       >
-        <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{commit.shaLabel}</span>
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{commit.subject}</span>
-        <span className="hidden shrink-0 text-[11px] text-soft-foreground sm:inline">
-          {commit.author} · {commit.when}
-        </span>
+        <CommitRowBody commit={commit} />
       </Link>
+      )}
     </div>
+  )
+}
+
+/** The row's contents, shared by the link and the in-place button so the two cannot drift. */
+function CommitRowBody({ commit }: { commit: CommitListItem }) {
+  return (
+    <>
+      <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{commit.shaLabel}</span>
+      <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{commit.subject}</span>
+      <span className="hidden shrink-0 text-[11px] text-soft-foreground sm:inline">
+        {commit.author} · {commit.when}
+      </span>
+    </>
   )
 }

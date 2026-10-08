@@ -99,10 +99,10 @@ export function LayoutCards({
 }
 
 /**
- * One card. Left click selects; right click opens the card menu (confirmed decision, 2026-10-07:
- * rename lives behind the context menu, not a double-click, so a mis-aimed second click on a tab
- * can never put the user in an edit they did not ask for). The X closes immediately — §5.2 is
- * explicit that there is no confirmation and no undo.
+ * One card. Left click selects; DOUBLE click renames, which is the gesture §5.2 names; right
+ * click opens the card menu, which offers the same rename plus close for a pointer that cannot
+ * double-click comfortably. The X closes immediately — §5.2 is explicit that there is no
+ * confirmation and no undo.
  *
  * The context menu is a CONTROLLED `DropdownMenu` anchored to a zero-size span rather than to the
  * card itself: making the card the trigger would open the menu on plain left click too, and the

@@ -168,6 +168,21 @@ export function isLoopbackHostHeader(host: string | null | undefined): boolean {
  *  `dispatch` is boot-time for a third reason: the dispatch prompt is composed into a run's system
  *  prompt when the run STARTS, so flipping the flag mid-flight would open (or close) the routes
  *  while every run already in the tree kept its prompt. Set it and restart. */
+/**
+ * Whether a task's own app can be PREVIEWED from this cockpit (spec §9, Milestone 3: "Enable the
+ * Browser view only when preview is supported for the task's host").
+ *
+ * On a LOCAL cockpit the browser and the task run on the same machine, so framing
+ * `http://localhost:<port>` reaches the task's app and the app sits on its own origin — isolated
+ * from the cockpit by the port alone. On a HOSTED cockpit a loopback address means the VIEWER's
+ * machine, not the host the task runs on, so there is nothing honest to frame until the proxy §7
+ * calls for exists. Same shape as `terminalEnabled`, and the same reason: it is a property of
+ * where the task actually runs.
+ */
+function previewEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
+  return env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost);
+}
+
 function terminalEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
   if (env.CEZ_TERMINAL === '1') return true;
   if (env.CEZ_TERMINAL === '0') return false;
@@ -181,6 +196,7 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
   return {
     localHandoff: env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost),
     terminal: terminalEnabled(env, bindHost),
+    preview: previewEnabled(env, bindHost),
     // Deliberately not re-derived here: RunManager enforces the same predicate,
     // and two spellings of "is the inbox on" would eventually disagree.
     followups: followupsEnabled(env),
