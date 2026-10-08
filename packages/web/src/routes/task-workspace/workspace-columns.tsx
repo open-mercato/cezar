@@ -15,9 +15,9 @@ import { cn } from '@/lib/utils'
 
 import {
   MAX_COLUMNS,
-  MIN_COLUMN_WIDTH,
   RESIZE_STEP,
   RESIZE_STEP_LARGE,
+  dividerFloor,
   viewLabel,
   type ViewId,
   type WorkspaceColumn,
@@ -140,6 +140,7 @@ export function WorkspaceColumns({
             <ColumnDivider
               index={index - 1}
               width={columns[index - 1]!.width}
+              pair={columns[index - 1]!.width + column.width}
               rowRef={rowRef}
               onResize={actions.resizeColumns}
             />
@@ -233,11 +234,6 @@ function ColumnHeader({
   return (
     <header
       data-slot="workspace-column-header"
-      draggable={count > 1}
-      onDragStart={(event) => {
-        event.dataTransfer.setData('text/cez-column', String(index))
-        event.dataTransfer.effectAllowed = 'move'
-      }}
       onDragOver={(event) => {
         if (!event.dataTransfer.types.includes('text/cez-column')) return
         event.preventDefault()
@@ -247,18 +243,39 @@ function ColumnHeader({
       onDragLeave={() => setDropTarget(false)}
       onDrop={(event) => {
         setDropTarget(false)
-        const from = Number(event.dataTransfer.getData('text/cez-column'))
-        if (!Number.isInteger(from)) return
+        // Re-checked here, not just in `onDragOver`: `Number('')` is 0 and passes
+        // `Number.isInteger`, so a foreign drop that reached this handler would have reordered
+        // column 0.
+        if (!event.dataTransfer.types.includes('text/cez-column')) return
+        const raw = event.dataTransfer.getData('text/cez-column')
+        const from = Number(raw)
+        if (raw === '' || !Number.isInteger(from)) return
         event.preventDefault()
         actions.moveColumn(from, index)
       }}
       className={cn(
         'flex h-9 shrink-0 items-center gap-1 border-b border-border bg-background/95 px-2 backdrop-blur',
-        count > 1 && 'cursor-grab active:cursor-grabbing',
         dropTarget && 'bg-muted',
       )}
     >
-      <span className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">
+      {/*
+        THE TITLE is the drag grip, not the whole header.
+        With `draggable` on the header, an HTML5 drag starts from the nearest draggable ancestor —
+        so a press on the menu trigger or the close X that moved even slightly began a column drag
+        instead of activating the button, which made the X unreliable on any two- or three-column
+        layout. Dropping stays on the header, so the target is still the full width.
+      */}
+      <span
+        draggable={count > 1}
+        onDragStart={(event) => {
+          event.dataTransfer.setData('text/cez-column', String(index))
+          event.dataTransfer.effectAllowed = 'move'
+        }}
+        className={cn(
+          'min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground',
+          count > 1 && 'cursor-grab active:cursor-grabbing',
+        )}
+      >
         {viewLabel(column.view)}
       </span>
       {menu}
@@ -346,12 +363,16 @@ function ColumnMenu({
 function ColumnDivider({
   index,
   width,
+  pair,
   rowRef,
   onResize,
 }: {
   index: number
   /** The left column's current width, in percent — the value this separator reports. */
   width: number
+  /** The two adjacent columns' widths added together: all this separator can redistribute, and
+   *  therefore what bounds the value it reports. */
+  pair: number
   rowRef: React.RefObject<HTMLDivElement | null>
   onResize: (index: number, delta: number) => void
 }) {
@@ -403,8 +424,12 @@ function ColumnDivider({
       aria-orientation="vertical"
       aria-label={`Zmień szerokość kolumny ${index + 1}`}
       aria-valuenow={Math.round(width)}
-      aria-valuemin={MIN_COLUMN_WIDTH}
-      aria-valuemax={100 - MIN_COLUMN_WIDTH}
+      /* The range this separator really has, which is a property of the PAIR it sits between and
+         not of the row: `resizeColumns` clamps to `[floor, pair - floor]`, so in a 33/33/33
+         layout either divider moves within roughly [12, 55]. Reporting the row-wide [12, 88]
+         told a screen reader about positions no divider in that layout can reach. */
+      aria-valuemin={Math.round(dividerFloor(pair))}
+      aria-valuemax={Math.round(pair - dividerFloor(pair))}
       tabIndex={0}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -412,10 +437,12 @@ function ColumnDivider({
       onPointerCancel={endDrag}
       onKeyDown={onKeyDown}
       title="Przeciągnij, by zmienić szerokość — strzałki regulują precyzyjnie"
-      // A 5px grab strip straddling the seam, invisible until reached for. `touch-none` is
+      // A 9px grab strip straddling the seam, invisible until reached for — the hit target §12
+      // asks to be defined, at the low end of what a pointer can comfortably catch. It is
+      // absolutely positioned, so widening it costs the columns no width. `touch-none` is
       // load-bearing: without it a touch drag is claimed by the browser's panning and scrolls
       // the column instead of resizing it.
-      className="absolute inset-y-0 -left-[3px] z-20 w-[5px] cursor-col-resize touch-none bg-transparent transition-colors hover:bg-violet/40 focus-visible:bg-violet/60 focus-visible:outline-none"
+      className="absolute inset-y-0 -left-[5px] z-20 w-[9px] cursor-col-resize touch-none bg-transparent transition-colors hover:bg-violet/40 focus-visible:bg-violet/60 focus-visible:outline-none"
     />
   )
 }

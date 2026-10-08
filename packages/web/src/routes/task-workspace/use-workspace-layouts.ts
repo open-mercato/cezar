@@ -263,27 +263,43 @@ export function useWorkspaceLayouts(taskId: string): WorkspaceLayouts {
       [onActive],
     ),
     openInBrowser: useCallback((url: string) => {
-      let placed = false
+      /*
+       * DECIDED off the committed state, then applied through the updater.
+       *
+       * The answer used to be assigned inside the updater and returned on the line after
+       * `setState`, which only ever worked because of React's eager-state fast path: the moment
+       * another update was already queued on this hook in the same batch — and a debounced
+       * layout save is never more than `SAVE_DEBOUNCE_MS` away — the updater ran AFTER the
+       * return, so `placed` was still false and the caller announced "no room" about a tab that
+       * had just opened.
+       *
+       * `latest.current` is the state React has committed, which is also the workspace the user
+       * was looking at when they clicked. The cap is read by asking `addColumn` rather than by
+       * restating the rule here, so the two cannot drift.
+       */
+      const committed = latest.current?.state
+      const layout = committed ? activeLayoutOf(committed) : undefined
+      if (!committed || !layout) return false
+      const index = layout.columns.findIndex((column) => column.view === 'browser')
+      if (index < 0 && addColumnTo(committed, layout.name, 'browser') === committed) return false
+
       setState((current) => {
-        const layout = activeLayoutOf(current)
-        if (!layout) return current
-        const index = layout.columns.findIndex((column) => column.view === 'browser')
-        if (index >= 0) {
+        const active = activeLayoutOf(current)
+        if (!active) return current
+        const position = active.columns.findIndex((column) => column.view === 'browser')
+        if (position >= 0) {
           // An existing Browser column gets the address as a new tab, activated.
-          const browser = layout.columns[index]!.browser ?? { tabs: [''], active: 0 }
+          const browser = active.columns[position]!.browser ?? { tabs: [''], active: 0 }
           // A blank tab is a slot, not a tab worth keeping beside the new one.
           const tabs = browser.tabs.filter((tab) => tab !== '')
-          placed = true
-          return setColumnBrowserOf(current, layout.name, index, { tabs: [...tabs, url], active: tabs.length })
+          return setColumnBrowserOf(current, active.name, position, { tabs: [...tabs, url], active: tabs.length })
         }
-        const added = addColumnTo(current, layout.name, 'browser')
-        // `addColumn` is a no-op at the column cap; saying so beats silently doing nothing.
+        const added = addColumnTo(current, active.name, 'browser')
         if (added === current) return current
-        placed = true
         const grown = activeLayoutOf(added)!
         return setColumnBrowserOf(added, grown.name, grown.columns.length - 1, { tabs: [url], active: 0 })
       })
-      return placed
+      return true
     }, []),
   }
 }

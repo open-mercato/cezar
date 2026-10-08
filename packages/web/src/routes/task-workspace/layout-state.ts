@@ -109,6 +109,19 @@ export const MIN_COLUMN_WIDTH = 12
 export const RESIZE_STEP = 2
 export const RESIZE_STEP_LARGE = 10
 
+/**
+ * The narrowest either side of ONE divider may become, given what that pair has to share.
+ *
+ * Normally `MIN_COLUMN_WIDTH`, but never more than half the pair — two columns sharing 20% of
+ * the row cannot both be 12% wide, and a floor above `pair / 2` would make the clamp
+ * unsatisfiable. Exported because the divider reports this as its accessible range and
+ * `resizeColumns` enforces it: one rule, read in both places, rather than the same arithmetic
+ * written twice and free to drift.
+ */
+export function dividerFloor(pair: number): number {
+  return Math.min(MIN_COLUMN_WIDTH, pair / 2)
+}
+
 /** The name a fresh task's first card carries (spec §5.2 — "A new task starts with one active
  *  card named `Czat`"). */
 export const DEFAULT_LAYOUT_NAME = VIEW_LABELS.session
@@ -221,7 +234,7 @@ function reviveLayout(entry: unknown, taken: readonly WorkspaceLayout[]): Worksp
   }
   // An EMPTY layout survives; a layout EMPTIED BY RECOVERY does not.
   //
-  // Spec §10 — "A saved layout may intentionally have no columns" — so a card the user emptied
+  // A saved layout may intentionally have no columns (spec §5.2), so a card the user emptied
   // must round-trip. But a card that arrived with columns and lost every one of them to an
   // unknown view is malformed state, and §5.3 says malformed state recovers rather than being
   // presented as the user's own. The two cases are only distinguishable here, before the
@@ -411,8 +424,12 @@ export function closeColumn(state: WorkspaceState, name: string, index: number):
   const columns = layout.columns.filter((_, position) => position !== index)
   // Closing the LAST column empties the layout, it does not close it: spec §5.2 — "Closing the
   // last column leaves the layout card in place with an empty area and the `+` control to add
-  // another view" — and §10, "A saved layout may intentionally have no columns". Closing the
-  // CARD is a separate, explicit act (its X, or its context menu).
+  // another view" — confirmed again in §11. Closing the CARD is a separate, explicit act (its X,
+  // or its context menu).
+  //
+  // §10 used to assert the opposite in its acceptance list, and both this comment and §5.2 cited
+  // §10 for a sentence it did not contain. The spec was corrected on 2026-10-08 toward the
+  // behaviour built here; the invented quote is gone from all three places that carried it.
   return replaceLayout(state, name, { ...layout, columns: withEqualWidths(columns) })
 }
 
@@ -460,7 +477,7 @@ export function resizeColumns(
   const right = layout.columns[index + 1]
   if (!left || !right) return state
   const pair = left.width + right.width
-  const floor = Math.min(MIN_COLUMN_WIDTH, pair / 2)
+  const floor = dividerFloor(pair)
   const nextLeft = round2(Math.min(pair - floor, Math.max(floor, left.width + delta)))
   if (nextLeft === left.width) return state
 

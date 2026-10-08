@@ -333,7 +333,7 @@ describe('round trip through the host', () => {
   })
 
   it('round-trips a workspace the user emptied on purpose', () => {
-    // §10: "A saved layout may intentionally have no columns" — so an emptied card must come
+    // §5.2: a saved layout may intentionally have no columns — so an emptied card must come
     // back as an emptied card, not as a fresh default.
     const emptied = closeColumn(defaultState(), 'Czat', 0)
     expect(emptied.layouts[0]!.columns).toEqual([])

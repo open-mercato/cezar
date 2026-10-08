@@ -504,6 +504,65 @@ describe('the task workspace', () => {
     await waitFor(() => expect(screen.getAllByRole('tab')[1]!.getAttribute('aria-selected')).toBe('true'))
   })
 
+  it('reports the range a divider actually has, not the row-wide one', async () => {
+    // `resizeColumns` clamps against the adjacent PAIR, so in a 33/33/33 layout either divider
+    // moves within roughly [12, 55] — the hard-coded [12, 88] told a screen reader about
+    // positions no divider in that layout can reach (spec §5.2, "position announcement").
+    stubFetch()
+    seedLayouts('r1', {
+      layouts: [
+        {
+          name: 'Trzy',
+          columns: [
+            { view: 'session', width: 33.33 },
+            { view: 'changes', width: 33.33 },
+            { view: 'files', width: 33.34 },
+          ],
+        },
+      ],
+      active: 'Trzy',
+    })
+    renderWorkspace()
+    await ready()
+    await waitFor(() => expect(dividers()).toHaveLength(2))
+
+    for (const divider of dividers()) {
+      // Each separator governs two thirds of the row: floor 12, ceiling 66.67 - 12.
+      expect(divider.getAttribute('aria-valuemin')).toBe('12')
+      expect(divider.getAttribute('aria-valuemax')).toBe('55')
+    }
+  })
+
+  it('does not make the column header itself the drag grip', async () => {
+    // An HTML5 drag starts from the nearest draggable ancestor, so a draggable HEADER swallowed
+    // presses on its own menu trigger and close X — the X became unreliable on any two- or
+    // three-column layout. The TITLE is the grip instead.
+    stubFetch()
+    seedLayouts('r1', {
+      layouts: [
+        {
+          name: 'Dwie',
+          columns: [
+            { view: 'session', width: 50 },
+            { view: 'changes', width: 50 },
+          ],
+        },
+      ],
+      active: 'Dwie',
+    })
+    renderWorkspace()
+    await ready()
+    await waitFor(() => expect(columns()).toHaveLength(2))
+
+    const header = document.querySelector('[data-slot="workspace-column-header"]')!
+    expect(header.getAttribute('draggable')).toBeNull()
+    expect(header.querySelector('[draggable="true"]')?.textContent).toBe('Czat')
+
+    // And the close X still closes, which is the behaviour the grip was costing.
+    fireEvent.click(screen.getByRole('button', { name: 'Zamknij kolumnę Czat' }))
+    await waitFor(() => expect(columnViews()).toEqual(['changes']))
+  })
+
   it('keeps two tasks apart when the route swaps run ids without remounting', async () => {
     stubFetch()
     seedLayouts('r1', {

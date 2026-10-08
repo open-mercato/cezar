@@ -188,8 +188,15 @@ list as a shortcut.
 - **Layout cards overflow:** If there are >5-6 layouts, show first 5-6 cards + "Pozostali..." dropdown
   listing remaining layouts. Clicking a layout in dropdown activates it.
 - **Closing the last column in a layout:** leaves the card in place with an empty area and the `+`
-  control to add another view (§5.2); §10 — "A saved layout may intentionally have no columns".
+  control to add another view. A saved layout may therefore intentionally have no columns.
   Closing the CARD is a separate act, with its own X.
+
+  > **CORRECTION (2026-10-08).** This bullet used to cite §10 for the sentence "A saved layout
+  > may intentionally have no columns". §10 never contained it — the quote was invented, and had
+  > been copied into three code comments by the time an audit caught it. The rule itself is real
+  > and was confirmed on 2026-10-07 (§11, "Closing last column: empties the card, which keeps its
+  > place and its `+`"), so it is stated here outright instead of being attributed. §10's own
+  > bullet, which said the opposite, is corrected there.
 - Reopening a task: If all layouts were deleted, create a fresh default `Czat` layout.
 
 #### Columns within a layout
@@ -501,7 +508,15 @@ loads it in the current tab.
   Conversation in one full-size column.
 - A user can select Changes, Commits or Files in a column via its menu, and add a second or third column with the `+` at the right edge of the view area. The same view may appear more than once in one layout.
 - Users can add up to two more columns on the right and resize every divider by pointer and keyboard.
-- Closing a column divides the remaining columns equally. Closing the last column closes the entire layout.
+- Closing a column divides the remaining columns equally. Closing the last column EMPTIES the
+  card, which keeps its place and its `+`; closing the card itself is a separate act with its own
+  X (§5.2, §11).
+
+  > **CORRECTION (2026-10-08).** This read "Closing the last column closes the entire layout",
+  > which contradicted both §5.2 and §11's confirmed decision of the same day, and the build
+  > followed those two. Corrected toward them rather than away: a card that vanishes the moment
+  > its last column is closed gives the user no way to change their mind, and the `+` on an empty
+  > card is the affordance §5.2 is built around.
 - Switching task ids restores the correct task-specific layout and never shows data from the prior
   task in a newly selected task.
 - Existing task actions, diff comments, route deep links and browser history keep their existing
@@ -509,13 +524,17 @@ loads it in the current tab.
 - Narrow screens remain usable by showing one active column at a time with column tabs.
 - Malformed persisted state and unavailable worktrees recover gracefully to one-column Conversation.
 - No terminal or preview panel claims to be functional until its own milestone is implemented.
-- Layout state persists in localStorage and survives page refresh and navigation.
+- Layout state persists ON THE HOST THAT OWNS THE TASK and survives page refresh and navigation
+  (§5.3, as corrected 2026-10-08 — this line said `localStorage`).
 - Deep links (`/tasks/:id/changes`, etc.) create a new layout with the requested view.
 
 ## 11. Confirmed product decisions (2026-10-07)
 
 ### Storage & Persistence
-- **Storage:** localStorage per task per host (local/VPS separate, no sync)
+- **Storage:** per task per host (local/VPS separate, no sync). Held by the cezar that owns the
+  task, under `.ai/cezar/layouts/<runId>.json` — see §5.3's CORRECTION of 2026-10-08, which
+  superseded the `localStorage` this line originally named. The browser keeps only the terminal
+  drawer's own open/height preference.
 - **Recovery on malformed state:** One-column Conversation default
 - **Reopening task:** Open `Czat` layout if exists, else first layout; if none, create fresh `Czat`
 
@@ -524,7 +543,7 @@ loads it in the current tab.
 - **Adding layouts:** Click `Nowy układ` button
 - **Renaming:** Right-click card → context menu → Rename
 - **Overflow:** Max 5-6 visible cards, rest in "Pozostali..." dropdown
-- **Closing last column:** empties the card, which keeps its place and its `+` (§5.2, §10)
+- **Closing last column:** empties the card, which keeps its place and its `+` (§5.2)
 
 ### Columns & Views
 - **Column count:** 1-3 per layout
@@ -554,14 +573,28 @@ loads it in the current tab.
 
 ## 12. Implementation questions (not product choices)
 
-These details can be resolved by the implementation plan without changing the agreed behavior:
+These details can be resolved by the implementation plan without changing the agreed behavior.
+All of them are now answered; each answer is recorded here so the question cannot be reopened as
+though it were still open.
 
-- Choose localStorage key structure (e.g., `layout_state_${taskId}`)
-- Define column minimum widths and divider hit target size
-- Design the column menu trigger (icon style, placement)
-- Implement column reorder drag UX (CSS Grid, CSS Flexbox, or absolute positioning)
-- Pick localStorage max size handling (when to warn user about overflow)
-- Define error handling for corrupted layout JSON
+- Storage addressing: one file per run on the owning host, `.ai/cezar/layouts/<runId>.json`,
+  behind `GET/PUT /api/v1/runs/:id/layouts` (§5.3). The two `localStorage` questions this list
+  originally asked — key structure, and what to do when the quota is reached — fell away with
+  that correction; a host file has no quota to overflow, and a write that cannot land reports a
+  409 the cockpit shows as a banner.
+- Column minimum width: 12% of the row, and no divider may take either of its two columns below
+  `min(12%, pair / 2)` — `dividerFloor` in `layout-state.ts`, read both by the clamp and by the
+  separator's accessible range.
+- Divider hit target: a 9px absolutely positioned grab strip straddling the seam, so widening it
+  costs the columns no width.
+- Column menu trigger: a ghost icon button (`MoreVerticalIcon`) at the right of the column
+  header, beside the close X.
+- Column reorder drag UX: HTML5 drag-and-drop with the column TITLE as the grip. Not the whole
+  header — a drag starts from the nearest draggable ancestor, so a draggable header swallowed
+  presses on its own menu and close buttons.
+- Corrupted layout JSON: repaired per entry rather than per file by `reviveState`, so one bad
+  layout never costs the user the rest; a file that yields no readable layout at all recovers to
+  the one-column `Czat` default (§5.3).
 
 ## 13. Research notes
 
