@@ -96,7 +96,7 @@ export class ProjectContexts {
   private readonly contexts = new Map<string, ProjectContext>();
   private readonly building = new Map<string, Promise<ProjectContext>>();
   /** Live store-created subscribers; invoked before RunManager recovery. */
-  private readonly storeListeners = new Set<(store: RunStore) => void>();
+  private readonly storeListeners = new Set<(store: RunStore, projectId: string) => void>();
   /** Live `onContextBuilt` subscribers (workspace SSE, step 2.8). */
   private readonly builtListeners = new Set<(ctx: ProjectContext) => void>();
   /** One semaphore for every manager this map builds — injected by boot,
@@ -142,18 +142,19 @@ export class ProjectContexts {
    * Subscribe at the earliest RunStore lifecycle point: immediately after a
    * lazy project's store opens and before its manager can recover runs. This
    * stays generic so backend-specific observers do not leak into the context
-   * map. Returns an unsubscribe.
+   * map. The project id rides along for observers that key state by project (the cross-task wait
+   * resolver, spec 2026-10-05-cross-task-waits). Returns an unsubscribe.
    */
-  onStoreCreated(listener: (store: RunStore) => void): () => void {
+  onStoreCreated(listener: (store: RunStore, projectId: string) => void): () => void {
     this.storeListeners.add(listener);
     return () => this.storeListeners.delete(listener);
   }
 
   /** A listener throwing must never fail the build (its store is usable). */
-  private notifyStoreCreated(store: RunStore): void {
+  private notifyStoreCreated(store: RunStore, projectId: string): void {
     for (const listener of [...this.storeListeners]) {
       try {
-        listener(store);
+        listener(store, projectId);
       } catch {
         // subscriber's problem — context construction can continue
       }
@@ -214,7 +215,7 @@ export class ProjectContexts {
     const automationStore = this.deps.automationStore?.(project.id, project.root)
       ?? AutomationStore.open(dataDir);
     reconcileAutomationReceipts(automationStore, store);
-    this.notifyStoreCreated(store);
+    this.notifyStoreCreated(store, project.id);
     const manager = new RunManager(store, project.root, { semaphore: this.semaphore, projectId: project.id, resolveTrackerEnv: resolveTrackerAgentEnv });
     try {
       const launchKey = ensureLaunchKey(dataDir);

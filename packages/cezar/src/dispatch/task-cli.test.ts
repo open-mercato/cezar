@@ -113,4 +113,70 @@ describe('cez task', () => {
       '    kid-0000  done $0.10  Kid → done (approve)',
     ]);
   });
+
+  // ---- cross-task waits (spec 2026-10-05-cross-task-waits) ----------------------------------
+
+  it('wait posts the target to this task’s waits route, as this task’s agent', async () => {
+    const edge = { id: 'w1', target: { projectId: 'api', runId: 'abcdef1234' }, targetTitle: 'Add export', origin: 'agent', deadline: '2026-10-06T10:00:00.000Z', state: 'pending', createdAt: 'x' };
+    const h = harness({ status: 200, body: { kind: 'pending', edge } });
+    expect(await runTaskCommand(['wait', 'api/abcdef12', '--timeout', '90'], env, h.io)).toBe(0);
+    expect(h.calls[0]?.url).toBe('http://127.0.0.1:4321/api/v1/p/proj/runs/run-1/waits');
+    expect(new Headers(h.calls[0]?.init?.headers).get('x-cez-task-id')).toBe('run-1');
+    expect(JSON.parse(String(h.calls[0]?.init?.body))).toEqual({ target: { projectId: 'api', runId: 'abcdef12' }, timeoutMinutes: 90 });
+    expect(h.out.join('\n')).toContain('waiting for "Add export" (api/abcdef12)');
+    expect(h.out.join('\n')).toContain('End your turn now');
+  });
+
+  it('wait with a bare id means this project, and prints an already-settled outcome', async () => {
+    const h = harness({ status: 200, body: { kind: 'settled', outcome: { target: { projectId: 'proj', runId: 'abcdef1234' }, title: 'Done thing', status: 'review', prUrl: 'https://github.com/o/r/pull/9', costUsd: 0.5 } } });
+    expect(await runTaskCommand(['wait', 'abcdef12'], env, h.io)).toBe(0);
+    expect(JSON.parse(String(h.calls[0]?.init?.body))).toEqual({ target: { runId: 'abcdef12' } });
+    expect(h.out[0]).toContain('has already settled — review');
+    expect(h.out.join('\n')).toContain('https://github.com/o/r/pull/9');
+  });
+
+  it('wait exits 2 with a do-not-poll message when waits are off, 1 on any other refusal', async () => {
+    const off = harness({ status: 409, body: { error: 'waits are disabled on this cockpit (CEZ_TASK_WAITS=0) — …' } });
+    expect(await runTaskCommand(['wait', 'abc'], env, off.io)).toBe(2);
+    expect(off.err[0]).toContain('Do not poll');
+    const cycle = harness({ status: 409, body: { error: 'waiting would create a cycle: a → b → a' } });
+    expect(await runTaskCommand(['wait', 'abc'], env, cycle.io)).toBe(1);
+    expect(cycle.err[0]).toContain('cycle');
+    expect(await runTaskCommand(['wait'], env, harness({ status: 200, body: {} }).io)).toBe(1);
+  });
+
+  it('waits lists this task’s edges off its run record', async () => {
+    const h = harness({ status: 200, body: { id: 'run-1', waits: [
+      { id: 'w1', target: { projectId: 'api', runId: 'abcdef1234' }, targetTitle: 'Add export', origin: 'agent', deadline: '2026-10-06T10:00:00.000Z', state: 'pending' },
+      { id: 'w2', target: { projectId: 'proj', runId: '12345678zz' }, targetTitle: 'Old one', origin: 'user', deadline: 'x', state: 'settled', resolvedAt: '2026-10-05T11:00:00.000Z', outcome: { status: 'done', costUsd: 1 } },
+    ] } });
+    expect(await runTaskCommand(['waits'], env, h.io)).toBe(0);
+    expect(h.calls[0]?.url).toBe('http://127.0.0.1:4321/api/v1/p/proj/runs/run-1');
+    expect(h.out[0]).toContain('pending');
+    expect(h.out[0]).toContain('api/abcdef12  "Add export"');
+    expect(h.out[1]).toContain('target done $1.00');
+    const none = harness({ status: 200, body: { id: 'run-1' } });
+    expect(await runTaskCommand(['waits'], env, none.io)).toBe(0);
+    expect(none.out[0]).toBe('this task waits for nothing');
+  });
+
+  it('create --project posts a create-and-wait to the waits route, not a dispatch', async () => {
+    const edge = { id: 'w1', target: { projectId: 'api', runId: 'newrun1234' }, targetTitle: 'Add export', origin: 'agent', created: true, deadline: 'd', state: 'pending', createdAt: 'x' };
+    const h = harness({ status: 200, body: { kind: 'pending', edge } });
+    expect(await runTaskCommand(['create', 'Add the export endpoint', '--project', 'api', '--title', 'Add export', '--budget', '3', '--runner', 'codex', '--success', 'GET /export answers CSV', '--timeout', '120'], env, h.io)).toBe(0);
+    expect(h.calls[0]?.url).toBe('http://127.0.0.1:4321/api/v1/p/proj/runs/run-1/waits');
+    expect(JSON.parse(String(h.calls[0]?.init?.body))).toEqual({
+      create: { projectId: 'api', objective: 'Add the export endpoint', title: 'Add export', budget: 3, runner: 'codex', success: 'GET /export answers CSV' },
+      timeoutMinutes: 120,
+    });
+    expect(h.out[0]).toContain('created and waiting for "Add export" (api/newrun12)');
+  });
+
+  it('create --project refuses the dispatch-only flags; --timeout without --project is an error', async () => {
+    const h = harness({ status: 200, body: {} });
+    expect(await runTaskCommand(['create', 'x', '--project', 'api', '--kind', 'review'], env, h.io)).toBe(1);
+    expect(h.err[0]).toContain('--kind cannot be combined with --project');
+    expect(await runTaskCommand(['create', 'x', '--timeout', '5'], env, h.io)).toBe(1);
+    expect(h.calls).toEqual([]);
+  });
 });

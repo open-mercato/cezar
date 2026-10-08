@@ -13,9 +13,10 @@ import { MAX_REF } from './task-refs.ts';
 import { workflowDefSchema } from '../workflows/types.ts';
 // A contract VALUE, like `workspaceUiStateSchema` in `workspace/migrations.ts`: the persisted
 // `dispatch` object and its wire half are literally the same schema, so they cannot drift.
-import { dispatchSchema, trackerAssociationSchema, trackerAutomationEventSchema } from '@open-mercato/cezar-contract';
+import { dispatchSchema, trackerAssociationSchema, trackerAutomationEventSchema, waitEdgeSchema, waitedBySchema } from '@open-mercato/cezar-contract';
 
 import { RUNNER_IDS } from '../core/agent-runner.ts';
+import { isTerminalStatus } from '../dispatch/engine.ts';
 
 import type { RunnerId } from '../core/agent-runner.ts';
 
@@ -242,6 +243,12 @@ export const runRecordSchema = z.object({
    *  a `dispatch` that no longer fits must drop the FIELD, never the whole index. The run then reads
    *  as an ordinary flat task — degraded, but running. */
   dispatch: dispatchSchema.optional().catch(undefined),
+  /** Wait edges (spec 2026-10-05-cross-task-waits) — the contract's own schema, imported like
+   *  `dispatchSchema` above and `.catch`ed the same way: a hand-edited edge that no longer fits
+   *  drops the FIELD (the run simply stops waiting), never the whole index. */
+  waits: z.array(waitEdgeSchema).optional().catch(undefined),
+  /** The task that created this one and waits for it (Phase 2). */
+  waitedBy: waitedBySchema.optional().catch(undefined),
   status: z.enum(['queued', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled']),
   /** Sub-state of `running` (spec 2026-07-18-subagent-monitoring-status, #490):
    *  `monitoring` while the agent is still working on its own downstream work.
@@ -1023,6 +1030,7 @@ export class RunStore extends EventEmitter {
     if (Object.prototype.hasOwnProperty.call(patch, 'issueNumber')) {
       delete run.referencedIssueNumberSeeded;
     }
+    const wasAwaitingAnswer = run.awaitingAnswerSince !== undefined;
     const normalized = { ...patch };
     if (normalized.status && !['running', 'waiting', 'queued'].includes(normalized.status)) {
       normalized.activity = undefined;
@@ -1063,6 +1071,7 @@ export class RunStore extends EventEmitter {
       appendPrRefToRun(run, { number: normalized.prNumber, origin: 'derived' });
     }
     this.touch(run);
+    if (wasAwaitingAnswer) this.notifyQuestionRetired(run);
     return run;
   }
 
@@ -1153,12 +1162,14 @@ export class RunStore extends EventEmitter {
     if (!run) return undefined;
     run.archived = archived;
     run.archivedAt = archived ? new Date().toISOString() : undefined;
+    const wasAwaitingAnswer = run.awaitingAnswerSince !== undefined;
     if (archived) {
       clearPendingAutoResume(run);
       clearAwaitingAnswer(run);
       clearPin(run);
     }
     this.touch(run);
+    if (wasAwaitingAnswer) this.notifyQuestionRetired(run);
     return run;
   }
 
@@ -1563,6 +1574,33 @@ export class RunStore extends EventEmitter {
     } catch {
       return [];
     }
+  }
+
+  /**
+   * Announce that a run reached a terminal status (spec 2026-10-05-cross-task-waits): emits
+   * `'settled'` with the run id. Fired by the run's `RunManager` from every terminal transition —
+   * NOT derived from `'run'` status writes, because restart recovery writes a transient `failed`
+   * onto a run it is about to re-queue. Listeners (the workspace wait resolver) must not throw
+   * into the lifecycle, so a failing one is contained here.
+   */
+  notifySettled(id: string): void {
+    try {
+      this.emit('settled', id);
+    } catch {
+      // a listener's failure is its own
+    }
+  }
+
+  /**
+   * A `failed` run left on an unanswered `CEZ:ASK` (`awaitingAnswerSince`) is "needs you", not an
+   * outcome, so the wait resolver does not settle edges on it (`targetSettled`). When the question
+   * is retired WITHOUT the run coming back to life — archived, Finished, cancelled — the run's
+   * outcome is final from that write on, and no manager transition will announce it: announce it
+   * here, so a waiter wakes instead of sitting out its deadline. A run that comes back to life
+   * (`running`/`queued`) is not terminal and announces its own settle later.
+   */
+  private notifyQuestionRetired(run: RunRecord): void {
+    if (run.awaitingAnswerSince === undefined && isTerminalStatus(run.status)) this.notifySettled(run.id);
   }
 
   deleteRun(id: string): boolean {

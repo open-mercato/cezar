@@ -78,7 +78,7 @@ function isUnseen(_run: AttentionInput): boolean {
  *  optional (#490), so status-only callers keep working unchanged. */
 export type AttentionInput = Pick<
   RunRecord,
-  'status' | 'activity' | 'autoResumeAt' | 'awaitingAnswerSince' | 'dispatch' | 'costUsd'
+  'status' | 'activity' | 'autoResumeAt' | 'awaitingAnswerSince' | 'dispatch' | 'costUsd' | 'waits'
 >
 
 export type BudgetStop = {
@@ -154,6 +154,11 @@ export function deriveAttention(run: AttentionInput): Attention {
   }
   if (run.status === 'review') {
     return { bucket: 'waiting', tone: 'violet', pulse: true, label: 'needs review' }
+  }
+  if (run.status === 'running' && run.activity === 'monitoring' && run.waits?.some((edge) => edge.state === 'pending')) {
+    // Parked on another TASK (spec 2026-10-05-cross-task-waits): still the `running` bucket — the
+    // engine wakes it, nobody has to — but named for what it is doing, not as a generic monitor.
+    return { bucket: 'running', tone: 'violet', pulse: true, label: 'waiting on a task' }
   }
   if (run.status === 'running' && run.activity === 'monitoring') {
     // Still working, but on its OWN downstream work (a sub-agent / a monitored

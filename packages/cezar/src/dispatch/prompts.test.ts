@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
-import { DISPATCH_PROMPT, REVIEW_PROMPT, composeDispatchPrompt, dispatchIntentPrompt } from './prompts.ts';
+import { DISPATCH_PROMPT, REVIEW_PROMPT, composeDispatchPrompt, dispatchIntentPrompt, waitsPrompt } from './prompts.ts';
 
 function containsRunnerToken(text: string, runner: string): boolean {
   return new RegExp(`(?:^|[^A-Za-z0-9_-])${runner}(?=$|[^A-Za-z0-9_-])`).test(text);
@@ -87,4 +87,39 @@ describe('the dispatch prompt', () => {
       expect(bare).not.toContain('Subtasks run with');
     });
   });
+
+describe('the waits paragraph (spec 2026-10-05-cross-task-waits)', () => {
+  it('rides the dispatch prompt only while waits are on', () => {
+    expect(composeDispatchPrompt(undefined)).not.toContain('cez task wait');
+    const withWaits = composeDispatchPrompt(undefined, undefined, true);
+    expect(withWaits.startsWith(DISPATCH_PROMPT)).toBe(true);
+    expect(withWaits).toContain('cez task wait <projectId>/<runId> [--timeout <minutes>]');
+    expect(withWaits).toContain('cez task create "<objective>" --project <projectId>');
+    expect(withWaits).toContain('Never poll a task you can wait on');
+  });
+
+  it('says when to wait and when to dispatch', () => {
+    const text = waitsPrompt({ create: true, standalone: false });
+    expect(text).toContain('same repository and the result should merge into YOUR branch → dispatch a child');
+    expect(text).toContain('Another project, or an independent change with its own review and PR');
+    expect(text).toContain('Already running somewhere');
+    expect(text).toContain('At most 4 at once');
+  });
+
+  it('offers every runner on create --project, derived like the dispatch prompt (#1236)', () => {
+    const createLine = waitsPrompt({ create: true, standalone: false })
+      .split('\n')
+      .find((line) => line.includes('--project <projectId>'));
+    expect(createLine).toBeDefined();
+    for (const runner of RUNNER_IDS) expect(containsRunnerToken(createLine!, runner)).toBe(true);
+  });
+
+  it('standing alone (dispatch off), it names the binary and never the create-elsewhere path', () => {
+    const text = waitsPrompt({ create: false, standalone: true });
+    expect(text).toContain('node "$CEZ_BIN" task');
+    expect(text).toContain('cez task wait');
+    expect(text).not.toContain('--project');
+    expect(text).not.toContain('dispatch a child');
+  });
+});
 });

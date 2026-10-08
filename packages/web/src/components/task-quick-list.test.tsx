@@ -24,6 +24,7 @@ const HEALTH: HealthResponse = {
     singleProject: false,
     automations: false,
     dispatch: false,
+    taskWaits: false,
     tokenMetrics: true,
     tokenUsageMetrics: true,
     costMetrics: true,
@@ -813,5 +814,34 @@ describe('dispatched subtasks in the quick-list', () => {
     expect(kindOf('rev')).toBe('review')
     expect(kindOf('imp')).toBe('implement')
     expect(kindOf('p')).toBeNull()
+  })
+})
+
+describe('cross-task waits on a row (spec 2026-10-05-cross-task-waits)', () => {
+  const waits = [
+    {
+      id: 'w1',
+      target: { projectId: 'api', runId: 'target-1' },
+      targetTitle: 'Add export endpoint',
+      origin: 'agent' as const,
+      createdAt: ago(60_000),
+      deadline: ago(-60 * 60_000),
+      state: 'pending' as const,
+    },
+  ]
+
+  it('wears an hourglass naming the targets while the capability is on', () => {
+    renderList({ runs: [run({ id: 'waiter', status: 'running', activity: 'monitoring', waits })], showWaits: true })
+    const mark = row('waiter')?.querySelector('[data-slot="task-row-waiting"]')
+    expect(mark?.getAttribute('title')).toBe('Waiting for Add export endpoint')
+    expect(mark?.getAttribute('aria-label')).toBe('Waiting for 1 task')
+  })
+
+  it('shows nothing while the capability is off, or once the wait resolved', () => {
+    renderList({ runs: [run({ id: 'off', status: 'running', activity: 'monitoring', waits })] })
+    expect(row('off')?.querySelector('[data-slot="task-row-waiting"]')).toBeNull()
+    cleanup()
+    renderList({ runs: [run({ id: 'done', status: 'running', waits: [{ ...waits[0]!, state: 'settled' as const }] })], showWaits: true })
+    expect(row('done')?.querySelector('[data-slot="task-row-waiting"]')).toBeNull()
   })
 })

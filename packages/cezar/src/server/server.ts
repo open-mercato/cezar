@@ -59,7 +59,7 @@ import {
   openProjectInSchema,
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
-import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
+import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema, waitInputSchema } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { hostUsageSampler, type HostSampler } from '../core/host-usage.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
@@ -200,6 +200,8 @@ import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { mergeWriteWorkspaceUiState, readWorkspaceUiState } from '../workspace/ui-state.ts';
 import { checkoutRepo, type CloneRunner } from './checkout.ts';
 import { ProjectContextError, ProjectContexts, type ProjectContext } from './project-context.ts';
+import { connectWaitResolver } from './wait-wiring.ts';
+import { isWaitRefusal } from '../workspace/waits.ts';
 import { reviewGateEnabled } from '../runs/review-gate.ts';
 import { readUiState, uiStatePath } from '../ui-state.ts';
 import { agentHomePaths, expandTilde } from '../paths.ts';
@@ -524,6 +526,14 @@ const AUTOMATIONS_OFF = 'Automations are off — this cockpit was started with C
 /** 409 body for every dispatch route while task dispatch is off (spec 2026-09-10-dispatch). */
 const DISPATCH_OFF =
   'dispatch is disabled on this cockpit (CEZ_DISPATCH=0) — the operator turned it off. Do not substitute sub-agents or do the delegated work yourself: stop and report that dispatch is disabled.';
+
+/** 409 body for both wait routes while cross-task waits are off (spec 2026-10-05-cross-task-waits). */
+const WAITS_OFF =
+  'waits are disabled on this cockpit (CEZ_TASK_WAITS=0) — continue without waiting, or stop and report that you are blocked on the other task. Do not poll it instead.';
+
+/** The header the `cez task` CLI sends with the run id it acts for (its `CEZ_TASK_ID`). A wait
+ *  declared with it naming the waiter itself is the AGENT's; anything else is the user's. */
+export const TASK_ID_HEADER = 'x-cez-task-id';
 
 // ---- variant-compare response shapes (spec 010) ----------------------------
 // Named and exported so `api-types.test.ts` can drift-guard the cockpit's
@@ -1371,6 +1381,56 @@ export function createApp(deps: ServerDeps) {
   }
   contexts.onStoreCreated((store) => providerRuntimeAuth.watch(store));
   contexts.onContextBuilt((ctx) => providerRuntimeAuth.watch(ctx.store));
+
+  // ---- cross-task waits (spec 2026-10-05-cross-task-waits) ------------------
+  // ONE workspace-level resolver, started only while the capability is on: off, existing edges
+  // stay inert on their records and nothing subscribes. The boot sweep builds every project that
+  // still holds a pending edge, so a waiter in a non-boot project gets its deadline re-armed and
+  // its targets progress without anyone opening it.
+  const canonicalProjectId = async (raw: string): Promise<string> =>
+    raw === 'default' || raw === bootContext.id || raw === (await resolveBootProject()) ? bootContext.id : raw;
+  const waits = capabilities().taskWaits
+    ? connectWaitResolver({
+        bootContext,
+        contexts,
+        canonical: canonicalProjectId,
+        listProjects: async () => {
+          const selector = capabilities().singleProject ? { projectId: await resolveBootProject() } : undefined;
+          return listProjects(selector);
+        },
+        // Phase 2 — `cez task create --project`: an independent task in ANOTHER project, created
+        // and waited for in one request. It is dispatch-class exposure (an agent starting an
+        // agent), so it rides dispatch's switch as well as this one's, and dispatch's brakes.
+        createTarget: (waiter, target, input) => {
+          if (!capabilities().dispatch) {
+            return { status: 409, error: 'creating a task in another project rides task dispatch, which is off on this cockpit (CEZ_DISPATCH=0). Do not do that work yourself: stop and report that it is blocked on another project.' };
+          }
+          if (target.id === waiter.projectId) {
+            return { status: 400, error: 'that is this task\'s own project — dispatch a child instead (cez task create without --project)' };
+          }
+          const creatorCtx = waiter.projectId === bootContext.id ? bootContext : contexts.peek(waiter.projectId);
+          const targetCtx = target.id === bootContext.id ? bootContext : contexts.peek(target.id);
+          if (!creatorCtx || !targetCtx) return { status: 404, error: `unknown project: ${creatorCtx ? target.id : waiter.projectId}` };
+          const reserved = creatorCtx.manager.reserveWaitCreate(waiter.run.id, input.budget);
+          if ('refused' in reserved) return { status: 409, error: reserved.refused };
+          try {
+            const run = targetCtx.manager.startWaitTarget(
+              input,
+              { projectId: waiter.projectId, runId: waiter.run.id, title: waiter.run.titleSummary ?? waiter.run.title },
+              reserved.budgetUsd,
+            );
+            return { run, ...(reserved.budgetUsd !== undefined ? { budgetUsd: reserved.budgetUsd } : {}) };
+          } catch (err) {
+            return { status: 409, error: `could not start the task in ${target.id}: ${err instanceof Error ? err.message : String(err)}` };
+          }
+        },
+      })
+    : undefined;
+  const waitResolver = waits?.resolver;
+  if (waits) {
+    void waits.resolver.bootSweep();
+    deps.onDispose?.(() => waits.disconnect());
+  }
 
   const app = new Hono();
 
@@ -2630,6 +2690,9 @@ export function createApp(deps: ServerDeps) {
       // closed (index flushed), manager's timers and usage subscription dropped.
       trackerWatches.invalidateProject(entry.root);
       contexts.dispose(id);
+      // A removed project's targets will never settle: every edge waiting on one resolves
+      // `target-unavailable` now. Here, NOT in `dispose` — shutdown disposes every context too.
+      waitResolver?.projectRemoved(id);
       workspaceEvents.emit('project-removed', { id });
       const body: RemoveProjectResponse = { removed: true, id };
       return c.json(body);
@@ -3991,6 +4054,12 @@ export function createApp(deps: ServerDeps) {
     await next();
   };
 
+  /** The waits gate — `requireDispatch`'s twin for `CEZ_TASK_WAITS=0`, on explicit paths. */
+  const requireWaits = async (c: Context, next: Next) => {
+    if (!capabilities().taskWaits || !waitResolver) return c.json({ error: WAITS_OFF }, 409);
+    await next();
+  };
+
   // ---- chained family: dispatch (project-scoped) ----
   // A task dispatching other tasks (spec 2026-09-10-dispatch). Both routes are what the `cez task`
   // CLI calls from inside a running agent, with CEZ_API_URL / CEZ_PROJECT_ID / CEZ_TASK_ID from
@@ -4014,6 +4083,32 @@ export function createApp(deps: ServerDeps) {
       const recorded = manager.recordReport(c.req.param('id'), c.req.valid('json'));
       if (!recorded) return c.json({ error: 'run is not part of a dispatch tree' }, 404);
       return c.json({ ok: true as const });
+    })
+
+    // ---- cross-task waits (spec 2026-10-05-cross-task-waits) ----
+    .use('/runs/:id/waits', requireWaits)
+    .use('/runs/:id/waits/:waitId', requireWaits)
+
+    /** Run `:id` waits for another task (or creates one in another project and waits for it).
+     *  `origin` is derived here, never read from the body: `agent` when the `cez task` CLI acts
+     *  for this very run (its task-id header), `user` otherwise. */
+    .post('/runs/:id/waits', jsonZodValidator(waitInputSchema), async (c) => {
+      const resolver = waitResolver;
+      if (!resolver) return c.json({ error: WAITS_OFF }, 409);
+      const id = c.req.param('id');
+      const origin = c.req.header(TASK_ID_HEADER) === id ? ('agent' as const) : ('user' as const);
+      const result = await resolver.declare(c.get('project').id, id, c.req.valid('json'), origin);
+      if (isWaitRefusal(result)) return c.json({ error: result.error }, result.status);
+      return c.json(result);
+    })
+
+    /** "Stop waiting": resolve one pending edge of run `:id` as `cancelled`. */
+    .delete('/runs/:id/waits/:waitId', (c) => {
+      const resolver = waitResolver;
+      if (!resolver) return c.json({ error: WAITS_OFF }, 409);
+      const result = resolver.cancel(c.get('project').id, c.req.param('id'), c.req.param('waitId'));
+      if (isWaitRefusal(result)) return c.json({ error: result.error }, result.status);
+      return c.json(result);
     });
 
   // ---- runs ----------------------------------------------------------------

@@ -9,6 +9,7 @@
  */
 import {
   DISPATCH_MAX_IN_FLIGHT,
+  type WaitEdge,
   type DispatchInput,
   type DispatchPendingReport,
   type DispatchReport,
@@ -59,7 +60,14 @@ export function inFlightChildren(runs: readonly RunRecord[], parentId: string): 
  * a child with no ceiling of its own consumes nothing here, which is exactly why a spawn is only
  * allowed to omit `max_cost` while something is left.
  */
-export function remainingBudgetUsd(parent: RunRecord, children: readonly RunRecord[]): number | undefined {
+export function remainingBudgetUsd(
+  parent: RunRecord,
+  children: readonly RunRecord[],
+  /** Tasks the parent CREATED in other projects and waits for (spec 2026-10-05-cross-task-waits,
+   *  Phase 2). They live in other projects' stores, out of `children`'s reach, so their edges on
+   *  the parent stand in for them — the same reserve-then-actual rule (`createdCharge`). */
+  created: readonly WaitEdge[] = [],
+): number | undefined {
   const budget = parent.dispatch?.budgetUsd;
   if (budget === undefined) return undefined;
   // A child still in flight reserves its whole ceiling — it may yet spend it. A SETTLED child is
@@ -77,7 +85,38 @@ export function remainingBudgetUsd(parent: RunRecord, children: readonly RunReco
       ? (settledCost ?? child.dispatch?.budgetUsd ?? 0)
       : (child.dispatch?.budgetUsd ?? 0));
   }, 0);
-  return budget - (parent.costUsd ?? 0) - promised;
+  const promisedElsewhere = created.reduce((sum, edge) => sum + createdCharge(edge), 0);
+  return budget - (parent.costUsd ?? 0) - promised - promisedElsewhere;
+}
+
+/**
+ * What one created-elsewhere task costs its creator's budget: its whole reservation (`budgetUsd`)
+ * while it may still spend — the edge is pending, or it resolved early (cancelled, timed out) and
+ * the target was still running — and what it actually cost once the TARGET is known to have
+ * settled (a positive `outcome.costUsd` with a terminal `outcome.status`). A zero or missing cost
+ * is no evidence the work was free, exactly as for a settled child above.
+ */
+export function createdCharge(edge: WaitEdge): number {
+  if (!edge.created) return 0;
+  const reserved = edge.budgetUsd ?? 0;
+  if (!createdTargetSettled(edge)) return reserved;
+  const actual = edge.outcome?.costUsd;
+  return actual !== undefined && actual > 0 ? actual : reserved;
+}
+
+/** Has a created edge's TARGET settled, as far as the edge knows? A pending edge, or one resolved
+ *  early while its target still ran, says no — the target may still be spending. */
+function createdTargetSettled(edge: WaitEdge): boolean {
+  if (edge.state === 'pending') return false;
+  if (edge.state === 'target-deleted' || edge.state === 'target-unavailable') return true;
+  return edge.outcome !== undefined && isTerminalStatus(edge.outcome.status);
+}
+
+/** The tasks a run created in other projects that may still be working — what counts against its
+ *  in-flight cap. Not just pending edges: "Stop waiting" or a deadline ends the WAIT, not the task
+ *  it created, which keeps running (and is tracked to its settle by the resolver). */
+export function pendingCreated(run: RunRecord): WaitEdge[] {
+  return (run.waits ?? []).filter((edge) => edge.created && !createdTargetSettled(edge));
 }
 
 /** A dollar amount as the transcript and the task order spell it. */
