@@ -62,7 +62,7 @@ const serverSchema = z
     command: z.string().min(1).optional(),
     args: z.array(z.string()).optional(),
     env: stringRecord.optional(),
-    url: z.url().optional(),
+    url: z.url({ protocol: /^https?$/ }).optional(),
     headers: stringRecord.optional(),
   })
   .passthrough();

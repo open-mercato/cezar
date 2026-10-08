@@ -52,6 +52,20 @@ describe('parsePrivateMcp', () => {
     expect(problems).toHaveLength(2);
   });
 
+  it('accepts only http(s) URLs for remote servers', () => {
+    const { servers: parsed, problems } = parsePrivateMcp(
+      JSON.stringify({
+        mcpServers: {
+          local: { type: 'http', url: 'file:///etc/passwd' },
+          script: { type: 'sse', url: 'javascript:alert(1)' },
+          ok: { type: 'sse', url: 'http://127.0.0.1:9000/sse' },
+        },
+      }),
+    );
+    expect(parsed.map((s) => s.name)).toEqual(['ok']);
+    expect(problems.map((p) => p.split(' skipped')[0])).toEqual(['MCP server "local"', 'MCP server "script"']);
+  });
+
   it('degrades a broken or empty file to no servers', () => {
     expect(parsePrivateMcp('').servers).toEqual([]);
     expect(parsePrivateMcp('{nope').problems[0]).toMatch(/not valid JSON/);
