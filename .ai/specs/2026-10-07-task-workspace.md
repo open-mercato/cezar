@@ -155,14 +155,19 @@ list as a shortcut.
 - Show one horizontal row of saved layout cards. This replaces the current Session/Changes/Commits/Files navigation tabs and is the only layout tab row in the workspace.
 - A new task starts with one active card named `Czat` and a `Nowy układ` button. Do not create
   extra layouts by default.
-- Clicking `Nowy układ` opens the view picker. Selecting an enabled tile creates a new layout with
-  one full-width column, names it after that view (`Zmiany`, then `Zmiany 2`…) and activates it.
+- Clicking `Nowy układ` opens the TILE picker. Selecting an enabled tile creates a new layout with
+  one full-width column, gives it the next automatic name (`Układ 2`, `Układ 3`…) and activates it.
   Closing the picker before choosing cancels creation.
-
-  > Implemented as the view's own name rather than `Układ 2`: a strip of `Układ 2 / Układ 3` says
-  > nothing about what each card holds, and the name is editable either way.
 - Available view tiles are `Czat`, `Zmiany`, `Commity`, `Pliki` and `Przeglądarka`. The first four
-  are enabled in Milestone 1. `Przeglądarka` remains visible but disabled until built. Terminal is separate.
+  landed in Milestone 1 and `Przeglądarka` in Milestone 3, so all five are enabled. Terminal is
+  separate — it is the bottom drawer, not a column.
+
+  > **IMPLEMENTATION NOTE — the tile is never disabled, including on a hosted cockpit.** §7 says
+  > "The user may type any URL, including task app addresses and external sites such as GitHub",
+  > so the column is useful wherever the cockpit runs. What a hosted cockpit cannot do is show
+  > THIS TASK's own app, because a loopback address there resolves on the viewer's machine —
+  > `capabilities.preview` reports that, and the column refuses such an address with the reason
+  > rather than the picker refusing the whole view.
 - Layout names are unique within the task. **Double-click a card to rename it** (§5.2). Right-click
   opens a context menu carrying the same actions:
   - Rename: Enter edit mode, save on Enter or click outside
@@ -178,7 +183,7 @@ list as a shortcut.
 
 #### Columns within a layout
 
-- A layout contains 1 to 3 side-by-side columns. Rows and nested splits are not supported.
+- A layout contains 0 to 3 side-by-side columns (zero after its last column is closed — §10). Rows and nested splits are not supported.
   The same view may appear in more than one column (duplicates allowed).
 - A new layout starts with one full-width column showing the chosen view.
 - To add another column, click the `+` at the **right edge of the view area**; the column menu
@@ -211,20 +216,16 @@ list as a shortcut.
   > fact destroyed; the warning is built because §5.2 asks for it, and it is the one place where
   > literal compliance costs a redundant dialog.
 
-  > CORRECTED DURING IMPLEMENTATION (2026-10-07). Earlier drafts of this spec asked for a
-  > `Zamknij mimo to` / `Wróć` warning when a Zmiany column holding an unsent diff comment was
-  > replaced, and said a Czat column's composer text would be discarded. Neither is true in this
-  > codebase, and the warning would have been a dialog about a loss that cannot happen:
+  > **Why neither is destroyed, and what that costs.** Composer text goes through
+  > `useDraft(runId, surface)` (`routes/task-thread/thread-draft.ts`) and diff comments through
+  > `useDiffComments(runId)` (`routes/task-thread/diff-comments.ts`); both are backed by the
+  > server drafts surface, keyed by run. Unmounting a column discards neither, and both reappear
+  > when a column shows that view again.
   >
-  > - Composer text goes through `useDraft(runId, surface)`
-  >   (`routes/task-thread/thread-draft.ts`), which reads `useRunDrafts` and writes `putRunDraft` —
-  >   the draft is SERVER state keyed by run and surface, not component state.
-  > - Diff comments go through `useDiffComments(runId)`
-  >   (`routes/task-thread/diff-comments.ts`), whose store is held in a `WeakMap` keyed by the
-  >   QueryClient — app-level, not column-level — and is backed by the same drafts surface.
-  >
-  > Unmounting a column therefore discards neither, and both reappear when a column shows that
-  > view again. A warning here would be dishonest, so there is none.
+  > So §5.2's Czat half is met by construction: nothing is discarded and nothing warns. Its Zmiany
+  > half is built as written anyway — the dialog above — because it was approved, and the only
+  > honest thing to say about it is that it warns about a loss that does not occur. Removing it is
+  > a one-line change if that trade is not wanted.
 - Switching to a different saved layout preserves all columns and their state, including unsent Czat text.
 
 #### Narrow screens

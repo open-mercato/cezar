@@ -10,27 +10,18 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 
-import { useHealth } from '@/api/queries'
-
 import { VIEW_IDS, viewLabel, type ViewId } from './layout-state'
 
-/**
- * Why a view may not be pickable here (spec §9, Milestone 3: "Enable the Browser view only when
- * preview is supported for the task's host"; §5.1: an unavailable panel shows an "explicitly
- * labeled, actionable unavailable state" rather than looking functional).
+/*
+ * Every view here is pickable, Browser included, on every cockpit.
  *
- * Only Browser has one today, and only on a hosted cockpit, where a loopback address resolves on
- * the VIEWER's machine instead of the host the task runs on — so the column could not show this
- * task's app however convincingly it rendered.
+ * `capabilities.preview` says whether THIS TASK'S OWN APP can be shown (§9, Milestone 3) — not
+ * whether the column works. §7 is explicit that "The user may type any URL, including task app
+ * addresses and external sites such as GitHub", so disabling the tile on a hosted cockpit would
+ * take away a working browser to express a limit that only applies to one kind of address. The
+ * column itself says so, where the limit actually bites: `browser-view.tsx` refuses a loopback
+ * address on a hosted cockpit with the reason, and loads everything else.
  */
-function useViewBlock(): (view: ViewId) => string | undefined {
-  const health = useHealth()
-  const preview = health.data?.capabilities?.preview ?? true
-  return (view) =>
-    view === 'browser' && !preview
-      ? 'Podgląd aplikacji zadania jest dostępny tylko na lokalnym cockpicie — ten działa na zdalnym hoście.'
-      : undefined
-}
 
 const VIEW_ICONS: Record<ViewId, ComponentType<{ className?: string }>> = {
   session: MessageSquareTextIcon,
@@ -65,12 +56,10 @@ export function ViewItems({
    */
   purpose?: 'set' | 'add'
 }) {
-  const blocked = useViewBlock()
   return (
     <>
       {VIEW_IDS.map((view) => {
         const Icon = VIEW_ICONS[view]
-        const block = blocked(view)
         return (
           <DropdownMenuItem
             key={view}
@@ -78,9 +67,7 @@ export function ViewItems({
                thing a copy change would move, and the view id is the thing that cannot. */
             data-view={view}
             data-view-action={purpose}
-            data-unavailable={block ? '' : undefined}
-            title={block}
-            disabled={view === disabled || block !== undefined}
+            disabled={view === disabled}
             onSelect={() => onPick(view)}
           >
             <Icon aria-hidden="true" />
@@ -116,7 +103,6 @@ export function ViewPickerMenu({
   onPick: (view: ViewId) => void
   align?: 'start' | 'end'
 }) {
-  const blocked = useViewBlock()
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
@@ -126,15 +112,11 @@ export function ViewPickerMenu({
         <div data-slot="view-tiles" className="grid grid-cols-3 gap-1 p-1">
           {VIEW_IDS.map((view) => {
             const Icon = VIEW_ICONS[view]
-            const block = blocked(view)
             return (
               <DropdownMenuItem
                 key={view}
                 data-view={view}
                 data-view-action="create"
-                data-unavailable={block ? '' : undefined}
-                title={block}
-                disabled={block !== undefined}
                 onSelect={() => onPick(view)}
                 className="flex h-16 flex-col items-center justify-center gap-1 rounded-md border border-border text-center text-xs"
               >

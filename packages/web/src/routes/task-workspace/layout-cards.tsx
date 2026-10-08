@@ -19,9 +19,10 @@ import { ViewPickerMenu } from './view-picker'
  * whole of the spec's "do not show both strips", and it is why `RunHeader` takes the row as a
  * slot rather than growing a second one.
  *
- * Visually the same underline-tab grammar `components/tab-link.tsx` paints (confirmed decision,
- * 2026-10-07: keep today's look), but these are BUTTONS, not links: a layout is not a URL, and
- * §5.3 keeps high-frequency layout state out of the address bar on purpose.
+ * Visually the same underline-tab grammar `components/tab-link.tsx` paints, which is what §3.1
+ * asks for — reuse the current conventions rather than invent a parallel one. But these are
+ * BUTTONS, not links: a layout is not a URL, and §5.3 keeps layout state out of the address bar
+ * on purpose.
  */
 export function LayoutCards({
   layouts,

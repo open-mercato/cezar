@@ -58,7 +58,11 @@ export function CommitsView({
   stateKey?: string
 }) {
   const { sha: shaFromUrl } = useParams<{ sha: string }>()
-  const [picked, setPicked] = useRememberedState<string | null>(stateKey, null)
+  // Seeded from the URL, so `/tasks/:id/commits/:sha` still opens THAT commit (spec §5.3 — the
+  // existing deep links keep working). It is only the initial value: once this column has a
+  // selection of its own, the URL stops speaking for it, which is what lets a second Commits
+  // column show something else.
+  const [picked, setPicked] = useRememberedState<string | null>(stateKey, shaFromUrl ?? null)
   const sha = stateKey === undefined ? shaFromUrl : (picked ?? undefined)
   const commits = useRunCommits(run.id, isRunActive(run.status))
 

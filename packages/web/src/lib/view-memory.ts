@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 
 /**
  * State that survives a remount, keyed by whatever identifies the view instance.
@@ -34,9 +34,16 @@ export function resetViewMemory(): void {
  * passes, so the standalone routes behave exactly as they always did.
  */
 export function useRememberedState<T>(key: string | undefined, initial: T): [T, (value: T) => void] {
-  const [value, setValue] = useState<T>(() =>
-    key !== undefined && memory.has(key) ? (memory.get(key) as T) : initial,
-  )
+  const read = () => (key !== undefined && memory.has(key) ? (memory.get(key) as T) : initial)
+  const [value, setValue] = useState<T>(read)
+  // The key can change WITHOUT a remount — a layout renamed, a column reordered — and the old
+  // value must not then be written under the new name. Re-read during render rather than in an
+  // effect, so the column never paints the previous key's answer for a frame.
+  const seen = useRef(key)
+  if (seen.current !== key) {
+    seen.current = key
+    setValue(read())
+  }
   const set = useCallback(
     (next: T) => {
       if (key !== undefined) memory.set(key, next)

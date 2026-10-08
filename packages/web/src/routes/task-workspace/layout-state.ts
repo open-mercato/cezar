@@ -330,7 +330,7 @@ export function addLayout(state: WorkspaceState, view: ViewId): WorkspaceState {
  * which is the tab grammar every editor uses. Closing the last card leaves no layouts at all:
  * that empty workspace is the user's own state and stays empty for this visit, and the next
  * `readState` for the task hands back a fresh `Czat` because an empty saved list is unreadable
- * (see `reviveState`). Those two rules are the confirmed decision, and they only agree because
+ * (see `reviveState`). Those two rules are both §5.3's, and they only agree because
  * the emptiness is never persisted as a legitimate shape.
  */
 export function closeLayout(state: WorkspaceState, name: string): WorkspaceState {

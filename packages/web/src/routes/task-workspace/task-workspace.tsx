@@ -1,6 +1,6 @@
 import { LayoutGridIcon, MessageSquareTextIcon, SearchXIcon, TerminalIcon } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useParams } from 'react-router'
+import { useNavigationType, useParams } from 'react-router'
 
 import { ApiError } from '@/api/client'
 import {
@@ -149,6 +149,7 @@ function WorkspaceView({
   // `/tasks/:id` — otherwise the canonical URL silently shows the surface the previous entry
   // asked for. The card itself stays (the spec saves it); only the SELECTION is restored, to
   // whatever was active before the hop.
+  const navigationType = useNavigationType()
   const beforeDeepLink = useRef<{ runId: string; name: string } | null>(null)
   useEffect(() => {
     if (!layouts.ready) return
@@ -163,13 +164,17 @@ function WorkspaceView({
     }
     const previous = beforeDeepLink.current
     beforeDeepLink.current = null
+    // Only a POP — Back or Forward. §5.3 asks the deep link to preserve "browser Back behavior",
+    // and nothing more: following an in-app link to `/tasks/:id` after deliberately choosing
+    // another card should leave that choice alone, not yank the user back to the pre-link one.
+    if (navigationType !== 'POP') return
     if (previous && previous.runId === run.id && previous.name !== layouts.state.active) {
       selectLayout(previous.name)
     }
     // `layouts.state.active` is deliberately NOT a dependency: this runs on a navigation, and
     // re-running it whenever the user picks another card would drag them back to the old one.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deepLinkView, layouts.ready, openDeepLink, run.id, selectLayout])
+  }, [deepLinkView, layouts.ready, navigationType, openDeepLink, run.id, selectLayout])
 
   const markedUnread = useCallback(() => onMarkedUnread(run.id), [onMarkedUnread, run.id])
 

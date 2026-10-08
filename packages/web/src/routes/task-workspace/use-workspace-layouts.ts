@@ -93,6 +93,8 @@ export function useWorkspaceLayouts(taskId: string): WorkspaceLayouts {
     loaded.current = { taskId, state: null }
     setState(defaultState())
     setReady(false)
+    // Task A's "could not save" is not a fact about task B — the banner goes with the task.
+    setSaveFailed(false)
   }
 
   useEffect(() => {
@@ -135,27 +137,67 @@ export function useWorkspaceLayouts(taskId: string): WorkspaceLayouts {
    */
   const pending = useRef<ReturnType<typeof setTimeout> | null>(null)
   const seq = useRef(0)
+  /** The newest (task, state) a save would be for. Read by the flush paths, which run outside the
+   *  render that produced them. */
+  const latest = useRef<{ taskId: string; state: WorkspaceState } | null>(null)
+
+  const save = useCallback((forTask: string, value: WorkspaceState) => {
+    const ticket = (seq.current += 1)
+    void putRunLayouts(forTask, value)
+      .then(() => {
+        if (ticket === seq.current) setSaveFailed(false)
+      })
+      .catch(() => {
+        // Only the newest save speaks: an older one failing says nothing about what is stored.
+        if (ticket === seq.current) setSaveFailed(true)
+      })
+  }, [])
+
+  /** Send the pending change now, if there is one. */
+  const flush = useCallback(() => {
+    if (!pending.current) return
+    clearTimeout(pending.current)
+    pending.current = null
+    const due = latest.current
+    if (due) save(due.taskId, due.state)
+  }, [save])
+
   useEffect(() => {
     // Nothing to save until the host has answered, and never an echo of what it just sent.
     if (!ready || loaded.current.taskId !== taskId || state === loaded.current.state) return
+    latest.current = { taskId, state }
     if (pending.current) clearTimeout(pending.current)
     pending.current = setTimeout(() => {
       pending.current = null
-      const ticket = (seq.current += 1)
-      void putRunLayouts(taskId, state)
-        .then(() => {
-          if (ticket === seq.current) setSaveFailed(false)
-        })
-        .catch(() => {
-          // Only the newest save speaks: an older one failing says nothing about what is stored.
-          if (ticket === seq.current) setSaveFailed(true)
-        })
+      save(taskId, state)
     }, SAVE_DEBOUNCE_MS)
+    // Only the timer is cleared here: this cleanup runs on EVERY change, and flushing from it
+    // would send one write per pointermove — the thing the debounce exists to prevent. The two
+    // cases that must not lose the change are handled below.
     return () => {
       if (pending.current) clearTimeout(pending.current)
       pending.current = null
     }
-  }, [ready, taskId, state])
+  }, [ready, save, taskId, state])
+
+  /**
+   * Leaving must not drop the last change.
+   *
+   * This cleanup runs only when the TASK changes or the workspace unmounts — never on an ordinary
+   * state change — so it is the one place a pending write is the user's final word rather than
+   * something a newer render is about to supersede. Without it the debounce had a way to lose
+   * work outright: build a split, leave the task, come back to the layout you had before it.
+   *
+   * `pagehide` covers the other exit, closing the tab or reloading, which React never sees.
+   */
+  useEffect(() => {
+    const onHide = () => flush()
+    window.addEventListener('pagehide', onHide)
+    return () => {
+      window.removeEventListener('pagehide', onHide)
+      flush()
+    }
+  }, [flush, taskId])
 
   // Every action is the pure transition applied to the LATEST state (the updater form), so a
   // double-invoked render or two clicks in one tick cannot drop one of them. The active card's

@@ -244,19 +244,34 @@ describe(`the task Commits tab on a ${COMMITS}-commit branch`, () => {
       if (m.scrollTop !== 0) { m.scrollTop = 0; m.dispatchEvent(new Event('scroll', { bubbles: true })); return false }
       return document.querySelector('[data-sha="${newestSha}"]') !== null
     })()`)
-    // The virtualized row is a real link, not a positioned decoration. Navigate to its
-    // observed href explicitly: clicking a node while virtua re-parents its window can lose
-    // the browser event even though the product link itself is correct.
-    const href = browser.evaluate(
-      `document.querySelector('[data-slot="commit-row"][data-sha="${newestSha}"]').getAttribute('href')`,
-    ) as string
-    expect(href).toContain(`/commits/${newestSha}`)
-    browser.goto(`${baseUrl}${href}`)
-    browser.waitForFunction(
-      `document.querySelector('[data-slot="task-commit"]') !== null`,
+    // Inside a workspace column the row SELECTS rather than navigates: the selection is the
+    // column's own, so two Commits columns can show two different commits and each layout gets
+    // its own back (spec §5.4). A URL change would move every column at once.
+    // Dispatched rather than pointer-clicked, for the reason this spec already documented about
+    // the link: virtua can re-parent the row's window between the hit test and the event, and the
+    // harness then loses a real click on a node that is perfectly correct.
+    browser.evaluate(
+      `document.querySelector('[data-slot="commit-row"][data-sha="${newestSha}"]').click()`,
     )
-    browser.waitForFunction(
-      `document.querySelector('[data-slot="diff-file"]') !== null`,
-    )
+    browser.waitForFunction(`document.querySelector('[data-slot="task-commit"]') !== null`)
+    browser.waitForFunction(`document.querySelector('[data-slot="diff-file"]') !== null`)
+    expect(
+      browser.evaluate(`document.querySelector('[data-slot="task-commit"]').dataset.sha`),
+    ).toBe(newestSha)
+    // The URL did not move, and "All commits" clears the selection in place.
+    expect(browser.url().endsWith(`/commits/${newestSha}`)).toBe(false)
+    browser.click('[data-slot="commit-back"]')
+    browser.waitForFunction(`document.querySelector('[data-slot="task-commit"]') === null`)
+  }, 60_000)
+
+  it('still cold-loads a commit from its own deep link', () => {
+    // §5.3: the existing `/tasks/:id/commits/:sha` URL keeps working — what changed is that
+    // clicking a row no longer mints one, not that the URL stopped resolving.
+    browser.goto(`${baseUrl}/tasks/${RUN_ID}/commits/${newestSha}`)
+    browser.waitForFunction(`document.querySelector('[data-slot="task-commit"]') !== null`)
+    browser.waitForFunction(`document.querySelector('[data-slot="diff-file"]') !== null`)
+    expect(
+      browser.evaluate(`document.querySelector('[data-slot="task-commit"]').dataset.sha`),
+    ).toBe(newestSha)
   }, 60_000)
 })
