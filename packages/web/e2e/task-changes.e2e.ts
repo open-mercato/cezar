@@ -151,8 +151,9 @@ describe('the Changes tab against a live dry run', () => {
     browser.waitForFunction(`document.querySelector('[data-slot="git-toolbar"]') !== null`)
     expect(browser.url()).toBe(`${baseUrl}${scoped(`/tasks/${runId}`)}`)
 
-    // The new card is active and carries the next automatic name (§5.2); the column says which
-    // view it holds.
+    // The new card is active and carries the next AUTOMATIC name — this is the `Nowy układ`
+    // path (§5.2, "`Układ 2`, `Układ 3`…"), not a deep link, which is the one that names a card
+    // after its view (§5.3). The column says which view it holds.
     expect(
       browser.evaluate(
         `document.querySelector('[data-slot="layout-cards"] [aria-current="page"]').textContent`,

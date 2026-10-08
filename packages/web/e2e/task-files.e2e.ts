@@ -133,13 +133,13 @@ describe('the Files tab against a live dry-run worktree', () => {
 
     // The workspace replaced the Session/Changes/Commits/Files tab strip with saved-layout cards
     // (spec `.ai/specs/2026-10-07-task-workspace.md` §5.2). A `/files` deep link keeps its meaning
-    // by opening its view as a new one-column card carrying "the next automatic unique layout
-    // name" (§5.3) — so the COLUMN, not the card label, is what names the surface now.
+    // by opening its view as a new one-column card named AFTER THAT VIEW — §5.3 asks for
+    // "`Zmiany` if doesn't exist, else `Zmiany 2`", and §11 spells it out per route.
     expect(
       browser.evaluate(
         `document.querySelector('[data-slot="layout-cards"] [aria-current="page"]').textContent`,
       ),
-    ).toBe('Układ 2')
+    ).toBe('Pliki')
     expect(browser.count('[data-slot="workspace-column"][data-view="files"]')).toBe(1)
     // The real worktree root: the committed fixture files plus the src dir.
     expect(browser.count('[data-slot="files-file"][data-path="README.md"]')).toBe(1)
