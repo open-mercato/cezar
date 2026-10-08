@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { useHostTransport } from '@/api/host-usage'
+import { useHealth } from '@/api/queries'
 import { CenteredState } from '@/components/centered-state'
 import { cn } from '@/lib/utils'
 
@@ -75,7 +75,7 @@ export function BrowserView({
    *  holds. */
   const [target, setTarget] = useState(current)
   const frameRef = useRef<HTMLIFrameElement>(null)
-  const transport = useHostTransport()
+  const health = useHealth()
   /**
    * The address this view itself just persisted, and for which tab.
    *
@@ -101,7 +101,17 @@ export function BrowserView({
     setStatus(current === '' ? 'idle' : 'loading')
   }, [active, current])
 
-  const refused = target !== '' && transport === 'remote' && isLoopback(target)
+  /**
+   * A loopback address this cockpit cannot honestly show.
+   *
+   * Read from `capabilities.preview` — the server's own answer to "can a task's app be previewed
+   * from here" (spec §9, Milestone 3) — rather than inferred from the transport. The two agree
+   * today, but the preview question is the one being asked, and a comment claiming this while
+   * the code consulted something else was exactly the kind of drift this feature has already
+   * produced once.
+   */
+  const canPreview = health.data?.capabilities?.preview ?? true
+  const refused = target !== '' && !canPreview && isLoopback(target)
 
   // A page that never fires `load` is the only failure an embedder can detect at all.
   useEffect(() => {

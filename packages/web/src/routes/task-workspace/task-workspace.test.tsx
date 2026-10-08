@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router'
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
@@ -115,7 +115,7 @@ function stubFetch(overrides: Record<string, () => Response> = {}) {
 function renderWorkspace(view?: ViewId) {
   const path = view === undefined ? '/tasks/:id' : `/tasks/:id/${view}`
   const entry = view === undefined ? '/tasks/r1' : `/tasks/r1/${view}`
-  render(
+  return render(
     <QueryClientProvider client={createQueryClient()}>
       <MemoryRouter initialEntries={[entry]}>
         <Routes>
@@ -123,6 +123,18 @@ function renderWorkspace(view?: ViewId) {
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
+  )
+}
+
+/** Buttons that drive the MemoryRouter's own history, so Back and Forward are real POPs. */
+function HistoryProbe() {
+  const navigate = useNavigate()
+  return (
+    <>
+      <button type="button" aria-label="go-changes" onClick={() => void navigate('/tasks/r1/changes')} />
+      <button type="button" aria-label="back" onClick={() => void navigate(-1)} />
+      <button type="button" aria-label="forward" onClick={() => void navigate(1)} />
+    </>
   )
 }
 
@@ -330,6 +342,40 @@ describe('the task workspace', () => {
     )
   })
 
+  it('does not mint a card for every Back-and-Forward across a deep link', async () => {
+    // Six presses used to leave `Układ 2, 3, 4` behind, saved on the host: Back cleared the hop,
+    // so the Forward looked like a fresh arrival. §5.3 — "existing saved layouts remain
+    // unchanged" — and §10's browser-history clause.
+    stubFetch()
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/tasks/r1']}>
+          <Routes>
+            <Route path="/tasks/:id" element={<TaskWorkspaceRoute />} />
+            <Route path="/tasks/:id/changes" element={<TaskWorkspaceRoute view="changes" />} />
+          </Routes>
+          <HistoryProbe />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    await ready()
+    await waitFor(() => expect(cards()).toHaveLength(1))
+
+    fireEvent.click(screen.getByRole('button', { name: 'go-changes' }))
+    await waitFor(() => expect(cards()).toHaveLength(2))
+
+    for (let round = 0; round < 3; round += 1) {
+      fireEvent.click(screen.getByRole('button', { name: 'back' }))
+      await waitFor(() => expect(columnViews()).toEqual(['session']))
+      fireEvent.click(screen.getByRole('button', { name: 'forward' }))
+      await waitFor(() => expect(columnViews()).toEqual(['changes']))
+    }
+
+    // Still the one card the first hop made.
+    expect(cards()).toHaveLength(2)
+    expect(cardNames()).toEqual(['Czat', 'Układ 2'])
+  })
+
   it('coalesces a divider drag into one save', async () => {
     // Spec §5.3 names high-frequency divider movement as the thing NOT to persist per event.
     // Without a debounce each `pointermove` was its own PUT, and each PUT an atomic file write
@@ -363,6 +409,30 @@ describe('the task workspace', () => {
 
     // Twelve moves, one save — not twelve.
     expect(puts.length - afterAdd).toBe(1)
+  })
+
+  it('saves the last change even when you leave the task straight away', async () => {
+    // The other half of the debounce. Cancelling the pending timer on the way out loses the
+    // user's final change — build a split, leave, come back to the layout you had before it —
+    // and the first attempt at a flush looked for a pending TIMER, which React's
+    // declaration-order cleanup had already cleared. This pins the outcome, not the mechanism.
+    stubFetch()
+    const view = renderWorkspace()
+    await ready()
+
+    await openColumnMenu()
+    pickView('Pliki', 'add')
+    await waitFor(() => expect(columnViews()).toEqual(['session', 'files']))
+
+    // Leave well inside the debounce window.
+    view.unmount()
+
+    await waitFor(() =>
+      expect(savedLayouts('r1').layouts[0]!.columns.map((column) => column.view)).toEqual([
+        'session',
+        'files',
+      ]),
+    )
   })
 
   it('opens a deep link as its own card and leaves the saved layouts alone', async () => {

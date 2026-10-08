@@ -19,7 +19,11 @@ import type { BrowserState } from './layout-state'
  * present twelve seconds after a load that worked.
  */
 
-vi.mock('@/api/host-usage', () => ({ useHostTransport: () => 'local' as const }))
+// A local cockpit: `capabilities.preview` true, so a loopback address is framed rather than
+// refused — which is the path these cases are about.
+vi.mock('@/api/queries', () => ({
+  useHealth: () => ({ data: { capabilities: { preview: true } } }),
+}))
 
 /** Drive the one load event an iframe gets, the way the browser would. */
 function fireFrameLoad() {

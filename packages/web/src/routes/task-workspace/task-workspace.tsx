@@ -151,6 +151,24 @@ function WorkspaceView({
   // whatever was active before the hop.
   const navigationType = useNavigationType()
   const beforeDeepLink = useRef<{ runId: string; name: string } | null>(null)
+  /**
+   * The card each deep-linked view minted during THIS visit to this task.
+   *
+   * Without it, Back-then-Forward across a deep link minted a card every time — Back cleared the
+   * hop and restored `Czat`, so the Forward looked like a brand-new arrival, and `openDeepLink`'s
+   * idempotence guard (which only holds while that card is still active) no longer applied. Six
+   * presses left `Układ 2, 3, 4` behind, saved on the host. Reusing the card this visit already
+   * made is not the same as adopting a layout the USER built, which §5.3 forbids and which this
+   * deliberately cannot do: only names minted here are ever in the map.
+   */
+  const hops = useRef<Map<ViewId, string>>(new Map())
+  const hopsRun = useRef(run.id)
+  if (hopsRun.current !== run.id) {
+    hopsRun.current = run.id
+    hops.current = new Map()
+    beforeDeepLink.current = null
+  }
+
   useEffect(() => {
     if (!layouts.ready) return
     if (deepLinkView) {
@@ -159,7 +177,12 @@ function WorkspaceView({
       if (beforeDeepLink.current?.runId !== run.id) {
         beforeDeepLink.current = { runId: run.id, name: layouts.state.active }
       }
-      openDeepLink(deepLinkView)
+      const minted = hops.current.get(deepLinkView)
+      if (minted !== undefined && layouts.state.layouts.some((layout) => layout.name === minted)) {
+        selectLayout(minted)
+      } else {
+        openDeepLink(deepLinkView)
+      }
       return
     }
     const previous = beforeDeepLink.current
@@ -175,6 +198,17 @@ function WorkspaceView({
     // re-running it whenever the user picks another card would drag them back to the old one.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deepLinkView, layouts.ready, navigationType, openDeepLink, run.id, selectLayout])
+
+  // Record the card the hop produced, once the transition has landed. Recognised by shape — a
+  // one-column layout of exactly this view — so the OLD active can never be mistaken for it in
+  // the render before `openDeepLink` applies.
+  useEffect(() => {
+    if (!layouts.ready || !deepLinkView || hops.current.has(deepLinkView)) return
+    const active = layouts.layout
+    if (active && active.columns.length === 1 && active.columns[0]?.view === deepLinkView) {
+      hops.current.set(deepLinkView, active.name)
+    }
+  }, [deepLinkView, layouts.layout, layouts.ready])
 
   const markedUnread = useCallback(() => onMarkedUnread(run.id), [onMarkedUnread, run.id])
 

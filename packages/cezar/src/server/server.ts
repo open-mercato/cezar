@@ -5030,8 +5030,10 @@ export function createApp(deps: ServerDeps) {
    * never outlive their task through this surface.
    *
    * There is no DELETE: §5.3 removes layouts only when the task itself is permanently deleted,
-   * which the run-delete route does directly. Emptying the workspace is a PUT of an empty list,
-   * and the two answers are deliberately distinguishable (see `readRunLayouts`).
+   * which the run-delete route does directly. Emptying the workspace is a PUT of an empty list.
+   * The store keeps `null` and `[]` apart because they are different facts on disk; the COCKPIT
+   * opens a fresh `Czat` for both, which is §5.3's rule for a task whose layouts were all
+   * deleted.
    */
   const layoutRoutes = new Hono<ProjectApiEnv>()
     .get('/runs/:id/layouts', paramZodValidator(runIdParamSchema), (c) => {

@@ -121,9 +121,20 @@ Do not implement placeholder Browser or Terminal panels that imply they work. If
 release milestone, keep them out of the selectable panel list or show an explicitly labeled,
 actionable unavailable state.
 
-Each visible column has a **simple panel header** with:
-- View name identifier (e.g., "Zmiany")
-- Close (X) button
+Each visible column has a panel header using current Cezar components and visual conventions. The
+header identifies the view and provides relevant existing actions.
+
+> **OPEN DEVIATION — the header carries no view-specific actions.** As built it holds the view
+> name, a menu (change view / add column / close) and an X. The approved §5.1 asks for "relevant
+> existing actions" too, and that is NOT implemented.
+>
+> It is left open rather than guessed at because the same paragraph's next sentence pulls the
+> other way: "The body reuses the existing component instead of copying its UI or data fetching
+> logic." Each view's real actions — the diff's mode and wrap toggles, Changes' Push / Create PR /
+> Commit toolbar, the file tree's controls — are rendered by those components, inside the column.
+> Lifting them into the header means either re-implementing each toolbar there (the thing the
+> sentence forbids) or hoisting state out of four components that own it. Which of the two §5.1
+> intends is a product call, so it is recorded here instead of being decided quietly.
 
 The header uses current Cezar components and visual conventions. The body reuses the existing
 component instead of copying its UI or data fetching logic.
@@ -274,6 +285,17 @@ list as a shortcut.
 **Do not persist:**
 - High-frequency divider movements (resize operations)
 - Unsaved diff comments or composer drafts (those are view-local; saved between layout switches)
+
+> **OPEN DEVIATION — selecting a commit in a column does not move browser history.** The
+> standalone `/tasks/:id/commits/:sha` URL still opens that commit, and Back/Forward between two
+> such URLs works. But INSIDE a column the rows select in place rather than navigating, so Back
+> does not return from a commit diff to the list the way it did on the old route.
+>
+> The trade is forced: §5.4 asks each layout's view state to come back when you switch to it, and
+> a single URL cannot hold a different selected commit for two Commits columns. History fidelity
+> for the in-column case would need per-column state in the URL, which §5.3 rules out ("Do not put
+> high-frequency divider movement into the URL. A future shareable layout can be designed
+> separately"). Recorded rather than resolved.
 
 ### 5.4 Run lifecycle interactions
 

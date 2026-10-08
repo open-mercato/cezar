@@ -50,10 +50,12 @@ function layoutsPath(dataDir: string, runId: string): string | null {
 /**
  * The layouts saved for this run, or `null` when it has none.
  *
- * `null` and "an empty list" are deliberately different answers. A run with no file has never
- * been opened, and the cockpit opens it on a fresh `Czat`; a run whose file holds `layouts: []`
- * is one the user emptied on purpose, and §5.3 keeps that empty for the visit. Collapsing the two
- * would resurrect a card the user closed.
+ * `null` and "an empty list" are different facts and are kept apart here: no file at all means
+ * the task has never been opened, while `layouts: []` means every card was closed. The COCKPIT
+ * opens a fresh `Czat` for both — §5.3: "reopening that task creates a fresh default `Czat`
+ * layout" — so the distinction is the store's honesty about what it holds, not a behaviour the
+ * user sees. What stays empty across a reload is a CARD with no columns (§10), which is a
+ * layout and round-trips as one.
  */
 export function readRunLayouts(dataDir: string, runId: string): WorkspaceLayouts | null {
   const path = layoutsPath(dataDir, runId);

@@ -103,9 +103,10 @@ export function useWorkspaceLayouts(taskId: string): WorkspaceLayouts {
       let next: WorkspaceState
       try {
         const answer = await getRunLayouts(taskId)
-        // `null` means the task has never been opened — a fresh `Czat`. An empty list is a
-        // workspace the user emptied on purpose and stays empty (§5.3); `reviveState` keeps that
-        // distinction, and repairs anything malformed rather than failing.
+        // Both `null` and an empty list open a fresh `Czat`, which is what §5.3 asks for: "If the
+        // user deleted all layouts … reopening that task creates a fresh default `Czat` layout."
+        // The emptiness that DOES survive is a card with no columns (§10), which is a layout and
+        // revives as one. `reviveState` repairs anything malformed rather than failing.
         next = answer.layouts === null ? defaultState() : reviveState(answer.layouts)
       } catch {
         // An unreachable host is not a reason to refuse the task its workspace.
@@ -113,6 +114,9 @@ export function useWorkspaceLayouts(taskId: string): WorkspaceLayouts {
       }
       if (cancelled) return
       loaded.current = { taskId, state: next }
+      // What the host just gave us needs no saving back.
+      sent.current = next
+      latest.current = { taskId, state: next }
       setState(next)
       setReady(true)
     })()
@@ -141,7 +145,11 @@ export function useWorkspaceLayouts(taskId: string): WorkspaceLayouts {
    *  render that produced them. */
   const latest = useRef<{ taskId: string; state: WorkspaceState } | null>(null)
 
+  /** The last state a PUT was issued for. What makes a flush idempotent and a drop impossible. */
+  const sent = useRef<WorkspaceState | null>(null)
+
   const save = useCallback((forTask: string, value: WorkspaceState) => {
+    sent.current = value
     const ticket = (seq.current += 1)
     void putRunLayouts(forTask, value)
       .then(() => {
@@ -153,13 +161,20 @@ export function useWorkspaceLayouts(taskId: string): WorkspaceLayouts {
       })
   }, [])
 
-  /** Send the pending change now, if there is one. */
+  /**
+   * Send the newest change now, if it has not been sent.
+   *
+   * Keyed on WHAT WAS SENT, never on the timer handle. React runs effect cleanups in declaration
+   * order, so the debounce effect's cleanup — declared first — nulls `pending` before this one
+   * runs; a flush that asked "is a timer pending?" therefore always answered no on the way out,
+   * and silently dropped the user's last change. `sent` is the only thing that knows.
+   */
   const flush = useCallback(() => {
-    if (!pending.current) return
-    clearTimeout(pending.current)
-    pending.current = null
     const due = latest.current
-    if (due) save(due.taskId, due.state)
+    if (!due || due.state === sent.current) return
+    if (pending.current) clearTimeout(pending.current)
+    pending.current = null
+    save(due.taskId, due.state)
   }, [save])
 
   useEffect(() => {

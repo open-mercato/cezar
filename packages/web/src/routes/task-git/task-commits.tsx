@@ -1,5 +1,5 @@
 import { ArrowLeftIcon, GitCommitHorizontalIcon, SearchXIcon, TriangleAlertIcon } from 'lucide-react'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useParams } from 'react-router'
 
 import { Link } from '@/lib/project-router'
@@ -58,11 +58,21 @@ export function CommitsView({
   stateKey?: string
 }) {
   const { sha: shaFromUrl } = useParams<{ sha: string }>()
-  // Seeded from the URL, so `/tasks/:id/commits/:sha` still opens THAT commit (spec §5.3 — the
-  // existing deep links keep working). It is only the initial value: once this column has a
-  // selection of its own, the URL stops speaking for it, which is what lets a second Commits
-  // column show something else.
   const [picked, setPicked] = useRememberedState<string | null>(stateKey, shaFromUrl ?? null)
+  /**
+   * The URL wins whenever it CHANGES, and the column owns the selection the rest of the time.
+   *
+   * Seeding only the initial value was not enough: a second `/commits/:sha` link, and Back or
+   * Forward between two commit URLs, reuse the same card and therefore the same memory key, so
+   * the column kept showing the first commit (§10 — deep links and browser history keep their
+   * existing semantics). Tracking the last sha the URL carried is what tells a new URL from a
+   * re-render.
+   */
+  const lastUrlSha = useRef(shaFromUrl)
+  if (stateKey !== undefined && shaFromUrl !== lastUrlSha.current) {
+    lastUrlSha.current = shaFromUrl
+    if (shaFromUrl !== undefined && shaFromUrl !== picked) setPicked(shaFromUrl)
+  }
   const sha = stateKey === undefined ? shaFromUrl : (picked ?? undefined)
   const commits = useRunCommits(run.id, isRunActive(run.status))
 
