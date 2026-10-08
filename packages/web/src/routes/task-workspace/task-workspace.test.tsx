@@ -7,7 +7,17 @@ import { createQueryClient } from '@/api/query-client'
 import type { ApiRun, HealthResponse } from '@open-mercato/cezar-api-client'
 
 import { reviveState, type ViewId, type WorkspaceState } from './layout-state'
-import { TaskWorkspaceRoute } from './task-workspace'
+
+// The Graf column lazily pulls `@xyflow/react` and its layout engine. This suite is about the
+// LAYOUT, so the view stands in — what matters here is that the column mounts and says which
+// run it was handed.
+vi.mock('../workflow-graph/task-graph', () => ({
+  GraphView: ({ run, embedded }: { run: { id: string }; embedded?: boolean }) => (
+    <div data-testid="graph-view" data-run={run.id} data-embedded={embedded ? '' : undefined} />
+  ),
+}))
+
+const { TaskWorkspaceRoute } = await import('./task-workspace')
 
 beforeEach(() => {
   localStorage.clear()
@@ -606,6 +616,43 @@ describe('the task workspace', () => {
     // And the close X still closes, which is the behaviour the grip was costing.
     fireEvent.click(screen.getByRole('button', { name: 'Zamknij kolumnę Czat' }))
     await waitFor(() => expect(columnViews()).toEqual(['changes']))
+  })
+
+  it('offers Graf as a view and mounts it embedded in a column', async () => {
+    // Spec §5.1 (amended): the task's live workflow graph is a workspace view, so a layout can
+    // hold it beside the conversation instead of it being a page of its own.
+    stubFetch()
+    seedLayouts('r1', {
+      layouts: [{ name: 'Czat', columns: [{ view: 'session', width: 100 }] }],
+      active: 'Czat',
+    })
+    renderWorkspace()
+    await ready()
+    await waitFor(() => expect(columnViews()).toEqual(['session']))
+
+    await openColumnMenu(0)
+    pickView('Graf', 'add')
+
+    await waitFor(() => expect(columnViews()).toEqual(['session', 'graph']))
+    const graph = await screen.findByTestId('graph-view')
+    // Embedded, so it drops its own RunHeader — the workspace already has one.
+    expect(graph.getAttribute('data-embedded')).toBe('')
+    expect(graph.getAttribute('data-run')).toBe('r1')
+  })
+
+  it('opens /tasks/:id/graph as its own Graf card, like every other task URL', async () => {
+    // Before this, the graph was a page of its own with the legacy tab strip, and nothing in the
+    // workspace could reach it (§5.3 now covers all five task URLs).
+    stubFetch()
+    seedLayouts('r1', {
+      layouts: [{ name: 'Czat', columns: [{ view: 'session', width: 100 }] }],
+      active: 'Czat',
+    })
+    renderWorkspace('graph')
+    await ready()
+
+    await waitFor(() => expect(cardNames()).toEqual(['Czat', 'Graf']))
+    expect(columnViews()).toEqual(['graph'])
   })
 
   it('keeps two tasks apart when the route swaps run ids without remounting', async () => {

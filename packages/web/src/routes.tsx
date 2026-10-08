@@ -72,10 +72,10 @@ const TrackerRoute = lazy(() =>
   import('./routes/tracker/tracker').then((m) => ({ default: m.TrackerRoute })),
 )
 
-/** The live workflow graph of a task (same spec, phase 3) — the editor's chunk, loaded lazily. */
-const TaskGraphRoute = lazy(() =>
-  import('./routes/workflow-graph/task-graph').then((m) => ({ default: m.TaskGraphRoute })),
-)
+/* The live workflow graph of a task is no longer a route of its own: `/tasks/:id/graph` opens the
+   WORKSPACE with a Graf column, exactly as `/changes`, `/files` and `/commits` do (spec
+   `2026-10-07-task-workspace` §5.3). The graph component is lazily imported by the workspace
+   instead, so its chunk is still fetched only when a column actually shows it. */
 
 /** The workflow node editor (spec 2026-09-30-workflow-node-editor) — the Workflows surface. Lazy
  *  so React Flow stays out of the main bundle. */
@@ -369,7 +369,7 @@ export const AppRoutes = memo(function AppRoutes() {
           path="tasks/:id/graph"
           element={
             <Suspense fallback={<GitTabLoading tab="changes" />}>
-              <TaskGraphRoute />
+              <TaskWorkspaceRoute view="graph" />
             </Suspense>
           }
         />

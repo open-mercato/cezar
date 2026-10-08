@@ -14,10 +14,14 @@ import { drawerStorageKey } from './drawer-state'
 
 /** The surfaces a column can show. `terminal` is deliberately absent — it is the bottom drawer,
  *  not a column — and an unavailable view must never be representable in saved state (spec §5.1,
- *  no placeholder that implies it works). */
-export type ViewId = 'session' | 'changes' | 'commits' | 'files' | 'browser'
+ *  no placeholder that implies it works).
+ *
+ *  `graph` is the task's live workflow graph. It is offered on every task, like `browser` and for
+ *  the same reason: a task with no stored definition gets the view's own honest empty state
+ *  ("No workflow graph") rather than a tile that silently is not there. */
+export type ViewId = 'session' | 'changes' | 'commits' | 'files' | 'browser' | 'graph'
 
-export const VIEW_IDS: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'browser']
+export const VIEW_IDS: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'browser', 'graph']
 
 /** The Polish labels the spec names: `Czat`, `Zmiany`, `Commity`, `Pliki`. These are what the
  *  layout cards and column headers read, and what an automatic layout name is derived from. */
@@ -27,6 +31,7 @@ const VIEW_LABELS: Record<ViewId, string> = {
   commits: 'Commity',
   files: 'Pliki',
   browser: 'Przeglądarka',
+  graph: 'Graf',
 }
 
 export function viewLabel(view: ViewId): string {

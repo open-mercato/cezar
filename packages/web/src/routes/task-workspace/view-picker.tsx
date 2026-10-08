@@ -1,4 +1,11 @@
-import { FileDiffIcon, FolderTreeIcon, GitCommitHorizontalIcon, GlobeIcon, MessageSquareTextIcon } from 'lucide-react'
+import {
+  FileDiffIcon,
+  FolderTreeIcon,
+  GitCommitHorizontalIcon,
+  GlobeIcon,
+  MessageSquareTextIcon,
+  WorkflowIcon,
+} from 'lucide-react'
 import type { ComponentType, ReactNode } from 'react'
 
 import {
@@ -29,6 +36,8 @@ const VIEW_ICONS: Record<ViewId, ComponentType<{ className?: string }>> = {
   commits: GitCommitHorizontalIcon,
   files: FolderTreeIcon,
   browser: GlobeIcon,
+  // The same icon the standalone graph route uses, so the tile and the surface agree.
+  graph: WorkflowIcon,
 }
 
 /**

@@ -13,7 +13,7 @@ import { z } from 'zod';
 
 /** The surfaces a column can show. `terminal` is deliberately absent — it is the bottom drawer,
  *  not a column (§5.1). Kept in step with the cockpit's own `ViewId`. */
-export const workspaceViewSchema = z.enum(['session', 'changes', 'commits', 'files', 'browser']);
+export const workspaceViewSchema = z.enum(['session', 'changes', 'commits', 'files', 'browser', 'graph']);
 export type WorkspaceView = z.infer<typeof workspaceViewSchema>;
 
 /** A Browser column's own tabs (§7). Only successfully loaded addresses are stored, so these are

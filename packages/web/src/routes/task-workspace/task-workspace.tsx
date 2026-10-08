@@ -1,4 +1,4 @@
-import { LayoutGridIcon, MessageSquareTextIcon, SearchXIcon, TerminalIcon } from 'lucide-react'
+import { LayoutGridIcon, LoaderCircleIcon, MessageSquareTextIcon, SearchXIcon, TerminalIcon } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigationType, useParams } from 'react-router'
 
@@ -45,6 +45,12 @@ import { emptyBrowserState, type ViewId, type WorkspaceColumn } from './layout-s
  *  (spec §6), so that is most visits. */
 const TerminalDrawer = lazy(() =>
   import('./terminal-drawer').then((m) => ({ default: m.TerminalDrawer })),
+)
+
+/** Lazy for the same reason the drawer is: the graph carries `@xyflow/react` and its layout
+ *  engine, and a workspace showing Czat beside Zmiany must not pay for either. */
+const GraphColumn = lazy(() =>
+  import('../workflow-graph/task-graph').then((m) => ({ default: m.GraphView })),
 )
 
 /**
@@ -328,6 +334,23 @@ function WorkspaceView({
               state={column.browser ?? emptyBrowserState()}
               onChange={(browser) => setColumnBrowser(index, browser)}
             />
+          )
+        case 'graph':
+          return (
+            // The chunk is fetched on first use; a bare centred spinner is the whole fallback,
+            // because the column's chrome is already painted around it.
+            <Suspense
+              fallback={
+                <CenteredState
+                  icon={<LoaderCircleIcon className="motion-safe:animate-spin" />}
+                  tone="neutral"
+                  heading="h2"
+                  title="Wczytywanie grafu…"
+                />
+              }
+            >
+              <GraphColumn run={run} embedded />
+            </Suspense>
           )
       }
     },

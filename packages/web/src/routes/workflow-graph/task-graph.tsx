@@ -96,7 +96,22 @@ export function TaskGraphRoute() {
   )
 }
 
-function TaskGraphView({ run }: { run: ApiRun }) {
+/**
+ * The graph as a WORKSPACE COLUMN (spec `2026-10-07-task-workspace` §5.1).
+ *
+ * The same one-prop embedding the other four views take: `embedded` drops this component's own
+ * `RunHeader` and changes nothing else. `ReactFlowProvider` comes along because it is per-graph
+ * state, not per-route — two Graph columns in one layout each need their own.
+ */
+export function GraphView({ run, embedded = false }: { run: ApiRun; embedded?: boolean }) {
+  return (
+    <ReactFlowProvider>
+      <TaskGraphView run={run} embedded={embedded} />
+    </ReactFlowProvider>
+  )
+}
+
+function TaskGraphView({ run, embedded = false }: { run: ApiRun; embedded?: boolean }) {
   const def = run.workflowDef
   const graph = useMemo(() => (def ? graphForWorkflow(def) : null), [def])
   const overlay = useMemo(() => (graph ? runOverlay(graph, run) : null), [graph, run])
@@ -159,7 +174,7 @@ function TaskGraphView({ run }: { run: ApiRun }) {
 
   return (
     <div data-route="task-graph" className="flex h-full min-h-0 flex-col">
-      <RunHeader run={run} tab="graph" />
+      {embedded ? null : <RunHeader run={run} tab="graph" />}
       {!graph ? (
         <CenteredState
           icon={<WorkflowIcon />}

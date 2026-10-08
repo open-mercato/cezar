@@ -115,6 +115,7 @@ The panel registry is:
 | Pliki (Files) | Existing task file tree and file preview | Available in Milestone 1 |
 | Commity (Commits) | Existing task commits route and commit diff | Available in Milestone 1 |
 | Browser | Embedded browser with Chrome-like URL tabs and controls; each Browser column has its own saved tabs and addresses | Later milestone |
+| Graf (Graph) | The task's live workflow graph — the same component `/tasks/:id/graph` used to render as a page of its own | Added 2026-10-08 |
 | Terminal | Bottom drawer with multiple VS Code-like terminal tabs; each tab has its own interactive shell whose cwd is this task worktree | Later milestone |
 
 Do not implement placeholder Browser or Terminal panels that imply they work. If these are not in a
@@ -169,9 +170,23 @@ list as a shortcut.
 - Clicking `Nowy układ` opens the TILE picker. Selecting an enabled tile creates a new layout with
   one full-width column, gives it the next automatic name (`Układ 2`, `Układ 3`…) and activates it.
   Closing the picker before choosing cancels creation.
-- Available view tiles are `Czat`, `Zmiany`, `Commity`, `Pliki` and `Przeglądarka`. The first four
-  landed in Milestone 1 and `Przeglądarka` in Milestone 3, so all five are enabled. Terminal is
-  separate — it is the bottom drawer, not a column.
+- Available view tiles are `Czat`, `Zmiany`, `Commity`, `Pliki`, `Przeglądarka` and `Graf`. The
+  first four landed in Milestone 1, `Przeglądarka` in Milestone 3 and `Graf` on 2026-10-08, so all
+  six are enabled. Terminal is separate — it is the bottom drawer, not a column.
+
+  > **AMENDMENT (2026-10-08) — the workflow graph is a view, not a page.** The graph arrived with
+  > the workflow-editor work as a sixth ROUTE tab, which the workspace had already replaced with
+  > its layout cards. The two surfaces were therefore disjoint: from a workspace nothing could
+  > reach the graph, and `/tasks/:id/graph` painted the legacy tab strip with no layout cards, so
+  > the only way in was to type the URL. Making it a view closes that: `GraphView` takes the same
+  > `embedded` prop the other four do, `/tasks/:id/graph` opens a `Graf` card like every other
+  > task URL (§5.3), and a layout can hold the graph beside the conversation it describes. The
+  > component is lazily imported, so a workspace with no Graf column still pays nothing for
+  > `@xyflow/react`.
+  >
+  > The tile is offered on every task, like `Przeglądarka` and for the same reason: a task with
+  > no stored workflow definition gets the view's own "No workflow graph" empty state, which is
+  > honest, rather than a tile that silently is not there.
 
   > **IMPLEMENTATION NOTE — the tile is never disabled, including on a hosted cockpit.** §7 says
   > "The user may type any URL, including task app addresses and external sites such as GitHub",
@@ -283,7 +298,8 @@ list as a shortcut.
 - If no layouts exist: create a fresh `Czat` layout
 
 **Deep links and existing URLs:**
-- Existing `/tasks/:id/changes`, `/tasks/:id/files`, `/tasks/:id/commits` continue to work
+- Existing `/tasks/:id/changes`, `/tasks/:id/files`, `/tasks/:id/commits` continue to work, and
+  `/tasks/:id/graph` joined them on 2026-10-08
 - When accessing these URLs: create a new saved one-column layout for the requested view
 - Give it an automatic unique layout name (e.g., `Zmiany` if doesn't exist, else `Zmiany 2`)
 - Activate the new layout; existing saved layouts remain unchanged
@@ -569,6 +585,7 @@ loads it in the current tab.
 - `/tasks/:id/changes` → creates new one-column layout named "Zmiany"
 - `/tasks/:id/files` → creates new one-column layout named "Pliki"
 - `/tasks/:id/commits` → creates new one-column layout named "Commity"
+- `/tasks/:id/graph` → creates new one-column layout named "Graf" (added 2026-10-08)
 - Existing saved layouts not affected by deep link access
 
 ## 12. Implementation questions (not product choices)
