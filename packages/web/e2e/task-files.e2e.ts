@@ -131,11 +131,16 @@ describe('the Files tab against a live dry-run worktree', () => {
     browser.goto(`${baseUrl}${scoped(`/tasks/${runId}/files`)}`)
     browser.waitForFunction(`document.querySelector('[data-slot="files-tree"]') !== null`)
 
+    // The workspace replaced the Session/Changes/Commits/Files tab strip with saved-layout cards
+    // (spec `.ai/specs/2026-10-07-task-workspace.md` §5.2). A `/files` deep link keeps its meaning
+    // by opening its view as a new one-column card, so the ACTIVE CARD is what names the surface
+    // now — and the column itself declares the view it is showing.
     expect(
       browser.evaluate(
-        `document.querySelector('[data-slot="run-tabs"] a[aria-current="page"]').textContent`,
+        `document.querySelector('[data-slot="layout-cards"] [aria-current="page"]').textContent`,
       ),
-    ).toBe('Files')
+    ).toBe('Pliki')
+    expect(browser.count('[data-slot="workspace-column"][data-view="files"]')).toBe(1)
     // The real worktree root: the committed fixture files plus the src dir.
     expect(browser.count('[data-slot="files-file"][data-path="README.md"]')).toBe(1)
     expect(browser.count('[data-slot="files-file"][data-path="logo.png"]')).toBe(1)
@@ -196,8 +201,11 @@ describe('the Files tab against a live dry-run worktree', () => {
         `document.querySelector('[data-slot="files-tree"]').offsetParent !== null`,
       ),
     ).toBe(true)
-    // Session / Changes / Commits / Files / Graph.
-    expect(browser.count('[data-slot="run-tabs"] a')).toBe(5)
+    // The four route tabs are gone; a narrow viewport switches between the COLUMNS of the active
+    // layout instead (spec §5.2 "Narrow screens"). This deep link opened a single Pliki column,
+    // so there is exactly one switcher tab — and the switcher is present, not squeezed away.
+    expect(browser.count('[data-slot="workspace-columns"][data-narrow]')).toBe(1)
+    expect(browser.count('[role="tablist"][aria-label="Kolumny układu"] [role="tab"]')).toBe(1)
     expect(browser.evaluate(`document.documentElement.scrollWidth <= window.innerWidth`)).toBe(true)
 
     browser.screenshot(`${artifactsDir}/files-mobile.png`)

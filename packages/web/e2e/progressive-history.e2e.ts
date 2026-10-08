@@ -12,6 +12,16 @@ import record from './fixtures/thread-run.record.json'
 const repoRoot = resolve(import.meta.dirname, '../../..')
 const artifactsDir = resolve(repoRoot, '.ai/qa/artifacts_e2e')
 const sessionId = `e2e-progressive-history-${process.pid}`
+/** The thread's scroll owner, as a page-side expression.
+ *
+ * The task workspace (spec `.ai/specs/2026-10-07-task-workspace.md`) mounts every task view in a
+ * COLUMN that is its own scroller, and that scroller carries `data-slot="main"` so the views keep
+ * resolving it through the `el.closest('[data-slot="main"]')` they always used. Two elements in
+ * the document now match, and a bare `querySelector` returns the app SHELL's — the one that no
+ * longer scrolls the transcript, which makes every scroll this spec drives a no-op. Prefer the
+ * column; fall back to the shell so the spec is also correct outside a workspace column. */
+const MAIN = `(document.querySelector('[data-slot="workspace-column"] [data-slot="main"]') ?? document.querySelector('[data-slot="main"]'))`
+
 const RUN_ID = 'cccccccc-1111-4222-8333-dddddddddddd'
 const RUN_B_ID = 'eeeeeeee-1111-4222-8333-ffffffffffff'
 const RUN = {
@@ -116,7 +126,7 @@ function navigateAndSampleArrival(runId: string): ArrivalSample[] {
     let attempts = 0
     const sample = () => {
       attempts += 1
-      const main = document.querySelector('[data-slot="main"]')
+      const main = ${MAIN}
       const destination = document.querySelector(
         ${JSON.stringify(`[data-route="task-thread"][data-run-id="${runId}"]`)},
       )
@@ -138,7 +148,7 @@ function navigateAndSampleArrival(runId: string): ArrivalSample[] {
 
 function parkCurrentThread(): number {
   return Number(browser.evaluate(`(() => {
-    const main = document.querySelector('[data-slot="main"]')
+    const main = ${MAIN}
     main.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true }))
     main.scrollTop = Math.max(160, Math.round((main.scrollHeight - main.clientHeight) / 2))
     main.dispatchEvent(new Event('scroll', { bubbles: true }))
@@ -213,7 +223,7 @@ describe('progressive long-session history', () => {
 
   it('consumes one upward intent without cascading while the boundary remains near', async () => {
     browser.evaluate(`(() => {
-      const main = document.querySelector('[data-slot="main"]')
+      const main = ${MAIN}
       main.scrollTop = 0
       main.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true }))
     })()`)
@@ -236,7 +246,7 @@ describe('progressive long-session history', () => {
     expect(Number(browser.evaluate(
       `document.querySelector('[data-slot="history-boundary"]')?.dataset.retainedPages`,
     ))).toBe(5)
-    browser.evaluate(`document.querySelector('[data-slot="main"]').scrollTop = 0`)
+    browser.evaluate(`${MAIN}.scrollTop = 0`)
     browser.waitForFunction(`document.querySelector('[data-slot="jump-to-latest"]') !== null`)
     browser.click('[data-slot="jump-to-latest"]')
     browser.waitForFunction(
@@ -248,13 +258,13 @@ describe('progressive long-session history', () => {
     // The preceding paging case deliberately visited the archive boundary. Establish the first
     // run's departure state as an explicit live-tail cache entry before warming the second run.
     browser.evaluate(`(() => {
-      const main = document.querySelector('[data-slot="main"]')
+      const main = ${MAIN}
       main.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true }))
       main.scrollTop = main.scrollHeight - main.clientHeight
       main.dispatchEvent(new Event('scroll', { bubbles: true }))
     })()`)
     browser.waitForFunction(
-      `(() => { const main = document.querySelector('[data-slot="main"]'); return main.scrollHeight - main.scrollTop - main.clientHeight < 80 })()`,
+      `(() => { const main = ${MAIN}; return main.scrollHeight - main.scrollTop - main.clientHeight < 80 })()`,
     )
 
     // Warm both query caches first. The destination transcript, not a loading placeholder, is

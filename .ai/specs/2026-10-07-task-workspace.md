@@ -10,6 +10,12 @@
 > **Corrections made during implementation are marked inline as `IMPLEMENTATION NOTE`.** Each one
 > records something this document assumed that the codebase or the platform does not support, with
 > the evidence. They are part of the spec now, not deviations from it.
+>
+> Browser-level coverage: `packages/web/e2e/task-workspace.e2e.ts` measures the rendered column
+> boxes, which is the half of §10 jsdom cannot reach — it does no layout, so every
+> `getBoundingClientRect()` there is zero and a split that rendered its percentages while staying
+> full-bleed would pass the unit suite. The four task-route specs that navigated by the removed
+> `run-tabs` strip were rewritten onto the layout cards rather than deleted.
 > Design reference: [`docs/mockups/task-workspace.html`](../../docs/mockups/task-workspace.html)
 > Related existing surfaces: `/tasks/:id`, `/tasks/:id/changes`, `/tasks/:id/files`, `/tasks/:id/commits`.
 

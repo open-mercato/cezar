@@ -29,7 +29,16 @@ const COMMITS = 200
 
 const RUN_ID = 'cccccccc-2222-4333-8444-ddddddddeeee'
 
-const MAIN = `document.querySelector('[data-slot="main"]')`
+/** The commit list's scroll owner.
+ *
+ * The task workspace (spec `.ai/specs/2026-10-07-task-workspace.md`) puts every task view inside
+ * a COLUMN that is its own scroller, and that scroller carries `data-slot="main"` so the views
+ * resolve it through the `el.closest('[data-slot="main"]')` they already used. There are now two
+ * matching elements in the document — the app shell's region and the column's — and a bare
+ * `querySelector` returns the SHELL's, which is no longer what scrolls this list. Prefer the
+ * column, and keep the shell as the fallback so this stays true wherever the list is mounted
+ * outside a workspace column. */
+const MAIN = `(document.querySelector('[data-slot="workspace-column"] [data-slot="main"]') ?? document.querySelector('[data-slot="main"]'))`
 const rowCount = () => browser.count('[data-slot="commit-row"]')
 
 /** Fractional-layout slack for the fold measurement below. Deliberately tiny: the regression

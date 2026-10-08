@@ -82,6 +82,10 @@ export function LayoutCards({
           <Button
             variant="ghost"
             size="sm"
+            /* `data-action` rather than `data-slot`: the shadcn Button already spends its
+               `data-slot` on `button`, and the browser-level specs need a hook that is not the
+               Polish label. */
+            data-action="new-layout"
             className="-mb-px h-8 px-2 text-muted-foreground"
             title="Nowy układ — wybierz widok dla pierwszej kolumny"
           >

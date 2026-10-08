@@ -135,21 +135,29 @@ afterAll(async () => {
 })
 
 describe('the Changes tab against a live dry run', () => {
-  it('the Session header tab navigates to /changes: tree, toolbar and the real diff', () => {
+  it('the view picker opens Changes in a column: tree, toolbar and the real diff', () => {
+    // The workspace replaced the Session/Changes/Commits/Files tab strip with saved-layout cards
+    // (spec `.ai/specs/2026-10-07-task-workspace.md` §5.2), so this is the path a user now takes
+    // to reach the diff from the task: `Nowy układ` → pick `Zmiany`. The URL deliberately stays
+    // on the canonical `/tasks/:id` — choosing a view in a column is not a navigation, which is
+    // why the assertion below pins the path rather than letting it drift.
     browser.goto(`${baseUrl}${scoped(`/tasks/${runId}`)}`)
-    browser.waitForFunction(`document.querySelector('[data-slot="run-tabs"]') !== null`)
-    browser.click(`[data-slot="run-tabs"] a[href="${scoped(`/tasks/${runId}/changes`)}"]`)
+    browser.waitForFunction(`document.querySelector('[data-slot="layout-cards"]') !== null`)
+    browser.click('[data-slot="layout-cards"] [data-action="new-layout"]')
+    browser.waitForFunction(`document.querySelector('[role="menuitem"][data-view="changes"]') !== null`)
+    browser.click('[role="menuitem"][data-view="changes"]')
 
-    // Client-side navigation into the lazy chunk — wait for the toolbar to exist.
+    // Client-side render into the lazy chunk — wait for the toolbar to exist.
     browser.waitForFunction(`document.querySelector('[data-slot="git-toolbar"]') !== null`)
-    expect(browser.url()).toBe(`${baseUrl}${scoped(`/tasks/${runId}/changes`)}`)
+    expect(browser.url()).toBe(`${baseUrl}${scoped(`/tasks/${runId}`)}`)
 
-    // The Changes tab is the active one now.
+    // The new card is active and named for the view it was created from, and the column says so.
     expect(
       browser.evaluate(
-        `document.querySelector('[data-slot="run-tabs"] a[aria-current="page"]').textContent`,
+        `document.querySelector('[data-slot="layout-cards"] [aria-current="page"]').textContent`,
       ),
-    ).toBe('Changes')
+    ).toBe('Zmiany')
+    expect(browser.count('[data-slot="workspace-column"][data-view="changes"]')).toBe(1)
 
     // The tree shows the mock's real change: notes.md, one added line.
     browser.waitForFunction(`document.querySelector('[data-slot="changes-tree"]') !== null`)
@@ -226,15 +234,20 @@ describe('the Changes tab against a live dry run', () => {
     browser.waitForFunction(`document.querySelector('[data-slot="tree-file"][data-path="edited-by-e2e.md"]') !== null`)
   })
 
-  it('the Files tab opens the worktree browser under the same header (deep coverage: task-files.e2e.ts)', () => {
-    browser.click(`[data-slot="run-tabs"] a[href="${scoped(`/tasks/${runId}/files`)}"]`)
+  it('changing the column view opens the worktree browser in place (deep coverage: task-files.e2e.ts)', () => {
+    // The replacement for the old Files tab: a column's own menu swaps its view, under the same
+    // task header and without leaving the task URL (spec §5.2 "Columns within a layout").
+    browser.click('[data-slot="workspace-column"][data-view="changes"] [aria-label="Menu kolumny Zmiany"]')
+    browser.waitForFunction(`document.querySelector('[role="menuitem"][data-view="files"][data-view-action="set"]') !== null`)
+    browser.click('[role="menuitem"][data-view="files"][data-view-action="set"]')
     browser.waitForFunction(`document.querySelector('[data-route="task-files"] [data-slot="files-tree"]') !== null`)
-    expect(browser.url()).toBe(`${baseUrl}${scoped(`/tasks/${runId}/files`)}`)
-    expect(
-      browser.evaluate(
-        `document.querySelector('[data-slot="run-tabs"] a[aria-current="page"]').textContent`,
-      ),
-    ).toBe('Files')
+    // The URL is UNCHANGED — still the `/changes` deep link the preceding cases arrived on.
+    // Choosing a view in a column is not a navigation (spec §5.3: the URL is a deep-link entry
+    // point, not live layout state), so this pins that the swap neither rewrote the path nor
+    // pushed a history entry a Back press would have to unwind.
+    expect(browser.url()).toBe(`${baseUrl}${scoped(`/tasks/${runId}/changes`)}`)
+    expect(browser.count('[data-slot="workspace-column"][data-view="files"]')).toBe(1)
+    expect(browser.count('[data-slot="workspace-column"][data-view="changes"]')).toBe(0)
   })
 
   it('below md the segments stay tappable and the diff forces unified+wrap (toggles gone)', () => {
@@ -256,9 +269,12 @@ describe('the Changes tab against a live dry run', () => {
         `(() => { const el = document.querySelector('[data-slot="changes-tree"]'); return el === null || el.offsetParent === null })()`,
       ),
     ).toBe(true)
-    // The tabs remain a tappable segment row and the page does not overflow sideways.
-    // Session / Changes / Commits / Files / Graph — the whole row survives the phone framing.
-    expect(browser.count('[data-slot="run-tabs"] a')).toBe(5)
+    // The four route tabs are gone; a narrow viewport shows one COLUMN at a time and switches
+    // between them with compact tabs labelled by view (spec §5.2 "Narrow screens"). This deep
+    // link opened one Zmiany column, so the switcher carries exactly one tab — present and
+    // tappable, not squeezed side by side, and the page still does not overflow sideways.
+    expect(browser.count('[data-slot="workspace-columns"][data-narrow]')).toBe(1)
+    expect(browser.count('[role="tablist"][aria-label="Kolumny układu"] [role="tab"]')).toBe(1)
     expect(browser.evaluate(`document.documentElement.scrollWidth <= window.innerWidth`)).toBe(true)
 
     browser.screenshot(`${artifactsDir}/changes-mobile.png`)

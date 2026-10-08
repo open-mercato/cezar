@@ -33,17 +33,32 @@ const VIEW_ICONS: Record<ViewId, ComponentType<{ className?: string }>> = {
 export function ViewItems({
   onPick,
   disabled,
+  purpose = 'set',
 }: {
   onPick: (view: ViewId) => void
   /** The view this column already shows — pickable nowhere, because it would be a no-op. */
   disabled?: ViewId
+  /**
+   * What picking an item does here. The column menu shows this list TWICE — once to replace the
+   * column's view, once to add a column — so `data-view` alone is ambiguous in that menu and a
+   * browser-level spec cannot say which of the two it meant. This narrows it.
+   */
+  purpose?: 'set' | 'add'
 }) {
   return (
     <>
       {VIEW_IDS.map((view) => {
         const Icon = VIEW_ICONS[view]
         return (
-          <DropdownMenuItem key={view} disabled={view === disabled} onSelect={() => onPick(view)}>
+          <DropdownMenuItem
+            key={view}
+            /* The stable hook the browser-level specs pick a view by: the Polish label is the
+               thing a copy change would move, and the view id is the thing that cannot. */
+            data-view={view}
+            data-view-action={purpose}
+            disabled={view === disabled}
+            onSelect={() => onPick(view)}
+          >
             <Icon aria-hidden="true" />
             {viewLabel(view)}
           </DropdownMenuItem>

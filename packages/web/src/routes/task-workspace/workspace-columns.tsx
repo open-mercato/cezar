@@ -257,7 +257,7 @@ function ColumnMenu({
         {count < MAX_COLUMNS ? (
           <>
             <DropdownMenuLabel>Dodaj kolumnę</DropdownMenuLabel>
-            <ViewItems onPick={actions.addColumn} />
+            <ViewItems onPick={actions.addColumn} purpose="add" />
           </>
         ) : (
           <DropdownMenuLabel className="font-normal text-soft-foreground">
