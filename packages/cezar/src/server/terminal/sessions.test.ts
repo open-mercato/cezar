@@ -223,6 +223,38 @@ describe('stopping', () => {
     }
   });
 
+  it('an explicit stop FORGETS the session, so a closed tab cannot come back', async () => {
+    // Regression: `kill()` used to leave the entry in place, and `onExit` then retained the
+    // corpse for a minute. The drawer reconciles its tab strip against `listFor` every two
+    // seconds, so a tab the user had just closed reappeared — labelled "zakończony" — and a
+    // drawer reopened inside that minute reattached to the dead shell instead of starting a
+    // fresh one. Spec §6: confirming a close "closes the terminal session".
+    const { sessions } = harness();
+    const session = await open(sessions);
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    try {
+      expect(sessions.kill(session.id)).toBe(true);
+    } finally {
+      kill.mockRestore();
+    }
+    expect(sessions.listFor('run-1')).toEqual([]);
+    expect(sessions.get(session.id)).toBeNull();
+  });
+
+  it('keeps a session that exited ON ITS OWN, so its last line and code can still be read', async () => {
+    // The other half of the same rule: the retention window exists for a shell nobody closed —
+    // the user typed `exit`, or the process died — whose exit code a still-polling client has
+    // not seen yet. That one stays listed.
+    const { sessions, spawned } = harness();
+    const session = await open(sessions);
+    spawned[0]!.finish(3);
+
+    const listed = sessions.listFor('run-1');
+    expect(listed).toHaveLength(1);
+    expect(listed[0]!.exitCode).toBe(3);
+    expect(sessions.read(session.id, 0)?.exitCode).toBe(3);
+  });
+
   it('closeAll stops every session and forgets them', async () => {
     const { sessions } = harness();
     await open(sessions, 'run-1');

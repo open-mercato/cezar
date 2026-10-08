@@ -314,12 +314,13 @@ export function nextAutomaticName(layouts: readonly WorkspaceLayout[]): string {
   return uniqueName(`Układ ${layouts.length + 1}`, layouts)
 }
 
-/** A new card with one full-width column, automatically named and activated (spec §5.2). */
-export function addLayout(state: WorkspaceState, view: ViewId): WorkspaceState {
-  const name = nextAutomaticName(state.layouts)
+/** A new card with one full-width column, activated. `name` defaults to the next automatic
+ *  `Układ N` (spec §5.2); a deep link passes the view's own label instead (§5.3). */
+export function addLayout(state: WorkspaceState, view: ViewId, name?: string): WorkspaceState {
+  const chosen = name === undefined ? nextAutomaticName(state.layouts) : uniqueName(name, state.layouts)
   return {
-    layouts: [...state.layouts, { name, columns: [{ ...newColumn(view), width: 100 }] }],
-    active: name,
+    layouts: [...state.layouts, { name: chosen, columns: [{ ...newColumn(view), width: 100 }] }],
+    active: chosen,
   }
 }
 
@@ -512,7 +513,12 @@ export function openDeepLink(state: WorkspaceState, view: ViewId): WorkspaceStat
   // link CREATES a new one-column layout and leaves existing layouts unchanged. The guard above
   // is what keeps a refresh idempotent — on reload the card this link made is already the active
   // one, so nothing is created — which is the only reason the create path cannot pile up.
-  return addLayout(state, view)
+  //
+  // NAMED AFTER THE VIEW, not `Układ N`: §5.3 asks for "an automatic unique layout name (e.g.
+  // `Zmiany` if doesn't exist, else `Zmiany 2`)" and §11 spells it out per route — `Zmiany`,
+  // `Pliki`, `Commity`. `uniqueName` inside `addLayout` settles a collision with a card the user
+  // already has under that name.
+  return addLayout(state, view, viewLabel(view))
 }
 
 /** How many cards the strip paints before the rest fold into a `Pozostałe…` menu (confirmed

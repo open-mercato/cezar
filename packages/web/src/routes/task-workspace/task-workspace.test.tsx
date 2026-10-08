@@ -343,7 +343,7 @@ describe('the task workspace', () => {
   })
 
   it('does not mint a card for every Back-and-Forward across a deep link', async () => {
-    // Six presses used to leave `Układ 2, 3, 4` behind, saved on the host: Back cleared the hop,
+    // Six presses used to leave `Zmiany 2, 3, 4` behind, saved on the host: Back cleared the hop,
     // so the Forward looked like a fresh arrival. §5.3 — "existing saved layouts remain
     // unchanged" — and §10's browser-history clause.
     stubFetch()
@@ -373,7 +373,7 @@ describe('the task workspace', () => {
 
     // Still the one card the first hop made.
     expect(cards()).toHaveLength(2)
-    expect(cardNames()).toEqual(['Czat', 'Układ 2'])
+    expect(cardNames()).toEqual(['Czat', 'Zmiany'])
   })
 
   it('coalesces a divider drag into one save', async () => {
@@ -444,7 +444,8 @@ describe('the task workspace', () => {
     renderWorkspace('changes')
     await ready()
 
-    await waitFor(() => expect(cardNames()).toEqual(['Czat', 'Układ 2']))
+    // Named after the view the URL asked for (spec §5.3, §11), not the `Układ N` counter.
+    await waitFor(() => expect(cardNames()).toEqual(['Czat', 'Zmiany']))
     expect(columnViews()).toEqual(['changes'])
     // The layout that was already there is untouched (spec §5.3).
     await waitFor(() => expect(savedLayouts('r1').layouts[0]!.columns).toEqual([{ view: 'session', width: 100 }]))

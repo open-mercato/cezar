@@ -285,7 +285,8 @@ describe('openDeepLink', () => {
   it('adds a one-column card for the requested view and leaves the rest alone', () => {
     const before = addColumn(defaultState(), 'Czat', 'files')
     const state = openDeepLink(before, 'changes')
-    expect(state.active).toBe('Układ 2')
+    // Named after the VIEW (spec §5.3, §11), not the `Układ N` counter `Nowy układ` uses.
+    expect(state.active).toBe('Zmiany')
     expect(findLayout(state, 'Czat')?.columns).toEqual(findLayout(before, 'Czat')?.columns)
   })
 
@@ -303,7 +304,8 @@ describe('openDeepLink', () => {
     state = selectLayout(state, 'Czat')
     const reopened = openDeepLink(state, 'changes')
     expect(reopened.layouts).toHaveLength(3)
-    expect(reopened.active).toBe('Układ 3')
+    // `Zmiany` is taken by the first hop, so the second gets the next free suffix (§5.3).
+    expect(reopened.active).toBe('Zmiany 2')
   })
 
   it('is idempotent on a refresh, because that card is already the active one', () => {
@@ -316,7 +318,7 @@ describe('openDeepLink', () => {
   it('does not reuse a multi-column card that happens to contain the view', () => {
     const state = openDeepLink(addColumn(defaultState(), 'Czat', 'changes'), 'changes')
     expect(state.layouts).toHaveLength(2)
-    expect(state.active).toBe('Układ 2')
+    expect(state.active).toBe('Zmiany')
   })
 })
 

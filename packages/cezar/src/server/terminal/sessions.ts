@@ -276,22 +276,32 @@ export class TerminalSessions {
   }
 
   /**
-   * Stop a session and its whole process tree.
+   * Stop a session and its whole process tree, and FORGET it.
    *
    * SIGHUP first, because that is what a closing terminal sends and what shells and well-behaved
    * children treat as "your terminal went away"; SIGKILL after a grace period for anything that
    * ignored it. Both go to the process GROUP (`-pid`) so the tree dies with the shell. The
    * binding's own `kill()` is the fallback: it is all Windows has, and it is the backstop if the
    * group signal fails because the leader is already gone.
+   *
+   * The entry goes NOW rather than after `EXITED_RETENTION_MS`, because every caller of this is
+   * an EXPLICIT stop — the tab's X, an archive, a delete. The retention exists for the other
+   * case, a shell that exited on its own, whose last line and exit code a still-polling client
+   * has not read yet. Retaining an explicitly closed session instead PUT THE TAB BACK on the
+   * next poll, because the drawer reconciles its strip against `listFor`, and made a drawer
+   * reopened inside that minute reattach to the corpse instead of starting a fresh shell — both
+   * contrary to spec §6 ("Confirming closes the terminal session and stops its process tree",
+   * and after an unarchive the drawer "has no tabs").
    */
   kill(id: string): boolean {
     const entry = this.entries.get(id);
     if (!entry) return false;
     signalTree(entry.pty, 'SIGHUP');
-    const force = setTimeout(() => {
-      if (this.entries.has(id)) signalTree(entry.pty, 'SIGKILL');
-    }, 2_000);
+    // Unconditional, where this used to re-check `entries.has`: the entry is dropped below, and a
+    // SIGKILL aimed at a group that has already gone is swallowed inside `signalTree`.
+    const force = setTimeout(() => signalTree(entry.pty, 'SIGKILL'), 2_000);
     force.unref?.();
+    this.remove(id);
     return true;
   }
 

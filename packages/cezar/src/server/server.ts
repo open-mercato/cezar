@@ -5233,6 +5233,11 @@ export function createApp(deps: ServerDeps) {
 
       for (const loser of losers) {
         if (manager.isActive(loser.id)) manager.cancel(loser.id);
+        // Archiving a variant is archiving a task (spec §6: archiving "stops terminal sessions
+        // and Cezar-started apps"). Without this the loser's shell and whatever it started —
+        // a `npm run dev` holding a port — outlived the worktree being removed under it on the
+        // very next line, and its detected addresses were never forgotten.
+        stopTaskProcesses(loser.id);
         if (loser.worktreePath) await removeWorktree(repoRoot, loser.worktreePath, loser.branch);
         store.updateRun(loser.id, { worktreePath: undefined, branch: undefined });
         store.setArchived(loser.id, true);

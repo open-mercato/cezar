@@ -92,7 +92,13 @@ export function TerminalDrawer({
           setUnavailable(state.reason ?? 'Terminal nie jest dostępny w tym cockpicie.')
           return
         }
-        const live = state.sessions.length > 0 ? state.sessions : [await createRunTerminal(runId, {})]
+        // LIVE sessions only decide whether this task already has tabs. A shell that exited on
+        // its own is kept server-side for a minute so a still-polling client can read its last
+        // line and exit code — useful while the drawer is open, but reattaching a freshly opened
+        // drawer to nothing but corpses would show the user a dead pane and no shell. Spec §6:
+        // "if it has no tabs, create a fresh terminal session".
+        const existing = state.sessions.filter((session) => session.exitCode === null)
+        const live = existing.length > 0 ? existing : [await createRunTerminal(runId, {})]
         if (cancelled) return
         setSessions(live)
         setActiveId(live[0]?.id ?? null)
@@ -274,12 +280,13 @@ export function TerminalDrawer({
             variant="ghost"
             size="sm"
             className="h-6 shrink-0 px-2 text-xs"
-            // Spec §11: "Every running command has a Stop action; Stop ends the process and
-            // closes its tab." No confirmation here — unlike the tab's X, Stop IS the deliberate
-            // answer to "something is running", so asking again would only ask it twice. Ctrl-C
-            // is not lost by this: the pane is a real shell and still takes it from the keyboard.
-            title="Zatrzymaj polecenie i zamknij tę zakładkę"
-            onClick={() => closeTab(active)}
+            // Spec §6: "Stop interrupts; the tab's X closes." Ctrl-C down the PTY, and nothing
+            // else — stopping a command is not the same act as closing a terminal, and you stop
+            // a build precisely so you can read in that same pane why it was wrong. No
+            // confirmation, because an interrupt is cheap and recoverable; the tab's X is the
+            // one that asks, because it takes the whole process tree.
+            title="Przerwij polecenie (Ctrl-C)"
+            onClick={() => void writeRunTerminal(runId, active.id, '\x03').catch(() => {})}
           >
             <SquareIcon aria-hidden="true" className="size-3" />
             Zatrzymaj
