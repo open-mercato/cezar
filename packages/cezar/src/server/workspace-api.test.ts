@@ -168,6 +168,22 @@ describe('the workspace settings API (step 2.7)', () => {
     expect((await apiRequest(app, '/api/v1/workspace/branding-logo', { method: 'POST', body: unsafe })).status).toBe(400);
   });
 
+  it('refuses a declared type borrowed from Object.prototype, with a 400 and no file written', async () => {
+    // `f.type in BRANDING_LOGO_TYPES` matched inherited keys, so these passed the type gate and
+    // the content sniff then read `.signature` off `Object` — undefined — and threw. A throw
+    // inside an async Zod refine is not caught by `safeParseAsync`, so the route answered 500
+    // instead of the message below, and did it for anything a client cared to declare.
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    for (const declared of ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__']) {
+      const form = new FormData();
+      form.set('file', new File([png], 'logo.png', { type: declared }));
+      const answer = await apiRequest(app, '/api/v1/workspace/branding-logo', { method: 'POST', body: form });
+      expect(answer.status, `declared type ${declared}`).toBe(400);
+      expect(await answer.text()).toContain('Use PNG, JPEG, WebP, GIF, AVIF, or a safe SVG image');
+      expect(existsSync(join(home, 'branding-logo'))).toBe(false);
+    }
+  });
+
   it('keeps one valid logo when uploads in different formats race', async () => {
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><path d="M0 0h10v10H0z"/></svg>';

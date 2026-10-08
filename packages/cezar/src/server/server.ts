@@ -998,17 +998,31 @@ function isSafeBrandSvg(svg: string): boolean {
  * `POST /workspace/branding-logo`'s request boundary — presence, size, declared type and (since
  * those three are only what the browser CLAIMS about the file) the real content-sniffed format,
  * all as one schema so the route type records a `File` field rather than the handler trusting
- * whatever `parseBody()` handed it. Chained rather than one `superRefine`: each `.refine` only
- * runs once the one before it passed, so a missing file answers "Choose an image file" instead of
- * also complaining about its (nonexistent) size.
+ * whatever `parseBody()` handed it.
+ *
+ * EVERY check in the chain runs — zod does not stop at the first failure — so each one has to
+ * stand on its own against input the one before it would have rejected. A request can therefore
+ * collect more than one message, which is the honest trade for never letting a later check
+ * dereference something an earlier one only *meant* to have filtered out.
  */
 export const brandingLogoUploadSchema = z.object({
   file: z
     .instanceof(File, { message: 'Choose an image file' })
     .refine((f) => f.size >= 1 && f.size <= BRANDING_LOGO_MAX_BYTES, { message: 'Logo must be smaller than 2 MB' })
-    .refine((f) => f.type in BRANDING_LOGO_TYPES, { message: 'Use PNG, JPEG, WebP, GIF, AVIF, or a safe SVG image' })
+    // `Object.hasOwn`, not `in`: `in` walks the prototype chain, so a part declaring
+    // `Content-Type: constructor` (or `toString`, `valueOf`, `hasOwnProperty`, `__proto__`)
+    // passed this gate, and the sniff below then read `.signature` off `Object` — undefined —
+    // and threw. A throw inside an async refine is NOT caught by `safeParseAsync`, so the
+    // request answered 500 instead of this message.
+    .refine((f) => Object.hasOwn(BRANDING_LOGO_TYPES, f.type), { message: 'Use PNG, JPEG, WebP, GIF, AVIF, or a safe SVG image' })
     .refine(
       async (f) => {
+        // Looked up defensively even though the refine above already rejected an unsupported
+        // type: zod runs EVERY check in a chain, it does not stop at the first failure, so this
+        // still executes for a type that is not in the table. Reading `.signature` off whatever
+        // the chain handed back then threw, and a throw inside an async refine escapes
+        // `safeParseAsync` — the route answered 500 instead of a validation error.
+        if (!Object.hasOwn(BRANDING_LOGO_TYPES, f.type)) return false;
         const imageType = BRANDING_LOGO_TYPES[f.type as keyof typeof BRANDING_LOGO_TYPES];
         return imageType.signature(Buffer.from(await f.arrayBuffer()));
       },
