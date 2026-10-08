@@ -76,9 +76,26 @@ export function BrowserView({
   const [target, setTarget] = useState(current)
   const frameRef = useRef<HTMLIFrameElement>(null)
   const transport = useHostTransport()
+  /**
+   * The address this view itself just persisted, and for which tab.
+   *
+   * A successful load writes its address into the column (spec §7 — only loaded addresses are
+   * kept), and that write comes straight back as a new `current`. Without recognising the echo,
+   * the re-point effect below treated it as a tab switch and reset a FINISHED load to `loading`.
+   * No second `load` event can follow — the iframe is already sitting on that exact address — so
+   * the timeout then declared a page that had rendered perfectly "Nie udało się otworzyć",
+   * twelve seconds after the user watched it appear.
+   */
+  const echo = useRef<{ index: number; url: string } | null>(null)
 
-  // Switching tabs re-points everything at that tab's own address.
+  // Switching tabs re-points everything at that tab's own address — but the echo of this view's
+  // own successful-load write is not a tab switch, and must not re-point anything.
   useEffect(() => {
+    if (echo.current && echo.current.index === active && echo.current.url === current) {
+      echo.current = null
+      return
+    }
+    echo.current = null
     setDraft(current)
     setTarget(current)
     setStatus(current === '' ? 'idle' : 'loading')
@@ -110,6 +127,7 @@ export function BrowserView({
     if (target === '') return
     setStatus('idle')
     if (tabs[active] !== target) {
+      echo.current = { index: active, url: target }
       onChange({ ...state, tabs: tabs.map((tab, index) => (index === active ? target : tab)) })
     }
   }, [active, onChange, state, tabs, target])
