@@ -201,16 +201,22 @@ describe('the task workspace’s saved layouts and resizable columns', () => {
     ).toBe('Czat')
 
     expect(columnViews()).toEqual(['session'])
-    // Full width: the one column really fills its row, and the familiar task header is still
-    // above it (the spec's "the current task stays the task").
+    // Full width: the one column fills the row apart from the `+` strip at its right edge, which
+    // spec §5.2 puts there — so the two together are the row, with nothing else taking space.
     const [only] = columnWidths()
     const row = Number(
       browser.evaluate(
         `document.querySelector('[data-slot="workspace-columns"]').getBoundingClientRect().width`,
       ),
     )
+    const edge = Number(
+      browser.evaluate(
+        `document.querySelector('[data-slot="add-column-edge"]').getBoundingClientRect().width`,
+      ),
+    )
     expect(only).toBeGreaterThan(0)
-    expect(Math.abs(only! - row)).toBeLessThanOrEqual(SUB_PIXEL)
+    expect(edge).toBeGreaterThan(0)
+    expect(Math.abs(only! + edge - row)).toBeLessThanOrEqual(SUB_PIXEL)
     expect(browser.count('[data-slot="run-header"]')).toBe(1)
   })
 
