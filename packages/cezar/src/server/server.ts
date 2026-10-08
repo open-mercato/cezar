@@ -38,7 +38,7 @@ import type { Next } from 'hono';
 import { serve, type ServerType } from '@hono/node-server';
 import { bodyLimit } from 'hono/body-limit';
 import { streamSSE } from 'hono/streaming';
-import { jsonZodValidator, paramZodValidator, queryZodValidator } from './validators.ts';
+import { jsonZodValidator, multipartZodValidator, paramZodValidator, queryZodValidator } from './validators.ts';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { z } from 'zod';
 import {
@@ -993,6 +993,28 @@ function isSafeBrandSvg(svg: string): boolean {
   if (checked.length === 0 || /<!DOCTYPE|<!ENTITY|<script\b|<foreignObject\b|<image\b|<use\b|<iframe\b|<style\b|\bon\w+\s*=|(?:href|src)\s*=|url\s*\(/i.test(checked)) return false;
   return /^\s*<svg\b[\s\S]*<\/svg>\s*$/i.test(checked) && !/javascript:|data:|https?:|file:/i.test(checked);
 }
+
+/**
+ * `POST /workspace/branding-logo`'s request boundary — presence, size, declared type and (since
+ * those three are only what the browser CLAIMS about the file) the real content-sniffed format,
+ * all as one schema so the route type records a `File` field rather than the handler trusting
+ * whatever `parseBody()` handed it. Chained rather than one `superRefine`: each `.refine` only
+ * runs once the one before it passed, so a missing file answers "Choose an image file" instead of
+ * also complaining about its (nonexistent) size.
+ */
+export const brandingLogoUploadSchema = z.object({
+  file: z
+    .instanceof(File, { message: 'Choose an image file' })
+    .refine((f) => f.size >= 1 && f.size <= BRANDING_LOGO_MAX_BYTES, { message: 'Logo must be smaller than 2 MB' })
+    .refine((f) => f.type in BRANDING_LOGO_TYPES, { message: 'Use PNG, JPEG, WebP, GIF, AVIF, or a safe SVG image' })
+    .refine(
+      async (f) => {
+        const imageType = BRANDING_LOGO_TYPES[f.type as keyof typeof BRANDING_LOGO_TYPES];
+        return imageType.signature(Buffer.from(await f.arrayBuffer()));
+      },
+      { message: 'File contents do not match a supported image format' },
+    ),
+});
 
 function logoAssetUrl(): string | null {
   for (const filename of [BRANDING_LOGO_FILE, ...BRANDING_LOGO_EXTENSIONS.map((ext) => `${BRANDING_LOGO_FILE}${ext}`)]) {
@@ -3236,15 +3258,9 @@ export function createApp(deps: ServerDeps) {
       }
       return c.json({ error: 'Brand logo not found' }, 404);
     })
-    .post('/workspace/branding-logo', async (c) => {
-      const body = await c.req.parseBody();
-      const file = body.file;
-      if (!(file instanceof File)) return c.json({ error: 'Choose an image file' }, 400);
-      if (file.size < 1 || file.size > BRANDING_LOGO_MAX_BYTES) return c.json({ error: 'Logo must be smaller than 2 MB' }, 400);
-      const imageType = BRANDING_LOGO_TYPES[file.type as keyof typeof BRANDING_LOGO_TYPES];
-      if (!imageType) return c.json({ error: 'Use PNG, JPEG, WebP, GIF, AVIF, or a safe SVG image' }, 400);
+    .post('/workspace/branding-logo', multipartZodValidator(() => brandingLogoUploadSchema), async (c) => {
+      const { file } = c.req.valid('form');
       const bytes = Buffer.from(await file.arrayBuffer());
-      if (!imageType.signature(bytes)) return c.json({ error: 'File contents do not match a supported image format' }, 400);
       await mkdir(cezarHomeDir(), { recursive: true, mode: 0o700 });
       const path = join(cezarHomeDir(), BRANDING_LOGO_FILE);
       const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
