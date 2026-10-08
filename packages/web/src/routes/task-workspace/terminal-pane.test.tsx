@@ -50,6 +50,14 @@ class FakeTerminal {
     this.resizeHandlers.push(handler)
   }
   onData() {}
+  /** The clipboard bindings attach one of these; this suite is about the size handshake. */
+  attachCustomKeyEventHandler() {}
+  hasSelection() {
+    return false
+  }
+  getSelection() {
+    return ''
+  }
   loadAddon() {}
   open() {}
   focus() {}
