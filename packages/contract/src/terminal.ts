@@ -24,7 +24,9 @@ export const terminalSessionSchema = z.object({
   /** The tab's name: the running (or last-run) command, else `Terminal N` (spec §6). */
   label: z.string(),
   /** The shell has a live child — something would be lost by closing this tab. */
-  busy: z.boolean(),
+  /** `null` = this host cannot read its process table (no `ps`), so busy-ness is unknown. The
+   *  cockpit treats anything but `false` as "something may be running". */
+  busy: z.boolean().nullable(),
   /** The WebSocket topic that wakes on new output. Local cockpits subscribe; hosted ones poll,
    *  because a browser WebSocket cannot carry reverse-proxy credentials. */
   topic: z.string(),

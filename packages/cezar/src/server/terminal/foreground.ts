@@ -102,21 +102,27 @@ export function tidyCommand(command: string): string {
 const SNAPSHOT_TTL_MS = 1_000;
 
 let snapshot: { at: number; rows: ProcessRow[] } | undefined;
-let inFlight: Promise<ProcessRow[]> | undefined;
+let inFlight: Promise<ProcessRow[] | null> | undefined;
 
 /**
- * One shared, cached `ps` snapshot.
+ * One shared, cached `ps` snapshot, or `null` when this host's process table cannot be read.
  *
  * Cached as the PROMISE while in flight so four tabs asking at once cost one `ps`, not four.
- * Any failure resolves to an empty table, which reads downstream as "nothing is running" — the
- * honest degradation for a host whose process table we cannot see.
+ *
+ * NULL IS NOT AN EMPTY TABLE. This used to resolve a failure to `[]`, which read downstream as
+ * the positive claim "nothing is running" — and on Windows, where there is no `ps` at all, that
+ * claim silently disabled the close warning §6 requires: closing a tab mid-build took the whole
+ * process tree without asking. "I cannot tell" has to be sayable, so that the one decision which
+ * must fail safe can.
  */
-export function processSnapshot(now = Date.now()): Promise<ProcessRow[]> {
+export function processSnapshot(now = Date.now()): Promise<ProcessRow[] | null> {
   if (snapshot && now - snapshot.at < SNAPSHOT_TTL_MS) return Promise.resolve(snapshot.rows);
   if (inFlight) return inFlight;
   inFlight = readProcessTable()
     .then((rows) => {
-      snapshot = { at: now, rows };
+      // A failed read is deliberately NOT cached: `ps` failing once (a transient EAGAIN under
+      // load) should not freeze every tab's busy flag at "unknown" for the whole TTL.
+      if (rows !== null) snapshot = { at: now, rows };
       return rows;
     })
     .finally(() => {
@@ -131,12 +137,12 @@ export function resetProcessSnapshot(): void {
   inFlight = undefined;
 }
 
-function readProcessTable(): Promise<ProcessRow[]> {
+function readProcessTable(): Promise<ProcessRow[] | null> {
   return new Promise((resolve) => {
-    // Windows has no `ps`; the catch-all below turns that into "nothing running", which is the
-    // same answer this gives on a container with a hidden process table.
+    // Windows has no `ps`, and a hardened container can hide the table; both land on `null`,
+    // which says "unknown" rather than "nothing running".
     execFile('ps', ['-axo', 'pid=,ppid=,command='], { maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
-      resolve(error ? [] : parseProcessRows(stdout));
+      resolve(error ? null : parseProcessRows(stdout));
     });
   });
 }

@@ -51,9 +51,16 @@ export interface TerminalSessionInfo {
    * so while you read its output — and is replaced only when another command starts.
    */
   label: string;
-  /** The shell has a live child. Drives the close warning, and is why that warning can never
-   *  disagree with the tab name: both come from the same process-table reading. */
-  busy: boolean;
+  /**
+   * The shell has a live child. Drives the close warning, and is why that warning can never
+   * disagree with the tab name: both come from the same process-table reading.
+   *
+   * `null` means THIS HOST CANNOT SAY — no `ps` (Windows) or a hidden process table. It is not
+   * `false`, because `false` is the positive claim "nothing is running", and on a host that
+   * cannot tell, that claim silently turned off the close warning §6 requires. The client treats
+   * anything but `false` as "ask first".
+   */
+  busy: boolean | null;
 }
 
 export interface TerminalRead {
@@ -200,10 +207,19 @@ export class TerminalSessions {
    * Takes the rows rather than reading them so ONE snapshot serves every tab (and so this stays
    * synchronous and testable). An exited session is left exactly as it was: its last command is
    * the most useful thing its tab can still say.
+   *
+   * `rows === null` is a host whose process table cannot be read. Busy-ness becomes `null`
+   * ("cannot say", which the close warning treats as "ask"), and the LABEL is left alone — a tab
+   * keeps whatever it was last known to be running rather than being reset by an absence of
+   * information.
    */
-  observe(rows: readonly ProcessRow[]): void {
+  observe(rows: readonly ProcessRow[] | null): void {
     for (const entry of this.entries.values()) {
       if (entry.info.exitCode !== null) continue;
+      if (rows === null) {
+        entry.info.busy = null;
+        continue;
+      }
       entry.info.busy = hasForeground(rows, entry.pty.pid);
       const running = foregroundCommand(rows, entry.pty.pid);
       // Only a command REPLACES the label; going idle keeps the last one (spec §6).

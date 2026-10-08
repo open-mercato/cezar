@@ -166,6 +166,34 @@ describe('TerminalDrawer — closing a tab', () => {
     await waitFor(() => expect(stopRunTerminal).toHaveBeenCalledWith('r1', 's-1'))
   })
 
+  it('asks first when the host cannot tell whether anything is running', async () => {
+    // `busy: null` is a host with no readable process table (Windows). Treating "unknown" as
+    // "idle" skipped the warning §6 requires and took a running build with it.
+    getRunTerminal.mockResolvedValue({
+      available: true,
+      sessions: [session('s-1', { busy: null }), session('s-2')],
+    })
+    drawer()
+    await waitFor(() => expect(tabNames()).toHaveLength(2))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Zamknij Terminal s-1' }))
+    expect(stopRunTerminal).not.toHaveBeenCalled()
+
+    // And it says so honestly, rather than claiming a process it never saw.
+    expect(await screen.findByText(/nie potrafi sprawdzić/)).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Zamknij mimo to' }))
+    await waitFor(() => expect(stopRunTerminal).toHaveBeenCalledWith('r1', 's-1'))
+  })
+
+  it('offers no Stop when busy-ness is unknown', async () => {
+    // An interrupt aimed at a shell we cannot see into would be a guess dressed as a control.
+    getRunTerminal.mockResolvedValue({ available: true, sessions: [session('s-1', { busy: null })] })
+    drawer()
+    await waitFor(() => expect(screen.queryByTestId('pane')).not.toBeNull())
+
+    expect(screen.queryByRole('button', { name: /Zatrzymaj/ })).toBeNull()
+  })
+
   it('hides the drawer when the last tab goes', async () => {
     const onClose = vi.fn()
     getRunTerminal.mockResolvedValue({ available: true, sessions: [session('s-1')] })

@@ -320,3 +320,41 @@ describe('tab labels', () => {
     expect(sessions.get(session.id)).toMatchObject({ label: 'make dev', exitCode: 1 });
   });
 });
+
+describe('a host that cannot read its process table', () => {
+  // Windows has no `ps`, and a hardened container can hide the table. `observe(null)` is that
+  // host. The old code resolved the failed read to `[]`, which reads as the positive claim
+  // "nothing is running" — and that claim silently disabled the close warning spec §6 requires,
+  // so closing a tab mid-build took the whole process tree without asking.
+  it('reports busy as UNKNOWN rather than as idle', async () => {
+    const { sessions } = harness();
+    const session = await open(sessions);
+
+    sessions.observe(null);
+
+    expect(sessions.get(session.id)?.busy).toBeNull();
+  });
+
+  it('leaves the tab name alone, because an absence of information is not a new command', async () => {
+    const { sessions, spawned } = harness();
+    const session = await open(sessions);
+    sessions.observe([{ pid: 5, ppid: spawned[0]!.pid, command: 'npm run build' }]);
+    expect(sessions.get(session.id)?.label).toBe('npm run build');
+
+    sessions.observe(null);
+
+    expect(sessions.get(session.id)?.label).toBe('npm run build');
+    expect(sessions.get(session.id)?.busy).toBeNull();
+  });
+
+  it('goes back to a definite answer once the table can be read again', async () => {
+    const { sessions } = harness();
+    const session = await open(sessions);
+    sessions.observe(null);
+    expect(sessions.get(session.id)?.busy).toBeNull();
+
+    sessions.observe([]);
+
+    expect(sessions.get(session.id)?.busy).toBe(false);
+  });
+});

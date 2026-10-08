@@ -239,7 +239,10 @@ export function TerminalDrawer({
               session={session}
               active={session.id === activeId}
               onSelect={() => setActiveId(session.id)}
-              onClose={() => (session.busy ? setConfirming(session) : closeTab(session))}
+              // Anything but a definite `false` asks first. `null` is a host that cannot read its
+              // process table (Windows), where treating "unknown" as "idle" silently skipped the
+              // warning §6 requires and took a running build with it.
+              onClose={() => (session.busy !== false ? setConfirming(session) : closeTab(session))}
             />
           ))}
           {unavailable ? null : (
@@ -275,7 +278,7 @@ export function TerminalDrawer({
           </span>
         ) : null}
         {unavailable ? null : <CommandPicker runId={runId} onRun={runCommand} />}
-        {active?.busy ? (
+        {active?.busy === true ? (
           <Button
             variant="ghost"
             size="sm"
@@ -328,10 +331,16 @@ export function TerminalDrawer({
       <AlertDialog open={confirming !== null} onOpenChange={(open) => !open && setConfirming(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>W tej zakładce coś działa</AlertDialogTitle>
+            {/* Two wordings, because there are two reasons to be here and only one of them is a
+                fact. `busy === true` saw the process; `busy === null` is a host that cannot read
+                its process table, and claiming "coś działa" there would be inventing it. */}
+            <AlertDialogTitle>
+              {confirming?.busy === true ? 'W tej zakładce coś działa' : 'Zamknąć tę zakładkę?'}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              {confirming ? `„${confirming.label}” wciąż działa. ` : ''}
-              Zamknięcie zakładki zatrzyma ten proces i wszystko, co uruchomił.
+              {confirming?.busy === true
+                ? `„${confirming.label}” wciąż działa. Zamknięcie zakładki zatrzyma ten proces i wszystko, co uruchomił.`
+                : 'Ten host nie potrafi sprawdzić, czy coś jeszcze działa w tej powłoce. Zamknięcie zakładki zatrzyma powłokę i wszystko, co uruchomiła.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
