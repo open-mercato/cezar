@@ -13,6 +13,7 @@ import { discoverCommands } from './terminal/commands.ts';
 import { DetectedUrls } from './terminal/detected-urls.ts';
 import { processSnapshot } from './terminal/foreground.ts';
 import { loadPty } from './terminal/pty-module.ts';
+import { discoverShells } from './terminal/shells.ts';
 import { TerminalSessions, type TerminalSessionInfo } from './terminal/sessions.ts';
 import { deleteRunLayouts, readRunLayouts, writeRunLayouts } from '../runs/layouts.ts';
 import { readTrackerAssociation, writeTrackerAssociation, clearTrackerAssociation } from '../tracker-association.ts';
@@ -5829,6 +5830,10 @@ export function createApp(deps: ServerDeps) {
         available: binding.available,
         ...(binding.available ? {} : { reason: binding.reason }),
         sessions: terminalSessions.listFor(run.id).map(withTopic),
+        // What a new tab may be opened with (spec §6, "shell selection"). Sent only when the PTY
+        // is actually available, because a cockpit that cannot open a terminal has no use for a
+        // list of shells it cannot spawn.
+        ...(binding.available ? { shells: discoverShells() } : {}),
       }));
     })
     .post('/runs/:id/terminal', jsonZodValidator(terminalCreateSchema), async (c) => {

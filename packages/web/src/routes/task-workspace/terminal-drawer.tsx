@@ -15,6 +15,13 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 
 import {
@@ -97,6 +104,7 @@ export function TerminalDrawer({
         // line and exit code — useful while the drawer is open, but reattaching a freshly opened
         // drawer to nothing but corpses would show the user a dead pane and no shell. Spec §6:
         // "if it has no tabs, create a fresh terminal session".
+        setShells(state.shells ?? [])
         const existing = state.sessions.filter((session) => session.exitCode === null)
         const live = existing.length > 0 ? existing : [await createRunTerminal(runId, {})]
         if (cancelled) return
@@ -140,8 +148,12 @@ export function TerminalDrawer({
     }
   }, [runId, starting, unavailable])
 
-  const addTab = useCallback(() => {
-    void createRunTerminal(runId, {})
+  /** What this host will open (spec §6, "shell selection"). The server decides; the picker only
+   *  offers what it sent, and an older server that sends nothing leaves the choice out. */
+  const [shells, setShells] = useState<string[]>([])
+
+  const addTab = useCallback((shell?: string) => {
+    void createRunTerminal(runId, shell ? { shell } : {})
       .then((session) => {
         setSessions((current) => [...current, session])
         setActiveId(session.id)
@@ -245,12 +257,38 @@ export function TerminalDrawer({
               onClose={() => (session.busy !== false ? setConfirming(session) : closeTab(session))}
             />
           ))}
-          {unavailable ? null : (
+          {unavailable ? null : shells.length > 1 ? (
+            // More than one shell on this host, so `+` asks which (spec §6). One shell means
+            // there is nothing to ask, and the button just opens it.
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="Nowa zakładka terminala"
+                  title="Nowa zakładka terminala — wybierz powłokę"
+                  className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <PlusIcon aria-hidden="true" className="size-3.5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-56">
+                <DropdownMenuLabel>Nowa zakładka</DropdownMenuLabel>
+                {shells.map((shell, index) => (
+                  <DropdownMenuItem key={shell} data-shell={shell} onSelect={() => addTab(shell)}>
+                    <span className="truncate font-mono text-xs">{shell}</span>
+                    {index === 0 ? (
+                      <span className="ml-auto shrink-0 text-[10px] text-soft-foreground">domyślna</span>
+                    ) : null}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
             <button
               type="button"
               aria-label="Nowa zakładka terminala"
               title="Nowa zakładka terminala"
-              onClick={addTab}
+              onClick={() => addTab()}
               className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
             >
               <PlusIcon aria-hidden="true" className="size-3.5" />

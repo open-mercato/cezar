@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { SCAN_OVERLAP, type DetectedUrls } from './detected-urls.ts';
 import { foregroundCommand, hasForeground, type ProcessRow } from './foreground.ts';
 import { loadPty, type PtyProcess } from './pty-module.ts';
+import { resolveShell } from './shells.ts';
 
 /**
  * Interactive terminal sessions, one PTY each, scoped to a task worktree (spec
@@ -96,7 +97,8 @@ export interface CreateSessionInput {
   cwd: string;
   cols?: number;
   rows?: number;
-  /** Overrides the host default; the API does not expose this yet. */
+  /** One of the host's discovered shells (`discoverShells()`). Anything else is refused rather
+   *  than spawned — see the allowlist reasoning in `shells.ts`. */
   shell?: string;
 }
 
@@ -143,7 +145,11 @@ export class TerminalSessions {
 
     const cols = clampDimension(input.cols, 80);
     const rows = clampDimension(input.rows, 24);
-    const shell = input.shell ?? defaultShell();
+    // The host decides what is openable; a request may only pick from that list (`shells.ts`).
+    const shell = resolveShell(input.shell);
+    if (shell === null) {
+      return { ok: false, reason: `This host does not offer the shell ${JSON.stringify(input.shell)}.` };
+    }
     let child: PtyProcess;
     try {
       child = pty.module.spawn(shell, [], {
@@ -388,12 +394,6 @@ function signalTree(pty: PtyProcess, signal: NodeJS.Signals): void {
   } catch {
     // Already reaped.
   }
-}
-
-/** The host's interactive shell. No configuration: discovered, with a per-platform default. */
-export function defaultShell(): string {
-  if (process.platform === 'win32') return process.env.ComSpec ?? 'cmd.exe';
-  return process.env.SHELL ?? '/bin/bash';
 }
 
 /** The child's environment: the server's own, plus a TERM the emulator understands.

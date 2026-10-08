@@ -131,6 +131,52 @@ describe('TerminalDrawer — Zatrzymaj', () => {
   })
 })
 
+describe('TerminalDrawer — choosing a shell', () => {
+  it('asks which shell when the host offers more than one', async () => {
+    getRunTerminal.mockResolvedValue({
+      available: true,
+      sessions: [session('s-1')],
+      shells: ['/bin/zsh', '/bin/bash', '/bin/sh'],
+    })
+    createRunTerminal.mockResolvedValue(session('s-2'))
+    drawer()
+    await waitFor(() => expect(tabNames()).toHaveLength(1))
+
+    fireEvent.pointerDown(
+      screen.getByRole('button', { name: 'Nowa zakładka terminala' }),
+      new MouseEvent('pointerdown', { bubbles: true }),
+    )
+    const bash = await screen.findByText('/bin/bash')
+    fireEvent.click(bash)
+
+    await waitFor(() => expect(createRunTerminal).toHaveBeenCalledWith('r1', { shell: '/bin/bash' }))
+  })
+
+  it('just opens the default when there is only one', async () => {
+    // Nothing to ask, so `+` stays a button rather than becoming a menu of one.
+    getRunTerminal.mockResolvedValue({ available: true, sessions: [session('s-1')], shells: ['/bin/zsh'] })
+    createRunTerminal.mockResolvedValue(session('s-2'))
+    drawer()
+    await waitFor(() => expect(tabNames()).toHaveLength(1))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Nowa zakładka terminala' }))
+
+    await waitFor(() => expect(createRunTerminal).toHaveBeenCalledWith('r1', {}))
+  })
+
+  it('leaves the choice out when the server sends no list', async () => {
+    // An older cezar. The cockpit must not invent shells it was never offered.
+    getRunTerminal.mockResolvedValue({ available: true, sessions: [session('s-1')] })
+    createRunTerminal.mockResolvedValue(session('s-2'))
+    drawer()
+    await waitFor(() => expect(tabNames()).toHaveLength(1))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Nowa zakładka terminala' }))
+
+    await waitFor(() => expect(createRunTerminal).toHaveBeenCalledWith('r1', {}))
+  })
+})
+
 describe('TerminalDrawer — closing a tab', () => {
   it('does not let the poll put a closed tab back', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })

@@ -402,6 +402,22 @@ lifecycle. A future terminal spec must resolve:
 - PTY implementation/dependency and supported OSes.
 - A Cezar server restart stops all terminal sessions and child processes; the user starts them again manually after Cezar returns. Archiving a task also stops its terminal sessions and Cezar-started apps, while preserving layouts and Browser tabs. Permanently deleting a task removes its layouts and task-owned state.
 - Multiple terminal tabs, shell selection, resize propagation, scrollback cap and copy/paste.
+
+  > **IMPLEMENTATION NOTE (2026-10-08) — shell selection is an ALLOWLIST, discovered.** The `+`
+  > asks which shell when the host offers more than one, and the list comes from the host:
+  > `/etc/shells` narrowed to entries that exist, with `$SHELL` and the platform default folded
+  > in (Windows has no such file, so there it is the known interpreters that are present). A
+  > request may only name something already on that list; anything else is refused rather than
+  > spawned.
+  >
+  > It is tempting to argue the allowlist adds nothing, since a terminal already runs arbitrary
+  > commands inside a shell. It does: the executable a request SPAWNS is the one thing the
+  > worktree discipline never covers, so taking it from the body verbatim would turn
+  > `POST /terminal` into "run this binary on the host", reachable by anything the reverse proxy
+  > admits — and §6 already records that a hosted cockpit has no authentication of its own.
+  >
+  > A host that can enumerate nothing still opens its default, and a cockpit talking to an older
+  > server that sends no list simply does not offer the choice.
 - Which process tree is killed on stop and how shutdown/reclaimed worktrees are handled.
 - How the API authenticates/authorizes terminal input for local and remote modes. Follow the
   versioned API contract, route chaining, validation and remote credential boundaries in AGENTS.md.

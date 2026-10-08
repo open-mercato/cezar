@@ -44,6 +44,9 @@ export const terminalStateSchema = z.object({
   available: z.boolean(),
   reason: z.string().optional(),
   sessions: z.array(terminalSessionSchema),
+  /** What this host will open, default first. The cockpit offers exactly these and nothing
+   *  else; an older server that does not send them leaves the picker out. */
+  shells: z.array(z.string()).optional(),
 });
 export type TerminalState = z.infer<typeof terminalStateSchema>;
 
@@ -51,6 +54,11 @@ export type TerminalState = z.infer<typeof terminalStateSchema>;
 export const terminalCreateSchema = z.object({
   cols: z.number().int().min(1).max(500).optional(),
   rows: z.number().int().min(1).max(500).optional(),
+  /** One of the shells the host offers (`shells` on the state response). The server refuses
+   *  anything else rather than spawning it — the executable a request starts is the one thing
+   *  the worktree discipline does not cover, so it comes from an allowlist, never from the body
+   *  verbatim. The length cap is a parse bound, not the check. */
+  shell: z.string().min(1).max(512).optional(),
 });
 export type TerminalCreateInput = z.infer<typeof terminalCreateSchema>;
 
