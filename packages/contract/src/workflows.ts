@@ -31,6 +31,8 @@ export const workflowStepDefSchema = z
     runner: runnerSchema.optional(),
     allowedTools: z.array(z.string()).optional(),
     bashAllowlist: z.array(z.string()).optional(),
+    /** Per-step agent wall-clock limit in ms, 0 = none, at most 24 h (#880). */
+    timeoutMs: z.number().int().min(0).max(24 * 60 * 60_000).optional(),
     // check step
     command: z.string().optional(),
     onFail: z
@@ -44,6 +46,9 @@ export const workflowStepDefSchema = z
   })
   .refine((s) => Boolean(s.command) !== Boolean(s.prompt ?? s.skill), {
     message: 'a step is either an agent step (prompt/skill) or a check step (command), not both',
+  })
+  .refine((s) => !(s.command && s.timeoutMs !== undefined), {
+    message: 'timeoutMs applies to agent steps only (a check step has no wall-clock limit)',
   });
 export type WorkflowStepDef = z.infer<typeof workflowStepDefSchema>;
 

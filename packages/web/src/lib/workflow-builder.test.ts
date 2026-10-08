@@ -50,6 +50,7 @@ describe('skillStack', () => {
     ['a per-step model', { ...stackStep('a'), model: 'opus' }],
     ['a per-step runner', { ...stackStep('a'), runner: 'codex' }],
     ['an onFail loop', { ...stackStep('a'), onFail: { retry: 'a', max: 2 } }],
+    ['a per-step wall-clock limit, even 0', { ...stackStep('a'), timeoutMs: 0 }],
     ['a plain prompt step (no skill)', { id: 'p', prompt: '{{task}}' }],
   ])('anything richer — %s — forces the full steps form', (_reason, step) => {
     expect(skillStack([stackStep('x'), step])).toBeNull()
@@ -148,6 +149,17 @@ describe('workflowYaml', () => {
         { id: 'tests', name: 'Run tests', command: 'npm test', onFail: { retry: 'fix', max: 2 } },
       ],
     })
+  })
+
+  it('keeps a step wall-clock limit (#880) as a number, 0 included', () => {
+    const steps: WorkflowStepDef[] = [
+      { id: 'implement', name: 'implement', skill: 'my-skill', prompt: '{{task}}', timeoutMs: 5_400_000 },
+      { id: 'review', name: 'review', skill: 'review', prompt: '{{task}}', timeoutMs: 0 },
+    ]
+    expect(parse(workflowYaml('long', '', steps)).steps).toEqual([
+      { id: 'implement', skill: 'my-skill', prompt: '{{task}}', timeoutMs: 5_400_000 },
+      { id: 'review', skill: 'review', prompt: '{{task}}', timeoutMs: 0 },
+    ])
   })
 
   it("writes back a loaded check's retryOn gate, which the builder has no editor for", () => {

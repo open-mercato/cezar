@@ -116,6 +116,44 @@ describe('loadConfig systemPrompt', () => {
     });
   });
 
+  /** `agentTimeoutMs` (#880): optional, never materialized — absent leaves the runners'
+   *  built-in 30 minutes in charge — and `.catch(undefined)` so a bad value degrades to
+   *  that default without discarding the rest of the config. */
+  describe('agentTimeoutMs', () => {
+    it('is undefined when absent (old config files load unchanged)', async () => {
+      expect((await loadConfig(repoRoot)).agentTimeoutMs).toBeUndefined();
+      write({ maxParallel: 5 });
+      expect((await loadConfig(repoRoot)).agentTimeoutMs).toBeUndefined();
+    });
+
+    it('round-trips a configured limit', async () => {
+      write({ agentTimeoutMs: 5_400_000 });
+      expect((await loadConfig(repoRoot)).agentTimeoutMs).toBe(5_400_000);
+    });
+
+    it('keeps 0 as a meaningful value (no wall clock)', async () => {
+      write({ agentTimeoutMs: 0 });
+      expect((await loadConfig(repoRoot)).agentTimeoutMs).toBe(0);
+    });
+
+    it('accepts the 24 h cap and degrades anything past it, keeping the rest', async () => {
+      write({ agentTimeoutMs: 86_400_000 });
+      expect((await loadConfig(repoRoot)).agentTimeoutMs).toBe(86_400_000);
+
+      write({ agentTimeoutMs: 86_400_001, defaultRunner: 'codex' });
+      const config = await loadConfig(repoRoot);
+      expect(config.agentTimeoutMs).toBeUndefined();
+      expect(config.defaultRunner).toBe('codex');
+    });
+
+    it.each([-1, 1.5, '90m', null])('degrades %j to unset per-key', async (value) => {
+      write({ agentTimeoutMs: value, maxParallel: 6 });
+      const config = await loadConfig(repoRoot);
+      expect(config.agentTimeoutMs).toBeUndefined();
+      expect(config.maxParallel).toBe(6);
+    });
+  });
+
   /** `worktreeRetention` (#483): count-based, always materialized (default 10),
    *  `.catch(10)` so a bad value degrades to the default. `0` = unlimited. */
   describe('worktreeRetention', () => {

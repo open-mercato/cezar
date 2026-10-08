@@ -26,7 +26,7 @@ export function skillStack(steps: readonly WorkflowStepDef[]): string[] | null {
     if (s.command || !s.skill) return null
     if (s.prompt !== undefined && s.prompt !== '{{task}}') return null
     if (s.name !== undefined && s.name !== s.skill) return null
-    if (s.model || s.runner || s.allowedTools || s.bashAllowlist || s.onFail) return null
+    if (s.model || s.runner || s.allowedTools || s.bashAllowlist || s.timeoutMs !== undefined || s.onFail) return null
     skills.push(s.skill)
   }
   return skills.length ? skills : null
@@ -117,6 +117,7 @@ export function workflowYaml(
       if (s.runner) lines.push(`    runner: ${yamlScalar(s.runner)}`)
       if (s.allowedTools) lines.push(`    allowedTools: [${s.allowedTools.map(yamlScalar).join(', ')}]`)
       if (s.bashAllowlist) lines.push(`    bashAllowlist: [${s.bashAllowlist.map(yamlScalar).join(', ')}]`)
+      if (s.timeoutMs !== undefined) lines.push(`    timeoutMs: ${s.timeoutMs}`)
       if (s.command) lines.push(...yamlBlock('command', s.command, 4))
       if (s.onFail) {
         lines.push('    onFail:', `      retry: ${yamlScalar(s.onFail.retry)}`, `      max: ${s.onFail.max ?? 2}`)
