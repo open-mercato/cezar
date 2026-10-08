@@ -363,8 +363,21 @@ describe('task thread', () => {
     expect(meta).toContain('IN 2.9k')
     expect(meta).toContain('OUT 720')
     expect(meta).toContain('$0.04')
-    // The runner IS in the line now, beside the model — it moved in after this spec was written.
-    expect(meta).toContain('claude')
+    // The runner stays OUT of the metadata parts — the original claim here, kept rather than
+    // inverted. It does appear inside `run-meta`, but only within the agent badge that #750
+    // (spec 2026-07-29-agent-profiles) added as a right-aligned sibling of the parts, so a bare
+    // `toContain` over the whole container could no longer express it. Subtracting the badge
+    // asks the question the line was written to ask.
+    const parts = browser.evaluate(`(() => {
+      const box = document.querySelector('[data-slot="run-meta"]').cloneNode(true)
+      box.querySelector('[data-slot="agent-badge"]')?.remove()
+      return box.textContent
+    })()`) as string
+    expect(parts).not.toContain('claude')
+    // …and the badge is where naming the agent does belong.
+    expect(
+      browser.evaluate(`document.querySelector('[data-slot="agent-badge"]').textContent`),
+    ).toContain('claude')
     // Branch renders as the mono chip, not plain text.
     expect(
       browser.evaluate(`document.querySelector('[data-slot="branch-chip"]').textContent`),
