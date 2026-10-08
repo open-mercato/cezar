@@ -189,12 +189,41 @@ export function TerminalPane({
   }, [active, screenReady])
 
   // Pull output ------------------------------------------------------------------------------
+  /**
+   * SINGLE FLIGHT, with a trailing re-run.
+   *
+   * The cursor advances only once the server has answered, so two reads that overlap both ask
+   * from the same offset, both receive the same bytes, and both write them — the screen then
+   * shows output the shell produced once, several times over. The per-session topic rings once
+   * per output chunk and the mount fires its own immediate pull, so a burst (an interrupt, a
+   * fast-printing build) overlaps readily. Observed live on 2026-10-08: the server's buffer held
+   * one `^C`, one copy of the typed command and three prompt lines; the screen showed five,
+   * three and eleven. The doubled opening prompt (`… % %`) was the same race at mount.
+   *
+   * A ring that arrives mid-read is COALESCED rather than dropped: `again` makes the loop go
+   * round once more, so the chunk that prompted it is still fetched — with the cursor the first
+   * read left behind.
+   */
+  const reading = useRef(false)
+  const again = useRef(false)
   const pull = useCallback(async () => {
-    const read = await readRunTerminal(runId, session.id, cursorRef.current)
-    cursorRef.current = read.cursor
-    // Say so rather than splicing a gap into the screen silently.
-    if (read.truncated) termRef.current?.write(TRUNCATION_NOTICE)
-    if (read.data) termRef.current?.write(read.data)
+    if (reading.current) {
+      again.current = true
+      return
+    }
+    reading.current = true
+    try {
+      do {
+        again.current = false
+        const read = await readRunTerminal(runId, session.id, cursorRef.current)
+        cursorRef.current = read.cursor
+        // Say so rather than splicing a gap into the screen silently.
+        if (read.truncated) termRef.current?.write(TRUNCATION_NOTICE)
+        if (read.data) termRef.current?.write(read.data)
+      } while (again.current)
+    } finally {
+      reading.current = false
+    }
   }, [runId, session.id])
 
   useEffect(() => {
