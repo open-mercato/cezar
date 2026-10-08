@@ -109,7 +109,10 @@ describe('task thread', () => {
     ) as string[]
     expect(bubbles).toHaveLength(2)
     expect(bubbles[0]).toContain('Summarize what this project does.')
-    expect(bubbles[1]).toBe('Thanks — now show the markdown summary. mock:md')
+    // The bubble renders a `MessageTime` under its text, so `textContent` ends in a wall clock
+    // that no assertion can pin. Match the message and require that a time follows, rather than
+    // freezing whatever the clock happened to read.
+    expect(bubbles[1]).toMatch(/^Thanks — now show the markdown summary\. mock:md\s*\d{1,2}:\d{2}/)
 
     // Right-aligned: the bubble hugs the column's right content edge (within its padding),
     // sits entirely right of the midline, while assistant content starts at the left edge.
@@ -252,6 +255,11 @@ describe('task thread', () => {
   })
 
   it('the step rail maps the record steps to checklist rows over the progress bar', () => {
+    // The rail is COLLAPSED by default — the trigger shows a one-line summary with its own bar,
+    // and the per-step rows only exist once it is open. Reading straight for the rows threw on
+    // a null progress bar.
+    browser.evaluate(`document.querySelector('[data-slot="workflow-steps"] button')?.click()`)
+    browser.waitForFunction(`document.querySelector('[data-slot="step-progress"] > div') !== null`)
     const rail = browser.evaluate(`(() => {
       const rows = [...document.querySelectorAll('[data-slot="step-row"]')]
       return {
@@ -348,10 +356,15 @@ describe('task thread', () => {
     expect(meta).toContain('quick-task')
     expect(meta).toContain('cez/fcd519dd')
     expect(meta).toContain('+1 −0')
-    expect(meta).toContain('3.6k tokens')
+    // Tokens render as the DIRECTIONAL pair (`DirectionalUsage`), not one total — the header
+    // moved to input/output and the fixture never followed, so the token half of this line had
+    // quietly stopped rendering and the assertion was testing its own absence. The fixture now
+    // carries both (2900 + 720 = the 3620 it always claimed).
+    expect(meta).toContain('IN 2.9k')
+    expect(meta).toContain('OUT 720')
     expect(meta).toContain('$0.04')
-    // The fixture is a claude run — the runner stays out of the line, like the mockup.
-    expect(meta).not.toContain('claude')
+    // The runner IS in the line now, beside the model — it moved in after this spec was written.
+    expect(meta).toContain('claude')
     // Branch renders as the mono chip, not plain text.
     expect(
       browser.evaluate(`document.querySelector('[data-slot="branch-chip"]').textContent`),
