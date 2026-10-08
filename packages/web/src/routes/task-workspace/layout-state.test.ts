@@ -82,6 +82,30 @@ describe('normalizeWidths', () => {
   it('never claims a width for a row with no columns', () => {
     expect(normalizeWidths([])).toEqual([])
   })
+
+  it('holds the floor THROUGH the scale, not just before it', () => {
+    // Clamping before scaling did not survive it: `[12, 90]` is already at the floor, and
+    // dividing both by 1.02 to reach a sum of 100 put the first column at 11.76 — under the
+    // minimum this function exists to enforce. `[1, 1, 98]` came out at 9.84 twice.
+    for (const input of [[12, 90], [5, 95], [1, 1, 98], [2, 2, 2, 94]]) {
+      const result = normalizeWidths(input)
+      const floor = Math.min(MIN_COLUMN_WIDTH, 100 / input.length)
+      expect(result.reduce((sum, width) => sum + width, 0)).toBe(100)
+      for (const width of result) {
+        // One rounding unit of tolerance: the widths are stored to two places.
+        expect(width).toBeGreaterThanOrEqual(floor - 0.01)
+      }
+    }
+  })
+
+  it('gives the rounding remainder to the widest column, never to a pinned one', () => {
+    // The drift used to go to the LAST column unconditionally, which could push a column that
+    // had just been pinned at the floor back underneath it.
+    const result = normalizeWidths([1, 1, 98])
+    expect(result[0]).toBe(MIN_COLUMN_WIDTH)
+    expect(result[1]).toBe(MIN_COLUMN_WIDTH)
+    expect(result.reduce((sum, width) => sum + width, 0)).toBe(100)
+  })
 })
 
 describe('uniqueName', () => {
@@ -359,6 +383,47 @@ describe('reviveState', () => {
       active: 'Mixed',
     })
     expect(state.layouts[0]!.columns).toEqual([{ view: 'session', width: 100 }])
+  })
+
+  it('applies the column cap to what SURVIVES, not to what arrived', () => {
+    // The cap used to be a `slice(0, MAX_COLUMNS)` taken before unknown views were filtered. A
+    // layout from a later cezar whose first three columns named views this build lacks therefore
+    // lost the two VALID ones behind them — and then, having nothing left, was dropped whole and
+    // the task recovered to the default `Czat`. Two real columns is the honest reading.
+    const state = reviveState({
+      layouts: [{
+        name: 'Piec',
+        columns: [
+          { view: 'hologram', width: 20 },
+          { view: 'telepathy', width: 20 },
+          { view: 'ansible', width: 20 },
+          { view: 'changes', width: 20 },
+          { view: 'files', width: 20 },
+        ],
+      }],
+      active: 'Piec',
+    })
+    expect(state.layouts[0]!.name).toBe('Piec')
+    expect(state.layouts[0]!.columns).toEqual([
+      { view: 'changes', width: 50 },
+      { view: 'files', width: 50 },
+    ])
+  })
+
+  it('still takes only the first three when more than three are valid', () => {
+    const state = reviveState({
+      layouts: [{
+        name: 'Cztery',
+        columns: [
+          { view: 'session', width: 25 },
+          { view: 'changes', width: 25 },
+          { view: 'files', width: 25 },
+          { view: 'commits', width: 25 },
+        ],
+      }],
+      active: 'Cztery',
+    })
+    expect(state.layouts[0]!.columns.map((column) => column.view)).toEqual(['session', 'changes', 'files'])
   })
 
   it('restores a Browser column together with its own tabs', () => {

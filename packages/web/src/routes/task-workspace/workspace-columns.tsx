@@ -24,6 +24,10 @@ import {
 } from './layout-state'
 import { ViewItems, ViewPickerMenu } from './view-picker'
 
+/** Narrower than this and the layout shows one column at a time (spec §5.2, §11). Tailwind's
+ *  `lg`, which is where a three-way split first has room to be readable. */
+const SIDE_BY_SIDE_MIN_WIDTH = 1024
+
 export interface ColumnActions {
   addColumn: (view: ViewId) => void
   closeColumn: (index: number) => void
@@ -53,7 +57,11 @@ export function WorkspaceColumns({
   actions: ColumnActions
   renderView: (view: ViewId, index: number, column: WorkspaceColumn) => ReactNode
 }) {
-  const desktop = useIsDesktop()
+  // Columns go side by side only from `lg` up. The shared default (`md`, 768px) is the threshold
+  // for a different question — whether a diff should wrap — and it left a 768-1024px tablet with
+  // two or three columns at ~340px each, which is the squeezing §5.2 asks not to do: it names
+  // "mobile/tablet" for one-column-at-a-time, and §11 repeats it.
+  const desktop = useIsDesktop(SIDE_BY_SIDE_MIN_WIDTH)
   const rowRef = useRef<HTMLDivElement>(null)
   // Which column a narrow viewport is showing (spec §5.2 — "show one column at a time"). Clamped
   // on read rather than synced in an effect, so closing a column can never leave a dangling index.
@@ -107,7 +115,35 @@ export function WorkspaceColumns({
               ) : null}
             </button>
           ))}
-          <span className="ml-auto flex shrink-0 items-center">{columnMenu(activeNarrow, column)}</span>
+          {/* The `+` §5.2 asks for at "the right edge of the view area", in the place a narrow
+              viewport actually has one: the end of the tab row. A vertical strip beside the
+              column would take width from the single column that is showing. */}
+          <span className="ml-auto flex shrink-0 items-center">
+            <ViewPickerMenu
+              heading="Dodaj widok"
+              align="end"
+              onPick={actions.addColumn}
+              trigger={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  data-action="add-column"
+                  disabled={columns.length >= MAX_COLUMNS}
+                  title={
+                    columns.length >= MAX_COLUMNS
+                      ? `Maksymalnie ${MAX_COLUMNS} kolumny`
+                      : 'Dodaj widok — nowa kolumna'
+                  }
+                  aria-label="Dodaj widok"
+                  className="size-7 text-muted-foreground"
+                >
+                  <PlusIcon aria-hidden="true" />
+                </Button>
+              }
+            />
+            {columnMenu(activeNarrow, column)}
+          </span>
         </div>
         <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           {renderView(column.view, activeNarrow, column)}

@@ -480,6 +480,51 @@ describe('the task workspace', () => {
     }
   })
 
+  it('splits columns only from lg up, so a tablet is not squeezed', async () => {
+    // The shared `useIsDesktop` default is `md` (768px), which is the threshold for a different
+    // question — whether a diff should wrap. At 768 a three-way split is ~250px a column, the
+    // squeezing §5.2 asks not to do; it names "mobile/tablet" for one-at-a-time.
+    stubFetch()
+    const queries: string[] = []
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn((query: string) => {
+        queries.push(query)
+        return { matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }
+      }),
+    )
+    seedLayouts('r1', {
+      layouts: [{ name: 'Czat', columns: [{ view: 'files', width: 100 }] }],
+      active: 'Czat',
+    })
+    renderWorkspace()
+    await ready()
+
+    await waitFor(() => expect(document.querySelector('[data-narrow]')).not.toBeNull())
+    expect(queries).toContain('(min-width: 1024px)')
+  })
+
+  it('offers the add-view + on a narrow viewport too', async () => {
+    // §5.2 asks for a `+` at "the right edge of the view area". On a narrow viewport that edge is
+    // the end of the tab row — a vertical strip would take width from the one column showing.
+    stubFetch()
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+    )
+    seedLayouts('r1', {
+      layouts: [{ name: 'Czat', columns: [{ view: 'files', width: 100 }] }],
+      active: 'Czat',
+    })
+    renderWorkspace()
+    await ready()
+    await waitFor(() => expect(document.querySelector('[data-narrow]')).not.toBeNull())
+
+    const add = document.querySelector('[data-narrow] [data-action="add-column"]')
+    expect(add).not.toBeNull()
+    expect((add as HTMLButtonElement).disabled).toBe(false)
+  })
+
   it('shows one column at a time on a narrow viewport', async () => {
     stubFetch()
     // jsdom has no matchMedia, which `useIsDesktop` counts as desktop — stub the narrow answer.

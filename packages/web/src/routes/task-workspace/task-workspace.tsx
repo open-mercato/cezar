@@ -261,11 +261,15 @@ function WorkspaceView({
    * §5.2: warn, with `Zamknij mimo to` to discard and change, or `Wróć` to keep it and stay).
    * Czat's composer text is discarded without a warning, which the same paragraph says.
    */
-  // Run-level, because that is what the comments ARE: `useDiffComments` is keyed by run, the
-  // draft behind it is one server surface per run, and every Zmiany column in every layout shows
-  // the same set. So this asks before leaving the LAST Zmiany column — once there is no column
-  // left showing them, the comments are genuinely out of sight — rather than once per column,
-  // which would ask while an identical column next door still displays them.
+  // Run-level, because that is what the comments ARE: `useDiffComments` is keyed by run and the
+  // draft behind it is one server surface per run, so every Zmiany column anywhere in the task
+  // shows the same set.
+  //
+  // The count that decides the warning is over the ACTIVE layout, though, because that is what
+  // "out of sight" means here: switching layouts unmounts the columns of the one you left
+  // (§5.4), so a Zmiany column in another saved layout is not displaying anything to be warned
+  // about. Asking once there is no VISIBLE column left is therefore the right line — and asking
+  // once per column would ask while an identical column next door still displays them.
   const diffComments = useDiffComments(run.id)
   const [pendingView, setPendingView] = useState<{ index: number; view: ViewId } | null>(null)
   const columns = layouts.layout?.columns

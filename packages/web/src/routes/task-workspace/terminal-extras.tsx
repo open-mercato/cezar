@@ -89,14 +89,17 @@ export function DetectedUrlsStrip({
           <span className="text-soft-foreground">
             {entry.running === true ? 'działa' : entry.running === false ? 'nie odpowiada' : '…'}
           </span>
+          {/* §7 names this control literally — "The user clicks `Otwórz w Przeglądarce`" — so the
+              words are on it, not only in its tooltip. An icon alone was discoverable by hover
+              and by screen reader, and invisible to everyone reading the strip. */}
           <button
             type="button"
-            title="Otwórz w Przeglądarce"
             aria-label={`Otwórz ${entry.url} w Przeglądarce`}
             onClick={() => setNoRoom(!onOpen(entry.url))}
-            className="ml-0.5 grid size-4 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="ml-0.5 flex items-center gap-1 rounded px-1 py-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             <ExternalLinkIcon aria-hidden="true" className="size-3" />
+            <span>Otwórz w Przeglądarce</span>
           </button>
         </span>
       ))}

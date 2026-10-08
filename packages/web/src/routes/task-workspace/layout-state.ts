@@ -147,18 +147,49 @@ export function normalizeWidths(raw: readonly number[]): number[] {
   const count = raw.length
   if (count === 0) return []
   const floor = Math.min(MIN_COLUMN_WIDTH, 100 / count)
-  const clamped = raw.map((value) => {
+  const positive = raw.map((value) => {
     const width = typeof value === 'number' ? value : Number(value)
-    return Number.isFinite(width) && width > 0 ? Math.max(floor, width) : floor
+    return Number.isFinite(width) && width > 0 ? width : floor
   })
-  const total = clamped.reduce((sum, width) => sum + width, 0)
+  const total = positive.reduce((sum, width) => sum + width, 0)
   if (!Number.isFinite(total) || total <= 0) return equalWidths(count)
-  // Scale to 100, then give the rounding remainder to the last column so the row always sums
-  // exactly — a 1/3 split that stored 33.33 three times would leave a 0.01 seam otherwise.
-  const scaled = clamped.map((width) => round2((width / total) * 100))
+
+  // SCALE FIRST, then hold the floor.
+  //
+  // Clamping before the scale does not survive it: `[12, 90]` is already at the floor, scaling
+  // to 100 divides both by 1.02, and the result is `[11.76, 88.24]` — a column narrower than
+  // the minimum this function exists to enforce. `[1, 1, 98]` came out at 9.84 twice. So the
+  // floor is applied to the SCALED widths, and whatever that adds is taken back from the
+  // columns which still have room, proportionally to how much room each has.
+  //
+  // The loop is a fixed point, not a search: lifting one column to the floor can push another
+  // below it, so it repeats until nothing moves. It always terminates — every pass either
+  // settles or pins one more column at the floor, and `floor * count <= 100` guarantees a
+  // solution exists.
+  let widths = positive.map((width) => (width / total) * 100)
+  for (let pass = 0; pass < count; pass += 1) {
+    const deficit = widths.reduce((sum, width) => sum + Math.max(0, floor - width), 0)
+    if (deficit <= 0) break
+    const surplus = widths.reduce((sum, width) => sum + Math.max(0, width - floor), 0)
+    if (surplus <= 0) {
+      widths = widths.map(() => 100 / count)
+      break
+    }
+    const take = Math.min(deficit, surplus) / surplus
+    widths = widths.map((width) => (width < floor ? floor : width - (width - floor) * take))
+  }
+
+  // The rounding remainder goes to the widest column rather than the last one: handing 0.01 to
+  // a column already pinned at the floor would put it back under.
+  const scaled = widths.map((width) => round2(width))
   const drift = round2(100 - scaled.reduce((sum, width) => sum + width, 0))
-  const last = scaled.length - 1
-  scaled[last] = round2((scaled[last] ?? 0) + drift)
+  if (drift !== 0) {
+    let widest = 0
+    for (let index = 1; index < scaled.length; index += 1) {
+      if ((scaled[index] ?? 0) > (scaled[widest] ?? 0)) widest = index
+    }
+    scaled[widest] = round2((scaled[widest] ?? 0) + drift)
+  }
   return scaled
 }
 
@@ -224,7 +255,11 @@ function reviveLayout(entry: unknown, taken: readonly WorkspaceLayout[]): Worksp
   const views: ViewId[] = []
   const widths: number[] = []
   const browsers: Array<BrowserState | undefined> = []
-  for (const column of source.columns.slice(0, MAX_COLUMNS)) {
+  // The cap is applied to what SURVIVES, not to what arrived. Slicing first meant a layout saved
+  // by a later cezar whose first three columns named views this build lacks lost the two valid
+  // ones behind them — and then, having no columns left, was dropped whole by the guard below.
+  for (const column of source.columns) {
+    if (views.length >= MAX_COLUMNS) break
     if (typeof column !== 'object' || column === null) continue
     const candidate = column as { view?: unknown; width?: unknown; browser?: unknown }
     if (!isViewId(candidate.view)) continue

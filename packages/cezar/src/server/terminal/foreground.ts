@@ -44,13 +44,20 @@ export function parseProcessRows(text: string): ProcessRow[] {
 /**
  * The command a shell is running, or null when it is sitting at its prompt.
  *
- * Walks DOWN from the shell and reports the deepest single descendant: `npm run dev` spawns a
- * `sh -c vite`, which spawns `node vite`, and the name worth showing is the one the user typed,
- * not the leaf. So the FIRST generation is what names the tab — but a generation that forked
- * several children (a `make -j`) stops the walk, because no single name describes it.
+ * The shell's FIRST DIRECT CHILD names the tab, and the walk stops there — it does not descend.
+ * That is deliberate and it is the whole point: `npm run dev` spawns a `sh -c vite` which spawns
+ * `node vite`, and the name worth showing is the one the user typed, which is the generation
+ * nearest the shell. Descending would reach the leaf and show `node`, which distinguishes
+ * nothing when three tabs are all running something through node.
  *
- * Deliberately ignores the shell's own re-execs and anything that is not a descendant: a session
- * leader's group can contain unrelated jobs, and attributing those to this tab would be a lie.
+ * A shell that forked several children (`make -j`) is named by the first of them, which is the
+ * one it started first and the one a user recognises; no single name describes the fan-out, and
+ * picking the first is better than picking none.
+ *
+ * Deliberately ignores the shell's own re-execs and anything that is not a direct child: a
+ * session leader's group can contain unrelated jobs, and attributing those to this tab would be
+ * a lie. A grandchild whose parent has exited is reparented away from this shell by the OS, so
+ * it is no longer this tab's business either.
  */
 export function foregroundCommand(rows: readonly ProcessRow[], shellPid: number): string | null {
   const byParent = new Map<number, ProcessRow[]>();
@@ -66,7 +73,9 @@ export function foregroundCommand(rows: readonly ProcessRow[], shellPid: number)
   return tidyCommand(children[0]!.command);
 }
 
-/** True when the shell has any descendant at all — "there is something to lose on close". */
+/** True when the shell has a direct child — "there is something to lose on close". Direct, for
+ *  the reason above: anything deeper either has a live parent here too, or has been reparented
+ *  off this shell entirely. */
 export function hasForeground(rows: readonly ProcessRow[], shellPid: number): boolean {
   return rows.some((row) => row.ppid === shellPid);
 }
