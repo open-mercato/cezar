@@ -102,8 +102,6 @@ export function TerminalPane({
         if (host.clientHeight > 0 && host.clientWidth > 0) fit.fit()
       }
       focusRef.current = () => term.focus()
-      fitRef.current()
-      setScreenReady(true)
 
       /**
        * Copy and paste (spec §6).
@@ -143,13 +141,26 @@ export function TerminalPane({
         return true
       })
 
+      // The PTY has to learn the real size, or every program that draws in columns wraps wrongly.
+      //
+      // REGISTERED BEFORE THE FIRST FIT, and followed by an unconditional send. The opening fit is
+      // the one that matters — it takes a terminal built at xterm's default 80x24 to whatever the
+      // drawer actually is — and an `onResize` attached after it never hears that event, leaving
+      // the shell convinced it has 80 columns while the user looks at ~120. Nothing fires again
+      // afterwards either: the observer only re-fits when the HOST changes size, and a fit that
+      // computes the same dimensions emits no event. The explicit send covers the mirror case,
+      // where the first fit really is a no-op because the drawer happens to measure 80x24.
+      const pushSize = ({ cols, rows }: { cols: number; rows: number }) => {
+        void resizeRunTerminal(runId, session.id, cols, rows).catch(() => {})
+      }
+      term.onResize(pushSize)
       term.onData((data) => {
         void writeRunTerminal(runId, session.id, data).catch(() => {})
       })
-      // The PTY has to learn the real size, or every program that draws in columns wraps wrongly.
-      term.onResize(({ cols, rows }) => {
-        void resizeRunTerminal(runId, session.id, cols, rows).catch(() => {})
-      })
+
+      fitRef.current()
+      pushSize({ cols: term.cols, rows: term.rows })
+      setScreenReady(true)
 
       const observer =
         typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => fitRef.current?.())

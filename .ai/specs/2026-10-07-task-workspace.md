@@ -301,6 +301,19 @@ To change the view in a column, use the **hamburger menu** in the header to acce
 > you stop a build precisely so you can read why it was wrong. Stop sends Ctrl-C; closing a tab
 > with something running asks first and then takes the whole process tree.
 >
+> **IMPLEMENTATION NOTE — the size handshake has to be armed before the first fit.** This section
+> asks for resize propagation, and the obvious shape of it is wrong in a way that is invisible
+> until you look at the server: the emulator is constructed at xterm's default 80x24, and the
+> OPENING fit is the one that takes it to whatever the drawer actually measures. An `onResize`
+> listener attached after that fit never hears the only event that matters, and nothing fires
+> again afterwards — the ResizeObserver re-fits only when the HOST changes size, and a fit that
+> computes the same dimensions emits no event. The shell is then left believing it has 80 columns
+> while the user looks at ~120, so zsh wraps early and anything full-screen draws wrongly. The
+> listener is therefore registered BEFORE the first fit, and the fitted size is sent once
+> unconditionally, which also covers the mirror case of a drawer that really does measure 80x24.
+> Observed live on 2026-10-08 (a fresh session reported 113x15 instead of 80x24) and pinned in
+> `terminal-pane.test.tsx`, which fails against the previous ordering.
+>
 > **IMPLEMENTATION NOTE — output never rides the WebSocket.** The per-session topic publishes a
 > cursor and nothing else; the bytes come back over the same authenticated HTTP as the rest of the
 > cockpit. The hub's topics are workspace-level and readable by anything its upgrade guard trusts,
