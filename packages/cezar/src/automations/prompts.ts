@@ -1,3 +1,5 @@
+import { RUNNER_IDS } from '../core/agent-runner.ts';
+
 /**
  * What a task is told about GitHub automations, and the playbook the built-in
  * `create-cezar-automation` skill runs under (spec `.ai/specs/2026-09-13-automations-from-prompt.md`).
@@ -46,7 +48,7 @@ A GitHub poll:
     "prompt": "Review pull request #{{github.number}} ({{github.title}}) at {{github.url}}: read the diff, run the tests, and post your findings as a review.",
     "workflow": "quick-task",                        // a workflow name — OR inline "steps", never both
     "steps": [{ "id": "task", "skill": "om-auto-review-pr", "prompt": "{{task}}" }],  // to run a skill: one agent step naming it
-    "runner": "claude",                              // optional: claude | codex | opencode | pi
+    "runner": "claude",                              // optional: ${RUNNER_IDS.join(' | ')}
     "agentProfile": "work",                          // optional: an agent account id of that runner; omitted = the project's selection at launch
     "model": "sonnet",                               // optional
     "variants": 1,                                   // 1 | 2 | 3 competing runs per match

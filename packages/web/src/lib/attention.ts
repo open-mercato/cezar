@@ -76,7 +76,37 @@ function isUnseen(_run: AttentionInput): boolean {
  *  surfaces that only have a status — the compare view's `GroupVariant` columns — can use the
  *  same canonical function instead of inventing a second status-to-tone mapping. `activity` is
  *  optional (#490), so status-only callers keep working unchanged. */
-export type AttentionInput = Pick<RunRecord, 'status' | 'activity' | 'autoResumeAt'>
+export type AttentionInput = Pick<
+  RunRecord,
+  'status' | 'activity' | 'autoResumeAt' | 'awaitingAnswerSince' | 'dispatch' | 'costUsd'
+>
+
+export type BudgetStop = {
+  spent: number
+  ceiling: number
+}
+
+/** The dispatch brake is intentionally still an attention state: the user must decide whether
+ * to send a message after spending reaches the child's ceiling. This helper only explains the
+ * existing persisted brake; it does not alter the engine's stop or resume behavior. */
+export function budgetStop(run: Pick<RunRecord, 'status' | 'dispatch' | 'costUsd'>): BudgetStop | undefined {
+  const ceiling = run.dispatch?.overBudget ? run.dispatch.budgetUsd : undefined
+  if (run.status !== 'waiting' || ceiling === undefined) return undefined
+  return { spent: run.costUsd ?? 0, ceiling }
+}
+
+/**
+ * A `failed` run whose session closed on an unanswered `CEZ:ASK`: no process is left, but the
+ * question is still the user's. Every surface that asks "does this need you?" reads it the same way.
+ */
+export function isAwaitingAnswer(run: Pick<RunRecord, 'status' | 'awaitingAnswerSince'>): boolean {
+  return run.status === 'failed' && run.awaitingAnswerSince !== undefined
+}
+
+/** The runs a "needs you" list keeps: waiting, in review, or awaiting an answer. */
+export function isNeedsYouStatus(run: Pick<RunRecord, 'status' | 'awaitingAnswerSince'>): boolean {
+  return run.status === 'waiting' || run.status === 'review' || isAwaitingAnswer(run)
+}
 
 /**
  * `RunRecord` → attention.
@@ -104,11 +134,23 @@ export function deriveAttention(run: AttentionInput): Attention {
   if (run.status === 'failed' && run.autoResumeAt) {
     return { bucket: 'none', tone: 'pending', pulse: false, label: 'scheduled' }
   }
+  // A session that closed on an unanswered `CEZ:ASK` — the inactivity timer, a crash, a restart —
+  // is `failed` on the record because the process is gone, but the question is still the user's to
+  // answer. Reporting it as a failure (or, before that, as done) hid a task that was waiting on
+  // you; it wears the `waiting` rung instead, and the answer reopens the session.
+  if (isAwaitingAnswer(run)) {
+    return { bucket: 'waiting', tone: 'pending', pulse: true, label: 'needs you' }
+  }
   if (run.status === 'failed') {
     return { bucket: 'error', tone: 'danger', pulse: false, label: 'failed' }
   }
   if (run.status === 'waiting') {
-    return { bucket: 'waiting', tone: 'pending', pulse: true, label: 'needs you' }
+    return {
+      bucket: 'waiting',
+      tone: 'pending',
+      pulse: true,
+      label: budgetStop(run)?.ceiling !== undefined ? 'budget reached' : 'needs you',
+    }
   }
   if (run.status === 'review') {
     return { bucket: 'waiting', tone: 'violet', pulse: true, label: 'needs review' }

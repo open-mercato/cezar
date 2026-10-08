@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /** The agent backends a run can be dispatched to. */
-export const runnerSchema = z.enum(['claude', 'codex', 'opencode', 'pi']);
+export const runnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot']);
 export type Runner = z.infer<typeof runnerSchema>;
 
 /** Git facts about the project root, or `null` when it is not a repository. */
@@ -14,7 +14,7 @@ export type RepoInfo = z.infer<typeof repoInfoSchema>;
 
 /** One probed CLI behind the Tools menu. */
 export const backendCheckSchema = z.object({
-  name: z.enum(['claude', 'codex', 'opencode', 'pi', 'gh', 'git']),
+  name: z.enum(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'gh', 'git']),
   available: z.boolean(),
   version: z.string().optional(),
   hint: z.string().optional(),
@@ -95,5 +95,7 @@ export const healthResponseSchema = z.object({
   // optional, which was wider than the server has ever been.
   projects: z.array(z.object({ id: z.string(), name: z.string() })),
   bootProject: z.string(),
+  /** Random identity of the installed service, when server-install supplied one. */
+  instanceId: z.string().optional(),
 });
 export type HealthResponse = z.infer<typeof healthResponseSchema>;

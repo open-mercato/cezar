@@ -62,7 +62,7 @@ function SheetBody({
   return (
     <>
       <SheetHeader className="gap-1.5 border-b border-border px-5 py-4">
-        <SheetTitle className="flex min-w-0 items-center gap-2 pr-8 text-[15px]">
+        <SheetTitle className="flex min-w-0 items-center gap-2 text-[15px]">
           <span className="min-w-0 truncate">{agent.title}</span>
           {agent.agentType !== undefined ? (
             <span

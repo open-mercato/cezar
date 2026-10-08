@@ -1,11 +1,12 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactElement } from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ProjectScopeProvider } from '@/api/project-scope-context'
 import { queryKeys } from '@/api/queries'
+import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { createQueryClient } from '@/api/query-client'
 import type {
   ApiRun,
@@ -20,6 +21,7 @@ import { buildTranscriptRows, mainTranscriptSections } from './session-transcrip
 import { reduceThread, type ThreadTurn } from './thread-state'
 
 afterEach(() => {
+  act(() => resetToasts())
   cleanup()
   vi.unstubAllGlobals()
 })
@@ -37,6 +39,7 @@ function renderView(
       { provider: 'claude', status: 'connected', enabled: true },
       { provider: 'codex', status: 'not-installed', enabled: true },
       { provider: 'opencode', status: 'not-installed', enabled: true },
+    { provider: 'cursor', status: 'not-installed', enabled: true },
     ],
   },
   health: Partial<HealthResponse> = {},
@@ -260,6 +263,23 @@ describe('ThreadView', () => {
     expect(textarea.placeholder).toBe('Reply — / for skills, @ for files…')
   })
 
+  it('budget-stopped waiting → explains the spend brake with spent and ceiling', () => {
+    renderView(
+      <ThreadView
+        run={run('waiting', {
+          costUsd: 20.83,
+          dispatch: { rootRunId: 'root', budgetUsd: 10, overBudget: true },
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    expect(document.querySelector('[data-slot="budget-hint"]')?.textContent).toContain(
+      'Budget reached — spent $20.83 of $10.00; send a message to continue.',
+    )
+    expect(document.querySelector('[data-slot="paused-hint"]')).toBeNull()
+    expect(document.querySelector('[data-slot="pill"]')?.textContent).toContain('budget reached')
+  })
+
   it('failed by a usage limit → the dock says when it resumes itself, and links the setting', () => {
     renderView(
       <ThreadView
@@ -368,6 +388,7 @@ describe('ThreadView', () => {
           { provider: 'claude', status: 'connected', enabled: false },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+        { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     )
@@ -634,6 +655,166 @@ describe('ThreadView', () => {
       )
       // Landed, so the box is empty — not restored as a failed send would be.
       await waitFor(() => expect(composer.value).toBe(''))
+    })
+
+    // ---- diff comments (self-review) ------------------------------------------------------
+
+    const DIFF_COMMENTS = [
+      { id: 'c1', path: 'src/app/page.tsx', side: 'new', line: 11, body: 'use the shared import', excerpt: 'import {' },
+      { id: 'c2', path: 'src/lib/util.ts', side: 'old', line: 4, body: 'why drop this?', excerpt: 'export const x = 1' },
+    ]
+    const ok = () =>
+      new Response(JSON.stringify({ delivered: true }), { status: 200, headers: { 'content-type': 'application/json' } })
+
+    /** The one fetch stub for the diff-comment cases: two stored comments, a `/messages` answer
+     *  the case picks, an optional skill catalog, and a recorded request log. */
+    const withDiffCommentDraft = (messages: () => Response, skills: { name: string }[] = []) => {
+      const sent: { path: string; method: string; body: unknown }[] = []
+      // Typing `/` opens the skill autocomplete, whose popover measures itself — jsdom has no observer.
+      vi.stubGlobal(
+        'ResizeObserver',
+        class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        },
+      )
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((input: RequestInfo | URL, init: RequestInit = {}) => {
+          const path = String(input)
+          const method = init.method ?? 'GET'
+          sent.push({ path, method, body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined })
+          const json = (body: unknown) =>
+            Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }))
+          if (path === '/api/v1/runs/r1/messages') return Promise.resolve(messages())
+          if (path === '/api/v1/providers/status')
+            return json({ providers: [{ provider: 'claude', status: 'connected', enabled: true }] })
+          if (path.includes('/api/v1/skills'))
+            return json(skills.map((skill) => ({ ...skill, description: '', path: `/s/${skill.name}.md`, source: 'project' })))
+          if (path === '/api/v1/runs/r1/drafts') {
+            return json({
+              surfaces: {
+                'diff-comments': { text: JSON.stringify(DIFF_COMMENTS), images: [], updatedAt: '2026-10-02T00:00:00.000Z' },
+              },
+            })
+          }
+          if (path.startsWith('/api/v1/runs/r1/drafts/'))
+            return json({ text: '', images: [], updatedAt: '2026-10-02T00:00:00.000Z' })
+          return json([])
+        }),
+      )
+      render(
+        <QueryClientProvider client={createQueryClient()}>
+          <MemoryRouter>
+            <ThreadView run={run('waiting')} thread={reduceThread(EVENTS)} />
+            <Toaster />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      )
+      const commentWrites = () =>
+        sent
+          .filter((r) => r.method === 'PUT' && r.path === '/api/v1/runs/r1/drafts/diff-comments')
+          .map((r) => (r.body as { text: string }).text)
+      const posted = () => sent.find((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/messages')?.body as
+        | { text: string }
+        | undefined
+      const composer = () => screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
+      const sendButton = () =>
+        composer().closest('[data-slot="composer"]')!.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!
+      return { commentWrites, posted, composer, sendButton }
+    }
+
+    /**
+     * Self-review: comments left on the Changes tab are draft items in the composer (one chip
+     * each), are a sendable message on their own, ride the reply as one review block, and are
+     * dropped from the draft store once it landed.
+     */
+    it('sends the diff comments drafted on the Changes tab with the next message', async () => {
+      const { commentWrites, posted, sendButton } = withDiffCommentDraft(ok)
+
+      const chip = await screen.findByText('page.tsx +11')
+      expect(chip.closest('[data-slot="composer"]')).not.toBeNull()
+      expect(screen.getByText('util.ts −4')).not.toBeNull()
+      // Nothing typed — the comments alone make it a message.
+      await waitFor(() => expect(sendButton().disabled).toBe(false))
+      fireEvent.click(sendButton())
+
+      await waitFor(() =>
+        expect(posted()?.text).toContain('`src/app/page.tsx` line 11:\n\n  ```\n  import {\n  ```\n\n  use the shared import'),
+      )
+      expect(posted()?.text).toContain('`src/lib/util.ts` line 4 (removed line):')
+      await waitFor(() => expect(screen.queryByText('page.tsx +11')).toBeNull())
+      await waitFor(() => expect(commentWrites()).toContain(''))
+    })
+
+    it('keeps the diff comments when the send is rejected', async () => {
+      const { commentWrites, posted, sendButton } = withDiffCommentDraft(
+        () => new Response(JSON.stringify({ error: 'session gone' }), { status: 500, headers: { 'content-type': 'application/json' } }),
+      )
+      await screen.findByText('page.tsx +11')
+      await waitFor(() => expect(sendButton().disabled).toBe(false))
+      fireEvent.click(sendButton())
+
+      await waitFor(() => expect(posted()).toBeDefined())
+      // Let the rejection settle, then: the chips are still there and nothing emptied the store.
+      await waitFor(() => expect(sendButton().disabled).toBe(false))
+      expect(screen.getByText('page.tsx +11')).not.toBeNull()
+      expect(commentWrites()).toEqual([])
+    })
+
+    it('never folds the diff comments into an Alt quick reply', async () => {
+      const { commentWrites, posted } = withDiffCommentDraft(ok)
+      await screen.findByText('page.tsx +11')
+
+      fireEvent.keyDown(window, { code: 'KeyC', key: 'c', altKey: true })
+
+      await waitFor(() => expect(posted()).toMatchObject({ text: 'Continue.' }))
+      expect(screen.getByText('page.tsx +11')).not.toBeNull()
+      expect(commentWrites()).toEqual([])
+    })
+
+    /** A backend's own command takes what follows it as ARGUMENTS — appended comments would be
+     *  swallowed by it and then cleared as though the agent had read them. */
+    it('keeps the diff comments out of a backend slash command, and says so', async () => {
+      const { commentWrites, posted, composer, sendButton } = withDiffCommentDraft(ok)
+      await screen.findByText('page.tsx +11')
+
+      fireEvent.change(composer(), { target: { value: '/compact' } })
+      fireEvent.click(sendButton())
+
+      await waitFor(() => expect(posted()).toMatchObject({ text: '/compact' }))
+      expect(await screen.findByText(/Diff comments kept — \/compact is a command/)).not.toBeNull()
+      expect(screen.getByText('page.tsx +11')).not.toBeNull()
+      expect(commentWrites()).toEqual([])
+    })
+
+    it('lets the diff comments ride a registry skill, which the server expands', async () => {
+      const { commentWrites, posted, composer, sendButton } = withDiffCommentDraft(ok, [{ name: 'fix-review' }])
+      await screen.findByText('page.tsx +11')
+      // The catalog decides it — wait until it has arrived.
+      await waitFor(() => expect(document.querySelector('[data-slot="composer"]')).not.toBeNull())
+      await new Promise((resolve) => setTimeout(resolve, 50))
+
+      fireEvent.change(composer(), { target: { value: '/fix-review please' } })
+      fireEvent.click(sendButton())
+
+      await waitFor(() => expect(posted()?.text.startsWith('/fix-review please\n\nReview comments on the diff:')).toBe(true))
+      await waitFor(() => expect(commentWrites()).toContain(''))
+    })
+
+    it('drops one comment from its chip and keeps the others; the last one empties the stored list', async () => {
+      const { commentWrites } = withDiffCommentDraft(ok)
+      await screen.findByText('page.tsx +11')
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remove comment on page.tsx line 11' }))
+      expect(screen.queryByText('page.tsx +11')).toBeNull()
+      expect(screen.getByText('util.ts −4')).not.toBeNull()
+      await waitFor(() => expect(commentWrites().length).toBeGreaterThan(0))
+      expect(JSON.parse(commentWrites().at(-1)!)).toEqual([DIFF_COMMENTS[1]])
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remove comment on util.ts removed line 4' }))
+      await waitFor(() => expect(commentWrites().at(-1)).toBe(''))
     })
 
     it('leaves the composer empty when this task has no draft — including another surface\'s', async () => {
@@ -1111,6 +1292,31 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="plan-mirror"]')?.textContent).toBe('Plan 1/3')
     // No steps on this run — the rail knows to stay away.
     expect(document.querySelector('[data-slot="step-rail"]')).toBeNull()
+  })
+
+  // Regression (run 4eb1a980): codex ended its last turn at "1/4" without a final
+  // `plan.updated`, and the finished run kept pulsing "in progress" above a closed session.
+  it.each([
+    ['running', false],
+    ['done', true],
+    ['review', true],
+  ] as const)('a %s run → the plan dock settled=%s', (status, settled) => {
+    const withPlan: RunEvent[] = [
+      ...EVENTS,
+      line(8, 'plan.updated', {
+        entries: [
+          { content: 'Merge main', status: 'completed' },
+          { content: 'Resolve conflicts', status: 'in_progress' },
+          { content: 'Push', status: 'pending' },
+        ],
+      }),
+    ]
+    renderView(<ThreadView run={run(status)} thread={reduceThread(withPlan)} />)
+    const dock = document.querySelector('[data-slot="plan-dock"]')!
+    expect(dock.getAttribute('data-settled')).toBe(settled ? 'true' : null)
+    expect(dock.querySelector('[data-slot="plan-tag"]') === null).toBe(settled)
+    expect(dock.querySelector('.animate-pulse') === null).toBe(settled)
+    expect(dock.querySelector('[data-slot="plan-unfinished"]') !== null).toBe(settled)
   })
 
   it('plan-kind tool cards stay out of the thread — the dock is their surface (#382)', () => {

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { hostUsageSchema } from '@open-mercato/cezar-contract';
 import { workspaceConfigPath, workspaceUiStatePath } from '../paths.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunStore } from '../runs/store.ts';
@@ -102,6 +103,7 @@ describe('the workspace settings API (step 2.7)', () => {
       resources: {
         maxParallel: 2,
         maxMonitoringSessions: 2,
+        idleTimeoutMinutes: 15,
         monitoringWakeIntervalMinutes: 5,
         autoResumeOnUsageLimit: true,
         memoryLimitMb: null,
@@ -125,12 +127,34 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(body).toMatchObject({ browseRoot: '~/source', projectsDir: '~/clones' });
   });
 
+  // ---- GET /api/v1/workspace/host-usage ---------------------------------------
+
+  it('GET host-usage answers a contract-valid sample from read-only OS facts', async () => {
+    const res = await apiRequest(app, '/api/v1/workspace/host-usage');
+    expect(res.status).toBe(200);
+    const body: unknown = await res.json();
+    // The schema is the whole contract: required facts always present, optional ones absent
+    // rather than zeroed (a CI container may legitimately have no swap and no /proc load).
+    expect(hostUsageSchema.safeParse(body).success).toBe(true);
+    const sample = hostUsageSchema.parse(body);
+    expect(sample.memTotalBytes).toBeGreaterThan(0);
+    expect(sample.memUsedBytes).toBeLessThanOrEqual(sample.memTotalBytes);
+    expect(sample.cpuCount).toBeGreaterThanOrEqual(1);
+    expect(Number.isNaN(Date.parse(sample.sampledAt))).toBe(false);
+    // cpuPct is a delta: it may be absent on a cold sampler, but it is never out of range.
+    if (sample.cpuPct !== undefined) {
+      expect(sample.cpuPct).toBeGreaterThanOrEqual(0);
+      expect(sample.cpuPct).toBeLessThanOrEqual(100);
+    }
+  });
+
   it('PUT resources round-trips, persists to disk, and refreshes the semaphore cache', async () => {
     expect(semaphore.maxParallel()).toBe(2); // the pre-PUT snapshot
     const res = await putConfig({
       resources: {
         maxParallel: 5,
         maxMonitoringSessions: 3,
+        idleTimeoutMinutes: 15,
         monitoringWakeIntervalMinutes: 5,
         autoResumeOnUsageLimit: false,
         memoryLimitMb: 2048,
@@ -151,6 +175,7 @@ describe('the workspace settings API (step 2.7)', () => {
       resources: {
         maxParallel: 5,
         maxMonitoringSessions: 3,
+        idleTimeoutMinutes: 15,
         monitoringWakeIntervalMinutes: 5,
         autoResumeOnUsageLimit: false,
         memoryLimitMb: 2048,
@@ -174,6 +199,22 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(semaphore.memoryLimitMb()).toBe(2048);
   });
 
+  it('#1232 PUT idle timeout persists, reloads, and reaches the live semaphore', async () => {
+    expect(semaphore.idleTimeoutMinutes()).toBe(15);
+
+    const res = await putConfig({ resources: { idleTimeoutMinutes: 30 } });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as WorkspaceConfigResponse).resources.idleTimeoutMinutes).toBe(30);
+    expect(((await (await getConfig()).json()) as WorkspaceConfigResponse).resources.idleTimeoutMinutes).toBe(30);
+    expect((rawConfig().resources as Record<string, unknown>).idleTimeoutMinutes).toBe(30);
+    expect(semaphore.idleTimeoutMinutes()).toBe(30);
+
+    const disabled = await putConfig({ resources: { idleTimeoutMinutes: null } });
+    expect(disabled.status).toBe(200);
+    expect(((await disabled.json()) as WorkspaceConfigResponse).resources.idleTimeoutMinutes).toBeNull();
+    expect(semaphore.idleTimeoutMinutes()).toBeNull();
+  });
+
   /** #810 — the cadence now ships ON, so the write worth pinning is the one that turns it
    *  OFF. `null` must survive the round-trip and reach the semaphore as `null`; re-defaulting
    *  it to 5 would silently overrule an operator who chose "Park until resumed". */
@@ -195,6 +236,7 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(((await (await getConfig()).json()) as WorkspaceConfigResponse).resources).toEqual({
       maxParallel: 5,
       maxMonitoringSessions: 2,
+      idleTimeoutMinutes: 15,
       monitoringWakeIntervalMinutes: 5,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
@@ -375,6 +417,21 @@ describe('the workspace settings API (step 2.7)', () => {
     });
     // The workspace file, not the boot repo's — the per-repo twin stays empty.
     expect(await (await apiRequest(app, '/api/v1/ui-state')).json()).toEqual({});
+  });
+
+  it('round-trips future dashboard widget IDs and nested preferences through the file and API', async () => {
+    const dashboard = {
+      order: ['overview', 'future-widget', 'portfolio'],
+      tiles: { fleet: false, futureWidget: false },
+      futureSetting: { enabled: true },
+    };
+    expect((await putUiState({ dashboard })).status).toBe(200);
+    expect(rawUiState()).toEqual({ dashboard });
+    expect(await (await getUiState()).json()).toEqual({ dashboard });
+    expect((await putUiState({ appearance: { accent: 'violet' } })).status).toBe(200);
+    expect(rawUiState().dashboard).toEqual(dashboard);
+    expect((await putUiState({ dashboard: { order: ['overview', 'overview'] } })).status).toBe(400);
+    expect(rawUiState().dashboard).toEqual(dashboard);
   });
 
   it('round-trips the sidebar project order beside the legacy collapse map', async () => {

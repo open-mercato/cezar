@@ -363,6 +363,12 @@ describe('sanitizeAttachmentName (#929)', () => {
     expect(sanitizeAttachmentName('a<b>c:d"e|f?g*h.txt', 'text/plain')).toBe('a-b-c-d-e-f-g-h.txt');
   });
 
+  it('strips bidi and format display controls without changing ordinary Unicode', () => {
+    const bidiAndFormatControls = '\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069';
+    expect(sanitizeAttachmentName(`brief${bidiAndFormatControls}dm.txt`, 'text/plain')).toBe('briefdm.txt');
+    expect(sanitizeAttachmentName('résumé-日本語.txt', 'text/plain')).toBe('résumé-日本語.txt');
+  });
+
   /**
    * The case the whole helper exists for. The media type is what the allowlist screened; letting
    * the NAME contradict it would mean a `text/plain` upload landing in the user's project as
@@ -837,6 +843,44 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
     expect(opening).toBeDefined();
     expect(opening?.userText).toContain('here is the brief');
     expect(opening?.userText).toContain(`- ${join(dataDir, 'runs', `${record.id}-images`, stackedName)}`);
+  }, 30_000);
+
+  /** #926 — the exact reported interaction: a screenshot pasted into a task that is still
+   * waiting for a processing slot must survive the queue and reach the eventual opening prompt.
+   * This is intentionally separate from the file case above: screenshots also need their inline
+   * image block and are the browser's clipboard path. */
+  it('a screenshot stacked onto a queued run reaches the opening prompt', async () => {
+    writeFileSync(stdinFile, '', 'utf8');
+    const workflow: WorkflowDef = {
+      name: 'stacked-screenshot-test',
+      source: 'built-in',
+      steps: [
+        { id: 'work', prompt: '{{task}}' },
+        { id: 'verify', command: 'true' },
+      ],
+    };
+    const holder: WorkflowDef = {
+      name: 'hold-slot-screenshot',
+      source: 'built-in',
+      steps: [{ id: 'hold', command: `${process.execPath} -e "setTimeout(() => {}, 700)"` }],
+    };
+    manager.startRun(holder, { task: 'occupy the only slot', worktree: false });
+    const record = manager.startRun(workflow, { task: 'wait for my screenshot', worktree: false });
+    expect(store.getRun(record.id)?.status).toBe('queued');
+
+    const queuedMessage = manager.enqueueMessage(record.id, [
+      { type: 'text', text: 'please inspect this screenshot' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: TINY_PNG_B64 } },
+    ]);
+    expect(queuedMessage?.images).toEqual([`/api/v1/runs/${record.id}/images/pasted-1.png`]);
+    expect(existsSync(join(dataDir, 'runs', `${record.id}-images`, 'pasted-1.png'))).toBe(true);
+
+    await waitForStatus(record.id, ['done', 'review', 'failed', 'cancelled']);
+    const opening = readStdinLines().find((line) => line.userText.includes('wait for my screenshot'));
+    expect(opening).toBeDefined();
+    expect(opening?.imageCount).toBe(1);
+    expect(opening?.userText).toContain('please inspect this screenshot');
+    expect(opening?.userText).toContain(`- ${join(dataDir, 'runs', `${record.id}-images`, 'pasted-1.png')}`);
   }, 30_000);
 
   it('a follow-up pasted image is saved and its path is appended to the delivered message', async () => {

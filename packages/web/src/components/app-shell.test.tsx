@@ -57,6 +57,31 @@ describe('AppShell', () => {
     expect(within(screen.getByRole('main')).getByText('route content')).toBeTruthy()
   })
 
+  // Brand guideline ("Znak z nazwą"): the mark WITHOUT its tile, in the text colour, beside the
+  // lowercase name in Chakra Petch SemiBold — 26px over 19px with a gap of 0.6 × the type size.
+  it('renders the brand lockup: the tile-less mark beside the lowercase name', () => {
+    renderShell('/')
+    const lockup = sidebar().querySelector('[data-slot="brand-lockup"]') as HTMLElement | null
+    expect(lockup).toBeTruthy()
+    expect(lockup!.style.gap).toBe('11.4px')
+
+    const mark = lockup!.querySelector('[data-slot="brand-mark"]') as SVGElement | null
+    expect(mark).toBeTruthy()
+    expect(mark!.getAttribute('height')).toBe('26')
+    expect(mark!.getAttribute('fill')).toBe('currentColor')
+    // No tile: polygons only, no rect behind them and no <img> of the tiled icon.
+    expect(mark!.querySelectorAll('polygon')).toHaveLength(4)
+    expect(mark!.querySelector('rect')).toBeNull()
+    expect(sidebar().querySelector('img[src="/icon.svg"]')).toBeNull()
+
+    const name = lockup!.querySelector('[data-slot="brand-name"]') as HTMLElement | null
+    expect(name?.textContent).toBe('cezar')
+    expect(name!.style.fontSize).toBe('19px')
+    expect(name!.style.fontFamily).toBe('var(--brand)')
+    expect(name!.className).toContain('font-semibold')
+    expect(name!.className).toContain('tracking-normal')
+  })
+
   it('resets the main scroller to the top on navigation (#mobile-scroll-top)', () => {
     renderShell('/')
     const main = screen.getByRole('main')
@@ -210,8 +235,10 @@ describe('AppShell', () => {
 
   /* The footer used to be one wrapping row that overflowed the 264px column, so the theme toggle
    * silently fell onto a line of its own (#702). jsdom cannot measure that — but it can pin the
-   * structure that makes the wrap impossible: two rows, by construction, not by luck. */
-  describe('sidebar footer is two intentional rows (#702)', () => {
+   * structure that makes the wrap impossible: deliberate rows, by construction, not by luck. The
+   * machine glance is one more of them when it is mounted, which is why it is passed as a slot and
+   * asserted first in the list below. */
+  describe('sidebar footer rows are intentional (#702)', () => {
     const controls = () =>
       document.querySelector('[data-slot="sidebar-footer-controls"]') as HTMLElement
 
@@ -221,10 +248,20 @@ describe('AppShell', () => {
       expect(footer().className).not.toContain('flex-wrap')
     })
 
-    it('has exactly two children: the search bar, then the controls row', () => {
+    it('has exactly two children without the machine glance: the search bar, then the controls', () => {
       renderShell('/', { version: '1.2.3' })
       const children = Array.from(footer().children) as HTMLElement[]
       expect(children.map((child) => child.dataset.slot)).toEqual([
+        'command-palette-hint',
+        'sidebar-footer-controls',
+      ])
+    })
+
+    it('puts the machine glance above both, as its own row', () => {
+      renderShell('/', { version: '1.2.3', hostWidget: <span data-slot="host-widget-stub" /> })
+      const children = Array.from(footer().children) as HTMLElement[]
+      expect(children.map((child) => child.dataset.slot)).toEqual([
+        'host-widget-stub',
         'command-palette-hint',
         'sidebar-footer-controls',
       ])
@@ -300,6 +337,7 @@ describe('AppShell', () => {
       expect(document.querySelector('[data-slot="repo-chip"]')).toBeNull()
       expect(document.querySelector('[data-slot="nav-badge"]')).toBeNull()
       expect(document.querySelector('[data-slot="version-chip"]')).toBeNull()
+      expect(document.querySelector('[data-slot="star-chip"]')).toBeNull()
     })
 
     it('renders the repo chip and version chip from props', () => {
@@ -307,6 +345,63 @@ describe('AppShell', () => {
       expect(screen.getByText('cezar / main')).toBeTruthy()
       // The chip prefixes the raw semver from /api/v1/health — `v1.2.3`, mono, muted.
       expect(within(footer()).getByText('v1.2.3')).toBeTruthy()
+    })
+
+    describe('the ⭐ ask', () => {
+      const chip = () => document.querySelector('[data-slot="star-chip"]') as HTMLAnchorElement | null
+
+      it('renders the count beside the version chip, in the one controls row', () => {
+        renderShell('/', { version: '1.2.3', starCount: 1234 })
+        const row = document.querySelector('[data-slot="sidebar-footer-controls"]') as HTMLElement
+        expect(row.querySelector('[data-slot="star-chip"]')).not.toBeNull()
+        expect(within(footer()).getByText('1.2k')).toBeTruthy()
+      })
+
+      it('is absent — not empty — when the count is unavailable', () => {
+        // Offline, a rate-limited IP, or `CEZ_NO_BANNER=1`. A button advertising a number it
+        // cannot produce is worse than no button, and the row has no room to spare either.
+        renderShell('/', { version: '1.2.3', starCount: null })
+        expect(chip()).toBeNull()
+      })
+
+      it('still renders at zero — a real count, not a missing one', () => {
+        renderShell('/', { version: '1.2.3', starCount: 0 })
+        expect(chip()).not.toBeNull()
+        expect(within(footer()).getByText('0')).toBeTruthy()
+      })
+
+      it('links to cezar, in a new tab, leaking neither opener nor referrer', () => {
+        renderShell('/', { starCount: 42 })
+        expect(chip()?.getAttribute('href')).toBe('https://github.com/open-mercato/cezar')
+        expect(chip()?.getAttribute('target')).toBe('_blank')
+        expect(chip()?.getAttribute('rel')).toContain('noopener')
+        expect(chip()?.getAttribute('rel')).toContain('noreferrer')
+      })
+
+      it('names itself for a screen reader with the exact count, not the abbreviation', () => {
+        renderShell('/', { starCount: 12_345 })
+        // The visible chip abbreviates for the 264px column; the accessible name must not —
+        // "12.3k stars" is a worse answer to "how many" than the number itself.
+        const label = chip()?.getAttribute('aria-label') ?? ''
+        expect(label).toMatch(/star cezar on github/i)
+        // Formatted for the reader's own locale, so assert it the same way rather than pinning
+        // `12,345` — that spelling is a property of the test machine, not of this component.
+        expect(label).toContain(new Intl.NumberFormat().format(12_345))
+        expect(label).not.toContain('12.3k')
+      })
+
+      it('is shrink-0, leaving the version chip as the row\'s one elastic item (#876)', () => {
+        // Two elastic controls would give the row two ways to lose its width budget. The star
+        // chip is six characters at worst, so it can afford to be rigid.
+        renderShell('/', { version: '1.2.3', starCount: 12_345 })
+        expect(chip()?.className).toContain('shrink-0')
+      })
+
+      it('offers no reward and blocks nothing — the chip is a link and only a link', () => {
+        renderShell('/', { starCount: 1000 })
+        expect(chip()?.tagName).toBe('A')
+        expect(chip()?.textContent ?? '').not.toMatch(/\b(unlock|reward|free|upgrade|pro|premium)\b/i)
+      })
     })
 
     describe('version chip update affordance (#368)', () => {
@@ -406,6 +501,51 @@ describe('AppShell', () => {
       cleanup()
       renderShell('/p/shop/', { projectGroups: <p>groups</p> })
       expect(allTasks()!.getAttribute('aria-current')).toBeNull()
+    })
+  })
+
+  /**
+   * Dashboard and All tasks stack directly against each other, so they are peers: one row
+   * height, one type scale, one violet icon. Dashboard shipped with its own inline class string
+   * and drifted to a taller row with a grey icon; these pin the pair together.
+   */
+  describe('top-level doors read as peers', () => {
+    const dashboard = () => document.querySelector('[data-slot="dashboard-link"]') as HTMLElement
+    const allTasks = () => document.querySelector('[data-slot="all-tasks-link"]') as HTMLElement
+
+    /** The shared skin, minus the active-state background either row adds on its own page. */
+    const skin = (el: HTMLElement) => [...el.classList].filter(c => c !== 'bg-muted').sort()
+
+    it('paints both rows from the same class string', () => {
+      renderShell('/', { projectGroups: <p>groups</p> })
+      expect(skin(dashboard())).toEqual(skin(allTasks()))
+    })
+
+    it('gives both rows the touch height that relaxes to 36px on desktop', () => {
+      renderShell('/', { projectGroups: <p>groups</p> })
+      for (const row of [dashboard(), allTasks()]) {
+        expect(row.classList.contains('h-11')).toBe(true)
+        expect(row.classList.contains('md:h-9')).toBe(true)
+        // The drifted Dashboard row was `min-h-11` with no desktop override — 8px taller than
+        // the row beneath it at every width above `md`.
+        expect(row.classList.contains('min-h-11')).toBe(false)
+      }
+    })
+
+    it('gives both icons the violet accent', () => {
+      renderShell('/', { projectGroups: <p>groups</p> })
+      for (const row of [dashboard(), allTasks()]) {
+        const icon = row.querySelector('svg') as SVGElement
+        expect(icon).not.toBeNull()
+        expect(icon.getAttribute('class')).toContain('text-violet/70')
+      }
+    })
+
+    it('brings its own icon to full strength on its own page', () => {
+      renderShell('/dashboard', { projectGroups: <p>groups</p> })
+      const icon = dashboard().querySelector('svg') as SVGElement
+      expect(icon.getAttribute('class')).toContain('text-violet')
+      expect(icon.getAttribute('class')).not.toContain('text-violet/70')
     })
   })
 
@@ -865,5 +1005,21 @@ describe('AppShell', () => {
       expect(content.className).toContain('pt-[env(safe-area-inset-top)]')
       expect(content.className).toContain('pb-[env(safe-area-inset-bottom)]')
     })
+  })
+})
+
+
+describe('Dashboard active navigation', () => {
+  it.each(['/dashboard', '/dashboard?view=costs', '/dashboard?period=30d'])('highlights %s beyond hover', entry => {
+    renderShell(entry)
+    const link = screen.getByRole('link', { name: 'Dashboard' })
+    expect(link.getAttribute('aria-current')).toBe('page')
+    expect(link.classList.contains('bg-muted')).toBe(true)
+  })
+  it('does not remain highlighted on another page', () => {
+    renderShell('/tasks')
+    const link = screen.getByRole('link', { name: 'Dashboard' })
+    expect(link.getAttribute('aria-current')).toBeNull()
+    expect(link.classList.contains('bg-muted')).toBe(false)
   })
 })

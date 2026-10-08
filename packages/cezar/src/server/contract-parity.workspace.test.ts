@@ -23,6 +23,7 @@ import type {
 import type { runsIndexResponseSchema } from '@open-mercato/cezar-contract';
 import type {
   configResponseSchema,
+  hostUsageSchema,
   openProjectInResponseSchema,
   openTargetsResponseSchema,
   providerConnectResponseSchema,
@@ -30,6 +31,8 @@ import type {
   runnerModelCatalogResponseSchema,
   setConfigResponseSchema,
   skillsUpdateStateSchema,
+  selfUpdateStatusSchema,
+  starCountSchema,
   uiStateSchema,
   workspaceConfigResponseSchema,
   workspaceUiStateSchema,
@@ -90,6 +93,7 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
   // ---- workspace settings + the per-repo agent knobs ---------------------------------------
   type WorkspaceConfig200 = InferResponseType<typeof client.api.v1.workspace.config.$get, 200>;
   type SetWorkspaceConfig200 = InferResponseType<typeof client.api.v1.workspace.config.$put, 200>;
+  type HostUsage200 = InferResponseType<(typeof client.api.v1.workspace)['host-usage']['$get'], 200>;
   type UiState200 = InferResponseType<(typeof client.api.v1)['ui-state']['$get'], 200>;
   type SetUiState200 = InferResponseType<(typeof client.api.v1)['ui-state']['$put'], 200>;
   type WorkspaceUiState200 = InferResponseType<(typeof client.api.v1.workspace)['ui-state']['$get'], 200>;
@@ -107,6 +111,15 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     (typeof client.api.v1.workspace)['skills-update']['apply']['$post'],
     200
   >;
+
+  // ---- self-update (PoC) --------------------------------------------------------------------
+  type SelfUpdate200 = InferResponseType<(typeof client.api.v1.workspace)['self-update']['$get'], 200>;
+  type SelfUpdateRefresh200 = InferResponseType<(typeof client.api.v1.workspace)['self-update']['refresh']['$post'], 200>;
+  type SelfUpdateChannel200 = InferResponseType<(typeof client.api.v1.workspace)['self-update']['channel']['$put'], 200>;
+  type SelfUpdateApply200 = InferResponseType<(typeof client.api.v1.workspace)['self-update']['apply']['$post'], 200>;
+
+  // ---- the star ask -------------------------------------------------------------------------
+  type StarCount200 = InferResponseType<(typeof client.api.v1)['star-count']['$get'], 200>;
 
   // ---- providers, models, open targets ----------------------------------------------------
   type ProviderStatus200 = InferResponseType<typeof client.api.v1.providers.status.$get, 200>;
@@ -176,6 +189,7 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     // workspace settings + prefs
     Assert<Exact<z.infer<typeof workspaceConfigResponseSchema>, WorkspaceConfig200>>,
     Assert<Exact<z.infer<typeof workspaceConfigResponseSchema>, SetWorkspaceConfig200>>,
+    Assert<Exact<z.infer<typeof hostUsageSchema>, HostUsage200>>,
     // the two open GUI-pref bags — GET and the merged answer the PUT sends back
     Assert<ExactOpen<z.infer<typeof uiStateSchema>, UiState200>>,
     Assert<ExactOpen<z.infer<typeof uiStateSchema>, SetUiState200>>,
@@ -187,6 +201,13 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     Assert<Exact<z.infer<typeof skillsUpdateStateSchema>, SkillsUpdate200>>,
     Assert<Exact<z.infer<typeof skillsUpdateStateSchema>, SkillsUpdateCheck200>>,
     Assert<Exact<z.infer<typeof skillsUpdateStateSchema>, SkillsUpdateApply200>>,
+    // self-update
+    Assert<Exact<z.infer<typeof selfUpdateStatusSchema>, SelfUpdate200>>,
+    Assert<Exact<z.infer<typeof selfUpdateStatusSchema>, SelfUpdateRefresh200>>,
+    Assert<Exact<z.infer<typeof selfUpdateStatusSchema>, SelfUpdateChannel200>>,
+    Assert<Exact<z.infer<typeof selfUpdateStatusSchema>, SelfUpdateApply200>>,
+    // the star ask
+    Assert<Exact<z.infer<typeof starCountSchema>, StarCount200>>,
     // providers, models, open targets
     Assert<Exact<z.infer<typeof providerStatusResponseSchema>, ProviderStatus200>>,
     Assert<Exact<z.infer<typeof providerStatusResponseSchema>, ProviderEnabled200>>,

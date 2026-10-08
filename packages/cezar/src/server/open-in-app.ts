@@ -1,10 +1,10 @@
 import { spawn } from 'node:child_process';
-import { accessSync, constants, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import type { RunnerId } from '../core/agent-runner.ts';
-import { claudeShellCommand } from '../core/claude-bin.ts';
+import { claudeShellCommand, isExecutable } from '../core/claude-bin.ts';
 import { isShellEmbeddable, quoteExecutable } from '../core/shell-env.ts';
 import { openInTerminal, refuseSpawnUnderTest } from './open-in-terminal.ts';
 import { isWsl, translateToWindowsPath } from './wsl.ts';
@@ -91,12 +91,7 @@ export function resolveOnPath(
   for (const dir of dirs) {
     if (!dir) continue;
     for (const name of names) {
-      try {
-        accessSync(join(dir, name), constants.X_OK);
-        return name;
-      } catch {
-        // keep looking
-      }
+      if (isExecutable(join(dir, name))) return name;
     }
   }
   return null;
@@ -134,8 +129,11 @@ const AGENT_CLIS: Array<{ runner: RunnerId; label: string; icon: string; bin: st
   // must also reach the LAUNCH — see `withResolvedClaudeBin`.
   { runner: 'claude', label: 'Claude CLI', icon: 'claude', bin: 'claude', envBin: () => claudeShellCommand() ?? undefined },
   { runner: 'codex', label: 'Codex CLI', icon: 'codex', bin: 'codex', envBin: () => process.env.CEZ_CODEX_BIN },
+  { runner: 'junie', label: 'Junie CLI', icon: 'junie', bin: 'junie', envBin: () => process.env.CEZ_JUNIE_BIN },
   { runner: 'opencode', label: 'OpenCode', icon: 'opencode', bin: 'opencode', envBin: () => process.env.CEZ_OPENCODE_BIN },
+  { runner: 'cursor', label: 'Cursor Agent', icon: 'cursor', bin: 'agent', envBin: () => process.env.CEZ_CURSOR_AGENT_BIN },
   { runner: 'pi', label: 'pi CLI', icon: 'pi', bin: 'pi', envBin: () => process.env.CEZ_PI_BIN },
+  { runner: 'copilot', label: 'Copilot CLI', icon: 'copilot', bin: 'copilot', envBin: () => process.env.CEZ_COPILOT_BIN },
 ];
 
 /**

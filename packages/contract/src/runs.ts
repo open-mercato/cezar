@@ -30,6 +30,15 @@ import { dispatchIntentSchema, dispatchSchema } from './dispatch.ts';
 
 // ---- the record --------------------------------------------------------------------------
 
+/** One authoritative PR association; optional for compatibility with older run records. */
+export const runPrRefSchema = z.object({
+  number: z.number().int().positive(),
+  url: z.string().url().optional(),
+  origin: z.enum(['created', 'marker', 'legacy', 'derived']),
+  at: z.string(),
+});
+export type RunPrRef = z.infer<typeof runPrRefSchema>;
+
 export const runStatusSchema = z.enum([
   'queued',
   'running',
@@ -220,6 +229,10 @@ export const runRecordSchema = z.object({
   autoResumeAt: z.string().optional(),
   /** Consecutive automatic resumes since the last human turn, against the safety cap. */
   autoResumeAttempts: z.number().optional(),
+  /** ISO-8601 instant the run's session ended (inactivity, a crash, a restart) while a `CEZ:ASK`
+   *  question was still unanswered. Present only on a `failed` run; the cockpit keeps such a run
+   *  under "needs you" until the answer reopens it. Absent on records written before it existed. */
+  awaitingAnswerSince: z.string().optional(),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
@@ -233,6 +246,7 @@ export const runRecordSchema = z.object({
   referencedPullRequestUrl: z.string().optional(),
   /** The PR/issue number this task is ABOUT (task auto-naming spec) — display tier only. */
   prNumber: z.number().optional(),
+  prRefs: z.array(runPrRefSchema).max(8).optional(),
   issueNumber: z.number().optional(),
   /** Server-side provenance: referenced-issue discovery currently owns `issueNumber`. */
   referencedIssueNumberSeeded: z.boolean().optional(),
@@ -355,6 +369,9 @@ export const runIndexEntrySchema = z.object({
    *  it, so without it here a cross-project row would show a red "failed" dot and land in
    *  Recently finished for work that is simply waiting for its appointment. */
   autoResumeAt: z.string().optional(),
+  /** A `failed` run whose session closed on an unanswered `CEZ:ASK` — `deriveAttention` reads it,
+   *  so a cross-project row says "needs you" like every other surface rather than "failed". */
+  awaitingAnswerSince: z.string().optional(),
   /** The workflow the run executes — the global Tasks page shows it in a column and groups by
    *  it. Always present on the record (`RunRecord.workflow`), so required here; the display
    *  refinement `workflowLabel` applies needs `steps[]`, which this row deliberately omits, so
@@ -384,6 +401,7 @@ export const runIndexEntrySchema = z.object({
   pullRequestUrl: z.string().optional(),
   referencedPullRequestUrl: z.string().optional(),
   prNumber: z.number().optional(),
+  prRefs: z.array(runPrRefSchema).max(8).optional(),
   issueNumber: z.number().optional(),
   referencedIssueUrl: z.string().optional(),
   markerRefs: z.object({ pr: z.number().optional(), issue: z.number().optional() }).optional(),
@@ -790,7 +808,7 @@ export function sanitizeAttachmentName(name: string, mediaType: string): string 
   const base = name.split(/[/\\]/).pop() ?? '';
   const cleaned = base
     // eslint-disable-next-line no-control-regex -- stripping control characters is the point
-    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/[\u0000-\u001f\u007f\u200e-\u200f\u202a-\u202e\u2066-\u2069]/g, '')
     .replace(/[<>:"|?*]/g, '-')
     .replace(/\s+/g, ' ')
     // Leading dots would make the copy a hidden file (and `.`/`..` a path operation).

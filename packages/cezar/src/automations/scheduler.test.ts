@@ -252,6 +252,178 @@ describe('ProjectAutomationScheduler', () => {
   });
 });
 
+/**
+ * #982: once the 120-second overlap band alone holds `maxRecords` events, every poll spends its
+ * whole budget re-reading them, hands back the cursor it was given, and the next interval asks the
+ * identical question. These tests pin the escape and its cost.
+ */
+describe('ProjectAutomationScheduler — a saturated overlap band (#982)', () => {
+  /** An ordered run of observations, drained exactly the way `GithubPoller.poll()` drains one. */
+  function fakePoller(run: Array<{ timestamp: string; tieBreaker: string }>) {
+    const poll = vi.fn(async (
+      _owner: string,
+      _repo: string,
+      _definition: unknown,
+      options: { since?: string; maxRecords?: number } = {},
+    ) => {
+      const budget = options.maxRecords ?? 25;
+      const window = run.filter((entry) => !options.since || entry.timestamp >= options.since);
+      const evaluated = window.slice(0, budget);
+      return {
+        candidates: [],
+        truncated: window.length > budget,
+        pages: 1,
+        cursor: evaluated.at(-1),
+      };
+    });
+    return { poll };
+  }
+
+  /** `count` label events written into the same second — the reporter's grooming automation. */
+  const band = (count: number, timestamp = '2026-09-10T15:12:30.000Z') =>
+    Array.from({ length: count }, (_, index) => ({ timestamp, tieBreaker: `band-${String(index).padStart(3, '0')}` }));
+
+  /** An automation parked on `cursor` — by default the run's last record, so a short prefix of
+   *  the band can never reach past it. */
+  async function pinnedAt(
+    run: Array<{ timestamp: string; tieBreaker: string }>,
+    cursor: { timestamp: string; tieBreaker: string } = run.at(-1)!,
+  ) {
+    const { store, definition } = await setup();
+    store.setState(definition.id, (current) => ({ ...current, cursor }));
+    const poller = fakePoller(run);
+    const scheduler = new ProjectAutomationScheduler({
+      projectId: 'p',
+      timeZone: 'UTC',
+      store,
+      github: { owner: 'acme', repo: 'demo', poller: poller as never },
+      launch: async () => ({ runId: 'unused' }),
+    });
+    return { store, definition, scheduler, poller, cursor };
+  }
+
+  it('climbs out of the band the old code was pinned in, doubling up to the 100-record ceiling', async () => {
+    const beyond = { timestamp: '2026-09-11T09:31:09.000Z', tieBreaker: 'beyond' };
+    // 30 label events in one second plus an hours-later record the 25-record budget never reaches.
+    const { store, definition, scheduler, poller } = await pinnedAt([...band(30), beyond], band(30).at(-1)!);
+
+    await scheduler.check(definition);
+
+    expect(poller.poll.mock.calls.map((call) => (call[3] as { maxRecords?: number }).maxRecords))
+      .toEqual([undefined, 50]);
+    expect(store.state(definition.id)?.cursor).toEqual(beyond);
+    expect(store.state(definition.id)?.pinnedCursor).toBeUndefined();
+    expect(store.logs({ automationId: definition.id })[0]?.reason)
+      .toBe('The overlap band was saturated; a 50-record re-poll moved the cursor past it.');
+  });
+
+  it('pays the climb once per pinned cursor when the band is still saturated at 100', async () => {
+    const { store, definition, scheduler, poller } = await pinnedAt(band(150));
+
+    await scheduler.check(definition);
+    expect(poller.poll.mock.calls.map((call) => (call[3] as { maxRecords?: number }).maxRecords))
+      .toEqual([undefined, 50, 100]);
+    const pinnedCursor = store.state(definition.id)?.pinnedCursor;
+    expect(pinnedCursor).toEqual(band(150).at(-1));
+    // The marker has to survive the state file's own schema, not just the in-memory copy.
+    expect(AutomationStore.open(store.dataDir).state(definition.id)?.pinnedCursor).toEqual(pinnedCursor);
+
+    poller.poll.mockClear();
+    await scheduler.check(definition);
+    // Still pinned at the search API's own ceiling: one poll, no ladder.
+    expect(poller.poll).toHaveBeenCalledTimes(1);
+    expect(store.state(definition.id)?.pinnedCursor).toEqual(pinnedCursor);
+    expect(store.logs({ automationId: definition.id })[0]?.reason)
+      .toContain('holds 100 or more records, so the cursor cannot advance past it');
+  });
+
+  it('clears the marker and climbs again once the cursor finally moves', async () => {
+    const { store, definition, scheduler, poller } = await pinnedAt(band(150));
+    await scheduler.check(definition);
+    expect(store.state(definition.id)?.pinnedCursor).toBeDefined();
+
+    const freed = { timestamp: '2026-09-11T09:31:09.000Z', tieBreaker: 'freed' };
+    poller.poll.mockResolvedValue({ candidates: [], truncated: false, pages: 1, cursor: freed });
+    poller.poll.mockClear();
+    await scheduler.check(definition);
+
+    expect(store.state(definition.id)?.cursor).toEqual(freed);
+    expect(store.state(definition.id)?.pinnedCursor).toBeUndefined();
+  });
+
+  it('climbs again after the operator narrows the filter the pinned log told them to narrow', async () => {
+    const { store, definition, scheduler } = await pinnedAt(band(150));
+    await scheduler.check(definition);
+    expect(store.state(definition.id)?.pinnedCursor).toEqual(band(150).at(-1));
+
+    // The remediation the `no-match` row prescribes: narrow the filter so the band stops saturating.
+    // 40 records still overrun the 25-record budget, so escaping it needs the ladder — which the
+    // marker would skip if an edit did not clear it.
+    const narrowed = store.update(definition.id, definition.revision, {
+      ...definition,
+      filters: { ...definition.filters, allLabels: ['grooming'] },
+    }) as GithubAutomationDefinition;
+    expect(store.state(definition.id)?.pinnedCursor).toBeUndefined();
+
+    const beyond = { timestamp: '2026-09-11T09:31:09.000Z', tieBreaker: 'beyond' };
+    const poller = fakePoller([...band(40), beyond]);
+    const narrowedScheduler = new ProjectAutomationScheduler({
+      projectId: 'p',
+      timeZone: 'UTC',
+      store,
+      github: { owner: 'acme', repo: 'demo', poller: poller as never },
+      launch: async () => ({ runId: 'unused' }),
+    });
+
+    await narrowedScheduler.check(narrowed);
+
+    expect(poller.poll.mock.calls.map((call) => (call[3] as { maxRecords?: number }).maxRecords))
+      .toEqual([undefined, 50]);
+    expect(store.state(definition.id)?.cursor).toEqual(beyond);
+    expect(store.state(definition.id)?.pinnedCursor).toBeUndefined();
+  });
+
+  it('leaves an ordinary no-new-events poll alone — one call, no marker', async () => {
+    const { store, definition } = await setup();
+    store.setState(definition.id, (current) => ({
+      ...current,
+      cursor: { timestamp: '2026-07-26T01:00:00.000Z', tieBreaker: 'current' },
+    }));
+    const poll = vi.fn(async () => ({ candidates: [], truncated: false, pages: 1, cursor: undefined }));
+    const scheduler = new ProjectAutomationScheduler({
+      projectId: 'p',
+      timeZone: 'UTC',
+      store,
+      github: { owner: 'acme', repo: 'demo', poller: { poll } as never },
+      launch: async () => ({ runId: 'unused' }),
+    });
+
+    await scheduler.check(definition);
+
+    expect(poll).toHaveBeenCalledTimes(1);
+    expect(poll).toHaveBeenCalledWith('acme', 'demo', definition, { since: '2026-07-26T00:58:00.000Z' });
+    expect(store.state(definition.id)?.pinnedCursor).toBeUndefined();
+    expect(store.state(definition.id)?.cursor).toEqual({ timestamp: '2026-07-26T01:00:00.000Z', tieBreaker: 'current' });
+    expect(store.logs({ automationId: definition.id })[0]?.reason).toBe('Scheduled check completed.');
+  });
+
+  it('does not climb in preview mode — the cursor it would climb for is never stored', async () => {
+    const { store, definition, poller } = await pinnedAt(band(150));
+    const scheduler = new ProjectAutomationScheduler({
+      projectId: 'p',
+      timeZone: 'UTC',
+      store,
+      github: { owner: 'acme', repo: 'demo', poller: poller as never },
+      launch: async () => ({ runId: 'unused' }),
+    });
+
+    await scheduler.check(definition, 'preview');
+
+    expect(poller.poll).toHaveBeenCalledTimes(1);
+    expect(store.state(definition.id)?.pinnedCursor).toBeUndefined();
+  });
+});
+
 describe('WorkspaceAutomationScheduler', () => {
   it('arms its first timer when a definition is enabled after startup', async () => {
     const { store, definition } = await setup();

@@ -150,6 +150,23 @@ describe('workflowYaml', () => {
     })
   })
 
+  it("writes back a loaded check's retryOn gate, which the builder has no editor for", () => {
+    // The builder can only ever have read `retryOn` from a file. Dropping it on save
+    // would put the retry loop back on the check's infrastructure failures — the
+    // exact thing the gate was written into the YAML to stop — and silently.
+    const steps: WorkflowStepDef[] = [
+      { id: 'fix', skill: 'om-fix', prompt: '{{task}}' },
+      { id: 'e2e', command: 'npx e2e run', onFail: { retry: 'fix', max: 2, retryOn: [1] } },
+    ]
+    expect(parse(workflowYaml('fix-and-e2e', '', steps))).toEqual({
+      name: 'fix-and-e2e',
+      steps: [
+        { id: 'fix', skill: 'om-fix', prompt: '{{task}}' },
+        { id: 'e2e', command: 'npx e2e run', onFail: { retry: 'fix', max: 2, retryOn: [1] } },
+      ],
+    })
+  })
+
   it('quotes scalars YAML would mistype and keeps plain ones bare', () => {
     const text = workflowYaml('true', '', [stackStep('2fast', 'no')])
     // `true`, `no` and `2fast` would parse as boolean/number-ish — they must come back strings.

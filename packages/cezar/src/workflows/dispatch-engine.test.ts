@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { DispatchInput, RunDispatch } from '@open-mercato/cezar-contract';
-import { RunStore, type RunRecord } from '../runs/store.ts';
+import { PENDING_ASK_MAX_QUESTIONS, type DispatchInput, type RunDispatch } from '@open-mercato/cezar-contract';
+import { runRecordSchema, RunStore, type RunRecord } from '../runs/store.ts';
 import { WorkspaceSemaphore, type WorkspaceResourceLimits } from '../workspace/semaphore.ts';
 import { RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
@@ -428,6 +428,28 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       expect(notes(child.id).some((n) => n.startsWith('tree inbox digest delivered into the session at turn end'))).toBe(true);
     }, 60_000);
 
+    it('keeps an inbox delivery ahead of a monitoring park at turn end', async () => {
+      const stdinFile = join(repoRoot, 'mock-stdin-own-inbox-monitoring.ndjson');
+      savedEnv.CEZ_MOCK_STDIN_FILE = process.env.CEZ_MOCK_STDIN_FILE;
+      process.env.CEZ_MOCK_STDIN_FILE = stdinFile;
+      const root = store.createRun({ title: 'root', workflow: 'quick-task', task: 'hold', steps: [] });
+      store.updateRun(root.id, { status: 'waiting', dispatch: rootOf(root.id) });
+      const child = start('mock:pause mock:monitoring keep watching', childOf(root.id), { autonomous: true });
+      await waitFor(child.id, () => stdin(stdinFile).includes('keep watching'));
+      const inbox = join(treeDirOf(root.id), 'inbox', child.id.slice(0, 8));
+      mkdirSync(inbox, { recursive: true });
+      writeFileSync(join(inbox, 'from-parent.md'), '# Redirect\n\nKeep going with the parent\'s latest instruction.\n');
+
+      // The note is persisted immediately after sendMessage accepts the delivery, while the
+      // mock's stdin writer may flush its JSON line a tick later. Wait for the actual inbound
+      // evidence before asking `delivered` to parse the file; otherwise the regression itself
+      // races the fixture and can report a false failure under suite load.
+      await waitFor(child.id, () => stdin(stdinFile).includes('## Tree inbox'), 40_000);
+      expect(delivered(stdinFile, '## Tree inbox')).toContain('from-parent.md');
+      expect(notes(child.id).some((n) => n.startsWith('tree inbox digest delivered into the session at turn end'))).toBe(true);
+      expect(store.getRun(child.id)?.activity).toBeUndefined();
+    }, 60_000);
+
     it('tells a parked parent, through its inbox, that a child is blocked on the Guard', async () => {
       const stdinFile = join(repoRoot, 'mock-stdin-blocked.ndjson');
       savedEnv.CEZ_MOCK_STDIN_FILE = process.env.CEZ_MOCK_STDIN_FILE;
@@ -456,6 +478,28 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       expect(store.getRun(record.id)?.dispatch?.pendingAsk).toBeUndefined();
       await waitFor(record.id, settled);
     }, 40_000);
+
+    // A card may now carry up to ASK_MAX_QUESTIONS, but this RECORD field may not: it is read
+    // back by an all-or-nothing index parser, so an over-long list in a fresh `runs.json` would
+    // cost an older cezar every task in the project, not just the park.
+    it('truncates a six-question park to the record’s bound and counts the rest', async () => {
+      const parent = await parkedRoot();
+      const child = start('mock:ask-many pick a path', childOf(parent.id), { autonomous: true });
+      await waitFor(child.id, (r) => r?.status === 'waiting');
+      const parked = store.getRun(child.id);
+      expect(parked?.dispatch?.pendingAsk?.questions).toHaveLength(PENDING_ASK_MAX_QUESTIONS);
+      expect(parked?.dispatch?.pendingAsk?.omittedQuestions).toBe(6 - PENDING_ASK_MAX_QUESTIONS);
+      // The point of the truncation: the record still parses, so the index keeps every task.
+      expect(runRecordSchema.safeParse(parked).success).toBe(true);
+      // Nothing is hidden from the parent — the Guard inbox message is a file under no schema.
+      const rootInbox = join(treeDirOf(parent.id), 'inbox', 'root');
+      const guard = readdirSync(rootInbox).find((name) => name.includes('blocked-on-a-guard'));
+      expect(guard).toBeTruthy();
+      const body = readFileSync(join(rootInbox, guard!), 'utf8');
+      for (let index = 0; index < 6; index += 1) {
+        expect(body).toContain(`Decision ${index} — which way?`);
+      }
+    }, 60_000);
   });
 
   // ---- brakes -------------------------------------------------------------------------------

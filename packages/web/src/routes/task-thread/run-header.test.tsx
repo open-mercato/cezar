@@ -88,6 +88,7 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
             { provider: 'claude', status: 'connected', enabled: true },
             { provider: 'codex', status: 'not-installed', enabled: true },
             { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
           ],
         })
       }
@@ -460,6 +461,7 @@ describe('actions hit their endpoints', () => {
             { provider: 'claude', status: 'disconnected', enabled: true },
             { provider: 'codex', status: 'unknown', enabled: true },
             { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
           ],
         }),
     })
@@ -482,6 +484,7 @@ describe('actions hit their endpoints', () => {
             { provider: 'claude', status: 'disconnected', enabled: true },
             { provider: 'codex', status: 'unknown', enabled: true },
             { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
           ],
         }),
     })
@@ -504,6 +507,7 @@ describe('actions hit their endpoints', () => {
             { provider: 'claude', status: 'disconnected', enabled: true },
             { provider: 'codex', status: 'connected', enabled: true },
             { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
           ],
         }),
     })
@@ -705,6 +709,7 @@ describe('Open in… menu — agent CLI resume labeling (#402)', () => {
           { provider: 'claude', status: 'connected', enabled: true },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+        { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       }),
     })
@@ -731,6 +736,7 @@ describe('Open in… menu — agent CLI resume labeling (#402)', () => {
           { provider: 'claude', status: 'connected', enabled: true },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+        { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       }),
     })
@@ -759,6 +765,7 @@ describe('Open in… menu — agent CLI resume labeling (#402)', () => {
           { provider: 'claude', status: 'connected', enabled: true },
           codex,
           { provider: 'opencode', status: 'not-installed', enabled: true },
+        { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       }),
     })

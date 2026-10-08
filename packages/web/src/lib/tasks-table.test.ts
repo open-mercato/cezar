@@ -14,6 +14,7 @@ import {
   taskPrUrl,
   taskIssueUrl,
   taskReferences,
+  prioritizeTaskReferences,
   usageCells,
   workflowLabel,
 } from '@/lib/tasks-table'
@@ -189,6 +190,8 @@ describe('finishedRunCount', () => {
         run({ status: 'waiting' }),
         run({ status: 'running' }),
         run({ status: 'queued' }),
+        // A closed session's unanswered question is a gate too.
+        run({ status: 'failed', awaitingAnswerSince: '2026-10-05T10:00:00.000Z' }),
         // Already archived — nothing to archive again.
         run({ status: 'done', archived: true }),
       ]),
@@ -197,6 +200,20 @@ describe('finishedRunCount', () => {
 })
 
 describe('taskPrUrl', () => {
+  it('projects the primary PR from the ordered association list', () => {
+    const r = run({
+      prRefs: [
+        { number: 7, origin: 'marker', at: '2026-01-01T00:00:00.000Z' },
+        { number: 8, origin: 'marker', at: '2026-01-02T00:00:00.000Z' },
+      ],
+      prNumber: 7,
+    } as never)
+    expect(taskReferences(r, 'https://github.com/o/r')).toEqual([
+      { kind: 'PR', number: 7, url: 'https://github.com/o/r/pull/7' },
+      { kind: 'PR', number: 8, url: 'https://github.com/o/r/pull/8' },
+    ])
+  })
+
   it('prefers the PR the task created over the one it referenced', () => {
     const r = run({
       pullRequestUrl: 'https://github.com/o/r/pull/7',
@@ -245,6 +262,35 @@ describe('taskPrUrl', () => {
 
 describe('taskReferences', () => {
   const REPO = 'https://github.com/o/r'
+
+  it('moves only known closed PRs behind live and merged references', () => {
+    const refs = [
+      { kind: 'PR' as const, number: 10 },
+      { kind: 'PR' as const, number: 11 },
+      { kind: 'Issue' as const, number: 12 },
+    ]
+    expect(
+      prioritizeTaskReferences(refs, (reference) =>
+        reference.number === 10 ? 'closed' : reference.number === 11 ? 'merged' : 'completed',
+      ),
+    ).toEqual([refs[1], refs[2], refs[0]])
+  })
+
+  it('keeps same-number PRs from different repositories distinct', () => {
+    expect(
+      taskReferences(
+        run({
+          prRefs: [
+            { number: 7, url: `${REPO}/pull/7`, origin: 'created', at: '2026-01-01T00:00:00.000Z' },
+            { number: 7, url: 'https://github.com/other/r/pull/7', origin: 'marker', at: '2026-01-02T00:00:00.000Z' },
+          ],
+        } as never),
+      ),
+    ).toEqual([
+      { kind: 'PR', number: 7, url: `${REPO}/pull/7` },
+      { kind: 'PR', number: 7, url: 'https://github.com/other/r/pull/7' },
+    ])
+  })
 
   it('returns every reference a task has, strongest first', () => {
     // The real multi-reference case: a review task opened on an issue, ABOUT one PR, having

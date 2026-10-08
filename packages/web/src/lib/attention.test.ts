@@ -4,6 +4,7 @@ import type { RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
 import type { StatusDotTone } from '@/components/status-dot'
 import {
   ATTENTION_RANK,
+  budgetStop,
   deriveAttention,
   wantsAttention,
   type Attention,
@@ -55,6 +56,17 @@ describe('deriveAttention', () => {
 
   it('answers for every status the API can send', () => {
     expect(cases.map(([status]) => status).sort()).toEqual([...ALL_STATUSES].sort())
+  })
+
+  it('explains a waiting dispatch run stopped by its spend ceiling', () => {
+    const stopped = run({
+      status: 'waiting',
+      costUsd: 20.83,
+      dispatch: { rootRunId: 'root', budgetUsd: 10, overBudget: true },
+    })
+    expect(deriveAttention(stopped).label).toBe('budget reached')
+    expect(budgetStop(stopped)).toEqual({ spent: 20.83, ceiling: 10 })
+    expect(wantsAttention(stopped)).toBe(true)
   })
 
   it('pulses exactly the transitioning states', () => {
@@ -164,6 +176,28 @@ describe('a run waiting out a usage limit', () => {
   it('only applies to a FAILED run — a live run with a stale stamp is still live', () => {
     expect(deriveAttention(run({ status: 'running', autoResumeAt: '2026-08-03T19:33:53.000Z' })).label)
       .toBe('running')
+  })
+})
+
+describe('a run whose session closed on an unanswered question', () => {
+  const awaiting = run({ status: 'failed', awaitingAnswerSince: '2026-10-05T10:00:00.000Z' })
+
+  it('still needs you — the question was never answered', () => {
+    // `failed` on the record because the idle close ended the process, but the user still owns
+    // the next move; neither "done" nor a red failure is true.
+    expect(deriveAttention(awaiting)).toEqual({
+      bucket: 'waiting',
+      tone: 'pending',
+      pulse: true,
+      label: 'needs you',
+    })
+    expect(wantsAttention(awaiting)).toBe(true)
+  })
+
+  it('only applies to a FAILED run — any other status reads as itself', () => {
+    expect(deriveAttention(run({ status: 'done', awaitingAnswerSince: '2026-10-05T10:00:00.000Z' })).label)
+      .toBe('done')
+    expect(deriveAttention(run({ status: 'failed' })).label).toBe('failed')
   })
 })
 

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-update-cezar-command"
+description = "Enables the update_cezar_command command without any pre-configured scope."
+commands.allow = ["update_cezar_command"]
+
+[[permission]]
+identifier = "deny-update-cezar-command"
+description = "Denies the update_cezar_command command without any pre-configured scope."
+commands.deny = ["update_cezar_command"]

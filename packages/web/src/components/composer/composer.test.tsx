@@ -591,7 +591,7 @@ describe('quick replies (legacy Alt+A / Alt+C)', () => {
     const { textarea } = renderComposer({ quickReplies: true, onSubmit })
     type(textarea, 'draft in progress')
     fireEvent.keyDown(window, { code: 'KeyA', altKey: true })
-    expect(onSubmit).toHaveBeenCalledWith('Yes, approved.', [])
+    expect(onSubmit).toHaveBeenCalledWith('Yes, approved.', [], { quickReply: true })
     expect(textarea.value).toBe('draft in progress')
     expect((screen.getByLabelText('Send') as HTMLButtonElement).disabled).toBe(true)
 
@@ -603,7 +603,7 @@ describe('quick replies (legacy Alt+A / Alt+C)', () => {
       expect((screen.getByLabelText('Send') as HTMLButtonElement).disabled).toBe(false),
     )
     fireEvent.keyDown(window, { code: 'KeyC', altKey: true })
-    expect(onSubmit).toHaveBeenCalledWith('Continue.', [])
+    expect(onSubmit).toHaveBeenCalledWith('Continue.', [], { quickReply: true })
   })
 
   /** ⌥ is a CHARACTER modifier on macOS: ⌥C types `ć` on a Polish layout (`ç` on a US one) and

@@ -6,6 +6,7 @@ import { execFileSync, execSync } from 'node:child_process';
 import {
   enableHttp2OnTlsListenerSed,
   isNpxExecStart,
+  nginxConfigTestFailure,
   nginxVhost,
   parseNginxVersion,
   refreshNpxCacheForRedeploy,
@@ -46,6 +47,64 @@ function stepById(id: string): InstallStep {
   if (!s) throw new Error(`no step ${id}`);
   return s;
 }
+
+describe('nginx configuration diagnostics', () => {
+  it('returns nginx -t stderr as a terminal verification failure', async () => {
+    const result = await nginxConfigTestFailure(
+      ctxWith({
+        runner: {
+          capture: async (program, args) =>
+            program === 'nginx' && args[0] === '-t'
+              ? {
+                  code: 1,
+                  stdout: '',
+                  stderr:
+                    '2026/08/20 [emerg] unknown directive "http2" in /etc/nginx/sites-enabled/cezar:12\n' +
+                    'nginx: configuration file /etc/nginx/nginx.conf test failed',
+                }
+              : { code: 0, stdout: '', stderr: '' },
+          interactive: async () => 0,
+        },
+      }),
+    );
+
+    expect(result).toEqual({
+      retryable: false,
+      message: expect.stringContaining('unknown directive "http2"'),
+    });
+    expect(result?.message).toContain('nginx: configuration file /etc/nginx/nginx.conf test failed');
+  });
+
+  it('does not turn a missing nginx binary into a terminal parse failure', async () => {
+    const result = await nginxConfigTestFailure(
+      ctxWith({
+        runner: {
+          capture: async () => ({ code: 127, stdout: '', stderr: 'nginx: command not found' }),
+          interactive: async () => 0,
+        },
+      }),
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it('leaves permission and operational nginx test failures retryable', async () => {
+    const result = await nginxConfigTestFailure(
+      ctxWith({
+        runner: {
+          capture: async () => ({
+            code: 1,
+            stdout: '',
+            stderr:
+              'nginx: [emerg] cannot load certificate "/etc/letsencrypt/live/example/fullchain.pem": BIO_new_file() failed (13: Permission denied)\n' +
+              'nginx: configuration file /etc/nginx/nginx.conf test failed',
+          }),
+          interactive: async () => 0,
+        },
+      }),
+    );
+    expect(result).toBeUndefined();
+  });
+});
 
 describe('ubuntu-vps ssl step', () => {
   let home: string;
@@ -411,6 +470,12 @@ describe('systemdUnit', () => {
     expect(unit).toContain('WorkingDirectory=/srv/app');
     expect(unit).toContain('WantedBy=default.target');
   });
+
+  it('passes the install identity to the service environment', () => {
+    expect(systemdUnit('/srv/app', 4321, 'user', '/usr/local/bin/cezar', undefined, 'install-a')).toContain(
+      'Environment=CEZ_INSTANCE_ID=install-a',
+    );
+  });
   it('system scope pins User= and multi-user.target', () => {
     const unit = systemdUnit('/srv/app', 5000, 'system', '/usr/local/bin/cezar');
     expect(unit).toContain('User=');
@@ -431,6 +496,63 @@ describe('systemdUnit', () => {
     const plain = systemdUnit('/srv/app', 4321, 'user', '/usr/local/bin/cezar');
     expect(systemdUnit('/srv/app', 4321, 'user', '/usr/local/bin/cezar', '127.0.0.1')).toBe(plain);
     expect(plain).not.toContain('--bind-host');
+  });
+});
+
+describe('ubuntu-vps identity verification (#1008)', () => {
+  function identityCtx(healthOutput: string) {
+    const messages: string[] = [];
+    let curl = 0;
+    const runner: Runner = {
+      capture: async (program) => {
+        if (program !== 'curl') return { code: 0, stdout: '', stderr: '' };
+        curl++;
+        if (curl === 1) return { code: 0, stdout: '200', stderr: '' };
+        if (curl === 2) return { code: 0, stdout: '401', stderr: '' };
+        if (curl === 3) return { code: 0, stdout: '200', stderr: '' };
+        return { code: 0, stdout: healthOutput, stderr: '' };
+      },
+      interactive: async () => 0,
+    };
+    const ctx = ctxWith({ runner, ui: { ...createAutoUi(), success: (m: string) => messages.push(m), warn: (m: string) => messages.push(m) }, state: { instanceId: 'this-install' } });
+    ctx.prefs = { cockpit: { user: 'ops', password: 'password' } };
+    return { ctx, messages };
+  }
+
+  it('rejects a different cezar instance answering on the expected port', async () => {
+    const errors: string[] = [];
+    const ui = { ...createAutoUi(), error: (message: string) => errors.push(message) } as Ui;
+    let curl = 0;
+    const runner: Runner = {
+      capture: async (program, args) => {
+        if (program !== 'curl') return { code: 0, stdout: '', stderr: '' };
+        curl++;
+        if (curl === 1) return { code: 0, stdout: '200', stderr: '' }; // upstream
+        if (curl === 2) return { code: 0, stdout: '401', stderr: '' }; // anonymous proxy
+        if (curl === 3) return { code: 0, stdout: '200', stderr: '' }; // authenticated reach
+        return { code: 0, stdout: '{"instanceId":"other-install"}\n200', stderr: '' };
+      },
+      interactive: async () => 0,
+    };
+    const ctx = ctxWith({ ui, runner, state: { instanceId: 'this-install' } });
+    ctx.prefs = { cockpit: { user: 'ops', password: 'password' } };
+    await expect(stepById('identity').run(ctx)).rejects.toBeInstanceOf(StepAborted);
+    expect(errors.join('\n')).toContain('serving another install, not this one');
+  });
+
+  it('accepts a matching identity', async () => {
+    const { ctx } = identityCtx('{"instanceId":"this-install"}\n200');
+    await expect(stepById('identity').run(ctx)).resolves.toBeTruthy();
+  });
+
+  it.each([
+    ['an absent identity', '\n200'],
+    ['a malformed health payload', 'not-json\n200'],
+    ['a forbidden health response', '{"error":"forbidden"}\n403'],
+  ])('reports %s as an inconclusive identity check', async (_label, healthOutput) => {
+    const { ctx, messages } = identityCtx(healthOutput);
+    await expect(stepById('identity').run(ctx)).resolves.toBeTruthy();
+    expect(messages.join('\n')).toContain('identity check could not run');
   });
 });
 

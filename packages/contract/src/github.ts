@@ -313,6 +313,16 @@ export const githubPrMergeStateSchema = z.object({
   mergeable: z.enum(['mergeable', 'conflicting', 'unknown']),
   reviewDecision: z.enum(['approved', 'changes-requested', 'review-required', 'unknown']),
   checks: z.array(githubPrCheckSchema),
+  /**
+   * How much of the check tier the forge token could read (#969). `detailed` = one row per check;
+   * `aggregate` = only the rolled-up state was readable, collapsed into a single row (a
+   * fine-grained PAT lands here — `statusCheckRollup`'s `CheckRun` contexts need the `checks`
+   * scope, which fine-grained PATs cannot grant, while `statusCheckRollup { state }` stays
+   * readable); `none` = nothing was, so an empty `checks` means "never found out", not "no CI".
+   */
+  checksTier: z.enum(['detailed', 'aggregate', 'none']),
+  /** Why the check tier degraded. Absent when `checksTier` is `detailed`. */
+  checksReason: z.string().optional(),
   methods: z.array(githubMergeMethodSchema),
   defaultMethod: githubMergeMethodSchema.nullable(),
   eligibility: z.enum(['ready', 'blocked', 'pending', 'unauthorized', 'terminal', 'unknown']),

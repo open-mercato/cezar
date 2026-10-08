@@ -54,7 +54,7 @@ import { formatElapsed, useDictation } from './dictation'
 export interface ComposerProps {
   /** Deliver the message. Rejection = the message did NOT land: the composer toasts the error
    *  and restores the draft (nothing the user typed is ever lost). */
-  onSubmit: (text: string, attachments: AttachmentInput[]) => Promise<unknown>
+  onSubmit: (text: string, attachments: AttachmentInput[], meta?: ComposerSubmitMeta) => Promise<unknown>
   /**
    * Controlled text (pass BOTH or neither): the /new host owns the draft so it survives
    * navigation (spec: "Queued form state survives navigation"). Every internal edit — typing,
@@ -64,15 +64,24 @@ export interface ComposerProps {
   onValueChange?: (text: string) => void
   /**
    * Controlled attachments (pass BOTH or neither) — the exact mirror of the text seam above, and
-   * it must stay that way: the thread host (#939) needs the images to survive navigation with the
-   * text, while `/new` deliberately keeps ITS images uncontrolled (multi-MB base64 has no business
-   * in localStorage). Every internal change — paste, drop, the paperclip, a thumbnail click, the
+   * it must stay that way: both hosts need the images to survive navigation with the text — the
+   * thread host since #939, `/new` since #1018, where swapping the project pill remounts the route
+   * and used to drop the pasted screenshot with the prompt. What `/new` still does NOT do is
+   * persist them: its store is per-project and in-memory, because multi-MB base64 has no business
+   * in localStorage. Every internal change — paste, drop, the paperclip, a thumbnail click, the
    * optimistic clear, the on-error restore — flows through `onImagesChange`.
    */
   images?: PendingAttachment[]
   onImagesChange?: (images: PendingAttachment[], reason: AttachmentsChangeReason) => void
   /** Focus the textarea on mount — the /new hero, where typing is the whole point of arriving. */
   autoFocus?: boolean
+  /**
+   * Draft items the host holds beside the message, rendered in the attachment row ahead of the
+   * thumbnails — the thread's diff-comment chips. The composer knows nothing about them: the host
+   * owns their content, folds them into what it sends, and decides via `allowEmptySubmit` whether
+   * they alone make the message sendable.
+   */
+  draftItems?: ReactNode
   /** Rendered in the footer bar after the paperclip — the /new picker pill row. */
   footerStart?: ReactNode
   /** Rendered between Dictation and the send button — the /new mode segment + kbd hint. */
@@ -107,6 +116,13 @@ export interface ComposerProps {
   ref?: Ref<ComposerHandle>
 }
 
+/** How a message was sent. `quickReply` marks the Alt+A / Alt+C canned replies: they are fired
+ *  from anywhere on the page, so a host must not fold its own draft items (the thread's diff
+ *  comments) into them — the user never saw those leave. */
+export interface ComposerSubmitMeta {
+  quickReply?: boolean
+}
+
 /** The imperative seam a host needs when it wants to write INTO the draft the composer owns —
  *  today only the /new prompt-template menu (#413 follow-up), which must land a snippet at the
  *  caret the same way the GitHub/Inbox composers do with their own textarea refs. */
@@ -125,6 +141,7 @@ export function Composer({
   images: controlledImages,
   onImagesChange,
   autoFocus = false,
+  draftItems,
   footerStart,
   footerEnd,
   sendAriaLabel = 'Send',
@@ -353,13 +370,20 @@ export function Composer({
   // ---- submit --------------------------------------------------------------------------------
 
   const send = useCallback(
-    async (messageText: string, messageImages: PendingAttachment[], restoreOnError: boolean) => {
+    async (
+      messageText: string,
+      messageImages: PendingAttachment[],
+      restoreOnError: boolean,
+      meta?: ComposerSubmitMeta,
+    ) => {
       const body = messageText.trim()
       if (disabled || busy) return
       if (body === '' && messageImages.length === 0 && !allowEmptySubmit) return
       setBusy(true)
       try {
-        await onSubmit(body, messageImages.map(toAttachmentInput))
+        // `meta` only when there is something to say, so an ordinary send keeps its two-argument call.
+        const attachments = messageImages.map(toAttachmentInput)
+        await (meta ? onSubmit(body, attachments, meta) : onSubmit(body, attachments))
       } catch (error) {
         toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
         if (restoreOnError) {
@@ -447,7 +471,7 @@ export function Composer({
       if (reply === undefined) return
       event.preventDefault()
       // Canned replies bypass the draft entirely — nothing to restore on failure.
-      void send(reply, [], false)
+      void send(reply, [], false, { quickReply: true })
     }
     window.addEventListener('keydown', onWindowKeyDown)
     return () => window.removeEventListener('keydown', onWindowKeyDown)
@@ -487,8 +511,9 @@ export function Composer({
             disabled && 'opacity-80',
           )}
         >
-          {images.length > 0 ? (
+          {images.length > 0 || draftItems ? (
             <div data-slot="composer-thumbs" className="flex flex-wrap items-center gap-2 px-4 pt-3">
+              {draftItems}
               {images.map((attachment, index) => (
                 <button
                   key={`${attachment.name}-${index}`}

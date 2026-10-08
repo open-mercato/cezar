@@ -46,6 +46,15 @@ export interface SubagentSummary {
   stalled?: boolean
 }
 
+/** One skill governing the run — the Skills dock's row. Deliberately NOT a `SubagentSummary`:
+ *  a skill has no children to count and no progress to report (see `collectSkills`). */
+export interface SkillSummary {
+  /** The skill tool item's id. */
+  id: string
+  /** "om-auto-create-pr" — the detail half of "Skill: …", else the whole title. */
+  name: string
+}
+
 /** A settled agent is done moving: the dock stops treating the fan-out as live (spec Q6). */
 const isSettled = (status: ToolStatus): boolean => status !== 'pending' && status !== 'running'
 
@@ -178,6 +187,46 @@ export function collectSubagents(turns: ThreadTurn[], runIsTerminal = false): Su
   }
 
   return roots.map((item) => summarize(item, childrenOf.get(item.id) ?? [], runIsTerminal))
+}
+
+/**
+ * The skills governing the run, in stream order — or `[]` when none was invoked.
+ *
+ * A skill is a parent-less `toolKind: 'skill'` item: instructions loaded into the main agent's
+ * turn. It is NOT a sub-agent, and until #1202 it answered to `toolKind: 'task'`, which made
+ * `collectSubagents` above report it as one — the dock read `Agents · 1/1 — starting…` for a
+ * fan-out that never happened.
+ *
+ * Three differences from the agent collector, all of them because a skill has no lifecycle the
+ * wire can report — a `Skill` call settles the moment its instructions come back, while the work
+ * it describes runs on in the main transcript:
+ *
+ *  - **No odometer and no activity line.** Both would be fabrications: an `N/M` would read `1/1`
+ *    the instant the skill was invoked, and the agent collector's "latest child" activity line
+ *    has nothing to draw on, since a skill adopts no children. The dock names the skill, period.
+ *  - **No turn anchoring.** A skill's instructions govern every later turn too, so scoping it to
+ *    the latest fan-out (the agent dock's Q6 rule) would hide it the moment the user replied.
+ *    Every skill in the thread is collected, de-duplicated by name at its FIRST position — a
+ *    re-invocation must not make the line the reader is looking at shuffle.
+ *  - **Failed invocations are dropped.** A `Skill` call that failed or was declined loaded no
+ *    instructions, so nothing is governing the run on its behalf.
+ *
+ * Pure and total, like `collectSubagents`.
+ */
+export function collectSkills(turns: ThreadTurn[]): SkillSummary[] {
+  // By name, so a skill re-invoked later in the run is listed once (at its first position — the
+  // dock must not re-order under a reader) rather than accumulating a duplicate row per call.
+  const byName = new Map<string, SkillSummary>()
+  for (const turn of turns) {
+    for (const entry of turn.items) {
+      if (entry.kind !== 'tool' || entry.toolKind !== 'skill') continue
+      if (entry.parentItemId !== undefined) continue // a sub-agent's skill is its own, not the run's
+      if (entry.status === 'failed' || entry.status === 'declined') continue
+      const name = splitToolTitle(entry.title).detail ?? entry.title
+      if (!byName.has(name)) byName.set(name, { id: entry.id, name })
+    }
+  }
+  return [...byName.values()]
 }
 
 /** The one place a `SubagentSummary` is built — the dock and the sheet must never disagree. */

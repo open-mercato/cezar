@@ -250,6 +250,8 @@ ensure_build() {
 BROWSER_INSTALLED=0
 BROWSER_COMMAND=""
 BROWSER_VERSION=unknown
+BROWSER_ENV_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
+BROWSER_ENV_AGENT_BROWSER_ARGS="${AGENT_BROWSER_ARGS:-}"
 BROWSER_NOTES=""
 
 ensure_browser() {
@@ -306,7 +308,41 @@ ensure_browser() {
       fi
     fi
   fi
-  if "$BROWSER_COMMAND" doctor --json >/dev/null 2>&1; then
+  if ! "$BROWSER_COMMAND" doctor --json >/dev/null 2>&1 && [ "$(uname -s 2>/dev/null || true)" = Linux ] && [ "$(id -u)" != 0 ]; then
+    STAGED_LIBRARY_PATH=""
+    for STAGED_ROOT in "$HOME/.agent-browser/deps" "$HOME/.cache/agent-tools/chrome-deps"; do
+      if [ -d "$STAGED_ROOT" ]; then
+        STAGED_DIRS=$(find "$STAGED_ROOT" -type f \( -name '*.so' -o -name '*.so.*' \) -exec dirname {} \; 2>/dev/null | sort -u)
+        if [ -n "$STAGED_DIRS" ]; then
+          if [ -n "$STAGED_LIBRARY_PATH" ]; then STAGED_LIBRARY_PATH="$STAGED_LIBRARY_PATH:"; fi
+          STAGED_LIBRARY_PATH="$STAGED_LIBRARY_PATH$(printf '%s\n' "$STAGED_DIRS" | paste -sd: -)"
+        fi
+      fi
+    done
+    if [ -n "$STAGED_LIBRARY_PATH" ]; then
+      export LD_LIBRARY_PATH="$STAGED_LIBRARY_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+      BROWSER_ENV_LD_LIBRARY_PATH="$LD_LIBRARY_PATH"
+      ROOTLESS_NO_USERNS=0
+      if command -v unshare >/dev/null 2>&1 && ! unshare -Ur true 2>/dev/null; then ROOTLESS_NO_USERNS=1; fi
+      if [ "$ROOTLESS_NO_USERNS" = 1 ] || [ -f /.dockerenv ] || [ -f /run/.containerenv ] || grep -Eqi '(docker|containerd|kubepods|libpod|lxc)' /proc/1/cgroup 2>/dev/null; then
+        case ",${AGENT_BROWSER_ARGS:-}," in
+          *,--no-sandbox,*) ;;
+          *) AGENT_BROWSER_ARGS="${AGENT_BROWSER_ARGS:+$AGENT_BROWSER_ARGS,}--no-sandbox,--disable-dev-shm-usage,--disable-gpu"; export AGENT_BROWSER_ARGS ;;
+        esac
+      fi
+      BROWSER_ENV_AGENT_BROWSER_ARGS="${AGENT_BROWSER_ARGS:-}"
+    fi
+  fi
+  browser_probe() {
+    BROWSER_PROBE_SESSION="cez-provider-probe-$$"
+    if "$BROWSER_COMMAND" --session "$BROWSER_PROBE_SESSION" open about:blank --json >/dev/null 2>&1; then
+      "$BROWSER_COMMAND" --session "$BROWSER_PROBE_SESSION" close --json >/dev/null 2>&1 || true
+      return 0
+    fi
+    "$BROWSER_COMMAND" --session "$BROWSER_PROBE_SESSION" close --json >/dev/null 2>&1 || true
+    return 1
+  }
+  if "$BROWSER_COMMAND" doctor --json >/dev/null 2>&1 || browser_probe; then
     BROWSER_INSTALLED=1
     BROWSER_VERSION=$("$BROWSER_COMMAND" --version 2>/dev/null || echo unknown)
   else
@@ -356,7 +392,7 @@ write_descriptor() {
   [ "${CEZ_SINGLE_PROJECT:-}" = 1 ] && SINGLE_PROJECT=true
   node -e '
     const fs = require("fs");
-    const [out, baseUrl, port, pid, cmd, bInstalled, bCmd, bVer, bNotes, desc, singleProject, platform] = process.argv.slice(1);
+    const [out, baseUrl, port, pid, cmd, bInstalled, bCmd, bVer, bLdLibraryPath, bArgs, bNotes, desc, singleProject, platform] = process.argv.slice(1);
     fs.writeFileSync(out, JSON.stringify({
       version: 1,
       runId: "cezar-" + new Date().toISOString().slice(0, 10) + "-" + pid,
@@ -375,6 +411,10 @@ write_descriptor() {
         installed: bInstalled === "1",
         command: bCmd,
         version: bVer,
+        environment: {
+          LD_LIBRARY_PATH: bLdLibraryPath,
+          AGENT_BROWSER_ARGS: bArgs,
+        },
         descriptor: desc,
         notes: bNotes,
       },
@@ -385,7 +425,7 @@ write_descriptor() {
     }, null, 2) + "\n");
   ' "$ENV_DESCRIPTOR" "$BASE_URL" "$PORT" "$APP_PID" \
     "CEZ_DRY_RUN=1 CEZ_HOME=.ai/qa/cez-home node packages/cezar/dist/index.js --port $PORT --no-open" \
-    "$BROWSER_INSTALLED" "$BROWSER_COMMAND" "$BROWSER_VERSION" "$BROWSER_NOTES" "$BROWSER_DESCRIPTOR" \
+    "$BROWSER_INSTALLED" "$BROWSER_COMMAND" "$BROWSER_VERSION" "$BROWSER_ENV_LD_LIBRARY_PATH" "$BROWSER_ENV_AGENT_BROWSER_ARGS" "$BROWSER_NOTES" "$BROWSER_DESCRIPTOR" \
     "$SINGLE_PROJECT" "$(uname -s 2>/dev/null | grep -qi Linux && { grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null && echo wsl2 || echo linux; } || echo darwin)"
 }
 

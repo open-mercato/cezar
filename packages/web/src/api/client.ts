@@ -64,6 +64,7 @@ import type {
   GithubPrChangesData,
   GroupResponse,
   HealthResponse,
+  HostUsage,
   AttachmentInput,
   LaunchKeyResponse,
   MessageInput,
@@ -97,6 +98,7 @@ import type {
   RunnerModelCatalogResponse,
   RunRecord,
   RunsIndexResponse,
+  StarCountPayload,
   WorktreeEntry,
   SaveWorkflowInput,
   SaveWorkflowResponse,
@@ -114,6 +116,9 @@ import type {
   WorkspaceConfigResponse,
   WorkspaceUiState,
   SkillsUpdateState,
+  SelfUpdateDevelopment,
+  SelfUpdateStatus,
+  UpdateChannel,
   TrackerAssociation,
   TrackerAssociationInput,
   TrackerAssociationResponse,
@@ -249,7 +254,7 @@ function errorFor(status: number, statusText: string, body: string): ApiError {
  * `Record<string, unknown>`) infers a weaker response than the DTO it replaces, so those wait
  * until the server tightens its own return types.
  */
-const cez = createCezarClient<AppType>({
+export const cez = createCezarClient<AppType>({
   // The base URL is resolved per request, not baked in at construction: this module is imported
   // before `main.tsx` configures it, and a `<meta>`-configured deployment must still take
   // effect. `hc` builds a root-relative URL, so prefixing here is the whole job.
@@ -310,7 +315,7 @@ const init = (opts?: ReadOptions) => ({ init: { signal: opts?.signal } })
  * resolves to a branded error type rather than to `never`, which would have been assignable to
  * every caller's declared return type and failed only at runtime.
  */
-async function unwrap<R extends ClientResponse<unknown, number, ResponseFormat>>(
+export async function unwrap<R extends ClientResponse<unknown, number, ResponseFormat>>(
   res: R,
   label: string,
 ): Promise<OkJson<R>> {
@@ -418,7 +423,14 @@ export async function getHealth(opts?: ReadOptions): Promise<HealthResponse> {
   return unwrap(await cez.api.v1.health.$get({}, init(opts)), '/health')
 }
 
-/** Host-local catalog for one discovery runner (`claude`, `codex`, `opencode` — #794, #784).
+/** cezar's own GitHub star count, behind the sidebar's ⭐ ask. Workspace-level: the number is
+ *  about cezar, never about the project on screen. `available: false` is the ordinary offline
+ *  answer and the chip renders nothing for it. */
+export async function getStarCount(opts?: ReadOptions): Promise<StarCountPayload> {
+  return unwrap(await cez.api.v1['star-count'].$get({}, init(opts)), '/star-count')
+}
+
+/** Host-local catalog for one discovery runner (`claude`, `codex`, `opencode`, `cursor` — #794, #784).
  *  Workspace-level: one CLI/account serves every project. */
 export async function getRunnerModels(
   runner: ModelDiscoveryRunner,
@@ -2066,7 +2078,32 @@ export async function getWorkspaceConfig(opts?: ReadOptions): Promise<WorkspaceC
     await cez.api.v1.workspace.config.$get({}, init(opts)),
     '/workspace/config',
   )
-  return { ...answer, agentDefaults: answer.agentDefaults ?? {} }
+  return {
+    ...answer,
+    agentDefaults: answer.agentDefaults ?? {},
+    resources: {
+      ...answer.resources,
+      // Older servers omit this additive key; preserve an explicit null (disabled) while
+      // defaulting only an absent value.
+      idleTimeoutMinutes: answer.resources.idleTimeoutMinutes === undefined
+        ? 15
+        : answer.resources.idleTimeoutMinutes,
+    },
+  }
+}
+
+/**
+ * Live host totals (spec `.ai/specs/2026-09-20-host-resource-telemetry.md`) — the REMOTE
+ * cockpit's snapshot of the machine's CPU/memory/swap/load. A local cockpit reads the same
+ * sample pushed over the `host` WS topic and never calls this; a remote one cannot open that
+ * socket (browser WebSocket carries no proxy credentials), so it reads here instead, on mount
+ * and on the existing visibility/reconnect reconcile.
+ */
+export async function getWorkspaceHostUsage(opts?: ReadOptions): Promise<HostUsage> {
+  return unwrap(
+    await cez.api.v1.workspace['host-usage'].$get({}, init(opts)),
+    '/workspace/host-usage',
+  )
 }
 
 /**
@@ -2217,6 +2254,41 @@ export async function applySkillsUpdate(projectId: string): Promise<SkillsUpdate
   return unwrap(
     await cez.api.v1.workspace['skills-update'].apply.$post({ json: { projectId } }),
     '/workspace/skills-update/apply',
+  )
+}
+
+/** cezar's own update state: install kind, channel, what the registry has, installed versions
+ *  and the in-flight job. The GET answers the cached registry view and refreshes it behind. */
+export async function getSelfUpdate(opts?: ReadOptions): Promise<SelfUpdateStatus> {
+  return unwrap(await cez.api.v1.workspace['self-update'].$get({}, init(opts)), '/workspace/self-update')
+}
+
+/** Force a registry round trip. */
+export async function refreshSelfUpdate(): Promise<SelfUpdateStatus> {
+  return unwrap(await cez.api.v1.workspace['self-update'].refresh.$post({}), '/workspace/self-update/refresh')
+}
+
+/** The development channel's pickers: cezar worktrees and open PRs with a preview build. */
+export async function getSelfUpdateDevelopment(opts?: ReadOptions & { refresh?: boolean }): Promise<SelfUpdateDevelopment> {
+  return unwrap(
+    await cez.api.v1.workspace['self-update'].development.$get({ query: opts?.refresh ? { refresh: '1' } : {} }, init(opts)),
+    '/workspace/self-update/development',
+  )
+}
+
+/** Persist the release channel (`stable`, `nightly` or `development`) in `~/.cezar/config.json`. */
+export async function setSelfUpdateChannel(channel: UpdateChannel): Promise<SelfUpdateStatus> {
+  return unwrap(
+    await cez.api.v1.workspace['self-update'].channel.$put({ json: { channel } }),
+    '/workspace/self-update/channel',
+  )
+}
+
+/** Install `version`, activate it and restart. A version string is the only browser input. */
+export async function applySelfUpdate(version: string): Promise<SelfUpdateStatus> {
+  return unwrap(
+    await cez.api.v1.workspace['self-update'].apply.$post({ json: { version } }),
+    '/workspace/self-update/apply',
   )
 }
 

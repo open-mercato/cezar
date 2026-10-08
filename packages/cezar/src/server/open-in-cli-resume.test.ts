@@ -27,6 +27,14 @@ vi.mock('../core/claude-bin.ts', async (importOriginal) => ({
 // so this suite exercises only the command construction, never a real terminal window.
 vi.mock('./open-in-terminal.js', () => ({ openInTerminal: vi.fn(async () => true) }));
 
+// Junie has no read-only auth-status command, so `ProviderAuthService` probes it through a real
+// ACP session instead of `runCommand`. Left unmocked, every status probe in this suite spawned a
+// real `junie` process — on a machine with Junie installed and logged in, that authenticates
+// against JetBrains for real per test case (#M3 review).
+vi.mock('../core/junie-auth-probe.ts', () => ({
+  probeJunieAuthentication: vi.fn(async () => ({ connected: true })),
+}));
+
 const mockOpenInTerminal = vi.mocked(openInTerminal);
 
 const { createApp } = await import('./server.ts');

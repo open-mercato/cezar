@@ -1,7 +1,9 @@
-import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { AutomationStore } from './store.ts';
 
@@ -83,6 +85,22 @@ describe('AutomationStore', () => {
     expect(store.latestReceipts().get('one:event')?.runId).toBe('run-1');
   });
 
+  it('normalizes a legacy receipt key before checking event identity', async () => {
+    const store = AutomationStore.open(await directory());
+    store.appendReceipt({
+      receiptId: 'old-receipt',
+      receiptKey: 'one:1:event',
+      eventId: 'event',
+      automationId: 'one',
+      revision: 1,
+      status: 'launched',
+      runId: 'run-1',
+      observedAt: '2026-07-26T01:00:00.000Z',
+      updatedAt: '2026-07-26T01:00:00.000Z',
+    });
+    expect(store.reserveReceipt({ automationId: 'one', revision: 2, eventId: 'event' })).toBeUndefined();
+  });
+
   it('holds an exclusive recoverable project polling lease', async () => {
     const dir = await directory();
     const store = AutomationStore.open(dir);
@@ -126,6 +144,17 @@ describe('AutomationStore.acquireLease — a lock nobody is holding any more (#9
     expect(JSON.parse(readFileSync(join(dir, 'automation-poll.lock'), 'utf8')).pid).toBe(FOREIGN_PID);
   });
 
+  it('does not overwrite a replacement that appears after stale metadata validation', async () => {
+    const dir = await lockedDirectory(JSON.stringify({ pid: UNREACHABLE_PID, startedAt: new Date().toISOString() }));
+    const replacement = JSON.stringify({ pid: process.pid, token: 'replacement', startedAt: new Date().toISOString() });
+    const store = AutomationStore.open(dir, {
+      processAlive: () => false,
+      beforeLeaseMetadataWrite: (path) => writeFileSync(path, replacement),
+    });
+    expect(store.acquireLease()).toBeUndefined();
+    expect(readFileSync(join(dir, 'automation-poll.lock'), 'utf8')).toBe(replacement);
+  });
+
   it('falls back to the age rule for a lock whose pid cannot be read', async () => {
     const dir = await lockedDirectory('{half-writ');
     const store = AutomationStore.open(dir, { processAlive: () => false });
@@ -143,6 +172,90 @@ describe('AutomationStore.acquireLease — a lock nobody is holding any more (#9
     expect(lease).toBeDefined();
     lease?.release();
   });
+
+  it('serializes competing stale-lock reclaimers and does not let an old owner release a replacement', async () => {
+    const dir = await lockedDirectory(JSON.stringify({ pid: UNREACHABLE_PID, startedAt: new Date().toISOString() }));
+    const one = AutomationStore.open(dir, { processAlive: () => false });
+    const two = AutomationStore.open(dir, { processAlive: () => false });
+    const first = one.acquireLease();
+    expect(first).toBeDefined();
+    // A contender must observe the live replacement, not reclaim it as the abandoned lock.
+    expect(two.acquireLease()).toBeUndefined();
+    const replacement = JSON.stringify({ pid: process.pid, token: 'replacement', startedAt: new Date().toISOString() });
+    writeFileSync(join(dir, 'automation-poll.lock'), replacement);
+    first?.release();
+    expect(readFileSync(join(dir, 'automation-poll.lock'), 'utf8')).toBe(replacement);
+    unlinkSync(join(dir, 'automation-poll.lock'));
+  });
+
+  it('allows at most one of two processes to reclaim the same abandoned lock', async () => {
+    const dir = await lockedDirectory(JSON.stringify({ pid: UNREACHABLE_PID, startedAt: new Date().toISOString() }));
+    const guard = join(dir, 'automation-poll.lock.guard');
+    mkdirSync(guard);
+    const old = new Date(Date.now() - 20 * 60_000);
+    utimesSync(guard, old, old);
+    const child = fileURLToPath(new URL('./store-lease-child.testkit.ts', import.meta.url));
+    const children = [0, 1].map(() => spawn(process.execPath, ['--import', 'tsx', child, dir], { stdio: ['pipe', 'pipe', 'inherit'] }));
+    const states = children.map((childProcess) => {
+      let buffer = '';
+      let ready!: () => void;
+      let result!: (held: boolean) => void;
+      const readyPromise = new Promise<void>((resolve) => { ready = resolve; });
+      const resultPromise = new Promise<boolean>((resolve) => { result = resolve; });
+      childProcess.stdout.setEncoding('utf8');
+      childProcess.stdout.on('data', (chunk) => {
+        buffer += chunk;
+        const lines = buffer.split('\n');
+        buffer = lines.pop()!;
+        for (const line of lines) {
+          if (line === 'ready') ready();
+          else if (line) result(JSON.parse(line).held as boolean);
+        }
+      });
+      return { readyPromise, resultPromise };
+    });
+    await Promise.all(states.map((state) => state.readyPromise));
+    for (const childProcess of children) childProcess.stdin.write('go\n');
+    const results = await Promise.all(states.map((state) => state.resultPromise));
+    expect(results.filter(Boolean)).toHaveLength(1);
+  });
+
+  it('recovers a guard abandoned by a dead process', async () => {
+    const dir = await lockedDirectory(JSON.stringify({ pid: UNREACHABLE_PID, startedAt: new Date().toISOString() }));
+    const guard = join(dir, 'automation-poll.lock.guard');
+    mkdirSync(guard);
+    const old = new Date(Date.now() - 20 * 60_000);
+    utimesSync(guard, old, old);
+    const lease = AutomationStore.open(dir).acquireLease();
+    expect(lease).toBeDefined();
+    expect(JSON.parse(readFileSync(join(dir, 'automation-poll.lock'), 'utf8')).pid).toBe(process.pid);
+    lease?.release();
+  });
+
+  it('recovers a real killed owner after the bounded guard stale window', async () => {
+    const dir = await directory();
+    const child = fileURLToPath(new URL('./store-lease-child.testkit.ts', import.meta.url));
+    const childProcess = spawn(process.execPath, ['--import', 'tsx', child, dir], { stdio: ['pipe', 'pipe', 'inherit'] });
+    let output = '';
+    const acquired = new Promise<void>((resolve, reject) => {
+      childProcess.stdout.setEncoding('utf8');
+      childProcess.stdout.on('data', (chunk) => {
+        output += chunk;
+        if (output.includes('ready\n')) childProcess.stdin.write('go\n');
+        if (output.includes('"held":true')) resolve();
+      });
+      childProcess.once('error', reject);
+    });
+    await acquired;
+    childProcess.kill('SIGKILL');
+    await new Promise<void>((resolve) => childProcess.once('close', () => resolve()));
+    // proper-lockfile's stale threshold is 2s minimum; leave margin for the final
+    // heartbeat/stat timestamp and filesystem timestamp granularity.
+    await new Promise((resolve) => setTimeout(resolve, 3_200));
+    const lease = AutomationStore.open(dir).acquireLease();
+    expect(lease).toBeDefined();
+    lease?.release();
+  }, 8_000);
 });
 
 describe('AutomationStore.setState (spec 2026-09-14: read-modify-write)', () => {

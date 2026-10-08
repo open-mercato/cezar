@@ -66,7 +66,11 @@ const ISSUE_139: GithubItem = {
   number: 139,
   title: 'Add --json flag to the CLI',
   author: 'lin',
-  createdAt: '2026-07-10T08:00:00.000Z',
+  // Older than 142, because a lower issue number always is: GitHub hands numbers out in creation
+  // order. The fixture used to date 139 a day AFTER 142 while listing it second, a combination the
+  // forge cannot produce — harmless while nothing read `createdAt`, load-bearing now that the sort
+  // toggle (#gh-sort) does.
+  createdAt: '2026-07-08T08:00:00.000Z',
   labels: [],
   body: '',
   url: 'https://github.com/acme/demo/issues/139',
@@ -148,7 +152,8 @@ const PROVIDERS_CONNECTED: ProviderStatusResponse = {
     { provider: 'claude', status: 'connected', enabled: true },
     { provider: 'codex', status: 'not-installed', enabled: true },
     { provider: 'opencode', status: 'not-installed', enabled: true },
-  ],
+    { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
 }
 
 const PROVIDERS_MULTI: ProviderStatusResponse = {
@@ -156,7 +161,8 @@ const PROVIDERS_MULTI: ProviderStatusResponse = {
     { provider: 'claude', status: 'connected', enabled: true },
     { provider: 'codex', status: 'connected', enabled: true },
     { provider: 'opencode', status: 'disconnected', enabled: true },
-  ],
+    { provider: 'cursor', status: 'connected', enabled: true },
+        ],
 }
 
 const PROVIDERS_NONE: ProviderStatusResponse = {
@@ -164,7 +170,8 @@ const PROVIDERS_NONE: ProviderStatusResponse = {
     { provider: 'claude', status: 'disconnected', enabled: true },
     { provider: 'codex', status: 'unknown', enabled: true },
     { provider: 'opencode', status: 'not-installed', enabled: true },
-  ],
+    { provider: 'cursor', status: 'disconnected', enabled: true },
+        ],
 }
 
 interface SentRequest {
@@ -224,6 +231,7 @@ function stubFetch(
       }
       if (method === 'GET' && path === '/api/v1/models?runner=codex') return jsonResponse({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
       if (method === 'GET' && path === '/api/v1/models?runner=claude') return jsonResponse({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
+      if (path === '/api/v1/models?runner=cursor') return jsonResponse({ runner: 'cursor', models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }], source: 'live', stale: false })
       if (method === 'POST' && path === '/api/v1/runs') {
         return jsonResponse({
           id: 'run-1',
@@ -363,7 +371,10 @@ describe('the GitHub tab lists', () => {
     const pr137: GithubItem = { ...PR_137, checks: null }
     stubFetch({
       'GET /api/v1/github?limit=1000': () => jsonResponse({ ...GITHUB, prs: [pr137, p201, p202, p203] }),
-      'GET /api/v1/github/checks?prs=137%2C201%2C202%2C203': () =>
+      // The window follows the RENDERED order, not the payload order (#gh-sort), so it is the
+      // sort's answer for these four — all copies of PR_137, hence one `createdAt` and the
+      // number tiebreak, newest-first — that names the request.
+      'GET /api/v1/github/checks?prs=203%2C202%2C201%2C137': () =>
         jsonResponse({ available: true, checks: { 137: 'failing', 201: 'passing', 202: 'pending', 203: null } }),
     })
     renderAt('/github/prs')
@@ -531,6 +542,152 @@ describe('remembering the last-selected tab (#417)', () => {
   })
 })
 
+/**
+ * The newest/oldest toggle (#gh-sort). The tab could only ever show the newest first, so the
+ * oldest open item — the one that has been waiting longest, which is exactly what a backlog sweep
+ * is looking for — sat at the bottom of an unbounded list. The control flips the rendered order
+ * and, like the sub-tab beside it, survives a reload.
+ */
+describe('sorting the list newest or oldest first', () => {
+  const sortButton = (name: 'Newest' | 'Oldest') =>
+    within(screen.getByRole('group', { name: 'Sort order' })).getByRole('button', { name })
+
+  /**
+   * `stubFetch`, with a ui-state route that behaves like the real one: `PUT` merges the body
+   * SHALLOWLY into the stored state and answers the whole merged object, which the tab writes
+   * back into its cache. The bare `stubFetch` catch-all answers `{}` instead, so a PUT would
+   * wipe the optimistic patch and undo the click a moment after it landed — a test artifact, not
+   * the behavior, and one that would hide a real regression in either direction.
+   */
+  function stubUiStateFetch(
+    overrides: Record<string, () => Response | Promise<Response>> = {},
+    initial: Record<string, unknown> = {},
+  ): SentRequest[] {
+    const state: Record<string, unknown> = { ...initial }
+    let sent: SentRequest[] | null = null
+    sent = stubFetch({
+      'GET /api/v1/ui-state': () => jsonResponse({ ...state }),
+      'PUT /api/v1/ui-state': () => {
+        // Read at REQUEST time, so `sent` is assigned by then; the stub records before it
+        // dispatches, so the write being answered is the last one recorded.
+        const last = sent
+          ?.filter((request) => request.method === 'PUT' && request.path === '/api/v1/ui-state')
+          .at(-1)
+        Object.assign(state, last?.body ?? {})
+        return jsonResponse({ ...state })
+      },
+      ...overrides,
+    })
+    return sent
+  }
+
+  it('defaults to newest first, and says so on the control', async () => {
+    stubUiStateFetch()
+    renderAt('/github')
+
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    expect(rows().map((row) => row.dataset.number)).toEqual(['142', '139'])
+    expect(sortButton('Newest').getAttribute('aria-pressed')).toBe('true')
+    expect(sortButton('Oldest').getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('clicking Oldest reverses the rows and persists the choice', async () => {
+    const sent = stubUiStateFetch()
+    renderAt('/github')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+
+    fireEvent.click(sortButton('Oldest'))
+
+    // Reordered from the cache the tab already holds — no refetch, so no second list request.
+    await waitFor(() => expect(rows().map((row) => row.dataset.number)).toEqual(['139', '142']))
+    expect(sortButton('Oldest').getAttribute('aria-pressed')).toBe('true')
+    const put = sent.find((request) => request.method === 'PUT' && request.path === '/api/v1/ui-state')
+    expect(put?.body).toEqual({ githubSort: 'oldest' })
+    expect(sent.filter((r) => r.method === 'GET' && r.path.startsWith('/api/v1/github?'))).toHaveLength(1)
+  })
+
+  it('opening the tab restores a remembered "oldest"', async () => {
+    stubUiStateFetch({}, { githubSort: 'oldest' })
+    renderAt('/github')
+
+    await waitFor(() => expect(rows().map((row) => row.dataset.number)).toEqual(['139', '142']))
+    expect(sortButton('Oldest').getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('an unknown stored order falls back to newest rather than rendering nothing', async () => {
+    // A value from a newer cockpit, or a hand-edited ui-state.json. The tab must degrade to its
+    // default, never to an empty or arbitrary list.
+    stubUiStateFetch({}, { githubSort: 'alphabetical' })
+    renderAt('/github')
+
+    await waitFor(() => expect(rows().map((row) => row.dataset.number)).toEqual(['142', '139']))
+    expect(sortButton('Newest').getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('the order survives switching sub-tabs, and applies to PRs too', async () => {
+    const olderPr: GithubItem = {
+      ...PR_137,
+      number: 120,
+      url: 'https://github.com/acme/demo/pull/120',
+      createdAt: '2026-06-01T08:00:00.000Z',
+    }
+    stubUiStateFetch({
+      'GET /api/v1/github?limit=1000': () => jsonResponse({ ...GITHUB, prs: [PR_137, olderPr] }),
+      'GET /api/v1/github/checks?prs=137%2C120': () => jsonResponse({ available: true, checks: {} }),
+      'GET /api/v1/github/checks?prs=120%2C137': () => jsonResponse({ available: true, checks: {} }),
+    })
+    renderAt('/github')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+
+    fireEvent.click(sortButton('Oldest'))
+    await waitFor(() => expect(rows().map((row) => row.dataset.number)).toEqual(['139', '142']))
+
+    fireEvent.click(screen.getByRole('link', { name: /Pull requests/ }))
+    await waitFor(() => expect(rows().map((row) => row.dataset.number)).toEqual(['120', '137']))
+    expect(sortButton('Oldest').getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('reorders the cross-state search hits by the same control (#730)', async () => {
+    // The hits render directly under the open list, so an order that visibly stopped applying
+    // halfway down the page would read as a bug.
+    const closedOld: GithubItem = {
+      ...ISSUE_142,
+      number: 90,
+      url: 'https://github.com/acme/demo/issues/90',
+      title: 'deploy went sideways',
+      createdAt: '2026-05-01T08:00:00.000Z',
+    }
+    const closedNew: GithubItem = {
+      ...ISSUE_142,
+      number: 91,
+      url: 'https://github.com/acme/demo/issues/91',
+      title: 'deploy retried',
+      createdAt: '2026-06-01T08:00:00.000Z',
+    }
+    stubUiStateFetch({
+      // `gh search` answers in best-match order — deliberately neither age order here, so the
+      // assertions below can only pass if the tab actually SORTS rather than reverses.
+      'GET /api/v1/github/search?kind=issue&q=deploy': () =>
+        jsonResponse({ available: true, items: [closedOld, closedNew] }),
+    })
+    renderAt('/github')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+
+    fireEvent.change(document.querySelector<HTMLInputElement>('[data-slot="gh-search"]')!, {
+      target: { value: 'deploy' },
+    })
+
+    const hitNumbers = () =>
+      [...document.querySelectorAll<HTMLElement>('[data-slot="gh-search-hits"] [data-slot="gh-row"]')].map(
+        (row) => row.dataset.number,
+      )
+    await waitFor(() => expect(hitNumbers()).toEqual(['91', '90']))
+
+    fireEvent.click(sortButton('Oldest'))
+    await waitFor(() => expect(hitNumbers()).toEqual(['90', '91']))
+  })
+})
+
 describe('the GitHub detail pane', () => {
   it('a PR renders the meta line, ± stat, label chips and the checks badge', async () => {
     stubFetch()
@@ -593,6 +750,7 @@ describe('the GitHub detail pane', () => {
           mergeable: 'mergeable',
           reviewDecision: 'approved',
           checks: [{ name: 'test', state: 'passing', required: true, url: 'https://example.com/check' }],
+          checksTier: 'detailed',
           methods: ['squash', 'rebase'],
           defaultMethod: 'squash',
           eligibility: 'ready',
@@ -615,6 +773,7 @@ describe('the GitHub detail pane', () => {
           mergeable: 'mergeable',
           reviewDecision: 'approved',
           checks: [],
+          checksTier: 'detailed',
           methods: ['squash'],
           defaultMethod: 'squash',
           eligibility: 'ready',
@@ -662,6 +821,7 @@ describe('the GitHub detail pane', () => {
           mergeable: 'mergeable',
           reviewDecision: 'review-required',
           checks: [{ name: 'test', state: 'pending', required: true }],
+          checksTier: 'detailed',
           methods: ['squash'],
           defaultMethod: 'squash',
           eligibility: 'blocked',
@@ -692,6 +852,94 @@ describe('the GitHub detail pane', () => {
       expectedHeadSha: '0123456789abcdef0123456789abcdef01234567',
       overrideRules: true,
     }))
+  })
+
+  /** #969 — under a fine-grained PAT the per-check detail is unreadable and no permission grants
+   *  it. The panel must still render the merge state the token CAN read, show the aggregate check
+   *  tier it fell back to, and say plainly which part is missing. */
+  it('renders the merge state with the aggregate check tier and names what it could not read', async () => {
+    stubFetch({
+      'GET /api/v1/github/prs/137/merge-state': () => jsonResponse({
+        available: true,
+        mergeState: {
+          number: 137,
+          title: PR_137.title,
+          url: PR_137.url,
+          state: 'open',
+          isDraft: false,
+          headRef: 'feat/sse',
+          baseRef: 'main',
+          headSha: '0123456789abcdef0123456789abcdef01234567',
+          mergeable: 'mergeable',
+          reviewDecision: 'approved',
+          checks: [{ name: 'All checks', state: 'passing', required: null }],
+          checksTier: 'aggregate',
+          checksReason: 'GraphQL: Resource not accessible by personal access token',
+          methods: ['squash'],
+          defaultMethod: 'squash',
+          eligibility: 'ready',
+          blockers: [],
+          canMerge: true,
+          canOverride: false,
+        },
+      }),
+    })
+    renderAt('/github/prs/137')
+
+    const box = await waitFor(() => {
+      const found = document.querySelector('[data-slot="gh-merge-box"]')
+      if (!found) throw new Error('merge box not rendered')
+      return found
+    })
+    expect(box.textContent).toContain('Ready to merge')
+    expect(box.textContent).toContain('Reviews: approved')
+    expect(box.textContent).toContain('All checks · passing')
+    const note = document.querySelector('[data-slot="gh-merge-checks-degraded"]')
+    expect(note?.textContent).toContain('per-check detail is not')
+    expect(note?.textContent).toContain('Resource not accessible by personal access token')
+    expect(box.textContent).not.toContain('No checks configured')
+  })
+
+  it('does not pass an unreadable check tier off as "no checks configured"', async () => {
+    stubFetch({
+      'GET /api/v1/github/prs/137/merge-state': () => jsonResponse({
+        available: true,
+        mergeState: {
+          number: 137,
+          title: PR_137.title,
+          url: PR_137.url,
+          state: 'open',
+          isDraft: false,
+          headRef: 'feat/sse',
+          baseRef: 'main',
+          headSha: '0123456789abcdef0123456789abcdef01234567',
+          mergeable: 'mergeable',
+          reviewDecision: 'approved',
+          checks: [],
+          checksTier: 'none',
+          checksReason: 'GraphQL: Resource not accessible by personal access token',
+          methods: ['squash'],
+          defaultMethod: 'squash',
+          eligibility: 'unknown',
+          blockers: [{ code: 'checks-unknown', message: 'This token cannot read the checks on this pull request.' }],
+          canMerge: false,
+          canOverride: true,
+        },
+      }),
+    })
+    renderAt('/github/prs/137')
+
+    const note = await waitFor(() => {
+      const found = document.querySelector('[data-slot="gh-merge-checks-degraded"]')
+      if (!found) throw new Error('degraded note not rendered')
+      return found
+    })
+    expect(note.textContent).toContain('cannot read the checks')
+    const box = document.querySelector('[data-slot="gh-merge-box"]')
+    expect(box?.textContent).not.toContain('No checks configured')
+    // The blocker says the same thing as the note above it — it must not be printed twice.
+    expect(box?.textContent?.match(/cannot read the checks/g)).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Squash and merge' }).hasAttribute('disabled')).toBe(true)
   })
 })
 
@@ -1255,6 +1503,109 @@ describe('the hand-to-agent backend pills (#401)', () => {
     expect(postedRun(sent)).toMatchObject({ runner: 'codex' })
   })
 
+  /**
+   * The #906 regression. `defaultModels` is seeded server-side from the coding agent's OWN
+   * settings file, so "never touched" is not a neutral state — it hands the choice to
+   * `~/.claude/settings.json`. Before the fix the pick was plain route state, reset on every
+   * mount, and an explicit `auto` therefore survived exactly until the next navigation: the user
+   * re-picked auto forever and every run still went out pinned to the native model.
+   */
+  it('an explicitly picked auto survives a remount instead of reverting to the native default (#906)', async () => {
+    const nativeDefault = () =>
+      jsonResponse({ defaultRunner: 'claude', defaultModels: { claude: 'opus' } })
+    stubFetch({ 'GET /api/v1/config': nativeDefault })
+    await openDetail()
+
+    // The starting state the issue describes: untouched, so the native default shows through.
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="model-pill"]')?.textContent).toContain('opus'),
+    )
+    await pickPill('model-pill', 'auto')
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="model-pill"]')?.textContent).toContain('auto'),
+    )
+
+    // A full cold mount — the reload / tab hop that used to discard the pick.
+    cleanup()
+    const sent = stubFetch({ 'GET /api/v1/config': nativeDefault })
+    await openDetail()
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="model-pill"]')?.textContent).toContain('auto'),
+    )
+
+    // And the pick is real, not cosmetic: auto stays implicit, so no model rides the request.
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).not.toHaveProperty('model')
+  })
+
+  /**
+   * Remembering gave the pick a lifetime beyond the host that justified it — the same problem
+   * `github.tsx` already solves for a workflow the server no longer knows. It is not theoretical:
+   * cockpits for different repos share one `localhost:<port>` origin and therefore this
+   * localStorage key, so a pick can arrive from a repo where it was perfectly valid.
+   */
+  it('drops a remembered runner this host cannot honour instead of posting it (#906)', async () => {
+    // Remembered from elsewhere: a backend that is not connected on this host.
+    localStorage.setItem('cez-followup-selection', '{"runner":"codex","model":null}')
+    const sent = stubFetch({
+      'GET /api/v1/health': SINGLE_BACKEND,
+      'GET /api/v1/config': () => jsonResponse({ defaultRunner: 'claude', defaultModels: {} }),
+    })
+    await openDetail()
+
+    // A single-backend host hides the runner pill entirely, so a dead pick could not even be
+    // seen, let alone corrected — it must be dropped rather than ride the request as an
+    // explicit override of the server's own default.
+    await waitFor(() => expect(document.querySelector('[data-slot="model-pill"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="runner-pill"]')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).not.toHaveProperty('runner')
+    // And it is cleared from the store, so it stops haunting every later hand-off.
+    await waitFor(() => expect(readFollowupSelection().runner).toBeNull())
+  })
+
+  it('drops a remembered model that belongs to a different backend (#906)', async () => {
+    // `opus` is a claude preset; the remembered runner is codex. Both are valid somewhere, which
+    // is exactly how this arrives — one localStorage key is shared across repos.
+    localStorage.setItem('cez-followup-selection', '{"runner":"codex","model":"opus"}')
+    stubFetch({
+      'GET /api/v1/health': MULTI_BACKEND,
+      'GET /api/v1/providers/status': () => jsonResponse(PROVIDERS_MULTI),
+    })
+    await openDetail()
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="runner-pill"]')?.textContent).toContain('codex'),
+    )
+    await waitFor(() => expect(readFollowupSelection()).toMatchObject({ runner: 'codex', model: null }))
+  })
+
+  /**
+   * The other half of that sweep, and the more dangerous one: "no backend is connected" and
+   * "provider status has not answered yet" look identical from inside the hook, so a sweep that
+   * treats an empty runner list as evidence would clear the pick on every single mount — and,
+   * because this surface persists, write the `null` straight back to the store. That destroys the
+   * remembered choice permanently and quietly reintroduces #906. An unreachable agent CLI is a
+   * degradation path, not a licence to discard user state.
+   */
+  it('keeps the remembered pick when no provider has answered — absence of status is not absence of a backend (#906)', async () => {
+    localStorage.setItem('cez-followup-selection', '{"runner":"codex","model":"opus"}')
+    stubFetch({ 'GET /api/v1/providers/status': () => jsonResponse(PROVIDERS_NONE) })
+    await openDetail()
+
+    // The disabled Run button proves the "nothing connected" answer really did land, so this is
+    // not merely passing on a render that happened before any query resolved.
+    await waitFor(() =>
+      expect(
+        screen.getByRole<HTMLButtonElement>('button', { name: /Run agent on this issue/ }).disabled,
+      ).toBe(true),
+    )
+    expect(readFollowupSelection()).toMatchObject({ runner: 'codex', model: 'opus' })
+  })
+
   it('disables click and shortcut starts with no connected provider while browsing and editing stay live', async () => {
     const sent = stubFetch({
       'GET /api/v1/providers/status': () => jsonResponse(PROVIDERS_NONE),
@@ -1309,7 +1660,8 @@ describe('the hand-to-agent backend pills (#401)', () => {
             { provider: 'claude', status: 'disconnected', enabled: true },
             { provider: 'codex', status: 'connected', enabled: true },
             { provider: 'opencode', status: 'not-installed', enabled: true },
-          ],
+            { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
         } satisfies ProviderStatusResponse),
     })
     await openDetail()
@@ -1334,7 +1686,8 @@ describe('the hand-to-agent backend pills (#401)', () => {
             { provider: 'claude', status: 'connected', enabled: false },
             { provider: 'codex', status: 'connected', enabled: true },
             { provider: 'opencode', status: 'not-installed', enabled: true },
-          ],
+            { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
         } satisfies ProviderStatusResponse),
     })
     await openDetail()
@@ -2160,6 +2513,9 @@ describe('the follow-up prompt template menu (#413)', () => {
       if (!option(id)) throw new Error(`template option "${id}" not mounted yet`)
     })
     await selectOption(id)
+    // Menu closure proves the click landed, but React may commit the prompt state in the next
+    // render. Wait for this selection's value transition before the caller checks its exact text.
+    await waitFor(() => expect(textarea().value).not.toBe(before))
   }
 
   it('an untouched ui-state shows the built-in templates, and inserting one fills the custom prompt', async () => {

@@ -19,6 +19,35 @@ describe('Jira context conversion', () => {
     expect(converted.body).toContain('| Key | Value |');
     expect(converted.body).toContain('| --- | --- |');
   });
+  it('escapes a pipe in a table cell without letting a preceding backslash re-open it', () => {
+    const cell = (s: string) => ({ type: 'tableCell', content: [{ type: 'text', text: s }] });
+    const row = (...cells: string[]) => ({ type: 'tableRow', content: cells.map(cell) });
+    const { body } = adfMarkdown({ type: 'doc', content: [{ type: 'table', content: [
+      row('Key', 'Value'),
+      row('a|b', String.raw`c\|d`),
+      row(String.raw`C:\dir`, String.raw`e\\|`),
+    ] }] });
+    const rows = body.trim().split('\n');
+    expect(rows[2]).toBe(String.raw`| a\|b | c\\\|d |`);
+    // A backslash away from any pipe is left alone, so `C:\dir` keeps its literal text in code.
+    expect(rows[3]).toBe(String.raw`| C:\dir | e\\\\\| |`);
+    // GFM's cell split: a pipe is a delimiter only after an EVEN run of backslashes.
+    const columns = (line: string) => line.slice(1, -1).split(/(?<=(?:^|[^\\])(?:\\\\)*)\|/).length;
+    for (const line of rows) expect(columns(line)).toBe(2);
+  });
+  // The escape itself must not become the next ReDoS: `/(\\*)\|/g` re-scanned the whole run from
+  // every position inside it, so a hostile cell of 64k backslashes held the event loop ~3.9 s.
+  it('escapes a cell of nothing but backslashes in linear time', () => {
+    const cell = (s: string) => ({ type: 'tableCell', content: [{ type: 'text', text: s }] });
+    const document = { type: 'doc', content: [{ type: 'table', content: [
+      { type: 'tableRow', content: [cell('\\'.repeat(64_000))] },
+    ] }] };
+    const started = performance.now();
+    const { body } = adfMarkdown(document);
+    expect(performance.now() - started).toBeLessThan(1000);
+    // Untouched: not one of those backslashes stands in front of a pipe.
+    expect(body).toContain('| ' + '\\'.repeat(64_000) + ' |');
+  });
   it('flags unsupported nodes and marks while retaining readable text', () => {
     const result = adfMarkdown({ type: 'doc', content: [{ type: 'unknown', content: [{ type: 'text', text: 'keep this', marks: [null, { type: 'unknown' }] }] }, { type: 'media', attrs: { id: 'private' } }] });
     expect(result.unsupportedContent).toBe(true);

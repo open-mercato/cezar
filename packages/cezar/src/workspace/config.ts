@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { chmodSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
@@ -80,12 +80,17 @@ export type WorkspaceProject = z.infer<typeof workspaceProjectSchema>;
  */
 export const DEFAULT_MONITORING_WAKE_MINUTES = 5;
 
+/** Plain user-wait sessions retain a bounded liveness safeguard by default (#992). */
+export const DEFAULT_IDLE_TIMEOUT_MINUTES = 15;
+
 const resourcesSchema = z
   .object({
     /** Workspace-wide parallel-task cap (moved from per-repo config.json). */
     maxParallel: z.number().int().min(1).max(16).default(2).catch(2),
     /** Extra durable `CEZ:MONITORING` sessions exempt from the active-task cap. */
     maxMonitoringSessions: z.number().int().min(0).max(16).default(2).catch(2),
+    /** Plain `waiting`/`CEZ:ASK` session idle timeout; null or 0 disables this safeguard. */
+    idleTimeoutMinutes: z.number().int().min(0).max(1440).nullable().default(DEFAULT_IDLE_TIMEOUT_MINUTES).catch(DEFAULT_IDLE_TIMEOUT_MINUTES),
     /**
      * Cadence for re-checking monitored work; `null` parks at zero model cost until a
      * user (or an external integration) resumes the session.
@@ -150,7 +155,10 @@ const agentDefaultsSchema = z
         claude: z.string().trim().min(1).max(200).optional().catch(undefined),
         codex: z.string().trim().min(1).max(200).optional().catch(undefined),
         opencode: z.string().trim().min(1).max(200).optional().catch(undefined),
+        cursor: z.string().trim().min(1).max(200).optional().catch(undefined),
         pi: z.string().trim().min(1).max(200).optional().catch(undefined),
+        junie: z.string().trim().min(1).max(200).optional().catch(undefined),
+        copilot: z.string().trim().min(1).max(200).optional().catch(undefined),
       })
       .passthrough()
       .optional()
@@ -193,6 +201,10 @@ const workspaceConfigSchema = z
     /** Optional auto-update override. Absence inherits the environment/default
      *  and must stay absent on unrelated merge-writes. */
     skillsAutoUpdate: z.boolean().optional().catch(undefined),
+    /** Release channel the self-updater follows (`stable` → npm `latest`, `nightly` → `nightly`,
+     *  `development` → none: a worktree or PR preview picked by hand). Absent inherits
+     *  `CEZ_UPDATE_CHANNEL`, then stable. */
+    updateChannel: z.enum(['stable', 'nightly', 'development']).optional().catch(undefined),
     /** Global opt-in model policy. The native coding-agent model becomes
      * authoritative while runner choice remains available. */
     modelsLocked: z.boolean().optional().catch(undefined),
@@ -357,8 +369,29 @@ export function atomicWriteJsonSync(path: string, value: unknown): void {
   assertCezarHomeWriteIsSandboxed(path);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const tmp = atomicTmpPath(path);
-  writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-  renameSync(tmp, path);
+  let fd = -1;
+  try {
+    fd = openSync(tmp, 'w', 0o600);
+    writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8' });
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = -1;
+    renameSync(tmp, path);
+  } catch (error) {
+    if (fd !== -1) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Preserve the original write/fsync/rename error.
+      }
+    }
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      // Preserve the original write/fsync/rename error.
+    }
+    throw error;
+  }
   try {
     chmodSync(path, 0o600); // best-effort — ignored on some filesystems
   } catch {

@@ -834,8 +834,9 @@ function StepCardBody({
   const known = skills.find((skill) => skill.name === step.skill)
   const isCheck = Boolean(step.command)
   const title = isCheck || !step.skill ? (step.name ?? step.id) : step.skill
+  const retryOn = step.onFail?.retryOn?.length ? ` on exit ${step.onFail.retryOn.join('/')}` : ''
   const description = isCheck
-    ? `$ ${step.command}${step.onFail ? ` — on fail retry from "${step.onFail.retry}" (×${step.onFail.max ?? 2})` : ''}`
+    ? `$ ${step.command}${step.onFail ? ` — on fail${retryOn} retry from "${step.onFail.retry}" (×${step.onFail.max ?? 2})` : ''}`
     : step.skill
       ? (known?.description ??
         'Not in this repo or the team skills — the step runs on its plain prompt.')

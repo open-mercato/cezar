@@ -10,12 +10,13 @@
  * restates the flags of `dispatchInputSchema` and `dispatchReportSchema` key for key.
  */
 import { DISPATCH_MAX_IN_FLIGHT, type DispatchIntent, type DispatchKind } from '@open-mercato/cezar-contract';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
 
 export const DISPATCH_PROMPT = `Dispatching tasks. cezar can run other cezar tasks for you, each in its own git worktree forked off YOUR branch as you last committed it, each reporting back into this session when it settles. Use it for work that is genuinely INDEPENDENT of what you are doing — several unrelated fixes, a review of a branch by a fresh pair of eyes, a wide read-only investigation, work on disjoint parts of the repository — and NOT for one tightly coupled change: splitting coupled work across tasks makes it slower, more expensive and inconsistent, and the evidence on that is clear. When in doubt, do it yourself.
 
 To dispatch, run (from your shell) — always through the cockpit's own binary, node "$CEZ_BIN", because a cez on your PATH may be an older install without this command; every "cez task …" below means node "$CEZ_BIN" task …:
 
-  cez task create "<objective>" [--title "…"] [--kind implement|review] [--review-of <branch or run id>] [--scope "<files or dirs it may touch>"] [--budget <usd>] [--success "<how it knows it is done>"] [--evidence "<what it must show>"] [--tools Read,Edit,Bash] [--runner claude|codex|opencode] [--model <model>]
+  cez task create "<objective>" [--title "…"] [--kind implement|review] [--review-of <branch or run id>] [--scope "<files or dirs it may touch>"] [--budget <usd>] [--success "<how it knows it is done>"] [--evidence "<what it must show>"] [--tools Read,Edit,Bash] [--runner ${RUNNER_IDS.join('|')}] [--model <model>]
 
 - The objective is the WHOLE assignment: the child sees it, its task order, and the shared tree directory (below) — nothing else you know. State the goal, the context it needs, and what finished means.
 - Give every sibling a DISJOINT scope. Two tasks editing the same file is the one failure this design cannot recover from.

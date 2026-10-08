@@ -25,7 +25,7 @@ import { Link, useNavigate } from '@/lib/project-router'
 
 import { archiveFinished, markAllRunsSeen, patchRun } from '@/api/client'
 import { useRunUsage } from '@/api/global-events'
-import { queryKeys, useHealth, usePinRun, useReferenceProjectId, useRuns } from '@/api/queries'
+import { queryKeys, useHealth, usePinRun, useReferenceProjectId, useRuns, writePatchedRunToCaches } from '@/api/queries'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { DiffStatLabel } from '@/components/diff-stat'
@@ -37,6 +37,7 @@ import { PinToggle } from '@/components/pin-toggle'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
+import { SubtaskToggle } from '@/components/subtask-toggle'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
@@ -61,6 +62,7 @@ import {
   formatCost,
   scheduledResume,
   taskReference,
+  taskReferences,
   usageCells,
   workflowLabel,
   type UsageCell,
@@ -124,14 +126,29 @@ export function TasksOverview({
   columnsPending?: boolean
 }) {
   const [query, setQuery] = React.useState('')
+  // The subtask accordion (#1110): ids of the parents whose dispatched rows are unfolded.
+  // Empty on arrival — collapsed is the default, and the chip on the parent row is the handle.
+  // Session-local on purpose: "collapsed by default" is the contract, so a fresh visit folds
+  // everything back.
+  const [expandedSubtasks, setExpandedSubtasks] = React.useState<ReadonlySet<string>>(new Set())
+  const toggleSubtasks = (id: string) =>
+    setExpandedSubtasks((current) => {
+      const next = new Set(current)
+      if (!next.delete(id)) next.add(id)
+      return next
+    })
   const all = runs ?? []
   const counts = listCounts(all)
   const visible = sortRuns(filterRuns(all, query), view)
+  // A live search overrides the fold wholesale: `filterRuns` keeps a child whose parent also
+  // matched NESTED under it, and a match the accordion then hid would read as a search miss.
+  const searching = query.trim() !== ''
   // Dispatched children nest under the task that ordered them, in that task's own place in the
   // sort above (spec `.ai/specs/2026-09-10-dispatch.md`). One derivation, both layouts: the table
   // and the cards are the same rows at two widths, and a tree that disagreed between them would
-  // be two trees.
-  const rows = taskTreeRows(visible)
+  // be two trees — which is also why the accordion state feeds the derivation here rather than
+  // either layout hiding rows on its own.
+  const rows = taskTreeRows(visible, (id) => searching || expandedSubtasks.has(id))
   // Positions come from the full list, never the filtered one: a search must not renumber the
   // queue the engine is actually going to drain.
   const positions = queuePositions(all)
@@ -250,6 +267,8 @@ export function TasksOverview({
                         run={node.run}
                         depth={node.depth}
                         childCount={node.childCount}
+                        subtasksExpanded={searching || expandedSubtasks.has(node.run.id)}
+                        onToggleSubtasks={toggleSubtasks}
                         queuePosition={
                           node.run.status === 'queued' ? (positions.get(node.run.id) ?? null) : null
                         }
@@ -273,6 +292,8 @@ export function TasksOverview({
                   run={node.run}
                   depth={node.depth}
                   childCount={node.childCount}
+                  subtasksExpanded={searching || expandedSubtasks.has(node.run.id)}
+                  onToggleSubtasks={toggleSubtasks}
                   queuePosition={
                     node.run.status === 'queued' ? (positions.get(node.run.id) ?? null) : null
                   }
@@ -524,6 +545,8 @@ function TableRow({
   run,
   depth,
   childCount,
+  subtasksExpanded,
+  onToggleSubtasks,
   queuePosition,
   onRename,
   onTogglePin,
@@ -536,6 +559,9 @@ function TableRow({
   depth: number
   /** How many tasks THIS one dispatched — the row's "N subtasks" note. */
   childCount: number
+  /** Whether this row's dispatched children are unfolded beneath it (#1110). */
+  subtasksExpanded: boolean
+  onToggleSubtasks: (id: string) => void
   queuePosition: number | null
   onRename: (id: string, title: string) => void
   onTogglePin?: (run: RunRecord, pinned: boolean) => void
@@ -598,6 +624,8 @@ function TableRow({
             run={run}
             depth={depth}
             childCount={childCount}
+            subtasksExpanded={subtasksExpanded}
+            onToggleSubtasks={onToggleSubtasks}
             attention={attention}
             scheduled={scheduled}
             reference={reference}
@@ -619,6 +647,8 @@ function TaskTableCell({
   run,
   depth,
   childCount,
+  subtasksExpanded,
+  onToggleSubtasks,
   attention,
   scheduled,
   reference,
@@ -633,6 +663,8 @@ function TaskTableCell({
   run: RunRecord
   depth: number
   childCount: number
+  subtasksExpanded: boolean
+  onToggleSubtasks: (id: string) => void
   attention: ReturnType<typeof deriveAttention>
   scheduled: ReturnType<typeof scheduledResume>
   reference: ReturnType<typeof taskReference>
@@ -663,6 +695,8 @@ function TaskTableCell({
             run={run}
             depth={depth}
             childCount={childCount}
+            subtasksExpanded={subtasksExpanded}
+            onToggleSubtasks={onToggleSubtasks}
             to={to}
             onRename={onRename}
             onTogglePin={onTogglePin}
@@ -747,6 +781,8 @@ function TitleCell({
   run,
   depth,
   childCount,
+  subtasksExpanded,
+  onToggleSubtasks,
   to,
   onRename,
   onTogglePin,
@@ -754,6 +790,8 @@ function TitleCell({
   run: RunRecord
   depth: number
   childCount: number
+  subtasksExpanded: boolean
+  onToggleSubtasks: (id: string) => void
   to: string
   onRename: (id: string, title: string) => void
   onTogglePin?: (run: RunRecord, pinned: boolean) => void
@@ -812,15 +850,14 @@ function TitleCell({
           {dispatchKindLabel(run)}
         </span>
       ) : null}
-      {/* What this task dispatched, counted rather than listed: the children are the rows right
-          underneath, so the count is a label for them, not a second copy of them. */}
+      {/* What this task dispatched, counted rather than listed — and, since #1110, the accordion
+          handle for the rows the count stands for: collapsed by default, this click unfolds them. */}
       {subtasks ? (
-        <span
-          data-slot="subtask-count"
-          className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground"
-        >
-          {subtasks}
-        </span>
+        <SubtaskToggle
+          label={subtasks}
+          expanded={subtasksExpanded}
+          onToggle={() => onToggleSubtasks(run.id)}
+        />
       ) : null}
       {/* The unread marker — same trailing violet dot as the sidebar row. */}
       {unread ? (
@@ -908,6 +945,8 @@ function TaskCard({
   run,
   depth,
   childCount,
+  subtasksExpanded,
+  onToggleSubtasks,
   queuePosition,
   now,
   showTokens,
@@ -918,6 +957,9 @@ function TaskCard({
   /** Nesting level under the task that dispatched this one; 0 for a top-level card. */
   depth: number
   childCount: number
+  /** Whether this card's dispatched children are unfolded beneath it (#1110). */
+  subtasksExpanded: boolean
+  onToggleSubtasks: (id: string) => void
   queuePosition: number | null
   now: number
   showTokens: boolean
@@ -933,6 +975,7 @@ function TaskCard({
   const unread = isUnread(run)
   const readDone = isReadDoneItem(run)
   const cost = formatCost(run.costUsd)
+  const subtasks = subtaskLabel(childCount)
   const hasDirectionalUsage = run.inputTokens !== undefined || run.outputTokens !== undefined
 
   return (
@@ -975,14 +1018,15 @@ function TaskCard({
             {dispatchKindLabel(run)}
           </span>
         ) : null}
-        {/* Same count as the table's Task cell — the dispatched children are the cards below. */}
-        {subtaskLabel(childCount) ? (
-          <span
-            data-slot="subtask-count"
-            className="mt-px shrink-0 rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground"
-          >
-            {subtaskLabel(childCount)}
-          </span>
+        {/* Same handle as the table's Task cell (#1110) — the dispatched children are the cards
+            this unfolds below. The card's own click already steps around `a, button`. */}
+        {subtasks ? (
+          <SubtaskToggle
+            label={subtasks}
+            expanded={subtasksExpanded}
+            onToggle={() => onToggleSubtasks(run.id)}
+            className="mt-px"
+          />
         ) : null}
         {/* The unread marker — trailing violet dot, as on the desktop row. */}
         {unread ? (
@@ -1099,7 +1143,10 @@ export function TasksOverviewRoute() {
   // in its variables. Same endpoint, same invalidation, same danger toast as the run header.
   const rename = useMutation({
     mutationFn: ({ id, title }: { id: string; title: string }) => patchRun(id, { title }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
+    onSuccess: (updated) => {
+      writePatchedRunToCaches(queryClient, updated)
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
+    },
     onError: (error: Error) => toast(error.message, { tone: 'danger' }),
   })
   // Pinning (#935) — this page is the scoped project's own table, so no explicit project id.
@@ -1117,10 +1164,13 @@ export function TasksOverviewRoute() {
       // reference), so asking about the others would be a request for something never shown.
       projectId === undefined
         ? []
-        : (runs.data ?? []).flatMap((run) => {
-            const reference = taskReference(run)
-            return reference ? [{ projectId, kind: reference.kind, number: reference.number }] : []
-          }),
+        : (runs.data ?? []).flatMap((run) =>
+            taskReferences(run).map((reference) => ({
+              projectId,
+              kind: reference.kind,
+              number: reference.number,
+            })),
+          ),
     [runs.data, projectId],
   )
 

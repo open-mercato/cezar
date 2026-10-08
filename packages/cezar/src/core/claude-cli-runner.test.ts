@@ -10,7 +10,9 @@ import type { AgentEvent } from './agent-runner.ts';
 import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
 import {
   buildClaudeArgs,
+  CLAUDE_HEADLESS_GUIDANCE,
   ClaudeCliRunner,
+  appendClaudeSystemPrompt,
   EOF_KILL_GRACE_MS,
   EOF_TERM_GRACE_MS,
   KILL_GRACE_MS,
@@ -43,11 +45,40 @@ describe('buildClaudeArgs systemPrompt', () => {
     const args = buildClaudeArgs({ ...spec, systemPrompt: 'Extra rules.\n\n---\n\nContract.' });
     const idx = args.indexOf('--append-system-prompt');
     expect(idx).toBeGreaterThanOrEqual(0);
-    expect(args[idx + 1]).toBe('Extra rules.\n\n---\n\nContract.');
+    expect(args[idx + 1]).toBe(appendClaudeSystemPrompt('Extra rules.\n\n---\n\nContract.'));
   });
 
-  it('omits the flag entirely when no systemPrompt is set', () => {
-    expect(buildClaudeArgs(spec)).not.toContain('--append-system-prompt');
+  it('always appends Claude-local headless denial guidance', () => {
+    const args = buildClaudeArgs(spec);
+    const idx = args.indexOf('--append-system-prompt');
+    expect(args[idx + 1]).toBe(CLAUDE_HEADLESS_GUIDANCE);
+  });
+
+  it('preserves caller instructions before the backend guidance', () => {
+    expect(appendClaudeSystemPrompt('Caller rules.')).toBe(
+      `Caller rules.\n\n---\n\n${CLAUDE_HEADLESS_GUIDANCE}`,
+    );
+  });
+
+  it('uses the same guidance for a resumed call without changing resume args', () => {
+    const initial = buildClaudeArgs({ ...spec, sessionId: 'session-1' });
+    const resumed = buildClaudeArgs({ ...spec, sessionId: 'session-1', resume: true });
+    expect(initial[initial.indexOf('--append-system-prompt') + 1]).toBe(CLAUDE_HEADLESS_GUIDANCE);
+    expect(resumed[resumed.indexOf('--append-system-prompt') + 1]).toBe(CLAUDE_HEADLESS_GUIDANCE);
+    expect(initial).toContain('--session-id');
+    expect(resumed).toContain('--resume');
+  });
+});
+
+describe('buildClaudeArgs output mode', () => {
+  const spec = { userPrompt: 'do it', cwd: '/tmp' };
+
+  it('runs in print mode, which both stream-json formats require', () => {
+    expect(buildClaudeArgs(spec)).toContain('--print');
+  });
+
+  it('asks for partial messages so text streams as deltas', () => {
+    expect(buildClaudeArgs(spec)).toContain('--include-partial-messages');
   });
 });
 

@@ -23,6 +23,7 @@ import { isHttpUrl } from '@/lib/utils'
 
 import { finishTitle } from './run-actions'
 import { useContinuationProvider } from './continuation-provider'
+import { MESSAGE_TEXT_MAX, messageWithReview, type DiffComments } from './diff-comments'
 import { useDraft } from './thread-draft'
 import { useFinishRun } from './use-finish-run'
 
@@ -34,8 +35,12 @@ import { useFinishRun } from './use-finish-run'
  * a notes box with ↩ Send back (`POST /continue` with the `Review feedback:` prefix
  * — legacy semantics verbatim), Draft PR (`POST /pr`; 409 → the copyable `git merge` manual
  * fallback), and ✓ Accept (the shared finish action from use-finish-run.ts).
+ *
+ * `diffComments`, when given, is the thread's comments: the line comments left on the Changes tab
+ * ride Send back — the review gate is the self-review moment, and notes sent without them would
+ * leave them pending for some later message.
  */
-export function ReviewPanel({ run }: { run: ApiRun }) {
+export function ReviewPanel({ run, diffComments }: { run: ApiRun; diffComments?: DiffComments }) {
   return (
     <section data-slot="review-panel" aria-label="Review the changes" className="flex flex-col gap-3">
       <div
@@ -52,14 +57,14 @@ export function ReviewPanel({ run }: { run: ApiRun }) {
       </div>
 
       <RunDiff runId={run.id} />
-      <ReviewActions run={run} />
+      <ReviewActions run={run} diffComments={diffComments} />
     </section>
   )
 }
 
 // ---- notes + exits --------------------------------------------------------------------------
 
-function ReviewActions({ run }: { run: ApiRun }) {
+function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: DiffComments }) {
   const queryClient = useQueryClient()
   const notesRef = useRef<HTMLTextAreaElement>(null)
   // Review notes are the second-longest thing anyone types into a task, and they are typed while
@@ -81,12 +86,17 @@ function ReviewActions({ run }: { run: ApiRun }) {
       if (!continuation.canContinue) return null
       // Through the draft's submit seam: the notes are dropped once they have really gone back,
       // and a rejected send-back leaves them in the box AND in the store.
-      return draft.submit(() =>
-        continueRun(run.id, {
-          text: `Review feedback:\n${text}`,
-          runner: continuation.runnerOverride,
-        }),
-      )
+      // The line comments go with the notes, and are dropped on the same terms: only once the
+      // send-back has landed.
+      const deliver = async (held: Parameters<typeof messageWithReview>[1]) => {
+        // Checked against the cap with the prefix it actually goes out with.
+        const message = `Review feedback:\n${messageWithReview(text, held)}`
+        if (message.length > MESSAGE_TEXT_MAX) {
+          throw new Error('Too long with the diff comments attached — shorten the notes or remove some comments.')
+        }
+        return continueRun(run.id, { text: message, runner: continuation.runnerOverride })
+      }
+      return draft.submit(() => (diffComments ? diffComments.submit(deliver) : deliver([])))
     },
     onSuccess: (result) => {
       if (result === null) return
@@ -107,9 +117,11 @@ function ReviewActions({ run }: { run: ApiRun }) {
     },
   })
 
+  const commentCount = diffComments?.comments.length ?? 0
   const submitNotes = () => {
     const text = notes.trim()
-    if (text.length === 0) {
+    // Drafted line comments are feedback on their own.
+    if (text.length === 0 && commentCount === 0) {
       // Legacy `alertBar('Write what to change first.')` + focus.
       toast('Write what to change first.')
       notesRef.current?.focus()
@@ -148,6 +160,11 @@ function ReviewActions({ run }: { run: ApiRun }) {
         }}
         className="min-h-[52px] text-[13px]"
       />
+      {commentCount > 0 ? (
+        <p data-slot="review-diff-comments" className="text-xs text-muted-foreground">
+          + {commentCount} {commentCount === 1 ? 'comment' : 'comments'} on the diff — sent back with these notes.
+        </p>
+      ) : null}
       {!continuation.canContinue ? (
         <p
           id="review-provider-guidance"

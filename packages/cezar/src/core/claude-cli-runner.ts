@@ -16,6 +16,7 @@ import type {
 export type { AgentSession, SessionOptions } from './agent-runner.ts';
 import { isSignalTerminationExit, trackChildExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
+import { disclaimedCommand } from './disclaim-spawn.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
 import { costWeightedTokens, type RawUsage } from './usage.ts';
 import { readNdjson } from './ndjson.ts';
@@ -39,6 +40,20 @@ export const EOF_TERM_GRACE_MS = 8_000;
 export const EOF_KILL_GRACE_MS = 4_000;
 /** Reopen window after a turn ends before an auto-ended session closes stdin. */
 export const AUTO_END_DELAY_MS = 250;
+
+/**
+ * Claude runs through cezar's headless stream-json transport. There is no
+ * cockpit permission response channel yet, so a denial must become actionable
+ * prose rather than an invitation to use Claude Code's interactive controls.
+ */
+export const CLAUDE_HEADLESS_GUIDANCE = `You are running Claude Code through cezar's headless integration. Permission prompts cannot be answered in the cezar cockpit. If a tool call is denied, do not suggest Shift+Tab, /permissions, changing Claude permission settings, or replying Continue to retry it. Report the exact blocked tool and path or command, stop retrying that operation, and explain that the task's actual Open in… action is the workaround: continue in an interactive claude --resume <session id> shell in the task worktree and approve the prompt there. Do not use filesystem workarounds or claim that cezar can approve the request.`;
+
+/** Keep caller-owned instructions intact while adding guidance owned by this backend. */
+export function appendClaudeSystemPrompt(systemPrompt?: string): string {
+  return systemPrompt
+    ? `${systemPrompt}\n\n---\n\n${CLAUDE_HEADLESS_GUIDANCE}`
+    : CLAUDE_HEADLESS_GUIDANCE;
+}
 
 export interface ClaudeCliRunnerOptions {
   /** Override the binary name/path; defaults to `claude` on PATH. */
@@ -106,10 +121,9 @@ export class ClaudeCliRunner implements AgentRunner {
 
     let child: ChildProcessWithoutNullStreams;
     try {
-      child = nodeSpawn(this.bin, args, {
-        cwd: spec.cwd,
-        env: buildChildEnv({ backend: this.backend, extraEnv: spec.env }),
-      });
+      const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
+      const [file, argv] = disclaimedCommand(this.bin, args, env);
+      child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
     } catch (err) {
       throw wrapSpawnError(err, this.bin);
     }
@@ -118,6 +132,7 @@ export class ClaudeCliRunner implements AgentRunner {
     let autoEndTimer: NodeJS.Timeout | undefined;
     let eofTermTimer: NodeJS.Timeout | undefined;
     let eofKillTimer: NodeJS.Timeout | undefined;
+    let hardKillTimer: NodeJS.Timeout | undefined;
 
     // Protocol v2 emission — additive alongside v1 (`onEvent` keeps flowing
     // byte-identical); the channel is `opts.onUiEvent` (RunManager wiring
@@ -198,6 +213,15 @@ export class ClaudeCliRunner implements AgentRunner {
       if (!hasExited()) signalChild('SIGTERM');
     };
 
+    const hardStop = (): void => {
+      interrupt();
+      if (hardKillTimer || hasExited()) return;
+      hardKillTimer = setTimeout(() => {
+        if (!hasExited()) signalChild('SIGKILL');
+      }, 1_000);
+      hardKillTimer.unref?.();
+    };
+
     // Seed the first user message — the same path every follow-up takes.
     // Pasted task screenshots (spec.images) ride along as leading blocks.
     sendMessage([...(spec.images ?? []), { type: 'text', text: spec.userPrompt }]);
@@ -269,7 +293,7 @@ export class ClaudeCliRunner implements AgentRunner {
           }
 
           if (msg.type === 'result') {
-            if (typeof msg.total_cost_usd === 'number' && msg.total_cost_usd > 0) {
+            if (typeof msg.total_cost_usd === 'number' && Number.isFinite(msg.total_cost_usd) && msg.total_cost_usd >= 0) {
               onEvent?.({ type: 'cost', usd: msg.total_cost_usd });
             }
             onEvent?.({ type: 'turn-end' });
@@ -286,6 +310,7 @@ export class ClaudeCliRunner implements AgentRunner {
       } finally {
         if (deadline) clearTimeout(deadline);
         if (killTimer) clearTimeout(killTimer);
+        if (hardKillTimer) clearTimeout(hardKillTimer);
         if (autoEndTimer) clearTimeout(autoEndTimer);
         stdinOpen = false;
       }
@@ -338,6 +363,7 @@ export class ClaudeCliRunner implements AgentRunner {
       sendMessage,
       end,
       interrupt,
+      hardStop,
       pid: child.pid,
       get open() {
         return stdinOpen;
@@ -349,28 +375,32 @@ export class ClaudeCliRunner implements AgentRunner {
 }
 
 /**
- * Build the headless argv. `--input-format stream-json` reads user messages
- * from stdin; `--output-format stream-json --verbose` gives per-event NDJSON;
+ * Build the headless argv. `--print` is spelled out because both stream-json
+ * formats are documented as "only works with --print"; `--input-format
+ * stream-json` reads user messages from stdin; `--output-format stream-json
+ * --verbose` gives per-event NDJSON, and `--include-partial-messages` adds the
+ * `stream_event` token deltas the cockpit renders as live text;
  * `--permission-mode dontAsk` keeps headless runs non-interactive: tools in
  * `--allowedTools` proceed and everything else is denied instead of prompting.
- * `CEZ_APPROVAL_GATE=1` opts back into Claude's approval UI (#435).
+ * `CEZ_APPROVAL_GATE=1` selects Claude's `acceptEdits` mode, but cezar still
+ * has no cockpit permission response channel.
  */
 export function buildClaudeArgs(
   spec: AgentRunSpec,
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   const args: string[] = [
+    '--print',
     '--input-format',
     'stream-json',
     '--output-format',
     'stream-json',
     '--verbose',
+    '--include-partial-messages',
     '--permission-mode',
     env.CEZ_APPROVAL_GATE === '1' ? 'acceptEdits' : 'dontAsk',
   ];
-  if (spec.systemPrompt) {
-    args.push('--append-system-prompt', spec.systemPrompt);
-  }
+  args.push('--append-system-prompt', appendClaudeSystemPrompt(spec.systemPrompt));
   // Pin the session so the user can `claude --resume <sessionId>` in the repo
   // to take over interactively after a run. With `resume` we reopen the
   // existing on-disk conversation instead.

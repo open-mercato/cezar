@@ -8,26 +8,26 @@
   },
   {
     "type": "item.started",
-    "item": { "kind": "message", "id": "turn_1_text_0", "role": "assistant", "text": "" }
+    "item": { "kind": "message", "id": "turn_1_message_0_text_0", "role": "assistant", "text": "" }
   },
-  { "type": "item.delta", "itemId": "turn_1_text_0", "field": "text", "delta": "Hello" },
+  { "type": "item.delta", "itemId": "turn_1_message_0_text_0", "field": "text", "delta": "Hello" },
   {
     "type": "item.completed",
-    "item": { "kind": "message", "id": "turn_1_text_0", "role": "assistant", "text": "Hello" }
+    "item": { "kind": "message", "id": "turn_1_message_0_text_0", "role": "assistant", "text": "Hello" }
   },
   {
     "type": "item.started",
-    "item": { "kind": "reasoning", "id": "turn_1_reasoning_1", "text": "" }
+    "item": { "kind": "reasoning", "id": "turn_1_message_0_reasoning_1", "text": "" }
   },
   {
     "type": "item.delta",
-    "itemId": "turn_1_reasoning_1",
+    "itemId": "turn_1_message_0_reasoning_1",
     "field": "reasoning",
     "delta": "Inspect first"
   },
   {
     "type": "item.completed",
-    "item": { "kind": "reasoning", "id": "turn_1_reasoning_1", "text": "Inspect first" }
+    "item": { "kind": "reasoning", "id": "turn_1_message_0_reasoning_1", "text": "Inspect first" }
   },
   {
     "type": "item.started",

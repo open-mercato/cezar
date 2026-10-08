@@ -1,7 +1,7 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useLocation, useNavigate } from 'react-router'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from './api/query-client'
 import { queryKeys, workspaceQueryKeys } from './api/queries'
@@ -331,6 +331,12 @@ describe('scoped route map (/p/:projectId)', () => {
  * project-scoped URLs alive as redirects, so pre-split bookmarks still land.
  */
 describe('the global settings area (/settings/global)', () => {
+  // These assertions cover routing and the capability gate, not Vite's cold module transform.
+  // Await the real lazy module before starting RTL's 1s DOM deadline; keep production lazy.
+  beforeAll(async () => {
+    await import('./routes/automations/automations-route')
+  }, 30_000)
+
   const GLOBAL_CASES: Array<[string, string, string]> = [
     ['/settings/global', 'settings-global', 'Global settings'],
     ['/settings/global/appearance', 'settings-global-appearance', 'Appearance'],

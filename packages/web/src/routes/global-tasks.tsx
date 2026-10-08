@@ -32,6 +32,7 @@ import { ReferenceChip } from '@/components/reference-chip'
 import { ResolveConflictsForRun } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
+import { SubtaskToggle } from '@/components/subtask-toggle'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
@@ -282,6 +283,19 @@ export function GlobalTasksRoute() {
    * mid-word would overwrite the characters typed since.
    */
   const [queryDraft, setQueryDraft] = React.useState(filters.query)
+  // The subtask accordion (#1110), same contract as the per-project table: collapsed by default,
+  // the parent row's chip is the handle. Held at page level and keyed by run id so regrouping or
+  // refiltering re-buckets the rows without forgetting which parents were open. A live search
+  // overrides the fold wholesale — a match must never hide under a collapsed parent.
+  const [expandedSubtasks, setExpandedSubtasks] = React.useState<ReadonlySet<string>>(new Set())
+  const toggleSubtasks = (id: string) =>
+    setExpandedSubtasks((current) => {
+      const next = new Set(current)
+      if (!next.delete(id)) next.add(id)
+      return next
+    })
+  const searching = filters.query.trim() !== ''
+  const isSubtasksExpanded = (id: string) => searching || expandedSubtasks.has(id)
   const sentQuery = React.useRef(filters.query)
   React.useEffect(() => {
     if (filters.query !== sentQuery.current) setQueryDraft(filters.query)
@@ -452,6 +466,8 @@ export function GlobalTasksRoute() {
                 <TaskTable
                   tasks={group.tasks}
                   now={now}
+                  isSubtasksExpanded={isSubtasksExpanded}
+                  onToggleSubtasks={toggleSubtasks}
                   showProject={groupBy !== 'project'}
                   onArchive={(task, archived) => archive.mutate({ task, archived })}
                   onSetRead={(task, read) => setRead.mutate({ task, read })}
@@ -668,6 +684,8 @@ const dispatchOf = (run: RunIndexEntry): TaskTreeInput['dispatch'] =>
 function TaskTable({
   tasks,
   now,
+  isSubtasksExpanded,
+  onToggleSubtasks,
   showProject,
   onArchive,
   onSetRead,
@@ -676,6 +694,9 @@ function TaskTable({
 }: {
   tasks: readonly GlobalTask[]
   now: number
+  /** The page-level accordion (#1110): whether a parent's dispatched rows are unfolded. */
+  isSubtasksExpanded: (id: string) => boolean
+  onToggleSubtasks: (id: string) => void
   showProject: boolean
   onArchive: (task: GlobalTask, archived: boolean) => void
   onSetRead: (task: GlobalTask, read: boolean) => void
@@ -721,12 +742,15 @@ function TaskTable({
                 dispatch: dispatchOf(task.run),
                 task,
               })),
+              isSubtasksExpanded,
             ).map((node) => (
               <TaskRow
                 key={`${node.run.task.run.projectId}/${node.run.task.run.id}`}
                 task={node.run.task}
                 depth={node.depth}
                 childCount={node.childCount}
+                subtasksExpanded={isSubtasksExpanded(node.run.id)}
+                onToggleSubtasks={onToggleSubtasks}
                 now={now}
                 showProject={showProject}
                 onArchive={onArchive}
@@ -769,6 +793,8 @@ function TaskRow({
   task,
   depth,
   childCount,
+  subtasksExpanded,
+  onToggleSubtasks,
   now,
   showProject,
   onArchive,
@@ -781,6 +807,9 @@ function TaskRow({
   depth: number
   /** How many tasks THIS one dispatched — the row's "N subtasks" note. */
   childCount: number
+  /** Whether this row's dispatched children are unfolded beneath it (#1110). */
+  subtasksExpanded: boolean
+  onToggleSubtasks: (id: string) => void
   now: number
   showProject: boolean
   onArchive: (task: GlobalTask, archived: boolean) => void
@@ -802,6 +831,7 @@ function TaskRow({
   // project-scoped view can use the one repo it is standing in; this page has a different repo
   // per row, which is why the registry entry carries `repoUrl`.
   const references = taskReferences(run, task.project?.repoUrl)
+  const subtasks = subtaskLabel(childCount)
   // The SAME live/peak rule the per-project table applies. The live sample rides the index row
   // itself (`run.usage`, attached server-side per poll) rather than the run event stream, which
   // is project-scoped and so cannot reach forty projects at once.
@@ -861,14 +891,14 @@ function TaskRow({
               {dispatchKindLabel(run)}
             </span>
           ) : null}
-          {/* The dispatched children are the indented rows underneath — counted, not listed. */}
-          {subtaskLabel(childCount) ? (
-            <span
-              data-slot="subtask-count"
-              className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground"
-            >
-              {subtaskLabel(childCount)}
-            </span>
+          {/* The dispatched children are the indented rows underneath — counted, and since
+              #1110 folded behind this handle until it is clicked open. */}
+          {subtasks ? (
+            <SubtaskToggle
+              label={subtasks}
+              expanded={subtasksExpanded}
+              onToggle={() => onToggleSubtasks(run.id)}
+            />
           ) : null}
           {unread ? (
             <StatusDot

@@ -11,9 +11,10 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import type { UiEvent } from '../core/ui-events.ts';
+import { ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import { createWorktree } from '../git-worktree.ts';
 import { RunStore, type RunRecord, type StepState } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
@@ -622,6 +623,23 @@ describe('RunManager.continueRun override', () => {
 
     expect(manager.continueRun(id, { agentProfile: 'default' })).toEqual({ ok: true });
     expect(calls[0]?.[2]).toBe('sess-1');
+  });
+
+  it('an omitted account never resumes a session another login owns', () => {
+    // Live run eab924c7: a Continue switched the run to `default` in a fresh session that
+    // recorded no session id, so the next plain Continue found the ORIGINAL step's session and
+    // resumed it under the account the user had switched away from.
+    const id = resumableRun();
+    store.updateStep(id, 's1', { backend: 'claude', profileId: 'klaudiusz' });
+    store.updateRun(id, { agentProfile: 'default' });
+    const calls: unknown[][] = [];
+    (manager as unknown as { runContinuation: (...args: unknown[]) => Promise<void> }).runContinuation = async (...args) => {
+      calls.push(args);
+    };
+
+    expect(manager.continueRun(id, { text: 'follow-up' })).toEqual({ ok: true });
+    expect(calls[0]?.[2]).toBeUndefined();
+    expect(store.getRun(id)?.agentProfile).toBe('default');
   });
 
   it('an omitted account preserves the one the run is on (backward compat)', () => {
@@ -1337,6 +1355,148 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(questions[0]!.options).toHaveLength(2);
   }, 30_000);
 
+  it('preserves the default 15-minute plain-wait expiry safeguard (#992)', () => {
+    vi.useFakeTimers();
+    const record = store.createRun({
+      title: 'idle timeout',
+      workflow: 'quick-task',
+      task: 'idle timeout',
+      steps: [{ id: 'task', name: 'Task', kind: 'agent' }],
+    });
+    const ended = vi.fn();
+    const state = {
+      cancelled: false,
+      session: { open: true, end: ended },
+    } as never;
+    const internals = manager as unknown as {
+      armIdleTimer: (runId: string, state: never) => void;
+    };
+
+    internals.armIdleTimer(record.id, state);
+    vi.advanceTimersByTime(14 * 60_000);
+    expect(ended).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(60_000);
+    expect(ended).toHaveBeenCalledOnce();
+    expect((state as { idleClosed?: boolean }).idleClosed).toBe(true);
+    expect(readEvents(record.id).some((event) => event.message === 'session closed after 15m of inactivity')).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it('honors a configured 30-minute timeout instead of the old hard-coded 15 (#992)', () => {
+    manager.dispose();
+    manager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({ initial: { idleTimeoutMinutes: 30 } }),
+    });
+    const record = store.createRun({
+      title: 'configured idle timeout',
+      workflow: 'quick-task',
+      task: 'configured idle timeout',
+      steps: [{ id: 'task', name: 'Task', kind: 'agent' }],
+    });
+    const ended = vi.fn();
+    const state = { cancelled: false, session: { open: true, end: ended } } as never;
+    const internals = manager as unknown as {
+      armIdleTimer: (runId: string, state: never) => void;
+    };
+    vi.useFakeTimers();
+    internals.armIdleTimer(record.id, state);
+    vi.advanceTimersByTime(15 * 60_000);
+    expect(ended).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(15 * 60_000);
+    expect(ended).toHaveBeenCalledOnce();
+    expect(readEvents(record.id).some((event) => event.message === 'session closed after 30m of inactivity')).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it('explicit Finish wins when ordinary inactivity already fired', () => {
+    vi.useFakeTimers();
+    const record = store.createRun({
+      title: 'finish after idle',
+      workflow: 'quick-task',
+      task: 'finish after idle',
+      steps: [{ id: 'task', name: 'Task', kind: 'agent' }],
+    });
+    const ended = vi.fn();
+    const state = { cancelled: false, session: { open: true, end: ended } } as never;
+    const active = (manager as unknown as { active: Map<string, typeof state> }).active;
+    active.set(record.id, state);
+    try {
+      (manager as unknown as { armIdleTimer: (runId: string, state: never) => void }).armIdleTimer(record.id, state);
+      vi.advanceTimersByTime(15 * 60_000);
+      expect((state as { idleClosed?: boolean }).idleClosed).toBe(true);
+      expect(manager.finish(record.id)).toBe(true);
+      expect((state as { idleClosed?: boolean }).idleClosed).toBeUndefined();
+    } finally {
+      active.delete(record.id);
+      vi.useRealTimers();
+    }
+  });
+
+  it('explicit Finish wins when an ASK park watchdog already fired', () => {
+    vi.useFakeTimers();
+    const record = store.createRun({
+      title: 'finish after ask idle',
+      workflow: 'quick-task',
+      task: 'finish after ask idle',
+      steps: [{ id: 'task', name: 'Task', kind: 'agent' }],
+    });
+    const ended = vi.fn();
+    const state = { cancelled: false, askPark: 'waiting', session: { open: true, end: ended } } as never;
+    const active = (manager as unknown as { active: Map<string, typeof state> }).active;
+    active.set(record.id, state);
+    try {
+      (manager as unknown as { armIdleTimer: (runId: string, state: never) => void }).armIdleTimer(record.id, state);
+      vi.advanceTimersByTime(15 * 60_000);
+      expect((state as { idleClosed?: boolean }).idleClosed).toBe(true);
+      expect(manager.finish(record.id)).toBe(true);
+      expect((state as { idleClosed?: boolean }).idleClosed).toBeUndefined();
+      expect((state as { askPark?: string }).askPark).toBe('abandoned');
+    } finally {
+      active.delete(record.id);
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the configured timeout armed at both new-run and reply continuation parks (#992)', async () => {
+    manager.dispose();
+    manager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({ initial: { idleTimeoutMinutes: 30 } }),
+    });
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:ask choose a path', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    const active = (manager as unknown as {
+      active: Map<string, { idleTimer?: NodeJS.Timeout }>;
+    }).active;
+    expect(active.get(record.id)?.idleTimer).toBeDefined();
+    expect(manager.sendMessage(record.id, [{ type: 'text', text: 'continue' }])).toBe(true);
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    expect(active.get(record.id)?.idleTimer).toBeDefined();
+  }, 30_000);
+
+  it.each([0, null])('does not arm the plain-wait timeout when configured as %s (#992)', (minutes) => {
+    manager.dispose();
+    manager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({ initial: { idleTimeoutMinutes: minutes } }),
+    });
+    const ended = vi.fn();
+    const state = { cancelled: false, session: { open: true, end: ended } } as never;
+    const record = store.createRun({
+      title: 'no idle timeout',
+      workflow: 'quick-task',
+      task: 'no idle timeout',
+      steps: [{ id: 'task', name: 'Task', kind: 'agent' }],
+    });
+    const internals = manager as unknown as {
+      armIdleTimer: (runId: string, state: never) => void;
+    };
+    vi.useFakeTimers();
+    internals.armIdleTimer(record.id, state);
+    vi.advanceTimersByTime(24 * 60 * 60_000);
+    expect(ended).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
   it('an intermediate CEZ:ASK pauses before the following check', async () => {
     const record = manager.startRun(BLOCKING_CHECK, { task: 'mock:ask choose a path', worktree: false });
     currentId = record.id;
@@ -1368,6 +1528,32 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
   }, 30_000);
 
   /**
+   * A parked step can wake WITHOUT cezar delivering anything: Claude Code re-invokes the model
+   * itself when a background command or sub-agent it started finishes. Writing straight into the
+   * session reproduces that — `manager.sendMessage`, the only path that clears the park, never
+   * runs. A later turn that declares `CEZ:DONE` must still finish the step and run the next one,
+   * not be settled as a question nobody answered (live run 2c2d2e34).
+   */
+  it('a self-woken intermediate monitoring park that ends with CEZ:DONE resumes the workflow', async () => {
+    const record = manager.startRun(PASSING_CHECK, { task: 'mock:monitoring keep going', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.activity === 'monitoring');
+
+    const live = (manager as unknown as {
+      active: Map<string, { session?: { sendMessage(content: { type: 'text'; text: string }[]): boolean } }>;
+    }).active.get(record.id);
+    expect(live?.session?.sendMessage([{ type: 'text', text: 'mock:done background task finished' }])).toBe(true);
+
+    await waitFor(record.id, (r) => r?.status === 'done' || r?.status === 'failed');
+    expect(store.getRun(record.id)?.status).toBe('done');
+    expect(steps(record.id)).toEqual([
+      { id: 'implement', status: 'done' },
+      { id: 'verify', status: 'done' },
+    ]);
+    expect(manager.isActive(record.id)).toBe(false);
+  }, 30_000);
+
+  /**
    * The park has to have EXITS, not just an entrance. Everything below drives one
    * of them: without them a run parked at an intermediate ask could never be
    * cancelled, finished or settled once its session closed, and — never reaching
@@ -1386,7 +1572,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       { id: 'implement', status: 'cancelled' },
       { id: 'verify', status: 'pending' },
     ]);
-    expect(manager.isActive(record.id)).toBe(false);
+    await vi.waitFor(() => expect(manager.isActive(record.id)).toBe(false), { timeout: 15_000 });
   }, 30_000);
 
   /** The control for the case above: the same cancel on the FINAL interactive
@@ -1395,12 +1581,299 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     const record = manager.startRun(SINGLE_STEP, { task: 'mock:ask which library?', worktree: false });
     currentId = record.id;
     await waitFor(record.id, (r) => r?.status === 'waiting');
-    expect(store.getRun(record.id)?.askParked).toBeUndefined(); // not a mid-workflow park
+    expect(store.getRun(record.id)?.askParked).toBe(true); // final ASK parks for idle settlement too
 
     expect(manager.cancel(record.id)).toBe(true);
     await waitFor(record.id, (r) => r?.status === 'cancelled');
+    await vi.waitFor(() => expect(manager.isActive(record.id)).toBe(false), { timeout: 15_000 });
+  }, 30_000);
+
+  it('settles an unanswered final interactive ask as failed when its idle session closes', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:ask which library?', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    expect(store.getRun(record.id)?.askParked).toBe(true);
+
+    const live = (manager as unknown as {
+      active: Map<string, { session?: { end(): void; readonly open: boolean } }>;
+    }).active.get(record.id);
+    expect(live?.session?.open).toBe(true);
+    live!.session!.end();
+
+    await waitFor(record.id, (r) => r?.status === 'failed');
+    expect(store.getRun(record.id)?.error).toContain('before the question was answered');
+  }, 30_000);
+
+  it('settles an ordinary final wait as failed when inactivity closes the session', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+
+    const active = (manager as unknown as {
+      active: Map<string, { idleClosed?: boolean; session?: { end(): void } }>;
+    }).active.get(record.id);
+    active!.idleClosed = true;
+    active!.session!.end();
+
+    await waitFor(record.id, (r) => r?.status === 'failed');
+    expect(store.getRun(record.id)?.error).toContain('after inactivity');
+    // The rail must agree with the run: a failed run never shows its final step `done`.
+    expect(store.getRun(record.id)?.steps[0]?.status).toBe('failed');
+    expect(readEvents(record.id).some((e) => e.type === 'step-end' && e.status === 'done')).toBe(false);
     expect(manager.isActive(record.id)).toBe(false);
   }, 30_000);
+
+  it('keeps the review gate for an idle-closed final wait whose worktree holds changes', async () => {
+    process.env.CEZ_REVIEW_GATE = '1';
+    try {
+      const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing' });
+      currentId = record.id;
+      await waitFor(record.id, (r) => r?.status === 'waiting');
+      const worktreePath = store.getRun(record.id)?.worktreePath;
+      expect(worktreePath).toBeTruthy();
+      writeFileSync(join(worktreePath!, 'a.txt'), 'one\nchanged\n');
+
+      const active = (manager as unknown as {
+        active: Map<string, { idleClosed?: boolean; session?: { end(): void } }>;
+      }).active.get(record.id);
+      active!.idleClosed = true;
+      active!.session!.end();
+
+      // `review` is the needs-you exit for real work (#489), never a success badge —
+      // inactivity must not take the diff and the draft-PR action away from the user.
+      await waitFor(record.id, (r) => r?.status === 'review');
+      expect(store.getRun(record.id)?.steps[0]?.status).toBe('done');
+      expect(manager.isActive(record.id)).toBe(false);
+    } finally {
+      delete process.env.CEZ_REVIEW_GATE;
+    }
+  }, 30_000);
+
+  /**
+   * The user did not answer, so the task still needs them. Closing the idle session frees the
+   * process and the slot, and the record is `failed` because nothing is running — but it carries
+   * `awaitingAnswerSince`, which is what keeps it under "needs you" in the cockpit instead of
+   * filing it as an outcome. Answering through Continue retires it.
+   */
+  it('keeps an unanswered final ask awaiting the user after the idle close, until Continue answers it', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:ask which library?', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    expect(store.getRun(record.id)?.awaitingAnswerSince).toBeUndefined(); // live: plain `waiting`
+
+    const live = (manager as unknown as {
+      active: Map<string, { idleClosed?: boolean; session?: { end(): void } }>;
+    }).active.get(record.id)!;
+    live.idleClosed = true;
+    live.session!.end();
+
+    await waitFor(record.id, (r) => r?.status === 'failed');
+    const settled = store.getRun(record.id)!;
+    expect(settled.awaitingAnswerSince).toBeDefined();
+    expect(settled.awaitingAnswerSince).toEqual(settled.finishedAt);
+    expect(settled.error).toContain('before the question was answered');
+    await vi.waitFor(() => expect(manager.isActive(record.id)).toBe(false), { timeout: 15_000 });
+
+    expect(manager.continueRun(record.id, { text: 'mock:done use zod' })).toEqual({ ok: true });
+    await waitFor(record.id, (r) => r?.status === 'done' || r?.status === 'review');
+    expect(store.getRun(record.id)?.awaitingAnswerSince).toBeUndefined();
+  }, 40_000);
+
+  it('keeps an unanswered ask awaiting the user when the parked session fails instead of idling out', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:ask which library?', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    const live = (manager as unknown as {
+      active: Map<string, { session?: { sendMessage(content: { type: 'text'; text: string }[]): boolean } }>;
+    }).active.get(record.id)!;
+    // A raw write (no `deliverMessage`, so the question stays pending) whose turn errors out —
+    // the session dies with the question still open.
+    expect(live.session!.sendMessage([{ type: 'text', text: 'mock:auth-error' }])).toBe(true);
+    await waitFor(record.id, (r) => r?.status === 'failed');
+    expect(store.getRun(record.id)?.awaitingAnswerSince).toBeDefined();
+  }, 40_000);
+
+  it('keeps an ask raised on a continuation awaiting the user after its idle close', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'do the first thing', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    expect(manager.finish(record.id)).toBe(true); // continueRun only accepts a terminal run
+    await waitFor(record.id, (r) => ['done', 'review'].includes(r?.status ?? ''));
+    await vi.waitFor(() => expect(manager.isActive(record.id)).toBe(false), { timeout: 15_000 });
+    expect(manager.continueRun(record.id, { text: 'mock:ask which library?' })).toEqual({ ok: true });
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+
+    const live = (manager as unknown as {
+      active: Map<string, { idleClosed?: boolean; session?: { end(): void } }>;
+    }).active.get(record.id)!;
+    live.idleClosed = true;
+    live.session!.end();
+
+    await waitFor(record.id, (r) => r?.status === 'failed');
+    expect(store.getRun(record.id)?.awaitingAnswerSince).toBeDefined();
+    expect(store.getRun(record.id)?.askParked).toBeUndefined();
+  }, 40_000);
+
+  /**
+   * The continuation twin of #1282. A session can wake WITHOUT cezar delivering anything (Claude
+   * Code re-invokes the model when a background command finishes), so `sendMessage` — which clears
+   * the park — never runs. A later turn that asks nothing must retire the earlier question, or the
+   * idle close would report a task that stopped asking as still waiting on the user.
+   */
+  it('a self-woken continuation turn that asks nothing retires the earlier question', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'do the first thing', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    expect(manager.finish(record.id)).toBe(true);
+    await waitFor(record.id, (r) => ['done', 'review'].includes(r?.status ?? ''));
+    await vi.waitFor(() => expect(manager.isActive(record.id)).toBe(false), { timeout: 15_000 });
+    expect(manager.continueRun(record.id, { text: 'mock:ask which library?' })).toEqual({ ok: true });
+    await waitFor(record.id, (r) => r?.status === 'waiting' && r.askParked === true);
+
+    const live = (manager as unknown as {
+      active: Map<string, {
+        askPark?: string;
+        idleClosed?: boolean;
+        session?: { end(): void; sendMessage(content: { type: 'text'; text: string }[]): boolean };
+      }>;
+    }).active.get(record.id)!;
+    expect(live.askPark).toBe('waiting');
+    const asksBefore = readEvents(record.id).filter((e) => e.type === 'ask.requested').length;
+    expect(live.session!.sendMessage([{ type: 'text', text: 'background task finished, nothing to ask' }])).toBe(true);
+    // The raw write bypasses `deliverMessage`, so the record never leaves `waiting`; the retired
+    // durable park is what shows the self-woken turn ended.
+    await waitFor(record.id, (r) => r?.status === 'waiting' && r.askParked === undefined);
+    expect(live.askPark).toBeUndefined();
+    expect(readEvents(record.id).filter((e) => e.type === 'ask.requested')).toHaveLength(asksBefore);
+
+    live.idleClosed = true;
+    live.session!.end();
+    await waitFor(record.id, (r) => r?.status === 'failed');
+    expect(store.getRun(record.id)?.error).toContain('after inactivity');
+    expect(store.getRun(record.id)?.awaitingAnswerSince).toBeUndefined();
+  }, 40_000);
+
+  it('clears stale inactivity evidence when a continuation answer arrives', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+
+    const active = (manager as unknown as {
+      active: Map<string, { idleClosed?: boolean }>;
+    }).active.get(record.id)!;
+    active.idleClosed = true;
+    expect(manager.sendMessage(record.id, [{ type: 'text', text: 'mock:done finish it' }])).toBe(true);
+
+    await waitFor(record.id, (r) => r?.status === 'done');
+    expect(manager.isActive(record.id)).toBe(false);
+  }, 30_000);
+
+  it('cancelling an active run before its session opens is durable and releases the slot', () => {
+    const record = store.createRun({
+      title: 'startup cancellation',
+      workflow: 'quick-task',
+      task: 'startup cancellation',
+      steps: [{ id: 'task', name: 'Task', kind: 'agent' }],
+    });
+    store.updateRun(record.id, { status: 'running', currentStepId: 'task' });
+    store.updateStep(record.id, 'task', { status: 'running', startedAt: new Date().toISOString() });
+    const state = { cancelled: false, interrupt: () => undefined, cwd: repoRoot };
+    const internals = manager as unknown as {
+      active: Map<string, typeof state>;
+    };
+    internals.active.set(record.id, state);
+
+    expect(manager.cancel(record.id)).toBe(true);
+    expect(store.getRun(record.id)).toMatchObject({ status: 'cancelled', currentStepId: undefined });
+    expect(store.getRun(record.id)?.steps[0]).toMatchObject({ status: 'cancelled' });
+    expect(manager.isActive(record.id)).toBe(false);
+  });
+
+  it('does not let late cleanup from a cancelled owner remove a replacement owner', () => {
+    const record = store.createRun({
+      title: 'late cleanup',
+      workflow: 'quick-task',
+      task: 'late cleanup',
+      steps: [{ id: 'task', name: 'Task', kind: 'agent' }],
+    });
+    const oldToken = Symbol('old-owner');
+    const newToken = Symbol('new-owner');
+    const oldState = {
+      ownerToken: oldToken,
+      cancelled: false,
+      interrupt: () => undefined,
+      cwd: repoRoot,
+      sessionEverOpened: true,
+      session: { open: true, result: new Promise<never>(() => {}), interrupt: () => undefined, hardStop: () => undefined },
+    };
+    const newState = { ownerToken: newToken, cancelled: false, interrupt: () => undefined, cwd: repoRoot, sessionEverOpened: true };
+    const internals = manager as unknown as {
+      active: Map<string, unknown>;
+      dropActive: (runId: string, expectedState?: typeof oldState) => void;
+      failOwnedContinuation: (runId: string, ownerToken: symbol, message: string) => void;
+    };
+    internals.active.set(record.id, oldState);
+    expect(manager.cancel(record.id)).toBe(true);
+    expect(internals.active.get(record.id)).toBe(oldState); // live sessions retain the slot during grace
+    internals.active.set(record.id, newState);
+
+    internals.failOwnedContinuation(record.id, oldToken, 'late startup failure');
+    internals.dropActive(record.id, oldState);
+
+    expect(internals.active.get(record.id)).toBe(newState);
+    expect(store.getRun(record.id)?.status).toBe('cancelled');
+  });
+
+  it('keeps a live hanging session counted until interrupt teardown, then reaps it', async () => {
+    const record = store.createRun({
+      title: 'hanging session',
+      workflow: 'quick-task',
+      task: 'hanging session',
+      steps: [{ id: 'task', name: 'Task', kind: 'agent' }],
+    });
+    const fixture = join(process.cwd(), 'packages/cezar/src/core/__fixtures__/claude/stub-ignores-eof-and-sigterm.mjs');
+    let sawText: () => void = () => undefined;
+    const textSeen = new Promise<void>((resolve) => { sawText = resolve; });
+    const session = new ClaudeCliRunner({ bin: fixture, timeoutMs: 0 }).startSession(
+      { userPrompt: 'hang', cwd: repoRoot },
+      (event) => { if (event.type === 'text') sawText(); },
+    );
+    await textSeen;
+    const state = {
+      ownerToken: Symbol('live-owner'),
+      cancelled: false,
+      interrupt: () => session.interrupt(),
+      cwd: repoRoot,
+      session,
+      sessionEverOpened: true,
+    };
+    const internals = manager as unknown as { active: Map<string, unknown>; waiting: Set<string> };
+    internals.active.set(record.id, state);
+    internals.waiting.add(record.id);
+    store.updateRun(record.id, { status: 'running', currentStepId: 'task' });
+    store.updateStep(record.id, 'task', { status: 'running' });
+
+    expect(manager.cancel(record.id)).toBe(true);
+    expect(manager.isActive(record.id)).toBe(true);
+    // The grace timer has fired, but the SIGTERM-ignoring child is still alive:
+    // its old generation must retain the slot and cannot admit this owner yet.
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    expect(manager.isActive(record.id)).toBe(true);
+    const replacement = {
+      ownerToken: Symbol('replacement-owner'),
+      cancelled: false,
+      interrupt: () => undefined,
+      cwd: repoRoot,
+      sessionEverOpened: true,
+    };
+    internals.active.set(record.id, replacement);
+    await session.result;
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    // Late old-session settlement cannot release the same-id replacement.
+    expect(internals.active.get(record.id)).toBe(replacement);
+    internals.active.delete(record.id);
+    internals.waiting.delete(record.id);
+  }, 15_000);
 
   it('finishing a run parked at an intermediate ask ends it like any other Finish', async () => {
     const record = manager.startRun(BLOCKING_CHECK, { task: 'mock:ask choose a path', worktree: false });
@@ -1561,6 +2034,22 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(events.filter((event) => event.type === 'text').some((event) => String(event.text).includes('CEZ:ASK'))).toBe(false);
   }, 30_000);
 
+  // The 4-question / 4-option caps came from AskUserQuestion parity, and a live run paid for
+  // them: five legitimate decisions, payload refused, questions shown to the user as raw JSON.
+  it('renders a card past the old 4/4 caps — six questions, six options', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:ask-many choose', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    const events = readEvents(record.id);
+    const asks = events.filter((event) => event.type === 'ask.requested');
+    expect(asks).toHaveLength(1);
+    const questions = asks[0]!.questions as Array<{ options: unknown[] }>;
+    expect(questions).toHaveLength(6);
+    expect(questions[0]!.options).toHaveLength(6);
+    // A rendered card replaces the marker; a refused one used to leave it in the text.
+    expect(events.filter((e) => e.type === 'text').some((e) => String(e.text).includes('CEZ:ASK'))).toBe(false);
+  }, 30_000);
+
   it('a markerless turn-end raises no ask.requested', async () => {
     const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
     currentId = record.id;
@@ -1718,6 +2207,8 @@ describe('recover() over a mid-workflow ask park (#917)', () => {
     // The check never ran, and recovery must not pretend otherwise.
     expect(recovered?.steps.map((s) => s.status)).toEqual(['failed', 'pending']);
     expect(recovered?.askParked).toBeUndefined();
+    // A restart does not answer the question: the task keeps reading as "needs you".
+    expect(recovered?.awaitingAnswerSince).toEqual(recovered?.finishedAt);
   });
 
   /**
@@ -1756,6 +2247,7 @@ describe('recover() over a mid-workflow ask park (#917)', () => {
     const recovered = store.getRun(id);
     expect(recovered?.status).toBe('done');
     expect(recovered?.steps.map((s) => s.status)).toEqual(['done', 'pending']);
+    expect(recovered?.awaitingAnswerSince).toBeUndefined();
   });
 
   /** Records written before #917 have no `askParked` key at all — they must keep
@@ -2508,6 +3000,208 @@ describe('native Codex requestUserInput parks and resumes the run (#565)', () =>
 });
 
 /**
+ * #955 — a Codex turn that ended ONLY because the app-server compacted its own context is
+ * not the user being handed the next action. Before this, both turn-end handlers read it as
+ * one: a long Luna task hit `Compacted context`, was parked under **Needs you** mid-work,
+ * and a "Continue" that the app-server then refused left the run reading as `running`
+ * forever, because `sendMessage` had already answered `true`.
+ *
+ * Driven end to end through the real Codex runner against the mock app-server (the #565
+ * shape), because the whole defect lives in the seam between them. No redacted Luna trace
+ * was obtainable, so the fixture is built from the documented wire contract and scripts all
+ * three post-compaction follow-up shapes the issue lists as open questions — see the header
+ * of `mock-codex-app-server.mjs`.
+ */
+describe('a context-compaction boundary keeps the run working (#955)', () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let manager: RunManager;
+  let runId: string | undefined;
+  const savedDryRun = process.env.CEZ_DRY_RUN;
+  const savedCodexBin = process.env.CEZ_CODEX_BIN;
+  const SINGLE_STEP: WorkflowDef = {
+    name: 'quick-task', source: 'built-in', steps: [{ id: 'task', name: 'Task', prompt: '{{task}}' }],
+  };
+
+  beforeEach(async () => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-955-'));
+    delete process.env.CEZ_DRY_RUN;
+    process.env.CEZ_CODEX_BIN = join(import.meta.dirname, '../core/__fixtures__/codex/mock-codex-app-server.mjs');
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
+    await run('git', ['add', '-A'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    manager = new RunManager(store, repoRoot);
+    runId = undefined;
+  });
+
+  afterEach(async () => {
+    const active = manager as unknown as {
+      active: Map<string, { session?: { result: Promise<unknown>; interrupt(): void } }>;
+    };
+    try {
+      if (runId) {
+        manager.cancel(runId);
+        // Cancellation marks the run immediately, but the session's result owns the
+        // final event delivery. Await it before removing the fixture so a late `done`
+        // cannot append into a vanished store (#1105).
+        const session = active.active.get(runId)?.session;
+        if (session) await session.result;
+      }
+    } finally {
+      manager.dispose(); // see DISPOSE at the top of this file — after the cancel it enables
+      if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN; else process.env.CEZ_DRY_RUN = savedDryRun;
+      if (savedCodexBin === undefined) delete process.env.CEZ_CODEX_BIN; else process.env.CEZ_CODEX_BIN = savedCodexBin;
+      store.flush();
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  const waitFor = async (predicate: () => boolean, ms = 20_000) => {
+    const deadline = Date.now() + ms;
+    while (!predicate()) {
+      if (Date.now() > deadline) throw new Error('condition not met in time');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+
+  const eventsOf = (id: string) => {
+    const path = join(repoRoot, '.ai/cezar/runs', `${id}.ndjson`);
+    if (!existsSync(path)) return [] as Array<Record<string, string>>;
+    return readFileSync(path, 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, string>);
+  };
+  /** How many times cezar continued the run across a compaction boundary. */
+  const continuations = (id: string) =>
+    eventsOf(id).filter((e) => e.type === 'note' && e.message?.includes('continuing on the same thread')).length;
+
+  const start = (task: string) => {
+    const record = manager.startRun(SINGLE_STEP, { task, runner: 'codex', worktree: false });
+    runId = record.id;
+    return record.id;
+  };
+
+  it('stays Working and continues ONCE instead of parking under Needs you', async () => {
+    // `-hold` opens the recovered turn and never ends it, so the state under assertion
+    // cannot drift out from under the test: the run is mid-turn, which is the whole point.
+    const id = start('mock:compaction-hold refactor the parser');
+    await waitFor(() => continuations(id) === 1);
+
+    const parked = store.getRun(id);
+    expect(parked?.status).toBe('running'); // NOT `waiting` — nothing is being asked of the user
+    expect(parked?.activity).toBeUndefined(); // and not a monitor either
+    expect(eventsOf(id).some((e) => e.type === 'user-message')).toBe(false); // no fabricated user turn
+    expect(continuations(id)).toBe(1);
+  }, 40_000);
+
+  it('a successful post-compaction turn finishes the run with no human in the loop', async () => {
+    const id = start('mock:compaction refactor the parser');
+    await waitFor(() => ['done', 'review'].includes(store.getRun(id)?.status ?? ''));
+
+    expect(continuations(id)).toBe(1); // exactly one, not a loop
+    expect(eventsOf(id).some((e) => e.type === 'text' && e.text?.includes('Refactor finished'))).toBe(true);
+  }, 40_000);
+
+  it('an ordinary markerless codex turn still parks as waiting', async () => {
+    // The control: the park this fix must NOT widen. Same runner, same handler, no boundary.
+    const id = start('check the working tree');
+    await waitFor(() => store.getRun(id)?.status === 'waiting');
+    expect(continuations(id)).toBe(0);
+  }, 40_000);
+
+  it('CEZ:DONE before the compaction still closes the session', async () => {
+    const id = start('mock:compaction-done wrap it up');
+    await waitFor(() => ['done', 'review'].includes(store.getRun(id)?.status ?? ''));
+    expect(continuations(id)).toBe(0);
+    expect(eventsOf(id).some((e) => e.type === 'lifecycle' && e.message?.includes('goal achieved'))).toBe(true);
+  }, 40_000);
+
+  it('CEZ:MONITORING before the compaction still parks as running/monitoring', async () => {
+    const id = start('mock:compaction-monitor kicked the build off');
+    await waitFor(() => store.getRun(id)?.activity === 'monitoring');
+    expect(store.getRun(id)?.status).toBe('running');
+    expect(continuations(id)).toBe(0);
+  }, 40_000);
+
+  it('CEZ:MONITORING followed by a task-reference line still parks as monitoring (#933)', async () => {
+    // The marker reading the monitoring decision uses (trailing `CEZ:PR=` lines stripped) must
+    // also be the one that decides the turn spoke — otherwise the boundary continues a monitor.
+    const id = start('mock:compaction-monitor-ref kicked the build off');
+    await waitFor(() => store.getRun(id)?.activity === 'monitoring');
+    expect(store.getRun(id)?.status).toBe('running');
+    expect(continuations(id)).toBe(0);
+  }, 40_000);
+
+  it('a MALFORMED CEZ:ASK before the compaction still parks, so the question is not buried', async () => {
+    // The marker raises no ask card, so nothing downstream would show that a question was
+    // asked at all — continuing here would answer it on the user's behalf and lose it.
+    const id = start('mock:compaction-badask which database?');
+    await waitFor(() => store.getRun(id)?.status === 'waiting');
+
+    expect(continuations(id)).toBe(0);
+    expect(
+      eventsOf(id).some((e) => e.type === 'note' && e.message?.includes('CEZ:ASK payload is not valid JSON')),
+    ).toBe(true);
+  }, 40_000);
+
+  it('bounds repeated compaction and then parks for the user', async () => {
+    // The spin the bound exists for: every turn ends at a boundary and nothing progresses.
+    const id = start('mock:compaction-repeat refactor the parser');
+    await waitFor(() => store.getRun(id)?.status === 'waiting');
+
+    expect(continuations(id)).toBe(3); // MAX_COMPACTION_CONTINUES, then it stops
+    const capped = eventsOf(id).filter(
+      (e) => e.type === 'note' && e.message?.includes('turns in a row with no progress'),
+    );
+    expect(capped).toHaveLength(1); // said once, not on every later boundary
+    expect(capped[0]?.tone).toBe('danger');
+  }, 60_000);
+
+  it('a refused post-compaction follow-up fails the run visibly instead of leaving a zombie', async () => {
+    const id = start('mock:compaction-reject refactor the parser');
+    await waitFor(() => store.getRun(id)?.status === 'failed');
+
+    expect(store.getRun(id)?.error).toContain('busy compacting context');
+    expect(eventsOf(id).some((e) => e.type === 'error' && e.message?.includes('busy compacting context'))).toBe(true);
+  }, 40_000);
+
+  it('cancellation still wins over a continued turn', async () => {
+    const id = start('mock:compaction-hold refactor the parser');
+    await waitFor(() => continuations(id) === 1);
+
+    manager.cancel(id);
+    await waitFor(() => store.getRun(id)?.status === 'cancelled');
+    expect(continuations(id)).toBe(1); // the cancel ends it; no further continuation
+  }, 40_000);
+
+  it("a CHILD thread's compaction never continues the parent (#600 holds)", async () => {
+    const id = start('mock:child-compaction fan out');
+    await waitFor(() => store.getRun(id)?.status === 'waiting');
+
+    // The parent ended on its own message, so the boundary was never the parent's.
+    expect(continuations(id)).toBe(0);
+    expect(eventsOf(id).some((e) => e.type === 'text' && e.text?.includes('after the sub-agent compacted'))).toBe(true);
+  }, 40_000);
+
+  it('applies on the CONTINUATION turn-end too, not just a fresh run', async () => {
+    // The half-fix AGENTS.md warns about: `runAgentStep` and `runContinuation` are
+    // hand-duplicated, so a fresh run could recover while every Continue kept the bug.
+    const id = start('check the working tree');
+    await waitFor(() => store.getRun(id)?.status === 'waiting');
+    expect(manager.finish(id)).toBe(true);
+    await waitFor(() => ['done', 'review'].includes(store.getRun(id)?.status ?? ''));
+
+    expect(manager.continueRun(id, { text: 'mock:compaction-hold keep going' })).toEqual({ ok: true });
+    await waitFor(() => continuations(id) === 1);
+    expect(store.getRun(id)?.status).toBe('running');
+  }, 60_000);
+});
+
+/**
  * #811 — registry `/skill` expansion on the CONTINUATION path.
  *
  * `expandRegistrySlashSkill` (#676) reads `state.skills`, which only `execute` ever
@@ -2605,6 +3299,43 @@ describe('registry /skill expansion survives a continuation (#811)', () => {
     // Delivery-only: the transcript still shows what the user actually typed.
     const typed = eventsOf(id).find((e) => e.type === 'user-message' && e.stepId === 'continue-1');
     expect(typed?.text).toBe('/demo-review look at the diff');
+  }, 40_000);
+
+  it('an account-switching Continue records its session, so the NEXT Continue stays on that account', async () => {
+    // Live run eab924c7: the switch opened a fresh session that recorded no id (Claude emits
+    // no `session` event), and the following Continue resumed the original step's session —
+    // under the login the user had switched away from.
+    const id = await finishedRun();
+    const original = store.getRun(id)?.steps.find((s) => s.id === 'task');
+    store.updateStep(id, 'task', { profileId: 'klaudiusz' });
+    expect(manager.continueRun(id, { agentProfile: 'default' })).toEqual({ ok: true });
+    await waitFor(() => store.getRun(id)?.status === 'waiting');
+    const fresh = store.getRun(id)?.steps.find((s) => s.id === 'continue-1');
+    expect(fresh?.sessionId).toBeDefined();
+    expect(fresh?.sessionId).not.toBe(original?.sessionId);
+    expect(fresh?.profileId).toBe('default');
+
+    expect(manager.finish(id)).toBe(true);
+    await waitFor(() => ['done', 'review'].includes(store.getRun(id)?.status ?? ''));
+    expect(manager.continueRun(id, { text: 'follow-up' })).toEqual({ ok: true });
+    await waitFor(() => store.getRun(id)?.status === 'waiting');
+    const next = store.getRun(id)?.steps.find((s) => s.id === 'continue-2');
+    expect(next?.sessionId).toBe(fresh?.sessionId);
+    expect(next?.profileId).toBe('default');
+  }, 40_000);
+
+  it('a fresh Continue that fails before spawning leaves no session id to resume', async () => {
+    // The pinned id is recorded before the preflight; a turn that never spawned created no
+    // conversation, so the next Continue must not try to `--resume` it.
+    const id = await finishedRun();
+    const tmp = join(repoRoot, '.ai/cezar/tmp');
+    rmSync(tmp, { recursive: true, force: true });
+    writeFileSync(tmp, 'not a directory', 'utf8');
+    expect(manager.continueRun(id, { runner: 'codex' })).toEqual({ ok: true });
+    await waitFor(() => store.getRun(id)?.status === 'failed');
+    const failed = store.getRun(id)?.steps.find((s) => s.id === 'continue-1');
+    expect(failed?.status).toBe('failed');
+    expect(failed?.sessionId).toBeUndefined();
   }, 40_000);
 
   it('expands a FOLLOW-UP delivered into the reopened continuation session', async () => {

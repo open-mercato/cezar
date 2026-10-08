@@ -8,6 +8,7 @@ import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
 import { HANDOFF_INSTRUCTIONS, HANDOFF_ONLY_INSTRUCTIONS } from '../handoff.ts';
 import { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import { CLAUDE_HEADLESS_GUIDANCE } from '../core/claude-cli-runner.ts';
 import type { WorkflowDef } from './types.ts';
 import {
   RunManager,
@@ -221,7 +222,11 @@ describe('systemPrompt end-to-end (dry run)', () => {
     const argv = JSON.parse(lines[index] as string) as string[];
     const idx = argv.indexOf('--append-system-prompt');
     expect(idx).toBeGreaterThanOrEqual(0);
-    return argv[idx + 1] as string;
+    const prompt = argv[idx + 1] as string;
+    // The Claude runner owns a backend-local suffix for denied-tool guidance;
+    // these tests assert workflow composition before that transport decoration.
+    const suffix = `\n\n---\n\n${CLAUDE_HEADLESS_GUIDANCE}`;
+    return prompt.endsWith(suffix) ? prompt.slice(0, -suffix.length) : prompt;
   }
 
   it('dispatch on (the default): every task is taught the cez task CLI ahead of the base prompt', async () => {
@@ -290,7 +295,8 @@ describe('systemPrompt end-to-end (dry run)', () => {
       delete process.env.CEZ_API_URL;
     }
     expect(capturedSystemPrompt()).not.toContain('cez automation');
-  });
+    // Two whole runs in one case: the default 5 s is one slow machine away from a timeout.
+  }, 30_000);
 
   it('no override: the config default reaches the CLI and is echoed on the record', async () => {
     const id = await runToEnd({ task: 'do the thing' });
@@ -604,7 +610,9 @@ describe('the global follow-up gate (dry run)', () => {
   const capturedSystemPrompt = (index = 0): string => {
     const lines = readFileSync(argsFile, 'utf8').trim().split('\n');
     const argv = JSON.parse(lines[index] as string) as string[];
-    return argv[argv.indexOf('--append-system-prompt') + 1] as string;
+    const prompt = argv[argv.indexOf('--append-system-prompt') + 1] as string;
+    const suffix = `\n\n---\n\n${CLAUDE_HEADLESS_GUIDANCE}`;
+    return prompt.endsWith(suffix) ? prompt.slice(0, -suffix.length) : prompt;
   };
 
   it('without CEZ_FOLLOWUPS the agent is never told about the inbox', async () => {
@@ -612,7 +620,21 @@ describe('the global follow-up gate (dry run)', () => {
     rmSync(todosFile, { force: true });
     rmSync(inheritedTodos, { force: true });
 
-    const id = await runToEnd({ task: 'do the thing mock:done' });
+    // This case asserts the follow-up gate only; keep ambient cockpit flags from
+    // adding the automation prompt when the suite runs inside cezar.
+    const savedAutomations = process.env.CEZ_AUTOMATIONS;
+    const savedApiUrl = process.env.CEZ_API_URL;
+    delete process.env.CEZ_AUTOMATIONS;
+    delete process.env.CEZ_API_URL;
+    let id: string;
+    try {
+      id = await runToEnd({ task: 'do the thing mock:done' });
+    } finally {
+      if (savedAutomations === undefined) delete process.env.CEZ_AUTOMATIONS;
+      else process.env.CEZ_AUTOMATIONS = savedAutomations;
+      if (savedApiUrl === undefined) delete process.env.CEZ_API_URL;
+      else process.env.CEZ_API_URL = savedApiUrl;
+    }
 
     expect(capturedSystemPrompt()).toBe(composeSystemPrompt(CONFIG_PROMPT, HANDOFF_ONLY_INSTRUCTIONS));
     expect(capturedSystemPrompt()).not.toContain('CEZ_TODOS_FILE');

@@ -106,4 +106,53 @@ describe('Toaster', () => {
     act(() => vi.advanceTimersByTime(200))
     expect(document.querySelector('[data-slot="toast"]')).toBeNull()
   })
+  describe('the optional action link', () => {
+    it('renders no action by default — every existing toast is unchanged', () => {
+      render(<Toaster />)
+      act(() => toast('Command copied to clipboard.'))
+      expect(document.querySelector('[data-slot="toast-action"]')).toBeNull()
+    })
+
+    it('appends a link that opens in a new tab without opener or referrer', () => {
+      render(<Toaster />)
+      act(() =>
+        toast('First PR ready 🎉', {
+          action: { label: 'Star on GitHub', href: 'https://github.com/open-mercato/cezar' },
+        }),
+      )
+      const link = screen.getByRole('link', { name: 'Star on GitHub' })
+      expect(link.getAttribute('href')).toBe('https://github.com/open-mercato/cezar')
+      expect(link.getAttribute('target')).toBe('_blank')
+      expect(link.getAttribute('rel')).toContain('noopener')
+      expect(link.getAttribute('rel')).toContain('noreferrer')
+      // The link lives INSIDE the live region, so a screen reader announces the ask and its
+      // affordance as one utterance rather than reading a sentence with no way to act on it.
+      expect(screen.getByRole('status').contains(link)).toBe(true)
+    })
+
+    it('honours a custom lifetime, and keeps 5s as the default', () => {
+      render(<Toaster />)
+      act(() => toast('takes a moment to read', { durationMs: 12_000 }))
+      // Still open where a default toast would already have started leaving.
+      act(() => vi.advanceTimersByTime(5000))
+      expect(screen.getByRole('status').getAttribute('data-state')).toBe('open')
+      act(() => vi.advanceTimersByTime(7000))
+      expect(screen.getByRole('status').getAttribute('data-state')).toBe('closed')
+      act(() => vi.advanceTimersByTime(200))
+      expect(document.querySelector('[data-slot="toast"]')).toBeNull()
+    })
+
+    it('gives each toast its own clock — a long one does not hold a default one open', () => {
+      render(<Toaster />)
+      act(() => toast('long', { durationMs: 12_000 }))
+      act(() => toast('short'))
+      act(() => vi.advanceTimersByTime(5000))
+      expect(
+        screen.getAllByRole('status').map((t) => [t.textContent, t.getAttribute('data-state')]),
+      ).toEqual([
+        ['long', 'open'],
+        ['short', 'closed'],
+      ])
+    })
+  })
 })

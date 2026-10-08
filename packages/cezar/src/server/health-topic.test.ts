@@ -23,15 +23,17 @@ import { apiRequest } from './loopback-request.testkit.ts';
 /** A hub that records what `createApp` registers, so the test can drive the topic by hand. */
 function stubHub() {
   const topics = new Map<string, TopicPublisher>();
+  const registrations: string[] = [];
   const hub: SocketHub = {
     registerTopic: (name, publisher) => {
+      registrations.push(name);
       topics.set(name, publisher);
       return () => { topics.delete(name); };
     },
     attach: () => undefined,
     close: () => undefined,
   };
-  return { hub, topics };
+  return { hub, topics, registrations };
 }
 
 describe('health topic + cache (live-server path)', () => {
@@ -80,7 +82,7 @@ describe('health topic + cache (live-server path)', () => {
   };
 
   const build = () => {
-    const { hub, topics } = stubHub();
+    const { hub, topics, registrations } = stubHub();
     const deps: ServerDeps = {
       repoRoot,
       store,
@@ -88,7 +90,7 @@ describe('health topic + cache (live-server path)', () => {
       version: '0.0.0-test',
       socketHub: hub,
     };
-    return { app: createApp(deps), topics };
+    return { app: createApp(deps), topics, registrations };
   };
 
   /** One health snapshot spawns the CLI/forge probes and shells out to git, which costs
@@ -142,8 +144,13 @@ describe('health topic + cache (live-server path)', () => {
   };
 
   it('registers exactly one `health` topic', () => {
-    const { topics } = build();
-    expect([...topics.keys()]).toEqual(['health']);
+    const { registrations } = build();
+    // `host` (spec 2026-09-20-host-resource-telemetry) is the app's SECOND topic, so this no
+    // longer asserts the registry holds one key — it asserts what it always meant: health is
+    // registered exactly ONCE (a duplicate is a programming error the hub throws on), and the
+    // live-server path is the one that registers it at all.
+    expect(registrations.filter((name) => name === 'health')).toHaveLength(1);
+    expect(registrations).toContain('host');
   });
 
   it('pre-warms the cache at boot so the first GET is already warm', async () => {

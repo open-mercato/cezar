@@ -32,6 +32,9 @@ export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
   claude: ['opus', 'sonnet', 'haiku'],
   codex: ['gpt-5.1-codex', 'gpt-5.1-codex-mini', 'gpt-5-codex'],
   opencode: [],
+  // Cursor models are discovered from the CLI / Settings — no hard-coded presets
+  // that could conflict with another runner's ids.
+  cursor: [],
   // pi lists nothing for the same reason OpenCode does (#794), plus one of its own: it picks a
   // model with the canonical `provider/model` convention and has no default provider, so the
   // structural check in {@link modelConflictsWithRunner} already guards it without vendor
@@ -39,6 +42,16 @@ export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
   // overlap (`anthropic/claude-sonnet-5`), and a shared id present in pi's list but absent from
   // OpenCode's empty one would read as "another runner's preset" and be refused.
   pi: [],
+  // junie lists nothing for the same reason OpenCode does (#794): its models come from its own
+  // live catalog (`session/new`'s configOptions, discovered per-account/per-host), so a
+  // hard-coded list would go stale the same way. `defaultProvider: 'junie'` (model-identity.ts)
+  // still gives it a structural guard via `namesAnotherKnownProvider` without any preset list.
+  junie: [],
+  // Copilot lists nothing for a third reason on top of OpenCode's and pi's: its catalog is fetched
+  // from GitHub at run time, and the ids it routes are other vendors' own (`gpt-5.4`,
+  // `claude-sonnet-4`). Naming them here would make this guard reject a legitimate codex or
+  // claude model as "another runner's preset" — the exact failure pi's comment warns about.
+  copilot: [],
 };
 
 /**

@@ -1,11 +1,12 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { resolveCursorAgentBin } from './cursor-agent-runner.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
 
 const exec = promisify(execFile);
 
 export interface BackendCheck {
-  name: 'claude' | 'codex' | 'opencode' | 'pi' | 'gh' | 'git';
+  name: 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'junie' | 'copilot' | 'gh' | 'git';
   available: boolean;
   version?: string;
   hint?: string;
@@ -13,17 +14,20 @@ export interface BackendCheck {
 
 /**
  * Probe the host for everything cez leans on: the agent CLIs (`claude`, and
- * the optional `codex` / `opencode` / `pi` alternatives), `gh` (GitHub auth for
- * PR creation) and `git`. Nothing is required except at least one agent CLI —
- * the GUI degrades gracefully, only offers the runners that are present, and
- * shows the hints for the rest.
+ * the optional `codex` / `opencode` / `cursor` / `pi` / `junie` / `copilot`
+ * alternatives), `gh` (GitHub auth for PR creation) and `git`. Nothing is required except at
+ * least one agent CLI — the GUI degrades gracefully, only offers the
+ * runners that are present, and shows the hints for the rest.
  */
 export async function detectEnvironment(): Promise<BackendCheck[]> {
   return Promise.all([
     probeClaude(),
     probeCodex(),
     probeOpencode(),
+    probeCursor(),
     probePi(),
+    probeJunie(),
+    probeCopilot(),
     probeGh(),
     probeGit(),
   ]);
@@ -107,6 +111,28 @@ async function probeOpencode(): Promise<BackendCheck> {
   }
 }
 
+async function probeCursor(): Promise<BackendCheck> {
+  if (process.env.CEZ_DRY_RUN === '1') {
+    return { name: 'cursor', available: true, version: 'mock (CEZ_DRY_RUN=1)' };
+  }
+  const bin = resolveCursorAgentBin();
+  try {
+    const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });
+    return {
+      name: 'cursor',
+      available: true,
+      version: stdout.trim() || 'installed',
+      hint: 'if not authenticated, run `agent login` or set CURSOR_API_KEY',
+    };
+  } catch {
+    return {
+      name: 'cursor',
+      available: false,
+      hint: 'optional: install the Cursor CLI (curl https://cursor.com/install -fsS | bash) and run `agent login`',
+    };
+  }
+}
+
 async function probePi(): Promise<BackendCheck> {
   // Dry-run stands the runner up on the shared mock, so report it present.
   if (process.env.CEZ_DRY_RUN === '1') {
@@ -128,6 +154,63 @@ async function probePi(): Promise<BackendCheck> {
       name: 'pi',
       available: false,
       hint: 'optional: install the pi CLI and log in to use the pi runner',
+    };
+  }
+}
+
+async function probeJunie(): Promise<BackendCheck> {
+  // Dry-run stands the runner up on the shared mock, so report it present.
+  if (process.env.CEZ_DRY_RUN === '1') {
+    return { name: 'junie', available: true, version: 'mock (CEZ_DRY_RUN=1)' };
+  }
+  const bin = process.env.CEZ_JUNIE_BIN ?? 'junie';
+  try {
+    const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });
+    const version = stdout.trim();
+    if (!/junie version[:\s]/i.test(version)) {
+      return {
+        name: 'junie',
+        available: false,
+        hint: `\`${bin}\` resolves but doesn't look like Junie (got: ${version.slice(0, 80)})`,
+      };
+    }
+    return {
+      name: 'junie',
+      available: true,
+      version,
+      hint: 'if not authenticated, run `junie` once and log in',
+    };
+  } catch {
+    return {
+      name: 'junie',
+      available: false,
+      hint: 'optional: install Junie (https://junie.jetbrains.com/cli) and log in to use the Junie runner',
+    };
+  }
+}
+
+async function probeCopilot(): Promise<BackendCheck> {
+  // Dry-run stands the runner up on the shared mock, so report it present.
+  if (process.env.CEZ_DRY_RUN === '1') {
+    return { name: 'copilot', available: true, version: 'mock (CEZ_DRY_RUN=1)' };
+  }
+  const bin = process.env.CEZ_COPILOT_BIN ?? 'copilot';
+  try {
+    // `--version` needs no login and no network — the auth state is the provider descriptor's
+    // job (`provider-auth.ts`), never detection's (AGENT_PROTOCOL.md §9 step 3).
+    const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });
+    return {
+      name: 'copilot',
+      available: true,
+      version: stdout.trim().split(/\r?\n/)[0] ?? '',
+      hint: 'if not authenticated, run `copilot login` (COPILOT_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN also work)',
+    };
+  } catch {
+    // A missing Copilot CLI is never a boot failure — the runner just isn't offered.
+    return {
+      name: 'copilot',
+      available: false,
+      hint: 'optional: install GitHub Copilot CLI (`npm i -g @github/copilot`) and run `copilot login` to use the copilot runner',
     };
   }
 }

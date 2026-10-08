@@ -18,6 +18,8 @@ export async function runEventPollCycle<C extends { timestamp: string }, R exten
   isCurrent?: () => Promise<boolean>;
   launch?: (candidate: C) => Promise<void>;
   persist: (result: R, current: AutomationRuntimeState) => AutomationRuntimeState;
+  /** What a completed execute cycle's `no-match` row says; defaults to a plain completion. */
+  reason?: (result: R) => string;
   onChange?: (id: string, revision: number) => void;
 }): Promise<R> {
   const { store, definition, mode } = input;
@@ -45,6 +47,7 @@ export async function runEventPollCycle<C extends { timestamp: string }, R exten
       && latestState.revision === capturedState.revision;
   };
   try {
+    if (!lease.isValid()) throw new Error('automation polling lease was lost');
     const snapshotLease = store.acquireMutationLease();
     if (!snapshotLease) throw new Error('automation mutation conflict');
     try {
@@ -61,18 +64,21 @@ export async function runEventPollCycle<C extends { timestamp: string }, R exten
       throw new Error(`automation is backed off until ${state.backoffUntil}`);
     }
     const result = await input.poll(state);
+    if (!lease.isValid()) throw new Error('automation polling lease was lost');
     const eligible = result.candidates.filter(candidate =>
       (!state.baselineAt || candidate.timestamp > state.baselineAt)
       && (!input.eligible || input.eligible(candidate, state)),
     );
     if (mode === 'execute') {
       for (const candidate of eligible) {
+        if (!lease.isValid()) throw new Error('automation polling lease was lost');
         const mutation = store.acquireMutationLease();
         if (!mutation) throw new Error('automation mutation conflict');
         try {
           if (!current() || (input.isCurrent && !await input.isCurrent())) {
             return { ...result, candidates: [] };
           }
+          if (!mutation.isValid()) throw new Error('automation mutation lease was lost');
           await input.launch?.(candidate);
         } finally {
           mutation.release();
@@ -81,7 +87,10 @@ export async function runEventPollCycle<C extends { timestamp: string }, R exten
       const mutation = store.acquireMutationLease();
       if (!mutation) throw new Error('automation mutation conflict');
       try {
-        if (current() && (!input.isCurrent || await input.isCurrent())) {
+        // The trailing `mutation.isValid()` is the deliberate re-check AFTER `isCurrent` is
+        // awaited: the guard can be lost while that promise is pending, and a lost guard must
+        // not publish state a successor already owns. Do not "simplify" it away.
+        if (lease.isValid() && mutation.isValid() && current() && (!input.isCurrent || await input.isCurrent()) && mutation.isValid()) {
           store.setState(definition.id, state => input.persist(result, state));
         }
       } finally {
@@ -94,15 +103,18 @@ export async function runEventPollCycle<C extends { timestamp: string }, R exten
       result: mode === 'preview' ? 'preview' : 'no-match',
       reason: mode === 'preview'
         ? `Bounded preview found ${eligible.length} match${eligible.length === 1 ? '' : 'es'}; no tasks were launched.`
-        : 'Scheduled check completed.',
+        : input.reason?.(result) ?? 'Scheduled check completed.',
       durationMs: Date.now() - started,
     });
     input.onChange?.(definition.id, definition.revision);
     return { ...result, candidates: eligible };
   } catch (error) {
+    // A compromised owner must not append backoff/error state after another
+    // process has taken over this automation.
+    if (!lease.isValid()) throw new Error('automation polling lease was lost');
     const mutation = store.acquireMutationLease();
     try {
-      if (mutation && mode === 'execute' && current()) {
+      if (mutation && lease.isValid() && mode === 'execute' && current()) {
         store.setState(definition.id, state => {
           const consecutiveFailures = (state.consecutiveFailures ?? 0) + 1;
           const delay = Math.min(21_600_000, 60_000 * 2 ** (consecutiveFailures - 1));

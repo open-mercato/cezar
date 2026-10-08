@@ -1,11 +1,15 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.js';
 import { KILL_GRACE_MS } from './claude-cli-runner.js';
 import { CodexAppServerRunner } from './codex-app-server-runner.js';
+import { RunStore } from '../runs/store.ts';
 
 /** Only the escalation tests below swap the child out; every other test in this
  *  file keeps spawning the real mock app-server through the untouched `spawn`. */
@@ -75,6 +79,239 @@ describe('a teardown cezar initiated (codex app-server)', () => {
     expect(events).toContainEqual({ type: 'error', message: 'model unavailable' });
     expect(events).toContainEqual({ type: 'turn-end' });
   }, 15_000);
+});
+
+describe('late Codex teardown events (#1105)', () => {
+  const mockBin = fileURLToPath(
+    new URL('./__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url),
+  );
+
+  it('does not route a teardown follow-up failure into a removed run store', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-1105-'));
+    const store = RunStore.open(join(dir, '.ai/cezar'));
+    const run = store.createRun({
+      title: 't', workflow: 'quick-task', task: 'check the working tree', runner: 'codex', worktree: false,
+      steps: [{ id: 'task', name: 'Task', kind: 'agent' }],
+    });
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown) => unhandled.push(error);
+    process.on('unhandledRejection', onUnhandled);
+    let session: ReturnType<CodexAppServerRunner['startSession']> | undefined;
+    try {
+      const events: AgentEvent[] = [];
+      session = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 }).startSession(
+        { userPrompt: 'mock:steer-silent keep going', cwd: dir },
+        (event) => {
+          events.push(event);
+          // A late event would synchronously reproduce the removed-store failure
+          // from the issue, including through the floating follow-up catch path.
+          store.appendEvent(run.id, { ...event, stepId: 'task' });
+        },
+      );
+
+      await expect.poll(() => events.some((event) => event.type === 'text'), { timeout: 10_000 }).toBe(true);
+      expect(session.sendMessage([{ type: 'text', text: 'Continue' }])).toBe(true);
+      session.interrupt();
+      store.flush();
+      rmSync(dir, { recursive: true, force: true });
+
+      const resultError = await session.result.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(resultError).toBeInstanceOf(Error);
+      expect((resultError as NodeJS.ErrnoException).code).toBe('ENOENT');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+      if (session?.open) session.interrupt();
+      if (session) {
+        await session.result.then(
+          () => undefined,
+          (error: unknown) => {
+            // The removed fixture intentionally makes the late `done` append fail;
+            // the assertion above already verifies that exact, expected ENOENT.
+            if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          },
+        );
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it('still rejects the live session when its event callback fails', async () => {
+    const session = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 }).startSession(
+      { userPrompt: 'check the working tree', cwd: process.cwd() },
+      (event) => {
+        if (event.type === 'session') throw new Error('active store corruption');
+      },
+    );
+
+    await expect(session.result).rejects.toThrow('active store corruption');
+  }, 15_000);
+});
+
+/**
+ * #955 — a `contextCompaction` item is internal session maintenance, not the user being
+ * handed the next action. The runner is the only layer that can tell the two apart, because
+ * `turn/completed` looks identical either way by the time it reaches `RunManager`. These pin
+ * the seam: the boundary rides out on the v1 `turn-end` as an ADDITIVE optional `reason`,
+ * never as a new event type and never in place of the existing `contextCompaction` tool item.
+ *
+ * No redacted Luna trace was obtainable, so the fixture is built from the documented wire
+ * contract — see the header of `mock-codex-app-server.mjs`.
+ */
+describe('a turn that ended at a context-compaction boundary (#955)', () => {
+  const mockBin = fileURLToPath(
+    new URL('./__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url),
+  );
+
+  /** Run one scripted prompt to completion and collect the v1 stream. */
+  async function collect(userPrompt: string): Promise<AgentEvent[]> {
+    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const events: AgentEvent[] = [];
+    const session = runner.startSession({ userPrompt, cwd: process.cwd() }, (event) => events.push(event), {
+      autoEndAfterFirstTurn: true,
+    });
+    await session.result;
+    return events;
+  }
+
+  it('marks the turn-end as context-compaction and still emits the tool item', async () => {
+    const events = await collect('mock:compaction-hold refactor the parser');
+    // ADDITIVE, not a replacement: the "Compacted context" row still renders from the
+    // unchanged tool-call/tool-result pair, so nothing that reads v1 today loses a frame.
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'tool-call', tool: 'contextCompaction' }),
+    );
+    expect(events.filter((e) => e.type === 'turn-end')).toEqual([
+      { type: 'turn-end', reason: 'context-compaction' },
+    ]);
+  }, 15_000);
+
+  it('leaves an ordinary turn-end bare, so old consumers see no new field', async () => {
+    const events = await collect('check the working tree');
+    expect(events.filter((e) => e.type === 'turn-end')).toEqual([{ type: 'turn-end' }]);
+  }, 15_000);
+
+  it('does not claim a compaction boundary when the model spoke after it', async () => {
+    // `mock:compaction-done` compacts AFTER a `CEZ:DONE` message. The compaction is still
+    // the last ITEM, which is exactly why the runner reports the boundary and `run.ts` —
+    // not the runner — owns marker precedence. The text must survive intact either way.
+    const events = await collect('mock:compaction-done wrap it up');
+    expect(events.some((e) => e.type === 'text' && e.text.includes('CEZ:DONE'))).toBe(true);
+  }, 15_000);
+
+  it('never lets a CHILD thread compaction end the parent turn (#600 holds)', async () => {
+    const events = await collect('mock:child-compaction fan out');
+    // The child's own turn lifecycle is dropped, and its compaction item must not colour
+    // the parent's boundary — the parent ended on its own message, so no reason at all.
+    expect(events.filter((e) => e.type === 'turn-end')).toEqual([{ type: 'turn-end' }]);
+    expect(events.some((e) => e.type === 'text' && e.text.includes('after the sub-agent compacted'))).toBe(true);
+  }, 15_000);
+});
+
+/**
+ * #955, second half — `sendMessage()` answers `true` the moment the frame is written to
+ * stdin, long before the app-server's JSON-RPC response settles. `RunManager.deliverMessage`
+ * takes that `true` as delivery, clears `waiting` and writes `running`; a later rejection
+ * used to surface only as a quiet `note`, so the run sat there looking alive forever. The
+ * rejection now speaks with the SAME authority `turn/failed` already has: an `error` event.
+ */
+describe('an asynchronous turn/start or turn/steer rejection (#955)', () => {
+  const mockBin = fileURLToPath(
+    new URL('./__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url),
+  );
+
+  it('surfaces a refused follow-up turn/start as an error, not a quiet note', async () => {
+    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const events: AgentEvent[] = [];
+    let sawTurnEnd: () => void = () => {};
+    const firstTurnEnd = new Promise<void>((resolve) => {
+      sawTurnEnd = resolve;
+    });
+    const session = runner.startSession(
+      { userPrompt: 'mock:compaction-reject refactor the parser', cwd: process.cwd() },
+      (event) => {
+        events.push(event);
+        if (event.type === 'turn-end') sawTurnEnd();
+      },
+    );
+    await firstTurnEnd;
+
+    expect(session.sendMessage([{ type: 'text', text: 'Continue' }])).toBe(true);
+    await expect
+      .poll(() => events.some((e) => e.type === 'error'), { timeout: 10_000 })
+      .toBe(true);
+    const error = events.find((e) => e.type === 'error');
+    expect(error).toMatchObject({ type: 'error', message: expect.stringContaining('busy compacting context') });
+    session.end();
+    await session.result.catch(() => undefined);
+  }, 20_000);
+
+  it('reports a refused turn/steer WITHOUT killing the turn still in flight', async () => {
+    // The other half of the rule, and the reason it is not "escalate every rejection": a
+    // refused steer leaves no zombie — the turn is genuinely running and `running` is
+    // genuinely true. Escalating would interrupt it and throw away real work to report a
+    // problem the run does not have. What was lost is the follow-up, and the note says so.
+    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const events: AgentEvent[] = [];
+    let sawText: () => void = () => {};
+    const firstText = new Promise<void>((resolve) => {
+      sawText = resolve;
+    });
+    const session = runner.startSession(
+      // The turn stays OPEN, so the follow-up steers it instead of starting a new turn.
+      { userPrompt: 'mock:steer-reject keep going', cwd: process.cwd() },
+      (event) => {
+        events.push(event);
+        if (event.type === 'text') sawText();
+      },
+    );
+    await firstText;
+
+    expect(session.sendMessage([{ type: 'text', text: 'Continue' }])).toBe(true);
+    await expect
+      .poll(() => events.some((e) => e.type === 'note' && e.message.includes('did not reach the model')), {
+        timeout: 10_000,
+      })
+      .toBe(true);
+    expect(events.find((e) => e.type === 'note' && e.message.includes('did not reach the model'))).toMatchObject({
+      message: expect.stringContaining('expectedTurnId'),
+    });
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    expect(session.open).toBe(true); // the live turn was NOT torn down
+    session.end();
+    await session.result.catch(() => undefined);
+  }, 20_000);
+
+  it("keeps cezar's OWN teardown a note, so cancelling never fails the run (#703 parity)", async () => {
+    // The in-flight request the escalation must NOT fire on: `mock:steer-silent` never
+    // answers the steer, so it is still pending when `interrupt()` tears the session down
+    // and `rejectPending` settles it. Escalating that to `error` would turn every cancel
+    // into a failed run — the exact class of self-inflicted failure #703 removed.
+    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const events: AgentEvent[] = [];
+    let sawText: () => void = () => {};
+    const firstText = new Promise<void>((resolve) => {
+      sawText = resolve;
+    });
+    const session = runner.startSession(
+      { userPrompt: 'mock:steer-silent keep going', cwd: process.cwd() },
+      (event) => {
+        events.push(event);
+        if (event.type === 'text') sawText();
+      },
+    );
+    await firstText;
+
+    expect(session.sendMessage([{ type: 'text', text: 'Continue' }])).toBe(true);
+    session.interrupt();
+    await session.result.catch(() => undefined);
+
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+  }, 20_000);
 });
 
 /**
@@ -173,6 +410,21 @@ describe('SIGTERM→SIGKILL escalation for an app-server that survives SIGTERM',
 
       session.interrupt();
       expect(fake.signals).toEqual([]);
+    });
+  });
+
+  it('hard-stops a SIGTERM-ignoring app-server within the bounded grace', () => {
+    withFakeChild((fake) => {
+      const session = new CodexAppServerRunner({ bin: 'codex', timeoutMs: 0 }).startSession({
+        userPrompt: 'do it',
+        cwd: process.cwd(),
+      });
+      void session.result.catch(() => undefined);
+
+      session.hardStop?.();
+      expect(fake.signals).toEqual(['SIGTERM']);
+      vi.advanceTimersByTime(KILL_GRACE_MS);
+      expect(fake.signals).toEqual(['SIGTERM', 'SIGKILL']);
     });
   });
 });

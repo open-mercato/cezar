@@ -2,8 +2,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderAuthService } from '../core/provider-auth.ts';
+import * as processUsage from '../core/process-usage.ts';
 import { emitUsageForTest, type ProcessUsage } from '../core/process-usage.ts';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
@@ -11,6 +12,14 @@ import { clearProjectProbeCache, listProjects, registerProject } from '../worksp
 import { ProjectContexts } from './project-context.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { WorkspaceEventBus, createApp } from './server.ts';
+
+// Junie has no read-only auth-status command, so `ProviderAuthService` probes it through a real
+// ACP session instead of `runCommand`. Left unmocked, the boot warm-up in this suite spawned a
+// real `junie` process — on a machine with Junie installed and logged in, that authenticates
+// against JetBrains for real (#M3 review).
+vi.mock('../core/junie-auth-probe.ts', () => ({
+  probeJunieAuthentication: vi.fn(async () => ({ connected: true })),
+}));
 
 /**
  * Workspace SSE stream (spec 2026-07-20-multi-project-workspace, step 2.8):
@@ -67,6 +76,7 @@ describe('GET /api/v1/workspace/events', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     for (const close of closers.splice(0)) await close().catch(() => undefined);
     contexts.disposeAll();
     store.flush();
@@ -211,6 +221,11 @@ describe('GET /api/v1/workspace/events', () => {
       rssBytes: 222 * 1024,
       procCount: 5,
     };
+    store.updateRun(bootRunId, { status: 'running' });
+    other.store.updateRun(otherRunId, { status: 'running' });
+    const sampledAt = '2026-09-18T10:00:00.000Z';
+    vi.spyOn(processUsage, 'currentTimedUsage').mockImplementation((id) => id === bootRunId
+      ? { ...bootSample, sampledAt } : id === otherRunId ? { ...otherSample, sampledAt, cpuPct: null } : undefined);
     emitUsageForTest({ [bootRunId]: bootSample, [otherRunId]: otherSample });
 
     const body = await ws.readUntil(`"project":"${other.id}","usage"`);
@@ -223,10 +238,14 @@ describe('GET /api/v1/workspace/events', () => {
     expect(events).toContainEqual({
       project: bootId,
       usage: { [bootRunId]: bootSample },
+      samples: [{ projectId: bootId, runId: bootRunId, ...bootSample, sampledAt }],
+      sentAt: expect.any(String),
     });
     expect(events).toContainEqual({
       project: other.id,
       usage: { [otherRunId]: otherSample },
+      samples: [{ projectId: other.id, runId: otherRunId, ...otherSample, sampledAt, cpuPct: null }],
+      sentAt: expect.any(String),
     });
 
     // A snapshot owned entirely by one project → exactly ONE more event; the

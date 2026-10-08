@@ -65,6 +65,16 @@ describe('engine', () => {
     expect(res.state.installed).toBe(true);
     expect(a.run).toHaveBeenCalledOnce();
     expect(loadServerState().steps.a?.status).toBe('done');
+    expect(loadServerState().instanceId).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('reuses the persisted instance identity on resume', async () => {
+    const first = fakeStep('a');
+    await runInstall(strategyOf([first]), opts());
+    const identity = loadServerState().instanceId;
+    const second = fakeStep('a');
+    await runInstall(strategyOf([second]), opts());
+    expect(loadServerState().instanceId).toBe(identity);
   });
 
   // #913: `primaryPort` is settled before anything renders it, and everything
