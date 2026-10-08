@@ -6,17 +6,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import type { ApiRun, HealthResponse } from '@open-mercato/cezar-api-client'
 
-import { readState, storageKey, type ViewId } from './layout-state'
+import { reviveState, type ViewId, type WorkspaceState } from './layout-state'
 import { TaskWorkspaceRoute } from './task-workspace'
 
 beforeEach(() => {
   localStorage.clear()
+  hostLayouts = {}
 })
 
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
   localStorage.clear()
+  hostLayouts = {}
 })
 
 const RUN: ApiRun = {
@@ -53,6 +55,23 @@ const HEALTH: HealthResponse = {
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
+/**
+ * The host's layout store, as the stub sees it (spec §5.3 — layouts belong to the cezar that owns
+ * the task, so a test seeds them by answering `GET /layouts` and observes them by watching what
+ * the cockpit PUTs back).
+ */
+let hostLayouts: Record<string, unknown> = {}
+
+/** Seed what the host already has for a task. */
+function seedLayouts(runId: string, value: unknown) {
+  hostLayouts[runId] = value
+}
+
+/** What the cockpit last saved for a task, revived the way a reload would read it back. */
+function savedLayouts(runId: string): WorkspaceState {
+  return reviveState(hostLayouts[runId] ?? null)
+}
+
 /** Fetch stub in the house style: the run, health, and empty answers for everything the embedded
  *  views ask for, so a column renders its real empty state rather than a crash. */
 function stubFetch(overrides: Record<string, () => Response> = {}) {
@@ -76,6 +95,15 @@ function stubFetch(overrides: Record<string, () => Response> = {}) {
       if (method === 'GET' && path.startsWith(`/api/v1/runs/${RUN.id}/commits`)) return jsonResponse({ commits: [] })
       if (method === 'GET' && path.startsWith(`/api/v1/runs/${RUN.id}/files`)) {
         return jsonResponse({ type: 'dir', path: '', entries: [] })
+      }
+      const layoutsMatch = /^\/api\/v1\/runs\/([^/]+)\/layouts$/.exec(path)
+      if (layoutsMatch) {
+        const runId = decodeURIComponent(layoutsMatch[1]!)
+        if (method === 'GET') return jsonResponse({ layouts: hostLayouts[runId] ?? null })
+        if (method === 'PUT') {
+          hostLayouts[runId] = JSON.parse(String(init.body ?? '{}'))
+          return jsonResponse({ layouts: hostLayouts[runId] })
+        }
       }
       if (method === 'GET' && path === '/api/v1/runs') return jsonResponse([RUN])
       if (method === 'GET' && path === '/api/v1/repo') return jsonResponse(HEALTH.repo)
@@ -155,13 +183,10 @@ describe('the task workspace', () => {
 
   it('resizes the pair either side of a divider with the keyboard', async () => {
     stubFetch()
-    localStorage.setItem(
-      storageKey('r1'),
-      JSON.stringify({
+    seedLayouts('r1', {
         layouts: [{ name: 'Czat', columns: [{ view: 'session', width: 50 }, { view: 'files', width: 50 }] }],
         active: 'Czat',
-      }),
-    )
+      })
     renderWorkspace()
     await ready()
     await waitFor(() => expect(dividers()).toHaveLength(1))
@@ -185,9 +210,7 @@ describe('the task workspace', () => {
 
   it('closes a column and divides the rest equally', async () => {
     stubFetch()
-    localStorage.setItem(
-      storageKey('r1'),
-      JSON.stringify({
+    seedLayouts('r1', {
         layouts: [
           {
             name: 'Czat',
@@ -199,8 +222,7 @@ describe('the task workspace', () => {
           },
         ],
         active: 'Czat',
-      }),
-    )
+      })
     renderWorkspace()
     await ready()
     await waitFor(() => expect(columnViews()).toHaveLength(3))
@@ -210,15 +232,34 @@ describe('the task workspace', () => {
     expect(columns().map((column) => (column as HTMLElement).style.width)).toEqual(['50%', '50%'])
   })
 
-  it('closes the whole card when the last column goes, and offers a new one', async () => {
+  it('empties the card when the last column goes, and offers the + to refill it', async () => {
+    // Spec §5.2: "Closing the last column leaves the layout card IN PLACE with an empty area and
+    // the `+` control to add another view", and §10: "A saved layout may intentionally have no
+    // columns". Closing the CARD is the separate act, with its own X.
     stubFetch()
     renderWorkspace()
     await ready()
 
     fireEvent.click(screen.getByRole('button', { name: 'Zamknij kolumnę Czat' }))
-    await waitFor(() => expect(screen.queryByText('Brak układów')).not.toBeNull())
-    expect(cards()).toHaveLength(0)
-    expect(columns()).toHaveLength(0)
+    await waitFor(() => expect(columns()).toHaveLength(0))
+    expect(cards()).toHaveLength(1)
+    expect(screen.queryByText('Brak układów')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Dodaj widok' })).not.toBeNull()
+  })
+
+  it('refills an emptied card through the right-edge +', async () => {
+    stubFetch()
+    renderWorkspace()
+    await ready()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Zamknij kolumnę Czat' }))
+    await waitFor(() => expect(columns()).toHaveLength(0))
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Dodaj widok' }))
+    await waitFor(() => expect(screen.queryByRole('menuitem', { name: 'Commity' })).not.toBeNull())
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Commity' }))
+    await waitFor(() => expect(columns()).toHaveLength(1))
+    expect(cards()).toHaveLength(1)
   })
 
   it('creates a card from Nowy układ and keeps the layout names unique', async () => {
@@ -233,7 +274,7 @@ describe('the task workspace', () => {
       await waitFor(() => expect(cards()).toHaveLength(expected))
     }
 
-    expect(cardNames()).toEqual(['Czat', 'Commity', 'Commity 2'])
+    expect(cardNames()).toEqual(['Czat', 'Układ 2', 'Układ 3'])
   })
 
   it('renames a card from its context menu', async () => {
@@ -251,7 +292,23 @@ describe('the task workspace', () => {
 
     await waitFor(() => expect(cardNames()).toEqual(['Debug']))
     // …and it survives a reload of the very same task.
-    expect(readState('r1').layouts.map((layout) => layout.name)).toEqual(['Debug'])
+    expect(savedLayouts('r1').layouts.map((layout) => layout.name)).toEqual(['Debug'])
+  })
+
+  it('renames a card on a double-click, which is the gesture the spec names', async () => {
+    // Spec §5.2: "Double-click a card to rename it." The context menu keeps the same action for
+    // discoverability, but the double-click is the requirement.
+    stubFetch()
+    renderWorkspace()
+    await ready()
+
+    fireEvent.doubleClick(screen.getByRole('button', { name: 'Czat', current: 'page' }))
+
+    const field = await screen.findByLabelText('Nazwa układu Czat')
+    fireEvent.change(field, { target: { value: 'Debug' } })
+    fireEvent.keyDown(field, { key: 'Enter' })
+
+    await waitFor(() => expect(cardNames()).toEqual(['Debug']))
   })
 
   it('persists a built workspace for the next visit', async () => {
@@ -263,31 +320,28 @@ describe('the task workspace', () => {
     pickView('Pliki', 'add')
     await waitFor(() => expect(columnViews()).toEqual(['session', 'files']))
 
-    const saved = readState('r1')
+    const saved = savedLayouts('r1')
     expect(saved.layouts[0]!.columns.map((column) => column.view)).toEqual(['session', 'files'])
   })
 
   it('opens a deep link as its own card and leaves the saved layouts alone', async () => {
     stubFetch()
-    localStorage.setItem(
-      storageKey('r1'),
-      JSON.stringify({
+    seedLayouts('r1', {
         layouts: [{ name: 'Czat', columns: [{ view: 'session', width: 100 }] }],
         active: 'Czat',
-      }),
-    )
+      })
     renderWorkspace('changes')
     await ready()
 
-    await waitFor(() => expect(cardNames()).toEqual(['Czat', 'Zmiany']))
+    await waitFor(() => expect(cardNames()).toEqual(['Czat', 'Układ 2']))
     expect(columnViews()).toEqual(['changes'])
     // The layout that was already there is untouched (spec §5.3).
-    expect(readState('r1').layouts[0]!.columns).toEqual([{ view: 'session', width: 100 }])
+    expect(savedLayouts('r1').layouts[0]!.columns).toEqual([{ view: 'session', width: 100 }])
   })
 
   it('recovers a malformed saved workspace to the one-column default without an error', async () => {
     stubFetch()
-    localStorage.setItem(storageKey('r1'), '{ not json at all')
+    seedLayouts('r1', '{ not json at all')
     renderWorkspace()
     await ready()
 
@@ -297,13 +351,10 @@ describe('the task workspace', () => {
 
   it('gives each column its own scroller, so the embedded views scroll inside it', async () => {
     stubFetch()
-    localStorage.setItem(
-      storageKey('r1'),
-      JSON.stringify({
+    seedLayouts('r1', {
         layouts: [{ name: 'Czat', columns: [{ view: 'files', width: 50 }, { view: 'commits', width: 50 }] }],
         active: 'Czat',
-      }),
-    )
+      })
     renderWorkspace()
     await ready()
 
@@ -324,13 +375,10 @@ describe('the task workspace', () => {
       'matchMedia',
       vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
     )
-    localStorage.setItem(
-      storageKey('r1'),
-      JSON.stringify({
+    seedLayouts('r1', {
         layouts: [{ name: 'Czat', columns: [{ view: 'files', width: 50 }, { view: 'commits', width: 50 }] }],
         active: 'Czat',
-      }),
-    )
+      })
     renderWorkspace()
     await ready()
 
@@ -346,18 +394,15 @@ describe('the task workspace', () => {
 
   it('keeps two tasks apart when the route swaps run ids without remounting', async () => {
     stubFetch()
-    localStorage.setItem(
-      storageKey('r1'),
-      JSON.stringify({
+    seedLayouts('r1', {
         layouts: [{ name: 'Tylko r1', columns: [{ view: 'files', width: 100 }] }],
         active: 'Tylko r1',
-      }),
-    )
+      })
     renderWorkspace()
     await ready()
     await waitFor(() => expect(cardNames()).toEqual(['Tylko r1']))
 
     // r2 has nothing saved, so it must open on its own default — never r1's card (spec §5.3).
-    expect(readState('r2').layouts.map((layout) => layout.name)).toEqual(['Czat'])
+    expect(savedLayouts('r2').layouts.map((layout) => layout.name)).toEqual(['Czat'])
   })
 })

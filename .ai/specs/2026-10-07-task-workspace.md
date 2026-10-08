@@ -226,9 +226,20 @@ To change the view in a column, use the **hamburger menu** in the header to acce
 ### 5.3 Persistence and URLs
 
 **Storage mechanism:**
-- Persist layouts in **browser localStorage** per task and per host (local/VPS)
+- Persist layouts **on the Cezar host that owns the task**, one file per run
+  (`.ai/cezar/layouts/<runId>.json`), behind `GET/PUT /api/v1/runs/:id/layouts`
 - Each host (local Cezar, VPS 1, VPS 2) keeps its own layouts independently
 - No synchronization between hosts required
+
+> **CORRECTION (2026-10-08).** An earlier revision of this section said "browser localStorage",
+> which was not what §5.3 asked for and was recorded here after the fact. Browser storage cannot
+> keep two of this section's own promises: "layouts are removed only when the task itself is
+> permanently deleted" (clearing site data removes them sooner), and a task being the same task
+> however you reach it (a second browser, profile or machine against the same cezar saw a
+> different workspace). Host-side storage keeps both, and keeps the per-host separation this
+> section asks for for free, since a local cezar and a VPS are different hosts holding different
+> files. The browser keeps only the terminal drawer's own open/height preference, which is a
+> property of the screen rather than of the task.
 
 **State recovery:**
 - Layouts survive navigation away from and back to the same task

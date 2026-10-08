@@ -1,5 +1,6 @@
 import {
   detectedUrlsSchema, discoveredCommandsSchema,
+  workspaceLayoutsResponseSchema, workspaceLayoutsSchema,
   terminalCreateSchema, terminalInputSchema, terminalOutputQuerySchema, terminalOutputSchema,
   terminalResizeSchema, terminalSessionParamsSchema, terminalSessionSchema, terminalStateSchema,
   trackerWatchInputSchema, trackerWatchParamsSchema, trackerWatchQuerySchema,
@@ -13,6 +14,7 @@ import { DetectedUrls } from './terminal/detected-urls.ts';
 import { processSnapshot } from './terminal/foreground.ts';
 import { loadPty } from './terminal/pty-module.ts';
 import { TerminalSessions, type TerminalSessionInfo } from './terminal/sessions.ts';
+import { deleteRunLayouts, readRunLayouts, writeRunLayouts } from '../runs/layouts.ts';
 import { readTrackerAssociation, writeTrackerAssociation, clearTrackerAssociation } from '../tracker-association.ts';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
@@ -4989,15 +4991,17 @@ export function createApp(deps: ServerDeps) {
     })
 
     .delete('/runs/:id', async (c) => {
-      const { root: repoRoot, store, manager } = c.get('project');
+      const { root: repoRoot, store, manager, dataDir } = c.get('project');
       const id = c.req.param('id');
       if (manager.isActive(id)) return c.json({ error: 'run is active — cancel it first' }, 409);
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
       // Delete cleans up after itself: worktree + branch go with the run (spec 006), and so do
-      // its terminals, their process trees and the addresses they printed. The browser-local
-      // layouts are the cockpit's to drop — it does so when the delete succeeds.
+      // its terminals, their process trees, the addresses they printed, and its saved layouts.
       stopTaskProcesses(id);
+      // Layouts go with the task, and ONLY with the task (spec §5.3: "Layouts are removed only
+      // when the task itself is permanently deleted" — archiving keeps them for the unarchive).
+      deleteRunLayouts(dataDir, id);
       if (run.worktreePath) await removeWorktree(repoRoot, run.worktreePath, run.branch);
       return store.deleteRun(id) ? c.json({ deleted: true }) : c.json({ error: 'not found' }, 404);
     });
@@ -5016,6 +5020,45 @@ export function createApp(deps: ServerDeps) {
    * The `:surface` param is validated as MIDDLEWARE (`draftSurfaceParamSchema`), not interpolated:
    * it reaches the filesystem as a path segment.
    */
+  /**
+   * A task's saved workspace layouts (spec `.ai/specs/2026-10-07-task-workspace.md` §5.3:
+   * "Persist named layouts per task ON THE CEZAR HOST THAT OWNS THE TASK").
+   *
+   * Its own family and its own files (`.ai/cezar/layouts/`), for the same reason drafts got
+   * theirs: this is per-run state whose lifetime is the run's, so deleting a task is one `rm`
+   * rather than a key to find in a shared bag. Both routes 404 on an unknown run, so layouts can
+   * never outlive their task through this surface.
+   *
+   * There is no DELETE: §5.3 removes layouts only when the task itself is permanently deleted,
+   * which the run-delete route does directly. Emptying the workspace is a PUT of an empty list,
+   * and the two answers are deliberately distinguishable (see `readRunLayouts`).
+   */
+  const layoutRoutes = new Hono<ProjectApiEnv>()
+    .get('/runs/:id/layouts', paramZodValidator(runIdParamSchema), (c) => {
+      const { dataDir, store } = c.get('project');
+      const run = store.getRun(c.req.param('id'));
+      if (!run) return c.json({ error: 'not found' }, 404);
+      return c.json(workspaceLayoutsResponseSchema.parse({ layouts: readRunLayouts(dataDir, run.id) }));
+    })
+
+    .put(
+      '/runs/:id/layouts',
+      paramZodValidator(runIdParamSchema),
+      jsonZodValidator(workspaceLayoutsSchema),
+      (c) => {
+        const { dataDir, store } = c.get('project');
+        const run = store.getRun(c.req.param('id'));
+        if (!run) return c.json({ error: 'not found' }, 404);
+        const value = c.req.valid('json');
+        if (!writeRunLayouts(dataDir, run.id, value)) {
+          // A read-only home or a full disk. The cockpit keeps working from memory for the rest
+          // of the visit rather than losing the layout the user is looking at.
+          return c.json({ error: 'could not save layouts on this host' }, 409);
+        }
+        return c.json(workspaceLayoutsResponseSchema.parse({ layouts: value }));
+      },
+    );
+
   const draftRoutes = new Hono<ProjectApiEnv>()
     .get('/runs/:id/drafts', paramZodValidator(runIdParamSchema), (c) => {
       const { dataDir, store } = c.get('project');
@@ -5809,6 +5852,12 @@ export function createApp(deps: ServerDeps) {
       async (c) => {
         const session = terminalFor(c.req.valid('param'));
         if (!session) return c.json({ error: 'terminal session not found' }, 404);
+        // Policy is re-checked on the READ too, not only on create and write: `CEZ_TERMINAL` is
+        // read live, so turning it off must stop a session's output being served from under a
+        // cockpit that is no longer allowed one — a shell's scrollback is the content this flag
+        // exists to withhold.
+        const outputRefusal = terminalPolicyRefusal(capabilities());
+        if (outputRefusal) return c.json({ error: outputRefusal }, 409);
         const read = terminalSessions.read(session.id, c.req.valid('query').cursor ?? 0);
         if (!read) return c.json({ error: 'terminal session not found' }, 404);
         c.header('Cache-Control', 'no-store');
@@ -5836,6 +5885,8 @@ export function createApp(deps: ServerDeps) {
       async (c) => {
         const session = terminalFor(c.req.valid('param'));
         if (!session) return c.json({ error: 'terminal session not found' }, 404);
+        const resizeRefusal = terminalPolicyRefusal(capabilities());
+        if (resizeRefusal) return c.json({ error: resizeRefusal }, 409);
         const { cols, rows } = c.req.valid('json');
         return c.json({ resized: terminalSessions.resize(session.id, cols, rows) });
       },
@@ -5860,6 +5911,9 @@ export function createApp(deps: ServerDeps) {
       const commands = worktree ? await discoverCommands(worktree) : [];
       return c.json(discoveredCommandsSchema.parse({ commands }));
     })
+    // Deliberately NOT policy-gated: stopping a shell is the one terminal action that reduces
+    // exposure, and refusing it with the flag off would strand a running process tree with no
+    // way to reach it.
     .delete('/runs/:id/terminal/:sessionId', paramZodValidator(terminalSessionParamsSchema), async (c) => {
       const session = terminalFor(c.req.valid('param'));
       if (!session) return c.json({ error: 'terminal session not found' }, 404);
@@ -6538,6 +6592,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', sseRoutes)
     .route('/', githubRoutes)
     .route('/', terminalRoutes)
+    .route('/', layoutRoutes)
     .route('/', trackerRoutes)
     .route('/', repoRoutes)
     .route('/', configRoutes)

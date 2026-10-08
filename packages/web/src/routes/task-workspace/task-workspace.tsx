@@ -3,6 +3,16 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useParams } from 'react-router'
 
 import { ApiError } from '@/api/client'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { useHealth, useMarkRunSeen, useRun } from '@/api/queries'
 import { useRunHistory } from '@/api/run-history'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
@@ -18,6 +28,7 @@ import { GitTabLoading } from '../task-git/git-tab-loading'
 import { RunHeader } from '../task-thread/run-header'
 import { ThreadLoading } from '../task-thread/thread-loading'
 import { ThreadView } from '../task-thread/task-thread'
+import { useDiffComments } from '../task-thread/diff-comments'
 import { useRunRecordReconcile } from '../task-thread/run-reconcile'
 import { reduceThread } from '../task-thread/thread-state'
 
@@ -128,9 +139,13 @@ function WorkspaceView({
   // The deep-link hop. Keyed on the run id as well as the view: task A `/changes` → task B
   // `/changes` changes neither the path nor `openDeepLink`, and without the id in the deps task B
   // would open its default Czat card instead of the Changes the URL asked for.
+  //
+  // Gated on `ready`, because the layouts now come from the host: applied to the placeholder
+  // state the hook starts with, the new card would be built on top of a workspace this task does
+  // not have, and the host's answer would then replace it wholesale a tick later.
   useEffect(() => {
-    if (deepLinkView) openDeepLink(deepLinkView)
-  }, [deepLinkView, openDeepLink, run.id])
+    if (layouts.ready && deepLinkView) openDeepLink(deepLinkView)
+  }, [deepLinkView, layouts.ready, openDeepLink, run.id])
 
   const markedUnread = useCallback(() => onMarkedUnread(run.id), [onMarkedUnread, run.id])
 
@@ -178,16 +193,47 @@ function WorkspaceView({
     [layouts.state.layouts, layouts.state.active, selectLayout, renameLayout, closeLayout, addLayout],
   )
 
+  /**
+   * Changing a column's view away from Zmiany while it holds an unsent comment asks first (spec
+   * §5.2: warn, with `Zamknij mimo to` to discard and change, or `Wróć` to keep it and stay).
+   * Czat's composer text is discarded without a warning, which the same paragraph says.
+   */
+  const diffComments = useDiffComments(run.id)
+  const [pendingView, setPendingView] = useState<{ index: number; view: ViewId } | null>(null)
+  const columns = layouts.layout?.columns
+  const requestColumnView = useCallback(
+    (index: number, view: ViewId) => {
+      if (columns?.[index]?.view === 'changes' && diffComments.comments.length > 0) {
+        setPendingView({ index, view })
+        return
+      }
+      layouts.setColumnView(index, view)
+    },
+    [columns, diffComments.comments.length, layouts.setColumnView],
+  )
+
   const actions: ColumnActions = useMemo(
     () => ({
       addColumn: layouts.addColumn,
       closeColumn: layouts.closeColumn,
-      setColumnView: layouts.setColumnView,
+      setColumnView: requestColumnView,
       resizeColumns: layouts.resizeColumns,
       moveColumn: layouts.moveColumn,
     }),
-    [layouts.addColumn, layouts.closeColumn, layouts.setColumnView, layouts.resizeColumns, layouts.moveColumn],
+    [layouts.addColumn, layouts.closeColumn, requestColumnView, layouts.resizeColumns, layouts.moveColumn],
   )
+
+  /**
+   * The LAYOUT is part of each column's memory key, not just its index.
+   *
+   * Spec §5.4 asks that switching saved layouts preserve "each layout's view state… scroll
+   * position, file selection". Keyed by index alone, two layouts whose Files column happens to
+   * sit in the same position shared one remembered selection — so switching between them moved
+   * the other one's file under the user. The name changes on rename, which costs that column its
+   * remembered position for the rest of the session; that is the right trade for state the
+   * module already documents as session-lifetime.
+   */
+  const activeName = layouts.state.active
 
   // One run, one worktree: every column is handed the SAME record (spec §3.3), so no column can
   // drift onto another task's state or the boot repo.
@@ -197,11 +243,11 @@ function WorkspaceView({
         case 'session':
           return <ConversationColumn run={run} onMarkedUnread={onMarkedUnread} />
         case 'changes':
-          return <ChangesView run={run} embedded stateKey={`${run.id}:${index}:changes`} />
+          return <ChangesView run={run} embedded stateKey={`${run.id}:${activeName}:${index}:changes`} />
         case 'commits':
           return <CommitsView run={run} embedded />
         case 'files':
-          return <FilesView run={run} embedded stateKey={`${run.id}:${index}:files`} />
+          return <FilesView run={run} embedded stateKey={`${run.id}:${activeName}:${index}:files`} />
         case 'browser':
           return (
             <BrowserView
@@ -211,7 +257,7 @@ function WorkspaceView({
           )
       }
     },
-    [onMarkedUnread, run, setColumnBrowser],
+    [activeName, onMarkedUnread, run, setColumnBrowser],
   )
 
   return (
@@ -230,7 +276,12 @@ function WorkspaceView({
           </Button>
         </div>
       ) : null}
-      {layouts.layout ? (
+      {!layouts.ready ? (
+        // The host still owes us this task's layouts (spec §5.3). Painting the default card first
+        // and swapping it a tick later would flash a workspace the user never built, so the view
+        // area holds the same skeleton a cold load of this URL already shows.
+        <DeepLinkLoading view={deepLinkView} />
+      ) : layouts.layout ? (
         <WorkspaceColumns columns={layouts.layout.columns} actions={actions} renderView={renderView} />
       ) : (
         // The workspace the user emptied by closing its last card. It stays empty for this visit
@@ -251,6 +302,31 @@ function WorkspaceView({
           }
         />
       )}
+      <AlertDialog open={pendingView !== null} onOpenChange={(open) => !open && setPendingView(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Masz niewysłany komentarz</AlertDialogTitle>
+            <AlertDialogDescription>
+              W tej kolumnie jest {diffComments.comments.length === 1 ? 'komentarz' : 'komentarze'} do
+              zmian, {diffComments.comments.length === 1 ? 'którego' : 'których'} jeszcze nie wysłano.
+              Zmiana widoku zabierze stąd Zmiany.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            {/* `Wróć` keeps the comment and stays in Zmiany; `Zamknij mimo to` changes the view
+                anyway — the two answers spec §5.2 names, in that order. */}
+            <AlertDialogCancel>Wróć</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (pendingView) layouts.setColumnView(pendingView.index, pendingView.view)
+                setPendingView(null)
+              }}
+            >
+              Zamknij mimo to
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {terminalAllowed && drawer.open ? (
         <Suspense fallback={null}>
           <TerminalDrawer

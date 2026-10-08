@@ -353,7 +353,7 @@ describe('the task workspace’s saved layouts and resizable columns', () => {
       browser.evaluate(
         `document.querySelector('[data-slot="layout-cards"] [aria-current="page"]').textContent`,
       ),
-    ).toBe('Pliki')
+    ).toBe('Układ 2')
     // … beside the `Czat` layout it did NOT disturb.
     expect(browser.count('[data-slot="layout-card"]')).toBe(2)
     expect(browser.url()).toBe(`${baseUrl}${scoped(`/tasks/${RUN_ID}/files`)}`)

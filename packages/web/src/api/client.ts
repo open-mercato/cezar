@@ -78,6 +78,8 @@ import type {
   TerminalOutput,
   TerminalSession,
   TerminalState,
+  WorkspaceLayouts,
+  WorkspaceLayoutsResponse,
   OpenProjectInResponse,
   OpenTargetsResponse,
   ParsedWorkflow,
@@ -1669,6 +1671,30 @@ export async function getRunTerminalCommands(id: string): Promise<DiscoveredComm
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
     }),
     runPath(id, '/terminal/commands'),
+  )
+}
+
+/**
+ * A task's saved workspace layouts, from the cezar that owns the task (spec
+ * `.ai/specs/2026-10-07-task-workspace.md` §5.3). `layouts: null` means the task has never been
+ * opened — distinct from an empty list, which is a workspace the user emptied on purpose.
+ */
+export async function getRunLayouts(id: string): Promise<WorkspaceLayoutsResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].layouts.$get({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/layouts'),
+  )
+}
+
+export async function putRunLayouts(id: string, body: WorkspaceLayouts): Promise<WorkspaceLayoutsResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].layouts.$put({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: body,
+    }),
+    runPath(id, '/layouts'),
   )
 }
 

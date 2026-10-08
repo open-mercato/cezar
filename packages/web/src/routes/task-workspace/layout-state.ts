@@ -113,11 +113,6 @@ export const RESIZE_STEP_LARGE = 10
  *  card named `Czat`"). */
 export const DEFAULT_LAYOUT_NAME = VIEW_LABELS.session
 
-/** One key per task, namespaced `cez-` like `cez-theme` and `cez-sidebar-width`. */
-export function storageKey(taskId: string): string {
-  return `cez-task-layouts:${taskId}`
-}
-
 /** The state a task with nothing saved opens with: one full-width Conversation column. Also the
  *  recovery target for state that is missing, malformed, or names views this build does not have
  *  (spec §5.3 — "recover to the one-column Conversation default without an error"). A factory
@@ -178,29 +173,12 @@ function withEqualWidths(columns: readonly WorkspaceColumn[]): WorkspaceColumn[]
 /* ── Reading and writing ─────────────────────────────────────────────────────────────────────── */
 
 /**
- * The saved state for a task, or the default when storage is empty, unreadable (private mode) or
- * junk. Salvages per entry rather than per file, the same stance the workspace registry takes:
- * one unparseable layout never costs the user the rest of them.
+ * Repair whatever the host sent into a state the workspace can paint.
+ *
+ * Salvages per entry rather than per file, the same stance the workspace registry takes: one
+ * unparseable layout never costs the user the rest of them (spec §5.3 — "recover to the
+ * one-column Conversation default without an error").
  */
-export function readState(taskId: string): WorkspaceState {
-  let raw: string | null = null
-  try {
-    raw = localStorage.getItem(storageKey(taskId))
-  } catch {
-    // Storage disabled — this visit gets the default and never persists.
-    return defaultState()
-  }
-  if (raw === null) return defaultState()
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return defaultState()
-  }
-  return reviveState(parsed)
-}
-
-/** The parse half of `readState`, split out so it can be tested without touching storage. */
 export function reviveState(parsed: unknown): WorkspaceState {
   if (typeof parsed !== 'object' || parsed === null) return defaultState()
   const source = parsed as { layouts?: unknown; active?: unknown }
@@ -241,9 +219,14 @@ function reviveLayout(entry: unknown, taken: readonly WorkspaceLayout[]): Worksp
     widths.push(typeof candidate.width === 'number' ? candidate.width : Number.NaN)
     browsers.push(candidate.view === 'browser' ? reviveBrowserState(candidate.browser) : undefined)
   }
-  // A layout the user emptied is not a layout: closing the last column closes the card (confirmed
-  // decision, 2026-10-07), so a saved zero-column entry can only be drift. Drop it.
-  if (views.length === 0) return null
+  // An EMPTY layout survives; a layout EMPTIED BY RECOVERY does not.
+  //
+  // Spec §10 — "A saved layout may intentionally have no columns" — so a card the user emptied
+  // must round-trip. But a card that arrived with columns and lost every one of them to an
+  // unknown view is malformed state, and §5.3 says malformed state recovers rather than being
+  // presented as the user's own. The two cases are only distinguishable here, before the
+  // surviving views are counted against what was actually saved.
+  if (source.columns.length > 0 && views.length === 0) return null
 
   const name = uniqueName(source.name.trim(), taken)
   const normalized = normalizeWidths(widths)
@@ -257,37 +240,18 @@ function reviveLayout(entry: unknown, taken: readonly WorkspaceLayout[]): Worksp
   }
 }
 
-/** Persist the state. Normalized on the way in as well as on the way out, so a bad value can
- *  never be written in the first place and an already-bad one can never be read back. */
-export function writeState(taskId: string, state: WorkspaceState): void {
-  try {
-    localStorage.setItem(storageKey(taskId), JSON.stringify(state))
-  } catch {
-    // Private mode, storage disabled, or a quota a hundred layouts could reach: the layouts still
-    // apply for this page. Never surface this — it is a preference, not the user's work.
-  }
-}
-
-/** Forget a task's layouts entirely. For a deleted task; never called on archive (spec §5.3 —
- *  "Layouts are removed only when the task itself is permanently deleted"). */
-export function clearState(taskId: string): void {
-  try {
-    localStorage.removeItem(storageKey(taskId))
-  } catch {
-    // Nothing to do and nothing to say.
-  }
-}
-
 /**
- * Everything this browser remembers about a task: its layouts AND its drawer.
+ * What this BROWSER remembers about a task, now that the layouts themselves do not live here.
  *
- * Called when a task is permanently DELETED, never when it is archived — §5.3 keeps layouts for
- * the unarchive, and §6 keeps the Browser tabs inside them. The server drops its own half (the
- * shells, their process trees, the detected addresses); this is the browser-local half, which no
- * server route could reach.
+ * The layouts are the owning cezar's (spec §5.3) and go with the run-delete route. What is left
+ * in the browser is the drawer's own open/height preference, which is per screen rather than per
+ * task-on-a-host — and a task id is never reused, so leaving it behind would be a leak nothing
+ * ever cleans up.
+ *
+ * Called when a task is permanently DELETED, never when it is archived (§5.3 keeps layouts for
+ * the unarchive, and §6 keeps the Browser tabs inside them).
  */
 export function forgetTask(taskId: string): void {
-  clearState(taskId)
   try {
     // The key comes from the module that owns it; spelling it again here is how the two drift.
     localStorage.removeItem(drawerStorageKey(taskId))
@@ -339,9 +303,20 @@ function replaceLayout(state: WorkspaceState, name: string, next: WorkspaceLayou
   }
 }
 
-/** A new card with one full-width column, named after its view and activated (spec §5.2). */
+/**
+ * The next automatic card name (spec §5.2: "gives it an automatic editable name (for example,
+ * `Układ 2`)", and §5.3 for a deep link: "Give it the next automatic unique layout name").
+ *
+ * Counting from the number of cards means the second card of a fresh task is `Układ 2`, which is
+ * the spec's own example; `uniqueName` then settles any collision with a card the user renamed.
+ */
+export function nextAutomaticName(layouts: readonly WorkspaceLayout[]): string {
+  return uniqueName(`Układ ${layouts.length + 1}`, layouts)
+}
+
+/** A new card with one full-width column, automatically named and activated (spec §5.2). */
 export function addLayout(state: WorkspaceState, view: ViewId): WorkspaceState {
-  const name = uniqueName(viewLabel(view), state.layouts)
+  const name = nextAutomaticName(state.layouts)
   return {
     layouts: [...state.layouts, { name, columns: [{ ...newColumn(view), width: 100 }] }],
     active: name,
@@ -433,7 +408,10 @@ export function closeColumn(state: WorkspaceState, name: string, index: number):
   const layout = findLayout(state, name)
   if (!layout || index < 0 || index >= layout.columns.length) return state
   const columns = layout.columns.filter((_, position) => position !== index)
-  if (columns.length === 0) return closeLayout(state, name)
+  // Closing the LAST column empties the layout, it does not close it: spec §5.2 — "Closing the
+  // last column leaves the layout card in place with an empty area and the `+` control to add
+  // another view" — and §10, "A saved layout may intentionally have no columns". Closing the
+  // CARD is a separate, explicit act (its X, or its context menu).
   return replaceLayout(state, name, { ...layout, columns: withEqualWidths(columns) })
 }
 
@@ -530,10 +508,10 @@ export function openDeepLink(state: WorkspaceState, view: ViewId): WorkspaceStat
   if (current && current.columns.length === 1 && current.columns[0]?.view === view) {
     return state
   }
-  const existing = state.layouts.find(
-    (layout) => layout.columns.length === 1 && layout.columns[0]?.view === view,
-  )
-  if (existing) return selectLayout(state, existing.name)
+  // No adopting some OTHER saved layout that happens to show this view: spec §5.3 says the deep
+  // link CREATES a new one-column layout and leaves existing layouts unchanged. The guard above
+  // is what keeps a refresh idempotent — on reload the card this link made is already the active
+  // one, so nothing is created — which is the only reason the create path cannot pile up.
   return addLayout(state, view)
 }
 

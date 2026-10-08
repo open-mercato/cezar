@@ -151,12 +151,13 @@ describe('the Changes tab against a live dry run', () => {
     browser.waitForFunction(`document.querySelector('[data-slot="git-toolbar"]') !== null`)
     expect(browser.url()).toBe(`${baseUrl}${scoped(`/tasks/${runId}`)}`)
 
-    // The new card is active and named for the view it was created from, and the column says so.
+    // The new card is active and carries the next automatic name (§5.2); the column says which
+    // view it holds.
     expect(
       browser.evaluate(
         `document.querySelector('[data-slot="layout-cards"] [aria-current="page"]').textContent`,
       ),
-    ).toBe('Zmiany')
+    ).toBe('Układ 2')
     expect(browser.count('[data-slot="workspace-column"][data-view="changes"]')).toBe(1)
 
     // The tree shows the mock's real change: notes.md, one added line.

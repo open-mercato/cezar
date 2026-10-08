@@ -68,7 +68,19 @@ export function ViewItems({
   )
 }
 
-/** A standalone picker: the `Nowy układ` button and the empty workspace's call to action. */
+/**
+ * The TILE picker (spec §5.2: "Selecting an enabled tile creates a new layout"; §11: "it opens a
+ * tile picker"). Behind `Nowy układ`, the view area's `+`, and the emptied-workspace call to
+ * action — the three places that create rather than switch.
+ *
+ * Tiles, but still `DropdownMenuItem`s in a grid: Radix keeps the roving focus, the Escape
+ * handling and the typeahead that a hand-rolled popover would have to re-implement, and the
+ * items keep the `role="menuitem"` semantics assistive tech already gets from every other menu
+ * in the cockpit. Only the layout changes, which is what "tile" asks for.
+ *
+ * The column header's own menu stays a list (`ViewItems`): switching a column's view is a choice
+ * among commands next to `Zamknij kolumnę`, not the creation gesture the spec describes.
+ */
 export function ViewPickerMenu({
   trigger,
   heading,
@@ -83,10 +95,26 @@ export function ViewPickerMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
-      <DropdownMenuContent align={align} className="w-52">
+      <DropdownMenuContent align={align} className="w-64">
         <DropdownMenuLabel>{heading}</DropdownMenuLabel>
         <DropdownMenuSeparator />
-        <ViewItems onPick={onPick} />
+        <div data-slot="view-tiles" className="grid grid-cols-3 gap-1 p-1">
+          {VIEW_IDS.map((view) => {
+            const Icon = VIEW_ICONS[view]
+            return (
+              <DropdownMenuItem
+                key={view}
+                data-view={view}
+                data-view-action="create"
+                onSelect={() => onPick(view)}
+                className="flex h-16 flex-col items-center justify-center gap-1 rounded-md border border-border text-center text-xs"
+              >
+                <Icon aria-hidden="true" className="size-4" />
+                <span className="truncate px-1">{viewLabel(view)}</span>
+              </DropdownMenuItem>
+            )
+          })}
+        </div>
       </DropdownMenuContent>
     </DropdownMenu>
   )

@@ -4,7 +4,6 @@ import {
   addColumn,
   addLayout,
   activeLayout,
-  clearState,
   closeColumn,
   closeLayout,
   defaultState,
@@ -17,17 +16,14 @@ import {
   normalizeWidths,
   openDeepLink,
   preferredActive,
-  readState,
   renameLayout,
   resizeColumns,
   reviveState,
   selectLayout,
   setColumnView,
   splitCards,
-  storageKey,
   uniqueName,
   viewLabel,
-  writeState,
   type WorkspaceState,
 } from './layout-state'
 import { drawerStorageKey } from './drawer-state'
@@ -101,37 +97,39 @@ describe('uniqueName', () => {
 })
 
 describe('addLayout', () => {
-  it('names a new card after its view and activates it', () => {
+  it('gives a new card an automatic name and activates it', () => {
+    // Spec §5.2: "gives it an automatic editable name (for example, `Układ 2`)" — the name is
+    // positional, not derived from the view, so two cards on the same view are still distinct.
     const state = addLayout(defaultState(), 'changes')
-    expect(state.active).toBe(viewLabel('changes'))
+    expect(state.active).toBe('Układ 2')
     expect(findLayout(state)?.columns).toEqual([{ view: 'changes', width: 100 }])
   })
 
-  it('numbers a second card for the same view', () => {
+  it('keeps counting for each further card', () => {
     const state = addLayout(addLayout(defaultState(), 'changes'), 'changes')
-    expect(state.layouts.map((layout) => layout.name)).toEqual(['Czat', 'Zmiany', 'Zmiany 2'])
+    expect(state.layouts.map((layout) => layout.name)).toEqual(['Czat', 'Układ 2', 'Układ 3'])
   })
 })
 
 describe('closeLayout', () => {
   it('selects the card to the right of the one it closed', () => {
     let state = addLayout(addLayout(defaultState(), 'changes'), 'files')
-    state = selectLayout(state, 'Zmiany')
-    state = closeLayout(state, 'Zmiany')
-    expect(state.active).toBe('Pliki')
+    state = selectLayout(state, 'Układ 2')
+    state = closeLayout(state, 'Układ 2')
+    expect(state.active).toBe('Układ 3')
   })
 
   it('falls back to the previous card when the closed one was last', () => {
     let state = addLayout(defaultState(), 'changes')
-    state = closeLayout(state, 'Zmiany')
+    state = closeLayout(state, 'Układ 2')
     expect(state.active).toBe('Czat')
   })
 
   it('leaves an inactive card selected when another is closed', () => {
     let state = addLayout(addLayout(defaultState(), 'changes'), 'files')
-    expect(state.active).toBe('Pliki')
-    state = closeLayout(state, 'Zmiany')
-    expect(state.active).toBe('Pliki')
+    expect(state.active).toBe('Układ 3')
+    state = closeLayout(state, 'Układ 2')
+    expect(state.active).toBe('Układ 3')
   })
 
   it('empties the workspace when the last card goes, and that stays empty for the visit', () => {
@@ -155,7 +153,7 @@ describe('renameLayout', () => {
 
   it('numbers a name that is already taken', () => {
     let state = addLayout(defaultState(), 'changes')
-    state = renameLayout(state, 'Zmiany', 'Czat')
+    state = renameLayout(state, 'Układ 2', 'Czat')
     expect(state.layouts.map((layout) => layout.name)).toEqual(['Czat', 'Czat 2'])
   })
 
@@ -197,9 +195,13 @@ describe('closeColumn', () => {
     expect(widths(state)).toEqual([50, 50])
   })
 
-  it('closes the whole card when the last column goes', () => {
+  it('leaves the card in place, empty, when the last column goes', () => {
+    // Spec §5.2 and §10: an emptied layout KEEPS its card and offers `+`; it is not the same act
+    // as closing the card, which has its own X.
     const state = closeColumn(defaultState(), 'Czat', 0)
-    expect(state.layouts).toEqual([])
+    expect(state.layouts).toHaveLength(1)
+    expect(state.layouts[0]!.columns).toEqual([])
+    expect(state.active).toBe('Czat')
   })
 
   it('ignores an index it does not have', () => {
@@ -283,7 +285,7 @@ describe('openDeepLink', () => {
   it('adds a one-column card for the requested view and leaves the rest alone', () => {
     const before = addColumn(defaultState(), 'Czat', 'files')
     const state = openDeepLink(before, 'changes')
-    expect(state.active).toBe('Zmiany')
+    expect(state.active).toBe('Układ 2')
     expect(findLayout(state, 'Czat')?.columns).toEqual(findLayout(before, 'Czat')?.columns)
   })
 
@@ -294,48 +296,50 @@ describe('openDeepLink', () => {
     expect(second.layouts).toHaveLength(2)
   })
 
-  it('re-selects an existing single-column card for that view', () => {
+  it('creates another card rather than adopting an existing one for that view', () => {
+    // Spec §5.3: the deep link CREATES a new one-column layout and "existing saved layouts
+    // remain unchanged" — it does not jump the user onto a card they built earlier.
     let state = openDeepLink(defaultState(), 'changes')
     state = selectLayout(state, 'Czat')
     const reopened = openDeepLink(state, 'changes')
-    expect(reopened.active).toBe('Zmiany')
-    expect(reopened.layouts).toHaveLength(2)
+    expect(reopened.layouts).toHaveLength(3)
+    expect(reopened.active).toBe('Układ 3')
+  })
+
+  it('is idempotent on a refresh, because that card is already the active one', () => {
+    // The only guard against a card per reload: arriving at a deep link whose card is already
+    // active changes nothing.
+    const state = openDeepLink(defaultState(), 'changes')
+    expect(openDeepLink(state, 'changes')).toBe(state)
   })
 
   it('does not reuse a multi-column card that happens to contain the view', () => {
     const state = openDeepLink(addColumn(defaultState(), 'Czat', 'changes'), 'changes')
     expect(state.layouts).toHaveLength(2)
-    expect(state.active).toBe('Zmiany')
+    expect(state.active).toBe('Układ 2')
   })
 })
 
-describe('storage', () => {
-  it('round-trips a built workspace', () => {
+describe('round trip through the host', () => {
+  // Layouts live on the cezar that owns the task now (spec §5.3), so the browser's half of the
+  // contract is simply that whatever it sends comes back meaning the same thing.
+  it('survives a round trip through JSON unchanged', () => {
     let state = addColumn(defaultState(), 'Czat', 'changes')
     state = resizeColumns(state, 'Czat', 0, 12)
     state = addLayout(state, 'files')
-    writeState('run-1', state)
-    expect(readState('run-1')).toEqual(state)
+    expect(reviveState(JSON.parse(JSON.stringify(state)))).toEqual(state)
   })
 
-  it('keeps the layouts of two tasks apart', () => {
-    writeState('run-1', addLayout(defaultState(), 'files'))
-    expect(readState('run-2')).toEqual(defaultState())
-  })
-
-  it('defaults for an empty key', () => {
-    expect(readState('never-opened')).toEqual(defaultState())
+  it('round-trips a workspace the user emptied on purpose', () => {
+    // §10: "A saved layout may intentionally have no columns" — so an emptied card must come
+    // back as an emptied card, not as a fresh default.
+    const emptied = closeColumn(defaultState(), 'Czat', 0)
+    expect(emptied.layouts[0]!.columns).toEqual([])
+    expect(reviveState(JSON.parse(JSON.stringify(emptied)))).toEqual(emptied)
   })
 
   it('recovers from junk rather than throwing', () => {
-    localStorage.setItem(storageKey('run-1'), 'not json')
-    expect(readState('run-1')).toEqual(defaultState())
-  })
-
-  it('forgets a task on clear', () => {
-    writeState('run-1', addLayout(defaultState(), 'files'))
-    clearState('run-1')
-    expect(readState('run-1')).toEqual(defaultState())
+    expect(reviveState('not a workspace')).toEqual(defaultState())
   })
 })
 
@@ -386,7 +390,7 @@ describe('reviveState', () => {
     expect(state.layouts[0]!.columns[0]!.browser).toEqual({ tabs: ['a'], active: 0 })
   })
 
-  it('drops a layout left with no columns at all', () => {
+  it('drops a layout whose every column was recovered away', () => {
     const state = reviveState({
       layouts: [
         { name: 'Gone', columns: [{ view: 'hologram', width: 100 }] },
@@ -481,20 +485,18 @@ describe('splitCards', () => {
 })
 
 describe('forgetTask', () => {
-  it('drops both halves of what a browser remembers about a deleted task', () => {
-    writeState('run-1', addLayout(defaultState(), 'files'))
+  // The layouts themselves are the host's now and go with the run-delete route; what is left in
+  // the browser is the drawer preference.
+  it('drops the drawer preference of a deleted task', () => {
     localStorage.setItem(drawerStorageKey('run-1'), JSON.stringify({ open: true, height: 300 }))
-
     forgetTask('run-1')
-
-    expect(localStorage.getItem(storageKey('run-1'))).toBeNull()
     expect(localStorage.getItem(drawerStorageKey('run-1'))).toBeNull()
   })
 
   it('leaves every other task alone', () => {
-    writeState('run-1', addLayout(defaultState(), 'files'))
-    writeState('run-2', addLayout(defaultState(), 'commits'))
+    localStorage.setItem(drawerStorageKey('run-1'), JSON.stringify({ open: true, height: 300 }))
+    localStorage.setItem(drawerStorageKey('run-2'), JSON.stringify({ open: true, height: 420 }))
     forgetTask('run-1')
-    expect(readState('run-2').layouts.map((layout) => layout.name)).toEqual(['Czat', 'Commity'])
+    expect(localStorage.getItem(drawerStorageKey('run-2'))).not.toBeNull()
   })
 })

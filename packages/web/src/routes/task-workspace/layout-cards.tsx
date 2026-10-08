@@ -184,7 +184,14 @@ function LayoutCard({
           type="button"
           aria-current={active ? 'page' : undefined}
           onClick={onSelect}
-          title={`${layout.name} — prawy klik, by zmienić nazwę lub zamknąć`}
+          // Double-click renames (spec §5.2 — "Double-click a card to rename it"). The context
+          // menu keeps the same action for a pointer that cannot double-click comfortably and
+          // for discoverability; this is the gesture the spec names.
+          onDoubleClick={(event) => {
+            event.preventDefault()
+            startRename()
+          }}
+          title={`${layout.name} — dwuklik, by zmienić nazwę; prawy klik, by zamknąć`}
           className="max-w-40 truncate outline-none focus-visible:underline"
         >
           {layout.name}

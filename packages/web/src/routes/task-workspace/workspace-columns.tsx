@@ -1,4 +1,4 @@
-import { MoreVerticalIcon, XIcon } from 'lucide-react'
+import { MoreVerticalIcon, PlusIcon, XIcon } from 'lucide-react'
 import { useRef, useState, type ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
@@ -22,7 +22,7 @@ import {
   type ViewId,
   type WorkspaceColumn,
 } from './layout-state'
-import { ViewItems } from './view-picker'
+import { ViewItems, ViewPickerMenu } from './view-picker'
 
 export interface ColumnActions {
   addColumn: (view: ViewId) => void
@@ -60,7 +60,6 @@ export function WorkspaceColumns({
   const [narrowIndex, setNarrowIndex] = useState(0)
   const activeNarrow = Math.min(narrowIndex, columns.length - 1)
 
-  if (columns.length === 0) return null
 
   const columnMenu = (index: number, column: WorkspaceColumn) => (
     <ColumnMenu
@@ -72,6 +71,15 @@ export function WorkspaceColumns({
   )
 
   if (!desktop) {
+    // An emptied layout has no column to show and no column menu to open, so the right-edge `+`
+    // is the whole surface here too (spec §5.2).
+    if (columns.length === 0) {
+      return (
+        <div data-slot="workspace-columns" data-narrow="" className="flex min-h-0 flex-1 flex-col">
+          <AddColumnEdge count={0} onPick={actions.addColumn} />
+        </div>
+      )
+    }
     const column = columns[activeNarrow]!
     return (
       <div data-slot="workspace-columns" data-narrow="" className="flex min-h-0 flex-1 flex-col">
@@ -148,12 +156,61 @@ export function WorkspaceColumns({
           </div>
         </div>
       ))}
+      {/* The `+` at the RIGHT EDGE of the view area (spec §5.2 and §11), not only inside a column
+          menu: it is how a layout gains its second and third column, and it is the ONLY way to
+          add one to a layout whose columns have all been closed — that case has no column menu
+          to open. Disabled at three, which is the cap the same paragraph sets. */}
+      <AddColumnEdge count={columns.length} onPick={actions.addColumn} />
     </div>
   )
 }
 
-/** Name + menu + close (confirmed decision, 2026-10-07: a simple header — name and X — with the
- *  view switcher and `+` folded into the menu rather than spread across the strip).
+/**
+ * The right-edge `+` (spec §5.2: "click the `+` at the right edge of the view area. It opens the
+ * same view picker"; §11 repeats it among the confirmed decisions).
+ *
+ * A full-width call to action when the layout is empty, a narrow strip beside the columns
+ * otherwise — the same control either way, so there is one answer to "how do I add a view".
+ */
+function AddColumnEdge({ count, onPick }: { count: number; onPick: (view: ViewId) => void }) {
+  const full = count === 0
+  const atCap = count >= MAX_COLUMNS
+  return (
+    <div
+      data-slot="add-column-edge"
+      className={cn(
+        'flex shrink-0 items-center justify-center border-l border-border',
+        full ? 'flex-1 border-l-0' : 'w-9',
+      )}
+    >
+      <ViewPickerMenu
+        heading="Dodaj widok"
+        onPick={onPick}
+        trigger={
+          <Button
+            type="button"
+            variant={full ? 'outline' : 'ghost'}
+            size={full ? 'default' : 'icon-sm'}
+            data-action="add-column"
+            disabled={atCap}
+            title={
+              atCap
+                ? `Maksymalnie ${MAX_COLUMNS} kolumny`
+                : 'Dodaj widok — nowa kolumna po prawej'
+            }
+            aria-label="Dodaj widok"
+            className={full ? undefined : 'size-7 text-muted-foreground'}
+          >
+            <PlusIcon aria-hidden="true" />
+            {full ? 'Dodaj widok' : null}
+          </Button>
+        }
+      />
+    </div>
+  )
+}
+
+/** Name + menu + close (spec §5.1: the header identifies the view and carries its controls).
  *
  *  Draggable by the header to reorder (spec §5.2). Native HTML drag-and-drop on purpose: dnd-kit
  *  is loaded by the workflows route alone and must not become main-bundle weight for a reorder

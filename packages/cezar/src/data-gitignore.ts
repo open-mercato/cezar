@@ -28,6 +28,10 @@ export const DATA_GITIGNORE_ENTRIES = [
   'worktrees/',
   'tmp/', // per-run agent temp directories (#785)
   'drafts/', // unsent composer text + pasted screenshots (#939) — never in git history
+  // Per-task workspace layouts (spec `2026-10-07-task-workspace` §5.3). A screen preference —
+  // which views sit side by side and how wide — belonging to whoever opened the task on this
+  // host, not to the repository, so it must never ride a `git add -A`.
+  'layouts/',
   'todos.json',
   'todos.json.tmp',
   // Private, per-project MCP servers (spec 2026-10-07-private-project-mcp) — personal tokens.
