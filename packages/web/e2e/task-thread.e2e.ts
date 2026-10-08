@@ -280,7 +280,11 @@ describe('task thread', () => {
   it('the plan dock shows the LATEST snapshot (2/4), settled for this finished run, mirrored in the header', () => {
     expect(browser.evaluate(`document.querySelector('[data-slot="plan-dock"]').dataset.state`)).toBe('open')
     expect(browser.evaluate(`document.querySelector('[data-slot="plan-count"]').textContent`)).toBe('· 2/4')
-    expect(browser.evaluate(`document.querySelector('[data-slot="plan-mirror"]').textContent`)).toBe('Plan 2/4')
+    // NO header mirror here, deliberately: the workspace keeps `planTally` in the Czat column's
+    // dock rather than publishing it up to its single run header, because
+    // `useContinueAction().pills` rebuilds on every render and would re-render the whole
+    // workspace on every transcript frame (spec `2026-10-07-task-workspace` §5.1). The dock
+    // above is the same number from the same source.
 
     // The turn-2 snapshot won (turn 1 said 0/4 with "Read README and docs" in progress).
     const items = browser.evaluate(`[...document.querySelectorAll('[data-slot="plan-item"]')].map((el) => ({
@@ -341,7 +345,10 @@ describe('task thread', () => {
   })
 
   it('shows the auto-summary title and the done pill in the header', () => {
-    expect(browser.evaluate(`document.querySelector('[data-route="task-thread"] h1').textContent`)).toBe(
+    // Scoped to the WORKSPACE, not the thread: `/tasks/:id` renders the workspace, whose
+    // `RunHeader` sits above the Czat column — so the title is no longer inside
+    // `[data-route="task-thread"]`, which now marks only the embedded transcript.
+    expect(browser.evaluate(`document.querySelector('[data-route="task-workspace"] h1').textContent`)).toBe(
       'Explain what cezar does',
     )
     expect(browser.evaluate(`document.querySelector('[data-slot="pill"]').textContent`)).toBe('done')
@@ -384,19 +391,20 @@ describe('task thread', () => {
     ).toBe('cez/fcd519dd')
   })
 
-  it('tabs point at the routed Session/Changes/Files/Graph surfaces; the done run offers the closed-run actions', () => {
-    const tabs = browser.evaluate(`[...document.querySelectorAll('[data-slot="run-tabs"] a')].map((a) => ({
-      text: a.textContent,
-      href: a.getAttribute('href'),
-      current: a.getAttribute('aria-current'),
-    }))`) as Array<{ text: string; href: string; current: string | null }>
-    expect(tabs).toEqual([
-      { text: 'Session', href: scoped(`/tasks/${RUN_ID}`), current: 'page' },
-      { text: 'Changes', href: scoped(`/tasks/${RUN_ID}/changes`), current: null },
-      { text: 'Commits', href: scoped(`/tasks/${RUN_ID}/commits`), current: null },
-      { text: 'Files', href: scoped(`/tasks/${RUN_ID}/files`), current: null },
-      { text: 'Graph', href: scoped(`/tasks/${RUN_ID}/graph`), current: null },
-    ])
+  it('saved-layout cards replace the route tabs; the done run offers the closed-run actions', () => {
+    // The workspace replaced the Session/Changes/Commits/Files/Graph strip with its saved-layout
+    // cards, and the spec is explicit that both must never show at once (§5.2). A clean visit
+    // opens the one default card, `Czat`, and it is the active one. Every surface those tabs
+    // pointed at is now a VIEW a column can hold — including Graf, which stopped being a page of
+    // its own on 2026-10-08.
+    expect(browser.count('[data-slot="run-tabs"] a')).toBe(0)
+    const cards = browser.evaluate(`[...document.querySelectorAll('[data-slot="layout-card"] [aria-current]')].map((el) => ({
+      text: el.textContent.trim(),
+      current: el.getAttribute('aria-current'),
+    }))`) as Array<{ text: string; current: string | null }>
+    expect(cards).toEqual([{ text: 'Czat', current: 'page' }])
+    // And the URL stays canonical — opening a task is not a navigation to a tab.
+    expect(browser.url()).toBe(`${baseUrl}${scoped(`/tasks/${RUN_ID}`)}`)
 
     const actions = browser.evaluate(
       `[...document.querySelectorAll('[data-slot="run-actions"] button')].map((b) => b.textContent.trim())`,
@@ -439,7 +447,7 @@ describe('task thread', () => {
 
     // The header re-reads the invalidated record — the new title lands in the h1…
     browser.waitForFunction(
-      `document.querySelector('[data-route="task-thread"] h1')?.textContent === 'Renamed by the header e2e'`,
+      `document.querySelector('[data-route="task-workspace"] h1')?.textContent === 'Renamed by the header e2e'`,
     )
     // …and the API readback proves it persisted rather than living in component state.
     const record = (await (await fetch(`${baseUrl}/api/v1/runs/${RUN_ID}`)).json()) as {
@@ -503,7 +511,7 @@ describe('task thread', () => {
       ),
     ).toBe(true)
     // Title + pill still read in one compact row.
-    expect(browser.isVisible('[data-route="task-thread"] h1')).toBe(true)
+    expect(browser.isVisible('[data-route="task-workspace"] h1')).toBe(true)
     expect(browser.evaluate(`document.querySelector('[data-slot="pill"]').textContent`)).toBe('done')
 
     browser.screenshot(`${artifactsDir}/thread-header-mobile.png`)
