@@ -70,6 +70,8 @@ const stepStateSchema = z.object({
   kind: z.enum(['agent', 'check']),
   status: z.enum(['pending', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled', 'skipped']),
   iterations: z.number(),
+  // #1300: unreadable accounting follows the same bounded fallback as legacy records.
+  retriesUsed: z.number().int().nonnegative().optional().catch(undefined),
   tokensUsed: z.number(),
   inputTokens: usageCounterSchema.optional(),
   outputTokens: usageCounterSchema.optional(),

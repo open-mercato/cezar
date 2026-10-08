@@ -1,10 +1,14 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AgentBackend, AgentRunSpec } from '../core/agent-runner.ts';
+import * as runnerFactory from '../core/runner-factory.ts';
+import { removeWorktree } from '../git-worktree.ts';
 import { RunStore } from '../runs/store.ts';
+import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import {
   AUTO_RESUME_GRACE_MS,
@@ -17,6 +21,23 @@ import type { WorkflowDef } from './types.ts';
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
 
+// Use the bundled dry-run transport for every selected backend, while capturing the
+// shared runner inputs. This checks workflow routing, not another provider's transport.
+function mockRunnerSessions(transformSpec: (spec: AgentRunSpec, invocation: number) => AgentRunSpec = (spec) => spec) {
+  const sessions: { backend: AgentBackend | undefined; spec: AgentRunSpec }[] = [];
+  const createRunner = runnerFactory.createRunner;
+  vi.spyOn(runnerFactory, 'createRunner').mockImplementation((backend) => {
+    const runner = createRunner('claude');
+    const startSession = runner.startSession.bind(runner);
+    vi.spyOn(runner, 'startSession').mockImplementation((spec, onEvent, opts) => {
+      sessions.push({ backend, spec });
+      return startSession(transformSpec(spec, sessions.length), onEvent, opts);
+    });
+    return runner;
+  });
+  return sessions;
+}
+
 /**
  * Auto-resume after a provider usage limit, end to end through the real engine
  * (spec 2026-08-03-auto-resume-after-usage-limit).
@@ -27,8 +48,8 @@ const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
  * the parse, the schedule, and the restart re-arm. Asserting on a hand-written record would prove
  * only the last two, and the first two are where this can silently stop working.
  *
- * The FIRE is exercised through `recover()` with an elapsed deadline rather than by waiting out a
- * real timer: same code path, no 30-second test.
+ * Deadline firing is driven through `recover()` or the timer callback directly, without waiting
+ * out a real provider window.
  */
 describe('a run stopped by a usage limit resumes itself', () => {
   let repoRoot: string;
@@ -89,6 +110,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
         manager = undefined;
       }
     }
+    vi.restoreAllMocks();
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -98,7 +120,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
     // is safer than recreating the ENOENT race this test guards against.
     if (!teardownError) {
       store.flush();
-      rmSync(repoRoot, { recursive: true, force: true });
+      rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
     if (teardownError) throw teardownError;
   });
@@ -122,6 +144,318 @@ describe('a run stopped by a usage limit resumes itself', () => {
     const events = store.readEvents(record.id);
     expect(events.some((event) => String(event.message ?? '').includes('resuming automatically at'))).toBe(true);
   }, 30_000);
+
+  it.each([
+    { restart: false, worktree: false },
+    { restart: true, worktree: false },
+    { restart: false, worktree: true },
+    { restart: true, worktree: true },
+    { restart: 'queued', worktree: false },
+    { restart: 'queued', worktree: true },
+    { restart: 'queued-without-counter', worktree: false },
+  ])('continues the workflow after a limit (restart=$restart, worktree=$worktree)', async ({ restart, worktree }) => {
+    const sessions = mockRunnerSessions();
+    const chain: WorkflowDef = {
+      name: 'plan-and-review',
+      source: 'built-in',
+      steps: [
+        { id: 'prepare', prompt: 'mock:done prepare the task' },
+        { id: 'plan', prompt: '{{task}}', runner: 'claude', allowedTools: ['Read'], bashAllowlist: ['git status'] },
+        { id: 'review-plan', prompt: 'mock:done challenge the plan', runner: 'codex' },
+      ],
+    };
+    manager = new RunManager(store, repoRoot);
+    const record = manager.startRun(chain, { task: 'mock:limit create a plan', worktree });
+    await settle(record.id);
+    const failed = store.getRun(record.id);
+    expect(failed?.error).toContain('Claude AI usage limit reached|');
+    expect(failed?.autoResumeAt).toBeDefined();
+    expect(failed?.steps.map((step) => step.status)).toEqual(['done', 'failed', 'pending']);
+    const planSession = failed?.steps.find((step) => step.id === 'plan')?.sessionId;
+    const originalWorktree = failed?.worktreePath;
+    const originalStartedAt = failed?.startedAt;
+    const originalBase = failed?.baseBranch;
+    expect(originalBase).toBeDefined();
+    if (!worktree) {
+      writeFileSync(join(repoRoot, 'a.txt'), 'two\n');
+      await run('git', ['add', 'a.txt'], { cwd: repoRoot });
+      await run('git', [...GIT_ID, 'commit', '-q', '-m', 'work after the interruption'], { cwd: repoRoot });
+      expect((await run('git', ['rev-parse', 'HEAD'], { cwd: repoRoot })).stdout.trim()).not.toBe(originalBase);
+    }
+
+    if (restart === true) {
+      manager.dispose();
+      store.flush();
+      store = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });
+      manager = new RunManager(store, repoRoot);
+    }
+    // The mock matches the task text on every turn. Change the reply after the interruption,
+    // then drive the real timer through reconciliation without waiting out a provider window.
+    store.updateRun(record.id, {
+      task: 'mock:done create a plan',
+      autoResumeAt: new Date(Date.now() - 1_000).toISOString(),
+    });
+    if (restart === true) {
+      await manager.recover();
+    } else {
+      // Deliver the existing timer's callback directly, without waiting out the hour-long mock
+      // window. Clear its real handle first so teardown leaves no orphan timer behind.
+      const scheduler = manager as unknown as {
+        autoResumeTimers: Map<string, ReturnType<typeof setTimeout>>;
+        fireAutoResume(runId: string): void;
+        pump(): Promise<void>;
+      };
+      // Hold the resumed job in the capacity queue, then restart before it can spawn.
+      const pump = typeof restart === 'string' ? vi.spyOn(scheduler, 'pump').mockResolvedValue() : undefined;
+      clearTimeout(scheduler.autoResumeTimers.get(record.id));
+      scheduler.fireAutoResume(record.id);
+      if (pump) {
+        expect(store.getRun(record.id)?.status).toBe('queued');
+        if (restart === 'queued-without-counter') {
+          // Optional/retired accounting state must not turn a recoverable workflow into a
+          // fresh run. Its failed step + session still identify exactly where to resume.
+          store.updateRun(record.id, { autoResumeAttempts: undefined });
+        }
+        manager.dispose();
+        pump.mockRestore();
+        store.flush();
+        store = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });
+        manager = new RunManager(store, repoRoot);
+        await manager.recover();
+      }
+    }
+    await expect.poll(() => store.getRun(record.id)?.status, { timeout: 20_000 }).toBe('done');
+    const resumed = store.getRun(record.id);
+    expect(resumed?.steps.map((step) => [step.id, step.status])).toEqual([
+      ['prepare', 'done'], ['plan', 'done'], ['review-plan', 'done'],
+    ]);
+    expect(resumed?.steps.find((step) => step.id === 'prepare')?.iterations).toBe(1);
+    expect(resumed?.steps.find((step) => step.id === 'plan')?.sessionId).toBe(planSession);
+    expect(resumed?.steps.find((step) => step.id === 'review-plan')?.backend).toBe('codex');
+    expect(resumed?.workflowDef).toEqual(chain);
+    expect(resumed?.worktreePath).toBe(originalWorktree);
+    expect(resumed?.startedAt).toBe(originalStartedAt);
+    expect(resumed?.baseBranch).toBe(originalBase);
+    expect(resumed?.autoResumeAt).toBeUndefined();
+    expect(resumed?.autoResumeAttempts).toBeUndefined();
+    expect(sessions.map(({ backend }) => backend)).toEqual(['claude', 'claude', 'claude', 'codex']);
+    const resumeSpec = sessions.find(({ spec }) => spec.resume)?.spec;
+    expect(resumeSpec).toMatchObject({
+      sessionId: planSession, resume: true, allowedTools: ['Read'], bashAllowlist: ['git status'],
+      cwd: worktree ? originalWorktree : repoRoot,
+    });
+  }, 40_000);
+
+  it('resumes the recorded account after the project selects another login', async () => {
+    const sessions = mockRunnerSessions();
+    savedEnv.CEZ_HOME = process.env.CEZ_HOME;
+    process.env.CEZ_HOME = join(repoRoot, 'account-home');
+    const originalConfig = join(process.env.CEZ_HOME, 'original');
+    const nextConfig = join(process.env.CEZ_HOME, 'next');
+    for (const dir of [originalConfig, nextConfig]) {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'settings.json'), '{}');
+    }
+    await mergeWriteAgentAccounts((accounts) => {
+      accounts.accounts = [
+        { id: 'original', provider: 'claude', label: 'Original', configDir: originalConfig, addedAt: '' },
+        { id: 'next', provider: 'claude', label: 'Next', configDir: nextConfig, addedAt: '' },
+      ];
+      accounts.selections[realpathSync(repoRoot)] = { claude: 'original' };
+    });
+    manager = new RunManager(store, repoRoot);
+    const record = manager.startRun(workflow, { task: 'mock:limit use the selected account', worktree: false });
+    await settle(record.id);
+    expect(store.getRun(record.id)?.steps[0]?.profileId).toBe('original');
+    const sessionId = store.getRun(record.id)?.steps[0]?.sessionId;
+    await mergeWriteAgentAccounts((accounts) => {
+      accounts.selections[realpathSync(repoRoot)] = { claude: 'next' };
+    });
+    manager.dispose();
+    store.updateRun(record.id, {
+      task: 'mock:done use the selected account',
+      autoResumeAt: new Date(Date.now() - 1_000).toISOString(),
+    });
+    store.flush();
+    store = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });
+    manager = new RunManager(store, repoRoot);
+    await manager.recover();
+    await expect.poll(() => store.getRun(record.id)?.status, { timeout: 20_000 }).toBe('done');
+    expect(sessions).toHaveLength(2);
+    expect(sessions[1]?.spec).toMatchObject({
+      cwd: repoRoot, sessionId, resume: true, env: { CLAUDE_CONFIG_DIR: originalConfig },
+    });
+    expect(store.getRun(record.id)?.steps[0]?.profileId).toBe('original');
+  }, 40_000);
+
+  it.each(['reclaimed', 'switched to another branch'] as const)(
+    'resumes in a task worktree that was %s', async (change) => {
+      const sessions = mockRunnerSessions();
+      const chain: WorkflowDef = {
+        name: 'plan-and-review', source: 'built-in', steps: [
+          { id: 'plan', prompt: '{{task}}' },
+          { id: 'review', prompt: 'mock:done review the plan' },
+        ],
+      };
+      manager = new RunManager(store, repoRoot);
+      const record = manager.startRun(chain, { task: 'mock:limit work in the task tree', worktree: true });
+      await settle(record.id);
+      const failed = store.getRun(record.id);
+      if (!failed?.worktreePath) throw new Error('limited run did not record its task worktree');
+      const worktreePath = failed.worktreePath;
+      const sessionId = failed.steps[0]?.sessionId;
+      const originalBranch = failed.branch;
+      const originalBase = failed.baseBranch;
+      if (change === 'switched to another branch') {
+        await run('git', ['checkout', '-q', '-b', 'agent-plan'], { cwd: worktreePath });
+      }
+      writeFileSync(join(worktreePath, 'agent-plan.txt'), 'preserve the interrupted task\n');
+      await run('git', ['add', 'agent-plan.txt'], { cwd: worktreePath });
+      await run('git', [...GIT_ID, 'commit', '-q', '-m', 'agent work before limit'], { cwd: worktreePath });
+      manager.dispose();
+      if (change === 'reclaimed') {
+        // Retention removes only the directory, keeping the task branch for recovery.
+        await removeWorktree(repoRoot, worktreePath);
+        expect(existsSync(worktreePath)).toBe(false);
+        store.updateRun(record.id, { worktreeReclaimedAt: new Date().toISOString() });
+      }
+      store.updateRun(record.id, {
+        task: 'mock:done work in the task tree',
+        autoResumeAt: new Date(Date.now() - 1_000).toISOString(),
+      });
+      store.flush();
+      store = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });
+      manager = new RunManager(store, repoRoot);
+      await manager.recover();
+      await expect.poll(() => store.getRun(record.id)?.status, { timeout: 20_000 }).toBe('done');
+      expect(sessions).toHaveLength(3);
+      expect(sessions[1]?.spec).toMatchObject({ cwd: worktreePath, sessionId, resume: true });
+      expect(sessions[2]?.spec.cwd).toBe(worktreePath);
+      expect(readFileSync(join(worktreePath, 'agent-plan.txt'), 'utf8')).toBe('preserve the interrupted task\n');
+      expect((await run('git', ['branch', '--show-current'], { cwd: worktreePath })).stdout.trim())
+        .toBe(change === 'reclaimed' ? originalBranch : 'agent-plan');
+      expect(store.getRun(record.id)?.worktreePath).toBe(worktreePath);
+      expect(store.getRun(record.id)?.worktreeReclaimedAt).toBeUndefined();
+      expect(store.getRun(record.id)?.baseBranch).toBe(originalBase);
+    }, 40_000,
+  );
+
+  it('keeps session-only recovery for legacy records without a workflow definition', async () => {
+    manager = new RunManager(store, repoRoot);
+    const record = manager.startRun(workflow, { task: 'mock:limit legacy task', worktree: false });
+    await settle(record.id);
+    manager.dispose();
+    store.updateRun(record.id, {
+      workflowDef: undefined,
+      task: 'mock:done legacy task',
+      autoResumeAt: new Date(Date.now() - 1_000).toISOString(),
+    });
+    manager = new RunManager(store, repoRoot);
+    await manager.recover();
+    await expect.poll(() => store.getRun(record.id)?.status, { timeout: 20_000 }).toBe('done');
+    expect(store.getRun(record.id)?.steps.find((step) => step.id === 'continue-1')?.status).toBe('done');
+  }, 40_000);
+
+  it.each([
+    { transcript: 'intact', legacy: false },
+    { transcript: 'missing', legacy: false },
+    { transcript: 'malformed', legacy: false },
+    { transcript: 'missing', legacy: true },
+    { transcript: 'malformed', legacy: true },
+  ])('keeps the check retry budget after restart (transcript=$transcript, legacy=$legacy)', async ({ transcript, legacy }) => {
+    // First attempt reaches the failing check; the check's one retry hits the usage limit.
+    let durableRetriesAtSpawn: number | undefined;
+    const sessions = mockRunnerSessions((spec, invocation) => {
+      if (invocation !== 3) return spec;
+      // Observe disk before the retried agent starts, without flushing the fixture's store.
+      const checkpoint = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });
+      durableRetriesAtSpawn = checkpoint.getRun(record.id)?.steps.find((step) => step.id === 'check')?.retriesUsed;
+      return { ...spec, userPrompt: 'mock:limit retry the plan' };
+    });
+    const chain: WorkflowDef = {
+      name: 'bounded-retry', source: 'built-in', steps: [
+        { id: 'plan', prompt: '{{task}}' },
+        { id: 'review', prompt: 'mock:done review the plan' },
+        { id: 'check', command: 'node -e "process.exit(1)"', onFail: { retry: 'plan', max: 1 } },
+      ],
+    };
+    manager = new RunManager(store, repoRoot);
+    const record = manager.startRun(chain, { task: 'mock:done create a plan', worktree: false });
+    await settle(record.id);
+    expect(durableRetriesAtSpawn).toBe(1);
+    expect(store.getRun(record.id)?.autoResumeAt).toBeDefined();
+    expect(store.getRun(record.id)?.steps.map((step) => step.status)).toEqual(['failed', 'pending', 'pending']);
+    manager.dispose();
+    store.updateRun(record.id, { autoResumeAt: new Date(Date.now() - 1_000).toISOString() });
+    if (legacy) store.updateStep(record.id, 'check', { retriesUsed: undefined });
+    store.flush();
+    const eventsPath = join(repoRoot, '.ai/cezar/runs', `${record.id}.ndjson`);
+    if (transcript === 'missing') {
+      rmSync(eventsPath);
+    } else if (transcript === 'malformed') {
+      const lines = readFileSync(eventsPath, 'utf8').split('\n');
+      const retryNote = lines.findIndex((line) => line.includes('check failed — retrying from'));
+      expect(retryNote).toBeGreaterThanOrEqual(0);
+      lines[retryNote] = '{malformed retry note';
+      writeFileSync(eventsPath, lines.join('\n'));
+    }
+    store = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });
+    manager = new RunManager(store, repoRoot);
+    await manager.recover();
+    await expect.poll(() => store.getRun(record.id)?.autoResumeAt, { timeout: 20_000 }).toBeUndefined();
+    await expect.poll(() => store.getRun(record.id)?.error, { timeout: 20_000 }).toContain('check "check" failed after 2 attempts');
+    expect(sessions).toHaveLength(5);
+    expect(sessions[3]?.spec.resume).toBe(true);
+    // The pending review retained its first session id; rerunning it still starts a fresh one.
+    expect(sessions[4]?.spec.resume).toBeUndefined();
+    expect(store.getRun(record.id)?.steps.find((step) => step.id === 'check')?.retriesUsed).toBe(1);
+    const accountingNote = store.readEvents(record.id).some((event) =>
+      event.stepId === 'check' &&
+      event.message === 'check retry accounting unavailable on this older record — no further retries granted',
+    );
+    expect(accountingNote).toBe(legacy);
+  }, 40_000);
+
+  it('does not spend a successful check\'s retry budget when another check loops through it', async () => {
+    const sessions = mockRunnerSessions((spec, invocation) =>
+      invocation === 2 ? { ...spec, userPrompt: 'mock:limit retry the plan' } : spec,
+    );
+    const chain: WorkflowDef = {
+      name: 'independent-retries', source: 'built-in', steps: [
+        { id: 'plan', prompt: '{{task}}' },
+        {
+          id: 'first-check',
+          command: 'node -e "const fs=require(\'node:fs\'); const p=\'first-check-count\'; const n=fs.existsSync(p)?Number(fs.readFileSync(p,\'utf8\')):0; fs.writeFileSync(p,String(n+1)); process.exit(n===1?1:0)"',
+          onFail: { retry: 'plan', max: 1 },
+        },
+        {
+          id: 'second-check',
+          command: 'node -e "const fs=require(\'node:fs\'); const p=\'second-check-count\'; const exists=fs.existsSync(p); fs.writeFileSync(p,\'seen\'); process.exit(exists?0:1)"',
+          onFail: { retry: 'plan', max: 1 },
+        },
+      ],
+    };
+    manager = new RunManager(store, repoRoot);
+    const record = manager.startRun(chain, { task: 'mock:done create a plan', worktree: false });
+    await settle(record.id);
+    expect(store.getRun(record.id)?.autoResumeAt).toBeDefined();
+    expect(store.getRun(record.id)?.steps.find((step) => step.id === 'first-check')?.iterations).toBe(1);
+    expect(store.getRun(record.id)?.steps.find((step) => step.id === 'first-check')?.retriesUsed).toBe(0);
+    manager.dispose();
+    store.updateRun(record.id, { autoResumeAt: new Date(Date.now() - 1_000).toISOString() });
+    store.flush();
+    store = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });
+    manager = new RunManager(store, repoRoot);
+    await manager.recover();
+    await expect.poll(() => store.getRun(record.id)?.status, { timeout: 20_000 }).toBe('done');
+    expect(sessions).toHaveLength(4);
+    expect(sessions[2]?.spec.resume).toBe(true);
+    expect(sessions[3]?.spec.resume).toBeUndefined();
+    expect(store.getRun(record.id)?.steps.find((step) => step.id === 'first-check'))
+      .toMatchObject({ iterations: 3, retriesUsed: 1 });
+    expect(store.getRun(record.id)?.steps.find((step) => step.id === 'second-check'))
+      .toMatchObject({ iterations: 2, retriesUsed: 1 });
+  }, 40_000);
 
   it('leaves the run plainly failed when the setting is off', async () => {
     manager = new RunManager(store, repoRoot, {
@@ -175,7 +509,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
 
     await expect
       .poll(
-        () => store.getRun(record.id)?.steps.find((step) => step.id === 'continue-1')?.status,
+        () => store.getRun(record.id)?.steps.find((step) => step.id === 'work')?.status,
         { timeout: 20_000 },
       )
       .toBe('done');
@@ -323,7 +657,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
     await expect
       .poll(
         () =>
-          runs.filter((r) => store.getRun(r.id)?.steps.some((s) => s.id === 'continue-1' && s.status === 'done'))
+          runs.filter((r) => store.getRun(r.id)?.steps.some((s) => s.id === 'work' && s.status === 'done'))
             .length,
         { timeout: 25_000 },
       )
@@ -473,7 +807,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
     // Exactly one probe spawns and meets the limit; the other's continuation never runs.
     const spawned = () =>
       runs.filter((r) =>
-        store.getRun(r.id)?.steps.some((s) => s.id.startsWith('continue-') && s.status === 'failed'),
+        store.getRun(r.id)?.steps.some((s) => s.id === 'work' && s.iterations > 1 && s.status === 'failed'),
       ).length;
     await expect.poll(spawned, { timeout: 30_000 }).toBe(1);
     await new Promise((resolve) => setTimeout(resolve, 1_500));
@@ -621,7 +955,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
     // something pumps the manager, so the resume is only real once its step RUNS and settles.
     await expect
       .poll(
-        () => store.getRun(record.id)?.steps.find((step) => step.id === 'continue-1')?.status,
+        () => store.getRun(record.id)?.steps.find((step) => step.id === 'work')?.status,
         { timeout: 20_000 },
       )
       .toBe('done');

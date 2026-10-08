@@ -79,6 +79,8 @@ export const stepStateSchema = z.object({
   kind: z.enum(['agent', 'check']),
   status: stepStatusSchema,
   iterations: z.number(),
+  /** Consumed onFail retries (#1300); absent on older run records. */
+  retriesUsed: z.number().int().nonnegative().optional(),
   tokensUsed: z.number(),
   inputTokens: usageCounterSchema.optional(),
   outputTokens: usageCounterSchema.optional(),
