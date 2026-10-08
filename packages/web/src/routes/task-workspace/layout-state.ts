@@ -595,10 +595,12 @@ export function splitCards(
   const overflow = layouts.slice(max)
   const hidden = overflow.findIndex((layout) => layout.name === active)
   if (hidden === -1) return { visible, overflow }
-  const displaced = visible[max - 1]!
   const promoted = overflow[hidden]!
-  return {
-    visible: [...visible.slice(0, max - 1), promoted],
-    overflow: overflow.map((layout, index) => (index === hidden ? displaced : layout)),
-  }
+  const shown = [...visible.slice(0, max - 1), promoted]
+  // The menu keeps CREATION order. Swapping the displaced card into the promoted one's slot was
+  // simpler but listed it out of order — with `A…H` and `H` selected, the menu read `G, F` — so
+  // the remainder is taken from the original list instead. Names are unique within a task, so
+  // they identify a card.
+  const shownNames = new Set(shown.map((layout) => layout.name))
+  return { visible: shown, overflow: layouts.filter((layout) => !shownNames.has(layout.name)) }
 }

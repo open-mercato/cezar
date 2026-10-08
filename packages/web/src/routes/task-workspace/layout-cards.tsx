@@ -229,8 +229,28 @@ function RenameField({
 }) {
   const [value, setValue] = useState(name)
   const inputRef = useRef<HTMLInputElement>(null)
+  /**
+   * Whether this edit has already been answered.
+   *
+   * Escape calls `onCancel`, which unmounts this input — and a focused node being detached can
+   * fire `blur`, which would run `onCommit(value)` and save the very edit the user just
+   * abandoned. Whether any given browser actually fires it is not worth depending on either
+   * way: the first answer wins, and the second is a no-op.
+   */
+  const settled = useRef(false)
   // Select the whole name on open: the common rename replaces it rather than appends to it.
   useEffect(() => inputRef.current?.select(), [])
+
+  const commit = () => {
+    if (settled.current) return
+    settled.current = true
+    onCommit(value)
+  }
+  const cancel = () => {
+    if (settled.current) return
+    settled.current = true
+    onCancel()
+  }
 
   return (
     <input
@@ -239,14 +259,14 @@ function RenameField({
       aria-label={`Nazwa układu ${name}`}
       value={value}
       onChange={(event) => setValue(event.target.value)}
-      onBlur={() => onCommit(value)}
+      onBlur={commit}
       onKeyDown={(event) => {
         if (event.key === 'Enter') {
           event.preventDefault()
-          onCommit(value)
+          commit()
         } else if (event.key === 'Escape') {
           event.preventDefault()
-          onCancel()
+          cancel()
         }
       }}
       className="w-28 rounded border border-border bg-background px-1 text-[13px] outline-none focus-visible:border-foreground"

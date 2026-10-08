@@ -545,9 +545,11 @@ describe('splitCards', () => {
   it('keeps a selected card on screen by displacing the last visible one', () => {
     const { visible, overflow } = splitCards(cards(9), 'L7', 6)
     expect(visible.map((layout) => layout.name)).toEqual(['L0', 'L1', 'L2', 'L3', 'L4', 'L7'])
-    // The strip stays exactly `max` long, and the displaced card is reachable in the menu.
+    // The strip stays exactly `max` long, and the displaced card is reachable in the menu —
+    // in CREATION order. The swap used to drop it into the promoted card's slot, so the menu
+    // read `L6, L5, L8`.
     expect(visible).toHaveLength(6)
-    expect(overflow.map((layout) => layout.name)).toEqual(['L6', 'L5', 'L8'])
+    expect(overflow.map((layout) => layout.name)).toEqual(['L5', 'L6', 'L8'])
   })
 })
 
