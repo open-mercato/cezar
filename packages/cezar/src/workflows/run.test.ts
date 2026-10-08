@@ -2034,6 +2034,22 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(events.filter((event) => event.type === 'text').some((event) => String(event.text).includes('CEZ:ASK'))).toBe(false);
   }, 30_000);
 
+  // The 4-question / 4-option caps came from AskUserQuestion parity, and a live run paid for
+  // them: five legitimate decisions, payload refused, questions shown to the user as raw JSON.
+  it('renders a card past the old 4/4 caps — six questions, six options', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:ask-many choose', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    const events = readEvents(record.id);
+    const asks = events.filter((event) => event.type === 'ask.requested');
+    expect(asks).toHaveLength(1);
+    const questions = asks[0]!.questions as Array<{ options: unknown[] }>;
+    expect(questions).toHaveLength(6);
+    expect(questions[0]!.options).toHaveLength(6);
+    // A rendered card replaces the marker; a refused one used to leave it in the text.
+    expect(events.filter((e) => e.type === 'text').some((e) => String(e.text).includes('CEZ:ASK'))).toBe(false);
+  }, 30_000);
+
   it('a markerless turn-end raises no ask.requested', async () => {
     const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
     currentId = record.id;
@@ -3020,13 +3036,26 @@ describe('a context-compaction boundary keeps the run working (#955)', () => {
     runId = undefined;
   });
 
-  afterEach(() => {
-    if (runId) manager.cancel(runId);
-    manager.dispose(); // see DISPOSE at the top of this file — after the cancel it enables
-    if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN; else process.env.CEZ_DRY_RUN = savedDryRun;
-    if (savedCodexBin === undefined) delete process.env.CEZ_CODEX_BIN; else process.env.CEZ_CODEX_BIN = savedCodexBin;
-    store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+  afterEach(async () => {
+    const active = manager as unknown as {
+      active: Map<string, { session?: { result: Promise<unknown>; interrupt(): void } }>;
+    };
+    try {
+      if (runId) {
+        manager.cancel(runId);
+        // Cancellation marks the run immediately, but the session's result owns the
+        // final event delivery. Await it before removing the fixture so a late `done`
+        // cannot append into a vanished store (#1105).
+        const session = active.active.get(runId)?.session;
+        if (session) await session.result;
+      }
+    } finally {
+      manager.dispose(); // see DISPOSE at the top of this file — after the cancel it enables
+      if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN; else process.env.CEZ_DRY_RUN = savedDryRun;
+      if (savedCodexBin === undefined) delete process.env.CEZ_CODEX_BIN; else process.env.CEZ_CODEX_BIN = savedCodexBin;
+      store.flush();
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
   });
 
   const waitFor = async (predicate: () => boolean, ms = 20_000) => {

@@ -84,7 +84,7 @@ One browser window, with live task updates over Server-Sent Events:
 | **Git** | Branch, working-tree status, diff vs HEAD, recent commits (click one for its inline patch + GitHub link), and the configurable base branch that worktrees fork from and PRs target. |
 | **GitHub** | Open issues and PRs of the repo's origin, read through your logged-in `gh`. Hand an issue straight to the agent — pick a workflow and skills, one click runs it. |
 | **Skills** | Local skills plus the team skills repo, with a rendered body + prompt preview. Refresh pulls the latest from the remote. |
-| **Workflows** | Build a chain by drag-ordering skills, save it as portable YAML, import/export, or delete. Built-ins always come back. |
+| **Workflows** | Build a workflow as a node graph, or let the planner draft one from a description; save it as YAML (a plain stack of skills stays in the portable `skills:` form), import/export, or delete. Built-ins always come back. |
 | **Settings** | Appearance (dark/light theme, accent, density), agent backends, notifications, and the skills catalog. |
 
 The cockpit is a React app served pre-built from the package — `npx cezar-run`
@@ -278,6 +278,96 @@ skills: [reproduce, root-cause, implement, self-review]
 
 ---
 
+### Workflow graphs (`version: 2`)
+
+The **Workflows** page is a node editor: every step is a block on a canvas, and the
+graph shows exactly how a task will run — which edge a failing check takes, where a
+loop goes back, what happens when it gives up. It saves a `version: 2` file next to
+the step-list ones (both keep loading; a step-list file opens as a graph):
+
+```yaml
+version: 2
+name: implement-test-review
+nodes:
+  - { id: start, type: start }
+  - { id: implement, type: agent, prompt: "{{task}}" }
+  - { id: tests, type: check, command: npm test }
+  - { id: retry, type: loop, max: 3 }
+  - id: fix
+    type: agent
+    session: { continue: implement }    # reopen implement's session (claude · codex · pi)
+    prompt: "Tests failed ({{nodes.retry.iteration}}/{{nodes.retry.max}}): {{nodes.tests.output}}"
+  - { id: review, type: agent, skill: code-review, verdicts: [approve, changes] }
+  - { id: ok, type: end, status: success }
+edges:
+  - { from: start, to: implement }
+  - { from: implement.done, to: tests }
+  - { from: tests.pass, to: review }
+  - { from: tests.fail, to: retry }
+  - { from: retry.repeat, to: fix }
+  - { from: fix.done, to: tests }
+  - { from: review.approve, to: ok }
+  - { from: review.changes, to: retry }
+```
+
+**How a graph runs.** One node runs at a time. A node finishes by leaving through
+exactly one **output port**; the edge wired to that port is the next step. An unwired
+port ends the run — failed for failure ports (`failed`, `fail`, `exhausted`, `reject`,
+`red`, `timeout`), successful otherwise. Every cycle must pass through a **loop** node,
+whose counter never resets within a run, so every run is finite.
+
+| Node | Ports | Outputs (`{{nodes.<id>.<field>}}`) |
+| --- | --- | --- |
+| `start` / `end` | `next` / — (`status: success\|failed`) | — |
+| `loop` (`max`) | `repeat`, `exhausted` | `iteration`, `max` |
+| `agent` (`prompt`, `skill`, `runner`, `model`, `session.continue`, `verdicts`; after a fork also `review`, `budgetUsd`) | `done`, `failed` — or one port per verdict | `summary`, `verdict`, `costUsd` (a fork branch: `runId`, `status`, `summary`) |
+| `check` (`command`) | `pass`, `fail` | `exitCode`, `output` |
+| `gate.human` (`message`, `timeoutMs?`) | `approve`, `reject` (+`timeout`) | `comment` |
+| `ask-user` (`question`, `options?`, `timeoutMs?`) | `answered` (+`timeout`) | `answer` |
+| `dispatch` (`prompt`, `runner?`, `budgetUsd?`) | `done`, `failed` | `runId`, `status`, `summary` |
+| `git.commit` (`message`) | `done`, `nothing`, `failed` | `sha` |
+| `github.draft-pr` (`title?`) | `created`, `failed` | `url`, `number` |
+| `github.wait-ci` (`timeoutMs`, `pollMs`) | `green`, `red`, `timeout`, `failed` (the task has no PR) | `status` |
+| `github.pr-comment` (`body`) | `done`, `failed` | — |
+| `fork` (`branches: 2–4`) | `1` … `4`, each wired to an agent | `runIds` |
+| `join` (`wait: all\|any`) | `done`, `failed` | `succeeded`, `failed` |
+| `workflow` (`workflow`, `prompt?`, `runner?`, `budgetUsd?`) | `done`, `failed` | `runId`, `status`, `summary` |
+| `if` (`condition`) | `true`, `false` | `result`, `value` |
+| `git.push` | `done`, `failed` | — |
+| `git.sync-base` | `done`, `conflict`, `failed` | `conflicts` |
+| `github.pr-update` (`ready?`, `addLabels?`, `reviewers?`) | `done`, `failed` | — |
+| `github.issue-comment` (`body`, `issue?` — default: the task's issue) | `done`, `failed` | `issue` |
+| `notify.webhook` (`url`, `body?` — needs `CEZ_WORKFLOW_WEBHOOKS=1`) | `done`, `failed` | `status` |
+
+- **Fork / join.** Each fork port leads to one agent node, and every one of those agents
+  leads into the same `join`. The agents run at once as subtasks through dispatch — fresh
+  sessions, each in its own worktree forked from the task branch (the fork commits the
+  task's work first), with a budget carved from the parent's, at most four in flight. An
+  agent with `review: true` runs as a reviewer of the task branch instead of an
+  implementer. `wait: any` takes the first branch to succeed and cancels the rest.
+  Sub-workflows run as subtasks the same way.
+- **`if` conditions**: `diff-lines` / `diff-files` (`op`, `value`) on the task's own diff,
+  `paths-changed` (`glob`: `*` within a folder, `**` across), `output` (`ref:
+  <node>.<field>`, `op`, `value` — numeric when both sides are numbers) and `branch`
+  (`equals` / `matches` on the base branch).
+- **`git.sync-base`** merges the freshest base into the task branch. On a conflict it
+  leaves the merge in progress and leaves by `conflict` — wire that to an agent to
+  resolve it (`{{nodes.<id>.conflicts}}` lists the files).
+- **Built-in templates** — `implement-and-verify`, `implement-review-pr`, `review-council`
+  (three fresh reviewers at once, then a judge that ships or sends it back), `fix-ci` — sit
+  next to `quick-task` (still the default). Open one in the editor; it saves as your copy.
+- **Restarts** resume a walk parked at a gate, question, CI wait or subtask (or mid-check)
+  at that node; an interrupted agent node keeps the usual Continue path.
+- **Verdicts.** An agent with `verdicts` ends its turn with `CEZ:VERDICT <name>`; the
+  graph branches on it. No verdict → one reminder in the same session, then `failed`.
+- **Waits hold no slot.** A gate, question, subtask or CI wait gives its `maxParallel`
+  slot back while it waits, and always has an exit: the answer, Cancel, Finish, its
+  timeout, or a restart.
+- **`CEZ_DRY_RUN=1`** fakes the PR and reports CI green, so a graph can be walked end
+  to end offline. In the editor, **Simulate** walks it without running anything.
+- **Watching a run.** A task started from a graph workflow gets a **Graph** tab: each
+  node's status, iterations and cost, loop counters, and the edges the run took.
+
 ## How it runs agents
 
 cezar shells out to your locally installed, logged-in agent CLI —
@@ -287,8 +377,9 @@ unapproved tools denied without prompting (`--permission-mode dontAsk`) inside
 the task's worktree — but note the zero-config default list (`Read`, `Edit`,
 `Write`, `Grep`, `Glob`, `Bash`) grants unrestricted `Bash` unless a step sets
 `bashAllowlist`, so treat a run as having full shell access in its worktree,
-not a sandboxed allowlist. Set `CEZ_APPROVAL_GATE=1` to opt into Claude's
-interactive approval UI. Codex, Junie and OpenCode are driven through their own
+not a sandboxed allowlist. Set `CEZ_APPROVAL_GATE=1` to select Claude's
+`acceptEdits` mode, but cezar has no cockpit permission response channel, so
+approval prompts are not actionable in the cockpit. Codex, Junie and OpenCode are driven through their own
 native protocols and don't honor `allowedTools` at all — see
 [Coding agent backends](#coding-agent-backends) for what each one actually
 locks down. Nothing runs on a server you don't own.
@@ -300,9 +391,10 @@ Useful environment variables:
 | `CEZ_DRY_RUN=1` | Use the bundled mock instead of the real `claude` CLI — the entire cockpit works offline, for demos and development. |
 | `CEZ_INSTANCE_ID` | Internal server-install identity set automatically in generated systemd/launchd services; normally leave unset. It is surfaced additively by `/api/v1/health` for install verification. |
 | `CEZ_AGENT_MODELS_LOCKED=1` | Globally lock each runner to the model configured in its native Claude/Codex/OpenCode settings while keeping runner selection available. Exact `1` also delegates authentication and provider enablement to those native agents, so Cezar skips its credential probes and provider-disable preferences. Existing Cezar presets are preserved but ignored, and an environment change requires a restart. The config-file equivalent is `"modelsLocked": true` in global `~/.cezar/config.json` or one repository's `.ai/cezar/config.json`; config-file locks do not disable provider checks. |
-| `CEZ_APPROVAL_GATE=1` | Opt into Claude's interactive approval UI; by default, unapproved tools are denied without interrupting the run. |
+| `CEZ_APPROVAL_GATE=1` | Select Claude's `acceptEdits` mode. Cezar has no cockpit permission response channel; by default, unapproved tools are denied without interrupting the run. |
 | `CEZ_FOLLOWUPS=1` | Turn on the global follow-up **Inbox**: agents are asked to leave follow-ups in `todos.json` when they finish, and the Inbox view appears. Off by default — each task's own **Notes** handoff journal runs either way. |
 | `CEZ_AUTOMATIONS=0` | Turn **automations** off. On by default since the automations redesign (spec `.ai/specs/2026-09-14-automations-redesign.md`): the Automations view lists GitHub-triggered and scheduled automations, and cezar polls GitHub or fires schedules on each enabled one while it is running — nothing runs until you enable an automation yourself. An agent can also **create an automation from a prompt**: type "whenever a PR is opened, review it" into New task — pick the built-in `create-cezar-automation` skill, or just ask; every task's system prompt teaches it to recognise the intent — and the agent writes the definition and creates it through `cez automation create` (paused, with a `cez automation check` preview of what it would match), then links the Automations page. Only the exact value `0` opts out (`CEZ_AUTOMATIONS=1`, the old opt-in, is accepted and changes nothing); opted out, the nav item is absent, the endpoints answer `409`, and the workspace scheduler never starts. Read at boot, so restart after changing it; definitions, receipts and high-watermarks are kept either way. |
+| `CEZ_WORKFLOW_WEBHOOKS=1` | Let a workflow graph's **`notify.webhook`** node POST to the URL it names (JSON: `text`, `run`, `node`). Off by default: a workflow file — which can be imported from anywhere — calling out to an arbitrary URL widens exposure, so it is opt-in. Off, the node leaves by `failed` with a note; under `CEZ_DRY_RUN=1` nothing is sent either way. |
 | `CEZ_DISPATCH=0` | Turn OFF **task dispatch**, which is on by default: a running task may start other cezar tasks with `cez task create` — each in its OWN worktree forked off the parent's branch, with a budget carved out of the parent's — and they report back into the parent's session when they settle (`cez task report`). Children appear nested under their parent in the task lists. Tasks talk through a tree directory (`.ai/cezar/dispatch/<root>/`: the brief, each task's order/notes/report, an inbox per task) and cezar wakes a parked recipient when a file lands. A `--kind review` child judges another task's branch and answers with a verdict. ON by default (the owner-approved exception to "cost-widening features are opt-in" — see `AGENTS.md`), and only the exact value `0` turns it off; with it off the `/runs/:id/dispatch` and `/runs/:id/report` routes answer `409`, no task is told about the CLI, and the cockpit hides the "Review open PRs" template. A headless `cezar run` never dispatches either way — there is no cockpit for the CLI to reach, so no task is told about it. Read at boot, so restart after changing it. This is the widest cost-widening flag here — one task can start four more agents — so give dispatching tasks a budget. |
 | `CEZ_AUTOSAVE=1` | Re-enable the periodic (90 s) autosave commit in task worktrees. Off by default (#471) — turn-end and pre-PR flushes always run, so branches still end complete. Every autosave names its trigger in the commit subject (`cezar autosave (periodic)` vs `(turn end)` / `(run finalize)` / `(pre-PR)`), so the flushes you keep are distinguishable from the timer you disabled. |
 | `CEZ_CLAUDE_BIN=/path/to/claude` | Override which `claude` binary is used. Rarely needed: when it is unset, cezar takes `claude` from PATH, and failing that looks where Claude Code's own installers put it — `~/.local/bin`, `~/.claude/local`, `/opt/homebrew/bin`, `/usr/local/bin` — so an install the launching shell never added to PATH is still found. |
@@ -374,7 +466,7 @@ cezar is not married to one vendor. Every agent step runs through a single
 
 | Backend | CLI | How cezar drives it | Tool access |
 |---|---|---|---|
-| **Claude Code** (default) | [`claude`](https://github.com/anthropics/claude-code) | Headless `stream-json` mode. | Per-tool `--allowedTools` (`bashAllowlist` scopes `Bash`); `dontAsk` denies unapproved tools without prompting (`CEZ_APPROVAL_GATE=1` → `acceptEdits` + approval UI). |
+| **Claude Code** (default) | [`claude`](https://github.com/anthropics/claude-code) | Headless `stream-json` mode. | Per-tool `--allowedTools` (`bashAllowlist` scopes `Bash`); `dontAsk` denies unapproved tools without prompting (`CEZ_APPROVAL_GATE=1` selects `acceptEdits`, but cezar cannot answer permission prompts). |
 | **Codex** | [`codex`](https://github.com/openai/codex) | `codex app-server` — JSON-RPC over stdio, the same transport the Codex IDE extensions use. | Ignores `allowedTools`; the default auto mode uses `danger-full-access` with `approvalPolicy: never` (`CEZ_CODEX_NETWORK=0` opts into the network-blocked `workspace-write` sandbox). |
 | **Junie** _(experimental)_ | [`junie`](https://junie.jetbrains.com/cli) | `junie --acp=true` — the real Agent Client Protocol over stdio, the same transport JetBrains IDEs use. | Ignores `allowedTools`; every permission is auto-approved. |
 | **OpenCode** _(experimental)_ | [`opencode`](https://opencode.ai) | `opencode serve` — a local HTTP server with an SSE event stream. | Ignores `allowedTools` entirely; every permission is auto-approved. |

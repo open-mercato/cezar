@@ -3,6 +3,34 @@ import { describe, expect, it, vi } from 'vitest'
 import { PickerPill } from './picker-pill'
 
 describe('PickerPill catalog status', () => {
+  it('constrains long descriptions so narrow menus can wrap them', async () => {
+    render(
+      <PickerPill
+        slot="model-pill"
+        ariaLabel="Model"
+        label="auto"
+        value="long-model"
+        onPick={() => {}}
+        options={[
+          {
+            value: 'long-model',
+            label: 'Long model',
+            desc: 'A model description supplied by the CLI that must wrap instead of widening the menu.',
+          },
+        ]}
+      />,
+    )
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Model' }))
+    const description = await screen.findByText(
+      'A model description supplied by the CLI that must wrap instead of widening the menu.',
+    )
+
+    expect(description.className).toContain('max-w-')
+    expect(description.className).toContain('whitespace-normal')
+    expect(description.className).toContain('break-words')
+  })
+
   it('keeps radio options selectable and renders a disabled status row', async () => {
     render(
       <PickerPill

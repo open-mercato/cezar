@@ -164,7 +164,22 @@ async function respond(userText, imageCount) {
   // `mock:ask-truncated` → a complete payload one closing brace short (#936):
   // the closer repair should still produce one card, note the recovery, and
   // strip the raw marker (which ends on `]`, not `}`).
-  const askMarker = userText.includes('mock:ask-bad')
+  // `mock:ask-many` → six distinct questions, one of them with six options:
+  // over the old 4/4 caps, which refused the whole payload and showed the user
+  // raw JSON. It must now render as exactly one card, and a dispatched child
+  // parking on it must still write a run record its index parser can read.
+  const askMarker = userText.includes('mock:ask-many')
+    ? '\n\nCEZ:ASK ' +
+      JSON.stringify({
+        questions: Array.from({ length: 6 }, (_, index) => ({
+          header: `Area ${index}`,
+          question: `Decision ${index} — which way?`,
+          options: Array.from({ length: index === 0 ? 6 : 2 }, (_, option) => ({
+            label: `Option ${index}.${option}`,
+          })),
+        })),
+      })
+    : userText.includes('mock:ask-bad')
     ? '\n\nCEZ:ASK {not valid json'
     : userText.includes('mock:ask-invalid')
       ? '\n\nCEZ:ASK {"questions":[]}'
@@ -200,6 +215,19 @@ async function respond(userText, imageCount) {
             },
           ],
         })
+      : '';
+  // `mock:verdict=<name>` → the reply ends with `CEZ:VERDICT <name>`, a graph agent node's
+  // branch choice (spec 2026-09-30-workflow-node-editor). cezar's one-shot verdict nudge carries
+  // no `mock:` marker, so it is answered with the FIRST verdict it lists — which makes the nudge
+  // path testable dry: omit the marker on the first turn, get the verdict on the nudge.
+  const verdictMatch = /mock:verdict=([A-Za-z0-9_-]+)/.exec(userText);
+  const nudgeMatch = userText.includes('You did not end with a verdict.')
+    ? /CEZ:VERDICT ([A-Za-z0-9_-]+)/.exec(userText)
+    : null;
+  const verdictMarker = verdictMatch
+    ? `\n\nCEZ:VERDICT ${verdictMatch[1]}`
+    : nudgeMatch
+      ? `\n\nCEZ:VERDICT ${nudgeMatch[1]}`
       : '';
   // `mock:refs` → the reply carries the in-band task-reference markers
   // (spec 2026-07-18-task-ref-markers), so the declaration path is testable dry.
@@ -527,7 +555,7 @@ async function respond(userText, imageCount) {
       type: 'assistant',
       message: {
         role: 'assistant',
-        content: [{ type: 'text', text: `Done with the first pass — opened a draft PR: https://github.com/open-mercato/demo/pull/123. Anything to adjust? (dry-run mock)${refsMarkers}${doneMarker}${monitoringMarker}${askMarker}` }],
+        content: [{ type: 'text', text: `Done with the first pass — opened a draft PR: https://github.com/open-mercato/demo/pull/123. Anything to adjust? (dry-run mock)${refsMarkers}${doneMarker}${monitoringMarker}${askMarker}${verdictMarker}` }],
         usage: { input_tokens: 300, output_tokens: 90 },
       },
     });
@@ -547,7 +575,7 @@ async function respond(userText, imageCount) {
     type: 'assistant',
     message: {
       role: 'assistant',
-      content: [{ type: 'text', text: `Follow-up #${turn - 1} received: "${userText.slice(0, 100)}".${imgNote} Applied (dry run).${refsMarkers}${doneMarker}${monitoringMarker}${askMarker}` }],
+      content: [{ type: 'text', text: `Follow-up #${turn - 1} received: "${userText.slice(0, 100)}".${imgNote} Applied (dry run).${refsMarkers}${doneMarker}${monitoringMarker}${askMarker}${verdictMarker}` }],
       usage: { input_tokens: 200, output_tokens: 60 },
     },
   });

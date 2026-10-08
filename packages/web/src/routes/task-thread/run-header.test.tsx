@@ -1424,6 +1424,25 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(tabs.getByRole('link', { name: 'Files' }).getAttribute('href')).toBe('/tasks/r1/files')
   })
 
+  it('tabs: Graph appears for a run with a workflow definition (a step list opens as its graph)', () => {
+    stubFetch()
+    const { unmount } = renderHeader(run('done'))
+    expect(within(document.querySelector('[data-slot="run-tabs"]') as HTMLElement).queryByRole('link', { name: 'Graph' })).toBeNull()
+    unmount()
+    renderHeader(
+      run('running', {
+        workflowDef: {
+          name: 'g',
+          source: 'file',
+          steps: [],
+          graph: { nodes: [{ id: 'start', type: 'start' }], edges: [] },
+        },
+      }),
+    )
+    const tabs = within(document.querySelector('[data-slot="run-tabs"]') as HTMLElement)
+    expect(tabs.getByRole('link', { name: 'Graph' }).getAttribute('href')).toBe('/tasks/r1/graph')
+  })
+
   it('copies the branch name from its header chip and confirms it in the tooltip', async () => {
     stubFetch()
     const writeText = vi.fn(() => Promise.resolve())

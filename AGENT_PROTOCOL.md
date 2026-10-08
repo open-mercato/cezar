@@ -266,8 +266,10 @@ backend-neutral: the agent asks a structured
 multiple-choice question by ending a turn with a `CEZ:ASK <json>` control marker
 (a sibling of `CEZ:DONE` / `CEZ:MONITORING`); the RunManager detects it on the
 *assembled* turn text — uniform across claude, codex and opencode with no mapper
-work — validates the payload (`packages/cezar/src/core/ask.ts`, modeled on Claude Code's
-`AskUserQuestion`: 1–4 questions, 2–4 options each, `header` ≤12 chars), emits
+work — validates the payload (`packages/cezar/src/core/ask.ts`, shaped after Claude Code's
+`AskUserQuestion`: `header` ≤12 chars, 1–`ASK_MAX_QUESTIONS` questions,
+2–`ASK_MAX_OPTIONS` options each — 20 and 10, finite for payload size and a
+scrollable card rather than for parity with that tool's 4 and 4), emits
 `ask.requested` and parks the run `waiting`. The cockpit renders clickable option
 chips; the user's pick (or a free-form reply) rides the normal reply seam
 (`POST /api/runs/:id/messages`), and the card resolves client-side when that
@@ -493,6 +495,11 @@ To be first-class:
    `buildChildEnv` is least-privilege per backend, so a multi-provider runner
    must receive credentials for every provider its own model ids can name
    without widening other backends.
+12. **Private MCP** — honor `AgentRunSpec.mcpServers` through the backend's own launch-time
+   channel (a flag, a config override, an env var, or ACP's `session/new` `mcpServers`), never by
+   writing into `cwd`; translators live in `private-mcp.ts`. Add the id to `PRIVATE_MCP_RUNNERS`
+   only once that works — a backend outside the list gets a run note naming the servers it could
+   not attach (spec `.ai/specs/2026-10-07-private-project-mcp.md`).
 
 ## 10. The plan channel (PR #443)
 

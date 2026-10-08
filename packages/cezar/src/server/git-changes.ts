@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { resolveTaskDiffBase, type RepointedHead } from '../git-diff-base.ts';
 import { isSafeGitRef } from '../git-refs.ts';
+import { gitHasIdentity, unresolvedConflicts } from '../git-worktree.ts';
 
 /**
  * Session git plumbing for the cockpit's Changes & Files tabs (redesign spec
@@ -656,16 +657,24 @@ export async function createOrSwitchBranch(
 export type CommitResult = { ok: true; sha: string } | { ok: false; error: string };
 
 /** `git add -A && git commit -m <message>` in `dir`. A clean tree, a failing
- *  hook or missing identity all come back as `{ ok:false, error }`. */
+ *  hook or missing identity all come back as `{ ok:false, error }`.
+ *
+ *  Refuses a worktree that is mid-merge or still carries conflict markers —
+ *  same guard as the graph `git.commit` node's `commitAll` (git-worktree.ts),
+ *  so a blind `git add -A` through this manual route cannot commit a
+ *  half-resolved merge either (see the #471 incident behind `autosaveCommit`). */
 export async function commitAll(dir: string, message: string): Promise<CommitResult> {
   const status = await git(dir, ['status', '--porcelain']);
   if (!status.ok) return { ok: false, error: gitReason(status, 'git status failed') };
   if (!status.stdout.trim()) {
     return { ok: false, error: 'nothing to commit — the working tree is clean' };
   }
+  const unresolved = await unresolvedConflicts(dir, status.stdout);
+  if (unresolved) return { ok: false, error: `refusing to commit: ${unresolved}` };
   const add = await git(dir, ['add', '-A']);
   if (!add.ok) return { ok: false, error: gitReason(add, 'git add failed') };
-  const commit = await git(dir, ['commit', '-m', message]);
+  const identityArgs = (await gitHasIdentity(dir)) ? [] : ['-c', 'user.name=cezar', '-c', 'user.email=cezar@local'];
+  const commit = await git(dir, [...identityArgs, 'commit', '-m', message]);
   if (!commit.ok) return { ok: false, error: gitReason(commit, 'git commit failed') };
   const head = await git(dir, ['rev-parse', 'HEAD']);
   return { ok: true, sha: head.ok ? head.stdout.trim() : '' };

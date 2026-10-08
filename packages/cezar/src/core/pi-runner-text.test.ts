@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunStore } from '../runs/store.js';
+import { parseAskMarkerResult } from './ask.js';
 import type { AgentEvent, AgentSession } from './agent-runner.js';
 import { PiRunner } from './pi-runner.js';
 
@@ -16,6 +17,10 @@ const delta = (text: string) => ({
 const endMessage = (text: string) => ({
   type: 'message_end',
   message: { role: 'assistant', content: [{ type: 'text', text }] },
+});
+const endMessageParts = (...parts: string[]) => ({
+  type: 'message_end',
+  message: { role: 'assistant', content: parts.map((text) => ({ type: 'text', text })) },
 });
 
 describe('PiRunner whole-block v1 text', () => {
@@ -110,6 +115,40 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       { type: 'tool-result', toolCallId: 'tool-1', result: 'file', isError: false },
       { type: 'text', text: 'second message' }, { type: 'turn-end' },
     ]);
+  });
+
+  it.each([
+    ['CEZ:ASK ', '{"questions":[{"header":"Pick","question":"Which?","options":[{"label":"A"},{"label":"B"}]}]}'],
+    ['CEZ:D', 'ONE'],
+    ['CEZ:MONITOR', 'ING'],
+  ])('keeps control markers adjacent when Pi splits message content parts (%s)', async (left, right) => {
+    const events: AgentEvent[] = [];
+    await peer([endMessageParts(`Progress.\n\n${left}`, right), { type: 'agent_settled' }]).run(
+      { cwd, userPrompt: 'test' },
+      (event) => events.push(event),
+    );
+    const text = events.find((event): event is Extract<AgentEvent, { type: 'text' }> => event.type === 'text')?.text;
+    expect(text).toBe(`Progress.\n\n${left}${right}`);
+    if (left === 'CEZ:ASK ') expect(parseAskMarkerResult(text!).kind).toBe('valid');
+    if (left === 'CEZ:D') expect(text!.endsWith('CEZ:DONE')).toBe(true);
+    if (left === 'CEZ:MONITOR') expect(/CEZ:MONITORING\s*$/.test(text!)).toBe(true);
+  });
+
+  it('coalesces token prose across an interleaved tool event while v2 remains delta-streamed', async () => {
+    const events: AgentEvent[] = [];
+    const live: string[] = [];
+    await peer([
+      delta('before '),
+      { type: 'tool_execution_start', toolCallId: 'tool-1', toolName: 'read', args: { path: 'README.md' } },
+      { type: 'tool_execution_end', toolCallId: 'tool-1', result: { content: [{ type: 'text', text: 'file' }] } },
+      delta('after'),
+      endMessage('before after'),
+      { type: 'agent_settled' },
+    ]).startSession({ cwd, userPrompt: 'test' }, (event) => events.push(event), { onUiEvent(event) {
+      if (event.type === 'item.delta') live.push(event.delta);
+    } }).result;
+    expect(events.filter((event) => event.type === 'text')).toEqual([{ type: 'text', text: 'before after' }]);
+    expect(live).toEqual(['before ', 'after']);
   });
 
   it.each(['EOF', 'interrupt', 'timeout', 'settled'] as const)('flushes unfinished text once on %s', async (boundary) => {

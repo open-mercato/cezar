@@ -31,6 +31,9 @@ export const DATA_GITIGNORE_ENTRIES = [
   'shadow/', // shadow runs' intent ledgers, shim and shadow remotes (spec 2026-10-06-shadow-runs)
   'todos.json',
   'todos.json.tmp',
+  // Private, per-project MCP servers (spec 2026-10-07-private-project-mcp) — personal tokens.
+  'mcp.local.json',
+  'mcp.local.json.cez-tmp-*',
   'tracker.json',
   'tracker.json.tmp',
   'tracker.json.*.tmp',

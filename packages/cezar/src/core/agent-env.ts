@@ -217,7 +217,8 @@ const MULTI_PROVIDER_PREFIXES: readonly string[] = [
 ];
 
 /** Per-backend auth/config the runner genuinely needs, by prefix. */
-const BACKEND_ALLOW_PREFIXES: Record<AgentBackend, readonly string[]> = {
+/** @internal Focused tests mutate a copy of one entry to model future policy changes. */
+export const BACKEND_ALLOW_PREFIXES: Record<AgentBackend, readonly string[]> = {
   claude: ['ANTHROPIC_', 'CLAUDE_'],
   'claude-cli': ['ANTHROPIC_', 'CLAUDE_'],
   codex: ['OPENAI_', 'CODEX_', 'AZURE_OPENAI_'],
@@ -303,6 +304,11 @@ function isTruthy(value: string | undefined): boolean {
   return v !== '' && v !== '0' && v !== 'false';
 }
 
+/** Only Claude Code backends may unlock Claude's Bedrock/Vertex credentials. */
+export function isClaudeBackend(backend: AgentBackend): boolean {
+  return backend === 'claude' || backend === 'claude-cli';
+}
+
 export interface BuildChildEnvOptions {
   backend: AgentBackend;
   /** Per-run env (CEZ_HANDOFF_FILE etc.) — always applied, wins over host. */
@@ -348,9 +354,11 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
       .filter(Boolean),
   );
 
-  // Cloud auth is unlocked only by the toggle that needs it, and only for a
-  // backend that is actually given the toggle (`CLAUDE_` prefix) to read.
-  const claudeCloud = backendPrefixes.includes('CLAUDE_');
+  // Cloud auth is unlocked only for Claude Code backends. Keep this gate tied
+  // to backend identity, not to whether an allowlist happens to contain the
+  // `CLAUDE_` prefix: a non-Claude backend may need a Claude-prefixed setting
+  // for an unrelated reason, but must never gain Claude's cloud credentials.
+  const claudeCloud = isClaudeBackend(opts.backend);
   const cloudPrefixes: string[] = [];
   const cloudNames = new Set<string>();
   if (claudeCloud && isTruthy(readVar(source, BEDROCK_TOGGLE))) {

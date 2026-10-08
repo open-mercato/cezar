@@ -326,7 +326,7 @@ export async function removeWorktree(
  * still saw `cezar autosave` in `git log` and reasonably concluded the opt-out
  * was broken. Only commit *spacing* (~90 s ⇒ timer) told them apart.
  */
-export type AutosaveReason = 'periodic' | 'turn end' | 'run finalize' | 'pre-PR';
+export type AutosaveReason = 'periodic' | 'turn end' | 'run finalize' | 'pre-PR' | 'pre-dispatch';
 
 /**
  * What an autosave attempt did. `refused` and `failed` are distinct from
@@ -420,6 +420,29 @@ export async function autosaveCommit(dir: string, reason: AutosaveReason): Promi
 }
 
 /**
+ * Stage and commit everything with the author's own message — the graph `git.commit` node
+ * (spec 2026-09-30-workflow-node-editor). Same guards and identity rule as `autosaveCommit`:
+ * refuses a mid-merge tree, commits as the current git user. Never throws.
+ */
+export async function commitAll(
+  dir: string,
+  message: string,
+): Promise<{ result: 'committed'; sha: string } | { result: 'nothing' } | { result: 'failed'; error: string }> {
+  const status = await git(dir, ['status', '--porcelain']);
+  if (!status.ok) return { result: 'failed', error: 'git status failed' };
+  if (!status.stdout.trim()) return { result: 'nothing' };
+  const unresolved = await unresolvedConflicts(dir, status.stdout);
+  if (unresolved) return { result: 'failed', error: `refusing to commit: ${unresolved}` };
+  await git(dir, ['add', '-A']);
+  const identityArgs = (await gitHasIdentity(dir)) ? [] : ['-c', 'user.name=cezar', '-c', 'user.email=cezar@local'];
+  const commit = await git(dir, [...identityArgs, 'commit', '--no-verify', '-m', message]);
+  if (!commit.ok) return { result: 'failed', error: (commit.stderr || commit.stdout).trim().split('\n')[0] || 'git commit failed' };
+  const sha = await git(dir, ['rev-parse', 'HEAD']);
+  if (!sha.ok || !sha.stdout.trim()) return { result: 'failed', error: 'commit succeeded but rev-parse HEAD failed' };
+  return { result: 'committed', sha: sha.stdout.trim() };
+}
+
+/**
  * Is the worktree mid-merge or still carrying conflict markers? Returns a
  * human-readable reason, or `null` when it is safe to autosave.
  *
@@ -428,7 +451,7 @@ export async function autosaveCommit(dir: string, reason: AutosaveReason): Promi
  * case — someone ran `git add` on a file they had not finished resolving, which
  * clears the `U` code but leaves `<<<<<<<` in the text.
  */
-async function unresolvedConflicts(dir: string, porcelain: string): Promise<string | null> {
+export async function unresolvedConflicts(dir: string, porcelain: string): Promise<string | null> {
   const entries = porcelain.split('\n').filter(Boolean);
   const unmerged = entries.filter((line) => {
     const xy = line.slice(0, 2);
@@ -508,7 +531,7 @@ function unquotePath(path: string): string {
 
 /** Does this repo/worktree resolve a git author identity (name + email)? Ambient config wins so
  *  autosave commits carry the user's own identity — see autosaveCommit. */
-async function gitHasIdentity(dir: string): Promise<boolean> {
+export async function gitHasIdentity(dir: string): Promise<boolean> {
   const [name, email] = await Promise.all([
     git(dir, ['config', 'user.name']),
     git(dir, ['config', 'user.email']),
@@ -615,6 +638,59 @@ export function parseShortstat(s: string): DiffStat {
  * git failure (the caller notes it, never fails the run); an empty diff is a
  * valid all-zero stat.
  */
+/** Push `branch` to origin (the graph `git.push` node). Never throws; `CEZ_DRY_RUN=1` is a no-op. */
+export async function pushBranch(dir: string, branch: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (process.env.CEZ_DRY_RUN === '1') return { ok: true };
+  if (!isSafeGitRef(branch)) return { ok: false, error: `refusing option-like branch: ${branch}` };
+  const remote = await git(dir, ['remote', 'get-url', 'origin']);
+  if (!remote.ok) return { ok: false, error: 'no origin remote' };
+  const push = await git(dir, ['-c', 'credential.interactive=false', 'push', '-u', 'origin', branch]);
+  return push.ok ? { ok: true } : { ok: false, error: (push.stderr || push.stdout).trim().split('\n')[0] || 'git push failed' };
+}
+
+/**
+ * Merge the freshest base into the worktree (the graph `git.sync-base` node): `origin/<base>`
+ * after a fetch when origin has it, else the local base. A conflicted merge is LEFT IN PROGRESS
+ * and reported with its files — the next node (an agent) resolves it; autosave refuses a
+ * mid-merge tree, so nothing half-resolved gets committed meanwhile. Never throws.
+ */
+export async function syncWithBase(
+  dir: string,
+  baseBranch: string,
+): Promise<{ result: 'done' } | { result: 'conflict'; files: string[] } | { result: 'failed'; error: string }> {
+  if (!isSafeGitRef(baseBranch)) return { result: 'failed', error: `refusing option-like base: ${baseBranch}` };
+  let ref = baseBranch;
+  const remote = await git(dir, ['remote', 'get-url', 'origin']);
+  if (remote.ok && process.env.CEZ_DRY_RUN !== '1') {
+    await git(dir, ['fetch', 'origin', baseBranch]);
+    const remoteRef = await git(dir, ['rev-parse', '--verify', '--quiet', `origin/${baseBranch}`]);
+    if (remoteRef.ok) ref = `origin/${baseBranch}`;
+  }
+  const identityArgs = (await gitHasIdentity(dir)) ? [] : ['-c', 'user.name=cezar', '-c', 'user.email=cezar@local'];
+  const merge = await git(dir, [...identityArgs, 'merge', '--no-edit', ref]);
+  if (merge.ok) return { result: 'done' };
+  const unmerged = await git(dir, ['diff', '--name-only', '--diff-filter=U']);
+  const files = unmerged.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+  if (files.length) return { result: 'conflict', files };
+  await git(dir, ['merge', '--abort']);
+  return { result: 'failed', error: (merge.stderr || merge.stdout).trim().split('\n')[0] || 'git merge failed' };
+}
+
+/** Paths this task changed vs its base — the SAME anchor `worktreeShortstat` uses (#751), so an
+ *  `if` node's "paths changed" and the task's diff numbers never disagree. Null on git failure. */
+export async function worktreeChangedFiles(
+  worktreePath: string,
+  baseBranch: string,
+  opts: { taskBranch?: string; runStartedAt?: string } = {},
+): Promise<string[] | null> {
+  if (!isSafeGitRef(baseBranch)) return null;
+  await git(worktreePath, ['add', '-N', '.']);
+  const { base } = await resolveTaskDiffBase((args) => git(worktreePath, args), baseBranch, opts);
+  const res = await git(worktreePath, ['diff', '--name-only', base]);
+  if (!res.ok) return null;
+  return res.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+}
+
 export async function worktreeShortstat(
   worktreePath: string,
   baseBranch: string,

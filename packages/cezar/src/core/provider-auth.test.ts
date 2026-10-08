@@ -384,6 +384,42 @@ describe('provider auth parsers', () => {
   });
 
   it.each([
+    'OpenCode Go  OpenCode Go                 stored',
+    [
+      '\u001B[36mOpenCode Go\u001B[0m  OpenCode Go                 stored',
+      'Anthropic  Claude                 stored',
+    ].join('\n'),
+  ])('recognizes OpenCode 2.x stored credential rows: %s', async (stdout) => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'opencode'
+        ? { stdout, stderr: '', exitCode: 0 }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'connected' } });
+  });
+
+  it('recognizes an OpenCode 2.x successful empty list as disconnected', async () => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'opencode'
+        ? { stdout: '', stderr: '', exitCode: 0 }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'disconnected' } });
+  });
+
+  it('does not guess from a malformed OpenCode 2.x credential row', async () => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'opencode'
+        ? { stdout: 'OpenCode Go stored maybe', stderr: '', exitCode: 0 }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'unknown' } });
+  });
+
+  it.each([
     [
       'one environment variable',
       [

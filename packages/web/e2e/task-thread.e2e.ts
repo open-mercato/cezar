@@ -358,7 +358,7 @@ describe('task thread', () => {
     ).toBe('cez/fcd519dd')
   })
 
-  it('tabs point at the routed Session/Changes/Files surfaces; the done run offers the closed-run actions', () => {
+  it('tabs point at the routed Session/Changes/Files/Graph surfaces; the done run offers the closed-run actions', () => {
     const tabs = browser.evaluate(`[...document.querySelectorAll('[data-slot="run-tabs"] a')].map((a) => ({
       text: a.textContent,
       href: a.getAttribute('href'),
@@ -369,12 +369,13 @@ describe('task thread', () => {
       { text: 'Changes', href: scoped(`/tasks/${RUN_ID}/changes`), current: null },
       { text: 'Commits', href: scoped(`/tasks/${RUN_ID}/commits`), current: null },
       { text: 'Files', href: scoped(`/tasks/${RUN_ID}/files`), current: null },
+      { text: 'Graph', href: scoped(`/tasks/${RUN_ID}/graph`), current: null },
     ])
 
     const actions = browser.evaluate(
       `[...document.querySelectorAll('[data-slot="run-actions"] button')].map((b) => b.textContent.trim())`,
     ) as string[]
-    expect(actions).toEqual(['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'])
+    expect(actions).toEqual(['Continue', 'Open in…', 'Notes', 'Mark unread', 'Pin', 'Archive', 'Delete'])
 
     // The take-over hint, per-backend (the fixture's last agent session, in its worktree).
     const hint = browser.evaluate(

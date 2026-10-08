@@ -81,8 +81,9 @@ const SPAWNABLE_PATH_SUFFIXES: readonly string[] = ['.exe', '.com'];
 const SHELL_PATH_SUFFIXES: readonly string[] = ['.exe', '.com', '.cmd', '.bat'];
 
 /** A runnable FILE. Every directory carries the execute bit, so `X_OK` alone would accept a
- *  folder named `claude` and turn the clean "not found" fallback into an `EACCES` at spawn time. */
-function isExecutable(path: string): boolean {
+ *  folder named `claude` and turn the clean "not found" fallback into an `EACCES` at spawn time.
+ *  The open-in-app PATH probe reuses this guard so its launch targets have the same contract. */
+export function isExecutable(path: string): boolean {
   try {
     accessSync(path, constants.X_OK);
     return statSync(path).isFile();

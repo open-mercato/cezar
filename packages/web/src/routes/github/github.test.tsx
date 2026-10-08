@@ -2513,6 +2513,9 @@ describe('the follow-up prompt template menu (#413)', () => {
       if (!option(id)) throw new Error(`template option "${id}" not mounted yet`)
     })
     await selectOption(id)
+    // Menu closure proves the click landed, but React may commit the prompt state in the next
+    // render. Wait for this selection's value transition before the caller checks its exact text.
+    await waitFor(() => expect(textarea().value).not.toBe(before))
   }
 
   it('an untouched ui-state shows the built-in templates, and inserting one fills the custom prompt', async () => {

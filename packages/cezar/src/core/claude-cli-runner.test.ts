@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -10,7 +10,9 @@ import type { AgentEvent } from './agent-runner.ts';
 import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
 import {
   buildClaudeArgs,
+  CLAUDE_HEADLESS_GUIDANCE,
   ClaudeCliRunner,
+  appendClaudeSystemPrompt,
   EOF_KILL_GRACE_MS,
   EOF_TERM_GRACE_MS,
   KILL_GRACE_MS,
@@ -43,11 +45,28 @@ describe('buildClaudeArgs systemPrompt', () => {
     const args = buildClaudeArgs({ ...spec, systemPrompt: 'Extra rules.\n\n---\n\nContract.' });
     const idx = args.indexOf('--append-system-prompt');
     expect(idx).toBeGreaterThanOrEqual(0);
-    expect(args[idx + 1]).toBe('Extra rules.\n\n---\n\nContract.');
+    expect(args[idx + 1]).toBe(appendClaudeSystemPrompt('Extra rules.\n\n---\n\nContract.'));
   });
 
-  it('omits the flag entirely when no systemPrompt is set', () => {
-    expect(buildClaudeArgs(spec)).not.toContain('--append-system-prompt');
+  it('always appends Claude-local headless denial guidance', () => {
+    const args = buildClaudeArgs(spec);
+    const idx = args.indexOf('--append-system-prompt');
+    expect(args[idx + 1]).toBe(CLAUDE_HEADLESS_GUIDANCE);
+  });
+
+  it('preserves caller instructions before the backend guidance', () => {
+    expect(appendClaudeSystemPrompt('Caller rules.')).toBe(
+      `Caller rules.\n\n---\n\n${CLAUDE_HEADLESS_GUIDANCE}`,
+    );
+  });
+
+  it('uses the same guidance for a resumed call without changing resume args', () => {
+    const initial = buildClaudeArgs({ ...spec, sessionId: 'session-1' });
+    const resumed = buildClaudeArgs({ ...spec, sessionId: 'session-1', resume: true });
+    expect(initial[initial.indexOf('--append-system-prompt') + 1]).toBe(CLAUDE_HEADLESS_GUIDANCE);
+    expect(resumed[resumed.indexOf('--append-system-prompt') + 1]).toBe(CLAUDE_HEADLESS_GUIDANCE);
+    expect(initial).toContain('--session-id');
+    expect(resumed).toContain('--resume');
   });
 });
 
@@ -284,6 +303,32 @@ describe('ClaudeCliRunner token usage', () => {
       expect(events.filter((event) => event.type === 'token-usage')).toEqual([
         { type: 'token-usage', tokensUsed: 1_455 },
       ]);
+    } finally {
+      rmSync(cwd, { force: true, recursive: true });
+    }
+  });
+});
+
+describe('ClaudeCliRunner private MCP (spec 2026-10-07-private-project-mcp)', () => {
+  it('spawns with --mcp-config pointing at a 0600 file that is gone once the session ends', async () => {
+    const mockBin = fileURLToPath(new URL('../../scripts/mock-claude.mjs', import.meta.url));
+    const runner = new ClaudeCliRunner({ bin: mockBin, timeoutMs: 60_000 });
+    const cwd = mkdtempSync(join(tmpdir(), 'cez-claude-private-mcp-'));
+    const argsFile = join(cwd, 'args.ndjson');
+    try {
+      await runner.run({
+        userPrompt: 'do it',
+        cwd,
+        env: { CEZ_HANDOFF_FILE: '', CEZ_MOCK_ARGS_FILE: argsFile, CEZ_TODOS_FILE: '' },
+        allowedTools: ['Read'],
+        mcpServers: [{ name: 'tracker', transport: 'stdio', command: 'tracker-mcp', args: [], env: { TOKEN: 's3cret' }, headers: {} }],
+      });
+      const argv = JSON.parse(readFileSync(argsFile, 'utf8').trim().split('\n')[0]!) as string[];
+      const configPath = argv[argv.indexOf('--mcp-config') + 1]!;
+      expect(argv).toContain('--mcp-config');
+      expect(argv[argv.indexOf('--allowedTools') + 1]).toBe('Read,mcp__tracker');
+      expect(argv.join(' ')).not.toContain('s3cret');
+      expect(existsSync(configPath)).toBe(false);
     } finally {
       rmSync(cwd, { force: true, recursive: true });
     }

@@ -102,6 +102,10 @@ import type {
   WorktreeEntry,
   SaveWorkflowInput,
   SaveWorkflowResponse,
+  SaveWorkflowGraphInput,
+  ValidateWorkflowGraphResponse,
+  WorkflowGraph,
+  WorkflowNodeCatalogResponse,
   SetConfigInput,
   SetConfigResponse,
   SetAgentConfigInput,
@@ -2003,6 +2007,36 @@ export async function createWorkflow(input: SaveWorkflowInput): Promise<SaveWork
       json: input,
     }),
     '/workflows',
+  )
+}
+
+/** Graph workflows (spec 2026-09-30-workflow-node-editor): the palette's node catalog. */
+export async function getWorkflowNodes(opts?: ReadOptions): Promise<WorkflowNodeCatalogResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].workflows.nodes.$get({ param: { projectId: queryScope() } }, init(opts)),
+    '/workflows/nodes',
+  )
+}
+
+/** Structural problems of a graph (`[]` when sound) — the editor calls it as you edit. */
+export async function validateWorkflowGraph(graph: WorkflowGraph): Promise<ValidateWorkflowGraphResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].workflows.validate.$post({
+      param: { projectId: queryScope() },
+      json: { graph },
+    }),
+    '/workflows/validate',
+  )
+}
+
+/** Save a `version: 2` graph workflow. A 409 carries `exists: true` like `createWorkflow`. */
+export async function saveWorkflowGraph(input: SaveWorkflowGraphInput): Promise<SaveWorkflowResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].workflows.graph.$post({
+      param: { projectId: queryScope() },
+      json: input,
+    }),
+    '/workflows/graph',
   )
 }
 

@@ -13,6 +13,13 @@ import { runnerSchema } from './health.ts';
  *  - `dispatchInputSchema` and `dispatchReportSchema` are request bodies.
  */
 
+/**
+ * How many of a parked ask's question texts the run record carries (see
+ * `dispatchSchema.pendingAsk.questions`). Frozen at 4 on purpose: raising it would make a
+ * freshly written `runs.json` unreadable to an older cezar's all-or-nothing index reader.
+ */
+export const PENDING_ASK_MAX_QUESTIONS = 4;
+
 /** What a dispatched task is for. `implement` is the default; `review` judges another task's
  *  branch and answers with a verdict. Nothing else — kinds are cheap to add, expensive to trust. */
 export const DISPATCH_KINDS = ['implement', 'review'] as const;
@@ -99,7 +106,24 @@ export const dispatchSchema = z.object({
   pendingAsk: z
     .object({
       requestId: z.string().optional(),
-      questions: z.array(z.string().max(400)).max(4),
+      /**
+       * At most `PENDING_ASK_MAX_QUESTIONS` texts, and that bound does NOT follow
+       * `ASK_MAX_QUESTIONS` upward. This is a persisted record field, and
+       * `readRunIndexFromDisk` is all-or-nothing (`return []` on a parse failure): a
+       * record written with more entries than an older cezar's copy of this schema
+       * accepts empties that cezar's WHOLE project index — every task gone from the
+       * palette and from search — over one parked question. The writer truncates and
+       * counts the rest in `omittedQuestions` instead; the parent gets every question
+       * in full through the Guard inbox message, which is a markdown file under no
+       * schema.
+       */
+      questions: z.array(z.string().max(400)).max(PENDING_ASK_MAX_QUESTIONS),
+      /**
+       * Additive: how many of the ask's questions are NOT in `questions[]` above,
+       * written only when the list was truncated. Absent means nothing was omitted,
+       * which is exactly how every record written before this field replays.
+       */
+      omittedQuestions: z.number().int().positive().optional(),
       askedAt: z.string(),
     })
     .optional(),

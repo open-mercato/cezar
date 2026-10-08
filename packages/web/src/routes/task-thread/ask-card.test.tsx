@@ -114,6 +114,16 @@ const twoQuestionAsk: ThreadAsk = {
   ],
 }
 
+describe('AskCard — who asks', () => {
+  it('names the agent by default and the workflow for a graph gate/question', () => {
+    const { unmount } = renderAsk(singleAsk)
+    expect(screen.getByText('The agent is asking')).toBeTruthy()
+    unmount()
+    renderAsk({ ...singleAsk, fromWorkflow: true })
+    expect(screen.getByText('The workflow is asking')).toBeTruthy()
+  })
+})
+
 describe('AskCard', () => {
   it('renders the header, question and each option with its description', () => {
     renderAsk(singleAsk)

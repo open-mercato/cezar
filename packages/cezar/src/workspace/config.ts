@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { chmodSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
@@ -369,8 +369,29 @@ export function atomicWriteJsonSync(path: string, value: unknown): void {
   assertCezarHomeWriteIsSandboxed(path);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const tmp = atomicTmpPath(path);
-  writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-  renameSync(tmp, path);
+  let fd = -1;
+  try {
+    fd = openSync(tmp, 'w', 0o600);
+    writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8' });
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = -1;
+    renameSync(tmp, path);
+  } catch (error) {
+    if (fd !== -1) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Preserve the original write/fsync/rename error.
+      }
+    }
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      // Preserve the original write/fsync/rename error.
+    }
+    throw error;
+  }
   try {
     chmodSync(path, 0o600); // best-effort — ignored on some filesystems
   } catch {
