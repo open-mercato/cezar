@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { shadowDir, shadowPaths } from './ledger.ts';
 import {
@@ -129,11 +129,18 @@ describe('prepareShadowRun (real git)', { timeout: 30_000 }, () => {
 
   it('arms outside any git repository: the probe has a scratch repository of its own', async () => {
     const outside = mkdtempSync(join(realpathSync(tmpdir()), 'cez-shadow-norepo-'));
+    // The temp dir can itself sit inside a repository - an agent run gets `<repo>/.ai/cezar/tmp/<run>`
+    // as its TMPDIR (#785) - and git would then find that checkout and its remotes from here. A
+    // ceiling at the parent keeps this directory outside every repository, wherever the temp dir is.
+    const ceiling = process.env.GIT_CEILING_DIRECTORIES;
+    process.env.GIT_CEILING_DIRECTORIES = dirname(outside);
     try {
       const shadow = await prepareShadowRun({ dataDir: join(outside, '.ai', 'cezar'), runId: RUN, repoRoot: outside });
       expect(shadow.remotes).toEqual([]);
       expect(shadow.env.CEZ_SHADOW).toBe('1');
     } finally {
+      if (ceiling === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
+      else process.env.GIT_CEILING_DIRECTORIES = ceiling;
       rmSync(outside, { recursive: true, force: true });
     }
   });
