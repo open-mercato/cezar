@@ -21,6 +21,7 @@ import {
   WorkflowIcon,
 } from 'lucide-react'
 import * as React from 'react'
+import { Virtualizer } from 'virtua'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import { archiveFinished, markAllRunsSeen, patchRun } from '@/api/client'
@@ -42,7 +43,6 @@ import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { deriveAttention } from '@/lib/attention'
-import { shortAge } from '@/lib/format'
 import { isReadDoneItem, isUnread, unreadDoneCount } from '@/lib/read-state'
 import {
   isColumnExpanded,
@@ -69,8 +69,14 @@ import {
 } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useTaskTableColumns } from '@/lib/use-task-table-columns'
-import { useNow } from '@/lib/use-now'
+import { LiveNowProvider, RelativeAge } from '@/lib/live-now'
+import { RowSpacer, WINDOWED_ROWS_THRESHOLD, useWindowedRows } from '@/lib/use-windowed-rows'
 import { cn } from '@/lib/utils'
+
+const NO_RUNS: RunRecord[] = []
+const DEFAULT_EXPANDED_COLUMNS = normalizeExpandedColumns(undefined)
+const noToggle = (): void => undefined
+const AGE_TICK_MS = 30_000
 
 /**
  * The Tasks overview — the table that IS the home at `/` (spec, "Task list & table", per PR
@@ -92,11 +98,11 @@ export function TasksOverview({
   onMarkAllRead,
   onRename,
   onTogglePin,
-  now = Date.now(),
+  now,
   showTokens = true,
   showCost = true,
-  expandedColumns = normalizeExpandedColumns(undefined),
-  onToggleColumn = () => undefined,
+  expandedColumns = DEFAULT_EXPANDED_COLUMNS,
+  onToggleColumn = noToggle,
   columnsPending = false,
 }: {
   /** Undefined while `/api/runs` has not answered: the header renders, the body stays empty —
@@ -131,31 +137,46 @@ export function TasksOverview({
   // Session-local on purpose: "collapsed by default" is the contract, so a fresh visit folds
   // everything back.
   const [expandedSubtasks, setExpandedSubtasks] = React.useState<ReadonlySet<string>>(new Set())
-  const toggleSubtasks = (id: string) =>
-    setExpandedSubtasks((current) => {
-      const next = new Set(current)
-      if (!next.delete(id)) next.add(id)
-      return next
-    })
-  const all = runs ?? []
-  const counts = listCounts(all)
-  const visible = sortRuns(filterRuns(all, query), view)
+  const toggleSubtasks = React.useCallback(
+    (id: string) =>
+      setExpandedSubtasks((current) => {
+        const next = new Set(current)
+        if (!next.delete(id)) next.add(id)
+        return next
+      }),
+    [],
+  )
+  const all = runs ?? NO_RUNS
+  const counts = React.useMemo(() => listCounts(all), [all])
+  const matching = React.useMemo(() => filterRuns(all, query), [all, query])
+  const visible = React.useMemo(() => sortRuns(matching, view), [matching, view])
   // A live search overrides the fold wholesale: `filterRuns` keeps a child whose parent also
   // matched NESTED under it, and a match the accordion then hid would read as a search miss.
   const searching = query.trim() !== ''
+  const isSubtasksExpanded = React.useCallback(
+    (id: string) => searching || expandedSubtasks.has(id),
+    [searching, expandedSubtasks],
+  )
   // Dispatched children nest under the task that ordered them, in that task's own place in the
   // sort above (spec `.ai/specs/2026-09-10-dispatch.md`). One derivation, both layouts: the table
   // and the cards are the same rows at two widths, and a tree that disagreed between them would
   // be two trees — which is also why the accordion state feeds the derivation here rather than
   // either layout hiding rows on its own.
-  const rows = taskTreeRows(visible, (id) => searching || expandedSubtasks.has(id))
+  const rows = React.useMemo(
+    () => taskTreeRows(visible, isSubtasksExpanded),
+    [visible, isSubtasksExpanded],
+  )
   // Positions come from the full list, never the filtered one: a search must not renumber the
   // queue the engine is actually going to drain.
-  const positions = queuePositions(all)
-  const strips = compareGroups(filterRuns(all, query), view)
-  const finished = finishedRunCount(all)
-  const columns = taskColumnsForCapabilities({ tokens: showTokens, cost: showCost })
-  const unread = unreadDoneCount(all)
+  const positions = React.useMemo(() => queuePositions(all), [all])
+  const strips = React.useMemo(() => compareGroups(matching, view), [matching, view])
+  const finished = React.useMemo(() => finishedRunCount(all), [all])
+  const columns = React.useMemo(
+    () => taskColumnsForCapabilities({ tokens: showTokens, cost: showCost }),
+    [showTokens, showCost],
+  )
+  const unread = React.useMemo(() => unreadDoneCount(all), [all])
+  const tableWindow = useWindowedRows<HTMLTableSectionElement>(rows.length)
   // The archived view withholds the pin, the same call `runActionFlags` makes for the thread
   // header (`pin: !run.archived`): `sortRuns` skips the pin comparator there and `bucketOf`
   // answers `Archived` before it ever reads `run.pinned`, so the button would be an action with
@@ -164,6 +185,7 @@ export function TasksOverview({
   const pinToggle = view === 'archived' ? undefined : onTogglePin
 
   return (
+    <LiveNowProvider intervalMs={AGE_TICK_MS} now={now}>
     <div data-route="tasks" className="flex min-h-full flex-col">
       {/* Desktop header. Below `md` the shell's top bar already says "Tasks", and the drawer
           carries the shared Active/Archived tabs — repeating them here would be a third copy. */}
@@ -233,7 +255,7 @@ export function TasksOverview({
               className="hidden overflow-x-auto rounded-lg border border-border bg-card shadow-xs md:block"
             >
               <TooltipProvider>
-                <table className="w-full border-collapse">
+                <table className="w-full border-collapse" aria-rowcount={tableWindow.ariaRowCount}>
                   <colgroup>
                     {columns.map((column) => {
                       const expanded = isColumnExpanded(column.id, expandedColumns)
@@ -248,7 +270,7 @@ export function TasksOverview({
                     })}
                   </colgroup>
                   <thead>
-                    <tr>
+                    <tr aria-rowindex={tableWindow.windowed ? 1 : undefined}>
                       {columns.map((column) => (
                         <TaskColumnHeader
                           key={column.id}
@@ -260,50 +282,51 @@ export function TasksOverview({
                       ))}
                     </tr>
                   </thead>
-                  <tbody className="[&>tr:last-child>td]:border-b-0">
-                    {rows.map((node) => (
+                  <tbody ref={tableWindow.anchorRef} className="[&>tr:last-child>td]:border-b-0">
+                    <RowSpacer height={tableWindow.padTop} colSpan={columns.length} />
+                    {rows.slice(tableWindow.start, tableWindow.end).map((node, index) => (
                       <TableRow
                         key={node.run.id}
+                        ariaRowIndex={tableWindow.ariaRowIndex(tableWindow.start + index)}
                         run={node.run}
                         depth={node.depth}
                         childCount={node.childCount}
-                        subtasksExpanded={searching || expandedSubtasks.has(node.run.id)}
+                        subtasksExpanded={isSubtasksExpanded(node.run.id)}
                         onToggleSubtasks={toggleSubtasks}
                         queuePosition={
                           node.run.status === 'queued' ? (positions.get(node.run.id) ?? null) : null
                         }
                         onRename={onRename}
                         onTogglePin={pinToggle}
-                        now={now}
                         columns={columns}
                         expandedColumns={expandedColumns}
                       />
                     ))}
+                    <RowSpacer height={tableWindow.padBottom} colSpan={columns.length} />
                   </tbody>
                 </table>
               </TooltipProvider>
             </div>
 
             {/* <md: the same runs as stacked cards. */}
-            <div data-slot="task-cards" className="flex flex-col gap-2.5 md:hidden">
-              {rows.map((node) => (
+            <TaskCardList
+              cards={rows.map((node) => (
                 <TaskCard
                   key={node.run.id}
                   run={node.run}
                   depth={node.depth}
                   childCount={node.childCount}
-                  subtasksExpanded={searching || expandedSubtasks.has(node.run.id)}
+                  subtasksExpanded={isSubtasksExpanded(node.run.id)}
                   onToggleSubtasks={toggleSubtasks}
                   queuePosition={
                     node.run.status === 'queued' ? (positions.get(node.run.id) ?? null) : null
                   }
-                  now={now}
                   showTokens={showTokens}
                   showCost={showCost}
                   onTogglePin={pinToggle}
                 />
               ))}
-            </div>
+            />
           </>
         )}
 
@@ -336,6 +359,59 @@ export function TasksOverview({
       >
         <PlusIcon className="size-[22px]" aria-hidden="true" />
       </Link>
+    </div>
+    </LiveNowProvider>
+  )
+}
+
+/**
+ * The `<md` card list. Cards differ in height (a subtask note, a wrapped title), which is the
+ * case virtua measures for; the table's fixed-height rows window through `useWindowedRows`.
+ */
+function TaskCardList({ cards }: { cards: React.ReactElement[] }) {
+  const virtual = cards.length > WINDOWED_ROWS_THRESHOLD
+  const containerRef = React.useRef<HTMLDivElement | null>(null)
+  const scrollElRef = React.useRef<HTMLElement | null>(null)
+  const [startMargin, setStartMargin] = React.useState(0)
+  React.useLayoutEffect(() => {
+    if (!virtual) return
+    const measure = () => {
+      const container = containerRef.current
+      const scroller = scrollElRef.current
+      if (!container || !scroller) return
+      setStartMargin(
+        Math.max(
+          0,
+          Math.round(container.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop),
+        ),
+      )
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [virtual])
+
+  return (
+    <div
+      ref={(el) => {
+        containerRef.current = el
+        if (el) scrollElRef.current = el.closest<HTMLElement>('[data-slot="main"]')
+      }}
+      data-slot="task-cards"
+      data-virtualized={virtual}
+      className={cn('flex flex-col md:hidden', virtual ? null : 'gap-2.5')}
+    >
+      {virtual ? (
+        <Virtualizer scrollRef={scrollElRef} startMargin={startMargin}>
+          {cards.map((card) => (
+            <div key={card.key} className="pb-2.5">
+              {card}
+            </div>
+          ))}
+        </Virtualizer>
+      ) : (
+        cards
+      )}
     </div>
   )
 }
@@ -541,7 +617,8 @@ const TD_BASE = 'h-11 border-b border-border px-2.5 whitespace-nowrap first:pl-4
  * input) belongs to that control and is not hijacked. The title is a true `<Link>` so the
  * row's destination exists for keyboards and middle-clicks too.
  */
-function TableRow({
+const TableRow = React.memo(function TableRow({
+  ariaRowIndex,
   run,
   depth,
   childCount,
@@ -550,10 +627,10 @@ function TableRow({
   queuePosition,
   onRename,
   onTogglePin,
-  now,
   columns,
   expandedColumns,
 }: {
+  ariaRowIndex?: number
   run: RunRecord
   /** Nesting level under the task that dispatched this one; 0 for a top-level row. */
   depth: number
@@ -565,7 +642,6 @@ function TableRow({
   queuePosition: number | null
   onRename: (id: string, title: string) => void
   onTogglePin?: (run: RunRecord, pinned: boolean) => void
-  now: number
   columns: readonly TaskColumnDefinition[]
   expandedColumns: NormalizedExpandedColumns
 }) {
@@ -580,6 +656,7 @@ function TableRow({
     <tr
       data-slot="task-table-row"
       data-run-id={run.id}
+      aria-rowindex={ariaRowIndex}
       // The nesting is carried on the ROW, not only in the Task cell's padding: a test (and a
       // stylesheet) should be able to ask how deep a row sits without parsing an indent.
       data-depth={depth}
@@ -633,13 +710,12 @@ function TableRow({
             to={to}
             onRename={onRename}
             onTogglePin={onTogglePin}
-            now={now}
           />
         )
       })}
     </tr>
   )
-}
+})
 
 function TaskTableCell({
   column,
@@ -656,7 +732,6 @@ function TaskTableCell({
   to,
   onRename,
   onTogglePin,
-  now,
 }: {
   column: TaskColumnDefinition
   expanded: boolean
@@ -672,7 +747,6 @@ function TaskTableCell({
   to: string
   onRename: (id: string, title: string) => void
   onTogglePin?: (run: RunRecord, pinned: boolean) => void
-  now: number
 }) {
   if (!expanded) return <FoldedTd column={column.id} />
 
@@ -750,7 +824,7 @@ function TaskTableCell({
     case 'started':
       return (
         <td data-column-id={column.id} className={cn(TD_BASE, 'text-right text-xs text-soft-foreground tabular-nums')}>
-          {shortAge(run.startedAt ?? run.createdAt, now)}
+          <RelativeAge at={run.startedAt ?? run.createdAt} />
         </td>
       )
     case 'cpu':
@@ -941,14 +1015,13 @@ function UsageTd({ column, cell }: { column: 'cpu' | 'memory'; cell: UsageCell }
 }
 
 /** One run, one card — the `<md` framing of the same row. */
-function TaskCard({
+const TaskCard = React.memo(function TaskCard({
   run,
   depth,
   childCount,
   subtasksExpanded,
   onToggleSubtasks,
   queuePosition,
-  now,
   showTokens,
   showCost,
   onTogglePin,
@@ -961,7 +1034,6 @@ function TaskCard({
   subtasksExpanded: boolean
   onToggleSubtasks: (id: string) => void
   queuePosition: number | null
-  now: number
   showTokens: boolean
   showCost: boolean
   onTogglePin?: (run: RunRecord, pinned: boolean) => void
@@ -1039,7 +1111,7 @@ function TaskCard({
           />
         ) : null}
         <span className="mt-0.5 shrink-0 text-[11.5px] text-soft-foreground tabular-nums">
-          {shortAge(run.finishedAt ?? run.createdAt, now)}
+          <RelativeAge at={run.finishedAt ?? run.createdAt} />
         </span>
         {/* Always visible here, not hover-revealed: a card has no hover to speak of on the
             device it exists for, and it is the only place a pin can be set or seen on mobile. */}
@@ -1093,7 +1165,7 @@ function TaskCard({
       </div>
     </div>
   )
-}
+})
 
 /** An honest em dash: this cell has nothing true to show. */
 function Dash() {
@@ -1151,7 +1223,18 @@ export function TasksOverviewRoute() {
   })
   // Pinning (#935) — this page is the scoped project's own table, so no explicit project id.
   const pin = usePinRun()
-  const now = useNow(30_000)
+  // Stable across renders so the memoized rows they reach only re-render for their own run.
+  const renameMutate = rename.mutate
+  const onRename = React.useCallback(
+    (id: string, title: string) => renameMutate({ id, title }),
+    [renameMutate],
+  )
+  const pinMutate = pin.mutate
+  const onTogglePin = React.useCallback(
+    (run: RunRecord, pinned: boolean) =>
+      pinMutate({ id: run.id, pinned }, { onError: (error: Error) => toast(error.message, { tone: 'danger' }) }),
+    [pinMutate],
+  )
   const taskTableColumns = useTaskTableColumns()
   // Chip statuses are hydrated HERE rather than inside `TasksOverview`, which is a pure
   // presentational component rendered directly (and without a query client) by its tests. The
@@ -1182,14 +1265,8 @@ export function TasksOverviewRoute() {
         onViewChange={setView}
         onArchiveFinished={() => archive.mutate()}
         onMarkAllRead={() => markAllRead.mutate()}
-        onRename={(id, title) => rename.mutate({ id, title })}
-        onTogglePin={(run, pinned) =>
-          pin.mutate(
-            { id: run.id, pinned },
-            { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
-          )
-        }
-        now={now}
+        onRename={onRename}
+        onTogglePin={onTogglePin}
         showTokens={metricVisibility.tokens}
         showCost={metricVisibility.cost}
         expandedColumns={taskTableColumns.expandedColumns}

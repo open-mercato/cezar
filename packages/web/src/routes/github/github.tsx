@@ -17,7 +17,7 @@ import {
   TagIcon,
   TriangleAlertIcon,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
+import { memo, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import { useParams } from 'react-router'
 
 import { Link, Navigate } from '@/lib/project-router'
@@ -682,14 +682,7 @@ function countLabel(count: number): string {
   return `${count}${count >= LIST_LIMIT ? '+' : ''}`
 }
 
-function GithubRow({
-  item,
-  view,
-  colors,
-  active,
-  queued,
-  checks,
-}: {
+interface GithubRowProps {
   item: GithubItem
   view: GithubView
   colors: Record<string, string>
@@ -697,7 +690,21 @@ function GithubRow({
   queued: boolean
   /** Resolved checks glyph — the lazily-hydrated value overrides the list's `null` (#664). */
   checks?: GithubItem['checks']
-}) {
+}
+
+/**
+ * Memoized, but not virtualized: a row's height depends on whether it carries labels and how many
+ * lines they wrap to, so there is no fixed row height to window by. `colors` is rebuilt every
+ * render of the page, so only the entries for this row's own labels are compared.
+ */
+const GithubRow = memo(function GithubRow({
+  item,
+  view,
+  colors,
+  active,
+  queued,
+  checks,
+}: GithubRowProps) {
   const Icon = item.kind === 'issue' ? CircleDotIcon : GitPullRequestIcon
   const queryClient = useQueryClient()
 
@@ -769,6 +776,17 @@ function GithubRow({
         ) : null}
       </Link>
     </li>
+  )
+}, sameGithubRow)
+
+function sameGithubRow(previous: GithubRowProps, next: GithubRowProps): boolean {
+  return (
+    previous.item === next.item &&
+    previous.view === next.view &&
+    previous.active === next.active &&
+    previous.queued === next.queued &&
+    previous.checks === next.checks &&
+    next.item.labels.every((label) => previous.colors[label] === next.colors[label])
   )
 }
 
