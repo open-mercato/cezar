@@ -133,6 +133,7 @@ import {
   enterGraph,
   globMatch,
   graphRailSteps,
+  loopBodyIds,
   edgeFrom,
   forkShape,
   type ForkShape,
@@ -4557,11 +4558,10 @@ export class RunManager {
       for (const t of transitions) {
         if (t.port !== 'repeat' || !t.to) continue;
         const into = transitions.find((x) => x.to === t.from);
+        if (!into?.from) continue;
         const rail = this.store.getRun(runId)?.steps ?? [];
-        const lo = rail.findIndex((r) => r.id === t.to);
-        const hi = rail.findIndex((r) => r.id === into?.from);
-        if (lo < 0 || hi < lo) continue;
-        for (const r of rail.slice(lo, hi + 1)) this.store.updateStep(runId, r.id, { status: 'pending' });
+        const body = loopBodyIds(graph, t.to, into.from);
+        for (const r of rail) if (body.has(r.id)) this.store.updateStep(runId, r.id, { status: 'pending' });
       }
     };
     const taken: string[] = [...(resume?.taken ?? [])];
@@ -4808,7 +4808,9 @@ export class RunManager {
       emit({ type: 'note', stepId: fork.id, message, ...(tone ? { tone } : {}) });
     const byChild = new Map<string, (typeof shape.branches)[number]>();
     const earlier = resuming ? outputs.get(fork.id)?.runIds : undefined;
-    const earlierIds = typeof earlier === 'string' && earlier ? earlier.split(',') : [];
+    // `earlier` may legitimately be '' (the only branch attempted so far was refused) — that
+    // must still split to one placeholder entry, not be treated as "nothing dispatched yet".
+    const earlierIds = typeof earlier === 'string' ? earlier.split(',') : [];
     if (earlierIds.length === shape.branches.length) {
       // One entry per branch, including empty-string placeholders for branches whose dispatch
       // was refused — this keeps the length check above meaningful even when a prior pass only

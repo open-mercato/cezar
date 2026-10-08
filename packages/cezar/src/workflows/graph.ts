@@ -239,7 +239,7 @@ export function isFailurePort(port: string): boolean {
 
 /** A concrete node's output ports: an agent with verdicts swaps `done` for one port per verdict. */
 export function portsOfNode(node: GraphNode): readonly string[] {
-  if (node.type === 'agent' && node.verdicts?.length) return [...new Set(node.verdicts), 'failed'];
+  if (node.type === 'agent' && node.verdicts?.length) return [...new Set([...node.verdicts, 'failed'])];
   // A human wait grows a `timeout` port only when it has a timeout to fire.
   if (node.type === 'fork') return Array.from({ length: node.branches }, (_, i) => String(i + 1));
   if ((node.type === 'gate.human' || node.type === 'ask-user') && node.timeoutMs) {
@@ -306,6 +306,12 @@ export function graphIssues(graph: WorkflowGraph): string[] {
 
   const starts = graph.nodes.filter((n) => n.type === 'start');
   if (starts.length !== 1) issues.push(`a workflow graph needs exactly one start node (found ${starts.length})`);
+
+  // The v1 builder refused to save an empty pipeline; a graph with nothing wired past `start`
+  // (or no agent/check anywhere on the walk) passes every other check here yet runs nothing.
+  if (starts.length === 1 && graphRailSteps(graph).length === 0) {
+    issues.push('a workflow needs at least one agent or check step reachable from start');
+  }
 
   for (const n of graph.nodes) {
     if (n.type === 'if' && n.condition.kind === 'output') {
@@ -415,6 +421,31 @@ export function graphRailSteps(graph: WorkflowGraph): { id: string; name: string
   return walkOrder(graph)
     .filter((n) => n.type !== 'start' && n.type !== 'end' && n.type !== 'loop' && n.type !== 'join')
     .map((n) => ({ id: n.id, name: n.name ?? (n.type === 'agent' || n.type === 'check' ? n.id : label(n.type)), kind: n.type === 'agent' ? 'agent' : 'check' }));
+}
+
+/** Node ids on the path from `from` forward to (and including) `to`, walking actual edges —
+ *  used to reopen exactly the rail rows a loop's retry step re-runs. The rail lists nodes in
+ *  BFS discovery order from `start`, which does not guarantee `to` comes after `from`, so an
+ *  index-range slice of the rail is not reliable here (D-rail-loop-reset). */
+export function loopBodyIds(graph: WorkflowGraph, from: string, to: string): ReadonlySet<string> {
+  const ids = new Set<string>([from]);
+  const queue = [from];
+  while (queue.length) {
+    const id = queue.shift() as string;
+    if (id === to) continue;
+    const node = graph.nodes.find((n) => n.id === id);
+    for (const port of node ? portsOfNode(node) : []) {
+      const edge = graph.edges.find((e) => {
+        const f = parseEdgeFrom(e.from, graph.nodes);
+        return f?.node === id && f.port === port;
+      });
+      if (edge && !ids.has(edge.to)) {
+        ids.add(edge.to);
+        queue.push(edge.to);
+      }
+    }
+  }
+  return ids;
 }
 
 /** The text fields of a node that `{{task}}` / `{{nodes.*}}` templates may appear in. */

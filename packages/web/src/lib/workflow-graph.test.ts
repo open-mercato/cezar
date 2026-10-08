@@ -65,6 +65,13 @@ describe('ports', () => {
   it('lists unwired ports', () => {
     expect(unwiredPorts(LOOPING)).toEqual(['implement.failed', 'review.failed'])
   })
+
+  it('never doubles the failed port for a verdict literally named "failed"', () => {
+    // The save-time schema refuses this verdict name, but portsOf also runs live, on every
+    // keystroke, before that validation ever fires.
+    const n = { ...LOOPING.nodes[4]!, verdicts: ['failed', 'approve'] } as (typeof LOOPING.nodes)[4]
+    expect(portsOf(n)).toEqual(['failed', 'approve'])
+  })
 })
 
 describe('editing', () => {

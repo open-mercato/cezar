@@ -10,6 +10,7 @@ import {
   graphRailSteps,
   graphToSteps,
   isTerminalAgent,
+  loopBodyIds,
   parseVerdict,
   portsOfNode,
   renderNodeRefs,
@@ -95,6 +96,18 @@ describe('graphIssues', () => {
       edges: [{ from: 'start', to: 'a' }],
     };
     expect(graphIssues(g)).toEqual(['agent node "a" needs a prompt or a skill']);
+  });
+
+  it('rejects a graph with nothing wired past start — the v1 "add at least one step" guard', () => {
+    const empty: WorkflowGraph = {
+      nodes: [{ id: 'start', type: 'start' }, { id: 'end', type: 'end', status: 'success' }],
+      edges: [],
+    };
+    expect(graphIssues(empty).join()).toMatch(/at least one agent or check step/);
+    // start wired straight to end is just as much a no-op as not wiring it at all.
+    const wiredToEnd: WorkflowGraph = { ...empty, edges: [{ from: 'start', to: 'end' }] };
+    expect(graphIssues(wiredToEnd).join()).toMatch(/at least one agent or check step/);
+    expect(graphIssues(EXAMPLE)).toEqual([]);
   });
 });
 
@@ -226,6 +239,13 @@ describe('verdicts (D10/D17)', () => {
     expect(advance(REVIEW, 'review', 'changes', new Map())).toMatchObject({ kind: 'end', status: 'failed', endNode: 'no' });
   });
 
+  it('never doubles the failed port, even for an unsaved node whose verdict is literally "failed"', () => {
+    // The schema refuses to persist a verdict named "failed" (below), but portsOfNode is also
+    // called on in-memory nodes mid-edit before that validation ever runs.
+    const n = { ...REVIEW.nodes[1]!, verdicts: ['failed', 'approve'] } as (typeof REVIEW.nodes)[1];
+    expect(portsOfNode(n)).toEqual(['failed', 'approve']);
+  });
+
   it('a verdict node is never the interactive tail', () => {
     expect(isTerminalAgent(REVIEW, 'review')).toBe(false);
   });
@@ -246,6 +266,41 @@ describe('verdicts (D10/D17)', () => {
       nodes: REVIEW.nodes.map((n) => (n.id === 'review' ? { ...n, verdicts: ['approve', 'approve'] } : n)),
     };
     expect(graphIssues(rep).join()).toMatch(/repeats a verdict/);
+  });
+});
+
+describe('loopBodyIds', () => {
+  // A loop whose retry target is only discovered late in `start`'s BFS walk order — same shape
+  // as the shipped REVIEW_COUNCIL template, where an index-range slice of the rail (`lo`..`hi`)
+  // silently skipped the reset because `hi` (the node that fed the loop) sorts before `lo` (the
+  // loop's retry target) in walk order, even though `lo` runs first once the loop repeats.
+  const g: WorkflowGraph = {
+    nodes: [
+      { id: 'start', type: 'start' },
+      { id: 'a', type: 'agent', prompt: 'a' },
+      { id: 'b', type: 'agent', prompt: 'b', verdicts: ['ship', 'fix'] },
+      { id: 'loop', type: 'loop', max: 2 },
+      { id: 'c', type: 'agent', prompt: 'c' },
+      { id: 'shipped', type: 'end', status: 'success' },
+      { id: 'gave-up', type: 'end', status: 'failed' },
+    ],
+    edges: [
+      { from: 'start', to: 'a' },
+      { from: 'a.done', to: 'b' },
+      { from: 'b.ship', to: 'shipped' },
+      { from: 'b.fix', to: 'loop' },
+      { from: 'loop.repeat', to: 'c' },
+      { from: 'loop.exhausted', to: 'gave-up' },
+      { from: 'c.done', to: 'a' },
+    ],
+  };
+
+  it('walk order puts the loop target after the node that fed the loop', () => {
+    expect(graphRailSteps(g).map((s) => s.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('collects every rail node the retry actually re-runs, regardless of rail order', () => {
+    expect(loopBodyIds(g, 'c', 'b')).toEqual(new Set(['c', 'a', 'b']));
   });
 });
 

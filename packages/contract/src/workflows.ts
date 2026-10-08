@@ -58,6 +58,10 @@ const nodeId = z
   .regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/, 'node ids are letters, digits, "-" and "_" (no dots)');
 const graphNodeBase = { id: nodeId, name: z.string().optional() };
 
+/** Mirrors `waitMs` in `src/workflows/graph.ts` exactly — every node that blocks on a human or
+ *  external event bounds its wait the same way (60s–7d). */
+const waitMs = z.number().int().min(60_000).max(7 * 24 * 60 * 60_000);
+
 /** Mirrors `verdictName` in `src/workflows/graph.ts` exactly. */
 const verdictName = z
   .string()
@@ -103,13 +107,13 @@ export const workflowGraphNodeSchema = z.discriminatedUnion('type', [
     command: z.string().min(1),
     retryOn: z.array(z.number().int().positive()).optional(),
   }),
-  z.object({ ...graphNodeBase, type: z.literal('gate.human'), message: z.string().min(1), timeoutMs: z.number().optional() }),
+  z.object({ ...graphNodeBase, type: z.literal('gate.human'), message: z.string().min(1), timeoutMs: waitMs.optional() }),
   z.object({
     ...graphNodeBase,
     type: z.literal('ask-user'),
     question: z.string().min(1),
     options: z.array(z.string().min(1)).max(6).optional(),
-    timeoutMs: z.number().optional(),
+    timeoutMs: waitMs.optional(),
   }),
   z.object({
     ...graphNodeBase,
@@ -125,7 +129,7 @@ export const workflowGraphNodeSchema = z.discriminatedUnion('type', [
   z.object({
     ...graphNodeBase,
     type: z.literal('github.wait-ci'),
-    timeoutMs: z.number().int().min(60_000).max(7 * 24 * 60 * 60_000).default(60 * 60_000),
+    timeoutMs: waitMs.default(60 * 60_000),
     pollMs: z.number().int().min(10_000).max(30 * 60_000).default(60_000),
   }),
   z.object({ ...graphNodeBase, type: z.literal('github.pr-comment'), body: z.string().min(1) }),

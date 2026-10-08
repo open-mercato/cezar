@@ -83,6 +83,7 @@ import {
   setForkBranches,
   skillStackOfGraph,
   stepsFromPlan,
+  parseFrom,
   portsOf,
   portTone,
   removeNode,
@@ -442,8 +443,10 @@ function WorkflowGraphEditor() {
         if (c.type === 'select') setSelectedEdge(c.selected ? c.id : null)
         if (c.type !== 'remove') continue
         const from = c.id.split('->')[0] ?? ''
-        const dot = from.lastIndexOf('.')
-        edit((g) => disconnect(g, from.slice(0, dot), from.slice(dot + 1)))
+        edit((g) => {
+          const parsed = parseFrom(from, g.nodes)
+          return parsed ? disconnect(g, parsed.node, parsed.port) : g
+        })
         setSelectedEdge(null)
       }
     },

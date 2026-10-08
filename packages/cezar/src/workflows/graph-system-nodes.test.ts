@@ -417,6 +417,47 @@ describe('graph system nodes', () => {
     expect(after.find((c) => c.title === 'tests' && c.id !== tests.id)).toBeDefined();
   }, 70_000);
 
+  it('a restart right after a fork\'s first branch is refused does not re-dispatch it (#1322)', async () => {
+    const id = manager.startRun(def(FORK), { task: 'x', worktree: true }).id;
+    const final = await until(id, terminal, 60_000);
+    expect(final.status).not.toBe('failed');
+    const before = store.listRuns().filter((r) => r.dispatch?.parentRunId === id);
+    before.forEach((c) => store.deleteRun(c.id));
+
+    // Roll the parent back to right after branch 0 ("correctness") was refused at dispatch and
+    // nothing else was ever attempted — `dispatchedIds` is `['']`, which joins to the empty
+    // string. A falsy check on that persisted string must not read as "nothing recorded yet",
+    // or resume re-dispatches the refused branch instead of only the untouched one.
+    store.updateRun(id, {
+      status: 'running',
+      currentStepId: 'council',
+      graphState: {
+        loops: final.graphState?.loops ?? {},
+        taken: final.graphState?.taken ?? [],
+        cursor: 'council',
+        outputs: { council: { runIds: '' } },
+      },
+    });
+    store.updateStep(id, 'correctness', { status: 'failed', error: 'refused' });
+    store.updateStep(id, 'tests', { status: 'pending' });
+    store.updateStep(id, 'meet', { status: 'pending' });
+    store.updateStep(id, 'after', { status: 'pending' });
+
+    manager.dispose();
+    manager = new RunManager(store, repoRoot);
+    await manager.recover();
+    // `correctness` was already finalized as refused/failed before the crash, so the fork (and
+    // the run with it) settles as failed once `tests` reports in — that part is correct
+    // behavior, not what this test is about.
+    await until(id, terminal, 60_000);
+
+    const after = store.listRuns().filter((r) => r.dispatch?.parentRunId === id);
+    // Exactly one new child — for `tests`. `correctness` stays refused; resuming must not spawn
+    // a (costly) duplicate for the branch that was already finalized before the crash.
+    expect(after).toHaveLength(1);
+    expect(after[0]?.title).toBe('tests');
+  }, 70_000);
+
   it('workflow runs another catalog workflow as a subtask', async () => {
     const graph: WorkflowGraph = {
       nodes: [

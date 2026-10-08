@@ -41,7 +41,7 @@ const PORTS: Record<GraphNodeType, readonly string[]> = {
 const FAILURE_PORTS = new Set(['failed', 'fail', 'exhausted', 'reject', 'red', 'timeout', 'conflict'])
 
 export function portsOf(node: WorkflowGraphNode): readonly string[] {
-  if (node.type === 'agent' && node.verdicts?.length) return [...new Set(node.verdicts), 'failed']
+  if (node.type === 'agent' && node.verdicts?.length) return [...new Set([...node.verdicts, 'failed'])]
   if (node.type === 'fork') return Array.from({ length: node.branches }, (_, i) => String(i + 1))
   if ((node.type === 'gate.human' || node.type === 'ask-user') && node.timeoutMs) return [...PORTS[node.type], 'timeout']
   return PORTS[node.type]
