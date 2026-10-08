@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import type { RunnerId } from '../core/agent-runner.ts';
+import { PRIVATE_MCP_FILE, PRIVATE_MCP_RUNNERS, privateMcpPath } from '../core/private-mcp.ts';
 
 /**
  * The catalog of coding-agent config files cezar can surface and edit (spec
@@ -58,6 +59,8 @@ export interface ConfigFileDef {
   seeded?: boolean;
   /** True when this file holds MCP server definitions (drives the MCP section's filter). */
   holdsMcp?: boolean;
+  /** cezar-owned private file: written `0600`, and its git-ignore entry is ensured before a write. */
+  private?: boolean;
   /** Top-level native setting that supplies the agent's new-session model, when present. */
   modelKey?: string;
   /** Native model keys checked in precedence order, including nested `env.*` settings. */
@@ -83,6 +86,7 @@ const OPENCODE_RULES_DOCS = 'https://opencode.ai/docs/rules/';
 const CURSOR_CLI_CONFIG_DOCS = 'https://cursor.com/docs/cli/reference/configuration';
 const COPILOT_CONFIG_DOCS = 'https://docs.github.com/en/copilot/how-tos/copilot-cli';
 const COPILOT_MCP_DOCS = 'https://docs.github.com/en/copilot/how-tos/copilot-cli#mcp-servers';
+const PRIVATE_MCP_DOCS = 'https://github.com/open-mercato/cezar/blob/main/.ai/specs/2026-10-07-private-project-mcp.md';
 const COPILOT_INSTRUCTIONS_DOCS =
   'https://docs.github.com/en/copilot/customizing-copilot/adding-repository-custom-instructions-for-github-copilot';
 
@@ -432,6 +436,23 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     holdsMcp: true,
     precedence: 'Project-scoped MCP servers for Cursor Agent CLI, shared via version control.',
     docsUrl: CURSOR_CLI_CONFIG_DOCS,
+  },
+
+  // ---- Shared: cezar's private, per-project MCP servers (spec 2026-10-07-private-project-mcp) ----
+  {
+    id: 'cezar.private.mcp',
+    runners: [...PRIVATE_MCP_RUNNERS],
+    kind: 'mcp',
+    scope: 'local',
+    resolve: (repo) => privateMcpPath(repo),
+    label: `.ai/cezar/${PRIVATE_MCP_FILE}`,
+    format: 'json',
+    tracked: 'gitignored',
+    holdsMcp: true,
+    private: true,
+    precedence:
+      'Private MCP servers for this project only — same shape as .mcp.json (key: mcpServers). Lives in cezar\'s git-ignored data dir, never in a worktree, so it is never committed. cezar adds these servers to every run of this project at launch (Claude --mcp-config, Codex thread config, OpenCode OPENCODE_CONFIG_CONTENT, Junie/Copilot ACP session); the agent\'s own MCP config still loads, and on a name clash this file wins. Cursor and pi have no launch-time MCP channel.',
+    docsUrl: PRIVATE_MCP_DOCS,
   },
 
   // ---- Shared: <repo>/AGENTS.md is read by Codex, OpenCode AND Copilot ----

@@ -161,7 +161,11 @@ export function WorkflowSteps({ runId, steps }: { runId: string; steps: StepStat
     <Collapsible data-slot="workflow-steps" open={open} onOpenChange={toggle} className="min-w-0">
       <CollapsibleTrigger
         aria-label={`Workflow: ${current.name}, step ${index + 1} of ${steps.length}`}
-        className="group flex min-h-7 w-full items-center gap-2 text-left text-xs text-muted-foreground hover:text-foreground md:min-h-[30px] md:gap-2.5"
+        // Keep the phone header's compact 28px footprint: the negative margins absorb the
+        // extra 16px of a 44px touch target without changing the surrounding row's height.
+        // The step rail is the only control in this bordered section, so the expanded hit box
+        // cannot overlap a neighboring action; desktop keeps its existing 30px row.
+        className="group -my-2 flex min-h-11 w-full items-center gap-2 text-left text-xs text-muted-foreground hover:text-foreground md:my-0 md:min-h-[30px] md:gap-2.5"
       >
         <span data-slot="step-dots" className="flex shrink-0 items-center gap-1">
           {steps.map((step) => (

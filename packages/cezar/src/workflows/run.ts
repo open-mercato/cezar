@@ -12,6 +12,13 @@ import {
   type AskRequest,
 } from '../core/ask.ts';
 import { AUTO_END_DELAY_MS, type AgentSession } from '../core/claude-cli-runner.ts';
+import {
+  loadPrivateMcp,
+  PRIVATE_MCP_FILE,
+  skippedServersNote,
+  supportsPrivateMcp,
+  type PrivateMcpServer,
+} from '../core/private-mcp.ts';
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import { createRunner } from '../core/runner-factory.ts';
@@ -40,6 +47,7 @@ import {
   attachmentExtension,
   isImageAttachmentName,
   isImageMediaType,
+  PENDING_ASK_MAX_QUESTIONS,
   sanitizeAttachmentName,
 } from '@open-mercato/cezar-contract';
 import type { AgentEvent, ContentBlock } from '../core/agent-runner.ts';
@@ -1193,6 +1201,28 @@ export class RunManager {
   }
 
   /**
+   * The project's private MCP servers for one agent session (spec
+   * 2026-10-07-private-project-mcp), with a note naming what was attached — or why not. Read
+   * fresh per launch, like `agentEnvForStep`, so an edit applies to the very next session.
+   * Never throws: an unreadable or broken file means a run without them, plus a note.
+   */
+  private async privateMcpForLaunch(
+    backend: RunnerId,
+    onEvent: (event: AgentEvent) => void,
+  ): Promise<PrivateMcpServer[] | undefined> {
+    const { servers, problems } = await loadPrivateMcp(this.repoRoot);
+    for (const problem of problems) onEvent({ type: 'note', message: `private MCP: ${problem}` });
+    if (servers.length === 0) return undefined;
+    const names = servers.map((s) => s.name);
+    if (!supportsPrivateMcp(backend)) {
+      onEvent({ type: 'note', message: skippedServersNote(backend, names, `${backend} has no launch-time MCP channel`) });
+      return undefined;
+    }
+    onEvent({ type: 'note', message: `private MCP servers from .ai/cezar/${PRIVATE_MCP_FILE}: ${names.join(', ')}` });
+    return servers;
+  }
+
+  /**
    * `agentEnv` plus the agent-account variable for the profile this STEP runs under (spec
    * 2026-07-29-agent-profiles), and the id it resolved to so the caller can record it.
    *
@@ -2028,15 +2058,28 @@ export class RunManager {
    * question: a restart-forced settle reports it `blocked` instead of `done`. Cleared by
    * `deliverMessage` when an answer reaches the session. A child parked on the Guard is told to its
    * parent through the inbox — the parent cannot answer for the human, but it can re-plan.
+   *
+   * A card may carry up to `ASK_MAX_QUESTIONS` questions, but the RECORD carries at most
+   * `PENDING_ASK_MAX_QUESTIONS` of their texts plus a count of the rest: that field is read back
+   * by an all-or-nothing index parser, and an over-long list in a newly written `runs.json` would
+   * cost an older cezar its entire project index. The inbox message below is a markdown file under
+   * no schema, so the parent still reads every question.
    */
   private recordAsk(runId: string, sink: UiEventSink, ask: AskRequest): void {
     const requestId = emitAskRequested(sink, ask);
     const dispatch = this.dispatchOf(runId);
     if (!dispatch) return;
     const questions = ask.questions.map((question) => question.question.slice(0, 400));
+    const recorded = questions.slice(0, PENDING_ASK_MAX_QUESTIONS);
+    const omittedQuestions = questions.length - recorded.length;
     this.updateDispatch(runId, (current) => ({
       ...current,
-      pendingAsk: { requestId, questions, askedAt: new Date().toISOString() },
+      pendingAsk: {
+        requestId,
+        questions: recorded,
+        ...(omittedQuestions > 0 ? { omittedQuestions } : {}),
+        askedAt: new Date().toISOString(),
+      },
     }));
     if (!dispatch.parentRunId) return;
     const run = this.store.getRun(runId);
@@ -3877,6 +3920,7 @@ export class RunManager {
     this.store.updateStep(runId, stepId, { profileId: continueProfile.profileId });
 
     const runner = createRunner(continueBackend);
+    const continueMcp = await this.privateMcpForLaunch(continueBackend, onEvent);
     if (state.cancelled) return;
     state.currentStepId = stepId;
     this.beginUsageInvocation(runId, state, stepId);
@@ -3922,6 +3966,7 @@ export class RunManager {
           continueProfile.env,
         ),
         env: continueProfile.env,
+        mcpServers: continueMcp,
         model: continueModel,
         sessionId: spawnSessionId,
         resume: sessionId !== undefined,
@@ -4811,6 +4856,7 @@ export class RunManager {
     this.store.updateStep(runId, step.id, { profileId: stepProfile.profileId });
 
     const runner = createRunner(stepBackend);
+    const stepMcp = await this.privateMcpForLaunch(stepBackend, onEvent);
     let session: AgentSession;
     state.currentStepId = step.id;
     this.beginUsageInvocation(runId, state, step.id);
@@ -4844,6 +4890,7 @@ export class RunManager {
             stepProfile.env,
           ),
           env: stepProfile.env,
+          mcpServers: stepMcp,
           model: backendModel,
           sessionId,
           // Interactive sessions have no wall clock — the idle timer rules.

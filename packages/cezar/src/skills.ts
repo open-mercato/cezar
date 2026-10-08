@@ -1,6 +1,7 @@
 import { readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve, basename, dirname, extname } from 'node:path';
+import { parse as parseYaml } from 'yaml';
 import { gatedSkillsRepos } from './config.ts';
 import { getTeamSkillsCached } from './skills-remote.ts';
 import { readWorkspaceUiState } from './workspace/ui-state.ts';
@@ -228,13 +229,13 @@ async function readMarkdownSkills(dir: string, source: Skill['source']): Promise
       typeof frontmatter.description === 'string' && frontmatter.description.trim()
         ? frontmatter.description.trim()
         : undefined;
-    const interactive = frontmatter.interactive === 'true' ? true : undefined;
+    const interactive = frontmatter.interactive === true || frontmatter.interactive === 'true' ? true : undefined;
     skills.push({ name, description, interactive, body, path: absPath, source });
   }
   return skills;
 }
 
-type FrontmatterValue = string | string[];
+type FrontmatterValue = string | boolean | string[];
 
 /**
  * Tiny purpose-built frontmatter parser — a leading `---\n … \n---\n` block
@@ -246,21 +247,36 @@ export function parseFrontmatter(raw: string): {
   frontmatter: Record<string, FrontmatterValue>;
   body: string;
 } {
-  // Normalize CRLF and lone CR — otherwise frontmatter is silently dropped.
-  const text = raw.replace(/\r\n?/g, '\n');
-  if (!text.startsWith('---\n')) return { frontmatter: {}, body: raw };
+  // Normalize CRLF and lone CR, and strip a UTF-8 BOM — otherwise frontmatter is silently dropped.
+  const text = raw.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+  const match = /^---\n([\s\S]*?)\n---[ \t]*(?:\n|$)/.exec(text);
+  if (!match) return { frontmatter: {}, body: raw };
 
-  // Match the closing delimiter only on its own line so a `---` thematic
-  // break inside the body doesn't terminate the block early.
-  const end = text.indexOf('\n---\n', 4);
-  const endAtEof = text.endsWith('\n---') ? text.length - 4 : -1;
-  const closeAt = end === -1 ? endAtEof : end;
-  if (closeAt === -1) return { frontmatter: {}, body: raw };
+  const block = match[1] ?? '';
+  const body = text.slice(match[0].length);
+  const legacy = parseLegacyFrontmatter(block);
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(block);
+  } catch {
+    return { frontmatter: legacy, body };
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { frontmatter: legacy, body };
+  }
 
-  const block = text.slice(4, closeAt);
-  const afterDelimiter = end === -1 ? -1 : text.indexOf('\n', closeAt + 1);
-  const body = afterDelimiter === -1 ? '' : text.slice(afterDelimiter + 1);
+  const frontmatter: Record<string, FrontmatterValue> = { ...legacy };
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (typeof value === 'string' || (key === 'interactive' && typeof value === 'boolean')) {
+      frontmatter[key] = value;
+    } else if (Array.isArray(value) && value.every((item) => typeof item === 'string')) {
+      frontmatter[key] = value as string[];
+    }
+  }
+  return { frontmatter, body };
+}
 
+function parseLegacyFrontmatter(block: string): Record<string, FrontmatterValue> {
   const frontmatter: Record<string, FrontmatterValue> = {};
   const lines = block.split('\n');
   for (let i = 0; i < lines.length; i++) {
@@ -295,7 +311,7 @@ export function parseFrontmatter(raw: string): {
     frontmatter[key] = stripQuotes(rest);
   }
 
-  return { frontmatter, body };
+  return frontmatter;
 }
 
 function stripQuotes(s: string): string {

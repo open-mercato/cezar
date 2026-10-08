@@ -199,6 +199,22 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(semaphore.memoryLimitMb()).toBe(2048);
   });
 
+  it('#1232 PUT idle timeout persists, reloads, and reaches the live semaphore', async () => {
+    expect(semaphore.idleTimeoutMinutes()).toBe(15);
+
+    const res = await putConfig({ resources: { idleTimeoutMinutes: 30 } });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as WorkspaceConfigResponse).resources.idleTimeoutMinutes).toBe(30);
+    expect(((await (await getConfig()).json()) as WorkspaceConfigResponse).resources.idleTimeoutMinutes).toBe(30);
+    expect((rawConfig().resources as Record<string, unknown>).idleTimeoutMinutes).toBe(30);
+    expect(semaphore.idleTimeoutMinutes()).toBe(30);
+
+    const disabled = await putConfig({ resources: { idleTimeoutMinutes: null } });
+    expect(disabled.status).toBe(200);
+    expect(((await disabled.json()) as WorkspaceConfigResponse).resources.idleTimeoutMinutes).toBeNull();
+    expect(semaphore.idleTimeoutMinutes()).toBeNull();
+  });
+
   /** #810 — the cadence now ships ON, so the write worth pinning is the one that turns it
    *  OFF. `null` must survive the round-trip and reach the semaphore as `null`; re-defaulting
    *  it to 5 would silently overrule an operator who chose "Park until resumed". */

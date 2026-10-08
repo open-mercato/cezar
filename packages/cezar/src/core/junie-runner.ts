@@ -33,6 +33,7 @@ import {
   mapJunieSessionUpdate,
   type JunieUiMapperState,
 } from './junie-ui-mapper.ts';
+import { acpMcpCapabilities, skippedServersNote, toAcpMcpServers } from './private-mcp.ts';
 
 export interface JunieRunnerOptions {
   /** Override the binary name/path; defaults to `junie` on PATH (`CEZ_JUNIE_BIN`). */
@@ -346,10 +347,15 @@ class JunieSession implements AgentSession {
       await this.rpc.request('authenticate', { methodId }).catch(() => undefined);
     }
 
+    // Private MCP servers (spec 2026-10-07-private-project-mcp) ride ACP's per-session list.
+    const { mcpServers, skipped } = toAcpMcpServers(this.spec.mcpServers ?? [], acpMcpCapabilities(initResult));
+    if (skipped.length) {
+      this.emit({ type: 'note', message: skippedServersNote('junie', skipped, 'the CLI did not advertise that MCP transport') });
+    }
     const session =
       this.spec.resume && this.spec.sessionId
-        ? await this.rpc.request('session/load', { sessionId: this.spec.sessionId, cwd: this.spec.cwd, mcpServers: [] })
-        : await this.rpc.request('session/new', { cwd: this.spec.cwd, mcpServers: [] });
+        ? await this.rpc.request('session/load', { sessionId: this.spec.sessionId, cwd: this.spec.cwd, mcpServers })
+        : await this.rpc.request('session/new', { cwd: this.spec.cwd, mcpServers });
     this.sessionId = stringField(session, 'sessionId') ?? this.spec.sessionId;
     if (this.sessionId) {
       this.emit({ type: 'session', sessionId: this.sessionId });

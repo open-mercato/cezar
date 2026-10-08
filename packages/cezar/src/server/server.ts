@@ -43,6 +43,7 @@ import { jsonZodValidator, paramZodValidator, queryZodValidator } from './valida
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { z } from 'zod';
 import {
+  PROMPT_TEMPLATE_TEXT_MAX,
   setWorkspaceUiStateInputSchema,
   type GroupResponse,
   type GroupVariant,
@@ -848,7 +849,7 @@ const uiStateSchema = z
         z.object({
           id: z.string().min(1).max(64),
           label: z.string().trim().min(1).max(80),
-          text: z.string().trim().min(1).max(2000),
+          text: z.string().trim().min(1).max(PROMPT_TEMPLATE_TEXT_MAX),
           // Skill names this template auto-applies for. Optional and additive: templates
           // written before this key existed keep validating, and stay manual-only.
           skills: z.array(z.string().trim().min(1).max(200)).max(50).optional(),
@@ -3174,6 +3175,9 @@ export function createApp(deps: ServerDeps) {
           if (resources?.maxParallel !== undefined) config.resources.maxParallel = resources.maxParallel;
           if (resources?.maxMonitoringSessions !== undefined) {
             config.resources.maxMonitoringSessions = resources.maxMonitoringSessions;
+          }
+          if (resources?.idleTimeoutMinutes !== undefined) {
+            config.resources.idleTimeoutMinutes = resources.idleTimeoutMinutes;
           }
           if (resources?.monitoringWakeIntervalMinutes !== undefined) {
             config.resources.monitoringWakeIntervalMinutes = resources.monitoringWakeIntervalMinutes;

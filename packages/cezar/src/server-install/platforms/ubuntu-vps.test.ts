@@ -6,6 +6,7 @@ import { execFileSync, execSync } from 'node:child_process';
 import {
   enableHttp2OnTlsListenerSed,
   isNpxExecStart,
+  nginxConfigTestFailure,
   nginxVhost,
   parseNginxVersion,
   refreshNpxCacheForRedeploy,
@@ -46,6 +47,64 @@ function stepById(id: string): InstallStep {
   if (!s) throw new Error(`no step ${id}`);
   return s;
 }
+
+describe('nginx configuration diagnostics', () => {
+  it('returns nginx -t stderr as a terminal verification failure', async () => {
+    const result = await nginxConfigTestFailure(
+      ctxWith({
+        runner: {
+          capture: async (program, args) =>
+            program === 'nginx' && args[0] === '-t'
+              ? {
+                  code: 1,
+                  stdout: '',
+                  stderr:
+                    '2026/08/20 [emerg] unknown directive "http2" in /etc/nginx/sites-enabled/cezar:12\n' +
+                    'nginx: configuration file /etc/nginx/nginx.conf test failed',
+                }
+              : { code: 0, stdout: '', stderr: '' },
+          interactive: async () => 0,
+        },
+      }),
+    );
+
+    expect(result).toEqual({
+      retryable: false,
+      message: expect.stringContaining('unknown directive "http2"'),
+    });
+    expect(result?.message).toContain('nginx: configuration file /etc/nginx/nginx.conf test failed');
+  });
+
+  it('does not turn a missing nginx binary into a terminal parse failure', async () => {
+    const result = await nginxConfigTestFailure(
+      ctxWith({
+        runner: {
+          capture: async () => ({ code: 127, stdout: '', stderr: 'nginx: command not found' }),
+          interactive: async () => 0,
+        },
+      }),
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it('leaves permission and operational nginx test failures retryable', async () => {
+    const result = await nginxConfigTestFailure(
+      ctxWith({
+        runner: {
+          capture: async () => ({
+            code: 1,
+            stdout: '',
+            stderr:
+              'nginx: [emerg] cannot load certificate "/etc/letsencrypt/live/example/fullchain.pem": BIO_new_file() failed (13: Permission denied)\n' +
+              'nginx: configuration file /etc/nginx/nginx.conf test failed',
+          }),
+          interactive: async () => 0,
+        },
+      }),
+    );
+    expect(result).toBeUndefined();
+  });
+});
 
 describe('ubuntu-vps ssl step', () => {
   let home: string;

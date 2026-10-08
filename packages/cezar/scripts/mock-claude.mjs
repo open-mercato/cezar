@@ -164,7 +164,22 @@ async function respond(userText, imageCount) {
   // `mock:ask-truncated` → a complete payload one closing brace short (#936):
   // the closer repair should still produce one card, note the recovery, and
   // strip the raw marker (which ends on `]`, not `}`).
-  const askMarker = userText.includes('mock:ask-bad')
+  // `mock:ask-many` → six distinct questions, one of them with six options:
+  // over the old 4/4 caps, which refused the whole payload and showed the user
+  // raw JSON. It must now render as exactly one card, and a dispatched child
+  // parking on it must still write a run record its index parser can read.
+  const askMarker = userText.includes('mock:ask-many')
+    ? '\n\nCEZ:ASK ' +
+      JSON.stringify({
+        questions: Array.from({ length: 6 }, (_, index) => ({
+          header: `Area ${index}`,
+          question: `Decision ${index} — which way?`,
+          options: Array.from({ length: index === 0 ? 6 : 2 }, (_, option) => ({
+            label: `Option ${index}.${option}`,
+          })),
+        })),
+      })
+    : userText.includes('mock:ask-bad')
     ? '\n\nCEZ:ASK {not valid json'
     : userText.includes('mock:ask-invalid')
       ? '\n\nCEZ:ASK {"questions":[]}'

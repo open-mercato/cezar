@@ -15,6 +15,7 @@ function fileOf(over: Partial<AgentConfigFile> & Pick<AgentConfigFile, 'id'>): A
     tracked: 'tracked',
     seeded: false,
     holdsMcp: false,
+    private: false,
     precedence: 'p',
     docsUrl: 'https://example.com',
     path: `/repo/${over.id}`,

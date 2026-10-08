@@ -24,7 +24,6 @@ const EMPTY_DRAFT = {
   agentProfile: null,
   model: null,
   variants: 1,
-  planFirst: false,
   worktree: null,
   autonomous: null,
   generateFollowups: null,
@@ -43,7 +42,6 @@ describe('resolveComposerRunMode', () => {
   const base = {
     hasGit: true,
     variants: 1,
-    planFirst: false,
     explicitAutonomous: null,
     explicitWorktree: null,
     configuredAutonomous: 'source-dependent' as const,
@@ -75,8 +73,7 @@ describe('resolveComposerRunMode', () => {
     })).toEqual({ autonomous: true, worktree: false })
   })
 
-  it('keeps plan, parallel, and no-git constraints authoritative', () => {
-    expect(resolveComposerRunMode({ ...base, planFirst: true, explicitAutonomous: true }).autonomous).toBe(false)
+  it('keeps parallel and no-git constraints authoritative', () => {
     expect(resolveComposerRunMode({ ...base, variants: 2, explicitWorktree: false }).worktree).toBe(true)
     expect(resolveComposerRunMode({ ...base, hasGit: false, explicitWorktree: true }).worktree).toBe(false)
   })
@@ -91,7 +88,6 @@ describe('resolveComposerRunMode with dispatch (spec 2026-09-10-dispatch)', () =
   const base = {
     hasGit: true,
     variants: 1,
-    planFirst: false,
     explicitAutonomous: null,
     explicitWorktree: null,
     configuredAutonomous: 'source-dependent' as const,
@@ -111,10 +107,9 @@ describe('resolveComposerRunMode with dispatch (spec 2026-09-10-dispatch)', () =
     expect(resolveComposerRunMode({ ...base, interactive: true, source: 'skill' }).autonomous).toBe(true)
   })
 
-  it('yields to an explicit Autonomous off, to plan-first, and to a missing repo', () => {
+  it('yields to an explicit Autonomous off, and to a missing repo', () => {
     expect(resolveComposerRunMode({ ...base, explicitAutonomous: false }))
       .toEqual({ autonomous: false, worktree: true })
-    expect(resolveComposerRunMode({ ...base, planFirst: true }).autonomous).toBe(false)
     expect(resolveComposerRunMode({ ...base, hasGit: false }).worktree).toBe(false)
   })
 })
@@ -128,7 +123,6 @@ describe('the new-task draft store', () => {
       agentProfile: null,
       model: null,
       variants: 1,
-      planFirst: false,
       worktree: null,
       autonomous: null,
       generateFollowups: null,
@@ -144,7 +138,6 @@ describe('the new-task draft store', () => {
       agentProfile: null,
       model: 'gpt-5-codex',
       variants: 2,
-      planFirst: false,
       worktree: false,
       autonomous: null,
       generateFollowups: false,
@@ -166,7 +159,6 @@ describe('the new-task draft store', () => {
       agentProfile: null,
       model: 'opus',
       variants: 3,
-      planFirst: true,
       worktree: null,
       autonomous: null,
       generateFollowups: true,
@@ -179,10 +171,9 @@ describe('the new-task draft store', () => {
       source: null,
       runner: null,
       agentProfile: null,
-      // Runner/model/variants/plan-first are a way of working — they survive, as they always did.
+      // Runner/model/variants are a way of working — they survive, as they always did.
       model: 'opus',
       variants: 3,
-      planFirst: true,
       worktree: null,
       autonomous: null,
       generateFollowups: true,
@@ -198,7 +189,6 @@ describe('the new-task draft store', () => {
       agentProfile: null,
       model: 'sonnet',
       variants: 2,
-      planFirst: true,
       worktree: false,
       autonomous: null,
       generateFollowups: false,
@@ -214,7 +204,6 @@ describe('the new-task draft store', () => {
       autonomous: null,
       generateFollowups: false,
       dispatch: null,
-      planFirst: true,
     })
   })
 
@@ -229,7 +218,6 @@ describe('the new-task draft store', () => {
       agentProfile: null,
       model: null,
       variants: 1,
-      planFirst: false,
       worktree: null,
       autonomous: null,
       generateFollowups: null,
@@ -245,7 +233,6 @@ describe('the new-task draft store', () => {
       agentProfile: null,
       model: null,
       variants: 1,
-      planFirst: false,
       worktree: null,
       autonomous: null,
       generateFollowups: null,

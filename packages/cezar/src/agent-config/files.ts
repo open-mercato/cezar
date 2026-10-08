@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { agentHomePaths } from '../paths.ts';
+import { ensureDataGitignore } from '../data-gitignore.ts';
 import { findConfigFile, type ConfigFileDef } from './catalog.ts';
 import { validateConfig } from './validate.ts';
 
@@ -120,10 +121,12 @@ export async function writeConfigFile(
       // file/link absent — target stays as the resolved path (the create case)
     }
     await mkdir(dirname(target), { recursive: true });
+    // A private file holds tokens: its git-ignore entry exists before its bytes do.
+    if (def.private) ensureDataGitignore(repoRoot);
     // Unique per write (not just per process) so two concurrent saves of the same
     // file can't rename the same tmp path over each other and tear the bytes.
     const tmp = `${target}.cez-tmp-${process.pid}-${randomUUID()}`;
-    await writeFile(tmp, content, 'utf8');
+    await writeFile(tmp, content, def.private ? { encoding: 'utf8', mode: 0o600 } : 'utf8');
     await rename(tmp, target);
     const written = await readFile(target, 'utf8');
     return { ok: true, read: { id, path, exists: true, content: written, version: hashBytes(written) } };

@@ -198,6 +198,14 @@ export const uiStateSchema = z.looseObject({
 });
 export type UiState = z.infer<typeof uiStateSchema>;
 
+/** Maximum persisted text for one reusable prompt template (#908).
+ *
+ * 20,000 characters accommodates long skills while keeping each ui-state entry bounded. The
+ * server write schema and cockpit editor mirror this documented value; the response schema above
+ * remains intentionally permissive so older/newer ui-state files round-trip safely.
+ */
+export const PROMPT_TEMPLATE_TEXT_MAX = 20_000;
+
 /**
  * `GET/PUT /api/v1/workspace/ui-state` — cross-project GUI prefs in `~/.cezar/ui-state.json`
  * (multi-project spec, step 2.7).

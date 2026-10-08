@@ -150,7 +150,9 @@ export function PickerPill({
               <span className="flex min-w-0 flex-col">
                 <span className="text-[12.5px] font-medium">{option.label}</span>
                 {option.desc ? (
-                  <span className="text-[11.5px] text-muted-foreground">{option.desc}</span>
+                  <span className="max-w-[calc(100vw-3rem)] whitespace-normal break-words text-[11.5px] text-muted-foreground md:max-w-96">
+                    {option.desc}
+                  </span>
                 ) : null}
               </span>
             </DropdownMenuRadioItem>

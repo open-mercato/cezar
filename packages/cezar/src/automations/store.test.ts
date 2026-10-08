@@ -85,6 +85,22 @@ describe('AutomationStore', () => {
     expect(store.latestReceipts().get('one:event')?.runId).toBe('run-1');
   });
 
+  it('normalizes a legacy receipt key before checking event identity', async () => {
+    const store = AutomationStore.open(await directory());
+    store.appendReceipt({
+      receiptId: 'old-receipt',
+      receiptKey: 'one:1:event',
+      eventId: 'event',
+      automationId: 'one',
+      revision: 1,
+      status: 'launched',
+      runId: 'run-1',
+      observedAt: '2026-07-26T01:00:00.000Z',
+      updatedAt: '2026-07-26T01:00:00.000Z',
+    });
+    expect(store.reserveReceipt({ automationId: 'one', revision: 2, eventId: 'event' })).toBeUndefined();
+  });
+
   it('holds an exclusive recoverable project polling lease', async () => {
     const dir = await directory();
     const store = AutomationStore.open(dir);

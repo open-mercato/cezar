@@ -190,7 +190,9 @@ export function useThreadScroll(
     void onLoadOlder().finally(() => {
       requestAnimationFrame(() => {
         const current = scrollElRef.current
-        if (current) {
+        // A jump to the tail while the page was loading cancels it; restoring the old reading
+        // anchor now would yank the reader back up mid-jump.
+        if (current && !stuckRef.current) {
           const fallbackTop = beforeTop + Math.max(0, current.scrollHeight - beforeHeight)
           const viewportTop = current.getBoundingClientRect().top
           const anchorIndex = anchor === undefined ? -1 : rowKeysRef.current.indexOf(anchor.key)
