@@ -14,13 +14,15 @@ const artifactsDir = resolve(repoRoot, '.ai/qa/artifacts_e2e')
 const sessionId = `e2e-progressive-history-${process.pid}`
 /** The thread's scroll owner, as a page-side expression.
  *
- * The task workspace (spec `.ai/specs/2026-10-07-task-workspace.md`) mounts every task view in a
- * COLUMN that is its own scroller, and that scroller carries `data-slot="main"` so the views keep
- * resolving it through the `el.closest('[data-slot="main"]')` they always used. Two elements in
- * the document now match, and a bare `querySelector` returns the app SHELL's — the one that no
- * longer scrolls the transcript, which makes every scroll this spec drives a no-op. Prefer the
- * column; fall back to the shell so the spec is also correct outside a workspace column. */
-const MAIN = `(document.querySelector('[data-slot="workspace-column"] [data-slot="main"]') ?? document.querySelector('[data-slot="main"]'))`
+ * Resolved THE WAY THE APP RESOLVES IT — outward from the rows — because that is the only rule
+ * that holds in every layout. The task workspace (spec `.ai/specs/2026-10-07-task-workspace.md`)
+ * mounts each view in a COLUMN that is its own scroller carrying `data-slot="main"`, so two
+ * elements now match and a bare `querySelector` returns the app SHELL's, which no longer scrolls
+ * the transcript. Reaching for `[data-slot="workspace-column"] [data-slot="main"]` instead fixes
+ * the wide case but NOT the narrow one: below `lg` the workspace shows one column at a time and
+ * renders no `workspace-column` element at all, so that selector falls back to the shell and
+ * every offset reads 0. The fallbacks remain for a page with no thread rows yet. */
+const MAIN = `(document.querySelector('[data-slot="thread-rows"]')?.closest('[data-slot="main"]') ?? document.querySelector('[data-slot="workspace-column"] [data-slot="main"]') ?? document.querySelector('[data-slot="main"]'))`
 
 const RUN_ID = 'cccccccc-1111-4222-8333-dddddddddddd'
 const RUN_B_ID = 'eeeeeeee-1111-4222-8333-ffffffffffff'
