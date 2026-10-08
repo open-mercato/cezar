@@ -213,6 +213,19 @@ const GRAPH_TAKEN_CAP = 500;
 
 /** Tail of an agent node's last turn kept as `{{nodes.<id>.summary}}`. */
 const NODE_SUMMARY_CAP = 4_000;
+
+/** System nodes that act on the world outside the machine - a push, a PR, a comment, a webhook.
+ *  A shadow run refuses them (`runSystemNode`). Reads (`github.wait-ci`) and local work
+ *  (`git.commit`, `git.sync-base`) stay allowed, as they are for the agent itself. */
+const SHADOW_REFUSED_NODES: ReadonlySet<ExecutableNode['type']> = new Set([
+  'git.push',
+  'github.draft-pr',
+  'github.pr-comment',
+  'github.pr-update',
+  'github.issue-comment',
+  'notify.webhook',
+]);
+
 import { freshContinuationContext } from './continuation-context.ts';
 
 const CHECK_OUTPUT_CAP = 20_000;
@@ -5042,6 +5055,15 @@ export class RunManager {
       const m = run?.pullRequestUrl ? /\/pull\/(\d+)/.exec(run.pullRequestUrl) : null;
       return m ? Number(m[1]) : undefined;
     };
+
+    // Shadow mode (spec 2026-10-06-shadow-runs): nothing a shadow run does leaves the machine.
+    // These nodes are cezar itself acting on the world - its own push, PR and comment calls, not a
+    // process in the run's armed environment - so the shim never sees them. They are refused
+    // outright, as the run-level PR and push routes are (409) for a shadow run.
+    if (SHADOW_REFUSED_NODES.has(node.type) && record()?.shadow === true) {
+      note(`shadow run: ${node.type} not performed - nothing leaves a shadow run`, 'danger');
+      return 'failed';
+    }
 
     switch (node.type) {
       case 'gate.human': {
