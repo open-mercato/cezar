@@ -226,7 +226,7 @@ function RunHeaderView({
   )
   const actionButtons = (
     <>
-          <div data-slot="run-actions" className="hidden items-center gap-1.5 md:flex">
+          <div data-slot="run-actions" className="hidden items-center gap-1.5 md:flex @max-4xl/strip:hidden">
             <OpenInMenuForRun run={run} canResume={flags.terminal} onResume={() => actions.terminal.mutate()} />
             {flags.finish && primary !== 'finish' ? (
               <Button variant="outline" size="sm" title={finishTitle(run.status)} onClick={() => actions.finish.mutate()}>
@@ -331,9 +331,11 @@ function RunHeaderView({
           bleeds to the header's edges so its rule reads as the strip's own. */}
       <div
         data-slot="run-tabs"
-        className={cn('-mx-4 flex items-end gap-2 px-4 sm:-mx-6 sm:px-6', mode === 'full' && 'border-b border-border')}
+        // A container: what the right side carries answers to the STRIP's width, not the window's —
+        // the same window is a wide strip with the sidebar closed and a narrow one with it open.
+        className={cn('@container/strip -mx-4 flex items-end gap-2 px-4 sm:-mx-6 sm:px-6', mode === 'full' && 'border-b border-border')}
       >
-        <div className="flex min-w-0 flex-1 items-end gap-1 overflow-x-auto">
+        <div className="flex min-w-0 flex-1 items-end gap-1 overflow-x-clip">
           {/* `tabs` is the workspace's saved-layout strip, which REPLACES this row (spec
               `2026-10-07-task-workspace` §5.2: "do not show both strips"). The fallback is what
               every other consumer of this header still gets — including the Graph tab, which
@@ -362,7 +364,7 @@ function RunHeaderView({
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1 pb-1">
-          <WorkflowSteps runId={run.id} steps={run.steps} className="hidden max-w-80 sm:flex" />
+          <WorkflowSteps runId={run.id} steps={run.steps} className="hidden max-w-80 sm:flex @max-7xl/strip:[&_[data-slot=step-name]]:hidden @max-3xl/strip:hidden" />
           {trailing}
           {/* In the strip there is no title row to carry them, so the run's actions sit here. */}
           {mode === 'strip' && !bareStrip ? actionButtons : null}
@@ -1209,13 +1211,14 @@ function MoreMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" data-slot="run-actions-menu" className="min-w-52">
         {flags.finish ? (
-          <DropdownMenuItem className="md:hidden" onSelect={() => actions.finish.mutate()}>
+          // Always here, not only on a phone: the strip drops its action buttons whenever it runs
+          // out of room, at any window size, and this menu is where they are found then.
+          <DropdownMenuItem onSelect={() => actions.finish.mutate()}>
             <CheckIcon aria-hidden="true" /> Finish
           </DropdownMenuItem>
         ) : null}
         {flags.continueRun ? (
           <DropdownMenuItem
-            className="md:hidden"
             disabled={!actions.continuation.canContinue || actions.continueRun.isPending}
             title={actions.continuation.reason}
             onSelect={() => actions.continueRun.mutate()}
@@ -1224,7 +1227,7 @@ function MoreMenu({
           </DropdownMenuItem>
         ) : null}
         {flags.terminal ? (
-          <DropdownMenuItem className="md:hidden" onSelect={() => actions.terminal.mutate()}>
+          <DropdownMenuItem onSelect={() => actions.terminal.mutate()}>
             <SquareTerminalIcon aria-hidden="true" /> Resume in terminal
           </DropdownMenuItem>
         ) : null}

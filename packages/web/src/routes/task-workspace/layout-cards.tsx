@@ -1,5 +1,5 @@
-import { ChevronDownIcon, Columns3Icon, PencilIcon, PlusIcon, XIcon } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { Columns3Icon, MoreHorizontalIcon, PencilIcon, PlusIcon, XIcon } from 'lucide-react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -11,8 +11,17 @@ import {
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 
-import { layoutDisplayName, splitCards, viewLabel, type ViewId, type WorkspaceLayout } from './layout-state'
+import { layoutDisplayName, viewLabel, type ViewId, type WorkspaceLayout } from './layout-state'
 import { VIEW_ICONS } from './view-picker'
+
+type StripItem =
+  | { kind: 'fixed'; key: string; view: ViewId }
+  | { kind: 'layout'; key: string; layout: WorkspaceLayout }
+
+/** The row's `gap-0.5`, and the two icon buttons at its end (28px + that gap). */
+const CARD_GAP = 2
+const NEW_BUTTON_WIDTH = 30
+const MORE_BUTTON_WIDTH = 30
 
 /**
  * The saved-layout strip (spec `2026-10-07-task-workspace` §5.2) — the row that REPLACES the
@@ -48,45 +57,122 @@ export function LayoutCards({
   onClose: (name: string) => void
   onCreate: () => void
 }) {
-  const { visible, overflow } = splitCards(layouts, active)
+  /*
+   * The strip never scrolls. Every card — fixed and saved alike — is one item in one row, and the
+   * ones that do not fit fold into the `…` menu at the row's end. How many fit is MEASURED, not
+   * counted: the room left depends on the window, the sidebar and how much the header's right
+   * side is carrying, and a fixed number was wrong on every one of them.
+   *
+   * Two passes, both before paint: with `fit` unknown every card is rendered (the row clips, so
+   * nothing shows) and measured; the count is then stored and the row re-rendered with it.
+   */
+  const items: StripItem[] = [
+    ...fixedViews.map((view): StripItem => ({ kind: 'fixed', key: `fixed:${view}`, view })),
+    ...layouts.map((layout): StripItem => ({ kind: 'layout', key: `layout:${layout.name}`, layout })),
+  ]
+  const isActive = (item: StripItem) =>
+    item.kind === 'fixed' ? fixedActive === item.view : fixedActive === null && item.layout.name === active
+
+  const rootRef = useRef<HTMLDivElement>(null)
+  const [width, setWidth] = useState(0)
+  const [fit, setFit] = useState<number | null>(null)
+  const signature = items.map((item) => item.key).join('|')
+
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    const read = () => setWidth(root.clientWidth)
+    // The observer is the real signal — the strip's room changes with the sidebar and the
+    // header's right side, not only with the window. The window listener is the belt to its
+    // braces: a ResizeObserver is delivered with a frame, and a tab that is not being painted
+    // gets neither until it is shown again.
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(read)
+    observer?.observe(root)
+    window.addEventListener('resize', read)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('resize', read)
+    }
+  }, [])
+
+  // Anything that changes what there is to fit, or the room to fit it in, starts a new measure.
+  useLayoutEffect(() => setFit(null), [signature, width])
+  useLayoutEffect(() => {
+    const root = rootRef.current
+    if (fit !== null || !root) return
+    const cards = [...root.querySelectorAll<HTMLElement>(':scope > [data-slot="layout-card"]')]
+    const widths = cards.map((card) => card.offsetWidth + CARD_GAP)
+    const room = root.clientWidth - NEW_BUTTON_WIDTH
+    if (widths.reduce((sum, value) => sum + value, 0) <= room) {
+      setFit(items.length)
+      return
+    }
+    // The active card is always shown, wherever it sits in the order — so its width is spent
+    // first, and the leading cards take what is left.
+    const activeAt = items.findIndex(isActive)
+    let used = MORE_BUTTON_WIDTH
+    let count = 0
+    for (const [index, value] of widths.entries()) {
+      const reserved = activeAt > index ? (widths[activeAt] ?? 0) : 0
+      if (used + value + reserved > room) break
+      used += value
+      count += 1
+    }
+    setFit(count)
+  })
+
+  const shownCount = fit ?? items.length
+  let visible = items.slice(0, shownCount)
+  // The active card is ALWAYS on the strip: a selected tab the user cannot see is the one thing a
+  // tab strip may not do. Past the cut, it follows the leading cards.
+  const activeIndex = items.findIndex(isActive)
+  if (activeIndex >= shownCount) visible = [...visible, items[activeIndex]!]
+  const shownKeys = new Set(visible.map((item) => item.key))
+  const overflow = items.filter((item) => !shownKeys.has(item.key))
 
   return (
-    <div data-slot="layout-cards" className="flex items-end gap-0.5">
-      {/* The fixed cards: one per view, always first and in the same order. They are not saved
-          layouts — no close, no rename, no reordering — just the task's standing surfaces. */}
-      {fixedViews.map((view) => {
-        const Icon = VIEW_ICONS[view]
-        const isActive = fixedActive === view
+    <div ref={rootRef} data-slot="layout-cards" className="flex min-w-0 flex-1 items-end gap-0.5 overflow-x-clip">
+      {visible.map((item) => {
+        // The digit that selects this card from the keyboard — its place on the whole strip.
+        const position = items.indexOf(item) + 1
+        if (item.kind === 'layout') {
+          const layout = item.layout
+          return (
+            <LayoutCard
+              key={item.key}
+              layout={layout}
+              active={isActive(item)}
+              onSelect={() => onSelect(layout.name)}
+              onRename={(requested) => onRename(layout.name, requested)}
+              onClose={() => onClose(layout.name)}
+            />
+          )
+        }
+        // A fixed card: one per view, always first and in the same order. Not a saved layout —
+        // no close, no rename — just one of the task's standing surfaces.
+        const Icon = VIEW_ICONS[item.view]
+        const selected = isActive(item)
         return (
           <Button
-            key={view}
+            key={item.key}
             type="button"
             variant="ghost"
             data-slot="layout-card"
-            data-fixed={view}
-            data-active={isActive ? 'true' : undefined}
-            aria-pressed={isActive}
-            onClick={() => onSelectFixed?.(view)}
+            data-fixed={item.view}
+            data-active={selected ? 'true' : undefined}
+            aria-pressed={selected}
+            title={position <= 9 ? `${viewLabel(item.view)} (${position})` : undefined}
+            onClick={() => onSelectFixed?.(item.view)}
             className={cn(
-              '-mb-px h-9 gap-1.5 rounded-none border-b-2 border-transparent px-2.5 text-[13px] font-medium text-muted-foreground hover:bg-transparent hover:text-foreground active:translate-y-0',
-              isActive && 'border-foreground text-foreground',
+              '-mb-px h-9 shrink-0 gap-1.5 rounded-none border-b-2 border-transparent px-2.5 text-[13px] font-medium text-muted-foreground hover:bg-transparent hover:text-foreground active:translate-y-0',
+              selected && 'border-foreground text-foreground',
             )}
           >
             <Icon aria-hidden="true" className="size-3.5 shrink-0" />
-            {viewLabel(view)}
+            {viewLabel(item.view)}
           </Button>
         )
       })}
-      {visible.map((layout) => (
-        <LayoutCard
-          key={layout.name}
-          layout={layout}
-          active={fixedActive === null && layout.name === active}
-          onSelect={() => onSelect(layout.name)}
-          onRename={(requested) => onRename(layout.name, requested)}
-          onClose={() => onClose(layout.name)}
-        />
-      ))}
 
       {overflow.length > 0 ? (
         <DropdownMenu>
@@ -94,19 +180,35 @@ export function LayoutCards({
             <Button
               type="button"
               variant="ghost"
-              className="-mb-px h-9 gap-1 rounded-none border-b-2 border-transparent px-2 text-[13px] hover:bg-transparent"
+              size="icon-sm"
+              data-action="more-layouts"
+              aria-label={`${overflow.length} more layouts`}
+              title="More layouts"
+              className="mb-1 size-7 shrink-0 text-muted-foreground"
             >
-              More
-              <span className="tabular-nums">({overflow.length})</span>
-              <ChevronDownIcon aria-hidden="true" className="size-3.5" />
+              <MoreHorizontalIcon aria-hidden="true" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="max-h-72 w-52 overflow-y-auto">
-            {overflow.map((layout) => (
-              <DropdownMenuItem key={layout.name} onSelect={() => onSelect(layout.name)}>
-                <span className="truncate">{layoutDisplayName(layout.name)}</span>
-              </DropdownMenuItem>
-            ))}
+            {overflow.map((item) => {
+              const Icon =
+                item.kind === 'fixed'
+                  ? VIEW_ICONS[item.view]
+                  : item.layout.columns.length === 1
+                    ? VIEW_ICONS[item.layout.columns[0]!.view]
+                    : Columns3Icon
+              return (
+                <DropdownMenuItem
+                  key={item.key}
+                  onSelect={() => (item.kind === 'fixed' ? onSelectFixed?.(item.view) : onSelect(item.layout.name))}
+                >
+                  <Icon aria-hidden="true" />
+                  <span className="truncate">
+                    {item.kind === 'fixed' ? viewLabel(item.view) : layoutDisplayName(item.layout.name)}
+                  </span>
+                </DropdownMenuItem>
+              )
+            })}
           </DropdownMenuContent>
         </DropdownMenu>
       ) : null}
@@ -119,7 +221,7 @@ export function LayoutCards({
            `data-slot` on `button`, and the browser-level specs need a hook that is not the
            label. */
         data-action="new-layout"
-        className="mb-1 ml-1 size-7 shrink-0 text-muted-foreground"
+        className="mb-1 size-7 shrink-0 text-muted-foreground"
         aria-label="New layout"
         title="New layout"
         onClick={() => onCreate()}

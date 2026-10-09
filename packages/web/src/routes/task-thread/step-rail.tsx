@@ -174,7 +174,7 @@ export function WorkflowSteps({
             <span className="block h-full rounded-full bg-success" style={{ width: `${pct}%` }} />
           </span>
         )}
-        <span className="min-w-0 truncate font-medium text-foreground">{current.name}</span>
+        <span data-slot="step-name" className="min-w-0 truncate font-medium text-foreground">{current.name}</span>
         <span className="shrink-0 text-xs tabular-nums">
           {index + 1} of {steps.length}
         </span>
