@@ -61,7 +61,7 @@ const providerForExecutable = (executable: string): ProviderId => {
 
 /** A service whose Claude CLI agrees the credentials are gone, so the latch's self-check confirms
  *  the rejection instead of clearing it. */
-function loggedOutClaudeProviderAuth(): ProviderAuthService {
+function loggedOutClaudeProviderAuth(createAuthFailureId: () => string = () => 'auth-incident-1'): ProviderAuthService {
   return new ProviderAuthService({
     platform: 'linux',
     runCommand: vi.fn<RunProviderCommand>(async (executable) => (
@@ -69,7 +69,7 @@ function loggedOutClaudeProviderAuth(): ProviderAuthService {
         ? { stdout: '{"loggedIn":false}', stderr: '', exitCode: 1 }
         : { stdout: CONNECTED_OUTPUT[providerForExecutable(executable)], stderr: '', exitCode: 0 }
     )),
-    createAuthFailureId: () => 'auth-incident-1',
+    createAuthFailureId,
   });
 }
 
@@ -319,6 +319,61 @@ describe('watchProviderRuntimeAuthFailures', () => {
     });
 
     expect(reopened.readEvents(run.id).filter(({ type }) => type === 'provider-auth-required')).toHaveLength(1);
+  });
+
+  it('does not seed the cache from an older persisted incident', () => {
+    providerAuth = loggedOutClaudeProviderAuth(() => 'fresh-incident');
+    const observer = new ProviderRuntimeAuthObserver(providerAuth, vi.fn());
+    const run = store.createRun({
+      title: 'cold cache',
+      workflow: 'quick-task',
+      task: 'work',
+      runner: 'claude',
+      steps: [],
+    });
+    store.appendEvent(run.id, {
+      type: 'provider-auth-required',
+      provider: 'claude',
+      authFailureId: 'old-incident',
+    });
+    observer.watch(store);
+    store.appendEvent(run.id, {
+      type: 'error',
+      message: 'Failed to authenticate. API Error: 401 OAuth token has been revoked.',
+    });
+
+    expect(store.readEvents(run.id).filter(({ type }) => type === 'provider-auth-required'))
+      .toEqual([
+        expect.objectContaining({ authFailureId: 'old-incident' }),
+        expect.objectContaining({ authFailureId: 'fresh-incident' }),
+      ]);
+  });
+
+  it('records a new incident after the previous latch is cleared', () => {
+    let incident = 0;
+    providerAuth = loggedOutClaudeProviderAuth(() => `incident-${++incident}`);
+    const observer = new ProviderRuntimeAuthObserver(providerAuth, vi.fn());
+    const run = store.createRun({
+      title: 'new incident',
+      workflow: 'quick-task',
+      task: 'work',
+      runner: 'claude',
+      steps: [],
+    });
+    observer.watch(store);
+    const authEvent = {
+      type: 'error',
+      message: 'Failed to authenticate. API Error: 401 OAuth token has been revoked.',
+    };
+    store.appendEvent(run.id, authEvent);
+    expect(providerAuth.clearRuntimeAuthFailure('claude', 'incident-1')).toBe(true);
+    store.appendEvent(run.id, { ...authEvent, type: 'session.error' });
+
+    expect(store.readEvents(run.id).filter(({ type }) => type === 'provider-auth-required'))
+      .toEqual([
+        expect.objectContaining({ authFailureId: 'incident-1' }),
+        expect.objectContaining({ authFailureId: 'incident-2' }),
+      ]);
   });
 
   it('keeps copied run ids in different transcript directories independent', () => {

@@ -67,10 +67,8 @@ export function watchProviderRuntimeAuthFailures(
           ...(event.stepId ? { stepId: event.stepId } : {}),
         });
         dedupe.add(key);
-      } catch (error) {
-        // A failed append must not permanently suppress a later retry.
-        throw error;
       } finally {
+        // A failed append must not permanently suppress a later retry.
         pending.delete(key);
       }
     }
