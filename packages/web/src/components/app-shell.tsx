@@ -820,7 +820,7 @@ function FooterMenu({
               data-slot="footer-menu"
               tooltip={{ children: version ? `${brandName} v${version}` : brandName, hidden: false }}
               aria-label={`${brandName} menu`}
-              className="relative size-9 justify-center overflow-visible rounded-md bg-contrast p-0 shadow-xs text-contrast-foreground hover:bg-contrast/85 hover:text-contrast-foreground data-[state=open]:bg-contrast/85 data-[state=open]:hover:bg-contrast/85 data-[state=open]:hover:text-contrast-foreground"
+              className="relative size-9 justify-center overflow-visible rounded-md p-0 text-foreground data-[state=open]:bg-sidebar-accent [&>svg]:size-auto"
             >
               {brandLogoUrl ? (
                 <img src={brandLogoUrl} alt="" className="size-7 object-contain" />
