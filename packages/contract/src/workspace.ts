@@ -181,6 +181,8 @@ export const uiStateSchema = z.looseObject({
   lastAutonomous: z.boolean().optional(),
   /** Whether new runs should ask agents to append follow-up work. Absent → on. */
   lastGenerateFollowups: z.boolean().optional(),
+  /** The selected default team skills for this repo. Absent means all default skills remain available. */
+  importedSkills: z.array(z.string().min(1).max(200)).max(200).optional(),
   /** Skill selection frequency (#408): name → times chosen, across BOTH composers. */
   skillUsage: z.record(z.string(), z.number()).optional(),
   runsView: z.enum(['list', 'table']).optional(),
@@ -203,8 +205,7 @@ export const uiStateSchema = z.looseObject({
       }),
     )
     .optional(),
-  /** The open-mercato/skills promo banner (#391), dismissed for good. Legacy — the banner is
-   *  gone, replaced by `WorkspaceUiState.importedSkills`; retained so old files round-trip. */
+  /** The open-mercato/skills promo banner (#391), dismissed for good. Legacy — retained so old files round-trip. */
   dismissedSkillsBanner: z.boolean().optional(),
 });
 export type UiState = z.infer<typeof uiStateSchema>;
@@ -222,8 +223,8 @@ export const PROMPT_TEMPLATE_TEXT_MAX = 20_000;
  * (multi-project spec, step 2.7).
  *
  * The same open bag as its per-repo twin above, and open for the same reason. The PUT merges
- * SHALLOWLY at the top level server-side, so a writer must send the whole `sidebar` object (or the
- * whole `importedSkills` array), never a leaf.
+ * SHALLOWLY at the top level server-side, so a writer must send the whole `sidebar` object, never a
+ * leaf.
  */
 export const workspaceLastLocationSchema = z.strictObject({
   projectId: z.string().min(1).max(64),
@@ -306,9 +307,8 @@ export const workspaceUiStateSchema = z.looseObject({
    *  cockpit keeps it in localStorage (`packages/web/src/lib/last-location.ts`): stored here, the
    *  last client to navigate decided where every OTHER client's next launch landed. */
   lastLocation: workspaceLastLocationSchema.optional(),
-  /** The user's curated selection of default (vendor) skills. Tri-state: ABSENT means "not
-   *  curated", so every default skill shows; a PRESENT array (even `[]`) means only those names
-   *  show from that repo. */
+  /** Legacy source for default team-skill selections. New choices are project-scoped; this stays
+   *  typed so projects without a local choice preserve selections from older cockpit versions. */
   importedSkills: z.array(z.string()).optional(),
 });
 export type WorkspaceUiState = z.infer<typeof workspaceUiStateSchema>;
@@ -352,10 +352,7 @@ export const setWorkspaceUiStateInputSchema = z
         copilot: z.string().min(1).max(128).optional(),
       })
       .optional(),
-    importedSkills: z
-      .array(z.string().min(1).max(200))
-      .max(WORKSPACE_UI_STATE_MAX_KEYS)
-      .optional(),
+    importedSkills: z.array(z.string().min(1).max(200)).max(WORKSPACE_UI_STATE_MAX_KEYS).optional(),
     taskTable: taskTableUiStateSchema
       .extend({
         expandedColumns: z

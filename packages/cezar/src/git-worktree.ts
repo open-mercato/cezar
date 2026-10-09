@@ -279,7 +279,11 @@ export async function createWorktree(
     return worktreeInfo(absolutePath, branch, base);
   }
 
-  const create = await git(repoRoot, ['worktree', 'add', '-b', branch, absolutePath, base]);
+  // Task branches do not need upstream metadata: every diff/base decision passes
+  // the resolved ref explicitly. `git worktree add` otherwise writes branch.*
+  // tracking keys to the repository-wide config when `base` is origin/<name>,
+  // making concurrent task launches contend on the shared config.lock.
+  const create = await git(repoRoot, ['worktree', 'add', '--no-track', '-b', branch, absolutePath, base]);
   if (!create.ok) {
     throw new Error(`git worktree add failed: ${create.stderr.trim() || create.stdout.trim()}`);
   }

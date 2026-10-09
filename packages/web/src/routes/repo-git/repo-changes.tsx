@@ -81,16 +81,31 @@ export function RepoChangesSection() {
           subtitle="No uncommitted changes in the main working tree. Edits show up here as they happen."
         />
       ) : (
-        <div className="flex min-h-0 flex-1 items-start gap-5 px-4 py-4 [--diff-sticky-top:7rem] md:px-6">
-          {/* Same deal as the task Changes tab: sticky AND its own scroller, so a long file list
-              never has to drag the diff to the bottom to show its last row. */}
+        // Below md the diff scrolls in `main` under the repo header, which (unlike the task tabs'
+        // run header) stays sticky at every width — so its file headers must still park below
+        // it there. From md up they stick to their own column's top, so no offset.
+        <div className="flex min-h-0 flex-1 gap-5 px-4 py-4 max-md:[--diff-sticky-top:7rem] md:px-6 md:py-0">
+          {/* Same split as the task Changes tab: from md up the tree and the diff are two
+              independent scrollers under the header, laid out in CSS alone. */}
           <aside
             data-slot="changes-tree-pane"
-            className="sticky top-28 hidden max-h-[calc(100dvh_-_var(--diff-sticky-top)_-_1rem)] w-60 shrink-0 overflow-y-auto overscroll-contain md:block lg:w-72"
+            className="hidden w-60 shrink-0 overflow-y-auto overscroll-contain py-4 md:block lg:w-72"
           >
             <ChangesTree root={tree} selected={selected} onSelect={selectFile} />
           </aside>
-          <Diff files={files} viewRef={diffRef} mode={effectiveMode} wrap={effectiveWrap} className="min-w-0 flex-1" />
+          <div
+            data-slot="diff-pane"
+            data-diff-scroller={desktop ? '' : undefined}
+            className="min-w-0 flex-1 md:overflow-y-auto md:overscroll-contain"
+          >
+            <Diff
+              files={files}
+              viewRef={diffRef}
+              mode={effectiveMode}
+              wrap={effectiveWrap}
+              className="min-w-0 md:py-4"
+            />
+          </div>
         </div>
       )}
     </section>

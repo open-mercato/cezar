@@ -93,6 +93,7 @@ import type {
   RunHistoryContext,
   RunHistoryPage,
   RepoResponse,
+  RepoTree,
   Runner,
   ModelDiscoveryRunner,
   RunnerModelCatalogResponse,
@@ -646,8 +647,8 @@ export async function refreshSkills(): Promise<Skill[]> {
   )
 }
 
-/** The default (vendor) repo's full skill list — every skill the "Import skills" panel can
- *  offer, regardless of import state. Empty once a repo configures its own `skillsRepos`. */
+/** Full definitions from the default (vendor) repo — every skill the catalog can preview,
+ *  regardless of enabled state. Empty once a repo configures its own `skillsRepos`. */
 export async function getImportableSkills(opts?: ReadOptions): Promise<ImportableSkill[]> {
   return unwrap(
     await cez.api.v1.p[':projectId'].skills.importable.$get(
@@ -741,6 +742,37 @@ export async function getRepoChanges(opts?: ReadOptions): Promise<ChangesPayload
     ),
     '/repo/changes',
   )
+}
+
+/** The project repository's whole path index for the Git tab's Files sub-tab (#1279) — tracked
+ *  plus untracked-not-ignored, sorted, with `truncated` saying whether the server capped it. One
+ *  read backs both the tree and its filter, so expanding a folder and typing in the filter box
+ *  cost nothing. 409 (as an ApiError) outside a git repository. */
+export async function getRepoTree(opts?: ReadOptions): Promise<RepoTree> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].repo.tree.$get({ param: { projectId: queryScope() } }, init(opts)),
+    '/repo/tree',
+  )
+}
+
+/** One repository file for the Files sub-tab's viewer. Only a path the index lists is served —
+ *  an ignored untracked `.env` 409s with the server's own wording, which is why this route is
+ *  safe to point at the real checkout. Always the `file` member: every indexed path is a file. */
+export async function getRepoFile(path: string, opts?: ReadOptions): Promise<WorktreeEntry> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].repo.files.$get(
+      { param: { projectId: queryScope() }, query: { path } },
+      init(opts),
+    ),
+    '/repo/files',
+  )
+}
+
+/** The same-origin URL an `<img>` loads a repository image's bytes from — `runFileRawUrl`'s
+ *  sibling. Same server-side protections: image extensions only, inside the size cap, `nosniff`
+ *  and the no-script CSP. Handed to an `<img>`, never fetched, so it is built here. */
+export function repoFileRawUrl(path: string): string {
+  return apiPath(`/repo/files?path=${encodeURIComponent(path)}&raw=1`)
 }
 
 /** One commit's structured diff (R5 repo view): `?structured=1` on the legacy commit route —
@@ -2066,10 +2098,10 @@ export async function deleteWorkflow(name: string): Promise<DeleteWorkflowRespon
 // ---- prefs ---------------------------------------------------------------------------------
 
 /** Merges server-side (the stored object spread under the patch) and answers the merged state. */
-export async function putUiState(patch: UiState): Promise<UiState> {
+export async function putUiState(patch: UiState, projectId = queryScope()): Promise<UiState> {
   return unwrap(
     await cez.api.v1.p[':projectId']['ui-state'].$put({
-      param: { projectId: queryScope() },
+      param: { projectId },
       json: patch,
     }),
     '/ui-state',

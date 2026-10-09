@@ -1129,6 +1129,20 @@ export class RunStore extends EventEmitter {
     this.touch(run);
   }
 
+  /**
+   * Replace the step list of a run that has not started any step yet (#1078): a queued run whose
+   * workflow changed on disk is re-resolved at dequeue, and the step rail must show the steps
+   * that will actually run. Refused (returns false) once any step has left `pending`, so a run
+   * with history can never have it rewritten.
+   */
+  replacePendingSteps(runId: string, steps: Array<Pick<StepState, 'id' | 'name' | 'kind'>>): boolean {
+    const run = this.runs.get(runId);
+    if (!run || run.steps.some((s) => s.status !== 'pending' || s.iterations > 0)) return false;
+    run.steps = steps.map((s) => ({ ...s, status: 'pending', iterations: 0, tokensUsed: 0 }));
+    this.touch(run);
+    return true;
+  }
+
   updateStep(runId: string, stepId: string, patch: Partial<Omit<StepState, 'id'>>): void {
     const run = this.runs.get(runId);
     const step = run?.steps.find((s) => s.id === stepId);

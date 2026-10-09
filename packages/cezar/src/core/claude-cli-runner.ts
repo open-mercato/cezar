@@ -194,6 +194,9 @@ export class ClaudeCliRunner implements AgentRunner {
     // SIGTERM itself, so `killed` is true while the process runs on; escalation
     // has to follow real termination or it never fires (#844).
     const hasExited = trackChildExit(child);
+    child.once('exit', () => {
+      stdinOpen = false;
+    });
 
     const end = (): void => {
       if (!stdinOpen) return;

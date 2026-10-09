@@ -109,6 +109,10 @@ const AutomationsRoute = lazy(() =>
  *  still land. The scoped Navigate keeps the redirect inside the active project. */
 function SettingsSkillsRedirect() {
   const location = useLocation()
+  const legacySkill = new URLSearchParams(location.search).get('skill')
+  if (legacySkill === '__bm') {
+    return <ScopedNavigate to={{ pathname: '/settings/bookmarklets', hash: location.hash }} replace />
+  }
   return (
     <ScopedNavigate
       to={{ pathname: '/skills', search: location.search, hash: location.hash }}
@@ -430,6 +434,25 @@ export const AppRoutes = memo(function AppRoutes() {
           element={
             <Suspense fallback={<RepoGitLoading />}>
               <RepoGitRoute tab="branches" />
+            </Suspense>
+          }
+        />
+        {/* The repository file browser (#1279). Two routes, because a file path contains slashes:
+            the bare tab, and the splat that carries the selected file so `/git/files/a/b.ts` is the
+            file's own address. */}
+        <Route
+          path="git/files"
+          element={
+            <Suspense fallback={<RepoGitLoading />}>
+              <RepoGitRoute tab="files" />
+            </Suspense>
+          }
+        />
+        <Route
+          path="git/files/*"
+          element={
+            <Suspense fallback={<RepoGitLoading />}>
+              <RepoGitRoute tab="files" />
             </Suspense>
           }
         />

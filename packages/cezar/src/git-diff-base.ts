@@ -81,6 +81,24 @@ export interface TaskDiffBase {
  * not plainly a timestamp simply disables the baseline anchor.
  */
 const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+const PINNED_COMMIT = /^[0-9a-f]{7,64}$/i;
+
+/**
+ * In-place runs persist their starting commit because they have no task branch.
+ * If that commit is now contained by the repository's advertised origin branch,
+ * use that branch as the moving base: the SHA is a fork snapshot, not a request
+ * to count every upstream commit fetched after the run began. Keep the SHA when
+ * origin/HEAD is unavailable or does not contain it; that preserves the narrow
+ * fallback for local-only and unrelated commits.
+ */
+async function freshestPinnedBaseRef(runGit: GitRunner, base: string): Promise<string> {
+  if (!PINNED_COMMIT.test(base)) return base;
+  const originHead = await runGit(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']);
+  const remote = originHead.ok ? originHead.stdout.trim() : '';
+  if (!remote.startsWith('origin/') || !isSafeGitRef(remote)) return base;
+  const contains = await runGit(['merge-base', '--is-ancestor', base, remote]);
+  return contains.ok ? remote : base;
+}
 
 /**
  * The freshest ref the configured base branch names: `origin/<base>` when the
@@ -96,6 +114,7 @@ const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2
  */
 async function freshestBaseRef(runGit: GitRunner, base: string): Promise<string> {
   if (!isSafeGitRef(base) || base === 'HEAD' || base.startsWith('origin/')) return base;
+  if (PINNED_COMMIT.test(base)) return freshestPinnedBaseRef(runGit, base);
   const remote = `origin/${base}`;
   const hasRemote = await runGit(['rev-parse', '--verify', '--quiet', `${remote}^{commit}`]);
   if (!hasRemote.ok) return base;

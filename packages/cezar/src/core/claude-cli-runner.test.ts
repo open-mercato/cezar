@@ -263,6 +263,20 @@ describe('SIGTERM→SIGKILL escalation for a CLI that survives SIGTERM', () => {
       expect(fake.signals).toEqual(['SIGTERM']);
     });
   });
+
+  it('stops accepting messages once the child has exited on its own', () => {
+    withFakeChild((fake) => {
+      const session = new ClaudeCliRunner({ bin: 'claude', timeoutMs: 0 }).startSession({
+        userPrompt: 'do it',
+        cwd: process.cwd(),
+      });
+      expect(session.open).toBe(true);
+      fake.exit(1);
+
+      expect(session.open).toBe(false);
+      expect(session.sendMessage([{ type: 'text', text: 'are you there?' }])).toBe(false);
+    });
+  });
 });
 
 describe('prependSystemPrompt (codex/opencode delivery)', () => {

@@ -73,7 +73,7 @@ import {
 import { commentOnIssue, commentOnPr, fetchGithubChecks, updatePr } from '../server/forge/github.ts';
 import { createDraftPr } from '../server/pr.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
-import { loadWorkflows } from './load.ts';
+import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 // Task dispatch (spec 2026-09-10-dispatch). Every import below is inert unless the feature is
 // ON *and* the run carries a `dispatch`: `dispatchOf()` is the single gate, and a run without one
@@ -514,6 +514,9 @@ interface ActiveRun {
   /** Registry snapshot used to expand `/skill` follow-ups before a backend can
    *  mistake them for its own slash commands (#676). */
   skills?: Skill[];
+  /** The attachment library actually granted to this session at spawn (#987). A library that
+   *  appears later must not be advertised to a session whose fixed grant was absent. */
+  grantedAttachmentLibrary?: string;
   /**
    * The dispatch prompt this session runs under (spec 2026-09-10-dispatch), resolved by
    * `prepareDispatchSession` — which BOTH construction sites call, because `ActiveRun` is built in
@@ -1593,6 +1596,11 @@ export class RunManager {
           if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude')) return false;
           return capacity();
         };
+        // The catalog as it is NOW (#1078), read once per sweep and only when a fresh run can
+        // actually start — never inside the loop, whose dequeue must stay in one synchronous tick.
+        const catalog = this.queue.some((id) => this.pendingJobs.has(id) && startable(id))
+          ? await loadWorkflows(this.repoRoot).then((loaded) => loaded.workflows, () => undefined)
+          : undefined;
         while (this.queue.length > 0) {
           // FIFO among the runs that CAN start; a held one keeps its place in the queue rather
           // than being dequeued and re-queued (which would churn its position and its record).
@@ -1635,8 +1643,11 @@ export class RunManager {
           // in the same synchronous tick as the `pendingJobs.delete` above, so no
           // handler can observe a half-dequeued run.
           const input = this.hydrateQueuedInput(runId, job.input);
+          // …and the workflow the same way (#1078): a file edited while the run waited is run as
+          // it is now, exactly as a run started now would be.
+          const workflow = catalog ? this.refreshQueuedWorkflow(runId, job.workflow, catalog) : job.workflow;
           const ownerToken = Symbol('run-owner');
-          void this.execute(runId, job.workflow, input, ownerToken).catch((err: unknown) => {
+          void this.execute(runId, workflow, input, ownerToken).catch((err: unknown) => {
             const message = err instanceof Error ? err.message : String(err);
             const state = this.active.get(runId);
             if (!state || state.ownerToken !== ownerToken || state.cancelled) return;
@@ -1908,6 +1919,25 @@ export class RunManager {
     // one — see `reconcileAutoResumes`.
     this.reconcileAutoResumes();
     void this.pump();
+  }
+
+  /**
+   * Swap a dequeued run's snapshot for the catalog's current definition when it changed while the
+   * run was queued (#1078; see `newerCatalogWorkflow` for which runs qualify). The record follows
+   * — `workflowDef` and the step rail both — so the run shows the workflow it actually runs. A
+   * run that already started a step (a re-queue from inside `execute`) keeps what it has.
+   */
+  private refreshQueuedWorkflow(runId: string, snapshot: WorkflowDef, catalog: readonly WorkflowDef[]): WorkflowDef {
+    const current = newerCatalogWorkflow(snapshot, catalog);
+    if (!current) return snapshot;
+    const steps = current.steps.map((s) => ({ id: s.id, name: s.name ?? s.id, kind: stepKind(s) }));
+    if (!this.store.replacePendingSteps(runId, steps)) return snapshot;
+    this.store.updateRun(runId, { workflowDef: current });
+    this.store.appendEvent(runId, {
+      type: 'lifecycle',
+      message: `workflow "${current.name}" changed while the task was queued — starting with the current version`,
+    });
+    return current;
   }
 
   /** The persisted definition when it looks sane, else the catalog by name. */
@@ -2408,6 +2438,11 @@ export class RunManager {
     return { budgetUsd: maxCost ?? remaining };
   }
 
+  /** Notify the parent after an explicit user action retires an unanswered child question. */
+  notifyQuestionRetired(runId: string): void {
+    this.reportSettledChildToParent(runId);
+  }
+
   /**
    * A child settled — tell its parent. Nothing else fires this: there is no process-exit callback
    * and no sub-agent-completion event, so a parent parked on `monitoring` waiting for children
@@ -2425,6 +2460,12 @@ export class RunManager {
       if (!child || !parentId) return;
       if (!this.dispatchEnabled()) return;
       if (!isTerminalStatus(child.status)) return;
+      // A closed session can leave an unanswered CEZ:ASK as terminal `failed` while the
+      // question remains under the user's control (`awaitingAnswerSince`). That is a hold, not
+      // an outcome: reporting it now would make the parent plan around work that may still be
+      // resumed. The existing status transition that answers or explicitly retires the question
+      // clears this field and reaches this hook again with the real outcome.
+      if (child.awaitingAnswerSince !== undefined) return;
       const parent = this.store.getRun(parentId);
       if (!parent?.dispatch) return;
 
@@ -3442,8 +3483,8 @@ export class RunManager {
     const blocks = contentBlocksOf(content);
     const expanded = userAuthored ? expandRegistrySlashSkill(blocks, state.skills ?? []) : blocks;
     const deliverable = persisted.length
-      ? [...expanded, pastedAttachmentsNote(persisted, this.attachmentLibraryHint(persisted) ??
-          (imageLibraryWrites.length ? attachmentLibraryDir(this.dataDir) : undefined))]
+      ? [...expanded, pastedAttachmentsNote(persisted, this.attachmentLibraryHint(persisted, state.grantedAttachmentLibrary) ??
+          (imageLibraryWrites.length ? this.usableAttachmentLibrary(state.grantedAttachmentLibrary) : undefined))]
       : expanded;
     const delivered = state.session.sendMessage(deliverable);
     if (delivered) {
@@ -4087,6 +4128,7 @@ export class RunManager {
     const contextualOpeningPrompt = portableContext
       ? `${portableContext}\n\n---\n\n## New user instruction\n${openingPrompt}`
       : openingPrompt;
+    state.grantedAttachmentLibrary = this.prepareAttachmentLibrary();
     const session = runner.startSession(
       {
         // The Continue step is a fresh agent session on the same run — the
@@ -4100,15 +4142,15 @@ export class RunManager {
           generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
         ),
         userPrompt: attachments.length
-          ? `${contextualOpeningPrompt}\n\n${pastedAttachmentsText(attachments, this.attachmentLibraryHint(attachments))}`
+          ? `${contextualOpeningPrompt}\n\n${pastedAttachmentsText(attachments, this.attachmentLibraryHint(attachments, state.grantedAttachmentLibrary))}`
           : contextualOpeningPrompt,
         ...(openingImages.length ? { images: openingImages } : {}),
         cwd: state.cwd,
         allowedTools: toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
         bashAllowlist: toolsStep?.bashAllowlist,
-        additionalDirectories: agentDirectories(
-          join(this.dataDir, 'runs'),
-          this.grantableAttachmentLibrary(),
+          additionalDirectories: agentDirectories(
+            join(this.dataDir, 'runs'),
+            state.grantedAttachmentLibrary,
           continueProfile.env,
         ),
         env: continueProfile.env,
@@ -5579,8 +5621,9 @@ export class RunManager {
     // at all. Deliberately NOT nested in the branch above: gating the paths on an image block
     // existing is what would leave an agent holding a task about a `.pdf` it was never told the
     // location of.
+    state.grantedAttachmentLibrary = this.prepareAttachmentLibrary();
     if (attachments.length) {
-      userPrompt += `\n\n${pastedAttachmentsText(attachments, this.attachmentLibraryHint(attachments))}`;
+      userPrompt += `\n\n${pastedAttachmentsText(attachments, this.attachmentLibraryHint(attachments, state.grantedAttachmentLibrary))}`;
     }
 
     const sessionId = graphHooks?.resumeSessionId ?? randomUUID();
@@ -5908,7 +5951,7 @@ export class RunManager {
           // The handoff file lives outside the worktree — grant access.
           additionalDirectories: agentDirectories(
             join(this.dataDir, 'runs'),
-            this.grantableAttachmentLibrary(),
+            state.grantedAttachmentLibrary,
             stepProfile.env,
           ),
           env: stepProfile.env,
@@ -6376,14 +6419,53 @@ export class RunManager {
   }
 
   /**
+   * A session's filesystem grants are fixed when it starts, but the first named follow-up may
+   * create the library only after that session is already live (#987). Prepare the directory at
+   * both session construction sites so a later message can use the grant. Best effort: a
+   * read-only data directory simply leaves the library unavailable; the run-folder attachment
+   * remains the source of truth.
+   */
+  private prepareAttachmentLibrary(): string | undefined {
+    const dir = attachmentLibraryDir(this.dataDir);
+    try {
+      mkdirSync(dir, { recursive: true });
+      return dir;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * The attachment library to name in a message's note, or `undefined` when there is nothing to
    * point at yet — no attachment on this message, or a project where nothing has ever been filed.
    *
    * The name metadata is intentionally not serialized into PersistedAttachment. The
    * directory hint therefore depends on persisted attachments and library existence.
    */
-  private attachmentLibraryHint(attachments: PersistedAttachment[]): string | undefined {
-    return attachments.length ? this.grantableAttachmentLibrary() : undefined;
+  private attachmentLibraryHint(
+    attachments: PersistedAttachment[],
+    grantedDir?: string,
+  ): string | undefined {
+    if (!attachments.length) return undefined;
+    const dir = this.usableAttachmentLibrary(grantedDir);
+    if (!dir) return undefined;
+    try {
+      return readdirSync(dir).length ? dir : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** A library path that can be inspected, for truthful prompt hints only. */
+  private usableAttachmentLibrary(grantedDir: string | undefined): string | undefined {
+    const dir = grantedDir;
+    if (!dir) return undefined;
+    try {
+      readdirSync(dir);
+      return dir;
+    } catch {
+      return undefined;
+    }
   }
 
   /**

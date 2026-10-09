@@ -8,6 +8,7 @@ import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
 // one. `src/runs/store.ts` imports the SAME value for its persistence twin, so the two halves of
 // `contract-parity.runs.test.ts` cannot drift apart by construction.
 import { dispatchIntentSchema, dispatchSchema } from './dispatch.ts';
+import { trackerAssociationSchema, trackerAutomationEventSchema } from './tracker.ts';
 
 /**
  * The RUNS family of `/api/v1` — a task's record, its lifecycle mutations, and the artifacts
@@ -210,6 +211,34 @@ export const runRecordSchema = z.object({
     })
     .optional(),
   /**
+   * Provenance for a task a tracker (Jira/Linear) automation launched — its own key for the same
+   * downgrade reason as `automationTrigger`. The store has always persisted and served it; it is
+   * described here so the cockpit can tell an automation's task from a person's (the Tasks
+   * tables' origin filter) without reaching past the type. No secret rides on it.
+   */
+  automationTracker: z
+    .object({
+      automationId: z.string(),
+      automationRevision: z.number(),
+      receiptId: z.string(),
+      provider: z.enum(['jira', 'linear']),
+      association: trackerAssociationSchema.optional(),
+      eventId: z.string().optional(),
+      event: trackerAutomationEventSchema.optional(),
+      timestamp: z.string().optional(),
+      change: z
+        .object({
+          fromId: z.string().optional(),
+          toId: z.string().optional(),
+          labelId: z.string().optional(),
+          labelName: z.string().optional(),
+        })
+        .optional(),
+      key: z.string(),
+      url: z.string(),
+    })
+    .optional(),
+  /**
    * This run's place in a dispatch tree (spec `.ai/specs/2026-09-10-dispatch.md`): its root,
    * its parent, its budget, its report. Absent on a plain task, which behaves exactly as it
    * always has.
@@ -395,6 +424,11 @@ export const runIndexEntrySchema = z.object({
    *  page needs to nest a child under its parent, and the child's `kind` so a row can say
    *  `review` or `implement` next to its title. Absent on a plain task. */
   dispatch: dispatchSchema.pick({ rootRunId: true, parentRunId: true, kind: true }).optional(),
+  /** The automation that launched this run — GitHub, scheduled or tracker, whichever provenance
+   *  key the record carries. Absent on a task a person (or a dispatching task) started; the
+   *  global page's origin filter reads it, and a dispatched child inherits its root's answer
+   *  there through `dispatch.rootRunId` rather than through a copy here. */
+  automationId: z.string().optional(),
   /** When the agent actually started, as opposed to when the task was created. The global page's
    *  age column prefers it and falls back to `createdAt`, exactly as the per-project table does. */
   startedAt: z.string().optional(),
