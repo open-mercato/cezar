@@ -11,6 +11,8 @@ import { CenteredState } from '@/components/centered-state'
 import { Diff, type DiffMode } from '@/components/diff'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { Button } from '@/components/ui/button'
+import { Item, ItemContent, ItemDescription, ItemGroup, ItemMedia, ItemTitle } from '@/components/ui/item'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useIsDesktop } from '@/lib/use-desktop'
 import { useRememberedState } from '@/lib/view-memory'
 import { cn } from '@/lib/utils'
@@ -19,7 +21,8 @@ import { isRunActive } from '../task-thread/run-actions'
 import { RunHeader } from '../task-thread/run-header'
 import { CommitList } from './commit-list'
 import { GitTabLoadError, GitTabLoading } from './git-tab-loading'
-import { DiffViewToggles } from './diff-controls'
+import { BranchChip, DiffViewToggles } from './diff-controls'
+import { FullViewExit } from '../task-workspace/maximize'
 
 /**
  * `/tasks/:id/commits` — the run's own commits (`<base>..HEAD`), each opening its structured diff
@@ -76,6 +79,13 @@ export function CommitsView({
   const sha = stateKey === undefined ? shaFromUrl : (picked ?? undefined)
   const commits = useRunCommits(run.id, isRunActive(run.status))
 
+  // In a workspace column on a wide screen the view is a two-pane reader: the commits down the
+  // left, the picked one's diff beside it. A phone keeps the list-then-detail flow below.
+  const desktop = useIsDesktop()
+  if (embedded && desktop) {
+    return <CommitsReader run={run} commits={commits} picked={sha ?? null} onPick={setPicked} />
+  }
+
   return (
     <div data-route="task-commits" className="flex min-h-full flex-col">
       {embedded ? null : <RunHeader run={run} tab="commits" />}
@@ -125,6 +135,166 @@ export function CommitsView({
         />
       )}
     </div>
+  )
+}
+
+/**
+ * The Commits view of a workspace column: a toolbar that stays put (branch, count, diff
+ * toggles), the commits as a list on the left with its own scroll, and the selected commit —
+ * subject, author, sha, then its diff — on the right. The newest commit is selected until the
+ * user picks another, so the view never opens as one line on an empty page.
+ */
+function CommitsReader({
+  run,
+  commits,
+  picked,
+  onPick,
+}: {
+  run: ApiRun
+  commits: ReturnType<typeof useRunCommits>
+  picked: string | null
+  onPick: (sha: string | null) => void
+}) {
+  const [mode, setMode] = useState<DiffMode>('unified')
+  const [wrap, setWrap] = useState(false)
+  const list = commits.data?.commits ?? []
+  const sha = picked ?? list[0]?.sha ?? null
+  const refused = commits.isError && commits.error instanceof ApiError && commits.error.status === 409
+
+  return (
+    <div data-route="task-commits" className="flex min-h-full flex-col">
+      <div
+        data-slot="commits-toolbar"
+        className="sticky top-0 z-20 flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-border/70 bg-background px-4 py-1.5 sm:px-6"
+      >
+        {run.branch ? <BranchChip branch={run.branch} /> : null}
+        {commits.data ? (
+          <span className="text-[13px] text-muted-foreground tabular-nums">
+            {list.length} {list.length === 1 ? 'commit' : 'commits'}
+          </span>
+        ) : null}
+        <span className="ml-auto flex items-center gap-1.5">
+          {sha ? <DiffViewToggles mode={mode} wrap={wrap} onModeChange={setMode} onWrapChange={setWrap} /> : null}
+          <FullViewExit />
+        </span>
+      </div>
+
+      {commits.isPending ? (
+        <div className="flex gap-5 px-6 py-4" aria-busy="true">
+          <div className="w-72 shrink-0 space-y-2">
+            {[0, 1, 2].map((row) => (
+              <Skeleton key={row} className="h-14 w-full rounded-lg" />
+            ))}
+          </div>
+          <Skeleton className="h-64 flex-1 rounded-lg" />
+        </div>
+      ) : commits.isError ? (
+        <CenteredState
+          icon={<GitCommitHorizontalIcon />}
+          tone={refused ? 'neutral' : 'danger'}
+          heading="h2"
+          title={refused ? 'No commits to show' : 'Could not load the commits'}
+          subtitle={commits.error.message}
+        />
+      ) : list.length === 0 ? (
+        <CenteredState
+          icon={<GitCommitHorizontalIcon />}
+          tone="neutral"
+          heading="h2"
+          title="No commits yet"
+          subtitle="This task hasn't committed anything on its branch. Autosave commits and any the agent makes appear here."
+        />
+      ) : (
+        <div className="flex min-h-0 flex-1 items-start gap-5 px-4 py-4 [--diff-sticky-top:2.75rem] md:px-6">
+          <aside
+            data-slot="commits-pane"
+            className="sticky top-[calc(2.75rem+1rem)] max-h-[calc(100dvh_-_var(--diff-sticky-top)_-_1rem)] w-64 shrink-0 overflow-y-auto overscroll-contain lg:w-80"
+          >
+            <ItemGroup data-slot="task-commits" className="gap-1">
+              {list.map((commit: RunCommit) => {
+                const active = commit.sha === sha
+                return (
+                  <Item
+                    key={commit.sha}
+                    asChild
+                    size="sm"
+                    data-slot="commit-row"
+                    data-sha={commit.sha}
+                    data-active={active ? '' : undefined}
+                    className={cn('items-start gap-2.5 border-transparent', active ? 'bg-muted' : 'hover:bg-muted/60')}
+                  >
+                    <Button
+                      variant="ghost"
+                      aria-pressed={active}
+                      onClick={() => onPick(commit.sha)}
+                      className="h-auto w-full justify-start px-2.5 py-2 text-left font-normal whitespace-normal active:translate-y-0"
+                    >
+                      <ItemMedia className="mt-0.5 text-muted-foreground">
+                        <GitCommitHorizontalIcon className="size-4" aria-hidden="true" />
+                      </ItemMedia>
+                      <ItemContent className="min-w-0 gap-0.5">
+                        <ItemTitle className={cn('line-clamp-2 w-full text-[13px] leading-snug', active ? 'font-semibold' : 'font-medium')}>
+                          {commit.subject}
+                        </ItemTitle>
+                        <ItemDescription className="truncate text-xs">
+                          <span className="font-mono">{commit.sha.slice(0, 8)}</span> · {commit.author} · {commit.when}
+                        </ItemDescription>
+                      </ItemContent>
+                    </Button>
+                  </Item>
+                )
+              })}
+            </ItemGroup>
+          </aside>
+          <div className="min-w-0 flex-1">
+            {sha ? <CommitDetail runId={run.id} sha={sha} mode={mode} wrap={wrap} /> : null}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** The picked commit: what it says, who made it, and its diff. */
+function CommitDetail({ runId, sha, mode, wrap }: { runId: string; sha: string; mode: DiffMode; wrap: boolean }) {
+  const commit = useRunCommit(runId, sha)
+  if (commit.isPending) return <Skeleton className="h-64 w-full rounded-lg" />
+  if (commit.isError) {
+    const missing = commit.error instanceof ApiError && commit.error.status === 409
+    return (
+      <CenteredState
+        icon={missing ? <SearchXIcon /> : <TriangleAlertIcon />}
+        tone={missing ? 'neutral' : 'danger'}
+        heading="h2"
+        title={missing ? 'Commit not found' : 'Could not load the commit'}
+        subtitle={commit.error.message}
+      />
+    )
+  }
+  return (
+    <section data-slot="task-commit" data-sha={sha} className="flex min-w-0 flex-col gap-4">
+      <div data-slot="commit-meta" className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
+        <div className="min-w-0 space-y-1">
+          <h2 className="text-[15px] font-semibold text-foreground">{commit.data.subject}</h2>
+          <p className="text-[13px] text-muted-foreground">
+            {commit.data.author} · {commit.data.when} ·{' '}
+            <span className="font-mono text-xs select-all">{commit.data.sha.slice(0, 12)}</span>
+          </p>
+        </div>
+        <DiffStatLabel stat={commit.data.stat} />
+      </div>
+      {commit.data.files.length === 0 ? (
+        <CenteredState
+          icon={<GitCommitHorizontalIcon />}
+          tone="neutral"
+          heading="h2"
+          title="No file changes"
+          subtitle="This commit carries no diff of its own — a merge commit's changes live on the commits it merged."
+        />
+      ) : (
+        <Diff files={commit.data.files} mode={mode} wrap={wrap} className="min-w-0" />
+      )}
+    </section>
   )
 }
 

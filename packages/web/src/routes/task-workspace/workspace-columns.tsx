@@ -281,8 +281,9 @@ function AddColumnEdge({
   )
 }
 
-/** The views whose own top strip carries the full-view exit — the browser's tabs, Changes' toolbar. */
-const VIEWS_WITH_OWN_BAR: ReadonlySet<ViewId> = new Set<ViewId>(['browser', 'changes'])
+/** The views whose own top strip carries the full-view exit — the browser's tabs, the Changes and
+ *  Commits toolbars. */
+const VIEWS_WITH_OWN_BAR: ReadonlySet<ViewId> = new Set<ViewId>(['browser', 'changes', 'commits'])
 
 /** Name + menu + close (spec §5.1: the header identifies the view and carries its controls).
  *
