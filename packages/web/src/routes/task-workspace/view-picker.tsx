@@ -158,15 +158,33 @@ const VIEW_HINTS: Record<ViewId, string> = {
  * window. This is how a layout is created — the strip's `+` opens an empty one — and what a layout
  * returns to when its last window is closed.
  */
-export function ViewTiles({ onPick }: { onPick: (view: ViewId) => void }) {
+export function ViewTiles({
+  onPick,
+  scope = 'layout',
+}: {
+  onPick: (view: ViewId) => void
+  /** What is being filled: a whole new layout, or one new window of an existing one. */
+  scope?: 'layout' | 'window'
+}) {
   return (
-    <div data-slot="view-tiles-stage" className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-6">
-      <div className="flex w-full max-w-2xl flex-col gap-5">
+    // A container, because the tiles also fill ONE window of a split layout: the grid answers to
+    // the room it has, not to the viewport.
+    <div
+      data-slot="view-tiles-stage"
+      className="@container flex min-h-0 flex-1 justify-center overflow-y-auto p-4 @md:p-6"
+    >
+      <div className="my-auto flex w-full max-w-2xl flex-col gap-5">
         <div className="flex flex-col gap-1 text-center">
-          <h2 className="text-base font-medium text-foreground">What should this layout show?</h2>
-          <p className="text-sm text-muted-foreground">Pick a view to start. You can add more beside it afterwards.</p>
+          <h2 className="text-base font-medium text-foreground">
+            {scope === 'layout' ? 'What should this layout show?' : 'What should this window show?'}
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            {scope === 'layout'
+              ? 'Pick a view to start. You can split it into more windows afterwards.'
+              : 'Pick a view for the new window.'}
+          </p>
         </div>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-2.5 @[15rem]:grid-cols-2 @lg:grid-cols-3 @lg:gap-3">
           {TILE_ORDER.map((view) => {
             const Icon = VIEW_ICONS[view]
             return (
@@ -177,7 +195,7 @@ export function ViewTiles({ onPick }: { onPick: (view: ViewId) => void }) {
                 data-view={view}
                 data-view-action="create"
                 onClick={() => onPick(view)}
-                className="group/tile h-auto flex-col items-start gap-3 rounded-xl p-4 text-left whitespace-normal"
+                className="group/tile h-auto flex-col items-start justify-start gap-2.5 rounded-xl p-3 text-left whitespace-normal @lg:gap-3 @lg:p-4"
               >
                 <span className="flex size-9 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors group-hover/tile:bg-primary group-hover/tile:text-primary-foreground">
                   <Icon aria-hidden="true" className="size-[18px]" />

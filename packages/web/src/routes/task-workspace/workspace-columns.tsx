@@ -1,4 +1,13 @@
-import { ArrowLeftIcon, ArrowRightIcon, GripVerticalIcon, MoreVerticalIcon, PlusIcon, XIcon } from 'lucide-react'
+import {
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  Columns2Icon,
+  GripVerticalIcon,
+  LayoutGridIcon,
+  MoreVerticalIcon,
+  PlusIcon,
+  XIcon,
+} from 'lucide-react'
 import { useRef, useState, type ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
@@ -11,6 +20,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useIsDesktop } from '@/lib/use-desktop'
 import { cn } from '@/lib/utils'
 
@@ -74,6 +84,22 @@ export function WorkspaceColumns({
   // on read rather than synced in an effect, so closing a column can never leave a dangling index.
   const [narrowIndex, setNarrowIndex] = useState(0)
   const activeNarrow = Math.min(narrowIndex, columns.length - 1)
+  /**
+   * A window that has been split off but not given a view yet: the slot it will take. It is this
+   * component's own, never saved — a saved column always names a view — so leaving the layout or
+   * reloading simply forgets it. Clamped on read, so closing a column cannot strand it.
+   */
+  const [pendingAt, setPendingAt] = useState<number | null>(null)
+  const pending = pendingAt === null ? null : Math.min(pendingAt, columns.length)
+  const canSplit = columns.length + (pending === null ? 0 : 1) < MAX_COLUMNS
+  const fillPending = (view: ViewId) => {
+    if (pending === null) return
+    const target = pending
+    setPendingAt(null)
+    // Columns are added at the right; the new one is then walked to the slot it was split into.
+    actions.addColumn(view)
+    if (target < columns.length) actions.moveColumn(columns.length, target)
+  }
 
 
   const columnMenu = (index: number, column: WorkspaceColumn) => (
@@ -165,6 +191,38 @@ export function WorkspaceColumns({
     )
   }
   const headers = editable || columns.length > 1
+  // While a window is waiting for its view, every window shares the row equally.
+  const shown = columns.length + (pending === null ? 0 : 1)
+  const widthOf = (column: WorkspaceColumn) => (pending === null ? column.width : 100 / shown)
+  const pendingWindow =
+    pending === null ? null : (
+      <div
+        key="pending"
+        data-slot="workspace-column"
+        data-pending=""
+        className="relative flex min-w-0 flex-col border-l border-border/70 first:border-l-0"
+        style={{ width: `${100 / shown}%` }}
+      >
+        <header className="flex h-8 shrink-0 items-center gap-1.5 border-b border-border/70 bg-background pl-4 pr-1.5 text-xs font-medium text-muted-foreground">
+          <LayoutGridIcon aria-hidden="true" className="size-3.5 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">New window</span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Close new window"
+            title="Close"
+            onClick={() => setPendingAt(null)}
+            className="text-soft-foreground"
+          >
+            <XIcon aria-hidden="true" className="size-3.5" />
+          </Button>
+        </header>
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          <ViewTiles scope="window" onPick={fillPending} />
+        </div>
+      </div>
+    )
 
   return (
     <div
@@ -172,13 +230,14 @@ export function WorkspaceColumns({
       data-slot="workspace-columns"
       className="flex min-h-0 flex-1 items-stretch"
     >
-      {columns.map((column, index) => (
+      {columns.flatMap((column, index) => [
+        index === pending ? pendingWindow : null,
         <div
           key={index}
           data-slot="workspace-column"
           data-view={column.view}
           className="relative flex min-w-0 flex-col border-l border-border/70 first:border-l-0"
-          style={{ width: `${column.width}%` }}
+          style={{ width: `${widthOf(column)}%` }}
         >
           {/* The divider lives INSIDE the column it precedes, absolutely positioned over that
               border — the same move `SidebarResizeHandle` makes. A flex sibling would add real
@@ -186,7 +245,7 @@ export function WorkspaceColumns({
               by shrinking the very columns the handle exists to size. There is no divider before
               the first column, which is also why the handle at `index - 1` resizes the PAIR that
               meets at this seam. */}
-          {index > 0 ? (
+          {index > 0 && pending === null ? (
             <ColumnDivider
               index={index - 1}
               width={columns[index - 1]!.width}
@@ -205,6 +264,8 @@ export function WorkspaceColumns({
               count={columns.length}
               actions={actions}
               menu={columnMenu(index, column)}
+              onSplit={editable ? () => setPendingAt(index + 1) : undefined}
+              canSplit={canSplit}
               trailing={index === columns.length - 1 ? <FullViewExit className="ml-1.5" /> : null}
             />
           ) : null}
@@ -225,8 +286,9 @@ export function WorkspaceColumns({
               renderView(column.view, index, column)
             )}
           </div>
-        </div>
-      ))}
+        </div>,
+      ])}
+      {pending === columns.length ? pendingWindow : null}
     </div>
   )
 }
@@ -247,7 +309,12 @@ function ColumnHeader({
   actions,
   menu,
   trailing,
+  onSplit,
+  canSplit = true,
 }: {
+  /** Split this window: a new, empty one opens to its right. Absent on a fixed card. */
+  onSplit?: () => void
+  canSplit?: boolean
   index: number
   column: WorkspaceColumn
   count: number
@@ -310,6 +377,30 @@ function ColumnHeader({
         <ViewIcon aria-hidden="true" className="size-3.5 shrink-0" />
         <span className="truncate">{viewLabel(column.view)}</span>
       </span>
+      {onSplit ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            {/* A span, so the tooltip still answers on a disabled button. */}
+            <span className="inline-flex">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                data-action="split-view"
+                aria-label="Split view"
+                disabled={!canSplit}
+                onClick={onSplit}
+                className="text-soft-foreground hover:text-foreground"
+              >
+                <Columns2Icon aria-hidden="true" className="size-3.5" />
+              </Button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {canSplit ? 'Split view' : `At most ${MAX_COLUMNS} windows`}
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
       {menu}
       {/* Closing the last window is not a trap: the layout falls back to its tile picker. */}
       {count >= 1 ? (
