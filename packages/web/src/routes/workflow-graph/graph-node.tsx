@@ -224,7 +224,7 @@ export function nodeDetail(node: WorkflowGraphNode, loopCount?: number): string 
  */
 export const CANVAS_THEME = {
   '--xy-background-color': 'var(--background)',
-  '--xy-background-pattern-color': 'color-mix(in oklab, var(--muted-foreground) 28%, transparent)',
+  '--xy-background-pattern-color': 'color-mix(in oklab, var(--muted-foreground) 22%, transparent)',
   '--xy-controls-button-background-color': 'var(--card)',
   '--xy-controls-button-background-color-hover': 'var(--muted)',
   '--xy-controls-button-color': 'var(--muted-foreground)',
@@ -320,12 +320,9 @@ export const GraphNodeView = memo(function GraphNodeView({
     .filter(Boolean)
     .join(' · ')
 
-  const shape =
-    node.type === 'start'
-      ? 'rounded-l-[32px] rounded-r-xl'
-      : node.type === 'end'
-        ? 'rounded-full'
-        : 'rounded-xl'
+  // Where a run begins and where it ends are round; everything it does in between is a card.
+  const terminal = node.type === 'start' || node.type === 'end'
+  const shape = terminal ? 'rounded-full' : 'rounded-2xl'
 
   return (
     <div
@@ -336,12 +333,13 @@ export const GraphNodeView = memo(function GraphNodeView({
     >
       <div
         className={cn(
-          'relative flex items-center border bg-card text-card-foreground shadow-sm transition-[border-color,box-shadow]',
-          'border-border group-hover:border-muted-foreground/50 group-hover:shadow-md',
+          'relative flex items-center border bg-card text-card-foreground shadow-xs transition-[border-color,box-shadow]',
+          'border-border group-hover:border-muted-foreground/40 group-hover:shadow-md',
           shape,
-          wide ? 'h-16 gap-3 px-3.5' : 'size-16 justify-center',
-          selected && 'border-foreground/70 ring-3 ring-foreground/10',
-          issue && 'ring-2 ring-danger',
+          wide ? 'h-16 gap-3 pr-4 pl-3' : 'size-16 justify-center',
+          // Selection is the one place the canvas spends the accent.
+          selected && 'border-primary-strong shadow-md ring-4 ring-primary/25 group-hover:border-primary-strong',
+          issue && 'border-danger ring-4 ring-danger/20',
           state?.ring,
         )}
         style={{ width: wide ? WIDE_WIDTH : TILE }}
@@ -351,24 +349,30 @@ export const GraphNodeView = memo(function GraphNodeView({
             type="target"
             position={Position.Left}
             isConnectable={connectable}
-            className="!h-3.5 !w-1 !rounded-full !border-0 !bg-muted-foreground/50"
+            className="!h-4 !w-1.5 !rounded-full !border-0 !bg-muted-foreground/40"
           />
         )}
         {wide ? (
           // The type's icon on a soft tile of its own colour — the card's one accent.
           <span
-            className="flex size-9 shrink-0 items-center justify-center rounded-lg"
+            className="flex size-10 shrink-0 items-center justify-center rounded-xl"
             style={{ background: `color-mix(in oklab, ${color} 12%, transparent)` }}
           >
             <Icon className="size-5" style={{ color }} strokeWidth={1.75} />
           </span>
         ) : (
-          <Icon className="size-6 shrink-0" style={{ color }} strokeWidth={1.75} />
+          // A small tile is its icon: the same soft tile of colour, filling the card.
+          <span
+            className={cn('flex size-11 shrink-0 items-center justify-center', terminal ? 'rounded-full' : 'rounded-xl')}
+            style={{ background: `color-mix(in oklab, ${color} 12%, transparent)` }}
+          >
+            <Icon className="size-5" style={{ color }} strokeWidth={1.75} />
+          </span>
         )}
         {wide && (
           <div className="min-w-0">
-            <div className="truncate text-[13px] leading-tight font-medium">{title}</div>
-            {inner?.length ? <InnerSteps steps={inner} /> : <div className="mt-0.5 truncate text-xs text-muted-foreground">{detail}</div>}
+            <div className="truncate text-[13px] leading-tight font-semibold">{title}</div>
+            {inner?.length ? <InnerSteps steps={inner} /> : <div className="mt-1 truncate text-xs leading-tight text-muted-foreground">{detail}</div>}
           </div>
         )}
         {subtaskTo && (
@@ -413,7 +417,7 @@ export const GraphNodeView = memo(function GraphNodeView({
                 <div className="absolute left-[calc(100%+9px)] flex -translate-y-1/2 items-center" style={{ top }}>
                   {ports.length > 1 && (
                     <span
-                      className="pointer-events-none rounded-sm bg-background px-1 text-[11px] leading-4 whitespace-nowrap"
+                      className="pointer-events-none rounded-full border border-border/70 bg-card px-1.5 text-[10.5px] leading-4 font-medium whitespace-nowrap"
                       style={{ color: tone }}
                     >
                       {port}
@@ -451,8 +455,8 @@ export const GraphNodeView = memo(function GraphNodeView({
           className="pointer-events-none absolute top-full left-1/2 mt-1.5 -translate-x-1/2 text-center"
           style={{ width: CAPTION_WIDTH }}
         >
-          <div className="truncate text-xs leading-tight font-medium text-foreground">{title}</div>
-          {detail ? <div className="truncate text-[11px] text-muted-foreground">{detail}</div> : null}
+          <div className="truncate text-xs leading-tight font-semibold text-foreground">{title}</div>
+          {detail ? <div className="mt-0.5 truncate text-[11px] leading-tight text-muted-foreground">{detail}</div> : null}
         </div>
       )}
       {extras ? (
@@ -467,10 +471,10 @@ export const GraphNodeView = memo(function GraphNodeView({
 /** Neutral edge styling shared by both canvases: grey, dashed when it runs back (a loop). */
 export function edgeStyle(opts: { tone: PortTone; back: boolean; emphasis?: 'taken' | 'dim' }) {
   const stroke =
-    opts.tone === 'failure' ? 'color-mix(in oklab, var(--danger) 45%, transparent)' : 'color-mix(in oklab, var(--muted-foreground) 45%, transparent)'
+    opts.tone === 'failure' ? 'color-mix(in oklab, var(--danger) 50%, transparent)' : 'color-mix(in oklab, var(--muted-foreground) 50%, transparent)'
   return {
     stroke: opts.emphasis === 'taken' ? (opts.tone === 'failure' ? 'var(--danger)' : 'var(--primary-strong)') : stroke,
-    strokeWidth: opts.emphasis === 'taken' ? 2 : 1.25,
+    strokeWidth: opts.emphasis === 'taken' ? 2.25 : 1.5,
     strokeDasharray: opts.back ? '5 4' : undefined,
     opacity: opts.emphasis === 'dim' ? 0.35 : 1,
   }

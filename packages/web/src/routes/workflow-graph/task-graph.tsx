@@ -3,7 +3,6 @@ import '@xyflow/react/dist/style.css'
 import {
   Background,
   BackgroundVariant,
-  Controls,
   MarkerType,
   ReactFlow,
   ReactFlowProvider,
@@ -33,6 +32,7 @@ import {
 
 import { GitTabLoadError, GitTabLoading } from '../task-git/git-tab-loading'
 import { RunHeader } from '../task-thread/run-header'
+import { CanvasControls } from './canvas-controls'
 import { backLanes, edgeStyle, edgeTypes, GraphNodeView, CANVAS_THEME } from './graph-node'
 import { FloatingPanel } from './workflow-graph'
 
@@ -202,7 +202,7 @@ function TaskGraphView({ run, embedded = false }: { run: ApiRun; embedded?: bool
             proOptions={{ hideAttribution: true }}
           >
             <Background variant={BackgroundVariant.Dots} gap={20} size={1.25} />
-            <Controls showInteractive={false} />
+            <CanvasControls />
           </ReactFlow>
           {selected && overlay ? (
             <FloatingPanel side="right" label="Node details" title={selected.name ?? selected.id} onClose={() => setSelectedId(null)}>
