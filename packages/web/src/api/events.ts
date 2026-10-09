@@ -1,4 +1,5 @@
-import type { ApiRun, ProcessUsage, RunRecord, TodoItem } from '@open-mercato/cezar-api-client'
+import { WORKSPACE_RUN_EVENT_OMITTED_KEYS } from '@open-mercato/cezar-api-client'
+import type { ApiRun, ProcessUsage, RunRecord, TodoItem, WorkspaceRunEvent } from '@open-mercato/cezar-api-client'
 
 /**
  * The global stream's data layer: parse one SSE message, and fold it into cached state.
@@ -15,9 +16,13 @@ import type { ApiRun, ProcessUsage, RunRecord, TodoItem } from '@open-mercato/ce
 
 // ---- wire → typed event ------------------------------------------------------------------
 
+/** A `run` payload: the bare record from `GET /api/events`, or the workspace stream's slim frame
+ *  with its `project` stamp removed. */
+export type RunSummary = RunRecord | Omit<WorkspaceRunEvent, 'project'>
+
 /** One message from `GET /api/events` (src/server/server.ts). */
 export type GlobalEvent =
-  | { type: 'run'; run: RunRecord }
+  | { type: 'run'; run: RunSummary }
   | { type: 'run-deleted'; id: string }
   | { type: 'todos'; items: TodoItem[] }
   | { type: 'usage'; usage: Record<string, ProcessUsage> }
@@ -119,6 +124,13 @@ function isRunRecord(value: unknown): value is RunRecord {
   return isRecord(value) && typeof value.id === 'string' && value.id !== ''
 }
 
+/** Whether a `run` payload is a whole record, i.e. one a cache may hold as a row on its own.
+ *  `task` and `steps` are both required on `runRecordSchema` and both omitted from the slim
+ *  frame, so their presence is what tells a record from a slim frame. */
+export function isFullRunRecord(run: RunSummary): run is RunRecord {
+  return typeof (run as Partial<RunRecord>).task === 'string' && Array.isArray((run as Partial<RunRecord>).steps)
+}
+
 // ---- reducers ----------------------------------------------------------------------------
 
 /**
@@ -133,15 +145,19 @@ function isRunRecord(value: unknown): value is RunRecord {
  * one is inserted by `createdAt` descending, matching `store.listRuns()`'s order, so a run that
  * appears mid-session lands where a refetch would have put it.
  */
-export function applyRunEvent(list: ApiRun[] | undefined, run: RunRecord): ApiRun[] | undefined {
+export function applyRunEvent(list: ApiRun[] | undefined, run: RunSummary): ApiRun[] | undefined {
   if (!list) return undefined
 
   const index = list.findIndex((r) => r.id === run.id)
-  if (index >= 0) {
+  const existing = index < 0 ? undefined : list[index]
+  if (existing !== undefined) {
     const next = [...list]
-    next[index] = mergeRun(list[index], run)
+    next[index] = mergeRun(existing, run)
     return next
   }
+  // A slim frame for a run this list has never held cannot become a row: it has no `steps`.
+  // The caller fetches the single run instead.
+  if (!isFullRunRecord(run)) return list
 
   // `?? ''` because only `id` is validated on the way in: a record missing `createdAt` must sort
   // last, not throw and take the stream's message loop with it.
@@ -161,26 +177,44 @@ export function applyRunDeleted(list: ApiRun[] | undefined, id: string): ApiRun[
 }
 
 /**
- * The stream's record over the cached one.
+ * The stream's record over the cached one. `previous` is required: merging needs a row to merge
+ * into, and a slim frame with no cached record has no valid row to produce — the caller fetches
+ * the whole record (`GET /runs/:id`) instead.
  *
  * `usage` is carried over rather than dropped: the global `run` event is a bare `RunRecord`, while
  * `GET /api/runs` answers with the live sample attached (`withUsage`). An absent field on the wire
  * means "this message doesn't carry it", not "there is none" — overwriting would blink the sample
  * out on every status change. Freshness for it comes from the `usage` ticks either way.
+ *
+ * The workspace stream's slim frame never carries `WORKSPACE_RUN_EVENT_OMITTED_KEYS`, so a cached
+ * record keeps whatever copies of them it already holds. A slim frame cannot add one: a key the
+ * cache never held (say the first `queuedMessages`, stacked from another tab) stays absent until
+ * a full record lands — the per-run stream's `run` frame or a `GET`. No list cell reads these
+ * keys. Every other key is taken from the frame as-is, absent included: `activity`, `error` and
+ * friends are cleared by being left out.
  */
-export function mergeRun(previous: ApiRun | undefined, run: RunRecord): ApiRun {
-  if (!previous) return run
+export function mergeRun(previous: ApiRun, run: RunSummary): ApiRun {
+  const next = { ...run } as ApiRun
+  if (!isFullRunRecord(run)) {
+    const target = next as Record<string, unknown>
+    for (const key of WORKSPACE_RUN_EVENT_OMITTED_KEYS) {
+      if (key in previous) target[key] = previous[key]
+    }
+  }
 
   // A reconnect can replay a run frame queued before the user renamed the task. The server's
   // titleOrigin is the ownership bit: auto (and legacy missing) titles may not erase user/marker
   // titles, while all other fields still come from the live frame.
   const titleOwnership = (origin: RunRecord['titleOrigin']): number =>
     origin === 'user' ? 2 : origin === 'marker' ? 1 : 0
-  const title = titleOwnership(previous.titleOrigin) > titleOwnership(run.titleOrigin)
-    ? { title: previous.title, titleSummary: previous.titleSummary, titleOrigin: previous.titleOrigin }
-    : {}
+  if (titleOwnership(previous.titleOrigin) > titleOwnership(run.titleOrigin)) {
+    next.title = previous.title
+    next.titleSummary = previous.titleSummary
+    next.titleOrigin = previous.titleOrigin
+  }
 
-  return previous.usage ? { ...run, ...title, usage: previous.usage } : { ...run, ...title }
+  if (previous.usage) next.usage = previous.usage
+  return next
 }
 
 // ---- live usage --------------------------------------------------------------------------

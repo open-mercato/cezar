@@ -2,6 +2,7 @@ import { act, cleanup, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { setApiScope } from '@open-mercato/cezar-api-client'
+import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { parseRunEvent, RUN_EVENT_BATCH_MS, useRunEvents } from './run-events'
 
 /**
@@ -133,6 +134,22 @@ describe('useRunEvents — subscription', () => {
       [3, 'item.delta'],
       [4, 'token-usage'],
     ])
+  })
+
+  it('coalesces run-record frames into one onRun on the batch flush', async () => {
+    const runs: RunRecord[] = []
+    renderHook(() => useRunEvents('run-1', { onRun: (run) => runs.push(run) }))
+    const source = FakeEventSource.last
+    const frame = (status: string): string => JSON.stringify({ id: 'run-1', steps: [], status })
+
+    source.emit('run', frame('queued'))
+    source.emit('run', frame('running'))
+    // Not before the window: a token or cost tick must not write the detail cache on every frame.
+    expect(runs).toHaveLength(0)
+
+    await flushEvents()
+    expect(runs).toHaveLength(1)
+    expect(runs[0]?.status).toBe('running')
   })
 
   it('survives a malformed frame — one bad line costs one line', async () => {
