@@ -5,6 +5,8 @@ import { useHealth, useProjectRuns, useProjects, useRunsForProject, useSkillsUpd
 import type { HealthResponse, SkillsUpdateState } from '@open-mercato/cezar-api-client'
 import { AppShell, type Crumb, type RepoChip } from '@/components/app-shell'
 import { CommandPalette } from '@/components/command-palette'
+import { GlobalSettingsProvider } from '@/components/global-settings'
+import { GlobalSettingsDialog } from '@/components/global-settings-dialog'
 import { ListViewProvider } from '@/components/list-view'
 import { HostUsageWidget } from '@/components/host-usage-widget'
 import { ProviderBannerContainer } from '@/components/provider-banner-container'
@@ -154,6 +156,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
     // which renders in `children`. The provider goes here because this is the lowest node that has
     // both of them under it — the spec requires the two sets of tabs to be one filter.
     <ListViewProvider>
+     <GlobalSettingsProvider dialog={<GlobalSettingsDialog />}>
       <AppShell
         repo={repo}
         brandName={workspaceConfig.data?.branding.name ?? 'cezar'}
@@ -196,6 +199,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
       {/* Global chrome, not a route: ⌘K must work on every URL. Mounted here (not in AppShell)
           because it needs the query client and router this container already assumes. */}
       <CommandPalette />
+     </GlobalSettingsProvider>
     </ListViewProvider>
   )
 })

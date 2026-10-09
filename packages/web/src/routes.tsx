@@ -31,6 +31,7 @@ import {
   SettingsSectionRoute,
   settingsSectionPath,
 } from './routes/settings/settings-shell'
+import { TasksAreaLayout } from './components/tasks-sidebar'
 import { TasksOverviewRoute } from './routes/tasks-overview'
 import { GlobalTasksRoute } from './routes/global-tasks'
 
@@ -331,6 +332,10 @@ export const AppRoutes = memo(function AppRoutes() {
   return (
     <Routes>
       <Route path="/p/:projectId" element={<ProjectScopeRoute />}>
+        {/* The Tasks area: one contextual sidebar (the project's task list) for the list, the
+            composer, every task URL and the variant compare. A pathless layout, so the element
+            types below — and the workspace's no-remount rule — are untouched. */}
+        <Route element={<TasksAreaLayout />}>
         <Route index element={<TasksOverviewRoute />} />
         <Route path="new" element={<NewTaskProjectRoute />} />
 
@@ -397,6 +402,7 @@ export const AppRoutes = memo(function AppRoutes() {
             </Suspense>
           }
         />
+        </Route>
 
         {/* The repo view (R5 Step 1.7): each segment is a URL — /git (working-tree changes),
             /git/commits (+ /:sha for one commit's diff), /git/branches. */}

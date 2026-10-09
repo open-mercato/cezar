@@ -48,6 +48,7 @@ export function TaskQuickList({
   showTokens = true,
   showCost = true,
   onTogglePin,
+  limit = SIDEBAR_TASK_LIMIT,
 }: {
   runs: RunRecord[]
   view: ListView
@@ -62,11 +63,13 @@ export function TaskQuickList({
   /** Pin/unpin one row (#935). The container owns the mutation, because WHICH project a row
    *  belongs to is a container's question — this list is painted for other projects too. */
   onTogglePin?: (run: RunRecord, pinned: boolean) => void
+  /** How many rows to paint across buckets. The tasks sidebar lists them all. */
+  limit?: number
 }) {
   // Capped: the sidebar is a glance at what is live and what just finished, and the Tasks page —
   // one click away, below — is the full list. The Active/Archived switch lives there too; this
   // list follows it rather than carrying a second copy of the same control.
-  const buckets = capBuckets(groupRuns(runs, view), SIDEBAR_TASK_LIMIT)
+  const buckets = Number.isFinite(limit) ? capBuckets(groupRuns(runs, view), limit) : groupRuns(runs, view)
   // Withheld in the archived view, where `groupRuns` answers one `Archived` bucket and never
   // reads `run.pinned` — the same call the thread header makes on an archived run.
   const pinToggle = view === 'archived' ? undefined : onTogglePin
@@ -88,7 +91,7 @@ export function TaskQuickList({
           onTogglePin={pinToggle}
         />
       )}
-      {total > SIDEBAR_TASK_LIMIT ? (
+      {total > limit ? (
         <Link
           to="/"
           data-slot="quick-list-more"
@@ -549,7 +552,7 @@ function variantLabel(run: RunRecord, showTokens: boolean, showCost: boolean): s
  * stream, Step 3.2), the router for which row is open, and the shared Active/Archived context so
  * the sidebar and the Tasks table (Step 3.4) always show the same filter.
  */
-export function TaskQuickListContainer() {
+export function TaskQuickListContainer({ limit }: { limit?: number } = {}) {
   const health = useHealth()
   const activeProjectId = useActiveProjectId()
   const runs = useRunsForProject(activeProjectId, health.data?.bootProject ?? null)
@@ -595,6 +598,7 @@ export function TaskQuickListContainer() {
         runs={runs.data}
         view={view}
         onViewChange={setView}
+        limit={limit}
         // Both matches: `/tasks/:id` and its `/changes` and `/files` children all keep the row lit.
         currentRunId={match?.params.id ?? exact?.params.id ?? null}
         now={now}
