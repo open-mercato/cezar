@@ -422,8 +422,8 @@ function AreaBadge({
 const RAIL_BUTTON = 'size-9 justify-center p-0 text-muted-foreground [&>svg]:size-[18px]'
 
 /**
- * The icon rail (desktop): project, New task, the project's areas, the workspace's two pages,
- * and the cockpit's own menu at the foot. Icons only — every button names itself in a tooltip.
+ * The icon rail (desktop): the cockpit's own menu at the head, New task, the workspace's two
+ * pages, the project's areas, and the project itself — the switcher — at the foot. Icons only — every button names itself in a tooltip.
  */
 function AppRail(props: RailProps) {
   const {
@@ -452,12 +452,13 @@ function AppRail(props: RailProps) {
       className="hidden w-[calc(var(--sidebar-width-icon)+0.75rem)] shrink-0 bg-transparent md:flex"
     >
       <SidebarHeader className="items-center gap-3 px-0 pt-3 pb-0">
-        <ProjectSwitcher
-          projects={projects}
-          activeProjectId={navProjectId}
-          repo={repo}
-          singleProject={singleProject}
+        <FooterMenu
+          version={version}
+          latestVersion={latestVersion}
+          starCount={starCount}
           brandName={brandName}
+          brandLogoUrl={brandLogoUrl}
+          hostWidget={hostWidget}
         />
         <div aria-hidden="true" className="mx-auto h-px w-5 shrink-0 bg-foreground/12" />
         <SidebarMenu className="items-center">
@@ -570,13 +571,12 @@ function AppRail(props: RailProps) {
       </SidebarContent>
 
       <SidebarFooter data-slot="sidebar-footer" className="items-center px-0 pb-3">
-        <FooterMenu
-          version={version}
-          latestVersion={latestVersion}
-          starCount={starCount}
+        <ProjectSwitcher
+          projects={projects}
+          activeProjectId={navProjectId}
+          repo={repo}
+          singleProject={singleProject}
           brandName={brandName}
-          brandLogoUrl={brandLogoUrl}
-          hostWidget={hostWidget}
         />
       </SidebarFooter>
     </Sidebar>
@@ -716,8 +716,8 @@ function ProjectSwitcher({
           </DropdownMenuTrigger>
           <DropdownMenuContent
             className="min-w-64 rounded-lg"
-            align="start"
-            side={isMobile ? 'bottom' : 'right'}
+            align="end"
+            side={isMobile ? 'top' : 'right'}
             sideOffset={6}
           >
             <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Projects</DropdownMenuLabel>
@@ -785,7 +785,7 @@ const THEME_OPTIONS: ReadonlyArray<{ value: Theme; label: string; icon: typeof S
 ]
 
 /**
- * The rail's foot: everything about the cockpit itself rather than about a project — its
+ * The rail's head: everything about the cockpit itself rather than about a project — its
  * version and updates, the machine glance, global settings (a dialog, so you keep your place),
  * the theme, and the ⭐ ask.
  */
@@ -834,8 +834,8 @@ function FooterMenu({
           </DropdownMenuTrigger>
           <DropdownMenuContent
             className="min-w-60 rounded-lg"
-            side={isMobile ? 'top' : 'right'}
-            align="end"
+            side={isMobile ? 'bottom' : 'right'}
+            align="start"
             sideOffset={6}
           >
             <DropdownMenuLabel className="flex items-baseline gap-2">
