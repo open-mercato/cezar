@@ -1,4 +1,4 @@
-import { Loader2Icon, PlusIcon, SquareIcon, XIcon } from 'lucide-react'
+import { Loader2Icon, PlusIcon, SquareIcon, TerminalIcon, XIcon } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { createRunTerminal, getRunTerminal, stopRunTerminal, writeRunTerminal } from '@/api/client'
@@ -233,14 +233,15 @@ export function TerminalDrawer({
     <section
       data-slot="terminal-drawer"
       aria-label="Terminal"
-      className="relative flex shrink-0 flex-col border-t border-border bg-background"
+      className="relative flex shrink-0 flex-col border-t border-border bg-background shadow-[0_-12px_24px_-20px_rgb(var(--shadow-color)/0.35)]"
       style={{ height: `${height}px` }}
     >
       <DrawerResizeHandle height={height} onHeightChange={onHeightChange} />
 
       {unavailable ? null : <DetectedUrlsStrip runId={runId} onOpen={onOpenInBrowser} />}
 
-      <header className="flex h-9 shrink-0 items-center gap-1 border-b border-border/70 pl-3 pr-2">
+      <header className="flex h-10 shrink-0 items-center gap-1.5 pl-3 pr-2">
+        <TerminalIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
         <Tabs value={activeId ?? ''} onValueChange={setActiveId} className="min-w-0 flex-1 gap-0">
         <TabsList
           aria-label="Terminal tabs"
@@ -367,7 +368,11 @@ export function TerminalDrawer({
         // Every pane stays MOUNTED and only the active one is shown. A tab is a live shell with a
         // screen full of scrollback; unmounting it to switch tabs would throw that screen away and
         // make every switch replay the whole buffer from the server.
-        <div className="relative min-h-0 flex-1">
+        // The screen sits on its own soft surface, inset from the drawer's edges.
+        <div
+          data-slot="terminal-surface"
+          className="relative mx-2 mb-2 min-h-0 flex-1 overflow-hidden rounded-lg border border-border/70 bg-card-2"
+        >
           {sessions.map((session) => (
             <TerminalPane key={session.id} runId={runId} session={session} active={session.id === activeId} />
           ))}
@@ -417,8 +422,10 @@ function TerminalTab({
       data-slot="terminal-tab"
       data-active={active ? '' : undefined}
       className={cn(
-        'group flex h-6 shrink-0 items-center rounded-sm pl-2 pr-0.5 text-xs font-medium',
-        active ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground',
+        'group flex h-7 shrink-0 items-center rounded-md border border-transparent pl-2.5 pr-1 text-xs font-medium transition-colors',
+        active
+          ? 'border-border/70 bg-card-2 text-foreground shadow-2xs'
+          : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
       )}
     >
       {/* Radix selects on pointer-down and on arrow-key focus (`onValueChange` on the list);

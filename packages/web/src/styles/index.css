@@ -192,6 +192,25 @@
 
   --shadow-color: 0 0 0;
   --shadow-strength: 0.5;
+
+  /* terminal (xterm) — the 16 ANSI colours and the selection, tuned to this theme's surface */
+  --term-black: #3f3f46;
+  --term-red: #f87171;
+  --term-green: #86efac;
+  --term-yellow: #fcd34d;
+  --term-blue: #93c5fd;
+  --term-magenta: #c4b5fd;
+  --term-cyan: #67e8f9;
+  --term-white: #e4e4e7;
+  --term-bright-black: #71717a;
+  --term-bright-red: #fca5a5;
+  --term-bright-green: #bbf7d0;
+  --term-bright-yellow: #fde68a;
+  --term-bright-blue: #bfdbfe;
+  --term-bright-magenta: #ddd6fe;
+  --term-bright-cyan: #a5f3fc;
+  --term-bright-white: #fafafa;
+  --term-selection: rgba(168, 243, 114, 0.22);
 }
 
 /* ---------- tokens: light ---------- */
@@ -239,6 +258,25 @@
 
   --shadow-color: 24 24 27;
   --shadow-strength: 0.07;
+
+  /* terminal (xterm) — the 16 ANSI colours and the selection, tuned to this theme's surface */
+  --term-black: #18181b;
+  --term-red: #dc2626;
+  --term-green: #15803d;
+  --term-yellow: #a16207;
+  --term-blue: #1d4ed8;
+  --term-magenta: #7c3aed;
+  --term-cyan: #0e7490;
+  --term-white: #52525b;
+  --term-bright-black: #3f3f46;
+  --term-bright-red: #ef4444;
+  --term-bright-green: #16a34a;
+  --term-bright-yellow: #ca8a04;
+  --term-bright-blue: #2563eb;
+  --term-bright-magenta: #8b5cf6;
+  --term-bright-cyan: #0891b2;
+  --term-bright-white: #71717a;
+  --term-selection: rgba(127, 207, 74, 0.3);
 }
 
 /* ---------- appearance: accent + density (Settings → Appearance) ---------- */
@@ -572,4 +610,15 @@
 .thread-markdown [data-streamdown='code-block'] pre {
   font-size: 12px;
   line-height: 1.55;
+}
+
+/* ---------- terminal (xterm) ----------
+ * xterm's stylesheet paints its viewport black and leaves it showing wherever the rows do not
+ * reach — the strip under the last line, the gutter beside a scrollbar. The drawer's own surface
+ * is the background here, so the viewport is cleared and the scrollbar matches the cockpit's. */
+[data-slot='terminal-surface'] .xterm .xterm-viewport {
+  background-color: transparent !important;
+}
+[data-slot='terminal-surface'] .xterm {
+  height: 100%;
 }

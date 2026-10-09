@@ -32,6 +32,30 @@ const POLL_MS = 400
  *  state of — the program that is writing. */
 const TRUNCATION_NOTICE = '\r\n[... earlier output fell out of the scrollback ...]\r\n'
 
+/**
+ * The emulator's colours, read from the cockpit's tokens at the moment they are needed. The
+ * surface is `--card-2` — the same fill the drawer paints behind the screen — so the terminal has
+ * no edge of its own; the caret wears the accent.
+ */
+function terminalTheme() {
+  const css = getComputedStyle(document.documentElement)
+  const token = (name: string) => css.getPropertyValue(name).trim()
+  const ansi = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'] as const
+  const palette: Record<string, string> = {}
+  for (const name of ansi) {
+    palette[name] = token(`--term-${name}`)
+    palette[`bright${name[0]!.toUpperCase()}${name.slice(1)}`] = token(`--term-bright-${name}`)
+  }
+  return {
+    background: token('--card-2'),
+    foreground: token('--foreground'),
+    cursor: token('--primary-strong'),
+    cursorAccent: token('--card-2'),
+    selectionBackground: token('--term-selection'),
+    ...palette,
+  }
+}
+
 export function TerminalPane({
   runId,
   session,
@@ -44,6 +68,7 @@ export function TerminalPane({
   const transport = useHostTransport()
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<{ write(data: string): void } | null>(null)
+  const themeWatchRef = useRef<MutationObserver | null>(null)
   const fitRef = useRef<(() => void) | null>(null)
   const focusRef = useRef<(() => void) | null>(null)
   const cursorRef = useRef(0)
@@ -85,14 +110,24 @@ export function TerminalPane({
 
       const term = new Terminal({
         cursorBlink: true,
-        fontSize: 12,
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-        // Transparent so the drawer's own themed background shows through in light and dark
-        // alike, instead of xterm painting its own black over the cockpit's palette.
-        theme: { background: 'rgba(0,0,0,0)' },
-        allowTransparency: true,
+        cursorStyle: 'bar',
+        cursorWidth: 2,
+        fontSize: 12.5,
+        lineHeight: 1.35,
+        letterSpacing: 0,
+        // The cockpit's own mono face first, so the terminal reads as part of the page.
+        fontFamily: "'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
+        // A real palette read from the tokens rather than a transparent background: xterm paints
+        // its viewport black whenever it is not handed a colour it can use.
+        theme: terminalTheme(),
         scrollback: 5_000,
       })
+      // Follow the theme toggle: the tokens change under us when `.light` lands on <html>.
+      const themeWatch = new MutationObserver(() => {
+        term.options.theme = terminalTheme()
+      })
+      themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-accent'] })
+      themeWatchRef.current = themeWatch
       const fit = new FitAddon()
       term.loadAddon(fit)
       term.open(host)
@@ -173,6 +208,8 @@ export function TerminalPane({
 
     return () => {
       disposed = true
+      themeWatchRef.current?.disconnect()
+      themeWatchRef.current = null
       termRef.current = null
       fitRef.current = null
       focusRef.current = null
@@ -251,17 +288,20 @@ export function TerminalPane({
 
   return (
     <div
-      ref={hostRef}
       data-slot="terminal-screen"
       data-session={session.id}
       // Hidden rather than unmounted: a background tab keeps its screen and its scrollback.
       // `invisible` + zero size rather than `display:none`, so xterm's own measurements do not
       // throw while it is away.
       className={cn(
-        'absolute inset-0 overflow-hidden px-2 py-1',
+        'absolute inset-0 overflow-hidden p-3',
         active ? 'visible' : 'invisible pointer-events-none',
         session.exitCode !== null && 'opacity-60',
       )}
-    />
+    >
+      {/* The emulator's host is the box INSIDE the padding: the fit addon measures its parent's
+          full box, so padding on the host itself would be rows the shell thinks it has. */}
+      <div ref={hostRef} className="size-full" />
+    </div>
   )
 }
