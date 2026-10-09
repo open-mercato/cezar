@@ -41,6 +41,7 @@ import { useRunRecordReconcile } from '../task-thread/run-reconcile'
 import { reduceThread } from '../task-thread/thread-state'
 
 import { BrowserView } from './browser-view'
+import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 
 import { LayoutCards } from './layout-cards'
@@ -341,25 +342,26 @@ function WorkspaceView({
       ) : null,
     [terminalAllowed, drawerOpen, updateDrawer],
   )
-  // The strip's right-end controls: full view, then the terminal.
-  const stripControls = useMemo(
+  // Full view closes the strip: the last control, set apart by a rule and drawn as a real button
+  // so it is found without hunting among the ghost icons beside it.
+  const maximizeButton = useMemo(
     () => (
       <>
+        <Separator orientation="vertical" className="mx-1 data-[orientation=vertical]:h-5" />
         <Button
-          variant="ghost"
+          variant="outline"
           size="icon-sm"
           data-action="maximize-layout"
           aria-label="Full view"
           title="Full view — hide everything but this layout"
-          className="text-muted-foreground"
+          className="text-foreground"
           onClick={toggleMaximized}
         >
           <Maximize2Icon aria-hidden="true" />
         </Button>
-        {terminalToggle}
       </>
     ),
-    [terminalToggle, toggleMaximized],
+    [toggleMaximized],
   )
 
   /**
@@ -463,7 +465,8 @@ function WorkspaceView({
         run={run}
         onMarkedUnread={markedUnread}
         tabs={tabs}
-        trailing={stripControls}
+        trailing={terminalToggle}
+        trailingEnd={maximizeButton}
         mode="strip"
         bareStrip={overview}
       />

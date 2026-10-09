@@ -132,6 +132,8 @@ interface RunHeaderProps {
   tabs?: ReactNode
   /** Extra controls at the right end of the tab row — the workspace's terminal toggle. */
   trailing?: ReactNode
+  /** The very last control on the strip, after the run's actions — the workspace's full view. */
+  trailingEnd?: ReactNode
   /**
    * Which part of the header to draw.
    *  - `full` (default): the strip, then the title, facts and actions under it.
@@ -154,6 +156,7 @@ const headerPropComparators = {
   // The workspace memoizes the element it passes, so identity is a real comparison here.
   tabs: (before, after) => before.tabs === after.tabs,
   trailing: (before, after) => before.trailing === after.trailing,
+  trailingEnd: (before, after) => before.trailingEnd === after.trailingEnd,
   mode: (before, after) => before.mode === after.mode,
   bareStrip: (before, after) => before.bareStrip === after.bareStrip,
   planTally: (before, after) => before.planTally?.done === after.planTally?.done &&
@@ -173,6 +176,7 @@ function RunHeaderView({
   continuationEngine,
   tabs,
   trailing,
+  trailingEnd,
   mode = 'full',
   bareStrip = false,
 }: RunHeaderProps) {
@@ -359,6 +363,7 @@ function RunHeaderView({
           {trailing}
           {/* In the strip there is no title row to carry them, so the run's actions sit here. */}
           {mode === 'strip' && !bareStrip ? actionButtons : null}
+          {trailingEnd}
         </div>
       </div>
       {mode === 'full' ? (
