@@ -16,6 +16,8 @@ import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 
+import { FullViewExit } from './maximize'
+
 import {
   MAX_BROWSER_TABS,
   emptyBrowserState,
@@ -285,6 +287,8 @@ export function BrowserView({
             <PlusIcon aria-hidden="true" className="size-3.5" />
           </Button>
         ) : null}
+        {/* Top right of the strip that is already here; renders only in full view. */}
+        <FullViewExit className="sticky right-0 ml-auto" />
       </TabsList>
       </Tabs>
 

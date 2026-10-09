@@ -23,7 +23,7 @@ import {
   type ViewId,
   type WorkspaceColumn,
 } from './layout-state'
-import { FullViewExit, useWorkspaceMaximize } from './maximize'
+import { FullViewExit, WorkspaceMaximizeContext } from './maximize'
 import { VIEW_ICONS, ViewItems, ViewPickerMenu } from './view-picker'
 
 /** Narrower than this and the layout shows one column at a time (spec §5.2, §11). Tailwind's
@@ -69,9 +69,6 @@ export function WorkspaceColumns({
   // on read rather than synced in an effect, so closing a column can never leave a dangling index.
   const [narrowIndex, setNarrowIndex] = useState(0)
   const activeNarrow = Math.min(narrowIndex, columns.length - 1)
-  // In full view every column wears its header — a lone one too — so there is always a bar,
-  // and the way out sits at the right end of the last one: the top-right corner.
-  const maximized = useWorkspaceMaximize()?.maximized ?? false
 
 
   const columnMenu = (index: number, column: WorkspaceColumn) => (
@@ -188,7 +185,7 @@ export function WorkspaceColumns({
           {/* A lone column needs no bar of its own: the layout tab above already names it, and
               its menu moves to the edge strip. The bar returns with the second column, where it
               is what tells the columns apart and what a column is dragged by. */}
-          {columns.length > 1 || maximized ? (
+          {columns.length > 1 ? (
             <ColumnHeader
               index={index}
               column={column}
@@ -198,8 +195,22 @@ export function WorkspaceColumns({
               trailing={index === columns.length - 1 ? <FullViewExit className="ml-1.5" /> : null}
             />
           ) : null}
+          {/* Where the way out of full view sits (top right, always on a bar that already exists):
+               - several columns: the last column's header, above — and the views below are told
+                 nothing about full view, so none of them draws a second one;
+               - a lone browser or Changes: the view's own strip, which renders it itself;
+               - a lone view with no strip of its own: pinned to the column's top-right corner. */}
+          {columns.length === 1 && !VIEWS_WITH_OWN_BAR.has(column.view) ? (
+            <FullViewExit className="absolute top-2 right-3 z-20 bg-card shadow-sm" />
+          ) : null}
           <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-            {renderView(column.view, index, column)}
+            {columns.length > 1 ? (
+              <WorkspaceMaximizeContext.Provider value={null}>
+                {renderView(column.view, index, column)}
+              </WorkspaceMaximizeContext.Provider>
+            ) : (
+              renderView(column.view, index, column)
+            )}
           </div>
         </div>
       ))}
@@ -270,6 +281,9 @@ function AddColumnEdge({
   )
 }
 
+/** The views whose own top strip carries the full-view exit — the browser's tabs, Changes' toolbar. */
+const VIEWS_WITH_OWN_BAR: ReadonlySet<ViewId> = new Set<ViewId>(['browser', 'changes'])
+
 /** Name + menu + close (spec §5.1: the header identifies the view and carries its controls).
  *
  *  Draggable by the header to reorder (spec §5.2). Native HTML drag-and-drop on purpose: dnd-kit
@@ -317,7 +331,7 @@ function ColumnHeader({
         actions.moveColumn(from, index)
       }}
       className={cn(
-        'group/column flex h-9 shrink-0 items-center gap-0.5 border-b border-border/70 bg-background pl-4 pr-1.5',
+        'group/column flex h-8 shrink-0 items-center gap-0.5 border-b border-border/70 bg-background pl-4 pr-1.5',
         dropTarget && 'bg-muted',
       )}
     >

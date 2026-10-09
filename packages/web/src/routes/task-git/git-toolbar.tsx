@@ -21,6 +21,7 @@ import {
 import type { GitAction, GitActionBar, GitActionId } from '@/lib/git-actions'
 import { isHttpUrl } from '@/lib/utils'
 
+import { FullViewExit } from '../task-workspace/maximize'
 import { BranchChip, DiffViewToggles } from './diff-controls'
 
 /**
@@ -92,6 +93,8 @@ export function GitToolbar({
             </DropdownMenuContent>
           </DropdownMenu>
         ) : null}
+        {/* The task workspace's way out of full view; nothing anywhere else. */}
+        <FullViewExit />
       </span>
     </div>
   )
