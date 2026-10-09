@@ -219,6 +219,40 @@ function WorkspaceView({
   const markedUnread = useCallback(() => onMarkedUnread(run.id), [onMarkedUnread, run.id])
 
   /**
+   * The fixed Overview card: the task's title, state, facts and actions as a page of its own,
+   * which is what lets the strip above every other layout stay one line.
+   *
+   * Not a saved layout — it has no columns, cannot be closed or renamed, and is never the default
+   * — so it lives here rather than in the layouts the host stores. It is a way of looking, reset
+   * per task for the same reason the drawer below is: one route element serves every task.
+   */
+  const [overview, setOverview] = useState(false)
+  const overviewFor = useRef(run.id)
+  if (overviewFor.current !== run.id) {
+    overviewFor.current = run.id
+    setOverview(false)
+  }
+  const showOverview = useCallback(() => setOverview(true), [])
+  // Picking, creating or deep-linking into a layout leaves the Overview.
+  const pickLayout = useCallback(
+    (name: string) => {
+      setOverview(false)
+      selectLayout(name)
+    },
+    [selectLayout],
+  )
+  const createLayout = useCallback(
+    (view: ViewId) => {
+      setOverview(false)
+      addLayout(view)
+    },
+    [addLayout],
+  )
+  useEffect(() => {
+    if (deepLinkView) setOverview(false)
+  }, [deepLinkView, run.id])
+
+  /**
    * Whether the drawer is showing, and how tall (spec §6).
    *
    * Read during render on a CHANGED task id for the same reason the layouts are: run A → run B
@@ -253,13 +287,15 @@ function WorkspaceView({
       <LayoutCards
         layouts={layouts.state.layouts}
         active={layouts.state.active}
-        onSelect={selectLayout}
+        overviewActive={overview}
+        onSelectOverview={showOverview}
+        onSelect={pickLayout}
         onRename={renameLayout}
         onClose={closeLayout}
-        onCreate={addLayout}
+        onCreate={createLayout}
       />
     ),
-    [layouts.state.layouts, layouts.state.active, selectLayout, renameLayout, closeLayout, addLayout],
+    [layouts.state.layouts, layouts.state.active, overview, showOverview, pickLayout, renameLayout, closeLayout, createLayout],
   )
 
   // The drawer's toggle, handed to the header's tab row. Memoized for the same reason `tabs` is.
@@ -380,7 +416,14 @@ function WorkspaceView({
 
   return (
     <div data-route="task-workspace" data-run-id={run.id} className="flex h-full min-h-0 flex-col">
-      <RunHeader run={run} onMarkedUnread={markedUnread} tabs={tabs} trailing={terminalToggle} />
+      <RunHeader
+        run={run}
+        onMarkedUnread={markedUnread}
+        tabs={tabs}
+        trailing={terminalToggle}
+        mode="strip"
+        bareStrip={overview}
+      />
       {layouts.saveFailed ? (
         // Spec §2: a capability that cannot work degrades to a CLEAR state. The workspace still
         // works from memory for the rest of the visit — what is lost is only the remembering —
@@ -394,7 +437,12 @@ function WorkspaceView({
           come back after a refresh.
         </div>
       ) : null}
-      {!layouts.ready ? (
+      {overview ? (
+        // Its own scroller, carrying the slot every routed scroller carries.
+        <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          <RunHeader run={run} onMarkedUnread={markedUnread} mode="overview" />
+        </div>
+      ) : !layouts.ready ? (
         // The host still owes us this task's layouts (spec §5.3). Painting the default card first
         // and swapping it a tick later would flash a workspace the user never built, so the view
         // area holds the same skeleton a cold load of this URL already shows.

@@ -89,7 +89,9 @@ import { isHttpUrl } from '@/lib/utils'
 import { Markdown } from './markdown'
 import { useContinuationProvider } from './continuation-provider'
 import { cliTargetResumes, cliTargetRunner, finishTitle, resumeHint, runActionFlags } from './run-actions'
-import { WorkflowSteps } from './step-rail'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
+import { StepRail, WorkflowSteps, activeStepIndex } from './step-rail'
 import { useFinishRun } from './use-finish-run'
 import { useDraft } from './thread-draft'
 
@@ -131,6 +133,17 @@ interface RunHeaderProps {
   tabs?: ReactNode
   /** Extra controls at the right end of the tab row — the workspace's terminal toggle. */
   trailing?: ReactNode
+  /**
+   * Which part of the header to draw.
+   *  - `full` (default): the strip, then the title, facts and actions under it.
+   *  - `strip`: only the layout strip, with the run's actions folded into its right end — what the
+   *    workspace shows above every layout.
+   *  - `overview`: no strip at all; the title, actions, facts and steps laid out as a page — the
+   *    body of the workspace's fixed Overview layout.
+   */
+  mode?: 'full' | 'strip' | 'overview'
+  /** In `strip` mode, leave the run's actions out — the Overview below already shows them. */
+  bareStrip?: boolean
 }
 
 // Every prop must participate: adding one without a comparator is a compile error.
@@ -142,6 +155,8 @@ const headerPropComparators = {
   // The workspace memoizes the element it passes, so identity is a real comparison here.
   tabs: (before, after) => before.tabs === after.tabs,
   trailing: (before, after) => before.trailing === after.trailing,
+  mode: (before, after) => before.mode === after.mode,
+  bareStrip: (before, after) => before.bareStrip === after.bareStrip,
   planTally: (before, after) => before.planTally?.done === after.planTally?.done &&
     before.planTally?.total === after.planTally?.total,
 } satisfies Record<keyof RunHeaderProps, (before: RunHeaderProps, after: RunHeaderProps) => boolean>
@@ -159,6 +174,8 @@ function RunHeaderView({
   continuationEngine,
   tabs,
   trailing,
+  mode = 'full',
+  bareStrip = false,
 }: RunHeaderProps) {
   const attention = deriveAttention(run)
   const budget = budgetStop(run)
@@ -189,54 +206,9 @@ function RunHeaderView({
         ? 'stop'
         : null
 
-  return (
-    <header
-      data-slot="run-header"
-      className="relative z-20 shrink-0 border-b border-border bg-background px-4 pt-1.5 pb-3 sm:px-6 md:sticky md:top-0"
-    >
-      {/* The layout strip leads the header: it is what you switch between, and everything below
-          it — the title, the facts, the actions — is about the task whichever layout is up. It
-          bleeds to the header's edges so its rule reads as the strip's own. */}
-      <div
-        data-slot="run-tabs"
-        className="-mx-4 flex items-end gap-2 border-b border-border px-4 sm:-mx-6 sm:px-6"
-      >
-        <div className="flex min-w-0 flex-1 items-end gap-1 overflow-x-auto">
-          {/* `tabs` is the workspace's saved-layout strip, which REPLACES this row (spec
-              `2026-10-07-task-workspace` §5.2: "do not show both strips"). The fallback is what
-              every other consumer of this header still gets — including the Graph tab, which
-              belongs to the route strip rather than to the workspace's layout cards. */}
-          {tabs ?? (
-            <>
-              <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
-                Chat
-              </TabLink>
-              <TabLink to={`/tasks/${run.id}/changes`} active={tab === 'changes'}>
-                Changes
-              </TabLink>
-              <TabLink to={`/tasks/${run.id}/commits`} active={tab === 'commits'}>
-                Commits
-              </TabLink>
-              <TabLink to={`/tasks/${run.id}/files`} active={tab === 'files'}>
-                Files
-              </TabLink>
-              {/* The live workflow graph — every run with a definition: a step list opens as its graph. */}
-              {run.workflowDef ? (
-                <TabLink to={`/tasks/${run.id}/graph`} active={tab === 'graph'}>
-                  Graph
-                </TabLink>
-              ) : null}
-            </>
-          )}
-        </div>
-        <div className="flex shrink-0 items-center gap-1 pb-1">
-          <WorkflowSteps runId={run.id} steps={run.steps} className="hidden max-w-80 sm:flex" />
-          {trailing}
-        </div>
-      </div>
-      <div className="flex min-w-0 items-center gap-3 pt-3 md:pt-4">
-        <div className="flex min-w-0 flex-1 items-center gap-2.5">
-          <EditableTitle run={run} />
+  // The same pieces, arranged three ways (see `mode`).
+  const status = (
+    <>
           <Badge variant="outline" data-slot="run-status" className="gap-1.5 font-medium text-muted-foreground">
             <StatusDot tone={attention.tone} pulse={attention.pulse} />
             {attention.label}
@@ -247,9 +219,10 @@ function RunHeaderView({
               Spent {formatCost(budget.spent) || '$0.00'} of {formatCost(budget.ceiling) || '$0.00'}
             </span>
           ) : null}
-        </div>
-
-        <div className="flex shrink-0 items-center gap-1.5">
+    </>
+  )
+  const actionButtons = (
+    <>
           <div data-slot="run-actions" className="hidden items-center gap-1.5 md:flex">
             <OpenInMenuForRun run={run} canResume={flags.terminal} onResume={() => actions.terminal.mutate()} />
             {flags.finish && primary !== 'finish' ? (
@@ -288,9 +261,10 @@ function RunHeaderView({
             stopInMenu={primary !== 'stop'}
             onOpenNotes={() => setNotesOpen(true)}
           />
-        </div>
-      </div>
-
+    </>
+  )
+  const facts = (
+    <>
       <MetaRow
         run={run}
         hint={hint}
@@ -310,6 +284,132 @@ function RunHeaderView({
       <DispatchParentLine run={run} />
       <DispatchChildrenLine run={run} />
 
+    </>
+  )
+  const overlays = (
+    <>
+      <NotesSheet runId={run.id} open={notesOpen} onOpenChange={setNotesOpen} />
+      <ConfirmDialog run={run} actions={actions} />
+    </>
+  )
+
+  if (mode === 'overview') {
+    return (
+      <div data-slot="run-overview" className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
+        <div className="flex flex-col gap-3">
+          <div className="flex min-w-0 flex-wrap items-center gap-2.5">
+            <EditableTitle run={run} />
+            {status}
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">{actionButtons}</div>
+        </div>
+
+        <Card className="gap-4 py-5">
+          <CardHeader className="px-5">
+            <CardTitle className="text-[15px]">At a glance</CardTitle>
+            <CardDescription>What this task runs on and what it has produced so far.</CardDescription>
+          </CardHeader>
+          <CardContent className="px-5 [&_[data-slot=run-meta]]:mt-0">{facts}</CardContent>
+        </Card>
+
+        <Card className="gap-4 py-5">
+          <CardHeader className="px-5">
+            <CardTitle className="text-[15px]">Run details</CardTitle>
+            <CardDescription>The agent, the model, what it spent, and where its work lives.</CardDescription>
+          </CardHeader>
+          <CardContent className="px-5">
+            <RunDetails
+              inline
+              run={run}
+              hint={hint}
+              showTokens={metricVisibility.tokens}
+              showCost={metricVisibility.cost}
+              continuationEngine={continuationEngine}
+            />
+          </CardContent>
+        </Card>
+
+        {run.steps.length > 0 ? (
+          <Card className="gap-4 py-5">
+            <CardHeader className="px-5">
+              <CardTitle className="text-[15px]">Workflow</CardTitle>
+              <CardDescription>
+                Step {Math.min(activeStepIndex(run.steps) + 1, run.steps.length)} of {run.steps.length}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="px-5">
+              <StepRail steps={run.steps} />
+            </CardContent>
+          </Card>
+        ) : null}
+        {overlays}
+      </div>
+    )
+  }
+
+  return (
+    <header
+      data-slot="run-header"
+      data-mode={mode}
+      className={cn(
+        'relative z-20 shrink-0 border-b border-border bg-background px-4 pt-1.5 sm:px-6 md:sticky md:top-0',
+        mode === 'full' && 'pb-3',
+      )}
+    >
+      {/* The layout strip leads the header: it is what you switch between, and everything below
+          it — the title, the facts, the actions — is about the task whichever layout is up. It
+          bleeds to the header's edges so its rule reads as the strip's own. */}
+      <div
+        data-slot="run-tabs"
+        className={cn('-mx-4 flex items-end gap-2 px-4 sm:-mx-6 sm:px-6', mode === 'full' && 'border-b border-border')}
+      >
+        <div className="flex min-w-0 flex-1 items-end gap-1 overflow-x-auto">
+          {/* `tabs` is the workspace's saved-layout strip, which REPLACES this row (spec
+              `2026-10-07-task-workspace` §5.2: "do not show both strips"). The fallback is what
+              every other consumer of this header still gets — including the Graph tab, which
+              belongs to the route strip rather than to the workspace's layout cards. */}
+          {tabs ?? (
+            <>
+              <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
+                Chat
+              </TabLink>
+              <TabLink to={`/tasks/${run.id}/changes`} active={tab === 'changes'}>
+                Changes
+              </TabLink>
+              <TabLink to={`/tasks/${run.id}/commits`} active={tab === 'commits'}>
+                Commits
+              </TabLink>
+              <TabLink to={`/tasks/${run.id}/files`} active={tab === 'files'}>
+                Files
+              </TabLink>
+              {/* The live workflow graph — every run with a definition: a step list opens as its graph. */}
+              {run.workflowDef ? (
+                <TabLink to={`/tasks/${run.id}/graph`} active={tab === 'graph'}>
+                  Graph
+                </TabLink>
+              ) : null}
+            </>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-1 pb-1">
+          <WorkflowSteps runId={run.id} steps={run.steps} className="hidden max-w-80 sm:flex" />
+          {trailing}
+          {/* In the strip there is no title row to carry them, so the run's actions sit here. */}
+          {mode === 'strip' && !bareStrip ? actionButtons : null}
+        </div>
+      </div>
+      {mode === 'full' ? (
+        <>
+          <div className="flex min-w-0 items-center gap-3 pt-3 md:pt-4">
+            <div className="flex min-w-0 flex-1 items-center gap-2.5">
+              <EditableTitle run={run} />
+              {status}
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">{actionButtons}</div>
+          </div>
+          {facts}
+        </>
+      ) : null}
       {run.steps.length > 0 ? (
         // Phone width: the stepper gets its own row instead of squeezing the tabs.
         <div className="-mx-2 border-t border-border py-1 sm:hidden">
@@ -317,8 +417,7 @@ function RunHeaderView({
         </div>
       ) : null}
 
-      <NotesSheet runId={run.id} open={notesOpen} onOpenChange={setNotesOpen} />
-      <ConfirmDialog run={run} actions={actions} />
+      {overlays}
     </header>
   )
 }
@@ -942,12 +1041,15 @@ function RunDetails({
   showTokens,
   showCost,
   continuationEngine,
+  inline = false,
 }: {
   run: ApiRun
   hint?: string
   showTokens: boolean
   showCost: boolean
   continuationEngine?: ReactNode
+  /** Draw the list in place instead of behind the popover (the Overview layout). */
+  inline?: boolean
 }) {
   // The record keeps only what the caller ASKED for: `POST /api/runs` persists the raw optional
   // `runner` (`src/runs/store.ts`), while the run actually executes as
@@ -983,6 +1085,68 @@ function RunDetails({
   const identity = run.modelIdentity && run.modelIdentity !== model ? run.modelIdentity : undefined
   const summary = [runner, account, model].filter(Boolean).join(' · ')
   const hasTokens = showTokens && (run.inputTokens !== undefined || run.outputTokens !== undefined)
+  const list = (
+    <>
+    <dl className="grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-4 gap-y-2 text-[13px]">
+      <DetailRow label="Workflow">{workflowLabel(run)}</DetailRow>
+      <DetailRow label="Runner">{runner}</DetailRow>
+      {/* Omitted, not guessed, when no step recorded one: a run from before accounts existed
+          cannot be said to have used the discovered account — nothing wrote that down. */}
+      {account ? (
+        <DetailRow label="Account" slot="agent-badge-account">
+          {account}
+        </DetailRow>
+      ) : null}
+      <DetailRow label="Model">{model}</DetailRow>
+      {identity ? (
+        <DetailRow label="Identity" slot="agent-badge-identity" mono>
+          {identity}
+        </DetailRow>
+      ) : null}
+      {hasTokens ? (
+        <DetailRow label="Tokens">
+          <DirectionalUsage inputTokens={run.inputTokens} outputTokens={run.outputTokens} />
+        </DetailRow>
+      ) : null}
+      {showCost && run.costUsd ? (
+        <DetailRow label="Cost">
+          <span className="tabular-nums">{formatCost(run.costUsd)}</span>
+        </DetailRow>
+      ) : null}
+      {run.branch ? (
+        <DetailRow label="Branch" mono>
+          {run.branch}
+        </DetailRow>
+      ) : null}
+      {run.worktreePath ? (
+        <DetailRow label="Worktree" mono>
+          <CopyValue
+            value={run.worktreePath}
+            label="Copy worktree path"
+            done="Worktree path copied"
+          />
+        </DetailRow>
+      ) : null}
+      {hint ? (
+        <DetailRow label="Take over" mono>
+          <CopyValue
+            slot="resume-hint"
+            value={hint}
+            label="Copy the take-over command"
+            done="Command copied to clipboard."
+          />
+        </DetailRow>
+      ) : null}
+    </dl>
+    {continuationEngine ? (
+      <div className="mt-3 border-t border-border pt-3">
+        <p className="mb-1.5 text-xs text-muted-foreground">Next continuation</p>
+        <div data-slot="agent-badge-engine-picker">{continuationEngine}</div>
+      </div>
+    ) : null}
+    </>
+  )
+  if (inline) return <div data-slot="run-details">{list}</div>
   return (
     <Popover>
       <PopoverTrigger
@@ -1000,63 +1164,7 @@ function RunDetails({
       </PopoverTrigger>
       <PopoverContent align="start" data-slot="run-details" className="w-[min(24rem,calc(100vw-2rem))] p-4">
         <p className="mb-3 text-[13px] font-semibold text-foreground">Run details</p>
-        <dl className="grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-4 gap-y-2 text-[13px]">
-          <DetailRow label="Workflow">{workflowLabel(run)}</DetailRow>
-          <DetailRow label="Runner">{runner}</DetailRow>
-          {/* Omitted, not guessed, when no step recorded one: a run from before accounts existed
-              cannot be said to have used the discovered account — nothing wrote that down. */}
-          {account ? (
-            <DetailRow label="Account" slot="agent-badge-account">
-              {account}
-            </DetailRow>
-          ) : null}
-          <DetailRow label="Model">{model}</DetailRow>
-          {identity ? (
-            <DetailRow label="Identity" slot="agent-badge-identity" mono>
-              {identity}
-            </DetailRow>
-          ) : null}
-          {hasTokens ? (
-            <DetailRow label="Tokens">
-              <DirectionalUsage inputTokens={run.inputTokens} outputTokens={run.outputTokens} />
-            </DetailRow>
-          ) : null}
-          {showCost && run.costUsd ? (
-            <DetailRow label="Cost">
-              <span className="tabular-nums">{formatCost(run.costUsd)}</span>
-            </DetailRow>
-          ) : null}
-          {run.branch ? (
-            <DetailRow label="Branch" mono>
-              {run.branch}
-            </DetailRow>
-          ) : null}
-          {run.worktreePath ? (
-            <DetailRow label="Worktree" mono>
-              <CopyValue
-                value={run.worktreePath}
-                label="Copy worktree path"
-                done="Worktree path copied"
-              />
-            </DetailRow>
-          ) : null}
-          {hint ? (
-            <DetailRow label="Take over" mono>
-              <CopyValue
-                slot="resume-hint"
-                value={hint}
-                label="Copy the take-over command"
-                done="Command copied to clipboard."
-              />
-            </DetailRow>
-          ) : null}
-        </dl>
-        {continuationEngine ? (
-          <div className="mt-3 border-t border-border pt-3">
-            <p className="mb-1.5 text-xs text-muted-foreground">Next continuation</p>
-            <div data-slot="agent-badge-engine-picker">{continuationEngine}</div>
-          </div>
-        ) : null}
+        {list}
       </PopoverContent>
     </Popover>
   )

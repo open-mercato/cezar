@@ -1,4 +1,4 @@
-import { ChevronDownIcon, Columns3Icon, PencilIcon, PlusIcon, XIcon } from 'lucide-react'
+import { ChevronDownIcon, Columns3Icon, InfoIcon, PencilIcon, PlusIcon, XIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
@@ -32,9 +32,15 @@ export function LayoutCards({
   onRename,
   onClose,
   onCreate,
+  overviewActive = false,
+  onSelectOverview,
 }: {
   layouts: readonly WorkspaceLayout[]
   active: string
+  /** The fixed Overview card is showing; no saved layout wears the active mark while it is. */
+  overviewActive?: boolean
+  /** Present when the host offers the fixed Overview card. */
+  onSelectOverview?: () => void
   onSelect: (name: string) => void
   onRename: (name: string, requested: string) => void
   onClose: (name: string) => void
@@ -44,11 +50,31 @@ export function LayoutCards({
 
   return (
     <div data-slot="layout-cards" className="flex items-end gap-0.5">
+      {/* The one card that is not a saved layout: it cannot be closed, renamed or reordered,
+          and it is always first. It is the task itself — title, state, facts, actions. */}
+      {onSelectOverview ? (
+        <Button
+          type="button"
+          variant="ghost"
+          data-slot="layout-card"
+          data-layout="overview"
+          data-active={overviewActive ? 'true' : undefined}
+          aria-pressed={overviewActive}
+          onClick={onSelectOverview}
+          className={cn(
+            '-mb-px h-9 gap-1.5 rounded-none border-b-2 border-transparent px-2.5 text-[13px] font-medium text-muted-foreground hover:bg-transparent hover:text-foreground active:translate-y-0',
+            overviewActive && 'border-foreground text-foreground',
+          )}
+        >
+          <InfoIcon aria-hidden="true" className="size-3.5 shrink-0" />
+          Overview
+        </Button>
+      ) : null}
       {visible.map((layout) => (
         <LayoutCard
           key={layout.name}
           layout={layout}
-          active={layout.name === active}
+          active={!overviewActive && layout.name === active}
           onSelect={() => onSelect(layout.name)}
           onRename={(requested) => onRename(layout.name, requested)}
           onClose={() => onClose(layout.name)}
