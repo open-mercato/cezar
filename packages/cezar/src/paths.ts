@@ -20,6 +20,16 @@ export function cezarHomeDir(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /**
+ * The global cache dir — `~/.cache/cez` by default, where the team-skills bare
+ * clones and the persisted fetch/check timestamps live. A pinned `CEZ_HOME`
+ * (tests, containers) relocates it too, so a suite that pins only `CEZ_HOME`
+ * never writes the developer's real `~/.cache/cez`.
+ */
+export function cezarCacheDir(env: NodeJS.ProcessEnv = process.env): string {
+  return join((env.CEZ_HOME || undefined) ?? homedir(), '.cache', 'cez');
+}
+
+/**
  * The last line of defence for the developer's own `~/.cezar` while the suite
  * runs. Every workspace test pins `CEZ_HOME` to a temp dir, but the pin lives
  * in `process.env` — a single global for the whole worker. A test that ends

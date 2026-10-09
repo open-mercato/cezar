@@ -7,7 +7,7 @@ import { z } from 'zod';
 // file must not `.catch` away are the same constants the PATCH route validates against, so they
 // are imported rather than repeated.
 import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH } from '@open-mercato/cezar-contract';
-import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
+import { PROVIDER_IDS, type ProviderId } from '../core/provider-ids.ts';
 import { assertCezarHomeWriteIsSandboxed, workspaceConfigPath } from '../paths.ts';
 
 /**

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   DEFAULT_SERVER_INSTANCE,
   agentHomePaths,
+  cezarCacheDir,
   cezarHomeDir,
   claudeStateFilePath,
   instanceSlug,
@@ -31,6 +32,17 @@ describe('paths', () => {
     expect(cezarHomeDir()).toBe('/tmp/cez-home-test');
     expect(serverStatePath()).toBe('/tmp/cez-home-test/server.json');
     expect(serverLockPath()).toBe('/tmp/cez-home-test/server.install.lock');
+  });
+
+  it('keys the global cache dir off CEZ_HOME so tests stay out of the real ~/.cache', () => {
+    process.env.CEZ_HOME = '/tmp/cez-home-test';
+    expect(cezarCacheDir()).toBe('/tmp/cez-home-test/.cache/cez');
+    // The default (no pin) is the documented shared cache.
+    delete process.env.CEZ_HOME;
+    expect(cezarCacheDir()).toBe(join(homedir(), '.cache', 'cez'));
+    // Under the suite, the setup's sandbox pin means the cache is inside it.
+    process.env.CEZ_HOME = '/tmp/cez-home-test';
+    expect(cezarCacheDir().startsWith('/tmp/cez-home-test')).toBe(true);
   });
 
   it('the default instance keeps the legacy un-suffixed paths', () => {

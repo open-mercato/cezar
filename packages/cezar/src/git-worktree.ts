@@ -23,6 +23,8 @@ interface GitResult {
   ok: boolean;
   stdout: string;
   stderr: string;
+  /** Process exit code when the caller could read one (not an ENOENT). */
+  code?: number;
 }
 
 interface RegisteredWorktree {
@@ -41,7 +43,14 @@ function git(
       'git',
       args,
       { cwd, maxBuffer: 32 * 1024 * 1024, encoding: 'utf8', ...opts },
-      (err, stdout, stderr) => resolve({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' }),
+      (err, stdout, stderr) => resolve({
+        ok: !err,
+        stdout: stdout ?? '',
+        stderr: stderr ?? '',
+        ...(typeof (err as { code?: unknown } | null)?.code === 'number'
+          ? { code: (err as { code: number }).code }
+          : {}),
+      }),
     );
   });
 }
@@ -118,8 +127,12 @@ export async function resolveBaseRef(
   const [hasLocal, hasRemote] = await Promise.all([verify(base), verify(`origin/${base}`)]);
   if (hasLocal && hasRemote) {
     // `--is-ancestor origin/<base> <base>` succeeds iff local is equal-or-ahead.
+    // A clean exit 1 is the only evidence origin is strictly ahead; any other
+    // failure proves nothing about ancestry, so keep the local ref rather than
+    // silently forking from origin.
     const localCurrent = await git(repoRoot, ['merge-base', '--is-ancestor', `origin/${base}`, base]);
     if (localCurrent.ok) return base;
+    if (localCurrent.code !== 1) return base;
     if (!opts.keepDiverged) return `origin/${base}`;
     // `--is-ancestor <base> origin/<base>` succeeds iff local is strictly behind here.
     const localBehind = await git(repoRoot, ['merge-base', '--is-ancestor', base, `origin/${base}`]);
@@ -304,6 +317,39 @@ export function worktreeSizeBytes(path: string): Promise<number | null> {
       resolve(Number.isFinite(kib) ? kib * 1024 : null);
     });
   });
+}
+
+// `/worktrees` keeps a finalized run's `du -sk` answer instead of re-running it
+// on every request. A run still in flight recomputes (the tree is growing) and
+// drops any entry left by a previous finish, so a Continue cannot serve the old
+// number. A finalized worktree can still grow afterwards — `open-in`, a manual
+// `npm install`, the run's own finalize-time push — so the entry expires too.
+const WORKTREE_SIZE_TTL_MS = 60_000;
+const WORKTREE_SIZE_MAX = 50;
+const worktreeSizeCache = new Map<string, { at: number; size: number | null }>();
+
+/** The `du -sk` size of a run's worktree, memoized once the run has finalized. */
+export async function worktreeSizeForRun(
+  runId: string,
+  path: string,
+  finalized: boolean,
+): Promise<number | null> {
+  if (finalized) {
+    const hit = worktreeSizeCache.get(runId);
+    if (hit && Date.now() - hit.at < WORKTREE_SIZE_TTL_MS) return hit.size;
+    const size = await worktreeSizeBytes(path);
+    worktreeSizeCache.delete(runId);
+    worktreeSizeCache.set(runId, { at: Date.now(), size });
+    while (worktreeSizeCache.size > WORKTREE_SIZE_MAX) worktreeSizeCache.delete(worktreeSizeCache.keys().next().value!);
+    return size;
+  }
+  worktreeSizeCache.delete(runId);
+  return worktreeSizeBytes(path);
+}
+
+/** Test hook: drop every memoized worktree size. */
+export function clearWorktreeSizeCache(): void {
+  worktreeSizeCache.clear();
 }
 
 /** Remove a task worktree and its branch. Best effort — never throws. */
@@ -592,6 +638,40 @@ export async function worktreeDiffStat(
   return res.ok ? res.stdout.trim() : '';
 }
 
+// The compare view renders the per-file table, so this memoizes the TEXT, not a
+// number: a finalized run's table is stable and repeated renders are free, while
+// an in-flight run re-reads (the tree is changing) and drops any entry left by a
+// previous finish. Like the size memo it expires, because post-run edits
+// (Continue, `open-in`) change the table under a finalized run.
+const WORKTREE_DIFF_STAT_TTL_MS = 60_000;
+const WORKTREE_DIFF_STAT_MAX = 50;
+const worktreeDiffStatCache = new Map<string, { at: number; text: string }>();
+
+/** The `git diff --stat` text of a run's worktree, memoized once the run finalized. */
+export async function worktreeDiffStatForRun(
+  runId: string,
+  path: string,
+  baseBranch: string,
+  finalized: boolean,
+): Promise<string> {
+  if (finalized) {
+    const hit = worktreeDiffStatCache.get(runId);
+    if (hit && Date.now() - hit.at < WORKTREE_DIFF_STAT_TTL_MS) return hit.text;
+    const text = await worktreeDiffStat(path, baseBranch);
+    worktreeDiffStatCache.delete(runId);
+    worktreeDiffStatCache.set(runId, { at: Date.now(), text });
+    while (worktreeDiffStatCache.size > WORKTREE_DIFF_STAT_MAX) worktreeDiffStatCache.delete(worktreeDiffStatCache.keys().next().value!);
+    return text;
+  }
+  worktreeDiffStatCache.delete(runId);
+  return worktreeDiffStat(path, baseBranch);
+}
+
+/** Test hook: drop every memoized worktree diff stat. */
+export function clearWorktreeDiffStatCache(): void {
+  worktreeDiffStatCache.clear();
+}
+
 /** Aggregate diff numbers (#389) — the shape stored on `RunRecord.diffStat`. */
 export interface DiffStat {
   adds: number;
@@ -701,7 +781,7 @@ export async function worktreeShortstat(
   const { base, repointedHead } = await resolveTaskDiffBase(
     (args) => git(worktreePath, args),
     baseBranch,
-    opts,
+    { ...opts, cacheKey: worktreePath },
   );
   const res = await git(worktreePath, ['diff', '--shortstat', base]);
   if (!res.ok) return null;

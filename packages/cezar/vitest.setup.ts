@@ -35,6 +35,17 @@ beforeEach(pinSandboxHome)
 // Registered before any suite's own hooks, so vitest runs it last on the way out —
 // after a case's `afterEach` has deleted the pin.
 afterEach(pinSandboxHome)
-afterAll(() => {
-  rmSync(sandboxHome, { recursive: true, force: true })
+afterAll(async () => {
+  // A background team-skills load can still hold a `git clone`/`fetch` writing
+  // under the cache dir; letting it run into the removal turns rmSync into
+  // ENOTEMPTY. Stop the children, let the loads unwind, then remove.
+  // Imported here, not at the top: a setup file is evaluated before a test file's
+  // `vi.mock` calls, so a static import that transitively reaches a runner binds the
+  // real `node:child_process` and silently defeats that test's spawn mock.
+  const { abortTeamSkillsBackgroundWork, resetTeamSkillsBackgroundWorkAbort, settleTeamSkillsBackgroundWork } =
+    await import('./src/skills-remote.ts')
+  abortTeamSkillsBackgroundWork()
+  await settleTeamSkillsBackgroundWork()
+  resetTeamSkillsBackgroundWorkAbort()
+  rmSync(sandboxHome, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 })
 })

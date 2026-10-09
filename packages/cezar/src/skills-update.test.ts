@@ -194,6 +194,20 @@ describe('SkillsUpdateService', () => {
     release(); await active;
   });
 
+  it('persists scope check times across service instances within the window', async () => {
+    const lock = { skills: { om: { source: 'open-mercato/skills' } } };
+    const { home, repo } = await fixture(lock, lock);
+    const firstRun = vi.fn(async () => ({ stdout: '', stderr: '' }));
+    await new SkillsUpdateService({ homeDir: home, run: firstRun, resolveNpx: async () => 'npx' }).check(repo);
+    expect(firstRun).toHaveBeenCalled();
+
+    // A fresh boot inside the six-hour window must not re-run `skills check`.
+    const secondRun = vi.fn(async () => ({ stdout: '', stderr: '' }));
+    const state = await new SkillsUpdateService({ homeDir: home, run: secondRun, resolveNpx: async () => 'npx' }).check(repo);
+    expect(secondRun).not.toHaveBeenCalled();
+    expect(state.status).toBe('current');
+  });
+
   it('rejects guarded mutation when another service owns the live cache lock', async () => {
     const { home, repo } = await fixture({ skills: { alpha: { source: 'open-mercato/skills' } } });
     let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });

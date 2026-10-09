@@ -36,12 +36,45 @@ async function git(
   return stdout;
 }
 
-/** Null when repository metadata cannot be read. By default a failed remote read
+/** How long a default `getRepoInfo` answer is reused. Matches the project
+ *  probe's TTL: long enough to coalesce a burst of sidebar/route renders, short
+ *  enough that a checkout is visible almost immediately. */
+const REPO_INFO_TTL_MS = 5_000;
+const repoInfoCache = new Map<string, { at: number; info: RepoInfo | null }>();
+
+/** Drop the memo after branch creation or switching so the next read is fresh. */
+export function clearRepoInfoCache(): void {
+  repoInfoCache.clear();
+}
+
+/**
+ * Null when repository metadata cannot be read. By default a failed remote read
  * still returns root/branch; identity-sensitive callers can require a successful
- * remote read (including successful discovery of an empty remote list). */
+ * remote read (including successful discovery of an empty remote list).
+ *
+ * Default calls are memoized per directory for a few seconds (the health tick
+ * and ~10 repo routes ask the same question 3-4 `git` spawns deep). Calls that
+ * pass an option are left uncached, so identity-sensitive readers always see
+ * their own answer. Run start passes `fresh` explicitly: a worktree must fork
+ * off the branch the repo is on *now*, not one a sidebar read cached seconds ago.
+ */
 export async function getRepoInfo(
   dir: string,
-  options: { requireRemoteRead?: boolean; allowUnborn?: boolean } = {},
+  options: { requireRemoteRead?: boolean; allowUnborn?: boolean; fresh?: boolean } = {},
+): Promise<RepoInfo | null> {
+  const cacheable = !options.fresh && !options.requireRemoteRead && !options.allowUnborn;
+  if (cacheable) {
+    const hit = repoInfoCache.get(dir);
+    if (hit && Date.now() - hit.at < REPO_INFO_TTL_MS) return hit.info;
+  }
+  const info = await readRepoInfo(dir, options);
+  if (cacheable) repoInfoCache.set(dir, { at: Date.now(), info });
+  return info;
+}
+
+async function readRepoInfo(
+  dir: string,
+  options: { requireRemoteRead?: boolean; allowUnborn?: boolean },
 ): Promise<RepoInfo | null> {
   try {
     const root = (await git(dir, ['rev-parse', '--show-toplevel'])).trim();
@@ -147,23 +180,21 @@ export async function getDiff(root: string, cap = 400_000): Promise<string> {
 export async function getBranches(root: string): Promise<string[]> {
   const names = new Set<string>();
   try {
-    const local = await git(root, ['branch', '--list', '--format=%(refname:short)']);
-    for (const line of local.split('\n')) {
-      const name = line.trim();
-      if (name) names.add(name);
+    // One `for-each-ref` covers both halves; full refnames tell local
+    // `refs/heads/` and remote `refs/remotes/` entries apart.
+    const out = await git(root, ['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes']);
+    for (const line of out.split('\n')) {
+      const ref = line.trim();
+      if (ref.startsWith('refs/heads/')) {
+        names.add(ref.slice('refs/heads/'.length));
+      } else if (ref.startsWith('refs/remotes/')) {
+        const name = ref.slice('refs/remotes/'.length);
+        if (!name || name.includes('HEAD')) continue;
+        names.add(name.replace(/^origin\//, ''));
+      }
     }
   } catch {
     // no branches — empty list
-  }
-  try {
-    const remote = await git(root, ['branch', '-r', '--list', '--format=%(refname:short)']);
-    for (const line of remote.split('\n')) {
-      const name = line.trim();
-      if (!name || name.includes('HEAD')) continue;
-      names.add(name.replace(/^origin\//, ''));
-    }
-  } catch {
-    // no remotes — local only
   }
   return [...names].filter((n) => !n.startsWith('cez/')).sort((a, b) => a.localeCompare(b));
 }

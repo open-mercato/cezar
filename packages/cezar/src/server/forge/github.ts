@@ -53,6 +53,10 @@ const ghPrHeadSchema = z.object({ headRefOid: z.string().regex(/^[0-9a-f]{40}$/i
 export class GithubPrNotFoundError extends Error {}
 
 const prDiffCache = new Map<string, { at: number; data: ForgePrDiffResult }>();
+// The head SHA is the PR-diff cache key. Caching it separately lets a hit answer
+// with no `gh` spawn at all; the TTL is short so a push is visible quickly.
+const PR_HEAD_TTL_MS = 10_000;
+const prHeadCache = new Map<string, { at: number; sha: string }>();
 
 export type PrFilesPageRunner = (page: number) => Promise<string>;
 
@@ -74,9 +78,18 @@ export async function fetchGithubPrDiff(
 ): Promise<ForgePrDiffResult> {
   if (process.env.CEZ_DRY_RUN === '1') return mockGithubPrDiff(number);
   try {
-    const head = ghPrHeadSchema.parse(
-      JSON.parse(await gh(repoRoot, ['pr', 'view', String(number), '--json', 'headRefOid'])),
-    ).headRefOid;
+    const headKey = `${repoRoot}\0${number}`;
+    const cachedHead = prHeadCache.get(headKey);
+    let head: string;
+    if (!refresh && cachedHead && Date.now() - cachedHead.at < PR_HEAD_TTL_MS) {
+      head = cachedHead.sha;
+    } else {
+      head = ghPrHeadSchema.parse(
+        JSON.parse(await gh(repoRoot, ['pr', 'view', String(number), '--json', 'headRefOid'])),
+      ).headRefOid;
+      prHeadCache.set(headKey, { at: Date.now(), sha: head });
+      while (prHeadCache.size > 50) prHeadCache.delete(prHeadCache.keys().next().value!);
+    }
     const key = `${repoRoot}\0${number}\0${head}`;
     const hit = prDiffCache.get(key);
     if (!refresh && hit && Date.now() - hit.at < CACHE_MS) return hit.data;
@@ -381,6 +394,8 @@ export function parseOwnerName(nameWithOwner: string): { owner: string; name: st
    issues/PRs must never be served under another project's scope. Bounded like
    `commentsCache` so an unbounded workspace can't grow it without limit. */
 const listCache = new Map<string, { at: number; limit: number; data: GithubData }>();
+/** Cold reads already in flight, keyed by root — the `detectInflight` pattern. */
+const listInflight = new Map<string, { limit: number; promise: Promise<GithubData> }>();
 const LIST_CACHE_MAX = 50;
 const CACHE_MS = 60_000;
 export const GH_MAX_LIMIT = 1000;
@@ -392,6 +407,31 @@ export async function fetchGithub(repoRoot: string, refresh = false, limit = 30)
   if (!refresh && hit && Date.now() - hit.at < CACHE_MS && hit.limit >= capped) {
     return hit.data;
   }
+  // Two concurrent tab loads must share one set of `gh` spawns rather than both
+  // miss and race. A join is only valid when the in-flight fetch covers the
+  // rows this caller asked for.
+  if (!refresh) {
+    const inflight = listInflight.get(repoRoot);
+    if (inflight && inflight.limit >= capped) return inflight.promise;
+  }
+  const task = listFetch(repoRoot, capped).then((data) => {
+    if (data.available && listInflight.get(repoRoot)?.promise === task) {
+      listCache.delete(repoRoot);
+      listCache.set(repoRoot, { at: Date.now(), limit: capped, data });
+      while (listCache.size > LIST_CACHE_MAX) {
+        listCache.delete(listCache.keys().next().value!);
+      }
+    }
+    return data;
+  });
+  listInflight.set(repoRoot, { limit: capped, promise: task });
+  void task.finally(() => {
+    if (listInflight.get(repoRoot)?.promise === task) listInflight.delete(repoRoot);
+  });
+  return task;
+}
+
+async function listFetch(repoRoot: string, capped: number): Promise<GithubData> {
   try {
     // No `comments` field — `gh … --json comments` ships full comment bodies.
     // No `statusCheckRollup` either (#664): the CI rollup for every open PR was the
@@ -474,13 +514,6 @@ export async function fetchGithub(repoRoot: string, refresh = false, limit = 30)
       prs,
       labelColors,
     };
-    listCache.delete(repoRoot); // re-insert so this key becomes the newest
-    listCache.set(repoRoot, { at: Date.now(), limit: capped, data });
-    while (listCache.size > LIST_CACHE_MAX) {
-      const oldest = listCache.keys().next().value;
-      if (oldest === undefined) break;
-      listCache.delete(oldest);
-    }
     return data;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -2990,6 +3023,7 @@ export async function fetchPrMergeState(
 
 export function evictGithubProjectCaches(repoRoot: string): void {
   listCache.delete(repoRoot);
+  listInflight.delete(repoRoot);
   mergeStateCache.forEach((_value, key) => {
     if (key.startsWith(`${repoRoot}:`)) mergeStateCache.delete(key);
   });

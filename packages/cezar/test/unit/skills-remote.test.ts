@@ -1,9 +1,39 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+
+/** A PATH shim that logs every `git` invocation, then execs the real binary. */
+function installGitShim(): { calls: string[]; restore: () => void } {
+  const dir = mkdtempSync(join(tmpdir(), 'cez-git-shim-'));
+  const log = join(dir, 'calls.log');
+  const realGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+  writeFileSync(
+    join(dir, 'git'),
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(log)}\nexec ${JSON.stringify(realGit)} "$@"\n`,
+  );
+  chmodSync(join(dir, 'git'), 0o755);
+  const previous = process.env.PATH;
+  process.env.PATH = `${dir}:${previous ?? ''}`;
+  const read = () => {
+    try {
+      return readFileSync(log, 'utf8').split('\n').filter(Boolean);
+    } catch {
+      return [];
+    }
+  };
+  return {
+    get calls() {
+      return read();
+    },
+    restore: () => {
+      process.env.PATH = previous;
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
 import {
   ensureBareClone,
   getTeamSkillsCached,
@@ -106,10 +136,14 @@ test('listRemoteSkills clones a local repo, pins the SHA, and refuses a bad ref'
   const home = mkdtempSync(join(tmpdir(), 'cez-home-'));
   const srcDir = mkdtempSync(join(tmpdir(), 'cez-src-'));
   const prevHome = process.env.HOME;
+  const prevCezHome = process.env.CEZ_HOME;
   process.env.HOME = home; // redirect the ~/.cache/cez skills cache into temp
+  process.env.CEZ_HOME = home; // the cache resolves under CEZ_HOME when pinned
   t.after(() => {
     if (prevHome === undefined) delete process.env.HOME;
     else process.env.HOME = prevHome;
+    if (prevCezHome === undefined) delete process.env.CEZ_HOME;
+    else process.env.CEZ_HOME = prevCezHome;
     rmSync(home, { recursive: true, force: true });
     rmSync(srcDir, { recursive: true, force: true });
   });
@@ -156,11 +190,15 @@ test('listRemoteSkills clones a local repo, pins the SHA, and refuses a bad ref'
 test('team-skills cache is keyed by repoRoot — projects never see each other\'s skills', async (t) => {
   const home = mkdtempSync(join(tmpdir(), 'cez-home-'));
   const prevHome = process.env.HOME;
+  const prevCezHome = process.env.CEZ_HOME;
   process.env.HOME = home; // redirect the ~/.cache/cez skills cache into temp
+  process.env.CEZ_HOME = home; // the cache resolves under CEZ_HOME when pinned
   const dirs: string[] = [home];
   t.after(() => {
     if (prevHome === undefined) delete process.env.HOME;
     else process.env.HOME = prevHome;
+    if (prevCezHome === undefined) delete process.env.CEZ_HOME;
+    else process.env.CEZ_HOME = prevCezHome;
     for (const d of dirs) rmSync(d, { recursive: true, force: true });
   });
 
@@ -203,4 +241,49 @@ test('team-skills cache is keyed by repoRoot — projects never see each other\'
   // A's scope was served B's skills. Each root must keep its own entry.
   assert.deepEqual(getTeamSkillsCached(rootA).map((s) => s.name), ['alpha-skill']);
   assert.deepEqual(getTeamSkillsCached(rootB).map((s) => s.name), ['beta-skill']);
+});
+
+// ---- batched tree read: bounded spawns regardless of skill count ---------------
+
+test('listRemoteSkills reads every body in a bounded number of git spawns', async (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'cez-home-'));
+  const srcDir = mkdtempSync(join(tmpdir(), 'cez-src-'));
+  const prevHome = process.env.HOME;
+  const prevCezHome = process.env.CEZ_HOME;
+  process.env.HOME = home;
+  process.env.CEZ_HOME = home; // the cache resolves under CEZ_HOME when pinned
+  t.after(() => {
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    if (prevCezHome === undefined) delete process.env.CEZ_HOME;
+    else process.env.CEZ_HOME = prevCezHome;
+    rmSync(home, { recursive: true, force: true });
+    rmSync(srcDir, { recursive: true, force: true });
+  });
+
+  const g = (args: string[]) => execFileSync('git', args, { cwd: srcDir, encoding: 'utf8' });
+  g(['-c', 'init.defaultBranch=main', 'init']);
+  g(['config', 'user.email', 'test@example.com']);
+  g(['config', 'user.name', 'Test']);
+  const names = Array.from({ length: 8 }, (_, i) => `skill-${i}`);
+  for (const name of names) {
+    mkdirSync(join(srcDir, name), { recursive: true });
+    writeFileSync(join(srcDir, name, 'SKILL.md'), `---\ndescription: ${name}\n---\n${name} body\n`);
+  }
+  g(['add', '-A']);
+  g(['commit', '-m', 'init']);
+  await ensureBareClone(srcDir);
+
+  const shim = installGitShim();
+  try {
+    const before = shim.calls.length;
+    const skills = await listRemoteSkills({ repo: srcDir, ref: 'main' });
+    const spawns = shim.calls.length - before;
+    assert.deepEqual(skills.map((s) => s.name).sort(), names.sort());
+    // rev-parse the ref, one ls-tree, one batched cat-file --batch — independent
+    // of the eight skills. The old per-skill `git show` loop spawned 10.
+    assert.ok(spawns <= 3, `expected <=3 git spawns, got ${spawns}`);
+  } finally {
+    shim.restore();
+  }
 });
