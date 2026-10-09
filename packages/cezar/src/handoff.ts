@@ -46,11 +46,45 @@ export function seedHandoffFile(dataDir: string, run: HandoffSeed): string {
   return file;
 }
 
+/** `- <ISO ts> — <note>`: the one Progress-log line shape, written by cez's heartbeat and by an
+ *  agent's `cez handoff log`. A multi-line note is folded onto one line so it cannot break the
+ *  section structure. */
+export function progressLine(note: string, now: Date = new Date()): string {
+  return `- ${now.toISOString()} — ${note.trim().replace(/\s*\n\s*/g, ' ')}\n`;
+}
+
 /**
- * Cez's own heartbeat (the janitor pattern): insert `- <ISO ts> — <note>`
- * right under the `## Progress log` header (newest at the top), so the file
- * stays current even when the agent forgets to write. Missing header →
- * append at the end of the file; missing file → no-op.
+ * Insert `line` right under the `## Progress log` header (newest at the top). An empty log keeps
+ * one blank line before the next section's header. Missing header → append at the end.
+ */
+export function insertProgressLine(text: string, line: string): string {
+  const marker = '## Progress log\n';
+  const idx = text.indexOf(marker);
+  if (idx < 0) return `${text}${text.endsWith('\n') || text === '' ? '' : '\n'}${line}`;
+  const rest = text.slice(idx + marker.length).replace(/^\n+/, '');
+  return `${text.slice(0, idx + marker.length)}\n${line}${rest.startsWith('## ') ? '\n' : ''}${rest}`;
+}
+
+/**
+ * Replace the body of `## Resume notes` (up to the next `## ` header, or the end of the file) with
+ * `notes`; empty notes clear it. Missing header → the section is appended.
+ */
+export function replaceResumeNotes(text: string, notes: string): string {
+  const body = notes.trim();
+  const section = `## Resume notes\n${body ? `\n${body}\n` : ''}`;
+  const header = /^## Resume notes[ \t]*$/m.exec(text);
+  if (!header) {
+    const sep = text === '' ? '' : text.endsWith('\n\n') ? '' : text.endsWith('\n') ? '\n' : '\n\n';
+    return `${text}${sep}${section}`;
+  }
+  const after = text.slice(header.index + header[0].length);
+  const next = /\n## /.exec(after);
+  return `${text.slice(0, header.index)}${section}${next ? `\n${after.slice(next.index + 1)}` : ''}`;
+}
+
+/**
+ * Cez's own heartbeat (the janitor pattern): insert a progress line under `## Progress log`, so
+ * the file stays current even when the agent forgets to write. Missing file → no-op.
  */
 export function appendHandoffHeartbeat(dataDir: string, runId: string, note: string): void {
   const file = handoffPath(dataDir, runId);
@@ -60,15 +94,8 @@ export function appendHandoffHeartbeat(dataDir: string, runId: string, note: str
   } catch {
     return; // not seeded — nothing to heartbeat
   }
-  const line = `- ${new Date().toISOString()} — ${note}\n`;
-  const marker = '## Progress log\n';
-  const idx = text.indexOf(marker);
-  const next =
-    idx >= 0
-      ? `${text.slice(0, idx + marker.length)}\n${line}${text.slice(idx + marker.length).replace(/^\n+/, '')}`
-      : `${text}${text.endsWith('\n') || text === '' ? '' : '\n'}${line}`;
   try {
-    writeFileSync(file, next, 'utf8');
+    writeFileSync(file, insertProgressLine(text, progressLine(note)), 'utf8');
   } catch {
     // best effort
   }
@@ -142,6 +169,7 @@ CEZ_HANDOFF_FILE (env) is the absolute path to this task's rolling handoff file.
 1. At the start of work, read it — "Resume notes" left by a previous session is your starting context.
 2. After every meaningful milestone (passing tests, a commit, a PR, a scope decision), append one terse timestamped line under "## Progress log", newest at the top.
 3. Before finishing or pausing, update "## Resume notes" with what's done, what's next and any blockers. Leave it empty only when the task is truly complete.
+Use the commands, never a hand-written script: node "$CEZ_BIN" handoff log "<terse line>" inserts the timestamped line under "## Progress log"; node "$CEZ_BIN" handoff resume "<notes>" (or the notes on stdin, for several lines) replaces "## Resume notes", and handoff resume "" clears it. Only if CEZ_BIN is unset, edit the file directly.
 
 Task completion marker: when the task's goal is fully achieved and you have no question for the user, end your final message with a line containing exactly CEZ:DONE — cez then closes the session and marks the task finished. If you are waiting on the user (a question, a decision, missing input), just end your message normally; the session stays open for their reply. Never emit CEZ:DONE while anything is unfinished or unverified.
 
