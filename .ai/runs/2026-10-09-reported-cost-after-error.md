@@ -23,7 +23,7 @@ PR: #1346
 ### Phase 1: Preserve accounting
 
 - [x] 1.1 Add regression tests and retain costs after errors in both execution paths. — d10d121
-- [ ] 1.2 Run validation and authoritative review.
+- [x] 1.2 Run validation and authoritative review. — ca96cca (local assessment; maintainer GitHub approval required)
 
 ## Validation evidence
 
