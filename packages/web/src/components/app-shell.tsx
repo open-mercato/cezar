@@ -820,13 +820,12 @@ function FooterMenu({
               data-slot="footer-menu"
               tooltip={{ children: version ? `${brandName} v${version}` : brandName, hidden: false }}
               aria-label={`${brandName} menu`}
-              // No tile behind it: the mark itself is the button, at the size the tile used to be.
-              className="relative size-9 justify-center overflow-visible rounded-md p-0 text-foreground [&>svg]:size-auto"
+              className="relative size-9 justify-center overflow-visible rounded-md bg-contrast p-0 shadow-xs text-contrast-foreground hover:bg-contrast/85 hover:text-contrast-foreground data-[state=open]:bg-contrast/85 data-[state=open]:hover:bg-contrast/85 data-[state=open]:hover:text-contrast-foreground"
             >
               {brandLogoUrl ? (
-                <img src={brandLogoUrl} alt="" className="size-9 object-contain" />
+                <img src={brandLogoUrl} alt="" className="size-5 object-contain" />
               ) : (
-                <BrandMark height={34} />
+                <BrandMark height={16} />
               )}
               {updateAvailable ? (
                 <StatusDot tone="pending" pulse className="absolute -top-0.5 -right-0.5 size-2 ring-2 ring-sidebar" />
