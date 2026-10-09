@@ -23,7 +23,10 @@ const PLANNER_SYSTEM_PROMPT =
   'Rules: pick skills ONLY from the provided catalog; a step has either "prompt" (an agent step) or ' +
   '"command" (a shell verification check); include the {{task}} placeholder in agent prompts where ' +
   "the user's task text belongs; 1-5 steps; prefer fewer; \"title\" is a short kebab-case name for " +
-  'the whole workflow (2-4 words, e.g. "fix-and-review"). Names listed without a description are still valid choices.';
+  'the whole workflow (2-4 words, e.g. "fix-and-review").';
+
+const PLANNER_REDUCED_SYSTEM_PROMPT =
+  `${PLANNER_SYSTEM_PROMPT} Names listed without a description are still valid choices.`;
 
 export const PLANNER_CATALOG_DEFAULTS = {
   maxFull: 15,
@@ -66,6 +69,7 @@ export async function planChain(repoRoot: string, task: string): Promise<PlanRes
   ]);
   const skillNames = new Set(skills.map((s) => s.name));
   const userPrompt = buildPlannerPrompt(task, skills, verifyCommands);
+  const systemPrompt = buildPlannerSystemPrompt(skills);
 
   // Plan with the configured default runner. `plannerModel` ("sonnet") is a
   // Claude alias, so only pass it when the planner runs on Claude — Codex /
@@ -81,7 +85,7 @@ export async function planChain(repoRoot: string, task: string): Promise<PlanRes
     let text: string;
     try {
       const result = await runner.run({
-        systemPrompt: PLANNER_SYSTEM_PROMPT,
+        systemPrompt,
         userPrompt,
         cwd: repoRoot,
         allowedTools: [],
@@ -128,6 +132,13 @@ export function buildPlannerPrompt(task: string, skills: Skill[], verifyCommands
   ].join('\n');
 }
 
+/** Keep the original system prompt for small catalogs; explain the name-only tail only when used. */
+export function buildPlannerSystemPrompt(skills: Skill[]): string {
+  return buildFullSkillCatalog(skills).length > PLANNER_CATALOG_DEFAULTS.budgetChars
+    ? PLANNER_REDUCED_SYSTEM_PROMPT
+    : PLANNER_SYSTEM_PROMPT;
+}
+
 export interface SkillCatalogOptions {
   maxFull?: number;
   maxDescriptionChars?: number;
@@ -144,9 +155,7 @@ export function buildSkillCatalog(
     ...PLANNER_CATALOG_DEFAULTS,
     ...options,
   };
-  const original = skills.length
-    ? skills.map((s) => `- ${s.name} — ${s.description ?? ''}`).join('\n')
-    : '(no skills available)';
+  const original = buildFullSkillCatalog(skills);
   if (original.length <= budgetChars) return original;
 
   const explicit = new Set(
@@ -168,6 +177,12 @@ export function buildSkillCatalog(
     .filter((skill) => !describedNames.has(skill.name))
     .map((skill) => `- ${skill.name}`);
   return [...describedLines, ...nameOnlyLines].join('\n');
+}
+
+function buildFullSkillCatalog(skills: Skill[]): string {
+  return skills.length
+    ? skills.map((s) => `- ${s.name} — ${s.description ?? ''}`).join('\n')
+    : '(no skills available)';
 }
 
 function mentionsSkill(task: string, name: string): boolean {

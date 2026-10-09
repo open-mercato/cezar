@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   buildPlannerPrompt,
+  buildPlannerSystemPrompt,
   buildSkillCatalog,
   PLANNER_CATALOG_DEFAULTS,
 } from './planner.ts';
@@ -54,6 +55,7 @@ describe('planner skill catalog', () => {
 
     expect(buildSkillCatalog('fix alpha', skills)).toBe(expectedCatalog);
     expect(buildPlannerPrompt('fix alpha', skills, [])).toBe(expectedPrompt);
+    expect(buildPlannerSystemPrompt(skills)).not.toContain('Names listed without a description');
   });
 
   test('reduces catalogs above the 6,000-character threshold', () => {
@@ -63,6 +65,7 @@ describe('planner skill catalog', () => {
 
     const skills = [skill('large', 'z'.repeat(6_100))];
     expect(buildSkillCatalog('unrelated task', skills)).toBe('- large — ' + 'z'.repeat(160));
+    expect(buildPlannerSystemPrompt(skills)).toContain('Names listed without a description');
     expect(PLANNER_CATALOG_DEFAULTS).toEqual({ maxFull: 15, maxDescriptionChars: 160, budgetChars: 6000 });
   });
 
