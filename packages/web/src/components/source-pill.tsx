@@ -61,7 +61,17 @@ export function SourcePill({
   skillUsage,
   workflows,
   onPick,
+  only,
 }: {
+  /**
+   * Show ONE kind. A task runs a workflow or a skill, never both, but they are different things
+   * to choose — how the work is staged versus what playbook the agent follows — and one list of
+   * both made the workflows hard to find among the skills. With `only`, the pill is that kind's
+   * own picker: `workflow` always shows a value (the plain `quick-task` when nothing else is
+   * picked) and lists every workflow, that one included; `skill` lists skills alone. Picking in
+   * one still replaces a pick in the other, and each pill says so.
+   */
+  only?: 'workflow' | 'skill'
   source: TaskSource | null
   ready: boolean
   skills: readonly Skill[]
@@ -78,12 +88,26 @@ export function SourcePill({
   const matched = searchSkills(skills, search, skillUsage)
   const { mostUsed, project, global } = partitionSkillsForDisplay(matched, skillUsage)
   const quickTask = workflows.find((workflow) => workflow.name === QUICK_TASK)
-  const matchedWorkflows = searchWorkflows(workflows, search).filter((workflow) => workflow.name !== QUICK_TASK)
+  const workflowsOnly = only === 'workflow'
+  const skillsOnly = only === 'skill'
+  // Its own picker lists the built-in too: there it is a choice like any other, and the default.
+  const matchedWorkflows = skillsOnly
+    ? []
+    : searchWorkflows(workflows, search)
+        .filter((workflow) => workflowsOnly || workflow.name !== QUICK_TASK)
+        // The default leads its own list while nothing is being searched for.
+        .sort((a, b) => (search.trim() ? 0 : Number(b.name === QUICK_TASK) - Number(a.name === QUICK_TASK)))
+  if (workflowsOnly) {
+    mostUsed.length = 0
+    project.length = 0
+    global.length = 0
+  }
   // The empty row answers to what people type when they mean "none of these" — including the
   // built-in's own name, which is no longer a row of its own. Same match signal as every other
   // row, so one query ranks the whole list.
   const noneMatches =
-    queryScore('no skill', `none plain ${QUICK_TASK} ${quickTask?.description ?? ''}`, search) > 0
+    !workflowsOnly
+    && queryScore('no skill', `none plain ${QUICK_TASK} ${quickTask?.description ?? ''}`, search) > 0
   const nothingMatches =
     !noneMatches
     && mostUsed.length === 0
@@ -142,7 +166,20 @@ export function SourcePill({
     )
   }
 
-  const SourceIcon = source === null ? PlusIcon : source.source === 'skill' ? SparklesIcon : WorkflowIcon
+  // What THIS pill holds: the whole source, or only its own kind of it.
+  const held = only === undefined || source?.source === only ? source : null
+  const SourceIcon = workflowsOnly
+    ? WorkflowIcon
+    : held === null
+      ? PlusIcon
+      : held.source === 'skill'
+        ? SparklesIcon
+        : WorkflowIcon
+  // The workflow pill is never empty — with nothing picked the task runs `quick-task` — except
+  // under a skill, which runs on its own and leaves no workflow to name.
+  const overridden = workflowsOnly && source?.source === 'skill'
+  const label = workflowsOnly ? (held?.ref ?? (overridden ? 'Workflow' : QUICK_TASK)) : (held?.ref ?? 'Add skill')
+  const empty = workflowsOnly ? overridden : held === null
   // An empty picker looks empty: dashed, quiet, an invitation rather than a value. Every other
   // pill in this row shows a resolved choice, so a filled-looking pill that nobody chose was
   // read as one that could not be changed.
@@ -152,17 +189,28 @@ export function SourcePill({
       type="button"
       data-slot="source-pill"
       data-source-kind={source?.source ?? 'none'}
-      aria-label="Choose a skill or workflow"
+      data-only={only}
+      aria-label={workflowsOnly ? 'Choose a workflow' : skillsOnly ? 'Choose a skill' : 'Choose a skill or workflow'}
       title={
-        source === null
-          ? 'No skill — the task runs as one plain agent step. Pick a skill or workflow to change that.'
-          : `Runs the ${source.source} "${source.ref}" — pick it again, or press ✕, to run without it`
+        workflowsOnly
+          ? overridden
+            ? `The skill "${source.ref}" runs on its own. Pick a workflow to run that instead.`
+            : held === null
+              ? 'Runs quick-task — one plain agent step. Pick a workflow to stage the work differently.'
+              : `Runs the workflow "${held.ref}" — press ✕ to go back to quick-task`
+          : held === null
+            ? skillsOnly
+              ? source?.source === 'workflow'
+                ? `No skill. Picking one replaces the workflow "${source.ref}".`
+                : 'No skill — pick one to hand the agent its playbook.'
+              : 'No skill — the task runs as one plain agent step. Pick a skill or workflow to change that.'
+            : `Runs the ${held.source} "${held.ref}" — pick it again, or press ✕, to run without it`
       }
       disabled={!ready}
       onKeyDown={(event) => {
         // A filled pill clears like a token in a tag field. Modifiers stay out of it: ⌘⌫ is a
         // text gesture in the composer this row belongs to, not a picker one.
-        if (source === null || event.metaKey || event.ctrlKey || event.altKey) return
+        if (held === null || event.metaKey || event.ctrlKey || event.altKey) return
         if (event.key !== 'Backspace' && event.key !== 'Delete') return
         event.preventDefault()
         onPick(null)
@@ -170,16 +218,15 @@ export function SourcePill({
       className={cn(
         bareButton,
         chipClass,
-        source === null
-          ? 'border-dashed'
-          : 'rounded-r-none border-r-0 pr-1.5 text-foreground',
+        empty ? 'border-dashed' : 'text-foreground',
+        held !== null && 'rounded-r-none border-r-0 pr-1.5',
       )}
     >
       <SourceIcon
         aria-hidden="true"
-        className={cn('size-3.5 shrink-0', source === null ? 'text-soft-foreground' : 'text-primary-strong')}
+        className={cn('size-3.5 shrink-0', held === null ? 'text-soft-foreground' : 'text-primary-strong')}
       />
-      <span className="max-w-44 truncate">{!ready ? '…' : (source?.ref ?? 'Add skill')}</span>
+      <span className="max-w-44 truncate">{!ready ? '…' : label}</span>
       {chevron}
     </Button>
   )
@@ -198,13 +245,13 @@ export function SourcePill({
             the clear, and the seam between them is the ✕'s left border. */}
         <span className="inline-flex min-w-0 items-center">
           <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-          {source !== null && ready ? (
+          {held !== null && ready ? (
             <Button
               variant="ghost"
               type="button"
               data-slot="source-pill-clear"
-              aria-label={`Clear the ${source.source} ${source.ref}`}
-              title="Run without it"
+              aria-label={`Clear the ${held.source} ${held.ref}`}
+              title={workflowsOnly ? 'Back to quick-task' : 'Run without it'}
               onClick={() => onPick(null)}
               className={cn(
                 bareButton,
@@ -223,7 +270,7 @@ export function SourcePill({
         >
           <Command shouldFilter={false}>
             <CommandInput
-              placeholder="search skills & workflows…"
+              placeholder={workflowsOnly ? 'search workflows…' : skillsOnly ? 'search skills…' : 'search skills & workflows…'}
               value={search}
               onValueChange={setSearch}
               onInput={() => listRef.current?.scrollTo(0, 0)}
@@ -245,14 +292,16 @@ export function SourcePill({
                     keywords={['none', 'plain', ...skillKeywords(QUICK_TASK)]}
                     data-slot="source-option"
                     data-source-kind="none"
-                    onSelect={() => pick(null)}
+                    // Beside a workflow there is already no skill: the row closes the list and
+                    // leaves the workflow alone.
+                    onSelect={() => (skillsOnly && source?.source === 'workflow' ? setOpen(false) : pick(null))}
                   >
                     <CircleSlashIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />
                     <span className="shrink-0 text-xs font-medium">No skill</span>
                     <span className="min-w-0 flex-1 truncate text-xs text-soft-foreground">
                       {quickTask?.description ?? 'One agent run on your task — no ceremony.'}
                     </span>
-                    {source === null ? (
+                    {source === null || (skillsOnly && source.source === 'workflow') ? (
                       <CheckIcon aria-hidden="true" className="ml-auto size-3.5 shrink-0 text-primary-strong" />
                     ) : null}
                   </CommandItem>
@@ -273,7 +322,10 @@ export function SourcePill({
               {matchedWorkflows.length > 0 ? (
                 <CommandGroup heading="Workflows">
                   {matchedWorkflows.map((workflow) => {
-                    const selected = source?.source === 'workflow' && source.ref === workflow.name
+                    const plain = workflow.name === QUICK_TASK
+                    const selected = plain
+                      ? source === null
+                      : source?.source === 'workflow' && source.ref === workflow.name
                     return (
                       <CommandItem
                         key={workflow.name}
@@ -282,9 +334,11 @@ export function SourcePill({
                         data-slot="source-option"
                         data-source-kind="workflow"
                         data-source-ref={workflow.name}
-                        onSelect={() => toggle({ source: 'workflow', ref: workflow.name })}
+                        // The plain built-in IS the empty source; any other toggles as before.
+                        onSelect={() => (plain ? pick(null) : toggle({ source: 'workflow', ref: workflow.name }))}
                       >
                         <span className="shrink-0 font-mono text-xs">{workflow.name}</span>
+                        {plain ? <span className="shrink-0 text-[11px] text-soft-foreground">default</span> : null}
                         {workflow.description ? (
                           <span className="min-w-0 flex-1 truncate text-xs text-soft-foreground">
                             {workflow.description}

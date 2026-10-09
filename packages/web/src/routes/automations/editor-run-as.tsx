@@ -33,7 +33,18 @@ export function EditorRunAs({
 }) {
   return (
     <div data-slot="editor-run-as" className="flex flex-wrap items-center gap-2">
+      {/* Workflow and skill are picked apart, as on New task. */}
       <SourcePill
+        only="workflow"
+        source={source}
+        ready={sourcesReady}
+        skills={skills}
+        skillUsage={skillUsage}
+        workflows={workflows}
+        onPick={onSource}
+      />
+      <SourcePill
+        only="skill"
         source={source}
         ready={sourcesReady}
         skills={skills}
