@@ -59,7 +59,7 @@ export function GlobalSettingsDialog() {
           event.preventDefault()
           ;(event.currentTarget as HTMLElement).focus()
         }}
-        className="flex h-dvh w-screen max-w-none flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:max-w-none md:h-[min(640px,calc(100dvh-4rem))] md:w-[calc(100vw-4rem)] md:max-w-[920px] md:rounded-xl md:border"
+        className="flex h-dvh w-screen max-w-none flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:max-w-none md:h-[min(640px,calc(100dvh-4rem))] md:w-[calc(100vw-4rem)] md:max-w-[1080px] md:rounded-xl md:border"
       >
         <DialogTitle className="sr-only">Global settings</DialogTitle>
         <DialogDescription className="sr-only">
