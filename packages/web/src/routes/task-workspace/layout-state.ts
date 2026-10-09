@@ -590,11 +590,17 @@ export function moveColumn(
  * `Zmiany 2`, `Zmiany 3`… on every reload. Any other layout the user has built around that view
  * is left alone, because the spec is explicit that existing layouts remain unchanged.
  */
+/**
+ * Whether a saved layout is the plain card of one view: a single column of it, still under the
+ * view's own name. Those are what the workspace's FIXED cards stand in for — one per view, always
+ * on the strip, not closable or renamable — so they are never drawn as cards of their own.
+ */
+export function fixedViewOf(layout: WorkspaceLayout): ViewId | null {
+  const view = layout.columns.length === 1 ? layout.columns[0]?.view : undefined
+  return view !== undefined && layout.name === viewLabel(view) ? view : null
+}
+
 export function openDeepLink(state: WorkspaceState, view: ViewId): WorkspaceState {
-  const current = activeLayout(state)
-  if (current && current.columns.length === 1 && current.columns[0]?.view === view) {
-    return state
-  }
   // The card a new task is born with for this view — still one column of it, still under the
   // view's own name — is the card the link means: select it rather than minting `Changes 2`
   // beside an untouched `Changes`. Renamed or split, it is the user's own layout and is left alone.
@@ -602,6 +608,10 @@ export function openDeepLink(state: WorkspaceState, view: ViewId): WorkspaceStat
     (layout) => layout.name === viewLabel(view) && layout.columns.length === 1 && layout.columns[0]?.view === view,
   )
   if (born) return selectLayout(state, born.name)
+  const current = activeLayout(state)
+  if (current && current.columns.length === 1 && current.columns[0]?.view === view) {
+    return state
+  }
   // No adopting some OTHER saved layout that happens to show this view: spec §5.3 says the deep
   // link CREATES a new one-column layout and leaves existing layouts unchanged. The guard above
   // is what keeps a refresh idempotent — on reload the card this link made is already the active

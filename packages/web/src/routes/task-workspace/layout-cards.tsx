@@ -1,4 +1,4 @@
-import { ChevronDownIcon, Columns3Icon, MessageSquareTextIcon, PencilIcon, PlusIcon, XIcon } from 'lucide-react'
+import { ChevronDownIcon, Columns3Icon, PencilIcon, PlusIcon, XIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
@@ -11,7 +11,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 
-import { layoutDisplayName, splitCards, type ViewId, type WorkspaceLayout } from './layout-state'
+import { layoutDisplayName, splitCards, viewLabel, type ViewId, type WorkspaceLayout } from './layout-state'
 import { VIEW_ICONS, ViewPickerMenu } from './view-picker'
 
 /**
@@ -32,15 +32,17 @@ export function LayoutCards({
   onRename,
   onClose,
   onCreate,
-  overviewActive = false,
-  onSelectOverview,
+  fixedViews = [],
+  fixedActive = null,
+  onSelectFixed,
 }: {
   layouts: readonly WorkspaceLayout[]
   active: string
-  /** The fixed Chat card is showing; no saved layout wears the active mark while it is. */
-  overviewActive?: boolean
-  /** Present when the host offers the fixed Chat card. */
-  onSelectOverview?: () => void
+  /** The views that get a fixed card, in strip order. */
+  fixedViews?: readonly ViewId[]
+  /** The fixed card that is showing; no saved layout wears the active mark while one is. */
+  fixedActive?: ViewId | null
+  onSelectFixed?: (view: ViewId) => void
   onSelect: (name: string) => void
   onRename: (name: string, requested: string) => void
   onClose: (name: string) => void
@@ -50,31 +52,36 @@ export function LayoutCards({
 
   return (
     <div data-slot="layout-cards" className="flex items-end gap-0.5">
-      {/* The one card that is not a saved layout: it cannot be closed, renamed or reordered,
-          and it is always first. It is the task's home — its bar, then the conversation. */}
-      {onSelectOverview ? (
-        <Button
-          type="button"
-          variant="ghost"
-          data-slot="layout-card"
-          data-layout="overview"
-          data-active={overviewActive ? 'true' : undefined}
-          aria-pressed={overviewActive}
-          onClick={onSelectOverview}
-          className={cn(
-            '-mb-px h-9 gap-1.5 rounded-none border-b-2 border-transparent px-2.5 text-[13px] font-medium text-muted-foreground hover:bg-transparent hover:text-foreground active:translate-y-0',
-            overviewActive && 'border-foreground text-foreground',
-          )}
-        >
-          <MessageSquareTextIcon aria-hidden="true" className="size-3.5 shrink-0" />
-          Chat
-        </Button>
-      ) : null}
+      {/* The fixed cards: one per view, always first and in the same order. They are not saved
+          layouts — no close, no rename, no reordering — just the task's standing surfaces. */}
+      {fixedViews.map((view) => {
+        const Icon = VIEW_ICONS[view]
+        const isActive = fixedActive === view
+        return (
+          <Button
+            key={view}
+            type="button"
+            variant="ghost"
+            data-slot="layout-card"
+            data-fixed={view}
+            data-active={isActive ? 'true' : undefined}
+            aria-pressed={isActive}
+            onClick={() => onSelectFixed?.(view)}
+            className={cn(
+              '-mb-px h-9 gap-1.5 rounded-none border-b-2 border-transparent px-2.5 text-[13px] font-medium text-muted-foreground hover:bg-transparent hover:text-foreground active:translate-y-0',
+              isActive && 'border-foreground text-foreground',
+            )}
+          >
+            <Icon aria-hidden="true" className="size-3.5 shrink-0" />
+            {viewLabel(view)}
+          </Button>
+        )
+      })}
       {visible.map((layout) => (
         <LayoutCard
           key={layout.name}
           layout={layout}
-          active={!overviewActive && layout.name === active}
+          active={fixedActive === null && layout.name === active}
           onSelect={() => onSelect(layout.name)}
           onRename={(requested) => onRename(layout.name, requested)}
           onClose={() => onClose(layout.name)}

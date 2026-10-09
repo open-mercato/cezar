@@ -38,7 +38,7 @@ import { ViewPickerMenu } from './view-picker'
 import { WorkspaceColumns, type ColumnActions } from './workspace-columns'
 import { useWorkspaceLayouts } from './use-workspace-layouts'
 import { readDrawerState, writeDrawerState, type DrawerState } from './drawer-state'
-import { emptyBrowserState, type ViewId, type WorkspaceColumn } from './layout-state'
+import { emptyBrowserState, fixedViewOf, type ViewId, type WorkspaceColumn } from './layout-state'
 
 /** Lazy because it carries the emulator (xterm, ~80 KB gz) and its stylesheet. A task whose
  *  drawer is never opened must not pay for either — the drawer starts hidden on every visit
@@ -122,10 +122,8 @@ export function TaskWorkspaceRoute({ view }: { view?: ViewId }) {
   return <WorkspaceView run={run.data} deepLinkView={view} onMarkedUnread={suppressAutoReadFor} />
 }
 
-/** A saved layout that is nothing but the conversation — what the fixed Chat card stands in for. */
-function isPlainChat(layout: { columns: readonly { view: ViewId }[] }): boolean {
-  return layout.columns.length === 1 && layout.columns[0]?.view === 'session'
-}
+/** The fixed cards, left to right. Chat is home; the graph is the task's shape, so it is next. */
+const FIXED_VIEW_ORDER: readonly ViewId[] = ['session', 'graph', 'changes', 'commits', 'files', 'browser']
 
 function DeepLinkLoading({ view }: { view?: ViewId }) {
   if (view === 'files') return <GitTabLoading tab="files" />
@@ -224,48 +222,31 @@ function WorkspaceView({
   const markedUnread = useCallback(() => onMarkedUnread(run.id), [onMarkedUnread, run.id])
 
   /**
-   * The fixed Chat card: the task's home — its bar (title, state, facts, actions) and the
-   * conversation under it. It is always the first card, cannot be closed or renamed, and is where
-   * a task opens. Every other layout shows the strip alone.
+   * The fixed cards: one per view — Chat, Graph (when the task has a workflow), Changes, Commits,
+   * Files, Browser — always on the strip, in that order, with no close and no rename. Chat
+   * is the task's home (its bar, then the conversation) and is where a task opens.
    *
-   * It stands in for the plain one-column Chat layout the host keeps by default, so that layout
-   * is not drawn a second time as a card of its own: while the active saved layout is such a
-   * plain chat (or there is none), the fixed card is what is showing. `pinned` is the other way
-   * in — the user clicking it while some other layout is the saved active one. Reset per task for
-   * the same reason the drawer below is: one route element serves every task.
+   * Each stands in for the plain saved layout of its view (`fixedViewOf`): picking one selects
+   * that layout, creating it the first time, so what a fixed card shows is remembered like any
+   * other layout — but the plain layout itself is never drawn as a second, closable card.
    */
-  const [pinned, setPinned] = useState(false)
-  const pinnedFor = useRef(run.id)
-  if (pinnedFor.current !== run.id) {
-    pinnedFor.current = run.id
-    setPinned(false)
-  }
-  const setOverview = setPinned
-  const activeIsPlainChat = layouts.layout === undefined || layouts.layout === null || isPlainChat(layouts.layout)
-  const overview = pinned || (layouts.ready && activeIsPlainChat)
+  const fixedViews = useMemo<readonly ViewId[]>(
+    () => FIXED_VIEW_ORDER.filter((view) => view !== 'graph' || Boolean(run.workflowDef)),
+    [run.workflowDef],
+  )
+  const fixedActive: ViewId | null = !layouts.ready
+    ? null
+    : layouts.layout
+      ? fixedViewOf(layouts.layout)
+      // Every layout closed: the task's home is what is left.
+      : 'session'
+  const overview = fixedActive === 'session'
   const cardLayouts = useMemo(
-    () => layouts.state.layouts.filter((layout) => !isPlainChat(layout)),
+    () => layouts.state.layouts.filter((layout) => fixedViewOf(layout) === null),
     [layouts.state.layouts],
   )
-  const showOverview = useCallback(() => setOverview(true), [])
-  // Picking, creating or deep-linking into a layout leaves the Overview.
-  const pickLayout = useCallback(
-    (name: string) => {
-      setOverview(false)
-      selectLayout(name)
-    },
-    [selectLayout],
-  )
-  const createLayout = useCallback(
-    (view: ViewId) => {
-      setOverview(false)
-      addLayout(view)
-    },
-    [addLayout],
-  )
-  useEffect(() => {
-    if (deepLinkView) setOverview(false)
-  }, [deepLinkView, run.id])
+  const pickLayout = selectLayout
+  const createLayout = addLayout
 
   /**
    * Whether the drawer is showing, and how tall (spec §6).
@@ -302,15 +283,16 @@ function WorkspaceView({
       <LayoutCards
         layouts={cardLayouts}
         active={layouts.state.active}
-        overviewActive={overview}
-        onSelectOverview={showOverview}
+        fixedViews={fixedViews}
+        fixedActive={fixedActive}
+        onSelectFixed={openDeepLink}
         onSelect={pickLayout}
         onRename={renameLayout}
         onClose={closeLayout}
         onCreate={createLayout}
       />
     ),
-    [cardLayouts, layouts.state.active, overview, showOverview, pickLayout, renameLayout, closeLayout, createLayout],
+    [cardLayouts, layouts.state.active, fixedViews, fixedActive, openDeepLink, pickLayout, renameLayout, closeLayout, createLayout],
   )
 
   // The drawer's toggle, handed to the header's tab row. Memoized for the same reason `tabs` is.
