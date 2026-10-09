@@ -823,9 +823,9 @@ function FooterMenu({
               className="relative size-9 justify-center overflow-visible rounded-md p-0 text-foreground data-[state=open]:bg-sidebar-accent [&>svg]:size-auto"
             >
               {brandLogoUrl ? (
-                <img src={brandLogoUrl} alt="" className="size-7 object-contain" />
+                <img src={brandLogoUrl} alt="" className="size-[25px] object-contain" />
               ) : (
-                <BrandMark height={28} />
+                <BrandMark height={25} />
               )}
               {updateAvailable ? (
                 <StatusDot tone="pending" pulse className="absolute -top-0.5 -right-0.5 size-2 ring-2 ring-sidebar" />
