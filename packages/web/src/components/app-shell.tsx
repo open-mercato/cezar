@@ -823,9 +823,9 @@ function FooterMenu({
               className="relative size-9 justify-center overflow-visible rounded-md bg-contrast p-0 shadow-xs text-contrast-foreground hover:bg-contrast/85 hover:text-contrast-foreground data-[state=open]:bg-contrast/85 data-[state=open]:hover:bg-contrast/85 data-[state=open]:hover:text-contrast-foreground"
             >
               {brandLogoUrl ? (
-                <img src={brandLogoUrl} alt="" className="size-5 object-contain" />
+                <img src={brandLogoUrl} alt="" className="size-[21px] object-contain" />
               ) : (
-                <BrandMark height={16} />
+                <BrandMark height={16.8} />
               )}
               {updateAvailable ? (
                 <StatusDot tone="pending" pulse className="absolute -top-0.5 -right-0.5 size-2 ring-2 ring-sidebar" />
