@@ -52,7 +52,7 @@ export interface WorkspaceLayouts {
   saveFailed: boolean
   /** The selected card, or `undefined` while the workspace is intentionally empty. */
   layout: WorkspaceLayout | undefined
-  addLayout: (view: ViewId) => void
+  addLayout: (view?: ViewId) => void
   closeLayout: (name: string) => void
   selectLayout: (name: string) => void
   renameLayout: (name: string, requested: string) => void
@@ -229,7 +229,7 @@ export function useWorkspaceLayouts(taskId: string): WorkspaceLayouts {
     ready,
     saveFailed,
     layout: activeLayoutOf(state),
-    addLayout: useCallback((view: ViewId) => setState((current) => addLayoutTo(current, view)), []),
+    addLayout: useCallback((view?: ViewId) => setState((current) => addLayoutTo(current, view)), []),
     closeLayout: useCallback((name: string) => setState((current) => closeLayoutOf(current, name)), []),
     selectLayout: useCallback((name: string) => setState((current) => selectLayoutOf(current, name)), []),
     renameLayout: useCallback(

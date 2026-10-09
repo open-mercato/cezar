@@ -8,6 +8,8 @@ import {
 } from 'lucide-react'
 import type { ComponentType, ReactNode } from 'react'
 
+import { Button } from '@/components/ui/button'
+
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -135,5 +137,60 @@ export function ViewPickerMenu({
         </div>
       </DropdownMenuContent>
     </DropdownMenu>
+  )
+}
+
+/** The tiles' order — the same as the fixed cards on the strip. */
+const TILE_ORDER: readonly ViewId[] = ['session', 'graph', 'changes', 'commits', 'files', 'browser']
+
+/** One line per view, for the tiles of an empty layout. */
+const VIEW_HINTS: Record<ViewId, string> = {
+  session: 'The conversation with the agent',
+  graph: 'The workflow, live, step by step',
+  changes: 'What this task changed, as a diff',
+  commits: 'The commits on the task branch',
+  files: 'The worktree, file by file',
+  browser: 'A browser beside the work',
+}
+
+/**
+ * The stage of an EMPTY layout: every view as a tile, and picking one makes it the layout's first
+ * window. This is how a layout is created — the strip's `+` opens an empty one — and what a layout
+ * returns to when its last window is closed.
+ */
+export function ViewTiles({ onPick }: { onPick: (view: ViewId) => void }) {
+  return (
+    <div data-slot="view-tiles-stage" className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-6">
+      <div className="flex w-full max-w-2xl flex-col gap-5">
+        <div className="flex flex-col gap-1 text-center">
+          <h2 className="text-base font-medium text-foreground">What should this layout show?</h2>
+          <p className="text-sm text-muted-foreground">Pick a view to start. You can add more beside it afterwards.</p>
+        </div>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          {TILE_ORDER.map((view) => {
+            const Icon = VIEW_ICONS[view]
+            return (
+              <Button
+                key={view}
+                type="button"
+                variant="outline"
+                data-view={view}
+                data-view-action="create"
+                onClick={() => onPick(view)}
+                className="group/tile h-auto flex-col items-start gap-3 rounded-xl p-4 text-left whitespace-normal"
+              >
+                <span className="flex size-9 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors group-hover/tile:bg-primary group-hover/tile:text-primary-foreground">
+                  <Icon aria-hidden="true" className="size-[18px]" />
+                </span>
+                <span className="flex flex-col gap-0.5">
+                  <span className="text-sm font-medium text-foreground">{viewLabel(view)}</span>
+                  <span className="text-xs font-normal text-muted-foreground">{VIEW_HINTS[view]}</span>
+                </span>
+              </Button>
+            )
+          })}
+        </div>
+      </div>
+    </div>
   )
 }

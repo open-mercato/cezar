@@ -1,4 +1,4 @@
-import { MoreVerticalIcon, PlusIcon, XIcon } from 'lucide-react'
+import { ArrowLeftIcon, ArrowRightIcon, GripVerticalIcon, MoreVerticalIcon, PlusIcon, XIcon } from 'lucide-react'
 import { useRef, useState, type ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
@@ -24,7 +24,7 @@ import {
   type WorkspaceColumn,
 } from './layout-state'
 import { FullViewExit, WorkspaceMaximizeContext } from './maximize'
-import { VIEW_ICONS, ViewItems, ViewPickerMenu } from './view-picker'
+import { VIEW_ICONS, ViewItems, ViewPickerMenu, ViewTiles } from './view-picker'
 
 /** Narrower than this and the layout shows one column at a time (spec §5.2, §11). Tailwind's
  *  `lg`, which is where a three-way split first has room to be readable. */
@@ -54,7 +54,12 @@ export function WorkspaceColumns({
   columns,
   actions,
   renderView,
+  editable = false,
 }: {
+  /** A layout the user built: every window wears its header (name, menu, close) even when it is
+   *  the only one, because that header is how the layout is edited. A fixed card's lone view has
+   *  none. */
+  editable?: boolean
   columns: readonly WorkspaceColumn[]
   actions: ColumnActions
   renderView: (view: ViewId, index: number, column: WorkspaceColumn) => ReactNode
@@ -81,12 +86,10 @@ export function WorkspaceColumns({
   )
 
   if (!desktop) {
-    // An emptied layout has no column to show and no column menu to open, so the right-edge `+`
-    // is the whole surface here too (spec §5.2).
     if (columns.length === 0) {
       return (
         <div data-slot="workspace-columns" data-narrow="" className="flex min-h-0 flex-1 flex-col">
-          <AddColumnEdge count={0} onPick={actions.addColumn} />
+          <ViewTiles onPick={actions.addColumn} />
         </div>
       )
     }
@@ -153,6 +156,16 @@ export function WorkspaceColumns({
     )
   }
 
+  // An empty layout — just created, or with its last window closed — is the tile picker.
+  if (columns.length === 0) {
+    return (
+      <div data-slot="workspace-columns" className="flex min-h-0 flex-1 flex-col">
+        <ViewTiles onPick={actions.addColumn} />
+      </div>
+    )
+  }
+  const headers = editable || columns.length > 1
+
   return (
     <div
       ref={rowRef}
@@ -185,7 +198,7 @@ export function WorkspaceColumns({
           {/* A lone column needs no bar of its own: the layout tab above already names it, and
               its menu moves to the edge strip. The bar returns with the second column, where it
               is what tells the columns apart and what a column is dragged by. */}
-          {columns.length > 1 ? (
+          {headers ? (
             <ColumnHeader
               index={index}
               column={column}
@@ -200,11 +213,11 @@ export function WorkspaceColumns({
                  nothing about full view, so none of them draws a second one;
                - a lone browser or Changes: the view's own strip, which renders it itself;
                - a lone view with no strip of its own: pinned to the column's top-right corner. */}
-          {columns.length === 1 && !VIEWS_WITH_OWN_BAR.has(column.view) ? (
+          {!headers && !VIEWS_WITH_OWN_BAR.has(column.view) ? (
             <FullViewExit className="absolute top-2 right-3 z-20 bg-card shadow-sm" />
           ) : null}
           <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-            {columns.length > 1 ? (
+            {headers ? (
               <WorkspaceMaximizeContext.Provider value={null}>
                 {renderView(column.view, index, column)}
               </WorkspaceMaximizeContext.Provider>
@@ -214,69 +227,6 @@ export function WorkspaceColumns({
           </div>
         </div>
       ))}
-      {/* The `+` at the RIGHT EDGE of the view area (spec §5.2 and §11), not only inside a column
-          menu: it is how a layout gains its second and third column, and it is the ONLY way to
-          add one to a layout whose columns have all been closed — that case has no column menu
-          to open. Disabled at three, which is the cap the same paragraph sets. */}
-      {/* Only for a layout with no columns left, where it is the one way to put a view back.
-          Beside real columns the strip is gone: adding a view to a layout is being redesigned,
-          and until then a layout keeps the columns it has. */}
-      {columns.length === 0 ? <AddColumnEdge count={0} onPick={actions.addColumn} /> : null}
-    </div>
-  )
-}
-
-/**
- * The right-edge `+` (spec §5.2: "click the `+` at the right edge of the view area. It opens the
- * same view picker"; §11 repeats it among the confirmed decisions).
- *
- * A full-width call to action when the layout is empty, a narrow strip beside the columns
- * otherwise — the same control either way, so there is one answer to "how do I add a view".
- */
-function AddColumnEdge({
-  count,
-  onPick,
-  extra,
-}: {
-  count: number
-  onPick: (view: ViewId) => void
-  /** Stacked under the `+`: the lone column's own menu. */
-  extra?: ReactNode
-}) {
-  const full = count === 0
-  const atCap = count >= MAX_COLUMNS
-  return (
-    <div
-      data-slot="add-column-edge"
-      className={cn(
-        'flex shrink-0 justify-center border-l border-border/70',
-        full ? 'flex-1 items-center border-l-0' : 'w-9 flex-col items-center justify-start gap-0.5 pt-1',
-      )}
-    >
-      <ViewPickerMenu
-        heading="Add a view"
-        onPick={onPick}
-        trigger={
-          <Button
-            type="button"
-            variant={full ? 'outline' : 'ghost'}
-            size={full ? 'default' : 'icon-sm'}
-            data-action="add-column"
-            disabled={atCap}
-            title={
-              atCap
-                ? `At most ${MAX_COLUMNS} columns`
-                : 'Add a view — new column on the right'
-            }
-            aria-label="Add a view"
-            className={full ? undefined : 'size-7 text-muted-foreground'}
-          >
-            <PlusIcon aria-hidden="true" />
-            {full ? 'Add a view' : null}
-          </Button>
-        }
-      />
-      {extra}
     </div>
   )
 }
@@ -354,19 +304,21 @@ function ColumnHeader({
           count > 1 && 'cursor-grab active:cursor-grabbing',
         )}
       >
+        {count > 1 ? (
+          <GripVerticalIcon aria-hidden="true" className="-ml-2 size-3.5 shrink-0 text-soft-foreground/70" />
+        ) : null}
         <ViewIcon aria-hidden="true" className="size-3.5 shrink-0" />
         <span className="truncate">{viewLabel(column.view)}</span>
       </span>
       {menu}
-      {/* A lone column only has a header in full view, beside the exit — no close there: one
-          slip would empty the layout. */}
-      {count > 1 ? (
+      {/* Closing the last window is not a trap: the layout falls back to its tile picker. */}
+      {count >= 1 ? (
         <Button
           type="button"
           variant="ghost"
           size="icon-xs"
-          aria-label={`Close column ${viewLabel(column.view)}`}
-          title="Close column"
+          aria-label={`Close ${viewLabel(column.view)}`}
+          title="Close view"
           onClick={() => actions.closeColumn(index)}
           className="text-soft-foreground"
         >
@@ -414,21 +366,26 @@ function ColumnMenu({
       <DropdownMenuContent align="end" className="w-52">
         <DropdownMenuLabel>Change view</DropdownMenuLabel>
         <ViewItems onPick={(view) => actions.setColumnView(index, view)} disabled={column.view} />
-        <DropdownMenuSeparator />
-        {count < MAX_COLUMNS ? (
+        {count > 1 ? (
           <>
-            <DropdownMenuLabel>Add column</DropdownMenuLabel>
-            <ViewItems onPick={actions.addColumn} purpose="add" />
+            <DropdownMenuSeparator />
+            <DropdownMenuItem disabled={index === 0} onSelect={() => actions.moveColumn(index, index - 1)}>
+              <ArrowLeftIcon aria-hidden="true" />
+              Move left
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={index === count - 1}
+              onSelect={() => actions.moveColumn(index, index + 1)}
+            >
+              <ArrowRightIcon aria-hidden="true" />
+              Move right
+            </DropdownMenuItem>
           </>
-        ) : (
-          <DropdownMenuLabel className="font-normal text-soft-foreground">
-            At most {MAX_COLUMNS} columns
-          </DropdownMenuLabel>
-        )}
+        ) : null}
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => actions.closeColumn(index)}>
           <XIcon aria-hidden="true" />
-          Close column
+          Close view
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

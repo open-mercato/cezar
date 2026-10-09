@@ -12,7 +12,7 @@ import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 
 import { layoutDisplayName, splitCards, viewLabel, type ViewId, type WorkspaceLayout } from './layout-state'
-import { VIEW_ICONS, ViewPickerMenu } from './view-picker'
+import { VIEW_ICONS } from './view-picker'
 
 /**
  * The saved-layout strip (spec `2026-10-07-task-workspace` §5.2) — the row that REPLACES the
@@ -46,7 +46,7 @@ export function LayoutCards({
   onSelect: (name: string) => void
   onRename: (name: string, requested: string) => void
   onClose: (name: string) => void
-  onCreate: (view: ViewId) => void
+  onCreate: () => void
 }) {
   const { visible, overflow } = splitCards(layouts, active)
 
@@ -111,25 +111,21 @@ export function LayoutCards({
         </DropdownMenu>
       ) : null}
 
-      <ViewPickerMenu
-        heading="New layout"
-        onPick={onCreate}
-        trigger={
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            /* `data-action` rather than `data-slot`: the shadcn Button already spends its
-               `data-slot` on `button`, and the browser-level specs need a hook that is not the
-               label. */
-            data-action="new-layout"
-            className="mb-1 ml-1 size-7 shrink-0 text-muted-foreground"
-            aria-label="New layout"
-            title="New layout — pick the view for its first column"
-          >
-            <PlusIcon aria-hidden="true" />
-          </Button>
-        }
-      />
+      {/* No picker here: the new layout opens empty and its stage is the picker. */}
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        /* `data-action` rather than `data-slot`: the shadcn Button already spends its
+           `data-slot` on `button`, and the browser-level specs need a hook that is not the
+           label. */
+        data-action="new-layout"
+        className="mb-1 ml-1 size-7 shrink-0 text-muted-foreground"
+        aria-label="New layout"
+        title="New layout"
+        onClick={() => onCreate()}
+      >
+        <PlusIcon aria-hidden="true" />
+      </Button>
     </div>
   )
 }

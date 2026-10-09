@@ -396,14 +396,14 @@ export function nextAutomaticName(layouts: readonly WorkspaceLayout[]): string {
   return uniqueName(`Layout ${layouts.length + 1}`, layouts)
 }
 
-/** A new card with one full-width column, activated. `name` defaults to the next automatic
- *  `Układ N` (spec §5.2); a deep link passes the view's own label instead (§5.3). */
-export function addLayout(state: WorkspaceState, view: ViewId, name?: string): WorkspaceState {
+/** A new card, activated. With a `view` it opens on one full-width column of it; without one it
+ *  is EMPTY — the card the strip's `+` makes, whose stage is the tile picker for its first view.
+ *  `name` defaults to the next automatic `Layout N` (spec §5.2); a deep link passes the view's own
+ *  label instead (§5.3). */
+export function addLayout(state: WorkspaceState, view?: ViewId, name?: string): WorkspaceState {
   const chosen = name === undefined ? nextAutomaticName(state.layouts) : uniqueName(name, state.layouts)
-  return {
-    layouts: [...state.layouts, { name: chosen, columns: [{ ...newColumn(view), width: 100 }] }],
-    active: chosen,
-  }
+  const columns = view === undefined ? [] : [{ ...newColumn(view), width: 100 }]
+  return { layouts: [...state.layouts, { name: chosen, columns }], active: chosen }
 }
 
 /**

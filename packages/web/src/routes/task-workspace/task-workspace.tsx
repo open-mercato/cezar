@@ -3,6 +3,7 @@ import {
   LoaderCircleIcon,
   Maximize2Icon,
   MessageSquareTextIcon,
+  PlusIcon,
   SearchXIcon,
   TerminalIcon,
 } from 'lucide-react'
@@ -46,6 +47,7 @@ import { cn } from '@/lib/utils'
 import { LayoutCards } from './layout-cards'
 import { FullViewExit, WorkspaceMaximizeContext, usePanelCover } from './maximize'
 import { ViewPickerMenu } from './view-picker'
+import { MAX_COLUMNS } from './layout-state'
 import { WorkspaceColumns, type ColumnActions } from './workspace-columns'
 import { useWorkspaceLayouts } from './use-workspace-layouts'
 import { readDrawerState, writeDrawerState, type DrawerState } from './drawer-state'
@@ -257,7 +259,7 @@ function WorkspaceView({
     [layouts.state.layouts],
   )
   const pickLayout = selectLayout
-  const createLayout = addLayout
+  const createLayout = useCallback(() => addLayout(), [addLayout])
 
   /**
    * Whether the drawer is showing, and how tall (spec §6).
@@ -345,10 +347,39 @@ function WorkspaceView({
   )
   // Full view closes the strip: the last control, set apart by a rule and drawn as a real button
   // so it is found without hunting among the ghost icons beside it.
+  // How many views the active layout holds when it is one the user built; 0 on a fixed card.
+  const customColumns = fixedActive === null && layouts.layout ? layouts.layout.columns.length : 0
+  const addColumn = layouts.addColumn
   const maximizeButton = useMemo(
     () => (
       <>
         <Separator orientation="vertical" className="mx-1 data-[orientation=vertical]:h-5" />
+        {/* Only on a layout the user built, and only once it has a first view — an empty one is
+            already showing the tiles. A fixed card stays the one view it stands for. */}
+        {customColumns > 0 ? (
+          <ViewPickerMenu
+            heading="Add a view"
+            align="end"
+            onPick={addColumn}
+            trigger={
+              <Button
+                variant="ghost"
+                size="sm"
+                data-action="add-column"
+                disabled={customColumns >= MAX_COLUMNS}
+                title={
+                  customColumns >= MAX_COLUMNS
+                    ? `At most ${MAX_COLUMNS} views side by side`
+                    : 'Add a view beside the ones in this layout'
+                }
+                className="shrink-0 text-muted-foreground"
+              >
+                <PlusIcon aria-hidden="true" />
+                Add view
+              </Button>
+            }
+          />
+        ) : null}
         <Button
           variant="outline"
           size="sm"
@@ -362,7 +393,7 @@ function WorkspaceView({
         </Button>
       </>
     ),
-    [toggleMaximized],
+    [toggleMaximized, customColumns, addColumn],
   )
 
   /**
@@ -510,7 +541,12 @@ function WorkspaceView({
             // area holds the same skeleton a cold load of this URL already shows.
             <DeepLinkLoading view={deepLinkView} />
           ) : layouts.layout ? (
-            <WorkspaceColumns columns={layouts.layout.columns} actions={actions} renderView={renderView} />
+            <WorkspaceColumns
+              columns={layouts.layout.columns}
+              actions={actions}
+              renderView={renderView}
+              editable={fixedActive === null}
+            />
           ) : (
             // The workspace the user emptied by closing its last card. It stays empty for this visit
             // and comes back as a fresh `Czat` on the next one (§5.3) — the state module's recovery
@@ -522,11 +558,9 @@ function WorkspaceView({
               title="No layouts"
               subtitle="You closed every layout of this task. Create a new one, or come back later — the task will open with a Chat layout."
               actions={
-                <ViewPickerMenu
-                  heading="New layout"
-                  onPick={addLayout}
-                  trigger={<Button variant="outline">New layout</Button>}
-                />
+                <Button variant="outline" onClick={createLayout}>
+                  New layout
+                </Button>
               }
             />
           )}
