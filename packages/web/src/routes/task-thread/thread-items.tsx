@@ -230,7 +230,7 @@ export function UserBubble({
     <div data-slot="user-message" className="group flex max-w-[88%] min-w-0 flex-col items-end gap-1.5 self-end md:max-w-[78%]">
       <div
         data-slot="user-bubble"
-        className="min-w-0 max-w-full rounded-2xl bg-user-bubble px-5 py-3.5 text-[15px] leading-[1.65] text-user-bubble-foreground [&_[data-streamdown=inline-code]]:bg-user-bubble-foreground/15 [&_a]:underline"
+        className="min-w-0 max-w-full rounded-2xl bg-user-bubble px-4 py-2.5 text-[14.5px] leading-[1.6] text-user-bubble-foreground [&_[data-streamdown=inline-code]]:bg-user-bubble-foreground/15 [&_a]:underline"
       >
         {actionError ? <p role="alert" className="mb-1 text-xs text-danger">{actionError}</p> : null}
         <UserText text={text} />
