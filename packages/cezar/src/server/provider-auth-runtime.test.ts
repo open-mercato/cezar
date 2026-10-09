@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -265,6 +265,157 @@ describe('watchProviderRuntimeAuthFailures', () => {
     });
   });
 
+  it('does not reread the transcript for repeated auth-shaped events', () => {
+    const onInvalidated = watch();
+    const run = store.createRun({
+      title: 'no transcript scan',
+      workflow: 'quick-task',
+      task: 'work',
+      runner: 'claude',
+      steps: [],
+    });
+    const readEvents = vi.spyOn(store, 'readEvents');
+
+    store.appendEvent(run.id, {
+      type: 'error',
+      message: 'Failed to authenticate. API Error: 401 OAuth token has been revoked.',
+    });
+    readEvents.mockClear();
+    for (const type of ['session.error', 'note', 'error']) {
+      store.appendEvent(run.id, {
+        type,
+        message: 'Failed to authenticate. API Error: 401 OAuth token has been revoked.',
+      });
+    }
+
+    expect(readEvents).not.toHaveBeenCalled();
+    expect(onInvalidated).toHaveBeenCalledTimes(1);
+    expect(store.readEvents(run.id).filter(({ type }) => type === 'provider-auth-required')).toHaveLength(1);
+  });
+
+  it('retains dedupe across reopening a transcript under one observer', () => {
+    providerAuth = loggedOutClaudeProviderAuth();
+    const onInvalidated = vi.fn();
+    const observer = new ProviderRuntimeAuthObserver(providerAuth, onInvalidated);
+    const run = store.createRun({
+      title: 'reopen',
+      workflow: 'quick-task',
+      task: 'work',
+      runner: 'claude',
+      steps: [],
+    });
+    observer.watch(store);
+    store.appendEvent(run.id, {
+      type: 'error',
+      message: 'Failed to authenticate. API Error: 401 OAuth token has been revoked.',
+    });
+    store.flush();
+
+    const reopened = RunStore.open(store.getDataDir());
+    observer.watch(reopened);
+    reopened.appendEvent(run.id, {
+      type: 'session.error',
+      message: 'Failed to authenticate. API Error: 401 OAuth token has been revoked.',
+    });
+
+    expect(reopened.readEvents(run.id).filter(({ type }) => type === 'provider-auth-required')).toHaveLength(1);
+  });
+
+  it('keeps copied run ids in different transcript directories independent', () => {
+    providerAuth = loggedOutClaudeProviderAuth();
+    const onInvalidated = vi.fn();
+    const observer = new ProviderRuntimeAuthObserver(providerAuth, onInvalidated);
+    const run = store.createRun({
+      title: 'copied id',
+      workflow: 'quick-task',
+      task: 'work',
+      runner: 'claude',
+      steps: [],
+    });
+    store.flush();
+    const otherRoot = mkdtempSync(join(tmpdir(), 'cez-provider-auth-other-'));
+    const otherDataDir = join(otherRoot, '.ai/cezar');
+    try {
+      const otherStore = RunStore.open(otherDataDir);
+      copyFileSync(join(store.getDataDir(), 'runs.json'), join(otherDataDir, 'runs.json'));
+      const copiedStore = RunStore.open(otherDataDir);
+      observer.watch(store);
+      observer.watch(copiedStore);
+      for (const watchedStore of [store, copiedStore]) {
+        watchedStore.appendEvent(run.id, {
+          type: 'error',
+          message: 'Failed to authenticate. API Error: 401 OAuth token has been revoked.',
+        });
+      }
+      expect(copiedStore.readEvents(run.id).filter(({ type }) => type === 'provider-auth-required')).toHaveLength(1);
+      expect(store.readEvents(run.id).filter(({ type }) => type === 'provider-auth-required')).toHaveLength(1);
+      otherStore.flush();
+    } finally {
+      rmSync(otherRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('clears only the deleted transcript keys', () => {
+    providerAuth = loggedOutClaudeProviderAuth();
+    const observer = new ProviderRuntimeAuthObserver(providerAuth, vi.fn());
+    const run = store.createRun({
+      title: 'deleted',
+      workflow: 'quick-task',
+      task: 'work',
+      runner: 'claude',
+      steps: [],
+    });
+    observer.watch(store);
+    store.appendEvent(run.id, {
+      type: 'error',
+      message: 'Failed to authenticate. API Error: 401 OAuth token has been revoked.',
+    });
+    store.flush();
+    const runsIndex = readFileSync(join(store.getDataDir(), 'runs.json'), 'utf8');
+    expect(store.deleteRun(run.id)).toBe(true);
+
+    // Reintroduce the same run id as a fresh transcript after deletion. Cleanup must permit the
+    // incident marker to be recorded again, while the observer remains the same instance.
+    writeFileSync(join(store.getDataDir(), 'runs.json'), runsIndex, 'utf8');
+    const reopened = RunStore.open(store.getDataDir());
+    observer.watch(reopened);
+    reopened.appendEvent(run.id, {
+      type: 'session.error',
+      message: 'Failed to authenticate. API Error: 401 OAuth token has been revoked.',
+    });
+
+    expect(reopened.readEvents(run.id).filter(({ type }) => type === 'provider-auth-required')).toHaveLength(1);
+  });
+
+  it('rolls back a failed append and suppresses reentrant duplicates', () => {
+    providerAuth = loggedOutClaudeProviderAuth();
+    const onInvalidated = vi.fn();
+    const unwatch = watchProviderRuntimeAuthFailures(store, providerAuth, onInvalidated);
+    const run = store.createRun({
+      title: 'rollback',
+      workflow: 'quick-task',
+      task: 'work',
+      runner: 'claude',
+      steps: [],
+    });
+    const message = 'Failed to authenticate. API Error: 401 OAuth token has been revoked.';
+    const originalAppend = store.appendEvent.bind(store);
+    const append = vi.spyOn(store, 'appendEvent')
+      .mockImplementationOnce(() => {
+        store.emit('event', { runId: run.id, event: { seq: 1, ts: new Date().toISOString(), type: 'error', message } });
+        throw new Error('simulated append failure');
+      })
+      .mockImplementation((runId, event) => originalAppend(runId, event));
+
+    expect(() => store.emit('event', { runId: run.id, event: { seq: 1, ts: new Date().toISOString(), type: 'error', message } }))
+      .toThrow('simulated append failure');
+    store.emit('event', { runId: run.id, event: { seq: 2, ts: new Date().toISOString(), type: 'error', message } });
+
+    expect(append).toHaveBeenCalledTimes(2);
+    expect(store.readEvents(run.id).filter(({ type }) => type === 'provider-auth-required')).toHaveLength(1);
+    unwatch();
+  });
+
   it('records the current incident on each affected task but invalidates the workspace once', () => {
     const onInvalidated = watch();
     const first = store.createRun({
@@ -392,6 +543,8 @@ describe('watchProviderRuntimeAuthFailures', () => {
     });
 
     unwatch();
+    expect(store.listenerCount('event')).toBe(0);
+    expect(store.listenerCount('deleted')).toBe(0);
     store.appendEvent(run.id, {
       type: 'error',
       message: 'Failed to authenticate. API Error: 401 OAuth token has been revoked.',
