@@ -16,8 +16,8 @@ Non-goals: server routes/SSE, other `RunStore` behavior, contracts, UI, auth lat
 
 ### Phase 1: Observer-owned dedupe
 
-- [ ] 1.1 Add stable transcript identity access and observer/cache plumbing; dedupe successful appends with reentrancy rollback and deletion cleanup.
-- [ ] 1.2 Add regression and lifecycle tests for repeat reads, store reopening, incidents, transcript isolation, deletion, rollback, and listener disposal.
+- [x] 1.1 Add stable transcript identity access and observer/cache plumbing; dedupe successful appends with reentrancy rollback and deletion cleanup. — 05dc4b47
+- [x] 1.2 Add regression and lifecycle tests for repeat reads, store reopening, incidents, transcript isolation, deletion, rollback, and listener disposal. — 05dc4b47
 
 ### Phase 2: Verification and delivery
 
@@ -34,8 +34,8 @@ The cache must survive `RunStore` replacement without being keyed by store objec
 
 ### Phase 1: Observer-owned dedupe
 
-- [ ] 1.1 Add stable transcript identity access and observer/cache plumbing; dedupe successful appends with reentrancy rollback and deletion cleanup.
-- [ ] 1.2 Add regression and lifecycle tests for repeat reads, store reopening, incidents, transcript isolation, deletion, rollback, and listener disposal.
+- [x] 1.1 Add stable transcript identity access and observer/cache plumbing; dedupe successful appends with reentrancy rollback and deletion cleanup. — 05dc4b47
+- [x] 1.2 Add regression and lifecycle tests for repeat reads, store reopening, incidents, transcript isolation, deletion, rollback, and listener disposal. — 05dc4b47
 
 ### Phase 2: Verification and delivery
 
