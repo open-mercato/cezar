@@ -10,6 +10,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { cn } from '@/lib/utils'
 import { RUNNERS } from '@/routes/new-task-form'
 
 /**
@@ -38,6 +39,8 @@ export function PickerPill({
   disabledHint,
   status,
   searchPlaceholder,
+  icon,
+  className,
 }: {
   slot: string
   ariaLabel: string
@@ -55,6 +58,9 @@ export function PickerPill({
   status?: string
   /** Add a name filter above longer option catalogs. */
   searchPlaceholder?: string
+  /** A leading 14px icon that says what kind of choice this is. */
+  icon?: ReactNode
+  className?: string
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -76,8 +82,9 @@ export function PickerPill({
         data-slot={slot}
         aria-label={ariaLabel}
         title={disabledHint ?? hint}
-        className={`${chipClass} cursor-default hover:bg-card hover:text-muted-foreground`}
+        className={cn(chipClass, 'cursor-default hover:bg-card hover:text-muted-foreground', className)}
       >
+        {icon}
         {label}
       </span>
     )
@@ -89,9 +96,10 @@ export function PickerPill({
       aria-label={ariaLabel}
       disabled={disabled}
       title={disabled ? disabledHint : hint}
-      className={chipClass}
+      className={cn(chipClass, className)}
     >
-      {label}
+      {icon}
+      <span className="min-w-0 truncate">{label}</span>
       {chevron}
     </button>
   )
@@ -148,9 +156,9 @@ export function PickerPill({
           {visibleOptions.map((option) => (
             <DropdownMenuRadioItem key={option.value} value={option.value} className="gap-2.5">
               <span className="flex min-w-0 flex-col">
-                <span className="text-[12.5px] font-medium">{option.label}</span>
+                <span className="text-[13px] font-medium">{option.label}</span>
                 {option.desc ? (
-                  <span className="max-w-[calc(100vw-3rem)] whitespace-normal break-words text-[11.5px] text-muted-foreground md:max-w-96">
+                  <span className="max-w-[calc(100vw-3rem)] whitespace-normal break-words text-xs text-muted-foreground md:max-w-96">
                     {option.desc}
                   </span>
                 ) : null}
@@ -162,7 +170,7 @@ export function PickerPill({
           <p className="px-2 py-5 text-center text-xs text-muted-foreground">No branches found.</p>
         ) : null}
         {status ? (
-          <DropdownMenuItem disabled className="border-t border-border text-[11.5px] text-muted-foreground">
+          <DropdownMenuItem disabled className="border-t border-border text-xs text-muted-foreground">
             {status}
           </DropdownMenuItem>
         ) : null}
@@ -220,6 +228,8 @@ export function RunnerPill({
   accounts = [],
   account = null,
   repoAccount,
+  icon,
+  className,
 }: {
   runners: readonly Runner[]
   value: Runner
@@ -232,6 +242,8 @@ export function RunnerPill({
   account?: string | null
   /** What the repo's setting resolves to per runner — the row that is selected until overridden. */
   repoAccount?: Partial<Record<Runner, string>>
+  icon?: ReactNode
+  className?: string
 }) {
   const available = RUNNERS.filter((r) => runners.includes(r.id))
   const options = available.flatMap((runner) => {
@@ -262,6 +274,8 @@ export function RunnerPill({
       label={options.find((option) => option.value === value_)?.label ?? value}
       value={value_}
       disabled={disabled}
+      icon={icon}
+      className={className}
       onPick={(next) => {
         const [runner, picked] = next.split(':')
         onPick(runner as Runner, picked ?? null)

@@ -2,10 +2,8 @@ import {
   CopyIcon,
   EyeIcon,
   EllipsisIcon,
-  PauseIcon,
   PencilIcon,
   PlayIcon,
-  PowerIcon,
   ScrollTextIcon,
   TerminalIcon,
   Trash2Icon,
@@ -36,11 +34,11 @@ import { useNavigate } from '@/lib/project-router'
 import type { AutomationActions } from './use-automations'
 
 /**
- * The actions cell of one list row (spec 2026-09-14-automations-redesign § UI/UX 1, column 9):
- * Run now · Pause|Enable · More (Edit · View log · Duplicate · Copy as CLI · Delete). Every
- * click in here stops at the cell — the row itself opens the editor, and a pause must never
- * also navigate. The menu and the confirm are portaled, so they stop propagation on their own
- * content too: React bubbles synthetic events through portals to the row.
+ * The actions cell of one list row (spec 2026-09-14-automations-redesign § UI/UX 1): one menu —
+ * Run now · Preview matches · Edit · View log · Duplicate · Copy as CLI · Delete. Pause/Enable is
+ * the row's switch. Every click in here stops at the cell — the row itself opens the editor. The
+ * menu and the confirm are portaled, so they stop propagation on their own content too: React
+ * bubbles synthetic events through portals to the row.
  */
 export function RowActions({ automation, actions }: { automation: AutomationListEntry; actions: AutomationActions }) {
   const navigate = useNavigate()
@@ -50,36 +48,24 @@ export function RowActions({ automation, actions }: { automation: AutomationList
 
   return (
     <span data-slot="row-actions" className="inline-flex gap-0.5" onClick={stop}>
-      {automation.kind !== 'schedule' ? <Button variant="ghost" size="icon-sm" title="Preview matches" aria-label="Preview matches" disabled={actions.busy} onClick={() => void actions.preview(automation)}>
-        <EyeIcon className="size-[13px]" />
-      </Button> : null}
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        title="Run now"
-        aria-label="Run now"
-        disabled={actions.busy}
-        onClick={() => void actions.runNow(automation)}
-      >
-        <PlayIcon className="size-[13px]" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        title={automation.enabled ? 'Pause' : 'Enable'}
-        aria-label={automation.enabled ? 'Pause' : 'Enable'}
-        disabled={actions.busy}
-        onClick={() => void actions.toggleEnabled(automation)}
-      >
-        {automation.enabled ? <PauseIcon className="size-[13px]" /> : <PowerIcon className="size-[13px]" />}
-      </Button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon-sm" aria-label="More">
-            <EllipsisIcon className="size-3.5" />
+          <Button variant="ghost" size="icon-sm" aria-label="More" title={`Actions for ${automation.name}`}>
+            <EllipsisIcon aria-hidden="true" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-[200px]" onClick={stop}>
+          <DropdownMenuItem disabled={actions.busy} onSelect={() => void actions.runNow(automation)}>
+            <PlayIcon />
+            Run now
+          </DropdownMenuItem>
+          {automation.kind !== 'schedule' ? (
+            <DropdownMenuItem disabled={actions.busy} onSelect={() => void actions.preview(automation)}>
+              <EyeIcon />
+              Preview matches
+            </DropdownMenuItem>
+          ) : null}
+          <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={() => navigate(editorPath)}>
             <PencilIcon />
             Edit

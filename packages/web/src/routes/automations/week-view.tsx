@@ -1,6 +1,6 @@
 import { zonedParts, type AutomationsResponse } from '@open-mercato/cezar-api-client'
 
-import { Card } from '@/components/ui/card'
+import { PageBody } from '@/components/page'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
 
@@ -27,11 +27,11 @@ export function WeekView({ data }: { data: AutomationsResponse }) {
   const weekEnd = bounds[7]
   if (!today || weekStart === undefined || weekStart === null || weekEnd === undefined || weekEnd === null) {
     return (
-      <div data-slot="week-view" className="p-5">
-        <p className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+      <PageBody data-slot="week-view">
+        <p className="rounded-xl border border-dashed p-10 text-center text-[13px] text-muted-foreground">
           Cannot draw the week: unknown time zone “{timeZone}”.
         </p>
-      </div>
+      </PageBody>
     )
   }
 
@@ -49,9 +49,10 @@ export function WeekView({ data }: { data: AutomationsResponse }) {
   })
 
   return (
-    <div data-slot="week-view" className="p-5">
-      <Card flush>
-        <div className="grid grid-cols-[48px_repeat(7,minmax(0,1fr))] border-b border-border">
+    <PageBody data-slot="week-view">
+      <div className="min-w-0 overflow-x-auto rounded-xl border bg-card shadow-xs">
+       <div className="min-w-[720px]">
+        <div className="grid grid-cols-[56px_repeat(7,minmax(0,1fr))] border-b border-border/60">
           <div />
           {columns.map((column) => (
             <div
@@ -59,15 +60,15 @@ export function WeekView({ data }: { data: AutomationsResponse }) {
               data-slot="week-day-header"
               data-today={column.isToday ? 'true' : undefined}
               className={cn(
-                'flex items-center gap-2 border-l border-border px-2 py-2.5 text-[11px] font-semibold tracking-[.05em] uppercase',
-                column.isToday ? 'text-foreground' : 'text-soft-foreground',
+                'flex items-center gap-1.5 border-l border-border/60 px-2.5 py-2.5 text-xs font-medium',
+                column.isToday ? 'text-foreground' : 'text-muted-foreground',
               )}
             >
               {column.label}
               <span
                 className={cn(
-                  'rounded-full px-[7px] py-px text-[13px] font-medium tracking-normal normal-case',
-                  column.isToday ? 'bg-primary text-primary-foreground' : 'text-muted-foreground',
+                  'rounded-full px-1.5 py-px text-[13px] font-medium tabular-nums',
+                  column.isToday ? 'bg-primary text-primary-foreground' : 'text-foreground',
                 )}
               >
                 {column.dayOfMonth ?? ''}
@@ -76,14 +77,14 @@ export function WeekView({ data }: { data: AutomationsResponse }) {
           ))}
         </div>
         <PollBand automations={data.automations} />
-        <div className="flex max-h-[560px] overflow-y-auto">
+        <div className="flex max-h-[calc(100dvh-22rem)] min-h-80 overflow-y-auto pt-2">
           <HourGutter />
           {columns.map((column) => (
             <div
               key={column.label}
               data-slot="week-column"
               data-today={column.isToday ? 'true' : undefined}
-              className={cn('relative min-w-0 flex-1 border-l border-border', column.isToday && 'bg-muted/35')}
+              className={cn('relative min-w-0 flex-1 border-l border-border/60', column.isToday && 'bg-muted/40')}
               style={{ height: 24 * HOUR_H }}
             >
               <HourLines />
@@ -99,7 +100,8 @@ export function WeekView({ data }: { data: AutomationsResponse }) {
             </div>
           ))}
         </div>
-      </Card>
-    </div>
+       </div>
+      </div>
+    </PageBody>
   )
 }

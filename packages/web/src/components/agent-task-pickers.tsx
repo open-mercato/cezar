@@ -41,11 +41,11 @@ export function WorkflowPicker({
           type="button"
           data-slot={`${slotPrefix}-workflow-trigger`}
           aria-label="Choose a workflow"
-          className={cn(chipClass, value && 'border-foreground/60 font-mono text-[11.5px] font-semibold text-foreground')}
+          className={cn(chipClass, value && 'text-foreground')}
         >
-          <WorkflowIcon aria-hidden="true" className="size-3 shrink-0 text-violet" />
+          <WorkflowIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />
           <span className="max-w-44 truncate">{value ?? 'workflow'}</span>
-          <ChevronDownIcon aria-hidden="true" className="size-2.5 shrink-0 text-soft-foreground" />
+          <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={8} className="w-[320px] max-w-[calc(100vw-2rem)] p-0">
@@ -176,11 +176,11 @@ export function SkillsPicker({
             type="button"
             data-slot={`${slotPrefix}-skills-trigger`}
             aria-label="Choose skills"
-            className={cn(chipClass, selected.length > 0 && 'border-foreground/60 font-semibold text-foreground')}
+            className={cn(chipClass, selected.length > 0 && 'text-foreground')}
           >
-            <SparklesIcon aria-hidden="true" className="size-3 shrink-0 text-violet" />
+            <SparklesIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />
             skills{selected.length > 0 ? ` · ${selected.length}` : ''}
-            <ChevronDownIcon aria-hidden="true" className="size-2.5 shrink-0 text-soft-foreground" />
+            <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
           </button>
         </PopoverTrigger>
         <PopoverContent align="start" sideOffset={8} className="w-[336px] max-w-[calc(100vw-2rem)] p-0">

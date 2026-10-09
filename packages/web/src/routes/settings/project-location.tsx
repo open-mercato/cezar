@@ -1,11 +1,13 @@
 import { useMutation } from '@tanstack/react-query'
+import { CopyIcon } from 'lucide-react'
 
 import { openProjectIn } from '@/api/client'
 import { useOpenTargets, useProjects } from '@/api/queries'
 import { OpenInMenu, cliTargetRunner } from '@/components/open-in-menu'
+import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { useActiveProjectId } from '@/lib/project-router'
-import { SettingsField } from './settings-field'
+import { SettingsFact } from './settings-field'
 
 /**
  * "Where is this project?" — the active project's absolute root, inside project settings.
@@ -48,37 +50,29 @@ export function ProjectFolderField() {
   const root = useActiveProjectRoot()
   if (root === null) return null
   return (
-    <SettingsField
-      title="Project folder"
-      hint="Where this project lives on disk. Every task worktree, git command and agent run resolves against it."
-    >
-      <div
-        data-slot="project-location"
-        data-variant="field"
-        className="flex items-start gap-3 rounded-md border border-border bg-card p-3"
-      >
+    <SettingsFact label="Folder">
+      <div data-slot="project-location" data-variant="field" className="flex flex-col gap-2">
         {/* `break-all`, not `truncate`: a deep checkout path is exactly the case this row exists
             for, and half of it is not an answer. */}
-        <span
-          data-slot="project-location-path"
-          className="min-w-0 flex-1 font-mono text-xs break-all text-foreground"
-        >
+        <span data-slot="project-location-path" className="font-mono text-[13px] break-all text-foreground">
           {root}
         </span>
-        <div className="flex shrink-0 items-center gap-1.5">
-          <button
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
             type="button"
+            variant="outline"
+            size="sm"
             data-action="project-location-copy"
             title="Copy the project folder path"
             onClick={() => copyPath(root)}
-            className="text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
           >
-            Copy
-          </button>
+            <CopyIcon aria-hidden="true" className="size-3.5" />
+            Copy path
+          </Button>
           <OpenWithMenu root={root} />
         </div>
       </div>
-    </SettingsField>
+    </SettingsFact>
   )
 }
 
@@ -86,16 +80,18 @@ export function ProjectLocationNav() {
   const root = useActiveProjectRoot()
   if (root === null) return null
   return (
-    <div data-slot="project-location" data-variant="nav" className="mt-auto px-2.5 pt-3">
-      <p className="text-[11px] text-soft-foreground">Project folder</p>
+    <div data-slot="project-location" data-variant="nav" className="px-2.5">
+      <p className="text-xs text-soft-foreground">Project folder</p>
       <button
         type="button"
         data-action="project-location-copy"
         title={`${root} — click to copy`}
         onClick={() => copyPath(root)}
         className="block w-full truncate text-left font-mono text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+        // Keep the END of the path visible: the folder name is the part that tells projects apart.
+        style={{ direction: 'rtl' }}
       >
-        {root}
+        <bdi>{root}</bdi>
       </button>
     </div>
   )

@@ -64,16 +64,17 @@ export function PromptTemplateMenu({
           title="Insert a prompt template"
           disabled={disabled}
           className={cn(
-            'inline-flex h-[26px] items-center gap-1.5 rounded-full border border-border bg-card text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50',
-            iconOnly ? 'w-[26px] justify-center px-0' : 'px-2.5',
+            'inline-flex items-center gap-1.5 rounded-md text-[12.5px] font-medium text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50 data-[state=open]:bg-muted data-[state=open]:text-foreground',
+            // Icon-only sits beside the paperclip as a ghost icon button; labelled is a chip.
+            iconOnly ? 'size-8 justify-center' : 'h-7 border border-border bg-card px-2',
             triggerClassName,
           )}
         >
-          <NotebookPenIcon aria-hidden="true" className="size-3 shrink-0 text-violet" />
+          <NotebookPenIcon aria-hidden="true" className={cn('shrink-0', iconOnly ? 'size-[15px]' : 'size-3.5')} />
           {iconOnly ? null : (
             <>
-              templates
-              <ChevronDownIcon aria-hidden="true" className="size-2.5 shrink-0 text-soft-foreground" />
+              Templates
+              <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
             </>
           )}
         </button>
@@ -118,21 +119,21 @@ export function PromptTemplateMenu({
                   }}
                 >
                   <span className="flex w-full items-center gap-1.5">
-                    <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-foreground">
+                    <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">
                       {template.label}
                     </span>
                     {template.skills && template.skills.length > 0 ? (
                       <span
                         data-slot="prompt-template-assigned"
                         title={`Applied automatically with: ${template.skills.join(', ')}`}
-                        className="inline-flex shrink-0 items-center gap-0.5 text-[10px] font-medium text-violet"
+                        className="inline-flex shrink-0 items-center gap-0.5 text-[11px] font-medium text-muted-foreground"
                       >
                         <SparklesIcon aria-hidden="true" className="size-2.5" />
                         {template.skills.length}
                       </span>
                     ) : null}
                   </span>
-                  <span className="line-clamp-1 text-[11px] text-soft-foreground">
+                  <span className="line-clamp-1 text-xs text-muted-foreground">
                     {template.text}
                   </span>
                 </CommandItem>
@@ -143,7 +144,7 @@ export function PromptTemplateMenu({
               <CommandItem
                 value="edit prompt templates settings"
                 data-slot="prompt-template-settings"
-                className="text-[12px] text-muted-foreground"
+                className="text-[13px] text-muted-foreground"
                 onSelect={() => {
                   setOpen(false)
                   void navigate('/settings/prompt-templates')

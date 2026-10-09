@@ -25,8 +25,8 @@ export function SkillSourceTag({ source, className }: { source: Skill['source'];
       data-slot="skill-source"
       data-source={source}
       className={cn(
-        'shrink-0 rounded-full border border-border px-2 py-px font-mono text-[10.5px]',
-        project ? 'font-semibold text-foreground' : 'text-soft-foreground',
+        'shrink-0 rounded-full px-2 py-0.5 text-[11px] leading-4',
+        project ? 'bg-primary/15 font-medium text-foreground' : 'bg-muted text-muted-foreground',
         className,
       )}
     >
@@ -49,26 +49,24 @@ export function SkillDetailBody({
   return (
     <div data-slot="skill-detail" className="min-w-0">
       <div className="flex min-w-0 flex-wrap items-center gap-2.5">
-        <Heading className="min-w-0 font-mono text-lg font-semibold break-all">{skill.name}</Heading>
+        <Heading className="min-w-0 font-mono text-[17px] font-semibold break-all">{skill.name}</Heading>
         <SkillSourceTag source={skill.source} />
       </div>
-      <p data-slot="skill-path" className="mt-1 font-mono text-[10.5px] break-all text-soft-foreground">
-        {skill.path}
-        {skill.team ? ` · from ${skill.team.repo}` : ''}
-      </p>
       {skill.description ? (
-        <p data-slot="skill-description" className="mt-2.5 text-[13px] text-muted-foreground">
+        <p data-slot="skill-description" className="mt-2 max-w-prose text-sm text-pretty text-muted-foreground">
           {skill.description}
         </p>
       ) : null}
+      <p data-slot="skill-path" className="mt-2 font-mono text-[11px] break-all text-soft-foreground">
+        {skill.path}
+        {skill.team ? ` · from ${skill.team.repo}` : ''}
+      </p>
 
       {usedBy !== undefined ? (
-        <section data-slot="skill-used-by" className="mt-5">
-          <h3 className="text-[11px] font-semibold tracking-[.04em] text-soft-foreground uppercase">
-            Used by
-          </h3>
+        <section data-slot="skill-used-by" className="mt-6 border-t border-border pt-5">
+          <h3 className="text-[13px] font-semibold text-foreground">Used by</h3>
           {usedBy.length > 0 ? (
-            <ul className="mt-1.5 flex flex-col gap-1">
+            <ul className="mt-2 flex flex-col gap-1">
               {usedBy.map((entry) => (
                 <li key={entry} className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
                   <ArrowRightIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
@@ -77,17 +75,15 @@ export function SkillDetailBody({
               ))}
             </ul>
           ) : (
-            <p className="mt-1.5 text-xs text-soft-foreground">
+            <p className="mt-1.5 text-[13px] text-muted-foreground">
               Not referenced by any workflow yet — quick-task picks it up when the task mentions it.
             </p>
           )}
         </section>
       ) : null}
 
-      <section className="mt-5">
-        <h3 className="text-[11px] font-semibold tracking-[.04em] text-soft-foreground uppercase">
-          Content
-        </h3>
+      <section className="mt-6 border-t border-border pt-5">
+        <h3 className="text-[13px] font-semibold text-foreground">Content</h3>
         <div data-slot="skill-body" className="mt-2 text-sm">
           <Markdown>{skill.body}</Markdown>
         </div>
@@ -119,7 +115,7 @@ export function SkillPreviewDialog({ skill, onClose }: { skill: Skill | null; on
                 to={`/skills?skill=${encodeURIComponent(skill.name)}`}
                 data-slot="skill-preview-manage"
                 onClick={onClose}
-                className="text-xs font-semibold text-violet hover:underline"
+                className="text-[13px] font-medium text-foreground underline decoration-border underline-offset-4 hover:decoration-foreground"
               >
                 Open in the Skills catalog
               </Link>

@@ -1,6 +1,4 @@
-import { LoaderCircleIcon } from 'lucide-react'
-
-import { CenteredState } from '@/components/centered-state'
+import { Skeleton } from '@/components/ui/skeleton'
 
 /**
  * The Workflows builder's loading state, in its own module ON PURPOSE (same rule as
@@ -10,13 +8,17 @@ import { CenteredState } from '@/components/centered-state'
  */
 export function WorkflowsLoading() {
   return (
-    <div data-route="workflows" className="flex min-h-full flex-col">
-      <CenteredState
-        icon={<LoaderCircleIcon className="motion-safe:animate-spin" />}
-        tone="neutral"
-        title="Loading workflows…"
-        subtitle="Fetching the saved workflows and the node catalog."
-      />
+    <div data-route="workflows" aria-busy="true" aria-label="Loading workflows…" className="flex h-full min-h-0 flex-col">
+      <div className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-4">
+        <Skeleton className="h-7 w-40" />
+        <Skeleton className="h-7 w-48" />
+        <Skeleton className="ml-auto h-8 w-20" />
+      </div>
+      <div className="flex flex-1 items-center justify-center gap-6">
+        <Skeleton className="size-16 rounded-xl" />
+        <Skeleton className="h-16 w-48 rounded-xl" />
+        <Skeleton className="size-16 rounded-xl" />
+      </div>
     </div>
   )
 }

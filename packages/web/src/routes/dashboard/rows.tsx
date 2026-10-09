@@ -38,7 +38,7 @@ export function TaskRow({
   return (
     <div
       data-dashboard-row={taskKey(row)}
-      className="min-w-0 border-b px-4 py-3 transition-colors last:border-0 hover:bg-muted/30"
+      className="min-w-0 border-b border-border/70 px-5 py-3 transition-colors last:border-0 hover:bg-muted/50"
     >
       <ExportRows
         rows={[
@@ -58,7 +58,7 @@ export function TaskRow({
         ]}
       />
       {kicker && (
-        <p className="mb-1 pl-[15px] font-mono text-[10.5px] uppercase tracking-[0.1em] text-soft-foreground">
+        <p className="mb-0.5 pl-[15px] text-xs text-soft-foreground">
           {kicker}
         </p>
       )}
@@ -72,11 +72,11 @@ export function TaskRow({
               if (inactive) e.preventDefault()
             }}
             to={`/p/${encodeURIComponent(row.projectId)}/tasks/${encodeURIComponent(row.id)}`}
-            className="block break-words text-sm font-medium leading-relaxed hover:underline no-hover:min-h-11"
+            className="block break-words text-sm font-medium leading-relaxed underline-offset-4 hover:underline no-hover:min-h-11"
           >
             {row.titleSummary || row.title}
           </Link>
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
             <span className="font-mono text-[11px] text-soft-foreground">{row.projectId}</span>
             <span>
               {checkFailed
@@ -121,7 +121,7 @@ export function Coverage({
   const unavailable = coverage.projects.filter((p) => p.state !== 'complete')
   if (!unavailable.length) return null
   return (
-    <div className="rounded-lg border border-pending/40 bg-card-2 p-3 text-sm" role="status">
+    <div className="rounded-lg bg-pending/12 px-3 py-2.5 text-[13px]" role="status">
       <p>
         {count !== undefined
           ? `${count} tasks need you in the available data. Complete coverage: ${coverage.projects.length - unavailable.length} of ${coverage.projects.length} projects. `
@@ -132,19 +132,19 @@ export function Coverage({
             : 'One project has incomplete coverage.'
           : `${unavailable.length} projects have incomplete coverage.`}
       </p>
-      <details className="mt-2">
-        <summary className={`${disclosureSummary} min-h-11`}>
+      <details className="mt-1.5">
+        <summary className={`${disclosureSummary} py-1 no-hover:min-h-11`}>
           <DisclosureChevron />
           View unavailable {unavailable.length === 1 ? 'project' : 'projects'}
         </summary>
         {unavailable.map((p) => (
-          <p key={p.projectId}>
+          <p key={p.projectId} className="pl-5 text-muted-foreground">
             {p.projectId}: {p.reason ?? p.state}
             {p.omittedRuns > 0 ? ` · ${p.omittedRuns} omitted tasks` : ''}
           </p>
         ))}
       </details>
-      <Button variant="outline" onClick={retry} className="min-h-11">
+      <Button variant="outline" size="sm" onClick={retry} className="mt-2">
         Retry
       </Button>
     </div>

@@ -8,9 +8,9 @@ import { Link, useNavigate } from '@/lib/project-router'
 import { ApiError, pickVariant } from '@/api/client'
 import { queryKeys, useGroup, useHealth, useRuns } from '@/api/queries'
 import type { GroupVariant } from '@open-mercato/cezar-api-client'
-import { CenteredState } from '@/components/centered-state'
 import { DirectionalUsage } from '@/components/directional-usage'
-import { Pill } from '@/components/pill'
+import { ListEmpty, ListFrame, TaskStatusBadge } from '@/components/list-view'
+import { Page, PageBody, PageHeader, PageSection } from '@/components/page'
 import { RunDiff } from '@/components/run-diff'
 import {
   AlertDialog,
@@ -74,23 +74,25 @@ export function CompareVariantsRoute() {
   if (group.isError) {
     const notFound = group.error instanceof ApiError && group.error.status === 404
     return (
-      <div data-route="compare" className="flex min-h-full flex-col">
-        <CenteredState
-          icon={notFound ? <SearchXIcon /> : <ScaleIcon />}
-          tone={notFound ? 'neutral' : 'danger'}
-          title={notFound ? 'No such variant group' : 'Could not load the variants'}
-          subtitle={
-            notFound
-              ? 'No runs share this group id. The group may have been deleted, or a winner was already picked and the others removed.'
-              : group.error.message
-          }
-          actions={
-            <Button asChild variant="outline">
-              <Link to="/">Back to tasks</Link>
-            </Button>
-          }
-        />
-      </div>
+      <Page data-route="compare">
+        <PageBody className="flex flex-col pt-8">
+          <ListEmpty
+            icon={notFound ? <SearchXIcon /> : <ScaleIcon />}
+            tone={notFound ? 'neutral' : 'danger'}
+            title={notFound ? 'No such variant group' : 'Could not load the variants'}
+            description={
+              notFound
+                ? 'No runs share this group id. The group may have been deleted, or a winner was already picked and the others removed.'
+                : group.error.message
+            }
+            action={
+              <Button asChild variant="outline">
+                <Link to="/">Back to tasks</Link>
+              </Button>
+            }
+          />
+        </PageBody>
+      </Page>
     )
   }
 
@@ -137,45 +139,54 @@ function CompareView({
   })
 
   return (
-    <div data-route="compare" className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-5 md:px-6">
-      <header className="flex flex-col gap-1">
-        <h1 className="flex items-center gap-2 text-xl font-semibold">
-          <ScaleIcon className="size-5 shrink-0 text-violet" aria-hidden="true" />
-          <span className="min-w-0 truncate" title={title}>
-            {title}
+    <Page data-route="compare">
+      <PageHeader
+        eyebrow={
+          <span className="inline-flex items-center gap-1.5">
+            <ScaleIcon className="size-3.5" aria-hidden="true" />
+            Compare variants
           </span>
-        </h1>
-        <p className="text-[13px] text-muted-foreground">
-          {variants.length} variants of the same task, each in its own worktree — pick the diff you
-          want to keep. The others are cancelled and archived, their worktrees and branches removed.
-        </p>
-      </header>
+        }
+        title={<span title={title}>{title}</span>}
+        description={
+          <>
+            {variants.length} variants of the same task, each in its own worktree. Pick the one you want to
+            keep — the others are cancelled and archived, their worktrees and branches removed.
+          </>
+        }
+      />
 
-      <div
-        data-slot="compare-columns"
-        className={cn(
-          'grid grid-cols-1 gap-3',
-          variants.length >= 3 ? 'md:grid-cols-3' : 'md:grid-cols-2',
+      <PageBody>
+        <div
+          data-slot="compare-columns"
+          className={cn('grid grid-cols-1 gap-4', variants.length >= 3 ? 'lg:grid-cols-3' : 'md:grid-cols-2')}
+        >
+          {variants.map((variant) => (
+            <VariantColumn
+              key={variant.id}
+              variant={variant}
+              allTerminal={allTerminal}
+              pickPending={pick.isPending}
+              onPick={() => setConfirming(variant)}
+              showTokens={showTokens}
+              showCost={showCost}
+            />
+          ))}
+        </div>
+        {allTerminal ? null : (
+          <p data-slot="compare-wait-note" className="pt-3 text-[13px] text-muted-foreground">
+            You can pick once every variant has finished.
+          </p>
         )}
-      >
-        {variants.map((variant) => (
-          <VariantColumn
-            key={variant.id}
-            variant={variant}
-            allTerminal={allTerminal}
-            pickPending={pick.isPending}
-            onPick={() => setConfirming(variant)}
-            showTokens={showTokens}
-            showCost={showCost}
-          />
-        ))}
-      </div>
 
-      <section aria-label="Full diffs" className="flex flex-col gap-2">
-        {variants.map((variant) => (
-          <VariantDiff key={variant.id} variant={variant} />
-        ))}
-      </section>
+        <PageSection title="Full diffs" description="Every change each variant made, file by file.">
+          <ListFrame aria-label="Full diffs" className="divide-y divide-border">
+            {variants.map((variant) => (
+              <VariantDiff key={variant.id} variant={variant} />
+            ))}
+          </ListFrame>
+        </PageSection>
+      </PageBody>
 
       <AlertDialog open={confirming !== null} onOpenChange={(open) => !open && setConfirming(null)}>
         <AlertDialogContent>
@@ -203,7 +214,7 @@ function CompareView({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </Page>
   )
 }
 
@@ -231,71 +242,68 @@ function VariantColumn({
     <article
       data-slot="variant-column"
       data-variant={variant.variant}
-      className="flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-3.5 shadow-xs"
+      className="flex min-w-0 flex-col gap-4 rounded-xl border border-border bg-card p-5 shadow-xs"
     >
       <div className="flex items-center gap-2">
         <span
           data-slot="variant-letter"
           aria-label={`Variant ${variant.variant}`}
-          className="inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-violet/15 font-mono text-xs font-semibold text-violet"
+          className="inline-flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-[13px] font-semibold text-foreground"
         >
           {variant.variant}
         </span>
-        <Pill dot={attention.tone} pulse={attention.pulse}>
-          {attention.label}
-        </Pill>
-        {(showTokens && hasDirectionalUsage) || (showCost && cost) ? (
-          <span
-            data-slot="variant-token-metrics"
-            className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] text-soft-foreground"
-          >
-            {showTokens ? (
-              <DirectionalUsage
-                inputTokens={variant.inputTokens}
-                outputTokens={variant.outputTokens}
-              />
-            ) : null}
-            {showTokens && hasDirectionalUsage && showCost && cost ? (
-              <span aria-hidden="true">·</span>
-            ) : null}
-            {showCost && cost ? <span className="font-mono tabular-nums">{cost}</span> : null}
-          </span>
-        ) : null}
+        <span className="text-[15px] font-semibold text-foreground">Variant {variant.variant}</span>
+        <TaskStatusBadge attention={attention} className="ml-auto" />
       </div>
 
       {/* Honestly labeled: this block is git's own `git diff --stat` output from the variant's
           worktree, not this UI's ± stat — the numbers can disagree with a partial fetch. */}
       <div className="flex min-w-0 flex-col gap-1">
-        <span className="text-[10.5px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
-          git diff --stat
-        </span>
+        <span className="text-xs font-medium text-muted-foreground">Changes, from git diff --stat</span>
         <pre
           data-slot="variant-diffstat"
-          className="max-h-36 overflow-auto rounded-md bg-muted/60 px-2.5 py-2 font-mono text-[11px] leading-[1.6] whitespace-pre text-muted-foreground"
+          className="max-h-40 overflow-auto rounded-md bg-muted/60 px-3 py-2.5 font-mono text-[11px] leading-[1.7] whitespace-pre text-muted-foreground"
         >
-          {variant.diffStat.trimEnd() || '(no changes)'}
+          {variant.diffStat.trimEnd() || 'No changes'}
         </pre>
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="text-[10.5px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
-          Progress
-        </span>
+        <span className="text-xs font-medium text-muted-foreground">Progress notes</span>
         {variant.handoffExcerpt ? (
           <div
             data-slot="variant-progress"
-            className="max-h-28 min-w-0 overflow-hidden text-[12.5px] text-muted-foreground [mask-image:linear-gradient(to_bottom,black_75%,transparent)]"
+            className="max-h-32 min-w-0 overflow-hidden text-[13px] text-muted-foreground [mask-image:linear-gradient(to_bottom,black_75%,transparent)]"
           >
             <Markdown>{variant.handoffExcerpt}</Markdown>
           </div>
         ) : (
-          <p data-slot="variant-progress" className="text-xs text-soft-foreground">
-            (no progress notes)
+          <p data-slot="variant-progress" className="text-[13px] text-soft-foreground">
+            No progress notes
           </p>
         )}
       </div>
 
+      {(showTokens && hasDirectionalUsage) || (showCost && cost) ? (
+        <span
+          data-slot="variant-token-metrics"
+          className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground"
+        >
+          {showTokens ? (
+            <DirectionalUsage
+              inputTokens={variant.inputTokens}
+              outputTokens={variant.outputTokens}
+            />
+          ) : null}
+          {showTokens && hasDirectionalUsage && showCost && cost ? (
+            <span aria-hidden="true">·</span>
+          ) : null}
+          {showCost && cost ? <span className="font-mono tabular-nums">{cost}</span> : null}
+        </span>
+      ) : null}
+
       <Button
+        variant="outline"
         data-slot="variant-pick"
         title={
           allTerminal
@@ -322,17 +330,17 @@ function VariantDiff({ variant }: { variant: GroupVariant }) {
       onOpenChange={setOpen}
       data-slot="variant-diff"
       data-variant={variant.variant}
-      className="min-w-0 overflow-hidden rounded-lg border border-border bg-card"
+      className="min-w-0"
     >
-      <CollapsibleTrigger className="flex w-full items-center gap-2 px-3.5 py-2.5 text-left text-[13px] font-medium hover:bg-muted/50">
+      <CollapsibleTrigger className="flex min-h-11 w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm font-medium hover:bg-muted/50 sm:px-5">
         <ChevronRightIcon
-          className={cn('size-3.5 shrink-0 text-soft-foreground transition-transform', open && 'rotate-90')}
+          className={cn('size-4 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')}
           aria-hidden="true"
         />
-        Variant {variant.variant} — full diff
+        Variant {variant.variant}
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="border-t border-border/50 px-3 py-3">
+        <div className="border-t border-border px-3 py-3 sm:px-4">
           <RunDiff runId={variant.id} />
         </div>
       </CollapsibleContent>

@@ -1,4 +1,5 @@
-import { DisclosureChevron, disclosureSummary, widgetHeading } from './presentation'
+import { Inbox } from 'lucide-react'
+import { DisclosureChevron, disclosureSummary, Notice, WidgetEmpty, WidgetSkeleton, widgetHeading, widgetMeta } from './presentation'
 import { ExportRows } from './export-rows'
 import { useContext, useLayoutEffect, useMemo, useRef } from 'react'
 import type { DashboardFeed, DashboardFeedRow } from '@open-mercato/cezar-api-client'
@@ -72,12 +73,12 @@ export function Feed({
       data-export-context={`Results source: ${filter}; Last 7 days; loaded ${Math.min(count, rows.length)} rows`}
       className="min-w-0 gap-0 overflow-hidden py-0"
     >
-      <div className="space-y-2 border-b px-4 pt-2.5 pb-2">
+      <div className="space-y-2 px-5 pt-4 pb-3">
         <div className="flex min-h-9 flex-wrap items-center justify-between gap-2">
           <h2 ref={heading} tabIndex={-1} className={widgetHeading}>
             {tasksOnly ? 'Recent results' : 'Recent results & GitHub'}
           </h2>
-          <span className="font-mono text-[11px] text-soft-foreground">Last 7 days</span>
+          <span className={widgetMeta}>Last 7 days</span>
         </div>
         {!tasksOnly && (
           <SegmentedControl
@@ -93,7 +94,7 @@ export function Feed({
           />
         )}
         {tasksOnly && (
-          <p className="text-xs text-muted-foreground">
+          <p className="text-[13px] text-muted-foreground">
             Task results · No GitHub repositories configured
           </p>
         )}
@@ -102,7 +103,7 @@ export function Feed({
             className="text-xs text-muted-foreground"
             open={errors.length || githubFailed ? true : undefined}
           >
-            <summary className={`${disclosureSummary} py-1.5`}>
+            <summary className={`${disclosureSummary} py-1 no-hover:min-h-11`}>
               <DisclosureChevron />
               {errors.length || githubFailed
                 ? 'GitHub needs attention'
@@ -114,7 +115,7 @@ export function Feed({
                       ? `GitHub checked ${shortAge(fetched)} ago`
                       : 'GitHub source'}
             </summary>
-            <div className="flex flex-wrap items-center justify-between gap-x-3">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 pl-5 text-[13px]">
               <p>
                 {errors.length || githubFailed
                   ? fetched
@@ -130,8 +131,9 @@ export function Feed({
               </p>
               {!noGithub && (
                 <Button
-                  variant="ghost"
-                  className="min-h-11 px-0"
+                  variant="link"
+                  size="sm"
+                  className="px-0 no-hover:min-h-11"
                   disabled={query.githubFetching}
                   onClick={() => {
                     void query.refetch()
@@ -160,26 +162,32 @@ export function Feed({
             savePanel(entry, scrollKey, { count, scroll: event.currentTarget.scrollTop })
         }}
         tabIndex={0}
-        className="max-h-80 overflow-y-auto overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        className="max-h-96 overflow-y-auto overscroll-contain border-t border-border/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50"
       >
         {query.isError && (
-          <p role="alert" className="p-4 text-sm">
-            Could not load results.{' '}
-            <Button
-              className="min-h-11"
-              onClick={() => {
-                void query.retryFailed()
-              }}
-            >
-              Retry
-            </Button>
-          </p>
+          <Notice
+            className="m-3"
+            action={
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  void query.retryFailed()
+                }}
+              >
+                Retry
+              </Button>
+            }
+          >
+            Could not load results.
+          </Notice>
         )}
-        {query.isPending && <p className="p-4 text-sm">Loading results…</p>}
+        {query.isPending && <WidgetSkeleton label="Loading results…" className="p-5" />}
         {updates > 0 && (
           <Button
-            variant="ghost"
-            className="m-2 min-h-11"
+            variant="secondary"
+            size="sm"
+            className="mx-5 my-2"
             onClick={() => {
               staged.show()
               heading.current?.focus()
@@ -200,7 +208,7 @@ export function Feed({
               }
             />
           ) : (
-            <div key={row.key} className="border-b px-4 py-3 transition-colors hover:bg-muted/30">
+            <div key={row.key} className="border-b border-border/70 px-5 py-3 transition-colors last:border-0 hover:bg-muted/50">
               <ExportRows
                 rows={[
                   {
@@ -214,14 +222,14 @@ export function Feed({
                 ]}
               />
               <a
-                className="block break-words text-sm font-medium hover:underline no-hover:min-h-11"
+                className="block break-words text-sm font-medium leading-relaxed underline-offset-4 hover:underline no-hover:min-h-11"
                 href={row.url}
                 target="_blank"
                 rel="noreferrer"
               >
                 {row.title}
               </a>
-              <p className="mt-1 text-xs text-muted-foreground">
+              <p className="mt-0.5 text-xs text-muted-foreground">
                 {row.repo} · {row.itemKind === 'pr' ? 'PR' : 'Issue'} #{row.number} created ·{' '}
                 {shortAge(row.at)}
               </p>
@@ -236,30 +244,34 @@ export function Feed({
           !errors.length &&
           !loading &&
           query.data.coverage.projects.every((p) => p.state === 'complete') && (
-            <p className="px-4 py-8 text-sm text-muted-foreground">No results in the last 7 days</p>
+            <WidgetEmpty icon={Inbox} title="No results in the last 7 days" />
           )}
         {count < rows.length && (
-          <Button variant="ghost" className="m-2 min-h-11" onClick={more}>
+          <Button variant="ghost" size="sm" className="mx-3 my-2 text-muted-foreground" onClick={more}>
             Show {Math.min(20, rows.length - count)} more results
           </Button>
         )}
-        {query.data?.truncated && <p className="p-4 text-xs">Showing the latest 60 results</p>}
-        {query.data && (
-          <Coverage
-            coverage={query.data.coverage}
-            retry={() => {
-              void query.retryTasks()
-            }}
-          />
+        {query.data?.truncated && (
+          <p className="px-5 py-3 text-xs text-soft-foreground">Showing the latest 60 results</p>
+        )}
+        {query.data && query.data.coverage.projects.some((p) => p.state !== 'complete') && (
+          <div className="p-3">
+            <Coverage
+              coverage={query.data.coverage}
+              retry={() => {
+                void query.retryTasks()
+              }}
+            />
+          </div>
         )}
         {!tasksOnly && query.data?.sources.some((s) => s.state !== 'ready' || s.truncated) && (
-          <details className="p-4 text-xs">
-            <summary className={`${disclosureSummary} min-h-11`}>
+          <details className="px-5 py-3 text-xs text-muted-foreground">
+            <summary className={`${disclosureSummary} py-1 no-hover:min-h-11`}>
               <DisclosureChevron />
               Source details
             </summary>
             {query.data.sources.map((s) => (
-              <p className="break-words py-1" key={s.key}>
+              <p className="break-words py-1 pl-5" key={s.key}>
                 {sourceLabel(s.key)}:{' '}
                 {s.reason === 'No GitHub remote'
                   ? 'Not configured'

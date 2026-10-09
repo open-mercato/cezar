@@ -15,7 +15,7 @@ export function CommentCount({ count, className }: { count: number; className?: 
       data-slot="comment-count"
       title={`${label} for the agent`}
       aria-label={label}
-      className={cn('flex shrink-0 items-center gap-1 text-[11px] font-medium text-primary tabular-nums', className)}
+      className={cn('flex shrink-0 items-center gap-1 text-xs font-medium text-primary-strong tabular-nums', className)}
     >
       <MessageSquareIcon aria-hidden="true" className="size-3" />
       {count}

@@ -1,6 +1,6 @@
-import { DisclosureChevron, disclosureSummary, FilterSelect, filterLabel, Freshness, widgetHeader, widgetHeading } from './presentation'
+import { FilterSelect, filterLabel, Freshness, InfoHint, Notice, ReportNote, WidgetEmpty, WidgetSkeleton, widgetBody, widgetHeader, widgetHeading } from './presentation'
 import { useDashboardFilter } from './url-filter'
-import { Table2, ChevronDown } from 'lucide-react'
+import { Table2, ChevronDown, ChartColumn } from 'lucide-react'
 import { formatAmount, formatHours } from './format'
 import { ExportRows } from './export-rows'
 import { type ReactNode } from 'react'
@@ -28,6 +28,8 @@ function choices(visibility: UsageMetricVisibility): Metric[] {
     ...(visibility.tokens ? (['input', 'output'] as const) : []),
   ]
 }
+const definitions =
+  'Usage is grouped by creation date, not spending date. Completed tasks are grouped by finish date. Calendar days use your current UTC offset (fixed across the period), including today.'
 const formatValue = (value: number | null | undefined, metric: Metric) =>
   formatAmount(value, metric === 'cost')
 
@@ -55,7 +57,14 @@ function BarRow({
   const max = Math.max(1, ...series.map(height))
   return (
     <TooltipProvider delayDuration={150}>
-      <div className="flex h-20 items-end gap-0.5" role="group" aria-label="Daily trend">
+      <div className="relative h-24">
+        {/* Muted gridlines at 50% and 100%, and a baseline. */}
+        <div className="pointer-events-none absolute inset-0 flex flex-col justify-between" aria-hidden="true">
+          <span className="border-t border-dashed border-border/70" />
+          <span className="border-t border-dashed border-border/70" />
+          <span className="border-t border-border" />
+        </div>
+      <div className="relative flex h-full items-end gap-1" role="group" aria-label="Daily trend">
         {series.map((point) => {
           const value = height(point)
           const pct = Math.max(value > 0 ? 4 : 0, (value / max) * 100)
@@ -66,21 +75,24 @@ function BarRow({
                   data-export-keep
                   aria-label={describe(point)}
                   type="button"
-                  className="min-w-0 flex-1 rounded-t-sm transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="group/bar min-w-0 flex-1 rounded-t-[3px] transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
                   style={{ height: '100%', display: 'flex', alignItems: 'end' }}
                 >
                   <span
                     style={{ height: `${pct}%` }}
-                    className={`block w-full rounded-t-sm ${accent}`}
+                    className={`mx-auto block w-full max-w-7 rounded-t-[3px] ${accent}`}
                   />
                 </button>
               </TooltipTrigger>
-              <TooltipContent>{renderTooltip(point)}</TooltipContent>
+              <TooltipContent sideOffset={4} className="tabular-nums">
+                {renderTooltip(point)}
+              </TooltipContent>
             </Tooltip>
           )
         })}
       </div>
-      <div className="mt-1 flex justify-between text-xs text-muted-foreground">
+      </div>
+      <div className="mt-1.5 flex justify-between text-xs text-soft-foreground">
         <span>{formatDate(series[0]!.date)}</span>
         <span>{formatDate(series.at(-1)!.date)}</span>
       </div>
@@ -98,7 +110,7 @@ function DailyValuesTable({
   return (
     <table className="w-full text-left text-xs">
       <thead>
-        <tr className="border-b">
+        <tr className="border-b text-muted-foreground">
           <th className="py-1 pr-2 font-medium">Date</th>
           {metrics.map((metric) => (
             <th key={metric} className="py-1 pr-2 text-right font-medium">
@@ -111,7 +123,7 @@ function DailyValuesTable({
       </thead>
       <tbody>
         {series.map((point) => (
-          <tr key={point.date} className="border-b last:border-0">
+          <tr key={point.date} className="border-b border-border/70 last:border-0">
             <td className="py-1 pr-2">{formatDate(point.date)}</td>
             {metrics.map((metric) => (
               <td key={metric} className="py-1 pr-2 text-right tabular-nums">
@@ -139,9 +151,12 @@ function TrendMetricChart({
   const field = fields[metric]
   const reported = series.reduce((n, p) => n + (p[field]?.reportedTasks ?? 0), 0)
   return (
-    <div className="rounded-xl border p-3">
-      <p className={`text-xs font-medium ${accent.text}`}>{labels[metric]}</p>
-      <div className="mt-2">
+    <div className="min-w-0">
+      <p className="flex items-center gap-2 text-[13px] font-medium">
+        <span className={`size-2 rounded-[2px] ${accent.fill}`} aria-hidden="true" />
+        {labels[metric]}
+      </p>
+      <div className="mt-3">
         <BarRow
           series={series}
           describe={(p) =>
@@ -172,25 +187,28 @@ function ThroughputChart({ series }: { series: DashboardCostSeriesPoint[] }) {
   const timed = series.reduce((n, p) => n + (p.cycleReportedTasks ?? p.completed), 0)
   const avgCycleHours = timed ? weightedHours / timed : null
   return (
-    <div className="rounded-xl border p-3">
+    <div className="min-w-0">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="text-xs font-medium text-success">Completed tasks</p>
-        <p className="text-xs text-muted-foreground">
+        <p className="flex items-center gap-2 text-[13px] font-medium">
+          <span className="size-2 rounded-[2px] bg-success" aria-hidden="true" />
+          Completed tasks
+        </p>
+        <p className="text-xs text-muted-foreground tabular-nums">
           {totalCompleted} done · avg cycle{' '}
           {avgCycleHours === null ? 'unavailable' : formatHours(avgCycleHours)}
         </p>
       </div>
-      <p className="text-xs text-muted-foreground">
+      <p className="text-xs text-soft-foreground">
         {timed}/{totalCompleted} completed tasks have valid cycle times.
       </p>
-      <div className="mt-2">
+      <div className="mt-3">
         <BarRow
           series={series}
           describe={(p) =>
             `${p.date}: ${p.completed} completed tasks, average cycle ${p.avgCycleHours == null ? 'Unavailable' : formatHours(p.avgCycleHours)}`
           }
           height={(p) => p.completed}
-          accent="bg-success"
+          accent="bg-success/80"
           renderTooltip={(p) => (
             <div>
               <p>
@@ -233,7 +251,10 @@ export function Trends({ visibility }: { visibility: UsageMetricVisibility }) {
   return (
     <Card className="gap-0 py-0">
       <div className={widgetHeader}>
-        <h2 className={widgetHeading}>Trends</h2>
+        <div className="flex items-center gap-1">
+          <h2 className={widgetHeading}>Trends</h2>
+          <InfoHint label="How these metrics work">{definitions}</InfoHint>
+        </div>
         <label className={filterLabel}>
           Period
           <FilterSelect
@@ -245,7 +266,7 @@ export function Trends({ visibility }: { visibility: UsageMetricVisibility }) {
           </FilterSelect>
         </label>
       </div>
-      <div className="space-y-4 p-4 text-sm">
+      <div className={widgetBody}>
         {data && (
           <ExportRows
             rows={
@@ -294,40 +315,28 @@ export function Trends({ visibility }: { visibility: UsageMetricVisibility }) {
           />
         )}
 
-        <details className="text-xs text-muted-foreground">
-          <summary data-export-heading="Metric definitions" className={`${disclosureSummary} py-2`}>
-            <DisclosureChevron />
-            How these metrics work
-          </summary>
-          <p>
-            Usage is grouped by creation date, not spending date. Completed tasks are grouped by
-            finish date. Calendar days use your current UTC offset (fixed across the period),
-            including today.
-          </p>
-        </details>
-        {query.isPending && <p>Loading trends…</p>}
+        <ReportNote>{definitions}</ReportNote>
+        {query.isPending && <WidgetSkeleton label="Loading trends…" />}
         {query.isError && (
-          <p role="alert">
-            {data ? 'Showing stale trends. Could not refresh.' : 'Could not load trends.'}{' '}
-            <Button className="min-h-11" onClick={() => void query.refetch()}>
-              Retry
-            </Button>
-          </p>
-        )}
-        {data && (
-          <p className="text-xs text-muted-foreground">
-            <Freshness at={data.asOf} />
-          </p>
+          <Notice
+            action={
+              <Button variant="outline" size="sm" onClick={() => void query.refetch()}>
+                Retry
+              </Button>
+            }
+          >
+            {data ? 'Showing stale trends. Could not refresh.' : 'Could not load trends.'}
+          </Notice>
         )}
         {data && <Coverage coverage={data.coverage} retry={() => void query.refetch()} />}
         {data && empty && (
-          <p className="text-muted-foreground">No retained tasks in this period yet.</p>
+          <WidgetEmpty icon={ChartColumn} title="No retained tasks in this period yet." />
         )}
         {data && !empty && data.series.length > 0 && (
           <>
-            <div className="space-y-4">
+            <div className="space-y-8 pt-1">
               {metrics.length > 0 && (
-                <div className="grid gap-3 sm:grid-cols-[repeat(auto-fit,minmax(200px,1fr))]">
+                <div className="grid gap-x-10 gap-y-8 sm:grid-cols-[repeat(auto-fit,minmax(200px,1fr))]">
                   {metrics.map((metric) => (
                     <TrendMetricChart key={metric} metric={metric} series={data.series} />
                   ))}
@@ -335,19 +344,19 @@ export function Trends({ visibility }: { visibility: UsageMetricVisibility }) {
               )}
               <ThroughputChart series={data.series} />
             </div>
-            <details className="group rounded-lg border bg-muted/20 print:block">
+            <details className="group print:block">
               <summary
                 data-export-heading="Daily data"
-                className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 text-xs font-medium text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
+                className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-sm text-[13px] text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 no-hover:min-h-11 [&::-webkit-details-marker]:hidden"
               >
-                <Table2 className="size-4" aria-hidden="true" /> View data table
+                <Table2 className="size-3.5" aria-hidden="true" /> View data table
                 <ChevronDown
-                  className="ml-auto size-4 transition-transform group-open:rotate-180"
+                  className="size-3.5 transition-transform group-open:rotate-180 motion-reduce:transition-none"
                   aria-hidden="true"
                 />
               </summary>
               <div
-                className="max-h-80 overflow-auto border-t p-3 print:max-h-none print:overflow-visible"
+                className="mt-3 max-h-80 overflow-auto print:max-h-none print:overflow-visible"
                 role="region"
                 aria-label="Daily trend values"
                 tabIndex={0}
@@ -356,6 +365,11 @@ export function Trends({ visibility }: { visibility: UsageMetricVisibility }) {
               </div>
             </details>
           </>
+        )}
+        {data && (
+          <p className="text-xs text-soft-foreground">
+            <Freshness at={data.asOf} />
+          </p>
         )}
       </div>
     </Card>

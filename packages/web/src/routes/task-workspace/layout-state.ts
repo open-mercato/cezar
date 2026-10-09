@@ -23,15 +23,37 @@ export type ViewId = 'session' | 'changes' | 'commits' | 'files' | 'browser' | '
 
 export const VIEW_IDS: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'browser', 'graph']
 
-/** The Polish labels the spec names: `Czat`, `Zmiany`, `Commity`, `Pliki`. These are what the
- *  layout cards and column headers read, and what an automatic layout name is derived from. */
+/** What the layout cards and column headers read, and what an automatic layout name is derived
+ *  from. */
 const VIEW_LABELS: Record<ViewId, string> = {
-  session: 'Czat',
-  changes: 'Zmiany',
-  commits: 'Commity',
-  files: 'Pliki',
-  browser: 'Przeglądarka',
-  graph: 'Graf',
+  session: 'Chat',
+  changes: 'Changes',
+  commits: 'Commits',
+  files: 'Files',
+  browser: 'Browser',
+  graph: 'Graph',
+}
+
+/** The automatic names earlier builds minted in Polish. They are saved on the host as the
+ *  layout's NAME, so they are translated where a name is displayed and never rewritten. */
+const LEGACY_AUTO_NAMES: Record<string, string> = {
+  Czat: 'Chat',
+  Zmiany: 'Changes',
+  Commity: 'Commits',
+  Pliki: 'Files',
+  Przeglądarka: 'Browser',
+  Graf: 'Graph',
+}
+
+/** A layout's name as shown. Only an untouched automatic name is translated; anything the user
+ *  typed is theirs. */
+export function layoutDisplayName(name: string): string {
+  const match = /^(.+?)( \d+)?$/.exec(name)
+  if (!match) return name
+  const [, base = name, suffix = ''] = match
+  if (base === 'Układ') return `Layout${suffix}`
+  const translated = LEGACY_AUTO_NAMES[base]
+  return translated ? `${translated}${suffix}` : name
 }
 
 export function viewLabel(view: ViewId): string {
@@ -364,7 +386,7 @@ function replaceLayout(state: WorkspaceState, name: string, next: WorkspaceLayou
  * the spec's own example; `uniqueName` then settles any collision with a card the user renamed.
  */
 export function nextAutomaticName(layouts: readonly WorkspaceLayout[]): string {
-  return uniqueName(`Układ ${layouts.length + 1}`, layouts)
+  return uniqueName(`Layout ${layouts.length + 1}`, layouts)
 }
 
 /** A new card with one full-width column, activated. `name` defaults to the next automatic

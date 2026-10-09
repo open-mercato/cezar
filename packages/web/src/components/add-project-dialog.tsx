@@ -99,21 +99,19 @@ export function AddProjectDialog({
           decorate={(dir) => (
             <>
               {dir.isRepo ? (
-                <Badge variant="outline" className="shrink-0 text-[10px]">
+                <Badge variant="secondary" className="shrink-0 font-normal">
                   git
                 </Badge>
               ) : null}
               {registered.has(dir.path) ? (
-                <Badge variant="ghost" className="shrink-0 text-[10px] text-muted-foreground">
-                  already added
-                </Badge>
+                <span className="shrink-0 text-xs font-normal text-muted-foreground">already added</span>
               ) : null}
             </>
           )}
         />
 
         {register.isError ? (
-          <p data-slot="add-project-error" className="min-w-0 break-words text-[13px] text-danger">
+          <p data-slot="add-project-error" role="alert" className="min-w-0 text-[13px] break-words text-danger">
             {register.error instanceof Error ? register.error.message : 'could not add that folder'}
           </p>
         ) : null}
@@ -125,7 +123,7 @@ export function AddProjectDialog({
         <DialogFooter className="min-w-0 sm:items-center sm:justify-between">
           <span
             data-slot="add-project-target"
-            className="min-w-0 truncate font-mono text-[11.5px] text-muted-foreground"
+            className="min-w-0 truncate font-mono text-xs text-muted-foreground"
             title={target ?? undefined}
           >
             {target ?? ''}
@@ -135,6 +133,7 @@ export function AddProjectDialog({
               Cancel
             </Button>
             <Button
+              variant="default"
               data-slot="add-project-confirm"
               disabled={target === null || register.isPending}
               onClick={add}

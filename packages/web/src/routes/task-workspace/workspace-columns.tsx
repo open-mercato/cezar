@@ -22,7 +22,7 @@ import {
   type ViewId,
   type WorkspaceColumn,
 } from './layout-state'
-import { ViewItems, ViewPickerMenu } from './view-picker'
+import { VIEW_ICONS, ViewItems, ViewPickerMenu } from './view-picker'
 
 /** Narrower than this and the layout shows one column at a time (spec §5.2, §11). Tailwind's
  *  `lg`, which is where a three-way split first has room to be readable. */
@@ -94,7 +94,7 @@ export function WorkspaceColumns({
         {/* Compact tabs labelled by view, the spec's narrow-screen switcher. Several columns on the
             same view are a legitimate layout, so the label alone is ambiguous — the index
             disambiguates without inventing per-column names. */}
-        <div role="tablist" aria-label="Kolumny układu" className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
+        <div role="tablist" aria-label="Layout columns" className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
           {columns.map((entry, index) => (
             <button
               key={index}
@@ -120,7 +120,7 @@ export function WorkspaceColumns({
               column would take width from the single column that is showing. */}
           <span className="ml-auto flex shrink-0 items-center">
             <ViewPickerMenu
-              heading="Dodaj widok"
+              heading="Add a view"
               align="end"
               onPick={actions.addColumn}
               trigger={
@@ -132,10 +132,10 @@ export function WorkspaceColumns({
                   disabled={columns.length >= MAX_COLUMNS}
                   title={
                     columns.length >= MAX_COLUMNS
-                      ? `Maksymalnie ${MAX_COLUMNS} kolumny`
-                      : 'Dodaj widok — nowa kolumna'
+                      ? `At most ${MAX_COLUMNS} columns`
+                      : 'Add a view — new column'
                   }
-                  aria-label="Dodaj widok"
+                  aria-label="Add a view"
                   className="size-7 text-muted-foreground"
                 >
                   <PlusIcon aria-hidden="true" />
@@ -163,7 +163,7 @@ export function WorkspaceColumns({
           key={index}
           data-slot="workspace-column"
           data-view={column.view}
-          className="relative flex min-w-0 flex-col border-l border-border first:border-l-0"
+          className="relative flex min-w-0 flex-col border-l border-border/70 first:border-l-0"
           style={{ width: `${column.width}%` }}
         >
           {/* The divider lives INSIDE the column it precedes, absolutely positioned over that
@@ -181,13 +181,18 @@ export function WorkspaceColumns({
               onResize={actions.resizeColumns}
             />
           ) : null}
-          <ColumnHeader
-            index={index}
-            column={column}
-            count={columns.length}
-            actions={actions}
-            menu={columnMenu(index, column)}
-          />
+          {/* A lone column needs no bar of its own: the layout tab above already names it, and
+              its menu moves to the edge strip. The bar returns with the second column, where it
+              is what tells the columns apart and what a column is dragged by. */}
+          {columns.length > 1 ? (
+            <ColumnHeader
+              index={index}
+              column={column}
+              count={columns.length}
+              actions={actions}
+              menu={columnMenu(index, column)}
+            />
+          ) : null}
           <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
             {renderView(column.view, index, column)}
           </div>
@@ -197,7 +202,11 @@ export function WorkspaceColumns({
           menu: it is how a layout gains its second and third column, and it is the ONLY way to
           add one to a layout whose columns have all been closed — that case has no column menu
           to open. Disabled at three, which is the cap the same paragraph sets. */}
-      <AddColumnEdge count={columns.length} onPick={actions.addColumn} />
+      <AddColumnEdge
+        count={columns.length}
+        onPick={actions.addColumn}
+        extra={columns.length === 1 ? columnMenu(0, columns[0]!) : null}
+      />
     </div>
   )
 }
@@ -209,19 +218,28 @@ export function WorkspaceColumns({
  * A full-width call to action when the layout is empty, a narrow strip beside the columns
  * otherwise — the same control either way, so there is one answer to "how do I add a view".
  */
-function AddColumnEdge({ count, onPick }: { count: number; onPick: (view: ViewId) => void }) {
+function AddColumnEdge({
+  count,
+  onPick,
+  extra,
+}: {
+  count: number
+  onPick: (view: ViewId) => void
+  /** Stacked under the `+`: the lone column's own menu. */
+  extra?: ReactNode
+}) {
   const full = count === 0
   const atCap = count >= MAX_COLUMNS
   return (
     <div
       data-slot="add-column-edge"
       className={cn(
-        'flex shrink-0 items-center justify-center border-l border-border',
-        full ? 'flex-1 border-l-0' : 'w-9',
+        'flex shrink-0 justify-center border-l border-border/70',
+        full ? 'flex-1 items-center border-l-0' : 'w-9 flex-col items-center justify-start gap-0.5 pt-1',
       )}
     >
       <ViewPickerMenu
-        heading="Dodaj widok"
+        heading="Add a view"
         onPick={onPick}
         trigger={
           <Button
@@ -232,17 +250,18 @@ function AddColumnEdge({ count, onPick }: { count: number; onPick: (view: ViewId
             disabled={atCap}
             title={
               atCap
-                ? `Maksymalnie ${MAX_COLUMNS} kolumny`
-                : 'Dodaj widok — nowa kolumna po prawej'
+                ? `At most ${MAX_COLUMNS} columns`
+                : 'Add a view — new column on the right'
             }
-            aria-label="Dodaj widok"
+            aria-label="Add a view"
             className={full ? undefined : 'size-7 text-muted-foreground'}
           >
             <PlusIcon aria-hidden="true" />
-            {full ? 'Dodaj widok' : null}
+            {full ? 'Add a view' : null}
           </Button>
         }
       />
+      {extra}
     </div>
   )
 }
@@ -266,6 +285,7 @@ function ColumnHeader({
   menu: ReactNode
 }) {
   const [dropTarget, setDropTarget] = useState(false)
+  const ViewIcon = VIEW_ICONS[column.view]
 
   return (
     <header
@@ -290,7 +310,7 @@ function ColumnHeader({
         actions.moveColumn(from, index)
       }}
       className={cn(
-        'flex h-9 shrink-0 items-center gap-1 border-b border-border bg-background/95 px-2 backdrop-blur',
+        'group/column flex h-8 shrink-0 items-center gap-0.5 border-b border-border/70 bg-background pl-4 pr-1.5',
         dropTarget && 'bg-muted',
       )}
     >
@@ -308,18 +328,20 @@ function ColumnHeader({
           event.dataTransfer.effectAllowed = 'move'
         }}
         className={cn(
-          'min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground',
+          'flex min-w-0 flex-1 items-center gap-1.5 text-xs font-medium text-muted-foreground',
           count > 1 && 'cursor-grab active:cursor-grabbing',
         )}
       >
-        {viewLabel(column.view)}
+        <ViewIcon aria-hidden="true" className="size-3.5 shrink-0" />
+        <span className="truncate">{viewLabel(column.view)}</span>
       </span>
       {menu}
       <button
         type="button"
-        aria-label={`Zamknij kolumnę ${viewLabel(column.view)}`}
+        aria-label={`Close column ${viewLabel(column.view)}`}
+        title="Close column"
         onClick={() => actions.closeColumn(index)}
-        className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+        className="grid size-6 shrink-0 place-items-center rounded-sm text-soft-foreground hover:bg-muted hover:text-foreground"
       >
         <XIcon aria-hidden="true" className="size-3.5" />
       </button>
@@ -354,29 +376,30 @@ function ColumnMenu({
         <Button
           variant="ghost"
           size="icon-sm"
-          className="size-6 shrink-0 text-muted-foreground"
-          aria-label={`Menu kolumny ${viewLabel(column.view)}`}
+          className="size-6 shrink-0 text-soft-foreground hover:text-foreground"
+          aria-label={`Column menu ${viewLabel(column.view)}`}
         >
           <MoreVerticalIcon aria-hidden="true" className="size-3.5" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
-        <DropdownMenuLabel>Zmień widok</DropdownMenuLabel>
+        <DropdownMenuLabel>Change view</DropdownMenuLabel>
         <ViewItems onPick={(view) => actions.setColumnView(index, view)} disabled={column.view} />
         <DropdownMenuSeparator />
         {count < MAX_COLUMNS ? (
           <>
-            <DropdownMenuLabel>Dodaj kolumnę</DropdownMenuLabel>
+            <DropdownMenuLabel>Add column</DropdownMenuLabel>
             <ViewItems onPick={actions.addColumn} purpose="add" />
           </>
         ) : (
           <DropdownMenuLabel className="font-normal text-soft-foreground">
-            Maksymalnie {MAX_COLUMNS} kolumny
+            At most {MAX_COLUMNS} columns
           </DropdownMenuLabel>
         )}
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => actions.closeColumn(index)}>
-          Zamknij kolumnę
+          <XIcon aria-hidden="true" />
+          Close column
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -458,7 +481,7 @@ function ColumnDivider({
       data-slot="column-divider"
       role="separator"
       aria-orientation="vertical"
-      aria-label={`Zmień szerokość kolumny ${index + 1}`}
+      aria-label={`Resize column ${index + 1}`}
       aria-valuenow={Math.round(width)}
       /* The range this separator really has, which is a property of the PAIR it sits between and
          not of the row: `resizeColumns` clamps to `[floor, pair - floor]`, so in a 33/33/33
@@ -472,7 +495,7 @@ function ColumnDivider({
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
       onKeyDown={onKeyDown}
-      title="Przeciągnij, by zmienić szerokość — strzałki regulują precyzyjnie"
+      title="Drag to resize — arrow keys adjust precisely"
       // A 9px grab strip straddling the seam, invisible until reached for — the hit target §12
       // asks to be defined, at the low end of what a pointer can comfortably catch. It is
       // absolutely positioned, so widening it costs the columns no width. `touch-none` is

@@ -11,9 +11,12 @@ import {
 import type { ProviderId, ProviderStatusResponse } from '@open-mercato/cezar-api-client'
 import { StatusDot, type StatusDotTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
 import { providerStatusFor } from '@/lib/provider-status'
+import { cn } from '@/lib/utils'
+import { SettingsError, SettingsGroup } from './settings-field'
 
 /** The provider cards this pane renders, in order. Exported so tests count them from the
  *  source of truth rather than from a literal that a new runner silently invalidates. */
@@ -181,38 +184,34 @@ export function ProviderSettings() {
   }
 
   return (
-    <section id="providers" data-slot="provider-settings" className="scroll-mt-20">
-      <div className="mb-2">
-        <h2 className="text-sm font-semibold text-foreground">Providers</h2>
-        <p className="text-[13px] text-muted-foreground">
-          Connect the coding agents available on this computer.
-        </p>
-      </div>
-
+    <SettingsGroup
+      id="providers"
+      data-slot="provider-settings"
+      className="scroll-mt-20"
+      title="Providers"
+      description="Connect the coding agents available on this computer."
+      bare
+    >
       {status.isError ? (
-        <div
-          role="alert"
-          className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-danger/30 bg-danger/5 px-3 py-2.5"
+        <SettingsError
+          title="Provider status could not be loaded"
+          action={
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={status.isFetching}
+              onClick={() => void status.refetch()}
+            >
+              Retry
+            </Button>
+          }
         >
-          <div>
-            <p className="text-[13px] font-medium text-foreground">
-              Provider status could not be loaded
-            </p>
-            <p className="text-xs text-muted-foreground">{status.error.message}</p>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={status.isFetching}
-            onClick={() => void status.refetch()}
-          >
-            Retry
-          </Button>
-        </div>
+          {status.error.message}
+        </SettingsError>
       ) : null}
 
-      <div className="flex flex-col gap-2">
+      <Card flush className="divide-y divide-border">
         {PROVIDERS.map((provider) => {
           const current = providerStatusFor(status.data, provider.id)
           const state = current?.status
@@ -224,43 +223,38 @@ export function ProviderSettings() {
           const isConnecting = connect.isPending && connect.variables === provider.id
           const canRefresh = state === 'disconnected' || state === 'unknown'
           const incidentId = current?.authFailureId
+          const hint =
+            state === 'not-installed' ? (
+              <>
+                Install {provider.label}, then run{' '}
+                <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-[11px] text-foreground">{provider.login}</code>.
+              </>
+            ) : state === 'unknown' || (status.isError && !state) ? (
+              (current?.hint ?? 'Verification failed. Check again when the provider is available.')
+            ) : (
+              (current?.hint ?? null)
+            )
 
           return (
             <Fragment key={provider.id}>
               <div
                 data-slot="provider-card"
                 data-provider={provider.id}
-                className="rounded-md border border-border bg-card px-3.5 py-3"
+                className={cn('flex flex-col gap-2 px-5 py-3.5', state === 'not-installed' && 'bg-muted/30')}
               >
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <h3 className="text-[13px] font-semibold text-foreground">{provider.label}</h3>
-                    <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+                    <h3 className={cn('text-[13.5px] font-medium', state === 'not-installed' ? 'text-muted-foreground' : 'text-foreground')}>
+                      {provider.label}
+                    </h3>
+                    <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
                       <StatusDot tone={presentation.tone} pulse={status.isPending} />
                       <span>{presentation.label}</span>
-                      {current?.enabled === false ? <span>Disabled</span> : null}
-                    </div>
-                    {state === 'not-installed' ? (
-                      <p className="mt-1.5 text-xs text-soft-foreground">
-                        Install {provider.label}, then run <code>{provider.login}</code>.
-                      </p>
-                    ) : state === 'unknown' || (status.isError && !state) ? (
-                      <p className="mt-1.5 text-xs text-soft-foreground">
-                        {current?.hint ?? 'Verification failed. Check again when the provider is available.'}
-                      </p>
-                    ) : current?.hint ? (
-                      <p className="mt-1.5 text-xs text-soft-foreground">{current.hint}</p>
-                    ) : null}
+                      {current?.enabled === false ? <span>· Disabled</span> : null}
+                    </span>
                   </div>
 
                   <div className="flex items-center gap-2">
-                    {state !== 'not-installed' ? (
-                      <Switch
-                        checked={current?.enabled ?? true}
-                        aria-label={`Use ${provider.label}`}
-                        onCheckedChange={(enabled) => queueToggle(provider.id, enabled)}
-                      />
-                    ) : null}
                     {canRefresh ? (
                       <Button
                         type="button"
@@ -304,10 +298,18 @@ export function ProviderSettings() {
                         Try again
                       </Button>
                     ) : null}
+                    {state !== 'not-installed' ? (
+                      <Switch
+                        checked={current?.enabled ?? true}
+                        aria-label={`Use ${provider.label}`}
+                        onCheckedChange={(enabled) => queueToggle(provider.id, enabled)}
+                      />
+                    ) : null}
                   </div>
                 </div>
+                {hint ? <p className="text-xs text-pretty text-muted-foreground">{hint}</p> : null}
                 {incidentId !== undefined ? (
-                  <p className="mt-2 text-xs text-soft-foreground">
+                  <p className="text-xs text-pretty text-muted-foreground">
                     Use this after completing the provider sign-in flow. cezar cannot validate the
                     credential without a task/model request; it will verify it on the next task.
                   </p>
@@ -318,11 +320,11 @@ export function ProviderSettings() {
                 <div
                   role="region"
                   aria-label={`${manual.label} manual sign-in`}
-                  className="rounded-md border border-pending/40 bg-pending/5 px-3.5 py-3"
+                  className="bg-pending/5 px-5 py-3.5"
                 >
                   <p className="text-[13px] text-foreground">{manual.message}</p>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <code className="min-w-0 flex-1 overflow-x-auto rounded-sm bg-muted px-2 py-1.5 text-xs">
+                    <code className="min-w-0 flex-1 overflow-x-auto rounded-md bg-muted px-2.5 py-1.5 font-mono text-xs">
                       {manual.command}
                     </code>
                     <Button
@@ -339,7 +341,7 @@ export function ProviderSettings() {
             </Fragment>
           )
         })}
-      </div>
-    </section>
+      </Card>
+    </SettingsGroup>
   )
 }

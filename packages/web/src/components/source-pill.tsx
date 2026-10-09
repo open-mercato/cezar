@@ -134,7 +134,7 @@ export function SourcePill({
         >
           <EyeIcon aria-hidden="true" className="size-3.5" />
         </button>
-        {selected ? <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary" /> : null}
+        {selected ? <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary-strong" /> : null}
       </CommandItem>
     )
   }
@@ -165,17 +165,16 @@ export function SourcePill({
       }}
       className={cn(
         chipClass,
-        'font-mono text-[11.5px]',
         source === null
-          ? 'border-dashed text-soft-foreground'
-          : 'rounded-r-none border-r-0 border-foreground/60 pr-1.5 font-semibold text-foreground',
+          ? 'border-dashed'
+          : 'rounded-r-none border-r-0 pr-1.5 text-foreground',
       )}
     >
       <SourceIcon
         aria-hidden="true"
-        className={cn('size-3 shrink-0', source === null ? 'text-soft-foreground' : 'text-violet')}
+        className={cn('size-3.5 shrink-0', source === null ? 'text-soft-foreground' : 'text-primary-strong')}
       />
-      <span className="max-w-44 truncate">{!ready ? '…' : (source?.ref ?? 'Skill')}</span>
+      <span className="max-w-44 truncate">{!ready ? '…' : (source?.ref ?? 'Add skill')}</span>
       {chevron}
     </button>
   )
@@ -192,7 +191,7 @@ export function SourcePill({
       >
         {/* Split control, not a button inside a button: the trigger owns the menu, the ✕ owns
             the clear, and the seam between them is the ✕'s left border. */}
-        <span className="inline-flex items-center">
+        <span className="inline-flex min-w-0 items-center">
           <PopoverTrigger asChild>{trigger}</PopoverTrigger>
           {source !== null && ready ? (
             <button
@@ -203,10 +202,10 @@ export function SourcePill({
               onClick={() => onPick(null)}
               className={cn(
                 chipClass,
-                'rounded-l-none border-foreground/60 pl-1.5 pr-2 text-soft-foreground hover:text-foreground',
+                'rounded-l-none px-1.5 text-soft-foreground hover:text-foreground',
               )}
             >
-              <XIcon aria-hidden="true" className="size-3" />
+              <XIcon aria-hidden="true" className="size-3.5" />
             </button>
           ) : null}
         </span>
@@ -247,7 +246,7 @@ export function SourcePill({
                       {quickTask?.description ?? 'One agent run on your task — no ceremony.'}
                     </span>
                     {source === null ? (
-                      <CheckIcon aria-hidden="true" className="ml-auto size-3.5 shrink-0 text-primary" />
+                      <CheckIcon aria-hidden="true" className="ml-auto size-3.5 shrink-0 text-primary-strong" />
                     ) : null}
                   </CommandItem>
                 </CommandGroup>
@@ -285,7 +284,7 @@ export function SourcePill({
                           </span>
                         ) : null}
                         {selected ? (
-                          <CheckIcon aria-hidden="true" className="ml-auto size-3.5 shrink-0 text-primary" />
+                          <CheckIcon aria-hidden="true" className="ml-auto size-3.5 shrink-0 text-primary-strong" />
                         ) : null}
                       </CommandItem>
                     )

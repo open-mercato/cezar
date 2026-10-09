@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { FoldersIcon, XIcon } from 'lucide-react'
+import { ChevronDownIcon, MoreHorizontalIcon, PlusIcon, Trash2Icon, XIcon } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 
 import { putWorkspaceConfig } from '@/api/client'
@@ -17,15 +17,34 @@ import {
   type ProjectsResponse,
   type WorkspaceConfigResponse,
 } from '@open-mercato/cezar-api-client'
-import { CenteredState } from '@/components/centered-state'
+import { StatusDot } from '@/components/status-dot'
 import { IntegerStepper } from '@/components/integer-stepper'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
+import { Input } from '@/components/ui/input'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { toast } from '@/components/ui/toaster'
 import { allProjectTags, suggestTags } from '@/lib/project-tags'
 import { cn } from '@/lib/utils'
 import { RemoveProjectDialog, useProjectRemoval } from './remove-project'
-import { SettingsField } from './settings-field'
+import {
+  SettingsError,
+  SettingsField,
+  SettingsGroup,
+  SettingsLoading,
+  SettingsNote,
+  SettingsPane,
+} from './settings-field'
 
 /**
  * Global settings → Projects (multi-project spec, step 4.4; mockup
@@ -82,21 +101,11 @@ export function ProjectsSection() {
   const projects = useProjects()
 
   if (config.isPending || projects.isPending) {
-    return (
-      <p data-slot="projects-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
-        Loading projects…
-      </p>
-    )
+    return <SettingsLoading data-slot="projects-loading" label="Loading projects…" />
   }
   if (config.isError || projects.isError) {
     return (
-      <CenteredState
-        icon={<FoldersIcon />}
-        tone="danger"
-        title="Project settings did not load"
-        subtitle={(config.error ?? projects.error)?.message}
-        heading="h2"
-      />
+      <SettingsError title="Project settings did not load">{(config.error ?? projects.error)?.message}</SettingsError>
     )
   }
   return <ProjectsPane config={config.data} registry={projects.data} />
@@ -110,37 +119,32 @@ function ProjectsPane({
   registry: ProjectsResponse
 }) {
   return (
-    <div
-      data-slot="projects-section"
-      // `max-w-4xl`, not the `max-w-2xl` the other settings panes use: this is the one section
-      // whose content is a six-column TABLE rather than a stack of form fields, and 2xl left the
-      // Tags cell narrow enough to break `open-mercato` across two lines. The fields above keep
-      // their own `max-w-sm`, so widening the column costs them nothing.
-      className="mx-auto flex w-full max-w-4xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
-    >
-      <WorkspaceRootField
-        configKey="browseRoot"
-        value={config.browseRoot}
-        title="Default browse folder"
-        hint="Where “Open local folder…” starts. The picker cannot navigate above this folder."
-        placeholder="~/"
-        slot="browse"
-        savedLabel="Browse folder"
-        footer="Only affects folder browsing; GitHub checkouts use the separate checkout folder."
-      />
-      <WorkspaceRootField
-        configKey="projectsDir"
-        value={config.projectsDir}
-        title="Default checkout folder"
-        hint="Where “Clone from GitHub” puts new projects: <folder>/<project name>."
-        placeholder="~/cezar/projects"
-        slot="checkout"
-        savedLabel="Checkout folder"
-        footer="Only affects new checkouts; projects already registered keep their location."
-        refreshProjects
-      />
+    <SettingsPane data-slot="projects-section">
+      <SettingsGroup title="Folders" className="max-w-3xl">
+        <WorkspaceRootField
+          configKey="browseRoot"
+          value={config.browseRoot}
+          title="Default browse folder"
+          hint="Where “Open local folder…” starts. The picker cannot navigate above this folder."
+          placeholder="~/"
+          slot="browse"
+          savedLabel="Browse folder"
+          footer="Only affects folder browsing; GitHub checkouts use the separate checkout folder."
+        />
+        <WorkspaceRootField
+          configKey="projectsDir"
+          value={config.projectsDir}
+          title="Default checkout folder"
+          hint="Where “Clone from GitHub” puts new projects: <folder>/<project name>."
+          placeholder="~/cezar/projects"
+          slot="checkout"
+          savedLabel="Checkout folder"
+          footer="Only affects new checkouts; projects already registered keep their location."
+          refreshProjects
+        />
+      </SettingsGroup>
       <RegistryTable registry={registry} workspaceMax={config.resources.maxParallel} />
-    </div>
+    </SettingsPane>
   )
 }
 
@@ -201,7 +205,7 @@ function WorkspaceRootField({
       }`}
     >
       <div className="flex items-center gap-2">
-        <input
+        <Input
           type="text"
           spellCheck={false}
           aria-label={title}
@@ -216,7 +220,7 @@ function WorkspaceRootField({
             // the field, so leaving it up would be a lie about the current value.
             if (save.isError) save.reset()
           }}
-          className="block w-full max-w-sm rounded-md border border-input bg-card px-3 py-1.5 font-mono text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-invalid:border-danger disabled:opacity-50"
+          className="max-w-md font-mono text-[13px] md:text-[13px]"
         />
         <Button
           type="button"
@@ -234,13 +238,11 @@ function WorkspaceRootField({
       {serverError !== null ? (
         // The mockup's error line: the reason, then what did NOT happen — a failed probe
         // persists nothing, and saying so stops the reader wondering which value is live.
-        <p data-slot={`projects-${slot}-root-error`} role="alert" className="text-[11px] text-danger">
+        <SettingsNote tone="danger" data-slot={`projects-${slot}-root-error`} role="alert">
           {serverError} — setting unchanged
-        </p>
+        </SettingsNote>
       ) : (
-        <p className="text-[11px] text-soft-foreground">
-          {footer}
-        </p>
+        <SettingsNote>{footer}</SettingsNote>
       )}
     </SettingsField>
   )
@@ -267,47 +269,76 @@ function RegistryTable({
   }
 
   return (
-    <SettingsField
+    <SettingsGroup
       title="Registered projects"
-      hint={`The folders you have added. While this list is empty the folder cezar is serving is listed as “not registered” with an Add button; once you have projects, starting cezar somewhere new neither registers nor lists that folder — use “Add project” when you want to keep it. “Tags” group connected repositories — give the API, the web app and the design system a shared “storefront” tag and the global Tasks page can show all three as one piece of work. “Max parallel” caps how many of that project's tasks run at once (leave it empty to inherit the workspace limit); the workspace limit (${workspaceMax}) still applies as an overall ceiling, so a per-project value above it has no extra effect until the workspace limit is raised. Removing a project only unregisters it — no files on disk are deleted.`}
+      description="The folders you have added. Removing a project only unregisters it — no files on disk are deleted."
+      bare
     >
+      <Collapsible>
+        <CollapsibleTrigger className="group/how inline-flex items-center gap-1 text-[13px] font-medium text-muted-foreground hover:text-foreground">
+          How registration, tags and limits work
+          <ChevronDownIcon aria-hidden="true" className="size-3.5 transition-transform group-data-[state=open]/how:rotate-180" />
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <ul className="mt-2 max-w-3xl list-disc space-y-1.5 pl-5 text-[13px] text-pretty text-muted-foreground">
+            <li>
+              While this list is empty the folder cezar is serving is listed as “not registered” with an Add
+              button; once you have projects, starting cezar somewhere new neither registers nor lists that
+              folder — use “Add project” when you want to keep it.
+            </li>
+            <li>
+              “Tags” group connected repositories — give the API, the web app and the design system a shared
+              “storefront” tag and the global Tasks page can show all three as one piece of work.
+            </li>
+            <li>
+              “Max parallel” caps how many of that project's tasks run at once (leave it empty to inherit the
+              workspace limit); the workspace limit ({workspaceMax}) still applies as an overall ceiling, so a
+              per-project value above it has no extra effect until the workspace limit is raised.
+            </li>
+          </ul>
+        </CollapsibleContent>
+      </Collapsible>
+
       {/* Defensive: `GET /api/v1/projects` names at least the folder this server is serving
           whenever the registry is empty (the unregistered row), and the registry's own rows
           otherwise — so today this branch cannot render. Kept because an empty table with
           headers and no rows would be a worse answer than a sentence if that ever changes. */}
       {registry.projects.length === 0 ? (
-        <p data-slot="projects-empty" className="text-[13px] text-soft-foreground">
-          No projects registered yet.
-        </p>
+        <Empty data-slot="projects-empty" className="rounded-xl border border-dashed border-border py-10">
+          <EmptyHeader>
+            <EmptyTitle>No projects registered yet.</EmptyTitle>
+            <EmptyDescription>Open a local folder or clone from GitHub in the sidebar.</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       ) : (
-        <div className="overflow-x-auto rounded-md border border-border">
-          <table className="w-full border-collapse text-sm">
+        <Card flush>
+          <Table className="min-w-[800px] table-fixed">
             {/* Not "registered": this table also renders the folder cezar is serving without
-                having saved it, whose only action is Add project. A screen-reader user was told
-                the list was registered projects and then met a row that is the opposite. */}
+                having saved it, whose only action is Add project. */}
             <caption className="sr-only">Projects in this workspace</caption>
             {/* Explicit widths rather than letting the browser distribute them by content: Tags
-                is the one cell whose content GROWS with use, and auto-layout kept giving it
-                whatever the fixed-size controls left over — which was not enough for one chip. */}
+                is the one cell whose content GROWS with use. */}
             <colgroup>
               <col />
-              <col style={{ width: '104px' }} />
-              <col style={{ width: '260px' }} />
-              <col style={{ width: '150px' }} />
-              <col style={{ width: '72px' }} />
-              <col style={{ width: '92px' }} />
+              <col style={{ width: '130px' }} />
+              <col style={{ width: '180px' }} />
+              <col style={{ width: '176px' }} />
+              <col style={{ width: '76px' }} />
+              <col style={{ width: '52px' }} />
             </colgroup>
-            <thead>
-              <tr className="border-b border-border text-left text-[12px] text-soft-foreground">
-                <th scope="col" className="px-3 py-2 font-medium">Project</th>
-                <th scope="col" className="px-3 py-2 font-medium">Status</th>
-                <th scope="col" className="px-3 py-2 font-medium">Tags</th>
-                <th scope="col" className="px-3 py-2 font-medium">Max parallel</th>
-                <th scope="col" className="px-3 py-2 font-medium">Added</th>
-                <th scope="col" className="px-3 py-2 font-medium text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="pl-5">Project</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Tags</TableHead>
+                <TableHead>Max parallel</TableHead>
+                <TableHead>Added</TableHead>
+                <TableHead className="pr-3">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {registry.projects.map((project) => (
                 <ProjectRow
                   key={project.id}
@@ -319,9 +350,9 @@ function RegistryTable({
                   onRemove={() => setConfirming(project)}
                 />
               ))}
-            </tbody>
-          </table>
-        </div>
+            </TableBody>
+          </Table>
+        </Card>
       )}
 
       <RemoveProjectDialog
@@ -329,7 +360,7 @@ function RegistryTable({
         onOpenChange={(open) => !open && setConfirming(null)}
         onConfirm={confirmRemoval}
       />
-    </SettingsField>
+    </SettingsGroup>
   )
 }
 
@@ -349,75 +380,88 @@ function ProjectRow({
   onRemove: () => void
 }) {
   return (
-    <tr data-slot="project-row" data-project={project.id} className="border-b border-border last:border-0">
-      <th scope="row" className="max-w-0 px-3 py-2 text-left font-normal">
-        <span className="block truncate text-foreground">{project.name}</span>
-        <span className="block truncate font-mono text-[11px] text-soft-foreground" title={project.root}>
+    <TableRow data-slot="project-row" data-project={project.id} className="hover:bg-transparent">
+      <TableCell className="max-w-0 py-3 pl-5">
+        <span className="block truncate font-medium text-foreground">{project.name}</span>
+        <span className="block truncate font-mono text-[11px] text-muted-foreground" title={project.root}>
           {project.root}
         </span>
-      </th>
-      <td className="px-3 py-2">
-        <span
-          data-slot="project-status"
-          className={project.status === 'missing' ? 'text-[12px] text-danger' : 'text-[12px] text-soft-foreground'}
-        >
-          {STATUS_LABEL[project.status]}
-        </span>
-        {project.unregistered ? (
-          // Where `source` (how it got into the registry) would go — it is not in the registry,
-          // and this is the row's whole story, so it says that instead.
-          <span data-slot="project-unregistered" className="ml-1 text-[11px] text-soft-foreground">
-            · not registered
+      </TableCell>
+      <TableCell>
+        <span className="flex flex-wrap items-center gap-x-1.5 text-[13px]">
+          <StatusDot tone={project.status === 'missing' ? 'danger' : project.status === 'ok' ? 'success' : 'neutral'} />
+          <span
+            data-slot="project-status"
+            className={project.status === 'missing' ? 'text-danger' : 'text-foreground'}
+          >
+            {STATUS_LABEL[project.status]}
           </span>
-        ) : project.status !== 'missing' ? (
-          <span className="ml-1 text-[11px] text-soft-foreground">· {project.source}</span>
-        ) : null}
-      </td>
-      <td className="px-3 py-2">
+          {project.unregistered ? (
+            // Where `source` (how it got into the registry) would go — it is not in the registry,
+            // and this is the row's whole story, so it says that instead.
+            <span data-slot="project-unregistered" className="text-xs text-muted-foreground">
+              · not registered
+            </span>
+          ) : project.status !== 'missing' ? (
+            <span className="text-xs text-muted-foreground">· {project.source}</span>
+          ) : null}
+        </span>
+      </TableCell>
+      <TableCell className="whitespace-normal">
         {/* Every registry edit is meaningless for a folder that has no registry row: tags and
             the per-project cap are stored ON the entry, and Remove would 404. The Add button in
             the Actions cell is the only thing this row can honestly offer. */}
         {project.unregistered ? (
-          <span className="text-[12px] text-soft-foreground">—</span>
+          <span className="text-muted-foreground">—</span>
         ) : (
           <ProjectTagsEditor project={project} vocabulary={vocabulary} />
         )}
-      </td>
-      <td className="px-3 py-2">
+      </TableCell>
+      <TableCell>
         {project.unregistered ? (
-          <span className="text-[12px] text-soft-foreground">—</span>
+          <span className="text-muted-foreground">—</span>
         ) : (
           <MaxParallelStepper project={project} workspaceMax={workspaceMax} />
         )}
-      </td>
-      <td className="px-3 py-2 tabular-nums text-soft-foreground">
+      </TableCell>
+      <TableCell className="tabular-nums text-muted-foreground">
         {project.unregistered ? '—' : shortDate(project.addedAt)}
-      </td>
-      <td className="px-3 py-2 text-right">
+      </TableCell>
+      <TableCell className="pr-3 text-right">
         {project.unregistered ? (
-          <AddBootProjectButton root={project.root} name={project.name} disabled={disabled} />
+          <AddBootProjectButton root={project.root} name={project.name} disabled={disabled} compact />
         ) : (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            data-action="project-remove"
-            // Names the gesture precisely for a screen reader, where the row context that makes a
-            // bare "Remove" safe-sounding isn't read out with it — but LEADS with the button's own
-            // word, so the accessible name contains the visible one (WCAG 2.5.3 Label in Name) and
-            // speech input still reaches the control. Same shape as the General page's button.
-            aria-label={`Remove ${project.name} from the workspace — unregisters it, no files are deleted`}
-            // The boot project is refused server-side too (this server runs out of it);
-            // disabling here means the user gets the explanation before the click, not after.
-            title={isBoot ? 'cezar is serving this project — stop it and use `cezar projects remove`' : undefined}
-            disabled={disabled || isBoot}
-            onClick={onRemove}
-          >
-            Remove
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" variant="ghost" size="icon-sm" aria-label={`Actions for ${project.name}`}>
+                <MoreHorizontalIcon aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-64">
+              {/* The boot project is refused server-side too (this server runs out of it); saying
+                  so here means the user gets the explanation before the click, not after. */}
+              {isBoot ? (
+                <DropdownMenuLabel className="text-xs font-normal text-pretty text-muted-foreground">
+                  cezar is serving this project — stop it and use `cezar projects remove`
+                </DropdownMenuLabel>
+              ) : null}
+              <DropdownMenuItem
+                variant="destructive"
+                data-action="project-remove"
+                // LEADS with the item's own word, so the accessible name contains the visible one
+                // (WCAG 2.5.3 Label in Name). Same shape as the General page's button.
+                aria-label={`Remove ${project.name} from the workspace — unregisters it, no files are deleted`}
+                disabled={disabled || isBoot}
+                onSelect={onRemove}
+              >
+                <Trash2Icon aria-hidden="true" />
+                Remove from workspace
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
-      </td>
-    </tr>
+      </TableCell>
+    </TableRow>
   )
 }
 
@@ -435,17 +479,20 @@ export function AddBootProjectButton({
   root,
   name,
   disabled = false,
+  compact = false,
 }: {
   root: string
   name: string
   disabled?: boolean
+  /** Icon-only, for a table's narrow actions cell. */
+  compact?: boolean
 }) {
   const register = useRegisterProject()
   return (
     <Button
       type="button"
       variant="outline"
-      size="sm"
+      size={compact ? 'icon-sm' : 'sm'}
       data-action="project-add-boot"
       aria-label={`Add ${name} to your projects`}
       title="cezar is serving this folder — save it to your projects"
@@ -457,7 +504,8 @@ export function AddBootProjectButton({
         })
       }
     >
-      Add project
+      <PlusIcon aria-hidden="true" />
+      {compact ? null : 'Add project'}
     </Button>
   )
 }
@@ -551,7 +599,7 @@ export function ProjectTagsEditor({
           data-slot="project-tag"
           // `whitespace-nowrap`: a hyphenated tag (`open-mercato`) was wrapping mid-word into a
           // two-line chip, which read as two tags.
-          className="inline-flex max-w-full items-center gap-1 rounded-full bg-violet/15 py-px pr-1 pl-2 text-[11px] font-medium whitespace-nowrap text-violet"
+          className="inline-flex h-6 max-w-full items-center gap-0.5 rounded-full bg-muted pr-1 pl-2 text-xs font-medium whitespace-nowrap text-foreground"
         >
           {tag}
           <button
@@ -562,7 +610,7 @@ export function ProjectTagsEditor({
             aria-label={`Remove tag ${tag} from ${project.name}`}
             disabled={update.isPending}
             onClick={() => remove(tag)}
-            className="rounded-full p-0.5 hover:bg-violet/25 disabled:opacity-50"
+            className="rounded-full p-0.5 text-muted-foreground hover:bg-border hover:text-foreground disabled:opacity-50"
           >
             <XIcon className="size-3" aria-hidden="true" />
           </button>
@@ -646,7 +694,7 @@ export function ProjectTagsEditor({
                 if (last !== undefined) remove(last)
               }
             }}
-            className="h-6 w-16 min-w-0 flex-1 rounded-md border border-input bg-card px-1.5 text-[12px] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+            className="h-6 w-16 min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1.5 text-xs outline-none placeholder:text-soft-foreground hover:border-input focus-visible:border-ring focus-visible:bg-card focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
           />
         </PopoverAnchor>
         <PopoverContent
@@ -674,7 +722,7 @@ export function ProjectTagsEditor({
           // and picking a suggestion for the happy path.
           onInteractOutside={(event) => event.preventDefault()}
         >
-          <p className="px-2 pt-1 pb-1.5 text-[10.5px] text-soft-foreground">
+          <p className="px-2 pt-1 pb-1.5 text-xs text-muted-foreground">
             Tags used in this workspace
           </p>
           {suggestions.map((tag, index) => (
@@ -694,7 +742,7 @@ export function ProjectTagsEditor({
               }}
               onMouseEnter={() => setHighlight(index)}
               className={cn(
-                'flex w-full items-center rounded-sm px-2 py-1 text-left text-[12px] font-medium text-violet',
+                'flex w-full items-center rounded-sm px-2 py-1.5 text-left text-[13px] text-foreground',
                 index === highlight && 'bg-muted',
               )}
             >

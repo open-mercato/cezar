@@ -1,8 +1,9 @@
-import { FolderSearchIcon } from 'lucide-react'
+import { ChevronRightIcon, FolderSearchIcon } from 'lucide-react'
 import { Link } from 'react-router'
 
 import type { ProjectsResponse } from '@open-mercato/cezar-api-client'
-import { CenteredState } from '@/components/centered-state'
+import { ListEmpty, ListFrame } from '@/components/list-view'
+import { Page, PageBody } from '@/components/page'
 
 /**
  * `/p/<unknown>/…` (multi-project spec, step 3.2): a deep link to a project this server has
@@ -27,32 +28,36 @@ export function UnknownProjectRoute({
     : [{ id: registry.bootProject, name: registry.bootProject }]
 
   return (
-    <div data-route="unknown-project" className="flex min-h-full flex-col">
-      <CenteredState
-        icon={<FolderSearchIcon />}
-        tone="neutral"
-        title={`“${projectId}” isn’t registered here`}
-        // "can open", not "registered on this one": the list below is the
-        // `GET /api/v1/projects` payload, which since seed-once leads with the
-        // folder cezar is serving WITHOUT having registered it. Offering that row
-        // under a sentence calling it registered contradicts the "· not registered"
-        // marker the same folder carries in Settings.
-        subtitle="This workspace doesn’t serve a project by that id. The link may come from another machine’s workspace — these are the projects this one can open:"
-      >
-        <ul data-slot="registered-projects" className="mx-auto flex w-full max-w-xs flex-col gap-1.5 text-left">
-          {projects.map((project) => (
-            <li key={project.id}>
-              <Link
-                to={`/p/${encodeURIComponent(project.id)}/`}
-                className="flex items-baseline gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm font-medium text-foreground shadow-xs transition-colors hover:bg-card-2"
-              >
-                {project.name || project.id}
-                <span className="font-mono text-[11px] font-normal text-soft-foreground">/p/{project.id}</span>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </CenteredState>
-    </div>
+    <Page data-route="unknown-project" width="narrow">
+      <PageBody className="flex flex-col justify-center py-10">
+        <ListEmpty
+          className="border-0"
+          icon={<FolderSearchIcon />}
+          title={<h1>{`“${projectId}” isn’t registered here`}</h1>}
+          // "can open", not "registered on this one": the list below is the
+          // `GET /api/v1/projects` payload, which since seed-once leads with the
+          // folder cezar is serving WITHOUT having registered it.
+          description="This workspace doesn’t serve a project by that id. The link may come from another machine’s workspace — these are the projects this one can open:"
+          action={
+            <ListFrame className="w-full text-left">
+              <ul data-slot="registered-projects" className="divide-y divide-border">
+                {projects.map((project) => (
+                  <li key={project.id}>
+                    <Link
+                      to={`/p/${encodeURIComponent(project.id)}/`}
+                      className="flex min-h-11 items-center gap-3 px-4 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted/50"
+                    >
+                      <span className="min-w-0 flex-1 truncate">{project.name || project.id}</span>
+                      <span className="font-mono text-[11px] font-normal text-muted-foreground">/p/{project.id}</span>
+                      <ChevronRightIcon className="size-4 shrink-0 text-soft-foreground" aria-hidden="true" />
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </ListFrame>
+          }
+        />
+      </PageBody>
+    </Page>
   )
 }

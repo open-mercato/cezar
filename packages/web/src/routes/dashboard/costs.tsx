@@ -1,5 +1,6 @@
 import { useSheetState, useSheetPosition, newSheetSelection, useSheetTrigger } from './sheet-state'
-import { DisclosureChevron, disclosureSummary, FilterSelect, filterLabel, Freshness, widgetHeader, widgetHeading } from './presentation'
+import { EyeOff, Inbox } from 'lucide-react'
+import { FilterSelect, filterLabel, Freshness, InfoHint, Notice, ReportNote, WidgetEmpty, WidgetSkeleton, widgetBody, widgetHeader, widgetHeading } from './presentation'
 import { useDashboardFilter } from './url-filter'
 import { formatAmount } from './format'
 import { useState } from 'react'
@@ -81,11 +82,13 @@ export function DashboardUsageCosts() {
 export function UsageCosts({ visibility }: { visibility: UsageMetricVisibility }) {
   return (
     <Card className="gap-0 py-0">
-      <div className={widgetHeader}>
-        <h2 className={widgetHeading}>Usage &amp; cost</h2>
-      </div>
       {!visibility.cost && !visibility.tokens ? (
-        <p className="p-4 text-sm">Usage metrics are hidden by workspace settings</p>
+        <>
+          <div className={widgetHeader}>
+            <h2 className={widgetHeading}>Usage &amp; cost</h2>
+          </div>
+          <WidgetEmpty icon={EyeOff} title="Usage metrics are hidden by workspace settings" />
+        </>
       ) : (
         <CostContent key={`${visibility.cost}:${visibility.tokens}`} visibility={visibility} />
       )}
@@ -165,8 +168,27 @@ function CostPeriod({
   const currentPartial = latest?.coverage.projects.some((p) => p.state !== 'complete')
   const coverageChanged = JSON.stringify(data?.coverage) !== JSON.stringify(latest?.coverage)
   const empty = data?.totals.tasks === 0 && !partial && !currentPartial
+  const definitions = `Includes archived tasks and subtasks. ${policy.cost ? 'Reported USD is not an invoice. ' : ''}Missing reports are excluded, not treated as zero. Calendar days use your current UTC offset, including today.`
   return (
-    <div className="space-y-4 p-4 text-sm">
+    <>
+    <div className={widgetHeader}>
+      <div className="flex items-center gap-1">
+        <h2 className={widgetHeading}>Usage &amp; cost</h2>
+        <InfoHint label="How these metrics work">{definitions}</InfoHint>
+      </div>
+      <label className={filterLabel}>
+        Tasks created
+        <FilterSelect
+          value={period}
+          onChange={(e) => setPeriod(e.target.value as DashboardCosts['period'])}
+        >
+          <option value="all">All time</option>
+          <option value="7d">Last 7 days</option>
+          <option value="30d">Last 30 days</option>
+        </FilterSelect>
+      </label>
+    </div>
+    <div className={widgetBody}>
       {data && (
         <ExportRows
           rows={
@@ -197,64 +219,37 @@ function CostPeriod({
         />
       )}
 
-      {data && (
-        <p className="text-xs text-muted-foreground">
-          <Freshness at={data.asOf} />
-        </p>
-      )}
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h3 className="font-medium">Lifetime totals of retained tasks</h3>
-          <details className="mt-1 text-xs text-muted-foreground">
-            <summary
-              data-export-heading="Metric definitions"
-              className={`${disclosureSummary} min-h-11`}
-            >
-              <DisclosureChevron />
-              How these metrics work
-            </summary>
-            <p>
-              Includes archived tasks and subtasks.{' '}
-              {policy.cost && 'Reported USD is not an invoice. '}Missing reports are excluded,
-              not treated as zero. Calendar days use your current UTC offset, including today.
-            </p>
-          </details>
-        </div>
-        <label className={filterLabel}>
-          Tasks created
-          <FilterSelect
-            value={period}
-            onChange={(e) => setPeriod(e.target.value as DashboardCosts['period'])}
-          >
-            <option value="all">All time</option>
-            <option value="7d">Last 7 days</option>
-            <option value="30d">Last 30 days</option>
-          </FilterSelect>
-        </label>
+
+      <div>
+        <h3 className="text-[13px] text-muted-foreground">
+          Lifetime totals of retained tasks
+          {period !== 'all' && ' created in this period — not spending during the period'}
+        </h3>
+        <ReportNote>{definitions}</ReportNote>
       </div>
-      {period !== 'all' && (
-        <p className="text-muted-foreground">
-          Lifetime usage of tasks created in this period — not spending during the period.
-        </p>
-      )}
-      {query.isPending && <p>Loading usage…</p>}
+      {query.isPending && <WidgetSkeleton label="Loading usage…" />}
       {query.isError && (
-        <p role="alert">
-          {data ? 'Showing stale usage. Could not refresh.' : 'Could not load usage.'}{' '}
-          <Button className="min-h-11" onClick={() => void query.refetch()}>
-            Retry
-          </Button>
-        </p>
+        <Notice
+          action={
+            <Button variant="outline" size="sm" onClick={() => void query.refetch()}>
+              Retry
+            </Button>
+          }
+        >
+          {data ? 'Showing stale usage. Could not refresh.' : 'Could not load usage.'}
+        </Notice>
       )}
       {changed && (
-        <p role="status">
+        <Notice
+          tone="neutral"
+          action={
+            <Button variant="outline" size="sm" onClick={() => setAccepted(latest)}>
+              Updates available — Show
+            </Button>
+          }
+        >
           Newer usage data is available; displayed values use the previous snapshot.
-        </p>
-      )}
-      {changed && (
-        <Button className="min-h-11" variant="outline" onClick={() => setAccepted(latest)}>
-          Updates available — Show
-        </Button>
+        </Notice>
       )}
       {data && partial && (
         <div>
@@ -271,7 +266,7 @@ function CostPeriod({
       {data && (
         <>
           {!empty && (
-            <div className="report-cost-metrics grid gap-3 sm:grid-cols-[repeat(auto-fit,minmax(220px,1fr))]">
+            <div className="report-cost-metrics grid gap-x-10 gap-y-6 pt-1 sm:grid-cols-[repeat(auto-fit,minmax(200px,1fr))]">
               {choices(policy).map((metric) => (
                 <CostMetricCard
                   key={metric}
@@ -285,23 +280,27 @@ function CostPeriod({
             </div>
           )}
           {!policy.cost && !policy.tokens && (
-            <p>Usage metrics are hidden by workspace settings</p>
+            <WidgetEmpty icon={EyeOff} title="Usage metrics are hidden by workspace settings" />
           )}
           {data.totals.tasks === 0 ? (
-            <p>
-              {partial || currentPartial
-                ? 'No retained tasks could be read from available sources.'
-                : 'No retained tasks in this cohort.'}
-            </p>
+            <WidgetEmpty
+              icon={Inbox}
+              title={
+                partial || currentPartial
+                  ? 'No retained tasks could be read from available sources.'
+                  : 'No retained tasks in this cohort.'
+              }
+            >
+              {empty && 'Usage appears when tasks report cost or tokens.'}
+            </WidgetEmpty>
           ) : (
             choices(policy).every((metric) => !data.totals[fields[metric]]?.reportedTasks) && (
-              <p>No reports for the visible metrics in this cohort.</p>
+              <p className="text-[13px] text-muted-foreground">
+                No reports for the visible metrics in this cohort.
+              </p>
             )
           )}
-          {empty && (
-            <p className="text-muted-foreground">Usage appears when tasks report cost or tokens.</p>
-          )}
-          <p className="text-muted-foreground">
+          <p className="text-xs text-soft-foreground">
             Deleted tasks are excluded from retained history.
             {data.invalidDateTasks
               ? ` ${data.invalidDateTasks} tasks have missing or invalid creation dates${period === 'all' ? '; included in All time' : '; excluded from this period'}.`
@@ -309,10 +308,12 @@ function CostPeriod({
           </p>
           {!empty && (policy.cost || policy.tokens) && (
             <>
-              <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-end justify-between gap-2 pt-2">
                 <div>
-                  <h3 className="font-medium">Top projects</h3>
-                  <p className="text-muted-foreground">Ranking uses reported metrics only.</p>
+                  <h3 className="text-sm font-semibold">Top projects</h3>
+                  <p className="text-[13px] text-muted-foreground">
+                    Ranking uses reported metrics only.
+                  </p>
                 </div>
                 <SortSelect value={effectiveSort} onChange={setSort} visibility={policy} />
               </div>
@@ -325,10 +326,20 @@ function CostPeriod({
                 currentProjects={latest?.projects ?? []}
                 onSelect={openPanel}
               />
-              <Button data-usage-trigger className="min-h-11" variant="outline" onClick={() => openPanel('')}>
-                View tasks
-              </Button>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Button data-usage-trigger size="sm" variant="outline" onClick={() => openPanel('')}>
+                  View tasks
+                </Button>
+                <p className="text-xs text-soft-foreground">
+                  <Freshness at={data.asOf} />
+                </p>
+              </div>
             </>
+          )}
+          {(empty || !(policy.cost || policy.tokens)) && (
+            <p className="text-xs text-soft-foreground">
+              <Freshness at={data.asOf} />
+            </p>
           )}
         </>
       )}
@@ -366,6 +377,7 @@ function CostPeriod({
         </SheetContent>
       </Sheet>
     </div>
+    </>
   )
 }
 function CostTasks({
@@ -448,20 +460,24 @@ function CostTaskPage({
   const coverageChanged = JSON.stringify(data?.coverage) !== JSON.stringify(query.data?.coverage)
   const validProject = !projectId || snapshot.projects.some((p) => p.projectId === projectId)
   return (
-    <div className="space-y-3 p-4 text-sm" data-sheet-loading={query.isFetching}>
+    <div className="space-y-3 px-4 pb-4 text-sm" data-sheet-loading={query.isFetching}>
       <SortSelect value={effectiveSort} onChange={setSort} visibility={policy} />
-      {query.isPending && <p>Loading tasks…</p>}
+      {query.isPending && <WidgetSkeleton label="Loading tasks…" rows={4} />}
       {query.isError && (
-        <p role="alert">
-          Could not refresh tasks. {data ? 'Showing stale usage.' : ''}{' '}
-          <Button className="min-h-11" onClick={() => void query.refetch()}>
-            Retry
-          </Button>
-        </p>
+        <Notice
+          action={
+            <Button variant="outline" size="sm" onClick={() => void query.refetch()}>
+              Retry
+            </Button>
+          }
+        >
+          Could not refresh tasks. {data ? 'Showing stale usage.' : ''}
+        </Notice>
       )}
       {changed && (
         <Button
-          className="min-h-11"
+          variant="outline"
+          size="sm"
           onClick={() => {
             setAccepted(query.data)
             setAcceptedCount(count)
@@ -485,15 +501,18 @@ function CostTaskPage({
       )}
       {data && (
         <>
-          <p className="border-b pb-2 font-mono text-[11px] text-soft-foreground">
+          <p className="text-xs text-muted-foreground tabular-nums">
             {data.tasks.rows.length} of {data.tasks.total} retained tasks
           </p>
           {data.tasks.total === 0 && (
-            <p>
-              {data.coverage.projects.some((p) => p.state !== 'complete')
-                ? 'No tasks could be read from available sources.'
-                : 'No retained tasks in this cohort.'}
-            </p>
+            <WidgetEmpty
+              icon={Inbox}
+              title={
+                data.coverage.projects.some((p) => p.state !== 'complete')
+                  ? 'No tasks could be read from available sources.'
+                  : 'No retained tasks in this cohort.'
+              }
+            />
           )}
           {data.tasks.rows.map((row) => (
             <CostTaskRow
@@ -515,7 +534,8 @@ function CostTaskPage({
           ))}
           {data.tasks.nextOffset !== null && (
             <Button
-              className="min-h-11"
+              variant="outline"
+              size="sm"
               disabled={query.isFetching}
               onClick={() => {
                 setPagingSnapshot(data)
@@ -556,12 +576,12 @@ function CostTaskRow({
   }
   const label = (metric: Sort) => `${labels[metric]}: ${format(row[fields[metric]], metric)}`
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 border-b py-3 last:border-0">
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 border-b border-border/70 py-3 last:border-0">
       <div className="min-w-0">
         <div className="flex items-start gap-2">
           <StatusDot tone={attention.tone} pulse={attention.pulse} className="mt-[7px]" />
           <Link
-            className="line-clamp-2 break-words font-medium leading-snug hover:underline no-hover:min-h-11"
+            className="line-clamp-2 break-words font-medium leading-snug underline-offset-4 hover:underline no-hover:min-h-11"
             title={row.title}
             to={`/p/${encodeURIComponent(row.projectId)}/tasks/${encodeURIComponent(row.id)}`}
             aria-disabled={disabled || undefined}

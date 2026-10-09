@@ -27,10 +27,11 @@ export function TabLink({
       aria-current={active ? 'page' : undefined}
       onClick={onClick}
       className={cn(
-        '-mb-px flex h-8 items-center rounded-t-md border-b-2 px-3 text-[13px] font-medium',
-        active
-          ? 'border-foreground font-semibold text-foreground'
-          : 'border-transparent text-muted-foreground hover:bg-muted hover:text-foreground',
+        // The shadcn `line` tab: a quiet label with a 2px ink underline when current.
+        'relative -mb-px flex h-9 items-center gap-1.5 px-3 text-[13.5px] font-medium whitespace-nowrap transition-colors outline-none',
+        'after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:rounded-full after:bg-foreground after:opacity-0 after:transition-opacity',
+        'focus-visible:rounded-md focus-visible:ring-[3px] focus-visible:ring-ring/50',
+        active ? 'text-foreground after:opacity-100' : 'text-muted-foreground hover:text-foreground',
       )}
     >
       {children}

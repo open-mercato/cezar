@@ -1,14 +1,41 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { CheckIcon, GitBranchIcon, GitPullRequestIcon, PlusIcon } from 'lucide-react'
+import {
+  ArrowLeftRightIcon,
+  CopyIcon,
+  GitBranchIcon,
+  GitForkIcon,
+  GitPullRequestIcon,
+  MoreHorizontalIcon,
+  PlusIcon,
+  SearchIcon,
+} from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 
 import { createRepoBranch, putConfig } from '@/api/client'
 import { queryKeys, useGithub, useHealth } from '@/api/queries'
 import type { GithubItem, HealthResponse, RepoInfo, RepoResponse } from '@open-mercato/cezar-api-client'
+import { PageBody, PageSection, PageToolbar } from '@/components/page'
+import { StatusDot } from '@/components/status-dot'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Field, FieldDescription, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
+import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from '@/components/ui/toaster'
 import { cn, isHttpUrl } from '@/lib/utils'
+
+/** Radix Select has no empty-string item: this stands for "no base branch configured". */
+const FOLLOW_CHECKED_OUT = '__follow__'
 
 /**
  * The repo view's Branches segment (R5 Step 1.7): the branch list `GET /api/repo` already
@@ -64,6 +91,7 @@ export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: 
   })
 
   const [newName, setNewName] = useState('')
+  const [createOpen, setCreateOpen] = useState(false)
   const [branchQuery, setBranchQuery] = useState('')
   const normalizedBranchQuery = branchQuery.trim().toLowerCase()
   const filteredBranches = normalizedBranchQuery
@@ -73,105 +101,181 @@ export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: 
     event.preventDefault()
     const name = newName.trim()
     if (!name) return
-    branchAction.mutate(name, { onSuccess: () => setNewName('') })
+    branchAction.mutate(name, {
+      onSuccess: () => {
+        setNewName('')
+        setCreateOpen(false)
+      },
+    })
+  }
+  const copyName = (name: string) => {
+    void navigator.clipboard?.writeText(name).then(() => toast(`Copied ${name}`))
   }
 
   return (
-    <section data-slot="repo-branches" className="flex flex-col gap-6 px-4 py-4 md:px-6">
-      <div>
-        <h2 className="text-xs font-semibold tracking-wide text-soft-foreground uppercase">Branches</h2>
-        <Input
-          aria-label="Filter branches"
-          placeholder="Filter branches…"
-          value={branchQuery}
-          onChange={(event) => setBranchQuery(event.target.value)}
-          className="mt-2 max-w-xl"
-        />
-        <ul data-slot="repo-branch-list" className="mt-2 flex max-w-xl flex-col divide-y divide-border">
-          {filteredBranches.map((name) => {
-            const current = name === info.branch
-            return (
-              <li key={name} data-slot="branch-row" data-branch={name} className="flex min-h-9 items-center gap-2 py-1">
-                <GitBranchIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-                <span className={cn('min-w-0 truncate font-mono text-xs', current && 'font-semibold')}>{name}</span>
-                {current ? (
-                  <span
-                    data-slot="branch-current"
-                    className="flex shrink-0 items-center gap-1 rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground"
-                  >
-                    <CheckIcon aria-hidden="true" className="size-3" />
-                    current
-                  </span>
-                ) : (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    data-action="switch-branch"
-                    className="ml-auto"
-                    disabled={branchAction.isPending}
-                    onClick={() => branchAction.mutate(name)}
-                  >
-                    Switch
-                  </Button>
-                )}
-              </li>
-            )
-          })}
-          {filteredBranches.length === 0 ? (
-            <li data-slot="branch-empty" className="py-3 text-xs text-soft-foreground">
-              No branches match “{branchQuery.trim()}”.
-            </li>
-          ) : null}
-        </ul>
-
-        <form data-slot="branch-create" className="mt-3 flex max-w-md items-center gap-2" onSubmit={submitCreate}>
-          <Input
-            aria-label="New branch name"
-            placeholder="new-branch-name"
-            value={newName}
-            onChange={(event) => setNewName(event.target.value)}
+    <section data-slot="repo-branches" className="flex flex-1 flex-col">
+      <PageToolbar>
+        <InputGroup className="w-full sm:max-w-xs">
+          <InputGroupAddon>
+            <SearchIcon aria-hidden="true" />
+          </InputGroupAddon>
+          <InputGroupInput
+            aria-label="Filter branches"
+            placeholder="Filter branches…"
+            value={branchQuery}
+            onChange={(event) => setBranchQuery(event.target.value)}
           />
-          <Button
-            type="submit"
-            variant="outline"
-            size="sm"
-            data-action="create-branch"
-            disabled={!newName.trim() || branchAction.isPending}
-          >
-            <PlusIcon aria-hidden="true" />
-            Create
-          </Button>
-        </form>
-      </div>
+        </InputGroup>
+        <span className="text-[13px] text-muted-foreground tabular-nums">
+          {filteredBranches.length === repo.branches.length
+            ? `${repo.branches.length} branches`
+            : `${filteredBranches.length} of ${repo.branches.length}`}
+        </span>
+        <Popover open={createOpen} onOpenChange={setCreateOpen}>
+          <PopoverTrigger asChild>
+            <Button variant="outline" size="sm" className="ml-auto" data-action="new-branch">
+              <PlusIcon aria-hidden="true" />
+              New branch
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="end" className="w-80">
+            <form data-slot="branch-create" className="flex flex-col gap-3" onSubmit={submitCreate}>
+              <Field>
+                <FieldLabel htmlFor="new-branch-name">New branch name</FieldLabel>
+                <Input
+                  id="new-branch-name"
+                  aria-label="New branch name"
+                  placeholder="new-branch-name"
+                  className="font-mono"
+                  value={newName}
+                  onChange={(event) => setNewName(event.target.value)}
+                />
+                <FieldDescription>Created from {info.branch} and checked out.</FieldDescription>
+              </Field>
+              <Button
+                type="submit"
+                size="sm"
+                className="self-end"
+                data-action="create-branch"
+                disabled={!newName.trim() || branchAction.isPending}
+              >
+                Create branch
+              </Button>
+            </form>
+          </PopoverContent>
+        </Popover>
+      </PageToolbar>
 
-      <div className="max-w-md">
-        <label
-          htmlFor="base-branch-picker"
-          className="text-xs font-semibold tracking-wide text-soft-foreground uppercase"
-        >
-          Agents’ base branch
-        </label>
-        {/* A native <select>: a handful of branch names needs no popover machinery, and the
-            OS picker is the better control on phones. */}
-        <select
-          id="base-branch-picker"
-          data-slot="base-branch-picker"
-          value={repo.baseBranch ?? ''}
-          disabled={setBase.isPending}
-          onChange={(event) => setBase.mutate(event.target.value === '' ? null : event.target.value)}
-          className="mt-1.5 block w-full rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
-        >
-          <option value="">follow checked-out branch (default)</option>
-          {repo.branches.map((name) => (
-            <option key={name} value={name}>
-              {name}
-            </option>
-          ))}
-        </select>
-        <p className="mt-1 text-[11px] text-soft-foreground">New task worktrees branch from this.</p>
-      </div>
+      <PageBody className="grid items-start gap-x-10 gap-y-8 lg:grid-cols-[minmax(0,1fr)_20rem]">
+        <div className="overflow-hidden rounded-xl border bg-card shadow-xs">
+          <Table data-slot="repo-branch-list">
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="h-10 w-full pl-4 text-xs font-medium text-muted-foreground">Branch</TableHead>
+                <TableHead className="h-10 w-12 pr-3">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filteredBranches.map((name) => {
+                const current = name === info.branch
+                const base = name === repo.baseBranch
+                return (
+                  <TableRow key={name} data-slot="branch-row" data-branch={name} className="h-11 hover:bg-muted/50">
+                    <TableCell className="max-w-0 pl-4">
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        <GitBranchIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+                        <span className={cn('min-w-0 truncate font-mono text-[12.5px]', current && 'font-semibold')}>
+                          {name}
+                        </span>
+                        {current ? (
+                          <Badge variant="outline" data-slot="branch-current" className="gap-1.5 font-normal">
+                            <StatusDot tone="success" />
+                            Current
+                          </Badge>
+                        ) : null}
+                        {base ? (
+                          <Badge variant="secondary" data-slot="branch-base" className="font-normal">
+                            Agents’ base
+                          </Badge>
+                        ) : null}
+                      </div>
+                    </TableCell>
+                    <TableCell className="pr-3 text-right">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${name}`}>
+                            <MoreHorizontalIcon aria-hidden="true" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem
+                            data-action="switch-branch"
+                            disabled={current || branchAction.isPending}
+                            onSelect={() => branchAction.mutate(name)}
+                          >
+                            <ArrowLeftRightIcon aria-hidden="true" />
+                            Switch to this branch
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            data-action="set-base-branch"
+                            disabled={base || setBase.isPending}
+                            onSelect={() => setBase.mutate(name)}
+                          >
+                            <GitForkIcon aria-hidden="true" />
+                            Use as agents’ base branch
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onSelect={() => copyName(name)}>
+                            <CopyIcon aria-hidden="true" />
+                            Copy name
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
+              {filteredBranches.length === 0 ? (
+                <TableRow className="hover:bg-transparent">
+                  <TableCell
+                    colSpan={2}
+                    data-slot="branch-empty"
+                    className="h-20 text-center text-[13px] text-muted-foreground"
+                  >
+                    No branches match “{branchQuery.trim()}”.
+                  </TableCell>
+                </TableRow>
+              ) : null}
+            </TableBody>
+          </Table>
+        </div>
 
-      {health.data?.forge?.available ? <ForgePullRequests /> : null}
+        <div className="min-w-0">
+          <PageSection title="Agents’ base branch" description="New task worktrees branch from this.">
+            <Select
+              value={repo.baseBranch ?? FOLLOW_CHECKED_OUT}
+              disabled={setBase.isPending}
+              onValueChange={(value) => setBase.mutate(value === FOLLOW_CHECKED_OUT ? null : value)}
+            >
+              <SelectTrigger id="base-branch-picker" data-slot="base-branch-picker" aria-label="Agents’ base branch" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={FOLLOW_CHECKED_OUT}>Follow checked-out branch (default)</SelectItem>
+                {repo.branches.map((name) => (
+                  <SelectItem key={name} value={name} className="font-mono text-[12.5px]">
+                    {name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </PageSection>
+
+          {health.data?.forge?.available ? <ForgePullRequests /> : null}
+        </div>
+      </PageBody>
     </section>
   )
 }
@@ -181,40 +285,46 @@ export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: 
  *  honestly rather than hidden, since at this point a forge was detected. */
 function ForgePullRequests() {
   const github = useGithub({ limit: 20 })
+  const note = 'text-[13px] text-muted-foreground'
   return (
-    <div data-slot="repo-prs" className="max-w-xl">
-      <h2 className="text-xs font-semibold tracking-wide text-soft-foreground uppercase">Open pull requests</h2>
-      {github.isPending ? (
-        <p className="mt-2 text-xs text-soft-foreground">Loading pull requests…</p>
-      ) : github.isError ? (
-        <p className="mt-2 text-xs text-soft-foreground">{github.error.message}</p>
-      ) : !github.data.available ? (
-        <p data-slot="repo-prs-unavailable" className="mt-2 text-xs text-soft-foreground">
-          {github.data.reason ?? 'The forge is unreachable right now.'}
-        </p>
-      ) : github.data.prs.length === 0 ? (
-        <p className="mt-2 text-xs text-soft-foreground">No open pull requests.</p>
-      ) : (
-        <ul className="mt-2 flex flex-col divide-y divide-border">
-          {github.data.prs.map((pr) => (
-            <PullRequestRow key={pr.number} pr={pr} />
-          ))}
-        </ul>
-      )}
-    </div>
+    <PageSection title="Open pull requests">
+      <div data-slot="repo-prs">
+        {github.isPending ? (
+          <p className={note}>Loading pull requests…</p>
+        ) : github.isError ? (
+          <p className={note}>{github.error.message}</p>
+        ) : !github.data.available ? (
+          <p data-slot="repo-prs-unavailable" className={note}>
+            {github.data.reason ?? 'The forge is unreachable right now.'}
+          </p>
+        ) : github.data.prs.length === 0 ? (
+          <p className={note}>No open pull requests.</p>
+        ) : (
+          <ul className="-mx-2 flex flex-col">
+            {github.data.prs.map((pr) => (
+              <PullRequestRow key={pr.number} pr={pr} />
+            ))}
+          </ul>
+        )}
+      </div>
+    </PageSection>
   )
 }
 
 function PullRequestRow({ pr }: { pr: GithubItem }) {
   const inner = (
     <>
-      <GitPullRequestIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-      <span className="shrink-0 font-mono text-[11px] text-muted-foreground">#{pr.number}</span>
-      <span className="min-w-0 flex-1 truncate text-[13px]">{pr.title}</span>
-      {pr.checks ? <ChecksBadge checks={pr.checks} /> : null}
+      <GitPullRequestIcon aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1">
+        <span className="line-clamp-2 text-[13px] text-foreground">{pr.title}</span>
+        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="font-mono text-[11px]">#{pr.number}</span>
+          {pr.checks ? <ChecksBadge checks={pr.checks} /> : null}
+        </span>
+      </span>
     </>
   )
-  const rowClass = 'flex min-w-0 items-center gap-2 rounded-sm px-1.5 py-2'
+  const rowClass = 'flex min-w-0 items-start gap-2 rounded-md px-2 py-2'
   return (
     <li data-slot="pr-row" data-number={pr.number}>
       {/* href protocol guard (#431): link only for http(s) URLs, else inert row. */}
@@ -232,16 +342,9 @@ function PullRequestRow({ pr }: { pr: GithubItem }) {
 /** The checks badge — the same three words the GitHub tab uses, tinted by outcome. */
 function ChecksBadge({ checks }: { checks: 'passing' | 'failing' | 'pending' }) {
   return (
-    <span
-      data-slot="pr-checks"
-      data-checks={checks}
-      className={cn(
-        'shrink-0 text-[10px] font-medium',
-        checks === 'passing' && 'text-success',
-        checks === 'failing' && 'text-danger',
-        checks === 'pending' && 'text-muted-foreground',
-      )}
-    >
+    <span data-slot="pr-checks" data-checks={checks} className="flex items-center gap-1">
+      <span aria-hidden="true">·</span>
+      <StatusDot tone={checks === 'passing' ? 'success' : checks === 'failing' ? 'danger' : 'pending'} />
       {checks}
     </span>
   )

@@ -1,8 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query'
+import { BellOffIcon } from 'lucide-react'
 import * as React from 'react'
 
 import { putWorkspaceUiState } from '@/api/client'
 import { useWorkspaceUiState, workspaceQueryKeys } from '@/api/queries'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
 import {
@@ -10,6 +12,7 @@ import {
   notificationSupport,
   type NotificationSupport,
 } from '@/lib/notifications'
+import { SettingsField, SettingsGroup, SettingsPane } from './settings-field'
 
 /**
  * Settings → Notifications (R6 Step 1.7, spec §"Cross-cutting").
@@ -83,44 +86,43 @@ export function NotificationsSection() {
   const unsupported = permission === 'unsupported'
 
   return (
-    <div
-      data-slot="notifications-section"
-      className="mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
-    >
-      <section className="flex flex-col gap-2">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h2 className="text-sm font-semibold text-foreground">
-              <label htmlFor="notifications-enabled">Notify when an agent needs you</label>
-            </h2>
-            <p className="text-[13px] text-muted-foreground">
-              A browser notification when a task starts waiting, asks for review, or fails —
-              only while this tab is in the background. Off by default.
-            </p>
-          </div>
-          <Switch
-            id="notifications-enabled"
-            data-slot="notifications-toggle"
-            checked={enabled}
-            disabled={unsupported}
-            onCheckedChange={onToggle}
-          />
-        </div>
+    <SettingsPane data-slot="notifications-section">
+      <SettingsGroup title="Browser">
+        <SettingsField
+          title="Notify when an agent needs you"
+          htmlFor="notifications-enabled"
+          hint="A browser notification when a task starts waiting, asks for review, or fails — only while this tab is in the background. Off by default."
+          control={
+            <Switch
+              id="notifications-enabled"
+              data-slot="notifications-toggle"
+              checked={enabled}
+              disabled={unsupported}
+              onCheckedChange={onToggle}
+            />
+          }
+        >
+          {unsupported ? (
+            <Alert data-slot="notifications-unsupported">
+              <BellOffIcon aria-hidden="true" />
+              <AlertDescription>
+                This browser does not support notifications, so the toggle is unavailable here.
+              </AlertDescription>
+            </Alert>
+          ) : null}
 
-        {unsupported ? (
-          <p data-slot="notifications-unsupported" className="text-[13px] text-muted-foreground">
-            This browser does not support notifications, so the toggle is unavailable here.
-          </p>
-        ) : null}
-
-        {!unsupported && enabled && permission === 'denied' ? (
-          <p data-slot="notifications-denied" className="text-[13px] text-danger">
-            This browser is blocking notifications for the cockpit. The preference is saved, but
-            nothing will be delivered here until you allow notifications in the browser&apos;s
-            site settings.
-          </p>
-        ) : null}
-      </section>
-    </div>
+          {!unsupported && enabled && permission === 'denied' ? (
+            <Alert variant="destructive" data-slot="notifications-denied">
+              <BellOffIcon aria-hidden="true" />
+              <AlertDescription>
+                This browser is blocking notifications for the cockpit. The preference is saved, but
+                nothing will be delivered here until you allow notifications in the browser&apos;s
+                site settings.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+        </SettingsField>
+      </SettingsGroup>
+    </SettingsPane>
   )
 }

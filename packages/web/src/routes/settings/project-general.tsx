@@ -3,12 +3,23 @@ import { useNavigate } from 'react-router'
 
 import { useProjects, useWorkspaceConfig } from '@/api/queries'
 import type { Capabilities, ProjectListEntry } from '@open-mercato/cezar-api-client'
+import { StatusDot } from '@/components/status-dot'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useActiveProjectId } from '@/lib/project-router'
 import { ProjectFolderField } from './project-location'
 import { AddBootProjectButton, MaxParallelStepper, STATUS_LABEL } from './projects-section'
 import { RemoveProjectDialog, useProjectRemoval } from './remove-project'
-import { SettingsField } from './settings-field'
+import {
+  DangerZone,
+  SettingsError,
+  SettingsFact,
+  SettingsFacts,
+  SettingsField,
+  SettingsGroup,
+  SettingsLoading,
+  SettingsNote,
+} from './settings-field'
 
 /**
  * Project settings → General: what THIS project is, and the few knobs that belong to the project
@@ -53,22 +64,16 @@ export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<C
   const config = useWorkspaceConfig()
 
   if (projects.isPending) {
-    return (
-      <p data-slot="project-general-loading" className="text-[13px] text-soft-foreground">
-        Loading project…
-      </p>
-    )
+    return <SettingsLoading data-slot="project-general-loading" label="Loading project…" />
   }
   // An unreadable registry is SAID, not skipped. Defense in depth rather than a path a user
   // reaches today: `ProjectScopeRoute` keeps a scoped URL on "Loading…" while the registry query
-  // is unresolved, so this branch only renders where the gate is not in front of it. It belongs
-  // here anyway — on desktop the section cards are `md:hidden` (the left nav already lists them),
-  // so a silent `null` would leave the whole pane blank with no hint that anything went wrong.
+  // is unresolved, so this branch only renders where the gate is not in front of it.
   if (projects.isError) {
     return (
-      <p data-slot="project-general-error" className="text-[13px] text-danger">
-        Could not read the project registry — {projects.error.message}
-      </p>
+      <SettingsError data-slot="project-general-error" title="Could not read the project registry">
+        {projects.error.message}
+      </SettingsError>
     )
   }
   const registry = projects.data
@@ -83,35 +88,45 @@ export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<C
   const managesRegistry = capabilities?.singleProject !== true && project.unregistered !== true
 
   return (
-    <div data-slot="project-general" className="mx-auto flex w-full max-w-2xl flex-col gap-7">
-      <ProjectFolderField />
-      <ProjectFacts project={project} canRemove={managesRegistry} />
+    <div data-slot="project-general" className="flex w-full flex-col gap-8">
+      <SettingsGroup
+        title="Project"
+        description="The registry entry for this checkout — re-probed every time the project list is read."
+      >
+        <ProjectFacts project={project} canRemove={managesRegistry} />
+      </SettingsGroup>
+
       {project.unregistered ? (
-        <SettingsField
-          title="Add to your projects"
-          hint="cezar is serving this folder because you started it here — starting cezar somewhere new never adds it to your project list for you. Adding it keeps it in the sidebar between runs and gives it a registry entry to hold settings like the task cap. Nothing on disk changes either way."
-        >
-          <AddBootProjectButton root={project.root} name={project.name} />
-        </SettingsField>
+        <SettingsGroup title="Add to your projects">
+          <SettingsField
+            title="This folder is not in your project list"
+            hint="cezar is serving this folder because you started it here — starting cezar somewhere new never adds it to your project list for you. Adding it keeps it in the sidebar between runs and gives it a registry entry to hold settings like the task cap. Nothing on disk changes either way."
+            control={<AddBootProjectButton root={project.root} name={project.name} />}
+          />
+        </SettingsGroup>
       ) : null}
+
       {managesRegistry ? (
         <>
-          <SettingsField
-            title="Max parallel tasks"
-            hint={
-              config.data
-                ? `How many of this project's tasks may run at once — leave it empty to inherit the workspace limit. The workspace limit (${config.data.resources.maxParallel}) still applies as an overall ceiling, so a higher value here has no extra effect until that one is raised.`
-                : "How many of this project's tasks may run at once — leave it empty to inherit the workspace limit. The workspace limit still applies as an overall ceiling."
-            }
-          >
-            {config.data ? (
-              <MaxParallelStepper project={project} workspaceMax={config.data.resources.maxParallel} />
-            ) : (
-              // The stepper's "Inherit (N)" placeholder has to name N, and guessing it would be
-              // the one thing this control must not do.
-              <p className="text-[13px] text-soft-foreground">Loading the workspace limit…</p>
-            )}
-          </SettingsField>
+          <SettingsGroup title="Limits">
+            <SettingsField
+              title="Max parallel tasks"
+              hint={
+                config.data
+                  ? `How many of this project's tasks may run at once — leave it empty to inherit the workspace limit. The workspace limit (${config.data.resources.maxParallel}) still applies as an overall ceiling, so a higher value here has no extra effect until that one is raised.`
+                  : "How many of this project's tasks may run at once — leave it empty to inherit the workspace limit. The workspace limit still applies as an overall ceiling."
+              }
+              control={
+                config.data ? (
+                  <MaxParallelStepper project={project} workspaceMax={config.data.resources.maxParallel} />
+                ) : (
+                  // The stepper's "Inherit (N)" placeholder has to name N, and guessing it would be
+                  // the one thing this control must not do.
+                  <SettingsNote>Loading the workspace limit…</SettingsNote>
+                )
+              }
+            />
+          </SettingsGroup>
           <RemoveProject project={project} bootProject={registry.bootProject} />
         </>
       ) : null}
@@ -123,64 +138,57 @@ export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<C
  *  `canRemove` is whether the Remove field is rendered below — the missing-folder hint points at
  *  it, and must not point at a field single-project mode took away. */
 function ProjectFacts({ project, canRemove }: { project: ProjectListEntry; canRemove: boolean }) {
+  const missing = project.status === 'missing'
   return (
-    <SettingsField
-      title="Project"
-      hint="The registry entry for this checkout — re-probed every time the project list is read."
-    >
-      <dl
-        data-slot="project-facts"
-        className="grid grid-cols-[8rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-md border border-border bg-card p-3 text-[13px]"
-      >
-        <dt className="text-muted-foreground">Name</dt>
-        <dd className="min-w-0 truncate text-foreground">{project.name}</dd>
+    <SettingsFacts data-slot="project-facts">
+      <SettingsFact label="Name">
+        <span className="block truncate font-medium">{project.name}</span>
+      </SettingsFact>
 
-        <dt className="text-muted-foreground">Status</dt>
-        <dd data-slot="project-general-status" className={project.status === 'missing' ? 'text-danger' : 'text-foreground'}>
-          {STATUS_LABEL[project.status]}
+      <SettingsFact label="Status">
+        <span data-slot="project-general-status" className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <Badge variant="outline" className="gap-1.5 font-normal">
+            <StatusDot tone={missing ? 'danger' : 'success'} />
+            {STATUS_LABEL[project.status]}
+          </Badge>
           {/* A registered folder that has been deleted or moved is the one status worth acting
               on, and "folder not found" alone does not say what to do about it. */}
-          {project.status === 'missing'
-            ? canRemove
-              ? ' — remove it below, or restore the folder'
-              : ' — restore the folder at the path above'
-            : null}
-        </dd>
+          {missing ? (
+            <span className="text-[13px] text-danger">
+              {canRemove ? ' — remove it below, or restore the folder' : ' — restore the folder at the path below'}
+            </span>
+          ) : null}
+        </span>
+      </SettingsFact>
 
-        {/* Omitted rather than dashed when git could not name one (unborn HEAD): an empty row
-            invites the reader to wonder which branch is checked out, a missing row does not. */}
-        {project.branch !== undefined ? (
-          <>
-            <dt className="text-muted-foreground">Branch</dt>
-            <dd className="min-w-0 truncate font-mono text-xs text-foreground">{project.branch}</dd>
-          </>
-        ) : null}
+      <ProjectFolderField />
 
-        {/* A folder cezar is serving but has never registered has no registry dates to read out
-            — inventing them (or dashing two rows) would say less than naming the state once. */}
-        {project.unregistered ? (
-          <>
-            <dt className="text-muted-foreground">In your projects</dt>
-            <dd data-slot="project-general-unregistered" className="text-foreground">
-              No — served because cezar was started here
-            </dd>
-          </>
-        ) : (
-          <>
-            <dt className="text-muted-foreground">Added</dt>
-            <dd className="text-foreground">
-              {fullDate(project.addedAt)}
-              <span className="text-soft-foreground">
-                {project.source === 'checkout' ? ' · cloned from GitHub' : ' · opened locally'}
-              </span>
-            </dd>
+      {/* Omitted rather than dashed when git could not name one (unborn HEAD): an empty row
+          invites the reader to wonder which branch is checked out, a missing row does not. */}
+      {project.branch !== undefined ? (
+        <SettingsFact label="Branch">
+          <span className="block truncate font-mono text-[13px]">{project.branch}</span>
+        </SettingsFact>
+      ) : null}
 
-            <dt className="text-muted-foreground">Last opened</dt>
-            <dd className="text-foreground">{fullDate(project.lastOpenedAt)}</dd>
-          </>
-        )}
-      </dl>
-    </SettingsField>
+      {/* A folder cezar is serving but has never registered has no registry dates to read out
+          — inventing them (or dashing two rows) would say less than naming the state once. */}
+      {project.unregistered ? (
+        <SettingsFact label="In your projects">
+          <span data-slot="project-general-unregistered">No — served because cezar was started here</span>
+        </SettingsFact>
+      ) : (
+        <>
+          <SettingsFact label="Added">
+            {fullDate(project.addedAt)}
+            <span className="text-muted-foreground">
+              {project.source === 'checkout' ? ' · cloned from GitHub' : ' · opened locally'}
+            </span>
+          </SettingsFact>
+          <SettingsFact label="Last opened">{fullDate(project.lastOpenedAt)}</SettingsFact>
+        </>
+      )}
+    </SettingsFacts>
   )
 }
 
@@ -207,33 +215,36 @@ function RemoveProject({ project, bootProject }: { project: ProjectListEntry; bo
   const isBoot = project.id === bootProject
 
   return (
-    <SettingsField
-      title="Remove from workspace"
-      hint="Unregisters this project so it leaves the sidebar and the project list. Nothing on disk is deleted — the folder, its git history and its task history all stay, and adding it back later finds everything intact."
-    >
-      <div className="flex items-center gap-3">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          data-action="project-general-remove"
-          // Leads with the words on the button (WCAG 2.5.3 Label in Name) so speech input can
-          // reach it, then says what "Remove" actually does — the row context that makes a bare
-          // "Remove" safe-sounding isn't read out with it.
-          aria-label={`Remove ${project.name} from the workspace — unregisters it, no files are deleted`}
-          title={isBoot ? 'cezar is serving this project — stop it and use `cezar projects remove`' : undefined}
-          disabled={isBoot || remove.isPending}
-          onClick={() => setConfirming(project)}
-          className="text-danger"
-        >
-          Remove {project.name}
-        </Button>
+    <DangerZone>
+      <SettingsField
+        title="Remove from workspace"
+        hint="Unregisters this project so it leaves the sidebar and the project list. Nothing on disk is deleted — the folder, its git history and its task history all stay, and adding it back later finds everything intact."
+        control={
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            data-action="project-general-remove"
+            // Leads with the words on the button (WCAG 2.5.3 Label in Name) so speech input can
+            // reach it, then says what "Remove" actually does — the row context that makes a bare
+            // "Remove" safe-sounding isn't read out with it.
+            aria-label={`Remove ${project.name} from the workspace — unregisters it, no files are deleted`}
+            title={isBoot ? 'cezar is serving this project — stop it and use `cezar projects remove`' : undefined}
+            disabled={isBoot || remove.isPending}
+            onClick={() => setConfirming(project)}
+          >
+            Remove {project.name}
+          </Button>
+        }
+      >
         {isBoot ? (
-          <span data-slot="project-general-remove-boot" className="text-[11px] text-soft-foreground">
-            cezar is serving this project — stop cezar and run `cezar projects remove` to drop it.
-          </span>
+          <SettingsNote data-slot="project-general-remove-boot">
+            cezar is serving this project — stop cezar and run{' '}
+            <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-[11px]">cezar projects remove</code> to
+            drop it.
+          </SettingsNote>
         ) : null}
-      </div>
+      </SettingsField>
       <RemoveProjectDialog
         project={confirming}
         onOpenChange={(open) => !open && setConfirming(null)}
@@ -244,6 +255,6 @@ function RemoveProject({ project, bootProject }: { project: ProjectListEntry; bo
           remove.confirm(project, () => void navigate(`/p/${encodeURIComponent(bootProject)}`))
         }}
       />
-    </SettingsField>
+    </DangerZone>
   )
 }

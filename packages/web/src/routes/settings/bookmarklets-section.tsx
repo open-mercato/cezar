@@ -1,15 +1,25 @@
-import { TriangleAlertIcon, ZapIcon } from 'lucide-react'
+import { BookmarkIcon, CopyIcon, GripVerticalIcon, SearchIcon, ZapIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
 import { useHealth, useLaunchKey, useProjects, useSkills } from '@/api/queries'
 import type { Skill } from '@open-mercato/cezar-api-client'
 import { repoChipOf } from '@/components/app-shell-container'
-import { CenteredState } from '@/components/centered-state'
-import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
+import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
+import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
 import { bookmarkletUrl } from '@/lib/bookmarklet'
 import { useActiveProjectId } from '@/lib/project-router'
 import { orderSkills } from '@/lib/skills'
+import {
+  SettingsError,
+  SettingsField,
+  SettingsGroup,
+  SettingsLoading,
+  SettingsPane,
+} from './settings-field'
 
 /** Settings → Bookmarklets (spec 011): the legacy generic and per-skill launchers promoted
  *  to a first-class, discoverable Settings subpage. */
@@ -19,29 +29,13 @@ export function BookmarkletsSection() {
   // Without this the in-flight catalog renders as the panel's empty state, which tells the
   // user "(no skills yet)" — a claim that is simply false while the fetch is still running.
   if (skillsQuery.isPending) {
-    return (
-      <p data-slot="bookmarklets-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
-        Loading bookmarklets…
-      </p>
-    )
+    return <SettingsLoading data-slot="bookmarklets-loading" label="Loading bookmarklets…" />
   }
   if (skillsQuery.isError) {
-    return (
-      <CenteredState
-        icon={<TriangleAlertIcon />}
-        tone="danger"
-        heading="h2"
-        title="Could not load bookmarklets"
-        subtitle={skillsQuery.error.message}
-      />
-    )
+    return <SettingsError title="Could not load bookmarklets">{skillsQuery.error.message}</SettingsError>
   }
 
-  return (
-    <div className="flex min-h-full flex-1 overflow-y-auto px-4 py-5 md:px-7">
-      <BookmarkletPanel skills={orderSkills(skillsQuery.data ?? [])} />
-    </div>
-  )
+  return <BookmarkletPanel skills={orderSkills(skillsQuery.data ?? [])} />
 }
 
 /**
@@ -91,61 +85,76 @@ export function BookmarkletPanel({ skills }: { skills: readonly Skill[] }) {
   const shown = skills.filter((skill) => skill.name.toLowerCase().includes(needle))
 
   return (
-    <div data-slot="bookmarklet-panel" className="mx-auto w-full max-w-2xl">
-      <h2 className="text-base font-semibold">Run from GitHub</h2>
-      <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
-        Drag a button below to your browser&apos;s bookmarks bar. On any GitHub PR or issue, click it
-        to open this cockpit directly. The cockpit must be running: <span className="font-mono">npx cezar</span>.
-      </p>
-
-      <label className="mt-4 flex items-center gap-2 text-[13px] font-medium">
-        <input
-          type="checkbox"
-          data-slot="bm-auto"
-          checked={auto}
-          onChange={(event) => setAuto(event.target.checked)}
-          className="size-3.5"
+    <SettingsPane data-slot="bookmarklet-panel">
+      <SettingsGroup
+        title="Run from GitHub"
+        description={
+          <>
+            Drag a button below to your browser&apos;s bookmarks bar. On any GitHub PR or issue, click it
+            to open this cockpit directly. The cockpit must be running:{' '}
+            <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-[11px] text-foreground">npx cezar</code>.
+          </>
+        }
+      >
+        <SettingsField
+          title="One-click launch (auto-submit)"
+          htmlFor="bm-auto"
+          hint="Start the task as soon as the bookmark is clicked. Re-drag the buttons after changing this."
+          control={<Switch id="bm-auto" data-slot="bm-auto" checked={auto} onCheckedChange={setAuto} />}
         />
-        One-click launch (auto-submit){' '}
-        <span className="font-normal text-soft-foreground">— re-drag the buttons after changing this</span>
-      </label>
+        <div data-slot="bm-generic">
+          {/* Generic launcher: no skill, auto forced off — it only prefills the form. */}
+          <BookmarkletRow
+            label={repoName ? `cezar (${repoName}): this PR/issue` : 'cezar: this PR/issue'}
+            url={bookmarkletUrl('', false, key, origin, projectId)}
+            hint="prefills the form — nothing starts by itself"
+          />
+        </div>
+      </SettingsGroup>
 
-      <div data-slot="bm-generic" className="mt-4">
-        {/* Generic launcher: no skill, auto forced off — it only prefills the form. */}
-        <BookmarkletRow
-          label={repoName ? `cezar (${repoName}): this PR/issue` : 'cezar: this PR/issue'}
-          url={bookmarkletUrl('', false, key, origin, projectId)}
-          hint="prefills the form — nothing starts by itself"
-        />
-      </div>
-
-      <Input
-        data-slot="bm-filter"
-        placeholder="Filter skills…"
-        aria-label="Filter bookmarklet skills"
-        value={filter}
-        onChange={(event) => setFilter(event.target.value)}
-        className="mt-5 h-8 text-[13px]"
-      />
-      <div data-slot="bm-list" className="mt-3 flex flex-col gap-2">
+      <SettingsGroup
+        title="Skill launchers"
+        description="One bookmark per skill — it opens the composer with that skill picked."
+        bare
+      >
+        <InputGroup>
+          <InputGroupAddon>
+            <SearchIcon aria-hidden="true" />
+          </InputGroupAddon>
+          <InputGroupInput
+            data-slot="bm-filter"
+            placeholder="Filter skills…"
+            aria-label="Filter bookmarklet skills"
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+          />
+        </InputGroup>
         {shown.length > 0 ? (
-          shown.map((skill) => (
-            <BookmarkletRow
-              key={skill.path}
-              label={repoName ? `/${skill.name} (${repoName})` : `/${skill.name}`}
-              url={bookmarkletUrl(skill.name, auto, key, origin, projectId)}
-              hint={skill.source}
-            />
-          ))
+          <Card flush data-slot="bm-list" className="divide-y divide-border">
+            {shown.map((skill) => (
+              <BookmarkletRow
+                key={skill.path}
+                label={repoName ? `/${skill.name} (${repoName})` : `/${skill.name}`}
+                url={bookmarkletUrl(skill.name, auto, key, origin, projectId)}
+                hint={skill.source}
+              />
+            ))}
+          </Card>
         ) : (
-          <p className="text-xs text-soft-foreground">
-            {skills.length > 0
-              ? '(no skills match)'
-              : '(no skills yet — the generic launcher above still works)'}
-          </p>
+          <Empty data-slot="bm-list" className="rounded-xl border border-dashed border-border py-10">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <BookmarkIcon />
+              </EmptyMedia>
+              <EmptyTitle>{skills.length > 0 ? 'No skills match' : 'No skills yet'}</EmptyTitle>
+              <EmptyDescription>
+                {skills.length > 0 ? 'Try a different filter.' : 'The generic launcher above still works.'}
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
         )}
-      </div>
-    </div>
+      </SettingsGroup>
+    </SettingsPane>
   )
 }
 
@@ -167,7 +176,7 @@ function BookmarkletRow({ label, url, hint }: { label: string; url: string; hint
     }
   }
   return (
-    <div data-slot="bm-row" className="flex min-w-0 items-center gap-2.5">
+    <div data-slot="bm-row" className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 px-5 py-3">
       {/* A drag SOURCE only — the cockpit page never executes the javascript: URL itself
           (spec 011 §5), so a plain click just explains the gesture. */}
       <a
@@ -179,21 +188,24 @@ function BookmarkletRow({ label, url, hint }: { label: string; url: string; hint
           event.preventDefault()
           toast('Drag me to your bookmarks bar')
         }}
-        className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 font-mono text-xs font-medium text-foreground shadow-xs transition-colors hover:bg-muted"
+        className="inline-flex h-8 max-w-full min-w-0 cursor-grab items-center gap-1.5 rounded-md border border-input bg-card pr-3 pl-2 font-mono text-xs font-medium text-foreground shadow-2xs transition-colors hover:bg-muted active:cursor-grabbing"
       >
-        <ZapIcon aria-hidden="true" className="size-3 text-primary" />
-        {label}
+        <GripVerticalIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />
+        <ZapIcon aria-hidden="true" className="size-3 shrink-0 text-primary-strong" />
+        <span className="truncate">{label}</span>
       </a>
-      <button
+      {hint ? <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{hint}</span> : <span className="flex-1" />}
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
         data-slot="bm-copy"
         title="Copy the bookmarklet URL"
         onClick={() => void copy()}
-        className="shrink-0 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
       >
+        <CopyIcon aria-hidden="true" className="size-3.5" />
         Copy
-      </button>
-      {hint ? <span className="min-w-0 truncate text-[11px] text-soft-foreground">{hint}</span> : null}
+      </Button>
     </div>
   )
 }

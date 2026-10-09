@@ -68,7 +68,7 @@ export function RemoveProjectDialog({
             This only unregisters the project — <strong>nothing on disk is deleted</strong>. The
             folder, its git history and its task history all stay exactly where they are, and
             adding it back later finds everything intact.
-            <span className="mt-1 block truncate font-mono text-[11px] text-foreground" title={project?.root}>
+            <span className="mt-2 block truncate rounded-md bg-muted px-2 py-1.5 font-mono text-xs text-foreground" title={project?.root}>
               {project?.root}
             </span>
           </AlertDialogDescription>
@@ -77,7 +77,7 @@ export function RemoveProjectDialog({
           <AlertDialogCancel>Keep it</AlertDialogCancel>
           <AlertDialogAction
             data-action="projects-confirm-remove"
-            className="bg-danger text-danger-foreground hover:brightness-[0.96]"
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             onClick={onConfirm}
           >
             Remove from list

@@ -88,6 +88,10 @@ export interface ComposerProps {
   footerEnd?: ReactNode
   /** The send button's accessible name. */
   sendAriaLabel?: string
+  /** A visible word beside the send arrow (hidden on phones) — the /new hero's "Start task". */
+  sendLabel?: ReactNode
+  /** `hero` is the /new prompt box: a roomier card and textarea. The thread dock stays `default`. */
+  size?: 'default' | 'hero'
   disabled?: boolean
   /** Shown as the placeholder while disabled — e.g. the legacy "Session closed — Continue to
    *  reopen." */
@@ -145,6 +149,8 @@ export function Composer({
   footerStart,
   footerEnd,
   sendAriaLabel = 'Send',
+  sendLabel,
+  size = 'default',
   disabled = false,
   disabledReason = 'Session closed — Continue to reopen.',
   allowEmptySubmit = false,
@@ -192,6 +198,7 @@ export function Composer({
     },
     [],
   )
+  const hero = size === 'hero'
   const [busy, setBusy] = useState(false)
   const [trigger, setTrigger] = useState<TriggerState | null>(null)
   const [menuValue, setMenuValue] = useState('')
@@ -324,8 +331,8 @@ export function Composer({
     const el = textareaRef.current
     if (!el) return
     el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 220)}px`
-  }, [text])
+    el.style.height = `${Math.min(el.scrollHeight, hero ? 320 : 220)}px`
+  }, [text, hero])
 
   // ---- attachments ---------------------------------------------------------------------------
 
@@ -503,16 +510,18 @@ export function Composer({
           ref={rootRef}
           data-slot="composer"
           data-disabled={disabled || undefined}
+          data-size={size}
           onDrop={onDrop}
           onDragOver={(event) => event.preventDefault()}
           className={cn(
-            'rounded-xl border border-border bg-card shadow-xs transition-[border-color,box-shadow]',
-            'focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/15',
+            'border border-border bg-card transition-[border-color,box-shadow]',
+            hero ? 'rounded-2xl shadow-md' : 'rounded-xl shadow-xs',
+            'focus-within:border-ring/70 focus-within:ring-4 focus-within:ring-ring/10',
             disabled && 'opacity-80',
           )}
         >
           {images.length > 0 || draftItems ? (
-            <div data-slot="composer-thumbs" className="flex flex-wrap items-center gap-2 px-4 pt-3">
+            <div data-slot="composer-thumbs" className={cn('flex flex-wrap items-center gap-2 pt-3', hero ? 'px-4 md:px-5 md:pt-4' : 'px-4')}>
               {draftItems}
               {images.map((attachment, index) => (
                 <button
@@ -559,7 +568,12 @@ export function Composer({
             aria-label={ariaLabel}
             placeholder={disabled ? disabledReason : placeholder}
             // 16px on touch widths — iOS zooms any focused input below 16px (spec mobile rule).
-            className="block max-h-[220px] min-h-11 w-full resize-none bg-transparent px-3 pt-2.5 pb-1 text-base leading-normal outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed md:min-h-[54px] md:px-4 md:pt-3 md:text-sm"
+            className={cn(
+              'block w-full resize-none bg-transparent text-base outline-none placeholder:text-soft-foreground disabled:cursor-not-allowed',
+              hero
+                ? 'max-h-[320px] min-h-[88px] px-4 pt-4 pb-2 leading-relaxed md:min-h-[112px] md:px-5 md:pt-5 md:text-[15px]'
+                : 'max-h-[220px] min-h-11 px-3 pt-2.5 pb-1 leading-normal md:min-h-[54px] md:px-4 md:pt-3 md:text-sm',
+            )}
             onChange={(event) => {
               setText(event.target.value)
               syncTrigger()
@@ -580,45 +594,50 @@ export function Composer({
           ) : (
             // The footer may WRAP (the /new pill row on narrow widths), but the trailing
             // controls stay one unbreakable group so the send button never strands alone.
-            <div className="flex flex-wrap items-center gap-1 gap-y-1 px-1.5 pt-1 pb-1.5 md:gap-y-1.5 md:px-2 md:pt-1.5 md:pb-2">
+            <div
+              className={cn(
+                'flex flex-wrap items-end gap-x-2 gap-y-1.5',
+                hero ? 'px-2.5 pt-1 pb-2.5 md:px-3 md:pb-3' : 'px-1.5 pt-1 pb-1.5 md:px-2 md:pt-1.5 md:pb-2',
+              )}
+            >
               {/* The paperclip shares ONE wrapping row with the footer pills — otherwise the
                   pill group is a single flex item that wraps as a block, stranding the
                   paperclip alone on the line above it (#composer-attach-line). */}
-              <div data-slot="composer-footer-start" className="flex min-w-0 flex-wrap items-center gap-1">
+              <div data-slot="composer-footer-start" className="flex min-w-0 flex-wrap items-center gap-1.5">
                 <AttachButton disabled={disabled} onFiles={addFiles} />
                 {footerStart}
               </div>
-              <div className="ml-auto flex items-center gap-1">
+              <div className="ml-auto flex min-w-0 items-center gap-1">
                 {dictation.supported ? (
                   <Button
                     type="button"
                     variant="ghost"
-                    size="sm"
+                    size="icon-sm"
                     disabled={disabled}
                     aria-label="Start dictation"
-                    title="Dictation"
-                    className="h-8 gap-1.5 px-2.5 text-xs font-medium text-muted-foreground"
+                    title="Dictate instead of typing"
                     onClick={dictation.start}
                   >
-                    <MicIcon aria-hidden="true" className="size-3.5" />
-                    Dictation
+                    <MicIcon aria-hidden="true" className="size-[15px]" />
                   </Button>
                 ) : null}
                 {footerEnd ? (
-                  <div data-slot="composer-footer-end" className="flex items-center gap-1.5">
+                  <div data-slot="composer-footer-end" className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
                     {footerEnd}
                   </div>
                 ) : null}
                 <Button
                   type="button"
-                  size="icon-sm"
+                  variant="primary"
+                  size={sendLabel ? 'sm' : 'icon-sm'}
                   aria-label={sendAriaLabel}
                   disabled={
                     disabled || busy || (text.trim() === '' && images.length === 0 && !allowEmptySubmit)
                   }
-                  className="size-8"
+                  className={cn(sendLabel && 'max-sm:size-8 max-sm:px-0')}
                   onClick={submitDraft}
                 >
+                  {sendLabel ? <span className="max-sm:hidden">{sendLabel}</span> : null}
                   <ArrowUpIcon aria-hidden="true" />
                 </Button>
               </div>
@@ -711,7 +730,6 @@ function AttachButton({
         aria-label="Attach files"
         title="Attach an image, PDF, TXT or MD file (or paste a screenshot)"
         disabled={disabled}
-        className="size-8 text-muted-foreground"
         onClick={() => inputRef.current?.click()}
       >
         <PaperclipIcon aria-hidden="true" className="size-[15px]" />
@@ -758,7 +776,7 @@ function DictationBar({
       data-slot="dictation-overlay"
       role="status"
       aria-label="Dictation in progress"
-      className="flex items-center gap-2.5 rounded-b-xl border-t border-border bg-muted/60 px-3 py-2"
+      className="flex items-center gap-2.5 rounded-b-[inherit] border-t border-border bg-muted/60 px-3 py-2"
     >
       <span
         aria-hidden="true"

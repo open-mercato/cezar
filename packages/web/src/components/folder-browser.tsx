@@ -1,4 +1,4 @@
-import { ChevronRightIcon, CornerLeftUpIcon, FolderIcon } from 'lucide-react'
+import { ChevronRightIcon, CornerLeftUpIcon, FolderIcon, FolderOpenIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 
 import { ApiError } from '@/api/client'
@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils'
 /** System Settings ▸ Privacy & Security ▸ Files & Folders. */
 const PRIVACY_SETTINGS_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders'
 const errorAction =
-  'inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-foreground hover:bg-muted'
+  'inline-flex h-8 items-center gap-1.5 rounded-md border border-input bg-card px-2.5 font-medium text-foreground shadow-2xs hover:bg-muted'
 
 /** The folder a failed listing can step back to — the same path minus its last segment. */
 function parentOf(path: string): string | null {
@@ -69,10 +69,11 @@ export function FolderBrowser({
       {/* The breadcrumb is the server's realpath'd answer, not the spelling we asked for. */}
       <p
         data-slot="fs-breadcrumb"
-        className="truncate font-mono text-[11.5px] text-soft-foreground"
+        className="flex min-w-0 items-center gap-1.5 rounded-md bg-muted px-2.5 py-1.5 font-mono text-xs text-muted-foreground"
         title={listing.data?.path ?? undefined}
       >
-        {listing.data?.path ?? (listing.isError ? '' : 'Loading…')}
+        <FolderOpenIcon className="size-3.5 shrink-0" aria-hidden="true" />
+        <span className="truncate">{listing.data?.path ?? (listing.isError ? '' : 'Loading…')}</span>
       </p>
 
       {listing.isError ? (
@@ -83,11 +84,11 @@ export function FolderBrowser({
           {/* macOS remembers a "Don't Allow" and never asks again — the switch is in System
               Settings. The desktop shell hands a `_blank` link to `open`, which opens the pane. */}
           {listing.error instanceof ApiError && listing.error.status === 403 ? (
-            <p data-slot="fs-privacy-hint" className="text-[12.5px] text-soft-foreground">
+            <p data-slot="fs-privacy-hint" className="text-[13px] text-muted-foreground">
               Allow it under Privacy &amp; Security ▸ Files &amp; Folders, then try again.
             </p>
           ) : null}
-          <div className="flex flex-wrap gap-2 text-[12.5px]">
+          <div className="flex flex-wrap gap-2 text-[13px]">
             {path !== null && parentOf(path) !== null ? (
               <button type="button" data-slot="fs-error-back" onClick={() => onEnter(parentOf(path)!)} className={errorAction}>
                 <CornerLeftUpIcon className="size-3.5" aria-hidden />
@@ -109,7 +110,7 @@ export function FolderBrowser({
       ) : (
         <ul
           data-slot="fs-listing"
-          className="max-h-64 divide-y divide-border/60 overflow-y-auto overscroll-contain rounded-md border border-border"
+          className="max-h-64 overflow-y-auto overscroll-contain rounded-lg border border-border bg-card p-1"
         >
           {/* Only when the server said there IS a parent — at the root there is no up. */}
           {parent !== null ? (
@@ -118,7 +119,7 @@ export function FolderBrowser({
                 type="button"
                 data-slot="fs-up"
                 onClick={() => onEnter(parent)}
-                className="flex flex-1 items-center gap-2 px-3 py-2 text-left text-[13px] hover:bg-muted"
+                className="flex h-9 flex-1 items-center gap-2 rounded-md px-2.5 text-left text-[13.5px] text-muted-foreground hover:bg-muted hover:text-foreground"
               >
                 <CornerLeftUpIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
                 Up one level
@@ -134,8 +135,8 @@ export function FolderBrowser({
                 onClick={() => onSelect(dir)}
                 onDoubleClick={() => onEnter(dir.path)}
                 className={cn(
-                  'flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left text-[13px] hover:bg-muted',
-                  selected?.path === dir.path && 'bg-muted',
+                  'flex h-9 min-w-0 flex-1 items-center gap-2 rounded-l-md px-2.5 text-left text-[13.5px] hover:bg-muted',
+                  selected?.path === dir.path && 'bg-muted font-medium',
                 )}
               >
                 <FolderIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -150,20 +151,23 @@ export function FolderBrowser({
                 data-slot="fs-enter"
                 aria-label={`Open ${dir.name}`}
                 onClick={() => onEnter(dir.path)}
-                className="flex shrink-0 items-center px-2.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                className={cn(
+                  'flex shrink-0 items-center rounded-r-md px-2.5 text-muted-foreground hover:bg-muted hover:text-foreground',
+                  selected?.path === dir.path && 'bg-muted',
+                )}
               >
                 <ChevronRightIcon className="size-3.5" aria-hidden="true" />
               </button>
             </li>
           ))}
           {listing.data && listing.data.dirs.length === 0 ? (
-            <li className="px-3 py-2 text-[13px] text-muted-foreground">{emptyHint}</li>
+            <li className="px-2.5 py-2 text-[13px] text-muted-foreground">{emptyHint}</li>
           ) : null}
         </ul>
       )}
 
       {listing.data?.truncated ? (
-        <p data-slot="fs-truncated" className="text-[11.5px] text-muted-foreground">
+        <p data-slot="fs-truncated" className="text-xs text-muted-foreground">
           Too many folders to list — only the first ones are shown.
         </p>
       ) : null}

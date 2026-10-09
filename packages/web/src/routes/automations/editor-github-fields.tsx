@@ -40,7 +40,7 @@ export function EditorGithubFields({
   const changedMissing = changedRequired && filters.changedLabels.trim().length === 0
 
   return (
-    <div data-slot="editor-github" className="flex flex-col gap-3.5">
+    <div data-slot="editor-github" className="flex flex-col gap-4">
       <div role="group" aria-label="GitHub events" className="flex flex-wrap gap-1.5">
         {GITHUB_EVENTS.map((event) => (
           <Chip
@@ -55,7 +55,7 @@ export function EditorGithubFields({
         ))}
       </div>
       <div className="flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
-        poll every
+        Poll every
         <Select value={String(Math.round(intervalSeconds / 60))} onValueChange={(value) => onChange({ intervalSeconds: Number(value) * 60 })}>
           <SelectTrigger size="sm" aria-label="Poll interval" className="text-[13px]">
             <SelectValue />
@@ -72,15 +72,15 @@ export function EditorGithubFields({
         <CollapsibleTrigger asChild>
           <button
             type="button"
-            className="inline-flex h-6 items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+            className="inline-flex h-7 items-center gap-1.5 self-start text-[13px] font-medium text-muted-foreground hover:text-foreground"
           >
-            <ChevronDownIcon aria-hidden="true" className={cn('size-3 transition-transform', open ? '' : '-rotate-90')} />
+            <ChevronDownIcon aria-hidden="true" className={cn('size-3.5 transition-transform', open ? '' : '-rotate-90')} />
             Filters
             {changedMissing ? <span className="text-danger">· changed labels required</span> : null}
           </button>
         </CollapsibleTrigger>
         <CollapsibleContent>
-          <div data-slot="editor-github-filters" className="grid grid-cols-1 gap-3 pt-2 sm:grid-cols-2">
+          <div data-slot="editor-github-filters" className="grid grid-cols-1 gap-x-4 gap-y-4 pt-3 sm:grid-cols-2">
             <FilterField id="filter-authors" label="Authors" value={filters.authors} onChange={(value) => setFilter('authors', value)} />
             <FilterField id="filter-assignees" label="Assignees" value={filters.assignees} onChange={(value) => setFilter('assignees', value)} />
             <FilterField id="filter-any-labels" label="Any of labels" value={filters.anyLabels} onChange={(value) => setFilter('anyLabels', value)} />
@@ -112,14 +112,14 @@ function FilterField({ id, label, value, invalid = false, onChange }: {
 }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <Label htmlFor={id} className="text-xs text-muted-foreground">{label}</Label>
+      <Label htmlFor={id} className="text-[13px] font-medium">{label}</Label>
       <Input
         id={id}
         value={value}
         placeholder="comma-separated"
         aria-invalid={invalid || undefined}
         onChange={(event) => onChange(event.target.value)}
-        className="h-8 text-[13px]"
+        className="text-[13px]"
       />
     </div>
   )
@@ -135,7 +135,7 @@ function NumberField({ id, label, value, min, max, onChange }: {
 }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <Label htmlFor={id} className="text-xs text-muted-foreground">{label}</Label>
+      <Label htmlFor={id} className="text-[13px] font-medium">{label}</Label>
       <Input
         id={id}
         type="number"
@@ -143,7 +143,7 @@ function NumberField({ id, label, value, min, max, onChange }: {
         max={max}
         value={value}
         onChange={(event) => onChange(clamp(Number(event.target.value), min, max))}
-        className="h-8 w-28 font-mono text-[13px] tabular-nums"
+        className="w-28 text-[13px] tabular-nums"
       />
     </div>
   )

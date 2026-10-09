@@ -27,7 +27,7 @@ export function SkillsDock({ skills }: { skills: SkillSummary[] }) {
   return (
     <section
       data-slot="skills-dock"
-      className="flex min-w-0 items-center gap-2 overflow-hidden rounded-lg border border-border bg-card px-3.5 py-2 text-[13px] shadow-xs"
+      className="flex min-w-0 items-center gap-2 overflow-hidden rounded-xl border border-border bg-card px-4 py-2.5 text-[13px] shadow-xs"
     >
       <SparklesIcon aria-hidden className="size-3.5 shrink-0 text-soft-foreground" />
       <span className="shrink-0 font-semibold">{skills.length === 1 ? 'Skill' : 'Skills'}</span>

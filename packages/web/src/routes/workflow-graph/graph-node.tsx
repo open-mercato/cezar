@@ -25,6 +25,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { memo } from 'react'
+import type * as React from 'react'
 
 import { Link } from '@/lib/project-router'
 
@@ -59,7 +60,7 @@ export type Category = WorkflowNodeCatalogResponse['nodes'][number]['category']
 
 export const CATEGORY_ORDER: { id: Category; label: string; color: string }[] = [
   { id: 'agents', label: 'Agents', color: 'var(--violet)' },
-  { id: 'flow', label: 'Flow control', color: 'var(--primary)' },
+  { id: 'flow', label: 'Flow control', color: 'var(--primary-strong)' },
   { id: 'scripts', label: 'Scripts & checks', color: 'var(--info)' },
   { id: 'git', label: 'Git & GitHub', color: 'var(--foreground)' },
 ]
@@ -216,8 +217,27 @@ export function nodeDetail(node: WorkflowGraphNode, loopCount?: number): string 
   }
 }
 
+/**
+ * React Flow's own chrome, pointed at the cockpit's tokens so both canvases follow the APP theme
+ * (React Flow's `colorMode` only knows the OS one): the canvas, its dots, the zoom controls.
+ */
+export const CANVAS_THEME = {
+  '--xy-background-color': 'var(--background)',
+  '--xy-background-pattern-color': 'color-mix(in oklab, var(--muted-foreground) 28%, transparent)',
+  '--xy-controls-button-background-color': 'var(--card)',
+  '--xy-controls-button-background-color-hover': 'var(--muted)',
+  '--xy-controls-button-color': 'var(--muted-foreground)',
+  '--xy-controls-button-color-hover': 'var(--foreground)',
+  '--xy-controls-button-border-color': 'var(--border)',
+  '--xy-controls-box-shadow': 'var(--shadow-xs)',
+  '--xy-edge-stroke': 'var(--muted-foreground)',
+  '--xy-connectionline-stroke': 'var(--muted-foreground)',
+  '--xy-selection-background-color': 'color-mix(in oklab, var(--primary) 12%, transparent)',
+  '--xy-selection-border': '1px solid var(--primary-strong)',
+} as React.CSSProperties
+
 const STATUS: Partial<Record<NodeRunState['status'], { ring: string; dot: string; label: string }>> = {
-  running: { ring: 'ring-2 ring-primary shadow-lg shadow-primary/25', dot: 'bg-primary motion-safe:animate-pulse', label: 'running' },
+  running: { ring: 'ring-2 ring-primary shadow-md', dot: 'bg-primary motion-safe:animate-pulse', label: 'running' },
   waiting: { ring: 'ring-2 ring-info', dot: 'bg-info motion-safe:animate-pulse', label: 'needs you' },
   done: { ring: '', dot: 'bg-success', label: 'done' },
   failed: { ring: 'ring-2 ring-danger', dot: 'bg-danger', label: 'failed' },
@@ -261,7 +281,7 @@ const INNER_DOT: Record<string, string> = {
 
 function InnerSteps({ steps }: { steps: readonly InnerStep[] }) {
   return (
-    <div className="flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground" aria-label="steps inside">
+    <div className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground" aria-label="steps inside">
       {steps.slice(0, 6).map((st, i) => (
         <span key={st.id} className="flex min-w-0 items-center gap-1" title={`${st.name}${st.status ? ` — ${st.status}` : ''}`}>
           {i > 0 && <span aria-hidden="true">→</span>}
@@ -315,11 +335,11 @@ export const GraphNodeView = memo(function GraphNodeView({
     >
       <div
         className={cn(
-          'relative flex items-center border bg-card text-card-foreground transition-[border-color,box-shadow]',
-          'border-border group-hover:border-muted-foreground/60',
+          'relative flex items-center border bg-card text-card-foreground shadow-sm transition-[border-color,box-shadow]',
+          'border-border group-hover:border-muted-foreground/50 group-hover:shadow-md',
           shape,
-          wide ? 'h-16 gap-3 px-4' : 'size-16 justify-center',
-          selected && 'border-primary ring-2 ring-primary/40',
+          wide ? 'h-16 gap-3 px-3.5' : 'size-16 justify-center',
+          selected && 'border-foreground/70 ring-3 ring-foreground/10',
           issue && 'ring-2 ring-danger',
           state?.ring,
         )}
@@ -330,14 +350,24 @@ export const GraphNodeView = memo(function GraphNodeView({
             type="target"
             position={Position.Left}
             isConnectable={connectable}
-            className="!h-4 !w-1.5 !rounded-sm !border-0 !bg-muted-foreground/70"
+            className="!h-3.5 !w-1 !rounded-full !border-0 !bg-muted-foreground/50"
           />
         )}
-        <Icon className={cn('shrink-0', wide ? 'size-6' : 'size-7')} style={{ color }} strokeWidth={1.75} />
+        {wide ? (
+          // The type's icon on a soft tile of its own colour — the card's one accent.
+          <span
+            className="flex size-9 shrink-0 items-center justify-center rounded-lg"
+            style={{ background: `color-mix(in oklab, ${color} 12%, transparent)` }}
+          >
+            <Icon className="size-5" style={{ color }} strokeWidth={1.75} />
+          </span>
+        ) : (
+          <Icon className="size-6 shrink-0" style={{ color }} strokeWidth={1.75} />
+        )}
         {wide && (
           <div className="min-w-0">
-            <div className="truncate text-[13px] font-medium leading-tight">{title}</div>
-            {inner?.length ? <InnerSteps steps={inner} /> : <div className="truncate text-[11px] text-muted-foreground">{detail}</div>}
+            <div className="truncate text-[13px] leading-tight font-medium">{title}</div>
+            {inner?.length ? <InnerSteps steps={inner} /> : <div className="mt-0.5 truncate text-xs text-muted-foreground">{detail}</div>}
           </div>
         )}
         {subtaskTo && (
@@ -359,7 +389,7 @@ export const GraphNodeView = memo(function GraphNodeView({
           />
         )}
         {node.type === 'loop' && loopCount ? (
-          <span className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 rounded-full border border-border bg-background px-1.5 text-[9px] leading-4 text-muted-foreground">
+          <span className="absolute -bottom-2 left-1/2 -translate-x-1/2 rounded-full border border-border bg-card px-1.5 text-[11px] leading-4 text-muted-foreground tabular-nums">
             {loopCount}/{node.max}
           </span>
         ) : null}
@@ -375,14 +405,14 @@ export const GraphNodeView = memo(function GraphNodeView({
                 type="source"
                 position={Position.Right}
                 isConnectable={connectable}
-                className="!size-2.5 !border-[1.5px]"
+                className="!size-2.5 !border-[1.5px] !shadow-none"
                 style={{ top, borderColor: tone, background: open ? 'var(--card)' : tone }}
               />
               {(ports.length > 1 || (open && onAddFromPort)) && (
                 <div className="absolute left-[calc(100%+9px)] flex -translate-y-1/2 items-center" style={{ top }}>
                   {ports.length > 1 && (
                     <span
-                      className="pointer-events-none whitespace-nowrap rounded bg-background px-1 text-[10px] leading-4"
+                      className="pointer-events-none rounded-sm bg-background px-1 text-[11px] leading-4 whitespace-nowrap"
                       style={{ color: tone }}
                     >
                       {port}
@@ -394,7 +424,7 @@ export const GraphNodeView = memo(function GraphNodeView({
                       <button
                         type="button"
                         // `nodrag nopan`: a click here is a button press, not the start of a node drag.
-                        className="nodrag nopan flex size-5 items-center justify-center rounded-md border border-border bg-card text-muted-foreground hover:border-primary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                        className="nodrag nopan flex size-5 items-center justify-center rounded-full border border-border bg-card text-muted-foreground shadow-xs hover:border-muted-foreground/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
                         aria-label={`Add a node after ${node.name ?? node.id} → ${port}`}
                         title={`Add a node on “${port}”`}
                         onClick={(e) => {
@@ -418,12 +448,12 @@ export const GraphNodeView = memo(function GraphNodeView({
           className="pointer-events-none absolute top-full left-1/2 mt-1.5 -translate-x-1/2 text-center"
           style={{ width: CAPTION_WIDTH }}
         >
-          <div className="truncate text-[11px] leading-tight text-foreground/85">{title}</div>
-          {detail ? <div className="truncate text-[10px] text-muted-foreground">{detail}</div> : null}
+          <div className="truncate text-xs leading-tight font-medium text-foreground">{title}</div>
+          {detail ? <div className="truncate text-[11px] text-muted-foreground">{detail}</div> : null}
         </div>
       )}
       {extras ? (
-        <div className={cn('pointer-events-none absolute left-1/2 -translate-x-1/2 text-[10px] text-muted-foreground', wide ? 'top-full mt-1' : 'top-full mt-9')}>
+        <div className={cn('pointer-events-none absolute left-1/2 -translate-x-1/2 text-[11px] text-muted-foreground tabular-nums', wide ? 'top-full mt-1' : 'top-full mt-9')}>
           {extras}
         </div>
       ) : null}
@@ -434,10 +464,10 @@ export const GraphNodeView = memo(function GraphNodeView({
 /** Neutral edge styling shared by both canvases: grey, dashed when it runs back (a loop). */
 export function edgeStyle(opts: { tone: PortTone; back: boolean; emphasis?: 'taken' | 'dim' }) {
   const stroke =
-    opts.tone === 'failure' ? 'color-mix(in oklab, var(--danger) 55%, transparent)' : 'color-mix(in oklab, var(--muted-foreground) 55%, transparent)'
+    opts.tone === 'failure' ? 'color-mix(in oklab, var(--danger) 45%, transparent)' : 'color-mix(in oklab, var(--muted-foreground) 45%, transparent)'
   return {
-    stroke: opts.emphasis === 'taken' ? (opts.tone === 'failure' ? 'var(--danger)' : 'var(--primary)') : stroke,
-    strokeWidth: opts.emphasis === 'taken' ? 2.5 : 1.5,
+    stroke: opts.emphasis === 'taken' ? (opts.tone === 'failure' ? 'var(--danger)' : 'var(--primary-strong)') : stroke,
+    strokeWidth: opts.emphasis === 'taken' ? 2 : 1.25,
     strokeDasharray: opts.back ? '5 4' : undefined,
     opacity: opts.emphasis === 'dim' ? 0.35 : 1,
   }

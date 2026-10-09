@@ -1,6 +1,7 @@
 import { hashKey, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeftIcon,
+  ArrowUpDownIcon,
   CircleCheckIcon,
   CheckIcon,
   CircleIcon,
@@ -11,10 +12,13 @@ import {
   ExternalLinkIcon,
   GitPullRequestIcon,
   MessageSquareIcon,
+  MoreHorizontalIcon,
+  PlayIcon,
   LoaderCircleIcon,
   RefreshCwIcon,
   SearchIcon,
   TagIcon,
+  ZapIcon,
   TriangleAlertIcon,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
@@ -33,13 +37,12 @@ import type {
   GithubPrMergeState,
   UiState,
 } from '@open-mercato/cezar-api-client'
-import { IssueBrowserLayout } from '@/components/issue-browser-layout'
-import { CenteredState } from '@/components/centered-state'
+import { IssueBrowserEmpty, IssueBrowserLayout } from '@/components/issue-browser-layout'
 import { Diff, type DiffFileChange } from '@/components/diff'
 import { useRememberedEnginePick } from '@/components/engine-pills'
 import { GithubIcon } from '@/components/icons'
-import { Segmented } from '@/components/segmented'
-import { TabLink } from '@/components/tab-link'
+import { StatusDot } from '@/components/status-dot'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -49,9 +52,24 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Spinner } from '@/components/ui/spinner'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toaster'
 import { shortAge } from '@/lib/format'
 import { githubTaskPrompt } from '@/lib/github-task'
@@ -314,6 +332,9 @@ export function GithubRoute({
     [skillsData, skillUsage],
   )
   const [queued, setQueued] = useState<ReadonlyMap<string, string>>(new Map())
+  // The hand-off composer opens over the detail; keyed by item url so a hop to another item
+  // never carries an open dialog with it.
+  const [handFor, setHandFor] = useState<string | null>(null)
   // List filtering (#gh-filter): free-text search (by #id or any text) + a label narrow.
   const [query, setQuery] = useState('')
   const [labelFilter, setLabelFilter] = useState<readonly string[]>([])
@@ -358,11 +379,11 @@ export function GithubRoute({
     if (list.isError) {
       return (
         <div data-route="github" className="flex min-h-full flex-col">
-          <CenteredState
+          <IssueBrowserEmpty
             icon={<TriangleAlertIcon />}
             tone="danger"
             title="Could not load GitHub"
-            subtitle={list.error.message}
+            description={list.error.message}
           />
         </div>
       )
@@ -376,11 +397,10 @@ export function GithubRoute({
   if (!gh.available) {
     return (
       <div data-route="github" className="flex min-h-full flex-col">
-        <CenteredState
+        <IssueBrowserEmpty
           icon={<GithubIcon />}
-          tone="neutral"
           title="GitHub is unavailable here"
-          subtitle={gh.reason ?? 'unknown reason'}
+          description={gh.reason ?? 'unknown reason'}
           actions={
             <Button
               variant="outline"
@@ -388,16 +408,17 @@ export function GithubRoute({
               disabled={refresh.isPending}
               onClick={() => refresh.mutate()}
             >
+              <RefreshCwIcon aria-hidden="true" className={cn(refresh.isPending && 'motion-safe:animate-spin')} />
               Try again
             </Button>
           }
         >
-          <p className="text-xs leading-relaxed text-soft-foreground">
-            The tab needs the <span className="font-mono">gh</span> CLI, logged in (
-            <span className="font-mono">gh auth login</span>), and a repo with a GitHub remote.
+          <p className="text-[13px] leading-relaxed text-pretty text-muted-foreground">
+            The tab needs the <span className="font-mono text-xs">gh</span> CLI, logged in (
+            <span className="font-mono text-xs">gh auth login</span>), and a repo with a GitHub remote.
             Everything else in the cockpit works without it.
           </p>
-        </CenteredState>
+        </IssueBrowserEmpty>
       </div>
     )
   }
@@ -473,8 +494,8 @@ export function GithubRoute({
   const emptyState = !filtering ? (
     <p>No open {view === 'issues' ? 'issues' : 'pull requests'}.</p>
   ) : searching ? (
-    <p className="flex items-center gap-1.5">
-      <LoaderCircleIcon aria-hidden="true" className="size-3.5 motion-safe:animate-spin" />
+    <p className="flex items-center gap-2">
+      <Spinner />
       Searching GitHub for “{query.trim()}”…
     </p>
   ) : searchHits.length > 0 ? null : searchFailed ? (
@@ -497,90 +518,116 @@ export function GithubRoute({
 
   return (
     <IssueBrowserLayout name="gh" route="github" selected={n !== undefined} list={<>
-        <header data-slot="gh-header" className="sticky top-0 z-10 border-b border-border bg-background/95 px-4 pt-3 backdrop-blur">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <h1 className="text-lg font-semibold">GitHub</h1>
-            {gh.repo ? (
-              <span data-slot="gh-repo" className="min-w-0 truncate font-mono text-[11px] text-soft-foreground">
-                {gh.repo}
-              </span>
-            ) : null}
-            {automationsAvailable ? (
-              <Link
-                to="/automations/new"
-                className="ml-auto shrink-0 text-[10px] font-medium text-primary hover:underline"
-              >
-                Set up automations
-              </Link>
-            ) : null}
-            <button
-              type="button"
+        <header data-slot="gh-header" className="sticky top-0 z-10 bg-background/95 px-4 pt-5 pb-3 backdrop-blur">
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <h1 className="text-[22px] leading-7 font-semibold">GitHub</h1>
+              {gh.repo ? (
+                <p data-slot="gh-repo" className="truncate text-[13px] text-muted-foreground">
+                  {gh.repo}
+                </p>
+              ) : null}
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
               data-slot="gh-refresh"
               title="Refresh from GitHub"
               disabled={refresh.isPending}
               onClick={() => refresh.mutate()}
-              // The automations link owns the `ml-auto` that pushes this cluster right; with the
-              // link gated away this button inherits it, so the header does not re-flow.
-              className={cn(
-                'flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px text-[10px] font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-55',
-                !automationsAvailable && 'ml-auto',
-              )}
+              className="shrink-0 font-normal tabular-nums"
             >
-              <RefreshCwIcon
-                aria-hidden="true"
-                className={cn('size-[9px]', refresh.isPending && 'motion-safe:animate-spin')}
-              />
-              {gh.syncedAt ? `synced ${shortAge(gh.syncedAt)} ago` : 'refresh'}
-            </button>
+              <RefreshCwIcon aria-hidden="true" className={cn(refresh.isPending && 'motion-safe:animate-spin')} />
+              {gh.syncedAt ? `Synced ${shortAge(gh.syncedAt)} ago` : 'Refresh'}
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-sm" aria-label="List options" data-slot="gh-list-menu" className="shrink-0">
+                  <MoreHorizontalIcon aria-hidden="true" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                {/* One click to work the backlog from the long-waiting end instead of the newest.
+                    There is no third "unordered" state — the payload's incoming order is `newest`. */}
+                <DropdownMenuLabel>Sort order</DropdownMenuLabel>
+                <DropdownMenuRadioGroup
+                  data-slot="gh-sort"
+                  value={sort}
+                  onValueChange={(next) => saveGithubSort(next === 'oldest' ? 'oldest' : 'newest')}
+                >
+                  <DropdownMenuRadioItem value="newest">Newest first</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="oldest">Oldest first</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+                {automationsAvailable ? (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem asChild>
+                      <Link to="/automations/new">
+                        <ZapIcon aria-hidden="true" />
+                        Set up automations
+                      </Link>
+                    </DropdownMenuItem>
+                  </>
+                ) : null}
+                {gh.repo ? (
+                  <DropdownMenuItem asChild>
+                    <a href={`https://github.com/${gh.repo}`} target="_blank" rel="noopener noreferrer">
+                      <ExternalLinkIcon aria-hidden="true" />
+                      Open repository on GitHub
+                    </a>
+                  </DropdownMenuItem>
+                ) : null}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
-          <div data-slot="gh-tabs" className="mt-2.5 flex items-end gap-1">
-            <TabLink to="/github" active={view === 'issues'} onClick={() => saveGithubView('issues')}>
-              Issues · {countLabel(gh.issues.length)}
-            </TabLink>
-            <TabLink to="/github/prs" active={view === 'prs'} onClick={() => saveGithubView('prs')}>
-              Pull requests · {countLabel(gh.prs.length)}
-            </TabLink>
-          </div>
-          {/* Wraps rather than squeezes: on a phone the sort control below is ~145px, and with
-              a non-wrapping row the search field shrank to about a quarter of its placeholder.
-              The field's `min-w` is what forces the wrap — `flex-1` alone would keep shrinking
-              it to nothing instead. Nothing wraps once there is room, so desktop is unchanged. */}
-          <div className="mt-2.5 flex flex-wrap items-center gap-2 pb-3">
-            <div className="relative min-w-[11rem] flex-1">
-              <SearchIcon
-                aria-hidden="true"
-                className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-soft-foreground"
-              />
-              <input
+          <Tabs value={view} className="mt-4">
+            <TabsList data-slot="gh-tabs" className="w-full">
+              <TabsTrigger value="issues" asChild>
+                <Link to="/github" aria-current={view === 'issues' ? 'page' : undefined} onClick={() => saveGithubView('issues')}>
+                  Issues
+                  <span className="font-normal text-muted-foreground tabular-nums">{countLabel(gh.issues.length)}</span>
+                </Link>
+              </TabsTrigger>
+              <TabsTrigger value="prs" asChild>
+                <Link to="/github/prs" aria-current={view === 'prs' ? 'page' : undefined} onClick={() => saveGithubView('prs')}>
+                  Pull requests
+                  <span className="font-normal text-muted-foreground tabular-nums">{countLabel(gh.prs.length)}</span>
+                </Link>
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          <div className="mt-3 flex items-center gap-2">
+            <InputGroup className="min-w-0 flex-1">
+              <InputGroupAddon>
+                <SearchIcon aria-hidden="true" />
+              </InputGroupAddon>
+              <InputGroupInput
                 type="search"
                 data-slot="gh-search"
                 aria-label={`Search ${view}`}
                 placeholder="Search #id, title, author…"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                className="w-full rounded-md border border-input bg-card py-1 pr-2 pl-7 text-[13px] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
               />
-            </div>
+            </InputGroup>
             <LabelFilter
               options={labelOptions}
               colors={labelColors}
               selected={labelFilter}
               onChange={setLabelFilter}
             />
-            {/* One click to work the backlog from the long-waiting end instead of the newest.
-                No `allowRelease`: there is no third "unordered" state to fall back to — the
-                payload's incoming order is itself `newest`. */}
-            <Segmented<GithubSort>
-              slot="gh-sort"
-              label="Sort order"
-              value={sort}
-              options={[
-                { value: 'newest', label: 'Newest' },
-                { value: 'oldest', label: 'Oldest' },
-              ]}
-              onChange={saveGithubSort}
-              className="shrink-0"
-            />
+            {sort === 'oldest' ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                title="Oldest first — click for newest first"
+                aria-label="Sorted oldest first. Switch to newest first"
+                className="shrink-0 text-foreground"
+                onClick={() => saveGithubSort('newest')}
+              >
+                <ArrowUpDownIcon aria-hidden="true" />
+              </Button>
+            ) : null}
           </div>
         </header>
 
@@ -590,12 +637,12 @@ export function GithubRoute({
           // search found, is finding, or could not do. No verdict to report (the hits below are
           // the answer) means no wrapper at all, so its padding cannot leave a gap.
           emptyState && (
-            <div data-slot="gh-empty" className="px-4 py-4 text-sm text-soft-foreground">
+            <div data-slot="gh-empty" className="px-4 py-6 text-[13px] text-muted-foreground">
               {emptyState}
             </div>
           )
         ) : (
-          <ul data-slot="gh-rows" className="flex flex-col gap-0.5 px-2 py-2">
+          <ul data-slot="gh-rows" className="flex flex-col gap-px px-2 pb-3">
             {items.map((item) => (
               <GithubRow
                 key={item.url}
@@ -605,6 +652,7 @@ export function GithubRoute({
                 active={selected?.url === item.url}
                 queued={queued.has(item.url)}
                 checks={item.kind === 'pr' ? checksMap?.[item.number] ?? item.checks : item.checks}
+                open
               />
             ))}
           </ul>
@@ -614,10 +662,10 @@ export function GithubRoute({
             whether a row came from the open list or from a search that reached past it. */}
         {searchHits.length > 0 ? (
           <div data-slot="gh-search-hits">
-            <p className="px-4 pt-2 pb-1 text-[11px] font-medium tracking-wide text-soft-foreground uppercase">
+            <p className="px-4 pt-3 pb-1.5 text-xs font-medium text-muted-foreground">
               Found on GitHub{searchPayload?.truncated ? ' (first matches)' : ''}
             </p>
-            <ul className="flex flex-col gap-0.5 px-2 pb-2">
+            <ul className="flex flex-col gap-px px-2 pb-3">
               {searchHits.map((item) => (
                 <GithubRow
                   key={item.url}
@@ -640,6 +688,10 @@ export function GithubRoute({
             colors={labelColors}
             changes={changes}
             checks={selected.kind === 'pr' ? checksMap?.[selected.number] ?? selected.checks : selected.checks}
+            open={allItems.some((item) => item.url === selected.url)}
+            queuedRunId={queued.get(selected.url) ?? null}
+            handOpen={handFor === selected.url}
+            onHandOpenChange={(next) => setHandFor(next ? selected.url : null)}
           >
             <HandToAgent
               key={selected.url}
@@ -653,22 +705,30 @@ export function GithubRoute({
               engine={engine}
               onEngineChange={setEngine}
               queuedRunId={queued.get(selected.url) ?? null}
-              onQueued={(url, runId) => setQueued((current) => new Map(current).set(url, runId))}
+              onQueued={(url, runId) => {
+                setQueued((current) => new Map(current).set(url, runId))
+                setHandFor(null)
+              }}
             />
           </GithubDetail>
         ) : (
-          <CenteredState
+          <IssueBrowserEmpty
             icon={view === 'issues' ? <CircleDotIcon /> : <GitPullRequestIcon />}
-            tone="neutral"
-            heading="h2"
             title={number === null ? 'Nothing selected' : 'Not found'}
-            subtitle={
+            description={
               number === null
                 ? `No open ${view === 'issues' ? 'issues' : 'pull requests'} to show.`
                 : // Since #730 a closed or merged item IS reachable — type its number into the
                   // search box and the tab asks GitHub directly — so the honest advice is to
                   // search, not the old "it may be closed" shrug.
-                  `#${number} is not among the open ${view === 'issues' ? 'issues' : 'pull requests'}. Search for ${number} above to look it up on GitHub, closed and merged included.`
+                  `#${number} is not among the open ${view === 'issues' ? 'issues' : 'pull requests'}. Search for ${number} in the list to look it up on GitHub, closed and merged included.`
+            }
+            actions={
+              number === null ? undefined : (
+                <Button asChild variant="outline" size="sm">
+                  <Link to={listPath}>Back to the list</Link>
+                </Button>
+              )
             }
           />
         )}
@@ -682,6 +742,9 @@ function countLabel(count: number): string {
   return `${count}${count >= LIST_LIMIT ? '+' : ''}`
 }
 
+/** How many label chips a list row shows before folding the rest into "+n". */
+const ROW_LABELS = 2
+
 function GithubRow({
   item,
   view,
@@ -689,6 +752,7 @@ function GithubRow({
   active,
   queued,
   checks,
+  open = false,
 }: {
   item: GithubItem
   view: GithubView
@@ -697,6 +761,8 @@ function GithubRow({
   queued: boolean
   /** Resolved checks glyph — the lazily-hydrated value overrides the list's `null` (#664). */
   checks?: GithubItem['checks']
+  /** The row comes from the open list (a search hit's state is not known here). */
+  open?: boolean
 }) {
   const Icon = item.kind === 'issue' ? CircleDotIcon : GitPullRequestIcon
   const queryClient = useQueryClient()
@@ -722,6 +788,9 @@ function GithubRow({
     }
   }
 
+  const shownLabels = item.labels.slice(0, ROW_LABELS)
+  const hiddenLabels = item.labels.length - shownLabels.length
+
   return (
     <li>
       <Link
@@ -735,38 +804,57 @@ function GithubRow({
         aria-current={active ? 'page' : undefined}
         title="Drag into the composer to prefill a task"
         className={cn(
-          'flex flex-col gap-1 rounded-md px-2.5 py-2 transition-colors hover:bg-muted',
-          active && 'bg-muted',
+          'flex min-h-14 gap-2.5 rounded-lg px-2.5 py-2.5 transition-colors outline-none hover:bg-muted/60 focus-visible:bg-muted/60',
+          active && 'bg-muted hover:bg-muted',
         )}
       >
-        <span className="flex min-w-0 items-center gap-2">
-          <Icon
-            aria-hidden="true"
-            className={cn('size-3.5 shrink-0', item.kind === 'issue' ? 'text-success' : 'text-violet')}
-          />
-          <span className={cn('min-w-0 truncate text-[13px] font-medium', active && 'font-semibold')}>
+        <Icon
+          aria-hidden="true"
+          className={cn(
+            'mt-0.5 size-4 shrink-0',
+            !open ? 'text-muted-foreground' : item.isDraft ? 'text-muted-foreground' : 'text-success',
+          )}
+        />
+        <span className="flex min-w-0 flex-1 flex-col gap-1">
+          <span className={cn('line-clamp-2 text-[13.5px] leading-snug font-medium text-pretty', active && 'font-semibold')}>
             {item.title}
           </span>
-        </span>
-        <span className="flex items-center gap-2 pl-[22px] font-mono text-[10.5px] text-muted-foreground">
-          <span>#{item.number}</span>
-          <span className="min-w-0 truncate">{item.author}</span>
-          <span>{shortAge(item.createdAt)}</span>
-          <CommentCount count={item.comments} />
-          {checks ? <ChecksGlyph checks={checks} /> : null}
-          {queued ? (
-            <span data-slot="gh-queued-flag" className="font-sans font-medium text-violet">
-              ↗ run queued
+          <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground tabular-nums">
+            <span className="shrink-0">#{item.number}</span>
+            <span aria-hidden="true">·</span>
+            <span className="min-w-0 truncate">{item.author}</span>
+            <span aria-hidden="true">·</span>
+            <span className="shrink-0">{shortAge(item.createdAt)}</span>
+            <CommentCount count={item.comments} />
+            {checks ? <ChecksGlyph checks={checks} /> : null}
+            {item.isDraft ? (
+              <Badge variant="outline" className="px-1.5 py-0 font-normal text-muted-foreground">
+                Draft
+              </Badge>
+            ) : null}
+          </span>
+          {shownLabels.length > 0 || queued ? (
+            <span className="flex flex-wrap items-center gap-1 pt-0.5">
+              {queued ? (
+                <Badge data-slot="gh-queued-flag" variant="secondary" className="bg-violet/12 px-1.5 py-0 font-medium text-violet">
+                  Run queued
+                </Badge>
+              ) : null}
+              {shownLabels.map((label) => (
+                <LabelChip key={label} label={label} color={colors[label]} />
+              ))}
+              {hiddenLabels > 0 ? (
+                <span
+                  data-slot="gh-label-more"
+                  title={item.labels.slice(ROW_LABELS).join(', ')}
+                  className="text-xs text-muted-foreground tabular-nums"
+                >
+                  +{hiddenLabels}
+                </span>
+              ) : null}
             </span>
           ) : null}
         </span>
-        {item.labels.length > 0 ? (
-          <span className="flex flex-wrap gap-1 pl-[22px]">
-            {item.labels.map((label) => (
-              <LabelChip key={label} label={label} color={colors[label]} />
-            ))}
-          </span>
-        ) : null}
       </Link>
     </li>
   )
@@ -791,18 +879,20 @@ function LabelFilter({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
-          type="button"
+        <Button
+          variant="outline"
           data-slot="gh-label-filter"
           disabled={options.length === 0}
-          className={cn(
-            'flex shrink-0 items-center gap-1 rounded-md border border-input bg-card px-2 py-1 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50',
-            selected.length > 0 && 'border-primary/60 text-foreground',
-          )}
+          className={cn('shrink-0 px-2.5 font-normal text-muted-foreground', selected.length > 0 && 'text-foreground')}
         >
-          <TagIcon aria-hidden="true" className="size-3.5" />
-          {selected.length > 0 ? `Labels · ${selected.length}` : 'Labels'}
-        </button>
+          <TagIcon aria-hidden="true" />
+          Labels
+          {selected.length > 0 ? (
+            <Badge variant="secondary" className="px-1.5 py-0 tabular-nums">
+              {selected.length}
+            </Badge>
+          ) : null}
+        </Button>
       </PopoverTrigger>
       <PopoverContent align="end" sideOffset={6} className="w-60 p-0">
         <Command>
@@ -824,7 +914,7 @@ function LabelFilter({
                     style={labelChipStyle(colors[label])}
                   />
                   <span className="min-w-0 flex-1 truncate">{label}</span>
-                  {on ? <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary" /> : null}
+                  {on ? <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary-strong" /> : null}
                 </CommandItem>
               )
             })}
@@ -842,7 +932,7 @@ function LabelChip({ label, color }: { label: string; color: string | undefined 
       data-slot="gh-label"
       data-label={label}
       style={labelChipStyle(color)}
-      className="rounded-full border px-1.5 py-px text-[10px] font-medium"
+      className="max-w-40 truncate rounded-full border px-1.5 py-px text-[11px] leading-4 font-medium"
     >
       {label}
     </span>
@@ -856,98 +946,208 @@ function GithubDetail({
   children,
   changes,
   checks,
+  open,
+  queuedRunId,
+  handOpen,
+  onHandOpenChange,
 }: {
   item: GithubItem
   listPath: string
   colors: Record<string, string>
+  /** The hand-off composer — rendered inside the "Hand to agent" dialog. */
   children: ReactNode
   changes: boolean
   /** Resolved checks glyph — the lazily-hydrated value overrides the list's `null` (#664). */
   checks?: GithubItem['checks']
+  /** The item is in the open list (a search hit's state is not known here). */
+  open: boolean
+  queuedRunId: string | null
+  handOpen: boolean
+  onHandOpenChange: (open: boolean) => void
 }) {
   const kindWord = item.kind === 'pr' ? 'pull request' : 'issue'
+  const kindLabel = item.kind === 'pr' ? 'Pull request' : 'Issue'
   const hasDiffStat = item.kind === 'pr' && Boolean(item.additions || item.deletions)
+  const linkable = isHttpUrl(item.url)
+  const copyLink = () => {
+    void navigator.clipboard?.writeText(item.url).then(() => toast('Link copied'))
+  }
   return (
-    <article data-slot="gh-detail-inner" className="min-w-0 px-4 py-4 md:px-7 md:py-5">
-      <Link
-        to={listPath}
-        data-slot="gh-back"
-        className="mb-3 inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground md:hidden"
-      >
-        <ArrowLeftIcon aria-hidden="true" className="size-3.5" />
-        Back to the list
-      </Link>
+    <article
+      data-slot="gh-detail-inner"
+      className={cn('mx-auto w-full min-w-0 px-4 pt-5 pb-12 md:px-10 md:pt-8', changes ? 'max-w-[1400px]' : 'max-w-3xl')}
+    >
+      <Button asChild variant="ghost" size="sm" className="mb-3 -ml-2.5 md:hidden">
+        <Link to={listPath} data-slot="gh-back">
+          <ArrowLeftIcon aria-hidden="true" />
+          Back to the list
+        </Link>
+      </Button>
 
-      <p data-slot="gh-meta" className="flex flex-wrap items-center gap-x-1.5 font-mono text-[10.5px] text-soft-foreground">
-        <span>#{item.number}</span>·<span>{kindWord}</span>·<span>opened by {item.author}</span>·
-        <span>{shortAge(item.createdAt)} ago</span>
+      <header className="flex flex-wrap items-start gap-x-4 gap-y-3">
+        <div className="min-w-0 flex-1 basis-72 space-y-2">
+          <div className="flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
+            {open ? (
+              <Badge variant="outline" data-slot="gh-state" className="gap-1.5 font-medium">
+                <StatusDot tone={item.isDraft ? 'neutral' : 'success'} />
+                {item.isDraft ? 'Draft' : 'Open'}
+              </Badge>
+            ) : (
+              <Badge variant="secondary" data-slot="gh-state" className="font-medium">
+                Found on GitHub
+              </Badge>
+            )}
+            <span>
+              {kindLabel} <span className="tabular-nums">#{item.number}</span>
+            </span>
+          </div>
+          <h2 className="text-[22px] leading-7 font-semibold text-pretty">{item.title}</h2>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {queuedRunId ? (
+            <Button asChild variant="outline" data-slot="gh-view-run">
+              <Link to={`/tasks/${queuedRunId}`}>
+                <CheckIcon aria-hidden="true" className="text-success" />
+                <span data-slot="gh-queued">Queued — view task</span>
+              </Link>
+            </Button>
+          ) : null}
+          <Button
+            variant={queuedRunId ? 'outline' : 'primary'}
+            data-action="gh-hand-open"
+            onClick={() => onHandOpenChange(true)}
+          >
+            <PlayIcon aria-hidden="true" />
+            Hand to agent
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="icon" aria-label={`More actions for this ${kindWord}`}>
+                <MoreHorizontalIcon aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              {/* href protocol guard (#431): link only for http(s) URLs. */}
+              {linkable ? (
+                <DropdownMenuItem asChild>
+                  <a href={item.url} target="_blank" rel="noopener noreferrer" data-slot="gh-open-link">
+                    <ExternalLinkIcon aria-hidden="true" />
+                    Open on GitHub
+                  </a>
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem disabled data-slot="gh-open-link">
+                  <ExternalLinkIcon aria-hidden="true" />
+                  Open on GitHub
+                </DropdownMenuItem>
+              )}
+              {linkable && item.kind === 'pr' ? (
+                <DropdownMenuItem asChild>
+                  <a href={`${item.url}/checks`} target="_blank" rel="noopener noreferrer">
+                    <CircleCheckIcon aria-hidden="true" />
+                    Open checks on GitHub
+                  </a>
+                </DropdownMenuItem>
+              ) : null}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={copyLink}>Copy link</DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => void navigator.clipboard?.writeText(githubTaskPrompt(item)).then(() => toast('Task prompt copied'))}
+              >
+                Copy as task prompt
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </header>
+
+      <dl
+        data-slot="gh-meta"
+        className="mt-5 grid grid-cols-[6.5rem_minmax(0,1fr)] items-baseline gap-x-4 gap-y-2 text-[13px]"
+      >
+        <dt className="text-muted-foreground">Author</dt>
+        <dd>{item.author}</dd>
+        <dt className="text-muted-foreground">Opened</dt>
+        <dd>{shortAge(item.createdAt)} ago</dd>
         {item.comments ? (
           <>
-            ·<CommentCount count={item.comments} />
+            <dt className="text-muted-foreground">Comments</dt>
+            <dd>
+              <CommentCount count={item.comments} />
+            </dd>
           </>
         ) : null}
         {hasDiffStat ? (
           <>
-            ·
-            <span data-slot="gh-diffstat">
+            <dt className="text-muted-foreground">Changes</dt>
+            <dd data-slot="gh-diffstat" className="font-mono text-xs tabular-nums">
               <span className="text-success">+{item.additions ?? 0}</span>{' '}
               <span className="text-danger">−{item.deletions ?? 0}</span>
-            </span>
+            </dd>
           </>
         ) : null}
-        ·
-        {/* href protocol guard (#431): link only for http(s) URLs. */}
-        {isHttpUrl(item.url) ? (
-          <a
-            href={item.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            data-slot="gh-open-link"
-            className="inline-flex items-center gap-0.5 text-muted-foreground hover:text-foreground hover:underline"
-          >
-            open on GitHub
-            <ExternalLinkIcon aria-hidden="true" className="size-2.5" />
-          </a>
-        ) : (
-          <span data-slot="gh-open-link" className="text-muted-foreground">
-            open on GitHub
-          </span>
-        )}
-      </p>
-
-      <h2 className="mt-2 text-xl leading-snug font-semibold">{item.title}</h2>
+        {checks ? (
+          <>
+            <dt className="text-muted-foreground">Checks</dt>
+            <dd>
+              <ChecksBadge checks={checks} url={item.url} />
+            </dd>
+          </>
+        ) : null}
+        {item.labels.length > 0 ? (
+          <>
+            <dt className="text-muted-foreground">Labels</dt>
+            <dd className="flex flex-wrap gap-1">
+              {item.labels.map((label) => (
+                <LabelChip key={label} label={label} color={colors[label]} />
+              ))}
+            </dd>
+          </>
+        ) : null}
+      </dl>
 
       {item.kind === 'pr' ? (
-        <nav aria-label="Pull request detail" className="mt-4 flex border-b border-border">
-          <TabLink to={`/github/prs/${item.number}`} active={!changes}>Conversation</TabLink>
-          <TabLink to={`/github/prs/${item.number}/changes`} active={changes}>Changes</TabLink>
-        </nav>
-      ) : null}
-
-      {item.labels.length > 0 || checks ? (
-        <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          {item.labels.map((label) => (
-            <LabelChip key={label} label={label} color={colors[label]} />
-          ))}
-          {checks ? <ChecksBadge checks={checks} url={item.url} /> : null}
-        </div>
+        <Tabs value={changes ? 'changes' : 'conversation'} className="mt-6">
+          <TabsList aria-label="Pull request detail">
+            <TabsTrigger value="conversation" asChild>
+              <Link to={`/github/prs/${item.number}`} aria-current={!changes ? 'page' : undefined}>
+                Conversation
+              </Link>
+            </TabsTrigger>
+            <TabsTrigger value="changes" asChild>
+              <Link to={`/github/prs/${item.number}/changes`} aria-current={changes ? 'page' : undefined}>
+                Changes
+              </Link>
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
       ) : null}
 
       {changes && item.kind === 'pr' ? <GithubPrChanges item={item} /> : <>
-      <div data-slot="gh-body" className="mt-5 text-sm">
+      <div data-slot="gh-body" className="mt-6 border-t border-border pt-6 text-sm leading-relaxed">
         {item.body ? (
           <Markdown>{item.body}</Markdown>
         ) : (
-          <p className="text-soft-foreground">(no description)</p>
+          <p className="text-muted-foreground">No description.</p>
         )}
       </div>
 
       <GithubThread item={item} colors={colors} />
 
       {item.kind === 'pr' ? <GithubMergeBox number={item.number} /> : null}
-
-      {children}
       </>}
+
+      <Dialog open={handOpen} onOpenChange={onHandOpenChange}>
+        <DialogContent data-slot="gh-hand-dialog" className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Hand to agent</DialogTitle>
+            <DialogDescription className="line-clamp-2">
+              {kindLabel} #{item.number} — {item.title}
+            </DialogDescription>
+          </DialogHeader>
+          {children}
+        </DialogContent>
+      </Dialog>
     </article>
   )
 }
@@ -964,7 +1164,7 @@ function MergeRequirementIcon({ state }: { state: MergeRequirementState }) {
   const iconClass = 'size-4 shrink-0'
   if (state === 'passing') return <CircleCheckIcon aria-hidden="true" data-slot="gh-merge-status-passing" className={cn(iconClass, 'text-success')} />
   if (state === 'failing') return <CircleXIcon aria-hidden="true" data-slot="gh-merge-status-failing" className={cn(iconClass, 'text-danger')} />
-  if (state === 'pending') return <LoaderCircleIcon aria-hidden="true" data-slot="gh-merge-status-pending" className={cn(iconClass, 'animate-spin text-warning')} />
+  if (state === 'pending') return <LoaderCircleIcon aria-hidden="true" data-slot="gh-merge-status-pending" className={cn(iconClass, 'animate-spin text-pending-strong')} />
   return <CircleIcon aria-hidden="true" data-slot="gh-merge-status-unknown" className={cn(iconClass, 'text-soft-foreground')} />
 }
 
@@ -1011,13 +1211,13 @@ function GithubMergeBox({ number }: { number: number }) {
   })
 
   if (mergeState.isPending) {
-    return <Skeleton data-slot="gh-merge-loading" className="mt-6 h-32 w-full" />
+    return <Skeleton data-slot="gh-merge-loading" className="mt-8 h-32 w-full rounded-xl" />
   }
   if (!state) {
     return (
-      <section data-slot="gh-merge-unavailable" className="mt-6 rounded-lg border border-border bg-card p-4 text-sm">
+      <section data-slot="gh-merge-unavailable" className="mt-8 rounded-xl border bg-card p-5 text-sm shadow-xs">
         <p className="font-medium">Merge status unavailable</p>
-        <p className="mt-1 text-xs text-soft-foreground">
+        <p className="mt-1 text-[13px] text-muted-foreground">
           {mergeState.data?.available === false ? mergeState.data.reason : 'GitHub could not load merge requirements.'}
         </p>
       </section>
@@ -1042,99 +1242,96 @@ function GithubMergeBox({ number }: { number: number }) {
   const mergeEnabled = Boolean(selectedMethod && (state.canMerge || (state.canOverride && overrideRules)))
 
   return (
-    <section data-slot="gh-merge-box" aria-live="polite" className="mt-6 rounded-lg border border-border bg-card p-4">
-      <div className="flex items-start gap-3">
-        {state.canMerge ? (
-          <CheckIcon aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-success" />
-        ) : (
-          <TriangleAlertIcon aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-warning" />
-        )}
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="font-semibold">{title}</h3>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={refreshMergeState.isPending}
-              onClick={() => refreshMergeState.mutate()}
-            >
-              <RefreshCwIcon aria-hidden="true" className={cn('size-3.5', refreshMergeState.isPending && 'animate-spin')} />
-              Refresh
-            </Button>
-          </div>
-          <p className="mt-1 font-mono text-[11px] text-soft-foreground">
-            {state.headRef} ({state.headSha.slice(0, 7)}) → {state.baseRef}
-          </p>
-          <ul className="mt-3 space-y-2 text-xs">
-            <li className="flex items-center gap-2">
-              <MergeRequirementIcon state={reviewState} />
-              <span>Reviews: {state.reviewDecision.replaceAll('-', ' ')}</span>
-            </li>
-            <li className="flex items-center gap-2">
-              <MergeRequirementIcon state={conflictState} />
-              <span>Conflicts: {state.mergeable === 'conflicting' ? 'present' : state.mergeable === 'mergeable' ? 'none' : 'unknown'}</span>
-            </li>
-            {state.checks.length === 0 && state.checksTier !== 'none' ? <li>No checks configured</li> : state.checks.map((check) => (
-              <li key={check.name} className="flex items-center justify-between gap-3">
-                <span className="flex min-w-0 items-center gap-2">
-                  <MergeRequirementIcon state={check.state} />
-                  <span>{check.name} · {check.state}{check.required === true ? ' · required' : check.required === null ? ' · requiredness unknown' : ''}</span>
-                </span>
-                {check.url && isHttpUrl(check.url) ? <a href={check.url} target="_blank" rel="noopener noreferrer" className="text-muted-foreground underline">details</a> : null}
-              </li>
-            ))}
-            {/* What the token could NOT read (#969). A fine-grained PAT cannot expand
-                `statusCheckRollup` into CheckRun contexts — there is no permission to grant — so
-                the panel says which tier it is showing instead of passing a degraded read off as
-                the whole truth, or (tier `none`) an empty list off as "no CI". */}
-            {state.checksTier === 'aggregate' || state.checksTier === 'none' ? (
-              <li data-slot="gh-merge-checks-degraded" className="flex items-start gap-2">
-                <MergeRequirementIcon state="unknown" />
-                <span className="min-w-0">
-                  {state.checksTier === 'aggregate'
-                    ? 'Only the rolled-up check state is readable here — per-check detail is not.'
-                    : 'This token cannot read the checks on this pull request.'}
-                  {state.checksReason ? <span className="mt-0.5 block break-words text-soft-foreground">{state.checksReason}</span> : null}
-                </span>
-              </li>
-            ) : null}
-            {/* The row above already said `checks-unknown`, with the reason — don't say it twice. */}
-            {state.blockers
-              .filter((blocker) => !(blocker.code === 'checks-unknown' && state.checksTier === 'none'))
-              .map((blocker) => <li key={blocker.code} className="text-soft-foreground">{blocker.message}</li>)}
-          </ul>
-          {state.canOverride ? (
-            <label className="mt-4 flex cursor-pointer items-start gap-2 rounded-md border border-warning/40 bg-warning/5 p-3 text-xs">
-              <input
-                type="checkbox"
-                checked={overrideRules}
-                onChange={(event) => setOverrideRules(event.target.checked)}
-                className="mt-0.5 size-4 accent-primary"
-              />
-              <span>
-                <span className="block font-medium">Merge without waiting for requirements</span>
-                <span className="mt-0.5 block text-soft-foreground">GitHub will allow this only if your permissions can bypass the repository rules.</span>
-              </span>
-            </label>
-          ) : null}
-          {state.state === 'open' && state.methods.length > 0 ? (
-            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-              <select
-                aria-label="Merge method"
-                value={selectedMethod ?? ''}
-                onChange={(event) => setMethod(event.target.value as GithubMergeMethod)}
-                className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-              >
-                {state.methods.map((candidate) => <option key={candidate} value={candidate}>{mergeLabels[candidate]}</option>)}
-              </select>
-              <Button disabled={!mergeEnabled} onClick={() => setConfirming(true)}>
-                {selectedMethod ? mergeLabels[selectedMethod] : 'Merge'}
-              </Button>
-            </div>
-          ) : null}
+    <section data-slot="gh-merge-box" aria-live="polite" className="mt-8 rounded-xl border bg-card p-5 shadow-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          {state.canMerge ? (
+            <CircleCheckIcon aria-hidden="true" className="size-4 shrink-0 text-success" />
+          ) : (
+            <TriangleAlertIcon aria-hidden="true" className="size-4 shrink-0 text-pending-strong" />
+          )}
+          <h3 className="text-[15px] font-semibold">{title}</h3>
         </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={refreshMergeState.isPending}
+          onClick={() => refreshMergeState.mutate()}
+        >
+          <RefreshCwIcon aria-hidden="true" className={cn(refreshMergeState.isPending && 'animate-spin')} />
+          Refresh
+        </Button>
       </div>
+      <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+        {state.headRef} ({state.headSha.slice(0, 7)}) → {state.baseRef}
+      </p>
+      <ul className="mt-4 space-y-2.5 text-[13px]">
+        <li className="flex items-center gap-2">
+          <MergeRequirementIcon state={reviewState} />
+          <span>Reviews: {state.reviewDecision.replaceAll('-', ' ')}</span>
+        </li>
+        <li className="flex items-center gap-2">
+          <MergeRequirementIcon state={conflictState} />
+          <span>Conflicts: {state.mergeable === 'conflicting' ? 'present' : state.mergeable === 'mergeable' ? 'none' : 'unknown'}</span>
+        </li>
+        {state.checks.length === 0 && state.checksTier !== 'none' ? <li className="text-muted-foreground">No checks configured</li> : state.checks.map((check) => (
+          <li key={check.name} className="flex items-center justify-between gap-3">
+            <span className="flex min-w-0 items-center gap-2">
+              <MergeRequirementIcon state={check.state} />
+              <span>{check.name} · {check.state}{check.required === true ? ' · required' : check.required === null ? ' · requiredness unknown' : ''}</span>
+            </span>
+            {check.url && isHttpUrl(check.url) ? <a href={check.url} target="_blank" rel="noopener noreferrer" className="shrink-0 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">Details</a> : null}
+          </li>
+        ))}
+        {/* What the token could NOT read (#969). A fine-grained PAT cannot expand
+            `statusCheckRollup` into CheckRun contexts — there is no permission to grant — so
+            the panel says which tier it is showing instead of passing a degraded read off as
+            the whole truth, or (tier `none`) an empty list off as "no CI". */}
+        {state.checksTier === 'aggregate' || state.checksTier === 'none' ? (
+          <li data-slot="gh-merge-checks-degraded" className="flex items-start gap-2">
+            <MergeRequirementIcon state="unknown" />
+            <span className="min-w-0">
+              {state.checksTier === 'aggregate'
+                ? 'Only the rolled-up check state is readable here — per-check detail is not.'
+                : 'This token cannot read the checks on this pull request.'}
+              {state.checksReason ? <span className="mt-0.5 block break-words text-muted-foreground">{state.checksReason}</span> : null}
+            </span>
+          </li>
+        ) : null}
+        {/* The row above already said `checks-unknown`, with the reason — don't say it twice. */}
+        {state.blockers
+          .filter((blocker) => !(blocker.code === 'checks-unknown' && state.checksTier === 'none'))
+          .map((blocker) => <li key={blocker.code} className="text-muted-foreground">{blocker.message}</li>)}
+      </ul>
+      {state.canOverride ? (
+        <label className="mt-4 flex cursor-pointer items-start gap-2.5 rounded-lg bg-pending/10 p-3 text-[13px]">
+          <Checkbox
+            checked={overrideRules}
+            onCheckedChange={(checked) => setOverrideRules(checked === true)}
+            className="mt-0.5"
+          />
+          <span>
+            <span className="block font-medium">Merge without waiting for requirements</span>
+            <span className="mt-0.5 block text-muted-foreground">GitHub will allow this only if your permissions can bypass the repository rules.</span>
+          </span>
+        </label>
+      ) : null}
+      {state.state === 'open' && state.methods.length > 0 ? (
+        <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+          <Select value={selectedMethod ?? undefined} onValueChange={(value) => setMethod(value as GithubMergeMethod)}>
+            <SelectTrigger aria-label="Merge method" className="min-w-0 flex-1">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {state.methods.map((candidate) => <SelectItem key={candidate} value={candidate}>{mergeLabels[candidate]}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button variant="contrast" disabled={!mergeEnabled} onClick={() => setConfirming(true)}>
+            {selectedMethod ? mergeLabels[selectedMethod] : 'Merge'}
+          </Button>
+        </div>
+      ) : null}
       <Dialog open={confirming} onOpenChange={setConfirming}>
         <DialogContent data-slot="gh-merge-confirm" showCloseButton={false}>
           <DialogHeader>
@@ -1179,7 +1376,7 @@ function GithubPrChanges({ item }: { item: GithubItem }) {
       toast('The reviewed revision changed.')
     }
   }
-  if (query.isPending) return <p aria-live="polite" className="mt-6 text-sm text-muted-foreground">Loading changed files…</p>
+  if (query.isPending) return <p aria-live="polite" className="mt-6 flex items-center gap-2 text-[13px] text-muted-foreground"><Spinner />Loading changed files…</p>
   if (query.isError || !data) return <p className="mt-6 text-sm text-danger">Changed files could not be loaded.</p>
   if (!data.available) return <p className="mt-6 text-sm text-muted-foreground">{data.reason}</p>
   const diffFiles: DiffFileChange[] = files.map((file) => ({
@@ -1195,32 +1392,36 @@ function GithubPrChanges({ item }: { item: GithubItem }) {
   const active = files.find((file) => file.path === selected)
   return (
     <section data-slot="gh-pr-changes" className="mt-5 min-w-0">
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <strong>{data.files.length} changed files</strong>
-        <span className="text-success">+{data.additions}</span>
-        <span className="text-danger">−{data.deletions}</span>
-        <span className="font-mono text-muted-foreground" title={data.headSha}>head {data.headSha.slice(0, 8)}</span>
-        <Button type="button" variant="outline" size="sm" className="ml-auto min-h-11" onClick={() => void refresh()}>Refresh</Button>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[13px]">
+        <span className="font-medium">{data.files.length} changed files</span>
+        <span className="font-mono text-xs tabular-nums">
+          <span className="text-success">+{data.additions}</span> <span className="text-danger">−{data.deletions}</span>
+        </span>
+        <span className="font-mono text-[11px] text-muted-foreground" title={data.headSha}>head {data.headSha.slice(0, 8)}</span>
+        <div className="ml-auto flex items-center gap-1">
+          <Button aria-label="Previous file" variant="outline" size="icon-sm" disabled={current <= 0} onClick={() => setSelected(files[current - 1]?.path ?? null)}><ChevronLeftIcon /></Button>
+          <Button aria-label="Next file" variant="outline" size="icon-sm" disabled={current < 0 || current >= files.length - 1} onClick={() => setSelected(files[current + 1]?.path ?? null)}><ChevronRightIcon /></Button>
+          <Button type="button" variant="outline" size="sm" onClick={() => void refresh()}><RefreshCwIcon aria-hidden="true" />Refresh</Button>
+        </div>
       </div>
-      {data.truncated ? <p role="status" className="mt-3 rounded-md border border-warning/40 bg-warning/10 p-3 text-xs">{data.reason ?? 'This response is incomplete.'} {fallback ? <a href={fallback} target="_blank" rel="noopener noreferrer" className="underline">Open all files on GitHub</a> : null}</p> : null}
-      <div className="mt-4 grid min-w-0 gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
+      {data.truncated ? <p role="status" className="mt-3 rounded-lg bg-pending/10 p-3 text-[13px]">{data.reason ?? 'This response is incomplete.'} {fallback ? <a href={fallback} target="_blank" rel="noopener noreferrer" className="underline underline-offset-4">Open all files on GitHub</a> : null}</p> : null}
+      <div className="mt-4 grid min-w-0 gap-5 lg:grid-cols-[260px_minmax(0,1fr)]">
         <aside className="min-w-0">
-          <input aria-label="Filter changed files" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter files…" className="min-h-11 w-full rounded-md border border-input bg-background px-3 text-sm" />
-          <select aria-label="Select changed file" value={selected ?? ''} onChange={(e) => setSelected(e.target.value)} className="mt-2 min-h-11 w-full rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 lg:hidden">
+          <InputGroup>
+            <InputGroupAddon><SearchIcon aria-hidden="true" /></InputGroupAddon>
+            <InputGroupInput aria-label="Filter changed files" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter files…" />
+          </InputGroup>
+          <select aria-label="Select changed file" value={selected ?? ''} onChange={(e) => setSelected(e.target.value)} className="mt-2 h-10 w-full rounded-md border border-input bg-card px-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 lg:hidden">
             {files.map((file) => <option key={file.path}>{file.path}</option>)}
           </select>
-          <ul className="mt-2 hidden max-h-[60vh] overflow-auto lg:block">
-            {files.map((file) => <li key={file.path}><button type="button" onClick={() => setSelected(file.path)} className={cn('min-h-11 w-full truncate rounded px-2 text-left text-xs', selected === file.path && 'bg-muted font-medium')} title={file.path}>{file.status} · {file.path} <span className="text-success">+{file.additions}</span> <span className="text-danger">−{file.deletions}</span></button></li>)}
+          <ul className="mt-2 hidden max-h-[60vh] flex-col gap-px overflow-auto lg:flex">
+            {files.map((file) => <li key={file.path}><button type="button" onClick={() => setSelected(file.path)} className={cn('flex min-h-9 w-full items-center gap-2 rounded-md px-2 text-left text-xs text-muted-foreground hover:bg-muted/60', selected === file.path && 'bg-muted font-medium text-foreground')} title={`${file.status} · ${file.path}`}><span className="min-w-0 flex-1 truncate [direction:rtl]"><bdi>{file.path}</bdi></span><span className="sr-only">{file.status}</span><span className="shrink-0 font-mono text-[11px] tabular-nums"><span className="text-success">+{file.additions}</span> <span className="text-danger">−{file.deletions}</span></span></button></li>)}
           </ul>
         </aside>
         <div className="min-w-0">
-          <div className="mb-2 flex justify-end gap-1">
-            <Button aria-label="Previous file" variant="outline" size="icon" className="min-h-11 min-w-11" disabled={current <= 0} onClick={() => setSelected(files[current - 1]?.path ?? null)}><ChevronLeftIcon /></Button>
-            <Button aria-label="Next file" variant="outline" size="icon" className="min-h-11 min-w-11" disabled={current < 0 || current >= files.length - 1} onClick={() => setSelected(files[current + 1]?.path ?? null)}><ChevronRightIcon /></Button>
-          </div>
-          {files.length === 0 ? <p className="text-sm text-muted-foreground">No changed files match this filter.</p> : <>
+          {files.length === 0 ? <p className="text-[13px] text-muted-foreground">No changed files match this filter.</p> : <>
             <Diff files={diffFiles.filter((file) => file.path === selected)} wrap className="min-w-0" />
-            {active && !active.patch ? <p className="rounded-b border border-border p-3 text-xs text-muted-foreground">Patch unavailable: {active.patchUnavailableReason ?? 'not-provided'}.</p> : null}
+            {active && !active.patch ? <p className="rounded-b-md border border-border p-3 text-xs text-muted-foreground">Patch unavailable: {active.patchUnavailableReason ?? 'not-provided'}.</p> : null}
           </>}
         </div>
       </div>
@@ -1265,7 +1466,7 @@ function GithubThread({ item, colors }: { item: GithubItem; colors: Record<strin
 
   if (thread.isPending) {
     return (
-      <section data-slot="gh-thread-loading" className="mt-6 border-t border-border pt-5">
+      <section data-slot="gh-thread-loading" className="mt-8 border-t border-border pt-6">
         <Skeleton className="mb-3 h-3 w-24" />
         <div className="flex flex-col gap-3">
           <Skeleton className="h-14 w-full" />
@@ -1278,16 +1479,16 @@ function GithubThread({ item, colors }: { item: GithubItem; colors: Record<strin
   if (!data || !data.available) {
     const reason = data?.reason ?? (thread.error instanceof Error ? thread.error.message : 'could not load comments')
     return (
-      <section data-slot="gh-thread-error" className="mt-6 border-t border-border pt-5 text-xs text-soft-foreground">
+      <section data-slot="gh-thread-error" className="mt-8 border-t border-border pt-6 text-[13px] text-muted-foreground">
         <span>Couldn’t load comments — {reason}. </span>
         <a
           href={item.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-0.5 text-muted-foreground hover:text-foreground hover:underline"
+          className="inline-flex items-center gap-1 text-foreground underline-offset-4 hover:underline"
         >
-          open on GitHub
-          <ExternalLinkIcon aria-hidden="true" className="size-2.5" />
+          Open on GitHub
+          <ExternalLinkIcon aria-hidden="true" className="size-3" />
         </a>
       </section>
     )
@@ -1300,17 +1501,18 @@ function GithubThread({ item, colors }: { item: GithubItem; colors: Record<strin
   if (entries.length === 0) return null
 
   return (
-    <section data-slot="gh-thread" className="mt-6 border-t border-border pt-5">
-      <h3
-        data-slot="gh-thread-header"
-        className="mb-4 text-[11px] font-semibold tracking-wide text-soft-foreground uppercase"
-      >
+    <section data-slot="gh-thread" className="mt-8 border-t border-border pt-6">
+      <h3 data-slot="gh-thread-header" className="mb-5 flex items-baseline gap-2 text-[15px] font-semibold">
         {/* "Activity", not "Comments": heading a twenty-row list `Comments · 2` would be
             incoherent once events render. The comment count stays as a secondary. This is a
             different surface from the row badge, which still counts comments only. */}
-        Activity · {data.comments.length} comment{data.comments.length === 1 ? '' : 's'}
+        Activity
+        <span className="text-[13px] font-normal text-muted-foreground">
+          {data.comments.length} comment{data.comments.length === 1 ? '' : 's'}
+        </span>
       </h3>
-      <ul className="flex flex-col gap-5">
+      {/* A simple timeline: one rail down the avatar column, comments and events hung off it. */}
+      <ul className="relative flex flex-col gap-5 before:absolute before:top-2 before:bottom-2 before:left-3 before:w-px before:bg-border">
         {groupCommitRuns(entries).map((grouped) =>
           grouped.group === 'commits' ? (
             <CommitGroup key={grouped.commits[0]!.id} commits={grouped.commits} colors={colors} />
@@ -1330,10 +1532,10 @@ function GithubThread({ item, colors }: { item: GithubItem; colors: Record<strin
           target="_blank"
           rel="noopener noreferrer"
           data-slot="gh-thread-truncated"
-          className="mt-4 inline-flex items-center gap-0.5 text-xs text-soft-foreground hover:text-foreground hover:underline"
+          className="mt-5 inline-flex items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground hover:underline"
         >
-          thread truncated — open on GitHub
-          <ExternalLinkIcon aria-hidden="true" className="size-2.5" />
+          Thread truncated — open on GitHub
+          <ExternalLinkIcon aria-hidden="true" className="size-3" />
         </a>
       ) : null}
     </section>
@@ -1409,10 +1611,10 @@ function CommitGroup({ commits, colors }: { commits: GithubTimelineEvent[]; colo
             type="button"
             aria-expanded={true}
             onClick={() => setOpen(false)}
-            className="flex items-center gap-1.5 font-mono text-[11px] text-soft-foreground hover:text-foreground"
+            className="relative flex items-center gap-2 text-[13px] text-muted-foreground hover:text-foreground"
           >
-            <span aria-hidden="true">{EVENT_GLYPH.committed}</span>
-            <span className="font-sans font-medium text-foreground">{actor}</span>
+            <EventMarker kind="committed" />
+            <span className="font-medium text-foreground">{actor}</span>
             <span>added {commits.length} commits</span>
           </button>
         </li>
@@ -1429,12 +1631,12 @@ function CommitGroup({ commits, colors }: { commits: GithubTimelineEvent[]; colo
         type="button"
         aria-expanded={false}
         onClick={() => setOpen(true)}
-        className="flex items-center gap-1.5 font-mono text-[11px] text-soft-foreground hover:text-foreground"
+        className="relative flex items-center gap-2 text-[13px] text-muted-foreground hover:text-foreground"
       >
-        <span aria-hidden="true">{EVENT_GLYPH.committed}</span>
-        <span className="font-sans font-medium text-foreground">{actor}</span>
+        <EventMarker kind="committed" />
+        <span className="font-medium text-foreground">{actor}</span>
         <span>added {commits.length} commits</span>
-        <span className="shrink-0">{shortAge(commits[commits.length - 1]!.createdAt)}</span>
+        <span className="shrink-0 text-xs tabular-nums">{shortAge(commits[commits.length - 1]!.createdAt)}</span>
       </button>
     </li>
   )
@@ -1462,31 +1664,41 @@ const EVENT_GLYPH: Record<GithubTimelineEventKind, string> = {
  * block, so events read as connective tissue between comments rather than competing with them.
  * Mirrors github.com's density.
  */
+/** The event's glyph, seated on the timeline rail (same 24px column as a comment's avatar). */
+function EventMarker({ kind }: { kind: GithubTimelineEventKind }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="flex size-6 shrink-0 items-center justify-center rounded-full bg-background text-xs text-muted-foreground"
+    >
+      {EVENT_GLYPH[kind]}
+    </span>
+  )
+}
+
 function EventRow({ event, colors }: { event: GithubTimelineEvent; colors: Record<string, string> }) {
   return (
     <li
       data-slot="gh-event-row"
       data-kind={event.kind}
       className={cn(
-        'flex min-w-0 items-center gap-1.5 font-mono text-[11px] text-soft-foreground',
-        event.kind === 'merged' && 'text-accent-foreground',
+        'relative flex min-w-0 items-center gap-2 text-[13px] text-muted-foreground',
+        event.kind === 'merged' && 'text-foreground',
       )}
     >
-      <span aria-hidden="true" className="shrink-0">
-        {EVENT_GLYPH[event.kind]}
-      </span>
-      <span className="font-sans font-medium text-foreground">{event.actor}</span>
+      <EventMarker kind={event.kind} />
+      <span className="shrink-0 font-medium text-foreground">{event.actor}</span>
       <EventPhrase event={event} colors={colors} />
-      <span className="shrink-0">{shortAge(event.createdAt)}</span>
+      <span className="shrink-0 text-xs tabular-nums">{shortAge(event.createdAt)}</span>
       {event.url ? (
         <a
           href={event.url}
           target="_blank"
           rel="noopener noreferrer"
           aria-label={`open ${event.kind} on GitHub`}
-          className="ml-auto shrink-0 text-muted-foreground hover:text-foreground"
+          className="ml-auto shrink-0 text-soft-foreground hover:text-foreground"
         >
-          <ExternalLinkIcon aria-hidden="true" className="size-2.5" />
+          <ExternalLinkIcon aria-hidden="true" className="size-3.5" />
         </a>
       ) : null}
     </li>
@@ -1501,9 +1713,9 @@ function EventPhrase({ event, colors }: { event: GithubTimelineEvent; colors: Re
       return (
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="shrink-0">committed</span>
-          {event.sha ? <span className="shrink-0 text-muted-foreground">{event.sha.slice(0, 7)}</span> : null}
+          {event.sha ? <span className="shrink-0 font-mono text-[11px]">{event.sha.slice(0, 7)}</span> : null}
           {event.message ? (
-            <span className="truncate font-sans text-foreground">{event.message}</span>
+            <span className="truncate text-foreground">{event.message}</span>
           ) : null}
           <CommitChecks checks={event.checks} />
         </span>
@@ -1517,7 +1729,7 @@ function EventPhrase({ event, colors }: { event: GithubTimelineEvent; colors: Re
             <span
               data-slot="gh-event-label"
               style={labelChipStyle(event.label.color ?? colors[event.label.name])}
-              className="max-w-[12rem] truncate rounded-full border px-1.5 py-px font-sans text-[10px]"
+              className="max-w-[12rem] truncate rounded-full border px-1.5 py-px text-[11px] leading-4 font-medium"
             >
               {event.label.name}
             </span>
@@ -1575,10 +1787,10 @@ function CommitChecks({ checks }: { checks: GithubTimelineEvent['checks'] }) {
 /** Review-state chip tones — the same success/danger/muted vocabulary the checks badge uses, so
  *  approved reads green and changes-requested reads red without a new color system. */
 const REVIEW_CHIP: Record<NonNullable<GithubComment['reviewState']>, { label: string; tone: string }> = {
-  approved: { label: 'approved', tone: 'border-success/40 text-success' },
-  changes_requested: { label: 'changes requested', tone: 'border-danger/40 text-danger' },
-  commented: { label: 'commented', tone: 'border-border text-muted-foreground' },
-  dismissed: { label: 'dismissed', tone: 'border-border text-muted-foreground' },
+  approved: { label: 'Approved', tone: 'border-success/40 text-success' },
+  changes_requested: { label: 'Changes requested', tone: 'border-danger/40 text-danger' },
+  commented: { label: 'Commented', tone: 'border-border text-muted-foreground' },
+  dismissed: { label: 'Dismissed', tone: 'border-border text-muted-foreground' },
 }
 
 /** One thread entry: avatar (letter fallback), author, age, an optional review-state chip, and the
@@ -1586,38 +1798,41 @@ const REVIEW_CHIP: Record<NonNullable<GithubComment['reviewState']>, { label: st
 function ThreadEntry({ comment }: { comment: GithubComment }) {
   const chip = comment.reviewState ? REVIEW_CHIP[comment.reviewState] : null
   return (
-    <li data-slot="gh-thread-entry" data-kind={comment.kind} className="min-w-0">
-      <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[11px] text-soft-foreground">
-        <Avatar url={comment.avatarUrl} login={comment.author} />
-        <span className="font-sans font-medium text-foreground">{comment.author}</span>
-        <span>{shortAge(comment.createdAt)}</span>
-        {chip ? (
-          <span
-            data-slot="gh-review-chip"
-            data-review-state={comment.reviewState}
-            className={cn('rounded-full border px-1.5 py-px font-sans text-[10px] font-medium', chip.tone)}
+    <li data-slot="gh-thread-entry" data-kind={comment.kind} className="relative flex min-w-0 gap-3">
+      <Avatar url={comment.avatarUrl} login={comment.author} />
+      <div className="min-w-0 flex-1">
+        <div className="mb-1.5 flex min-h-6 items-center gap-2 text-[13px] text-muted-foreground">
+          <span className="font-medium text-foreground">{comment.author}</span>
+          <span className="text-xs tabular-nums">{shortAge(comment.createdAt)}</span>
+          {chip ? (
+            <Badge
+              variant="outline"
+              data-slot="gh-review-chip"
+              data-review-state={comment.reviewState}
+              className={cn('px-1.5 py-0 font-medium', chip.tone)}
+            >
+              {chip.label}
+            </Badge>
+          ) : null}
+          <a
+            href={comment.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="open comment on GitHub"
+            className="ml-auto shrink-0 text-soft-foreground hover:text-foreground"
           >
-            {chip.label}
-          </span>
-        ) : null}
-        <a
-          href={comment.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label="open comment on GitHub"
-          className="ml-auto shrink-0 text-muted-foreground hover:text-foreground"
-        >
-          <ExternalLinkIcon aria-hidden="true" className="size-2.5" />
-        </a>
-      </div>
-      <div data-slot="gh-thread-body" className="text-sm">
-        {comment.body ? <Markdown>{comment.body}</Markdown> : <p className="text-soft-foreground">(no body)</p>}
+            <ExternalLinkIcon aria-hidden="true" className="size-3.5" />
+          </a>
+        </div>
+        <div data-slot="gh-thread-body" className="text-sm leading-relaxed">
+          {comment.body ? <Markdown>{comment.body}</Markdown> : <p className="text-muted-foreground">No body.</p>}
+        </div>
       </div>
     </li>
   )
 }
 
-/** A 16 px comment avatar. Falls back to a letter block when no URL is known or the image fails to
+/** A 24 px comment avatar, seated on the timeline rail. Falls back to a letter block when no URL is known or the image fails to
  *  load (private-repo attachments, deleted avatars) — never a broken-image glyph. */
 function Avatar({ url, login }: { url?: string; login: string }) {
   const [failed, setFailed] = useState(false)
@@ -1626,12 +1841,12 @@ function Avatar({ url, login }: { url?: string; login: string }) {
       <img
         src={url}
         alt=""
-        width={16}
-        height={16}
+        width={24}
+        height={24}
         loading="lazy"
         onError={() => setFailed(true)}
         data-slot="gh-avatar"
-        className="size-4 shrink-0 rounded-full"
+        className="size-6 shrink-0 rounded-full bg-background ring-4 ring-background"
       />
     )
   }
@@ -1639,7 +1854,7 @@ function Avatar({ url, login }: { url?: string; login: string }) {
     <span
       data-slot="gh-avatar-fallback"
       aria-hidden="true"
-      className="flex size-4 shrink-0 items-center justify-center rounded-full bg-muted text-[8px] font-semibold text-muted-foreground uppercase"
+      className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-semibold text-muted-foreground uppercase ring-4 ring-background"
     >
       {login.slice(0, 1) || '?'}
     </span>
@@ -1650,6 +1865,11 @@ function Avatar({ url, login }: { url?: string; login: string }) {
  *  (#400) — one source of truth so the two surfaces can't drift out of sync. */
 type Checks = NonNullable<GithubItem['checks']>
 const CHECKS_GLYPH: Record<Checks, string> = { passing: '✓', failing: '✗', pending: '○' }
+const CHECKS_DOT: Record<Checks, 'success' | 'danger' | 'pending'> = {
+  passing: 'success',
+  failing: 'danger',
+  pending: 'pending',
+}
 const CHECKS_TONE: Record<Checks, string> = {
   passing: 'text-success',
   failing: 'text-danger',
@@ -1666,9 +1886,9 @@ function CommentCount({ count }: { count: number }) {
       data-slot="gh-comment-count"
       data-count={count}
       aria-label={`${count} comment${count === 1 ? '' : 's'}`}
-      className="inline-flex shrink-0 items-center gap-0.5"
+      className="inline-flex shrink-0 items-center gap-1 tabular-nums"
     >
-      <MessageSquareIcon aria-hidden="true" className="size-3" />
+      <MessageSquareIcon aria-hidden="true" className="size-3.5" />
       {count}
     </span>
   )
@@ -1677,8 +1897,13 @@ function CommentCount({ count }: { count: number }) {
 /** The checks badge — the legacy tab's three phrases, tinted by outcome. Links out
  *  to the PR's checks tab on GitHub (issue #415) when a URL is available. */
 function ChecksBadge({ checks, url }: { checks: Checks; url?: string }) {
-  const className = cn('text-[11px] font-medium', CHECKS_TONE[checks], url && 'hover:underline')
-  const label = `${CHECKS_GLYPH[checks]} checks ${checks}`
+  const className = cn('inline-flex items-center gap-1.5 text-[13px]', url && 'underline-offset-4 hover:underline')
+  const label = (
+    <>
+      <StatusDot tone={CHECKS_DOT[checks]} />
+      Checks {checks}
+    </>
+  )
 
   if (!url) {
     return (
@@ -1712,7 +1937,7 @@ function ChecksGlyph({ checks }: { checks: Checks }) {
       data-checks={checks}
       title={`checks ${checks}`}
       aria-label={`checks ${checks}`}
-      className={cn('shrink-0 font-sans text-[11px] font-semibold', CHECKS_TONE[checks])}
+      className={cn('shrink-0 text-xs font-semibold', CHECKS_TONE[checks])}
     >
       {CHECKS_GLYPH[checks]}
     </span>

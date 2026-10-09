@@ -1,12 +1,14 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { CheckIcon, ChevronDownIcon, NotebookPenIcon, PlusIcon, SparklesIcon, XIcon } from 'lucide-react'
-import { useRef, useState, type ReactNode } from 'react'
+import { CheckIcon, ChevronDownIcon, NotebookPenIcon, PlusIcon, SparklesIcon, Trash2Icon, XIcon } from 'lucide-react'
+import { useRef, useState } from 'react'
 
 import { putUiState } from '@/api/client'
 import { queryKeys, useSkills, useUiState } from '@/api/queries'
 import type { Skill } from '@open-mercato/cezar-api-client'
-import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
+import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import {
   Command,
   CommandEmpty,
@@ -28,6 +30,7 @@ import {
 } from '@/lib/prompt-templates'
 import { isProjectSkill, partitionSkillsForDisplay, searchSkills, skillKeywords } from '@/lib/skills'
 import { cn } from '@/lib/utils'
+import { SettingsError, SettingsGroup, SettingsLoading, SettingsPane } from './settings-field'
 
 /**
  * Settings → Prompt templates (#413): "add the settings pane for editing these prompt templates
@@ -44,22 +47,10 @@ export function PromptTemplatesSection() {
   const uiState = useUiState()
 
   if (uiState.isPending) {
-    return (
-      <p data-slot="prompt-templates-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
-        Loading prompt templates…
-      </p>
-    )
+    return <SettingsLoading data-slot="prompt-templates-loading" label="Loading prompt templates…" />
   }
   if (uiState.isError) {
-    return (
-      <CenteredState
-        icon={<NotebookPenIcon />}
-        tone="danger"
-        title="Prompt templates did not load"
-        subtitle={uiState.error.message}
-        heading="h2"
-      />
-    )
+    return <SettingsError title="Prompt templates did not load">{uiState.error.message}</SettingsError>
   }
   // Keyed on whether the server has ever written this key: an untouched repo (undefined) and an
   // explicitly-cleared one ([]) both come through `normalizePromptTemplates` correctly already,
@@ -122,149 +113,170 @@ function PromptTemplatesForm({ initial }: { initial: PromptTemplate[] }) {
   const resetToDefaults = () => setTemplates(DEFAULT_PROMPT_TEMPLATES.map((t) => ({ ...t })))
 
   return (
-    <div
-      data-slot="prompt-templates-section"
-      className="mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
-    >
-      <Field
-        title="Prompt templates"
-        hint="Reusable snippets you can insert into a prompt — the new-task composer, the GitHub hand-over, and the Inbox's “Add instructions” box all offer this list. Assign a template to a skill and it fills the prompt in for you when you pick that skill, as long as you have not typed anything yet."
+    <SettingsPane data-slot="prompt-templates-section">
+      <SettingsGroup
+        title="Templates"
+        description="Reusable snippets you can insert into a prompt — the new-task composer, the GitHub hand-over, and the Inbox's “Add instructions” box all offer this list. Assign a template to a skill and it fills the prompt in for you when you pick that skill, as long as you have not typed anything yet."
+        bare
       >
-        <div data-slot="prompt-template-list" className="flex flex-col gap-3">
+        <div data-slot="prompt-template-list">
           {templates.length === 0 ? (
-            <p data-slot="prompt-templates-empty" className="text-[13px] text-soft-foreground">
-              No templates. Add one below, or reset to the built-ins.
-            </p>
+            <Empty data-slot="prompt-templates-empty" className="rounded-xl border border-dashed border-border py-10">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <NotebookPenIcon />
+                </EmptyMedia>
+                <EmptyTitle>No templates</EmptyTitle>
+                <EmptyDescription>Add one below, or reset to the built-ins.</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
           ) : (
-            templates.map((template) => (
-              <div
-                key={template.id}
-                data-slot="prompt-template-row"
-                data-template={template.id}
-                className="flex flex-col gap-1.5 rounded-md border border-border bg-card p-3"
-              >
-                <div className="flex items-center gap-2">
-                  <Input
-                    aria-label={`Label for ${template.label || 'this template'}`}
-                    data-slot="prompt-template-label-input"
-                    value={template.label}
-                    maxLength={80}
-                    onChange={(event) => updateTemplate(template.id, { label: event.target.value })}
-                    className="flex-1"
-                  />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    data-action="prompt-template-remove"
-                    title="Remove this template"
-                    onClick={() => removeTemplate(template.id)}
-                  >
-                    <XIcon aria-hidden="true" className="size-3.5" />
-                  </Button>
-                </div>
-                <Textarea
-                  aria-label={`Text for ${template.label || 'this template'}`}
-                  data-slot="prompt-template-text-input"
-                  value={template.text}
-                  maxLength={PROMPT_TEMPLATE_TEXT_LIMIT}
-                  onChange={(event) => updateTemplate(template.id, { text: event.target.value })}
-                  className="min-h-14 text-[13px]"
-                />
-                <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
-                  <TemplateSkillsPicker
-                    label={template.label}
-                    skills={skills.data ?? []}
-                    skillUsage={uiState.data?.skillUsage}
-                    selected={template.skills ?? []}
-                    onToggle={(name) => toggleTemplateSkill(template.id, name)}
-                  />
-                  {/* Chips live OUTSIDE the dropdown — the house rule from the GitHub picker:
-                      cmdk may filter the list, never your selection. */}
-                  {(template.skills ?? []).map((name) => (
-                    <button
-                      key={name}
+            <Card flush className="divide-y divide-border">
+              {templates.map((template) => (
+                <div
+                  key={template.id}
+                  data-slot="prompt-template-row"
+                  data-template={template.id}
+                  className="flex flex-col gap-2 px-5 py-4"
+                >
+                  <div className="flex items-center gap-2">
+                    <Input
+                      aria-label={`Label for ${template.label || 'this template'}`}
+                      data-slot="prompt-template-label-input"
+                      value={template.label}
+                      maxLength={80}
+                      aria-invalid={template.label.trim() === '' || undefined}
+                      onChange={(event) => updateTemplate(template.id, { label: event.target.value })}
+                      className="flex-1 font-medium"
+                    />
+                    <Button
                       type="button"
-                      data-slot="prompt-template-skill-chip"
-                      data-skill={name}
-                      title={`Stop applying “${template.label}” automatically with ${name}`}
-                      onClick={() => toggleTemplateSkill(template.id, name)}
-                      className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-px font-mono text-[11px] font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger"
+                      variant="ghost"
+                      size="icon-sm"
+                      data-action="prompt-template-remove"
+                      title="Remove this template"
+                      aria-label={`Remove ${template.label || 'this template'}`}
+                      onClick={() => removeTemplate(template.id)}
                     >
-                      {name}
-                      <XIcon aria-hidden="true" className="size-3" />
-                    </button>
-                  ))}
+                      <Trash2Icon aria-hidden="true" />
+                    </Button>
+                  </div>
+                  <Textarea
+                    aria-label={`Text for ${template.label || 'this template'}`}
+                    data-slot="prompt-template-text-input"
+                    value={template.text}
+                    maxLength={PROMPT_TEMPLATE_TEXT_LIMIT}
+                    aria-invalid={template.text.trim() === '' || undefined}
+                    onChange={(event) => updateTemplate(template.id, { text: event.target.value })}
+                    className="min-h-16 text-[13px]"
+                  />
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <TemplateSkillsPicker
+                      label={template.label}
+                      skills={skills.data ?? []}
+                      skillUsage={uiState.data?.skillUsage}
+                      selected={template.skills ?? []}
+                      onToggle={(name) => toggleTemplateSkill(template.id, name)}
+                    />
+                    {/* Chips live OUTSIDE the dropdown — the house rule from the GitHub picker:
+                        cmdk may filter the list, never your selection. */}
+                    {(template.skills ?? []).map((name) => (
+                      <button
+                        key={name}
+                        type="button"
+                        data-slot="prompt-template-skill-chip"
+                        data-skill={name}
+                        title={`Stop applying “${template.label}” automatically with ${name}`}
+                        onClick={() => toggleTemplateSkill(template.id, name)}
+                        className="inline-flex h-6 items-center gap-1 rounded-full bg-muted px-2 font-mono text-[11px] text-foreground transition-colors hover:bg-danger/10 hover:text-danger"
+                      >
+                        {name}
+                        <XIcon aria-hidden="true" className="size-3" />
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            ))
+              ))}
+            </Card>
           )}
         </div>
+      </SettingsGroup>
 
-        <div
-          data-slot="prompt-template-new"
-          className="flex flex-col gap-1.5 rounded-md border border-dashed border-border p-3"
+      <SettingsGroup title="New template">
+        <div data-slot="prompt-template-new" className="px-5 py-5">
+          <FieldGroup className="gap-4">
+            <Field>
+              <FieldLabel htmlFor="prompt-template-new-label">Label</FieldLabel>
+              <Input
+                id="prompt-template-new-label"
+                aria-label="New template label"
+                data-slot="prompt-template-new-label"
+                placeholder='e.g. "Add tests"'
+                value={newLabel}
+                maxLength={80}
+                onChange={(event) => setNewLabel(event.target.value)}
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="prompt-template-new-text">Instructions</FieldLabel>
+              <Textarea
+                id="prompt-template-new-text"
+                aria-label="New template text"
+                data-slot="prompt-template-new-text"
+                placeholder="The instructions to insert…"
+                value={newText}
+                maxLength={PROMPT_TEMPLATE_TEXT_LIMIT}
+                onChange={(event) => setNewText(event.target.value)}
+                className="min-h-16 text-[13px]"
+              />
+            </Field>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-action="prompt-template-add"
+              disabled={!newLabel.trim() || !newText.trim()}
+              onClick={addTemplate}
+              className="self-start"
+            >
+              <PlusIcon aria-hidden="true" className="size-3.5" />
+              Add template
+            </Button>
+          </FieldGroup>
+        </div>
+      </SettingsGroup>
+
+      {/* Sticky: the list can be long and Save is the one action that commits everything above. */}
+      <div className="sticky bottom-0 -mx-1 flex flex-wrap items-center gap-3 border-t border-border bg-background/95 px-1 py-3 backdrop-blur">
+        <Button
+          type="button"
+          variant="default"
+          size="sm"
+          data-action="prompt-templates-save"
+          disabled={!dirty || invalid || save.isPending}
+          onClick={() => save.mutate(templates)}
         >
-          <Input
-            aria-label="New template label"
-            data-slot="prompt-template-new-label"
-            placeholder='Label (e.g. "Add tests")'
-            value={newLabel}
-            maxLength={80}
-            onChange={(event) => setNewLabel(event.target.value)}
-          />
-          <Textarea
-            aria-label="New template text"
-            data-slot="prompt-template-new-text"
-            placeholder="The instructions to insert…"
-            value={newText}
-            maxLength={PROMPT_TEMPLATE_TEXT_LIMIT}
-            onChange={(event) => setNewText(event.target.value)}
-            className="min-h-14 text-[13px]"
-          />
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            data-action="prompt-template-add"
-            disabled={!newLabel.trim() || !newText.trim()}
-            onClick={addTemplate}
-            className="self-start"
-          >
-            <PlusIcon aria-hidden="true" className="size-3.5" />
-            Add template
-          </Button>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <Button
-            type="button"
-            variant="contrast"
-            size="sm"
-            data-action="prompt-templates-save"
-            disabled={!dirty || invalid || save.isPending}
-            onClick={() => save.mutate(templates)}
-          >
-            Save
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            data-action="prompt-templates-reset"
-            disabled={save.isPending}
-            onClick={resetToDefaults}
-          >
-            Reset to defaults
-          </Button>
-          {invalid ? (
-            <p data-slot="prompt-templates-invalid" className="text-[11px] text-danger">
-              Every template needs both a label and text.
-            </p>
-          ) : null}
-        </div>
-      </Field>
-    </div>
+          Save changes
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          data-action="prompt-templates-reset"
+          disabled={save.isPending}
+          onClick={resetToDefaults}
+        >
+          Reset to defaults
+        </Button>
+        {invalid ? (
+          <p data-slot="prompt-templates-invalid" className="text-xs text-danger">
+            Every template needs both a label and text.
+          </p>
+        ) : dirty ? (
+          <p className="text-xs text-muted-foreground">Unsaved changes</p>
+        ) : null}
+      </div>
+    </SettingsPane>
   )
 }
 
@@ -321,7 +333,7 @@ function TemplateSkillsPicker({
           </span>
         ) : null}
         {isSelected ? (
-          <CheckIcon aria-hidden="true" className="ml-auto size-3.5 shrink-0 text-primary" />
+          <CheckIcon aria-hidden="true" className="ml-auto size-3.5 shrink-0 text-primary-strong" />
         ) : null}
       </CommandItem>
     )
@@ -343,19 +355,19 @@ function TemplateSkillsPicker({
           title="Pick the skills this template applies itself to"
           disabled={skills.length === 0}
           className={cn(
-            'inline-flex h-[26px] items-center gap-1.5 rounded-full border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50',
-            selected.length > 0 && 'border-foreground/60 font-semibold text-foreground',
+            'inline-flex h-6 items-center gap-1.5 rounded-full border border-input bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50',
+            selected.length > 0 && 'text-foreground',
           )}
         >
           <SparklesIcon aria-hidden="true" className="size-3 shrink-0 text-violet" />
-          {skills.length === 0 ? 'no skills found' : 'apply with…'}
+          {skills.length === 0 ? 'No skills found' : 'Apply with…'}
           <ChevronDownIcon aria-hidden="true" className="size-2.5 shrink-0 text-soft-foreground" />
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={8} className="w-[336px] max-w-[calc(100vw-2rem)] p-0">
         <Command shouldFilter={false}>
           <CommandInput
-            placeholder="search skills…"
+            placeholder="Search skills…"
             value={search}
             onValueChange={setSearch}
             onInput={() => listRef.current?.scrollTo(0, 0)}
@@ -385,18 +397,5 @@ function TemplateSkillsPicker({
         </Command>
       </PopoverContent>
     </Popover>
-  )
-}
-
-/** The Appearance/Agents sections' field chassis — same rhythm, so Settings reads as one surface. */
-function Field({ title, hint, children }: { title: string; hint: string; children: ReactNode }) {
-  return (
-    <section className="flex flex-col gap-2">
-      <div>
-        <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-        <p className="text-[13px] text-muted-foreground">{hint}</p>
-      </div>
-      {children}
-    </section>
   )
 }

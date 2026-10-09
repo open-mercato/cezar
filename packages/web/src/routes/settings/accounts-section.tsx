@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ExternalLinkIcon, IdCardIcon } from 'lucide-react'
+import { ChevronDownIcon, ExternalLinkIcon, LockIcon, PlusIcon } from 'lucide-react'
 import { Fragment, useState } from 'react'
 
 import { ApiError, putWorkspaceConfig } from '@/api/client'
@@ -30,7 +30,6 @@ import {
   type Runner,
   type SetWorkspaceConfigInput,
 } from '@open-mercato/cezar-api-client'
-import { CenteredState } from '@/components/centered-state'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -42,7 +41,11 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { cn } from '@/lib/utils'
 import { StatusDot, type StatusDotTone } from '@/components/status-dot'
 import { RUNNER_ORDER } from '@/lib/provider-status'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -52,6 +55,16 @@ import { DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import { DefaultAgentPicker, agentPickerRows } from '@/components/default-agent-picker'
 import { modelCatalogStatus, modelsForRunner, RUNNERS } from '@/routes/new-task-form'
 import { AddAccountDialog } from './add-account-dialog'
+import {
+  SettingsError,
+  SettingsFact,
+  SettingsFacts,
+  SettingsField,
+  SettingsGroup,
+  SettingsLoading,
+  SettingsPane,
+  SettingsSelect,
+} from './settings-field'
 
 /**
  * Global settings → Agent accounts (spec `.ai/specs/2026-07-29-agent-profiles.md`).
@@ -122,22 +135,10 @@ export function AccountsSection() {
   const profiles = useAgentProfiles()
 
   if (profiles.isPending) {
-    return (
-      <p data-slot="accounts-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
-        Loading agent accounts…
-      </p>
-    )
+    return <SettingsLoading data-slot="accounts-loading" label="Loading agent accounts…" />
   }
   if (profiles.isError) {
-    return (
-      <CenteredState
-        icon={<IdCardIcon />}
-        tone="danger"
-        title="Agent accounts did not load"
-        subtitle={profiles.error.message}
-        heading="h2"
-      />
-    )
+    return <SettingsError title="Agent accounts did not load">{profiles.error.message}</SettingsError>
   }
   return <AccountsPane data={profiles.data} />
 }
@@ -156,36 +157,29 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
 
   if (!data.editable) {
     return (
-      <div
-        data-slot="accounts-section"
-        className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-4 md:p-6"
-      >
-        <h2 className="text-sm font-semibold text-foreground">Agent accounts</h2>
-        <p data-slot="accounts-hosted" className="text-[13px] text-soft-foreground">
-          Agent accounts are managed from the machine that owns the checkout — this cockpit runs in
-          hosted mode.
-        </p>
-      </div>
+      <SettingsPane data-slot="accounts-section">
+        <Alert data-slot="accounts-hosted">
+          <LockIcon aria-hidden="true" />
+          <AlertDescription>
+            Agent accounts are managed from the machine that owns the checkout — this cockpit runs in
+            hosted mode.
+          </AlertDescription>
+        </Alert>
+      </SettingsPane>
     )
   }
 
   return (
-    <div
-      data-slot="accounts-section"
-      className="mx-auto flex w-full max-w-2xl flex-col gap-5 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
-    >
-      <div>
-        <h2 className="text-sm font-semibold text-foreground">Agent accounts</h2>
-        <p className="text-[13px] text-muted-foreground">
-          One agent per tab: whether it is installed, and which logins you have. Add a second
-          config folder to keep a work account beside a personal one; each project picks which it
-          uses in its own Agents settings.
-        </p>
-      </div>
-
+    <SettingsPane data-slot="accounts-section">
       <DefaultsForNewProjects profiles={data} />
 
-      <Tabs defaultValue="claude">
+      <SettingsGroup
+        title="Agents and logins"
+        description="One agent per tab: whether it is installed, and which logins you have. Add a second config folder to keep a work account beside a personal one; each project picks which it uses in its own Agents settings."
+        bare
+      >
+      <Tabs defaultValue="claude" className="gap-0">
+        <div className="-mx-4 overflow-x-auto border-b border-border px-4 [scrollbar-width:none] sm:mx-0 sm:px-0">
         <TabsList variant="line" data-slot="accounts-tabs">
           {providers.map((provider) => (
             <TabsTrigger key={provider} value={provider} data-provider={provider}>
@@ -193,9 +187,10 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
             </TabsTrigger>
           ))}
         </TabsList>
+        </div>
 
         {providers.map((provider) => (
-          <TabsContent key={provider} value={provider} className="pt-4">
+          <TabsContent key={provider} value={provider} className="pt-5">
             <AgentTab
               provider={provider}
               // `checks` is read defensively: health is also patched in place from the WS topic and
@@ -210,6 +205,7 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
           </TabsContent>
         ))}
       </Tabs>
+      </SettingsGroup>
 
       {/* Keyed by provider so reopening under a different agent starts from a clean form rather
           than the previous agent's half-typed folder. */}
@@ -237,6 +233,7 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               data-action="accounts-remove-confirm"
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               disabled={remove.isPending}
               onClick={() => {
                 const target = confirming
@@ -256,7 +253,7 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </SettingsPane>
   )
 }
 
@@ -280,39 +277,45 @@ function AgentTab({
   const installed = check?.available === true
 
   return (
-    <div data-slot="accounts-provider" data-provider={provider} className="flex flex-col gap-4">
+    <div data-slot="accounts-provider" data-provider={provider} className="flex flex-col gap-3">
       {/* Facts about the BINARY, not about any one account: a version and an install are shared by
           every login of the same CLI, so they belong here rather than repeated on each row. */}
-      <dl className="divide-y divide-border/60 overflow-hidden rounded-md border border-border bg-card text-[13px]">
-        <Row label="Installed">
-          {check === undefined ? (
-            <span className="text-muted-foreground">Checking…</span>
-          ) : installed ? (
-            <span data-slot="agent-installed">Yes</span>
-          ) : (
-            <span data-slot="agent-installed" className="text-muted-foreground">
-              No — <code className="text-[12px]">{PROVIDER_INSTALL[provider]}</code>
-            </span>
-          )}
-        </Row>
-        {installed && check?.version ? (
-          <Row label="Version">
-            <span data-slot="agent-version" className="font-mono text-[12.5px]">
-              {check.version}
-            </span>
-          </Row>
-        ) : null}
-        <Row label="Accounts">
-          <span>
+      <Card flush>
+        <SettingsFacts>
+          <SettingsFact label="Installed">
+            {check === undefined ? (
+              <span className="text-muted-foreground">Checking…</span>
+            ) : installed ? (
+              <span data-slot="agent-installed" className="inline-flex items-center gap-1.5">
+                <StatusDot tone="success" />
+                Yes
+              </span>
+            ) : (
+              <span data-slot="agent-installed" className="text-muted-foreground">
+                No —{' '}
+                <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-xs break-all text-foreground">
+                  {PROVIDER_INSTALL[provider]}
+                </code>
+              </span>
+            )}
+          </SettingsFact>
+          {installed && check?.version ? (
+            <SettingsFact label="Version">
+              <span data-slot="agent-version" className="font-mono text-[13px]">
+                {check.version}
+              </span>
+            </SettingsFact>
+          ) : null}
+          <SettingsFact label="Accounts">
             {accounts.length === 1
               ? 'the discovered one'
               : `${accounts.length} (1 discovered, ${accounts.length - 1} added)`}
-          </span>
-        </Row>
-      </dl>
+          </SettingsFact>
+        </SettingsFacts>
+      </Card>
 
-      <div className="flex items-center justify-between gap-3">
-        <h3 className="text-[13px] font-semibold text-foreground">Logins</h3>
+      <div className="flex items-center justify-between gap-3 pt-2">
+        <h3 className="text-[13.5px] font-semibold text-foreground">Logins</h3>
         {canCarryAccounts ? (
           <Button
             type="button"
@@ -322,19 +325,22 @@ function AgentTab({
             data-provider={provider}
             onClick={onAdd}
           >
+            <PlusIcon aria-hidden="true" className="size-3.5" />
             Add account
           </Button>
         ) : null}
       </div>
 
-      <ul className="divide-y divide-border/60 rounded-md border border-border bg-card">
-        {accounts.map((account) => (
-          <AccountRow key={account.id} account={account} onRemove={() => onRemove(account)} />
-        ))}
-      </ul>
+      <Card flush>
+        <ul className="divide-y divide-border">
+          {accounts.map((account) => (
+            <AccountRow key={account.id} account={account} onRemove={() => onRemove(account)} />
+          ))}
+        </ul>
+      </Card>
 
       {!canCarryAccounts ? (
-        <p data-slot="accounts-single-only" className="text-[11.5px] text-soft-foreground">
+        <p data-slot="accounts-single-only" className="text-xs text-pretty text-muted-foreground">
           {PROVIDER_LABEL[provider]} can only hold one account here: it keeps its credentials
           outside its config folder, so a second folder would change settings without changing the
           login — which would say “work account” while billing the other one.
@@ -385,84 +391,69 @@ function DefaultsForNewProjects({ profiles }: { profiles: AgentProfilesResponse 
   const models = config.data.agentDefaults.models ?? {}
 
   return (
-    <section data-slot="accounts-defaults" className="flex flex-col gap-3 rounded-lg border border-border bg-card/40 p-3.5">
-      <div>
-        <h3 className="text-[13px] font-semibold text-foreground">Defaults for new projects</h3>
-        <p className="text-[13px] text-muted-foreground">
-          What a project runs when it has not chosen for itself — set once instead of per
-          repository. A project that has chosen keeps its own.
-        </p>
-      </div>
-
-      <DefaultAgentPicker
-        rows={rows}
-        runner={runner}
-        accountFor={(id) => profiles.defaults[id] ?? null}
-        providerStatus={providerStatus}
-        disabled={save.isPending}
-        accountDisabled={select.isPending}
-        onPick={(picked, account, hasAccountChoice) => {
-          if (picked !== runner) save.mutate({ agentDefaults: { runner: picked } })
-          // `projectId: null` targets the machine-wide default rather than one repo. Only for an
-          // agent that HAS a choice of accounts: a single-login agent must not write a selection,
-          // or the store fills up with rows that say nothing.
-          if (hasAccountChoice) {
-            select.mutate(
-              { projectId: null, provider: picked, profileId: account },
-              { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
-            )
-          }
-        }}
-      />
-
-      <div className="flex flex-col gap-2">
-        <span className="text-xs text-muted-foreground">Default model per agent</span>
-        {RUNNERS.map((entry) => (
-          <label key={entry.id} className="flex items-center gap-3">
-            <span className="w-24 shrink-0 font-mono text-xs text-muted-foreground">{entry.label}</span>
-            <select
-              aria-label={`Default model for ${entry.label}`}
-              data-slot="accounts-default-model"
-              data-runner={entry.id}
-              value={models[entry.id] ?? ''}
-              disabled={save.isPending}
-              onChange={(event) =>
-                save.mutate({
-                  // `null` clears the key back to "no opinion" — absence cannot say that in a
-                  // partial patch, and a stale value would keep seeding every unconfigured project.
-                  agentDefaults: {
-                    models: { [entry.id]: event.target.value || null } as Partial<
-                      Record<Runner, string | null>
-                    >,
-                  },
-                })
+    <SettingsGroup
+      data-slot="accounts-defaults"
+      title="Defaults for new projects"
+      description="What a project runs when it has not chosen for itself — set once instead of per repository. A project that has chosen keeps its own."
+    >
+      <SettingsField title="Default agent">
+        {/* The picker is one unbroken row; on a phone it scrolls instead of pushing the page wide. */}
+        <div className="-mx-1 overflow-x-auto px-1 py-0.5 [scrollbar-width:none]">
+          <DefaultAgentPicker
+            rows={rows}
+            runner={runner}
+            accountFor={(id) => profiles.defaults[id] ?? null}
+            providerStatus={providerStatus}
+            disabled={save.isPending}
+            accountDisabled={select.isPending}
+            onPick={(picked, account, hasAccountChoice) => {
+              if (picked !== runner) save.mutate({ agentDefaults: { runner: picked } })
+              // `projectId: null` targets the machine-wide default rather than one repo. Only for an
+              // agent that HAS a choice of accounts: a single-login agent must not write a selection,
+              // or the store fills up with rows that say nothing.
+              if (hasAccountChoice) {
+                select.mutate(
+                  { projectId: null, provider: picked, profileId: account },
+                  { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
+                )
               }
-              className="block w-full max-w-xs rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
-            >
-              {modelsForRunner(entry.id, catalogs[entry.id].data, [models[entry.id]]).map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.id === '' ? 'auto (default)' : model.label}
-                </option>
-              ))}
-              {modelCatalogStatus(entry.id, catalogs[entry.id].data, catalogs[entry.id].isError) ? (
-                <option disabled>
-                  {modelCatalogStatus(entry.id, catalogs[entry.id].data, catalogs[entry.id].isError)}
-                </option>
-              ) : null}
-            </select>
-          </label>
-        ))}
-      </div>
-    </section>
-  )
-}
+            }}
+          />
+        </div>
+      </SettingsField>
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-baseline gap-3 px-3.5 py-2.5">
-      <dt className="w-28 shrink-0 text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 flex-1">{children}</dd>
-    </div>
+      <SettingsField title="Default model per agent">
+        <div className="grid gap-x-6 gap-y-2.5 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
+          {RUNNERS.map((entry) => (
+            <Fragment key={entry.id}>
+              <span className="text-[13px] text-muted-foreground">{entry.label}</span>
+              <SettingsSelect
+                aria-label={`Default model for ${entry.label}`}
+                data-slot="accounts-default-model"
+                data-runner={entry.id}
+                value={models[entry.id] ?? ''}
+                disabled={save.isPending}
+                onChange={(value) =>
+                  save.mutate({
+                    // `null` clears the key back to "no opinion" — absence cannot say that in a
+                    // partial patch, and a stale value would keep seeding every unconfigured project.
+                    agentDefaults: {
+                      models: { [entry.id]: value || null } as Partial<Record<Runner, string | null>>,
+                    },
+                  })
+                }
+                options={modelsForRunner(entry.id, catalogs[entry.id].data, [models[entry.id]]).map((model) => ({
+                  value: model.id,
+                  label: model.id === '' ? 'auto (default)' : model.label,
+                }))}
+                footer={modelCatalogStatus(entry.id, catalogs[entry.id].data, catalogs[entry.id].isError) || undefined}
+                className="sm:w-full sm:max-w-sm"
+              />
+            </Fragment>
+          ))}
+        </div>
+      </SettingsField>
+    </SettingsGroup>
   )
 }
 
@@ -482,21 +473,21 @@ function AccountRow({ account, onRemove }: { account: AgentProfile; onRemove: ()
     <li
       data-slot="account-row"
       data-account={account.id}
-      className="flex flex-col gap-2 px-3.5 py-3"
+      className="flex flex-col gap-3 px-5 py-4"
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-[13px] font-medium text-foreground">{account.label}</span>
+            <span className="text-[13.5px] font-medium text-foreground">{account.label}</span>
             {account.isDefault ? (
-              <Badge variant="ghost" className="shrink-0 text-[10px] text-muted-foreground">
+              <Badge variant="secondary" className="shrink-0 font-normal text-muted-foreground">
                 discovered
               </Badge>
             ) : null}
           </div>
           <p
             data-slot="account-path"
-            className="mt-0.5 truncate font-mono text-[11.5px] text-soft-foreground"
+            className="mt-0.5 truncate font-mono text-xs text-muted-foreground"
             title={account.path}
           >
             {account.configDir}
@@ -522,10 +513,11 @@ function AccountRow({ account, onRemove }: { account: AgentProfile; onRemove: ()
             are how an account becomes usable at all, and the row's own "folder not created yet"
             copy points at Connect. Burying the only sign-in path behind "Show details" is what left
             an added account with no way to log in. */}
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 flex-wrap items-center gap-1">
           {status?.status !== 'connected' ? (
             <Button
               type="button"
+              variant="default"
               size="sm"
               data-action="account-connect"
               disabled={connect.isPending}
@@ -577,6 +569,7 @@ function AccountRow({ account, onRemove }: { account: AgentProfile; onRemove: ()
             onClick={() => setShowDetails((on) => !on)}
           >
             {showDetails ? 'Hide details' : 'Show details'}
+            <ChevronDownIcon aria-hidden="true" className={cn('size-3.5 transition-transform', showDetails && 'rotate-180')} />
           </Button>
         </div>
       </div>
@@ -627,7 +620,7 @@ function AccountDetails({
     )
 
   return (
-    <div data-slot="account-details" className="rounded-md border border-border/60 bg-muted/30 p-3">
+    <div data-slot="account-details" className="rounded-lg bg-muted/50 p-4">
       {details.isPending ? (
         <p className="text-xs text-muted-foreground">Reading account details…</p>
       ) : details.isError ? (
@@ -635,7 +628,7 @@ function AccountDetails({
           {details.error.message}
         </p>
       ) : details.data.available ? (
-        <dl data-slot="account-identity" className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
+        <dl data-slot="account-identity" className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-[13px]">
           {details.data.fields.map((field) => (
             <Fragment key={field.label}>
               <dt className="text-muted-foreground">{field.label}</dt>
@@ -652,8 +645,8 @@ function AccountDetails({
         </p>
       )}
 
-      <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-border/60 pt-2.5">
-        <span className="mr-1 text-xs text-muted-foreground">Config files</span>
+      <div className="mt-4 flex flex-wrap items-center gap-1.5">
+        <span className="w-28 shrink-0 text-[13px] text-muted-foreground">Config files</span>
         {account.files.map((file) => (
           <OpenInMenu
             key={file.id}
@@ -699,22 +692,23 @@ function AccountDetails({
       {account.isDefault ? null : (
         <div
           data-slot="account-manage"
-          className="mt-3 flex flex-wrap items-center gap-2 border-t border-border/60 pt-2.5"
+          className="mt-3 flex flex-wrap items-center gap-2"
         >
-          <span className="mr-1 text-xs text-muted-foreground">Account</span>
+          <span className="w-28 shrink-0 text-[13px] text-muted-foreground">Account</span>
           {renaming ? (
             <>
-              <input
+              <Input
                 type="text"
                 autoFocus
                 aria-label={`Name for ${account.label}`}
                 data-slot="account-rename-input"
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
-                className="w-48 rounded-md border border-input bg-card px-2 py-1 text-xs outline-none focus-visible:border-ring"
+                className="h-8 w-48"
               />
               <Button
                 type="button"
+                variant="default"
                 size="sm"
                 data-action="account-rename-save"
                 disabled={rename.isPending || draft.trim() === '' || draft.trim() === account.label}
@@ -755,7 +749,7 @@ function AccountDetails({
               </Button>
               <Button
                 type="button"
-                variant="outline"
+                variant="danger-ghost"
                 size="sm"
                 data-action="account-remove"
                 onClick={onRemove}
@@ -764,7 +758,7 @@ function AccountDetails({
               </Button>
               {/* The label is cezar's own; the folder is the account. Saying so here is what keeps
                   Rename from reading as "point this at a different directory". */}
-              <span className="text-xs text-muted-foreground">
+              <span className="basis-full text-xs text-muted-foreground sm:pl-[7.5rem]">
                 Renaming changes what cezar calls this account, not its folder.
               </span>
             </>

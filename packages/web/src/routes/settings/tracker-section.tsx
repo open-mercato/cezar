@@ -1,13 +1,30 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ExternalLinkIcon, LinkIcon, UnplugIcon } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { CheckIcon, ExternalLinkIcon, KeyRoundIcon, LinkIcon, SearchIcon, TicketIcon, TriangleAlertIcon, UnplugIcon } from 'lucide-react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 
 import type { TrackerCandidate, TrackerKind } from '@open-mercato/cezar-api-client'
 import { queryScope } from '@open-mercato/cezar-api-client'
 import { TRACKER_PROVIDERS, trackerProviders } from '@/lib/tracker-providers'
 import { clearTrackerAssociation, saveTrackerAssociation, saveTrackerConnection, removeTrackerConnection } from '@/api/client'
 import { queryKeys, useTrackerConnection, useTrackerAssociation, useTrackerCandidates, workspaceQueryKeys } from '@/api/queries'
+import { StatusDot } from '@/components/status-dot'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
+import { Input } from '@/components/ui/input'
+import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
+import { Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle } from '@/components/ui/item'
+import { cn } from '@/lib/utils'
+import {
+  DangerZone,
+  SettingsError,
+  SettingsField,
+  SettingsGroup,
+  SettingsLoading,
+  SettingsNote,
+  SettingsPane,
+} from './settings-field'
 import { toast } from '@/components/ui/toaster'
 
 export function TrackerSection() {
@@ -120,110 +137,230 @@ export function TrackerSection() {
   ))
 
 
-  if (association.isPending) return <p className="p-6 text-sm text-muted-foreground">Loading tracker settings…</p>
-  if (association.isError) return <p className="p-6 text-sm text-danger">{association.error.message}</p>
+  if (association.isPending) return <SettingsLoading label="Loading tracker settings…" />
+  if (association.isError) {
+    return <SettingsError title="Tracker settings did not load">{association.error.message}</SettingsError>
+  }
+
+  const needsReconnect =
+    savedAssociation && currentConnection && !connection.isError && !connection.data?.demo && !scopeConnected
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 p-4 md:p-6" data-slot="tracker-settings">
-      <section className="rounded-lg border border-border bg-card p-4">
-        <h2 className="text-sm font-semibold">Issue tracker</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Connect a project or team from your issue tracker. Credentials belong only to this project and are stored locally outside the repository. Server-wide environment keys are not used.
-        </p>
+    <SettingsPane data-slot="tracker-settings">
+      <SettingsGroup
+        title="Connection"
+        description="Connect a project or team from your issue tracker. Credentials belong only to this project and are stored locally outside the repository. Server-wide environment keys are not used."
+      >
         {scopeConnected && association.data.association ? (
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-border p-3">
-            <div>
-              <p className="font-medium">{association.data.association.externalName}</p>
-              <a className="inline-flex items-center gap-1 text-xs text-violet hover:underline" href={association.data.association.source.webUrl} target="_blank" rel="noreferrer">
-                {TRACKER_PROVIDERS[association.data.association.kind].label} <ExternalLinkIcon className="size-3" />
-              </a>
-            </div>
-            <Button variant="outline" onClick={() => disconnect.mutate()} disabled={disconnect.isPending}>
-              <UnplugIcon className="size-3.5" /> Disconnect
-            </Button>
-          </div>
-        ) : <p className="mt-4 text-sm font-medium">{connection.isPending ? 'Loading connection…' : connection.isError ? 'Connection status unavailable.' : 'No tracker connected.'}</p>}
-      </section>
+          <Item size="sm" className="rounded-none px-5 py-4">
+            <ItemMedia variant="icon">
+              <TicketIcon aria-hidden="true" />
+            </ItemMedia>
+            <ItemContent>
+              <ItemTitle>
+                {association.data.association.externalName}
+                <Badge variant="outline" className="gap-1.5 font-normal">
+                  <StatusDot tone="success" />
+                  Connected
+                </Badge>
+              </ItemTitle>
+              <ItemDescription>
+                <a
+                  className="inline-flex items-center gap-1 hover:text-foreground"
+                  href={association.data.association.source.webUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {TRACKER_PROVIDERS[association.data.association.kind].label} <ExternalLinkIcon className="size-3" />
+                </a>
+              </ItemDescription>
+            </ItemContent>
+            <ItemActions>
+              <Button variant="outline" size="sm" onClick={() => disconnect.mutate()} disabled={disconnect.isPending}>
+                <UnplugIcon className="size-3.5" /> Disconnect
+              </Button>
+            </ItemActions>
+          </Item>
+        ) : (
+          <Item size="sm" className="rounded-none px-5 py-4">
+            <ItemMedia variant="icon">
+              <TicketIcon aria-hidden="true" />
+            </ItemMedia>
+            <ItemContent>
+              <ItemTitle>
+                {connection.isPending ? 'Loading connection…' : connection.isError ? 'Connection status unavailable.' : 'No tracker connected.'}
+              </ItemTitle>
+              <ItemDescription>Configure a provider below, then browse and connect a scope.</ItemDescription>
+            </ItemContent>
+          </Item>
+        )}
+      </SettingsGroup>
 
-      {savedAssociation && currentConnection && !connection.isError && !connection.data?.demo && !scopeConnected ? <p className="text-sm text-warning">This scope needs reconnection with this project's credentials. Configure a connection, then browse and select its scope again.</p> : null}
-      {connection.data?.error ? <p role="alert" className="text-sm text-danger">{connection.data.error}</p> : null}
-      <p className="text-xs text-muted-foreground">For local credential cleanup, run <code>cez tracker-connections list</code>, then <code>cez tracker-connections remove &lt;id&gt;</code>. Local deletion does not revoke the vendor token.</p>
-      {connection.isError ? <p className="text-sm text-danger">Could not load project connection. <button onClick={() => void connection.refetch()}>Retry</button></p> : null}
-      <section className="rounded-lg border border-border bg-card p-4">
-        <h2 className="text-sm font-semibold">Connect a provider</h2>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          {trackerProviders.map((provider) => {
-            const ready = !connection.isError && (connection.data?.demo === true || connection.data?.connection?.kind === provider.kind)
-            return (
-              <div key={provider.kind} className="rounded-md border border-border p-3">
-                <p className="font-medium">{provider.label}</p>
-                {!connection.data?.demo ? <Button variant="outline" disabled={credentialBusy || connection.isPending || connection.isError} onClick={() => { resetSecrets(); setCredentialKind(provider.kind); setPickerOpen(false); setSelected(null) }}>
-                  {connection.data?.connection?.kind === provider.kind ? 'Replace' : 'Configure'} {provider.label} credentials
-                </Button> : null}
+      {needsReconnect ? (
+        <Alert>
+          <TriangleAlertIcon aria-hidden="true" className="text-pending-strong" />
+          <AlertDescription>
+            This scope needs reconnection with this project's credentials. Configure a connection, then browse and select its scope again.
+          </AlertDescription>
+        </Alert>
+      ) : null}
+      {connection.data?.error ? (
+        <Alert variant="destructive">
+          <TriangleAlertIcon aria-hidden="true" />
+          <AlertDescription>{connection.data.error}</AlertDescription>
+        </Alert>
+      ) : null}
+      {connection.isError ? (
+        <SettingsError
+          title="Could not load project connection."
+          action={<Button variant="outline" size="sm" onClick={() => void connection.refetch()}>Retry</Button>}
+        />
+      ) : null}
+
+      <SettingsGroup title="Connect a provider">
+        {trackerProviders.map((provider) => {
+          const ready = !connection.isError && (connection.data?.demo === true || connection.data?.connection?.kind === provider.kind)
+          return (
+            <Item key={provider.kind} size="sm" className="rounded-none px-5 py-4">
+              <ItemContent>
+                <ItemTitle>{provider.label}</ItemTitle>
+                {!ready ? <ItemDescription>Configure credentials for this project to browse.</ItemDescription> : null}
+              </ItemContent>
+              <ItemActions className="flex-wrap">
+                {!connection.data?.demo ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={credentialBusy || connection.isPending || connection.isError}
+                    aria-label={`${connection.data?.connection?.kind === provider.kind ? 'Replace' : 'Configure'} ${provider.label} credentials`}
+                    onClick={() => { resetSecrets(); setCredentialKind(provider.kind); setPickerOpen(false); setSelected(null) }}
+                  >
+                    <KeyRoundIcon className="size-3.5" />
+                    {connection.data?.connection?.kind === provider.kind ? 'Replace' : 'Configure'} credentials
+                  </Button>
+                ) : null}
                 <Button
-                  className="mt-3"
                   variant="outline"
+                  size="sm"
                   disabled={!ready || credentialBusy}
                   onClick={() => { setKind(provider.kind); setPickerOpen(true); setSearch(''); setSelected(null) }}
                 >
                   <LinkIcon className="size-3.5" /> Browse {provider.label}
                 </Button>
-                {!ready ? <p className="mt-2 text-xs text-muted-foreground">Configure credentials for this project to browse.</p> : null}
-              </div>
-            )
-          })}
-        </div>
-      </section>
+              </ItemActions>
+            </Item>
+          )
+        })}
+      </SettingsGroup>
 
-      {connection.data?.connection ? <Button variant="outline" disabled={credentialBusy} onClick={() => removeCredentials.mutate()}>Remove project credentials</Button> : null}
       {credentialKind ? (
-        <form className="rounded-lg border border-border bg-card p-4" onSubmit={event => { event.preventDefault(); saveCredentials.mutate() }} autoComplete="off">
-          <h2 className="font-medium">{TRACKER_PROVIDERS[credentialKind].label} credentials for this project</h2>
-          <p className="mt-2 text-xs text-muted-foreground">Saved in a private .env file for this project, without encryption. Use read-only access limited to this project's data. Saving replaces this project's connection and requires selecting its scope again.</p>
-          {credentialKind === 'jira' ? <>
-            <label className="mt-3 block text-sm">Jira site URL<input aria-label="Jira site URL" type="url" required value={origin} onChange={event => setOrigin(event.target.value)} placeholder="https://your-site.atlassian.net" className="mt-1 block w-full rounded border bg-background p-2" /></label>
-            <label className="mt-3 block text-sm">Account email<input aria-label="Account email" type="email" required value={email} onChange={event => setEmail(event.target.value)} className="mt-1 block w-full rounded border bg-background p-2" /></label>
-          </> : null}
-          <label className="mt-3 block text-sm">API token<input aria-label="API token" type="password" autoComplete="new-password" required maxLength={8192} value={secret} onChange={event => setSecret(event.target.value)} className="mt-1 block w-full rounded border bg-background p-2" /></label>
-          <div className="mt-3 flex gap-2"><Button type="submit" disabled={credentialBusy}>Save project credentials</Button><Button type="button" variant="outline" disabled={credentialBusy} onClick={resetSecrets}>Cancel</Button></div>
-        </form>
+        <SettingsGroup
+          title={`${TRACKER_PROVIDERS[credentialKind].label} credentials for this project`}
+          description="Saved in a private .env file for this project, without encryption. Use read-only access limited to this project's data. Saving replaces this project's connection and requires selecting its scope again."
+        >
+          <form className="px-5 py-5" onSubmit={event => { event.preventDefault(); saveCredentials.mutate() }} autoComplete="off">
+            <FieldGroup className="gap-5">
+              {credentialKind === 'jira' ? <>
+                <Field>
+                  <FieldLabel htmlFor="tracker-origin">Jira site URL</FieldLabel>
+                  <Input id="tracker-origin" aria-label="Jira site URL" type="url" required value={origin} onChange={event => setOrigin(event.target.value)} placeholder="https://your-site.atlassian.net" />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="tracker-email">Account email</FieldLabel>
+                  <Input id="tracker-email" aria-label="Account email" type="email" required value={email} onChange={event => setEmail(event.target.value)} />
+                </Field>
+              </> : null}
+              <Field>
+                <FieldLabel htmlFor="tracker-token">API token</FieldLabel>
+                <Input id="tracker-token" aria-label="API token" type="password" autoComplete="new-password" required maxLength={8192} value={secret} onChange={event => setSecret(event.target.value)} />
+              </Field>
+              <div className="flex gap-2">
+                <Button type="submit" variant="default" disabled={credentialBusy}>Save project credentials</Button>
+                <Button type="button" variant="ghost" disabled={credentialBusy} onClick={resetSecrets}>Cancel</Button>
+              </div>
+            </FieldGroup>
+          </form>
+        </SettingsGroup>
       ) : null}
 
       {pickerOpen ? (
-        <section className="rounded-lg border border-violet/40 bg-card p-4" aria-label={`${TRACKER_PROVIDERS[kind].label} picker`}>
-          <label className="text-xs font-medium" htmlFor="tracker-candidate-search">Search {TRACKER_PROVIDERS[kind].scopeLabel}</label>
-          <input
-            id="tracker-candidate-search"
-            className="mt-2 h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
-            value={search}
-            onChange={(event) => { setSearch(event.target.value); setSelected(null) }}
-            placeholder="Search by name…"
-          />
-          <div className="mt-3 max-h-64 space-y-1 overflow-auto">
-            {candidates.isPending ? <p className="text-sm text-muted-foreground">Loading…</p> : null}
-            {candidates.isError ? <CandidateFailure reason={candidates.error.message} generation={candidates.errorUpdatedAt} retry={() => void candidates.refetch()} /> : null}
-            {candidateFailure && !candidateFailure.available ? <CandidateFailure reason={candidateFailure.reason} generation={candidates.dataUpdatedAt} retryAfterSeconds={candidateFailure.code === 'rate_limited' ? candidateFailure.retryAfterSeconds : undefined} retry={() => void candidates.refetch()} /> : null}
-            {options.map((candidate) => (
-              <button
-                key={candidate.id}
-                type="button"
-                className={`block w-full rounded-md border px-3 py-2 text-left text-sm ${selected?.id === candidate.id ? 'border-violet bg-violet/10' : 'border-border'}`}
-                onClick={() => setSelected(candidate)}
-              >{candidate.name}</button>
-            ))}
-            {!candidates.isPending && !candidates.isError && !candidateFailure && options.length === 0 ? <p className="py-3 text-sm text-muted-foreground">No projects or teams match.</p> : null}
-            {candidates.hasNextPage ? (
-              <Button variant="ghost" onClick={() => void candidates.fetchNextPage()} disabled={candidates.isFetchingNextPage}>Load more</Button>
-            ) : null}
-          </div>
-          <div className="mt-4 flex gap-2">
-            <Button variant="contrast" disabled={!selected || connect.isPending || credentialBusy} onClick={() => connect.mutate()}>Connect</Button>
-            <Button variant="ghost" onClick={() => setPickerOpen(false)}>Cancel</Button>
-          </div>
-        </section>
+        <SettingsGroup title={`Browse ${TRACKER_PROVIDERS[kind].label}`}>
+          <section className="flex flex-col gap-3 px-5 py-5" aria-label={`${TRACKER_PROVIDERS[kind].label} picker`}>
+            <Field>
+              <FieldLabel htmlFor="tracker-candidate-search">Search {TRACKER_PROVIDERS[kind].scopeLabel}</FieldLabel>
+              <InputGroup>
+                <InputGroupAddon>
+                  <SearchIcon aria-hidden="true" />
+                </InputGroupAddon>
+                <InputGroupInput
+                  id="tracker-candidate-search"
+                  value={search}
+                  onChange={(event) => { setSearch(event.target.value); setSelected(null) }}
+                  placeholder="Search by name…"
+                />
+              </InputGroup>
+            </Field>
+            <div className="max-h-64 space-y-1 overflow-auto">
+              {candidates.isPending ? <p className="py-2 text-sm text-muted-foreground">Loading…</p> : null}
+              {candidates.isError ? <CandidateFailure reason={candidates.error.message} generation={candidates.errorUpdatedAt} retry={() => void candidates.refetch()} /> : null}
+              {candidateFailure && !candidateFailure.available ? <CandidateFailure reason={candidateFailure.reason} generation={candidates.dataUpdatedAt} retryAfterSeconds={candidateFailure.code === 'rate_limited' ? candidateFailure.retryAfterSeconds : undefined} retry={() => void candidates.refetch()} /> : null}
+              {options.map((candidate) => (
+                <button
+                  key={candidate.id}
+                  type="button"
+                  aria-pressed={selected?.id === candidate.id}
+                  className={cn(
+                    'flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors',
+                    selected?.id === candidate.id ? 'bg-muted font-medium text-foreground' : 'text-foreground hover:bg-muted/60',
+                  )}
+                  onClick={() => setSelected(candidate)}
+                >
+                  {candidate.name}
+                  {selected?.id === candidate.id ? <CheckIcon aria-hidden="true" className="size-4" /> : null}
+                </button>
+              ))}
+              {!candidates.isPending && !candidates.isError && !candidateFailure && options.length === 0 ? <p className="py-3 text-sm text-muted-foreground">No projects or teams match.</p> : null}
+              {candidates.hasNextPage ? (
+                <Button variant="ghost" size="sm" onClick={() => void candidates.fetchNextPage()} disabled={candidates.isFetchingNextPage}>Load more</Button>
+              ) : null}
+            </div>
+            <div className="flex gap-2">
+              <Button variant="default" disabled={!selected || connect.isPending || credentialBusy} onClick={() => connect.mutate()}>Connect</Button>
+              <Button variant="ghost" onClick={() => setPickerOpen(false)}>Cancel</Button>
+            </div>
+          </section>
+        </SettingsGroup>
       ) : null}
-    </div>
+
+      {connection.data?.connection ? (
+        <DangerZone title="Credentials">
+          <SettingsField
+            title="Remove project credentials"
+            hint={
+              <>
+                For local credential cleanup, run <Code>cez tracker-connections list</Code>, then{' '}
+                <Code>cez tracker-connections remove &lt;id&gt;</Code>. Local deletion does not revoke the vendor token.
+              </>
+            }
+            control={
+              <Button variant="destructive" size="sm" disabled={credentialBusy} onClick={() => removeCredentials.mutate()}>
+                Remove project credentials
+              </Button>
+            }
+          />
+        </DangerZone>
+      ) : (
+        <SettingsNote>
+          For local credential cleanup, run <Code>cez tracker-connections list</Code>, then{' '}
+          <Code>cez tracker-connections remove &lt;id&gt;</Code>. Local deletion does not revoke the vendor token.
+        </SettingsNote>
+      )}
+    </SettingsPane>
   )
+}
+
+function Code({ children }: { children: ReactNode }) {
+  return <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-[11px] text-foreground">{children}</code>
 }
 
 function CandidateFailure({ reason, retry, retryAfterSeconds = 0, generation }: { reason: string; retry: () => void; retryAfterSeconds?: number; generation: number }) {
@@ -234,5 +371,14 @@ function CandidateFailure({ reason, retry, retryAfterSeconds = 0, generation }: 
     const timer = window.setInterval(() => setCooldown((value) => Math.max(0, value - 1)), 1_000)
     return () => window.clearInterval(timer)
   }, [cooldown > 0])
-  return <div className="rounded-md border border-danger/30 bg-danger/5 p-3 text-sm"><p className="text-danger">{reason}</p><Button className="mt-2" variant="outline" disabled={cooldown > 0} onClick={retry}>{cooldown > 0 ? `Retry in ${cooldown}s` : 'Retry'}</Button></div>
+  return (
+    <SettingsError
+      title={reason}
+      action={
+        <Button variant="outline" size="sm" disabled={cooldown > 0} onClick={retry}>
+          {cooldown > 0 ? `Retry in ${cooldown}s` : 'Retry'}
+        </Button>
+      }
+    />
+  )
 }

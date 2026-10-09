@@ -1,4 +1,4 @@
-import { ChevronDownIcon, PlusIcon, XIcon } from 'lucide-react'
+import { ChevronDownIcon, Columns3Icon, PencilIcon, PlusIcon, XIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
@@ -10,8 +10,8 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 
-import { splitCards, type ViewId, type WorkspaceLayout } from './layout-state'
-import { ViewPickerMenu } from './view-picker'
+import { layoutDisplayName, splitCards, type ViewId, type WorkspaceLayout } from './layout-state'
+import { VIEW_ICONS, ViewPickerMenu } from './view-picker'
 
 /**
  * The saved-layout strip (spec `2026-10-07-task-workspace` §5.2) — the row that REPLACES the
@@ -42,7 +42,7 @@ export function LayoutCards({
   const { visible, overflow } = splitCards(layouts, active)
 
   return (
-    <div data-slot="layout-cards" className="mt-1.5 flex items-end gap-1 md:mt-2.5">
+    <div data-slot="layout-cards" className="flex items-end gap-0.5">
       {visible.map((layout) => (
         <LayoutCard
           key={layout.name}
@@ -59,9 +59,9 @@ export function LayoutCards({
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              className="-mb-px flex h-8 items-center gap-1 rounded-t-md border-b-2 border-transparent px-2 text-[13px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="-mb-px flex h-9 shrink-0 items-center gap-1 border-b-2 border-transparent px-2 text-[13px] font-medium text-muted-foreground hover:text-foreground"
             >
-              Pozostałe
+              More
               <span className="tabular-nums">({overflow.length})</span>
               <ChevronDownIcon aria-hidden="true" className="size-3.5" />
             </button>
@@ -69,7 +69,7 @@ export function LayoutCards({
           <DropdownMenuContent align="start" className="max-h-72 w-52 overflow-y-auto">
             {overflow.map((layout) => (
               <DropdownMenuItem key={layout.name} onSelect={() => onSelect(layout.name)}>
-                <span className="truncate">{layout.name}</span>
+                <span className="truncate">{layoutDisplayName(layout.name)}</span>
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>
@@ -77,21 +77,21 @@ export function LayoutCards({
       ) : null}
 
       <ViewPickerMenu
-        heading="Nowy układ"
+        heading="New layout"
         onPick={onCreate}
         trigger={
           <Button
             variant="ghost"
-            size="sm"
+            size="icon-sm"
             /* `data-action` rather than `data-slot`: the shadcn Button already spends its
                `data-slot` on `button`, and the browser-level specs need a hook that is not the
-               Polish label. */
+               label. */
             data-action="new-layout"
-            className="-mb-px h-8 px-2 text-muted-foreground"
-            title="Nowy układ — wybierz widok dla pierwszej kolumny"
+            className="mb-1 ml-1 size-7 shrink-0 text-muted-foreground"
+            aria-label="New layout"
+            title="New layout — pick the view for its first column"
           >
             <PlusIcon aria-hidden="true" />
-            Nowy układ
           </Button>
         }
       />
@@ -125,6 +125,9 @@ function LayoutCard({
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [editing, setEditing] = useState(false)
+  const shown = layoutDisplayName(layout.name)
+  // One column wears its view's icon; a split wears the columns glyph.
+  const Icon = layout.columns.length === 1 ? VIEW_ICONS[layout.columns[0]!.view] : Columns3Icon
 
   // Entering the edit is deferred by one macrotask, which is load-bearing rather than cosmetic.
   // Closing a Radix menu moves focus in the SAME tick as the selection, and the rename field
@@ -151,10 +154,10 @@ function LayoutCard({
       data-slot="layout-card"
       data-active={active ? '' : undefined}
       className={cn(
-        '-mb-px group relative flex h-8 items-center rounded-t-md border-b-2 pl-3 pr-1 text-[13px] font-medium',
+        '-mb-px group relative flex h-9 shrink-0 items-center gap-1.5 border-b-2 pl-2 pr-0.5 text-[13px] font-medium transition-colors',
         active
-          ? 'border-foreground font-semibold text-foreground'
-          : 'border-transparent text-muted-foreground hover:bg-muted hover:text-foreground',
+          ? 'border-foreground text-foreground'
+          : 'border-transparent text-muted-foreground hover:text-foreground',
       )}
       onContextMenu={(event) => {
         event.preventDefault()
@@ -166,14 +169,21 @@ function LayoutCard({
           <span aria-hidden="true" className="pointer-events-none absolute bottom-0 left-2 size-0" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-44">
-          <DropdownMenuItem onSelect={startRename}>Zmień nazwę</DropdownMenuItem>
-          <DropdownMenuItem onSelect={onClose}>Zamknij układ</DropdownMenuItem>
+          <DropdownMenuItem onSelect={startRename}>
+            <PencilIcon aria-hidden="true" />
+            Rename layout
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={onClose}>
+            <XIcon aria-hidden="true" />
+            Close layout
+          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
 
+      <Icon aria-hidden="true" className="size-3.5 shrink-0" />
       {editing ? (
         <RenameField
-          name={layout.name}
+          name={shown}
           onCommit={(requested) => {
             setEditing(false)
             onRename(requested)
@@ -192,10 +202,10 @@ function LayoutCard({
             event.preventDefault()
             startRename()
           }}
-          title={`${layout.name} — dwuklik, by zmienić nazwę; prawy klik, by zamknąć`}
+          title={`${shown} — double-click to rename, right-click for more`}
           className="max-w-40 truncate outline-none focus-visible:underline"
         >
-          {layout.name}
+          {shown}
         </button>
       )}
 
@@ -203,11 +213,11 @@ function LayoutCard({
           within the card, and on the active card, which is the one a user closes most often. */}
       <button
         type="button"
-        aria-label={`Zamknij układ ${layout.name}`}
+        aria-label={`Close layout ${shown}`}
         onClick={onClose}
         className={cn(
-          'ml-1 grid size-5 shrink-0 place-items-center rounded opacity-0 transition-opacity hover:bg-muted focus-visible:opacity-100 group-hover:opacity-100',
-          active && 'opacity-60',
+          'grid size-5 shrink-0 place-items-center rounded-sm opacity-0 transition-opacity hover:bg-muted focus-visible:opacity-100 group-hover:opacity-100',
+          active && 'opacity-50',
         )}
       >
         <XIcon aria-hidden="true" className="size-3.5" />
@@ -256,7 +266,7 @@ function RenameField({
     <input
       ref={inputRef}
       autoFocus
-      aria-label={`Nazwa układu ${name}`}
+      aria-label={`Layout name ${name}`}
       value={value}
       onChange={(event) => setValue(event.target.value)}
       onBlur={commit}
@@ -269,7 +279,7 @@ function RenameField({
           cancel()
         }
       }}
-      className="w-28 rounded border border-border bg-background px-1 text-[13px] outline-none focus-visible:border-foreground"
+      className="h-6 w-28 rounded-sm border border-input bg-card px-1.5 text-[13px] outline-none focus-visible:border-ring"
     />
   )
 }

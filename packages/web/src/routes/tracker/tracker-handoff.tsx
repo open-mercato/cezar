@@ -1,6 +1,6 @@
 import { AgentProviderGate } from '@/components/agent-provider-gate'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { CheckIcon, PlayIcon, XIcon, ZapIcon } from 'lucide-react'
+import { CheckIcon, PlayIcon, XIcon } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 
 import type { Skill, TrackerItem, WorkflowDef } from '@open-mercato/cezar-api-client'
@@ -10,6 +10,9 @@ import { EnginePills, engineRunBody, useResolvedEngine, type EnginePick } from '
 import { WorkflowPicker, SkillsPicker } from '@/components/agent-task-pickers'
 import { isSubmitShortcut, submitShortcutHint } from '@/lib/use-submit-shortcut'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Field, FieldDescription, FieldLabel } from '@/components/ui/field'
+import { Kbd } from '@/components/ui/kbd'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
 import { MAX_CHAIN_STEPS } from '@/lib/github-task'
@@ -24,7 +27,9 @@ export type TrackerHandoffSelection = {
   engine: EnginePick
 }
 
-export function TrackerHandoff({ item, workflows, skills, selection, onSelectionChange, drafts, scopePending = false, detailUnavailable = false }: {
+export function TrackerHandoff({ item, workflows, skills, selection, onSelectionChange, drafts, scopePending = false, detailUnavailable = false, onQueued }: {
+  /** Fires with the queued run's id, so the host can confirm it outside this panel. */
+  onQueued?: (runId: string | null) => void
   item: TrackerItem
   scopePending?: boolean
   detailUnavailable?: boolean
@@ -72,6 +77,7 @@ export function TrackerHandoff({ item, workflows, skills, selection, onSelection
     onSuccess: (created) => {
       const run = 'runs' in created ? created.runs[0] : created
       setQueued(run?.id ?? null)
+      onQueued?.(run?.id ?? null)
       void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
       toast(`Added ${item.id} to the queue`)
     },
@@ -87,49 +93,52 @@ export function TrackerHandoff({ item, workflows, skills, selection, onSelection
   const canSubmit = !scopePending && !detailUnavailable && !start.isPending && resolved.canRun && composition.error === null && !skillChainOverLimit && (losses.length === 0 || acknowledgeLoss)
 
   return (
-    <section className="mt-7 rounded-lg border border-border bg-card p-4" data-slot="tracker-handoff">
-      <h2 className="flex items-center gap-1.5 text-[11px] font-semibold tracking-[.04em] text-soft-foreground uppercase">
-        <ZapIcon className="size-3.5 text-violet" /> Hand this to the agent
-      </h2>
-      <div className="mt-3 flex flex-wrap items-center gap-2">
+    <section className="flex min-w-0 flex-col gap-3" data-slot="tracker-handoff">
+      {losses.length || emptyDescription ? (
+        <div className="flex flex-col gap-3 rounded-lg bg-pending/10 p-4 text-[13px]">
+          <div>
+            <p className="font-medium">{losses.length ? 'This provider snapshot lost some issue content.' : 'This issue has no description.'}</p>
+            {losses.length ? <ul className="mt-1 list-disc pl-5 text-muted-foreground">{losses.map((loss) => <li key={loss}>{loss}</li>)}</ul> : <p className="mt-1 text-muted-foreground">Add any context the agent needs before starting.</p>}
+            {losses.length ? <a className="mt-2 inline-block font-medium underline underline-offset-4" href={item.url} target="_blank" rel="noreferrer">Review the source issue</a> : null}
+          </div>
+          <Field>
+            <FieldLabel htmlFor="tracker-supplemental">Supplemental context</FieldLabel>
+            <Textarea id="tracker-supplemental" value={supplemental} onChange={(event) => setSupplemental(event.target.value)} placeholder="Paste any missing context here…" className="min-h-20 bg-card" />
+          </Field>
+          {losses.length ? <label className="flex items-start gap-2.5">
+            <Checkbox className="mt-0.5" checked={acknowledgeLoss} onCheckedChange={(checked) => setAcknowledgedSnapshot(checked === true ? snapshotIdentity : null)} />
+            I understand the agent receives this snapshot and the supplemental context above.
+          </label> : null}
+        </div>
+      ) : null}
+      <Field>
+        <FieldLabel htmlFor="tracker-instruction">Custom instruction</FieldLabel>
+        <Textarea id="tracker-instruction" aria-keyshortcuts="Control+Enter Meta+Enter" onKeyDown={event => { if (isSubmitShortcut(event.nativeEvent)) { event.preventDefault(); if (canSubmit) start.mutate() } }} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="Optional instructions; these are placed last in the task." className="min-h-28 text-[13.5px]" />
+        <FieldDescription className="flex justify-between gap-4 text-xs">
+          <span className={composition.error ? 'text-danger' : undefined}>{composition.error ?? 'Full tracker detail and source link are included. Comments, attachments, and custom fields are outside the snapshot.'}</span>
+          <span className="shrink-0 tabular-nums">{composition.task.length.toLocaleString()} / {TRACKER_TASK_LIMIT.toLocaleString()}</span>
+        </FieldDescription>
+      </Field>
+      <div className="flex flex-wrap items-center gap-2">
         <WorkflowPicker workflows={workflows} value={workflow} onChange={setWorkflow} slotPrefix="tracker" />
         <SkillsPicker skills={skills} skillUsage={undefined} selected={validSkills} onToggle={toggleSkill} maxSelections={workflow === null ? MAX_CHAIN_STEPS : undefined} slotPrefix="tracker" />
         <EnginePills pick={engine} onChange={setEngine} accounts disabled={start.isPending || !resolved.canRun} />
         <AgentProviderGate resolved={resolved} dataSlot="tracker-provider-gate" />
       </div>
-      {validSkills.length ? <div className="mt-2.5 flex flex-wrap gap-1.5">{validSkills.map(name => <button type="button" key={name} aria-label={`Remove skill ${name}`} onClick={() => toggleSkill(name)} className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-px font-mono text-[11px] font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger">{name}<XIcon aria-hidden="true" className="size-3" /></button>)}</div> : null}
+      {validSkills.length ? <div className="flex flex-wrap gap-1.5">{validSkills.map(name => <button type="button" key={name} aria-label={`Remove skill ${name}`} onClick={() => toggleSkill(name)} className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger">{name}<XIcon aria-hidden="true" className="size-3" /></button>)}</div> : null}
       {workflow === null && validSkills.length >= MAX_CHAIN_STEPS ? (
-        <p className={`mt-2 text-xs ${skillChainOverLimit ? 'text-danger' : 'text-muted-foreground'}`}>
+        <p className={`text-xs ${skillChainOverLimit ? 'text-danger' : 'text-muted-foreground'}`}>
           Skill chains support at most {MAX_CHAIN_STEPS} skills. Remove one before selecting another.
         </p>
       ) : null}
-      {losses.length || emptyDescription ? (
-        <div className="mt-3 rounded-md border border-warning/50 bg-warning/10 p-3 text-sm">
-          <p className="font-medium">{losses.length ? 'This provider snapshot lost some issue content.' : 'This issue has no description.'}</p>
-          {losses.length ? <ul className="mt-1 list-disc pl-5 text-xs">{losses.map((loss) => <li key={loss}>{loss}</li>)}</ul> : <p className="mt-1 text-xs">Add any context the agent needs before starting.</p>}
-          {losses.length ? <a className="mt-2 inline-block text-xs text-violet underline underline-offset-4" href={item.url} target="_blank" rel="noreferrer">Review the source issue</a> : null}
-          <label className="mt-3 block text-xs font-medium" htmlFor="tracker-supplemental">Supplemental context</label>
-          <Textarea id="tracker-supplemental" value={supplemental} onChange={(event) => setSupplemental(event.target.value)} placeholder="Paste any missing context here…" className="mt-1 min-h-20 bg-background" />
-          {losses.length ? <label className="mt-2 flex items-start gap-2 text-xs">
-            <input type="checkbox" checked={acknowledgeLoss} onChange={(event) => setAcknowledgedSnapshot(event.target.checked ? snapshotIdentity : null)} />
-            I understand the agent receives this snapshot and the supplemental context above.
-          </label> : null}
-        </div>
-      ) : null}
-      <label className="mt-3 block text-xs font-medium" htmlFor="tracker-instruction">Custom instruction</label>
-      <Textarea id="tracker-instruction" aria-keyshortcuts="Control+Enter Meta+Enter" onKeyDown={event => { if (isSubmitShortcut(event.nativeEvent)) { event.preventDefault(); if (canSubmit) start.mutate() } }} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="Optional instructions; these are placed last in the task." className="mt-1 min-h-20 text-[13px]" />
-      <div className="mt-1 flex justify-between text-[11px] text-muted-foreground">
-        <span>{composition.error ?? 'Full tracker detail and source link are included. Comments, attachments, and custom fields are outside the snapshot.'}</span>
-        <span>{composition.task.length.toLocaleString()} / {TRACKER_TASK_LIMIT.toLocaleString()}</span>
-      </div>
-      {scopePending ? <p role="status" className="mt-3 text-xs text-muted-foreground">Verifying tracker connection…</p> : null}
-      {detailUnavailable ? <p role="status" className="mt-3 text-xs text-danger">Issue detail could not be verified. Retry successfully before starting the agent; your draft is preserved.</p> : null}
-      <div className="mt-4 flex flex-wrap items-center gap-2.5">
-        <Button variant="contrast" onClick={() => start.mutate()} disabled={!canSubmit}>
-          <PlayIcon className="size-3.5" /> Run agent on this issue
+      {scopePending ? <p role="status" className="text-[13px] text-muted-foreground">Verifying tracker connection…</p> : null}
+      {detailUnavailable ? <p role="status" className="text-[13px] text-danger">Issue detail could not be verified. Retry successfully before starting the agent; your draft is preserved.</p> : null}
+      <div className="mt-2 flex flex-wrap items-center justify-end gap-2.5">
+        {queued ? <span className="mr-auto flex items-center gap-1.5 text-[13px] text-success"><CheckIcon className="size-3.5" /> Queued · <Link className="font-medium text-foreground underline-offset-4 hover:underline" to={`/tasks/${queued}`}>View task</Link></span> : null}
+        <Kbd aria-hidden="true">{submitShortcutHint()}</Kbd>
+        <Button variant="primary" onClick={() => start.mutate()} disabled={!canSubmit}>
+          <PlayIcon aria-hidden="true" /> Run agent on this issue
         </Button>
-        <kbd aria-hidden="true" className="rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-[10.5px] font-medium text-muted-foreground">{submitShortcutHint()}</kbd>
-        {queued ? <span className="flex items-center gap-1 text-xs text-success"><CheckIcon className="size-3" /> queued · <Link className="text-violet hover:underline" to={`/tasks/${queued}`}>View task →</Link></span> : null}
       </div>
     </section>
   )

@@ -50,7 +50,9 @@ export function Segmented<T extends string>({
       data-full={full ? 'true' : undefined}
       role="group"
       aria-label={label}
-      className={cn('inline-flex gap-0.5 rounded-md bg-muted p-[3px]', full && 'flex w-full', className)}
+      // The shadcn TabsList well; the buttons below are its triggers, kept as `aria-pressed`
+      // toggles because they re-slice one view rather than switch panels.
+      className={cn('inline-flex h-9 items-center gap-0.5 rounded-lg bg-muted p-[3px]', full && 'flex w-full', className)}
     >
       {options.map((option) => {
         const isActive = option.value === value
@@ -67,14 +69,14 @@ export function Segmented<T extends string>({
               onChange(option.value)
             }}
             className={cn(
-              'flex h-7 items-center justify-center gap-1.5 rounded-[7px] px-3 text-[12.5px] font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground',
+              'flex h-full items-center justify-center gap-1.5 rounded-md px-3 text-[13px] font-medium whitespace-nowrap text-muted-foreground transition-[color,box-shadow,background-color] outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50',
               full && 'flex-1',
-              isActive && 'bg-card font-semibold text-foreground shadow-xs',
+              isActive && 'bg-card text-foreground shadow-xs',
             )}
           >
             {option.label}
             {option.count !== undefined ? (
-              <small className="font-mono text-[11px] font-normal tabular-nums">{option.count}</small>
+              <small className="text-xs font-normal tabular-nums text-muted-foreground">{option.count}</small>
             ) : null}
           </button>
         )

@@ -1,4 +1,4 @@
-import { ChevronDownIcon, SplitIcon } from 'lucide-react'
+import { SlidersHorizontalIcon, SplitIcon } from 'lucide-react'
 import { useId, useRef, useState, type ReactNode } from 'react'
 
 import {
@@ -7,23 +7,18 @@ import {
   type Runner,
 } from '@open-mercato/cezar-api-client'
 import { useRunnerModels } from '@/api/queries'
-import { chipClass } from '@/components/picker-pill'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useIsDesktop } from '@/lib/use-desktop'
-import { useLongPress } from '@/lib/use-long-press'
-import { cn } from '@/lib/utils'
 import { RUNNERS, modelsForRunner, type ModelPreset } from '@/routes/new-task-form'
 
 /**
- * The composer's Dispatch toggle (spec 2026-09-10-dispatch; mockup "option 3"): an icon-only
- * pill in the /new footer row. Tap = on/off; hold (or right-click, or ArrowDown / Shift+Enter)
- * = the settings surface, where the limits the intent carries are set. The label lives in the
- * hover tooltip — the row is already full, and a task that fans out is the exception, not the
- * default, so it earns an icon rather than a word.
+ * The composer's Dispatch control (spec 2026-09-10-dispatch), one row of the /new "Options"
+ * popover: a switch (on/off) and a "Limits" button that opens the settings surface, where the
+ * limits the intent carries are set.
  *
  * `value` is the draft's `DispatchIntent | null`: `null` off, `{}` on with the engine's
  * defaults, keys for whatever the user limited. Every change in the settings keeps it ON —
@@ -31,13 +26,8 @@ import { RUNNERS, modelsForRunner, type ModelPreset } from '@/routes/new-task-fo
  * Turning it off then on again restores the limits it had (kept here, not in the draft, so an
  * off draft stays an honest `null`).
  *
- * The settings surface is a Popover on md-and-up and a bottom Sheet below it: a phone's thumb
- * cannot land on a popover positioned off a 26px pill. Both render the same `DispatchSettings`
- * form. How it OPENS differs by pointer, not only by width: a mouse has no natural hold, so the
- * desktop control is a split pill — the icon toggles, a chevron segment beside it opens the
- * settings on a plain click (right-click and ArrowDown still work). A phone keeps the single
- * icon with tap and hold. The anchor is a `PopoverAnchor`, never a `PopoverTrigger` — Radix's
- * trigger toggles on pointerdown, which is exactly the event the hold begins on.
+ * The settings surface is a Popover on md-and-up and a bottom Sheet below it. Both render the
+ * same `DispatchSettings` form. The anchor is a `PopoverAnchor`: the Limits button toggles it.
  *
  * Renders nothing unless `available` (`capabilities.dispatch` is on, in a git repo).
  */
@@ -92,34 +82,8 @@ export function DispatchToggle({
     onSettingsOpenChange?.(next)
   }
   const on = value !== null
-  const toggle = () => onChange(on ? null : remembered.current)
-  const press = useLongPress({ onLongPress: () => setOpen(true), onClick: toggle })
 
   if (!available) return null
-
-  const button = (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      aria-label="Dispatch"
-      data-slot="dispatch-toggle"
-      data-state={on ? 'on' : 'off'}
-      {...press}
-      className={cn(
-        desktop
-          ? // A segment of the split pill below: the ring belongs to the wrapper.
-            'inline-flex h-full w-[26px] items-center justify-center transition-colors hover:bg-muted'
-          : cn(chipClass, 'w-[26px] justify-center px-0'),
-        on && (desktop ? 'hover:bg-primary/15' : 'border-primary/60 bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary'),
-      )}
-    >
-      <SplitIcon
-        aria-hidden="true"
-        className={cn('size-3 shrink-0', on ? 'text-primary' : 'text-soft-foreground')}
-      />
-    </button>
-  )
 
   const settings = (
     <DispatchSettings
@@ -131,56 +95,29 @@ export function DispatchToggle({
     />
   )
 
-  const tooltip = (
-    <TooltipContent side="top" sideOffset={6} className="max-w-[260px]">
-      <div className="font-medium">{on ? 'Dispatch — on' : 'Dispatch — off'}</div>
-      <div className="text-contrast-foreground/80">
-        {on
-          ? 'Splits this task into subtasks it runs as separate tasks'
-          : 'Let this task split into subtasks'}
-      </div>
-      {desktop ? <div className="mt-0.5 text-contrast-foreground/60">▾ limits and subtask defaults</div> : null}
-    </TooltipContent>
-  )
-
-  const trigger = desktop ? (
-    // The split pill: one ring, two segments — the icon (toggle) and the chevron (settings).
-    <span
-      data-slot="dispatch-control"
-      data-state={on ? 'on' : 'off'}
-      className={cn(
-        'inline-flex h-[26px] items-stretch overflow-hidden rounded-full border border-border bg-card text-muted-foreground transition-colors',
-        on && 'border-primary/60 bg-primary/10 text-primary',
-      )}
-    >
-      <TooltipProvider delayDuration={300}>
-        <Tooltip>
-          <TooltipTrigger asChild>{button}</TooltipTrigger>
-          {tooltip}
-        </Tooltip>
-      </TooltipProvider>
-      <button
+  // One row control: a quiet "Limits" button (the settings surface) beside the on/off switch.
+  const trigger = (
+    <span data-slot="dispatch-control" data-state={on ? 'on' : 'off'} className="inline-flex items-center gap-2">
+      <Button
         type="button"
+        variant="ghost"
+        size="xs"
         aria-label="Dispatch settings"
         aria-haspopup="dialog"
         aria-expanded={open}
         data-slot="dispatch-settings-trigger"
         onClick={() => setOpen(!open)}
-        className={cn(
-          'inline-flex w-[18px] items-center justify-center border-l border-border transition-colors hover:bg-muted',
-          on && 'border-primary/40 hover:bg-primary/15',
-        )}
       >
-        <ChevronDownIcon aria-hidden="true" className="size-2.5 shrink-0 text-soft-foreground" />
-      </button>
+        <SlidersHorizontalIcon aria-hidden="true" />
+        Limits
+      </Button>
+      <Switch
+        aria-label="Dispatch"
+        data-slot="dispatch-toggle"
+        checked={on}
+        onCheckedChange={(next) => onChange(next ? remembered.current : null)}
+      />
     </span>
-  ) : (
-    <TooltipProvider delayDuration={300}>
-      <Tooltip>
-        <TooltipTrigger asChild>{button}</TooltipTrigger>
-        {tooltip}
-      </Tooltip>
-    </TooltipProvider>
   )
 
   if (!desktop) {
@@ -212,7 +149,7 @@ export function DispatchToggle({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverAnchor asChild>{trigger}</PopoverAnchor>
       <PopoverContent
-        align="start"
+        align="end"
         sideOffset={8}
         data-slot="dispatch-settings"
         className="w-[340px] max-w-[calc(100vw-2rem)] p-3.5"
@@ -294,7 +231,7 @@ function DispatchSettings({
       <header className="flex items-start gap-2.5">
         <span
           aria-hidden="true"
-          className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary"
+          className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary/15 text-primary-strong"
         >
           <SplitIcon className="size-3.5" />
         </span>

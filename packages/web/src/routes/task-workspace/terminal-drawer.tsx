@@ -77,9 +77,9 @@ export function TerminalDrawer({
   // the PROJECT is the repository root's own folder name, the way the rest of the cockpit names
   // a project. Both degrade to something honest rather than blank.
   const health = useHealth()
-  const hostLabel = typeof window === 'undefined' ? 'ten host' : window.location.host
+  const hostLabel = typeof window === 'undefined' ? 'this host' : window.location.host
   const repoRoot = health.data?.repo?.root ?? health.data?.repoRoot ?? ''
-  const projectLabel = repoRoot.split(/[\\/]/).filter(Boolean).pop() ?? 'projekt'
+  const projectLabel = repoRoot.split(/[\\/]/).filter(Boolean).pop() ?? 'project'
 
   // Opening the drawer reattaches to whatever this task already has, and creates a shell only
   // when it has none (spec §6) — reopening must never lose a running build, and must never
@@ -96,7 +96,7 @@ export function TerminalDrawer({
         const state = await getRunTerminal(runId)
         if (cancelled) return
         if (!state.available) {
-          setUnavailable(state.reason ?? 'Terminal nie jest dostępny w tym cockpicie.')
+          setUnavailable(state.reason ?? 'The terminal is not available in this cockpit.')
           return
         }
         // LIVE sessions only decide whether this task already has tabs. A shell that exited on
@@ -239,10 +239,10 @@ export function TerminalDrawer({
 
       {unavailable ? null : <DetectedUrlsStrip runId={runId} onOpen={onOpenInBrowser} />}
 
-      <header className="flex h-8 shrink-0 items-center gap-1 border-b border-border pl-1 pr-2">
+      <header className="flex h-9 shrink-0 items-center gap-1 border-b border-border/70 pl-3 pr-2">
         <div
           role="tablist"
-          aria-label="Zakładki terminala"
+          aria-label="Terminal tabs"
           className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto"
         >
           {sessions.map((session) => (
@@ -264,20 +264,20 @@ export function TerminalDrawer({
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  aria-label="Nowa zakładka terminala"
-                  title="Nowa zakładka terminala — wybierz powłokę"
+                  aria-label="New terminal tab"
+                  title="New terminal tab — pick a shell"
                   className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
                 >
                   <PlusIcon aria-hidden="true" className="size-3.5" />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-56">
-                <DropdownMenuLabel>Nowa zakładka</DropdownMenuLabel>
+                <DropdownMenuLabel>New tab</DropdownMenuLabel>
                 {shells.map((shell, index) => (
                   <DropdownMenuItem key={shell} data-shell={shell} onSelect={() => addTab(shell)}>
                     <span className="truncate font-mono text-xs">{shell}</span>
                     {index === 0 ? (
-                      <span className="ml-auto shrink-0 text-[10px] text-soft-foreground">domyślna</span>
+                      <span className="ml-auto shrink-0 text-xs text-soft-foreground">default</span>
                     ) : null}
                   </DropdownMenuItem>
                 ))}
@@ -286,8 +286,8 @@ export function TerminalDrawer({
           ) : (
             <button
               type="button"
-              aria-label="Nowa zakładka terminala"
-              title="Nowa zakładka terminala"
+              aria-label="New terminal tab"
+              title="New terminal tab"
               onClick={() => addTab()}
               className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
             >
@@ -326,17 +326,17 @@ export function TerminalDrawer({
             // a build precisely so you can read in that same pane why it was wrong. No
             // confirmation, because an interrupt is cheap and recoverable; the tab's X is the
             // one that asks, because it takes the whole process tree.
-            title="Przerwij polecenie (Ctrl-C)"
+            title="Interrupt the command (Ctrl-C)"
             onClick={() => void writeRunTerminal(runId, active.id, '\x03').catch(() => {})}
           >
             <SquareIcon aria-hidden="true" className="size-3" />
-            Zatrzymaj
+            Stop
           </Button>
         ) : null}
         <button
           type="button"
-          aria-label="Ukryj terminal"
-          title="Ukryj terminal — procesy działają dalej"
+          aria-label="Hide terminal"
+          title="Hide terminal — processes keep running"
           onClick={onClose}
           className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
         >
@@ -353,7 +353,7 @@ export function TerminalDrawer({
       ) : starting ? (
         <p className="flex items-center gap-2 px-3 py-4 text-xs text-soft-foreground">
           <Loader2Icon aria-hidden="true" className="size-3.5 animate-spin" />
-          Uruchamianie powłoki…
+          Starting the shell…
         </p>
       ) : (
         // Every pane stays MOUNTED and only the active one is shown. A tab is a live shell with a
@@ -373,18 +373,18 @@ export function TerminalDrawer({
                 fact. `busy === true` saw the process; `busy === null` is a host that cannot read
                 its process table, and claiming "coś działa" there would be inventing it. */}
             <AlertDialogTitle>
-              {confirming?.busy === true ? 'W tej zakładce coś działa' : 'Zamknąć tę zakładkę?'}
+              {confirming?.busy === true ? 'Something is running in this tab' : 'Close this tab?'}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {confirming?.busy === true
-                ? `„${confirming.label}” wciąż działa. Zamknięcie zakładki zatrzyma ten proces i wszystko, co uruchomił.`
-                : 'Ten host nie potrafi sprawdzić, czy coś jeszcze działa w tej powłoce. Zamknięcie zakładki zatrzyma powłokę i wszystko, co uruchomiła.'}
+                ? `“${confirming.label}” is still running. Closing the tab stops that process and everything it started.`
+                : 'This host cannot tell whether something is still running in this shell. Closing the tab stops the shell and everything it started.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Anuluj</AlertDialogCancel>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={() => confirming && closeTab(confirming)}>
-              Zamknij mimo to
+              Close anyway
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -409,7 +409,7 @@ function TerminalTab({
       data-slot="terminal-tab"
       data-active={active ? '' : undefined}
       className={cn(
-        'group flex h-6 shrink-0 items-center rounded pl-2 pr-0.5 text-xs',
+        'group flex h-6 shrink-0 items-center rounded-sm pl-2 pr-0.5 text-xs font-medium',
         active ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground',
       )}
     >
@@ -418,14 +418,14 @@ function TerminalTab({
         role="tab"
         aria-selected={active}
         onClick={onSelect}
-        title={session.exitCode === null ? session.label : `${session.label} — zakończony (${session.exitCode})`}
+        title={session.exitCode === null ? session.label : `${session.label} — exited (${session.exitCode})`}
         className="max-w-40 truncate outline-none focus-visible:underline"
       >
         {session.label}
       </button>
       <button
         type="button"
-        aria-label={`Zamknij ${session.label}`}
+        aria-label={`Close ${session.label}`}
         onClick={onClose}
         className={cn(
           'ml-1 grid size-4 shrink-0 place-items-center rounded opacity-0 transition-opacity hover:bg-background focus-visible:opacity-100 group-hover:opacity-100',
@@ -503,7 +503,7 @@ function DrawerResizeHandle({
       data-slot="drawer-resize-handle"
       role="separator"
       aria-orientation="horizontal"
-      aria-label="Zmień wysokość terminala"
+      aria-label="Resize terminal"
       aria-valuenow={height}
       aria-valuemin={MIN_DRAWER_HEIGHT}
       aria-valuemax={MAX_DRAWER_HEIGHT}
@@ -513,7 +513,7 @@ function DrawerResizeHandle({
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
       onKeyDown={onKeyDown}
-      title="Przeciągnij, by zmienić wysokość — strzałki regulują precyzyjnie"
+      title="Drag to resize — arrow keys adjust precisely"
       // A 5px grab strip straddling the top border, invisible until reached for. `touch-none` is
       // load-bearing: without it a touch drag is claimed by the browser's panning.
       className="absolute inset-x-0 -top-[3px] z-20 h-[5px] cursor-row-resize touch-none bg-transparent transition-colors hover:bg-violet/40 focus-visible:bg-violet/60 focus-visible:outline-none"

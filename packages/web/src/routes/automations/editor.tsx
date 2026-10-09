@@ -1,15 +1,18 @@
 import { EditorTrackerFields } from './editor-tracker-fields'
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowLeftIcon, FileTextIcon, LayoutTemplateIcon, Settings2Icon } from 'lucide-react'
+import { ArrowLeftIcon, LayoutTemplateIcon, Settings2Icon } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import type { AutomationListEntry, AutomationsResponse } from '@open-mercato/cezar-api-client'
 import { ApiError, createAutomation, updateAutomation } from '@/api/client'
 import { useHealth, useRepo, useSkills, useUiState, useWorkflows } from '@/api/queries'
 import { Chip } from '@/components/chip'
-import { Pill } from '@/components/pill'
+import { Page, PageBody, PageHeader, PageRow, PageSection } from '@/components/page'
+import { StatusDot } from '@/components/status-dot'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
+import { Field, FieldDescription, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
@@ -163,40 +166,50 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
 
 
   return (
-    <div data-route="automations" data-slot="automation-editor" className="flex min-h-full flex-col">
-      {/* The kit's 56px header. Below `md` it may wrap onto a second row: a phone cannot fit the
-          title, the template toggle and both actions on one line, and Save must stay reachable. */}
-      <header className="sticky top-0 z-10 flex min-h-14 shrink-0 flex-wrap items-center gap-3 border-b border-border bg-background px-5 max-md:py-2 md:h-14 md:flex-nowrap">
-        <Button variant="ghost" size="icon-sm" aria-label="Back" onClick={onBack}>
-          <ArrowLeftIcon aria-hidden="true" className="size-[15px]" />
-        </Button>
-        <h1 className="truncate text-base font-semibold">{automation ? 'Edit automation' : 'New automation'}</h1>
-        {automation ? (
-          <Pill dot={automation.enabled ? 'success' : 'neutral'}>{automation.enabled ? 'enabled' : 'paused'}</Pill>
-        ) : null}
-        <span className="flex-1" />
-        {!automation ? (
-          <Button variant="ghost" size="sm" aria-expanded={showTemplates} aria-label={showTemplates ? 'Hide templates' : 'Start from a template'} onClick={() => setShowTemplates((open) => !open)}>
-            <LayoutTemplateIcon aria-hidden="true" className="size-3.5" />
-            <span className="max-md:hidden">{showTemplates ? 'Hide templates' : 'Start from a template'}</span>
+    <Page data-route="automations" data-slot="automation-editor">
+      <PageHeader
+        eyebrow={
+          <Button variant="ghost" size="xs" className="-ml-2 font-normal" aria-label="Back" onClick={onBack}>
+            <ArrowLeftIcon aria-hidden="true" />
+            Automations
           </Button>
-        ) : null}
-        <Button variant="outline" onClick={onBack}>Cancel</Button>
-        <Button disabled={!canSave} onClick={() => void save()}>{saveLabel}</Button>
-      </header>
-
-      <div className="flex justify-center p-5">
-        <div className="grid w-full max-w-[1080px] grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
-          <div className="flex min-w-0 flex-col gap-4">
-            {conflict ? (
-              <div role="alert" data-slot="editor-conflict" className="flex flex-wrap items-center gap-3 rounded-lg border border-danger/40 bg-danger/10 px-3.5 py-2.5 text-[13px] text-foreground">
-                Edited elsewhere — reload to see the latest version
-                <Button variant="outline" size="sm" className="ml-auto" onClick={reload}>Reload</Button>
-              </div>
+        }
+        title={
+          <span className="flex items-center gap-3">
+            <span className="truncate">{automation ? 'Edit automation' : 'New automation'}</span>
+            {automation ? (
+              <Badge variant="outline" className="gap-1.5 font-normal">
+                <StatusDot tone={automation.enabled ? 'success' : 'neutral'} />
+                {automation.enabled ? 'Enabled' : 'Paused'}
+              </Badge>
             ) : null}
-            {error?.section === 'top' ? <InlineAlert>{error.message}</InlineAlert> : null}
+          </span>
+        }
+        description={automation ? automation.name : 'Describe the task, then choose when it runs. Save it paused to try it first.'}
+        actions={
+          !automation ? (
+            <Button variant="outline" aria-expanded={showTemplates} aria-label={showTemplates ? 'Hide templates' : 'Start from a template'} onClick={() => setShowTemplates((open) => !open)}>
+              <LayoutTemplateIcon aria-hidden="true" />
+              <span className="max-md:hidden">{showTemplates ? 'Hide templates' : 'Start from a template'}</span>
+            </Button>
+          ) : undefined
+        }
+      />
 
-            {showTemplates && !automation ? (
+      <PageBody className="grid grid-cols-1 items-start gap-x-12 gap-y-8 lg:grid-cols-[minmax(0,1fr)_300px]">
+        <div className="flex min-w-0 flex-col">
+          {conflict ? (
+            <Alert variant="destructive" data-slot="editor-conflict" className="mb-6">
+              <AlertTitle>Edited elsewhere — reload to see the latest version</AlertTitle>
+              <AlertDescription>
+                <Button variant="outline" size="sm" className="mt-1" onClick={reload}>Reload</Button>
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          {error?.section === 'top' ? <div className="mb-6"><InlineAlert>{error.message}</InlineAlert></div> : null}
+
+          {showTemplates && !automation ? (
+            <div className="mb-8">
               <TemplatePalette
                 onPick={(template) => {
                   // A template from another project may name a workflow this repo does not
@@ -206,68 +219,52 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
                   setShowTemplates(false)
                 }}
               />
-            ) : null}
+            </div>
+          ) : null}
 
-            <Section title="Name">
+          <Section title="What to run" description="Each run is an ordinary cezar task in its own worktree — it queues behind the parallel cap like anything else and never auto-merges.">
+            <Field>
+              <FieldLabel htmlFor="automation-name">Name</FieldLabel>
               <Input
+                id="automation-name"
                 aria-label="Name"
                 placeholder="Nightly dependency bump"
                 value={draft.name}
                 onChange={(event) => patch({ name: event.target.value })}
-                className="max-w-[420px] text-[15px] md:text-[15px]"
+                className="max-w-[420px]"
               />
-            </Section>
-
-            <Section title="When">
-              <KindSegment
-                value={draft.kind}
-                editing={!!automation}
-                githubAvailable={githubAvailable}
-                githubReason={data?.reason}
-                onChange={(kind) => patch({ kind, ...(kind === 'tracker' ? { intervalSeconds: 1800, enabled: false } : {}) })}
-              />
-              {draft.kind === 'schedule' ? (
-                <EditorScheduleFields schedule={draft.schedule} timeZone={timeZone} onChange={(schedule) => patch({ schedule })} />
-              ) : draft.kind === 'tracker' ? (
-                <EditorTrackerFields trigger={draft.trackerTrigger} intervalSeconds={draft.intervalSeconds} onChange={patch} onValid={setTrackerValid} />
-              ) : (
-                <EditorGithubFields
-                  events={draft.events}
-                  intervalSeconds={draft.intervalSeconds}
-                  filters={draft.filters}
-                  onChange={(next) => patch(next)}
-                />
-              )}
-              {error?.section === 'when' ? <InlineAlert>{error.message}</InlineAlert> : null}
-            </Section>
-
-            <Section title="What to run">
-              <div data-slot="editor-prompt-templates" className="flex flex-wrap items-center gap-1.5 text-xs text-soft-foreground">
-                <FileTextIcon aria-hidden="true" className="size-3" />
-                Prompt templates
-                {promptTemplates.map((template) => (
-                  <Chip key={template.id} className="h-6 text-[11.5px]" title={template.text} onClick={() => insertPrompt(template.text)}>
-                    {template.label}
-                  </Chip>
-                ))}
-                <Chip
-                  dashed
-                  className="h-6 text-[11.5px]"
-                  icon={<Settings2Icon aria-hidden="true" className="size-3" />}
-                  onClick={() => navigate(settingsSectionPath('project', 'prompt-templates'))}
-                >
-                  Manage…
-                </Chip>
-              </div>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="automation-prompt">Prompt</FieldLabel>
               <Textarea
+                id="automation-prompt"
                 ref={promptRef}
                 aria-label="Prompt"
                 rows={5}
                 placeholder={PLACEHOLDER[draft.kind]}
                 value={draft.prompt}
                 onChange={(event) => patch({ prompt: event.target.value })}
-                className="min-h-[104px] text-sm leading-[1.55] md:text-sm"
+                className="min-h-[120px] text-sm leading-relaxed md:text-sm"
               />
+              <div data-slot="editor-prompt-templates" className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                <span className="mr-0.5">Insert a template</span>
+                {promptTemplates.map((template) => (
+                  <Chip key={template.id} className="h-6 text-xs" title={template.text} onClick={() => insertPrompt(template.text)}>
+                    {template.label}
+                  </Chip>
+                ))}
+                <Chip
+                  dashed
+                  className="h-6 text-xs"
+                  icon={<Settings2Icon aria-hidden="true" className="size-3" />}
+                  onClick={() => navigate(settingsSectionPath('project', 'prompt-templates'))}
+                >
+                  Manage…
+                </Chip>
+              </div>
+            </Field>
+            <Field>
+              <FieldLabel>Runs as</FieldLabel>
               <EditorRunAs
                 source={sourceOf(draft)}
                 sourcesReady={sourcesReady}
@@ -278,65 +275,108 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
                 pick={{ runner: draft.runner, model: draft.model, account: draft.account }}
                 onPick={(pick) => patch({ runner: pick.runner, model: pick.model, account: pick.account })}
                 baseBranch={baseBranch}
-                autonomous={draft.autonomous}
-                onAutonomous={(autonomous) => patch({ autonomous })}
               />
-              <p className="m-0 text-xs leading-[1.5] text-soft-foreground">
-                Each run is an ordinary cezar task in its own worktree — it queues behind the parallel cap like anything else and never auto-merges.
-              </p>
-              <EditorDispatchRow
-                available={dispatchAvailable}
-                enabled={draft.dispatch}
-                maxSubtasks={draft.maxSubtasks}
-                reviewChild={draft.reviewChild}
+            </Field>
+            {error?.section === 'what' ? <InlineAlert>{error.message}</InlineAlert> : null}
+          </Section>
+
+          <Section title="When" description="What starts a run.">
+            <KindSegment
+              value={draft.kind}
+              editing={!!automation}
+              githubAvailable={githubAvailable}
+              githubReason={data?.reason}
+              onChange={(kind) => patch({ kind, ...(kind === 'tracker' ? { intervalSeconds: 1800, enabled: false } : {}) })}
+            />
+            {draft.kind === 'schedule' ? (
+              <EditorScheduleFields schedule={draft.schedule} timeZone={timeZone} onChange={(schedule) => patch({ schedule })} />
+            ) : null}
+            {draft.kind === 'schedule' && error?.section === 'when' ? <InlineAlert>{error.message}</InlineAlert> : null}
+          </Section>
+
+          {draft.kind === 'github' ? (
+            <Section title="GitHub trigger" description="The events to watch, how often to check, and which issues or pull requests count.">
+              <EditorGithubFields
+                events={draft.events}
+                intervalSeconds={draft.intervalSeconds}
+                filters={draft.filters}
                 onChange={(next) => patch(next)}
               />
-              {error?.section === 'what' ? <InlineAlert>{error.message}</InlineAlert> : null}
+              {error?.section === 'when' ? <InlineAlert>{error.message}</InlineAlert> : null}
             </Section>
-
-            <Section title="Enable">
-              <Label className="text-[13px] font-medium">
-                <Switch aria-label="Enabled" checked={draft.enabled} onCheckedChange={(enabled) => patch({ enabled })} />
-                Enabled
-                {draft.kind !== 'schedule' ? (
-                  <span className="text-xs font-normal text-muted-foreground">— from a current-time baseline; existing matches will not launch</span>
-                ) : null}
-              </Label>
+          ) : draft.kind === 'tracker' ? (
+            <Section title="Tracker trigger" description="The Jira or Linear events to watch in this project's tracker.">
+              <EditorTrackerFields trigger={draft.trackerTrigger} intervalSeconds={draft.intervalSeconds} onChange={patch} onValid={setTrackerValid} />
+              {error?.section === 'when' ? <InlineAlert>{error.message}</InlineAlert> : null}
             </Section>
-          </div>
+          ) : null}
 
-          <div className="flex flex-col gap-3 lg:sticky lg:top-[76px]">
-            <NextRunsPreview kind={draft.kind} schedule={draft.schedule} intervalSeconds={draft.intervalSeconds} timeZone={timeZone} />
-            <CopyAsCliCard definition={cli} />
-            {automation && automation.kind !== 'schedule' && actions ? <Button variant="outline" disabled={actions.busy} onClick={() => void actions.preview(automation)}>Preview saved matches</Button> : null}
-            {automation?.lastRun ? (
-              <LastRunCard
-                lastRun={automation.lastRun}
-                busy={actions?.busy}
-                onRunNow={() => void actions?.runNow(automation)}
-                onLog={onLog}
-              />
-            ) : null}
-          </div>
+          <Section title="Advanced" description="How much the run may do on its own.">
+            <Field orientation="horizontal" className="items-start justify-between gap-6">
+              <div className="min-w-0 space-y-1">
+                <FieldLabel htmlFor="automation-autonomous">Autonomous</FieldLabel>
+                <FieldDescription>Keep working through the workflow without waiting for a person between turns.</FieldDescription>
+              </div>
+              <Switch id="automation-autonomous" aria-label="Autonomous" checked={draft.autonomous} onCheckedChange={(autonomous) => patch({ autonomous })} />
+            </Field>
+            <EditorDispatchRow
+              available={dispatchAvailable}
+              enabled={draft.dispatch}
+              maxSubtasks={draft.maxSubtasks}
+              reviewChild={draft.reviewChild}
+              onChange={(next) => patch(next)}
+            />
+          </Section>
         </div>
+
+        <aside className="flex flex-col gap-8 lg:sticky lg:top-6">
+          <NextRunsPreview kind={draft.kind} schedule={draft.schedule} intervalSeconds={draft.intervalSeconds} timeZone={timeZone} />
+          {automation?.lastRun ? (
+            <LastRunCard
+              lastRun={automation.lastRun}
+              busy={actions?.busy}
+              onRunNow={() => void actions?.runNow(automation)}
+              onLog={onLog}
+            />
+          ) : null}
+          {automation && automation.kind !== 'schedule' && actions ? <Button variant="outline" className="self-start" disabled={actions.busy} onClick={() => void actions.preview(automation)}>Preview saved matches</Button> : null}
+          <CopyAsCliCard definition={cli} />
+        </aside>
+      </PageBody>
+
+      {/* The sticky footer: the enable switch and the two ways out, always in reach. */}
+      <div data-slot="editor-footer" className="sticky bottom-0 z-10 mt-auto border-t border-border bg-background/95 backdrop-blur">
+        <PageRow className="flex flex-wrap items-center gap-x-4 gap-y-2 py-3">
+          <Label className="min-w-0 text-[13px] font-medium">
+            <Switch aria-label="Enabled" checked={draft.enabled} onCheckedChange={(enabled) => patch({ enabled })} />
+            Enabled
+            {draft.kind !== 'schedule' ? (
+              <span className="truncate text-xs font-normal text-muted-foreground max-md:hidden">— from a current-time baseline; existing matches will not launch</span>
+            ) : null}
+          </Label>
+          <span className="flex-1" />
+          <Button variant="outline" onClick={onBack}>Cancel</Button>
+          <Button variant="primary" disabled={!canSave} onClick={() => void save()}>{saveLabel}</Button>
+        </PageRow>
       </div>
-    </div>
+    </Page>
   )
 }
 
-/** `Card` `padding 0 24px`, title 600 14px `16px 0 4px`, body column gap 14 `10px 0 20px`. */
-function Section({ title, children }: { title: string; children: ReactNode }) {
+/** One titled group of the form — separated from the previous one by a rule and space, not a box. */
+function Section({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
   return (
-    <Card data-slot="editor-section" className="gap-0 px-6 py-0">
-      <div className="pt-4 pb-1 text-sm font-semibold">{title}</div>
-      <div className="flex flex-col gap-3.5 pt-2.5 pb-5">{children}</div>
-    </Card>
+    <div data-slot="editor-section" className="not-first:mt-8 not-first:border-t not-first:border-border/70 not-first:pt-8">
+      <PageSection title={title} description={description}>
+        <div className="flex flex-col gap-5 pt-2">{children}</div>
+      </PageSection>
+    </div>
   )
 }
 
 function InlineAlert({ children }: { children: ReactNode }) {
   return (
-    <p role="alert" className="m-0 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[12.5px] text-danger">
+    <p role="alert" className="m-0 rounded-lg bg-danger/10 px-3 py-2 text-[13px] text-danger">
       {children}
     </p>
   )
@@ -387,7 +427,7 @@ function KindSegment({ value, editing, githubAvailable, githubReason, onChange }
           title={option.title}
           onClick={() => { if (option.value !== value) onChange(option.value) }}
           className={cn(
-            'flex h-7 items-center justify-center gap-1.5 rounded-[7px] px-3 text-[12.5px] font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50',
+            'flex h-8 items-center justify-center gap-1.5 rounded-sm px-3 text-[13px] font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50',
             option.value === value && 'bg-card font-semibold text-foreground shadow-xs',
           )}
         >

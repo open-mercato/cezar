@@ -28,7 +28,7 @@ export function TrackerLabelSuggestions({ association, selected, onSelect, onRem
     .filter(label => selected.includes(label) || (label.length > 0 && label.length <= 200))
     .sort((a, b) => a.localeCompare(b))
   return <div className="flex flex-col gap-2" aria-label="Project label suggestions">
-    <span className="font-medium">Required labels</span>
+    <span className="text-[13px] font-medium">Required labels</span>
     <p className="text-xs text-muted-foreground">All selected labels must match. Leave unselected to allow any label.</p>
     <div role="group" aria-label="Required labels" className="flex flex-wrap gap-1.5">
       {labels.map(label => <Chip key={label} active={selected.includes(label)} aria-pressed={selected.includes(label)} disabled={!selected.includes(label) && selected.length >= 100} onClick={() => selected.includes(label) ? onRemove(label) : onSelect(label)}>{label}</Chip>)}

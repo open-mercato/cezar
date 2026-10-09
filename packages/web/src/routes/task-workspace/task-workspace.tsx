@@ -262,6 +262,27 @@ function WorkspaceView({
     [layouts.state.layouts, layouts.state.active, selectLayout, renameLayout, closeLayout, addLayout],
   )
 
+  // The drawer's toggle, handed to the header's tab row. Memoized for the same reason `tabs` is.
+  const drawerOpen = drawer.open
+  const terminalToggle = useMemo(
+    () =>
+      terminalAllowed ? (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          data-action="toggle-terminal"
+          aria-label={drawerOpen ? 'Hide terminal' : 'Show terminal'}
+          aria-pressed={drawerOpen}
+          title={drawerOpen ? 'Hide terminal — processes keep running' : 'Terminal'}
+          className={drawerOpen ? 'bg-muted text-foreground' : 'text-muted-foreground'}
+          onClick={() => updateDrawer({ open: !drawerOpen })}
+        >
+          <TerminalIcon aria-hidden="true" />
+        </Button>
+      ) : null,
+    [terminalAllowed, drawerOpen, updateDrawer],
+  )
+
   /**
    * Changing a column's view away from Zmiany while it holds an unsent comment asks first (spec
    * §5.2: warn, with `Zamknij mimo to` to discard and change, or `Wróć` to keep it and stay).
@@ -345,7 +366,7 @@ function WorkspaceView({
                   icon={<LoaderCircleIcon className="motion-safe:animate-spin" />}
                   tone="neutral"
                   heading="h2"
-                  title="Wczytywanie grafu…"
+                  title="Loading graph…"
                 />
               }
             >
@@ -359,20 +380,7 @@ function WorkspaceView({
 
   return (
     <div data-route="task-workspace" data-run-id={run.id} className="flex h-full min-h-0 flex-col">
-      <RunHeader run={run} onMarkedUnread={markedUnread} tabs={tabs} />
-      {terminalAllowed && !drawer.open ? (
-        <div className="flex shrink-0 justify-end border-b border-border px-2 py-1">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 px-2 text-xs text-muted-foreground"
-            onClick={() => updateDrawer({ open: true })}
-          >
-            <TerminalIcon aria-hidden="true" className="size-3.5" />
-            Terminal
-          </Button>
-        </div>
-      ) : null}
+      <RunHeader run={run} onMarkedUnread={markedUnread} tabs={tabs} trailing={terminalToggle} />
       {layouts.saveFailed ? (
         // Spec §2: a capability that cannot work degrades to a CLEAR state. The workspace still
         // works from memory for the rest of the visit — what is lost is only the remembering —
@@ -380,10 +388,10 @@ function WorkspaceView({
         <div
           data-slot="layouts-unsaved"
           role="status"
-          className="shrink-0 border-b border-border bg-muted/40 px-3 py-1 text-xs text-muted-foreground"
+          className="shrink-0 border-b border-border bg-muted/40 px-4 py-1.5 text-xs text-muted-foreground sm:px-6"
         >
-          Nie udało się zapisać układu na tym hoście — działa dalej w tej karcie, ale nie wróci po
-          odświeżeniu.
+          This layout could not be saved on this host — it keeps working in this tab, but will not
+          come back after a refresh.
         </div>
       ) : null}
       {!layouts.ready ? (
@@ -401,13 +409,13 @@ function WorkspaceView({
           icon={<LayoutGridIcon />}
           tone="neutral"
           heading="h2"
-          title="Brak układów"
-          subtitle="Zamknąłeś wszystkie układy tego zadania. Utwórz nowy albo wróć tu później — zadanie otworzy się wtedy z układem Czat."
+          title="No layouts"
+          subtitle="You closed every layout of this task. Create a new one, or come back later — the task will open with a Chat layout."
           actions={
             <ViewPickerMenu
-              heading="Nowy układ"
+              heading="New layout"
               onPick={addLayout}
-              trigger={<Button variant="outline">Nowy układ</Button>}
+              trigger={<Button variant="outline">New layout</Button>}
             />
           }
         />
@@ -415,25 +423,25 @@ function WorkspaceView({
       <AlertDialog open={pendingView !== null} onOpenChange={(open) => !open && setPendingView(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Masz niewysłany komentarz</AlertDialogTitle>
+            <AlertDialogTitle>You have an unsent comment</AlertDialogTitle>
             <AlertDialogDescription>
               {diffComments.comments.length === 1
-                ? 'Jeden komentarz do zmian nie został jeszcze wysłany.'
-                : `${diffComments.comments.length} komentarzy do zmian nie zostało jeszcze wysłanych.`}{' '}
-              To ostatnia kolumna, która je pokazuje.
+                ? 'One comment on the changes has not been sent yet.'
+                : `${diffComments.comments.length} comments on the changes have not been sent yet.`}{' '}
+              This is the last column showing them.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             {/* `Wróć` keeps the comment and stays in Zmiany; `Zamknij mimo to` changes the view
                 anyway — the two answers spec §5.2 names, in that order. */}
-            <AlertDialogCancel>Wróć</AlertDialogCancel>
+            <AlertDialogCancel>Go back</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
                 if (pendingView) layouts.setColumnView(pendingView.index, pendingView.view)
                 setPendingView(null)
               }}
             >
-              Zamknij mimo to
+              Change anyway
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

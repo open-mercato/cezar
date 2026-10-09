@@ -1,16 +1,18 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { CheckIcon, InboxIcon, PlayIcon, TriangleAlertIcon } from 'lucide-react'
+import { CheckIcon, InboxIcon, PlayIcon, PlusIcon, TriangleAlertIcon } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import { removeTodo, startTodo } from '@/api/client'
 import { queryKeys, useHealth, useRuns, useTodos, useUiState } from '@/api/queries'
 import type { TodoItem } from '@open-mercato/cezar-api-client'
-import { CenteredState } from '@/components/centered-state'
 import { EnginePills, engineBody, useResolvedEngine, useSeededEnginePick } from '@/components/engine-pills'
+import { ListEmpty, ListFrame } from '@/components/list-view'
+import { Page, PageBody, PageHeader } from '@/components/page'
 import { PromptTemplateMenu } from '@/components/prompt-template-menu'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
 import { deriveAttention } from '@/lib/attention'
@@ -78,69 +80,86 @@ export function InboxRoute() {
 
   const todos = todosQuery.data === undefined ? undefined : visibleTodos(todosQuery.data)
 
-  return (
-    <div data-route="inbox" className="flex min-h-full flex-col">
-      {/* Desktop header — below `md` the shell's top bar already says "Inbox". */}
-      <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
-        <h1 className="text-base font-semibold">Inbox</h1>
-        <p className="text-[13px] text-soft-foreground">
-          {inboxOff
-            ? 'Disabled for this server; per-task Notes still run.'
-            : 'Follow-ups agents suggested when they finished a task.'}
-        </p>
-      </header>
+  const count = todos?.length ?? 0
 
-      <div className="flex flex-1 flex-col p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5">
+  return (
+    <Page data-route="inbox" width="narrow">
+      <PageHeader
+        title="Inbox"
+        description={
+          inboxOff
+            ? 'Disabled for this server; per-task Notes still run.'
+            : 'Follow-ups agents suggested when they finished a task.'
+        }
+        eyebrow={count > 0 ? `${count} waiting on you` : undefined}
+      />
+
+      <PageBody>
         {inboxOff ? (
-          <CenteredState
+          <ListEmpty
             icon={<InboxIcon />}
-            tone="neutral"
             title="The follow-up inbox is off"
-            subtitle="Agents are not asked to leave follow-ups. Set CEZ_FOLLOWUPS=1 and restart the service to turn the inbox on."
-            heading="h2"
+            description="Agents are not asked to leave follow-ups. Set CEZ_FOLLOWUPS=1 and restart the service to turn the inbox on."
           />
         ) : todos === undefined ? (
           todosQuery.isError ? (
-            <CenteredState
+            <ListEmpty
               icon={<TriangleAlertIcon />}
               tone="danger"
               title="Could not load the inbox"
-              subtitle={todosQuery.error.message}
-              heading="h2"
+              description={todosQuery.error.message}
             />
-          ) : null
+          ) : (
+            <InboxSkeleton />
+          )
         ) : todos.length === 0 ? (
           // Not while health is still in flight: an inbox-less server answers `[]` too, so
-          // claiming "empty" here would flash the very lie this route exists to avoid, then
-          // correct itself. Keyed on `isPending` rather than `data === undefined` so a health
-          // request that *fails* still falls through to the empty state — an unreachable
-          // /api/health must not leave this route blank forever.
-          health.isPending ? null : (
-            <CenteredState
+          // claiming "empty" here would flash the very lie this route exists to avoid. Keyed on
+          // `isPending` so a health request that *fails* still falls through to the empty state.
+          health.isPending ? (
+            <InboxSkeleton />
+          ) : (
+            <ListEmpty
               icon={<InboxIcon />}
-              tone="neutral"
               title="Inbox empty"
-              subtitle="Agents drop follow-up suggestions here when they finish a task."
-              heading="h2"
+              description="Agents drop follow-up suggestions here when they finish a task."
             />
           )
         ) : (
-          <ul data-slot="todo-list" className="mx-auto flex w-full max-w-3xl flex-col gap-2.5">
-            {todos.map((todo) => (
-              <TodoCard
-                key={todo.id}
-                todo={todo}
-                sourceTaskExists={
-                  todo.taskId === undefined
-                    ? null
-                    : (runs.data?.some((run) => run.id === todo.taskId) ?? false)
-                }
-              />
-            ))}
-          </ul>
+          <ListFrame>
+            <ul data-slot="todo-list" className="divide-y divide-border">
+              {todos.map((todo) => (
+                <TodoCard
+                  key={todo.id}
+                  todo={todo}
+                  sourceTaskExists={
+                    todo.taskId === undefined
+                      ? null
+                      : (runs.data?.some((run) => run.id === todo.taskId) ?? false)
+                  }
+                />
+              ))}
+            </ul>
+          </ListFrame>
         )}
-      </div>
-    </div>
+      </PageBody>
+    </Page>
+  )
+}
+
+function InboxSkeleton() {
+  return (
+    <ListFrame aria-busy="true" className="divide-y divide-border">
+      {[0, 1, 2].map((row) => (
+        <div key={row} className="flex items-center gap-4 px-5 py-4">
+          <div className="flex-1 space-y-2">
+            <Skeleton className="h-3.5 w-3/5" />
+            <Skeleton className="h-3 w-1/3" />
+          </div>
+          <Skeleton className="h-8 w-16" />
+        </div>
+      ))}
+    </ListFrame>
   )
 }
 
@@ -231,22 +250,22 @@ function TodoCard({
     <li
       data-slot="todo-card"
       data-id={todo.id}
-      className="flex flex-col gap-2.5 rounded-lg border border-border bg-card p-4 shadow-xs"
+      className="flex flex-col gap-3 px-4 py-4 sm:px-5"
     >
       <div className="flex items-start gap-3">
         <StatusDot
           tone={CARD_ATTENTION.tone}
           pulse={CARD_ATTENTION.pulse}
           title={CARD_ATTENTION.label}
-          className="mt-[5px]"
+          className="mt-[7px]"
         />
         <div className="min-w-0 flex-1">
-          <p data-slot="todo-summary" className="text-sm leading-snug font-medium text-foreground">
+          <p data-slot="todo-summary" className="text-sm leading-relaxed font-medium text-pretty text-foreground">
             {todo.summary}
           </p>
           <div
             data-slot="todo-meta"
-            className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-soft-foreground"
+            className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-muted-foreground"
           >
             {todo.ts ? <span>{shortAge(todo.ts)} ago</span> : null}
             {todo.action ? <span>{todo.action}</span> : null}
@@ -255,12 +274,12 @@ function TodoCard({
                 <Link
                   to={`/tasks/${todo.taskId}`}
                   data-slot="todo-source"
-                  className="text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
+                  className="underline decoration-border underline-offset-4 hover:text-foreground"
                 >
-                  source task
+                  Source task
                 </Link>
               ) : (
-                <span data-slot="todo-source-gone">source task deleted</span>
+                <span data-slot="todo-source-gone">Source task deleted</span>
               )
             ) : null}
             {/* href protocol guard (#431): link only for http(s) URLs. */}
@@ -270,31 +289,31 @@ function TodoCard({
                 target="_blank"
                 rel="noopener noreferrer"
                 data-slot="todo-pr"
-                className="text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
+                className="underline decoration-border underline-offset-4 hover:text-foreground"
               >
-                PR
+                Pull request
               </a>
             ) : null}
             {todo.suggestedSkill ? (
-              <span data-slot="todo-skill" className="font-mono">
-                skill: {todo.suggestedSkill}
+              <span data-slot="todo-skill">
+                Skill <span className="font-mono text-xs">{todo.suggestedSkill}</span>
               </span>
             ) : null}
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1.5 self-center">
+        <div className="flex shrink-0 items-center gap-1.5">
           {runnable ? (
             <>
               <Button
                 type="button"
-                variant="contrast"
+                variant="default"
                 size="sm"
                 data-action="todo-run"
                 title="Start a task from this follow-up"
                 disabled={busy || !resolved.canRun}
                 onClick={() => start.mutate()}
               >
-                <PlayIcon aria-hidden="true" className="size-3" />
+                <PlayIcon aria-hidden="true" className="size-3.5" />
                 Run
               </Button>
               <Button
@@ -312,14 +331,14 @@ function TodoCard({
           ) : (
             <Button
               type="button"
-              variant="contrast"
+              variant="outline"
               size="sm"
               data-action="todo-acknowledge"
               title="Acknowledge and remove this note"
               disabled={busy}
               onClick={() => dismiss.mutate()}
             >
-              <CheckIcon aria-hidden="true" className="size-3" />
+              <CheckIcon aria-hidden="true" className="size-3.5" />
               Acknowledge
             </Button>
           )}
@@ -330,12 +349,12 @@ function TodoCard({
           Indented under the summary, above the instructions composer, so the two per-card
           Run knobs (engine + prompt) read as one group. */}
       {runnable ? (
-        <div data-slot="todo-engine" className="flex flex-wrap items-center gap-2 pl-5">
+        <div data-slot="todo-engine" className="flex flex-wrap items-center gap-2 pl-[19px]">
           <EnginePills pick={engine} onChange={setEngine} disabled={busy || !resolved.canRun} />
           {!resolved.providerPending && !resolved.canRun ? (
             <span
               data-slot="todo-provider-gate"
-              className="inline-flex flex-wrap items-center gap-1 text-xs text-muted-foreground"
+              className="inline-flex flex-wrap items-center gap-1 text-[13px] text-muted-foreground"
             >
               {resolved.providerError
                 ? 'Provider authentication could not be verified.'
@@ -356,7 +375,7 @@ function TodoCard({
           composer there would be a dead end. */}
       {runnable ? (
         notesOpen ? (
-          <div data-slot="todo-instructions" className="flex flex-col gap-2 pl-5">
+          <div data-slot="todo-instructions" className="flex flex-col gap-2 pl-[19px]">
             <Textarea
               ref={notesRef}
               data-slot="todo-instructions-input"
@@ -372,27 +391,31 @@ function TodoCard({
             />
             <div className="flex items-center gap-2">
               <PromptTemplateMenu templates={templates} onInsert={insertNotesTemplate} />
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 data-slot="todo-instructions-hide"
                 onClick={() => setNotesOpen(false)}
-                className="text-xs font-medium text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
               >
                 Hide
-              </button>
+              </Button>
             </div>
           </div>
         ) : (
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             data-slot="todo-instructions-toggle"
             onClick={() => setNotesOpen(true)}
-            className="self-start pl-5 text-xs font-medium text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
+            className="ml-2.5 self-start"
           >
             {/* A collapsed composer keeps its draft, and Run still carries it — so say so
                 rather than hiding instructions the next Run would silently send. */}
-            {notes.trim() ? 'Edit instructions (added)' : '+ Add instructions'}
-          </button>
+            {notes.trim() ? null : <PlusIcon aria-hidden="true" />}
+            {notes.trim() ? 'Edit instructions (added)' : 'Add instructions'}
+          </Button>
         )
       ) : null}
     </li>

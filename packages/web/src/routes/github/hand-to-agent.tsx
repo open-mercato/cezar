@@ -4,7 +4,6 @@ import {
   CheckIcon,
   PlayIcon,
   XIcon,
-  ZapIcon,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { Link } from '@/lib/project-router'
@@ -15,6 +14,7 @@ import type { GithubItem, Skill, WorkflowDef } from '@open-mercato/cezar-api-cli
 import { EnginePills, engineRunBody, useResolvedEngine, type EnginePick } from '@/components/engine-pills'
 import { WorkflowPicker, SkillsPicker } from '@/components/agent-task-pickers'
 import { Button } from '@/components/ui/button'
+import { Kbd } from '@/components/ui/kbd'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
 import { PromptTemplateMenu } from '@/components/prompt-template-menu'
@@ -229,13 +229,20 @@ export function HandToAgent({
     )
 
   return (
-    <section data-slot="gh-hand" className="mt-7 rounded-lg border border-border bg-card p-4">
-      <h3 className="flex items-center gap-1.5 text-[11px] font-semibold tracking-[.04em] text-soft-foreground uppercase">
-        <ZapIcon aria-hidden="true" className="size-3.5 text-violet" />
-        Hand this to the agent
-      </h3>
+    <section data-slot="gh-hand" className="flex min-w-0 flex-col gap-3">
+      <Textarea
+        ref={promptRef}
+        data-slot="gh-custom-prompt"
+        aria-label="Custom prompt"
+        aria-keyshortcuts="Control+Enter Meta+Enter"
+        value={prompt}
+        onChange={(event) => setPrompt(event.target.value)}
+        onKeyDown={submitShortcut}
+        placeholder={`Instructions for the agent… (#${item.number} and its link are always sent)`}
+        className="min-h-32 text-[13.5px]"
+      />
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <WorkflowPicker workflows={workflows} value={workflow} onChange={onWorkflowChange} />
         <SkillsPicker
           skills={skills}
@@ -260,7 +267,7 @@ export function HandToAgent({
           POSTs `validSkills`, so showing a deleted skill here would promise the run a skill it
           will not use. What the composer shows and what it sends are the same list. */}
       {validSkills.length > 0 ? (
-        <div data-slot="gh-skill-chips" className="mt-2.5 flex flex-wrap gap-1.5">
+        <div data-slot="gh-skill-chips" className="flex flex-wrap gap-1.5">
           {validSkills.map((name) => (
             <button
               key={name}
@@ -269,7 +276,7 @@ export function HandToAgent({
               data-skill={name}
               onClick={() => toggleSkill(name)}
               title="Remove this skill"
-              className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-px font-mono text-[11px] font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger"
+              className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger"
             >
               {name}
               <XIcon aria-hidden="true" className="size-3" />
@@ -278,49 +285,32 @@ export function HandToAgent({
         </div>
       ) : null}
 
-      <Textarea
-        ref={promptRef}
-        data-slot="gh-custom-prompt"
-        aria-label="Custom prompt"
-        aria-keyshortcuts="Control+Enter Meta+Enter"
-        value={prompt}
-        onChange={(event) => setPrompt(event.target.value)}
-        onKeyDown={submitShortcut}
-        placeholder={`Instructions for the agent… (#${item.number} and its link are always sent)`}
-        className="mt-3 min-h-20 text-[13px]"
-      />
-
-      <div className="mt-4 flex flex-wrap items-center gap-2.5">
-        <Button
-          variant="contrast"
-          data-action="gh-run"
-          disabled={start.isPending || !resolved.canRun}
-          onClick={() => start.mutate()}
-        >
-          <PlayIcon aria-hidden="true" className="size-3.5" />
-          Run agent on this {kindLabel}
-        </Button>
-        <kbd
-          aria-hidden="true"
-          className="rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-[10.5px] font-medium text-muted-foreground"
-        >
-          {submitShortcutHint()}
-        </kbd>
+      <div className="mt-2 flex flex-wrap items-center justify-end gap-2.5">
         {queuedRunId ? (
-          <>
-            <span data-slot="gh-queued" className="flex items-center gap-1 text-xs font-medium text-success">
+          <span className="mr-auto flex items-center gap-2 text-[13px]">
+            <span data-slot="gh-queued" className="flex items-center gap-1 font-medium text-success">
               <CheckIcon aria-hidden="true" className="size-3.5" />
-              queued
+              Queued
             </span>
             <Link
               to={`/tasks/${queuedRunId}`}
               data-slot="gh-view-run"
-              className="text-xs font-semibold text-violet hover:underline"
+              className="font-medium text-foreground underline-offset-4 hover:underline"
             >
-              View task →
+              View task
             </Link>
-          </>
+          </span>
         ) : null}
+        <Kbd aria-hidden="true">{submitShortcutHint()}</Kbd>
+        <Button
+          variant="primary"
+          data-action="gh-run"
+          disabled={start.isPending || !resolved.canRun}
+          onClick={() => start.mutate()}
+        >
+          <PlayIcon aria-hidden="true" />
+          Run agent on this {kindLabel}
+        </Button>
       </div>
     </section>
   )

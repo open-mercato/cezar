@@ -1,6 +1,8 @@
 import { useState, type RefObject } from 'react'
 import { Download } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { collectDashboardExport, dashboardCsv, printableDashboard } from './export'
 
@@ -88,34 +90,44 @@ export function DashboardExportMenu({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="outline" className="min-h-11" disabled={busy}>
-          <Download className="size-4" />
+        <Button variant="outline" size="sm" disabled={busy}>
+          <Download />
           {busy ? 'Preparing report…' : 'Export'}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="max-w-[calc(100vw-2rem)] space-y-3">
-        <p className="text-sm font-medium">Export current dashboard</p>
-        <p className="text-xs text-muted-foreground">
-          Visible modules, current filters and loaded rows. Hidden metrics are excluded.
-        </p>
-        <label className="block space-y-1 text-xs text-muted-foreground">
-          Report title (optional)
-          <input
-            className="min-h-11 w-full rounded-md border bg-background px-3 text-sm text-foreground"
+      <PopoverContent align="end" className="w-80 max-w-[calc(100vw-2rem)] space-y-4">
+        <div className="space-y-0.5">
+          <p className="text-sm font-medium">Export current dashboard</p>
+          <p className="text-xs text-muted-foreground">
+            Visible modules, current filters and loaded rows. Hidden metrics are excluded.
+          </p>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="dashboard-export-title" className="text-[13px]">
+            Report title <span className="font-normal text-muted-foreground">(optional)</span>
+          </Label>
+          <Input
+            id="dashboard-export-title"
             placeholder="e.g. Fleet review for leadership"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
           />
-        </label>
-        <Button className="min-h-11 w-full" onClick={() => exportView('pdf')}>
-          PDF report…
-        </Button>
-        <p className="text-xs text-muted-foreground">Choose Save as PDF in the print dialog.</p>
-        <Button variant="outline" className="min-h-11 w-full" onClick={() => exportView('csv')}>
-          Download CSV
-        </Button>
+        </div>
+        <div className="space-y-1.5">
+          <div className="grid grid-cols-2 gap-2">
+            <Button variant="default" onClick={() => exportView('pdf')}>
+              PDF report…
+            </Button>
+            <Button variant="outline" onClick={() => exportView('csv')}>
+              Download CSV
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            For a PDF, choose Save as PDF in the print dialog.
+          </p>
+        </div>
         {error && (
-          <p role="alert" className="text-sm">
+          <p role="alert" className="text-[13px] text-danger">
             {error}
           </p>
         )}

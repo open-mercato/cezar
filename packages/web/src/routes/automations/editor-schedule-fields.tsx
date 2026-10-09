@@ -41,7 +41,7 @@ export function EditorScheduleFields({
   const s = normalizeSchedule(schedule)
   const set = (patch: Partial<AutomationSchedule>) => onChange({ ...s, ...patch })
   return (
-    <div data-slot="editor-schedule" className="flex flex-col gap-3.5">
+    <div data-slot="editor-schedule" className="flex flex-col gap-4">
       <div role="group" aria-label="Schedule type" className="flex flex-wrap gap-1.5">
         {TYPES.map(([value, label]) => (
           <Chip key={value} active={s.type === value} aria-pressed={s.type === value} onClick={() => set({ type: value })}>
@@ -66,7 +66,7 @@ export function EditorScheduleFields({
       ) : null}
       {s.type === 'hours' ? (
         <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
-          every
+          Every
           <Select value={String(s.every)} onValueChange={(value) => { const every = Number(value); if (isScheduleEvery(every)) set({ every }) }}>
             <SelectTrigger size="sm" aria-label="Every N hours" className="text-[13px]">
               <SelectValue />
@@ -81,13 +81,13 @@ export function EditorScheduleFields({
         </div>
       ) : (
         <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
-          at
+          At
           <Input
             aria-label="Hour"
             inputMode="numeric"
             value={pad(s.hour)}
             onChange={(event) => set({ hour: Math.min(23, Math.max(0, Number(event.target.value) || 0)) })}
-            className="w-14 text-center font-mono"
+            className="w-14 text-center tabular-nums"
           />
           :
           <Input
@@ -95,13 +95,13 @@ export function EditorScheduleFields({
             inputMode="numeric"
             value={pad(s.minute)}
             onChange={(event) => set({ minute: Math.min(59, Math.max(0, Number(event.target.value) || 0)) })}
-            className="w-14 text-center font-mono"
+            className="w-14 text-center tabular-nums"
           />
-          <span className="font-mono text-xs">{timeZone}</span>
+          <span>{timeZone}</span>
         </div>
       )}
-      <div className="flex items-center gap-2.5 font-mono text-xs text-soft-foreground">
-        <span>cron</span>
+      <div className="flex items-center gap-2.5 text-xs text-muted-foreground">
+        <span>Cron</span>
         <BranchChip data-slot="editor-cron">{cronOf(s)}</BranchChip>
       </div>
     </div>

@@ -298,6 +298,8 @@ body { margin:0; font:12px/1.5 system-ui,sans-serif; }
 .report-module svg { max-width:24px; }
 .report-module [role=region] > div, .report-module [role=region] > p { break-inside:avoid; }
 .report-module .sr-only { display:none!important; }
+.report-module .report-only { display:block!important; position:static!important; width:auto!important; height:auto!important; margin:0 0 6px!important; clip-path:none!important; white-space:normal!important; color:var(--muted-foreground); }
+.report-module h2.report-only { font-size:15px; font-weight:600; color:var(--foreground); }
 .report-context { font-size:11px; color:var(--muted-foreground); margin:0 0 8px; }
 </style></head><body><header class="report-heading"><h1>${escape(report.title || 'Dashboard report')}</h1><p>${escape(report.generatedAt)} · ${escape(report.source)}</p><span class="report-confidential">${confidential}</span><p>${escape(scope)}</p>${report.notices.map((note) => `<p>${escape(note)}</p>`).join('')}</header>${
     tiles.length

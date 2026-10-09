@@ -1,10 +1,20 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
+  BotIcon,
+  BugIcon,
   CheckIcon,
-  ChevronDownIcon,
-  FolderOpenIcon,
-  SparklesIcon,
-  SquareIcon,
+  CopyIcon,
+  CpuIcon,
+  FileTextIcon,
+  FolderIcon,
+  GitBranchIcon,
+  GitCommitHorizontalIcon,
+  GitForkIcon,
+  ListPlusIcon,
+  SlidersHorizontalIcon,
+  SplitIcon,
+  ZapIcon,
+  type LucideIcon,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useParams, useSearchParams } from 'react-router'
@@ -34,10 +44,8 @@ import type {
   RepoResponse,
   Runner,
 } from '@open-mercato/cezar-api-client'
-import { TwinkleBackdrop } from '@/components/centered-state'
 import { Composer, type ComposerHandle } from '@/components/composer/composer'
 import { DispatchToggle } from '@/components/dispatch-toggle'
-import { GhostCodeBackdrop } from '@/components/ghost-code-backdrop'
 import { PickerPill, RunnerPill, chevron, chipClass } from '@/components/picker-pill'
 import { PromptTemplateMenu } from '@/components/prompt-template-menu'
 import { SourcePill } from '@/components/source-pill'
@@ -48,7 +56,12 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command'
+import { Item, ItemContent, ItemDescription, ItemGroup, ItemMedia, ItemTitle } from '@/components/ui/item'
+import { Kbd } from '@/components/ui/kbd'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Spinner } from '@/components/ui/spinner'
+import { Switch } from '@/components/ui/switch'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { toast } from '@/components/ui/toaster'
 import {
   autoApplyText,
@@ -528,10 +541,11 @@ export function NewTaskRoute() {
         data-route="new"
         className="relative isolate flex min-h-full flex-col items-center justify-center overflow-x-clip px-6"
       >
-        <TwinkleBackdrop />
-        <div data-slot="auto-starting" role="status" className="text-center">
-          <h1 className="animate-pulse text-lg font-semibold tracking-tight">Starting task…</h1>
-          <p className="mt-1.5 text-[13.5px] text-muted-foreground">
+        <HeroGlow />
+        <div data-slot="auto-starting" role="status" className="flex flex-col items-center text-center">
+          <Spinner className="mb-4 size-5 text-muted-foreground" />
+          <h1 className="text-[22px] font-semibold tracking-tight">Starting task…</h1>
+          <p className="mt-1.5 text-sm text-muted-foreground">
             Launched from a bookmarklet — taking you to the run.
           </p>
         </div>
@@ -539,23 +553,29 @@ export function NewTaskRoute() {
     )
   }
 
+  const worktreeDisabledReason = dispatchOn
+    ? "Dispatch forks this task's commits — subtasks need a worktree."
+    : 'Parallel variants always use isolated worktrees.'
+  // The two choices that change what a run COSTS or how many runs appear — worth a mark on the
+  // closed Options button, where the everyday switches are not.
+  const optionsMarked = variants > 1 || dispatchOn
+
   return (
     <div
       data-route="new"
-      className="relative isolate flex min-h-full flex-col items-center overflow-x-clip px-6 pt-[clamp(32px,7vh,84px)] pb-16 max-md:px-3.5 max-md:pt-7"
+      className="relative isolate flex min-h-full flex-col items-center overflow-x-clip px-4 pt-[clamp(28px,13vh,150px)] pb-16 max-md:pt-8 sm:px-6"
     >
-      <TwinkleBackdrop />
-      <GhostCodeBackdrop />
+      <HeroGlow />
 
-      <div className="w-full max-w-[720px]">
-        <header className="mb-6 text-center max-md:mb-4">
-          <h1 className="text-lg font-semibold tracking-tight max-md:text-base">
+      <div className="w-full max-w-[800px]">
+        <header className="mb-7 text-center max-md:mb-5">
+          <h1 className="text-[28px] leading-9 font-semibold tracking-tight text-balance max-md:text-[22px] max-md:leading-7">
             What should the agent work on?
           </h1>
           {/* Follows the resolved run mode (#793). Printing the isolation promise
               unconditionally made this line false for every run the user opted out of — and
               for a non-git folder, where there is no worktree to opt into. */}
-          <p data-slot="run-mode-note" className="mt-1.5 text-[13.5px] text-muted-foreground max-md:text-xs">
+          <p data-slot="run-mode-note" className="mx-auto mt-2 max-w-xl text-sm text-pretty text-muted-foreground max-md:text-[13px]">
             {composerRunModeNote({
               worktree: worktreeOn,
               hasGit,
@@ -567,15 +587,17 @@ export function NewTaskRoute() {
 
         <Composer
           ref={composerRef}
+          size="hero"
           onSubmit={submit}
           value={draft.text}
           onValueChange={(text) => update({ text })}
           images={images}
           onImagesChange={setImages}
           autoFocus
-          placeholder="Describe a task for the agent — / for skills…"
+          placeholder="Describe the task — type / to use a skill…"
           ariaLabel="Describe a task for the agent"
           sendAriaLabel="Start task"
+          sendLabel="Start task"
           disabled={!providersReady}
           disabledReason={
             providers.isPending
@@ -587,12 +609,16 @@ export function NewTaskRoute() {
           autocompleteSkills
           footerStart={
             <>
-              {/* The project pill LEADS the row (mockup new-task-project.html): everything to
-                  its right is resolved against it, so it reads left-to-right as "in this
-                  project, run this skill, with this model". Rendered only once the workspace
-                  actually holds more than one project — with a single one the control offers
-                  nothing and the composer keeps the shape it has always had, the same rule the
-                  sidebar's project groups follow. */}
+              {/* Beside the paperclip: both ADD something to the prompt. */}
+              <PromptTemplateMenu
+                templates={templates}
+                iconOnly
+                onInsert={(text) => composerRef.current?.insertAtCaret(text)}
+              />
+              {/* The three choices people change most, left to right: "in this project, run
+                  this skill, with this agent and model". The project control renders only once
+                  the workspace holds more than one project — with a single one it offers
+                  nothing, the same rule the sidebar's project groups follow. */}
               {projectList.length > 1 && urlProjectId !== undefined ? (
                 <ProjectPill
                   projects={projectList}
@@ -632,7 +658,7 @@ export function NewTaskRoute() {
                 onPick={(next) => update({ source: next })}
               />
               {/* Shown when there is a choice to make: more than one runner, or more than one
-                  login for one of them. A host with neither sees no pill, exactly as before. */}
+                  login for one of them. A host with neither sees no control, exactly as before. */}
               {runners.length > 1 || runners.some((id) => hasAccountChoice(accountChoices, id)) ? (
                 <RunnerPill
                   runners={runners}
@@ -640,6 +666,8 @@ export function NewTaskRoute() {
                   accounts={accountChoices}
                   account={agentProfile}
                   repoAccount={repoAccount}
+                  icon={<BotIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />}
+                  className="text-foreground"
                   // Changing the AGENT clears the model pin: presets are per-runner, so a kept
                   // model would be one the new runner does not have. Changing only the account
                   // keeps it — the model catalog is the same either way.
@@ -656,7 +684,15 @@ export function NewTaskRoute() {
               <PickerPill
                 slot="model-pill"
                 ariaLabel="Model"
-                label={models.find((m) => m.id === model)?.label ?? 'auto'}
+                hint="Which model the agent runs on"
+                icon={<CpuIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />}
+                className="text-foreground"
+                label={
+                  <>
+                    <span className="font-normal text-muted-foreground">Model </span>
+                    {models.find((m) => m.id === model)?.label ?? 'auto'}
+                  </>
+                }
                 value={model}
                 disabled={!providersReady}
                 readOnly={modelsLocked}
@@ -669,75 +705,152 @@ export function NewTaskRoute() {
                 options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
                 status={modelCatalogStatus(displayRunner, catalog.data, catalog.isError)}
               />
-              <PickerPill
-                slot="variants-pill"
-                ariaLabel="Parallel variants"
-                label={variants > 1 ? `×${variants} variants` : '×1'}
-                value={String(variants)}
-                onPick={(next) => update({ variants: Number(next) })}
-                disabled={!hasGit}
-                hint="How many times to run this task in parallel — each variant gets its own worktree, and you pick the diff you keep. ×1 runs it once."
-                disabledHint="Parallel variants need a git repository — each variant runs in its own worktree."
-                options={[
-                  { value: '1', label: '×1', desc: 'One run' },
-                  { value: '2', label: '×2 variants', desc: 'Two competing runs — pick the diff you keep' },
-                  { value: '3', label: '×3 variants', desc: 'Three competing runs — pick the diff you keep' },
-                ]}
-              />
-              {/* The row reads in clusters: WHAT runs (project, source, runner, model,
-                  variants) | HOW it runs (worktree, autonomous, follow-ups) | the icon
-                  extras (templates, dispatch) | WHERE it forks from. The dividers only
-                  exist on md-and-up; a phone wraps the row and a divider mid-wrap is noise. */}
-              <PillDivider />
-              {worktreeToggleShown ? (
-                <WorktreeToggle
-                  on={worktreeOn}
-                  disabled={worktreeForced}
-                  disabledReason={
-                    dispatchOn
-                      ? "Dispatch forks this task's commits — subtasks need a worktree"
-                      : 'Parallel variants always use isolated worktrees'
-                  }
-                  onChange={(on) => update({ worktree: on })}
-                />
-              ) : null}
-              <AutonomousToggle
-                on={autonomousOn}
-                onChange={(on) => update({ autonomous: on })}
-              />
-              {followupsToggleShown ? (
-                <GenerateFollowupsToggle
-                  on={generateFollowupsOn}
-                  onChange={(on) => update({ generateFollowups: on })}
-                />
-              ) : null}
-              {templates.length > 0 || dispatchAvailable ? <PillDivider /> : null}
-              {/* Icon-only: this row already carries source/runner/model/variants/worktree/
-                  autonomous/branch, and templates is the least-used of them. */}
-              <PromptTemplateMenu
-                templates={templates}
-                iconOnly
-                onInsert={(text) => composerRef.current?.insertAtCaret(text)}
-              />
-              <DispatchToggle
-                available={dispatchAvailable}
-                value={dispatch}
-                onChange={changeDispatch}
-                onSettingsOpenChange={setDispatchSettingsOpen}
-                runners={runners}
-                parentRunner={displayRunner}
-                // The composer's own catalog, already fetched for the runner this task runs as —
-                // the list "same as parent" resolves to. A subtask runner the user changes to
-                // discovers its own inside the toggle, which is the only place that knows it.
-                parentModels={models}
-              />
-              {repo.data?.info ? <PillDivider /> : null}
-              {repo.data ? <BaseBranchPill repo={repo.data} /> : null}
-              {selectedSkill?.interactive && (draft.autonomous === null || draft.worktree === null) ? (
-                <p className="basis-full text-xs text-muted-foreground" data-slot="interactive-skill-hint">
-                  This skill recommends an interactive run in the current checkout. You can change either setting.
-                </p>
-              ) : null}
+              {/* Everything else about HOW the run happens, one click away and each with a line
+                  that says what it does. */}
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    data-slot="run-options-trigger"
+                    aria-label="Run options"
+                    title="Variants, worktree, autonomy, dispatch and base branch"
+                    className={cn(chipClass, 'border-transparent bg-transparent')}
+                  >
+                    <SlidersHorizontalIcon aria-hidden="true" className="size-3.5 shrink-0" />
+                    Options
+                    {optionsMarked ? (
+                      <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-primary" />
+                    ) : null}
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent
+                  align="start"
+                  sideOffset={8}
+                  data-slot="run-options"
+                  className="max-h-(--radix-popover-content-available-height) w-[400px] max-w-[calc(100vw-2rem)] overflow-y-auto p-0"
+                >
+                  <h2 className="px-4 pt-3.5 pb-0.5 text-[15px] font-semibold text-foreground">Run options</h2>
+                  <div className="divide-y divide-border px-4 pb-1.5">
+                    <OptionRow
+                      slot="variants-option"
+                      icon={CopyIcon}
+                      title="Parallel variants"
+                      description={
+                        hasGit
+                          ? 'Run it several times in parallel and keep the diff you like.'
+                          : 'Needs a git repository — each variant runs in its own worktree.'
+                      }
+                    >
+                      <ToggleGroup
+                        type="single"
+                        variant="outline"
+                        size="sm"
+                        aria-label="Parallel variants"
+                        data-slot="variants-pill"
+                        disabled={!hasGit}
+                        value={String(variants)}
+                        // Radix sends '' when the pressed item is pressed again; a count cannot be empty.
+                        onValueChange={(next) => (next === '' ? undefined : update({ variants: Number(next) }))}
+                      >
+                        {['1', '2', '3'].map((count) => (
+                          <ToggleGroupItem
+                            key={count}
+                            value={count}
+                            aria-label={count === '1' ? 'One run' : `${count} competing runs`}
+                            className="w-9 tabular-nums data-[state=on]:bg-primary/15 data-[state=on]:text-foreground"
+                          >
+                            ×{count}
+                          </ToggleGroupItem>
+                        ))}
+                      </ToggleGroup>
+                    </OptionRow>
+                    {worktreeToggleShown ? (
+                      <OptionRow
+                        icon={GitForkIcon}
+                        title="Isolated worktree"
+                        description={
+                          worktreeForced
+                            ? worktreeDisabledReason
+                            : worktreeOn
+                              ? 'Works on its own branch, in its own folder.'
+                              : 'Off — runs directly in your checkout.'
+                        }
+                      >
+                        <Switch
+                          aria-label="Worktree"
+                          data-slot="worktree-toggle"
+                          checked={worktreeOn}
+                          disabled={worktreeForced}
+                          onCheckedChange={(on) => update({ worktree: on })}
+                        />
+                      </OptionRow>
+                    ) : null}
+                    <OptionRow
+                      icon={ZapIcon}
+                      title="Autonomous"
+                      description={
+                        autonomousOn
+                          ? 'Runs to completion without pausing for you.'
+                          : 'Off — the agent can stop and ask you.'
+                      }
+                    >
+                      <Switch
+                        aria-label="Autonomous"
+                        data-slot="autonomous-toggle"
+                        checked={autonomousOn}
+                        onCheckedChange={(on) => update({ autonomous: on })}
+                      />
+                    </OptionRow>
+                    {followupsToggleShown ? (
+                      <OptionRow
+                        icon={ListPlusIcon}
+                        title="Follow-ups"
+                        description={
+                          generateFollowupsOn
+                            ? 'Agents can add newly discovered work to the task inbox.'
+                            : 'Off — agents still keep the handoff journal.'
+                        }
+                      >
+                        <Switch
+                          aria-label="Follow-ups"
+                          data-slot="generate-followups-toggle"
+                          checked={generateFollowupsOn}
+                          onCheckedChange={(on) => update({ generateFollowups: on })}
+                        />
+                      </OptionRow>
+                    ) : null}
+                    {dispatchAvailable ? (
+                      <OptionRow
+                        icon={SplitIcon}
+                        title="Dispatch"
+                        description="Let the task split itself into subtasks."
+                      >
+                        <DispatchToggle
+                          available={dispatchAvailable}
+                          value={dispatch}
+                          onChange={changeDispatch}
+                          onSettingsOpenChange={setDispatchSettingsOpen}
+                          runners={runners}
+                          parentRunner={displayRunner}
+                          // The composer's own catalog, already fetched for the runner this task runs
+                          // as — the list "same as parent" resolves to. A subtask runner the user
+                          // changes to discovers its own inside the toggle.
+                          parentModels={models}
+                        />
+                      </OptionRow>
+                    ) : null}
+                    {repo.data?.info ? (
+                      <OptionRow
+                        icon={GitBranchIcon}
+                        title="Base branch"
+                        description="Tasks fork from it; pull requests target it."
+                      >
+                        <BaseBranchPill repo={repo.data} />
+                      </OptionRow>
+                    ) : null}
+                  </div>
+                </PopoverContent>
+              </Popover>
             </>
           }
           footerEnd={
@@ -745,152 +858,81 @@ export function NewTaskRoute() {
               {!providersReady && !providers.isPending ? (
                 <Link
                   to="/settings/agents#providers"
-                  className="text-xs font-medium text-foreground underline underline-offset-4"
+                  className="text-[13px] font-medium text-foreground underline underline-offset-4"
                 >
                   Configure providers
                 </Link>
               ) : null}
-              <kbd
-                aria-hidden="true"
-                className="rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-[10.5px] font-medium text-muted-foreground"
-              >
-                {submitShortcutHint()}
-              </kbd>
             </>
           }
         />
 
-        {dispatchOn && (dispatchSettingsOpen || dispatchHintFlash) ? (
-          <p
-            data-slot="dispatch-hint"
-            className="mt-2 rounded-md border border-primary/25 bg-primary/[0.07] px-3 py-1.5 text-xs text-muted-foreground"
-          >
-            <strong className="font-semibold text-foreground">Dispatch is on.</strong> Splits this
-            task into subtasks it runs as separate tasks. Worktree stays on. Long-press the icon
-            for limits.
+        <p aria-hidden="true" data-slot="composer-tips" className="mt-2.5 flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1 text-xs text-soft-foreground max-md:hidden">
+          <Kbd>{submitShortcutHint()}</Kbd> to start
+          <span className="mx-1">·</span>
+          <Kbd>/</Kbd> for skills
+          <span className="mx-1">·</span>
+          paste or drop files to attach
+        </p>
+
+        {selectedSkill?.interactive && (draft.autonomous === null || draft.worktree === null) ? (
+          <p className="mt-2.5 px-1 text-[13px] text-muted-foreground" data-slot="interactive-skill-hint">
+            This skill recommends an interactive run in the current checkout. You can change either in Options.
           </p>
         ) : null}
 
-        <SuggestedChips onPick={(text) => update({ text })} />
-      </div>
+        {dispatchOn && (dispatchSettingsOpen || dispatchHintFlash) ? (
+          <p
+            data-slot="dispatch-hint"
+            className="mt-2.5 rounded-lg bg-primary/15 px-3 py-2 text-[13px] text-muted-foreground"
+          >
+            <strong className="font-semibold text-foreground">Dispatch is on.</strong> Splits this
+            task into subtasks it runs as separate tasks. Worktree stays on. Set limits under
+            Options.
+          </p>
+        ) : null}
 
+        <Suggestions onPick={(text) => update({ text })} />
+      </div>
     </div>
   )
 }
 
-/** The thin seam between the footer's pill clusters. Hidden on phones, where the row wraps. */
-function PillDivider() {
-  return <span aria-hidden="true" className="mx-0.5 h-3.5 w-px shrink-0 bg-border max-md:hidden" />
-}
-
-/** Worktree opt-out toggle (#worktree-toggle): a checkbox-style chip for ordinary runs.
- *  Checked = isolated worktree (the default); unchecked = run in the repo working tree. */
-function WorktreeToggle({
-  on,
-  disabled,
-  disabledReason,
-  onChange,
-}: {
-  on: boolean
-  disabled?: boolean
-  disabledReason?: string
-  onChange: (on: boolean) => void
-}) {
+/** The hero's only decoration: a soft lime wash from the top edge, fading out well above the
+ *  composer's footer so it never competes with it. */
+function HeroGlow() {
   return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-checked={on}
-      disabled={disabled}
-      data-slot="worktree-toggle"
-      onClick={() => onChange(!on)}
-      title={
-        disabled
-          ? disabledReason
-          : on
-          ? 'Runs in an isolated worktree — uncheck to run in the repo working tree'
-          : 'Runs in the repo working tree — check to isolate in a worktree'
-      }
-      className={cn(chipClass, on && 'border-primary/60 text-foreground')}
-    >
-      {on ? (
-        <CheckIcon aria-hidden="true" className="size-3 shrink-0 text-primary" />
-      ) : (
-        <SquareIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
-      )}
-      Worktree
-    </button>
+    <div
+      aria-hidden="true"
+      data-slot="hero-glow"
+      className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[460px] bg-radial-[ellipse_60%_100%_at_50%_0%] from-primary/20 to-transparent dark:from-primary/10"
+    />
   )
 }
 
-/** Autonomous toggle (#autonomous): checked = the run never pauses for you, auto-continuing
- *  until the agent is done. No "needs you" is ever raised. */
-function AutonomousToggle({
-  on,
-  disabled,
-  onChange,
+/** One line of the Options popover: what it is, what it does, and its control. */
+function OptionRow({
+  icon: Icon,
+  title,
+  description,
+  slot,
+  children,
 }: {
-  on: boolean
-  disabled?: boolean
-  onChange: (on: boolean) => void
+  icon: LucideIcon
+  title: string
+  description: string
+  slot?: string
+  children: ReactNode
 }) {
   return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-checked={on}
-      disabled={disabled}
-      data-slot="autonomous-toggle"
-      onClick={() => onChange(!on)}
-      title={
-        disabled
-          ? 'Plan-first runs are interactive — autonomous is unavailable'
-          : on
-            ? 'Autonomous — the agent runs to completion without pausing for you'
-            : 'Runs interactively — check to let the agent finish without pausing for you'
-      }
-      className={cn(chipClass, on && !disabled && 'border-primary/60 text-foreground')}
-    >
-      {on ? (
-        <CheckIcon aria-hidden="true" className="size-3 shrink-0 text-primary" />
-      ) : (
-        <SquareIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
-      )}
-      Autonomous
-    </button>
-  )
-}
-
-/** Follow-up toggle: checked lets agents append newly discovered work to the task inbox.
- *  Handoff journaling remains active either way. */
-function GenerateFollowupsToggle({
-  on,
-  onChange,
-}: {
-  on: boolean
-  onChange: (on: boolean) => void
-}) {
-  return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-checked={on}
-      data-slot="generate-followups-toggle"
-      onClick={() => onChange(!on)}
-      title={
-        on
-          ? 'Agents can add newly discovered follow-up work to the task inbox'
-          : 'Follow-up generation is off; agents still maintain the handoff journal'
-      }
-      className={cn(chipClass, on && 'border-primary/60 text-foreground')}
-    >
-      {on ? (
-        <CheckIcon aria-hidden="true" className="size-3 shrink-0 text-primary" />
-      ) : (
-        <SquareIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
-      )}
-      Follow-ups
-    </button>
+    <div data-slot={slot ?? 'run-option'} className="flex items-start gap-3 py-2.5">
+      <Icon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+      <div className="min-w-0 flex-1">
+        <div className="text-[13.5px] font-medium text-foreground">{title}</div>
+        <p className="mt-0.5 text-xs leading-relaxed text-pretty text-muted-foreground">{description}</p>
+      </div>
+      <div className="flex shrink-0 items-center pt-0.5">{children}</div>
+    </div>
   )
 }
 
@@ -964,9 +1006,9 @@ function ProjectPill({
           data-slot="project-pill"
           aria-label="Project"
           title="Which project this task runs in — its skills, workflows, settings and draft"
-          className={cn(chipClass, 'border-foreground/60 font-semibold text-foreground')}
+          className={cn(chipClass, 'text-foreground')}
         >
-          <FolderOpenIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
+          <FolderIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />
           {/* The registry is authoritative for the display name; the raw id is the fallback
               while it is still loading, so the pill never renders an empty label. */}
           <span className="max-w-40 truncate">{selected?.name ?? projectId}</span>
@@ -1002,23 +1044,23 @@ function ProjectPill({
                   setOpen(false)
                 }}
               >
-                <span className="min-w-0 flex-1 truncate text-xs font-medium">{project.name}</span>
+                <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{project.name}</span>
                 {project.status === 'missing' ? (
-                  <span className="shrink-0 text-[11px] text-soft-foreground">folder not found</span>
+                  <span className="shrink-0 text-xs text-soft-foreground">folder not found</span>
                 ) : project.branch !== undefined ? (
                   <span className="shrink-0 font-mono text-[11px] text-soft-foreground">
                     {project.branch}
                   </span>
                 ) : null}
                 {project.id === projectId ? (
-                  <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary" />
+                  <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary-strong" />
                 ) : null}
               </CommandItem>
             ))}
           </CommandList>
           {/* The mockup's `dd-note`. Worth the two lines: picking here does far more than
               relabel a pill, and nothing else on screen says so. */}
-          <p className="border-t border-border px-3 py-2 text-[11px] leading-snug text-soft-foreground">
+          <p className="border-t border-border px-3 py-2 text-xs leading-snug text-muted-foreground">
             Skills, workflows, settings and the draft re-resolve against the selected project.
           </p>
         </Command>
@@ -1050,7 +1092,8 @@ function BaseBranchPill({ repo }: { repo: RepoResponse }) {
     <PickerPill
       slot="base-pill"
       ariaLabel="Base branch"
-      label={<span className="font-mono text-[11.5px]">base: {current}</span>}
+      className="max-w-36"
+      label={<span className="font-mono text-xs">{current}</span>}
       value={repo.baseBranch ?? ''}
       onPick={(value) => mutation.mutate(value === '' ? null : value)}
       searchPlaceholder="Search branches…"
@@ -1062,29 +1105,36 @@ function BaseBranchPill({ repo }: { repo: RepoResponse }) {
   )
 }
 
-/** Honest static starters (the mockup's ghost chips): they only fill the textarea — the user
- *  still aims and submits. */
-const SUGGESTIONS = [
-  'Fix a failing or flaky test',
-  'Summarize recent commits on this branch',
-  'Update the README for recent changes',
+/** Honest static starters: they only fill the textarea — the user still aims and submits. */
+const SUGGESTIONS: ReadonlyArray<{ text: string; hint: string; icon: LucideIcon }> = [
+  { text: 'Fix a failing or flaky test', hint: 'Find it, reproduce it, make it green', icon: BugIcon },
+  {
+    text: 'Summarize recent commits on this branch',
+    hint: 'A short read of what changed and why',
+    icon: GitCommitHorizontalIcon,
+  },
+  { text: 'Update the README for recent changes', hint: 'Bring the docs back in line with the code', icon: FileTextIcon },
 ]
 
-function SuggestedChips({ onPick }: { onPick: (text: string) => void }) {
+function Suggestions({ onPick }: { onPick: (text: string) => void }) {
   return (
-    <div className="mt-7 flex flex-wrap justify-center gap-2 max-md:justify-start">
-      {SUGGESTIONS.map((suggestion) => (
-        <button
-          key={suggestion}
-          type="button"
-          data-slot="suggested-chip"
-          onClick={() => onPick(suggestion)}
-          className="inline-flex h-[30px] items-center gap-1.5 rounded-full border border-border px-3 text-[12.5px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        >
-          <SparklesIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
-          {suggestion}
-        </button>
-      ))}
-    </div>
+    <section aria-label="Suggestions" className="mt-10 max-md:mt-7">
+      <h2 className="mb-2 px-1 text-[13px] font-medium text-muted-foreground">Or start from an idea</h2>
+      <ItemGroup className="gap-2 sm:grid sm:grid-cols-3">
+        {SUGGESTIONS.map(({ text, hint, icon: Icon }) => (
+          <Item key={text} asChild variant="outline" size="sm" className="items-start gap-2.5 rounded-xl bg-card/60 px-3.5 text-left hover:bg-muted/60">
+            <button type="button" data-slot="suggested-chip" onClick={() => onPick(text)}>
+              <ItemMedia>
+                <Icon aria-hidden="true" className="size-4 text-muted-foreground" />
+              </ItemMedia>
+              <ItemContent className="gap-0.5">
+                <ItemTitle className="text-[13.5px] leading-snug text-pretty">{text}</ItemTitle>
+                <ItemDescription className="text-xs text-pretty">{hint}</ItemDescription>
+              </ItemContent>
+            </button>
+          </Item>
+        ))}
+      </ItemGroup>
+    </section>
   )
 }

@@ -16,6 +16,7 @@ import { isReadDoneItem, isUnread } from '@/lib/read-state'
 import { directionalUsageText } from '@/components/directional-usage'
 import {
   groupRuns,
+  capBuckets,
   listCounts,
   refPrefixMatches,
   runTitle,
@@ -62,33 +63,19 @@ export function TaskQuickList({
    *  belongs to is a container's question — this list is painted for other projects too. */
   onTogglePin?: (run: RunRecord, pinned: boolean) => void
 }) {
-  const counts = listCounts(runs)
-  const buckets = groupRuns(runs, view)
+  // Capped: the sidebar is a glance at what is live and what just finished, and the Tasks page —
+  // one click away, below — is the full list. The Active/Archived switch lives there too; this
+  // list follows it rather than carrying a second copy of the same control.
+  const buckets = capBuckets(groupRuns(runs, view), SIDEBAR_TASK_LIMIT)
   // Withheld in the archived view, where `groupRuns` answers one `Archived` bucket and never
   // reads `run.pinned` — the same call the thread header makes on an archived run.
   const pinToggle = view === 'archived' ? undefined : onTogglePin
+  const total = listCounts(runs)[view === 'archived' ? 'archived' : 'active']
 
   return (
-    <div data-slot="quick-list">
-      {/* Sticky, not scrolled away: the tabs say what you are looking at, and a long Recent list
-          must not be able to hide that the view is filtered. */}
-      <div className="sticky top-0 z-10 bg-sidebar pt-2 pb-1">
-        <div className="inline-flex w-full gap-0.5 rounded-md bg-muted p-[3px]">
-          <ViewTab view="active" current={view} onSelect={onViewChange} count={counts.active}>
-            Active
-            {/* The one reason to look at a tab you are not on. */}
-            {counts.waiting > 0 && view !== 'active' ? (
-              <StatusDot tone="pending" pulse data-slot="waiting-dot" aria-label="needs you" />
-            ) : null}
-          </ViewTab>
-          <ViewTab view="archived" current={view} onSelect={onViewChange} count={counts.archived}>
-            Archived
-          </ViewTab>
-        </div>
-      </div>
-
+    <div data-slot="quick-list" className="flex flex-col gap-0.5">
       {buckets.length === 0 ? (
-        <p className="px-3 py-3.5 text-xs text-soft-foreground">
+        <p className="px-2 py-2 text-[13px] text-muted-foreground">
           {view === 'archived' ? 'Nothing archived yet.' : 'No tasks yet — describe one.'}
         </p>
       ) : (
@@ -101,9 +88,21 @@ export function TaskQuickList({
           onTogglePin={pinToggle}
         />
       )}
+      {total > SIDEBAR_TASK_LIMIT ? (
+        <Link
+          to="/"
+          data-slot="quick-list-more"
+          className="mt-1 flex h-7 items-center rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+        >
+          View all {total} tasks
+        </Link>
+      ) : null}
     </div>
   )
 }
+
+/** How many rows the sidebar paints, counted across buckets. */
+const SIDEBAR_TASK_LIMIT = 8
 
 /**
  * The bucketed rows alone — the piece the multi-project sidebar reuses per project group
@@ -142,7 +141,7 @@ export function QuickListBuckets({
     <>
       {buckets.map((bucket) => (
         <div key={bucket.label} data-slot="quick-list-bucket" data-bucket={bucket.label}>
-          <h2 className="px-3 pt-2.5 pb-1 text-[11px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
+          <h2 className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground/80 first-letter:uppercase">
             {bucket.label}
           </h2>
           {nestRows(bucket.rows).map((node) => (
@@ -187,41 +186,6 @@ function nestRows(rows: readonly QuickListRow[]) {
         ? { id: `group:${row.groupId}`, row }
         : { id: row.run.id, dispatch: row.run.dispatch, row },
     ),
-  )
-}
-
-function ViewTab({
-  view,
-  current,
-  onSelect,
-  count,
-  children,
-}: {
-  view: ListView
-  current: ListView
-  onSelect: (view: ListView) => void
-  count: number
-  children: React.ReactNode
-}) {
-  const isActive = view === current
-  return (
-    <button
-      type="button"
-      data-slot="view-tab"
-      data-view={view}
-      // Toggle buttons rather than a real tablist: these filter one list in place, they do not
-      // switch between panels — `aria-pressed` is what that actually is.
-      aria-pressed={isActive}
-      onClick={() => onSelect(view)}
-      className={cn(
-        'flex h-7 flex-1 items-center justify-center gap-1.5 rounded-[7px] text-[12.5px] font-medium text-muted-foreground',
-        isActive && 'bg-card font-semibold text-foreground shadow-xs'
-      )}
-    >
-      {children}
-      {/* No "0": an empty bucket says so by being empty. */}
-      {count > 0 ? <span className="font-mono text-[11px] tabular-nums">{count}</span> : null}
-    </button>
   )
 }
 
@@ -272,14 +236,14 @@ function Row({
     <>
       {/* Like RunRow: the compare link is the toggle button's flex SIBLING, not its child —
           a link inside a button is invalid, and both targets are real. */}
-      <div className="flex items-center rounded-sm hover:bg-muted">
+      <div className="flex items-center rounded-md hover:bg-sidebar-accent">
         <button
           type="button"
           data-slot="group-tile"
           data-group-id={row.groupId}
           aria-expanded={expanded}
           onClick={() => onToggle(row.groupId)}
-          className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-[7px] text-left"
+          className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left"
         >
           <ChevronDownIcon
             className={cn('size-3 shrink-0 text-soft-foreground transition-transform', !expanded && '-rotate-90')}
@@ -444,8 +408,8 @@ const RunRow = React.memo(function RunRow({
       // level — the same step the Tasks table indents by, so the two lists read as one grammar.
       style={depth > 0 ? { paddingLeft: `${10 + depth * 14}px` } : undefined}
       className={cn(
-        'group/task-row flex items-center gap-2 rounded-sm pl-2.5 hover:bg-muted',
-        isActive && 'bg-muted',
+        'group/task-row flex items-center gap-2 rounded-md pl-2 hover:bg-sidebar-accent',
+        isActive && 'bg-sidebar-accent',
         // The indent a member row wears under an expanded group tile. One padding declaration,
         // not two: `cn` is tailwind-merge, so this REPLACES the `pl-2.5` above rather than losing
         // to it — 26px = the row's own 10px plus the 16px indent.
@@ -471,7 +435,7 @@ const RunRow = React.memo(function RunRow({
         // visible text drop — so hover always gives back everything the column could not show.
         title={title}
         aria-current={isActive ? 'page' : undefined}
-        className="flex min-w-0 flex-1 items-center gap-2 py-[7px] pr-2.5"
+        className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-2"
       >
         {variant ? (
           <span className="inline-flex size-[15px] shrink-0 items-center justify-center rounded-full bg-violet/15 font-mono text-[9.5px] font-semibold text-violet">

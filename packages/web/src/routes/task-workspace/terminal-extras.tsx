@@ -62,15 +62,15 @@ export function DetectedUrlsStrip({
   return (
     <div
       data-slot="detected-urls"
-      className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-2 py-1"
+      className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border/70 px-3 py-1.5"
     >
-      <span className="mr-1 text-[11px] text-soft-foreground">Wykryte adresy</span>
+      <span className="text-xs text-muted-foreground">Detected addresses</span>
       {urls.map((entry) => (
         <span
           key={entry.url}
           data-slot="detected-url"
           data-running={entry.running === true ? '' : undefined}
-          className="flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px]"
+          className="flex items-center gap-1.5 rounded-sm bg-muted/60 py-0.5 pr-0.5 pl-2 text-xs"
         >
           {/* Three states, not two: `null` is "not probed yet", which is not the same claim as
               "nothing is listening". */}
@@ -79,7 +79,7 @@ export function DetectedUrlsStrip({
             className={cn(
               'size-2',
               entry.running === true
-                ? 'fill-emerald-500 text-emerald-500'
+                ? 'fill-success text-success'
                 : entry.running === false
                   ? 'fill-muted text-muted-foreground'
                   : 'text-soft-foreground',
@@ -87,25 +87,25 @@ export function DetectedUrlsStrip({
           />
           <span className="font-mono">{entry.url}</span>
           <span className="text-soft-foreground">
-            {entry.running === true ? 'działa' : entry.running === false ? 'nie odpowiada' : '…'}
+            {entry.running === true ? 'running' : entry.running === false ? 'not responding' : '…'}
           </span>
           {/* §7 names this control literally — "The user clicks `Otwórz w Przeglądarce`" — so the
               words are on it, not only in its tooltip. An icon alone was discoverable by hover
               and by screen reader, and invisible to everyone reading the strip. */}
           <button
             type="button"
-            aria-label={`Otwórz ${entry.url} w Przeglądarce`}
+            aria-label={`Open ${entry.url} in Browser`}
             onClick={() => setNoRoom(!onOpen(entry.url))}
-            className="ml-0.5 flex items-center gap-1 rounded px-1 py-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="flex items-center gap-1 rounded-sm px-1.5 py-0.5 font-medium text-muted-foreground hover:bg-background hover:text-foreground"
           >
             <ExternalLinkIcon aria-hidden="true" className="size-3" />
-            <span>Otwórz w Przeglądarce</span>
+            <span>Open in Browser</span>
           </button>
         </span>
       ))}
       {noRoom ? (
-        <span className="text-[11px] text-soft-foreground">
-          Układ ma już trzy kolumny — zamknij jedną, by otworzyć Przeglądarkę.
+        <span className="text-xs text-muted-foreground">
+          This layout already has three columns — close one to open the Browser.
         </span>
       ) : null}
     </div>
@@ -134,15 +134,15 @@ export function CommandPicker({
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" size="sm" className="h-6 shrink-0 px-2 text-xs text-muted-foreground">
           <PlayIcon aria-hidden="true" className="size-3" />
-          Uruchom
+          Run
           <ChevronDownIcon aria-hidden="true" className="size-3" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="max-h-80 w-80 overflow-y-auto">
-        <DropdownMenuLabel>Polecenia z projektu</DropdownMenuLabel>
+        <DropdownMenuLabel>Project commands</DropdownMenuLabel>
         {commands.length === 0 ? (
           <p className="px-2 py-1.5 text-xs text-soft-foreground">
-            Nie znaleziono poleceń w package.json ani Makefile. Wpisz własne poniżej.
+            No commands found in package.json or a Makefile. Type your own below.
           </p>
         ) : (
           commands.map((entry) => (
@@ -154,7 +154,7 @@ export function CommandPicker({
               <span className="font-mono text-xs">{entry.command}</span>
               {/* The source file travels with the command: `dev` means one thing in a Makefile
                   and another in npm, and you are about to hand a shell one of them. */}
-              <span className="text-[10px] text-soft-foreground">
+              <span className="text-[11px] text-soft-foreground">
                 {entry.source}
                 {entry.detail ? ` — ${entry.detail}` : ''}
               </span>
@@ -162,7 +162,7 @@ export function CommandPicker({
           ))
         )}
         <DropdownMenuSeparator />
-        <DropdownMenuLabel className="font-normal text-soft-foreground">Własne polecenie</DropdownMenuLabel>
+        <DropdownMenuLabel className="font-normal text-soft-foreground">Custom command</DropdownMenuLabel>
         <form
           className="px-2 pb-1"
           onSubmit={(event) => {
@@ -178,10 +178,10 @@ export function CommandPicker({
             onChange={(event) => setManual(event.target.value)}
             // Radix would treat typing as menu type-ahead and steal the keystrokes.
             onKeyDown={(event) => event.stopPropagation()}
-            placeholder="np. npm run dev"
-            aria-label="Własne polecenie"
+            placeholder="e.g. npm run dev"
+            aria-label="Custom command"
             spellCheck={false}
-            className="w-full rounded border border-border bg-background px-2 py-1 font-mono text-xs outline-none focus-visible:border-foreground"
+            className="h-8 w-full rounded-md border border-input bg-card px-2 font-mono text-xs outline-none focus-visible:border-ring"
           />
         </form>
       </DropdownMenuContent>

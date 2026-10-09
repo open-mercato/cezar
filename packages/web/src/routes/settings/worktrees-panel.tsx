@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { FolderGit2Icon, MoreHorizontalIcon, RecycleIcon, Trash2Icon } from 'lucide-react'
 import { useState } from 'react'
 
 import { reclaimWorktrees, removeRunWorktree } from '@/api/client'
@@ -14,10 +15,17 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from '@/components/ui/toaster'
 import { formatMem } from '@/lib/tasks-table'
 import { shortAge } from '@/lib/format'
+import { SettingsError, SettingsGroup } from './settings-field'
 
 /** What the confirm dialog is about — a bulk reclaim, or one row's delete. */
 type Confirming = { kind: 'reclaim' } | { kind: 'delete'; runId: string; title: string } | null
@@ -59,18 +67,28 @@ export function WorktreesPanel() {
     onError: (error: Error) => toast(error.message, { tone: 'danger' }),
   })
 
+  const heading = {
+    title: 'On disk',
+    description:
+      'Task worktrees currently on disk. Delete one to reclaim its space now, or reclaim everything past the keep-limit at once. Branches are always kept, so the work stays recoverable.',
+  }
+
   if (worktrees.isPending) {
     return (
-      <p data-slot="worktrees-loading" className="text-[13px] text-soft-foreground">
-        Loading worktrees…
-      </p>
+      <SettingsGroup {...heading} bare>
+        <div data-slot="worktrees-loading" role="status" aria-label="Loading worktrees…">
+          <Skeleton className="h-32 w-full rounded-xl" />
+        </div>
+      </SettingsGroup>
     )
   }
   if (worktrees.isError) {
     return (
-      <p data-slot="worktrees-error" className="text-[13px] text-danger">
-        Worktrees did not load: {worktrees.error.message}
-      </p>
+      <SettingsGroup {...heading} bare>
+        <SettingsError data-slot="worktrees-error" title="Worktrees did not load">
+          {worktrees.error.message}
+        </SettingsError>
+      </SettingsGroup>
     )
   }
 
@@ -84,45 +102,11 @@ export function WorktreesPanel() {
   }
 
   return (
-    <div data-slot="worktrees-panel" className="flex flex-col gap-3">
-      {rows.length === 0 ? (
-        <p data-slot="worktrees-empty" className="text-[13px] text-soft-foreground">
-          No task worktrees on disk.
-        </p>
-      ) : (
-        <div className="overflow-x-auto rounded-md border border-border">
-          <table className="w-full border-collapse text-sm">
-            <caption className="sr-only">Task worktrees currently materialized on disk</caption>
-            <thead>
-              <tr className="border-b border-border text-left text-[12px] text-soft-foreground">
-                <th scope="col" className="px-3 py-2 font-medium">Task</th>
-                <th scope="col" className="px-3 py-2 font-medium">Status</th>
-                <th scope="col" className="px-3 py-2 font-medium">Size</th>
-                <th scope="col" className="px-3 py-2 font-medium">Age</th>
-                <th scope="col" className="px-3 py-2 font-medium text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((w) => (
-                <WorktreeRow
-                  key={w.runId}
-                  worktree={w}
-                  disabled={busy}
-                  onDelete={() => setConfirming({ kind: 'delete', runId: w.runId, title: w.title })}
-                />
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p data-slot="worktrees-footer" className="text-[12px] text-soft-foreground">
-          {rows.length} worktree{rows.length === 1 ? '' : 's'}
-          {totalBytes !== null ? ` · ${formatMem(totalBytes) || '0 kB'} on disk` : ' · size unavailable'}
-          {' · '}
-          {keep === 0 ? 'keeping all (unlimited)' : `keeping the last ${keep}`}
-        </p>
+    <SettingsGroup
+      {...heading}
+      bare
+      data-slot="worktrees-panel"
+      actions={
         <Button
           type="button"
           variant="outline"
@@ -131,9 +115,56 @@ export function WorktreesPanel() {
           disabled={busy}
           onClick={() => setConfirming({ kind: 'reclaim' })}
         >
+          <RecycleIcon aria-hidden="true" className="size-3.5" />
           Reclaim now
         </Button>
-      </div>
+      }
+    >
+      {rows.length === 0 ? (
+        <Empty data-slot="worktrees-empty" className="rounded-xl border border-dashed border-border py-10">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <FolderGit2Icon />
+            </EmptyMedia>
+            <EmptyTitle>No task worktrees on disk</EmptyTitle>
+            <EmptyDescription>A worktree appears here when a task starts in its own checkout.</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      ) : (
+        <Card flush>
+          <Table>
+            <caption className="sr-only">Task worktrees currently materialized on disk</caption>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="pl-5">Task</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="text-right">Size</TableHead>
+                <TableHead className="text-right">Age</TableHead>
+                <TableHead className="w-12 pr-3">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((w) => (
+                <WorktreeRow
+                  key={w.runId}
+                  worktree={w}
+                  disabled={busy}
+                  onDelete={() => setConfirming({ kind: 'delete', runId: w.runId, title: w.title })}
+                />
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
+      )}
+
+      <p data-slot="worktrees-footer" className="text-xs tabular-nums text-muted-foreground">
+        {rows.length} worktree{rows.length === 1 ? '' : 's'}
+        {totalBytes !== null ? ` · ${formatMem(totalBytes) || '0 kB'} on disk` : ' · size unavailable'}
+        {' · '}
+        {keep === 0 ? 'keeping all (unlimited)' : `keeping the last ${keep}`}
+      </p>
 
       <AlertDialog open={confirming !== null} onOpenChange={(open) => !open && setConfirming(null)}>
         <AlertDialogContent>
@@ -146,7 +177,7 @@ export function WorktreesPanel() {
                 <>
                   This removes the worktree directory and its branch — the local-only work is not
                   recoverable afterwards.
-                  <span className="mt-1 block truncate font-medium text-foreground" title={confirming.title}>
+                  <span className="mt-2 block truncate font-medium text-foreground" title={confirming.title}>
                     {confirming.title}
                   </span>
                 </>
@@ -159,7 +190,7 @@ export function WorktreesPanel() {
             <AlertDialogCancel>Keep it</AlertDialogCancel>
             <AlertDialogAction
               data-action="worktrees-confirm"
-              className={confirming?.kind === 'delete' ? 'bg-danger text-danger-foreground hover:brightness-[0.96]' : undefined}
+              className={confirming?.kind === 'delete' ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90' : undefined}
               onClick={runConfirmed}
             >
               {confirming?.kind === 'delete' ? 'Delete' : 'Reclaim now'}
@@ -167,7 +198,7 @@ export function WorktreesPanel() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </SettingsGroup>
   )
 }
 
@@ -181,38 +212,49 @@ function WorktreeRow({
   onDelete: () => void
 }) {
   return (
-    <tr data-slot="worktree-row" data-run={worktree.runId} className="border-b border-border last:border-0">
-      <th scope="row" className="max-w-[220px] px-3 py-2 text-left font-normal">
-        <span className="block truncate text-foreground" title={worktree.title}>{worktree.title}</span>
-        <span className="block truncate font-mono text-[11px] text-soft-foreground">
+    <TableRow data-slot="worktree-row" data-run={worktree.runId}>
+      <TableCell className="max-w-[260px] py-2.5 pl-5">
+        <span className="block truncate font-medium text-foreground" title={worktree.title}>{worktree.title}</span>
+        <span className="block truncate font-mono text-[11px] text-muted-foreground">
           {worktree.branch ?? worktree.runId.slice(0, 8)}
         </span>
-      </th>
-      <td className="px-3 py-2">
-        <span className="text-[12px] text-soft-foreground">{worktree.status}</span>
-        {worktree.reclaimable ? (
-          <span data-slot="worktree-reclaimable" className="ml-1 text-[11px] text-soft-foreground">
-            (reclaimable)
-          </span>
-        ) : null}
-      </td>
-      <td className="px-3 py-2 tabular-nums text-soft-foreground">
+      </TableCell>
+      <TableCell>
+        <span className="flex flex-wrap items-center gap-1.5">
+          <Badge variant="outline" className="font-normal">{worktree.status}</Badge>
+          {worktree.reclaimable ? (
+            <span data-slot="worktree-reclaimable" className="text-xs text-muted-foreground">
+              reclaimable
+            </span>
+          ) : null}
+        </span>
+      </TableCell>
+      <TableCell className="text-right tabular-nums text-muted-foreground">
         {worktree.sizeBytes !== null ? formatMem(worktree.sizeBytes) || '0 kB' : '—'}
-      </td>
-      <td className="px-3 py-2 tabular-nums text-soft-foreground">{shortAge(worktree.finishedAt ?? undefined) || '—'}</td>
-      <td className="px-3 py-2 text-right">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          data-action="worktree-delete"
-          aria-label={`Delete the worktree for ${worktree.title}`}
-          disabled={disabled}
-          onClick={onDelete}
-        >
-          Delete
-        </Button>
-      </td>
-    </tr>
+      </TableCell>
+      <TableCell className="text-right tabular-nums text-muted-foreground">
+        {shortAge(worktree.finishedAt ?? undefined) || '—'}
+      </TableCell>
+      <TableCell className="pr-3 text-right">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button type="button" variant="ghost" size="icon-sm" aria-label={`Actions for ${worktree.title}`} disabled={disabled}>
+              <MoreHorizontalIcon aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem
+              variant="destructive"
+              data-action="worktree-delete"
+              aria-label={`Delete the worktree for ${worktree.title}`}
+              onSelect={onDelete}
+            >
+              <Trash2Icon aria-hidden="true" />
+              Delete worktree
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </TableCell>
+    </TableRow>
   )
 }

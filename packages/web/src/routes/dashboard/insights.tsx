@@ -17,15 +17,19 @@ import { useDashboardAutomations } from './automations-data'
 import { ExportRows } from './export-rows'
 import { Coverage } from './rows'
 import { formatAmount, formatHours } from './format'
-import { FilterSelect, filterLabel, Freshness, widgetHeader, widgetHeading } from './presentation'
+import { CircleCheck, Cpu, Workflow } from 'lucide-react'
+import { FilterSelect, filterLabel, Freshness, InfoHint, Notice, ReportNote, tableHead, tableRow, WidgetEmpty, WidgetSkeleton, widgetBody, widgetHeader, widgetHeading, widgetMeta } from './presentation'
 import { useDashboardFilter } from './url-filter'
 
 type Period = DashboardInsights['period']
 const periodText = (period: Period) => `Last ${period === '7d' ? 7 : 30} calendar days`
-const bandLabel = 'font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground'
-const panel = 'min-w-0 rounded-lg border bg-card-2 p-4'
-const th =
-  'whitespace-nowrap px-3 py-2 font-mono text-[11px] font-medium uppercase tracking-[0.1em] text-soft-foreground'
+const bandLabel = 'text-[15px] leading-6 font-semibold text-foreground'
+const panel = 'min-w-0 rounded-xl border bg-card p-5 shadow-xs'
+const th = tableHead
+const backendsDefinition =
+  'Tasks that finished done or failed in the period, by the backend and model their steps ran on. Includes subtasks. Cost is reported USD only.'
+const automationsDefinition =
+  'Tasks each automation created in the period and how they ended. Active means still running, queued, waiting on you, or waiting to resume after a usage limit.'
 
 function useProjectName() {
   const projects = useProjects().data?.projects
@@ -55,20 +59,18 @@ function PeriodSelect({
 }
 
 function InsightState({ query }: { query: ReturnType<typeof useDashboardInsights> }) {
-  if (query.isPending)
-    return (
-      <p role="status" className="text-sm text-muted-foreground">
-        Loading insights…
-      </p>
-    )
+  if (query.isPending) return <WidgetSkeleton label="Loading insights…" />
   if (!query.isError) return null
   return (
-    <p role="alert" className="text-sm">
-      {query.data ? 'Showing previous results. ' : ''}Could not refresh insights.{' '}
-      <Button variant="outline" onClick={() => void query.refetch()}>
-        Retry insights
-      </Button>
-    </p>
+    <Notice
+      action={
+        <Button variant="outline" size="sm" onClick={() => void query.refetch()}>
+          Retry insights
+        </Button>
+      }
+    >
+      {query.data ? 'Showing previous results. ' : ''}Could not refresh insights.
+    </Notice>
   )
 }
 
@@ -77,11 +79,22 @@ export function OutcomeInsights({ period, active }: { period: Period; active: bo
   const query = useDashboardInsights(period, active)
   const data = query.data
   return (
-    <div className="space-y-3">
-      <InsightState query={query} />
+    <div className="space-y-4">
+      {query.isPending ? (
+        <div className="grid gap-6 @3xl:grid-cols-2">
+          <div className={panel}>
+            <InsightState query={query} />
+          </div>
+          <div className={`${panel} @max-3xl:hidden`} aria-hidden="true">
+            <WidgetSkeleton label="" />
+          </div>
+        </div>
+      ) : (
+        <InsightState query={query} />
+      )}
       {data && <Coverage coverage={data.coverage} retry={() => void query.refetch()} />}
       {data && (
-        <div className="grid gap-3 lg:grid-cols-2">
+        <div className="grid gap-6 @3xl:grid-cols-2">
           <Delivered data={data} />
           <FailureReasons data={data} />
         </div>
@@ -123,18 +136,18 @@ function Delivered({ data }: { data: DashboardInsights }) {
         }))}
       />
       <h3 className={bandLabel}>Delivered</h3>
-      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
+      <dl className="mt-4 flex flex-wrap gap-x-10 gap-y-4">
         {stats.map((s) => (
-          <div key={s.label} className="min-w-0">
-            <dt className="text-xs text-soft-foreground">{s.label}</dt>
-            <dd className="mt-1 truncate text-xl font-semibold tracking-tight tabular-nums">
+          <div key={s.label} className="min-w-16">
+            <dt className="text-[13px] text-muted-foreground">{s.label}</dt>
+            <dd className="mt-1 text-2xl leading-8 font-semibold tracking-tight whitespace-nowrap tabular-nums">
               {s.value}
             </dd>
             {s.note && <dd className="text-xs text-soft-foreground">{s.note}</dd>}
           </div>
         ))}
       </dl>
-      <span className="mt-3 block text-xs text-soft-foreground">
+      <span className="mt-4 block text-xs text-muted-foreground">
         From {d.completedTasks} completed {d.completedTasks === 1 ? 'task' : 'tasks'} ·{' '}
         {d.measuredTasks} with a stored diff
       </span>
@@ -161,16 +174,13 @@ function FailureReasons({ data }: { data: DashboardInsights }) {
       <div className="flex items-baseline justify-between gap-2">
         <h3 className={bandLabel}>Why tasks failed</h3>
         {total > 0 && (
-          <span className="font-mono text-[11px] text-soft-foreground">{total} failed</span>
+          <span className={widgetMeta}>{total} failed</span>
         )}
       </div>
       {total === 0 ? (
-        <span className="mt-4 flex items-center gap-2.5 text-sm text-muted-foreground">
-          <StatusDot tone="success" />
-          No failed outcomes in this period
-        </span>
+        <WidgetEmpty icon={CircleCheck} title="No failed outcomes in this period" className="md:p-6" />
       ) : (
-        <ul className="mt-3 space-y-3">
+        <ul className="mt-4 space-y-4">
           {reasons.map((reason) => (
             <FailureReason
               key={`${reason.category}:${reason.label}`}
@@ -201,14 +211,14 @@ function FailureReason({
         <span className="min-w-0 truncate font-medium" title={reason.label}>
           {reason.label}
         </span>
-        <span className="font-mono text-xs tabular-nums text-muted-foreground">{reason.count}</span>
+        <span className="text-xs tabular-nums text-muted-foreground">{reason.count}</span>
       </div>
-      <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-muted" aria-hidden="true">
-        <div className="h-full rounded-full bg-danger/70" style={{ width: `${(reason.count / total) * 100}%` }} />
+      <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden="true">
+        <div className="h-full rounded-full bg-danger/60" style={{ width: `${(reason.count / total) * 100}%` }} />
       </div>
       <span className="mt-1.5 block truncate text-xs text-soft-foreground" title={latest.message}>
         Latest:{' '}
-        <Link className="text-muted-foreground hover:text-foreground hover:underline" to={taskPath(latest.projectId, latest.id)}>
+        <Link className="text-muted-foreground underline-offset-4 hover:text-foreground hover:underline" to={taskPath(latest.projectId, latest.id)}>
           {latest.title}
         </Link>{' '}
         · {projectName(latest.projectId)}
@@ -240,20 +250,20 @@ export function BackendComparison() {
     <section data-dashboard-module="backends" className="min-w-0">
     <Card className="gap-0 py-0" data-export-context={`Backends: ${periodText(period)}; finished tasks`}>
       <div className={widgetHeader}>
-        <h2 className={widgetHeading}>Backends & models</h2>
+        <div className="flex items-center gap-1">
+          <h2 className={widgetHeading}>Backends & models</h2>
+          <InfoHint label="About backends and models">{backendsDefinition}</InfoHint>
+        </div>
         <PeriodSelect label="Finished" value={period} onChange={setPeriod} />
       </div>
-      <div className="space-y-3 p-4">
+      <div className={widgetBody}>
         <InsightState query={query} />
         {data && (
           <>
-            <p className="text-xs text-muted-foreground">
-              Tasks that finished done or failed in the period, by the backend and model their
-              steps ran on. Includes subtasks. Cost is reported USD only.
-            </p>
+            <ReportNote>{backendsDefinition}</ReportNote>
             <Coverage coverage={data.coverage} retry={() => void query.refetch()} />
             {data.backends.length ? (
-              <div className="overflow-x-auto" role="region" aria-label="Backend comparison" tabIndex={0}>
+              <div className="-mx-3 overflow-x-auto" role="region" aria-label="Backend comparison" tabIndex={0}>
                 <table className="w-full text-left text-sm">
                   <thead>
                     <tr>
@@ -273,9 +283,9 @@ export function BackendComparison() {
                 </table>
               </div>
             ) : (
-              <p className="py-4 text-sm text-muted-foreground">No finished tasks in this period.</p>
+              <WidgetEmpty icon={Cpu} title="No finished tasks in this period." />
             )}
-            <span className="block font-mono text-[11px] text-soft-foreground">
+            <span className="block text-xs text-soft-foreground">
               <Freshness at={data.asOf} />
             </span>
             <ExportRows
@@ -302,7 +312,7 @@ function BackendRow({ stat: b, cost }: { stat: DashboardBackendStat; cost: boole
   const rate = percent(b.done, b.finished)
   const usd = b.costUsd?.value
   return (
-    <tr className="border-t transition-colors hover:bg-muted/30">
+    <tr className={tableRow}>
       <td className="px-3 py-2.5">
         <span className="block font-medium">{backendName(b.backend)}</span>
         <span className="block font-mono text-[11px] text-soft-foreground">
@@ -312,10 +322,10 @@ function BackendRow({ stat: b, cost }: { stat: DashboardBackendStat; cost: boole
       <td className="px-3 py-2.5 text-right tabular-nums">{b.finished}</td>
       <td className="min-w-40 px-3 py-2.5">
         <span className="flex items-center gap-2">
-          <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-danger/40" aria-hidden="true">
+          <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-danger/30" aria-hidden="true">
             <span className="block h-full rounded-full bg-success" style={{ width: `${rate}%` }} />
           </span>
-          <span className="w-10 text-right font-mono text-xs tabular-nums">{rate}%</span>
+          <span className="w-10 text-right text-xs tabular-nums">{rate}%</span>
         </span>
         <span className="block text-xs text-soft-foreground">
           {b.done} done · {b.failed} failed
@@ -354,7 +364,8 @@ type AutomationRow = {
 
 /** What each automation launched in the period, including the ones that launched nothing. */
 export function AutomationOutcomes() {
-  const [period, setPeriod] = useDashboardFilter('automations', ['7d', '30d'] as const, '7d')
+  // The period control lives in the page header (index.tsx); both read the same URL key.
+  const [period] = useDashboardFilter('automations', ['7d', '30d'] as const, '7d')
   const gate = useAutomationsGate()
   const query = useDashboardInsights(period)
   const definitions = useDashboardAutomations(gate.known && !gate.off)
@@ -401,34 +412,37 @@ export function AutomationOutcomes() {
   )
   return (
     <section data-dashboard-module="automation-outcomes" className="min-w-0">
-    <Card className="gap-0 py-0" data-export-context={`Automation outcomes: tasks created in ${periodText(period)}`}>
+    <Card className="gap-0 py-0" data-export-context={`Launched: Last ${period === '7d' ? 7 : 30} days; Automation outcomes: tasks created in ${periodText(period)}`}>
       <div className={widgetHeader}>
-        <h2 className={widgetHeading}>Automation outcomes</h2>
-        <PeriodSelect label="Launched" value={period} onChange={setPeriod} />
+        <div className="flex items-center gap-1">
+          <h2 className={widgetHeading}>Automation outcomes</h2>
+          <InfoHint label="About automation outcomes">{automationsDefinition}</InfoHint>
+        </div>
+        <span className={widgetMeta}>Launched in the last {period === '7d' ? 7 : 30} days</span>
       </div>
-      <div className="space-y-3 p-4">
+      <div className={widgetBody}>
         {gate.off ? (
-          <p className="text-sm text-muted-foreground">Automations are disabled in this workspace.</p>
+          <WidgetEmpty icon={Workflow} title="Automations are disabled in this workspace." />
         ) : (
           <>
             <InsightState query={query} />
             {data && (
               <>
-                <p className="text-xs text-muted-foreground">
-                  Tasks each automation created in the period and how they ended. Active means
-                  still running, queued, waiting on you, or waiting to resume after a usage limit.
-                </p>
+                <ReportNote>{automationsDefinition}</ReportNote>
                 <Coverage coverage={data.coverage} retry={() => void query.refetch()} />
                 {detailsFailed && (
-                  <p role="alert" className="text-sm">
-                    Some automation details could not be loaded. Their outcomes are shown by id.{' '}
-                    <Button variant="ghost" onClick={definitions.retry}>
-                      Retry automations
-                    </Button>
-                  </p>
+                  <Notice
+                    action={
+                      <Button variant="outline" size="sm" onClick={definitions.retry}>
+                        Retry automations
+                      </Button>
+                    }
+                  >
+                    Some automation details could not be loaded. Their outcomes are shown by id.
+                  </Notice>
                 )}
                 {sorted.length ? (
-                  <div className="overflow-x-auto" role="region" aria-label="Automation outcomes" tabIndex={0}>
+                  <div className="-mx-3 overflow-x-auto" role="region" aria-label="Automation outcomes" tabIndex={0}>
                     <table className="w-full text-left text-sm">
                       <thead>
                         <tr>
@@ -454,11 +468,11 @@ export function AutomationOutcomes() {
                     </table>
                   </div>
                 ) : (
-                  <p className="py-4 text-sm text-muted-foreground">
-                    No automations yet. Create one in a project's Automations page.
-                  </p>
+                  <WidgetEmpty icon={Workflow} title="No automations yet.">
+                    Create one in a project's Automations page.
+                  </WidgetEmpty>
                 )}
-                <span className="block font-mono text-[11px] text-soft-foreground">
+                <span className="block text-xs text-soft-foreground">
                   <Freshness at={data.asOf} />
                 </span>
                 <ExportRows
@@ -497,13 +511,13 @@ function AutomationOutcome({
   const cell = 'px-3 py-2.5 text-right tabular-nums'
   const zero = (n: number | undefined) => (n ? n : <span className="text-soft-foreground">0</span>)
   return (
-    <tr className="border-t transition-colors hover:bg-muted/30">
+    <tr className={tableRow}>
       <td className="px-3 py-2.5">
         {row.definition === 'removed' ? (
           <span className="block font-medium">{row.name}</span>
         ) : (
           <Link
-            className="block font-medium hover:underline"
+            className="block font-medium underline-offset-4 hover:underline"
             to={`/p/${encodeURIComponent(row.projectId)}/automations/${encodeURIComponent(row.automationId)}`}
           >
             {row.name}

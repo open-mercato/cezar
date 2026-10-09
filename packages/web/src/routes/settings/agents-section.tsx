@@ -1,6 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { BotIcon } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { Fragment, useState } from 'react'
 
 import { putConfig } from '@/api/client'
 import {
@@ -15,7 +14,6 @@ import {
 } from '@/api/queries'
 import { useProjectScope } from '@/api/project-scope-context'
 import type { ConfigResponse, Runner, SetConfigInput } from '@open-mercato/cezar-api-client'
-import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
@@ -28,6 +26,15 @@ import {
 } from '@/components/default-agent-picker'
 import { modelCatalogStatus, modelsForRunner, RUNNERS } from '@/routes/new-task-form'
 import { ProviderSettings } from './provider-settings'
+import {
+  SettingsError,
+  SettingsField,
+  SettingsGroup,
+  SettingsLoading,
+  SettingsNote,
+  SettingsPane,
+  SettingsSelect,
+} from './settings-field'
 
 /**
  * Settings → Agents (R6 Step 1.5, spec §"Settings"): today's scattered `PUT /api/config` knobs
@@ -55,22 +62,10 @@ export function AgentsSection() {
   const providerStatus = useProviderStatus()
 
   if (config.isPending) {
-    return (
-      <p data-slot="agents-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
-        Loading agent settings…
-      </p>
-    )
+    return <SettingsLoading data-slot="agents-loading" label="Loading agent settings…" />
   }
   if (config.isError) {
-    return (
-      <CenteredState
-        icon={<BotIcon />}
-        tone="danger"
-        title="Agent settings did not load"
-        subtitle={config.error.message}
-        heading="h2"
-      />
-    )
+    return <SettingsError title="Agent settings did not load">{config.error.message}</SettingsError>
   }
   return <AgentsForm config={config.data} catalogs={catalogs} providerStatus={providerStatus} />
 }
@@ -117,216 +112,215 @@ function AgentsForm({
     )
 
   return (
-    <div
-      data-slot="agents-section"
-      className="mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
-    >
+    <SettingsPane data-slot="agents-section">
       <ProviderSettings />
 
-      <DefaultAgentField
-        defaultRunner={config.defaultRunner}
-        providerStatus={providerStatus}
-        saving={save.isPending}
-        onPick={(runner) => save.mutate({ defaultRunner: runner })}
-      />
-
-      <Field
-        title="Default models"
-        hint={
-          config.modelsLocked
-            ? 'Models are locked to the defaults configured in the native coding-agent settings.'
-            : 'The model preselected in the composer for each runner. Auto lets the runner decide per task.'
-        }
-      >
-        <div className="flex max-w-md flex-col gap-2">
-          {RUNNERS.map((runner) => {
-            const provider = providerStatusFor(providerStatus.data, runner.id)
-            const providerConnected =
-              !providerStatus.isPending &&
-              !providerStatus.isError &&
-              provider?.enabled === true &&
-              provider.status === 'connected'
-            const providerReason = providerStatus.isPending
-              ? 'Checking provider authentication…'
-              : providerStatus.isError
-                ? 'Provider authentication could not be verified.'
-                : provider?.enabled === false
-                  ? 'This provider is disabled. Enable it above or choose another provider.'
-                : providerConnected
-                  ? undefined
-                  : 'Connect this provider before selecting it.'
-            const catalog = catalogs[runner.id]
-            const catalogStatus = modelCatalogStatus(runner.id, catalog.data, catalog.isError)
-            const modelOptions = modelsForRunner(runner.id, catalog.data, [
-              config.defaultModels[runner.id],
-            ])
-            const configuredModel = config.defaultModels[runner.id] ?? ''
-            const configuredModelLabel =
-              modelOptions.find((model) => model.id === configuredModel)?.label ??
-              configuredModel ??
-              'auto (default)'
-            return (
-              <label key={runner.id} className="flex items-center gap-3">
-                <span className="w-24 shrink-0 font-mono text-xs text-muted-foreground">{runner.label}</span>
-                {config.modelsLocked ? (
-                  <output
-                    aria-label={`Default model for ${runner.label}`}
-                    data-slot="agents-model"
-                    data-runner={runner.id}
-                    title="Model selection is locked to native coding-agent settings."
-                    className="block w-full rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs"
-                  >
-                    {configuredModelLabel}
-                  </output>
-                ) : (
-                  <select
-                    aria-label={`Default model for ${runner.label}`}
-                    data-slot="agents-model"
-                    data-runner={runner.id}
-                    value={configuredModel}
-                    title={providerReason ?? runner.desc}
-                    disabled={save.isPending || !providerConnected}
-                    onChange={(event) =>
-                      // Picking auto is a CHOICE, not the absence of one (#906): clearing the
-                      // preset alone let the coding agent's own settings file show through again,
-                      // so the select snapped straight back to the model it names. The additive
-                      // override says "ignore that default"; picking a real model clears it.
-                      save.mutate({
-                        defaultModels: { [runner.id]: event.target.value || null } as Partial<
-                          Record<Runner, string | null>
-                        >,
-                        defaultModelsAuto: { [runner.id]: event.target.value === '' } as Partial<
-                          Record<Runner, boolean>
-                        >,
-                      })
-                    }
-                    className="block w-full rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
-                  >
-                    {modelOptions.map((model) => (
-                      <option key={model.id} value={model.id}>
-                        {model.id === '' ? 'auto (default)' : model.label}
-                      </option>
-                    ))}
-                    {catalogStatus ? <option disabled>{catalogStatus}</option> : null}
-                  </select>
-                )}
-              </label>
-            )
-          })}
-        </div>
-      </Field>
-
-      <Field
-        title="System prompt"
-        hint="Extra instructions appended to every run, whichever runner executes it. This is the only place it is edited."
-      >
-        <Textarea
-          aria-label="System prompt"
-          data-slot="agents-system-prompt"
-          value={prompt}
-          onChange={(event) => setPrompt(event.target.value)}
-          placeholder="Extra rules for every agent run — conventions, tone, review requirements…"
-          className="min-h-32 max-w-xl"
+      <SettingsGroup title="Defaults" description="What a new task in this project starts with.">
+        <DefaultAgentField
+          defaultRunner={config.defaultRunner}
+          providerStatus={providerStatus}
+          saving={save.isPending}
+          onPick={(runner) => save.mutate({ defaultRunner: runner })}
         />
-        <div className="flex max-w-xl items-center gap-3">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            data-action="agents-save-prompt"
-            disabled={promptSaved || promptOverLimit || save.isPending}
-            onClick={savePrompt}
-          >
-            Save
-          </Button>
-          {promptOverLimit ? (
-            <p data-slot="agents-prompt-limit" className="text-[11px] text-danger">
-              {trimmedPrompt.length.toLocaleString()} characters — the limit is{' '}
-              {SYSTEM_PROMPT_MAX.toLocaleString()}.
-            </p>
-          ) : (
-            <p className="text-[11px] text-soft-foreground">
-              Leave empty and save to clear. Applied to new runs only.
-            </p>
+
+        <SettingsField
+          title="Default models"
+          hint={
+            config.modelsLocked
+              ? 'Models are locked to the defaults configured in the native coding-agent settings.'
+              : 'The model preselected in the composer for each runner. Auto lets the runner decide per task.'
+          }
+        >
+          <div className="grid gap-x-6 gap-y-2.5 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
+            {RUNNERS.map((runner) => {
+              const provider = providerStatusFor(providerStatus.data, runner.id)
+              const providerConnected =
+                !providerStatus.isPending &&
+                !providerStatus.isError &&
+                provider?.enabled === true &&
+                provider.status === 'connected'
+              const providerReason = providerStatus.isPending
+                ? 'Checking provider authentication…'
+                : providerStatus.isError
+                  ? 'Provider authentication could not be verified.'
+                  : provider?.enabled === false
+                    ? 'This provider is disabled. Enable it above or choose another provider.'
+                  : providerConnected
+                    ? undefined
+                    : 'Connect this provider before selecting it.'
+              const catalog = catalogs[runner.id]
+              const catalogStatus = modelCatalogStatus(runner.id, catalog.data, catalog.isError)
+              const modelOptions = modelsForRunner(runner.id, catalog.data, [
+                config.defaultModels[runner.id],
+              ])
+              const configuredModel = config.defaultModels[runner.id] ?? ''
+              const configuredModelLabel =
+                modelOptions.find((model) => model.id === configuredModel)?.label ??
+                configuredModel ??
+                'auto (default)'
+              return (
+                <Fragment key={runner.id}>
+                  <span className="text-[13px] text-muted-foreground">{runner.label}</span>
+                  {config.modelsLocked ? (
+                    <output
+                      aria-label={`Default model for ${runner.label}`}
+                      data-slot="agents-model"
+                      data-runner={runner.id}
+                      title="Model selection is locked to native coding-agent settings."
+                      className="flex h-9 w-full items-center rounded-md border border-input bg-muted/40 px-3 text-sm text-muted-foreground sm:max-w-sm"
+                    >
+                      {configuredModelLabel}
+                    </output>
+                  ) : (
+                    <SettingsSelect
+                      aria-label={`Default model for ${runner.label}`}
+                      data-slot="agents-model"
+                      data-runner={runner.id}
+                      value={configuredModel}
+                      title={providerReason ?? runner.desc}
+                      disabled={save.isPending || !providerConnected}
+                      onChange={(value) =>
+                        // Picking auto is a CHOICE, not the absence of one (#906): clearing the
+                        // preset alone let the coding agent's own settings file show through again,
+                        // so the select snapped straight back to the model it names. The additive
+                        // override says "ignore that default"; picking a real model clears it.
+                        save.mutate({
+                          defaultModels: { [runner.id]: value || null } as Partial<
+                            Record<Runner, string | null>
+                          >,
+                          defaultModelsAuto: { [runner.id]: value === '' } as Partial<
+                            Record<Runner, boolean>
+                          >,
+                        })
+                      }
+                      options={modelOptions.map((model) => ({
+                        value: model.id,
+                        label: model.id === '' ? 'auto (default)' : model.label,
+                      }))}
+                      footer={catalogStatus || undefined}
+                      className="sm:w-full sm:max-w-sm"
+                    />
+                  )}
+                </Fragment>
+              )
+            })}
+          </div>
+        </SettingsField>
+
+        <SettingsField
+          title="Base branch"
+          hint="New task worktrees branch from this and draft PRs target it. Also settable from the Git view."
+          control={
+            repo.data?.info ? (
+              <SettingsSelect
+                aria-label="Base branch"
+                data-slot="agents-base-branch"
+                value={config.baseBranch ?? ''}
+                disabled={save.isPending}
+                onChange={(value) => save.mutate({ baseBranch: value || null })}
+                options={[
+                  { value: '', label: 'follow checked-out branch (default)' },
+                  ...repo.data.branches.map((name) => ({ value: name, label: name })),
+                ]}
+                className="sm:w-72"
+              />
+            ) : undefined
+          }
+        >
+          {repo.data?.info ? null : (
+            <SettingsNote data-slot="agents-base-branch-unavailable">
+              {repo.isPending ? 'Loading branches…' : 'Not a git repository — tasks run in place, no branching.'}
+            </SettingsNote>
           )}
-        </div>
-      </Field>
+        </SettingsField>
+      </SettingsGroup>
 
-      <Field
-        title="Live title updates"
-        hint="Refresh a task's short title through the namer model as the run progresses. A manual rename always wins and stops updates for that task."
-      >
-        <label className="flex w-fit items-center gap-3">
-          <Switch
-            aria-label="Live title updates"
-            data-slot="agents-live-title-updates"
-            checked={config.liveTitleUpdates ?? true}
-            disabled={save.isPending}
-            onCheckedChange={(checked) =>
-              save.mutate(
-                { liveTitleUpdates: checked },
-                { onSuccess: () => toast(checked ? 'Live title updates on' : 'Live title updates off') },
-              )
-            }
+      <SettingsGroup title="Behaviour">
+        <SettingsField
+          title="System prompt"
+          hint="Extra instructions appended to every run, whichever runner executes it. This is the only place it is edited."
+        >
+          <Textarea
+            aria-label="System prompt"
+            data-slot="agents-system-prompt"
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            placeholder="Extra rules for every agent run — conventions, tone, review requirements…"
+            className="min-h-32"
           />
-          <span className="text-[13px] text-muted-foreground">
-            {(config.liveTitleUpdates ?? true) ? 'On' : 'Off'}
-            {config.liveTitleUpdates === null && ' (default)'}
-          </span>
-        </label>
-      </Field>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-action="agents-save-prompt"
+              disabled={promptSaved || promptOverLimit || save.isPending}
+              onClick={savePrompt}
+            >
+              Save
+            </Button>
+            {promptOverLimit ? (
+              <SettingsNote tone="danger" data-slot="agents-prompt-limit">
+                {trimmedPrompt.length.toLocaleString()} characters — the limit is{' '}
+                {SYSTEM_PROMPT_MAX.toLocaleString()}.
+              </SettingsNote>
+            ) : (
+              <SettingsNote>Leave empty and save to clear. Applied to new runs only.</SettingsNote>
+            )}
+          </div>
+        </SettingsField>
 
-      <Field
-        title="Review changes before finishing"
-        hint="When on, a task with changes pauses so you can Accept, Send back, or open a Draft PR. Autonomous tasks always skip this and finish on their own. Default: off — tasks finish without asking."
-      >
-        <label className="flex w-fit items-center gap-3">
-          <Switch
-            aria-label="Review changes before finishing"
-            data-slot="agents-review-gate"
-            checked={config.reviewGate ?? false}
-            disabled={save.isPending}
-            onCheckedChange={(checked) =>
-              save.mutate(
-                { reviewGate: checked },
-                { onSuccess: () => toast(checked ? 'Review gate on' : 'Review gate off') },
-              )
-            }
-          />
-          <span className="text-[13px] text-muted-foreground">
-            {(config.reviewGate ?? false) ? 'On' : 'Off'}
-            {config.reviewGate === null && ' (default)'}
-          </span>
-        </label>
-      </Field>
+        <SettingsField
+          title="Live title updates"
+          hint="Refresh a task's short title through the namer model as the run progresses. A manual rename always wins and stops updates for that task."
+          control={
+            <>
+              <span className="text-xs text-muted-foreground">
+                {(config.liveTitleUpdates ?? true) ? 'On' : 'Off'}
+                {config.liveTitleUpdates === null && ' (default)'}
+              </span>
+              <Switch
+                aria-label="Live title updates"
+                data-slot="agents-live-title-updates"
+                checked={config.liveTitleUpdates ?? true}
+                disabled={save.isPending}
+                onCheckedChange={(checked) =>
+                  save.mutate(
+                    { liveTitleUpdates: checked },
+                    { onSuccess: () => toast(checked ? 'Live title updates on' : 'Live title updates off') },
+                  )
+                }
+              />
+            </>
+          }
+        />
 
-      <Field
-        title="Base branch"
-        hint="New task worktrees branch from this and draft PRs target it. Also settable from the Git view."
-      >
-        {repo.data?.info ? (
-          <select
-            aria-label="Base branch"
-            data-slot="agents-base-branch"
-            value={config.baseBranch ?? ''}
-            disabled={save.isPending}
-            onChange={(event) => save.mutate({ baseBranch: event.target.value || null })}
-            className="block w-full max-w-md rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
-          >
-            <option value="">follow checked-out branch (default)</option>
-            {repo.data.branches.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <p data-slot="agents-base-branch-unavailable" className="text-[13px] text-soft-foreground">
-            {repo.isPending ? 'Loading branches…' : 'Not a git repository — tasks run in place, no branching.'}
-          </p>
-        )}
-      </Field>
-    </div>
+        <SettingsField
+          title="Review changes before finishing"
+          hint="When on, a task with changes pauses so you can Accept, Send back, or open a Draft PR. Autonomous tasks always skip this and finish on their own. Default: off — tasks finish without asking."
+          control={
+            <>
+              <span className="text-xs text-muted-foreground">
+                {(config.reviewGate ?? false) ? 'On' : 'Off'}
+                {config.reviewGate === null && ' (default)'}
+              </span>
+              <Switch
+                aria-label="Review changes before finishing"
+                data-slot="agents-review-gate"
+                checked={config.reviewGate ?? false}
+                disabled={save.isPending}
+                onCheckedChange={(checked) =>
+                  save.mutate(
+                    { reviewGate: checked },
+                    { onSuccess: () => toast(checked ? 'Review gate on' : 'Review gate off') },
+                  )
+                }
+              />
+            </>
+          }
+        />
+      </SettingsGroup>
+    </SettingsPane>
   )
 }
 
@@ -380,7 +374,7 @@ function DefaultAgentField({
   const hasAccounts = hasAgentAccounts(rows)
 
   return (
-    <Field
+    <SettingsField
       title={hasAccounts ? 'Default agent' : 'Default runner'}
       hint={
         hasAccounts
@@ -388,53 +382,43 @@ function DefaultAgentField({
           : 'Preselected for new tasks in THIS repo, and used by the chain planner. Each task can still pick another runner.'
       }
     >
-      <DefaultAgentPicker
-        rows={rows}
-        runner={defaultRunner}
-        accountFor={(id) => selection?.[id] ?? machine?.[id] ?? null}
-        providerStatus={providerStatus}
-        disabled={saving}
-        // The account half needs a project to write against; the runner half does not, so only an
-        // account row waits on the registry.
-        accountDisabled={select.isPending || projects.data === undefined}
-        onPick={(runner, account, hasAccountChoice) => {
-          if (runner !== defaultRunner) onPick(runner)
-          // Only when this agent HAS a choice of accounts: a single-login agent must not write a
-          // selection, or the store would fill up with rows that say nothing.
-          if (hasAccountChoice) {
-            select.mutate(
-              { projectId, provider: runner, profileId: account },
-              { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
-            )
-          }
-        }}
-      />
+      {/* The picker is one unbroken row; on a phone it scrolls instead of pushing the page wide. */}
+      <div className="-mx-1 overflow-x-auto px-1 py-0.5 [scrollbar-width:none]">
+        <DefaultAgentPicker
+          rows={rows}
+          runner={defaultRunner}
+          accountFor={(id) => selection?.[id] ?? machine?.[id] ?? null}
+          providerStatus={providerStatus}
+          disabled={saving}
+          // The account half needs a project to write against; the runner half does not, so only an
+          // account row waits on the registry.
+          accountDisabled={select.isPending || projects.data === undefined}
+          onPick={(runner, account, hasAccountChoice) => {
+            if (runner !== defaultRunner) onPick(runner)
+            // Only when this agent HAS a choice of accounts: a single-login agent must not write a
+            // selection, or the store would fill up with rows that say nothing.
+            if (hasAccountChoice) {
+              select.mutate(
+                { projectId, provider: runner, profileId: account },
+                { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
+              )
+            }
+          }}
+        />
+      </div>
       {!providerStatus.isPending &&
       !providerStatus.isError &&
       providerStatusFor(providerStatus.data, defaultRunner)?.enabled === false ? (
-        <p className="text-[13px] text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           This provider is disabled. Enable it above or choose another provider.
         </p>
       ) : null}
       {hasAccounts ? (
-        <p className="max-w-md text-[13px] text-muted-foreground">
+        <p className="text-xs text-pretty text-muted-foreground">
           Tasks already started under another account can’t be resumed here — their sessions live in
           that account’s folder.
         </p>
       ) : null}
-    </Field>
-  )
-}
-
-/** The Appearance section's field chassis — same rhythm, so Settings reads as one surface. */
-function Field({ title, hint, children }: { title: string; hint: string; children: ReactNode }) {
-  return (
-    <section className="flex flex-col gap-2">
-      <div>
-        <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-        <p className="text-[13px] text-muted-foreground">{hint}</p>
-      </div>
-      {children}
-    </section>
+    </SettingsField>
   )
 }

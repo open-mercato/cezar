@@ -91,7 +91,7 @@ export function DevelopmentPanel({
   return (
     <div data-slot="self-update-development" className="flex min-w-0 flex-col gap-2">
       <div className="flex items-center justify-between gap-2">
-        <div role="tablist" aria-label="Development builds" className="flex rounded-md border border-border bg-muted/40 p-0.5">
+        <div role="tablist" aria-label="Development builds" className="flex gap-0.5 rounded-lg bg-muted p-[3px]">
           {(
             [
               ...(hasWorktrees ? [{ value: 'worktrees', label: 'Worktrees', count: checkouts.length } as const] : []),
@@ -108,12 +108,12 @@ export function DevelopmentPanel({
                 setPicked(null)
               }}
               className={cn(
-                'rounded-[5px] px-3 py-1 text-[12.5px] font-semibold transition-colors',
-                tab === entry.value ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+                'flex h-7 items-center rounded-md px-3 text-[13px] font-medium transition-colors',
+                tab === entry.value ? 'bg-card text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground',
               )}
             >
               {entry.label}
-              {dev.data ? <span className="ml-1.5 font-normal text-muted-foreground">{entry.count}</span> : null}
+              {dev.data ? <span className="ml-1.5 font-normal tabular-nums text-muted-foreground">{entry.count}</span> : null}
             </button>
           ))}
         </div>
@@ -132,14 +132,14 @@ export function DevelopmentPanel({
 
       {/* Status lines and the "show unbuilt" toggle sit beside the listbox, not in it: a listbox
           may only hold options. */}
-      <div className="max-h-72 min-h-24 overflow-y-auto rounded-md border border-border">
+      <div className="max-h-72 min-h-24 overflow-y-auto rounded-lg border border-border bg-card">
         {dev.isPending ? (
-          <p className="px-3 py-3 text-[12.5px] text-muted-foreground">Looking for worktrees and pull requests…</p>
+          <p className="px-3 py-3 text-[13px] text-muted-foreground">Looking for worktrees and pull requests…</p>
         ) : dev.error ? (
-          <p className="px-3 py-3 text-[12.5px] text-danger">{dev.error.message}</p>
+          <p className="px-3 py-3 text-[13px] text-danger">{dev.error.message}</p>
         ) : tab === 'worktrees' ? (
           <>
-            {shownCheckouts.length === 0 ? <p className="px-3 py-3 text-[12.5px] text-muted-foreground">Nothing matches.</p> : null}
+            {shownCheckouts.length === 0 ? <p className="px-3 py-3 text-[13px] text-muted-foreground">Nothing matches.</p> : null}
             <div role="listbox" aria-label="Worktrees">
               {shownCheckouts.map((checkout) => (
                 <CheckoutRow
@@ -154,9 +154,9 @@ export function DevelopmentPanel({
           </>
         ) : (
           <>
-            {pulls && !pulls.available ? <p className="px-3 py-2 text-[12px] text-muted-foreground">{pulls.reason}</p> : null}
+            {pulls && !pulls.available ? <p className="px-3 py-2 text-xs text-muted-foreground">{pulls.reason}</p> : null}
             {pulls?.available && shownPulls.length === 0 ? (
-              <p className="px-3 py-3 text-[12.5px] text-muted-foreground">
+              <p className="px-3 py-3 text-[13px] text-muted-foreground">
                 {pulls.items.length === 0
                   ? `No open pull requests on ${pulls.repo}.`
                   : needle
@@ -179,7 +179,7 @@ export function DevelopmentPanel({
               <button
                 type="button"
                 onClick={() => setShowUnbuilt((value) => !value)}
-                className="w-full border-t border-border px-3 py-2 text-left text-[12px] text-muted-foreground hover:text-foreground"
+                className="w-full border-t border-border px-3 py-2 text-left text-xs text-muted-foreground hover:text-foreground"
               >
                 {showUnbuilt
                   ? `Hide the ${unbuilt} without a preview build`
@@ -191,7 +191,7 @@ export function DevelopmentPanel({
       </div>
 
       <div className="flex min-w-0 items-center justify-between gap-2">
-        <p className="min-w-0 truncate text-[11.5px] text-muted-foreground" title={pickedCheckout?.worktree}>
+        <p className="min-w-0 truncate text-xs text-muted-foreground" title={pickedCheckout?.worktree}>
           {pickedCheckout
             ? needsBuild
               ? `${pickedCheckout.built ? 'Built before its last commit' : 'Not built yet'} — runs npm run build in ${pickedCheckout.worktree} first (about a minute).`
@@ -245,7 +245,7 @@ function Row({
       className={cn(
         'flex min-w-0 flex-col gap-0.5 border-b border-border px-3 py-2 last:border-b-0 outline-none',
         disabled ? 'cursor-not-allowed opacity-55' : 'cursor-pointer hover:bg-muted/50 focus-visible:bg-muted/60',
-        selected && 'bg-primary/10 hover:bg-primary/10',
+        selected && 'bg-primary/15 hover:bg-primary/15',
       )}
     >
       {children}
@@ -277,7 +277,7 @@ function CheckoutRow({
           <Badge variant="outline">needs rebuild</Badge>
         ) : null}
       </div>
-      <div className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-muted-foreground">
+      <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
         <span className="shrink-0 font-mono">{checkout.branch}</span>
         {checkout.task ? <span className="shrink-0">· {checkout.task.status}</span> : null}
         {checkout.commit ? (
@@ -316,7 +316,7 @@ function PullRow({
           <Badge variant="outline">installed</Badge>
         ) : null}
       </div>
-      <div className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-muted-foreground">
+      <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
         {pull.author ? <span className="shrink-0">{pull.author}</span> : null}
         <span className="min-w-0 truncate font-mono">· {pull.branch}</span>
         <span className="shrink-0">· updated {shortAge(pull.updatedAt)} ago</span>

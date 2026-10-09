@@ -30,6 +30,10 @@
  * is the keyboard's answer to the same problem. */
 @custom-variant no-hover (@media (hover: none));
 
+/* `dark:` follows the cockpit's own theme, not the OS: dark is the default and `.light` on <html>
+ * flips it, so stock shadcn components that ship `dark:` utilities stay in step with the toggle. */
+@custom-variant dark (&:where(:root:not(.light), :root:not(.light) *));
+
 /* Streamdown (the thread's markdown renderer) styles itself with Tailwind utility classes that
  * live in node_modules — without this @source Tailwind would purge them and every code block /
  * table / blockquote would render unstyled (diff-highlight-tech.md §4, the documented gotcha). */
@@ -97,71 +101,55 @@
     U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
-/* ---------- tokens: dark (default) ---------- */
+/* ---------- tokens: dark (default) ----------
+ * Concept 2 — "light and airy". A cool-neutral zinc ramp, one lime accent used on purpose, and
+ * elevation from a soft shadow scale plus one inset content panel (the shadcn `inset` sidebar
+ * layout): `--sidebar` is the canvas the whole app sits on, `--background` is the panel floating
+ * on it, `--card` is a surface raised on the panel.
+ */
 
 :root {
   color-scheme: dark;
 
-  /* neutral ramp — elevation comes from surface steps, not shadows */
-  --background: #0d0d0d;
-  --foreground: #ffffff;
-  --card: #171717;
-  --card-2: #1c1c1c;
-  /* The sidebar's surface. Its own token because the two themes disagree about what it is:
-   * dark wants the card step, light wants a tint *below* the white card so the rail reads as
-   * chrome rather than page. See the `.light` block. */
-  --sidebar: var(--card);
-  --muted: #262626;
-  --muted-foreground: #a3a3a3;
-  --soft-foreground: #7b7b7b;
-  --border: #262626;
-  --input: #262626;
-  --contrast: #ebebeb;
-  --contrast-foreground: #171717;
+  --background: #131316;
+  --foreground: #f4f4f5;
+  --card: #19191d;
+  --card-2: #1e1e23;
+  --sidebar: #0b0b0d;
+  --muted: #222227;
+  --muted-foreground: #a1a1aa;
+  --soft-foreground: #74747e;
+  --border: #25252b;
+  --input: #2d2d34;
+  --contrast: #f4f4f5;
+  --contrast-foreground: #131316;
 
   /* accents — `--accent-lime` is the stable name for the brand lime; `--primary` points at
    * whichever accent family is active (Settings → Appearance swaps it via [data-accent]). */
   --accent-lime: #a8f372;
   --primary: var(--accent-lime);
-  --primary-foreground: #0d0d0d;
-  --violet: #8f86e8;
-  /* Text/icons printed *on* --violet (the Inbox count badge). White in both themes — the violet
-   * never lightens enough for ink to pass AA against it. */
+  --primary-foreground: #10190a;
+  /* Lime as INK. The fill is too light to read as text on a white panel, so words and icons
+   * that want the accent use this per-theme step instead. */
+  --primary-strong: #a8f372;
+  --violet: #9d94f5;
   --violet-foreground: #ffffff;
   --ring: #a8f372;
 
   /* status */
-  --danger: #ef4444;
+  --danger: #f0524d;
   --danger-foreground: #ffffff;
-  --success: #10b981; /* emerald-500 */
-  --pending: #fbbf24; /* amber-400 — dots/spinners only, never text */
-  /* Waiting on a PERSON — a reference that needs a reviewer, as opposed to one that is done
-   * (violet), finished well (success) or broken (danger). The palette had no blue outside the
-   * syntax theme, which is exactly why this reads as its own thing: nothing else in the cockpit
-   * is blue. Ink-only, per theme, AA on both backgrounds (10.9:1 here, 6.7:1 on light). */
+  --success: #22c38e;
+  --pending: #fbbf24; /* dots/spinners only, never text */
   --info: #93c5fd;
-
-  /* A pull request that will not merge — the OTHER axis of a reference's state, and the reason it
-   * needs a hue of its own. Red is already spoken for by "the checks failed" and "a reviewer asked
-   * for changes", and a conflict shown in that same red is a third meaning on one colour; green
-   * "ready" is the very claim it contradicts. Orange sits between the two on the same warm ramp —
-   * blocked, not broken — and is the one warm hue the cockpit had not spent. Ink-only, per theme,
-   * AA on both backgrounds (8.6:1 on this one, 7.9:1 on --card; 5.2:1 on light). Distinct from
-   * `--pending`'s amber by hue AND by glyph: the pending chip carries the pulsing dot, this one a
-   * warning triangle. */
   --conflict: #fb923c;
-
-  /* The INK version of pending. `--pending` is a fill colour: amber-400 as text passes against
-   * this theme's near-black and fails badly against the light theme's white, which is why the
-   * design guardian bans `text-pending` outright. This token is the sanctioned way to write amber
-   * words — same hue, per-theme luminance, AA against each theme's background. */
   --pending-strong: #fbbf24;
 
   /* diff tints */
-  --diff-add-bg: rgba(16, 185, 129, 0.1);
-  --diff-add-strong: rgba(16, 185, 129, 0.28);
-  --diff-del-bg: rgba(239, 68, 68, 0.1);
-  --diff-del-strong: rgba(239, 68, 68, 0.3);
+  --diff-add-bg: rgba(34, 195, 142, 0.1);
+  --diff-add-strong: rgba(34, 195, 142, 0.28);
+  --diff-del-bg: rgba(240, 82, 77, 0.1);
+  --diff-del-strong: rgba(240, 82, 77, 0.3);
 
   /* brand gradient: lime → yellow → violet */
   --grad: linear-gradient(135deg, #b4f372 12%, #eefb63 58%, #bc9aff 100%);
@@ -169,13 +157,9 @@
   /* type stacks — the woff2 above, then platform fallbacks */
   --sans: 'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'SF Mono', 'Menlo', monospace;
-  /* The wordmark only. Falls back to the UI face, never to a system display font. */
   --brand: 'Chakra Petch', var(--sans);
 
-  /* reading measure — the max width of the task view's column (header, thread, changes,
-   * commits). The default is the shipped 820px reading column; Settings → Appearance → Reading
-   * width flips it to `wide` (see the `:root[data-width]` block). Consumed as
-   * `max-w-[var(--measure)]` so one token moves every column together. */
+  /* reading measure — see `:root[data-width]` */
   --measure: 820px;
 
   /* shiki syntax highlighting (dark) */
@@ -197,6 +181,17 @@
   --secondary-foreground: var(--foreground);
   --destructive: var(--danger);
   --destructive-foreground: var(--danger-foreground);
+
+  --sidebar-foreground: #c8c8cf;
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: #1c1c21;
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+
+  --shadow-color: 0 0 0;
+  --shadow-strength: 0.5;
 }
 
 /* ---------- tokens: light ---------- */
@@ -205,32 +200,27 @@
   color-scheme: light;
 
   --background: #ffffff;
-  --foreground: #171717;
+  --foreground: #18181b;
   --card: #ffffff;
-  --card-2: #fbfbfb;
-  --sidebar: #fafafa;
-  --muted: #f7f7f7;
-  --muted-foreground: #5c5c5c;
-  --soft-foreground: #a3a3a3;
-  --border: #ebebeb;
-  --input: #ebebeb;
-  --contrast: #262626;
+  --card-2: #fafafa;
+  --sidebar: #f4f4f5;
+  --muted: #f4f4f5;
+  --muted-foreground: #5d5d66;
+  --soft-foreground: #8e8e98;
+  --border: #e9e9ec;
+  --input: #dfdfe4;
+  --contrast: #18181b;
   --contrast-foreground: #ffffff;
 
-  --ring: #171717;
+  --primary-strong: #3f8f17;
+  --violet: #6d5ef0;
+  --ring: #7fcf4a;
 
-  /* blue-700, not blue-300 — the same per-theme darkening the syntax blue already makes. */
+  --danger: #e5484d;
+  --success: #12a57a;
   --info: #1d4ed8;
-
-  /* amber-700, not amber-400: the dot keeps `--pending` in both themes, but amber ink on white
-   * has to come down this far to stay readable (~4.8:1 against #ffffff). */
   --pending-strong: #b45309;
-
-  /* orange-700, for the same reason the amber above darkens: orange-400 as ink on white is ~2:1.
-   * Far enough from `--pending-strong` (amber-700) to stay a different colour, not a shade. */
   --conflict: #c2410c;
-
-  --shadow-modal: 0 16px 48px 0 rgba(0, 0, 0, 0.12);
 
   --diff-add-bg: rgba(16, 185, 129, 0.08);
   --diff-del-bg: rgba(239, 68, 68, 0.07);
@@ -243,75 +233,64 @@
   --syn-num: #b91c1c;
   --syn-punc: #6b7280;
   --syn-var: #111827;
+
+  --sidebar-foreground: #3f3f46;
+  --sidebar-accent: #e8e8eb;
+
+  --shadow-color: 24 24 27;
+  --shadow-strength: 0.07;
 }
 
-/* ---------- appearance: accent + density (Settings → Appearance, redesign R6) ----------
- * `data-accent` / `data-density` land on <html> before first paint (the index.html pre-paint
- * script reads the localStorage mirror; ui-state.json is the authoritative store — see
- * src/lib/appearance.ts). The default (lime / comfortable) is the ABSENCE of the attribute,
- * so these blocks only name the deviations.
- */
+/* ---------- appearance: accent + density (Settings → Appearance) ---------- */
 
-/* Violet accent: the `--primary` family swaps onto the existing violet tokens. An accent is
- * exactly a `--primary` family swap — a new accent = a new block here + one entry in
- * ACCENT_OPTIONS (routes/settings/appearance.tsx). */
 :root[data-accent='violet'] {
   --primary: var(--violet);
   --primary-foreground: var(--violet-foreground);
+  --primary-strong: var(--violet);
   --ring: var(--violet);
 }
 
-/* Compact density: Tailwind v4's whole numeric spacing scale keys off ONE token (`--spacing`,
- * default 0.25rem — every `p-4`/`gap-2`/`h-14` is `calc(var(--spacing) * n)`), so shrinking it
- * to 3.5px/unit tightens paddings, gaps and control heights ~12% across the cockpit while the
- * type scale stays untouched. Declared on :root[…] (unlayered) so it outranks the
- * `@layer theme` default. */
 :root[data-density='compact'] {
   --spacing: 0.21875rem;
 }
 
-/* "Compact for real": one more notch — 3px/unit (~25% tighter than comfortable). Same one-token
- * lever as compact, just smaller; the type scale still stays untouched. */
 :root[data-density='ultra'] {
   --spacing: 0.1875rem;
 }
 
-/* Wide reading width (Settings → Appearance → Reading width): open the task-view column from the
- * default 820px to 1180px so long transcripts, diffs and command output use more of the screen.
- * One token, same `:root[…]` (unlayered) lever as density; narrow is the absence of the attribute. */
 :root[data-width='wide'] {
   --measure: 1180px;
 }
 
 /* ---------- tokens: radius + shadow ----------
- * These two scales are declared in a plain `@theme` (not `@theme inline`) because their token names
- * ARE Tailwind's own namespace keys — one declaration both defines `var(--radius-lg)` for hand-written
- * CSS and wires the `rounded-lg` / `shadow-md` utilities. Routing them through `@theme inline` instead
- * would emit a circular `--radius-lg: var(--radius-lg)`.
- * `initial` first wipes Tailwind's stock scales, so off-system steps (`shadow-2xl`, `rounded-3xl`) don't exist.
- * `static` keeps every step in the output even when no utility uses it yet, so hand-written CSS and
- * inline styles can rely on `var(--shadow-modal)` & co. being defined.
+ * Declared in a plain `@theme` (not `@theme inline`) because the names ARE Tailwind's namespace
+ * keys. The shadow scale is built from two per-theme variables so one set of utilities is soft on
+ * the light panel and deep enough to read on the dark one.
  */
 
 @theme static {
   --radius-*: initial;
-  --radius-sm: 8px;
-  --radius: 10px; /* default control radius — no namespace suffix, so it makes no utility of its own */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius: 8px; /* default control radius — no namespace suffix, so it makes no utility of its own */
   --radius-lg: 12px;
   --radius-xl: 16px;
+  --radius-2xl: 20px;
 
-  /* restrained by design — borders carry most of the separation */
   --shadow-*: initial;
-  --shadow-xs: 0 1px 2px 0 rgba(10, 13, 20, 0.03);
-  --shadow-sm: 0 2px 4px 0 rgba(27, 28, 29, 0.04);
-  --shadow-md: 0 16px 32px -12px rgba(14, 18, 27, 0.1);
-  --shadow-modal: 0 16px 48px 0 rgba(0, 0, 0, 0.45);
+  --shadow-2xs: 0 1px 0 0 rgb(var(--shadow-color) / calc(var(--shadow-strength) * 0.5));
+  --shadow-xs: 0 1px 2px 0 rgb(var(--shadow-color) / calc(var(--shadow-strength) * 0.7));
+  --shadow-sm: 0 1px 2px 0 rgb(var(--shadow-color) / var(--shadow-strength)),
+    0 2px 6px -1px rgb(var(--shadow-color) / var(--shadow-strength));
+  --shadow-md: 0 2px 4px -1px rgb(var(--shadow-color) / var(--shadow-strength)),
+    0 8px 20px -4px rgb(var(--shadow-color) / calc(var(--shadow-strength) * 1.4));
+  --shadow-lg: 0 4px 8px -2px rgb(var(--shadow-color) / var(--shadow-strength)),
+    0 20px 40px -8px rgb(var(--shadow-color) / calc(var(--shadow-strength) * 2));
+  --shadow-xl: 0 24px 60px -12px rgb(var(--shadow-color) / calc(var(--shadow-strength) * 3));
+  --shadow-modal: 0 24px 64px -12px rgb(var(--shadow-color) / calc(var(--shadow-strength) * 3.4));
 }
 
-/* ---------- Tailwind theme: utilities point at the tokens above ----------
- * `inline` means Tailwind emits `var(--card)` in the utility rather than copying the value,
- * so a single class like `bg-card` follows the active theme with no `dark:` variant anywhere.
- */
+/* ---------- Tailwind theme: utilities point at the tokens above ---------- */
 
 @theme inline {
   --color-background: var(--background);
@@ -330,6 +309,7 @@
 
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-primary-strong: var(--primary-strong);
   --color-violet: var(--violet);
   --color-violet-foreground: var(--violet-foreground);
   --color-ring: var(--ring);
@@ -356,6 +336,14 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
 
   --font-sans: var(--sans);
   --font-mono: var(--mono);
@@ -403,8 +391,20 @@
     background: var(--background);
     color: var(--foreground);
     font-family: var(--sans);
+    font-feature-settings: 'cv11', 'ss01', 'calt';
+    letter-spacing: -0.006em;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1,
+  h2,
+  h3 {
+    letter-spacing: -0.02em;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--primary) 45%, transparent);
   }
 
   code,
@@ -420,12 +420,19 @@
 
   /* Slim scrollbars — the cockpit is dense and the default chrome is heavy. */
   ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 10px;
+    height: 10px;
   }
   ::-webkit-scrollbar-thumb {
-    background: var(--muted);
+    background: color-mix(in oklab, var(--muted-foreground) 28%, transparent);
+    border: 2px solid transparent;
+    background-clip: content-box;
     border-radius: 99px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklab, var(--muted-foreground) 50%, transparent);
+    border: 2px solid transparent;
+    background-clip: content-box;
   }
   ::-webkit-scrollbar-track {
     background: transparent;

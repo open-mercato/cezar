@@ -42,7 +42,7 @@ export function DiffStatLabel({ stat, className }: { stat: DiffStat; className?:
       {...(caveat ? { 'data-repointed': 'true', 'aria-label': caveat } : {})}
       title={caveat ?? counts}
       className={cn(
-        'font-mono text-xs font-semibold tabular-nums',
+        'font-mono text-xs font-medium tabular-nums',
         stat.repointed && 'cursor-help underline decoration-dotted underline-offset-2',
         className
       )}

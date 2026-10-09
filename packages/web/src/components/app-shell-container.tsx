@@ -3,18 +3,19 @@ import { useLocation } from 'react-router'
 
 import { useHealth, useProjectRuns, useProjects, useRunsForProject, useSkillsUpdate, useStarCount, useTodos, useWorkspaceConfig } from '@/api/queries'
 import type { HealthResponse, SkillsUpdateState } from '@open-mercato/cezar-api-client'
-import { AppShell, type RepoChip } from '@/components/app-shell'
+import { AppShell, type Crumb, type RepoChip } from '@/components/app-shell'
 import { CommandPalette } from '@/components/command-palette'
 import { ListViewProvider } from '@/components/list-view'
 import { HostUsageWidget } from '@/components/host-usage-widget'
 import { ProviderBannerContainer } from '@/components/provider-banner-container'
-import { ProjectGroups } from '@/components/project-groups'
 import { TaskQuickListContainer } from '@/components/task-quick-list'
 import { ToolsMenu } from '@/components/tools-menu'
 import { useDocumentTitle } from '@/lib/use-document-title'
 import { useActiveProjectId } from '@/lib/project-router'
 import { unreadDoneCount } from '@/lib/read-state'
+import { orderProjects } from '@/lib/project-order'
 import { runTitle } from '@/lib/task-groups'
+import { useProjectOrder } from '@/lib/use-project-order'
 import { pageTitleContext } from '@/routes'
 
 /**
@@ -115,12 +116,26 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
 
   useDocumentTitle({ projectName, pageLabel, brandName: workspaceConfig.data?.branding.name, brandLogoUrl: workspaceConfig.data?.branding.logoUrl })
 
-  // Multi-project sidebar only from the SECOND project on (multi-project spec, "Sidebar").
-  // With one registered project — or with the registry still loading, or unreachable — the
-  // group header would say nothing the repo chip does not already say, so the shell keeps the
-  // flat nav + single quick-list it has always had. That degenerate case is the upgrade path:
-  // an existing user boots the new version in their usual repo and sees no difference.
-  const projects = registry && registry.projects.length > 1 ? registry : null
+  // The switcher lists the registry in the user's hand-picked order (#952), shared with ⌘K.
+  const { order } = useProjectOrder()
+  const projects = useMemo(
+    () => (registry ? orderProjects(registry.projects, order) : []),
+    [registry, order],
+  )
+  // The top bar's trail: the project (when the page belongs to one), then the page — and for a
+  // task, the Tasks list it came from in between.
+  const crumbs = useMemo<Crumb[]>(() => {
+    const trail: Crumb[] = []
+    const home = projectId === null ? null : `/p/${encodeURIComponent(projectId)}/`
+    if (home && projectName) trail.push({ label: projectName, to: home })
+    if (titleContext.taskId !== null) {
+      if (home) trail.push({ label: 'Tasks', to: home })
+      trail.push({ label: titleLabel ?? 'Task' })
+    } else if (pageLabel) {
+      trail.push({ label: globalSettings ? 'Global settings' : pageLabel })
+    }
+    return trail
+  }, [projectId, projectName, titleContext.taskId, titleLabel, pageLabel, globalSettings])
   const repo = useMemo(
     () => repoChipOf(health.data),
     [health.data?.repo?.root, health.data?.repo?.branch],
@@ -132,29 +147,6 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   // mounts nothing below `md` or in remote, so neither the CSS-hidden column nor a hosted cockpit
   // ever pays for a sample it cannot show.
   const hostWidget = useMemo(() => <HostUsageWidget />, [])
-  const projectGroups = useMemo(
-    () =>
-      projects ? (
-        <ProjectGroups
-          projects={projects.projects}
-          bootProjectId={projects.bootProject}
-          // No forge prop: each group gates its own GitHub tab on its registry entry's
-          // `forge` field (#698) — the boot folder's health-level answer says nothing about
-          // the other projects in the workspace.
-          inboxAvailable={inboxAvailable}
-          automationsAvailable={automationsAvailable}
-          inboxCount={todos.data?.length ?? null}
-          skillsUpdateAvailable={skillsUpdateAvailable}
-        />
-      ) : undefined,
-    [
-      projects,
-      inboxAvailable,
-      automationsAvailable,
-      todos.data?.length,
-      skillsUpdateAvailable,
-    ],
-  )
   const toolsMenu = useMemo(() => <ToolsMenu health={health.data} />, [health.data])
 
   return (
@@ -193,9 +185,10 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         singleProject={health.data?.capabilities.singleProject === true}
         taskQuickList={taskQuickList}
         hostWidget={hostWidget}
-        // Present only in a multi-project workspace; `AppShell` renders the flat nav and the
-        // quick-list above whenever this slot is absent.
-        projectGroups={projectGroups}
+        projects={projects}
+        activeProjectId={globalSettings ? null : projectId}
+        bootProjectId={bootProjectId}
+        crumbs={crumbs}
         toolsMenu={toolsMenu}
       >
         {children}

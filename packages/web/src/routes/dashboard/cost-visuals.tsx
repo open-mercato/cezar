@@ -1,4 +1,4 @@
-import { MetricContent, metricAccents, metricSurface } from './presentation'
+import { MetricContent } from './presentation'
 import type { DashboardCostProject, DashboardCosts } from '@open-mercato/cezar-api-client'
 import { ArrowDownLeft, ArrowUpRight, DollarSign, ChevronRight } from 'lucide-react'
 import {
@@ -10,22 +10,20 @@ import {
 
 type Metric = DashboardCosts['sort']
 export const accents = {
+  // Lime for money, neutrals for tokens: one accent, two quiet series.
   cost: {
-    text: 'text-primary',
+    text: 'text-primary-strong',
     fill: 'bg-primary',
-    tint: metricAccents.primary,
     icon: DollarSign,
   },
   input: {
-    text: 'text-violet',
-    fill: 'bg-violet',
-    tint: metricAccents.violet,
+    text: 'text-foreground',
+    fill: 'bg-foreground/70',
     icon: ArrowDownLeft,
   },
   output: {
-    text: 'text-info',
-    fill: 'bg-info',
-    tint: metricAccents.info,
+    text: 'text-muted-foreground',
+    fill: 'bg-foreground/30',
     icon: ArrowUpRight,
   },
 }
@@ -47,7 +45,7 @@ export function CostMetricCard({
   const Icon = accent.icon
   const coverage = total ? Math.min(100, (reported / total) * 100) : 0
   return (
-    <div className={`${metricSurface} ${accent.tint}`}>
+    <div className="min-w-0">
       <MetricContent
         label={label}
         value={value}
@@ -55,7 +53,7 @@ export function CostMetricCard({
       >
         {reported} of {total} tasks report this metric
       </MetricContent>
-      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden="true">
+      <div className="mt-2 h-1 overflow-hidden rounded-full bg-muted" aria-hidden="true">
         <div
           className={`h-full rounded-full ${accent.fill} transition-[width] duration-300 motion-reduce:transition-none`}
           style={{ width: `${coverage}%` }}
@@ -90,11 +88,11 @@ export function CostProjectBars({
   return (
     <TooltipProvider delayDuration={150}>
       <div
-        className="space-y-1 rounded-xl border p-2"
+        className="-mx-3 space-y-0.5"
         aria-label={`Projects ranked by ${label}`}
       >
         {projects.length === 0 && (
-          <p className="px-3 py-4 text-muted-foreground">
+          <p className="px-3 py-4 text-[13px] text-muted-foreground">
             No projects to compare in this cohort.
           </p>
         )}
@@ -109,7 +107,7 @@ export function CostProjectBars({
                 <button
                   data-export-row
                   data-export-keep
-                  className="group w-full rounded-lg px-3 py-3 text-left transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 motion-reduce:transition-none"
+                  className="group w-full cursor-pointer rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-50 motion-reduce:transition-none"
                   disabled={!currentProjects.some((p) => p.projectId === project.projectId)}
                   onClick={() => onSelect(project.projectId)}
                 >
@@ -126,12 +124,12 @@ export function CostProjectBars({
                     <span className="shrink-0 font-semibold tabular-nums">{format(value)}</span>
                     <ChevronRight
                       data-export-exclude
-                      className="size-4 shrink-0 text-muted-foreground"
+                      className="size-4 shrink-0 text-soft-foreground transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none"
                       aria-hidden="true"
                     />
                   </div>
                   <div
-                    className="mt-2 ml-7 h-2 overflow-hidden rounded-full bg-muted"
+                    className="mt-2 ml-7 h-1.5 overflow-hidden rounded-full bg-muted"
                     aria-hidden="true"
                   >
                     <div
@@ -140,7 +138,7 @@ export function CostProjectBars({
                       style={{ width: `${width}%` }}
                     />
                   </div>
-                  <p className="mt-1.5 ml-7 text-xs text-muted-foreground">
+                  <p className="mt-1.5 ml-7 text-xs text-soft-foreground">
                     {measure?.reportedTasks ?? 0} of {project.tasks} tasks report this metric
                     {!available ? ' · No measured value' : ''}
                   </p>
@@ -160,7 +158,7 @@ export function CostProjectBars({
         })}
       </div>
       {projects.length > 0 && (
-        <p className="mt-2 text-xs text-muted-foreground">
+        <p className="mt-2 text-xs text-soft-foreground">
           {projects.length > 5 ? `Top 5 of ${projects.length} projects. ` : ''}
           Bar lengths compare reported values; the largest is the reference.
         </p>

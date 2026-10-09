@@ -13,7 +13,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 
@@ -30,7 +29,7 @@ import { VIEW_IDS, viewLabel, type ViewId } from './layout-state'
  * address on a hosted cockpit with the reason, and loads everything else.
  */
 
-const VIEW_ICONS: Record<ViewId, ComponentType<{ className?: string }>> = {
+export const VIEW_ICONS: Record<ViewId, ComponentType<{ className?: string }>> = {
   session: MessageSquareTextIcon,
   changes: FileDiffIcon,
   commits: GitCommitHorizontalIcon,
@@ -117,7 +116,6 @@ export function ViewPickerMenu({
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
       <DropdownMenuContent align={align} className="w-64">
         <DropdownMenuLabel>{heading}</DropdownMenuLabel>
-        <DropdownMenuSeparator />
         <div data-slot="view-tiles" className="grid grid-cols-3 gap-1 p-1">
           {VIEW_IDS.map((view) => {
             const Icon = VIEW_ICONS[view]
@@ -127,7 +125,7 @@ export function ViewPickerMenu({
                 data-view={view}
                 data-view-action="create"
                 onSelect={() => onPick(view)}
-                className="flex h-16 flex-col items-center justify-center gap-1 rounded-md border border-border text-center text-xs"
+                className="flex h-16 flex-col items-center justify-center gap-1.5 rounded-md bg-muted/50 text-center text-xs text-muted-foreground focus:text-foreground"
               >
                 <Icon aria-hidden="true" className="size-4" />
                 <span className="truncate px-1">{viewLabel(view)}</span>

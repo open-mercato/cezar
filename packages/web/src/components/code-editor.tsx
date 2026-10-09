@@ -74,7 +74,7 @@ export function CodeEditor({ value, onChange, language, readOnly, className, ...
   return (
     <div
       data-slot="code-editor"
-      className={cn('relative overflow-hidden rounded-md border border-input bg-card', className)}
+      className={cn('relative overflow-hidden rounded-lg border border-input bg-card shadow-xs focus-within:border-ring', className)}
     >
       <pre
         ref={preRef}

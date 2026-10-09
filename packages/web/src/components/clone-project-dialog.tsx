@@ -15,7 +15,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
+import { Spinner } from '@/components/ui/spinner'
 
 /**
  * GitHub prints this URL when an otherwise-valid OAuth token still needs SAML
@@ -164,12 +165,13 @@ export function CloneProjectDialog({
         <DialogHeader>
           <DialogTitle>Clone from GitHub</DialogTitle>
           <DialogDescription>
-            The service clones with <code>gh</code> into your checkout root and adds the result as a project.
+            The service clones with <code className="font-mono text-[13px]">gh</code> into your checkout root and adds the result as a project.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-1.5">
-          <Label htmlFor="clone-url">Repository</Label>
+        <FieldGroup className="gap-4">
+        <Field>
+          <FieldLabel htmlFor="clone-url">Repository</FieldLabel>
           <Input
             id="clone-url"
             data-slot="clone-url"
@@ -182,10 +184,10 @@ export function CloneProjectDialog({
               if (event.key === 'Enter') clone()
             }}
           />
-        </div>
+        </Field>
 
-        <div className="grid gap-1.5">
-          <Label htmlFor="clone-name">Folder name</Label>
+        <Field>
+          <FieldLabel htmlFor="clone-name">Folder name</FieldLabel>
           <Input
             id="clone-name"
             data-slot="clone-name"
@@ -194,10 +196,10 @@ export function CloneProjectDialog({
             disabled={checkout.isPending}
             onChange={(event) => setName(event.target.value)}
           />
-          <div className="flex min-w-0 items-center gap-1">
+          <div className="flex min-w-0 items-center gap-1 rounded-md bg-muted py-0.5 pr-0.5 pl-2.5">
             <p
               data-slot="clone-target"
-              className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-soft-foreground"
+              className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground"
               title={target}
             >
               {target}
@@ -227,18 +229,20 @@ export function CloneProjectDialog({
               </Button>
             )}
           </div>
-        </div>
+        </Field>
+        </FieldGroup>
 
         {/* One line, replaced in place: `git clone` emits a counter update every few hundred ms,
             and a growing log would scroll a dialog that is otherwise a form. */}
         {checkout.isPending ? (
-          <p data-slot="clone-progress" className="truncate font-mono text-[11.5px] text-muted-foreground">
-            {progress ?? 'Starting the clone…'}
+          <p data-slot="clone-progress" className="flex min-w-0 items-center gap-2 font-mono text-xs text-muted-foreground">
+            <Spinner className="size-3.5 shrink-0" />
+            <span className="truncate">{progress ?? 'Starting the clone…'}</span>
           </p>
         ) : null}
 
         {checkout.isError ? (
-          <div data-slot="clone-error" className="grid min-w-0 gap-1.5 text-[13px] text-danger">
+          <div data-slot="clone-error" role="alert" className="grid min-w-0 gap-1.5 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2.5 text-[13px] text-danger">
             {ssoUrl ? (
               <>
                 <p>GitHub requires SAML authorization for this organization.</p>
@@ -280,6 +284,7 @@ export function CloneProjectDialog({
             Cancel
           </Button>
           <Button
+            variant="default"
             data-slot="clone-confirm"
             disabled={url.trim() === '' || effectiveName === '' || checkout.isPending}
             onClick={clone}

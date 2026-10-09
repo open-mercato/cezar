@@ -1,11 +1,12 @@
-import { ArrowUpRightIcon, Clock3Icon, GitForkIcon, ZapIcon } from 'lucide-react'
+import { ArrowUpRightIcon, Clock3Icon, GitForkIcon, TicketIcon, ZapIcon } from 'lucide-react'
 import type { SyntheticEvent } from 'react'
 import { nextOccurrence, type AutomationListEntry, type AutomationsResponse } from '@open-mercato/cezar-api-client'
 
 import { GithubIcon } from '@/components/icons'
-import { Pill } from '@/components/pill'
 import { StatusDot } from '@/components/status-dot'
-import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { dayTime, statusLabel, statusTone, triggerLabel, usd, AUTOMATION_COST_VISIBLE } from '@/lib/automation-format'
 import { shortAge } from '@/lib/format'
 import { Link, useNavigate } from '@/lib/project-router'
@@ -15,16 +16,14 @@ import { RowActions } from './row-actions'
 import type { AutomationActions } from './use-automations'
 
 /**
- * The Automations table (spec 2026-09-14-automations-redesign § UI/UX 1): nine columns, a row
- * per definition, the row itself the way into the editor. Costs are a column only when the
- * server reports them at all; the "Runs as", "Runs 7d" and "Cost 7d" columns give way under
- * 1280px (`.cz-auto-wide`) so the table keeps its shape on a laptop.
+ * The Automations table (spec 2026-09-14-automations-redesign § UI/UX 1): a row per definition,
+ * the row itself the way into the editor. Six columns — name, trigger, next run, last result,
+ * the enabled switch, the actions menu; what it runs as and the week's run count (and cost, when
+ * the server reports one) sit on the name's quiet second line instead of columns of their own.
  */
 
-const TH = 'h-[38px] border-b border-border px-[10px] text-left text-[11px] leading-none font-semibold tracking-[.05em] whitespace-nowrap text-soft-foreground uppercase'
-const TD = 'h-12 border-b border-border px-[10px] text-[13px] leading-none whitespace-nowrap'
-const WIDE = 'cz-auto-wide max-[1280px]:hidden'
-const DASH = <span className="text-xs text-soft-foreground">—</span>
+const TH = 'h-10 text-xs font-medium text-muted-foreground'
+const DASH = <span className="text-muted-foreground">—</span>
 
 export function AutomationsTable({
   data,
@@ -37,22 +36,21 @@ export function AutomationsTable({
 }) {
   const showCost = AUTOMATION_COST_VISIBLE && (data.stats.costUsd !== undefined || data.automations.some((automation) => automation.costUsd7d !== undefined))
   return (
-    <Card flush data-slot="automations-table" className="min-w-0 overflow-x-auto">
-      <table className="w-full border-collapse [&_tbody_tr:last-child>td]:border-b-0">
-        <thead>
-          <tr>
-            <th className={cn(TH, 'pl-4')}>State</th>
-            <th className={TH}>Automation</th>
-            <th className={TH}>Trigger</th>
-            <th className={cn(TH, WIDE)}>Runs as</th>
-            <th className={TH}>Next run</th>
-            <th className={TH}>Last run</th>
-            <th className={cn(TH, WIDE, 'text-right')}>Runs 7d</th>
-            {showCost ? <th className={cn(TH, WIDE, 'text-right')}>Cost 7d</th> : null}
-            <th className={cn(TH, 'pr-4')} />
-          </tr>
-        </thead>
-        <tbody>
+    <div data-slot="automations-table" className="min-w-0 overflow-hidden rounded-xl border bg-card shadow-xs">
+      <Table>
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
+            <TableHead className={cn(TH, 'pl-4')}>Automation</TableHead>
+            <TableHead className={cn(TH, 'max-md:hidden')}>Trigger</TableHead>
+            <TableHead className={TH}>Next run</TableHead>
+            <TableHead className={cn(TH, 'max-sm:hidden')}>Last result</TableHead>
+            <TableHead className={TH}>Enabled</TableHead>
+            <TableHead className={cn(TH, 'w-12 pr-3')}>
+              <span className="sr-only">Actions</span>
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {data.automations.map((automation) => (
             <AutomationRow
               key={automation.id}
@@ -64,9 +62,9 @@ export function AutomationsTable({
               now={now}
             />
           ))}
-        </tbody>
-      </table>
-    </Card>
+        </TableBody>
+      </Table>
+    </div>
   )
 }
 
@@ -93,107 +91,106 @@ function AutomationRow({
   const trigger = triggerLabel(automation)
   const runAs = [automation.task.workflow, automation.task.runner].filter(Boolean)
   const stop = (event: SyntheticEvent) => event.stopPropagation()
+  const KindIcon = github ? GithubIcon : automation.kind === 'tracker' ? TicketIcon : Clock3Icon
+  const details = [
+    ...runAs,
+    `${automation.runs7d} ${automation.runs7d === 1 ? 'run' : 'runs'} this week`,
+    ...(showCost && automation.costUsd7d !== undefined ? [usd(automation.costUsd7d)] : []),
+  ]
 
   return (
-    <tr
+    <TableRow
       data-slot="automation-row"
       data-automation={automation.id}
       data-enabled={automation.enabled ? 'true' : 'false'}
-      className={cn('cursor-pointer hover:bg-muted', !automation.enabled && 'opacity-60')}
+      className="cursor-pointer hover:bg-muted/50"
       onClick={() => navigate(`/automations/${encodeURIComponent(automation.id)}`)}
     >
-      <td className={cn(TD, 'pl-4')}>
-        {capabilityPaused ? (
-          <Pill dot="neutral">paused by capability</Pill>
+      <TableCell className="max-w-0 min-w-[220px] py-2.5 pl-4">
+        <div className={cn('flex min-w-0 items-start gap-3', !automation.enabled && 'opacity-60')}>
+          <KindIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="truncate text-[13.5px] font-medium text-foreground">{automation.name}</span>
+              {dispatch ? (
+                <Badge
+                  variant="secondary"
+                  data-slot="dispatch-badge"
+                  title={`dispatch · up to ${dispatch.maxSubtasks ?? 1} subtasks`}
+                  className="gap-0.5 px-1.5 py-0 font-normal tabular-nums"
+                >
+                  <GitForkIcon aria-hidden="true" />×{dispatch.maxSubtasks ?? 1}
+                </Badge>
+              ) : null}
+              {automation.task.autonomous ? (
+                <span title="autonomous" data-slot="autonomous-mark" className="inline-flex shrink-0">
+                  <ZapIcon aria-hidden="true" className="size-3.5 text-muted-foreground" />
+                </span>
+              ) : null}
+            </div>
+            <div data-slot="automation-details" className="truncate text-xs text-muted-foreground tabular-nums">
+              {details.join(' · ')}
+            </div>
+          </div>
+        </div>
+      </TableCell>
+      <TableCell className="max-w-[280px] truncate text-[13px] text-muted-foreground max-md:hidden" title={trigger}>
+        {trigger}
+      </TableCell>
+      <TableCell
+        data-slot="next-run"
+        className={cn('text-[13px] whitespace-nowrap tabular-nums', automation.enabled ? 'text-foreground' : 'text-muted-foreground')}
+      >
+        {nextRunText(automation, timeZone, now)}
+      </TableCell>
+      <TableCell className="max-sm:hidden">
+        {automation.lastRun ? (
+          <span className="inline-flex items-center gap-2 whitespace-nowrap">
+            <Badge asChild variant="outline" className="gap-1.5 font-normal">
+              <Link
+                to={`/tasks/${encodeURIComponent(automation.lastRun.runId)}`}
+                data-slot="task-link"
+                title="Open the task"
+                onClick={stop}
+              >
+                <StatusDot tone={statusTone(automation.lastRun.status)} />
+                {statusLabel(automation.lastRun.status)}
+                <ArrowUpRightIcon aria-hidden="true" className="text-muted-foreground" />
+              </Link>
+            </Badge>
+            <span className="text-xs text-muted-foreground tabular-nums">{shortAge(automation.lastRun.ts, now)}</span>
+          </span>
         ) : (
-          <Pill dot={automation.enabled ? 'success' : 'neutral'} pulse={automation.enabled && github}>
-            {automation.enabled ? 'enabled' : 'paused'}
-          </Pill>
+          DASH
         )}
-      </td>
-      <td className={cn(TD, 'max-w-0 min-w-[200px]')}>
-        <span className="flex min-w-0 items-center gap-2">
-          {github ? <GithubIcon className="size-3.5 shrink-0 text-soft-foreground" /> : automation.kind === 'tracker' ? <ZapIcon className="size-3.5 shrink-0 text-soft-foreground" /> : <Clock3Icon className="size-3.5 shrink-0 text-soft-foreground" />}
-          <span className="overflow-hidden text-[13px] font-medium text-ellipsis whitespace-nowrap">{automation.name}</span>
-          {dispatch ? (
-            <span
-              data-slot="dispatch-badge"
-              title={`dispatch · up to ${dispatch.maxSubtasks ?? 1} subtasks`}
-              className="inline-flex shrink-0 items-center gap-[3px] rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground"
-            >
-              <GitForkIcon className="size-2.5" />×{dispatch.maxSubtasks ?? 1}
+      </TableCell>
+      <TableCell onClick={stop}>
+        <span className="inline-flex items-center gap-2">
+          <Switch
+            checked={automation.enabled}
+            disabled={actions.busy}
+            aria-label={automation.enabled ? `Pause ${automation.name}` : `Enable ${automation.name}`}
+            title={automation.enabled ? 'Pause' : 'Enable'}
+            onCheckedChange={() => void actions.toggleEnabled(automation)}
+          />
+          {capabilityPaused ? (
+            <span data-slot="capability-paused" className="text-xs whitespace-nowrap text-muted-foreground max-xl:hidden">
+              paused by capability
             </span>
           ) : null}
         </span>
-      </td>
-      <td className={cn(TD, 'max-w-[260px] overflow-hidden font-mono text-xs text-ellipsis text-muted-foreground')} title={trigger}>
-        {trigger}
-      </td>
-      <td className={cn(TD, WIDE, 'text-xs text-muted-foreground')}>
-        {runAs.length ? (
-          <span className="inline-flex items-center gap-1.5">
-            {runAs.map((part, index) => (
-              <span key={part} className="contents">
-                {index > 0 ? <span className="text-soft-foreground">·</span> : null}
-                {part}
-              </span>
-            ))}
-            {automation.task.autonomous ? (
-              <>
-                <span className="text-soft-foreground">·</span>
-                <span title="autonomous" data-slot="autonomous-mark" className="inline-flex">
-                  <ZapIcon aria-hidden="true" className="size-[11px] text-soft-foreground" />
-                </span>
-              </>
-            ) : null}
-          </span>
-        ) : (
-          DASH
-        )}
-      </td>
-      <td
-        data-slot="next-run"
-        className={cn(TD, 'font-mono text-xs tabular-nums', automation.enabled ? 'text-foreground' : 'text-soft-foreground')}
-      >
-        {nextRunText(automation, timeZone, now)}
-      </td>
-      <td className={TD}>
-        {automation.lastRun ? (
-          <span className="inline-flex items-center gap-2">
-            <StatusDot tone={statusTone(automation.lastRun.status)} />
-            <span className="text-[12.5px] text-muted-foreground">{statusLabel(automation.lastRun.status)}</span>
-            <span className="text-[11.5px] text-soft-foreground">{shortAge(automation.lastRun.ts, now)}</span>
-            <Link
-              to={`/tasks/${encodeURIComponent(automation.lastRun.runId)}`}
-              data-slot="task-link"
-              onClick={stop}
-              className="inline-flex items-center gap-0.5 rounded-full border border-violet/40 px-1.5 py-px font-mono text-[10.5px] font-semibold text-violet"
-            >
-              task
-              <ArrowUpRightIcon className="size-[9px]" />
-            </Link>
-          </span>
-        ) : (
-          DASH
-        )}
-      </td>
-      <td className={cn(TD, WIDE, 'text-right font-mono text-xs text-muted-foreground tabular-nums')}>{automation.runs7d}</td>
-      {showCost ? (
-        <td className={cn(TD, WIDE, 'text-right font-mono text-xs text-muted-foreground tabular-nums')}>
-          {automation.costUsd7d !== undefined ? usd(automation.costUsd7d) : DASH}
-        </td>
-      ) : null}
-      <td className={cn(TD, 'pr-3 text-right')}>
+      </TableCell>
+      <TableCell className="pr-3 text-right">
         <RowActions automation={automation} actions={actions} />
-      </td>
-    </tr>
+      </TableCell>
+    </TableRow>
   )
 }
 
 /** `continuous` for a poll; the next instant (server-reported, else computed) for a schedule; `—` paused. */
 function nextRunText(automation: AutomationListEntry, timeZone: string, now: number): string {
   if (!automation.enabled) return '—'
-  if (automation.kind !== 'schedule') return 'continuous'
+  if (automation.kind !== 'schedule') return 'Continuous'
   if (automation.nextRunAt) return dayTime(automation.nextRunAt, timeZone) || '—'
   const next = automation.schedule ? nextOccurrence(automation.schedule, now, timeZone) : null
   return next === null ? '—' : dayTime(next, timeZone) || '—'

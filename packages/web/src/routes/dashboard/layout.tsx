@@ -35,23 +35,22 @@ function Module({ id, children, wide }: { id: TileId; children: ReactNode; wide:
     <section
       ref={setNodeRef}
       data-dashboard-module={id}
-      className={`group/module relative min-w-0 ${wide ? 'lg:col-span-2' : ''} ${isDragging ? 'z-20 opacity-80' : ''}`}
+      className={`group/module relative min-w-0 ${wide ? '@3xl:col-span-2' : ''} ${isDragging ? 'z-20 opacity-80' : ''}`}
       style={{
         transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
       }}
     >
-      {/* The handle straddles the card's top edge instead of owning a row of its own: a
-          full-width row per module was most of the dashboard's vertical whitespace. The
+      {/* The handle straddles the module's top edge instead of owning a row of its own. The
           button keeps its 44px target; only the pill inside it is visible. */}
       <Button
         ref={setActivatorNodeRef}
         variant="ghost"
-        className="absolute -top-[22px] left-1/2 z-10 min-h-11 min-w-11 -translate-x-1/2 cursor-grab touch-none p-0 opacity-0 transition-opacity hover:bg-transparent focus-visible:opacity-100 active:cursor-grabbing group-hover/module:opacity-100 no-hover:opacity-100"
+        className="absolute -top-[22px] left-1/2 z-10 h-11 min-w-11 -translate-x-1/2 cursor-grab touch-none p-0 opacity-0 transition-opacity hover:bg-transparent focus-visible:opacity-100 active:cursor-grabbing group-hover/module:opacity-100 no-hover:opacity-100"
         {...attributes}
         {...listeners}
         aria-label={`Move ${names[id]}`}
       >
-        <span className="flex h-4 w-8 items-center justify-center rounded-full border bg-card text-muted-foreground shadow-xs">
+        <span className="flex h-4 w-8 items-center justify-center rounded-full border bg-card text-soft-foreground shadow-xs">
           <GripHorizontal className="size-3.5" aria-hidden="true" />
         </span>
       </Button>
@@ -121,12 +120,15 @@ export function DashboardLayout({
       }}
     >
       <SortableContext items={visible} strategy={rectSortingStrategy}>
-        <div className="grid items-start gap-5 lg:grid-cols-2">
-          {visible.map((id) => (
-            <Module key={id} id={id} wide={wide.has(id)}>
-              {modules[id]}
-            </Module>
-          ))}
+        {/* Container, not viewport, breakpoints: the sidebar takes its share of the window. */}
+        <div className="@container">
+          <div className="grid items-start gap-6 @3xl:grid-cols-2">
+            {visible.map((id) => (
+              <Module key={id} id={id} wide={wide.has(id)}>
+                {modules[id]}
+              </Module>
+            ))}
+          </div>
         </div>
       </SortableContext>
     </DndContext>

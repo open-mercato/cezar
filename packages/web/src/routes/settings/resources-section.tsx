@@ -1,17 +1,25 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { GaugeIcon } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
 
 import { putWorkspaceConfig } from '@/api/client'
 import { useWorkspaceConfig, workspaceQueryKeys } from '@/api/queries'
 import type { SetWorkspaceConfigInput, WorkspaceConfigResponse } from '@open-mercato/cezar-api-client'
-import { CenteredState } from '@/components/centered-state'
 import { IntegerStepper } from '@/components/integer-stepper'
 import { Button } from '@/components/ui/button'
+import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
+import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
 import { MachineCard } from './machine-card'
-import { SettingsField } from './settings-field'
+import {
+  SettingsError,
+  SettingsField,
+  SettingsGroup,
+  SettingsLoading,
+  SettingsNote,
+  SettingsPane,
+  SettingsSelect,
+} from './settings-field'
 
 /**
  * Global settings → Resources: how hard the MACHINE works. `maxParallel` caps concurrent tasks
@@ -43,22 +51,10 @@ export function ResourcesSection() {
   const config = useWorkspaceConfig()
 
   if (config.isPending) {
-    return (
-      <p data-slot="resources-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
-        Loading resource settings…
-      </p>
-    )
+    return <SettingsLoading data-slot="resources-loading" label="Loading resource settings…" />
   }
   if (config.isError) {
-    return (
-      <CenteredState
-        icon={<GaugeIcon />}
-        tone="danger"
-        title="Resource settings did not load"
-        subtitle={config.error.message}
-        heading="h2"
-      />
-    )
+    return <SettingsError title="Resource settings did not load">{config.error.message}</SettingsError>
   }
   return <ResourcesForm config={config.data} />
 }
@@ -129,221 +125,230 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
     composerDefaults: { [key]: value === 'inherit' ? null : value === 'on' },
   })
 
+  const onOffInherit = [
+    { value: 'inherit', label: 'Inherit environment' },
+    { value: 'on', label: 'On' },
+    { value: 'off', label: 'Off' },
+  ] as const
+
   return (
-    <div
-      data-slot="resources-section"
-      className="mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
-    >
+    <SettingsPane data-slot="resources-section">
       {/* Live host totals first: they answer "how is the machine" before the knobs below answer
           "how hard may cezar push it" (spec 2026-09-20-host-resource-telemetry, §UI/UX). The
           card owns its own subscription, so this screen is what keeps the sampler alive. */}
       <MachineCard />
 
-      <SettingsField
-        title="Max parallel tasks"
-        hint="How many tasks run at once across every project. The rest wait in the queue. A non-git directory always runs one at a time."
-      >
-        <IntegerStepper
-          aria-label="Max parallel tasks"
-          data-slot="resources-max-parallel"
-          value={config.resources.maxParallel}
-          min={MAX_PARALLEL_MIN}
-          max={MAX_PARALLEL_MAX}
-          onCommit={(maxParallel) => save.mutateAsync({ resources: { maxParallel: maxParallel ?? MAX_PARALLEL_MIN } })}
-        />
-        <p className="text-[11px] text-soft-foreground">
-          Need a different limit for one project?{' '}
-          <Link
-            to="/settings/global/projects"
-            data-slot="resources-project-limits-link"
-            className="font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
-          >
-            Configure per-project limits
-          </Link>
-          .
-        </p>
-      </SettingsField>
-
-      <SettingsField
-        title="Waiting-session idle timeout"
-        hint="How long a plain waiting session may stay open without activity before its live backend session ends. Continue resumes it; set 0 to keep it open indefinitely."
-      >
-        <IntegerStepper
-          aria-label="Waiting-session idle timeout"
-          data-slot="resources-idle-timeout"
-          value={config.resources.idleTimeoutMinutes ?? 0}
-          min={0}
-          max={IDLE_TIMEOUT_MAX}
-          onCommit={(minutes) => save.mutateAsync({ resources: { idleTimeoutMinutes: minutes ?? 0 } })}
-        />
-        <p className="text-[11px] text-soft-foreground">
-          Minutes; 0 keeps plain waiting sessions alive. Monitoring sessions are already exempt.
-        </p>
-      </SettingsField>
-
-      <SettingsField
-        title="Extra monitoring sessions"
-        hint="How many agent sessions may wait on CI, sub-agents, or monitored commands without using an active task slot. Extra sessions stay alive but pause the queue."
-      >
-        <IntegerStepper
-          aria-label="Extra monitoring sessions"
-          data-slot="resources-max-monitoring"
-          value={config.resources.maxMonitoringSessions ?? 2}
-          min={0}
-          max={MAX_MONITORING_MAX}
-          onCommit={(sessions) => save.mutateAsync({ resources: { maxMonitoringSessions: sessions ?? 0 } })}
-        />
-        <p className="text-[11px] text-soft-foreground">
-          Capacity: {config.resources.maxParallel} active + {config.resources.maxMonitoringSessions ?? 2} monitoring. Set 0 to make monitoring share active slots.
-        </p>
-      </SettingsField>
-
-      <SettingsField
-        title="Monitoring wake-up"
-        hint="Park uses no model turns. Re-check sends the same agent a follow-up on this cadence until work completes or the 40-wakeup safety cap is reached."
-      >
-        <div className="flex flex-wrap items-center gap-2">
-          <select
-            aria-label="Monitoring wake-up"
-            data-slot="resources-monitoring-wake-mode"
-            value={wakeMode}
-            disabled={save.isPending}
-            onChange={(event) => setWakeMode(event.target.value as 'park' | 'interval')}
-            className="rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
-          >
-            <option value="park">Park until resumed</option>
-            <option value="interval">Re-check on an interval</option>
-          </select>
-          {wakeMode === 'interval' ? (
-            <>
-              <input
-                type="number"
-                min={WAKE_INTERVAL_MIN}
-                max={WAKE_INTERVAL_MAX}
-                aria-label="Wake interval in minutes"
-                data-slot="resources-monitoring-wake-interval"
-                value={wakeInterval}
-                disabled={save.isPending}
-                onChange={(event) => setWakeInterval(event.target.value)}
-                className="block w-24 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
-              />
-              <span className="text-xs text-soft-foreground">minutes</span>
-            </>
-          ) : null}
-          <Button type="button" variant="outline" size="sm" data-action="resources-save-monitoring-wake" disabled={wakeSaved || (wakeMode === 'interval' && wakeInvalid) || save.isPending} onClick={saveWake}>Save</Button>
-        </div>
-        {wakeMode === 'interval' && wakeInvalid ? (
-          <p data-slot="resources-monitoring-wake-invalid" className="text-[11px] text-danger">Enter a whole number from 1 to 60 minutes.</p>
-        ) : (
-          <p className="text-[11px] text-soft-foreground">Applied consistently to Claude, Codex and OpenCode.</p>
-        )}
-      </SettingsField>
-
-      <SettingsField
-        title="Auto-resume after a usage limit"
-        hint="When an agent stops because its provider usage limit is reached, cezar waits for the reset the provider named and continues the task 30 seconds later — up to 12 times in a row without you. Off leaves the task failed with its Continue button."
-      >
-        <select
-          aria-label="Auto-resume after a usage limit"
-          data-slot="resources-auto-resume"
-          value={autoResume ? 'on' : 'off'}
-          disabled={save.isPending}
-          onChange={(event) => saveAutoResume(event.target.value === 'on')}
-          className="block w-28 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+      <SettingsGroup title="Concurrency" description="How much runs at once, across every project.">
+        <SettingsField
+          title="Max parallel tasks"
+          hint="How many tasks run at once across every project. The rest wait in the queue. A non-git directory always runs one at a time."
+          control={
+            <IntegerStepper
+              aria-label="Max parallel tasks"
+              data-slot="resources-max-parallel"
+              value={config.resources.maxParallel}
+              min={MAX_PARALLEL_MIN}
+              max={MAX_PARALLEL_MAX}
+              onCommit={(maxParallel) => save.mutateAsync({ resources: { maxParallel: maxParallel ?? MAX_PARALLEL_MIN } })}
+            />
+          }
         >
-          <option value="on">On</option>
-          <option value="off">Off</option>
-        </select>
-        <p className="text-[11px] text-soft-foreground">
-          Applies to Claude, Codex and OpenCode — whenever the provider says when the limit lifts.
-        </p>
-      </SettingsField>
+          <SettingsNote>
+            Need a different limit for one project?{' '}
+            <Link
+              to="/settings/global/projects"
+              data-slot="resources-project-limits-link"
+              className="font-medium text-foreground underline decoration-border underline-offset-4 hover:decoration-foreground"
+            >
+              Configure per-project limits
+            </Link>
+            .
+          </SettingsNote>
+        </SettingsField>
 
-      <SettingsField
-        title="Per-task memory limit"
-        hint="When a task's whole process tree crosses this, the engine pauses it with a warning and starts the next queued task. Leave empty for no limit."
-      >
-        <div className="flex items-center gap-2">
-          <input
-            type="number"
-            inputMode="numeric"
-            min={MEMORY_MIN_MB}
-            step={256}
-            aria-label="Per-task memory limit in MiB"
-            data-slot="resources-memory-limit"
-            value={memory}
-            disabled={save.isPending}
-            placeholder="no limit"
-            onChange={(event) => setMemory(event.target.value)}
-            className="block w-32 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
-          />
-          <span className="text-xs text-soft-foreground">MiB</span>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            data-action="resources-save-memory"
-            disabled={memorySaved || memoryInvalid || save.isPending}
-            onClick={saveMemory}
-          >
-            Save
-          </Button>
-        </div>
-        {memoryInvalid ? (
-          <p data-slot="resources-memory-invalid" className="text-[11px] text-danger">
-            Enter a whole number of at least {MEMORY_MIN_MB} MiB, or leave empty for no limit.
-          </p>
-        ) : (
-          <p className="text-[11px] text-soft-foreground">Applies to newly started tasks.</p>
-        )}
-      </SettingsField>
+        <SettingsField
+          title="Extra monitoring sessions"
+          hint="How many agent sessions may wait on CI, sub-agents, or monitored commands without using an active task slot. Extra sessions stay alive but pause the queue."
+          control={
+            <IntegerStepper
+              aria-label="Extra monitoring sessions"
+              data-slot="resources-max-monitoring"
+              value={config.resources.maxMonitoringSessions ?? 2}
+              min={0}
+              max={MAX_MONITORING_MAX}
+              onCommit={(sessions) => save.mutateAsync({ resources: { maxMonitoringSessions: sessions ?? 0 } })}
+            />
+          }
+        >
+          <SettingsNote>
+            Capacity: {config.resources.maxParallel} active + {config.resources.maxMonitoringSessions ?? 2} monitoring. Set 0 to make monitoring share active slots.
+          </SettingsNote>
+        </SettingsField>
 
-      <SettingsField
+        <SettingsField
+          title="Per-task memory limit"
+          hint="When a task's whole process tree crosses this, the engine pauses it with a warning and starts the next queued task. Leave empty for no limit."
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <InputGroup className="w-40">
+              <InputGroupInput
+                type="number"
+                inputMode="numeric"
+                min={MEMORY_MIN_MB}
+                step={256}
+                aria-label="Per-task memory limit in MiB"
+                aria-invalid={memoryInvalid || undefined}
+                data-slot="resources-memory-limit"
+                value={memory}
+                disabled={save.isPending}
+                placeholder="no limit"
+                onChange={(event) => setMemory(event.target.value)}
+              />
+              <InputGroupAddon align="inline-end">MiB</InputGroupAddon>
+            </InputGroup>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-action="resources-save-memory"
+              disabled={memorySaved || memoryInvalid || save.isPending}
+              onClick={saveMemory}
+            >
+              Save
+            </Button>
+          </div>
+          {memoryInvalid ? (
+            <SettingsNote tone="danger" data-slot="resources-memory-invalid">
+              Enter a whole number of at least {MEMORY_MIN_MB} MiB, or leave empty for no limit.
+            </SettingsNote>
+          ) : (
+            <SettingsNote>Applies to newly started tasks.</SettingsNote>
+          )}
+        </SettingsField>
+      </SettingsGroup>
+
+      <SettingsGroup title="Waiting and monitoring" description="What happens to sessions that are not actively working.">
+        <SettingsField
+          title="Waiting-session idle timeout"
+          hint="How long a plain waiting session may stay open without activity before its live backend session ends. Continue resumes it; set 0 to keep it open indefinitely."
+          control={
+            <IntegerStepper
+              aria-label="Waiting-session idle timeout"
+              data-slot="resources-idle-timeout"
+              value={config.resources.idleTimeoutMinutes ?? 0}
+              min={0}
+              max={IDLE_TIMEOUT_MAX}
+              onCommit={(minutes) => save.mutateAsync({ resources: { idleTimeoutMinutes: minutes ?? 0 } })}
+            />
+          }
+        >
+          <SettingsNote>
+            Minutes; 0 keeps plain waiting sessions alive. Monitoring sessions are already exempt.
+          </SettingsNote>
+        </SettingsField>
+
+        <SettingsField
+          title="Monitoring wake-up"
+          hint="Park uses no model turns. Re-check sends the same agent a follow-up on this cadence until work completes or the 40-wakeup safety cap is reached."
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <SettingsSelect
+              aria-label="Monitoring wake-up"
+              data-slot="resources-monitoring-wake-mode"
+              value={wakeMode}
+              disabled={save.isPending}
+              onChange={(value) => setWakeMode(value as 'park' | 'interval')}
+              options={[
+                { value: 'park', label: 'Park until resumed' },
+                { value: 'interval', label: 'Re-check on an interval' },
+              ]}
+            />
+            {wakeMode === 'interval' ? (
+              <InputGroup className="w-36">
+                <InputGroupInput
+                  type="number"
+                  min={WAKE_INTERVAL_MIN}
+                  max={WAKE_INTERVAL_MAX}
+                  aria-label="Wake interval in minutes"
+                  aria-invalid={wakeInvalid || undefined}
+                  data-slot="resources-monitoring-wake-interval"
+                  value={wakeInterval}
+                  disabled={save.isPending}
+                  onChange={(event) => setWakeInterval(event.target.value)}
+                />
+                <InputGroupAddon align="inline-end">minutes</InputGroupAddon>
+              </InputGroup>
+            ) : null}
+            <Button type="button" variant="outline" size="sm" data-action="resources-save-monitoring-wake" disabled={wakeSaved || (wakeMode === 'interval' && wakeInvalid) || save.isPending} onClick={saveWake}>Save</Button>
+          </div>
+          {wakeMode === 'interval' && wakeInvalid ? (
+            <SettingsNote tone="danger" data-slot="resources-monitoring-wake-invalid">Enter a whole number from 1 to 60 minutes.</SettingsNote>
+          ) : (
+            <SettingsNote>Applied consistently to Claude, Codex and OpenCode.</SettingsNote>
+          )}
+        </SettingsField>
+
+        <SettingsField
+          title="Auto-resume after a usage limit"
+          hint="When an agent stops because its provider usage limit is reached, cezar waits for the reset the provider named and continues the task 30 seconds later — up to 12 times in a row without you. Off leaves the task failed with its Continue button."
+          control={
+            <Switch
+              aria-label="Auto-resume after a usage limit"
+              data-slot="resources-auto-resume"
+              checked={autoResume}
+              disabled={save.isPending}
+              onCheckedChange={saveAutoResume}
+            />
+          }
+        >
+          <SettingsNote>
+            Applies to Claude, Codex and OpenCode — whenever the provider says when the limit lifts.
+          </SettingsNote>
+        </SettingsField>
+      </SettingsGroup>
+
+      <SettingsGroup
         title="New task defaults"
-        hint="Set stable composer defaults across projects. Explicit choices and run-shape constraints still win."
+        description="Set stable composer defaults across projects. Explicit choices and run-shape constraints still win."
+        data-slot="resources-composer-defaults"
       >
-        <div className="grid gap-4 sm:grid-cols-2" data-slot="resources-composer-defaults">
-          <label className="grid gap-1.5 text-sm">
-            <span className="font-medium">Autonomous by default</span>
-            <select
+        <SettingsField
+          title="Autonomous by default"
+          hint={`Inherited: ${
+            composerDefaults.inheritedAutonomous === 'source-dependent'
+              ? 'Source-dependent — skills on, workflows off'
+              : composerDefaults.inheritedAutonomous ? 'On' : 'Off'
+          }`}
+          control={
+            <SettingsSelect
               aria-label="Autonomous by default"
               value={composerDefaults.autonomous === null ? 'inherit' : composerDefaults.autonomous ? 'on' : 'off'}
               disabled={save.isPending}
-              onChange={(event) => saveComposerDefault('autonomous', event.target.value)}
-              className="rounded-md border border-input bg-card px-3 py-1.5 shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-            >
-              <option value="inherit">Inherit environment</option>
-              <option value="on">On</option>
-              <option value="off">Off</option>
-            </select>
-            <span className="text-[11px] text-soft-foreground">
-              Inherited: {composerDefaults.inheritedAutonomous === 'source-dependent'
-                ? 'Source-dependent — skills on, workflows off'
-                : composerDefaults.inheritedAutonomous ? 'On' : 'Off'}
-            </span>
-          </label>
-          <label className="grid gap-1.5 text-sm">
-            <span className="font-medium">Use a worktree by default</span>
-            <select
+              onChange={(value) => saveComposerDefault('autonomous', value)}
+              options={onOffInherit}
+              className="sm:w-48"
+            />
+          }
+        />
+        <SettingsField
+          title="Use a worktree by default"
+          hint={`Inherited: ${composerDefaults.inheritedWorktree ? 'On' : 'Off'}`}
+          control={
+            <SettingsSelect
               aria-label="Use a worktree by default"
               value={composerDefaults.worktree === null ? 'inherit' : composerDefaults.worktree ? 'on' : 'off'}
               disabled={save.isPending}
-              onChange={(event) => saveComposerDefault('worktree', event.target.value)}
-              className="rounded-md border border-input bg-card px-3 py-1.5 shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-            >
-              <option value="inherit">Inherit environment</option>
-              <option value="on">On</option>
-              <option value="off">Off</option>
-            </select>
-            <span className="text-[11px] text-soft-foreground">
-              Inherited: {composerDefaults.inheritedWorktree ? 'On' : 'Off'}
-            </span>
-          </label>
-        </div>
-        <p className="text-[11px] text-soft-foreground">
-          Interactive skills may recommend both off. Multi-step and parallel runs remain isolated.
-        </p>
-      </SettingsField>
-    </div>
+              onChange={(value) => saveComposerDefault('worktree', value)}
+              options={onOffInherit}
+              className="sm:w-48"
+            />
+          }
+        >
+          <SettingsNote>
+            Interactive skills may recommend both off. Multi-step and parallel runs remain isolated.
+          </SettingsNote>
+        </SettingsField>
+      </SettingsGroup>
+    </SettingsPane>
   )
 }

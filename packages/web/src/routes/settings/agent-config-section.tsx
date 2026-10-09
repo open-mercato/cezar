@@ -1,17 +1,22 @@
-import { FileCogIcon } from 'lucide-react'
+import { ExternalLinkIcon, FileCogIcon, FileIcon, LockIcon } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 
 import { ApiError } from '@/api/client'
 import { useAgentConfig, useAgentConfigFile, useHealth, usePutAgentConfigFile } from '@/api/queries'
 import type { AgentConfigFile, AgentConfigListing, Runner } from '@open-mercato/cezar-api-client'
-import { CenteredState } from '@/components/centered-state'
 import { CodeEditor } from '@/components/code-editor'
 import { Badge } from '@/components/ui/badge'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toaster'
 import { availableRunners } from '@/routes/new-task-form'
 import { cn } from '@/lib/utils'
 import { AGENT_DESCRIPTORS, descriptorFor, type AgentDescriptor } from './agent-descriptors'
+import { SettingsError, SettingsLoading } from './settings-field'
 
 /**
  * Settings → Agent config (spec #404, regrouped per
@@ -64,22 +69,10 @@ export function AgentConfigSection() {
   )
 
   if (listing.isPending) {
-    return (
-      <p data-slot="agent-config-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
-        Loading agent config…
-      </p>
-    )
+    return <SettingsLoading data-slot="agent-config-loading" label="Loading agent config…" />
   }
   if (listing.isError) {
-    return (
-      <CenteredState
-        icon={<FileCogIcon />}
-        tone="danger"
-        title="Agent config did not load"
-        subtitle={listing.error.message}
-        heading="h2"
-      />
-    )
+    return <SettingsError title="Agent config did not load">{listing.error.message}</SettingsError>
   }
   return <AgentConfigView listing={listing.data} installed={installed} />
 }
@@ -96,51 +89,48 @@ function AgentConfigView({ listing, installed }: { listing: AgentConfigListing; 
   }
 
   return (
-    <div data-slot="agent-config" className="flex flex-col gap-4 p-4 md:p-6">
+    <div data-slot="agent-config" className="flex flex-col gap-5">
       {!listing.editable && (
-        <div
-          data-slot="agent-config-readonly"
-          className="rounded-md border border-border bg-muted/40 px-3 py-2 text-[13px] text-soft-foreground"
-        >
-          Read-only: agent config is edited from the machine that owns the checkout (this cockpit runs in hosted
-          mode). You can still see every file and which one wins.
+        <Alert data-slot="agent-config-readonly">
+          <LockIcon aria-hidden="true" />
+          <AlertDescription>
+            Read-only: agent config is edited from the machine that owns the checkout (this cockpit runs in hosted
+            mode). You can still see every file and which one wins.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <Tabs value={agent.id} onValueChange={(id) => pickAgent(id as Runner)} className="gap-2">
+        <div className="-mx-4 overflow-x-auto px-4 [scrollbar-width:none] sm:mx-0 sm:px-0">
+          <TabsList data-slot="agent-config-agents">
+            {AGENT_DESCRIPTORS.map((d) => (
+              <TabsTrigger
+                key={d.id}
+                value={d.id}
+                data-slot="agent-config-agent"
+                data-agent={d.id}
+                data-selected={d.id === agent.id}
+                title={installed.includes(d.id) ? undefined : `${d.label} is not installed`}
+                className={cn(!installed.includes(d.id) && 'text-soft-foreground')}
+              >
+                {d.label}
+                {!installed.includes(d.id) && <span className="sr-only">not installed</span>}
+              </TabsTrigger>
+            ))}
+          </TabsList>
         </div>
-      )}
+        {!installed.includes(agent.id) && (
+          <p className="text-xs text-muted-foreground">{agent.label} is not installed on this machine.</p>
+        )}
+        {agent.note && (
+          <p data-slot="agent-config-agent-note" className="max-w-prose text-[13px] text-pretty text-muted-foreground">
+            {agent.note}
+          </p>
+        )}
+      </Tabs>
 
-      <div data-slot="agent-config-agents" role="tablist" className="flex flex-wrap gap-1 rounded-md bg-muted/40 p-1">
-        {AGENT_DESCRIPTORS.map((d) => (
-          <button
-            key={d.id}
-            type="button"
-            role="tab"
-            aria-selected={d.id === agent.id}
-            data-slot="agent-config-agent"
-            data-agent={d.id}
-            data-selected={d.id === agent.id}
-            onClick={() => pickAgent(d.id)}
-            className={cn(
-              'flex items-center gap-2 rounded-md px-3 py-1.5 text-[13px] transition-colors',
-              d.id === agent.id ? 'bg-background font-semibold shadow-sm' : 'hover:bg-muted/60',
-            )}
-          >
-            {d.label}
-            {!installed.includes(d.id) && (
-              <Badge variant="outline" className="text-[10px] text-soft-foreground">
-                not installed
-              </Badge>
-            )}
-          </button>
-        ))}
-      </div>
-
-      {agent.note && (
-        <p data-slot="agent-config-agent-note" className="text-[12px] text-soft-foreground">
-          {agent.note}
-        </p>
-      )}
-
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
-        <nav data-slot="agent-config-nav" className="flex flex-col gap-5">
+      <div className="grid items-start gap-5 lg:grid-cols-[17rem_minmax(0,1fr)]">
+        <nav data-slot="agent-config-nav" className="flex flex-col gap-6">
           <AgentPane
             agent={agent}
             listing={listing}
@@ -149,13 +139,19 @@ function AgentConfigView({ listing, installed }: { listing: AgentConfigListing; 
           />
         </nav>
 
-        <div data-slot="agent-config-editor-pane">
+        <div data-slot="agent-config-editor-pane" className="min-w-0">
           {selected ? (
             <FileEditor key={selected.id} file={selected} />
           ) : (
-            <div className="flex h-full min-h-40 items-center justify-center rounded-md border border-dashed border-border text-[13px] text-soft-foreground">
-              Select a config file to view or edit it.
-            </div>
+            <Empty className="min-h-64 rounded-xl border border-dashed border-border">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <FileCogIcon />
+                </EmptyMedia>
+                <EmptyTitle>No file selected</EmptyTitle>
+                <EmptyDescription>Select a config file to view or edit it.</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
           )}
         </div>
       </div>
@@ -182,34 +178,27 @@ function AgentPane({
         if (files.length === 0 && !(isClaudeMcp && listing.userMcp)) return null
         return (
           <section key={g.id} data-slot="agent-config-group" data-group={g.id} data-agent={agent.id}>
-            <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-soft-foreground">
-              {g.label}
-            </p>
-            {g.note && <p className="mb-2 text-[12px] text-soft-foreground">{g.note}</p>}
-            <ul className="flex flex-col gap-1">
+            <h3 className="px-2 text-[13px] font-semibold text-foreground">{g.label}</h3>
+            {g.note && <p className="mt-0.5 px-2 text-xs text-pretty text-muted-foreground">{g.note}</p>}
+            <ul className="mt-1.5 flex flex-col gap-0.5">
               {files.map((file) => (
                 <li key={file.id}>
                   <button
                     type="button"
                     data-slot="agent-config-file"
                     data-selected={file.id === selectedId}
+                    aria-current={file.id === selectedId ? 'true' : undefined}
                     onClick={() => onSelect(file.id)}
                     className={cn(
-                      'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors',
-                      file.id === selectedId ? 'bg-primary/15 text-foreground' : 'hover:bg-muted/60',
+                      'flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
+                      file.id === selectedId ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+                      !file.exists && file.id !== selectedId && 'text-soft-foreground',
                     )}
                   >
-                    <span className="min-w-0 flex-1 truncate font-mono text-[12px]">{file.label}</span>
-                    {file.seeded && (
-                      <Badge variant="outline" className="shrink-0 text-[10px]">
-                        seeded
-                      </Badge>
-                    )}
-                    {file.private && (
-                      <Badge variant="outline" className="shrink-0 text-[10px]">
-                        private
-                      </Badge>
-                    )}
+                    <FileIcon aria-hidden="true" className="size-3.5 shrink-0" />
+                    <span className="min-w-0 flex-1 truncate font-mono text-xs" title={file.label}>{file.label}</span>
+                    {file.seeded && <span className="shrink-0 text-[11px] text-muted-foreground">seeded</span>}
+                    {file.private && <span className="shrink-0 text-[11px] text-muted-foreground">private</span>}
                     {!file.exists && <span className="shrink-0 text-[11px] text-soft-foreground">absent</span>}
                   </button>
                 </li>
@@ -227,9 +216,9 @@ function AgentPane({
  *  file) — listed read-only; cezar never edits it. */
 function UserMcpBlock({ userMcp }: { userMcp: NonNullable<AgentConfigListing['userMcp']> }) {
   return (
-    <div data-slot="agent-config-user-mcp" className="mt-3">
-      <h4 className="mb-1 text-[12px] font-semibold">User &amp; local scopes</h4>
-      <p className="mb-2 text-[12px] text-soft-foreground">
+    <div data-slot="agent-config-user-mcp" className="mt-4 px-2">
+      <h4 className="text-[13px] font-medium">User &amp; local scopes</h4>
+      <p className="mt-0.5 mb-2 text-xs text-pretty text-muted-foreground">
         Managed by <code className="font-mono">claude mcp add</code> in {userMcp.path} — cezar does not edit
         Claude’s state file.
       </p>
@@ -238,17 +227,17 @@ function UserMcpBlock({ userMcp }: { userMcp: NonNullable<AgentConfigListing['us
           <ul className="flex flex-wrap gap-1">
             {userMcp.servers.map((name) => (
               <li key={name}>
-                <Badge variant="outline" className="font-mono text-[11px]">
+                <Badge variant="secondary" className="font-mono text-[11px] font-normal">
                   {name}
                 </Badge>
               </li>
             ))}
           </ul>
         ) : (
-          <p className="text-[12px] text-soft-foreground">No user-scoped MCP servers.</p>
+          <p className="text-xs text-muted-foreground">No user-scoped MCP servers.</p>
         )
       ) : (
-        <p className="text-[12px] text-soft-foreground">Could not read the file.</p>
+        <p className="text-xs text-muted-foreground">Could not read the file.</p>
       )}
     </div>
   )
@@ -296,34 +285,40 @@ export function FileEditor({ file }: { file: AgentConfigFile }) {
   }
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="font-mono text-[13px]">{file.label}</span>
-        <Badge variant="outline" className="text-[10px] uppercase">
-          {file.format}
-        </Badge>
-        <a
-          href={file.docsUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="text-[12px] text-soft-foreground underline hover:text-foreground"
-        >
-          docs
-        </a>
+    <Card flush>
+      <div className="flex flex-col gap-1.5 border-b border-border px-5 py-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-mono text-[13px] font-medium break-all">{file.label}</span>
+          <Badge variant="secondary" className="font-mono text-[11px] font-normal">
+            {file.format}
+          </Badge>
+          <a
+            href={file.docsUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+          >
+            docs
+            <ExternalLinkIcon aria-hidden="true" className="size-3" />
+          </a>
+        </div>
+        <p data-slot="agent-config-effect" className="text-[13px] text-pretty text-foreground">
+          {effectLabel(file)}
+          {file.hotReload ? ` ${file.hotReload}` : ''}
+        </p>
+        <p data-slot="agent-config-precedence" className="text-xs text-pretty text-muted-foreground">
+          {file.precedence}
+        </p>
       </div>
 
-      <p data-slot="agent-config-precedence" className="text-[12px] text-soft-foreground">
-        {file.precedence}
-      </p>
-      <p data-slot="agent-config-effect" className="text-[12px] text-foreground/80">
-        {effectLabel(file)}
-        {file.hotReload ? ` ${file.hotReload}` : ''}
-      </p>
-
       {fileQuery.isPending ? (
-        <p className="text-[13px] text-soft-foreground">Loading file…</p>
+        <div role="status" aria-label="Loading file…" className="p-5">
+          <Skeleton className="h-64 w-full" />
+        </div>
       ) : fileQuery.isError ? (
-        <p className="text-[13px] text-destructive">{fileQuery.error.message}</p>
+        <div className="p-5">
+          <SettingsError title="The file did not load">{fileQuery.error.message}</SettingsError>
+        </div>
       ) : (
         <CodeEditor
           value={content}
@@ -331,43 +326,46 @@ export function FileEditor({ file }: { file: AgentConfigFile }) {
           readOnly={!canWrite}
           onChange={setDraft}
           aria-label={`${file.label} contents`}
-          className="h-[26rem]"
+          className="h-[26rem] rounded-none border-0 shadow-none"
         />
       )}
 
-      {formatError && (
-        <p data-slot="agent-config-format-error" className="text-[12px] text-destructive">
-          {formatError}
-        </p>
-      )}
-      {conflict && (
-        <div
-          data-slot="agent-config-conflict"
-          className="flex items-center justify-between gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-[12px]"
-        >
-          <span>The file changed on disk since you opened it.</span>
-          <Button size="sm" variant="outline" onClick={() => void fileQuery.refetch()}>
-            Reload from disk
-          </Button>
+      {formatError || conflict || canWrite ? (
+        <div className="flex flex-col gap-3 border-t border-border px-5 py-3.5">
+          {formatError && (
+            <p data-slot="agent-config-format-error" className="text-[13px] text-destructive">
+              {formatError}
+            </p>
+          )}
+          {conflict && (
+            <SettingsError
+              data-slot="agent-config-conflict"
+              title="The file changed on disk since you opened it."
+              action={
+                <Button size="sm" variant="outline" onClick={() => void fileQuery.refetch()}>
+                  Reload from disk
+                </Button>
+              }
+            />
+          )}
+          {canWrite && (
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="default" onClick={save} disabled={!dirty || put.isPending}>
+                {file.exists ? 'Save' : 'Create'}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setDraft(null)}
+                disabled={!dirty || put.isPending}
+              >
+                Revert
+              </Button>
+              {dirty && <span className="text-xs text-muted-foreground">Unsaved changes</span>}
+            </div>
+          )}
         </div>
-      )}
-
-      {canWrite && (
-        <div className="flex items-center gap-2">
-          <Button size="sm" onClick={save} disabled={!dirty || put.isPending}>
-            {file.exists ? 'Save' : 'Create'}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => setDraft(null)}
-            disabled={!dirty || put.isPending}
-          >
-            Revert
-          </Button>
-          {dirty && <span className="text-[12px] text-soft-foreground">Unsaved changes</span>}
-        </div>
-      )}
-    </div>
+      ) : null}
+    </Card>
   )
 }

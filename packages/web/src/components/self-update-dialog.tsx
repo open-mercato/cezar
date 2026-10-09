@@ -131,14 +131,14 @@ export function SelfUpdateDialog({
             {!data.canSelfUpdate ? <InstallHint data={data} /> : null}
 
             {data.activeRuns > 0 && data.canSelfUpdate ? (
-              <p className="rounded-md border border-pending/50 bg-pending/10 px-3 py-2 text-[12.5px] text-foreground">
+              <p className="rounded-lg bg-pending/10 px-3.5 py-2.5 text-[13px] text-foreground">
                 {data.activeRuns} task{data.activeRuns === 1 ? ' is' : 's are'} running. A restart interrupts
                 them; {brandName} re-queues or resumes them on the way back up.
               </p>
             ) : null}
 
             {setChannel.error ? (
-              <p className="text-[12.5px] text-danger">
+              <p className="text-[13px] text-danger">
                 Could not switch the channel: {setChannel.error.message}
                 {/* The cockpit is read from disk on every request, the server only at boot: a rebuilt
                     worktree can show a channel its still-running server has never heard of. */}
@@ -148,7 +148,7 @@ export function SelfUpdateDialog({
               </p>
             ) : null}
 
-            {apply.error ? <p className="text-[12.5px] text-danger">{apply.error.message}</p> : null}
+            {apply.error ? <p className="text-[13px] text-danger">{apply.error.message}</p> : null}
 
             {data.job ? <JobPanel data={data} /> : null}
           </div>
@@ -184,8 +184,8 @@ function ChannelToggle({
   return (
     <div className="flex items-center justify-between gap-3">
       <div className="min-w-0">
-        <div className="text-[13px] font-semibold">Release channel</div>
-        <div className="text-[12px] text-muted-foreground">
+        <div className="text-[13.5px] font-medium">Release channel</div>
+        <div className="text-xs text-muted-foreground">
           {CHANNEL_HINTS[data.channel]}
         </div>
       </div>
@@ -193,7 +193,7 @@ function ChannelToggle({
         role="radiogroup"
         aria-label="Release channel"
         data-slot="channel-toggle"
-        className="flex shrink-0 rounded-md border border-border bg-muted/40 p-0.5"
+        className="flex shrink-0 gap-0.5 rounded-lg bg-muted p-[3px]"
       >
         {CHANNELS.map((channel) => {
           const active = data.channel === channel.value
@@ -206,8 +206,8 @@ function ChannelToggle({
               disabled={busy}
               onClick={() => !active && onChange(channel.value)}
               className={cn(
-                'rounded-[5px] px-3 py-1 text-[12.5px] font-semibold transition-colors',
-                active ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+                'flex h-7 items-center rounded-md px-3 text-[13px] font-medium transition-colors',
+                active ? 'bg-card text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground',
               )}
             >
               {channel.label}
@@ -247,11 +247,11 @@ function LatestCard({
     // Stacked rather than side by side: branch names and nightly versions are long enough to
     // squeeze a one-row layout into a narrow word-per-line column.
     return (
-      <div data-slot="self-update-latest" className="flex flex-col gap-2 rounded-md border border-border bg-card px-3 py-2.5">
+      <div data-slot="self-update-latest" className="flex flex-col gap-2 rounded-lg border border-border bg-card px-4 py-3 shadow-xs">
         <div className="min-w-0 text-[13px] break-words">
           {dev?.source === 'link' ? (
             <>
-              Running worktree <span className="font-mono text-[12.5px] font-semibold">{dev.branch ?? dev.id}</span>, not
+              Running worktree <span className="font-mono text-[13px] font-semibold">{dev.branch ?? dev.id}</span>, not
               a release.
             </>
           ) : dev?.source === 'local' ? (
@@ -267,7 +267,7 @@ function LatestCard({
           )}
         </div>
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-          <div className="min-w-0 text-[11.5px] break-words text-muted-foreground">
+          <div className="min-w-0 text-xs break-words text-muted-foreground">
             {data.channel === 'development' ? (
               'Switch the channel back to Stable or Nightly to follow releases again.'
             ) : !data.checkedAt ? (
@@ -309,8 +309,8 @@ function LatestCard({
     <div
       data-slot="self-update-latest"
       className={cn(
-        'flex items-center justify-between gap-3 rounded-md border px-3 py-2.5',
-        target ? 'border-primary/40 bg-primary/5' : 'border-border bg-card',
+        'flex items-center justify-between gap-3 rounded-lg border px-4 py-3 shadow-xs',
+        target ? 'border-transparent bg-primary/15' : 'border-border bg-card',
       )}
     >
       <div className="min-w-0 text-[13px]">
@@ -327,7 +327,7 @@ function LatestCard({
           </>
         )}
         {data.checkedAt ? (
-          <div className="text-[11.5px] text-muted-foreground">checked {new Date(data.checkedAt).toLocaleTimeString()}</div>
+          <div className="text-xs text-muted-foreground">checked {new Date(data.checkedAt).toLocaleTimeString()}</div>
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-2">
@@ -380,7 +380,7 @@ function VersionPicker({
   const selected = options.find((option) => option.value === picked)
   return (
     <div data-slot="self-update-picker" className="flex min-w-0 flex-col gap-2">
-      <div className="text-[13px] font-semibold">
+      <div className="text-[13.5px] font-medium">
         Pick a version <span className="font-normal text-muted-foreground">· {data.channel}</span>
       </div>
       <div className="flex min-w-0 items-center gap-2">
@@ -412,7 +412,7 @@ function VersionPicker({
           {selected?.installed ? 'Switch & restart' : 'Install & restart'}
         </Button>
       </div>
-      <p className="text-[11.5px] text-muted-foreground">
+      <p className="text-xs text-muted-foreground">
         Any version, older ones included. Installed versions stay on disk, so switching back is instant.
       </p>
     </div>
@@ -436,10 +436,10 @@ function InstallHint({ data }: { data: SelfUpdateStatus }) {
         ? 'cezar install'
         : 'npx cezar-cli install'
   return (
-    <div data-slot="self-update-install-hint" className="rounded-md border border-border bg-muted/40 px-3 py-2.5 text-[12.5px]">
+    <div data-slot="self-update-install-hint" className="rounded-lg bg-muted/60 px-4 py-3 text-[13px]">
       <p>{data.reason}</p>
       <p className="mt-1.5 text-muted-foreground">Run this once, then start cezar with the plain command:</p>
-      <pre className="mt-1.5 overflow-x-auto rounded bg-background px-2 py-1.5 font-mono text-[12px]">{command}</pre>
+      <pre className="mt-1.5 overflow-x-auto rounded-md border border-border bg-card px-2.5 py-2 font-mono text-xs">{command}</pre>
     </div>
   )
 }
@@ -493,7 +493,7 @@ function JobPanel({ data }: { data: SelfUpdateStatus }) {
 
   return (
     <div data-slot="self-update-job" className="flex min-w-0 flex-col gap-1.5">
-      <div className="flex items-center justify-between text-[12.5px]">
+      <div className="flex items-center justify-between text-[13px]">
         <span className="font-semibold">
           {job.status === 'running'
             ? `Installing ${job.target}…`
@@ -508,11 +508,11 @@ function JobPanel({ data }: { data: SelfUpdateStatus }) {
       </div>
       <pre
         ref={logRef}
-        className="max-h-40 min-w-0 overflow-y-auto rounded-md border border-border bg-background px-2 py-1.5 font-mono text-[11px] leading-[1.5] break-all whitespace-pre-wrap text-muted-foreground"
+        className="max-h-40 min-w-0 overflow-y-auto rounded-lg bg-muted/60 px-3 py-2 font-mono text-[11px] leading-[1.5] break-all whitespace-pre-wrap text-muted-foreground"
       >
         {job.log.join('\n')}
       </pre>
-      {job.error ? <p className="text-[12.5px] text-danger">{job.error}</p> : null}
+      {job.error ? <p className="text-[13px] text-danger">{job.error}</p> : null}
     </div>
   )
 }

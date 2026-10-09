@@ -1,11 +1,10 @@
 import { useQueryClient, type QueryClient, type QueryKey } from '@tanstack/react-query'
-import { AlertTriangleIcon, ArrowLeftIcon, CircleDotIcon, ExternalLinkIcon, RefreshCwIcon, SearchIcon, SettingsIcon, TicketIcon } from 'lucide-react'
+import { AlertTriangleIcon, ArrowLeftIcon, CheckIcon, CircleDotIcon, ExternalLinkIcon, MoreHorizontalIcon, PlayIcon, RefreshCwIcon, SearchIcon, SettingsIcon, TicketIcon } from 'lucide-react'
 import { useEffect, useMemo, useState, type DragEvent } from 'react'
 import { useParams } from 'react-router'
 
 import type { TrackerAssociation, TrackerItem, TrackerItemResponse } from '@open-mercato/cezar-api-client'
-import { IssueBrowserLayout } from '@/components/issue-browser-layout'
-import { CenteredState } from '@/components/centered-state'
+import { IssueBrowserEmpty, IssueBrowserLayout } from '@/components/issue-browser-layout'
 import { useIsDesktop } from '@/lib/use-desktop'
 import { shortAge } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -14,7 +13,14 @@ import { getTrackerItem } from '@/api/client'
 import { useTrackerWatch } from '@/api/tracker-watch'
 import { useProjectScope } from '@/api/project-scope-context'
 import { queryKeys, TRACKER_STALE_TIME, TrackerRefreshError, useSkills, useTrackerConnection, useTrackerAssociation, useTrackerItem, useTrackerItems, useWorkflows } from '@/api/queries'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '@/components/ui/input-group'
+import { Spinner } from '@/components/ui/spinner'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toaster'
 import { Link } from '@/lib/project-router'
 import { trackerLosses, trackerTaskPrompt } from '@/lib/tracker-task'
@@ -38,21 +44,29 @@ export function TrackerRoute() {
     const current = previous?.key === associationKey ? previous.value : emptySelection()
     return { key: associationKey, value: typeof update === 'function' ? update(current) : update }
   })
-  if (association.isPending) return <PageState text="Loading tracker…" />
+  if (association.isPending) return <PageState text="Loading tracker…" loading />
   if (association.isError) return (
-    <div className="p-8 text-center text-sm text-danger">
-      <p>{association.error.message}</p>
-      <Link className="mt-3 inline-block text-violet underline underline-offset-4" to="/settings/tracker">Open tracker settings</Link>
-    </div>
+    <IssueBrowserEmpty
+      icon={<AlertTriangleIcon />}
+      tone="danger"
+      title="Could not load the tracker"
+      description={association.error.message}
+      actions={<Button asChild variant="outline"><Link to="/settings/tracker">Open tracker settings</Link></Button>}
+    />
   )
   if (!association.data.association) return <SetupState />
   // Connection-bound scopes survive disconnect so Settings can display their selection.
   // They must not mount a browser/watch without the corresponding credentials.
   if (association.data.association.connectionId) {
-    if (connection.isPending) return <PageState text="Loading tracker…" />
-    if (connection.isError) return <div role="alert" className="p-8 text-center text-sm">
-      <p>Could not verify the tracker connection.</p>
-      <Button className="mt-3" variant="outline" onClick={() => void connection.refetch()}>Retry connection</Button>
+    if (connection.isPending) return <PageState text="Loading tracker…" loading />
+    if (connection.isError) return <div role="alert" className="flex min-h-full flex-col">
+      <IssueBrowserEmpty
+        icon={<AlertTriangleIcon />}
+        tone="danger"
+        title="Could not verify the tracker connection."
+        description="The connection check did not answer. Your tracker settings are unchanged."
+        actions={<Button variant="outline" onClick={() => void connection.refetch()}><RefreshCwIcon aria-hidden="true" />Retry connection</Button>}
+      />
     </div>
     if (!connection.data.demo && (
       connection.data.connection?.id !== association.data.association.connectionId
@@ -68,12 +82,13 @@ function trackerAssociationKey(association: TrackerAssociation): string {
 
 function SetupState() {
   return (
-    <div className="mx-auto flex min-h-[55vh] max-w-lg flex-col items-center justify-center p-6 text-center">
-      <TicketIcon className="size-8 text-muted-foreground" />
-      <h1 className="mt-3 text-lg font-semibold">Connect an issue tracker</h1>
-      <p className="mt-1 text-sm text-muted-foreground">Choose a project or team from your issue tracker in project settings.</p>
-      <Link className="mt-4 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground" to="/settings/tracker">Open tracker settings</Link>
-    </div>
+    <IssueBrowserEmpty
+      slot="tracker-setup"
+      icon={<TicketIcon />}
+      title="Connect an issue tracker"
+      description="Choose a project or team from your issue tracker in project settings. Its issues then show up here, ready to hand to an agent."
+      actions={<Button asChild variant="primary"><Link to="/settings/tracker"><SettingsIcon aria-hidden="true" />Open tracker settings</Link></Button>}
+    />
   )
 }
 
@@ -111,42 +126,59 @@ function TrackerBrowse({ scopePending, association, selectedId, drafts, selectio
   }
 
   return <IssueBrowserLayout name="tracker" route="tracker" selected={selectedId !== undefined} list={<>
-    <header data-slot="tracker-header" className="sticky top-0 z-10 border-b border-border bg-background/95 px-4 pt-3 backdrop-blur">
-      <div className="flex min-w-0 items-center gap-2.5">
-        <h1 className="text-lg font-semibold">{provider}</h1>
-        <span className="min-w-0 truncate font-mono text-[11px] text-soft-foreground" title={association.externalName}>{association.externalName}</span>
-        <Link to="/settings/tracker" aria-label="Connection settings" title="Connection settings" className="ml-auto shrink-0 text-soft-foreground hover:text-foreground"><SettingsIcon className="size-3.5" /></Link>
-        <button type="button" aria-label="Refresh" title={`Refresh from ${provider}`} disabled={watch.checking || result.isFetching} onClick={() => void refresh()} className="flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px text-[10px] font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-55">
-          <RefreshCwIcon aria-hidden="true" className={cn('size-[9px]', (watch.checking || result.isFetching) && 'motion-safe:animate-spin')} />
-          {watch.checkedAt ? `synced ${shortAge(watch.checkedAt)} ago` : 'refresh'}
-        </button>
+    <header data-slot="tracker-header" className="sticky top-0 z-10 bg-background/95 px-4 pt-5 pb-3 backdrop-blur">
+      <div className="flex min-w-0 items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <h1 className="text-[22px] leading-7 font-semibold">{provider}</h1>
+          <p className="truncate text-[13px] text-muted-foreground" title={association.externalName}>{association.externalName}</p>
+        </div>
+        <Button variant="ghost" size="sm" aria-label="Refresh" title={`Refresh from ${provider}`} disabled={watch.checking || result.isFetching} onClick={() => void refresh()} className="shrink-0 font-normal tabular-nums">
+          <RefreshCwIcon aria-hidden="true" className={cn((watch.checking || result.isFetching) && 'motion-safe:animate-spin')} />
+          {watch.checkedAt ? `Synced ${shortAge(watch.checkedAt)} ago` : 'Refresh'}
+        </Button>
+        <Button asChild variant="ghost" size="icon-sm" className="shrink-0">
+          <Link to="/settings/tracker" aria-label="Connection settings" title="Connection settings"><SettingsIcon aria-hidden="true" /></Link>
+        </Button>
       </div>
-      <div className="mt-2.5 flex items-center justify-between border-b border-border pb-2">
-        <h2 className="text-[13px] font-medium">Issues · {items.length}{result.hasNextPage ? '+' : ''}</h2>
-        <select aria-label="Issue state" className="min-w-0 rounded-md border border-input bg-card px-2 py-1 text-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" value={state} onChange={(event) => { setState(event.target.value as 'active' | 'all'); setStateExplicit(true) }}><option value="active">Active</option><option value="all">All states</option></select>
+      <div className="mt-4 flex items-center justify-between gap-3">
+        <Tabs value={state} onValueChange={(next) => { setState(next === 'all' ? 'all' : 'active'); setStateExplicit(true) }}>
+          <TabsList aria-label="Issue state">
+            <TabsTrigger value="active">Active</TabsTrigger>
+            <TabsTrigger value="all">All states</TabsTrigger>
+          </TabsList>
+        </Tabs>
+        <h2 className="shrink-0 text-[13px] font-normal text-muted-foreground tabular-nums">{items.length}{result.hasNextPage ? '+' : ''} {items.length === 1 && !result.hasNextPage ? 'issue' : 'issues'}</h2>
       </div>
-      <form className="mt-2.5 flex items-center gap-2 pb-3" onSubmit={(event) => {
+      <form className="mt-3 flex items-center gap-2" onSubmit={(event) => {
         event.preventDefault()
         const next = queryDraft.trim()
         const nextState = stateExplicit ? state : next ? 'all' : 'active'
         if (next === query && nextState === state) void refresh()
         else { setQuery(next); setState(nextState) }
       }}>
-        <div className="relative min-w-0 flex-1"><SearchIcon aria-hidden="true" className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-soft-foreground" /><input type="search" aria-label="Search tracker" maxLength={256} className="w-full rounded-md border border-input bg-card py-1 pr-2 pl-7 text-[13px] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" value={queryDraft} onChange={(event) => setQueryDraft(event.target.value)} placeholder="Search issues…" /></div>
-        <Button type="submit" variant="outline" size="sm" disabled={result.isFetching}>Search</Button>
+        <InputGroup className="min-w-0 flex-1">
+          <InputGroupAddon><SearchIcon aria-hidden="true" /></InputGroupAddon>
+          <InputGroupInput type="search" aria-label="Search tracker" maxLength={256} value={queryDraft} onChange={(event) => setQueryDraft(event.target.value)} placeholder="Search issues…" />
+          <InputGroupAddon align="inline-end">
+            <InputGroupButton type="submit" variant="secondary" disabled={result.isFetching}>Search</InputGroupButton>
+          </InputGroupAddon>
+        </InputGroup>
         <TrackerLabelFilter options={items.flatMap(item => item.labels)} selected={labels} onChange={setLabels} />
       </form>
     </header>
-    {watch.error ? <p role="status" className="px-4 py-2 text-xs text-danger">{watch.error} The displayed list may be outdated.</p> : null}
-    {watch.hasChanges ? <div className="m-2 rounded-md border border-border bg-muted/40 p-3 text-xs"><p>New changes are available. Your loaded pages have been preserved.</p><Button size="sm" className="mt-2" variant="outline" onClick={() => void watch.applyChanges()}>Show changes</Button></div> : null}
-    {result.isPending && listVisible ? <PageState text="Loading issues…" /> : null}
-    {result.isError ? <Failure reason={result.error.message} generation={result.errorUpdatedAt} retryAfterSeconds={result.error instanceof TrackerRefreshError && result.error.failure.code === 'rate_limited' ? result.error.failure.retryAfterSeconds : undefined} retry={() => void result.restart()} /> : null}
-    {failure && !failure.available ? <Failure reason={failure.reason} generation={result.dataUpdatedAt} retryAfterSeconds={failure.code === 'rate_limited' ? failure.retryAfterSeconds : undefined} retry={() => void result.restart()} /> : null}
+    {watch.error ? <p role="status" className="px-4 py-2 text-[13px] text-danger">{watch.error} The displayed list may be outdated.</p> : null}
+    {watch.hasChanges ? <div className="mx-3 mb-2 flex items-center gap-3 rounded-lg bg-muted/60 px-3 py-2.5 text-[13px]"><p className="min-w-0 flex-1 text-pretty">New changes are available. Your loaded pages have been preserved.</p><Button size="sm" className="shrink-0" variant="outline" onClick={() => void watch.applyChanges()}>Show changes</Button></div> : null}
+    {result.isPending && listVisible ? <PageState text="Loading issues…" loading /> : null}
+    {result.isError ? <div className="px-3"><Failure reason={result.error.message} generation={result.errorUpdatedAt} retryAfterSeconds={result.error instanceof TrackerRefreshError && result.error.failure.code === 'rate_limited' ? result.error.failure.retryAfterSeconds : undefined} retry={() => void result.restart()} /></div> : null}
+    {failure && !failure.available ? <div className="px-3"><Failure reason={failure.reason} generation={result.dataUpdatedAt} retryAfterSeconds={failure.code === 'rate_limited' ? failure.retryAfterSeconds : undefined} retry={() => void result.restart()} /></div> : null}
     {!result.isPending && !result.isError && !failure && items.length === 0 ? <PageState text={query.trim() ? 'No issues match this search.' : 'No issues in this view.'} /> : null}
-    <ul data-slot="tracker-rows" className="flex flex-col gap-0.5 px-2 py-2">{items.map(item => <TrackerRow scopePending={scopePending} key={item.id} association={association} item={item} active={detailId === item.id} />)}</ul>
+    <ul data-slot="tracker-rows" className="flex flex-col gap-px px-2 pb-3">{items.map(item => <TrackerRow scopePending={scopePending} key={item.id} association={association} item={item} active={detailId === item.id} />)}</ul>
     {result.hasNextPage ? <Button className="mx-4 mb-4 shrink-0" variant="outline" onClick={() => void result.fetchNextPage()} disabled={result.isFetchingNextPage}>Load more</Button> : null}
-  </>} detail={detailId ? <TrackerDetail scopePending={scopePending} key={`${trackerAssociationKey(association)}:${detailId}`} association={association} id={detailId} drafts={drafts} selection={selection} onSelectionChange={setSelection} /> : <CenteredState icon={<CircleDotIcon />} tone="neutral" heading="h2" title="Nothing selected" subtitle="Choose an issue from the list." />} />
+  </>} detail={detailId ? <TrackerDetail scopePending={scopePending} key={`${trackerAssociationKey(association)}:${detailId}`} association={association} id={detailId} drafts={drafts} selection={selection} onSelectionChange={setSelection} /> : <IssueBrowserEmpty icon={<CircleDotIcon />} title="Nothing selected" description="Choose an issue from the list." />} />
 }
+
+/** How many label chips a list row shows before folding the rest into "+n". */
+const ROW_LABELS = 2
 
 function TrackerRow({ scopePending, association, item, active }: { scopePending: boolean; association: TrackerAssociation; item: TrackerItem; active: boolean }) {
   const queryClient = useQueryClient()
@@ -175,11 +207,20 @@ function TrackerRow({ scopePending, association, item, active }: { scopePending:
     event.dataTransfer.setData('text/plain', trackerTaskPrompt(detail.item))
     event.dataTransfer.effectAllowed = 'copy'
   }
-  return <li><Link to={`/tracker/${encodeURIComponent(item.id)}`} draggable onMouseEnter={preload} onFocus={preload} onDragStart={drag} data-slot="tracker-row" aria-current={active ? 'page' : undefined} title="Drag into the composer to prefill a task" className={cn('flex flex-col gap-1 rounded-md px-2.5 py-2 transition-colors hover:bg-muted', active && 'bg-muted')}>
-    <span className="flex min-w-0 items-center gap-2"><CircleDotIcon aria-hidden="true" className="size-3.5 shrink-0 text-violet" /><span className={cn('min-w-0 truncate text-[13px] font-medium', active && 'font-semibold')}>{item.title}</span></span>
-    <span className="flex min-w-0 items-center gap-2 pl-[22px] font-mono text-[10.5px] text-muted-foreground"><span className="shrink-0">{item.id}</span><span className="min-w-0 truncate">{item.author}</span><span className="shrink-0" title={new Date(item.updatedAt).toLocaleString()}>{shortAge(item.updatedAt)}</span></span>
-    <span className="flex flex-wrap gap-1 pl-[22px]"><span className="rounded border border-border px-1.5 py-px text-[10px] text-muted-foreground">{item.status}</span>{item.labels.map(label => <span key={label} className="rounded-full border border-border px-1.5 py-px text-[10px] text-muted-foreground">{label}</span>)}</span>
+  const shownLabels = item.labels.slice(0, ROW_LABELS)
+  const hiddenLabels = item.labels.length - shownLabels.length
+  return <li><Link to={`/tracker/${encodeURIComponent(item.id)}`} draggable onMouseEnter={preload} onFocus={preload} onDragStart={drag} data-slot="tracker-row" aria-current={active ? 'page' : undefined} title="Drag into the composer to prefill a task" className={cn('flex min-h-14 gap-2.5 rounded-lg px-2.5 py-2.5 transition-colors outline-none hover:bg-muted/60 focus-visible:bg-muted/60', active && 'bg-muted hover:bg-muted')}>
+    <CircleDotIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+    <span className="flex min-w-0 flex-1 flex-col gap-1">
+      <span className={cn('line-clamp-2 text-[13.5px] leading-snug font-medium text-pretty', active && 'font-semibold')}>{item.title}</span>
+      <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground tabular-nums"><span className="shrink-0">{item.id}</span><span aria-hidden="true">·</span><span className="min-w-0 truncate">{item.author}</span><span aria-hidden="true">·</span><span className="shrink-0" title={new Date(item.updatedAt).toLocaleString()}>{shortAge(item.updatedAt)}</span></span>
+      <span className="flex flex-wrap items-center gap-1 pt-0.5"><Badge variant="secondary" className="px-1.5 py-0 font-normal">{item.status}</Badge>{shownLabels.map(label => <LabelChip key={label} label={label} />)}{hiddenLabels > 0 ? <span title={item.labels.slice(ROW_LABELS).join(', ')} className="text-xs text-muted-foreground tabular-nums">+{hiddenLabels}</span> : null}</span>
+    </span>
   </Link></li>
+}
+
+function LabelChip({ label }: { label: string }) {
+  return <Badge variant="outline" className="max-w-40 px-1.5 py-0 font-normal text-muted-foreground"><span className="truncate">{label}</span></Badge>
 }
 
 export function trackerDetailReadyForDrag(
@@ -207,27 +248,84 @@ function TrackerDetail({ scopePending, association, id, selection, onSelectionCh
   useEffect(() => {
     if (detail.data?.available) setLastItem(detail.data.item)
   }, [detail.data])
+  const [handOpen, setHandOpen] = useState(false)
+  const [queuedRunId, setQueuedRunId] = useState<string | null>(null)
   const failure = detail.isError
     ? <Failure reason={detail.error.message} generation={detail.errorUpdatedAt} retry={() => void detail.refetch()} />
     : detail.data && !detail.data.available
       ? <Failure reason={detail.data.reason} generation={detail.dataUpdatedAt} retryAfterSeconds={detail.data.code === 'rate_limited' ? detail.data.retryAfterSeconds : undefined} retry={() => void detail.refetch()} />
       : null
-  // Keep the scoped composer mounted through a failed refresh; retained context is never launchable.
+  // Keep the composer's context through a failed refresh; retained context is never launchable.
   const item = detail.data?.available ? detail.data.item : lastItem
-  if (!item) return <div className="p-4"><DetailBackLink />{detail.isPending ? <PageState text="Loading full issue detail…" /> : failure}</div>
+  if (!item) return <div className="mx-auto w-full max-w-3xl px-4 pt-5 md:px-10 md:pt-8"><DetailBackLink />{detail.isPending ? <PageState text="Loading full issue detail…" loading /> : failure}</div>
+  const providerLabel = TRACKER_PROVIDERS[association.kind].label
+  const losses = trackerLosses(item)
   return (
-    <article data-slot="tracker-detail-inner" className="min-w-0 px-4 py-4 md:px-7 md:py-5">
+    <article data-slot="tracker-detail-inner" className="mx-auto w-full max-w-3xl min-w-0 px-4 pt-5 pb-12 md:px-10 md:pt-8">
       <DetailBackLink />
-      <p className="flex flex-wrap items-center gap-x-1.5 font-mono text-[10.5px] text-soft-foreground">
-        <span>{item.id}</span>·<span>issue</span>·<span>opened by {item.author}</span>·<span title={new Date(item.createdAt).toLocaleString()}>{shortAge(item.createdAt)} ago</span>·
-        <a className="inline-flex items-center gap-0.5 text-muted-foreground hover:text-foreground hover:underline" href={item.url} target="_blank" rel="noopener noreferrer">open on {TRACKER_PROVIDERS[association.kind].label}<ExternalLinkIcon aria-hidden="true" className="size-2.5" /></a>
-      </p>
-      <h2 className="mt-2 text-xl leading-snug font-semibold">{item.title}</h2>
-      <div className="mt-3 flex flex-wrap items-center gap-1.5"><span className="rounded border border-border px-1.5 py-px text-[10px] text-muted-foreground">{item.status}</span>{item.labels.map(label => <span key={label} className="rounded-full border border-border px-1.5 py-px text-[10px] text-muted-foreground">{label}</span>)}</div>
+      <header className="flex flex-wrap items-start gap-x-4 gap-y-3">
+        <div className="min-w-0 flex-1 basis-72 space-y-2">
+          <div className="flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
+            <Badge variant="secondary" className="font-medium">{item.status}</Badge>
+            <span>Issue <span className="tabular-nums">{item.id}</span></span>
+          </div>
+          <h2 className="text-[22px] leading-7 font-semibold text-pretty">{item.title}</h2>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {queuedRunId ? (
+            <Button asChild variant="outline">
+              <Link to={`/tasks/${queuedRunId}`}><CheckIcon aria-hidden="true" className="text-success" />Queued — view task</Link>
+            </Button>
+          ) : null}
+          <Button variant={queuedRunId ? 'outline' : 'primary'} data-action="tracker-hand-open" onClick={() => setHandOpen(true)}>
+            <PlayIcon aria-hidden="true" />
+            Hand to agent
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="icon" aria-label="More actions for this issue"><MoreHorizontalIcon aria-hidden="true" /></Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuItem asChild>
+                <a href={item.url} target="_blank" rel="noopener noreferrer"><ExternalLinkIcon aria-hidden="true" />Open on {providerLabel}</a>
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => void detail.refetch()}><RefreshCwIcon aria-hidden="true" />Refresh issue</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => void navigator.clipboard?.writeText(item.url).then(() => toast('Link copied'))}>Copy link</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </header>
+      <dl className="mt-5 grid grid-cols-[6.5rem_minmax(0,1fr)] items-baseline gap-x-4 gap-y-2 text-[13px]">
+        <dt className="text-muted-foreground">Author</dt>
+        <dd>{item.author}</dd>
+        <dt className="text-muted-foreground">Opened</dt>
+        <dd title={new Date(item.createdAt).toLocaleString()}>{shortAge(item.createdAt)} ago</dd>
+        <dt className="text-muted-foreground">Updated</dt>
+        <dd title={new Date(item.updatedAt).toLocaleString()}>{shortAge(item.updatedAt)} ago</dd>
+        {item.labels.length > 0 ? <>
+          <dt className="text-muted-foreground">Labels</dt>
+          <dd className="flex flex-wrap gap-1">{item.labels.map(label => <LabelChip key={label} label={label} />)}</dd>
+        </> : null}
+      </dl>
       {failure}
-      {trackerLosses(item).length ? <div className="mt-4 rounded-md border border-warning/50 bg-warning/10 p-3 text-sm"><AlertTriangleIcon className="mr-2 inline size-4" />This snapshot is incomplete. Review the limitations in the handoff panel.</div> : null}
-      <section data-slot="tracker-body" className="mt-5 text-sm"><Markdown>{item.body.trim() || '*No description was provided.*'}</Markdown></section>
-      <TrackerHandoff scopePending={scopePending} key={`${trackerAssociationKey(association)}:${item.id}`} item={item} detailUnavailable={detail.isError || !detail.data?.available} drafts={drafts} selection={selection} onSelectionChange={onSelectionChange} workflows={workflows.data?.workflows ?? []} skills={skills.data ?? []} />
+      {losses.length ? (
+        <Alert className="mt-5">
+          <AlertTriangleIcon className="text-pending-strong" />
+          <AlertTitle>This snapshot is incomplete.</AlertTitle>
+          <AlertDescription>Review the limitations in the handoff panel.</AlertDescription>
+        </Alert>
+      ) : null}
+      <section data-slot="tracker-body" className="mt-6 border-t border-border pt-6 text-sm leading-relaxed"><Markdown>{item.body.trim() || '*No description was provided.*'}</Markdown></section>
+      <Dialog open={handOpen} onOpenChange={setHandOpen}>
+        <DialogContent data-slot="tracker-hand-dialog" className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Hand to agent</DialogTitle>
+            <DialogDescription className="line-clamp-2">{item.id} — {item.title}</DialogDescription>
+          </DialogHeader>
+          <TrackerHandoff scopePending={scopePending} key={`${trackerAssociationKey(association)}:${item.id}`} item={item} detailUnavailable={detail.isError || !detail.data?.available} drafts={drafts} selection={selection} onSelectionChange={onSelectionChange} workflows={workflows.data?.workflows ?? []} skills={skills.data ?? []} onQueued={(runId) => { setQueuedRunId(runId); if (runId) setHandOpen(false) }} />
+        </DialogContent>
+      </Dialog>
     </article>
   )
 }
@@ -240,13 +338,22 @@ function Failure({ reason, retry, retryAfterSeconds = 0, generation }: { reason:
     const timer = window.setInterval(() => setCooldown((value) => Math.max(0, value - 1)), 1_000)
     return () => window.clearInterval(timer)
   }, [cooldown > 0])
-  return <div className="mt-5 rounded-md border border-danger/30 bg-danger/5 p-4 text-sm"><p className="text-danger">{reason}</p><div className="mt-3 flex items-center gap-3"><Button variant="outline" disabled={cooldown > 0} onClick={retry}><RefreshCwIcon className="size-3.5" />{cooldown > 0 ? `Retry in ${cooldown}s` : 'Retry'}</Button><Link className="text-xs text-violet underline underline-offset-4" to="/settings/tracker">Tracker settings</Link></div></div>
+  return <Alert variant="destructive" className="mt-5">
+    <AlertTriangleIcon />
+    <AlertTitle>{reason}</AlertTitle>
+    <AlertDescription>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Button variant="outline" size="sm" disabled={cooldown > 0} onClick={retry}><RefreshCwIcon aria-hidden="true" />{cooldown > 0 ? `Retry in ${cooldown}s` : 'Retry'}</Button>
+        <Button asChild variant="ghost" size="sm"><Link to="/settings/tracker">Tracker settings</Link></Button>
+      </div>
+    </AlertDescription>
+  </Alert>
 }
 
-function PageState({ text, danger = false }: { text: string; danger?: boolean }) {
-  return <div className={`p-8 text-center text-sm ${danger ? 'text-danger' : 'text-muted-foreground'}`}>{text}</div>
+function PageState({ text, danger = false, loading = false }: { text: string; danger?: boolean; loading?: boolean }) {
+  return <div className={cn('flex items-center justify-center gap-2 p-8 text-center text-[13px]', danger ? 'text-danger' : 'text-muted-foreground')}>{loading ? <Spinner /> : null}{text}</div>
 }
 
 function DetailBackLink() {
-  return <Link className="mb-3 inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground md:hidden" to="/tracker"><ArrowLeftIcon aria-hidden="true" className="size-3.5" />Back to the list</Link>
+  return <Button asChild variant="ghost" size="sm" className="mb-3 -ml-2.5 md:hidden"><Link to="/tracker"><ArrowLeftIcon aria-hidden="true" />Back to the list</Link></Button>
 }

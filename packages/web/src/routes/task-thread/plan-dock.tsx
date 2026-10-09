@@ -75,15 +75,15 @@ export function PlanDock({
       data-slot="plan-dock"
       data-state={open ? 'open' : 'collapsed'}
       data-settled={settled ? 'true' : undefined}
-      className="min-w-0 overflow-hidden rounded-lg border border-border bg-card shadow-xs"
+      className="min-w-0 overflow-hidden rounded-xl border border-border bg-card shadow-xs"
     >
       {/* The mockup's `.grad-edge` — the brand gradient as a hairline top edge. */}
-      <div aria-hidden data-slot="grad-edge" className="h-0.5 md:h-[3px]" style={{ background: 'var(--grad)' }} />
+      <div aria-hidden data-slot="grad-edge" className="hidden" />
       <button
         type="button"
         onClick={toggle}
         aria-expanded={open}
-        className={cn('flex w-full items-center gap-2 px-3.5 text-left text-[13px]', open ? 'pt-2 pb-1.5' : 'py-2')}
+        className={cn('flex w-full items-center gap-2 px-4 text-left text-[13px]', open ? 'pt-2.5 pb-2' : 'py-2.5')}
       >
         <span className="shrink-0 font-semibold">Plan</span>
         <span data-slot="plan-count" className="shrink-0 text-muted-foreground tabular-nums">
@@ -105,7 +105,7 @@ export function PlanDock({
         />
       </button>
       {open ? (
-        <ul data-slot="plan-list" className="flex flex-col gap-[7px] px-3.5 pb-3">
+        <ul data-slot="plan-list" className="flex flex-col gap-2 px-4 pb-3">
           {entries.map((entry, index) => (
             <PlanRow key={`${index}:${entry.content}`} entry={entry} settled={settled} />
           ))}
@@ -137,7 +137,7 @@ function PlanRow({ entry, settled }: { entry: PlanEntry; settled: boolean }) {
       {status === 'in_progress' ? (
         <span
           data-slot="plan-tag"
-          className="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase"
+          className="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground"
         >
           in progress
         </span>

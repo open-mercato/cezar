@@ -1,12 +1,16 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { CheckCircle2Icon, RefreshCwIcon, SparklesIcon, TriangleAlertIcon } from 'lucide-react'
+import { CheckCircle2Icon, RefreshCwIcon, SearchIcon, TriangleAlertIcon } from 'lucide-react'
 import { useCallback, useMemo, useRef, useState } from 'react'
 
 import { applySkillsUpdate, checkSkillsUpdate, createRun, putWorkspaceUiState } from '@/api/client'
 import { queryKeys, useImportableSkills, useSkillsUpdate, useWorkspaceUiState, workspaceQueryKeys } from '@/api/queries'
 import type { SkillsUpdateState, WorkspaceUiState } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
-import { CenteredState } from '@/components/centered-state'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Card } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
+import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   Dialog,
   DialogContent,
@@ -15,7 +19,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toaster'
 import { useNavigate } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
@@ -140,13 +143,11 @@ export function ImportSkillsPanel({ projectId }: { projectId: string }) {
 
   if (importable.isError) {
     return (
-      <CenteredState
-        icon={<TriangleAlertIcon />}
-        tone="danger"
-        heading="h2"
-        title="Could not load importable skills"
-        subtitle={importable.error.message}
-      />
+      <Alert variant="destructive">
+        <TriangleAlertIcon aria-hidden="true" />
+        <AlertTitle>Could not load importable skills</AlertTitle>
+        <AlertDescription>{importable.error.message}</AlertDescription>
+      </Alert>
     )
   }
 
@@ -160,91 +161,99 @@ export function ImportSkillsPanel({ projectId }: { projectId: string }) {
     : all
 
   return (
-    <div data-slot="skills-import-panel" className="mx-auto w-full max-w-2xl">
-      <h2 className="text-base font-semibold">Manage skills</h2>
-      <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
-        Reusable, technology-agnostic agent skills from{' '}
-        <a
-          href={SKILLS_REPO_URL}
-          target="_blank"
-          rel="noreferrer"
-          className="underline underline-offset-2 hover:text-foreground"
-        >
-          open-mercato/skills
-        </a>{' '}
-        — PR creation, code review, CI stabilisation, spec writing and more. They&apos;re all in your
-        catalog and the composer picker by default; uncheck any you don&apos;t want.
-      </p>
+    <div data-slot="skills-import-panel" className="flex w-full flex-col gap-5">
+      <div className="space-y-1">
+        <h2 className="text-[15px] font-semibold">Manage skills</h2>
+        <p className="max-w-prose text-[13px] leading-relaxed text-pretty text-muted-foreground">
+          Reusable, technology-agnostic agent skills from{' '}
+          <a
+            href={SKILLS_REPO_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="font-medium text-foreground underline decoration-border underline-offset-4 hover:decoration-foreground"
+          >
+            open-mercato/skills
+          </a>{' '}
+          — PR creation, code review, CI stabilisation, spec writing and more. They&apos;re all in your
+          catalog and the composer picker by default; uncheck any you don&apos;t want.
+        </p>
+      </div>
 
       <SkillsUpdateCard projectId={projectId} state={update.data} loadError={update.error} />
 
-      <p className="mt-4 text-xs text-soft-foreground">
-        These checkboxes choose what cezar shows; updates refresh installed skill files.
-      </p>
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center gap-2">
+          <InputGroup>
+            <InputGroupAddon>
+              <SearchIcon aria-hidden="true" />
+            </InputGroupAddon>
+            <InputGroupInput
+              data-slot="import-filter"
+              placeholder="Filter skills…"
+              aria-label="Filter skills"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </InputGroup>
+          <Button
+            type="button"
+            variant="outline"
+            data-slot="import-all"
+            disabled={allNames.length === 0 || uiState.isPending}
+            onClick={enableOrDisableAll}
+            className="shrink-0"
+          >
+            {allImported ? 'Remove all' : 'Enable all'}
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          These checkboxes choose what cezar shows; updates refresh installed skill files.
+        </p>
 
-      <div className="mt-4 flex items-center gap-2">
-        <Input
-          data-slot="import-filter"
-          placeholder="Filter skills…"
-          aria-label="Filter skills"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          className="h-8 text-[13px]"
-        />
-        <button
-          type="button"
-          data-slot="import-all"
-          disabled={allNames.length === 0 || uiState.isPending}
-          onClick={enableOrDisableAll}
-          className="h-8 shrink-0 rounded-md border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-55"
-        >
-          {allImported ? 'Remove all' : 'Enable all'}
-        </button>
-      </div>
-
-      <div data-slot="import-list" className="mt-3 flex flex-col gap-1.5">
         {importable.isPending ? (
-          <p className="px-1 py-2 text-[13px] text-soft-foreground">Loading…</p>
+          <div data-slot="import-list" role="status" aria-label="Loading…">
+            <Skeleton className="h-40 w-full rounded-xl" />
+          </div>
         ) : shown.length > 0 ? (
-          shown.map((skill) => {
-            const checked = imported.has(skill.name)
-            return (
-              <label
-                key={skill.name}
-                data-slot="import-row"
-                data-skill={skill.name}
-                data-imported={checked ? 'true' : undefined}
-                className={cn(
-                  'flex cursor-pointer items-start gap-2.5 rounded-md border border-border px-2.5 py-2 transition-colors hover:bg-muted',
-                  checked && 'bg-muted',
-                )}
-              >
-                <input
-                  type="checkbox"
-                  data-slot="import-toggle"
-                  checked={checked}
-                  onChange={() => toggle(skill.name)}
-                  className="mt-0.5 size-3.5 shrink-0"
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="flex min-w-0 items-center gap-2">
-                    <SparklesIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />
-                    <span className="min-w-0 truncate font-mono text-[13px] font-medium text-foreground">
+          <Card flush data-slot="import-list" className="divide-y divide-border">
+            {shown.map((skill) => {
+              const checked = imported.has(skill.name)
+              return (
+                <label
+                  key={skill.name}
+                  data-slot="import-row"
+                  data-skill={skill.name}
+                  data-imported={checked ? 'true' : undefined}
+                  className="flex cursor-pointer items-start gap-3 px-4 py-3 transition-colors hover:bg-muted/50"
+                >
+                  <Checkbox
+                    data-slot="import-toggle"
+                    checked={checked}
+                    onCheckedChange={() => toggle(skill.name)}
+                    className="mt-0.5"
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span
+                      className={cn(
+                        'block truncate font-mono text-[13px] font-medium',
+                        checked ? 'text-foreground' : 'text-muted-foreground',
+                      )}
+                    >
                       {skill.name}
                     </span>
+                    {skill.description ? (
+                      <span className="mt-0.5 line-clamp-2 text-xs text-pretty text-muted-foreground" title={skill.description}>
+                        {skill.description}
+                      </span>
+                    ) : null}
                   </span>
-                  {skill.description ? (
-                    <span className="mt-0.5 block pl-[22px] text-xs text-soft-foreground">
-                      {skill.description}
-                    </span>
-                  ) : null}
-                </span>
-              </label>
-            )
-          })
+                </label>
+              )
+            })}
+          </Card>
         ) : (
-          <p className="px-1 py-2 text-xs text-soft-foreground">
-            {all.length > 0 ? '(no skills match)' : '(no skills available — the repo may still be cloning)'}
+          <p data-slot="import-list" className="py-2 text-[13px] text-muted-foreground">
+            {all.length > 0 ? 'No skills match.' : 'No skills available — the repo may still be cloning.'}
           </p>
         )}
       </div>
@@ -337,20 +346,20 @@ function SkillsUpdateCard({
 
   return (
     <>
-      <section data-slot="skills-update-card" aria-live="polite" className="mt-4 rounded-lg border border-border bg-muted/30 p-3">
+      <section data-slot="skills-update-card" aria-live="polite" className="rounded-xl border border-border bg-card px-5 py-4 shadow-xs">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <p className="text-[13px] font-medium text-foreground">{message}</p>
-          {state?.checkedAt ? <p className="mt-1 text-xs text-soft-foreground">Last checked {new Date(state.checkedAt).toLocaleString()}.</p> : null}
+          <p className="text-[13.5px] font-medium text-foreground">{message}</p>
+          {state?.checkedAt ? <p className="mt-1 text-xs text-muted-foreground">Last checked {new Date(state.checkedAt).toLocaleString()}.</p> : null}
           {state?.scopes.some((scope) => scope.skills.length > 0) ? (
-            <ul className="mt-1 text-xs text-soft-foreground">
+            <ul className="mt-1 text-xs text-muted-foreground">
               {state.scopes.filter((scope) => scope.skills.length > 0).map((scope) => <li key={scope.scope}>{scopeLabel(scope.scope)} · {scope.skills.length} tracked</li>)}
             </ul>
           ) : null}
           {failed.length > 0 ? <p className="mt-1 text-xs text-destructive">Failed: {failed.map((scope) => scopeLabel(scope.scope)).join(', ')}{succeeded.length ? `; updated: ${succeeded.map((scope) => scopeLabel(scope.scope)).join(', ')}` : ''}.</p> : null}
         </div>
         {canApply ? (
-          <Button data-action="skills-update-apply" size="sm" disabled={pending} onClick={() => run('apply')}>
+          <Button data-action="skills-update-apply" variant="default" size="sm" disabled={pending} onClick={() => run('apply')}>
             <RefreshCwIcon aria-hidden="true" className={cn('size-3.5', pending && 'motion-safe:animate-spin')} />
             {pending ? 'Updating…' : retryable ? 'Retry' : 'Update now'}
           </Button>
@@ -360,8 +369,8 @@ function SkillsUpdateCard({
           <Button data-action="skills-update-check" variant="outline" size="sm" disabled={checkMutation.isPending} onClick={() => run('check')}>Retry check</Button>
         ) : null}
       </div>
-      {(state?.status === 'unavailable' || loadError) ? <div className="mt-2 text-xs text-soft-foreground">Manual examples: <code>npx skills update -p</code> · <code>npx skills update -g</code>. These broad commands may update other tracked sources.</div> : null}
-      {state?.needsUpgradeNotes ? <div data-slot="skills-upgrade-notes" className="mt-3 flex gap-2 rounded-md border border-primary/30 bg-background p-2.5 text-xs text-foreground"><CheckCircle2Icon aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-primary" /><span>Skill files were updated. Run <code>/om-apply-upgrade-notes</code> in each configured repository to apply descriptor migrations while preserving local edits.</span></div> : null}
+      {(state?.status === 'unavailable' || loadError) ? <div className="mt-3 text-xs text-muted-foreground">Manual examples: <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-[11px] text-foreground">npx skills update -p</code> · <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-[11px] text-foreground">npx skills update -g</code>. These broad commands may update other tracked sources.</div> : null}
+      {state?.needsUpgradeNotes ? <div data-slot="skills-upgrade-notes" className="mt-3 flex gap-2 rounded-md bg-primary/15 p-2.5 text-xs text-foreground"><CheckCircle2Icon aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-primary-strong" /><span>Skill files were updated. Run <code>/om-apply-upgrade-notes</code> in each configured repository to apply descriptor migrations while preserving local edits.</span></div> : null}
       </section>
       <Dialog
         open={showUpgradeNotesPrompt}
@@ -386,6 +395,7 @@ function SkillsUpdateCard({
             </Button>
             <Button
               type="button"
+              variant="default"
               disabled={startUpgradeNotes.isPending}
               onClick={() => startUpgradeNotes.mutate()}
             >

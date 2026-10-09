@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronDownIcon } from 'lucide-react'
+import { CheckIcon, ChevronDownIcon, ListFilterIcon } from 'lucide-react'
 import * as React from 'react'
 
 import {
@@ -8,8 +8,10 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
+  CommandSeparator,
 } from '@/components/ui/command'
 import { Segmented } from '@/components/segmented'
+import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 
@@ -143,6 +145,100 @@ export function FacetFilter({
             </button>
           </div>
         ) : null}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+export interface FacetMenuGroup {
+  /** `data-facet` on every option, and the id prefix for tests. */
+  id: string
+  label: string
+  options: readonly (FacetOption & { checked: boolean })[]
+  onToggle: (value: string) => void
+}
+
+/**
+ * Every facet behind ONE "Filter" button (cockpit concept 2): a searchable list, grouped by
+ * facet, each option ticked in place and wearing the number of rows it would leave. The page
+ * shows what is active as removable badges, so this stays a quiet button until it is opened.
+ *
+ * Same `cmdk` list as `FacetFilter`, and the same rule: selecting does not close it.
+ */
+export function FacetMenu({
+  groups,
+  activeCount,
+  footer,
+  emptyLabel = 'Nothing to filter by',
+}: {
+  groups: readonly FacetMenuGroup[]
+  /** How many values are ticked across every group — shown on the button. */
+  activeCount: number
+  /** A quiet line under the list: a hint, a link to where facets are configured. */
+  footer?: React.ReactNode
+  emptyLabel?: string
+}) {
+  const visibleGroups = groups.filter((group) => group.options.length > 0)
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          data-slot="facet-menu"
+          data-active={activeCount > 0 ? 'true' : undefined}
+          aria-label={activeCount > 0 ? `Filter, ${activeCount} active` : 'Filter'}
+        >
+          <ListFilterIcon aria-hidden="true" />
+          Filter
+          {activeCount > 0 ? (
+            <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-violet/12 px-1.5 text-xs font-medium text-violet tabular-nums">
+              {activeCount}
+            </span>
+          ) : null}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-72 p-0" data-testid="facet-menu-list">
+        <Command>
+          <CommandInput placeholder="Filter by…" />
+          <CommandList className="max-h-80">
+            <CommandEmpty>{emptyLabel}</CommandEmpty>
+            {visibleGroups.map((group, index) => (
+              <React.Fragment key={group.id}>
+                {index > 0 ? <CommandSeparator /> : null}
+                <CommandGroup heading={group.label}>
+                  {group.options.map((option) => (
+                    <CommandItem
+                      key={option.value}
+                      // Prefixed with the group so `open` the status and `open` the tag stay two rows.
+                      value={`${group.label} ${option.label}`}
+                      onSelect={() => group.onToggle(option.value)}
+                      data-slot="facet-option"
+                      data-facet={group.id}
+                      data-value={option.value}
+                      aria-checked={option.checked}
+                      role="option"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={cn(
+                          'flex size-4 shrink-0 items-center justify-center rounded-[4px] border',
+                          option.checked ? 'border-foreground bg-foreground text-background' : 'border-input',
+                        )}
+                      >
+                        {option.checked ? <CheckIcon className="size-3 text-background" /> : null}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                      {option.count === undefined ? null : (
+                        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{option.count}</span>
+                      )}
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </React.Fragment>
+            ))}
+          </CommandList>
+        </Command>
+        {footer ? <div className="border-t border-border px-3 py-2.5 text-xs text-muted-foreground">{footer}</div> : null}
       </PopoverContent>
     </Popover>
   )

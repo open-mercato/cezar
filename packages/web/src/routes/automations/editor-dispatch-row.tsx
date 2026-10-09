@@ -34,21 +34,26 @@ export function EditorDispatchRow({
     <div
       data-slot="editor-dispatch"
       data-enabled={enabled ? 'true' : undefined}
-      title="Let this run start its own subtasks with cez task create — each in a worktree forked off its branch, reporting back into the parent session."
-      className="flex flex-wrap items-center gap-2.5 border-t border-border pt-3 text-[13px] text-muted-foreground"
+      className="flex flex-col gap-3"
     >
-      <Label className="text-[13px] font-medium text-foreground">
-        <GitForkIcon aria-hidden="true" className={cn('size-3.5', enabled ? 'text-violet' : 'text-soft-foreground')} />
-        Dispatch
-        <Switch aria-label="Dispatch" checked={enabled} onCheckedChange={(next) => onChange({ dispatch: next })} />
-      </Label>
+      <div className="flex items-start justify-between gap-6">
+        <div className="min-w-0 space-y-1">
+          <Label htmlFor="automation-dispatch" className="text-sm font-medium text-foreground">
+            <GitForkIcon aria-hidden="true" className={cn('size-4', enabled ? 'text-foreground' : 'text-muted-foreground')} />
+            Dispatch
+          </Label>
+          <p className="text-sm text-muted-foreground">
+            Let this run start its own subtasks with <code className="font-mono text-xs">cez task create</code> — each in a worktree forked off its branch, reporting back into the parent session.
+          </p>
+        </div>
+        <Switch id="automation-dispatch" aria-label="Dispatch" checked={enabled} onCheckedChange={(next) => onChange({ dispatch: next })} />
+      </div>
       {enabled ? (
-        <>
-          <span className="text-soft-foreground">·</span>
-          <span className="inline-flex items-center gap-1.5">
-            up to
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[13px] text-muted-foreground">
+          <span className="inline-flex items-center gap-2">
+            Up to
             <Select value={String(maxSubtasks)} onValueChange={(value) => onChange({ maxSubtasks: Number(value) })}>
-              <SelectTrigger size="sm" aria-label="Max subtasks" className="h-7 px-2 text-[12.5px]">
+              <SelectTrigger size="sm" aria-label="Max subtasks">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -59,15 +64,14 @@ export function EditorDispatchRow({
             </Select>
             subtasks
           </span>
-          <span className="text-soft-foreground">·</span>
           <Label className="text-[13px] font-normal text-muted-foreground">
             <Switch size="sm" aria-label="Review child" checked={reviewChild} onCheckedChange={(next) => onChange({ reviewChild: next })} />
-            review child
+            Review child
           </Label>
-          <span data-slot="editor-dispatch-hint" className="ml-auto text-[11.5px] whitespace-nowrap text-soft-foreground">
+          <span data-slot="editor-dispatch-hint" className="ml-auto text-xs whitespace-nowrap tabular-nums">
             ≤ {maxSubtasks + 1} agents
           </span>
-        </>
+        </div>
       ) : null}
     </div>
   )

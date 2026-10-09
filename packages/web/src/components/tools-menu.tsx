@@ -91,7 +91,7 @@ export function ToolsMenu({ health }: { health: HealthResponse | undefined }) {
           type="button"
           data-slot="tools-menu-trigger"
           title={toolsTooltip(health)}
-          className="flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[13px] text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/40"
         >
           <StatusDot tone={blocker ? 'pending' : 'success'} />
           Tools
@@ -101,8 +101,8 @@ export function ToolsMenu({ health }: { health: HealthResponse | undefined }) {
 
       {/* Anchored above the trigger — the trigger sits in the shell's bottom edge. */}
       <DropdownMenuContent
-        side="top"
-        align="start"
+        side="bottom"
+        align="end"
         data-slot="tools-menu-content"
         className="w-[240px]"
       >

@@ -6,8 +6,9 @@ import {
   EyeOffIcon,
   LayersIcon,
   ListChecksIcon,
-  SearchIcon,
+  Rows3Icon,
   SearchXIcon,
+  SlidersHorizontalIcon,
   XIcon,
 } from 'lucide-react'
 import * as React from 'react'
@@ -24,16 +25,37 @@ import {
 } from '@/api/queries'
 import type { ProjectListEntry, RunIndexEntry, RunsIndexResponse } from '@open-mercato/cezar-api-client'
 import { dispatchKindLabel, subtaskLabel, taskTreeRows, type TaskTreeInput } from '@/lib/task-tree'
-import { CenteredState } from '@/components/centered-state'
-import { FacetFilter, SegmentedControl, ToggleChip } from '@/components/facet-filter'
-import { useListView } from '@/components/list-view'
-import { Pill } from '@/components/pill'
+import { FacetMenu } from '@/components/facet-filter'
+import {
+  LIST_CELL_CLASS,
+  LIST_HEAD_CLASS,
+  ListEmpty,
+  ListFrame,
+  ListSearch,
+  ListViewTabs,
+  TaskStatusBadge,
+  useListView,
+} from '@/components/list-view'
+import { Page, PageBody, PageHeader, PageToolbar } from '@/components/page'
 import { ReferenceChip } from '@/components/reference-chip'
 import { ResolveConflictsForRun } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
 import { SubtaskToggle } from '@/components/subtask-toggle'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { deriveAttention } from '@/lib/attention'
@@ -60,10 +82,8 @@ import {
   hasActiveFilters,
   tagValuesOf,
   tasksExcludingFacet,
-  resetCount,
   toGlobalTasks,
   toggleFacetValue,
-  toggleGroupBy,
   truncatedProjectNames,
   type FacetId,
   type GlobalTask,
@@ -222,6 +242,46 @@ function useIndexedRunMutation<V extends { task: GlobalTask }>({
   })
 }
 
+const sentenceCase = (label: string) => label.charAt(0).toUpperCase() + label.slice(1)
+
+/** Spend and live usage: real columns, off until asked for (cockpit concept 2). */
+const OPTIONAL_COLUMNS = [
+  { id: 'cost', label: 'Cost' },
+  { id: 'cpu', label: 'CPU' },
+  { id: 'memory', label: 'Memory' },
+] as const
+type OptionalColumn = (typeof OPTIONAL_COLUMNS)[number]['id']
+
+const COLUMNS_STORAGE_KEY = 'cez-global-tasks-columns'
+
+/** Per-browser on purpose: this page has no workspace-state slot, and a column choice is a
+ *  viewing convenience that must never be required for the page to render. */
+function useOptionalColumns(): [ReadonlySet<OptionalColumn>, (id: OptionalColumn) => void] {
+  const [shown, setShown] = React.useState<ReadonlySet<OptionalColumn>>(() => {
+    try {
+      const raw: unknown = JSON.parse(localStorage.getItem(COLUMNS_STORAGE_KEY) ?? '[]')
+      const known = new Set<string>(OPTIONAL_COLUMNS.map((column) => column.id))
+      return new Set(
+        Array.isArray(raw) ? raw.filter((id): id is OptionalColumn => typeof id === 'string' && known.has(id)) : [],
+      )
+    } catch {
+      return new Set()
+    }
+  })
+  const toggle = (id: OptionalColumn) =>
+    setShown((current) => {
+      const next = new Set(current)
+      if (!next.delete(id)) next.add(id)
+      try {
+        localStorage.setItem(COLUMNS_STORAGE_KEY, JSON.stringify([...next]))
+      } catch {
+        // Private window or blocked storage: the choice simply lasts for this visit.
+      }
+      return next
+    })
+  return [shown, toggle]
+}
+
 export function GlobalTasksRoute() {
   const projects = useProjects()
   // The same host gate the per-project table honours: `CEZ_HIDE_COST` and friends turn these
@@ -251,6 +311,7 @@ export function GlobalTasksRoute() {
     if (sharedView !== view) setSharedView(view)
   }, [view, sharedView, setSharedView])
   const now = useNow(30_000)
+  const [optionalColumns, toggleOptionalColumn] = useOptionalColumns()
 
   /**
    * `replace`, always: filtering is one continuous gesture, and a history entry per click would
@@ -360,195 +421,203 @@ export function GlobalTasksRoute() {
 
   if (index.isError || projects.isError) {
     return (
-      <div data-route="global-tasks" className="flex min-h-full flex-col">
-        <CenteredState
-          icon={<LayersIcon />}
-          tone="danger"
-          title="Tasks across projects did not load"
-          subtitle={(index.error ?? projects.error)?.message}
-        />
-      </div>
+      <Page data-route="global-tasks">
+        <PageHeader title="All tasks" description="Work across every project in this workspace." />
+        <PageBody>
+          <ListEmpty
+            icon={<LayersIcon />}
+            tone="danger"
+            title="Tasks across projects did not load"
+            description={(index.error ?? projects.error)?.message}
+          />
+        </PageBody>
+      </Page>
     )
   }
 
-  const search = (
-    <div className="relative w-full md:w-60">
-      <SearchIcon
-        className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-soft-foreground"
-        aria-hidden="true"
-      />
-      <input
-        type="text"
-        value={queryDraft}
-        onChange={(event) => setQueryDraft(event.target.value)}
-        placeholder="Search every project…"
-        aria-label="Search tasks across projects"
-        className="h-9 w-full rounded-md border border-input bg-card pr-3 pl-8 text-[13px] text-foreground outline-none placeholder:text-soft-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-      />
-    </div>
-  )
+  const clearAll = () => {
+    setQueryDraft('')
+    // Filters AND grouping — "Clear all" is the one way back to a plain list.
+    commit((state) => ({ ...state, filters: NO_FILTERS, groupBy: 'none' }))
+  }
+  // The host gate decides whether Cost may be offered at all.
+  const offered = OPTIONAL_COLUMNS.filter((column) => column.id !== 'cost' || metrics.cost)
+  const extraColumns = offered.filter((column) => optionalColumns.has(column.id)).map((column) => column.id)
 
   return (
-    <div data-route="global-tasks" className="flex min-h-full flex-col">
-      <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
-        <h1 className="text-base font-semibold">All tasks</h1>
-        <div className="inline-flex gap-0.5 rounded-md bg-muted p-[3px]">
-          <ViewTab view="active" current={view} onSelect={setView}>
-            Active
-          </ViewTab>
-          <ViewTab view="archived" current={view} onSelect={setView}>
-            Archived
-          </ViewTab>
-        </div>
+    <Page data-route="global-tasks">
+      <PageHeader title="All tasks" description="Work across every project in this workspace." />
+
+      <PageToolbar>
+        <ListViewTabs view={view} onChange={setView} />
+        <FilterMenu filters={filters} onToggle={toggle} projects={registry} tasks={tasks} view={view} />
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" data-slot="group-by" aria-label="Group tasks by">
+              <Rows3Icon aria-hidden="true" />
+              {groupBy === 'none' ? (
+                'Group'
+              ) : (
+                <>
+                  <span className="text-muted-foreground">Group:</span>
+                  {GROUP_BY_OPTIONS.find((option) => option.value === groupBy)?.label}
+                </>
+              )}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="min-w-44">
+            <DropdownMenuLabel>Group by</DropdownMenuLabel>
+            <DropdownMenuRadioGroup value={groupBy} onValueChange={(next) => setGroupBy(next as GroupBy)}>
+              <DropdownMenuRadioItem value="none">None</DropdownMenuRadioItem>
+              {GROUP_BY_OPTIONS.map((option) => (
+                <DropdownMenuRadioItem key={option.value} value={option.value} data-value={option.value}>
+                  {option.label}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <div className="flex-1" />
-        <span data-slot="global-tasks-count" className="text-[12.5px] text-soft-foreground tabular-nums">
+        <span data-slot="global-tasks-count" className="hidden text-[13px] text-muted-foreground tabular-nums sm:inline">
           {visible.length} of {tasks.length}
         </span>
-        {search}
-      </header>
+        <ListSearch
+          value={queryDraft}
+          onChange={setQueryDraft}
+          placeholder="Search every project…"
+          label="Search tasks across projects"
+        />
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" data-slot="display-menu" className="hidden md:inline-flex">
+              <SlidersHorizontalIcon aria-hidden="true" />
+              Display
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-44">
+            <DropdownMenuLabel>Columns</DropdownMenuLabel>
+            {offered.map((column) => (
+              <DropdownMenuCheckboxItem
+                key={column.id}
+                data-column-id={column.id}
+                checked={optionalColumns.has(column.id)}
+                onCheckedChange={() => toggleOptionalColumn(column.id)}
+                onSelect={(event) => event.preventDefault()}
+              >
+                {column.label}
+              </DropdownMenuCheckboxItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </PageToolbar>
 
-      <div className="flex flex-1 flex-col gap-3 p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5">
-        {/* Below `md` the header above is hidden, so the search box rides here instead. */}
-        <div className="md:hidden">{search}</div>
-
-        <FilterBar
+      <PageBody className="flex flex-col gap-4">
+        <ActiveFilters
           filters={filters}
-          onToggle={toggle}
-          onClearFacet={clearFacet}
-          onClearAll={() => {
-            setQueryDraft('')
-            // Filters AND grouping — "Clear" is the one way back to a plain list.
-            commit((state) => ({ ...state, filters: NO_FILTERS, groupBy: 'none' }))
-          }}
           groupBy={groupBy}
-          onGroupByChange={setGroupBy}
-          projects={registry}
-          tasks={tasks}
-          view={view}
+          onRemove={toggle}
+          onClearQuery={() => {
+            setQueryDraft('')
+            setFilters((current) => ({ ...current, query: '' }))
+          }}
+          onClearAll={clearAll}
         />
 
         {truncated.length > 0 ? (
-          <p data-slot="global-tasks-truncated" className="text-[11.5px] text-soft-foreground">
+          <p data-slot="global-tasks-truncated" className="text-[13px] text-muted-foreground">
             Showing the newest {index.data?.perProjectLimit} tasks per project — older ones in{' '}
             {truncated.join(', ')} are only in that project&rsquo;s own Tasks page.
           </p>
         ) : null}
 
-        {index.data === undefined ? null : visible.length === 0 ? (
-          <GlobalTasksEmptyState view={view} filtered={hasActiveFilters(filters)} />
+        {index.data === undefined ? (
+          <ListFrame aria-busy="true" className="divide-y divide-border">
+            {[0, 1, 2, 3, 4].map((row) => (
+              <div key={row} className="flex items-center gap-4 px-5 py-3.5">
+                <Skeleton className="h-6 w-24 rounded-full" />
+                <div className="flex-1 space-y-2">
+                  <Skeleton className="h-3.5 w-2/5" />
+                  <Skeleton className="h-3 w-1/4" />
+                </div>
+                <Skeleton className="h-3.5 w-12" />
+              </div>
+            ))}
+          </ListFrame>
+        ) : visible.length === 0 ? (
+          <GlobalTasksEmptyState
+            view={view}
+            filtered={hasActiveFilters(filters)}
+            onClear={canReset({ filters, groupBy }) ? clearAll : undefined}
+          />
         ) : (
           // No `projectId` on the provider, uniquely on this page: every chip under it names its
           // own, because the rows next to each other belong to different repositories.
           <ReferenceStatusProvider requests={referenceRequests}>
-            {groups.map((group) => (
-              <section key={group.key} data-slot="task-group" data-group-key={group.key}>
-                {groupBy === 'none' ? null : (
-                  <h2 className="mb-1.5 flex items-center gap-2 text-[12px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
-                    {/* A project heading is a DOOR, not a label: that project's own Tasks page is
-                        the better version of "just this project" (live SSE, the full column set,
-                        the composer), which is why there is no project filter here at all. */}
-                    {groupBy === 'project' ? (
-                      <Link
-                        to={scopeTo(group.key, '/')}
-                        data-slot="group-project-link"
-                        className="hover:text-foreground hover:underline"
-                      >
-                        {group.label}
-                      </Link>
-                    ) : (
-                      group.label
-                    )}
-                    <span className="font-mono text-[11px] font-medium tabular-nums">
-                      {group.tasks.length}
-                    </span>
-                  </h2>
-                )}
-                <TaskTable
-                  tasks={group.tasks}
-                  now={now}
-                  isSubtasksExpanded={isSubtasksExpanded}
-                  onToggleSubtasks={toggleSubtasks}
-                  showProject={groupBy !== 'project'}
-                  onArchive={(task, archived) => archive.mutate({ task, archived })}
-                  onSetRead={(task, read) => setRead.mutate({ task, read })}
-                  busy={archive.isPending || setRead.isPending}
-                  showCost={metrics.cost}
-                />
-              </section>
-            ))}
+            <div className="flex flex-col gap-8">
+              {groups.map((group) => (
+                <section key={group.key} data-slot="task-group" data-group-key={group.key} className="space-y-3">
+                  {groupBy === 'none' ? null : (
+                    <h2 className="flex items-baseline gap-2 text-[15px] font-semibold text-foreground">
+                      {/* A project heading is a DOOR, not a label: that project's own Tasks page
+                          is the better version of "just this project". */}
+                      {groupBy === 'project' ? (
+                        <Link
+                          to={scopeTo(group.key, '/')}
+                          data-slot="group-project-link"
+                          className="underline-offset-4 hover:underline"
+                        >
+                          {group.label}
+                        </Link>
+                      ) : groupBy === 'status' ? (
+                        sentenceCase(group.label)
+                      ) : (
+                        group.label
+                      )}
+                      <span className="text-[13px] font-normal text-muted-foreground tabular-nums">
+                        {group.tasks.length}
+                      </span>
+                    </h2>
+                  )}
+                  <TaskTable
+                    tasks={group.tasks}
+                    now={now}
+                    isSubtasksExpanded={isSubtasksExpanded}
+                    onToggleSubtasks={toggleSubtasks}
+                    showProject={groupBy !== 'project'}
+                    onArchive={(task, archived) => archive.mutate({ task, archived })}
+                    onSetRead={(task, read) => setRead.mutate({ task, read })}
+                    busy={archive.isPending || setRead.isPending}
+                    extraColumns={extraColumns}
+                  />
+                </section>
+              ))}
+            </div>
           </ReferenceStatusProvider>
         )}
-      </div>
-    </div>
-  )
-}
-
-function ViewTab({
-  view,
-  current,
-  onSelect,
-  children,
-}: {
-  view: ListView
-  current: ListView
-  onSelect: (view: ListView) => void
-  children: React.ReactNode
-}) {
-  const isActive = view === current
-  return (
-    <button
-      type="button"
-      data-slot="overview-tab"
-      data-view={view}
-      // Same rationale as the per-project table's tabs: these filter one list in place, they do
-      // not switch panels — `aria-pressed` is what that actually is.
-      aria-pressed={isActive}
-      onClick={() => onSelect(view)}
-      className={cn(
-        'flex h-7 items-center justify-center rounded-[7px] px-3 text-[12.5px] font-medium text-muted-foreground',
-        isActive && 'bg-card font-semibold text-foreground shadow-xs',
-      )}
-    >
-      {children}
-    </button>
+      </PageBody>
+    </Page>
   )
 }
 
 /**
- * The filter row.
- *
- * Two shapes, chosen by what the facet IS rather than for variety:
- *
- *  - **Tags are laid out flat**, as one-click toggle chips. They are the reason this page exists
- *    ("show me the storefront work"), there are rarely more than a dozen, and seeing the whole
- *    set is most of the value — a popover would hide exactly what the user came to look at.
- *  - **Everything else is a searchable multi-select pill.** A workspace can hold forty projects
- *    and a dozen workflows; those do not lay out flat, and they do not need to.
+ * The filters, behind one button.
  *
  * Every option carries the number of rows it would leave, counted against the list as the OTHER
- * facets narrow it — so a filter that would empty the table says so before it is clicked. And
- * every option list except the tags is derived from the tasks ACTUALLY on the page: an option
- * that can only ever produce an empty table is a dead end wearing a control's clothes. Tags are
- * the deliberate exception, taken from the registry, because a tag on a project with no tasks
- * yet is still the answer to "which repos are in this group?".
+ * facets narrow it — so a filter that would empty the table says so before it is clicked. Status
+ * and workflow options are derived from the tasks ACTUALLY on the page; tags come from the
+ * registry, because a tag on a project with no tasks yet is still the answer to "which repos are
+ * in this group?". No project facet, deliberately — narrowing to one project is that project's
+ * own Tasks page, which every project name here links to.
  */
-function FilterBar({
+function FilterMenu({
   filters,
   onToggle,
-  onClearFacet,
-  onClearAll,
-  groupBy,
-  onGroupByChange,
   projects,
   tasks,
   view,
 }: {
   filters: GlobalTaskFilters
   onToggle: (facet: FacetId, value: string) => void
-  onClearFacet: (facet: FacetId) => void
-  onClearAll: () => void
-  groupBy: GroupBy
-  onGroupByChange: (next: GroupBy) => void
   projects: readonly ProjectListEntry[]
   tasks: readonly GlobalTask[]
   view: ListView
@@ -567,102 +636,142 @@ function FilterBar({
     }
   }, [tasks, filters, view])
 
-  const withCount = (map: Map<string, number>) => (option: { value: string; label: string }) => ({
-    ...option,
-    count: map.get(option.value) ?? 0,
-  })
+  const tagChecked = (tag: string) => filters.tags.some((picked) => picked.toLowerCase() === tag.toLowerCase())
 
   return (
-    <div
-      data-slot="global-tasks-filters"
-      className="flex flex-col gap-2 rounded-lg border border-border bg-card p-2.5 shadow-xs"
-    >
-      <div className="flex flex-wrap items-center gap-1.5">
-        {/* No project facet, deliberately — see the note in `lib/global-tasks.ts`. Narrowing to
-            one project is that project's own Tasks page, which every project name here links to. */}
-        <FacetFilter
-          slot="status"
-          label="Status"
-          selected={filters.statuses}
-          onToggle={(value) => onToggle('statuses', value)}
-          onClear={() => onClearFacet('statuses')}
-          options={allStatuses(tasks)
-            .map((status) => ({ value: status, label: status }))
-            .map(withCount(counts.statuses))}
-          emptyLabel="No tasks to filter"
-        />
-        <FacetFilter
-          slot="workflow"
-          label="Workflow"
-          selected={filters.workflows}
-          onToggle={(value) => onToggle('workflows', value)}
-          onClear={() => onClearFacet('workflows')}
-          options={allWorkflows(tasks)
-            .map((workflow) => ({ value: workflow, label: workflow }))
-            .map(withCount(counts.workflows))}
-          emptyLabel="No tasks to filter"
-        />
-        <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
-        <span className="text-[11px] font-medium text-soft-foreground">Group by</span>
-        {/* Pressing the pressed one releases it — see `toggleGroupBy`, which is why there is
-            no "None" button to hunt for. */}
-        <SegmentedControl
-          slot="group-by"
-          label="Group tasks by"
-          value={groupBy}
-          options={GROUP_BY_OPTIONS}
-          onChange={(picked) => onGroupByChange(toggleGroupBy(groupBy, picked))}
-        />
-        {canReset({ filters, groupBy }) ? (
+    <div data-slot="global-tasks-filters" className="contents">
+      <FacetMenu
+        activeCount={filters.statuses.length + filters.workflows.length + filters.tags.length}
+        emptyLabel="No tasks to filter"
+        groups={[
+          {
+            id: 'status',
+            label: 'Status',
+            onToggle: (value) => onToggle('statuses', value),
+            options: allStatuses(tasks).map((status) => ({
+              value: status,
+              label: sentenceCase(status),
+              count: counts.statuses.get(status) ?? 0,
+              checked: filters.statuses.includes(status),
+            })),
+          },
+          {
+            id: 'workflow',
+            label: 'Workflow',
+            onToggle: (value) => onToggle('workflows', value),
+            options: allWorkflows(tasks).map((workflow) => ({
+              value: workflow,
+              label: workflow,
+              count: counts.workflows.get(workflow) ?? 0,
+              checked: filters.workflows.includes(workflow),
+            })),
+          },
+          {
+            id: 'tag',
+            label: 'Tag',
+            onToggle: (value) => onToggle('tags', value),
+            // "Untagged" last, and only once tags exist: "which repos still need labelling?".
+            options:
+              tags.length === 0
+                ? []
+                : [
+                    ...tags.map((tag) => ({
+                      value: tag,
+                      label: tag,
+                      count: counts.tags.get(tag) ?? 0,
+                      checked: tagChecked(tag),
+                    })),
+                    {
+                      value: UNTAGGED,
+                      label: 'Untagged',
+                      count: counts.tags.get(UNTAGGED) ?? 0,
+                      checked: filters.tags.includes(UNTAGGED),
+                    },
+                  ],
+          },
+        ]}
+        footer={
+          tags.length === 0 ? (
+            // A workspace with no tags anywhere is the ONE state where the feature is invisible.
+            <p data-slot="no-tags-hint">
+              Tag connected repositories in{' '}
+              <Link to="/settings/global/projects" className="font-medium text-foreground underline underline-offset-4">
+                Settings → Projects
+              </Link>{' '}
+              to filter and group their tasks here.
+            </p>
+          ) : undefined
+        }
+      />
+    </div>
+  )
+}
+
+/** What is narrowing the list right now, each piece removable on its own. */
+function ActiveFilters({
+  filters,
+  groupBy,
+  onRemove,
+  onClearQuery,
+  onClearAll,
+}: {
+  filters: GlobalTaskFilters
+  groupBy: GroupBy
+  onRemove: (facet: FacetId, value: string) => void
+  onClearQuery: () => void
+  onClearAll: () => void
+}) {
+  if (!hasActiveFilters(filters)) return null
+  const chips: { key: string; label: string; value: string; onRemove: () => void }[] = [
+    ...filters.statuses.map((value) => ({
+      key: `status:${value}`,
+      label: 'Status',
+      value: sentenceCase(value),
+      onRemove: () => onRemove('statuses', value),
+    })),
+    ...filters.workflows.map((value) => ({
+      key: `workflow:${value}`,
+      label: 'Workflow',
+      value,
+      onRemove: () => onRemove('workflows', value),
+    })),
+    ...filters.tags.map((value) => ({
+      key: `tag:${value}`,
+      label: 'Tag',
+      value: value === UNTAGGED ? 'Untagged' : value,
+      onRemove: () => onRemove('tags', value),
+    })),
+    ...(filters.query.trim()
+      ? [{ key: 'query', label: 'Search', value: `“${filters.query.trim()}”`, onRemove: onClearQuery }]
+      : []),
+  ]
+  return (
+    <div data-slot="active-filters" className="flex flex-wrap items-center gap-1.5">
+      {chips.map((chip) => (
+        <Badge
+          key={chip.key}
+          variant="secondary"
+          data-slot="active-filter"
+          data-filter={chip.key}
+          className="h-7 gap-1 py-0 pr-1 pl-2.5 text-[13px] font-normal"
+        >
+          <span className="text-muted-foreground">{chip.label}</span>
+          <span className="max-w-40 truncate font-medium">{chip.value}</span>
           <button
             type="button"
-            data-action="clear-filters"
-            onClick={onClearAll}
-            className="ml-auto inline-flex h-7 items-center gap-1 rounded-full px-2 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label={`Remove ${chip.label.toLowerCase()} filter ${chip.value}`}
+            onClick={chip.onRemove}
+            className="inline-flex size-5 items-center justify-center rounded-full text-muted-foreground hover:bg-background hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
           >
             <XIcon className="size-3" aria-hidden="true" />
-            Clear
-            {` (${resetCount({ filters, groupBy })})`}
           </button>
-        ) : null}
-      </div>
-
-      {tags.length > 0 ? (
-        <div data-slot="tag-filters" className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[11px] font-medium text-soft-foreground">Tags</span>
-          {tags.map((tag) => (
-            <ToggleChip
-              key={tag}
-              slot="tag-filter"
-              tone="tag"
-              label={tag}
-              count={counts.tags.get(tag) ?? 0}
-              selected={filters.tags.some((picked) => picked.toLowerCase() === tag.toLowerCase())}
-              onToggle={() => onToggle('tags', tag)}
-            />
-          ))}
-          {/* Last, and named as the leftovers it is: "which repos still need labelling?" is a
-              real question, and it is the one this chip answers. */}
-          <ToggleChip
-            slot="tag-filter"
-            label="Untagged"
-            count={counts.tags.get(UNTAGGED) ?? 0}
-            selected={filters.tags.includes(UNTAGGED)}
-            onToggle={() => onToggle('tags', UNTAGGED)}
-          />
-        </div>
-      ) : (
-        // Not silence: a workspace with no tags anywhere is the ONE state where the feature is
-        // invisible, and the sentence that fixes it is one line long — with the door in it,
-        // since the pane that fixes it is two clicks away and outside this page.
-        <p data-slot="no-tags-hint" className="text-[11px] text-soft-foreground">
-          Tag connected repositories in{' '}
-          <Link to="/settings/global/projects" className="font-medium text-violet hover:underline">
-            Settings → Projects
-          </Link>{' '}
-          to group their tasks together here.
-        </p>
-      )}
+        </Badge>
+      ))}
+      {canReset({ filters, groupBy }) ? (
+        <Button variant="ghost" size="sm" data-action="clear-filters" onClick={onClearAll} className="h-7">
+          Clear all
+        </Button>
+      ) : null}
     </div>
   )
 }
@@ -679,8 +788,7 @@ function FilterBar({
 const dispatchOf = (run: RunIndexEntry): TaskTreeInput['dispatch'] =>
   (run as { dispatch?: TaskTreeInput['dispatch'] }).dispatch
 
-/** The rows. One table per group, so a group heading owns its own header row rather than
- *  floating above a shared one that would scroll away from it. */
+/** The rows. One table per group, so a group heading owns its own header row. */
 function TaskTable({
   tasks,
   now,
@@ -690,7 +798,7 @@ function TaskTable({
   onArchive,
   onSetRead,
   busy,
-  showCost,
+  extraColumns,
 }: {
   tasks: readonly GlobalTask[]
   now: number
@@ -701,41 +809,33 @@ function TaskTable({
   onArchive: (task: GlobalTask, archived: boolean) => void
   onSetRead: (task: GlobalTask, read: boolean) => void
   busy: boolean
-  showCost: boolean
+  /** The optional columns the Display menu has switched on, in table order. */
+  extraColumns: readonly OptionalColumn[]
 }) {
   return (
-    <div
-      data-slot="global-tasks-table"
-      className="overflow-x-auto rounded-lg border border-border bg-card shadow-xs"
-    >
+    <ListFrame data-slot="global-tasks-table">
       <TooltipProvider>
-        <table className="w-full border-collapse">
-          <thead>
-            {/* Every other column is pinned as narrow as its content allows, because Task is the
-                only one with NO width and therefore the only one that grows on what they give
-                up. A cross-project list is scanned by title; everything else is the answer to a
-                question you ask about a row you already found. */}
-            <tr>
-              <Th className="w-[104px]">Status</Th>
-              <Th>Task</Th>
-              {showProject ? <Th className="w-[124px]">Project</Th> : null}
-              <Th className="hidden w-[120px] xl:table-cell">Tags</Th>
-              <Th className="w-[84px]">Ref</Th>
-              <Th className="hidden w-[108px] xl:table-cell">Workflow</Th>
-              {showCost ? <Th className="hidden w-[64px] text-right lg:table-cell">Cost</Th> : null}
-              <Th className="hidden w-[56px] text-right xl:table-cell">CPU</Th>
-              <Th className="hidden w-[84px] text-right xl:table-cell">Mem</Th>
-              <Th className="w-[56px] text-right">Age</Th>
-              <Th className="w-[64px] text-right">
+        <Table>
+          <TableHeader>
+            {/* Task is the only column with no width, so it grows on what the others give up: a
+                cross-project list is scanned by title. */}
+            <TableRow className="hover:bg-transparent">
+              <TableHead className={cn(LIST_HEAD_CLASS, 'hidden w-[150px] md:table-cell')}>Status</TableHead>
+              <TableHead className={LIST_HEAD_CLASS}>Task</TableHead>
+              {extraColumns.map((id) => (
+                <TableHead key={id} className={cn(LIST_HEAD_CLASS, 'hidden text-right md:table-cell')}>
+                  {OPTIONAL_COLUMNS.find((column) => column.id === id)?.label}
+                </TableHead>
+              ))}
+              <TableHead className={cn(LIST_HEAD_CLASS, 'text-right')}>Started</TableHead>
+              <TableHead className={cn(LIST_HEAD_CLASS, 'w-[84px]')}>
                 <span className="sr-only">Actions</span>
-              </Th>
-            </tr>
-          </thead>
-          <tbody className="[&>tr:last-child>td]:border-b-0">
-            {/* Dispatched children nest under the task that ordered them, in that task's own
-                place in the ordering. Per TABLE, which is per group: a child grouped away from
-                its parent (a different tag, a different project) stands on its own rather than
-                being filed where nobody is looking for it. */}
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {/* Dispatched children nest under the task that ordered them. Per TABLE, which is
+                per group: a child grouped away from its parent stands on its own. */}
             {taskTreeRows(
               tasks.map((task) => ({
                 id: task.run.id,
@@ -756,38 +856,21 @@ function TaskTable({
                 onArchive={onArchive}
                 onSetRead={onSetRead}
                 busy={busy}
-                showCost={showCost}
+                extraColumns={extraColumns}
               />
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </TooltipProvider>
-    </div>
+    </ListFrame>
   )
 }
-
-function Th({ children, className }: { children: React.ReactNode; className?: string }) {
-  return (
-    <th
-      scope="col"
-      className={cn(
-        'h-[38px] border-b border-border px-2.5 text-left text-[11px] font-semibold tracking-[0.05em] whitespace-nowrap text-soft-foreground uppercase first:pl-4 last:pr-4',
-        className,
-      )}
-    >
-      {children}
-    </th>
-  )
-}
-
-const TD_BASE = 'h-11 border-b border-border px-2.5 whitespace-nowrap first:pl-4 last:pr-4'
 
 /**
  * One cross-project run.
  *
  * The title is a real `<Link>` — a plain router one, explicitly scoped with `scopeTo`: this page
- * renders outside every `/p/:projectId`, so the scope-aware `Link` would have no project to
- * prefix with, and each row points at a DIFFERENT project anyway.
+ * renders outside every `/p/:projectId`, and each row points at a DIFFERENT project anyway.
  */
 function TaskRow({
   task,
@@ -800,12 +883,12 @@ function TaskRow({
   onArchive,
   onSetRead,
   busy,
-  showCost,
+  extraColumns,
 }: {
   task: GlobalTask
   /** Nesting level under the task that dispatched this one; 0 for a top-level row. */
   depth: number
-  /** How many tasks THIS one dispatched — the row's "N subtasks" note. */
+  /** How many tasks THIS one dispatched — the row's "N subtasks" handle. */
   childCount: number
   /** Whether this row's dispatched children are unfolded beneath it (#1110). */
   subtasksExpanded: boolean
@@ -815,152 +898,142 @@ function TaskRow({
   onArchive: (task: GlobalTask, archived: boolean) => void
   onSetRead: (task: GlobalTask, read: boolean) => void
   busy: boolean
-  showCost: boolean
+  extraColumns: readonly OptionalColumn[]
 }) {
   const { run } = task
   const attention = deriveAttention(run)
   const to = scopeTo(run.projectId, `/tasks/${run.id}`)
   const unread = isUnread(run)
   const readDone = isReadDoneItem(run)
-  // The SAME rule every other surface applies (#407, #526) — the index carries the six inputs
-  // rather than a pre-resolved chip precisely so this is one function, not two. Plural here
-  // because a task genuinely has several: opened on an issue, about one PR, having created
-  // another. The surfaces with one slot take the first; this one has room for the truth.
-  //
-  // The project's own repo root is what makes a reference known only by NUMBER clickable. A
-  // project-scoped view can use the one repo it is standing in; this page has a different repo
-  // per row, which is why the registry entry carries `repoUrl`.
+  // The SAME rule every other surface applies (#407, #526). Plural here because a task genuinely
+  // has several references; the project's own repo root is what makes one known only by NUMBER
+  // clickable, which is why the registry entry carries `repoUrl`.
   const references = taskReferences(run, task.project?.repoUrl)
   const subtasks = subtaskLabel(childCount)
-  // The SAME live/peak rule the per-project table applies. The live sample rides the index row
-  // itself (`run.usage`, attached server-side per poll) rather than the run event stream, which
-  // is project-scoped and so cannot reach forty projects at once.
+  // The live sample rides the index row itself (`run.usage`, attached server-side per poll): the
+  // run event stream is project-scoped and cannot reach forty projects at once.
   const usage = usageCells(run, run.usage)
+  const kind = dispatchKindLabel(run)
 
   return (
-    <tr
+    <TableRow
       data-slot="global-task-row"
       data-run-id={run.id}
       data-project={run.projectId}
       data-depth={depth}
-      className="hover:bg-muted"
+      className="group/row"
     >
-      <td className={TD_BASE}>
-        <Pill dot={attention.tone} pulse={attention.pulse}>
-          {attention.label}
-        </Pill>
-      </td>
-      {/* The one column with no fixed width, so every pixel the others give up lands here — and
-          dropping Branch gave up 140 of them. A cross-project list is read by TITLE. */}
-      <td className={cn(TD_BASE, 'min-w-[320px] max-w-0')}>
-        {/* Inline padding, not a class: depth is unbounded, and Tailwind cannot generate a class
-            per level. 14px a level — the same step the per-project table and the sidebar use. */}
-        <span
-          className="flex min-w-0 items-center gap-1.5"
+      <TableCell className={cn(LIST_CELL_CLASS, 'hidden md:table-cell')}>
+        <TaskStatusBadge attention={attention} />
+      </TableCell>
+      <TableCell className={cn(LIST_CELL_CLASS, 'w-full max-w-0 min-w-[200px] md:min-w-[320px]')}>
+        {/* Inline padding, not a class: depth is unbounded. 14px a level — the same step the
+            per-project table and the sidebar use. */}
+        <div
+          className="flex min-w-0 flex-col gap-0.5"
           style={depth > 0 ? { paddingLeft: `${depth * 14}px` } : undefined}
         >
-          {depth > 0 ? (
-            <span
-              aria-hidden="true"
-              data-slot="subtask-tick"
-              className="shrink-0 font-mono text-[11px] leading-none text-soft-foreground"
+          <div className="flex min-w-0 items-center gap-2">
+            {depth > 0 ? (
+              <span
+                aria-hidden="true"
+                data-slot="subtask-tick"
+                className="shrink-0 font-mono text-xs leading-none text-soft-foreground"
+              >
+                &#9492;
+              </span>
+            ) : null}
+            <Link
+              to={to}
+              title={runTitle(run)}
+              className={cn(
+                'min-w-0 truncate text-sm',
+                unread
+                  ? 'font-semibold text-foreground'
+                  : readDone
+                    ? 'font-medium text-muted-foreground'
+                    : 'font-medium text-foreground',
+              )}
             >
-              &#9492;
-            </span>
-          ) : null}
-          <Link
-            to={to}
-            title={runTitle(run)}
+              {runTitle(run)}
+            </Link>
+            {unread ? (
+              <StatusDot
+                tone="violet"
+                role="img"
+                aria-label="unread"
+                title="Unread — not opened since it finished"
+                className="shrink-0"
+              />
+            ) : null}
+            {/* What a DISPATCHED row is for — `review` or `implement`. Null on every root. */}
+            {kind ? (
+              <Badge
+                variant="secondary"
+                data-slot="dispatch-kind"
+                className="h-5 px-1.5 font-normal text-muted-foreground"
+              >
+                {kind}
+              </Badge>
+            ) : null}
+            {subtasks ? (
+              <SubtaskToggle
+                label={subtasks}
+                expanded={subtasksExpanded}
+                onToggle={() => onToggleSubtasks(run.id)}
+              />
+            ) : null}
+          </div>
+          <div
+            data-slot="task-details"
             className={cn(
-              'min-w-0 truncate text-[13px]',
-              unread
-                ? 'font-semibold text-foreground'
-                : readDone
-                  ? 'font-medium text-muted-foreground'
-                  : 'font-medium',
+              'flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[13px] text-muted-foreground',
+              depth > 0 && 'pl-5',
             )}
           >
-            {runTitle(run)}
-          </Link>
-          {/* What a DISPATCHED row is for — `review` or `implement`. Null on every root. */}
-          {dispatchKindLabel(run) ? (
-            <span
-              data-slot="dispatch-kind"
-              className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground"
-            >
-              {dispatchKindLabel(run)}
-            </span>
-          ) : null}
-          {/* The dispatched children are the indented rows underneath — counted, and since
-              #1110 folded behind this handle until it is clicked open. */}
-          {subtasks ? (
-            <SubtaskToggle
-              label={subtasks}
-              expanded={subtasksExpanded}
-              onToggle={() => onToggleSubtasks(run.id)}
-            />
-          ) : null}
-          {unread ? (
-            <StatusDot
-              tone="violet"
-              role="img"
-              aria-label="unread"
-              title="Unread — not opened since it finished"
-              className="shrink-0"
-            />
-          ) : null}
-        </span>
-      </td>
-      {showProject ? (
-        <td className={cn(TD_BASE, 'text-[12.5px] text-muted-foreground')}>
-          <Link to={scopeTo(run.projectId, '/')} className="truncate hover:text-foreground">
-            {task.projectName}
-          </Link>
-        </td>
-      ) : null}
-      <td className={cn(TD_BASE, 'hidden xl:table-cell')}>
-        {task.tags.length > 0 ? (
-          <span className="flex flex-wrap items-center gap-1">
+            {/* Below `md` the Status column folds into this line. */}
+            <TaskStatusBadge attention={attention} className="mr-1 md:hidden" />
+            {showProject ? (
+              <>
+                <Link to={scopeTo(run.projectId, '/')} className="truncate hover:text-foreground hover:underline">
+                  {task.projectName}
+                </Link>
+                <span aria-hidden="true" className="text-soft-foreground">
+                  ·
+                </span>
+              </>
+            ) : null}
+            <span className="truncate">{run.workflow}</span>
             {task.tags.map((tag) => (
               <TagChip key={tag} tag={tag} />
             ))}
-          </span>
+            {references.length > 0 ? <ReferenceChips references={references} run={run} /> : null}
+          </div>
+        </div>
+      </TableCell>
+      {extraColumns.map((id) =>
+        id === 'cost' ? (
+          <TableCell
+            key={id}
+            className={cn(LIST_CELL_CLASS, 'hidden text-right text-[13px] text-muted-foreground tabular-nums md:table-cell')}
+          >
+            {formatCost(run.costUsd) || <Dash />}
+          </TableCell>
         ) : (
-          <Dash />
-        )}
-      </td>
-      <td className={TD_BASE}>
-        {references.length > 0 ? (
-          <ReferenceChips references={references} run={run} />
-        ) : (
-          <Dash />
-        )}
-      </td>
-      <td className={cn(TD_BASE, 'hidden text-[12.5px] text-muted-foreground xl:table-cell')}>
-        {run.workflow}
-      </td>
-      {showCost ? (
-        <td
-          className={cn(
-            TD_BASE,
-            'hidden text-right font-mono text-xs text-muted-foreground tabular-nums lg:table-cell',
-          )}
-        >
-          {formatCost(run.costUsd) || <Dash />}
-        </td>
-      ) : null}
-      <UsageTd column="cpu" cell={usage.cpu} />
-      <UsageTd column="memory" cell={usage.mem} />
-      <td className={cn(TD_BASE, 'text-right text-xs text-soft-foreground tabular-nums')}>
+          <UsageTd key={id} column={id} cell={id === 'cpu' ? usage.cpu : usage.mem} />
+        ),
+      )}
+      <TableCell className={cn(LIST_CELL_CLASS, 'text-right text-[13px] text-muted-foreground tabular-nums')}>
         {shortAge(run.startedAt ?? run.createdAt, now)}
-      </td>
-      <td className={cn(TD_BASE, 'text-right')}>
-        <span className="inline-flex items-center gap-0.5">
+      </TableCell>
+      <TableCell className={cn(LIST_CELL_CLASS, 'text-right')}>
+        {/* Revealed on hover so a resting list stays quiet; always there without a pointer. */}
+        <span className="inline-flex items-center justify-end gap-0.5 opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100 no-hover:opacity-100">
           <ReadToggle task={task} busy={busy} onSetRead={onSetRead} />
           <ArchiveToggle task={task} busy={busy} onArchive={onArchive} />
         </span>
-      </td>
-    </tr>
+      </TableCell>
+    </TableRow>
   )
 }
 
@@ -1000,8 +1073,8 @@ function ReadToggle({
           disabled={busy}
           onClick={() => onSetRead(task, unread)}
           className={cn(
-            'inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-wait disabled:opacity-50',
-            unread ? 'text-violet' : 'text-soft-foreground',
+            'inline-flex size-7 items-center justify-center rounded-sm transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-wait disabled:opacity-50',
+            unread ? 'text-violet' : 'text-muted-foreground',
           )}
         >
           <Icon className="size-3.5" aria-hidden="true" />
@@ -1047,7 +1120,7 @@ function ArchiveToggle({
           aria-label={label}
           disabled={busy}
           onClick={() => onArchive(task, !archived)}
-          className="inline-flex size-7 items-center justify-center rounded-md text-soft-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-wait disabled:opacity-50"
+          className="inline-flex size-7 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-wait disabled:opacity-50"
         >
           <Icon className="size-3.5" aria-hidden="true" />
         </button>
@@ -1098,7 +1171,7 @@ function ReferenceChips({
               prNumber={reference.number}
             />
           }
-          className="shrink-0"
+          className="h-5 shrink-0"
         />
       ))}
       {hidden > 0 ? (
@@ -1186,7 +1259,7 @@ function ReferenceOverflow({
           onClick={() => {
             openedByHover.current = false
           }}
-          className="shrink-0 rounded-full px-1 text-[11px] font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          className="shrink-0 rounded-full px-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
         >
           +{hidden}
         </button>
@@ -1204,7 +1277,7 @@ function ReferenceOverflow({
           if (openedByHover.current) event.preventDefault()
         }}
       >
-        <p className="px-1 pb-1.5 text-[10.5px] text-soft-foreground">References</p>
+        <p className="px-1 pb-1.5 text-xs text-muted-foreground">References</p>
         <span className="flex flex-col items-start gap-1">
           {references.map((reference) => (
             <ReferenceChip
@@ -1231,74 +1304,78 @@ function ReferenceOverflow({
  */
 export function TagChip({ tag, className }: { tag: string; className?: string }) {
   return (
-    <span
+    <Badge
+      variant="secondary"
       data-slot="project-tag"
-      className={cn(
-        'inline-flex max-w-full items-center truncate rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground',
-        className,
-      )}
+      className={cn('h-5 max-w-full truncate px-1.5 font-normal text-muted-foreground', className)}
     >
       {tag}
-    </span>
+    </Badge>
   )
 }
 
 /**
- * One CPU or Mem cell — the per-project table's exact grammar, so the two read alike: a LIVE
- * sample is emphasized, a finished run's persisted peak is dimmed and says so, and anything
- * else is an honest em dash rather than an invented zero.
+ * One CPU or Memory cell — the per-project table's grammar: a LIVE sample is emphasized, a
+ * finished run's persisted peak is quiet, anything else is an honest em dash.
  */
 function UsageTd({ column, cell }: { column: 'cpu' | 'memory'; cell: UsageCell }) {
   return (
-    <td
+    <TableCell
       data-usage={column === 'memory' ? 'mem' : column}
       data-usage-kind={cell.kind}
       title={cell.title}
       className={cn(
-        TD_BASE,
-        'hidden text-right font-mono tabular-nums xl:table-cell',
-        cell.kind === 'live' && 'bg-violet/5 text-xs font-medium text-foreground',
-        cell.kind === 'peak' && 'text-[11.5px] text-soft-foreground',
-        cell.kind === 'none' && 'text-xs text-soft-foreground',
+        LIST_CELL_CLASS,
+        'hidden text-right text-[13px] tabular-nums md:table-cell',
+        cell.kind === 'live' ? 'font-medium text-foreground' : 'text-muted-foreground',
       )}
     >
       {cell.text || '—'}
-    </td>
+    </TableCell>
   )
 }
 
 function Dash() {
-  return <span className="text-xs text-soft-foreground">—</span>
+  return <span className="text-[13px] text-soft-foreground">—</span>
 }
 
 /** What an empty global list honestly means, given how it got empty. */
-function GlobalTasksEmptyState({ view, filtered }: { view: ListView; filtered: boolean }) {
+function GlobalTasksEmptyState({
+  view,
+  filtered,
+  onClear,
+}: {
+  view: ListView
+  filtered: boolean
+  onClear?: () => void
+}) {
   if (filtered) {
     return (
-      <CenteredState
-        heading="h2"
+      <ListEmpty
         icon={<SearchXIcon />}
-        tone="neutral"
         title="No matching tasks"
-        subtitle="No task in any project matches these filters."
+        description="No task in any project matches these filters."
+        action={
+          onClear ? (
+            <Button variant="outline" onClick={onClear}>
+              Clear filters
+            </Button>
+          ) : undefined
+        }
       />
     )
   }
   return view === 'archived' ? (
-    <CenteredState
-      heading="h2"
+    <ListEmpty
       icon={<ArchiveIcon />}
-      tone="neutral"
       title="Nothing archived yet"
-      subtitle="Finished tasks you archive land here, from every project."
+      description="Finished tasks you archive land here, from every project."
     />
   ) : (
-    <CenteredState
-      heading="h2"
+    <ListEmpty
       icon={<ListChecksIcon />}
-      tone="neutral"
       title="No tasks yet"
-      subtitle="Start a task in any project and it shows up here."
+      description="Start a task in any project and it shows up here."
     />
   )
 }

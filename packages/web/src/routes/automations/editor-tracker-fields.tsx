@@ -52,16 +52,16 @@ export function EditorTrackerFields({ trigger, intervalSeconds, onChange, onVali
   const wantsStatuses = trigger?.events.includes('issue.status_changed')
   const wantsLabels = trigger?.events.some(event => event === 'issue.labeled' || event === 'issue.unlabeled')
   const searchLabel = wantsStatuses && wantsLabels ? 'Search tracker statuses and labels' : wantsLabels ? 'Search tracker labels' : 'Search tracker statuses'
-  return <div data-slot="editor-tracker" className="flex flex-col gap-3 text-sm">
-    {metadata.isPending ? <p>Loading tracker events…</p> : null}
-    {metadata.isError || (first && !first.available) ? <div role="alert">
+  return <div data-slot="editor-tracker" className="flex flex-col gap-4 text-[13px]">
+    {metadata.isPending ? <p className="text-muted-foreground">Loading tracker events…</p> : null}
+    {metadata.isError || (first && !first.available) ? <div role="alert" className="flex flex-col items-start gap-2 rounded-lg bg-danger/10 px-3 py-2.5 text-danger">
       <p>{first && !first.available ? first.reason : 'Could not load tracker events.'} Check the project’s Issue tracker settings.</p>
       <Button variant="outline" size="sm" onClick={() => void metadata.refetch()}>Retry</Button>
     </div> : null}
     {ready ? <>
-      <p>{ready.association.kind === 'jira' ? 'Jira' : 'Linear'} · {ready.association.externalName}</p>
-      {trigger && !sameSource ? <p role="alert">The tracker connection changed. Select an event again before saving.</p> : null}
-      {!trigger ? <p>Select an event to complete this automation.</p> : null}
+      <p className="font-medium">{ready.association.kind === 'jira' ? 'Jira' : 'Linear'} · {ready.association.externalName}</p>
+      {trigger && !sameSource ? <p role="alert" className="text-danger">The tracker connection changed. Select an event again before saving.</p> : null}
+      {!trigger ? <p className="text-muted-foreground">Select an event to complete this automation.</p> : null}
       <div role="group" aria-label="Tracker events" className="flex flex-wrap gap-1.5">
         {ready.events.map(event => <Chip key={event} active={sameSource && trigger?.events.includes(event)} aria-pressed={sameSource && trigger?.events.includes(event)} onClick={() => {
           const current = sameSource ? trigger!.events : []
@@ -103,7 +103,7 @@ export function EditorTrackerFields({ trigger, intervalSeconds, onChange, onVali
         {results.hasNextPage ? <Button variant="outline" size="sm" disabled={results.isFetchingNextPage} onClick={() => void results.fetchNextPage()}>Load more</Button> : null}
       </> : null}
     </> : null}
-    <div className="flex items-center gap-2">Check every
+    <div className="flex items-center gap-2 text-muted-foreground">Check every
       <Select value={String(intervalSeconds / 60)} onValueChange={value => onChange({ intervalSeconds: Number(value) * 60 })}>
         <SelectTrigger aria-label="Tracker poll interval" className="w-28"><SelectValue /></SelectTrigger>
         <SelectContent>{POLL_MINUTES.map(minutes => <SelectItem key={minutes} value={String(minutes)}>{minutes} min</SelectItem>)}</SelectContent>

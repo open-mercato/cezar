@@ -33,7 +33,7 @@ import {
 
 import { GitTabLoadError, GitTabLoading } from '../task-git/git-tab-loading'
 import { RunHeader } from '../task-thread/run-header'
-import { backLanes, edgeStyle, edgeTypes, GraphNodeView } from './graph-node'
+import { backLanes, edgeStyle, edgeTypes, GraphNodeView, CANVAS_THEME } from './graph-node'
 import { FloatingPanel } from './workflow-graph'
 
 /**
@@ -198,9 +198,10 @@ function TaskGraphView({ run, embedded = false }: { run: ApiRun; embedded?: bool
             fitViewOptions={{ padding: 0.2, maxZoom: 1.2 }}
             minZoom={0.2}
             colorMode="system"
+            style={CANVAS_THEME}
             proOptions={{ hideAttribution: true }}
           >
-            <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
+            <Background variant={BackgroundVariant.Dots} gap={20} size={1.25} />
             <Controls showInteractive={false} />
           </ReactFlow>
           {selected && overlay ? (
@@ -243,8 +244,8 @@ function NodeDetails({
   if (state.loopCount !== undefined) rows.push(['iterations', `${state.loopCount}${loopMax ? ` / ${loopMax}` : ''}`])
   const fields = Object.entries(outputs ?? {}).filter(([, v]) => v !== '')
   return (
-    <div className="space-y-4 p-4 text-[12px]">
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+    <div className="space-y-5 p-4 text-[13px]">
+      <dl className="grid grid-cols-[5.5rem_1fr] gap-x-3 gap-y-1.5">
         {rows.map(([k, v]) => (
           <div key={k} className="contents">
             <dt className="text-muted-foreground">{k}</dt>
@@ -253,19 +254,19 @@ function NodeDetails({
         ))}
       </dl>
       {childRunId ? (
-        <Link to={`/tasks/${childRunId}`} className="inline-flex items-center gap-1 text-primary hover:underline">
-          Open the subtask <ExternalLinkIcon className="size-3" />
+        <Link to={`/tasks/${childRunId}`} className="inline-flex items-center gap-1 font-medium text-foreground underline-offset-4 hover:underline">
+          Open the subtask <ExternalLinkIcon className="size-3.5" />
         </Link>
       ) : null}
       <div>
-        <div className="mb-1 text-[11px] text-muted-foreground uppercase">Outputs</div>
+        <div className="mb-1.5 text-xs font-medium text-foreground">Outputs</div>
         {fields.length === 0 ? (
-          <p className="text-[11px] text-muted-foreground">Nothing yet — outputs appear once the node has run.</p>
+          <p className="text-xs text-muted-foreground">Nothing yet — outputs appear once the node has run.</p>
         ) : (
           fields.map(([k, v]) => (
             <div key={k} className="mb-2">
               <code className="text-[11px] text-muted-foreground">{k}</code>
-              <pre className="mt-0.5 max-h-48 overflow-auto rounded-md bg-muted/40 p-2 text-[11px] whitespace-pre-wrap">{String(v)}</pre>
+              <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted/60 p-2.5 font-mono text-[11px] whitespace-pre-wrap">{String(v)}</pre>
             </div>
           ))
         )}

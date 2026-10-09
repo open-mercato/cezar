@@ -59,14 +59,14 @@ export function NextRunsRail({
         side="right"
         data-slot="next-runs-rail"
         aria-describedby={undefined}
-        className="w-[360px] gap-0 sm:max-w-[360px]"
+        className="w-[380px] gap-0 sm:max-w-[380px]"
       >
-        <SheetHeader className="px-4 pt-4 pb-2">
-          <SheetTitle className="inline-flex items-center gap-2 text-sm">
-            <CalendarClockIcon className="size-4" />
+        <SheetHeader className="px-5 pt-5 pb-3">
+          <SheetTitle className="inline-flex items-center gap-2 text-[15px]">
+            <CalendarClockIcon className="size-4 text-muted-foreground" />
             Next runs
           </SheetTitle>
-          <SheetDescription className="sr-only">Upcoming scheduled runs, soonest first.</SheetDescription>
+          <SheetDescription className="text-[13px]">Upcoming scheduled runs, soonest first.</SheetDescription>
         </SheetHeader>
         <div className="overflow-y-auto">
           {upcoming.map((run, index) => {
@@ -84,20 +84,20 @@ export function NextRunsRail({
                   onOpenChange(false)
                   navigate(`/automations/${encodeURIComponent(run.automation.id)}`)
                 }}
-                className="grid w-full cursor-pointer grid-cols-[76px_1fr_auto] items-center gap-2 px-4 py-2 text-left text-[13px] hover:bg-muted"
+                className="grid min-h-11 w-full cursor-pointer grid-cols-[76px_1fr_auto] items-center gap-2 px-5 py-2 text-left text-[13px] hover:bg-muted/60"
               >
-                <span className="font-mono text-xs font-medium whitespace-nowrap text-muted-foreground tabular-nums">{time}</span>
-                <span className="overflow-hidden text-[13px] font-medium text-ellipsis whitespace-nowrap">{run.automation.name}</span>
-                <span className="text-[11px] whitespace-nowrap text-soft-foreground">{relativeIn(run.at, now)}</span>
+                <span className="text-[13px] whitespace-nowrap text-muted-foreground tabular-nums">{time}</span>
+                <span className="truncate text-[13.5px] font-medium">{run.automation.name}</span>
+                <span className="text-xs whitespace-nowrap text-muted-foreground tabular-nums">{relativeIn(run.at, now)}</span>
               </button>
             )
           })}
           {upcoming.length === 0 ? (
-            <p className="px-4 py-2 text-[12.5px] text-soft-foreground">No scheduled runs in the next two weeks.</p>
+            <p className="px-5 py-2 text-[13px] text-muted-foreground">No scheduled runs in the next two weeks.</p>
           ) : null}
           <div
             data-slot="next-runs-footer"
-            className="mt-1.5 flex items-center gap-2 border-t border-border px-3.5 pt-2.5 pb-1 text-xs text-muted-foreground"
+            className="mt-2 flex items-center gap-2 border-t border-border px-5 pt-3 pb-2 text-[13px] text-muted-foreground"
           >
             <StatusDot tone="pending" pulse />
             {pollCount} GitHub polls running continuously

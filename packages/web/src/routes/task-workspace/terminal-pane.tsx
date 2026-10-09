@@ -30,7 +30,7 @@ const POLL_MS = 400
 /** Written into the screen when retained scrollback was dropped. Plain text rather than a dimmed
  *  ANSI sequence: this is the cockpit talking, and it must not be mistakable for — or corrupt the
  *  state of — the program that is writing. */
-const TRUNCATION_NOTICE = '\r\n[... wcześniejsze wyjście wypadło ze scrollbacku ...]\r\n'
+const TRUNCATION_NOTICE = '\r\n[... earlier output fell out of the scrollback ...]\r\n'
 
 export function TerminalPane({
   runId,

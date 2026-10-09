@@ -4,11 +4,12 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { getAutomationLog, retryAutomationReceipt } from '@/api/client'
 import { onWorkspaceEvent } from '@/api/global-events'
-import { Pill } from '@/components/pill'
+import { Page, PageBody, PageHeader, PageToolbar } from '@/components/page'
 import { StatusDot } from '@/components/status-dot'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from '@/components/ui/toaster'
 import { logTime, resultTone, statusTone, usd, AUTOMATION_COST_VISIBLE } from '@/lib/automation-format'
 import { Link, useNavigate } from '@/lib/project-router'
@@ -69,63 +70,85 @@ export function AutomationLog({ automationId, automation, timeZone, onBack }: {
     (result === 'all' || record.result === result) && (event === 'all' || record.event === event))
 
   return (
-    <div data-route="automations" data-slot="automation-log" className="flex min-h-full flex-col">
-      <header className="sticky top-0 z-10 flex h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5">
-        <Button variant="ghost" size="icon-sm" aria-label="Back" onClick={onBack}>
-          <ArrowLeftIcon className="size-[15px]" />
-        </Button>
-        <h1 className="m-0 text-base font-semibold">{automation ? automation.name : 'Automation'}</h1>
-        <span className="text-[13px] text-muted-foreground">· execution log</span>
-        <div className="flex flex-1 items-center justify-end gap-2">
-          <Select value={result} onValueChange={(next) => setResult(next as AutomationLogResult | 'all')}>
-            <SelectTrigger size="sm" aria-label="Filter by result" className="text-[12.5px]">
-              <SelectValue placeholder="All results" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All results</SelectItem>
-              {RESULTS.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}
-            </SelectContent>
-          </Select>
-          <Select value={event} onValueChange={(next) => setEvent(next as AutomationEvent | 'all')}>
-            <SelectTrigger size="sm" aria-label="Filter by event" className="text-[12.5px]">
-              <SelectValue placeholder="All events" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All events</SelectItem>
-              {EVENTS.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-        <Button variant="outline" size="sm" onClick={() => navigate(`/automations/${encodeURIComponent(automationId)}`)}>
-          <PencilIcon className="size-[13px]" />
-          Edit
-        </Button>
-      </header>
+    <Page data-route="automations" data-slot="automation-log">
+      <PageHeader
+        eyebrow={
+          <Button variant="ghost" size="xs" className="-ml-2 font-normal" aria-label="Back" onClick={onBack}>
+            <ArrowLeftIcon aria-hidden="true" />
+            Automations
+          </Button>
+        }
+        title={automation ? automation.name : 'Automation'}
+        description="Execution log — the newest 100 checks, in the scheduler's time zone."
+        actions={
+          <Button variant="outline" onClick={() => navigate(`/automations/${encodeURIComponent(automationId)}`)}>
+            <PencilIcon aria-hidden="true" />
+            Edit
+          </Button>
+        }
+      />
+      <PageToolbar>
+        <Select value={result} onValueChange={(next) => setResult(next as AutomationLogResult | 'all')}>
+          <SelectTrigger size="sm" aria-label="Filter by result">
+            <SelectValue placeholder="All results" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All results</SelectItem>
+            {RESULTS.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Select value={event} onValueChange={(next) => setEvent(next as AutomationEvent | 'all')}>
+          <SelectTrigger size="sm" aria-label="Filter by event">
+            <SelectValue placeholder="All events" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All events</SelectItem>
+            {EVENTS.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        {records && query.data ? (
+          <span className="ml-auto text-[13px] text-muted-foreground tabular-nums">
+            {records.length === query.data.records.length ? `${records.length} entries` : `${records.length} of ${query.data.records.length}`}
+          </span>
+        ) : null}
+      </PageToolbar>
 
-      <div className="flex justify-center p-5">
+      <PageBody>
         {query.isError ? (
-          <div className="w-full max-w-[820px]"><PageState text={query.error instanceof Error ? query.error.message : String(query.error)} /></div>
+          <PageState text={query.error instanceof Error ? query.error.message : String(query.error)} />
         ) : records === undefined ? (
-          <div className="w-full max-w-[820px]"><PageState text="Loading execution log…" /></div>
+          <PageState text="Loading execution log…" loading />
         ) : records.length === 0 ? (
-          <div className="w-full max-w-[820px]"><PageState text="No checks have run yet." /></div>
+          <PageState text="No checks have run yet." />
         ) : (
-          <Card flush className="w-full max-w-[820px]">
-            {records.map((record, index) => (
-              <LogRow
-                key={record.seq}
-                record={record}
-                run={record.runId === undefined ? undefined : query.data?.runs[record.runId]}
-                last={index === records.length - 1}
-                timeZone={zone}
-                retrying={retry.isPending && retry.variables === record.receiptId}
-                onRetry={(receiptId) => retry.mutate(receiptId)}
-              />
-            ))}
-          </Card>
+          <div className="overflow-hidden rounded-xl border bg-card shadow-xs">
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="h-10 w-32 pl-4 text-xs font-medium text-muted-foreground">When</TableHead>
+                  <TableHead className="h-10 w-36 text-xs font-medium text-muted-foreground">Result</TableHead>
+                  <TableHead className="h-10 text-xs font-medium text-muted-foreground">Details</TableHead>
+                  {AUTOMATION_COST_VISIBLE ? <TableHead className="h-10 text-right text-xs font-medium text-muted-foreground">Cost</TableHead> : null}
+                  <TableHead className="h-10 w-32 pr-3"><span className="sr-only">Actions</span></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {records.map((record) => (
+                  <LogRow
+                    key={record.seq}
+                    record={record}
+                    run={record.runId === undefined ? undefined : query.data?.runs[record.runId]}
+                    timeZone={zone}
+                    retrying={retry.isPending && retry.variables === record.receiptId}
+                    onRetry={(receiptId) => retry.mutate(receiptId)}
+                  />
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         )}
-      </div>
-    </div>
+      </PageBody>
+    </Page>
   )
 }
 
@@ -147,11 +170,10 @@ function launchErrorReceipt(record: AutomationLogRecord): string | undefined {
   return record.result === 'failed' && record.runId === undefined ? record.receiptId : undefined
 }
 
-/** One log row — kit values 1:1: grid `90px 110px 1fr auto auto`, `12px 16px`, 13px, gaps 8/12. */
-function LogRow({ record, run, last, timeZone, retrying, onRetry }: {
+/** One log entry: a table row, plus one indented row per dispatched child task. */
+function LogRow({ record, run, timeZone, retrying, onRetry }: {
   record: AutomationLogRecord
   run: AutomationLogRun | undefined
-  last: boolean
   timeZone: string
   retrying: boolean
   onRetry: (receiptId: string) => void
@@ -160,53 +182,58 @@ function LogRow({ record, run, last, timeZone, retrying, onRetry }: {
   const children = run?.children ?? []
   const retryable = launchErrorReceipt(record)
   return (
-    <div
-      data-slot="log-row"
-      data-result={record.result}
-      className={`grid ${AUTOMATION_COST_VISIBLE ? 'grid-cols-[90px_110px_1fr_auto_auto]' : 'grid-cols-[90px_110px_1fr_auto]'} items-center gap-x-3 gap-y-2 px-4 py-3 text-[13px] ${last ? '' : 'border-b border-border'}`}
-    >
-      <span className="font-mono text-xs font-medium text-muted-foreground tabular-nums">{logTime(record.ts, timeZone)}</span>
-      <Pill dot={tone} className="w-fit">{record.result}</Pill>
-      <span className={`overflow-hidden text-ellipsis whitespace-nowrap ${tone === 'danger' ? 'text-danger' : 'text-muted-foreground'}`} title={record.reason}>
-        {record.reason ?? ''}
-      </span>
-      {AUTOMATION_COST_VISIBLE ? <span className="font-mono text-xs text-soft-foreground">{run?.costUsd === undefined ? '—' : usd(run.costUsd)}</span> : null}
-      {record.runId !== undefined ? (
-        <Button variant="ghost" size="sm" asChild>
-          <Link to={`/tasks/${encodeURIComponent(record.runId)}`}>
-            Open task
-            <ArrowUpRightIcon className="size-3" />
-          </Link>
-        </Button>
-      ) : retryable !== undefined ? (
-        <Button variant="ghost" size="sm" disabled={retrying} onClick={() => onRetry(retryable)}>
-          <RotateCcwIcon className="size-3" />
-          Retry task
-        </Button>
-      ) : (
-        <span />
-      )}
-      {children.length > 0 ? (
-        <div className="col-span-full flex flex-col gap-1 pl-3.5">
-          {children.map((child) => (
-            <div key={child.runId} data-slot="log-child" className={`grid ${AUTOMATION_COST_VISIBLE ? 'grid-cols-[14px_70px_1fr_auto_auto]' : 'grid-cols-[14px_70px_1fr_auto]'} items-center gap-2.5 text-[12.5px]`}>
-              <span className="font-mono text-[11px] text-soft-foreground">└</span>
-              <span className="w-fit rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground">{child.kind ?? 'implement'}</span>
-              <span className="flex min-w-0 items-center gap-2">
-                <StatusDot tone={statusTone(child.status)} />
-                <span className="overflow-hidden text-ellipsis whitespace-nowrap">{child.title}</span>
-              </span>
-              {AUTOMATION_COST_VISIBLE ? <span className="font-mono text-[11.5px] text-soft-foreground">{child.costUsd === undefined ? '—' : usd(child.costUsd)}</span> : null}
-              <Button variant="ghost" size="sm" className="h-6" asChild>
-                <Link to={`/tasks/${encodeURIComponent(child.runId)}`}>
-                  Open
-                  <ArrowUpRightIcon className="size-[11px]" />
-                </Link>
-              </Button>
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </div>
+    <>
+      <TableRow data-slot="log-row" data-result={record.result} className={`h-11 hover:bg-muted/50 ${children.length > 0 ? 'border-b-0' : ''}`}>
+        <TableCell className="pl-4 text-[13px] whitespace-nowrap text-muted-foreground tabular-nums">{logTime(record.ts, timeZone)}</TableCell>
+        <TableCell>
+          <Badge variant="outline" className="gap-1.5 font-normal">
+            <StatusDot tone={tone} />
+            {record.result}
+          </Badge>
+        </TableCell>
+        <TableCell className={`max-w-0 truncate text-[13px] ${tone === 'danger' ? 'text-danger' : 'text-muted-foreground'}`} title={record.reason}>
+          {record.reason ?? ''}
+        </TableCell>
+        {AUTOMATION_COST_VISIBLE ? <TableCell className="text-right text-[13px] text-muted-foreground tabular-nums">{run?.costUsd === undefined ? '—' : usd(run.costUsd)}</TableCell> : null}
+        <TableCell className="pr-3 text-right">
+          {record.runId !== undefined ? (
+            <Button variant="ghost" size="sm" asChild>
+              <Link to={`/tasks/${encodeURIComponent(record.runId)}`}>
+                Open task
+                <ArrowUpRightIcon aria-hidden="true" />
+              </Link>
+            </Button>
+          ) : retryable !== undefined ? (
+            <Button variant="ghost" size="sm" disabled={retrying} onClick={() => onRetry(retryable)}>
+              <RotateCcwIcon aria-hidden="true" />
+              Retry task
+            </Button>
+          ) : null}
+        </TableCell>
+      </TableRow>
+      {children.map((child, index) => (
+        <TableRow key={child.runId} data-slot="log-child" className={`h-10 hover:bg-muted/50 ${index < children.length - 1 ? 'border-b-0' : ''}`}>
+          <TableCell />
+          <TableCell>
+            <Badge variant="secondary" className="font-normal">{child.kind ?? 'implement'}</Badge>
+          </TableCell>
+          <TableCell className="max-w-0">
+            <span className="flex min-w-0 items-center gap-2 text-[13px]">
+              <StatusDot tone={statusTone(child.status)} />
+              <span className="truncate">{child.title}</span>
+            </span>
+          </TableCell>
+          {AUTOMATION_COST_VISIBLE ? <TableCell className="text-right text-[13px] text-muted-foreground tabular-nums">{child.costUsd === undefined ? '—' : usd(child.costUsd)}</TableCell> : null}
+          <TableCell className="pr-3 text-right">
+            <Button variant="ghost" size="sm" asChild>
+              <Link to={`/tasks/${encodeURIComponent(child.runId)}`}>
+                Open
+                <ArrowUpRightIcon aria-hidden="true" />
+              </Link>
+            </Button>
+          </TableCell>
+        </TableRow>
+      ))}
+    </>
   )
 }

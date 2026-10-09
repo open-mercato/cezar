@@ -4,8 +4,8 @@ import * as React from 'react'
 import { cn } from '@/lib/utils'
 
 /**
- * The mockup's `.chip` (spec 2026-09-14-automations-redesign § Primitives): a quiet 26px
- * bordered pill that darkens on hover. One class string, `chipClass`, so the composer's
+ * The mockup's `.chip` (spec 2026-09-14-automations-redesign § Primitives): a quiet 28px
+ * bordered control that darkens on hover. One class string, `chipClass`, so the composer's
  * `PickerPill` (a chip that opens a menu) and this plain button chip render identically.
  *
  * Three states beyond the base, each a data attribute so a test or a stylesheet can address it:
@@ -14,10 +14,10 @@ import { cn } from '@/lib/utils'
  *  - `dashed` — an affordance that leads somewhere rather than selecting ("Manage…").
  */
 export const chipClass =
-  'inline-flex h-[26px] items-center gap-1.5 rounded-full border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-55'
+  'inline-flex h-7 max-w-full max-md:h-8 items-center gap-1.5 rounded-md border border-border bg-card px-2 text-[12.5px] font-medium whitespace-nowrap text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-55 data-[state=open]:bg-muted data-[state=open]:text-foreground'
 
 export const chipChevron = (
-  <ChevronDownIcon aria-hidden="true" className="size-2.5 shrink-0 text-soft-foreground" />
+  <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
 )
 
 export function Chip({

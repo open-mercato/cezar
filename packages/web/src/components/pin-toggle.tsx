@@ -43,12 +43,12 @@ export function PinToggle({
         onToggle(!pinned)
       }}
       className={cn(
-        'inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-soft-foreground transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
+        'inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-soft-foreground transition-[color,background-color,opacity] hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
         pinned && 'text-violet hover:text-violet',
         className,
       )}
     >
-      <PinIcon className={cn('size-3', pinned && 'fill-current')} aria-hidden="true" />
+      <PinIcon className={cn('size-3.5', pinned && 'fill-current')} aria-hidden="true" />
     </button>
   )
 }

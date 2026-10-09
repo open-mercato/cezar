@@ -225,8 +225,8 @@ export function BrowserView({
     <div data-slot="browser-view" className="flex h-full min-h-0 flex-col">
       <div
         role="tablist"
-        aria-label="Karty przeglądarki"
-        className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border px-1 py-1"
+        aria-label="Browser tabs"
+        className="flex h-9 shrink-0 items-center gap-0.5 overflow-x-auto px-3"
       >
         {tabs.map((tab, index) => (
           <div
@@ -234,7 +234,7 @@ export function BrowserView({
             data-slot="browser-tab"
             data-active={index === active ? '' : undefined}
             className={cn(
-              'group flex h-6 shrink-0 items-center rounded pl-2 pr-0.5 text-xs',
+              'group flex h-6 shrink-0 items-center rounded-sm pl-2 pr-0.5 text-xs font-medium',
               index === active ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground',
             )}
           >
@@ -243,14 +243,14 @@ export function BrowserView({
               role="tab"
               aria-selected={index === active}
               onClick={() => onChange({ ...state, active: index })}
-              title={tab || 'Nowa karta'}
+              title={tab || 'New tab'}
               className="max-w-32 truncate outline-none focus-visible:underline"
             >
               {tabLabel(tab)}
             </button>
             <button
               type="button"
-              aria-label={`Zamknij kartę ${tabLabel(tab)}`}
+              aria-label={`Close tab ${tabLabel(tab)}`}
               onClick={() => closeTab(index)}
               className={cn(
                 'ml-1 grid size-4 shrink-0 place-items-center rounded opacity-0 transition-opacity hover:bg-background focus-visible:opacity-100 group-hover:opacity-100',
@@ -264,8 +264,8 @@ export function BrowserView({
         {tabs.length < MAX_BROWSER_TABS ? (
           <button
             type="button"
-            aria-label="Nowa karta"
-            title="Nowa karta"
+            aria-label="New tab"
+            title="New tab"
             onClick={addTab}
             className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
           >
@@ -274,23 +274,23 @@ export function BrowserView({
         ) : null}
       </div>
 
-      <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1">
+      <div className="flex shrink-0 items-center gap-1 border-b border-border/70 px-3 pb-2">
         {/* Back and Forward walk this view's OWN per-tab stack — see `navByTab`. They can
             therefore be disabled truthfully, which reaching into the frame could never do. */}
         <ToolbarButton
-          label="Wstecz"
+          label="Back"
           disabled={!canBack}
           onClick={() => go(-1)}
           icon={<ArrowLeftIcon aria-hidden="true" className="size-3.5" />}
         />
         <ToolbarButton
-          label="Dalej"
+          label="Forward"
           disabled={!canForward}
           onClick={() => go(1)}
           icon={<ArrowRightIcon aria-hidden="true" className="size-3.5" />}
         />
         <ToolbarButton
-          label="Odśwież"
+          label="Reload"
           onClick={() => {
             if (target === '') return
             setStatus('loading')
@@ -308,10 +308,10 @@ export function BrowserView({
           <input
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
-            placeholder="Wpisz adres, np. http://localhost:3000"
-            aria-label="Adres"
+            placeholder="Enter an address, e.g. http://localhost:3000"
+            aria-label="Address"
             spellCheck={false}
-            className="w-full rounded border border-border bg-background px-2 py-1 text-xs outline-none focus-visible:border-foreground"
+            className="h-8 w-full rounded-md border border-input bg-card px-3 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/30"
           />
         </form>
       </div>
@@ -322,16 +322,16 @@ export function BrowserView({
             icon={<TriangleAlertIcon />}
             tone="neutral"
             heading="h2"
-            title="Ten adres wskazuje na maszynę, przy której siedzisz"
-            subtitle="Ten cockpit działa zdalnie, więc adres lokalny otworzyłby się na Twoim komputerze, a nie na hoście zadania. Podgląd aplikacji zadania z trybu hosted wymaga proxy, którego jeszcze nie ma."
+            title="This address points at the machine you are sitting at"
+            subtitle="This cockpit runs remotely, so a local address would open on your computer rather than on the task's host. Previewing the task's app from hosted mode needs a proxy that does not exist yet."
           />
         ) : target === '' ? (
           <CenteredState
             icon={<GlobeIcon />}
             tone="neutral"
             heading="h2"
-            title="Pusta karta"
-            subtitle="Wpisz adres powyżej. Zadziała każdy — także adres aplikacji uruchomionej w terminalu tego zadania."
+            title="Empty tab"
+            subtitle="Enter an address above. Any will do — including the app running in this task's terminal."
           />
         ) : (
           <>
@@ -340,15 +340,15 @@ export function BrowserView({
                 data-slot="browser-failed"
                 className="absolute inset-x-0 top-0 z-10 border-b border-border bg-background px-3 py-2 text-xs text-soft-foreground"
               >
-                <span className="font-medium text-foreground">Nie udało się otworzyć</span> — strona nie
-                odpowiedziała albo nie pozwala się osadzić. Adres został w pasku, możesz go poprawić.
+                <span className="font-medium text-foreground">Could not open</span> — the page did not
+                respond or does not allow embedding. The address is still in the bar; you can fix it.
               </div>
             ) : null}
             <iframe
               // Keyed by the address AND the reload token so Reload really re-fetches.
               key={`${target}#${reloadToken}`}
               src={target}
-              title="Podgląd"
+              title="Preview"
               onLoad={onLoaded}
               // Worktree-served content is untrusted (spec §7). `allow-same-origin` keeps the page
               // in its OWN origin — which is not the cockpit's, so it still cannot touch the
@@ -365,7 +365,7 @@ export function BrowserView({
             />
             {status === 'loading' ? (
               <p className="absolute inset-0 grid place-items-center text-xs text-soft-foreground">
-                Ładowanie…
+                Loading…
               </p>
             ) : null}
           </>
@@ -393,7 +393,7 @@ function ToolbarButton({
       title={label}
       onClick={onClick}
       disabled={disabled}
-      className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+      className="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
     >
       {icon}
     </button>
@@ -424,7 +424,7 @@ const MAX_HISTORY = 50
  * that is merely terse.
  */
 export function tabLabel(url: string): string {
-  if (url === '') return 'Nowa karta'
+  if (url === '') return 'New tab'
   try {
     const parsed = new URL(url)
     const path = parsed.pathname === '/' ? '' : parsed.pathname

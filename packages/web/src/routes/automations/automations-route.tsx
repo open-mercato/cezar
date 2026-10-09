@@ -1,7 +1,9 @@
 import { ZapIcon } from 'lucide-react'
 import { useParams, useSearchParams } from 'react-router'
 
-import { CenteredState } from '@/components/centered-state'
+import { Page, PageBody, PageHeader } from '@/components/page'
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
+import { Spinner } from '@/components/ui/spinner'
 import { useNavigate } from '@/lib/project-router'
 
 import { AutomationEditor } from './editor'
@@ -30,23 +32,22 @@ export function AutomationsRoute({ mode = 'list' }: { mode?: 'list' | 'new' | 'e
   const view = viewOf(searchParams.get('view'))
 
   if (!gate.known) {
-    return (
-      <div data-route="automations" className="flex min-h-full flex-col p-3 md:p-5">
-        <PageState text="Loading automations…" />
-      </div>
-    )
+    return <StatePage text="Loading automations…" loading />
   }
   if (gate.off) {
     return (
-      <div data-route="automations" className="flex min-h-full flex-col p-3 md:p-5">
-        <CenteredState
-          icon={<ZapIcon />}
-          tone="neutral"
-          title="Automations are off"
-          subtitle="This cockpit was started with CEZ_AUTOMATIONS=0. Unset it and restart the service to turn automations on."
-          heading="h2"
-        />
-      </div>
+      <Page data-route="automations">
+        <PageHeader title="Automations" />
+        <Empty data-slot="centered-state" className="flex-1">
+          <EmptyHeader>
+            <EmptyMedia variant="icon"><ZapIcon /></EmptyMedia>
+            <EmptyTitle>Automations are off</EmptyTitle>
+            <EmptyDescription>
+              This cockpit was started with <span className="font-mono text-xs">CEZ_AUTOMATIONS=0</span>. Unset it and restart the service to turn automations on.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      </Page>
     )
   }
 
@@ -56,16 +57,16 @@ export function AutomationsRoute({ mode = 'list' }: { mode?: 'list' | 'new' | 'e
   }
   if (mode === 'edit') {
     const automation = query.data?.automations.find((item) => item.id === automationId)
-    if (query.data && !automation) return <div data-route="automations" className="p-5"><PageState text="Automation not found." /></div>
+    if (query.data && !automation) return <StatePage text="Automation not found." />
     return automation
       ? <AutomationEditor data={query.data} automation={automation} actions={actions} onBack={back} onSaved={back} onLog={() => navigate(`/automations/${encodeURIComponent(automation.id)}/log`)} />
-      : <div data-route="automations" className="p-5"><PageState text="Loading automation…" /></div>
+      : <StatePage text="Loading automation…" loading />
   }
   if (mode === 'log') {
     const automation = query.data?.automations.find((item) => item.id === automationId)
     return automationId
       ? <AutomationLog automationId={automationId} automation={automation} timeZone={query.data?.timeZone} onBack={back} />
-      : <div data-route="automations" className="p-5"><PageState text="Automation not found." /></div>
+      : <StatePage text="Automation not found." />
   }
   return (
     <AutomationsList
@@ -87,6 +88,23 @@ function viewOf(raw: string | null): AutomationsView {
   return raw === 'week' || raw === 'day' ? raw : 'list'
 }
 
-export function PageState({ text }: { text: string }) {
-  return <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">{text}</div>
+export function PageState({ text, loading = false }: { text: string; loading?: boolean }) {
+  return (
+    <div className="flex items-center justify-center gap-2 rounded-xl border border-dashed p-10 text-center text-[13px] text-muted-foreground">
+      {loading ? <Spinner /> : null}
+      {text}
+    </div>
+  )
+}
+
+/** A whole-page state under the Automations title: loading, not found. */
+function StatePage({ text, loading = false }: { text: string; loading?: boolean }) {
+  return (
+    <Page data-route="automations">
+      <PageHeader title="Automations" />
+      <PageBody>
+        <PageState text={text} loading={loading} />
+      </PageBody>
+    </Page>
+  )
 }

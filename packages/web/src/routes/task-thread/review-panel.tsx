@@ -42,13 +42,17 @@ import { useFinishRun } from './use-finish-run'
  */
 export function ReviewPanel({ run, diffComments }: { run: ApiRun; diffComments?: DiffComments }) {
   return (
-    <section data-slot="review-panel" aria-label="Review the changes" className="flex flex-col gap-3">
+    <section
+      data-slot="review-panel"
+      aria-label="Review the changes"
+      className="flex flex-col gap-3 rounded-xl border border-violet/30 bg-card p-4 shadow-xs sm:p-5"
+    >
       <div
         data-slot="review-banner"
-        className="flex items-center gap-2.5 rounded-md border border-violet/30 bg-violet/10 px-3.5 py-2.5"
+        className="flex items-center gap-2.5"
       >
         <EyeIcon className="size-4 shrink-0 text-violet" aria-hidden="true" />
-        <p className="min-w-0 text-[13px]">
+        <p className="min-w-0 text-sm">
           <span className="font-semibold">Review the changes before anything lands.</span>{' '}
           <span className="text-muted-foreground">
             Read the diff, send notes back, draft a PR — or accept. Nothing merges on its own.
@@ -226,7 +230,7 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
         )}
         <Button
           data-slot="review-accept"
-          variant="contrast"
+          variant="primary"
           size="sm"
           className="ml-auto"
           title={finishTitle('review')}

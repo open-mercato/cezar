@@ -23,6 +23,7 @@ import {
   CheckCircle2Icon,
   DownloadIcon,
   LayoutGridIcon,
+  MoreHorizontalIcon,
   PlayIcon,
   PlusIcon,
   RotateCcwIcon,
@@ -30,6 +31,7 @@ import {
   Settings2Icon,
   SquareIcon,
   Trash2Icon,
+  WorkflowIcon,
   XIcon,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
@@ -46,7 +48,7 @@ import {
 } from '@/api/client'
 import { queryKeys, useSkills, useWorkflowNodes, useWorkflows } from '@/api/queries'
 import type { WorkflowGraph, WorkflowGraphNode } from '@open-mercato/cezar-api-client'
-import { CenteredState } from '@/components/centered-state'
+import { Page } from '@/components/page'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -57,8 +59,18 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
 import { useNavigate } from '@/lib/project-router'
@@ -95,7 +107,7 @@ import {
 } from '@/lib/workflow-graph'
 
 import { WorkflowsLoading } from '../workflows/workflows-loading'
-import { backLanes, CATEGORY_ORDER, edgeStyle, edgeTypes, GraphNodeView, ICONS, type InnerStep, TILE, TONE, WIDE_WIDTH } from './graph-node'
+import { backLanes, CANVAS_THEME, CATEGORY_ORDER, TYPE_LABEL, edgeStyle, edgeTypes, GraphNodeView, ICONS, type InnerStep, TILE, TONE, WIDE_WIDTH } from './graph-node'
 
 /**
  * The workflow node editor (spec 2026-09-30-workflow-node-editor), at
@@ -114,6 +126,8 @@ import { backLanes, CATEGORY_ORDER, edgeStyle, edgeTypes, GraphNodeView, ICONS, 
 
 const RUNNERS = ['claude', 'codex', 'opencode', 'cursor', 'pi'] as const
 const DRAG_MIME = 'application/x-cezar-node'
+/** Radix Select has no empty-string item: this stands for the blank canvas at `/workflows`. */
+const NEW_WORKFLOW = '__new__'
 
 type FlowNodeData = {
   node: WorkflowGraphNode
@@ -223,13 +237,13 @@ export function FloatingPanel({
     <aside
       aria-label={label}
       className={cn(
-        'absolute top-3 bottom-3 z-10 flex flex-col overflow-hidden rounded-xl border border-border bg-card/95 shadow-xl backdrop-blur',
-        side === 'left' ? 'left-3 w-60' : 'right-3 w-80',
+        'absolute top-3 bottom-3 z-10 flex max-w-[calc(100%-1.5rem)] flex-col overflow-hidden rounded-xl border border-border bg-card shadow-lg',
+        side === 'left' ? 'left-3 w-72' : 'right-3 w-[22rem]',
       )}
     >
-      <div className="flex h-10 shrink-0 items-center justify-between border-b border-border pr-1 pl-3 text-[12px] font-medium">
+      <div className="flex h-11 shrink-0 items-center justify-between border-b border-border/70 pr-1.5 pl-4 text-[13px] font-semibold">
         <span className="min-w-0 truncate">{title}</span>
-        <Button size="sm" variant="ghost" onClick={onClose} aria-label={`Close ${label.toLowerCase()}`}>
+        <Button size="icon-sm" variant="ghost" onClick={onClose} aria-label={`Close ${label.toLowerCase()}`}>
           <XIcon />
         </Button>
       </div>
@@ -639,12 +653,13 @@ function WorkflowGraphEditor() {
   if (catalog.isPending || (routeName && workflows.isPending)) return <WorkflowsLoading />
   if (catalog.isError) {
     return (
-      <CenteredState
-        icon={<AlertTriangleIcon />}
-        tone="neutral"
-        title="The node catalog did not load"
-        subtitle={catalog.error instanceof Error ? catalog.error.message : 'Try again in a moment.'}
-      />
+      <Empty data-slot="centered-state" className="min-h-full flex-1">
+        <EmptyHeader>
+          <EmptyMedia variant="icon"><AlertTriangleIcon /></EmptyMedia>
+          <EmptyTitle>The node catalog did not load</EmptyTitle>
+          <EmptyDescription>{catalog.error instanceof Error ? catalog.error.message : 'Try again in a moment.'}</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
     )
   }
 
@@ -660,68 +675,85 @@ function WorkflowGraphEditor() {
   const shadowsBuiltIn = Boolean(workflows.data?.workflows.some((w) => w.name === name.trim() && w.source === 'built-in'))
 
   return (
-    <div data-route="workflows" className="flex h-full min-h-0 flex-col">
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-background px-3">
-        <select
-          aria-label="Open workflow"
-          className="h-8 max-w-44 rounded-md border border-transparent bg-transparent px-1.5 text-[13px] font-medium outline-none hover:border-border focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-          value={routeName ?? ''}
-          onChange={(e) => {
-            const to = e.target.value ? `/workflows/${encodeURIComponent(e.target.value)}` : '/workflows'
+    <Page width="full" data-route="workflows" className="h-full min-h-0">
+      {/* The slim toolbar: which workflow, its name and state on the left; the canvas tools, the
+          secondary actions menu and the one primary — Save — on the right. */}
+      <header className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border bg-background px-3 py-1.5">
+        <Select
+          value={routeName ?? NEW_WORKFLOW}
+          onValueChange={(value) => {
+            const to = value === NEW_WORKFLOW ? '/workflows' : `/workflows/${encodeURIComponent(value)}`
             if (dirty) setConfirm({ kind: 'discard', to })
             else void navigate(to)
           }}
         >
-          <option value="">New workflow</option>
-          <optgroup label="This repo">
-            {workflows.data?.workflows
-              .filter((w) => w.source === 'file')
-              .map((w) => (
-                <option key={w.name} value={w.name}>
-                  {w.name}
-                  {w.graph ? '' : ' (v1)'}
-                </option>
-              ))}
-          </optgroup>
-          <optgroup label="Built-in templates">
-            {workflows.data?.workflows
-              .filter((w) => w.source === 'built-in')
-              .map((w) => (
-                <option key={w.name} value={w.name}>
-                  {w.name}
-                </option>
-              ))}
-          </optgroup>
-        </select>
-        <span className="text-muted-foreground/60">/</span>
+          <SelectTrigger size="sm" aria-label="Open workflow" className="max-w-48 border-transparent bg-transparent font-medium shadow-none hover:bg-muted">
+            <WorkflowIcon aria-hidden="true" className="text-muted-foreground" />
+            <SelectValue placeholder={routeName ?? 'Open workflow'} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={NEW_WORKFLOW}>New workflow</SelectItem>
+            <SelectSeparator />
+            <SelectGroup>
+              <SelectLabel>This repo</SelectLabel>
+              {workflows.data?.workflows
+                .filter((w) => w.source === 'file')
+                .map((w) => (
+                  <SelectItem key={w.name} value={w.name}>
+                    {w.name}
+                    {w.graph ? '' : ' (v1)'}
+                  </SelectItem>
+                ))}
+            </SelectGroup>
+            <SelectGroup>
+              <SelectLabel>Built-in templates</SelectLabel>
+              {workflows.data?.workflows
+                .filter((w) => w.source === 'built-in')
+                .map((w) => (
+                  <SelectItem key={w.name} value={w.name}>
+                    {w.name}
+                  </SelectItem>
+                ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+        <span aria-hidden="true" className="text-soft-foreground">/</span>
         <Input
           aria-label="Workflow name"
-          placeholder="name this workflow"
+          placeholder="Name this workflow"
           value={name}
           onChange={(e) => {
             setName(e.target.value)
             setDirty(true)
           }}
-          className="h-8 w-52 border-transparent bg-transparent text-[13px] shadow-none hover:border-border"
+          className="h-8 w-52 max-w-full border-transparent bg-transparent text-[13px] font-medium shadow-none hover:bg-muted focus-visible:bg-card"
         />
-        {dirty && <span className="size-1.5 rounded-full bg-primary" title="Unsaved changes" aria-label="Unsaved changes" />}
+        {dirty && (
+          <Badge variant="outline" className="gap-1.5 font-normal text-muted-foreground" title="Unsaved changes" aria-label="Unsaved changes">
+            <span className="size-1.5 rounded-full bg-pending" />
+            Unsaved
+          </Badge>
+        )}
         <button
           type="button"
-          className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[12px] hover:bg-accent"
-          style={{ color: issues.length ? TONE.failure : 'var(--muted-foreground)' }}
+          className={cn(
+            'flex h-7 items-center gap-1.5 rounded-md px-2 text-xs hover:bg-muted',
+            issues.length ? 'font-medium text-danger' : 'text-muted-foreground',
+          )}
           title={issues.join('\n') || 'The server validated this workflow'}
           onClick={() => {
             setSelectedId(null)
             setWorkflowPanel(true)
           }}
         >
-          {issues.length ? <AlertTriangleIcon className="size-3.5" /> : <CheckCircle2Icon className="size-3.5" />}
-          {issues.length ? `${issues.length} issue${issues.length > 1 ? 's' : ''}` : 'valid'}
+          {issues.length ? <AlertTriangleIcon className="size-3.5" /> : <CheckCircle2Icon className="size-3.5 text-success" />}
+          {issues.length ? `${issues.length} issue${issues.length > 1 ? 's' : ''}` : 'Valid'}
         </button>
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex items-center gap-1.5">
           <Button
             size="sm"
-            variant={paletteOpen ? 'primary' : 'ghost'}
+            variant={paletteOpen ? 'secondary' : 'ghost'}
+            aria-pressed={paletteOpen}
             onClick={() => {
               setAttach(null)
               setPaletteOpen((o) => !o)
@@ -729,36 +761,56 @@ function WorkflowGraphEditor() {
           >
             <PlusIcon /> Add node
           </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            title="Tidy up the layout"
-            aria-label="Tidy up"
-            onClick={() => {
-              edit((g) => ({ ...g, layout: autoLayout(g) }))
-              pendingFit.current = true
-            }}
-          >
-            <LayoutGridIcon />
-          </Button>
-          <Button size="sm" variant={sim ? 'primary' : 'ghost'} onClick={() => setSim((s) => (s ? null : startSim(graph)))}>
+          <Button size="sm" variant={sim ? 'secondary' : 'ghost'} aria-pressed={Boolean(sim)} onClick={() => setSim((s) => (s ? null : startSim(graph)))}>
             {sim ? <SquareIcon /> : <PlayIcon />} {sim ? 'Stop' : 'Simulate'}
           </Button>
-          <Button
-            size="sm"
-            variant={workflowPanel ? 'primary' : 'ghost'}
-            title="Workflow settings, YAML and import"
-            aria-label="Workflow settings"
-            onClick={() => {
-              setSelectedId(null)
-              setWorkflowPanel((o) => !o)
-            }}
-          >
-            <Settings2Icon />
-          </Button>
-          <Button size="sm" variant="ghost" title="Export as a .yaml file" aria-label="Export YAML" onClick={exportYaml}>
-            <DownloadIcon />
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="icon-sm" variant={workflowPanel ? 'secondary' : 'ghost'} aria-label="More workflow actions" title="More">
+                <MoreHorizontalIcon />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-60">
+              <DropdownMenuItem
+                aria-label="Workflow settings"
+                title="Workflow settings, YAML and import"
+                onSelect={() => {
+                  setSelectedId(null)
+                  setWorkflowPanel((o) => !o)
+                }}
+              >
+                <Settings2Icon />
+                {workflowPanel ? 'Hide workflow settings' : 'Workflow settings, YAML and import'}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                aria-label="Tidy up"
+                onSelect={() => {
+                  edit((g) => ({ ...g, layout: autoLayout(g) }))
+                  pendingFit.current = true
+                }}
+              >
+                <LayoutGridIcon />
+                Tidy up the layout
+              </DropdownMenuItem>
+              <DropdownMenuItem aria-label="Export YAML" onSelect={exportYaml}>
+                <DownloadIcon />
+                Export as a .yaml file
+              </DropdownMenuItem>
+              {opened?.source === 'file' ? (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    variant="destructive"
+                    disabled={del.isPending}
+                    onSelect={() => setConfirm({ kind: 'delete', name: opened.name })}
+                  >
+                    <Trash2Icon />
+                    Delete workflow
+                  </DropdownMenuItem>
+                </>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button
             size="sm"
             variant="primary"
@@ -791,9 +843,10 @@ function WorkflowGraphEditor() {
           fitViewOptions={{ padding: 0.2, maxZoom: 1.2 }}
           minZoom={0.2}
           colorMode="system"
+          style={CANVAS_THEME}
           proOptions={{ hideAttribution: true }}
         >
-          <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
+          <Background variant={BackgroundVariant.Dots} gap={20} size={1.25} />
           <Controls showInteractive={false} position="bottom-left" />
         </ReactFlow>
 
@@ -804,8 +857,8 @@ function WorkflowGraphEditor() {
             title={
               attach ? (
                 <span>
-                  Add after <span className="text-muted-foreground">{attach.node}</span> →{' '}
-                  <span style={{ color: TONE.success }}>{attach.port}</span>
+                  Add after <span className="font-normal text-muted-foreground">{attach.node}</span> →{' '}
+                  <span className="font-normal" style={{ color: TONE.success }}>{attach.port}</span>
                 </span>
               ) : (
                 'Add a node'
@@ -821,8 +874,8 @@ function WorkflowGraphEditor() {
                 const entries = catalog.data.nodes.filter((n) => n.category === cat.id)
                 if (!entries.length) return null
                 return (
-                  <section key={cat.id} className="mb-3">
-                    <h2 className="px-1.5 pb-1 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+                  <section key={cat.id} className="mb-4">
+                    <h2 className="px-2 pb-1.5 text-xs font-medium text-muted-foreground">
                       {cat.label}
                     </h2>
                     {entries.map((entry) => {
@@ -837,15 +890,18 @@ function WorkflowGraphEditor() {
                             e.dataTransfer.effectAllowed = 'move'
                           }}
                           onClick={() => addNode(entry.type)}
-                          className="flex w-full cursor-grab items-center gap-2.5 rounded-lg px-1.5 py-1.5 text-left hover:bg-accent"
+                          className="flex w-full cursor-grab items-center gap-3 rounded-lg px-2 py-1.5 text-left hover:bg-muted"
                           title={`${entry.description} — drag onto the canvas, or click to add`}
                         >
-                          <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-background">
+                          <span
+                            className="flex size-8 shrink-0 items-center justify-center rounded-lg"
+                            style={{ background: `color-mix(in oklab, ${cat.color} 12%, transparent)` }}
+                          >
                             <Icon className="size-4" style={{ color: cat.color }} strokeWidth={1.75} />
                           </span>
                           <span className="min-w-0">
-                            <span className="block text-[12px] leading-tight font-medium">{entry.label}</span>
-                            <span className="block truncate text-[10px] text-muted-foreground">{entry.description}</span>
+                            <span className="block text-[13px] leading-tight font-medium">{entry.label}</span>
+                            <span className="block truncate text-xs text-muted-foreground">{entry.description}</span>
                           </span>
                         </button>
                       )
@@ -854,16 +910,16 @@ function WorkflowGraphEditor() {
                 )
               })}
               <section className="mb-1">
-                <h2 className="px-1.5 pb-1 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">Skills</h2>
+                <h2 className="px-2 pb-1.5 text-xs font-medium text-muted-foreground">Skills</h2>
                 <Input
                   aria-label="Search skills"
-                  placeholder="search skills…"
+                  placeholder="Search skills…"
                   value={skillQuery}
                   onChange={(e) => setSkillQuery(e.target.value)}
-                  className="mb-1 h-7 text-[12px]"
+                  className="mb-1.5 h-8 text-[13px]"
                 />
                 {skills.isPending ? (
-                  <p className="px-1.5 text-[11px] text-muted-foreground">Loading skills…</p>
+                  <p className="px-2 text-xs text-muted-foreground">Loading skills…</p>
                 ) : (
                   (skills.data ?? [])
                     .filter((sk) => {
@@ -876,16 +932,16 @@ function WorkflowGraphEditor() {
                         key={`${sk.source}:${sk.name}`}
                         type="button"
                         onClick={() => addNode('agent', undefined, sk.name)}
-                        className="flex w-full items-center gap-2.5 rounded-lg px-1.5 py-1 text-left hover:bg-accent"
+                        className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left hover:bg-muted"
                         title={sk.description ?? sk.name}
                       >
-                        <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-background text-[11px] text-muted-foreground">
+                        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted font-mono text-xs text-muted-foreground">
                           /
                         </span>
                         <span className="min-w-0">
-                          <span className="block truncate text-[12px] leading-tight">{sk.name}</span>
+                          <span className="block truncate text-[13px] leading-tight">{sk.name}</span>
                           {sk.description ? (
-                            <span className="block truncate text-[10px] text-muted-foreground">{sk.description}</span>
+                            <span className="block truncate text-xs text-muted-foreground">{sk.description}</span>
                           ) : null}
                         </span>
                       </button>
@@ -920,7 +976,7 @@ function WorkflowGraphEditor() {
           </FloatingPanel>
         ) : workflowPanel ? (
           <FloatingPanel side="right" label="Workflow settings" title="Workflow" onClose={() => setWorkflowPanel(false)}>
-            <div className="space-y-4 p-4 text-[12px]">
+            <div className="space-y-5 p-4 text-[13px]">
               <Field label="description">
                 <Textarea
                   value={description}
@@ -934,28 +990,28 @@ function WorkflowGraphEditor() {
               {(issues.length > 0 || unwired.length > 0) && (
                 <div className="space-y-1.5">
                   {issues.map((i) => (
-                    <div key={i} className="flex gap-1.5 text-[11px]" style={{ color: TONE.failure }}>
-                      <AlertTriangleIcon className="mt-0.5 size-3 shrink-0" />
+                    <div key={i} className="flex gap-2 text-xs" style={{ color: TONE.failure }}>
+                      <AlertTriangleIcon className="mt-0.5 size-3.5 shrink-0" />
                       {i}
                     </div>
                   ))}
                   {unwired.length > 0 && (
-                    <div className="text-[11px] text-muted-foreground">Unwired — end the run: {unwired.join(', ')}</div>
+                    <div className="text-xs text-muted-foreground">Unwired — end the run: {unwired.join(', ')}</div>
                   )}
                 </div>
               )}
               <div>
-                <div className="mb-1 flex items-center justify-between text-[11px] text-muted-foreground">
-                  <span>YAML</span>
+                <div className="mb-1.5 flex items-center justify-between text-xs">
+                  <span className="font-medium text-foreground">YAML</span>
                   <button
                     type="button"
-                    className="hover:text-foreground"
+                    className="text-muted-foreground hover:text-foreground"
                     onClick={() => void navigator.clipboard?.writeText(graphYaml(name, description, graph))}
                   >
                     Copy
                   </button>
                 </div>
-                <pre className="max-h-64 overflow-auto rounded-md bg-muted/40 p-2 text-[10.5px] leading-relaxed">
+                <pre className="max-h-64 overflow-auto rounded-md bg-muted/60 p-2.5 font-mono text-[11px] leading-relaxed">
                   {graphYaml(name, description, graph)}
                 </pre>
               </div>
@@ -964,7 +1020,7 @@ function WorkflowGraphEditor() {
                   value={importText}
                   onChange={(e) => setImportText(e.target.value)}
                   rows={4}
-                  className="font-mono text-[11px]"
+                  className="font-mono text-xs"
                   placeholder="paste a workflow file…"
                 />
               </Field>
@@ -988,7 +1044,7 @@ function WorkflowGraphEditor() {
                 {autoPlan.isPending ? 'Building…' : 'Build workflow'}
               </Button>
               {opened?.source === 'file' && (
-                <div className="border-t border-border pt-3">
+                <div className="border-t border-border/70 pt-4">
                   <Button
                     size="sm"
                     variant="danger-ghost"
@@ -1004,7 +1060,7 @@ function WorkflowGraphEditor() {
         ) : null}
 
         {sim && (
-          <div className="absolute bottom-4 left-1/2 z-20 w-[min(520px,90%)] -translate-x-1/2 rounded-xl border border-border bg-card/95 p-3 shadow-xl backdrop-blur">
+          <div className="absolute bottom-4 left-1/2 z-20 w-[min(520px,90%)] -translate-x-1/2 rounded-xl border border-border bg-card p-3 shadow-lg">
             {sim.finished || !cursorNode ? (
               <div className="flex items-center gap-2 text-[13px]">
                 <CheckCircle2Icon className="size-4" style={{ color: sim.finished === 'failed' ? TONE.failure : TONE.success }} />
@@ -1015,8 +1071,8 @@ function WorkflowGraphEditor() {
               </div>
             ) : (
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[12px] text-muted-foreground">
-                  <b className="text-foreground">{cursorNode.name ?? cursorNode.id}</b> ends with
+                <span className="text-[13px] text-muted-foreground">
+                  <b className="font-medium text-foreground">{cursorNode.name ?? cursorNode.id}</b> ends with
                 </span>
                 {(cursorNode.type === 'fork' ? ['done', 'failed'] : portsOf(cursorNode)).map((p) => (
                   <Button
@@ -1083,7 +1139,7 @@ function WorkflowGraphEditor() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </Page>
   )
 }
 
@@ -1096,7 +1152,7 @@ function SkillField({ value, onChange }: { value: string | undefined; onChange: 
   return (
     <Field label="skill">
       <select
-        className="w-full rounded-md border border-input bg-card px-2 py-1 text-[12px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        className="w-full h-9 rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
         value={value ?? ''}
         onChange={(e) => onChange(e.target.value || undefined)}
       >
@@ -1122,7 +1178,7 @@ function ListField({ label, value, onChange }: { label: string; value: string[] 
           const list = e.target.value.split(',').map((v) => v.trim()).filter(Boolean)
           onChange(list.length ? list : undefined)
         }}
-        className="h-8"
+        className="text-[13px]"
       />
     </Field>
   )
@@ -1145,7 +1201,7 @@ function WorkflowSelect({
   return (
     <select
       aria-label={label}
-      className="w-full rounded-md border border-input bg-card px-2 py-1 text-[12px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      className="w-full h-9 rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
       value={value ?? ''}
       onChange={(e) => onChange(e.target.value || undefined)}
     >
@@ -1182,7 +1238,7 @@ function ConditionEditor({ condition, onChange }: { condition: ConditionValue; o
   return (
     <>
       <Field label="look at">
-        <select className="w-full rounded-md border border-input bg-card px-2 py-1 text-[12px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" value={condition.kind} onChange={(e) => switchKind(e.target.value as ConditionValue['kind'])}>
+        <select className="w-full h-9 rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" value={condition.kind} onChange={(e) => switchKind(e.target.value as ConditionValue['kind'])}>
           <option value="diff-lines">the task's diff — changed lines</option>
           <option value="diff-files">the task's diff — changed files</option>
           <option value="paths-changed">which paths changed (glob)</option>
@@ -1192,48 +1248,48 @@ function ConditionEditor({ condition, onChange }: { condition: ConditionValue; o
       </Field>
       {(condition.kind === 'diff-lines' || condition.kind === 'diff-files') && (
         <div className="grid grid-cols-[5rem_1fr] gap-2">
-          <select className="w-full rounded-md border border-input bg-card px-2 py-1 text-[12px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label="operator" value={condition.op} onChange={(e) => onChange({ ...condition, op: e.target.value as (typeof numericOps)[number] })}>
+          <select className="w-full h-9 rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label="operator" value={condition.op} onChange={(e) => onChange({ ...condition, op: e.target.value as (typeof numericOps)[number] })}>
             {numericOps.map((o) => (
               <option key={o} value={o}>
                 {o}
               </option>
             ))}
           </select>
-          <Input type="number" min={0} aria-label="threshold" value={condition.value} onChange={(e) => onChange({ ...condition, value: Math.max(0, Number(e.target.value) || 0) })} className="h-8" />
+          <Input type="number" min={0} aria-label="threshold" value={condition.value} onChange={(e) => onChange({ ...condition, value: Math.max(0, Number(e.target.value) || 0) })} className="text-[13px]" />
         </div>
       )}
       {condition.kind === 'paths-changed' && (
         <Field label="glob — * within a folder, ** across folders">
-          <Input value={condition.glob} onChange={(e) => onChange({ ...condition, glob: e.target.value })} className="h-8 font-mono text-[11px]" />
+          <Input value={condition.glob} onChange={(e) => onChange({ ...condition, glob: e.target.value })} className="font-mono text-xs" />
         </Field>
       )}
       {condition.kind === 'output' && (
         <>
           <Field label="output — <node>.<field>">
-            <Input value={condition.ref} onChange={(e) => onChange({ ...condition, ref: e.target.value.trim() })} className="h-8 font-mono text-[11px]" />
+            <Input value={condition.ref} onChange={(e) => onChange({ ...condition, ref: e.target.value.trim() })} className="font-mono text-xs" />
           </Field>
           <div className="grid grid-cols-[7rem_1fr] gap-2">
-            <select className="w-full rounded-md border border-input bg-card px-2 py-1 text-[12px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label="operator" value={condition.op} onChange={(e) => onChange({ ...condition, op: e.target.value as (typeof outputOps)[number] })}>
+            <select className="w-full h-9 rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label="operator" value={condition.op} onChange={(e) => onChange({ ...condition, op: e.target.value as (typeof outputOps)[number] })}>
               {outputOps.map((o) => (
                 <option key={o} value={o}>
                   {o}
                 </option>
               ))}
             </select>
-            <Input aria-label="value" value={String(condition.value)} onChange={(e) => onChange({ ...condition, value: e.target.value })} className="h-8" />
+            <Input aria-label="value" value={String(condition.value)} onChange={(e) => onChange({ ...condition, value: e.target.value })} className="text-[13px]" />
           </div>
         </>
       )}
       {condition.kind === 'branch' && (
         <div className="grid grid-cols-[7rem_1fr] gap-2">
-          <select className="w-full rounded-md border border-input bg-card px-2 py-1 text-[12px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label="operator" value={condition.op} onChange={(e) => onChange({ ...condition, op: e.target.value as 'equals' | 'matches' })}>
+          <select className="w-full h-9 rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label="operator" value={condition.op} onChange={(e) => onChange({ ...condition, op: e.target.value as 'equals' | 'matches' })}>
             <option value="equals">equals</option>
             <option value="matches">matches glob</option>
           </select>
-          <Input aria-label="branch" value={condition.value} onChange={(e) => onChange({ ...condition, value: e.target.value })} className="h-8 font-mono text-[11px]" />
+          <Input aria-label="branch" value={condition.value} onChange={(e) => onChange({ ...condition, value: e.target.value })} className="font-mono text-xs" />
         </div>
       )}
-      <p className="text-[11px] text-muted-foreground">Leaves by true or false. Diff and paths are this task's own changes vs its base.</p>
+      <p className="text-xs text-pretty text-muted-foreground">Leaves by true or false. Diff and paths are this task's own changes vs its base.</p>
     </>
   )
 }
@@ -1241,7 +1297,7 @@ function ConditionEditor({ condition, onChange }: { condition: ConditionValue; o
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-[11px] text-muted-foreground">{label}</span>
+      <span className="mb-1.5 block text-xs font-medium text-foreground first-letter:uppercase">{label}</span>
       {children}
     </label>
   )
@@ -1270,7 +1326,7 @@ function MinutesField({
           const minutes = Math.floor(Number(e.target.value))
           onChange(minutes >= 1 ? minutes * 60_000 : undefined)
         }}
-        className="h-8"
+        className="text-[13px]"
       />
     </Field>
   )
@@ -1331,11 +1387,11 @@ function Inspector({
   }
 
   return (
-    <div className="space-y-3 p-4 text-[12px]">
+    <div className="space-y-4 p-4 text-[13px]">
       <div className="flex items-center justify-between">
-        <span className="text-[11px] uppercase text-muted-foreground">{node.type} node</span>
+        <Badge variant="secondary" className="font-normal" title={`${node.type} node`}>{TYPE_LABEL[node.type]} node</Badge>
         <Button size="sm" variant="danger-ghost" onClick={onDelete} aria-label="Delete node">
-          <Trash2Icon />
+          <Trash2Icon /> Delete
         </Button>
       </div>
       <Field label="id">
@@ -1351,22 +1407,22 @@ function Inspector({
             }
             onChange({ ...node, id })
           }}
-          className="h-8"
+          className="text-[13px]"
         />
       </Field>
       <Field label="name">
-        <Input value={node.name ?? ''} onChange={(e) => set({ name: e.target.value })} className="h-8" />
+        <Input value={node.name ?? ''} onChange={(e) => set({ name: e.target.value })} className="text-[13px]" />
       </Field>
 
       {node.type === 'agent' && (
         <>
           <Field label="prompt — {{task}}, {{nodes.<id>.<field>}}">
-            <Textarea value={node.prompt ?? ''} rows={5} className="font-mono text-[11px]" onChange={(e) => set({ prompt: e.target.value })} />
+            <Textarea value={node.prompt ?? ''} rows={5} className="font-mono text-xs" onChange={(e) => set({ prompt: e.target.value })} />
           </Field>
           <SkillField value={node.skill} onChange={(skill) => set({ skill })} />
           <div className="grid grid-cols-2 gap-2">
             <Field label="runner">
-              <select className="w-full rounded-md border border-input bg-card px-2 py-1 text-[12px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" value={node.runner ?? ''} onChange={(e) => set({ runner: e.target.value || undefined })}>
+              <select className="w-full h-9 rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" value={node.runner ?? ''} onChange={(e) => set({ runner: e.target.value || undefined })}>
                 <option value="">task default</option>
                 {RUNNERS.map((r) => (
                   <option key={r} value={r}>
@@ -1376,7 +1432,7 @@ function Inspector({
               </select>
             </Field>
             <Field label="model">
-              <Input value={node.model ?? ''} onChange={(e) => set({ model: e.target.value })} className="h-8" />
+              <Input value={node.model ?? ''} onChange={(e) => set({ model: e.target.value })} className="text-[13px]" />
             </Field>
           </div>
           {isBranch ? (
@@ -1384,7 +1440,7 @@ function Inspector({
               <label className="flex items-center gap-2">
                 <input
                   type="checkbox"
-                  className="size-3.5 accent-primary"
+                  className="size-4 accent-foreground"
                   checked={node.review ?? false}
                   onChange={(e) => set({ review: e.target.checked || undefined })}
                 />
@@ -1397,10 +1453,10 @@ function Inspector({
                   step={0.5}
                   value={node.budgetUsd ?? ''}
                   onChange={(e) => set({ budgetUsd: Number(e.target.value) > 0 ? Number(e.target.value) : undefined })}
-                  className="h-8"
+                  className="text-[13px]"
                 />
               </Field>
-              <p className="rounded-md bg-accent/50 p-2 text-[11px] text-muted-foreground">
+              <p className="rounded-md bg-muted/60 p-2.5 text-xs text-pretty text-muted-foreground">
                 A fork branch: runs as its own subtask at the same time as the other branches — a fresh session in its
                 own worktree, starting from the task's work so far.
               </p>
@@ -1414,13 +1470,13 @@ function Inspector({
                     const list = e.target.value.split(',').map((v) => v.trim()).filter(Boolean)
                     set({ verdicts: list.length ? list : undefined })
                   }}
-                  className="h-8"
+                  className="text-[13px]"
                   placeholder="approve, changes"
                 />
               </Field>
               <Field label="session">
                 <select
-                  className="w-full rounded-md border border-input bg-card px-2 py-1 text-[12px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                  className="w-full h-9 rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
                   value={node.session?.continue ?? ''}
                   onChange={(e) => set({ session: e.target.value ? { continue: e.target.value } : undefined })}
                 >
@@ -1437,7 +1493,7 @@ function Inspector({
             </>
           )}
           {node.verdicts?.length ? (
-            <p className="rounded-md bg-accent/50 p-2 text-[11px] text-muted-foreground">
+            <p className="rounded-md bg-muted/60 p-2.5 text-xs text-pretty text-muted-foreground">
               The agent ends its turn with {node.verdicts.map((v) => `CEZ:VERDICT ${v}`).join(' or ')}. No verdict → one
               reminder, then <span style={{ color: TONE.failure }}>failed</span>.
             </p>
@@ -1447,7 +1503,7 @@ function Inspector({
 
       {node.type === 'check' && (
         <Field label="command — runs in the worktree; exit 0 passes">
-          <Textarea value={node.command} rows={3} className="font-mono text-[11px]" onChange={(e) => set({ command: e.target.value })} />
+          <Textarea value={node.command} rows={3} className="font-mono text-xs" onChange={(e) => set({ command: e.target.value })} />
         </Field>
       )}
 
@@ -1458,7 +1514,7 @@ function Inspector({
             min={1}
             value={node.max}
             onChange={(e) => set({ max: Math.max(1, Math.floor(Number(e.target.value) || 1)) })}
-            className="h-8"
+            className="text-[13px]"
           />
         </Field>
       )}
@@ -1469,7 +1525,7 @@ function Inspector({
             <Textarea value={node.message} rows={3} onChange={(e) => set({ message: e.target.value })} />
           </Field>
           <MinutesField label="timeout (minutes, optional) — adds a timeout port" value={node.timeoutMs} optional onChange={(ms) => set({ timeoutMs: ms })} />
-          <p className="rounded-md bg-accent/50 p-2 text-[11px] text-muted-foreground">
+          <p className="rounded-md bg-muted/60 p-2.5 text-xs text-pretty text-muted-foreground">
             The run waits without holding a slot. A reply starting with “approve” takes approve; anything else takes
             reject and becomes <code>{`{{nodes.${node.id}.comment}}`}</code>.
           </p>
@@ -1488,7 +1544,7 @@ function Inspector({
                 const list = e.target.value.split(',').map((v) => v.trim()).filter(Boolean)
                 set({ options: list.length ? list : undefined })
               }}
-              className="h-8"
+              className="text-[13px]"
             />
           </Field>
           <MinutesField label="timeout (minutes, optional) — adds a timeout port" value={node.timeoutMs} optional onChange={(ms) => set({ timeoutMs: ms })} />
@@ -1498,12 +1554,12 @@ function Inspector({
       {node.type === 'dispatch' && (
         <>
           <Field label="objective — {{task}}, {{nodes.<id>.<field>}}">
-            <Textarea value={node.prompt} rows={4} className="font-mono text-[11px]" onChange={(e) => set({ prompt: e.target.value })} />
+            <Textarea value={node.prompt} rows={4} className="font-mono text-xs" onChange={(e) => set({ prompt: e.target.value })} />
           </Field>
           <div className="grid grid-cols-2 gap-2">
             <Field label="runner">
               <select
-                className="w-full rounded-md border border-input bg-card px-2 py-1 text-[12px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                className="w-full h-9 rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
                 value={node.runner ?? ''}
                 onChange={(e) => set({ runner: e.target.value || undefined })}
               >
@@ -1522,7 +1578,7 @@ function Inspector({
                 step={0.5}
                 value={node.budgetUsd ?? ''}
                 onChange={(e) => set({ budgetUsd: Number(e.target.value) > 0 ? Number(e.target.value) : undefined })}
-                className="h-8"
+                className="text-[13px]"
               />
             </Field>
           </div>
@@ -1531,13 +1587,13 @@ function Inspector({
 
       {node.type === 'git.commit' && (
         <Field label="commit message — commits everything in the worktree">
-          <Input value={node.message} onChange={(e) => set({ message: e.target.value })} className="h-8" />
+          <Input value={node.message} onChange={(e) => set({ message: e.target.value })} className="text-[13px]" />
         </Field>
       )}
 
       {node.type === 'github.draft-pr' && (
         <Field label="title — optional, defaults to the task title">
-          <Input value={node.title ?? ''} onChange={(e) => set({ title: e.target.value })} className="h-8" />
+          <Input value={node.title ?? ''} onChange={(e) => set({ title: e.target.value })} className="text-[13px]" />
         </Field>
       )}
 
@@ -1556,7 +1612,7 @@ function Inspector({
               min={10}
               value={Math.round(node.pollMs / 1000)}
               onChange={(e) => set({ pollMs: Math.max(10, Math.floor(Number(e.target.value) || 60)) * 1000 })}
-              className="h-8"
+              className="text-[13px]"
             />
           </Field>
         </>
@@ -1566,7 +1622,7 @@ function Inspector({
         <>
           <Field label="branches — one agent each, all at once">
             <select
-              className="w-full rounded-md border border-input bg-card px-2 py-1 text-[12px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              className="w-full h-9 rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
               value={node.branches}
               onChange={(e) => onGraphEdit((g) => setForkBranches(g, node.id, Number(e.target.value)))}
             >
@@ -1577,7 +1633,7 @@ function Inspector({
               ))}
             </select>
           </Field>
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-xs text-pretty text-muted-foreground">
             Each branch is the agent it is wired to: set its prompt, runner and budget there. They run as subtasks in
             their own worktrees (at most 4 at once) and meet at the join.
           </p>
@@ -1587,7 +1643,7 @@ function Inspector({
       {node.type === 'join' && (
         <Field label="wait for">
           <select
-            className="w-full rounded-md border border-input bg-card px-2 py-1 text-[12px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            className="w-full h-9 rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
             value={node.wait}
             onChange={(e) => set({ wait: e.target.value })}
           >
@@ -1601,18 +1657,18 @@ function Inspector({
         <>
           <WorkflowSelect label="workflow to run" value={node.workflow} onChange={(workflow) => set({ workflow: workflow ?? 'quick-task' })} />
           <Field label="task for it — {{task}}, {{nodes.<id>.<field>}}">
-            <Textarea value={node.prompt ?? ''} placeholder="{{task}}" rows={3} className="font-mono text-[11px]" onChange={(e) => set({ prompt: e.target.value })} />
+            <Textarea value={node.prompt ?? ''} placeholder="{{task}}" rows={3} className="font-mono text-xs" onChange={(e) => set({ prompt: e.target.value })} />
           </Field>
-          <p className="text-[11px] text-muted-foreground">Runs as a subtask in its own worktree; this node waits for it.</p>
+          <p className="text-xs text-pretty text-muted-foreground">Runs as a subtask in its own worktree; this node waits for it.</p>
         </>
       )}
 
       {node.type === 'git.push' && (
-        <p className="text-[11px] text-muted-foreground">Commits anything pending, then pushes the task branch to origin.</p>
+        <p className="text-xs text-pretty text-muted-foreground">Commits anything pending, then pushes the task branch to origin.</p>
       )}
 
       {node.type === 'git.sync-base' && (
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-xs text-pretty text-muted-foreground">
           Merges the latest base branch into the task. On a conflict the merge is left in progress and the node leaves by{' '}
           <span style={{ color: TONE.failure }}>conflict</span> — wire it to an agent to resolve it;{' '}
           <code>{`{{nodes.${node.id}.conflicts}}`}</code> lists the files.
@@ -1622,7 +1678,7 @@ function Inspector({
       {node.type === 'github.pr-update' && (
         <>
           <label className="flex items-center gap-2">
-            <input type="checkbox" checked={node.ready ?? false} onChange={(e) => set({ ready: e.target.checked || undefined })} />
+            <input type="checkbox" className="size-4 accent-foreground" checked={node.ready ?? false} onChange={(e) => set({ ready: e.target.checked || undefined })} />
             <span>mark ready for review</span>
           </label>
           <ListField label="add labels — comma-separated" value={node.addLabels} onChange={(addLabels) => set({ addLabels })} />
@@ -1638,7 +1694,7 @@ function Inspector({
               min={1}
               value={node.issue ?? ''}
               onChange={(e) => set({ issue: Number(e.target.value) > 0 ? Math.floor(Number(e.target.value)) : undefined })}
-              className="h-8"
+              className="text-[13px]"
             />
           </Field>
           <Field label="comment">
@@ -1650,12 +1706,12 @@ function Inspector({
       {node.type === 'notify.webhook' && (
         <>
           <Field label="URL (http/https)">
-            <Input value={node.url} onChange={(e) => set({ url: e.target.value })} className="h-8 font-mono text-[11px]" />
+            <Input value={node.url} onChange={(e) => set({ url: e.target.value })} className="font-mono text-xs" />
           </Field>
           <Field label="message — sent as JSON text">
             <Textarea value={node.body ?? ''} rows={3} onChange={(e) => set({ body: e.target.value })} />
           </Field>
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-xs text-pretty text-muted-foreground">
             Only runs when the server has <code>CEZ_WORKFLOW_WEBHOOKS=1</code>; otherwise it leaves by failed.
           </p>
         </>
@@ -1665,7 +1721,7 @@ function Inspector({
 
       {node.type === 'end' && (
         <Field label="run status">
-          <select className="w-full rounded-md border border-input bg-card px-2 py-1 text-[12px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" value={node.status} onChange={(e) => set({ status: e.target.value })}>
+          <select className="w-full h-9 rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" value={node.status} onChange={(e) => set({ status: e.target.value })}>
             <option value="success">success</option>
             <option value="failed">failed</option>
           </select>
@@ -1673,9 +1729,9 @@ function Inspector({
       )}
 
       <div>
-        <div className="mb-1 text-[11px] uppercase text-muted-foreground">Output ports</div>
+        <div className="mb-1.5 text-xs font-medium text-foreground">Output ports</div>
         {portsOf(node).map((p) => (
-          <div key={p} className="flex justify-between py-0.5">
+          <div key={p} className="flex justify-between gap-3 py-1 text-xs">
             <span style={{ color: TONE[portTone(node, p)] }}>{p}</span>
             <span className="text-muted-foreground">{targetOf(graph, node.id, p) ?? 'ends run'}</span>
           </div>
@@ -1683,9 +1739,9 @@ function Inspector({
       </div>
       {outputsOf(node, branches).length > 0 && (
         <div>
-          <div className="mb-1 text-[11px] uppercase text-muted-foreground">Outputs for templates</div>
+          <div className="mb-1.5 text-xs font-medium text-foreground">Outputs for templates</div>
           {outputsOf(node, branches).map((o) => (
-            <code key={o} className="block text-[11px]">{`{{nodes.${node.id}.${o}}}`}</code>
+            <code key={o} className="block py-0.5 font-mono text-[11px] text-muted-foreground select-all">{`{{nodes.${node.id}.${o}}}`}</code>
           ))}
         </div>
       )}

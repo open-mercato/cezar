@@ -53,12 +53,12 @@ export function GitToolbar({
   return (
     <div
       data-slot="git-toolbar"
-      className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 border-b border-border px-4 py-2 md:px-6"
+      className="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-border/70 px-4 py-1.5 sm:px-6"
     >
       {branch ? <BranchChip branch={branch} /> : null}
       {stat ? <AnimatedDiffStat stat={stat} /> : null}
 
-      <span className="ml-auto flex items-center gap-1">
+      <span className="ml-auto flex items-center gap-1.5">
         {/* View toggles — layout preferences, not git actions, so not the policy's business.
             Hidden below md: phones force unified+wrap (the parent owns that rule). */}
         <span className="hidden items-center gap-1 md:flex">
@@ -68,7 +68,7 @@ export function GitToolbar({
         {bar.secondary.map((action) => (
           <ActionButton key={action.id} action={action} variant="outline" onAction={onAction} />
         ))}
-        <ActionButton action={bar.primary} variant="primary" onAction={onAction} />
+        <ActionButton action={bar.primary} variant="secondary" onAction={onAction} />
 
         {bar.menu.length > 0 ? (
           <DropdownMenu>
@@ -114,7 +114,7 @@ function ActionButton({
   onAction,
 }: {
   action: GitAction
-  variant: 'primary' | 'outline'
+  variant: 'secondary' | 'outline'
   onAction: (id: GitActionId) => void
 }) {
   // href protocol guard (#431): treat the PR link as a link only for http(s) URLs. A refused

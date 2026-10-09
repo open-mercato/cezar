@@ -20,7 +20,7 @@ import { cn } from '@/lib/utils'
  */
 
 /** One hour row's height in px — `top = minute / 60 · HOUR_H` places an occurrence. */
-export const HOUR_H = 34
+export const HOUR_H = 40
 
 /** Height of a block that stacks under another one at the same minute (`top + 26·k`). */
 export const STACK_STEP = 26
@@ -108,8 +108,8 @@ export function EventBlock({
       title={`${automation.name} · ${time}`}
       onClick={() => navigate(`/automations/${encodeURIComponent(automation.id)}`)}
       className={cn(
-        'absolute right-[3px] left-[3px] flex cursor-pointer overflow-hidden rounded-[6px] border border-border bg-card text-left text-[11.5px] leading-[1.3] font-medium text-foreground shadow-xs',
-        wide ? 'h-12 flex-col items-start gap-[3px] px-2 py-[5px]' : 'h-6 flex-row items-center gap-1.5 px-1.5',
+        'absolute right-1 left-1 flex cursor-pointer overflow-hidden rounded-sm border border-border/70 bg-card text-left text-xs leading-tight font-medium text-foreground shadow-xs transition-colors hover:bg-muted',
+        wide ? 'h-12 flex-col items-start gap-0.5 px-2.5 py-1.5' : 'h-6 flex-row items-center gap-1.5 px-1.5',
         !automation.enabled && 'opacity-50',
       )}
       style={{ top: (minute / 60) * HOUR_H + 1 + STACK_STEP * stack }}
@@ -119,7 +119,7 @@ export function EventBlock({
         <span className="overflow-hidden text-ellipsis whitespace-nowrap">{automation.name}</span>
       </span>
       {wide ? (
-        <span className="max-w-full overflow-hidden font-mono text-[10.5px] leading-[1.3] font-normal text-ellipsis whitespace-nowrap text-muted-foreground">
+        <span className="max-w-full truncate text-xs font-normal text-muted-foreground tabular-nums">
           {time}
           {runAs ? ` · ${runAs}` : ''}
         </span>
@@ -131,11 +131,11 @@ export function EventBlock({
 /** The 48px hour column: `01:00` … `23:00`, midnight left blank, each label nudged up onto its line. */
 export function HourGutter() {
   return (
-    <div data-slot="hour-gutter" className="w-12 shrink-0">
+    <div data-slot="hour-gutter" className="w-14 shrink-0">
       {Array.from({ length: 24 }, (_, hour) => (
         <div
           key={hour}
-          className="-translate-y-[6px] pr-2 text-right font-mono text-[10.5px] text-soft-foreground"
+          className="-translate-y-2 pr-2.5 text-right text-xs text-muted-foreground tabular-nums"
           style={{ height: HOUR_H }}
         >
           {hour ? hm(hour) : ''}
@@ -151,10 +151,10 @@ export function NowLine({ minute }: { minute: number }) {
     <div
       aria-hidden="true"
       data-slot="now-line"
-      className="absolute inset-x-0 z-[2] h-[2px] bg-primary"
+      className="absolute inset-x-0 z-[2] h-px bg-primary-strong"
       style={{ top: (minute / 60) * HOUR_H }}
     >
-      <span className="absolute -top-[3px] -left-[3px] size-[8px] rounded-full bg-primary" />
+      <span className="absolute -top-[3px] -left-1 size-[7px] rounded-full bg-primary-strong" />
     </div>
   )
 }
@@ -164,7 +164,7 @@ export function HourLines() {
   return (
     <>
       {Array.from({ length: 24 }, (_, hour) => (
-        <div key={hour} aria-hidden="true" className="absolute inset-x-0 h-px bg-border" style={{ top: hour * HOUR_H }} />
+        <div key={hour} aria-hidden="true" className="absolute inset-x-0 h-px bg-border/50" style={{ top: hour * HOUR_H }} />
       ))}
     </>
   )
@@ -179,21 +179,21 @@ export function PollBand({ automations }: { automations: readonly AutomationList
   const polls = automations.filter((automation) => automation.kind === 'github' && automation.enabled)
   if (!polls.length) return null
   return (
-    <div data-slot="poll-band" className="grid grid-cols-[48px_minmax(0,1fr)] border-b border-border">
-      <div className="py-2 pr-2 text-right font-mono text-[10.5px] text-soft-foreground">poll</div>
-      <div className="flex flex-col gap-1 border-l border-border px-2 py-1.5">
+    <div data-slot="poll-band" className="grid grid-cols-[56px_minmax(0,1fr)] border-b border-border/60">
+      <div className="py-2.5 pr-2.5 text-right text-xs text-muted-foreground">Polls</div>
+      <div className="flex flex-col gap-1 border-l border-border/60 px-2 py-2">
         {polls.map((automation) => (
           <div
             key={automation.id}
             data-slot="poll-row"
-            className="flex h-[22px] min-w-0 items-center gap-2 overflow-hidden rounded-[6px] border border-violet/25 bg-violet/8 px-2 text-[11.5px] font-medium"
+            className="flex h-7 min-w-0 items-center gap-2 overflow-hidden rounded-sm bg-muted/70 px-2.5 text-xs font-medium"
           >
-            <GithubIcon className="size-3 shrink-0 text-violet" />
-            <span className="overflow-hidden text-ellipsis whitespace-nowrap">{automation.name}</span>
-            <span className="overflow-hidden font-mono text-[10.5px] font-normal text-ellipsis whitespace-nowrap text-muted-foreground">
+            <GithubIcon className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate">{automation.name}</span>
+            <span className="truncate font-normal text-muted-foreground">
               {triggerLabel(automation)}
             </span>
-            <span className="ml-auto shrink-0 font-mono text-[10.5px] font-normal whitespace-nowrap text-soft-foreground">
+            <span className="ml-auto shrink-0 font-normal whitespace-nowrap text-muted-foreground tabular-nums">
               {automation.runs7d} runs
             </span>
           </div>

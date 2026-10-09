@@ -8,7 +8,7 @@ import { useNow } from '@/lib/use-now'
 import { dayTime, relativeIn } from '@/lib/automation-format'
 import { enabledAutomations, useDashboardAutomations } from './automations-data'
 import { ExportRows } from './export-rows'
-import { DisclosureChevron, disclosureSummary, Freshness, widgetHeader, widgetHeading } from './presentation'
+import { DisclosureChevron, disclosureSummary, Freshness, Notice, WidgetEmpty, WidgetSkeleton, widgetHeader, widgetHeading, widgetMeta } from './presentation'
 
 export function DashboardAutomations() {
   const gate = useAutomationsGate()
@@ -26,15 +26,18 @@ export function DashboardAutomations() {
       data-export-context={`Enabled automations · showing ${visible.length} of ${rows.length} loaded · ${failed ? 'partial coverage' : 'available projects'}`}
       className="min-w-0 gap-0 py-0"
     >
-      <div className={widgetHeader}>
-        <h2 className={`flex items-center ${widgetHeading}`}>
-          Automations
-          <CalendarClock className="ml-2 size-3.5 text-soft-foreground" aria-hidden="true" />
-        </h2>
+      <div className={`${widgetHeader} pb-3`}>
+        <h2 className={widgetHeading}>Automations</h2>
         {!gate.off && query.data && (
-          <span className="font-mono text-[11px] text-soft-foreground">
+          <p className={widgetMeta}>
             {rows.length} enabled{failed ? ' · partial' : ''}
-          </span>
+            {query.dataUpdatedAt > 0 && (
+              <>
+                {' · '}
+                <Freshness at={new Date(query.dataUpdatedAt).toISOString()} />
+              </>
+            )}
+          </p>
         )}
       </div>
       {!gate.off && query.data && (
@@ -50,37 +53,36 @@ export function DashboardAutomations() {
               },
             ]}
           />
-          {query.dataUpdatedAt > 0 && (
-            <p className="px-4 pt-3 text-xs text-muted-foreground">
-              <Freshness at={new Date(query.dataUpdatedAt).toISOString()} />
-            </p>
-          )}
         </>
       )}
       {gate.off ? (
-        <p className="p-4 text-sm text-muted-foreground">
-          Automations are disabled in this workspace.
-        </p>
+        <WidgetEmpty icon={CalendarClock} title="Automations are disabled in this workspace." />
       ) : (
         <>
-          {pending && <p className="p-4 text-sm text-muted-foreground">Loading automations…</p>}
+          {pending && <WidgetSkeleton label="Loading automations…" className="px-5 pb-5" />}
           {failed && (
-            <div role="alert" className="p-4 text-sm">
-              <p>Some automation data could not be refreshed. Available results are shown.</p>
+            <Notice
+              className="mx-3 mb-3"
+              action={
+                <Button variant="outline" size="sm" onClick={query.retry}>
+                  Retry automations
+                </Button>
+              }
+            >
+              <span className="block">
+                Some automation data could not be refreshed. Available results are shown.
+              </span>
               {errors.map((p) => (
-                <p key={p.id}>
+                <span key={p.id} className="block text-muted-foreground">
                   {p.name}: {p.error}
-                </p>
+                </span>
               ))}
-              <Button variant="ghost" onClick={query.retry}>
-                Retry automations
-              </Button>
-            </div>
+            </Notice>
           )}
           {!pending && !failed && rows.length === 0 && (
-            <p className="p-4 text-sm text-muted-foreground">
-              No enabled automations. Enable one in a project's Automations page.
-            </p>
+            <WidgetEmpty icon={CalendarClock} title="No enabled automations.">
+              Enable one in a project's Automations page.
+            </WidgetEmpty>
           )}
           {visible.map(({ project, automation: a, at }) => {
             const warning =
@@ -96,10 +98,10 @@ export function DashboardAutomations() {
               <div
                 key={`${project.id}:${a.id}`}
                 data-export-row
-                className="border-b px-4 py-3 transition-colors last:border-0 hover:bg-muted/30"
+                className="border-t border-border/70 px-5 py-3 transition-colors hover:bg-muted/50"
               >
                 <Link
-                  className="block min-h-11 text-sm font-medium hover:underline"
+                  className="block text-sm font-medium leading-relaxed underline-offset-4 hover:underline no-hover:min-h-11"
                   to={`/p/${encodeURIComponent(project.id)}/automations/${encodeURIComponent(a.id)}`}
                 >
                   {a.name}
@@ -108,18 +110,18 @@ export function DashboardAutomations() {
                   {project.name} · {action}: {timing}
                 </p>
                 {at !== null && (
-                  <p className="mt-1 text-xs text-muted-foreground">
+                  <p className="mt-0.5 text-xs text-soft-foreground">
                     <time dateTime={new Date(at).toISOString()}>
                       {dayTime(at, project.data!.timeZone)} · {project.data!.timeZone}
                     </time>
                   </p>
                 )}
                 {a.kind !== 'schedule' && (
-                  <p className="mt-1 text-xs text-muted-foreground">
+                  <p className="mt-0.5 text-xs text-soft-foreground">
                     Checks for matching events; a task may not be started.
                   </p>
                 )}
-                {warning && <p className="mt-1 text-xs text-warning">{warning}</p>}
+                {warning && <p className="mt-1 text-xs text-pending-strong">{warning}</p>}
                 <ExportRows
                   rows={[
                     {
@@ -141,14 +143,19 @@ export function DashboardAutomations() {
             )
           })}
           {rows.length > 3 && (
-            <Button variant="ghost" className="m-2 min-h-11" onClick={() => setAll(!all)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="mx-3 my-2 text-muted-foreground"
+              onClick={() => setAll(!all)}
+            >
               {all ? 'Show fewer' : `Show all ${rows.length} enabled`}
             </Button>
           )}
           {!pending && (
-            <details className="border-t px-4 py-2 text-xs text-muted-foreground">
+            <details className="border-t border-border/70 px-5 py-3 text-[13px] text-muted-foreground">
               <summary
-                className={`${disclosureSummary} min-h-11`}
+                className={`${disclosureSummary} py-1 no-hover:min-h-11`}
                 data-export-heading="Project automations"
               >
                 <DisclosureChevron />
@@ -157,7 +164,7 @@ export function DashboardAutomations() {
               {query.data?.map((p) => (
                 <Link
                   key={p.id}
-                  className="block min-h-11 py-3 hover:underline"
+                  className="block py-1.5 pl-5 text-foreground underline-offset-4 hover:underline no-hover:min-h-11"
                   to={`/p/${encodeURIComponent(p.id)}/automations`}
                 >
                   {p.name}

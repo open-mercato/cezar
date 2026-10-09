@@ -38,7 +38,7 @@ export function AskCard({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
       <div
         data-slot="ask-card"
         data-resolved="true"
-        className="rounded-lg border border-border bg-card px-3.5 py-2.5 text-xs text-muted-foreground"
+        className="rounded-lg bg-muted/50 px-3.5 py-2.5 text-[13px] text-muted-foreground"
       >
         <span className="text-soft-foreground">Answered</span>
         {ask.answer ? (
@@ -79,10 +79,11 @@ function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
       data-slot="ask-card"
       data-resolved="false"
       data-delivery={delivery.mode}
-      className="rounded-lg border border-primary/25 bg-primary/[0.04] px-4 pt-3.5 pb-3.5"
+      className="rounded-xl border border-violet/30 bg-card p-4 shadow-xs sm:p-5"
     >
-      <div className="mb-2.5 flex items-center gap-2">
-        <span className="text-xs font-medium text-primary">
+      <div className="mb-3 flex items-center gap-2">
+        <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
+        <span className="text-xs font-medium text-violet">
           {ask.fromWorkflow ? 'The workflow is asking' : 'The agent is asking'}
         </span>
       </div>
@@ -103,20 +104,20 @@ function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
       </div>
       {oneTap ? (
         resuming ? (
-          <p data-slot="ask-resume-hint" className="mt-3 text-[11.5px] text-soft-foreground">
+          <p data-slot="ask-resume-hint" className="mt-3 text-xs text-soft-foreground">
             The session has ended — your answer reopens it and goes to the agent.
           </p>
         ) : null
       ) : (
         <div className="mt-3 flex items-center gap-2.5">
-          <Button size="sm" disabled={delivery.isPending || blocked || !allAnswered} onClick={sendAll}>
+          <Button variant="primary" size="sm" disabled={delivery.isPending || blocked || !allAnswered} onClick={sendAll}>
             {resuming ? 'Send answer & reopen' : 'Send answer'}
           </Button>
           {/* The slot names the resume state, so a selector for it can never match the ordinary
               "pick one or more" hint a live run shows. */}
           <span
             data-slot={resuming ? 'ask-resume-hint' : 'ask-hint'}
-            className="text-[11.5px] text-soft-foreground"
+            className="text-xs text-soft-foreground"
           >
             {resuming
               ? 'the session has ended — sending reopens it'
@@ -173,14 +174,14 @@ function AskQuestionBlock({
   return (
     <div role="group" aria-label={question.question}>
       <div className="mb-0.5 flex items-center gap-2">
-        <span className="rounded-md bg-primary px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-foreground">
+        <span className="rounded-sm bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
           {question.header}
         </span>
         {multiSelect ? (
-          <span className="ml-auto text-[10.5px] text-soft-foreground">select all that apply</span>
+          <span className="ml-auto text-xs text-soft-foreground">Select all that apply</span>
         ) : null}
       </div>
-      <p className="mb-2.5 break-words text-sm font-semibold text-foreground">{question.question}</p>
+      <p className="mt-1.5 mb-3 break-words text-[15px] font-semibold text-foreground">{question.question}</p>
       <div className="flex flex-col gap-2">
         {question.options.map((option) => {
           const isSelected = selected.includes(option.label)
@@ -192,12 +193,12 @@ function AskQuestionBlock({
               aria-pressed={isSelected}
               onClick={() => pick(option.label)}
               className={cn(
-                'flex w-full flex-col gap-0.5 rounded-md border px-3.5 py-2.5 text-left transition-colors',
-                'hover:border-primary/50 hover:bg-primary/[0.06] disabled:pointer-events-none disabled:opacity-50',
-                isSelected ? 'border-primary/60 bg-primary/[0.06]' : 'border-border bg-card',
+                'flex w-full flex-col gap-0.5 rounded-lg border px-3.5 py-2.5 text-left transition-colors',
+                'hover:bg-muted/60 disabled:pointer-events-none disabled:opacity-50',
+                isSelected ? 'border-foreground/40 bg-muted' : 'border-border bg-card',
               )}
             >
-              <span className="flex min-w-0 items-start gap-2 text-[13.5px] font-semibold text-foreground">
+              <span className="flex min-w-0 items-start gap-2 text-sm font-medium text-foreground">
                 {multiSelect ? (
                   <span
                     aria-hidden

@@ -16,7 +16,7 @@ function Card({
       data-slot="card"
       data-flush={flush ? "true" : undefined}
       className={cn(
-        "flex flex-col rounded-lg border bg-card text-card-foreground shadow-xs",
+        "flex flex-col rounded-xl border bg-card text-card-foreground shadow-xs",
         flush ? "gap-0 overflow-hidden py-0" : "gap-6 py-6",
         className
       )}

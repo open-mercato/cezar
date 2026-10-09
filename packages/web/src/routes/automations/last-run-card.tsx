@@ -3,7 +3,6 @@ import { PlayIcon, ScrollTextIcon } from 'lucide-react'
 import type { AutomationLastRun } from '@open-mercato/cezar-api-client'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
 import { statusLabel, statusTone, usd, AUTOMATION_COST_VISIBLE } from '@/lib/automation-format'
 import { shortAge } from '@/lib/format'
 
@@ -25,28 +24,28 @@ export function LastRunCard({
   now?: number
 }) {
   return (
-    <Card flush data-slot="last-run-card" className="px-3.5 py-3">
-      <div className="mb-2 text-[11px] font-semibold tracking-[.05em] uppercase text-soft-foreground">Last run</div>
+    <section data-slot="last-run-card">
+      <h2 className="pb-2 text-[15px] font-semibold">Last run</h2>
       <div className="flex items-center gap-2 text-[13px]">
         <StatusDot tone={statusTone(lastRun.status)} />
         {statusLabel(lastRun.status)}
-        <span className="text-[11.5px] text-soft-foreground">{shortAge(lastRun.ts, now)}</span>
+        <span className="text-xs text-muted-foreground tabular-nums">{shortAge(lastRun.ts, now)}</span>
         {AUTOMATION_COST_VISIBLE && lastRun.costUsd !== undefined ? (
-          <span className="ml-auto font-mono text-xs text-muted-foreground">{usd(lastRun.costUsd)}</span>
+          <span className="ml-auto text-xs text-muted-foreground tabular-nums">{usd(lastRun.costUsd)}</span>
         ) : null}
       </div>
-      <div className="mt-2.5 flex gap-1.5">
+      <div className="mt-3 flex gap-1.5">
         <Button variant="outline" size="sm" disabled={busy} onClick={onRunNow}>
-          <PlayIcon aria-hidden="true" className="size-3" />
+          <PlayIcon aria-hidden="true"  />
           Run now
         </Button>
         {onLog ? (
           <Button variant="ghost" size="sm" onClick={onLog}>
-            <ScrollTextIcon aria-hidden="true" className="size-3" />
+            <ScrollTextIcon aria-hidden="true"  />
             View log
           </Button>
         ) : null}
       </div>
-    </Card>
+    </section>
   )
 }

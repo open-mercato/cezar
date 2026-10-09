@@ -7,8 +7,9 @@ import {
   ChevronDownIcon,
   CircleStopIcon,
   CopyIcon,
-  EllipsisVerticalIcon,
+  EllipsisIcon,
   FileTextIcon,
+  GitBranchIcon,
   MailIcon,
   PencilIcon,
   PinIcon,
@@ -17,7 +18,7 @@ import {
   SquareTerminalIcon,
   Trash2Icon,
 } from 'lucide-react'
-import { Fragment, memo, useEffect, useId, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
+import { Fragment, memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
@@ -36,10 +37,9 @@ import {
   useRunHandoff,
   useRuns,
 } from '@/api/queries'
-import { DEFAULT_AGENT_ACCOUNT_ID, type ApiRun, type OpenTarget } from '@open-mercato/cezar-api-client'
+import { DEFAULT_AGENT_ACCOUNT_ID, type ApiRun } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor, type TitleEditor } from '@/components/editable-title'
-import { Pill } from '@/components/pill'
 import { ReferenceChip } from '@/components/reference-chip'
 import { ResolveConflictsButton } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
@@ -57,16 +57,18 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { OpenInMenu, type OpenInChoice } from '@/components/open-in-menu'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { DirectionalUsage } from '@/components/directional-usage'
@@ -82,7 +84,7 @@ import {
   workflowLabel,
 } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
-import { cn, isHttpUrl } from '@/lib/utils'
+import { isHttpUrl } from '@/lib/utils'
 
 import { Markdown } from './markdown'
 import { useContinuationProvider } from './continuation-provider'
@@ -110,16 +112,6 @@ import { useDraft } from './thread-draft'
  *  A prop rather than a route match so the header stays testable with a bare render. */
 export type RunTab = 'session' | 'changes' | 'commits' | 'files' | 'graph'
 
-/** Which runs the reader has expanded the phone-width meta row for (#765). A module-level map for
- *  the same reason `WorkflowSteps` keeps one (`openByRun` in step-rail.tsx) — and it has to be BOTH
- *  module-level and run-keyed, because the two navigations a reader makes here remount the header
- *  in opposite ways. A Session → Changes hop resolves a different route element, so it DOES remount
- *  and plain `useState` would throw the expand away; run A → run B stays on `/tasks/:id`, so React
- *  reconciles the same element and does NOT remount — the docks below it key themselves by `run.id`
- *  for exactly this reason — so even lazily-initialized `useState` would carry run A's expansion
- *  into run B. Session-lifetime only; no server persistence invented for it. */
-const detailsOpenByRun = new Map<string, boolean>()
-
 interface RunHeaderProps {
   run: ApiRun
   planTally?: { done: number; total: number }
@@ -137,6 +129,8 @@ interface RunHeaderProps {
    *  route tabs stay the default for every surface that still navigates by URL. The actions on
    *  the right of that row are unaffected — they belong to the run, not to the navigation. */
   tabs?: ReactNode
+  /** Extra controls at the right end of the tab row — the workspace's terminal toggle. */
+  trailing?: ReactNode
 }
 
 // Every prop must participate: adding one without a comparator is a compile error.
@@ -147,6 +141,7 @@ const headerPropComparators = {
   continuationEngine: (before, after) => before.continuationEngine === after.continuationEngine,
   // The workspace memoizes the element it passes, so identity is a real comparison here.
   tabs: (before, after) => before.tabs === after.tabs,
+  trailing: (before, after) => before.trailing === after.trailing,
   planTally: (before, after) => before.planTally?.done === after.planTally?.done &&
     before.planTally?.total === after.planTally?.total,
 } satisfies Record<keyof RunHeaderProps, (before: RunHeaderProps, after: RunHeaderProps) => boolean>
@@ -163,6 +158,7 @@ function RunHeaderView({
   onMarkedUnread,
   continuationEngine,
   tabs,
+  trailing,
 }: RunHeaderProps) {
   const attention = deriveAttention(run)
   const budget = budgetStop(run)
@@ -170,16 +166,6 @@ function RunHeaderView({
   const hint = resumeHint(run)
   const [notesOpen, setNotesOpen] = useState(false)
   const actions = useRunActions(run, onMarkedUnread)
-
-  // The phone-width meta disclosure (#765). The map is the state — a re-render bump rather than a
-  // mirrored `useState` — so switching runs reads that run's own answer instead of the last one's.
-  const [, bumpDetails] = useReducer((n: number) => n + 1, 0)
-  const detailsId = useId()
-  const detailsOpen = detailsOpenByRun.get(run.id) ?? false
-  const toggleDetails = () => {
-    detailsOpenByRun.set(run.id, !detailsOpen)
-    bumpDetails()
-  }
 
   // The queue position a parked run shows in its pill ("queued #2"). Reads the shared runs-list
   // query — already warm from the sidebar quick-list — because position is a property of the
@@ -194,82 +180,98 @@ function RunHeaderView({
   const health = useHealth()
   const metricVisibility = usageMetricVisibility(health.data)
 
+  // ONE primary action, picked by what the run's state calls for; the rest is quieter.
+  const primary: 'continue' | 'finish' | 'stop' | null = flags.continueRun
+    ? 'continue'
+    : flags.finish
+      ? 'finish'
+      : flags.cancel
+        ? 'stop'
+        : null
+
   return (
     <header
       data-slot="run-header"
-      className="relative z-20 border-b border-border bg-background/95 px-3 pt-2 backdrop-blur md:sticky md:top-0 md:px-6 md:pt-3"
+      className="relative z-20 shrink-0 border-b border-border bg-background px-4 pt-3 sm:px-6 md:sticky md:top-0 md:pt-4"
     >
-      <div className="mx-auto w-full max-w-[var(--measure)]">
-        <div className="flex min-w-0 items-center gap-2">
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="flex min-w-0 flex-1 items-center gap-2.5">
           <EditableTitle run={run} />
-          <span className="ml-auto flex shrink-0 items-center gap-2.5">
-            {planTally ? (
-              // The plan dock's compact mirror (spec: "mirrored as a compact progress line in
-              // the run header"). Desktop only since #764: on a phone the dock it mirrors is
-              // itself on screen, so the mirror would spend the tightest row here restating it.
-              <span data-slot="plan-mirror" className="hidden text-[11px] text-soft-foreground tabular-nums md:inline">
-                Plan {planTally.done}/{planTally.total}
-              </span>
-            ) : null}
-            <Pill dot={attention.tone} pulse={attention.pulse}>
-              {attention.label}
-              {queuePosition !== undefined ? ` #${queuePosition}` : ''}
-            </Pill>
-            {budget ? (
-              <span data-slot="budget-stop" className="text-xs text-muted-foreground tabular-nums">
-                Spent {formatCost(budget.spent) || '$0.00'} of {formatCost(budget.ceiling) || '$0.00'}
-              </span>
-            ) : null}
-            {/* Phone-width only: above `md` the meta row never collapses, so a control to expand
-                it would be a permanently disabled-looking chevron next to always-visible content.
-                On the Session tab of a run with a plan it lands in the slot #764 freed by hiding
-                the plan mirror here; on the three `task-git` tabs no tally is passed at all, so
-                there the row does grow by one control — the price of the collapse. */}
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="md:hidden"
-              aria-label={detailsOpen ? 'Hide run details' : 'Show run details'}
-              aria-controls={detailsId}
-              aria-expanded={detailsOpen}
-              onClick={toggleDetails}
-            >
-              <ChevronDownIcon
-                aria-hidden="true"
-                className={cn('transition-transform', detailsOpen && 'rotate-180')}
-              />
-            </Button>
-            <ActionsKebab run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} />
-          </span>
+          <Badge variant="outline" data-slot="run-status" className="gap-1.5 font-medium text-muted-foreground">
+            <StatusDot tone={attention.tone} pulse={attention.pulse} />
+            {attention.label}
+            {queuePosition !== undefined ? ` #${queuePosition}` : ''}
+          </Badge>
+          {budget ? (
+            <span data-slot="budget-stop" className="hidden shrink-0 text-xs text-muted-foreground tabular-nums sm:inline">
+              Spent {formatCost(budget.spent) || '$0.00'} of {formatCost(budget.ceiling) || '$0.00'}
+            </span>
+          ) : null}
         </div>
 
-        {/* #765: workflow, branch, tracker refs, diff, tokens and cost wrap across several rows on
-            a phone. `hidden` rather than a visual-only class so the collapsed rows leave the
-            accessibility tree instead of lingering as invisible-but-focusable chips. `md:block`
-            keeps the desktop header exactly as it was — this is a narrow-viewport fix, and a
-            desktop reader who has always seen these at a glance should not have to click for them. */}
-        <div id={detailsId} data-slot="run-details" className={cn(detailsOpen ? 'block' : 'hidden', 'md:block')}>
-          <MetaRow
+        <div className="flex shrink-0 items-center gap-1.5">
+          <div data-slot="run-actions" className="hidden items-center gap-1.5 md:flex">
+            <OpenInMenuForRun run={run} canResume={flags.terminal} onResume={() => actions.terminal.mutate()} />
+            {flags.finish && primary !== 'finish' ? (
+              <Button variant="outline" size="sm" title={finishTitle(run.status)} onClick={() => actions.finish.mutate()}>
+                <CheckIcon aria-hidden="true" />
+                Finish
+              </Button>
+            ) : null}
+            {primary === 'continue' ? (
+              <Button
+                variant="default"
+                size="sm"
+                title={actions.continuation.reason ?? 'Reopen the session'}
+                disabled={actions.continueRun.isPending || !actions.continuation.canContinue}
+                onClick={() => actions.continueRun.mutate()}
+              >
+                <PlayIcon aria-hidden="true" />
+                Continue
+              </Button>
+            ) : primary === 'finish' ? (
+              <Button variant="default" size="sm" title={finishTitle(run.status)} onClick={() => actions.finish.mutate()}>
+                <CheckIcon aria-hidden="true" />
+                Finish
+              </Button>
+            ) : primary === 'stop' ? (
+              <Button variant="outline" size="sm" onClick={() => actions.setConfirming('cancel')}>
+                <CircleStopIcon aria-hidden="true" />
+                Stop
+              </Button>
+            ) : null}
+          </div>
+          <MoreMenu
             run={run}
-            continuationEngine={continuationEngine}
-            showTokens={metricVisibility.tokens}
-            showCost={metricVisibility.cost}
-            // `capabilities?.` like `usageMetricVisibility` above it: this header is rendered
-            // against minimal health payloads (a `{defaultRunner}`-only answer is pinned by its
-            // own test), so every capability read here tolerates an absent object. Absent stays
-            // fail-closed — the chip degrades to text rather than linking into a disabled view.
-            automationsAvailable={health.data?.capabilities?.automations === true}
+            actions={actions}
+            hint={hint}
+            stopInMenu={primary !== 'stop'}
+            onOpenNotes={() => setNotesOpen(true)}
           />
         </div>
-        {/* Outside the disclosure on purpose: "this run wakes itself up at 14:20" is status, not
-            metadata — it belongs with the pill above, not behind a tap with the diff stats. */}
-        <MonitoringSchedule run={run} />
-        {/* Also outside it, for the same reason: who ordered this task, and what it dispatched,
-            are what the run IS doing right now, not metadata about how it started. */}
-        <DispatchParentLine run={run} />
-        <DispatchChildrenLine run={run} />
+      </div>
 
-        <div data-slot="run-tabs" className="mt-1.5 flex items-end gap-1 md:mt-2.5">
+      <MetaRow
+        run={run}
+        hint={hint}
+        planTally={planTally}
+        continuationEngine={continuationEngine}
+        showTokens={metricVisibility.tokens}
+        showCost={metricVisibility.cost}
+        // `capabilities?.` like `usageMetricVisibility` above it: this header is rendered
+        // against minimal health payloads (a `{defaultRunner}`-only answer is pinned by its
+        // own test), so every capability read here tolerates an absent object. Absent stays
+        // fail-closed — the chip degrades to text rather than linking into a disabled view.
+        automationsAvailable={health.data?.capabilities?.automations === true}
+      />
+      {/* "This run wakes itself up at 14:20" is status, not metadata — it stays on the page. */}
+      <MonitoringSchedule run={run} />
+      {/* Who ordered this task, and what it dispatched, are what the run IS doing right now. */}
+      <DispatchParentLine run={run} />
+      <DispatchChildrenLine run={run} />
+
+      <div data-slot="run-tabs" className="mt-2 flex items-end gap-2 md:mt-3">
+        <div className="flex min-w-0 flex-1 items-end gap-1 overflow-x-auto">
           {/* `tabs` is the workspace's saved-layout strip, which REPLACES this row (spec
               `2026-10-07-task-workspace` §5.2: "do not show both strips"). The fallback is what
               every other consumer of this header still gets — including the Graph tab, which
@@ -277,7 +279,7 @@ function RunHeaderView({
           {tabs ?? (
             <>
               <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
-                Session
+                Chat
               </TabLink>
               <TabLink to={`/tasks/${run.id}/changes`} active={tab === 'changes'}>
                 Changes
@@ -296,99 +298,20 @@ function RunHeaderView({
               ) : null}
             </>
           )}
-
-          <div data-slot="run-actions" className="ml-auto hidden items-center gap-1 pb-1 md:flex">
-            {flags.finish ? (
-              <Button variant="outline" size="sm" title={finishTitle(run.status)} onClick={() => actions.finish.mutate()}>
-                <CheckIcon aria-hidden="true" />
-                Finish
-              </Button>
-            ) : null}
-            {flags.continueRun ? (
-              <Button
-                variant="outline"
-                size="sm"
-                title={actions.continuation.reason ?? 'Reopen the session'}
-                disabled={actions.continueRun.isPending || !actions.continuation.canContinue}
-                onClick={() => actions.continueRun.mutate()}
-              >
-                <PlayIcon aria-hidden="true" />
-                Continue
-              </Button>
-            ) : null}
-            {/* Terminal is folded into the Open in… menu to save room in the actions row. */}
-            <OpenInMenuForRun run={run} canResume={flags.terminal} onResume={() => actions.terminal.mutate()} />
-            <Button
-              variant="ghost"
-              size="sm"
-              title="Handoff notes — what the agent did and what's left"
-              aria-expanded={notesOpen}
-              onClick={() => setNotesOpen((open) => !open)}
-            >
-              <FileTextIcon aria-hidden="true" />
-              Notes
-            </Button>
-            {flags.markUnread ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                title="Put this task back in the unread list"
-                disabled={actions.markUnread.isPending}
-                onClick={() => actions.markUnread.mutate()}
-              >
-                <MailIcon aria-hidden="true" />
-                Mark unread
-              </Button>
-            ) : null}
-            {flags.pin ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                data-slot="pin-run"
-                aria-pressed={Boolean(run.pinned)}
-                title={
-                  run.pinned
-                    ? 'Unpin from the top of this project’s task list'
-                    : 'Pin to the top of this project’s task list'
-                }
-                disabled={actions.pin.isPending}
-                onClick={() => actions.pin.mutate()}
-              >
-                {run.pinned ? <PinOffIcon aria-hidden="true" /> : <PinIcon aria-hidden="true" />}
-                {run.pinned ? 'Unpin' : 'Pin'}
-              </Button>
-            ) : null}
-            {flags.archive ? (
-              <Button variant="ghost" size="sm" onClick={() => actions.archive.mutate()}>
-                {run.archived ? <ArchiveRestoreIcon aria-hidden="true" /> : <ArchiveIcon aria-hidden="true" />}
-                {run.archived ? 'Unarchive' : 'Archive'}
-              </Button>
-            ) : null}
-            {flags.cancel ? (
-              <Button variant="danger-ghost" size="sm" onClick={() => actions.setConfirming('cancel')}>
-                <CircleStopIcon aria-hidden="true" />
-                Cancel
-              </Button>
-            ) : null}
-            {flags.deleteRun ? (
-              <Button variant="danger-ghost" size="sm" onClick={() => actions.setConfirming('delete')}>
-                <Trash2Icon aria-hidden="true" />
-                Delete
-              </Button>
-            ) : null}
-          </div>
         </div>
-
-        {run.steps.length > 0 ? (
-          <div className="border-t border-border pt-1 pb-0 md:pt-2 md:pb-1">
-            <WorkflowSteps runId={run.id} steps={run.steps} />
-          </div>
-        ) : null}
-
-        {hint ? <ResumeHintLine hint={hint} /> : null}
-        {notesOpen ? <NotesPanel runId={run.id} /> : null}
+        <div className="flex shrink-0 items-center gap-1 pb-1">
+          <WorkflowSteps runId={run.id} steps={run.steps} className="hidden max-w-80 sm:flex" />
+          {trailing}
+        </div>
       </div>
+      {run.steps.length > 0 ? (
+        // Phone width: the stepper gets its own row instead of squeezing the tabs.
+        <div className="-mx-2 border-t border-border py-1 sm:hidden">
+          <WorkflowSteps runId={run.id} steps={run.steps} className="w-full" />
+        </div>
+      ) : null}
 
+      <NotesSheet runId={run.id} open={notesOpen} onOpenChange={setNotesOpen} />
       <ConfirmDialog run={run} actions={actions} />
     </header>
   )
@@ -459,6 +382,7 @@ function OpenInMenuForRun({
       choices={choices}
       onPick={(target) => open.mutate(target)}
       title="Resume in a terminal, or open the worktree locally"
+      triggerVariant="outline"
       leading={
         canResumeHere ? (
           <DropdownMenuItem data-target="terminal-resume" onSelect={onResume}>
@@ -636,12 +560,12 @@ function EditableTitle({ run }: { run: ApiRun }) {
   }, [draft.hasDraft, draft.ready, draft.text, editing])
 
   if (editor.editing) {
-    return <TitleEditInput editor={drafted} className="flex-1 text-[15px] font-semibold" />
+    return <TitleEditInput editor={drafted} className="flex-1 text-lg font-semibold" />
   }
 
   return (
     <span className="group flex min-w-0 items-center gap-1">
-      <h1 className="min-w-0 truncate text-[15px] font-semibold" title={run.task}>
+      <h1 className="min-w-0 truncate text-lg leading-7 font-semibold text-foreground" title={run.task}>
         {title}
       </h1>
       <button
@@ -701,11 +625,12 @@ function CopyBranchChip({ branch }: { branch: string }) {
             <button
               type="button"
               data-slot="branch-chip"
-              className="cursor-copy rounded-sm border border-border bg-card px-1.5 py-px font-mono text-[11px] font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              className="inline-flex max-w-56 cursor-copy items-center gap-1 rounded-sm px-1 py-0.5 font-mono text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
               aria-label={`Copy branch name ${branch}`}
               onClick={copy}
             >
-              {branch}
+              <GitBranchIcon aria-hidden="true" className="size-3.5 shrink-0" />
+              <span className="truncate">{branch}</span>
               <span className="sr-only" role="status">
                 {copied ? 'Branch name copied' : ''}
               </span>
@@ -724,12 +649,17 @@ function CopyBranchChip({ branch }: { branch: string }) {
  *  count, revealed on hover/focus rather than always-on text. */
 function MetaRow({
   run,
+  hint,
+  planTally,
   showTokens,
   showCost,
   automationsAvailable,
   continuationEngine,
 }: {
   run: ApiRun
+  /** The take-over command, when the engine has let go of the session. */
+  hint?: string
+  planTally?: { done: number; total: number }
   showTokens: boolean
   showCost: boolean
   continuationEngine?: ReactNode
@@ -759,7 +689,11 @@ function MetaRow({
   )
   // `workflowLabel` so an inline chain shows its first step's name, not the bare "(planned)"
   // placeholder — which reads like a status next to the live status pill.
-  const parts: ReactNode[] = [<span key="workflow">{workflowLabel(run)}</span>]
+  const parts: ReactNode[] = [
+    <span key="workflow" className="font-medium text-foreground">
+      {workflowLabel(run)}
+    </span>,
+  ]
   const branch = run.branch
   if (branch) {
     parts.push(<CopyBranchChip key="branch" branch={branch} />)
@@ -828,7 +762,7 @@ function MetaRow({
         <Link
           key="automation"
           to={`/automations/${encodeURIComponent(run.automation.automationId)}/log`}
-          className="rounded-sm border border-border bg-card px-1.5 py-px text-[11px] font-medium hover:text-foreground"
+          className="underline-offset-2 hover:text-foreground hover:underline"
         >
           Automation
         </Link>
@@ -837,7 +771,6 @@ function MetaRow({
           key="automation"
           data-slot="automation-origin"
           title="Automations are off on this server (CEZ_AUTOMATIONS)"
-          className="rounded-sm border border-border bg-card px-1.5 py-px text-[11px] font-medium"
         >
           Automation
         </span>
@@ -845,20 +778,12 @@ function MetaRow({
     )
   }
 
-  const usage: ReactNode[] = []
-  if (showTokens && (run.inputTokens !== undefined || run.outputTokens !== undefined)) {
-    usage.push(
-      <DirectionalUsage
-        key="tokens"
-        inputTokens={run.inputTokens}
-        outputTokens={run.outputTokens}
-      />,
-    )
-  }
-  if (showCost && run.costUsd) {
-    usage.push(
-      <span key="cost" className="tabular-nums">
-        {formatCost(run.costUsd)}
+  if (planTally) {
+    // The plan dock's compact mirror (spec: "mirrored as a compact progress line in the run
+    // header"). Desktop only since #764: on a phone the dock it mirrors is itself on screen.
+    parts.push(
+      <span key="plan" data-slot="plan-mirror" className="hidden tabular-nums md:inline">
+        Plan {planTally.done}/{planTally.total}
       </span>,
     )
   }
@@ -867,31 +792,20 @@ function MetaRow({
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
       <div
         data-slot="run-meta"
-        className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground md:mt-1.5 md:gap-y-1"
+        className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-muted-foreground"
       >
+        {/* Index keys: two references may carry the same number (the PR a task opened and the
+            PR it is about), so the parts' own keys are not unique. */}
         {parts.map((part, index) => (
-          <Fragment key={index}>
-            {index > 0 ? (
-              <span className="text-soft-foreground" aria-hidden="true">
-                ·
-              </span>
-            ) : null}
-            {part}
-          </Fragment>
+          <Fragment key={index}>{part}</Fragment>
         ))}
-        <span className="ml-auto flex shrink-0 items-center gap-1.5">
-          {usage.map((part, index) => (
-            <Fragment key={index}>
-              {index > 0 ? (
-                <span className="text-soft-foreground" aria-hidden="true">
-                  ·
-                </span>
-              ) : null}
-              {part}
-            </Fragment>
-          ))}
-          <AgentBadge run={run} continuationEngine={continuationEngine} />
-        </span>
+        <RunDetails
+          run={run}
+          hint={hint}
+          showTokens={showTokens}
+          showCost={showCost}
+          continuationEngine={continuationEngine}
+        />
       </div>
     </ReferenceStatusProvider>
   )
@@ -916,9 +830,9 @@ function DispatchParentLine({ run }: { run: ApiRun }) {
   return (
     <div
       data-slot="dispatch-parent-line"
-      className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs text-muted-foreground"
+      className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-[13px] text-muted-foreground"
     >
-      <span className="shrink-0">Dispatched by</span>
+      <span className="shrink-0 text-soft-foreground">Dispatched by</span>
       <Link
         to={`/tasks/${parentRunId}`}
         data-slot="dispatch-parent"
@@ -952,10 +866,10 @@ function DispatchChildrenLine({ run }: { run: ApiRun }) {
   return (
     <div
       data-slot="dispatch-children"
-      className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs text-muted-foreground"
+      className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-[13px] text-muted-foreground"
     >
-      <span className="shrink-0">Subtasks</span>
-      <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 overflow-hidden">
+      <span className="shrink-0 text-soft-foreground">Subtasks</span>
+      <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 overflow-hidden">
         {children.map((child) => {
           const attention = deriveAttention(child)
           return (
@@ -1009,19 +923,26 @@ function MonitoringSchedule({ run }: { run: ApiRun }) {
   )
 }
 
-/** The agent icon by the token counter (#416): hover/focus reveals the runner, account, model and
- *  canonical model identity — the answer to "what am I actually running here?" — without turning
- *  them into permanent text next to the live status pill. Always rendered (a run always has an
- *  effective runner, `model` reads "auto" when the runner picks it), and reuses the same
- *  click/keyboard-accessible `DropdownMenu` as the rest of this header instead of inventing a
- *  hover-only affordance.
+/** "Details" — everything about HOW this run executes that a reader rarely needs at a glance:
+ *  runner, account, model and canonical model identity (#416, #546), tokens and cost, the
+ *  worktree path and the take-over command. One quiet trigger in the meta line, a labelled
+ *  definition grid behind it.
  *
- *  This is the production reader for `RunRecord.modelIdentity` (#546): the field was persisted by
- *  #405 for cost attribution and replay and had none, which is how a persisted field rots into
- *  something nobody can tell is load-bearing. The menu is the right home for it — it answers a
- *  question only a user debugging "which provider actually served this?" asks, so it belongs
- *  behind the same disclosure as the account rather than in the truncating summary line. */
-function AgentBadge({ run, continuationEngine }: { run: ApiRun; continuationEngine?: ReactNode }) {
+ *  This is the production reader for `RunRecord.modelIdentity` (#546): it answers a question only
+ *  a user debugging "which provider actually served this?" asks. */
+function RunDetails({
+  run,
+  hint,
+  showTokens,
+  showCost,
+  continuationEngine,
+}: {
+  run: ApiRun
+  hint?: string
+  showTokens: boolean
+  showCost: boolean
+  continuationEngine?: ReactNode
+}) {
   // The record keeps only what the caller ASKED for: `POST /api/runs` persists the raw optional
   // `runner` (`src/runs/store.ts`), while the run actually executes as
   // `input.runner ?? config.defaultRunner` (`src/workflows/run.ts`). Mirror that resolution —
@@ -1055,102 +976,161 @@ function AgentBadge({ run, continuationEngine }: { run: ApiRun; continuationEngi
   // one this header may invent.
   const identity = run.modelIdentity && run.modelIdentity !== model ? run.modelIdentity : undefined
   const summary = [runner, account, model].filter(Boolean).join(' · ')
+  const hasTokens = showTokens && (run.inputTokens !== undefined || run.outputTokens !== undefined)
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          data-slot="agent-badge"
-          title={summary}
-          aria-label={`Agent: ${runner}, ${account ? `account ${account}, ` : ''}model ${model}`}
-          className="flex min-w-0 shrink items-center gap-1.5 rounded-sm px-1 py-1 text-soft-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-        >
-          <BotIcon className="size-3.5 shrink-0" aria-hidden="true" />
-          {/* READ, not just reachable. This was an icon alone, and "which agent, account and model
-              produced this?" turned out to be unanswerable without knowing to click it — the whole
-              point of the badge. #416 moved runner/model out of the loose dot-list to cut noise;
-              this puts them back as ONE quiet, truncating string rather than three chips, and the
-              menu still carries the labelled breakdown. */}
-          <span data-slot="agent-badge-summary" className="truncate font-mono text-[11px]">
-            {summary}
-          </span>
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-[9rem]">
-        <DropdownMenuLabel className="font-mono text-[11px] font-normal text-muted-foreground">
-          runner: {runner}
-        </DropdownMenuLabel>
-        {/* Omitted, not guessed, when no step recorded one: a run from before accounts existed
-            cannot be said to have used the discovered account — nothing wrote that down. */}
-        {account ? (
-          <DropdownMenuLabel
-            data-slot="agent-badge-account"
-            className="font-mono text-[11px] font-normal text-muted-foreground"
-          >
-            account: {account}
-          </DropdownMenuLabel>
-        ) : null}
-        <DropdownMenuLabel className="font-mono text-[11px] font-normal text-muted-foreground">
-          model: {model}
-        </DropdownMenuLabel>
-        {identity ? (
-          <DropdownMenuLabel
-            data-slot="agent-badge-identity"
-            className="font-mono text-[11px] font-normal text-muted-foreground"
-          >
-            identity: {identity}
-          </DropdownMenuLabel>
-        ) : null}
+    <Popover>
+      <PopoverTrigger
+        data-slot="agent-badge"
+        title={summary}
+        aria-label={`Details — agent: ${runner}, ${account ? `account ${account}, ` : ''}model ${model}`}
+        className="group inline-flex items-center gap-1 rounded-sm px-1 py-0.5 text-[13px] text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/40 data-[state=open]:bg-muted data-[state=open]:text-foreground"
+      >
+        <BotIcon className="size-3.5 shrink-0" aria-hidden="true" />
+        <span data-slot="agent-badge-summary" className="hidden lg:inline">
+          {runner}
+        </span>
+        <span className="lg:hidden">Details</span>
+        <ChevronDownIcon aria-hidden="true" className="size-3.5 text-soft-foreground transition-transform group-data-[state=open]:rotate-180" />
+      </PopoverTrigger>
+      <PopoverContent align="start" data-slot="run-details" className="w-[min(24rem,calc(100vw-2rem))] p-4">
+        <p className="mb-3 text-[13px] font-semibold text-foreground">Run details</p>
+        <dl className="grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-4 gap-y-2 text-[13px]">
+          <DetailRow label="Workflow">{workflowLabel(run)}</DetailRow>
+          <DetailRow label="Runner">{runner}</DetailRow>
+          {/* Omitted, not guessed, when no step recorded one: a run from before accounts existed
+              cannot be said to have used the discovered account — nothing wrote that down. */}
+          {account ? (
+            <DetailRow label="Account" slot="agent-badge-account">
+              {account}
+            </DetailRow>
+          ) : null}
+          <DetailRow label="Model">{model}</DetailRow>
+          {identity ? (
+            <DetailRow label="Identity" slot="agent-badge-identity" mono>
+              {identity}
+            </DetailRow>
+          ) : null}
+          {hasTokens ? (
+            <DetailRow label="Tokens">
+              <DirectionalUsage inputTokens={run.inputTokens} outputTokens={run.outputTokens} />
+            </DetailRow>
+          ) : null}
+          {showCost && run.costUsd ? (
+            <DetailRow label="Cost">
+              <span className="tabular-nums">{formatCost(run.costUsd)}</span>
+            </DetailRow>
+          ) : null}
+          {run.branch ? (
+            <DetailRow label="Branch" mono>
+              {run.branch}
+            </DetailRow>
+          ) : null}
+          {run.worktreePath ? (
+            <DetailRow label="Worktree" mono>
+              <CopyValue
+                value={run.worktreePath}
+                label="Copy worktree path"
+                done="Worktree path copied"
+              />
+            </DetailRow>
+          ) : null}
+          {hint ? (
+            <DetailRow label="Take over" mono>
+              <CopyValue
+                slot="resume-hint"
+                value={hint}
+                label="Copy the take-over command"
+                done="Command copied to clipboard."
+              />
+            </DetailRow>
+          ) : null}
+        </dl>
         {continuationEngine ? (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel className="pb-1 text-[11px] font-normal text-muted-foreground">
-              Next continuation
-            </DropdownMenuLabel>
-            <div
-              data-slot="agent-badge-engine-picker"
-              className="px-2 pb-1"
-              // The controls open their own selection menus. Do not let a click inside this
-              // custom menu row dismiss the parent badge before the nested picker can open.
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={(event) => event.stopPropagation()}
-            >
-              {continuationEngine}
-            </div>
-          </>
+          <div className="mt-3 border-t border-border pt-3">
+            <p className="mb-1.5 text-xs text-muted-foreground">Next continuation</p>
+            <div data-slot="agent-badge-engine-picker">{continuationEngine}</div>
+          </div>
         ) : null}
-      </DropdownMenuContent>
-    </DropdownMenu>
+      </PopoverContent>
+    </Popover>
   )
 }
 
-/** The <md action surface: everything the desktop bar offers, folded into a kebab menu next to
- *  the pill (the mockup's mobile pattern — `.tabs-row .actions { display:none }` under 768px). */
-function ActionsKebab({
+function DetailRow({
+  label,
+  slot,
+  mono = false,
+  children,
+}: {
+  label: string
+  slot?: string
+  mono?: boolean
+  children: ReactNode
+}) {
+  return (
+    <>
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd data-slot={slot} className={mono ? 'min-w-0 font-mono text-xs break-all text-foreground' : 'min-w-0 text-foreground'}>
+        {children}
+      </dd>
+    </>
+  )
+}
+
+/** A long mono value with a copy button beside it — the worktree path, the take-over command. */
+function CopyValue({ value, label, done, slot }: { value: string; label: string; done: string; slot?: string }) {
+  return (
+    <span className="flex min-w-0 items-start gap-1.5">
+      <span className="line-clamp-3 min-w-0 flex-1 break-all">{value}</span>
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        data-slot={slot}
+        aria-label={label}
+        title={label}
+        className="-my-0.5 shrink-0 text-muted-foreground"
+        onClick={() => void copyToClipboard(value, done)}
+      >
+        <CopyIcon aria-hidden="true" />
+      </Button>
+    </span>
+  )
+}
+
+/** "More": every action that is not the run's one primary button — and, under `md` where the
+ *  button row is hidden, those too — in one menu. Destructive items last. */
+function MoreMenu({
   run,
   actions,
-  onToggleNotes,
+  hint,
+  stopInMenu,
+  onOpenNotes,
 }: {
   run: ApiRun
   actions: RunActions
-  onToggleNotes: () => void
+  hint?: string
+  /** Stop is the header's primary button on a run with nothing else to offer; otherwise it lives here. */
+  stopInMenu: boolean
+  onOpenNotes: () => void
 }) {
   const flags = runActionFlags(run)
+  const worktreePath = run.worktreePath
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label="Run actions" className="md:hidden">
-          <EllipsisVerticalIcon aria-hidden="true" />
+        <Button variant="ghost" size="icon-sm" aria-label="More actions" title="More actions">
+          <EllipsisIcon aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" data-slot="run-actions-menu">
+      <DropdownMenuContent align="end" data-slot="run-actions-menu" className="min-w-52">
         {flags.finish ? (
-          <DropdownMenuItem onSelect={() => actions.finish.mutate()}>
+          <DropdownMenuItem className="md:hidden" onSelect={() => actions.finish.mutate()}>
             <CheckIcon aria-hidden="true" /> Finish
           </DropdownMenuItem>
         ) : null}
         {flags.continueRun ? (
           <DropdownMenuItem
+            className="md:hidden"
             disabled={!actions.continuation.canContinue || actions.continueRun.isPending}
             title={actions.continuation.reason}
             onSelect={() => actions.continueRun.mutate()}
@@ -1159,15 +1139,16 @@ function ActionsKebab({
           </DropdownMenuItem>
         ) : null}
         {flags.terminal ? (
-          <DropdownMenuItem onSelect={() => actions.terminal.mutate()}>
-            <SquareTerminalIcon aria-hidden="true" /> Terminal
+          <DropdownMenuItem className="md:hidden" onSelect={() => actions.terminal.mutate()}>
+            <SquareTerminalIcon aria-hidden="true" /> Resume in terminal
           </DropdownMenuItem>
         ) : null}
-        <DropdownMenuItem onSelect={onToggleNotes}>
+        <DropdownMenuItem title="Handoff notes — what the agent did and what's left" onSelect={onOpenNotes}>
           <FileTextIcon aria-hidden="true" /> Notes
         </DropdownMenuItem>
         {flags.markUnread ? (
           <DropdownMenuItem
+            title="Put this task back in the unread list"
             disabled={actions.markUnread.isPending}
             onSelect={() => actions.markUnread.mutate()}
           >
@@ -1177,9 +1158,13 @@ function ActionsKebab({
         {flags.pin ? (
           <DropdownMenuItem
             data-slot="pin-run"
-            // The same `aria-pressed` its desktop twin and `PinToggle` carry — a toggle should
-            // announce its state in every spelling, not only the ones with room for the word.
+            // A toggle should announce its state in every spelling.
             aria-pressed={Boolean(run.pinned)}
+            title={
+              run.pinned
+                ? 'Unpin from the top of this project’s task list'
+                : 'Pin to the top of this project’s task list'
+            }
             disabled={actions.pin.isPending}
             onSelect={() => actions.pin.mutate()}
           >
@@ -1193,10 +1178,31 @@ function ActionsKebab({
             {run.archived ? 'Unarchive' : 'Archive'}
           </DropdownMenuItem>
         ) : null}
+        {hint || worktreePath ? <DropdownMenuSeparator /> : null}
+        {hint ? (
+          <DropdownMenuItem
+            title={hint}
+            onSelect={() => void copyToClipboard(hint, 'Command copied to clipboard.')}
+          >
+            <SquareTerminalIcon aria-hidden="true" /> Copy take-over command
+          </DropdownMenuItem>
+        ) : null}
+        {worktreePath ? (
+          <DropdownMenuItem
+            title={worktreePath}
+            onSelect={() => void copyToClipboard(worktreePath, 'Worktree path copied')}
+          >
+            <CopyIcon aria-hidden="true" /> Copy worktree path
+          </DropdownMenuItem>
+        ) : null}
         {flags.cancel || flags.deleteRun ? <DropdownMenuSeparator /> : null}
         {flags.cancel ? (
-          <DropdownMenuItem variant="destructive" onSelect={() => actions.setConfirming('cancel')}>
-            <CircleStopIcon aria-hidden="true" /> Cancel
+          <DropdownMenuItem
+            variant="destructive"
+            className={stopInMenu ? undefined : 'md:hidden'}
+            onSelect={() => actions.setConfirming('cancel')}
+          >
+            <CircleStopIcon aria-hidden="true" /> Stop
           </DropdownMenuItem>
         ) : null}
         {flags.deleteRun ? (
@@ -1216,7 +1222,7 @@ function ConfirmDialog({ run, actions }: { run: ApiRun; actions: RunActions }) {
     <AlertDialog open={confirming !== null} onOpenChange={(open) => !open && actions.setConfirming(null)}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>{confirming === 'delete' ? 'Delete this task?' : 'Cancel this task?'}</AlertDialogTitle>
+          <AlertDialogTitle>{confirming === 'delete' ? 'Delete this task?' : 'Stop this task?'}</AlertDialogTitle>
           <AlertDialogDescription>
             {confirming === 'delete' ? (
               <>
@@ -1241,7 +1247,7 @@ function ConfirmDialog({ run, actions }: { run: ApiRun; actions: RunActions }) {
               actions.setConfirming(null)
             }}
           >
-            {confirming === 'delete' ? 'Delete' : 'Cancel the run'}
+            {confirming === 'delete' ? 'Delete' : 'Stop the run'}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -1249,40 +1255,41 @@ function ConfirmDialog({ run, actions }: { run: ApiRun; actions: RunActions }) {
   )
 }
 
-/** "take over interactively: cd … && claude --resume …" — the legacy `#d-resume` line, now
- *  copyable. Local-machine phrasing; hosted mode (R5, `capabilities.localHandoff`) will swap the
- *  cd-prefix for a bare resume command. */
-function ResumeHintLine({ hint }: { hint: string }) {
+/** The handoff journal (spec 007) as rendered markdown, in a side sheet — fetched only while open. */
+function NotesSheet({
+  runId,
+  open,
+  onOpenChange,
+}: {
+  runId: string
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
   return (
-    <button
-      type="button"
-      data-slot="resume-hint"
-      title="Copy the command"
-      onClick={() => void copyToClipboard(hint, 'Command copied to clipboard.')}
-      className="mb-2 flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left font-mono text-[11px] text-soft-foreground hover:bg-muted hover:text-foreground"
-    >
-      <CopyIcon className="size-3 shrink-0" aria-hidden="true" />
-      <span className="truncate">take over interactively: {hint}</span>
-    </button>
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="flex w-full flex-col gap-0 sm:max-w-xl">
+        <SheetHeader>
+          <SheetTitle>Notes</SheetTitle>
+          <SheetDescription>Handoff notes — what the agent did and what is left.</SheetDescription>
+        </SheetHeader>
+        {open ? <NotesBody runId={runId} /> : null}
+      </SheetContent>
+    </Sheet>
   )
 }
 
-/** The handoff journal (spec 007) as rendered markdown — fetched only while open. */
-function NotesPanel({ runId }: { runId: string }) {
+function NotesBody({ runId }: { runId: string }) {
   const handoff = useRunHandoff(runId)
   return (
-    <div
-      data-slot="notes-panel"
-      className="mb-3 max-h-72 overflow-y-auto rounded-md border border-border bg-card px-4 py-3"
-    >
+    <div data-slot="notes-panel" className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
       {handoff.isPending ? (
-        <p className="text-xs text-soft-foreground">Loading notes…</p>
+        <p className="text-[13px] text-muted-foreground">Loading notes…</p>
       ) : handoff.isError ? (
-        <p className="text-xs text-danger">{handoff.error.message}</p>
+        <p className="text-[13px] text-danger">{handoff.error.message}</p>
       ) : handoff.data.trim().length > 0 ? (
         <Markdown>{handoff.data}</Markdown>
       ) : (
-        <p className="text-xs text-soft-foreground">
+        <p className="text-[13px] text-muted-foreground">
           No notes yet — the handoff file is seeded when the task starts.
         </p>
       )}

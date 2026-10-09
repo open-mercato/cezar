@@ -2,10 +2,10 @@ import { DashboardAutomations } from './automations'
 import { AutomationOutcomes, BackendComparison } from './insights'
 import { Overview } from './overview'
 import { useContext, useEffect, useRef, useState } from 'react'
-import { Link, useLocation, useSearchParams } from 'react-router'
-import { LayoutDashboardIcon, SlidersHorizontalIcon } from 'lucide-react'
+import { useLocation, useNavigate, useSearchParams } from 'react-router'
+import { ChevronRightIcon, InboxIcon, LayoutDashboardIcon, SlidersHorizontalIcon } from 'lucide-react'
 import { StatusDot } from '@/components/status-dot'
-import { DisclosureChevron, disclosureSummary, widgetHeader, widgetHeading } from './presentation'
+import { DisclosureChevron, disclosureSummary, Notice, WidgetEmpty, WidgetSkeleton, widgetHeader, widgetHeading, widgetMeta } from './presentation'
 import type {
   DashboardFeed,
   DashboardGroup,
@@ -15,6 +15,13 @@ import { useDashboard, useDashboardTelemetry } from '@/api/dashboard'
 import { useDashboardLive } from '@/api/dashboard-live'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Page, PageBody, PageHeader } from '@/components/page'
+import { useDashboardFilter } from './url-filter'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   Sheet,
@@ -60,6 +67,10 @@ export function DashboardRoute() {
 function DashboardView({ entryKey }: { entryKey: string }) {
   const location = useLocation()
   const [search, setSearch] = useSearchParams()
+  const navigate = useNavigate()
+  // Header period control: the same URL keys the Overview and Automation outcomes modules read.
+  const [overviewPeriod, setOverviewPeriod] = useDashboardFilter('period', ['7d', '30d'] as const, '7d')
+  const [automationsPeriod, setAutomationsPeriod] = useDashboardFilter('automations', ['7d', '30d'] as const, '7d')
   const restored = useRef(readEntry(entryKey)).current
   const [questions, setQuestions] = useState(restored?.questions ?? 0)
   const [reviews, setReviews] = useState(restored?.reviews ?? 0)
@@ -212,130 +223,163 @@ function DashboardView({ entryKey }: { entryKey: string }) {
     setPanel(group)
   }
   const count = query.data ? query.data.counts.questions + query.data.counts.reviews : 0
+  const periodControl =
+    view === 'overview'
+      ? { label: 'Outcomes period', value: overviewPeriod, set: setOverviewPeriod }
+      : view === 'automations'
+        ? { label: 'Launched', value: automationsPeriod, set: setAutomationsPeriod }
+        : null
   return (
     <DashboardEntryContext.Provider value={entryKey}>
       <DashboardReconciledContext.Provider
         value={!restored || (!query.isFetching && !query.isError)}
       >
-        <div
-          ref={root}
-          data-route="dashboard"
-          className="mx-auto w-full max-w-[1440px] space-y-6 p-4 md:px-8 md:py-7"
-        >
-          <header className="flex flex-wrap items-end justify-between gap-4">
-            <div className="min-w-0">
-              <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
-              <p className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-                Across your workspace · Includes subtasks
-                <span
+        <Page ref={root} width="wide" data-route="dashboard">
+          <PageHeader
+            title={
+              <span className="flex items-center gap-2.5">
+                Dashboard
+                <Badge
                   data-export-exclude
-                  className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[10.5px] uppercase tracking-[0.1em]"
+                  variant="outline"
+                  className="gap-1.5 font-normal text-muted-foreground"
                 >
                   <StatusDot tone={live.connected ? 'success' : 'neutral'} pulse={live.connected} />
                   {live.connected ? 'Live' : 'Offline'}
-                </span>
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <DashboardExportMenu dashboard={root} />
-              <Popover open={customizeOpen} onOpenChange={setCustomizeOpen}>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" className="min-h-11">
-                    <SlidersHorizontalIcon className="size-4" />
-                    Customize
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent
-                  align="end"
-                  className="max-h-[min(32rem,80dvh)] max-w-[calc(100vw-2rem)] overflow-y-auto"
-                >
-                  <p className="mb-3 text-sm font-medium">Optional modules in this view</p>
-                  {viewTiles.map((key) => (
-                    <label key={key} className="flex min-h-11 items-center gap-3 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={savedTiles[key]}
-                        disabled={!preferences.ready}
-                        onChange={(e) =>
-                          preferences.setTiles({ ...savedTiles, [key]: e.target.checked })
-                        }
-                      />
-                      {
-                        {
-                          automations: 'Automations',
-                          fleet: 'Queue & scheduling',
-                          needsYou: 'Needs you',
-                          recent: 'Recent results & GitHub',
-                          usage: 'Usage & cost',
-                          trends: 'Trends',
-                        }[key]
-                      }
-                    </label>
-                  ))}
-                  <p className="mt-3 text-xs text-muted-foreground">
-                    Drag a module by its handle. With keyboard: Space, arrow keys, Space. Escape
-                    cancels.
-                  </p>
-                  {preferences.order.some((id, index) => id !== resetOrder[index]) && (
-                    <Button
-                      variant="ghost"
-                      className="min-h-11"
-                      onClick={() => preferences.setOrder(resetOrder)}
-                    >
-                      Reset {viewLabel} order
-                    </Button>
-                  )}
-                  <p className="my-3 text-xs text-muted-foreground">
-                    Shared across browsers using this workspace
-                  </p>
-                  {viewTiles.some((key) => !savedTiles[key]) && (
-                    <Button
-                      variant="outline"
-                      className="min-h-11"
-                      disabled={!preferences.ready}
-                      onClick={() => {
-                        showViewTiles()
-                        setCustomizeOpen(false)
-                      }}
-                    >
-                      Show all in {viewLabel}
-                    </Button>
-                  )}
-                </PopoverContent>
-              </Popover>
-            </div>
-          </header>
-          <nav aria-label="Dashboard views" className="-mt-2 flex flex-wrap gap-5 border-b">
-            {views.map(([id, label]) => {
-              const next = new URLSearchParams(search)
-              next.set('view', id)
-              next.delete('panel')
-              return (
-                <Button
-                  key={id}
-                  asChild
-                  variant="ghost"
-                  className={`-mb-px min-h-11 rounded-none border-b-2 px-0.5 hover:bg-transparent ${view === id ? 'border-primary text-foreground' : 'border-transparent'}`}
-                >
-                  <Link
-                    aria-current={view === id ? 'page' : undefined}
-                    to={`?${next}`}
-                    replace={view === id}
-                    state={{ ...location.state, dashboardEntry: view === id ? entryKey : undefined }}
+                </Badge>
+              </span>
+            }
+            description="How work is going across every project in this workspace, subtasks included."
+            actions={
+              <>
+                {periodControl && (
+                  <Select
+                    value={periodControl.value}
+                    onValueChange={(value) => periodControl.set(value === '30d' ? '30d' : '7d')}
                   >
-                    {label}
-                  </Link>
-                </Button>
-              )
-            })}
-          </nav>
+                    <SelectTrigger size="sm" aria-label={periodControl.label}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent align="end">
+                      <SelectItem value="7d">Last 7 days</SelectItem>
+                      <SelectItem value="30d">Last 30 days</SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+                <DashboardExportMenu dashboard={root} />
+                <Popover open={customizeOpen} onOpenChange={setCustomizeOpen}>
+                  <PopoverTrigger asChild>
+                    <Button variant="outline" size="sm">
+                      <SlidersHorizontalIcon />
+                      Customize
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    align="end"
+                    className="max-h-[min(32rem,80dvh)] w-80 max-w-[calc(100vw-2rem)] space-y-3 overflow-y-auto"
+                  >
+                    <div className="space-y-0.5">
+                      <p className="text-sm font-medium">Optional modules in this view</p>
+                      <p className="text-xs text-muted-foreground">
+                        Shared across browsers using this workspace
+                      </p>
+                    </div>
+                    <div>
+                      {viewTiles.map((key) => (
+                        <Label
+                          key={key}
+                          className="flex min-h-9 cursor-pointer items-center justify-between gap-3 text-[13px] font-normal no-hover:min-h-11"
+                        >
+                          {
+                            {
+                              automations: 'Automations',
+                              fleet: 'Queue & scheduling',
+                              needsYou: 'Needs you',
+                              recent: 'Recent results & GitHub',
+                              usage: 'Usage & cost',
+                              trends: 'Trends',
+                            }[key]
+                          }
+                          <Switch
+                            checked={savedTiles[key]}
+                            disabled={!preferences.ready}
+                            onCheckedChange={(checked) =>
+                              preferences.setTiles({ ...savedTiles, [key]: checked })
+                            }
+                          />
+                        </Label>
+                      ))}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Drag a module by its handle. With keyboard: Space, arrow keys, Space. Escape
+                      cancels.
+                    </p>
+                    {(preferences.order.some((id, index) => id !== resetOrder[index]) ||
+                      viewTiles.some((key) => !savedTiles[key])) && (
+                      <div className="flex flex-wrap gap-2 border-t pt-3">
+                        {viewTiles.some((key) => !savedTiles[key]) && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={!preferences.ready}
+                            onClick={() => {
+                              showViewTiles()
+                              setCustomizeOpen(false)
+                            }}
+                          >
+                            Show all in {viewLabel}
+                          </Button>
+                        )}
+                        {preferences.order.some((id, index) => id !== resetOrder[index]) && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => preferences.setOrder(resetOrder)}
+                          >
+                            Reset {viewLabel} order
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                  </PopoverContent>
+                </Popover>
+              </>
+            }
+          >
+            <Tabs
+              value={view}
+              activationMode="manual"
+              onValueChange={(id) => {
+                const next = new URLSearchParams(search)
+                next.set('view', id)
+                next.delete('panel')
+                void navigate(`?${next}`, {
+                  state: { ...location.state, dashboardEntry: undefined },
+                })
+              }}
+            >
+              <div className="border-b">
+                <TabsList variant="line" aria-label="Dashboard views" className="-mb-px gap-4 p-0">
+                  {views.map(([id, label]) => (
+                    <TabsTrigger key={id} value={id} className="px-0.5 text-[13.5px] after:bottom-0!">
+                      {label}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </div>
+            </Tabs>
+          </PageHeader>
+          <PageBody className="space-y-6 pt-2">
           {preferences.failed && (
-            <p role="alert" className="text-sm">
-              Layout changed for this session, but could not be saved.{' '}
-              <Button variant="ghost" className="min-h-11" onClick={preferences.retry}>
-                Retry saving
-              </Button>
-            </p>
+            <Notice
+              action={
+                <Button variant="outline" size="sm" onClick={preferences.retry}>
+                  Retry saving
+                </Button>
+              }
+            >
+              Layout changed for this session, but could not be saved.
+            </Notice>
           )}
           {needsSnapshot && !live.connected && query.data && (
             <p role="status" className="text-xs text-muted-foreground">
@@ -343,33 +387,40 @@ function DashboardView({ entryKey }: { entryKey: string }) {
             </p>
           )}
           {needsSnapshot && query.isError && (
-            <p role="alert" className="rounded-md border p-4 text-sm">
+            <Notice
+              action={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    void query.refetch()
+                  }}
+                >
+                  Retry
+                </Button>
+              }
+            >
               Could not refresh dashboard.{' '}
-              {query.data ? 'Showing the last available task state.' : ''}{' '}
-              <Button
-                className="min-h-11"
-                onClick={() => {
-                  void query.refetch()
-                }}
-              >
-                Retry
-              </Button>
-            </p>
+              {query.data ? 'Showing the last available task state.' : ''}
+            </Notice>
           )}
           {/* A notice, not a full-view empty state: Backends & models stays on this view, so
               "everything is hidden" would be false while a populated table sits below it. */}
           {view === 'costs' && !Object.values(tiles).some(Boolean) ? (
-            <p role="status" className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-              <LayoutDashboardIcon className="size-4" aria-hidden="true" />
-              Optional modules in this view are hidden.
-              <Button variant="outline" className="min-h-11" onClick={() => showViewTiles()}>
-                Show all in {viewLabel}
-              </Button>
-            </p>
+            <Notice
+              tone="neutral"
+              action={
+                <Button variant="outline" size="sm" onClick={() => showViewTiles()}>
+                  Show all in {viewLabel}
+                </Button>
+              }
+            >
+              <span className="flex items-center gap-2 text-muted-foreground">
+                <LayoutDashboardIcon className="size-4" aria-hidden="true" />
+                Optional modules in this view are hidden.
+              </span>
+            </Notice>
           ) : null}
-          {query.isPending && (tiles.fleet || tiles.needsYou) && (
-            <p className="text-sm">Loading dashboard…</p>
-          )}
           {needsSnapshot && query.data && (
             <Coverage
               coverage={query.data.coverage}
@@ -380,7 +431,7 @@ function DashboardView({ entryKey }: { entryKey: string }) {
           {view === 'automations' && <AutomationOutcomes />}
           <Overview active={view === 'overview'} onCurrent={open}>
             {(overviewModules) =>
-              preferences.ready && (
+              preferences.ready ? (
                 <DashboardLayout
                   order={preferences.order}
                   onOrder={preferences.setOrder}
@@ -405,12 +456,12 @@ function DashboardView({ entryKey }: { entryKey: string }) {
                           />
                           <div className={widgetHeader}>
                             <h2 className={widgetHeading}>Queue & scheduling</h2>
-                            <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <span className={`inline-flex items-center gap-1.5 ${widgetMeta}`}>
                               <StatusDot tone={live.connected ? 'success' : 'neutral'} />
                               {live.connected ? 'Tasks connected' : 'Tasks disconnected'}
                             </span>
                           </div>
-                          <div className="grid grid-cols-2 divide-x">
+                          <div className="grid grid-cols-2 gap-2 px-3 pt-2 pb-1">
                             {(
                               [
                                 ['queued', 'Queued', query.data.counts.queued],
@@ -419,15 +470,21 @@ function DashboardView({ entryKey }: { entryKey: string }) {
                             ).map(([group, label, total]) => (
                               <button
                                 key={group}
+                                type="button"
                                 data-export-keep
                                 aria-label={`${label}: ${total}`}
-                                className="min-h-24 p-4 text-left transition-colors hover:bg-muted/40 focus-visible:outline-ring"
+                                className="group/stat cursor-pointer rounded-lg px-2 py-2.5 text-left transition-colors outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/40"
                                 onClick={(e) => open(group, e.currentTarget)}
                               >
-                                <span className="block font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+                                <span className="flex items-center justify-between text-[13px] text-muted-foreground">
                                   {label}
+                                  <ChevronRightIcon
+                                    data-export-exclude
+                                    className="size-3.5 text-soft-foreground opacity-0 transition-opacity group-hover/stat:opacity-100 group-focus-visible/stat:opacity-100 no-hover:opacity-100"
+                                    aria-hidden="true"
+                                  />
                                 </span>
-                                <span className="mt-3 block text-3xl font-semibold leading-none tracking-tight tabular-nums">
+                                <span className="mt-2 block text-[28px] leading-none font-semibold tracking-tight tabular-nums">
                                   {total}
                                 </span>
                               </button>
@@ -436,23 +493,25 @@ function DashboardView({ entryKey }: { entryKey: string }) {
                           <details
                             open={technicalOpen}
                             onToggle={(event) => setTechnicalOpen(event.currentTarget.open)}
-                            className="border-t px-4 py-3 text-xs text-muted-foreground"
+                            className="px-5 pt-1 pb-4 text-xs text-muted-foreground"
                           >
-                            <summary className={`${disclosureSummary} py-2`}>
+                            <summary className={`${disclosureSummary} py-1.5 no-hover:min-h-11`}>
                               <DisclosureChevron />
                               Technical details
                             </summary>
-                            <div className="flex flex-wrap gap-x-5 gap-y-2">
+                            <div className="flex flex-col gap-1 pt-1 pl-5">
                               <span>
                                 {query.data.counts.monitoring} monitoring (included in Running)
                               </span>
-                              <span>Agent processes</span>
+                              <span className="pt-1 font-medium text-foreground">Agent processes</span>
                               {technicalOpen && (
                                 <FleetTelemetry running={query.data.counts.running} />
                               )}
                             </div>
                           </details>
                         </Card>
+                      ) : tiles.fleet && query.isPending ? (
+                        <ModuleSkeleton title="Queue & scheduling" />
                       ) : null,
                     needsYou:
                       tiles.needsYou && query.data ? (
@@ -465,6 +524,8 @@ function DashboardView({ entryKey }: { entryKey: string }) {
                             group === 'questions' ? setQuestions(n) : setReviews(n)
                           }
                         />
+                      ) : tiles.needsYou && query.isPending ? (
+                        <ModuleSkeleton title="Needs you" />
                       ) : null,
                     recent: tiles.recent ? (
                       <Feed
@@ -486,10 +547,13 @@ function DashboardView({ entryKey }: { entryKey: string }) {
                     trends: tiles.trends ? <DashboardTrends /> : null,
                   }}
                 />
+              ) : (
+                <WidgetSkeleton label="Loading dashboard…" rows={4} />
               )
             }
           </Overview>
           {view === 'costs' && <BackendComparison />}
+          </PageBody>
           <Sheet
             open={!!panel}
             onOpenChange={(open) => {
@@ -519,31 +583,44 @@ function DashboardView({ entryKey }: { entryKey: string }) {
                 </SheetDescription>
               </SheetHeader>
               {!query.data && query.isPending && (
-                <p className="p-4" role="status">
-                  Loading tasks…
-                </p>
+                <WidgetSkeleton label="Loading tasks…" rows={4} className="p-4" />
               )}
               {!query.data && query.isError && (
-                <p className="p-4" role="alert">
-                  Could not load tasks.{' '}
-                  <Button
-                    className="min-h-11"
-                    onClick={() => {
-                      void query.refetch()
-                    }}
-                  >
-                    Retry
-                  </Button>
-                </p>
+                <Notice
+                  className="m-4"
+                  action={
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        void query.refetch()
+                      }}
+                    >
+                      Retry
+                    </Button>
+                  }
+                >
+                  Could not load tasks.
+                </Notice>
               )}
               {panel && query.data && (
                 <TaskPanel key={panel} snapshot={query.data} group={panel} />
               )}
             </SheetContent>
           </Sheet>
-        </div>
+        </Page>
       </DashboardReconciledContext.Provider>
     </DashboardEntryContext.Provider>
+  )
+}
+function ModuleSkeleton({ title }: { title: string }) {
+  return (
+    <Card className="gap-0 py-0">
+      <div className={widgetHeader}>
+        <h2 className={widgetHeading}>{title}</h2>
+      </div>
+      <WidgetSkeleton label={`Loading ${title}…`} className="px-5 pt-3 pb-5" />
+    </Card>
   )
 }
 function FleetTelemetry({ running }: { running: number }) {
@@ -640,24 +717,34 @@ function TaskPanel({
       <h3 ref={heading} tabIndex={-1} className="sr-only">
         Tasks
       </h3>
-      {query.isPending && <p className="p-4">Loading tasks…</p>}
+      {query.isPending && <WidgetSkeleton label="Loading tasks…" rows={4} className="p-4" />}
       {(query.isError || displaced.isError) && (
-        <p className="p-4" role="alert">
-          Could not check current task state.{' '}
-          <Button
-            className="min-h-11"
-            onClick={() => {
-              void query.refetch()
-              void displaced.refetch()
-            }}
-          >
-            Retry
-          </Button>
-        </p>
+        <Notice
+          className="m-4"
+          action={
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                void query.refetch()
+                void displaced.refetch()
+              }}
+            >
+              Retry
+            </Button>
+          }
+        >
+          Could not check current task state.
+        </Notice>
+      )}
+      {query.data && !staged.rows.length && total === 0 && (
+        <WidgetEmpty icon={InboxIcon} title="No tasks here right now" />
       )}
       {staged.updates > 0 && (
         <Button
-          className="m-4 min-h-11"
+          variant="secondary"
+          size="sm"
+          className="mx-5 my-2"
           onClick={() => {
             staged.show()
             heading.current?.focus()
@@ -681,7 +768,9 @@ function TaskPanel({
       ))}
       {count < total && (
         <Button
-          className="m-4 min-h-11"
+          variant="outline"
+          size="sm"
+          className="mx-5 my-3"
           disabled={query.isFetching}
           onClick={() => setCount((n) => n + 20)}
         >

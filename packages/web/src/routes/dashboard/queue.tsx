@@ -1,5 +1,6 @@
-import { StatusDot } from '@/components/status-dot'
-import { widgetHeader, widgetHeading } from './presentation'
+import { CircleCheck } from 'lucide-react'
+import { Notice, WidgetEmpty, widgetHeader, widgetHeading, widgetMeta } from './presentation'
+import { cn } from '@/lib/utils'
 import { useDashboardLive } from '@/api/dashboard-live'
 import { useRef } from 'react'
 import type { DashboardSnapshot } from '@open-mercato/cezar-api-client'
@@ -24,11 +25,21 @@ export function Queue({
   const live = useDashboardLive()
   return (
     <Card className="min-w-0 gap-0 overflow-hidden py-0">
-      <div className={widgetHeader}>
-        <h2 id="dashboard-needs-you" tabIndex={-1} className={widgetHeading}>
-          Needs you · {snapshot.counts.questions + snapshot.counts.reviews}
+      <div className={`${widgetHeader} pb-3`}>
+        <h2 id="dashboard-needs-you" tabIndex={-1} className={`${widgetHeading} outline-none`}>
+          Needs you{' '}
+          <span
+            className={cn(
+              'font-normal tabular-nums',
+              snapshot.counts.questions + snapshot.counts.reviews
+                ? 'text-violet'
+                : 'text-soft-foreground',
+            )}
+          >
+            · {snapshot.counts.questions + snapshot.counts.reviews}
+          </span>
         </h2>
-        <p className="font-mono text-[11px] text-soft-foreground">
+        <p className={widgetMeta}>
           {snapshot.counts.questions} questions · {snapshot.counts.reviews} reviews
         </p>
       </div>
@@ -36,10 +47,7 @@ export function Queue({
       live.connected &&
       snapshot.counts.questions + snapshot.counts.reviews === 0 &&
       snapshot.coverage.projects.every((p) => p.state === 'complete') ? (
-        <p className="flex items-center gap-2.5 px-4 py-8 text-sm text-muted-foreground">
-          <StatusDot tone="success" />
-          All caught up — no tasks need your input
-        </p>
+        <WidgetEmpty icon={CircleCheck} title="All caught up — no tasks need your input" />
       ) : null}
       <QueueSection snapshot={snapshot} group="questions" count={questions} more={more} />
       <QueueSection snapshot={snapshot} group="reviews" count={reviews} more={more} />
@@ -75,14 +83,15 @@ function QueueSection({
       <h3
         ref={heading}
         tabIndex={-1}
-        className="border-b bg-card-2 px-4 py-2 font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground"
+        className="border-t border-border/70 px-5 pt-3 pb-1 text-[13px] font-medium text-muted-foreground outline-none"
       >
         {group === 'questions' ? 'Questions' : 'Reviews'} · {initial.total}
       </h3>
       {staged.updates > 0 && (
         <Button
-          variant="ghost"
-          className="m-2 min-h-11"
+          variant="secondary"
+          size="sm"
+          className="mx-5 my-2"
           onClick={() => {
             staged.show()
             heading.current?.focus()
@@ -105,24 +114,29 @@ function QueueSection({
         />
       ))}
       {(query.isError || displaced.isError) && (
-        <p role="alert" className="p-4 text-sm">
-          Could not check current task state.{' '}
-          <Button
-            variant="ghost"
-            className="min-h-11"
-            onClick={() => {
-              void query.refetch()
-              void displaced.refetch()
-            }}
-          >
-            Retry
-          </Button>
-        </p>
+        <Notice
+          className="m-3"
+          action={
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                void query.refetch()
+                void displaced.refetch()
+              }}
+            >
+              Retry
+            </Button>
+          }
+        >
+          Could not check current task state.
+        </Notice>
       )}
       {wanted < initial.total && (
         <Button
           variant="ghost"
-          className="m-2 min-h-11"
+          size="sm"
+          className="mx-3 my-2 text-muted-foreground"
           disabled={query.isFetching}
           onClick={() => more(group, wanted + Math.min(20, initial.total - wanted))}
         >
