@@ -27,6 +27,9 @@ Excluded: #1267/#1300/#1301/#1325 already have fix PRs; #1308 depends on unmerge
 Parent implementation, merging into main, duplicate PRs, changing automation definitions, speculative fixes. Parent only orchestrates; each child owns its plan, implementation, tests and PR using om-auto-create-pr. Children start their fix branches from origin/main so this orchestration document does not contaminate their PRs. At most eight children overall, five planned implementations plus one final review.
 
 ## Audit updates
+- #1338: draft PR #1341, af633215f8533fd446521ce19acca728dcb900b5. Parent rejected initial import-only red proof; child replaced it with runnable spawn-boundary regression. Isolated typecheck/build/unit/package pass; native Windows and final review remain.
+- #1222: draft PR #1342, 4c5fb13f4add2ee74eac841099d235c93651734e at inspection. Isolated dependency installation fixed initial build errors. Current-head CI queued at parent check; prior green is not proof for new head.
+- #926: sixth child 63c5efc0-5aa8-4374-baee-5328c8d2d6b6 dispatched; UI/test writes only while SSE sibling holds server.ts. Investigations may read server; edits need explicit scope release. Final review reserved as seventh task.
 - #1077: no action needed; PR #1127 merged as e0c372e2 and is an ancestor of main. Child identified legacy revision-bearing receipt keys, demonstrated pre-fix red and current 38-test green. Parent inspected normalization diff and confirmed merge/ancestry; independent tests being rerun. Replacement #1213 owns planner module/tests only. Six implementation/investigation children plus one final review now planned, within limit eight.
 
 ## Risks
@@ -38,7 +41,7 @@ Parent implementation, merging into main, duplicate PRs, changing automation def
 
 ### Phase 1: Audit and dispatch
 - [x] 1.1 Audit live issues, coverage and claims; assign disjoint scopes.
-- [ ] 1.2 Dispatch four Codex gpt-5.6-luna children, then queued-attachment child when server scope is free.
+- [x] 1.2 Dispatch four Codex gpt-5.6-luna children, then queued-attachment child when server scope is free. — #926 dispatched with UI-only writes pending server release
 
 ### Phase 2: Verify and review
 - [ ] 2.1 Validate child diffs, PRs and reported tests; retain honest partial/blocker outcomes.
