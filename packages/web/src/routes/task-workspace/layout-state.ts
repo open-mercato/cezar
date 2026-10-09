@@ -624,6 +624,43 @@ export function openDeepLink(state: WorkspaceState, view: ViewId): WorkspaceStat
   return addLayout(state, view, viewLabel(view))
 }
 
+/**
+ * Where a view asked for from ANOTHER window should appear — a file path clicked in the chat —
+ * and the state that puts it there. "Beside what I am looking at" is the whole rule:
+ *
+ *  - the active layout already shows that view: there;
+ *  - it is a layout the user built and has room: a new window at its right;
+ *  - otherwise (a fixed card, which stays the one view it stands for, or a full layout): the
+ *    two-window layout named after the pair — `Chat + Files` — made the first time, reused after.
+ */
+export function openBeside(
+  state: WorkspaceState,
+  view: ViewId,
+): { state: WorkspaceState; name: string; index: number } {
+  const current = activeLayout(state)
+  if (current) {
+    const existing = current.columns.findIndex((column) => column.view === view)
+    if (existing >= 0) return { state, name: current.name, index: existing }
+    if (fixedViewOf(current) === null && current.columns.length > 0 && current.columns.length < MAX_COLUMNS) {
+      return { state: addColumn(state, current.name, view), name: current.name, index: current.columns.length }
+    }
+  }
+  const from = current?.columns[0]?.view ?? 'session'
+  const name = `${viewLabel(from)} + ${viewLabel(view)}`
+  const pair = findLayout(state, name)
+  const index = pair ? pair.columns.findIndex((column) => column.view === view) : -1
+  if (pair && index >= 0) return { state: selectLayout(state, name), name, index }
+  const made = uniqueName(name, state.layouts)
+  return {
+    state: {
+      layouts: [...state.layouts, { name: made, columns: withEqualWidths([newColumn(from), newColumn(view)]) }],
+      active: made,
+    },
+    name: made,
+    index: 1,
+  }
+}
+
 /** How many cards the strip paints before the rest fold into a `Pozostałe…` menu (confirmed
  *  decision, 2026-10-07: "Maksymalnie 5-6, potem 'Pozostali...' dropdown"). */
 export const MAX_VISIBLE_CARDS = 6

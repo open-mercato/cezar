@@ -27,6 +27,8 @@ import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
 import { Link } from '@/lib/project-router'
 import { isUnread } from '@/lib/read-state'
+import { rememberViewState } from '@/lib/view-memory'
+import { isEditableTarget } from '@/lib/use-command-shortcut'
 
 import { ChangesView } from '../task-git/task-changes'
 import { CommitsView } from '../task-git/task-commits'
@@ -333,7 +335,7 @@ function WorkspaceView({
           data-action="toggle-terminal"
           aria-label={drawerOpen ? 'Hide terminal' : 'Show terminal'}
           aria-pressed={drawerOpen}
-          title={drawerOpen ? 'Hide terminal — processes keep running' : 'Terminal'}
+          title={drawerOpen ? 'Hide terminal — processes keep running (`)' : 'Terminal (`)'}
           className={drawerOpen ? 'bg-muted text-foreground' : 'text-muted-foreground'}
           onClick={() => updateDrawer({ open: !drawerOpen })}
         >
@@ -342,6 +344,73 @@ function WorkspaceView({
       ) : null,
     [terminalAllowed, drawerOpen, updateDrawer],
   )
+  /**
+   * The workspace's keys. BARE keys, the `c`-to-create convention the cockpit already follows
+   * (`useKeyShortcut`), and for the same reason: the chords one would reach for are the browser's.
+   * ⌘1…⌘9 switch BROWSER tabs, ⌘[ / ⌘] are back and forward, ⌘F is find, ⌘\ and ⌘/ belong to
+   * extensions — and a page cannot reliably claim any of them. A bare key collides with nothing,
+   * as long as it never fires while someone is typing: a focused input, the composer, the
+   * terminal (xterm types into a textarea) all swallow it, and so does any open dialog or menu.
+   *
+   *   1…9   the nth card on the strip        [ / ]   previous / next card
+   *   f     full view on and off              \       split the last window (a layout you built)
+   *   /     focus the composer                `       show or hide the terminal
+   *
+   * Taken elsewhere and left alone: `c` and ⌘N (new task), ⌘K (palette), ⌘B (sidebar),
+   * ⌥+letter (quick replies), ⌃⇧` (new terminal tab), Escape (leave full view).
+   */
+  const stripOrder = useMemo(
+    () => [
+      ...fixedViews.map((view) => ({ select: () => openDeepLink(view), active: fixedActive === view })),
+      ...cardLayouts.map((layout) => ({
+        select: () => pickLayout(layout.name),
+        active: fixedActive === null && layout.name === layouts.state.active,
+      })),
+    ],
+    [fixedViews, cardLayouts, fixedActive, layouts.state.active, openDeepLink, pickLayout],
+  )
+  const keys = useRef({ stripOrder, toggleMaximized, terminalAllowed, drawerOpen, updateDrawer })
+  keys.current = { stripOrder, toggleMaximized, terminalAllowed, drawerOpen, updateDrawer }
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey || event.repeat || event.defaultPrevented) return
+      if (isEditableTarget(event.target)) return
+      // Something modal is up: its keys are its own.
+      if (document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) return
+      const now = keys.current
+      const stage = document.querySelector<HTMLElement>('[data-slot="workspace-stage"]')
+      const at = now.stripOrder.findIndex((entry) => entry.active)
+      const step = (delta: number) => {
+        if (now.stripOrder.length === 0) return
+        const next = (Math.max(at, 0) + delta + now.stripOrder.length) % now.stripOrder.length
+        now.stripOrder[next]!.select()
+      }
+      if (/^[1-9]$/.test(event.key)) {
+        const entry = now.stripOrder[Number(event.key) - 1]
+        if (!entry) return
+        entry.select()
+      } else if (event.key === '[') step(-1)
+      else if (event.key === ']') step(1)
+      else if (event.key === 'f' || event.key === 'F') now.toggleMaximized()
+      else if (event.key === '\\') {
+        const buttons = stage?.querySelectorAll<HTMLButtonElement>('[data-action="split-view"]:not(:disabled)')
+        const last = buttons?.[buttons.length - 1]
+        if (!last) return
+        last.click()
+      } else if (event.key === '/') {
+        const input = stage?.querySelector<HTMLElement>('[data-slot="composer"] textarea, [data-slot="composer-input"]')
+        if (!input) return
+        input.focus()
+      } else if (event.key === '`') {
+        if (!now.terminalAllowed) return
+        now.updateDrawer({ open: !now.drawerOpen })
+      } else return
+      event.preventDefault()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   // Full view closes the strip: the last control, set apart by a rule and drawn as a real button
   // so it is found without hunting among the ghost icons beside it.
   const maximizeButton = useMemo(
@@ -352,12 +421,13 @@ function WorkspaceView({
           variant="outline"
           size="sm"
           data-action="maximize-layout"
-          title="Full view — hide everything but this layout"
+          aria-label="Full view"
+          title="Full view — hide everything but this layout (F)"
           className="shrink-0 text-foreground"
           onClick={toggleMaximized}
         >
           <Maximize2Icon aria-hidden="true" />
-          Full view
+          <span className="@max-6xl/strip:hidden">Full view</span>
         </Button>
       </>
     ),
@@ -405,6 +475,18 @@ function WorkspaceView({
     [layouts.addColumn, layouts.closeColumn, requestColumnView, layouts.resizeColumns, layouts.moveColumn],
   )
 
+  // A file or commit named in the chat: put its view beside the chat, then tell THAT window —
+  // by the same key it remembers its selection under — what to show.
+  const openBeside = layouts.openBeside
+  const openReference = useCallback(
+    (reference: ThreadReference) => {
+      const placed = openBeside(reference.view)
+      if (!placed) return
+      rememberViewState(`${run.id}:${placed.name}:${placed.index}:${reference.view}`, reference.value)
+    },
+    [openBeside, run.id],
+  )
+
   /**
    * The LAYOUT is part of each column's memory key, not just its index.
    *
@@ -423,7 +505,7 @@ function WorkspaceView({
     (view: ViewId, index: number, column: WorkspaceColumn) => {
       switch (view) {
         case 'session':
-          return <ConversationColumn run={run} onMarkedUnread={onMarkedUnread} />
+          return <ConversationColumn run={run} onMarkedUnread={onMarkedUnread} onOpenReference={openReference} />
         case 'changes':
           return <ChangesView run={run} embedded stateKey={`${run.id}:${activeName}:${index}:changes`} />
         case 'commits':
@@ -456,7 +538,7 @@ function WorkspaceView({
           )
       }
     },
-    [activeName, onMarkedUnread, run, setColumnBrowser],
+    [activeName, onMarkedUnread, run, setColumnBrowser, openReference],
   )
 
   return (
@@ -500,7 +582,7 @@ function WorkspaceView({
             <>
               <RunHeader run={run} onMarkedUnread={markedUnread} mode="overview" trailingEnd={fullViewExit} />
               <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-                <ConversationColumn run={run} onMarkedUnread={onMarkedUnread} />
+                <ConversationColumn run={run} onMarkedUnread={onMarkedUnread} onOpenReference={openReference} />
               </div>
             </>
           ) : !layouts.ready ? (
@@ -588,9 +670,11 @@ function WorkspaceView({
 function ConversationColumn({
   run,
   onMarkedUnread,
+  onOpenReference,
 }: {
   run: ApiRun
   onMarkedUnread: (runId: string) => void
+  onOpenReference?: (reference: ThreadReference) => void
 }) {
   const history = useRunHistory(run.id)
   const thread = useMemo(
@@ -608,14 +692,77 @@ function ConversationColumn({
 
   if (history.isPending) return <ThreadLoading />
 
+  /*
+   * A file path or a commit the agent names in its answer opens in a window beside the chat.
+   *
+   * By delegation, on the inline code the markdown already renders, rather than by a component of
+   * our own inside it: Streamdown's `code` renders fences and spans alike, and replacing it to
+   * reach the spans would put this in charge of every code block in the thread. A span is
+   * classified the first time the pointer reaches it and marked `data-open`, which is what the
+   * stylesheet draws as a link — so only the spans that DO open something ever look like it.
+   */
+  const target = (event: { target: EventTarget | null }) => {
+    const node = event.target instanceof Element ? event.target.closest('[data-streamdown="inline-code"]') : null
+    if (!(node instanceof HTMLElement) || node.closest('[data-slot="user-message"]')) return null
+    const reference = classifyReference(node.textContent ?? '', run.worktreePath ?? undefined)
+    return reference ? { node, reference } : null
+  }
+
   return (
-    <ThreadView
-      run={run}
-      thread={thread}
-      currentThread={currentThread}
-      history={history}
-      onMarkedUnread={onMarkedUnread}
-      embedded
-    />
+    <div
+      className="contents"
+      onPointerOver={(event) => {
+        const hit = target(event)
+        if (hit && !hit.node.dataset.open) {
+          hit.node.dataset.open = hit.reference.view
+          hit.node.title = hit.reference.view === 'files' ? 'Open in Files' : 'Open in Commits'
+        }
+      }}
+      onClick={(event) => {
+        if (!onOpenReference || window.getSelection()?.toString()) return
+        const hit = target(event)
+        if (hit) onOpenReference(hit.reference)
+      }}
+    >
+      <ThreadView
+        run={run}
+        thread={thread}
+        currentThread={currentThread}
+        history={history}
+        onMarkedUnread={onMarkedUnread}
+        embedded
+      />
+    </div>
   )
+}
+
+interface ThreadReference {
+  view: 'files' | 'commits'
+  /** A worktree-relative path, or a commit sha as written. */
+  value: string
+}
+
+/**
+ * Is this inline code a file of the task or one of its commits?
+ *
+ * Deliberately narrow — a miss costs nothing, a false hit makes plain code look like a link:
+ *  - a commit is 7–40 hex digits and nothing else, with at least one letter and one digit in it
+ *    (so `1234567` and `deadbeef`-style words are not claimed on a guess of either kind alone);
+ *  - a file is one whitespace-free path ending in an extension, optionally `:line[:col]`. A path
+ *    under this task's worktree is made relative to it; any other absolute path is somewhere this
+ *    cockpit cannot show, and is left alone.
+ */
+function classifyReference(raw: string, worktree?: string): ThreadReference | null {
+  const text = raw.trim()
+  if (text.length < 3 || text.length > 260 || /\s/.test(text)) return null
+  if (/^[0-9a-f]{7,40}$/.test(text) && /[a-f]/.test(text) && /[0-9]/.test(text)) return { view: 'commits', value: text }
+  let path = text.replace(/:\d+(?::\d+)?$/, '')
+  if (worktree && path.startsWith(`${worktree}/`)) path = path.slice(worktree.length + 1)
+  if (path.startsWith('/') || path.startsWith('~') || /^[a-z]+:\/\//i.test(path)) return null
+  path = path.replace(/^\.\//, '')
+  if (path.startsWith('..')) return null
+  if (!/^[\w@.+\-()[\]]+(?:\/[\w@.+\-()[\]]+)*\.[A-Za-z][A-Za-z0-9]{0,7}$/.test(path)) return null
+  // `v1.2`, `e.g`, `foo.bar` in prose: without a directory, only believe a real-looking filename.
+  if (!path.includes('/') && !/\.(?:tsx?|jsx?|mjs|cjs|json|md|mdx|css|scss|html|ya?ml|toml|py|rs|go|rb|java|kt|swift|sh|sql|lock|txt|env|svg|png|jpe?g)$/i.test(path)) return null
+  return { view: 'files', value: path }
 }

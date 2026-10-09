@@ -5,6 +5,7 @@ import { getRunLayouts, putRunLayouts } from '@/api/client'
 import {
   addColumn as addColumnTo,
   addLayout as addLayoutTo,
+  openBeside as openBesideOf,
   activeLayout as activeLayoutOf,
   closeColumn as closeColumnOf,
   closeLayout as closeLayoutOf,
@@ -67,6 +68,9 @@ export interface WorkspaceLayouts {
    *  layout has one and adds one otherwise; returns false when there was no room, so the caller
    *  can say so rather than appearing to do nothing. */
   openInBrowser: (url: string) => boolean
+  /** Show `view` beside what is on screen (see `openBeside`), and say where it landed so the
+   *  caller can tell that window what to show. `null` before the layouts have loaded. */
+  openBeside: (view: ViewId) => { name: string; index: number } | null
   /** The deep-link entry (`/tasks/:id/changes` and friends) — idempotent, so a refresh does not
    *  pile up cards. Called from an effect by the route, not during render. */
   openDeepLink: (view: ViewId) => void
@@ -318,6 +322,14 @@ export function useWorkspaceLayouts(taskId: string): WorkspaceLayouts {
         return setColumnBrowserOf(added, grown.name, grown.columns.length - 1, { tabs: [url], active: 0 })
       })
       return true
+    }, []),
+    openBeside: useCallback((view: ViewId) => {
+      // Answered from the COMMITTED state, for the reason `openInBrowser` gives above.
+      const committed = latest.current?.state ?? loaded.current.state
+      if (!committed) return null
+      const placed = openBesideOf(committed, view)
+      setState((current) => openBesideOf(current, view).state)
+      return { name: placed.name, index: placed.index }
     }, []),
   }
 }

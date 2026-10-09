@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 /**
  * State that survives a remount, keyed by whatever identifies the view instance.
@@ -16,6 +16,19 @@ import { useCallback, useRef, useState } from 'react'
  * chose, and a reload legitimately starts fresh.
  */
 const memory = new Map<string, unknown>()
+
+/** Who is showing a key right now — so a value written from OUTSIDE the view reaches it. */
+const listeners = new Map<string, Set<(value: unknown) => void>>()
+
+/**
+ * Write a remembered value from outside the view that owns it — "open this file in the Files
+ * window" said by another window. A view that is mounted takes it at once; one that mounts later
+ * reads it like any other remembered value.
+ */
+export function rememberViewState(key: string, value: unknown): void {
+  memory.set(key, value)
+  for (const listener of listeners.get(key) ?? []) listener(value)
+}
 
 /** Forget everything remembered for a key prefix — for a task that was deleted. */
 export function forgetViewMemory(prefix: string): void {
@@ -44,6 +57,17 @@ export function useRememberedState<T>(key: string | undefined, initial: T): [T, 
     seen.current = key
     setValue(read())
   }
+  useEffect(() => {
+    if (key === undefined) return
+    const listener = (next: unknown) => setValue(next as T)
+    const set = listeners.get(key) ?? new Set()
+    set.add(listener)
+    listeners.set(key, set)
+    return () => {
+      set.delete(listener)
+      if (set.size === 0) listeners.delete(key)
+    }
+  }, [key])
   const set = useCallback(
     (next: T) => {
       if (key !== undefined) memory.set(key, next)

@@ -631,3 +631,16 @@
 [data-slot='terminal-surface'] .xterm {
   height: 100%;
 }
+
+/* A file path or commit sha in the agent's answer that opens in a window beside the chat. Marked
+   by the workspace the first time the pointer reaches it (`task-workspace.tsx`). */
+.thread-markdown [data-streamdown='inline-code'][data-open] {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+}
+.thread-markdown [data-streamdown='inline-code'][data-open]:hover {
+  color: var(--foreground);
+  text-decoration-style: solid;
+}
