@@ -17,7 +17,7 @@ Risks: prompt content changes only on catalogs over the documented threshold; ra
 
 > Convention: `- [ ]` pending, `- [x]` done. Append — <commit sha> when a step lands.
 
-- [x] 1. Measure current catalog construction and verify issue coverage
-- [ ] 2. Implement bounded catalog builder
-- [ ] 3. Add regression tests
+- [x] 1. Measure current catalog construction and verify issue coverage — 850ef664
+- [x] 2. Implement bounded catalog builder
+- [x] 3. Add regression tests
 - [ ] 4. Run validation, review, and report
