@@ -1,18 +1,10 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArchiveIcon,
-  ArrowUpRightIcon,
   CheckCheckIcon,
-  CircleAlertIcon,
-  CircleCheckIcon,
   EllipsisIcon,
-  FilterXIcon,
-  HandIcon,
   ListChecksIcon,
-  LoaderIcon,
   PencilIcon,
-  PinIcon,
-  PinOffIcon,
   PlusIcon,
   ScaleIcon,
   SearchXIcon,
@@ -38,7 +30,7 @@ import {
   TaskStatusBadge,
   useListView,
 } from '@/components/list-view'
-import { Page, PageBody, PageHeader } from '@/components/page'
+import { Page, PageBody, PageHeader, PageToolbar } from '@/components/page'
 import { PinToggle } from '@/components/pin-toggle'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
@@ -46,7 +38,6 @@ import { StatusDot } from '@/components/status-dot'
 import { SubtaskToggle } from '@/components/subtask-toggle'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -56,11 +47,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemMedia, ItemTitle } from '@/components/ui/item'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from '@/components/ui/toaster'
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { deriveAttention } from '@/lib/attention'
 import { shortAge } from '@/lib/format'
@@ -138,21 +127,6 @@ const HEAD_LABELS: Partial<Record<TaskColumnId, string>> = {
 type Shown = (id: TaskColumnId) => boolean
 
 /**
- * The four questions the page answers before you read a single row — and, clicked, the four
- * cuts of the list. One grammar with the rows: the same `deriveAttention` decides both.
- */
-type Focus = 'needs-you' | 'in-progress' | 'finished' | 'failed'
-
-function focusOf(run: RunRecord): Focus | null {
-  const { bucket } = deriveAttention(run)
-  if (bucket === 'waiting' || bucket === 'permission') return 'needs-you'
-  if (bucket === 'error') return 'failed'
-  if (bucket === 'running' || run.status === 'queued') return 'in-progress'
-  if (run.status === 'done') return 'finished'
-  return null
-}
-
-/**
  * The Tasks overview — a project's home (`/`). The Active/Archived switch is the *same state*
  * as the sidebar quick-list's.
  *
@@ -210,31 +184,13 @@ export function TasksOverview({
       if (!next.delete(id)) next.add(id)
       return next
     })
-  // Which summary card is narrowing the list, if any. Local: it is a way of looking, not a setting.
-  const [focus, setFocus] = React.useState<Focus | null>(null)
   const all = runs ?? []
   const counts = listCounts(all)
-  // The cards count what is on the Active side; Archived is history, and has no cuts.
-  const live = all.filter((run) => !run.archived)
-  const tally = { 'needs-you': 0, 'in-progress': 0, finished: 0, failed: 0 } satisfies Record<Focus, number>
-  let queued = 0
-  // Unread among the FINISHED ones only: the card's note has to be about the card's own number.
-  let finishedUnread = 0
-  for (const run of live) {
-    const kind = focusOf(run)
-    if (kind) tally[kind] += 1
-    if (run.status === 'queued') queued += 1
-    if (kind === 'finished' && isUnread(run)) finishedUnread += 1
-  }
-  const activeFocus = view === 'active' ? focus : null
-  const matching = filterRuns(all, query)
-  const visible = sortRuns(activeFocus ? matching.filter((run) => focusOf(run) === activeFocus) : matching, view)
+  const visible = sortRuns(filterRuns(all, query), view)
   // A live search overrides the fold wholesale: a match the accordion hid would read as a miss.
   const searching = query.trim() !== ''
   // Dispatched children nest under the task that ordered them. One derivation, both layouts.
   const rows = taskTreeRows(visible, (id) => searching || expandedSubtasks.has(id))
-  // Tasks a person started, as opposed to the ones those tasks dispatched — the footer counts both.
-  const roots = taskTreeRows(visible, () => true).filter((node) => node.depth === 0).length
   // Positions come from the full list, never the filtered one: a search must not renumber the
   // queue the engine is actually going to drain.
   const positions = queuePositions(all)
@@ -263,347 +219,210 @@ export function TasksOverview({
     <Page data-route="tasks">
       <PageHeader
         title="Tasks"
-        description="What agents are doing in this project, and what is waiting on you."
+        description={runs === undefined ? 'Everything agents are working on in this project.' : summaryOf(all)}
         actions={
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="icon" aria-label="List actions" data-slot="list-actions">
-                <EllipsisIcon aria-hidden="true" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-52">
-              {/* Disabled rather than hidden when there is nothing to clear or sweep, so the
-                  menu always says what it can do. */}
-              <DropdownMenuItem data-slot="mark-all-read" disabled={unread === 0} onSelect={onMarkAllRead}>
-                <CheckCheckIcon aria-hidden="true" />
-                Mark all read
-                {unread > 0 ? <MenuCount>{unread}</MenuCount> : null}
-              </DropdownMenuItem>
-              <DropdownMenuItem data-slot="archive-finished" disabled={!canArchiveFinished} onSelect={onArchiveFinished}>
-                <ArchiveIcon aria-hidden="true" />
-                Archive finished
-                {canArchiveFinished ? <MenuCount>{finished}</MenuCount> : null}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <>
+            {/* No New-task button here: the sidebar's is the screen's one accent CTA. */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="icon" aria-label="List actions" data-slot="list-actions">
+                  <EllipsisIcon aria-hidden="true" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-52">
+                {/* Disabled rather than hidden when there is nothing to clear or sweep, so the
+                    menu always says what it can do. */}
+                <DropdownMenuItem data-slot="mark-all-read" disabled={unread === 0} onSelect={onMarkAllRead}>
+                  <CheckCheckIcon aria-hidden="true" />
+                  Mark all read
+                  {unread > 0 ? <MenuCount>{unread}</MenuCount> : null}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  data-slot="archive-finished"
+                  disabled={!canArchiveFinished}
+                  onSelect={onArchiveFinished}
+                >
+                  <ArchiveIcon aria-hidden="true" />
+                  Archive finished
+                  {canArchiveFinished ? <MenuCount>{finished}</MenuCount> : null}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </>
         }
       />
 
-      <PageBody className="flex flex-col gap-6">
-        {/* The summary: four numbers, each a way to cut the list below. */}
-        <ToggleGroup
-          type="single"
-          value={activeFocus ?? ''}
-          onValueChange={(next) => {
-            setFocus(next === '' ? null : (next as Focus))
-            // A card describes the Active side; picking one from Archived goes there.
-            if (next !== '' && view !== 'active') onViewChange('active')
-          }}
-          spacing={4}
-          aria-label="Filter tasks by state"
-          data-slot="task-summary"
-          className="grid w-full grid-cols-2 xl:grid-cols-4"
-        >
-          <SummaryCard
-            value="needs-you"
-            icon={<HandIcon />}
-            label="Needs you"
-            count={runs === undefined ? null : tally['needs-you']}
-            hint={tally['needs-you'] > 0 ? 'Waiting for a reply or a review' : 'All caught up'}
-            tone={tally['needs-you'] > 0 ? 'violet' : 'neutral'}
-          />
-          <SummaryCard
-            value="in-progress"
-            icon={<LoaderIcon />}
-            label="In progress"
-            count={runs === undefined ? null : tally['in-progress']}
-            hint={queued > 0 ? `${queued} queued` : tally['in-progress'] > 0 ? 'Agents are working' : 'Nothing running'}
-          />
-          <SummaryCard
-            value="finished"
-            icon={<CircleCheckIcon />}
-            label="Finished"
-            count={runs === undefined ? null : tally.finished}
-            hint={finishedUnread > 0 ? `${finishedUnread} not opened yet` : 'Ready to review or archive'}
-            badge={finishedUnread > 0 ? `${finishedUnread} new` : undefined}
-          />
-          <SummaryCard
-            value="failed"
-            icon={<CircleAlertIcon />}
-            label="Failed"
-            count={runs === undefined ? null : tally.failed}
-            hint={tally.failed > 0 ? 'Open one to see why' : 'No failures'}
-            tone={tally.failed > 0 ? 'danger' : 'neutral'}
-          />
-        </ToggleGroup>
+      <PageToolbar>
+        <ListViewTabs view={view} onChange={onViewChange} counts={counts} />
+        <div className="flex-1" />
+        <ListSearch value={query} onChange={setQuery} placeholder="Search tasks…" label="Search tasks" />
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" data-slot="display-menu" className="hidden md:inline-flex">
+              <SlidersHorizontalIcon aria-hidden="true" />
+              Display
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-56">
+            <DropdownMenuLabel>Under the title</DropdownMenuLabel>
+            {DETAIL_IDS.filter((id) => available.has(id)).map((id) => (
+              <DisplayItem key={id} id={id} checked={shown(id)} disabled={columnsPending} onToggle={setShown} />
+            ))}
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>Columns</DropdownMenuLabel>
+            {METRIC_IDS.filter((id) => available.has(id)).map((id) => (
+              <DisplayItem key={id} id={id} checked={shown(id)} disabled={columnsPending} onToggle={setShown} />
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </PageToolbar>
 
+      <PageBody className="flex flex-col gap-4 pb-[calc(96px+env(safe-area-inset-bottom))] md:pb-10">
         {/* Finished variant groups are a decision waiting on a person, so they sit above the list. */}
         {strips.length > 0 ? (
-          <section aria-labelledby="tasks-decisions" className="flex flex-col gap-2">
-            <h2 id="tasks-decisions" className="text-[15px] font-semibold text-foreground">
-              Waiting for a decision
-            </h2>
-            <ItemGroup className="gap-2">
-              {strips.map((group) => (
-                <Item
-                  key={group.groupId}
-                  variant="outline"
-                  data-slot="compare-strip"
-                  data-group-id={group.groupId}
-                  className="bg-card shadow-xs"
-                >
-                  <ItemMedia variant="icon" className="rounded-lg border-0 bg-violet/12 text-violet">
-                    <ScaleIcon aria-hidden="true" />
-                  </ItemMedia>
-                  <ItemContent>
-                    <ItemTitle>{group.title}</ItemTitle>
-                    <ItemDescription>{group.count} variants finished — compare them and keep one.</ItemDescription>
-                  </ItemContent>
-                  <ItemActions>
-                    <Button asChild variant="outline" size="sm">
-                      <Link to={`/compare/${group.groupId}`}>
-                        Compare
-                        <ArrowUpRightIcon aria-hidden="true" />
-                      </Link>
-                    </Button>
-                  </ItemActions>
-                </Item>
-              ))}
-            </ItemGroup>
-          </section>
+          <ListFrame className="divide-y divide-border">
+            {strips.map((group) => (
+              <div
+                key={group.groupId}
+                data-slot="compare-strip"
+                data-group-id={group.groupId}
+                className="flex flex-wrap items-center gap-3 px-4 py-3 md:px-5"
+              >
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-violet/12 text-violet">
+                  <ScaleIcon className="size-4" aria-hidden="true" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-foreground">{group.title}</p>
+                  <p className="text-[13px] text-muted-foreground">
+                    {group.count} variants finished — compare them and keep one.
+                  </p>
+                </div>
+                <Button asChild variant="outline" size="sm">
+                  <Link to={`/compare/${group.groupId}`}>Compare</Link>
+                </Button>
+              </div>
+            ))}
+          </ListFrame>
         ) : null}
 
-        {/* The list: one card holding its own toolbar, the table and a footer line. */}
-        <Card flush data-slot="tasks-card">
-          <div className="flex flex-wrap items-center gap-2 border-b border-border p-3">
-            <ListViewTabs view={view} onChange={onViewChange} counts={counts} />
-            {activeFocus ? (
-              <Badge variant="secondary" data-slot="focus-chip" className="h-7 gap-1 pr-1 pl-2.5 text-[13px] font-medium">
-                {FOCUS_LABEL[activeFocus]}
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label={`Clear the ${FOCUS_LABEL[activeFocus]} filter`}
-                  onClick={() => setFocus(null)}
-                  className="size-5 rounded-full"
-                >
-                  <FilterXIcon aria-hidden="true" />
-                </Button>
-              </Badge>
-            ) : null}
-            <div className="flex-1" />
-            <ListSearch value={query} onChange={setQuery} placeholder="Search tasks…" label="Search tasks" />
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" data-slot="display-menu" className="hidden md:inline-flex">
-                  <SlidersHorizontalIcon aria-hidden="true" />
-                  Display
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-56">
-                <DropdownMenuLabel>Under the title</DropdownMenuLabel>
-                {DETAIL_IDS.filter((id) => available.has(id)).map((id) => (
-                  <DisplayItem key={id} id={id} checked={shown(id)} disabled={columnsPending} onToggle={setShown} />
-                ))}
-                <DropdownMenuSeparator />
-                <DropdownMenuLabel>Columns</DropdownMenuLabel>
-                {METRIC_IDS.filter((id) => available.has(id)).map((id) => (
-                  <DisplayItem key={id} id={id} checked={shown(id)} disabled={columnsPending} onToggle={setShown} />
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-
-          {runs === undefined ? (
-            <ListSkeleton />
-          ) : visible.length === 0 ? (
-            <TasksEmptyState
-              view={view}
-              query={query}
-              focus={activeFocus}
-              onClearFocus={() => setFocus(null)}
-            />
-          ) : (
-            <>
-              {/* ≥md: the table. */}
-              <div data-slot="tasks-table" className="hidden md:block">
-                <TooltipProvider>
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="hover:bg-transparent">
-                        <TableHead data-column-id="status" className={cn(LIST_HEAD_CLASS, 'w-[150px]')}>
-                          Status
+        {runs === undefined ? (
+          <ListSkeleton />
+        ) : visible.length === 0 ? (
+          <TasksEmptyState view={view} query={query} />
+        ) : (
+          <>
+            {/* ≥md: the table. */}
+            <ListFrame data-slot="tasks-table" className="hidden md:block">
+              <TooltipProvider>
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead data-column-id="status" className={cn(LIST_HEAD_CLASS, 'w-[150px]')}>
+                        Status
+                      </TableHead>
+                      <TableHead data-column-id="task" className={LIST_HEAD_CLASS}>
+                        Task
+                      </TableHead>
+                      {metricColumns.map((id) => (
+                        <TableHead
+                          key={id}
+                          data-column-id={id}
+                          className={cn(LIST_HEAD_CLASS, id !== 'diff' && 'text-right')}
+                        >
+                          {HEAD_LABELS[id]}
                         </TableHead>
-                        <TableHead data-column-id="task" className={LIST_HEAD_CLASS}>
-                          Task
-                        </TableHead>
-                        {metricColumns.map((id) => (
-                          <TableHead
-                            key={id}
-                            data-column-id={id}
-                            className={cn(LIST_HEAD_CLASS, id !== 'diff' && 'text-right')}
-                          >
-                            {HEAD_LABELS[id]}
-                          </TableHead>
-                        ))}
-                        <TableHead className={cn(LIST_HEAD_CLASS, 'w-[84px]')}>
-                          <span className="sr-only">Actions</span>
-                        </TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {rows.map((node) => (
-                        <TaskRow
-                          key={node.run.id}
-                          run={node.run}
-                          depth={node.depth}
-                          childCount={node.childCount}
-                          subtasksExpanded={searching || expandedSubtasks.has(node.run.id)}
-                          onToggleSubtasks={toggleSubtasks}
-                          queuePosition={
-                            node.run.status === 'queued' ? (positions.get(node.run.id) ?? null) : null
-                          }
-                          onRename={onRename}
-                          onTogglePin={pinToggle}
-                          now={now}
-                          shown={shown}
-                          metricColumns={metricColumns}
-                        />
                       ))}
-                    </TableBody>
-                  </Table>
-                </TooltipProvider>
-              </div>
+                      <TableHead className={cn(LIST_HEAD_CLASS, 'w-[76px]')}>
+                        <span className="sr-only">Actions</span>
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {rows.map((node) => (
+                      <TaskRow
+                        key={node.run.id}
+                        run={node.run}
+                        depth={node.depth}
+                        childCount={node.childCount}
+                        subtasksExpanded={searching || expandedSubtasks.has(node.run.id)}
+                        onToggleSubtasks={toggleSubtasks}
+                        queuePosition={
+                          node.run.status === 'queued' ? (positions.get(node.run.id) ?? null) : null
+                        }
+                        onRename={onRename}
+                        onTogglePin={pinToggle}
+                        now={now}
+                        shown={shown}
+                        metricColumns={metricColumns}
+                      />
+                    ))}
+                  </TableBody>
+                </Table>
+              </TooltipProvider>
+            </ListFrame>
 
-              {/* <md: the same runs as one stacked list. */}
-              <div data-slot="task-cards" className="divide-y divide-border md:hidden">
-                {rows.map((node) => (
-                  <TaskCard
-                    key={node.run.id}
-                    run={node.run}
-                    depth={node.depth}
-                    childCount={node.childCount}
-                    subtasksExpanded={searching || expandedSubtasks.has(node.run.id)}
-                    onToggleSubtasks={toggleSubtasks}
-                    queuePosition={
-                      node.run.status === 'queued' ? (positions.get(node.run.id) ?? null) : null
-                    }
-                    now={now}
-                    showTokens={showTokens}
-                    showCost={showCost}
-                    onTogglePin={pinToggle}
-                  />
-                ))}
-              </div>
-
-              <div
-                data-slot="tasks-count"
-                className="flex items-center justify-between gap-3 border-t border-border px-5 py-2.5 text-[13px] text-muted-foreground"
-              >
-                <span className="tabular-nums">
-                  {roots} {roots === 1 ? 'task' : 'tasks'}
-                  {visible.length > roots ? ` · ${visible.length - roots} subtasks` : ''}
-                  {visible.length < counts[view] ? ` · ${counts[view] - visible.length} hidden by the filter` : ''}
-                </span>
-                {activeFocus || searching ? (
-                  <Button
-                    variant="link"
-                    size="sm"
-                    className="h-auto p-0 text-[13px] text-muted-foreground"
-                    onClick={() => {
-                      setFocus(null)
-                      setQuery('')
-                    }}
-                  >
-                    Show all
-                  </Button>
-                ) : null}
-              </div>
-            </>
-          )}
-        </Card>
+            {/* <md: the same runs as one stacked list. */}
+            <ListFrame data-slot="task-cards" className="divide-y divide-border md:hidden">
+              {rows.map((node) => (
+                <TaskCard
+                  key={node.run.id}
+                  run={node.run}
+                  depth={node.depth}
+                  childCount={node.childCount}
+                  subtasksExpanded={searching || expandedSubtasks.has(node.run.id)}
+                  onToggleSubtasks={toggleSubtasks}
+                  queuePosition={
+                    node.run.status === 'queued' ? (positions.get(node.run.id) ?? null) : null
+                  }
+                  now={now}
+                  showTokens={showTokens}
+                  showCost={showCost}
+                  onTogglePin={pinToggle}
+                />
+              ))}
+            </ListFrame>
+          </>
+        )}
       </PageBody>
+
+      {/* The mobile New-task FAB. The desktop CTA lives in the sidebar. */}
+      <Link
+        to="/new"
+        data-slot="new-task-fab"
+        aria-label="New task"
+        className="fixed right-4 bottom-[calc(16px+env(safe-area-inset-bottom))] z-20 inline-flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg md:hidden"
+      >
+        <PlusIcon className="size-[22px]" aria-hidden="true" />
+      </Link>
     </Page>
   )
 }
 
-const FOCUS_LABEL: Record<Focus, string> = {
-  'needs-you': 'Needs you',
-  'in-progress': 'In progress',
-  finished: 'Finished',
-  failed: 'Failed',
-}
-
-/**
- * One summary number, and a toggle that cuts the list to it. Built on the toggle-group item so
- * the four are one single-choice control for a keyboard, and dressed as a card.
- */
-function SummaryCard({
-  value,
-  icon,
-  label,
-  count,
-  hint,
-  badge,
-  tone = 'neutral',
-}: {
-  value: Focus
-  icon: React.ReactNode
-  label: string
-  /** Null while the list has not answered. */
-  count: number | null
-  hint: string
-  /** A small trailing note in the header: "3 new". */
-  badge?: string
-  /** Colour only when the number is asking for something. */
-  tone?: 'neutral' | 'violet' | 'danger'
-}) {
-  return (
-    <ToggleGroupItem
-      value={value}
-      data-slot="summary-card"
-      data-focus={value}
-      className={cn(
-        'h-auto w-full min-w-0 justify-start rounded-xl border border-border bg-card p-0 text-left font-normal whitespace-normal shadow-xs hover:bg-card hover:text-foreground',
-        'data-[state=on]:border-foreground/25 data-[state=on]:bg-card data-[state=on]:ring-[3px] data-[state=on]:ring-ring/25',
-        tone === 'violet' && 'border-violet/30 bg-violet/[0.06] hover:bg-violet/[0.06] data-[state=on]:bg-violet/[0.06]',
-        tone === 'danger' && 'border-danger/25 bg-danger/[0.05] hover:bg-danger/[0.05] data-[state=on]:bg-danger/[0.05]',
-      )}
-    >
-      <Card className="w-full gap-3 border-0 bg-transparent py-4 shadow-none">
-        <CardHeader className="gap-1.5 px-4">
-          <CardDescription className="flex items-center gap-1.5 text-[13px]">
-            <span
-              aria-hidden="true"
-              className={cn(
-                '[&>svg]:size-3.5',
-                tone === 'violet' && 'text-violet',
-                tone === 'danger' && 'text-danger',
-              )}
-            >
-              {icon}
-            </span>
-            {label}
-            {badge ? (
-              <Badge variant="secondary" className="ml-auto h-5 bg-violet/12 px-1.5 text-[11px] font-medium text-violet">
-                {badge}
-              </Badge>
-            ) : null}
-          </CardDescription>
-          <CardTitle
-            className={cn(
-              'text-[28px] leading-8 font-semibold tabular-nums',
-              tone === 'violet' && 'text-violet',
-              tone === 'danger' && 'text-danger',
-            )}
-          >
-            {count === null ? <Skeleton className="h-8 w-10" /> : count}
-          </CardTitle>
-        </CardHeader>
-        <CardFooter className="px-4 text-xs text-muted-foreground">{hint}</CardFooter>
-      </Card>
-    </ToggleGroupItem>
-  )
+/** The header's one-line answer to "what is going on here?" — counted from the same attention
+ *  grammar the rows wear. */
+function summaryOf(runs: readonly RunRecord[]): string {
+  let needsYou = 0
+  let running = 0
+  let queued = 0
+  let failed = 0
+  for (const run of runs) {
+    if (run.archived) continue
+    const { bucket } = deriveAttention(run)
+    if (bucket === 'waiting' || bucket === 'permission') needsYou += 1
+    else if (bucket === 'running') running += 1
+    else if (bucket === 'error') failed += 1
+    else if (run.status === 'queued') queued += 1
+  }
+  const unread = unreadDoneCount(runs)
+  const parts = [
+    needsYou > 0 ? `${needsYou} ${needsYou === 1 ? 'needs' : 'need'} you` : null,
+    running > 0 ? `${running} running` : null,
+    queued > 0 ? `${queued} queued` : null,
+    failed > 0 ? `${failed} failed` : null,
+    unread > 0 ? `${unread} unread` : null,
+  ].filter((part): part is string => part !== null)
+  if (parts.length > 0) return parts.join(' · ')
+  return runs.length === 0 ? 'Everything agents are working on in this project.' : 'Nothing needs you right now.'
 }
 
 function MenuCount({ children }: { children: React.ReactNode }) {
@@ -637,7 +456,7 @@ function DisplayItem({
 
 function ListSkeleton() {
   return (
-    <div data-slot="tasks-loading" aria-busy="true" className="divide-y divide-border">
+    <ListFrame data-slot="tasks-loading" aria-busy="true" className="divide-y divide-border">
       {[0, 1, 2, 3, 4].map((row) => (
         <div key={row} className="flex items-center gap-4 px-5 py-3.5">
           <Skeleton className="h-6 w-24 rounded-full" />
@@ -648,27 +467,14 @@ function ListSkeleton() {
           <Skeleton className="h-3.5 w-12" />
         </div>
       ))}
-    </div>
+    </ListFrame>
   )
 }
 
 /** What an empty list honestly means, given how it got empty — one variant per cause. */
-function TasksEmptyState({
-  view,
-  query,
-  focus = null,
-  onClearFocus,
-}: {
-  view: ListView
-  query: string
-  /** The summary card narrowing the list, when that is why it is empty. */
-  focus?: Focus | null
-  onClearFocus?: () => void
-}) {
+function TasksEmptyState({ view, query }: { view: ListView; query: string }) {
   const needle = query.trim()
-  const kind = needle ? 'search-miss' : focus ? 'focus-miss' : view === 'archived' ? 'archive' : 'no-tasks'
-  // Inside the list card: the card is the surface, so the empty state brings no frame of its own.
-  const bare = 'rounded-none border-0 py-14 md:py-16'
+  const kind = needle ? 'search-miss' : view === 'archived' ? 'archive' : 'no-tasks'
   return (
     <div data-slot="tasks-empty" data-empty-kind={kind} className="flex flex-1 flex-col">
       {kind === 'search-miss' ? (
@@ -676,26 +482,12 @@ function TasksEmptyState({
           icon={<SearchXIcon />}
           title="No matching tasks"
           description={`No tasks match “${needle}”.`}
-          className={bare}
-        />
-      ) : kind === 'focus-miss' && focus ? (
-        <ListEmpty
-          icon={<FilterXIcon />}
-          title={`Nothing under “${FOCUS_LABEL[focus]}”`}
-          description="No task is in that state right now."
-          className={bare}
-          action={
-            <Button variant="outline" onClick={onClearFocus}>
-              Show all tasks
-            </Button>
-          }
         />
       ) : kind === 'archive' ? (
         <ListEmpty
           icon={<ArchiveIcon />}
           title="Nothing archived yet"
           description="Finished tasks you archive land here."
-          className={bare}
         />
       ) : (
         <ListEmpty
@@ -703,7 +495,6 @@ function TasksEmptyState({
           tone="primary"
           title="No tasks yet"
           description="Describe a task and an agent picks it up in its own worktree."
-          className={bare}
           action={
             <Button asChild>
               <Link to="/new">
@@ -789,7 +580,6 @@ function TaskRow({
   const title = runTitle(run)
   // Same machine as the run header's title — one edit, one PATCH.
   const editor = useTitleEditor(title, (next) => onRename(run.id, next))
-  const renaming = React.useRef(false)
   const subtasks = subtaskLabel(childCount)
   // Inline style: depth is unbounded and Tailwind cannot generate a class per level. 14px a
   // level is the sidebar's own nesting step.
@@ -814,8 +604,7 @@ function TaskRow({
       data-run-id={run.id}
       data-depth={depth}
       onClick={(event) => {
-        // The row menu is portalled, but React still bubbles its clicks through this row.
-        if ((event.target as Element).closest('a, button, input, [role="menu"]')) return
+        if ((event.target as Element).closest('a, button, input')) return
         navigate(to)
       }}
       className="group/row cursor-pointer"
@@ -927,65 +716,28 @@ function TaskRow({
 
       <TableCell className={cn(LIST_CELL_CLASS, 'text-right')}>
         <span className="inline-flex items-center justify-end gap-0.5">
+          {/* Revealed on hover so a resting list stays quiet; `no-hover:` covers a tablet. */}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            data-slot="row-rename"
+            aria-label="Rename task"
+            title="Rename"
+            onClick={editor.begin}
+            className="size-7 opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 no-hover:opacity-100"
+          >
+            <PencilIcon className="size-3.5" aria-hidden="true" />
+          </Button>
           {/* A pinned row keeps its pin lit: it is the whole explanation for why the row sorted
-              to the top. Everything else a row can do is in its menu. */}
-          {onTogglePin && run.pinned ? (
-            <PinToggle pinned onToggle={(pinned) => onTogglePin(run, pinned)} className="size-7 hover:bg-muted" />
+              to the top. */}
+          {onTogglePin ? (
+            <PinToggle
+              pinned={Boolean(run.pinned)}
+              onToggle={(pinned) => onTogglePin(run, pinned)}
+              className="size-7 hover:bg-muted opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 no-hover:opacity-100 data-[pinned=true]:opacity-100"
+            />
           ) : null}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                data-slot="row-actions"
-                aria-label={`Actions for ${title}`}
-                className="size-7 text-muted-foreground data-[state=open]:bg-muted"
-              >
-                <EllipsisIcon className="size-4" aria-hidden="true" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              className="min-w-44"
-              // Rename puts the caret in the title field; handing focus back to the trigger on
-              // close would blur that field and cancel the edit it just started.
-              onCloseAutoFocus={(event) => {
-                if (!renaming.current) return
-                renaming.current = false
-                event.preventDefault()
-                // The field mounted while the menu still held focus, so its own autofocus lost;
-                // give it the caret now that the menu has let go.
-                const field = document.querySelector<HTMLInputElement>(
-                  `[data-slot="task-table-row"][data-run-id="${run.id}"] input`,
-                )
-                field?.focus()
-                field?.select()
-              }}
-            >
-              <DropdownMenuItem asChild>
-                <Link to={to}>
-                  <ArrowUpRightIcon aria-hidden="true" />
-                  Open
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                data-slot="row-rename"
-                onSelect={() => {
-                  renaming.current = true
-                  editor.begin()
-                }}
-              >
-                <PencilIcon aria-hidden="true" />
-                Rename
-              </DropdownMenuItem>
-              {onTogglePin ? (
-                <DropdownMenuItem onSelect={() => onTogglePin(run, !run.pinned)}>
-                  {run.pinned ? <PinOffIcon aria-hidden="true" /> : <PinIcon aria-hidden="true" />}
-                  {run.pinned ? 'Unpin' : 'Pin to top'}
-                </DropdownMenuItem>
-              ) : null}
-            </DropdownMenuContent>
-          </DropdownMenu>
         </span>
       </TableCell>
     </TableRow>
