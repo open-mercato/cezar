@@ -627,6 +627,33 @@ function MobileAreas(props: RailProps) {
   if (!isMobile) return null
   return (
     <SidebarNavigateContext.Provider value={close}>
+      {/* What the rail carries at its two ends, which a phone has no rail for: the project (and
+          the way to another one) and the cockpit's own menu — theme, updates, global settings. */}
+      <div data-slot="mobile-identity" className="flex items-center gap-2.5 border-b border-border/70 px-2 py-2">
+        <ProjectSwitcher
+          projects={props.projects ?? []}
+          activeProjectId={navProjectId}
+          repo={props.repo ?? null}
+          singleProject={props.singleProject ?? false}
+          brandName={props.brandName ?? 'cezar'}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[13px] leading-tight font-semibold text-foreground">
+            {(props.projects ?? []).find((project) => project.id === navProjectId)?.name ?? props.brandName ?? 'cezar'}
+          </div>
+          {props.repo?.branch ? (
+            <div className="truncate font-mono text-[11px] leading-tight text-muted-foreground">{props.repo.branch}</div>
+          ) : null}
+        </div>
+        <FooterMenu
+          version={props.version ?? null}
+          latestVersion={props.latestVersion ?? null}
+          starCount={props.starCount ?? null}
+          brandName={props.brandName ?? 'cezar'}
+          brandLogoUrl={props.brandLogoUrl ?? null}
+          hostWidget={props.hostWidget}
+        />
+      </div>
       <SidebarGroup className="border-b border-border/70">
         <SidebarGroupContent>
           <SidebarMenu>
@@ -847,7 +874,7 @@ function FooterMenu({
               className="relative size-9 justify-center overflow-visible rounded-md p-0 text-foreground data-[state=open]:bg-sidebar-accent [&>svg]:size-auto"
             >
               {brandLogoUrl ? (
-                <img src={brandLogoUrl} alt="" className="size-[25px] object-contain" />
+                <img src={brandLogoUrl} alt="" className="size-[25px] object-contain in-[.light]:invert" />
               ) : (
                 <BrandMark height={25} />
               )}

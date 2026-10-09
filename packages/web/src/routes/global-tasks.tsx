@@ -1079,17 +1079,17 @@ function TaskTable({
   extraColumns: readonly OptionalColumn[]
 }) {
   return (
-    <ListFrame data-slot="global-tasks-table">
+    <ListFrame data-slot="global-tasks-table" className="@container">
       <TooltipProvider>
         <Table>
           <TableHeader>
             {/* Task is the only column with no width, so it grows on what the others give up: a
                 cross-project list is scanned by title. */}
             <TableRow className="hover:bg-transparent">
-              <TableHead className={cn(LIST_HEAD_CLASS, 'hidden w-[150px] md:table-cell')}>Status</TableHead>
+              <TableHead className={cn(LIST_HEAD_CLASS, 'hidden w-[150px] @3xl:table-cell')}>Status</TableHead>
               <TableHead className={LIST_HEAD_CLASS}>Task</TableHead>
               {extraColumns.map((id) => (
-                <TableHead key={id} className={cn(LIST_HEAD_CLASS, 'hidden text-right md:table-cell')}>
+                <TableHead key={id} className={cn(LIST_HEAD_CLASS, 'hidden text-right @3xl:table-cell')}>
                   {OPTIONAL_COLUMNS.find((column) => column.id === id)?.label}
                 </TableHead>
               ))}
@@ -1189,10 +1189,10 @@ function TaskRow({
       data-depth={depth}
       className="group/row"
     >
-      <TableCell className={cn(LIST_CELL_CLASS, 'hidden md:table-cell')}>
+      <TableCell className={cn(LIST_CELL_CLASS, 'hidden @3xl:table-cell')}>
         <TaskStatusBadge attention={attention} />
       </TableCell>
-      <TableCell className={cn(LIST_CELL_CLASS, 'w-full max-w-0 min-w-[200px] md:min-w-[320px]')}>
+      <TableCell className={cn(LIST_CELL_CLASS, 'w-full max-w-0 min-w-[150px] @3xl:min-w-[320px]')}>
         {/* Inline padding, not a class: depth is unbounded. 14px a level — the same step the
             per-project table and the sidebar use. */}
         <div
@@ -1281,7 +1281,7 @@ function TaskRow({
         id === 'cost' ? (
           <TableCell
             key={id}
-            className={cn(LIST_CELL_CLASS, 'hidden text-right text-[13px] text-muted-foreground tabular-nums md:table-cell')}
+            className={cn(LIST_CELL_CLASS, 'hidden text-right text-[13px] text-muted-foreground tabular-nums @3xl:table-cell')}
           >
             {formatCost(run.costUsd) || <Dash />}
           </TableCell>
@@ -1594,7 +1594,7 @@ function UsageTd({ column, cell }: { column: 'cpu' | 'memory'; cell: UsageCell }
       title={cell.title}
       className={cn(
         LIST_CELL_CLASS,
-        'hidden text-right text-[13px] tabular-nums md:table-cell',
+        'hidden text-right text-[13px] tabular-nums @3xl:table-cell',
         cell.kind === 'live' ? 'font-medium text-foreground' : 'text-muted-foreground',
       )}
     >

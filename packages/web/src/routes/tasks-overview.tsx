@@ -312,7 +312,18 @@ export function TasksOverview({
         ) : (
           <>
             {/* ≥md: the table. */}
-            <ListFrame data-slot="tasks-table" className="hidden md:block">
+            <ListFrame
+              data-slot="tasks-table"
+              // A container: the optional columns leave one by one as the TABLE runs out of room
+              // (the open sidebar narrows it as much as a small window does), least-read first,
+              // so the list never scrolls sideways. They are all still one click away in Display.
+              className={cn(
+                '@container hidden md:block',
+                '@max-5xl:[&_[data-column-id=memory]]:hidden @max-5xl:[&_[data-column-id=cpu]]:hidden',
+                '@max-4xl:[&_[data-column-id=tokens]]:hidden @max-3xl:[&_[data-column-id=cost]]:hidden',
+                '@max-2xl:[&_[data-column-id=diff]]:hidden @max-xl:[&_[data-column-id=status]]:w-auto',
+              )}
+            >
               <TooltipProvider>
                 <Table>
                   <TableHeader>
