@@ -451,7 +451,7 @@ function AppRail(props: RailProps) {
       data-slot="rail"
       className="hidden w-[calc(var(--sidebar-width-icon)+0.75rem)] shrink-0 bg-transparent md:flex"
     >
-      <SidebarHeader className="items-center gap-2 px-0 pt-3">
+      <SidebarHeader className="items-center gap-3 px-0 pt-3 pb-0">
         <ProjectSwitcher
           projects={projects}
           activeProjectId={navProjectId}
@@ -459,61 +459,12 @@ function AppRail(props: RailProps) {
           singleProject={singleProject}
           brandName={brandName}
         />
-        <SidebarMenu className="items-center">
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              asChild
-              tooltip={{ children: 'New task · C', hidden: false }}
-              className={cn(
-                RAIL_BUTTON,
-                'bg-primary text-primary-foreground shadow-xs hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground',
-              )}
-            >
-              <Link to="/new" data-slot="new-task-link" aria-label="New task">
-                <PlusIcon aria-hidden="true" />
-              </Link>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
+        <div aria-hidden="true" className="mx-auto h-px w-5 shrink-0 bg-foreground/12" />
       </SidebarHeader>
 
       <SidebarContent className="items-center gap-0 [scrollbar-width:none]">
-        <nav aria-label="Main">
-          <SidebarMenu className="items-center py-2">
-            {workItems.map((item) => {
-              const Icon = item.icon
-              const active = item.to === activeTo
-              return (
-                <SidebarMenuItem key={item.to}>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={active}
-                    tooltip={{ children: item.label, hidden: false }}
-                    className={RAIL_BUTTON}
-                  >
-                    <Link
-                      to={scopeTo(navProjectId, item.to)}
-                      aria-label={item.label}
-                      aria-current={active ? 'page' : undefined}
-                      data-slot="rail-item"
-                    >
-                      <Icon aria-hidden="true" />
-                    </Link>
-                  </SidebarMenuButton>
-                  <AreaBadge
-                    item={item}
-                    inboxCount={inboxAvailable ? inboxCount : null}
-                    unreadCount={unreadCount}
-                    skillsUpdateAvailable={skillsUpdateAvailable}
-                    className="absolute -top-1 -right-1"
-                  />
-                </SidebarMenuItem>
-              )
-            })}
-          </SidebarMenu>
-        </nav>
-        <div aria-hidden="true" className="mx-auto h-px w-5 shrink-0 bg-sidebar-border" />
-        <SidebarMenu className="items-center py-2">
+        {/* The workspace's two pages first: they are about every project, like the tile above. */}
+        <SidebarMenu className="items-center py-3">
           <SidebarMenuItem>
             <SidebarMenuButton
               asChild
@@ -544,30 +495,78 @@ function AppRail(props: RailProps) {
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
-      </SidebarContent>
-
-      <SidebarFooter data-slot="sidebar-footer" className="items-center px-0 pb-3">
-        <SidebarMenu className="items-center">
-          {settingsItem ? (
+        <div aria-hidden="true" className="mx-auto h-px w-5 shrink-0 bg-foreground/12" />
+        {/* Then the project: New task, its areas, and its settings last. */}
+        <nav aria-label="Main">
+          <SidebarMenu className="items-center py-3">
             <SidebarMenuItem>
               <SidebarMenuButton
                 asChild
-                isActive={settingsItem.to === activeTo}
-                tooltip={{ children: 'Project settings', hidden: false }}
-                className={RAIL_BUTTON}
+                tooltip={{ children: 'New task · C', hidden: false }}
+                className={cn(
+                  RAIL_BUTTON,
+                  'bg-primary text-primary-foreground shadow-xs hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground',
+                )}
               >
-                <Link
-                  to={scopeTo(navProjectId, settingsItem.to)}
-                  aria-label="Project settings"
-                  aria-current={settingsItem.to === activeTo ? 'page' : undefined}
-                  data-slot="rail-item"
-                >
-                  <SettingsIcon aria-hidden="true" />
+                <Link to="/new" data-slot="new-task-link" aria-label="New task">
+                  <PlusIcon aria-hidden="true" />
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
-          ) : null}
-        </SidebarMenu>
+            {workItems.map((item) => {
+              const Icon = item.icon
+              const active = item.to === activeTo
+              return (
+                <SidebarMenuItem key={item.to}>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={active}
+                    tooltip={{ children: item.label, hidden: false }}
+                    className={RAIL_BUTTON}
+                  >
+                    <Link
+                      to={scopeTo(navProjectId, item.to)}
+                      aria-label={item.label}
+                      aria-current={active ? 'page' : undefined}
+                      data-slot="rail-item"
+                    >
+                      <Icon aria-hidden="true" />
+                    </Link>
+                  </SidebarMenuButton>
+                  <AreaBadge
+                    item={item}
+                    inboxCount={inboxAvailable ? inboxCount : null}
+                    unreadCount={unreadCount}
+                    skillsUpdateAvailable={skillsUpdateAvailable}
+                    className="absolute -top-1 -right-1"
+                  />
+                </SidebarMenuItem>
+              )
+            })}
+            {settingsItem ? (
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  asChild
+                  isActive={settingsItem.to === activeTo}
+                  tooltip={{ children: 'Project settings', hidden: false }}
+                  className={RAIL_BUTTON}
+                >
+                  <Link
+                    to={scopeTo(navProjectId, settingsItem.to)}
+                    aria-label="Project settings"
+                    aria-current={settingsItem.to === activeTo ? 'page' : undefined}
+                    data-slot="rail-item"
+                  >
+                    <SettingsIcon aria-hidden="true" />
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ) : null}
+          </SidebarMenu>
+        </nav>
+      </SidebarContent>
+
+      <SidebarFooter data-slot="sidebar-footer" className="items-center px-0 pb-3">
         <FooterMenu
           version={version}
           latestVersion={latestVersion}
