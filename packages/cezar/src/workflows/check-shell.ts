@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { win32 } from 'node:path';
 
 export interface CheckShellOptions {
@@ -42,7 +43,6 @@ export function resolveCheckShell(options: CheckShellOptions = {}): string {
   const platform = options.platform ?? process.platform;
   if (platform !== 'win32') return 'bash';
   const env = options.env ?? process.env;
-  const fileExists = options.fileExists ?? (() => false);
+  const fileExists = options.fileExists ?? existsSync;
   return candidatePaths(env).find((candidate) => fileExists(candidate)) ?? 'bash';
 }
-
