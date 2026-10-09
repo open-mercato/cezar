@@ -13,7 +13,6 @@ import {
   ListPlusIcon,
   SlidersHorizontalIcon,
   SplitIcon,
-  WorkflowIcon,
   ZapIcon,
   type LucideIcon,
 } from 'lucide-react'
@@ -21,7 +20,6 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useParams, useSearchParams } from 'react-router'
 
 import { Link, useNavigate } from '@/lib/project-router'
-import { QUICK_TASK } from '@/lib/task-source'
 
 import { createRun, getLaunchKey, putConfig, putUiState } from '@/api/client'
 import { useProjectScope } from '@/api/project-scope-context'
@@ -45,7 +43,6 @@ import type {
   ProjectListEntry,
   RepoResponse,
   Runner,
-  WorkflowDef,
 } from '@open-mercato/cezar-api-client'
 import { Composer, type ComposerHandle } from '@/components/composer/composer'
 import { DispatchToggle } from '@/components/dispatch-toggle'
@@ -909,13 +906,6 @@ export function NewTaskRoute() {
           </p>
         ) : null}
 
-        <WorkflowChoices
-          workflows={workflowList}
-          source={source}
-          ready={sourcesReady}
-          onPick={(next) => update({ source: next })}
-        />
-
         <Suggestions onPick={(text) => update({ text })} />
       </div>
     </div>
@@ -1140,103 +1130,6 @@ const SUGGESTIONS: ReadonlyArray<{ text: string; hint: string; icon: LucideIcon 
   },
   { text: 'Update the README for recent changes', hint: 'Bring the docs back in line with the code', icon: FileTextIcon },
 ]
-
-/** How many workflows get a card; the rest are one click further, in the composer's pill. */
-const WORKFLOW_CARDS = 6
-
-/**
- * The workflows, as cards under the composer: the choice of HOW the task runs, one click away and
- * described, instead of a row inside a dropdown of skills. The plain `quick-task` leads and is
- * what an untouched screen has selected; this repo's own files come before the other built-ins.
- * It is the same choice the composer's workflow pill holds — the two always agree.
- */
-function WorkflowChoices({
-  workflows,
-  source,
-  ready,
-  onPick,
-}: {
-  workflows: readonly WorkflowDef[]
-  source: TaskSource | null
-  ready: boolean
-  onPick: (source: TaskSource | null) => void
-}) {
-  if (!ready || workflows.length < 2) return null
-  const rank = (workflow: WorkflowDef) => (workflow.name === QUICK_TASK ? 0 : workflow.source === 'file' ? 1 : 2)
-  const ordered = [...workflows].sort((a, b) => rank(a) - rank(b))
-  const picked = source?.source === 'workflow' ? source.ref : source === null ? QUICK_TASK : null
-  // The picked one always has a card, even when it sits past the cut.
-  const head = ordered.slice(0, WORKFLOW_CARDS)
-  const shown = picked && !head.some((w) => w.name === picked)
-    ? [...head.slice(0, WORKFLOW_CARDS - 1), ...ordered.filter((w) => w.name === picked)]
-    : head
-  const more = ordered.length - shown.length
-  return (
-    <section aria-label="Workflow" data-slot="workflow-choices" className="mt-10 max-md:mt-7">
-      <div className="mb-2 flex items-baseline justify-between gap-3 px-1">
-        <h2 className="text-[13px] font-medium text-muted-foreground">Workflow</h2>
-        <Link to="/workflows" className="text-xs text-muted-foreground hover:text-foreground">
-          {more > 0 ? `${more} more · ` : ''}Edit workflows
-        </Link>
-      </div>
-      <ItemGroup className="gap-2 sm:grid sm:grid-cols-3">
-        {shown.map((workflow) => {
-          const selected = workflow.name === picked
-          const steps = workflow.graph
-            ? workflow.graph.nodes.filter((node) => node.type !== 'start' && node.type !== 'end').length
-            : workflow.steps.length
-          return (
-            <Item
-              key={workflow.name}
-              asChild
-              variant="outline"
-              size="sm"
-              className={cn(
-                'items-start gap-2.5 rounded-xl bg-card/60 px-3.5 text-left hover:bg-muted/60',
-                selected && 'border-primary-strong bg-primary/5 hover:bg-primary/5',
-              )}
-            >
-              <Button
-                type="button"
-                variant="ghost"
-                data-slot="workflow-choice"
-                data-workflow={workflow.name}
-                aria-pressed={selected}
-                title={workflow.description ?? workflow.name}
-                onClick={() => onPick(workflow.name === QUICK_TASK ? null : { source: 'workflow', ref: workflow.name })}
-                className="h-auto justify-start font-normal whitespace-normal text-foreground"
-              >
-                <ItemMedia>
-                  {selected ? (
-                    <CheckIcon aria-hidden="true" className="size-4 text-primary-strong" />
-                  ) : (
-                    <WorkflowIcon aria-hidden="true" className="size-4 text-muted-foreground" />
-                  )}
-                </ItemMedia>
-                <ItemContent className="gap-0.5">
-                  <ItemTitle className="text-[13.5px] leading-snug">
-                    {workflow.name}
-                    <span className="font-normal text-soft-foreground tabular-nums">
-                      {steps} {steps === 1 ? 'step' : 'steps'}
-                    </span>
-                  </ItemTitle>
-                  <ItemDescription className="line-clamp-2 text-xs text-pretty">
-                    {workflow.description ?? (workflow.source === 'file' ? 'A workflow of this repo' : 'Built-in')}
-                  </ItemDescription>
-                </ItemContent>
-              </Button>
-            </Item>
-          )
-        })}
-      </ItemGroup>
-      {source?.source === 'skill' ? (
-        <p className="mt-2 px-1 text-xs text-muted-foreground">
-          The skill “{source.ref}” runs on its own. Picking a workflow here replaces it.
-        </p>
-      ) : null}
-    </section>
-  )
-}
 
 function Suggestions({ onPick }: { onPick: (text: string) => void }) {
   return (
