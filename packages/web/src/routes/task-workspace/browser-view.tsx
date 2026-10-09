@@ -6,8 +6,6 @@ import {
   RotateCwIcon,
   TriangleAlertIcon,
   XIcon,
-  Maximize2Icon,
-  Minimize2Icon,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
@@ -17,8 +15,6 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
-
-import { useWorkspaceMaximize } from './maximize'
 
 import {
   MAX_BROWSER_TABS,
@@ -228,10 +224,6 @@ export function BrowserView({
     [active, onChange, tabs],
   )
 
-  // Full view is the workspace's; the toggle rides this strip because the tabs are here.
-  const maximize = useWorkspaceMaximize()
-  const maximized = maximize?.maximized ?? false
-
   return (
     <div data-slot="browser-view" className="flex h-full min-h-0 flex-col">
       <Tabs
@@ -291,25 +283,6 @@ export function BrowserView({
             className="rounded"
           >
             <PlusIcon aria-hidden="true" className="size-3.5" />
-          </Button>
-        ) : null}
-        {maximize ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            data-action="toggle-maximize"
-            aria-label={maximized ? 'Exit full view' : 'Full view'}
-            aria-pressed={maximized}
-            title={maximized ? 'Exit full view (Esc)' : 'Full view — hide everything but this layout'}
-            onClick={maximize.toggle}
-            className="sticky right-0 ml-auto rounded bg-background"
-          >
-            {maximized ? (
-              <Minimize2Icon aria-hidden="true" className="size-3.5" />
-            ) : (
-              <Maximize2Icon aria-hidden="true" className="size-3.5" />
-            )}
           </Button>
         ) : null}
       </TabsList>

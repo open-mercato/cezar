@@ -296,8 +296,6 @@ function WorkspaceView({
   const exitMaximized = useCallback(() => setMaximized(false), [])
   const toggleMaximized = useCallback(() => setMaximized((current) => !current), [])
   const cover = usePanelCover<HTMLDivElement>(maximized, exitMaximized)
-  const loneBrowser =
-    !overview && layouts.layout?.columns.length === 1 && layouts.layout.columns[0]?.view === 'browser'
   const maximize = useMemo(() => ({ maximized, toggle: toggleMaximized }), [maximized, toggleMaximized])
 
   // Policy, read from the one place that knows it. A cockpit where a shell is not allowed shows
@@ -495,9 +493,8 @@ function WorkspaceView({
           )}
         >
           {/* The way back. In the bottom corner, the one place no view keeps a control of its own
-              — column headers and edge strips own the top. Not over a lone browser, whose tab
-              strip carries the toggle. */}
-          {cover.covering && !loneBrowser ? (
+              — column headers own the top. */}
+          {cover.covering ? (
             <Button
               variant="outline"
               size="icon-sm"
