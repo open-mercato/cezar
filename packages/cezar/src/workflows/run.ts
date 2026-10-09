@@ -74,6 +74,7 @@ import { commentOnIssue, commentOnPr, fetchGithubChecks, updatePr } from '../ser
 import { createDraftPr } from '../server/pr.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows } from './load.ts';
+import { resolveCheckShell } from './check-shell.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 // Task dispatch (spec 2026-09-10-dispatch). Every import below is inert unless the feature is
 // ON *and* the run carries a `dispatch`: `dispatchOf()` is the single gate, and a run without one
@@ -6712,7 +6713,7 @@ export class RunManager {
     emit({ type: 'note', stepId: step.id, message: `$ ${command}` });
     return new Promise((resolve) => {
       // Check steps run in the same cwd as the agent steps — the worktree.
-      const child = spawn('bash', ['-lc', command], { cwd: state.cwd, env: process.env });
+      const child = spawn(resolveCheckShell(), ['-lc', command], { cwd: state.cwd, env: process.env });
       state.interrupt = () => child.kill('SIGTERM');
 
       let output = '';
