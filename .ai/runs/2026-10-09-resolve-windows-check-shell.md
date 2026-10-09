@@ -25,9 +25,9 @@ Risks: Windows executable discovery and shell quoting can affect command executi
 ### Phase 1: Implementation
 
 - [x] 1.1 Confirm current check execution and implement the Windows shell resolver — 85260a50
-- [x] 1.2 Add regression coverage for shell selection and check lifecycle behavior — b119cbf2
+- [x] 1.2 Add regression coverage for shell selection and check lifecycle behavior — 645ae0e6
 
 ### Phase 2: Documentation and validation
 
 - [x] 2.1 Document Windows check shell behavior — cd9d347b
-- [ ] 2.2 Run the full validation gate — blocked by pre-existing repository typecheck/build and unrelated suite failures
+- [x] 2.2 Run the full validation gate — 645ae0e6 (typecheck/build/package pass; broad-suite failures reproduce on origin/main control)
