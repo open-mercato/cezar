@@ -13,12 +13,13 @@ import {
   ReasoningItem,
   ToolCard,
   ToolStreak,
-  WorkGroup,
   UserBubble,
 } from './thread-items'
+import { collapseFailureNotes } from './session-failure'
 import { ThreadCardCache } from './thread-open-cards'
 import { threadRenderMode } from './thread-scroll'
 import { DaySeparator, TurnTime, localDayKey, turnDuration } from './thread-time'
+import { WorkGroup } from './work-group'
 import {
   JumpToLatestPill,
   ThreadRows,
@@ -98,8 +99,15 @@ export interface SessionTranscriptProps {
   rowModels?: readonly TranscriptRowModel[]
 }
 
-/** The main run record plus reduced turns, without rendering or backend inspection. */
-export function mainTranscriptSections(run: ApiRun, thread: ThreadState): TranscriptSection[] {
+/** The main run record plus reduced turns, without rendering or backend inspection.
+ *
+ *  `hiddenEntryIds` are transcript notes another surface already speaks for — the failed
+ *  session's closing alert (`digestFailure`), which says the failure once instead of three times. */
+export function mainTranscriptSections(
+  run: ApiRun,
+  thread: ThreadState,
+  hiddenEntryIds?: ReadonlySet<string>,
+): TranscriptSection[] {
   const sections: TranscriptSection[] = []
   if (run.task) {
     sections.push({
@@ -140,7 +148,11 @@ export function mainTranscriptSections(run: ApiRun, thread: ThreadState): Transc
         : {}),
       ...(turn.startedAt !== undefined ? { startedAt: turn.startedAt } : {}),
       ...(turn.completed?.ts !== undefined ? { completedAt: turn.completed.ts } : {}),
-      entries: turn.items,
+      entries: collapseFailureNotes(
+        hiddenEntryIds !== undefined && hiddenEntryIds.size > 0
+          ? turn.items.filter((entry) => !hiddenEntryIds.has(entry.id))
+          : turn.items,
+      ),
     })
   }
   return sections
@@ -377,12 +389,13 @@ function renderRowContent(
       return (
         <WorkGroup
           label={duration !== undefined ? `Worked for ${duration}` : 'Show the work'}
-          count={row.content.blocks.length}
-        >
-          {row.content.blocks.map((block) => (
-            <ThreadBlockRenderer key={block.id} block={block} scope={row.scope} renderAsk={renderAsk} />
-          ))}
-        </WorkGroup>
+          blocks={row.content.blocks}
+          scope={row.scope}
+          renderEntry={(entry, scope) => <ThreadEntryRenderer entry={entry} scope={scope} renderAsk={renderAsk} />}
+          renderNested={(entries, nestedScope) => (
+            <GroupedEntries entries={entries} scope={nestedScope} renderAsk={renderAsk} />
+          )}
+        />
       )
     }
     default:

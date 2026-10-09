@@ -40,6 +40,7 @@ import { AcceptCelebration, ReviewPanel } from './review-panel'
 import { queuePosition } from './run-actions'
 import { RunHeader } from './run-header'
 import { AskCard } from './ask-card'
+import { SessionFailureAlert, digestFailure } from './session-failure'
 import { useRunRecordReconcile } from './run-reconcile'
 import { ThreadLoading } from './thread-loading'
 import { threadRenderMode } from './thread-scroll'
@@ -284,7 +285,15 @@ export function ThreadView({
     [queued, patchRunAsync, editQueuedAsync, removeQueuedAsync],
   )
 
-  const sections = useMemo(() => mainTranscriptSections(run, thread), [run, thread])
+  // A failed session says so ONCE, in the closing alert; the transcript lines that would repeat
+  // it are left out of the rows (see session-failure.tsx). An unanswered question is not a
+  // failure to announce — `threadFooter` already reads that state as "waiting for your answer".
+  const failed = run.status === 'failed' && !isAwaitingAnswer(run)
+  const failure = useMemo(() => (failed ? digestFailure(run, thread) : undefined), [failed, run, thread])
+  const sections = useMemo(
+    () => mainTranscriptSections(run, thread, failure?.hiddenIds),
+    [run, thread, failure],
+  )
   const rows = useMemo(() => buildTranscriptRows(sections, run.id), [sections, run.id])
   const renderAsk = useCallback((ask: ThreadAsk) => <AskCard ask={ask} run={run} />, [run])
   const messageActions = useMemo<Readonly<Record<string, TranscriptMessageActions>> | undefined>(() => {
@@ -377,7 +386,19 @@ export function ThreadView({
 
         {/* Closed states read as the body's last line; the WAITING state lives in the dock
             (mockup `.paused-hint`), right above the composer it is asking the user to use. */}
-        {footer && footer.state === 'closed' ? (
+        {failure !== undefined ? (
+          <SessionFailureAlert
+            run={run}
+            digest={failure}
+            continueAction={continueAction}
+            canResume={hasContinuation}
+            links={
+              isHttpUrl(taskPrUrl(run)) || isHttpUrl(issueUrl) ?
+                <FooterLinks prUrl={taskPrUrl(run)} issueUrl={issueUrl} />
+              : undefined
+            }
+          />
+        ) : footer && footer.state === 'closed' ? (
           <div
             data-slot="thread-footer"
             data-state={footer.state}
@@ -387,33 +408,7 @@ export function ThreadView({
             )}
           >
             {footer.label}
-            {/* href protocol guard (#431): link only for http(s) URLs. */}
-            {isHttpUrl(taskPrUrl(run)) ? (
-              // The run shipped as a PR (review-gate Draft PR, or agent-opened), or worked on
-              // one (#407) — the link stays reachable after the panel is gone.
-              <a
-                data-slot="pr-link"
-                href={taskPrUrl(run)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-medium text-foreground underline-offset-2 hover:underline"
-              >
-                PR ↗
-              </a>
-            ) : null}
-            {/* #526: an issue-subject run (om-prepare-issue) links the issue it created — it
-                declares no PR, so without this the created issue was unreachable from the UI. */}
-            {isHttpUrl(issueUrl) ? (
-              <a
-                data-slot="issue-link"
-                href={issueUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-medium text-foreground underline-offset-2 hover:underline"
-              >
-                Issue ↗
-              </a>
-            ) : null}
+            <FooterLinks prUrl={taskPrUrl(run)} issueUrl={issueUrl} />
           </div>
         ) : null}
 
@@ -504,6 +499,44 @@ export function ThreadView({
         />
       </TaskDock>
     </div>
+  )
+}
+
+/** The closed footer's outbound links, shared by the quiet footer and the failure alert. */
+function FooterLinks({ prUrl, issueUrl }: { prUrl?: string; issueUrl?: string }) {
+  // href protocol guard (#431): link only for http(s) URLs.
+  const pr = isHttpUrl(prUrl)
+  const issue = isHttpUrl(issueUrl)
+  if (!pr && !issue) return null
+  return (
+    <>
+      {pr ? (
+        // The run shipped as a PR (review-gate Draft PR, or agent-opened), or worked on one
+        // (#407) — the link stays reachable after the panel is gone.
+        <a
+          data-slot="pr-link"
+          href={prUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-medium text-foreground underline-offset-2 hover:underline"
+        >
+          PR ↗
+        </a>
+      ) : null}
+      {/* #526: an issue-subject run (om-prepare-issue) links the issue it created — it declares
+          no PR, so without this the created issue was unreachable from the UI. */}
+      {issue ? (
+        <a
+          data-slot="issue-link"
+          href={issueUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-medium text-foreground underline-offset-2 hover:underline"
+        >
+          Issue ↗
+        </a>
+      ) : null}
+    </>
   )
 }
 

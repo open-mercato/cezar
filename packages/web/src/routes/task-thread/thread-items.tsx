@@ -3,6 +3,7 @@ import {
   BrainIcon,
   CheckIcon,
   ChevronRightIcon,
+  CircleAlertIcon,
   CopyIcon,
   FileTextIcon,
   FolderInputIcon,
@@ -22,6 +23,7 @@ import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'rea
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Diff } from '@/components/diff'
 import { ZoomableImage } from '@/components/zoomable-image'
 import { Link } from '@/lib/project-router'
 import { isImageAttachmentName, type FileDiff, type ToolKind, type UiToolItem } from '@open-mercato/cezar-api-client'
@@ -32,6 +34,7 @@ import { Markdown } from './markdown'
 import { ReviewCommentsBlock } from './review-comments-block'
 import { useDraft } from './thread-draft'
 import { splitToolTitle, streakLabel, type ContextGroupBlock } from './thread-groups'
+import { diffTotals, toDiffFileChange } from './tool-diff'
 import { useThreadCardCache } from './thread-open-cards'
 import { isNearBottom } from './thread-scroll'
 import { MessageTime, clockLabel, elapsedSince, exactLabel, useNow } from './thread-time'
@@ -358,16 +361,26 @@ export function AssistantMessage({ text }: { text: string }) {
   )
 }
 
-/** A dim (lifecycle/note) or danger (error) transcript line. */
+/**
+ * A system line in the transcript. A dim one (lifecycle, note — "session closed after 15m of
+ * inactivity") is a quiet aside: small, muted, a dot. A danger one (a failed step, a backend
+ * error) is marked by its icon alone — the words stay in the reading colour, because a red
+ * sentence per event turned one failure into a wall of red.
+ */
 export function NoteLine({ note }: { note: ThreadNote }) {
+  const danger = note.tone === 'danger'
   return (
     <div
       data-slot="note-line"
       data-tone={note.tone}
-      className={cn('text-xs leading-5', note.tone === 'danger' ? 'text-danger' : 'text-soft-foreground')}
+      className={cn('flex min-w-0 items-start gap-2 text-xs leading-5', danger ? 'text-muted-foreground' : 'text-soft-foreground')}
     >
-      {note.tone === 'danger' ? '✗ ' : '· '}
-      {note.text}
+      {danger ? (
+        <CircleAlertIcon aria-hidden="true" className="mt-[3px] size-3.5 shrink-0 text-danger" />
+      ) : (
+        <span aria-hidden="true" className="mx-[5px] mt-2 size-1 shrink-0 rounded-full bg-current opacity-60" />
+      )}
+      <span className="min-w-0 break-words first-letter:uppercase">{note.text}</span>
     </div>
   )
 }
@@ -574,58 +587,21 @@ function ToolOutput({ text, streaming }: { text: string; streaming: boolean }) {
 }
 
 /**
- * NAMED BOUNDARY for R5: the real word-level `<Diff>` replaces this component's body without
- * touching the tool card. Until then, edits render as a plain unified block from the item's
- * `diffs` — old lines tinted del, new lines tinted add, `unified` text preferred when present.
+ * A tool call's file edits, on the cockpit's ONE diff surface (`@/components/diff` — the Changes
+ * tab's renderer: word-level marks, syntax highlighting, a collapsible card per file).
+ * `toDiffFileChange` adapts the protocol's `FileDiff` to the facade's shape. The "N files changed"
+ * totals line is the card row's own `+a −d` when there is a single file, so it is hidden there.
  */
 export function InlineDiffPreview({ diffs }: { diffs: FileDiff[] }) {
+  const files = useMemo(() => diffs.map(toDiffFileChange), [diffs])
   return (
-    <>
-      {diffs.map((diff, index) => (
-        <div key={`${diff.path}:${index}`} data-slot="diff-preview" className="min-w-0">
-          <div className="px-4 pt-2.5 font-mono text-[11px] text-muted-foreground">
-            {diff.path}
-          </div>
-          <pre className="overflow-x-auto py-2 font-mono text-xs leading-[1.7] whitespace-pre">
-            {diff.unified !== undefined
-              ? diff.unified.split('\n').map((line, i) => <DiffLine key={i} text={line} />)
-              : [
-                  ...diffLines(diff.oldText).map((line, i) => (
-                    <span key={`old-${i}`} className="block bg-diff-del px-4 text-muted-foreground">
-                      - {line}
-                    </span>
-                  )),
-                  ...diffLines(diff.newText).map((line, i) => (
-                    <span key={`new-${i}`} className="block bg-diff-add px-4">
-                      + {line}
-                    </span>
-                  )),
-                ]}
-          </pre>
-        </div>
-      ))}
-    </>
-  )
-}
-
-/** Old/new file text → displayable lines; `null`/absent sides (new files) contribute none. */
-function diffLines(text: string | null | undefined): string[] {
-  if (text === null || text === undefined || text === '') return []
-  return text.replace(/\n$/, '').split('\n')
-}
-
-function DiffLine({ text }: { text: string }) {
-  return (
-    <span
-      className={cn(
-        'block px-4',
-        text.startsWith('+') && 'bg-diff-add',
-        text.startsWith('-') && 'bg-diff-del text-muted-foreground',
-        text.startsWith('@@') && 'text-soft-foreground',
-      )}
-    >
-      {text}
-    </span>
+    <div data-slot="diff-preview" className="min-w-0 p-2">
+      <Diff
+        files={files}
+        wrap
+        className={cn('min-w-0 [&_[data-slot=diff-file-slot]:last-child]:pb-0', files.length === 1 && '[&>[data-slot=diff-totals]]:hidden')}
+      />
+    </div>
   )
 }
 
@@ -652,10 +628,14 @@ export function ToolCard({
   nested = [],
   cacheKey,
   renderNested,
+  variant = 'plain',
 }: {
   item: UiToolItem
   nested?: readonly ThreadEntry[]
   cacheKey?: string
+  /** `plain` is the thread's quiet line. `row` is one row of a bordered list (the work group's
+   *  `ToolList`): roomier, an icon tile, an explicit done mark, the body flush inside the row. */
+  variant?: 'plain' | 'row'
   renderNested?: (entries: readonly ThreadEntry[], scope: string) => ReactNode
 }) {
   const cache = useThreadCardCache()
@@ -674,6 +654,10 @@ export function ToolCard({
     nested.length > 0
   const open = hasDetail && (userOpen ?? defaultOpen(item))
   const { verb, detail } = splitToolTitle(item.title)
+  const row = variant === 'row'
+  const failed = item.status === 'failed'
+  // How big the edit was, readable without opening it.
+  const totals = useMemo(() => diffTotals(item.diffs), [item.diffs])
 
   const Icon = TOOL_ICONS[item.toolKind] ?? WrenchIcon
   return (
@@ -693,12 +677,26 @@ export function ToolCard({
     >
       <CollapsibleTrigger
         disabled={!hasDetail}
-        className="group -mx-1.5 flex min-h-7 w-[calc(100%+0.75rem)] items-center gap-2 rounded-md px-1.5 text-left text-[13px] outline-none enabled:hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/40 data-[state=open]:bg-muted/60"
+        className={cn(
+          'group flex items-center text-left text-[13px] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40',
+          row
+            ? 'min-h-10 w-full gap-2.5 px-3 py-1.5 enabled:hover:bg-muted/50 focus-visible:ring-inset data-[state=open]:bg-muted/40'
+            : '-mx-1.5 min-h-7 w-[calc(100%+0.75rem)] gap-2 rounded-md px-1.5 enabled:hover:bg-muted data-[state=open]:bg-muted/60',
+        )}
       >
-        <Icon
-          aria-hidden
-          className={cn('size-3.5 shrink-0', item.status === 'failed' ? 'text-danger' : 'text-soft-foreground')}
-        />
+        {row ? (
+          <span
+            aria-hidden
+            className={cn(
+              'flex size-6 shrink-0 items-center justify-center rounded-md',
+              failed ? 'bg-danger/10 text-danger' : 'bg-muted text-muted-foreground',
+            )}
+          >
+            <Icon className="size-3.5" />
+          </span>
+        ) : (
+          <Icon aria-hidden className={cn('size-3.5 shrink-0', failed ? 'text-danger' : 'text-soft-foreground')} />
+        )}
         <span
           className={cn(
             'shrink-0 font-medium text-foreground',
@@ -715,6 +713,11 @@ export function ToolCard({
           {busy ? (
             <LoaderCircleIcon role="status" aria-label="Running" className="size-3.5 animate-spin text-soft-foreground" />
           ) : null}
+          {totals !== undefined && totals.adds + totals.dels > 0 ? (
+            <span data-slot="tool-diff-stat" className="font-mono text-[11px] tabular-nums">
+              <span className="text-success">+{totals.adds}</span> <span className="text-danger">−{totals.dels}</span>
+            </span>
+          ) : null}
           {item.status === 'failed' ? <span className="text-xs text-danger">failed</span> : null}
           {item.status === 'declined' ? <span className="text-xs text-soft-foreground">declined</span> : null}
           {item.toolKind === 'execute' && typeof item.exitCode === 'number' ? (
@@ -728,17 +731,22 @@ export function ToolCard({
               exit {item.exitCode}
             </span>
           ) : null}
+          {row && item.status === 'completed' ? (
+            <CheckIcon role="img" aria-label="Completed" className="size-3.5 shrink-0 text-soft-foreground" />
+          ) : null}
           <ChevronRightIcon
             aria-hidden
             className={cn(
-              'size-3.5 shrink-0 text-soft-foreground opacity-0 transition-[transform,opacity] group-hover:opacity-100 group-focus-visible:opacity-100 group-data-[state=open]:rotate-90 group-data-[state=open]:opacity-100',
+              'size-3.5 shrink-0 text-soft-foreground transition-[transform,opacity] group-data-[state=open]:rotate-90',
+              // A list row always shows that it opens; the quiet thread line only on approach.
+              !row && 'opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 group-data-[state=open]:opacity-100',
               !hasDetail && 'invisible',
             )}
           />
         </span>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="mt-1 mb-1.5 overflow-hidden rounded-lg bg-card-2">
+        <div className={cn('overflow-hidden bg-card-2', row ? 'border-t border-border' : 'mt-1 mb-1.5 rounded-lg')}>
           {item.error !== undefined && item.error !== '' ? (
             <div data-slot="tool-error" className="px-4 py-3 font-mono text-xs leading-[1.7] whitespace-pre-wrap text-danger">
               {item.error}
@@ -810,39 +818,5 @@ export function ImageItem({ image }: { image: ThreadImage }) {
       alt={image.name ?? 'image from the agent session'}
       className="max-h-72 max-w-full self-start rounded-xl border border-border"
     />
-  )
-}
-
-/**
- * Everything the agent did before it answered — tool calls, reasoning, interim remarks — folded
- * into one line: "Worked for 28s". The answer under it is what a returning reader wants first;
- * the work is one click away, in order, exactly as it streamed.
- */
-export function WorkGroup({
-  label,
-  count,
-  children,
-}: {
-  /** "Worked for 28s", or a plain fallback when the turn carries no usable clock. */
-  label: string
-  count: number
-  children: ReactNode
-}) {
-  return (
-    <Collapsible data-slot="work-group" className="group/work min-w-0">
-      <CollapsibleTrigger
-        title={`${count} ${count === 1 ? 'step' : 'steps'}`}
-        className="flex w-full items-center gap-1.5 border-b border-border pb-2.5 text-left text-[13.5px] text-muted-foreground outline-none hover:text-foreground focus-visible:text-foreground"
-      >
-        <span>{label}</span>
-        <ChevronRightIcon
-          aria-hidden="true"
-          className="size-3.5 transition-transform group-data-[state=open]/work:rotate-90"
-        />
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div className="flex flex-col gap-2 border-b border-border py-3">{children}</div>
-      </CollapsibleContent>
-    </Collapsible>
   )
 }
