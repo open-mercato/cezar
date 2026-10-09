@@ -1,7 +1,6 @@
 import type { TrackerAssociation } from '@open-mercato/cezar-contract';
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
 import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import {
@@ -206,8 +205,8 @@ const GRAPH_TAKEN_CAP = 500;
 /** Tail of an agent node's last turn kept as `{{nodes.<id>.summary}}`. */
 const NODE_SUMMARY_CAP = 4_000;
 import { freshContinuationContext } from './continuation-context.ts';
-
-const CHECK_OUTPUT_CAP = 20_000;
+import { DEFAULT_CHECK_TIMEOUT_MS, checkExitHint, formatCheckFailure, formatDuration, runCheckCommand } from './check-step.ts';
+import { buildCheckEnv } from '../core/agent-env.ts';
 
 async function configuredModelProvider(
   backend: RunnerId,
@@ -4775,26 +4774,27 @@ export class RunManager {
       } else {
         const rendered = nodeToStep(node);
         if (rendered.command) rendered.command = renderNodeRefs(rendered.command, outputs);
-        const { ok, output, exitCode } = await this.runCheckStep(state, rendered, emit);
+        const { ok, output, failure, exitCode, timedOut } = await this.runCheckStep(state, rendered, emit);
         if (state.cancelled) return null;
         outputs.set(node.id, { exitCode, output });
         if (ok) {
           this.finishStep(runId, node.id, 'done', undefined, emit);
           port = 'pass';
         } else {
-          checkFailure = output;
+          checkFailure = failure;
+          const timeoutReason = `\`${rendered.command}\` timed out after ${formatDuration(rendered.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS)} and was killed`;
           if (node.retryOn?.length && !node.retryOn.includes(exitCode)) {
             const codes = node.retryOn.join(', ');
-            const error = `check "${node.id}" exited ${exitCode}, which onFail.retryOn (${codes}) does not retry`;
+            const verdict = timedOut ? 'timed out' : `exited ${exitCode}`;
             emit({
               type: 'note',
               stepId: node.id,
-              message: `check exited ${exitCode} — not retried (onFail.retryOn: ${codes})`,
+              message: `check ${verdict} — not retried (onFail.retryOn: ${codes})`,
             });
-            this.finishStep(runId, node.id, 'failed', `\`${rendered.command}\` exited ${exitCode}`, emit);
-            return error;
+            this.finishStep(runId, node.id, 'failed', timedOut ? timeoutReason : `\`${rendered.command}\` exited ${exitCode}`, emit);
+            return `check "${node.id}" ${verdict}, which onFail.retryOn (${codes}) does not retry`;
           }
-          this.finishStep(runId, node.id, 'failed', `\`${rendered.command}\` exited non-zero`, emit);
+          this.finishStep(runId, node.id, 'failed', timedOut ? timeoutReason : `\`${rendered.command}\` exited non-zero`, emit);
           port = 'fail';
         }
       }
@@ -5591,7 +5591,7 @@ export class RunManager {
     const treeBlocks = [treeReports, treeInbox].filter((block): block is string => Boolean(block));
     if (treeBlocks.length) userPrompt = `${treeBlocks.join('\n\n')}\n\n---\n\n${userPrompt}`;
     if (checkFailure) {
-      userPrompt += `\n\nA verification command failed after the previous attempt. Fix the cause. Failing output:\n\n${checkFailure}`;
+      userPrompt += `\n\nA verification command failed after the previous attempt. Fix the cause.\n\n${checkFailure}`;
     }
     if (images?.length) {
       emit({
@@ -6730,44 +6730,36 @@ export class RunManager {
     }
   }
 
-  private runCheckStep(
+  private async runCheckStep(
     state: ActiveRun,
     step: WorkflowStepDef,
     emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void,
-  ): Promise<{ ok: boolean; output: string; exitCode: number }> {
+  ): Promise<{ ok: boolean; output: string; failure: string; exitCode: number; timedOut: boolean }> {
     const command = step.command as string;
+    const timeoutMs = step.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS;
     emit({ type: 'note', stepId: step.id, message: `$ ${command}` });
-    return new Promise((resolve) => {
-      // Check steps run in the same cwd as the agent steps — the worktree.
-      const child = spawn('bash', ['-lc', command], { cwd: state.cwd, env: process.env });
-      state.interrupt = () => child.kill('SIGTERM');
-
-      let output = '';
-      const collect = (chunk: Buffer) => {
-        if (output.length < CHECK_OUTPUT_CAP) {
-          output += chunk.toString('utf8');
-          if (output.length >= CHECK_OUTPUT_CAP) output += '\n… (output truncated)';
-        }
-      };
-      child.stdout.on('data', collect);
-      child.stderr.on('data', collect);
-      child.on('error', (err) => {
-        state.interrupt = () => undefined;
-        const message = `failed to spawn: ${err.message}`;
-        emit({ type: 'check-output', stepId: step.id, command, text: message, exitCode: -1 });
-        resolve({ ok: false, output: message, exitCode: -1 });
-      });
-      child.on('close', (code) => {
-        state.interrupt = () => undefined;
-        const trimmed = output.trim() || '(no output)';
-        // `code` is null when a signal killed the child; -1 then, the same value an
-        // unspawnable command reports, and one no `retryOn` list can name — neither
-        // is a verdict on the diff, so neither buys the agent another attempt.
-        const exitCode = code ?? -1;
-        emit({ type: 'check-output', stepId: step.id, command, text: trimmed, exitCode });
-        resolve({ ok: code === 0, output: trimmed, exitCode });
-      });
-    });
+    // Check steps run in the same cwd as the agent steps — the worktree.
+    const check = runCheckCommand({ command, cwd: state.cwd, env: buildCheckEnv(), timeoutMs });
+    state.interrupt = check.kill;
+    const result = await check.result;
+    state.interrupt = () => undefined;
+    const hint = checkExitHint(result);
+    const text = result.timedOut
+      ? `${result.output}\n(timed out after ${formatDuration(timeoutMs)} and was killed)`
+      : hint
+        ? `${result.output}\n(${hint})`
+        : result.output;
+    // A timeout is cezar's kill, not a verdict on the diff: report -1, the code no `retryOn`
+    // list can name, whatever status the killed shell managed to exit with.
+    const exitCode = result.timedOut ? -1 : result.exitCode;
+    emit({ type: 'check-output', stepId: step.id, command, text, exitCode });
+    return {
+      ok: result.ok,
+      output: result.output,
+      failure: formatCheckFailure(command, result, timeoutMs),
+      exitCode,
+      timedOut: result.timedOut,
+    };
   }
 
   private finishStep(

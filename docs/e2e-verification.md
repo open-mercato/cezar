@@ -215,24 +215,29 @@ for follow-ups.
 
 ## What cezar gives the check, and what it does not
 
-- **cwd** is the task's worktree, and the command runs under `bash -lc`.
-- **Environment** is the cezar server's own `process.env`. There is no
-  per-step `env:` — export the model credential your provider reads
-  (`AI_GATEWAY_API_KEY`, `ANTHROPIC_API_KEY`, …) before starting cezar, or use
-  a subscription with `npx e2e login`. Tests with no agent step need no model
-  at all.
-- **`CI` is not set**, so e2e uses its local defaults: no retries, workers at
-  half the cores, and a read-write replay cache — a verified `agent.act`
-  recorded on one attempt replays without a model call on the next. Set `CI=1`
-  in the command to get the stricter CI defaults instead.
-- **No timeout.** cezar does not bound a check step; e2e's own startup,
-  test and exploration timeouts are what stop a hung app from holding the
-  task's parallel slot. Keep them configured.
+- **cwd** is the task's worktree, and the command runs under `bash -c`, without
+  login profiles.
+- **Environment** is the least-privilege set agents get, not the cezar
+  server's own `process.env`: the model credential your provider reads
+  (`AI_GATEWAY_API_KEY`, `ANTHROPIC_API_KEY`, …) is dropped unless you forward
+  it with `CEZ_ENV_PASSTHROUGH=AI_GATEWAY_API_KEY` when starting cezar, or use
+  a subscription with `npx e2e login`. There is no per-step `env:`. Tests with
+  no agent step need no model at all.
+- **cezar does not set `CI`**, so e2e uses its local defaults: no retries,
+  workers at half the cores, and a read-write replay cache — a verified
+  `agent.act` recorded on one attempt replays without a model call on the next.
+  Set `CI=1` in the command to get the stricter CI defaults instead.
+- **A timeout.** The check's process group is killed after `timeoutMs`
+  (default 30 minutes). A killed check reports exit -1 to the retry gate, so
+  with `retryOn: [1]` a timeout fails the run instead of buying another agent
+  attempt. Keep e2e's own startup, test and exploration timeouts below the
+  bound so a hung app fails as a verdict, with its report, rather than as a
+  kill.
 - **No service orchestration.** e2e starts `app.command` and nothing else. A
   database or a mock stack has to be up before the run, or started by the
   command the config names.
-- **Cancelling a task** sends SIGTERM to the running check, and e2e stops the
-  app process it started.
+- **Cancelling a task** sends SIGTERM to the check's process group, and e2e
+  stops the app process it started.
 
 ## Cost
 

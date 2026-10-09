@@ -247,6 +247,7 @@ steps:
   - id: verify
     name: Verify
     command: "npm test"          # a check step: exit 0 passes
+    # timeoutMs: 600000          # optional; default 30 min, then the check is killed and fails
     onFail:
       retry: implement           # loop back to an earlier step…
       max: 2                     # …at most twice
@@ -254,8 +255,23 @@ steps:
 ```
 
 `{{task}}` is replaced with the task text you typed. When a check fails and loops
-back, its failing output is appended to the retried agent's prompt so the next
-attempt can see what broke.
+back, the command, its exit code and its output are appended to the retried
+agent's prompt so the next attempt can see what broke. That output is capped at
+20,000 characters — the first quarter and the last three quarters, so the final
+assertion survives — with ANSI colour codes stripped.
+
+A check runs as `bash -c` in the task's worktree, without login profiles, with
+the least-privilege environment agents get minus their backend credentials and
+per-task temp directory (see `CEZ_ENV_PASSTHROUGH` to forward a variable it
+needs, such as a test database URL). A cezar started from a GUI launcher has no
+login-shell PATH, so a tool installed through nvm or asdf exits 127 there; start
+cezar from a shell instead. A check's process group is killed after `timeoutMs`
+(default 30 minutes) and the step fails; the group is also killed on cancel and
+when cezar exits, and a process the check backgrounded that still holds the
+output pipe is reaped after 5 seconds. A process that escapes the group into its
+own session is beyond every signal, but the step still fails at the bound. Every
+non-zero exit's failure text names `CEZ_ENV_PASSTHROUGH`; exit 127 also points at
+PATH.
 
 `onFail.retryOn` narrows the loop to the exit codes that mean *the work is
 wrong*. Omitted, any non-zero code loops back — right for `npm test`, which
@@ -264,7 +280,9 @@ distinguishes the two: an `e2e` browser run exits 1 on a failed test, but 2 on a
 config or credential error and 3 on an engine failure, none of which the agent
 can fix and each of which would otherwise cost a full agent attempt per retry.
 `retryOn: [1]` loops on the verdict and fails the run on the infrastructure,
-naming the code. See [browser and mobile e2e as a verification
+naming the code. A check killed at its `timeoutMs` counts as exit -1, which no
+list names: with `retryOn` a timeout fails the run, without it a timeout loops
+back like any other failure. See [browser and mobile e2e as a verification
 step](e2e-verification.md) for the worked chains, including an independent QA
 exploration as the gate.
 
@@ -321,7 +339,7 @@ whose counter never resets within a run, so every run is finite.
 | `start` / `end` | `next` / — (`status: success\|failed`) | — |
 | `loop` (`max`) | `repeat`, `exhausted` | `iteration`, `max` |
 | `agent` (`prompt`, `skill`, `runner`, `model`, `session.continue`, `verdicts`; after a fork also `review`, `budgetUsd`) | `done`, `failed` — or one port per verdict | `summary`, `verdict`, `costUsd` (a fork branch: `runId`, `status`, `summary`) |
-| `check` (`command`) | `pass`, `fail` | `exitCode`, `output` |
+| `check` (`command`, optional `timeoutMs` — default 30 min, then the check and its process group are killed — and `retryOn`, the exit codes a loop retries) | `pass`, `fail` | `exitCode`, `output` |
 | `gate.human` (`message`, `timeoutMs?`) | `approve`, `reject` (+`timeout`) | `comment` |
 | `ask-user` (`question`, `options?`, `timeoutMs?`) | `answered` (+`timeout`) | `answer` |
 | `dispatch` (`prompt`, `runner?`, `budgetUsd?`) | `done`, `failed` | `runId`, `status`, `summary` |
@@ -418,8 +436,8 @@ Useful environment variables:
 | `CEZ_HIDE_COST=1` | Hide backend-reported monetary cost throughout the browser cockpit while leaving raw input/output token counts visible. Only the exact value `1` enables it; telemetry and API payloads are unchanged, and a restart is required after changing it. |
 | `CEZ_HIDE_TOKEN_METRICS=1` | Legacy master switch that hides both token usage and cost. It takes precedence over the two independent flags; only the exact value `1` enables it, payloads are unchanged, and a restart is required. |
 | `GITHUB_TOKEN` | Fallback for GitHub reads/PRs when `gh` isn't authenticated. |
-| `CEZ_ENV_PASSTHROUGH=A,B` | Forward these extra host env vars to spawned agents. By default agents get a least-privilege env (safe shell/toolchain vars + the backend's own auth + `GITHUB_TOKEN` + `CEZ_*`), not your full environment — use this to add a var an agent needs. |
-| `CEZ_AGENT_ENV_FULL=1` | Escape hatch: give spawned agents the full host environment (pre-hardening behavior). Off by default; only set it if you understand that this hands every host secret to the agent process. |
+| `CEZ_ENV_PASSTHROUGH=A,B` | Forward these extra host env vars to spawned agents and to workflow check commands. By default agents get a least-privilege env (safe shell/toolchain vars + the backend's own auth + `GITHUB_TOKEN` + `CEZ_*`), not your full environment, and checks get the same minus the backend's auth plus `CI` — use this to add a var an agent or a check needs. |
+| `CEZ_AGENT_ENV_FULL=1` | Escape hatch: give spawned agents and workflow check commands the full host environment (pre-hardening behavior). Off by default; only set it if you understand that this hands every host secret to the agent process. |
 | `CEZ_AGENT_TMPDIR=0` | Stop giving each task its own temp directory and hand agents the host `TMPDIR` again (pre-#785 behavior). On by default: every run gets `TMPDIR`/`TEMP`/`TMP` pointing at `.ai/cezar/tmp/<task-id>`, created and write-probed before the agent spawns and reaped when the run ends, so concurrent tasks stop sharing one directory and a task refuses to start rather than run against a temp directory that silently swallows its shell output (see Troubleshooting below). Only an exact `0` disables it, and it disables the whole thing — the pre-spawn check included, so this stays an escape hatch you can actually take. |
 | `CEZ_REDACT_SECRETS=0` | Disable scrubbing of credential values/token shapes from the on-disk state (the NDJSON transcript and the free-text fields of `runs.json`). On by default; leave it on. Best-effort defense-in-depth, not a guarantee: it catches known token shapes and the values of your own secret-named env vars, so a credential in neither category can still get through. |
 | `CEZ_TITLE_UPDATES=0` | Turn off the live task-title refresh (namer re-runs on each turn end). The Settings → Agents toggle overrides this default. |

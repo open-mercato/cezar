@@ -172,6 +172,11 @@ describe('opening workflows', () => {
 })
 
 describe('graphYaml', () => {
+  it("keeps a check step's timeoutMs from the v1 step through the graph into the YAML", () => {
+    const yaml = graphYaml('Flow', '', compileSteps([{ id: 'build', command: 'npm run build', timeoutMs: 90_000 }]))
+    expect(yaml).toContain('    timeoutMs: 90000')
+  })
+
   it('emits the version: 2 shape with nested session and block prompts', () => {
     const yaml = graphYaml('Flow', '', {
       nodes: [

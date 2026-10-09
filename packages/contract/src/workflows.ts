@@ -33,6 +33,9 @@ export const workflowStepDefSchema = z
     bashAllowlist: z.array(z.string()).optional(),
     // check step
     command: z.string().optional(),
+    /** Kill the check's whole process tree and fail the step after this long (default 30 min).
+     *  Capped at the largest delay `setTimeout` honours; above it Node fires after 1 ms. */
+    timeoutMs: z.number().int().positive().max(2_147_483_647).optional(),
     onFail: z
       .object({
         retry: z.string().min(1),
@@ -44,6 +47,9 @@ export const workflowStepDefSchema = z
   })
   .refine((s) => Boolean(s.command) !== Boolean(s.prompt ?? s.skill), {
     message: 'a step is either an agent step (prompt/skill) or a check step (command), not both',
+  })
+  .refine((s) => s.timeoutMs === undefined || Boolean(s.command), {
+    message: 'timeoutMs applies only to a check step (command)',
   });
 export type WorkflowStepDef = z.infer<typeof workflowStepDefSchema>;
 
@@ -105,6 +111,7 @@ export const workflowGraphNodeSchema = z.discriminatedUnion('type', [
     ...graphNodeBase,
     type: z.literal('check'),
     command: z.string().min(1),
+    timeoutMs: z.number().int().positive().max(2_147_483_647).optional(),
     retryOn: z.array(z.number().int().positive()).optional(),
   }),
   z.object({ ...graphNodeBase, type: z.literal('gate.human'), message: z.string().min(1), timeoutMs: waitMs.optional() }),

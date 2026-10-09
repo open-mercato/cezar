@@ -347,12 +347,7 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
   }
 
   const backendPrefixes = BACKEND_ALLOW_PREFIXES[opts.backend] ?? BACKEND_ALLOW_PREFIXES.claude;
-  const passthrough = upperSet(
-    (readVar(source, 'CEZ_ENV_PASSTHROUGH') ?? '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean),
-  );
+  const passthrough = readPassthrough(source);
 
   // Cloud auth is unlocked only for Claude Code backends. Keep this gate tied
   // to backend identity, not to whether an allowlist happens to contain the
@@ -400,4 +395,43 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
     if (matchesPrefix(key, BASE_ALLOW_PREFIXES) && !looksSecret(key)) return true;
     return false;
   }
+}
+
+function readPassthrough(source: NodeJS.ProcessEnv): ReadonlySet<string> {
+  return upperSet(
+    (readVar(source, 'CEZ_ENV_PASSTHROUGH') ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+}
+
+/** CI-convention flags a check command's toolchain reads to pick non-interactive output. */
+const CHECK_ALLOW_NAMES: ReadonlySet<string> = upperSet(['CI']);
+
+/**
+ * The environment a workflow check command runs in: the same least-privilege base an agent's
+ * own shell gets (minus the per-task temp directory), `CEZ_*`, `gh` auth and the
+ * `CEZ_ENV_PASSTHROUGH` / `CEZ_AGENT_ENV_FULL` escape hatches — but no backend's model
+ * credentials, which a shell command has no use for.
+ */
+export function buildCheckEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  if (isTruthy(readVar(source, 'CEZ_AGENT_ENV_FULL'))) return { ...source };
+  const passthrough = readPassthrough(source);
+  const out: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(source)) {
+    if (value === undefined) continue;
+    const key = name.toUpperCase();
+    if (
+      key.startsWith('CEZ_') ||
+      CHECK_ALLOW_NAMES.has(key) ||
+      GH_ALLOW_NAMES.has(key) ||
+      passthrough.has(key) ||
+      BASE_ALLOW_NAMES.has(key) ||
+      (matchesPrefix(key, BASE_ALLOW_PREFIXES) && !looksSecret(key))
+    ) {
+      out[name] = value;
+    }
+  }
+  return out;
 }
