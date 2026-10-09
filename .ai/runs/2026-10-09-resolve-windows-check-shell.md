@@ -30,4 +30,4 @@ Risks: Windows executable discovery and shell quoting can affect command executi
 ### Phase 2: Documentation and validation
 
 - [x] 2.1 Document Windows check shell behavior — cd9d347b
-- [x] 2.2 Run the full validation gate — 645ae0e6 (typecheck/build/package pass; broad-suite failures reproduce on origin/main control)
+- [x] 2.2 Run the full validation gate — 645ae0e6 (typecheck/build/unit/package pass; broad suite rerun with `env -u CEZ_API_URL -u CEZ_BIN TMPDIR=/tmp TEMP=/tmp` exceeded 240s without a summary)
