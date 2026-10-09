@@ -126,7 +126,7 @@ export function TaskComposer({
       disabled={providerBlocked || (!sessionOpen && !queued && !continuable)}
       // Only reachable now by a closed run with NO session to resume — which is exactly the one
       // case where Continue is not on offer either.
-      disabledReason={providerBlocked ? providerReason : 'Session closed — no session to resume.'}
+      disabledReason={providerBlocked ? providerReason : 'This session is closed and cannot be resumed'}
       // The engine pills ride the enabled footer, so the picked runner/model and the typed prompt
       // reach `POST /continue` in one request.
       footerEnd={
@@ -140,11 +140,15 @@ export function TaskComposer({
       // are a message on their own.
       allowEmptySubmit={continuable || hasDiffComments}
       sendAriaLabel={continuable ? 'Continue' : 'Send'}
+      // The closed-but-resumable box names its primary action: an arrow alone does not say that
+      // sending an EMPTY box reopens the session. Not on a failed run — the failure alert right
+      // above the dock already carries a Continue button, and two in a row is one too many.
+      sendLabel={continuable && run.status !== 'failed' ? 'Continue' : undefined}
       placeholder={
-        queued ? 'Add to the prompt — sent when the run starts…'
-        : continuable ? 'Continue — add a prompt, or send to just reopen the session…'
-        : run.status === 'waiting' ? 'Reply — / for skills, @ for files…'
-        : 'Message the agent — / for skills, @ for files…'
+        queued ? 'Add to the prompt — it is sent when the run starts'
+        : continuable ? 'Add instructions, or just continue to reopen the session'
+        : run.status === 'waiting' ? 'Reply to the agent — / for skills, @ for files'
+        : 'Message the agent — / for skills, @ for files'
       }
       autocompleteSkills
       quickReplies
@@ -159,6 +163,25 @@ export function TaskComposer({
  * shared scroller, centred on the thread's reading measure. `bottom: var(--kb)` is the iOS
  * keyboard lift. `overlay` floats above the dock (the thread's jump-to-latest pill).
  */
+/**
+ * The dock's skin for the SHARED composer (`@/components/composer`, also the /new hero — which
+ * this must not restyle). One calm rounded surface; the paperclip and mic stay quiet until
+ * approached; the lime send is the only loud thing in the box.
+ *
+ * Written as descendant overrides because the composer exposes no class seam of its own. They
+ * key on its `data-slot`s and the Button's `data-variant`/`data-size`, never on its class names.
+ */
+const COMPOSER_SKIN = cn(
+  '[&_[data-slot=composer]]:rounded-2xl [&_[data-slot=composer]]:shadow-sm',
+  // One soft ring instead of a bright border plus a wide halo.
+  '[&_[data-slot=composer]:focus-within]:border-ring/50 [&_[data-slot=composer]:focus-within]:ring-[3px] [&_[data-slot=composer]:focus-within]:ring-ring/15',
+  // A disabled box reads as a surface that is switched off, not as a faded live one.
+  '[&_[data-slot=composer][data-disabled]]:bg-muted/40 [&_[data-slot=composer][data-disabled]]:opacity-100 [&_[data-slot=composer][data-disabled]]:shadow-none',
+  '[&_[data-slot=composer]_[data-slot=textarea]]:px-4 md:[&_[data-slot=composer]_[data-slot=textarea]]:px-[18px] md:[&_[data-slot=composer]_[data-slot=textarea]]:pt-3.5',
+  '[&_[data-slot=composer]_[data-variant=ghost][data-size=icon-sm]]:rounded-full [&_[data-slot=composer]_[data-variant=ghost][data-size=icon-sm]]:text-soft-foreground [&_[data-slot=composer]_[data-variant=ghost][data-size=icon-sm]:hover]:text-foreground',
+  '[&_[data-slot=composer]_[data-variant=primary]]:rounded-full',
+)
+
 export function TaskDock({
   children,
   overlay,
@@ -193,6 +216,7 @@ export function TaskDock({
       <div
         className={cn(
           'mx-auto flex w-full max-w-[var(--measure)] flex-col gap-1.5 md:gap-2.5',
+          COMPOSER_SKIN,
           floating && 'pointer-events-auto',
         )}
       >
