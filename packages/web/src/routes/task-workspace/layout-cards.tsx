@@ -1,4 +1,4 @@
-import { ChevronDownIcon, Columns3Icon, InfoIcon, PencilIcon, PlusIcon, XIcon } from 'lucide-react'
+import { ChevronDownIcon, Columns3Icon, MessageSquareTextIcon, PencilIcon, PlusIcon, XIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
@@ -37,9 +37,9 @@ export function LayoutCards({
 }: {
   layouts: readonly WorkspaceLayout[]
   active: string
-  /** The fixed Overview card is showing; no saved layout wears the active mark while it is. */
+  /** The fixed Chat card is showing; no saved layout wears the active mark while it is. */
   overviewActive?: boolean
-  /** Present when the host offers the fixed Overview card. */
+  /** Present when the host offers the fixed Chat card. */
   onSelectOverview?: () => void
   onSelect: (name: string) => void
   onRename: (name: string, requested: string) => void
@@ -51,7 +51,7 @@ export function LayoutCards({
   return (
     <div data-slot="layout-cards" className="flex items-end gap-0.5">
       {/* The one card that is not a saved layout: it cannot be closed, renamed or reordered,
-          and it is always first. It is the task itself — title, state, facts, actions. */}
+          and it is always first. It is the task's home — its bar, then the conversation. */}
       {onSelectOverview ? (
         <Button
           type="button"
@@ -66,8 +66,8 @@ export function LayoutCards({
             overviewActive && 'border-foreground text-foreground',
           )}
         >
-          <InfoIcon aria-hidden="true" className="size-3.5 shrink-0" />
-          Overview
+          <MessageSquareTextIcon aria-hidden="true" className="size-3.5 shrink-0" />
+          Chat
         </Button>
       ) : null}
       {visible.map((layout) => (

@@ -122,6 +122,11 @@ export function TaskWorkspaceRoute({ view }: { view?: ViewId }) {
   return <WorkspaceView run={run.data} deepLinkView={view} onMarkedUnread={suppressAutoReadFor} />
 }
 
+/** A saved layout that is nothing but the conversation — what the fixed Chat card stands in for. */
+function isPlainChat(layout: { columns: readonly { view: ViewId }[] }): boolean {
+  return layout.columns.length === 1 && layout.columns[0]?.view === 'session'
+}
+
 function DeepLinkLoading({ view }: { view?: ViewId }) {
   if (view === 'files') return <GitTabLoading tab="files" />
   // Commits has no skeleton of its own — it rides the Changes one, as its route always has.
@@ -219,19 +224,29 @@ function WorkspaceView({
   const markedUnread = useCallback(() => onMarkedUnread(run.id), [onMarkedUnread, run.id])
 
   /**
-   * The fixed Overview card: the task's title, state, facts and actions as a page of its own,
-   * which is what lets the strip above every other layout stay one line.
+   * The fixed Chat card: the task's home — its bar (title, state, facts, actions) and the
+   * conversation under it. It is always the first card, cannot be closed or renamed, and is where
+   * a task opens. Every other layout shows the strip alone.
    *
-   * Not a saved layout — it has no columns, cannot be closed or renamed, and is never the default
-   * — so it lives here rather than in the layouts the host stores. It is a way of looking, reset
-   * per task for the same reason the drawer below is: one route element serves every task.
+   * It stands in for the plain one-column Chat layout the host keeps by default, so that layout
+   * is not drawn a second time as a card of its own: while the active saved layout is such a
+   * plain chat (or there is none), the fixed card is what is showing. `pinned` is the other way
+   * in — the user clicking it while some other layout is the saved active one. Reset per task for
+   * the same reason the drawer below is: one route element serves every task.
    */
-  const [overview, setOverview] = useState(false)
-  const overviewFor = useRef(run.id)
-  if (overviewFor.current !== run.id) {
-    overviewFor.current = run.id
-    setOverview(false)
+  const [pinned, setPinned] = useState(false)
+  const pinnedFor = useRef(run.id)
+  if (pinnedFor.current !== run.id) {
+    pinnedFor.current = run.id
+    setPinned(false)
   }
+  const setOverview = setPinned
+  const activeIsPlainChat = layouts.layout === undefined || layouts.layout === null || isPlainChat(layouts.layout)
+  const overview = pinned || (layouts.ready && activeIsPlainChat)
+  const cardLayouts = useMemo(
+    () => layouts.state.layouts.filter((layout) => !isPlainChat(layout)),
+    [layouts.state.layouts],
+  )
   const showOverview = useCallback(() => setOverview(true), [])
   // Picking, creating or deep-linking into a layout leaves the Overview.
   const pickLayout = useCallback(
@@ -285,7 +300,7 @@ function WorkspaceView({
   const tabs = useMemo(
     () => (
       <LayoutCards
-        layouts={layouts.state.layouts}
+        layouts={cardLayouts}
         active={layouts.state.active}
         overviewActive={overview}
         onSelectOverview={showOverview}
@@ -295,7 +310,7 @@ function WorkspaceView({
         onCreate={createLayout}
       />
     ),
-    [layouts.state.layouts, layouts.state.active, overview, showOverview, pickLayout, renameLayout, closeLayout, createLayout],
+    [cardLayouts, layouts.state.active, overview, showOverview, pickLayout, renameLayout, closeLayout, createLayout],
   )
 
   // The drawer's toggle, handed to the header's tab row. Memoized for the same reason `tabs` is.
@@ -438,10 +453,13 @@ function WorkspaceView({
         </div>
       ) : null}
       {overview ? (
-        // Its own scroller, carrying the slot every routed scroller carries.
-        <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        // The task's bar, then the conversation in the scroller slot every thread resolves.
+        <>
           <RunHeader run={run} onMarkedUnread={markedUnread} mode="overview" />
-        </div>
+          <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+            <ConversationColumn run={run} onMarkedUnread={onMarkedUnread} />
+          </div>
+        </>
       ) : !layouts.ready ? (
         // The host still owes us this task's layouts (spec §5.3). Painting the default card first
         // and swapping it a tick later would flash a workspace the user never built, so the view

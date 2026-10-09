@@ -89,9 +89,8 @@ import { isHttpUrl } from '@/lib/utils'
 import { Markdown } from './markdown'
 import { useContinuationProvider } from './continuation-provider'
 import { cliTargetResumes, cliTargetRunner, finishTitle, resumeHint, runActionFlags } from './run-actions'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
-import { StepRail, WorkflowSteps, activeStepIndex } from './step-rail'
+import { WorkflowSteps } from './step-rail'
 import { useFinishRun } from './use-finish-run'
 import { useDraft } from './thread-draft'
 
@@ -138,11 +137,11 @@ interface RunHeaderProps {
    *  - `full` (default): the strip, then the title, facts and actions under it.
    *  - `strip`: only the layout strip, with the run's actions folded into its right end — what the
    *    workspace shows above every layout.
-   *  - `overview`: no strip at all; the title, actions, facts and steps laid out as a page — the
-   *    body of the workspace's fixed Overview layout.
+   *  - `overview`: no strip at all; just the title, actions and facts — the bar at the head of the
+   *    workspace's fixed Chat layout.
    */
   mode?: 'full' | 'strip' | 'overview'
-  /** In `strip` mode, leave the run's actions out — the Overview below already shows them. */
+  /** In `strip` mode, leave the run's actions out — the bar below already shows them. */
   bareStrip?: boolean
 }
 
@@ -294,54 +293,18 @@ function RunHeaderView({
   )
 
   if (mode === 'overview') {
+    // The task's own bar — title, state, actions, then the facts — as the head of the fixed Chat
+    // layout. No strip: the workspace draws that once, above every layout.
     return (
-      <div data-slot="run-overview" className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
-        <div className="flex flex-col gap-3">
-          <div className="flex min-w-0 flex-wrap items-center gap-2.5">
+      <div data-slot="run-bar" className="shrink-0 border-b border-border bg-background px-4 pt-3 pb-3 sm:px-6 md:pt-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex min-w-0 flex-1 items-center gap-2.5">
             <EditableTitle run={run} />
             {status}
           </div>
-          <div className="flex flex-wrap items-center gap-1.5">{actionButtons}</div>
+          <div className="flex shrink-0 items-center gap-1.5">{actionButtons}</div>
         </div>
-
-        <Card className="gap-4 py-5">
-          <CardHeader className="px-5">
-            <CardTitle className="text-[15px]">At a glance</CardTitle>
-            <CardDescription>What this task runs on and what it has produced so far.</CardDescription>
-          </CardHeader>
-          <CardContent className="px-5 [&_[data-slot=run-meta]]:mt-0">{facts}</CardContent>
-        </Card>
-
-        <Card className="gap-4 py-5">
-          <CardHeader className="px-5">
-            <CardTitle className="text-[15px]">Run details</CardTitle>
-            <CardDescription>The agent, the model, what it spent, and where its work lives.</CardDescription>
-          </CardHeader>
-          <CardContent className="px-5">
-            <RunDetails
-              inline
-              run={run}
-              hint={hint}
-              showTokens={metricVisibility.tokens}
-              showCost={metricVisibility.cost}
-              continuationEngine={continuationEngine}
-            />
-          </CardContent>
-        </Card>
-
-        {run.steps.length > 0 ? (
-          <Card className="gap-4 py-5">
-            <CardHeader className="px-5">
-              <CardTitle className="text-[15px]">Workflow</CardTitle>
-              <CardDescription>
-                Step {Math.min(activeStepIndex(run.steps) + 1, run.steps.length)} of {run.steps.length}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="px-5">
-              <StepRail steps={run.steps} />
-            </CardContent>
-          </Card>
-        ) : null}
+        {facts}
         {overlays}
       </div>
     )
