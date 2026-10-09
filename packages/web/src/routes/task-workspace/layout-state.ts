@@ -153,12 +153,19 @@ export function dividerFloor(pair: number): number {
  *  card named `Czat`"). */
 export const DEFAULT_LAYOUT_NAME = VIEW_LABELS.session
 
-/** The state a task with nothing saved opens with: one full-width Conversation column. Also the
- *  recovery target for state that is missing, malformed, or names views this build does not have
- *  (spec §5.3 — "recover to the one-column Conversation default without an error"). A factory
- *  rather than a shared constant so no caller can mutate the default for everyone else. */
+/** The state a task with nothing saved opens with: one card per view — Chat, Changes, Commits,
+ *  Files, Browser, Graph — each a single full-width column, with Chat active. A new task has every
+ *  surface one click away instead of behind the `+`; the cards are ordinary saved layouts from
+ *  then on, so any of them can be closed, renamed or split.
+ *
+ *  Also the recovery target for state that is missing, malformed, or names views this build does
+ *  not have (spec §5.3). A factory rather than a shared constant so no caller can mutate the
+ *  default for everyone else. */
 export function defaultState(): WorkspaceState {
-  return { layouts: [{ name: DEFAULT_LAYOUT_NAME, columns: [{ view: 'session', width: 100 }] }], active: DEFAULT_LAYOUT_NAME }
+  return {
+    layouts: VIEW_IDS.map((view) => ({ name: VIEW_LABELS[view], columns: [{ view, width: 100 }] })),
+    active: DEFAULT_LAYOUT_NAME,
+  }
 }
 
 /**
@@ -588,6 +595,13 @@ export function openDeepLink(state: WorkspaceState, view: ViewId): WorkspaceStat
   if (current && current.columns.length === 1 && current.columns[0]?.view === view) {
     return state
   }
+  // The card a new task is born with for this view — still one column of it, still under the
+  // view's own name — is the card the link means: select it rather than minting `Changes 2`
+  // beside an untouched `Changes`. Renamed or split, it is the user's own layout and is left alone.
+  const born = state.layouts.find(
+    (layout) => layout.name === viewLabel(view) && layout.columns.length === 1 && layout.columns[0]?.view === view,
+  )
+  if (born) return selectLayout(state, born.name)
   // No adopting some OTHER saved layout that happens to show this view: spec §5.3 says the deep
   // link CREATES a new one-column layout and leaves existing layouts unchanged. The guard above
   // is what keeps a refresh idempotent — on reload the card this link made is already the active
