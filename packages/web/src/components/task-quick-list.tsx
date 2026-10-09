@@ -1,4 +1,4 @@
-import { ChevronDownIcon, ScaleIcon } from 'lucide-react'
+import { ChevronDownIcon, ChevronRightIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
 import { useHealth, usePinRun, useReferenceProjectId, useRunsForProject } from '@/api/queries'
 import { Link, scopeTo, useActiveProjectId, useProjectMatch } from '@/lib/project-router'
@@ -32,6 +32,10 @@ import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { bareButton } from '@/components/bare-control'
+import { needSections, sectionHasRun, useSectionOpenState } from '@/components/task-need-sections'
+import { TaskRowMenu, TaskRowRename, useTaskRowActions } from '@/components/task-row-actions'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { SidebarGroupLabel } from '@/components/ui/sidebar'
 
 /**
  * The sidebar's task quick-list (spec, "App shell & navigation"): Active/Archived tabs, then the
@@ -51,6 +55,7 @@ export function TaskQuickList({
   showCost = true,
   onTogglePin,
   limit = SIDEBAR_TASK_LIMIT,
+  grouping = 'status',
 }: {
   runs: RunRecord[]
   view: ListView
@@ -67,6 +72,10 @@ export function TaskQuickList({
   onTogglePin?: (run: RunRecord, pinned: boolean) => void
   /** How many rows to paint across buckets. The tasks sidebar lists them all. */
   limit?: number
+  /** `status` — the Pinned / Needs you / Working / Recent buckets (the default, unchanged).
+   *  `need` — the Tasks sidebar's collapsible sections by what the task needs; the archived view
+   *  stays one flat list either way. */
+  grouping?: 'status' | 'need'
 }) {
   // Capped: the sidebar is a glance at what is live and what just finished, and the Tasks page —
   // one click away, below — is the full list. The Active/Archived switch lives there too; this
@@ -83,6 +92,15 @@ export function TaskQuickList({
         <p className="px-2 py-2 text-[13px] text-muted-foreground">
           {view === 'archived' ? 'Nothing archived yet.' : 'No tasks yet — describe one.'}
         </p>
+      ) : grouping === 'need' && view !== 'archived' ? (
+        <QuickListSections
+          buckets={buckets}
+          currentRunId={currentRunId}
+          now={now}
+          showTokens={showTokens}
+          showCost={showCost}
+          onTogglePin={pinToggle}
+        />
       ) : (
         <QuickListBuckets
           buckets={buckets}
@@ -133,14 +151,7 @@ export function QuickListBuckets({
   showCost?: boolean
   onTogglePin?: (run: RunRecord, pinned: boolean) => void
 }) {
-  // Which variant groups are open. Local: it is view state about this list, nothing else reads it.
-  const [expanded, setExpanded] = React.useState<ReadonlySet<string>>(() => new Set())
-  const toggleGroup = (groupId: string) =>
-    setExpanded((current) => {
-      const next = new Set(current)
-      if (!next.delete(groupId)) next.add(groupId)
-      return next
-    })
+  const [expanded, toggleGroup] = useExpandedGroups()
 
   return (
     <>
@@ -149,25 +160,155 @@ export function QuickListBuckets({
           <h2 className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground/80 first-letter:uppercase">
             {bucket.label}
           </h2>
-          {nestRows(bucket.rows).map((node) => (
-            <Row
-              key={node.run.id}
-              row={node.run.row}
-              depth={node.depth}
-              childCount={node.childCount}
-              currentRunId={currentRunId}
-              now={now}
-              scope={scope}
-              showTokens={showTokens}
-              showCost={showCost}
-              expanded={node.run.row.kind === 'group' && expanded.has(node.run.row.groupId)}
-              onToggle={toggleGroup}
-              onTogglePin={onTogglePin}
-            />
-          ))}
+          <BucketRows
+            rows={bucket.rows}
+            currentRunId={currentRunId}
+            now={now}
+            scope={scope}
+            showTokens={showTokens}
+            showCost={showCost}
+            expanded={expanded}
+            onToggle={toggleGroup}
+            onTogglePin={onTogglePin}
+          />
         </div>
       ))}
     </>
+  )
+}
+
+/** Which variant groups are open. Local: it is view state about this list, nothing else reads it. */
+function useExpandedGroups(): [ReadonlySet<string>, (groupId: string) => void] {
+  const [expanded, setExpanded] = React.useState<ReadonlySet<string>>(() => new Set())
+  const toggleGroup = (groupId: string) =>
+    setExpanded((current) => {
+      const next = new Set(current)
+      if (!next.delete(groupId)) next.add(groupId)
+      return next
+    })
+  return [expanded, toggleGroup]
+}
+
+/** One bucket's (or one section's) rows, nested — the part both groupings paint identically. */
+function BucketRows({
+  rows,
+  currentRunId,
+  now,
+  scope,
+  showTokens,
+  showCost,
+  expanded,
+  onToggle,
+  onTogglePin,
+}: {
+  rows: readonly QuickListRow[]
+  currentRunId: string | null
+  now: number
+  scope: string | null
+  showTokens: boolean
+  showCost: boolean
+  expanded: ReadonlySet<string>
+  onToggle: (groupId: string) => void
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
+}) {
+  return (
+    <>
+      {nestRows(rows).map((node) => (
+        <Row
+          key={node.run.id}
+          row={node.run.row}
+          depth={node.depth}
+          childCount={node.childCount}
+          currentRunId={currentRunId}
+          now={now}
+          scope={scope}
+          showTokens={showTokens}
+          showCost={showCost}
+          expanded={node.run.row.kind === 'group' && expanded.has(node.run.row.groupId)}
+          onToggle={onToggle}
+          onTogglePin={onTogglePin}
+        />
+      ))}
+    </>
+  )
+}
+
+/**
+ * The Tasks sidebar's grouping: the same rows, filed by what the task needs — Needs attention,
+ * In progress, Ready for review, Done / other — each a collapsible section with its count.
+ *
+ * The filing is `needSections` (`task-need-sections.ts`), which only re-reads `lib/attention.ts`
+ * and `lib/task-groups.ts`; nesting stays per SECTION for the reason it was per bucket (see
+ * `nestRows`): a child asking for you must not be tucked under a parent that is merely working.
+ *
+ * A section the viewer never toggled opens when it holds the open task, so the selection
+ * highlight is not hidden inside `Done / other`, which otherwise starts collapsed.
+ */
+export function QuickListSections({
+  buckets,
+  currentRunId = null,
+  now = Date.now(),
+  scope = null,
+  showTokens = true,
+  showCost = true,
+  onTogglePin,
+}: {
+  buckets: QuickListBucket[]
+  currentRunId?: string | null
+  now?: number
+  scope?: string | null
+  showTokens?: boolean
+  showCost?: boolean
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
+}) {
+  const [expanded, toggleGroup] = useExpandedGroups()
+  const sections = React.useMemo(() => needSections(buckets), [buckets])
+  const { isOpen, setOpen } = useSectionOpenState()
+
+  return (
+    <div className="flex flex-col gap-2">
+      {sections.map((section) => {
+        const open = isOpen(section.id, sectionHasRun(section, currentRunId))
+        return (
+          <Collapsible
+            key={section.id}
+            open={open}
+            onOpenChange={(next) => setOpen(section.id, next)}
+            data-slot="quick-list-section"
+            data-section={section.id}
+          >
+            <SidebarGroupLabel asChild className="h-7 w-full gap-1.5 px-2 hover:text-sidebar-foreground">
+              <CollapsibleTrigger>
+                <ChevronRightIcon
+                  className={cn('size-3! text-soft-foreground transition-transform', open && 'rotate-90')}
+                  aria-hidden="true"
+                />
+                <span className="truncate">{section.label}</span>
+                <span
+                  data-slot="quick-list-section-count"
+                  className="ml-auto font-mono text-[11px] font-normal text-soft-foreground tabular-nums"
+                >
+                  {section.rows.length}
+                </span>
+              </CollapsibleTrigger>
+            </SidebarGroupLabel>
+            <CollapsibleContent className="flex flex-col gap-0.5">
+              <BucketRows
+                rows={section.rows}
+                currentRunId={currentRunId}
+                now={now}
+                scope={scope}
+                showTokens={showTokens}
+                showCost={showCost}
+                expanded={expanded}
+                onToggle={toggleGroup}
+                onTogglePin={onTogglePin}
+              />
+            </CollapsibleContent>
+          </Collapsible>
+        )
+      })}
+    </div>
   )
 }
 
@@ -343,6 +484,20 @@ const ROW_PIN_CLASS =
   ' no-hover:mr-1 no-hover:size-7 no-hover:opacity-100' +
   ' data-[pinned=true]:mr-1 data-[pinned=true]:w-5 data-[pinned=true]:opacity-100'
 
+/** The quick-actions trigger: the pin's reveal rules, plus "while its own menu is open". */
+const ROW_MENU_CLASS =
+  'w-0 overflow-hidden opacity-0' +
+  ' group-hover/task-row:mr-1 group-hover/task-row:w-5 group-hover/task-row:opacity-100' +
+  ' group-focus-within/task-row:mr-1 group-focus-within/task-row:w-5 group-focus-within/task-row:opacity-100' +
+  ' no-hover:mr-1 no-hover:size-7 no-hover:opacity-100' +
+  ' data-[state=open]:mr-1 data-[state=open]:w-5 data-[state=open]:opacity-100'
+
+/** The age steps aside exactly when the trigger above is showing (not on a no-hover device,
+ *  where the trigger is permanent and the column keeps both). */
+const ROW_AGE_YIELDS_CLASS =
+  '[@media(hover:hover)]:group-hover/task-row:hidden [@media(hover:hover)]:group-focus-within/task-row:hidden' +
+  ' group-has-[[data-slot=task-row-menu][data-state=open]]/task-row:hidden'
+
 const RunRow = React.memo(function RunRow({
   run,
   depth = 0,
@@ -399,6 +554,9 @@ const RunRow = React.memo(function RunRow({
 
   const subtasks = subtaskLabel(childCount)
   const dispatchKind = dispatchKindLabel(run)
+  // The quick actions (Tasks sidebar only — null everywhere else, and then nothing below changes).
+  const rowActions = useTaskRowActions()
+  const [renaming, setRenaming] = React.useState(false)
 
   return (
     <div
@@ -435,6 +593,13 @@ const RunRow = React.memo(function RunRow({
           className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-[10.5px]"
         />
       ) : null}
+      {rowActions && renaming ? (
+        // Instead of the link, not inside it: an input in an anchor is invalid, and a click in
+        // the field must not open the task.
+        <div className="flex min-w-0 flex-1 items-center py-1 pr-1.5">
+          <TaskRowRename run={run} actions={rowActions} onDone={() => setRenaming(false)} />
+        </div>
+      ) : (
       <Link
         to={scopeTo(scope, `/tasks/${run.id}`)}
         // `title` carries the FULL stored title — including a `NNN: ` prefix the chip let the
@@ -510,7 +675,16 @@ const RunRow = React.memo(function RunRow({
             reference" alone would have silently deleted the queue position from every
             issue-driven queued row. */}
         {age && (queuePosition !== null || !reference) ? (
-          <span className="shrink-0 text-[11px] text-soft-foreground tabular-nums">{age}</span>
+          <span
+            className={cn(
+              'shrink-0 text-[11px] text-soft-foreground tabular-nums',
+              // The actions trigger takes this slot while the row is hovered, focused or its
+              // menu is open — the age gives way rather than the title.
+              rowActions && ROW_AGE_YIELDS_CLASS,
+            )}
+          >
+            {age}
+          </span>
         ) : null}
         {/* The unread marker (#unread-done-items): a trailing violet dot, opposite end and
             different hue from the leading status dot, so the two read as two signals. */}
@@ -524,10 +698,22 @@ const RunRow = React.memo(function RunRow({
           />
         ) : null}
       </Link>
+      )}
+      {/* The quick actions — a SIBLING of the Link like the pin below, which it subsumes: with a
+          menu on the row, Pin/Unpin is one of its items, so the two never crowd the title. */}
+      {rowActions && !renaming ? (
+        <TaskRowMenu
+          run={run}
+          scope={scope}
+          actions={rowActions}
+          onRename={() => setRenaming(true)}
+          className={ROW_MENU_CLASS}
+        />
+      ) : null}
       {/* The pin (#935), a SIBLING of the Link for the same reason the status dot and the
           reference chip are: a button inside an anchor is invalid, and this one has its own
           target. Reveal rules in `ROW_PIN_CLASS`. */}
-      {onTogglePin ? (
+      {onTogglePin && !rowActions ? (
         <PinToggle
           pinned={Boolean(run.pinned)}
           onToggle={(pinned) => onTogglePin(run, pinned)}
@@ -555,7 +741,10 @@ function variantLabel(run: RunRecord, showTokens: boolean, showCost: boolean): s
  * stream, Step 3.2), the router for which row is open, and the shared Active/Archived context so
  * the sidebar and the Tasks table (Step 3.4) always show the same filter.
  */
-export function TaskQuickListContainer({ limit }: { limit?: number } = {}) {
+export function TaskQuickListContainer({
+  limit,
+  grouping,
+}: { limit?: number; grouping?: 'status' | 'need' } = {}) {
   const health = useHealth()
   const activeProjectId = useActiveProjectId()
   const runs = useRunsForProject(activeProjectId, health.data?.bootProject ?? null)
@@ -602,6 +791,7 @@ export function TaskQuickListContainer({ limit }: { limit?: number } = {}) {
         view={view}
         onViewChange={setView}
         limit={limit}
+        grouping={grouping}
         // Both matches: `/tasks/:id` and its `/changes` and `/files` children all keep the row lit.
         currentRunId={match?.params.id ?? exact?.params.id ?? null}
         now={now}

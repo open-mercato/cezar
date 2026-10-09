@@ -5,6 +5,7 @@ import { useHealth, useRunsForProject } from '@/api/queries'
 import { ContextSidebar } from '@/components/context-sidebar'
 import { useListView } from '@/components/list-view'
 import { TaskQuickListContainer } from '@/components/task-quick-list'
+import { TaskRowActionsScope } from '@/components/task-row-actions'
 import { Button } from '@/components/ui/button'
 import { SidebarContent, SidebarGroup, SidebarGroupContent, SidebarHeader } from '@/components/ui/sidebar'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -12,8 +13,9 @@ import { Link, useActiveProjectId } from '@/lib/project-router'
 import { listCounts, type ListView } from '@/lib/task-groups'
 
 /**
- * The Tasks area's contextual sidebar: every task of the project, grouped Needs you / Working /
- * Recent, with the Active | Archived switch the Tasks table shares (one filter, two places).
+ * The Tasks area's contextual sidebar: every task of the project, grouped by what it needs —
+ * Needs attention / In progress / Ready for review / Done — with the Active | Archived switch the
+ * Tasks table shares (one filter, two places). Each row carries the task's quick actions.
  * It stays put while you move between the list, a task and the composer, which is the point —
  * the list is how you get from one task to the next without going back.
  */
@@ -54,7 +56,9 @@ export function TasksSidebar() {
       <SidebarContent>
         <SidebarGroup className="pt-0">
           <SidebarGroupContent data-slot="task-quick-list" className="@container/sidebar">
-            <TaskQuickListContainer limit={Number.POSITIVE_INFINITY} />
+            <TaskRowActionsScope>
+              <TaskQuickListContainer limit={Number.POSITIVE_INFINITY} grouping="need" />
+            </TaskRowActionsScope>
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
