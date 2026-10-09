@@ -67,7 +67,6 @@ import {
   SidebarMenuItem,
   SidebarProvider,
   SidebarRail,
-  SidebarSeparator,
   SidebarTrigger,
   useSidebar,
 } from '@/components/ui/sidebar'
@@ -513,7 +512,7 @@ function AppRail(props: RailProps) {
             })}
           </SidebarMenu>
         </nav>
-        <SidebarSeparator className="mx-auto w-5" />
+        <div aria-hidden="true" className="mx-auto h-px w-5 shrink-0 bg-sidebar-border" />
         <SidebarMenu className="items-center py-2">
           <SidebarMenuItem>
             <SidebarMenuButton
@@ -698,7 +697,7 @@ function ProjectSwitcher({
   const branch = active?.branch ?? repo?.branch ?? null
 
   return (
-    <SidebarMenu>
+    <SidebarMenu className="items-center">
       <SidebarMenuItem>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -706,7 +705,7 @@ function ProjectSwitcher({
               data-slot="project-switcher"
               tooltip={{ children: branch ? `${name} · ${branch}` : name, hidden: false }}
               aria-label={`Project: ${name}. Switch project`}
-              className="size-9 justify-center rounded-lg border bg-card p-0 text-[13px] font-semibold text-foreground uppercase shadow-2xs data-[state=open]:bg-sidebar-accent"
+              className="size-9 justify-center rounded-md border bg-card p-0 text-[13px] font-semibold text-foreground uppercase shadow-xs data-[state=open]:bg-sidebar-accent"
             >
               <span aria-hidden="true" data-slot="repo-chip">
                 {name.trim().charAt(0) || '·'}
@@ -811,7 +810,7 @@ function FooterMenu({
   const updateAvailable = Boolean(version && latestVersion && latestVersion !== version)
 
   return (
-    <SidebarMenu>
+    <SidebarMenu className="items-center">
       <SidebarMenuItem>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -819,7 +818,7 @@ function FooterMenu({
               data-slot="footer-menu"
               tooltip={{ children: version ? `${brandName} v${version}` : brandName, hidden: false }}
               aria-label={`${brandName} menu`}
-              className="relative size-9 justify-center overflow-visible rounded-lg bg-contrast p-0 text-contrast-foreground hover:bg-contrast/85 hover:text-contrast-foreground data-[state=open]:bg-contrast/85 data-[state=open]:hover:bg-contrast/85 data-[state=open]:hover:text-contrast-foreground"
+              className="relative size-9 justify-center overflow-visible rounded-md bg-contrast p-0 shadow-xs text-contrast-foreground hover:bg-contrast/85 hover:text-contrast-foreground data-[state=open]:bg-contrast/85 data-[state=open]:hover:bg-contrast/85 data-[state=open]:hover:text-contrast-foreground"
             >
               {brandLogoUrl ? (
                 <img src={brandLogoUrl} alt="" className="size-5 object-contain" />
