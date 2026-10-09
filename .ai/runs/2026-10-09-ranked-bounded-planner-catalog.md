@@ -20,4 +20,4 @@ Risks: prompt content changes only on catalogs over the documented threshold; ra
 - [x] 1. Measure current catalog construction and verify issue coverage — 850ef664
 - [x] 2. Implement bounded catalog builder
 - [x] 3. Add regression tests
-- [ ] 4. Run validation, review, and report
+- [x] 4. Run validation, review, and report — review performed locally; GitHub self-review prohibited
