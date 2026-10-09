@@ -6,7 +6,6 @@ import {
   GripVerticalIcon,
   LayoutGridIcon,
   MoreVerticalIcon,
-  PlusIcon,
   XIcon,
 } from 'lucide-react'
 import { useRef, useState, type ReactNode } from 'react'
@@ -35,7 +34,7 @@ import {
   type WorkspaceColumn,
 } from './layout-state'
 import { FullViewExit, WorkspaceMaximizeContext } from './maximize'
-import { VIEW_ICONS, ViewItems, ViewPickerMenu, ViewTiles } from './view-picker'
+import { VIEW_ICONS, ViewItems, ViewTiles } from './view-picker'
 
 /** Narrower than this and the layout shows one column at a time (spec §5.2, §11). Tailwind's
  *  `lg`, which is where a three-way split first has room to be readable. */
@@ -84,7 +83,6 @@ export function WorkspaceColumns({
   // Which column a narrow viewport is showing (spec §5.2 — "show one column at a time"). Clamped
   // on read rather than synced in an effect, so closing a column can never leave a dangling index.
   const [narrowIndex, setNarrowIndex] = useState(0)
-  const activeNarrow = Math.min(narrowIndex, columns.length - 1)
   /**
    * A window that has been split off but not given a view yet: the slot it will take. It is this
    * component's own, never saved — a saved column always names a view — so leaving the layout or
@@ -112,77 +110,6 @@ export function WorkspaceColumns({
     />
   )
 
-  if (!desktop) {
-    if (columns.length === 0) {
-      return (
-        <div data-slot="workspace-columns" data-narrow="" className="flex min-h-0 flex-1 flex-col">
-          <ViewTiles onPick={actions.addColumn} />
-        </div>
-      )
-    }
-    const column = columns[activeNarrow]!
-    return (
-      <div data-slot="workspace-columns" data-narrow="" className="flex min-h-0 flex-1 flex-col">
-        {/* Compact tabs labelled by view, the spec's narrow-screen switcher. Several columns on the
-            same view are a legitimate layout, so the label alone is ambiguous — the index
-            disambiguates without inventing per-column names. */}
-        <Tabs
-          value={String(activeNarrow)}
-          onValueChange={(value) => setNarrowIndex(Number(value))}
-          className="shrink-0 gap-0"
-        >
-        <TabsList aria-label="Layout columns" className="flex w-full justify-start gap-1 overflow-x-auto rounded-none border-b border-border bg-transparent px-3 py-1.5 group-data-[orientation=horizontal]/tabs:h-auto">
-          {columns.map((entry, index) => (
-            <TabsTrigger
-              key={index}
-              value={String(index)}
-              onClick={() => setNarrowIndex(index)}
-              className="h-auto flex-none rounded-md border-0 px-2.5 py-1 text-xs data-[state=active]:bg-muted data-[state=active]:font-medium group-data-[variant=default]/tabs-list:data-[state=active]:shadow-none"
-            >
-              {viewLabel(entry.view)}
-              {columns.filter((other) => other.view === entry.view).length > 1 ? (
-                <span className="ml-1 text-soft-foreground tabular-nums">{index + 1}</span>
-              ) : null}
-            </TabsTrigger>
-          ))}
-          {/* The `+` §5.2 asks for at "the right edge of the view area", in the place a narrow
-              viewport actually has one: the end of the tab row. A vertical strip beside the
-              column would take width from the single column that is showing. */}
-          <span className="ml-auto flex shrink-0 items-center">
-            <ViewPickerMenu
-              heading="Add a view"
-              align="end"
-              onPick={actions.addColumn}
-              trigger={
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  data-action="add-column"
-                  disabled={columns.length >= MAX_COLUMNS}
-                  title={
-                    columns.length >= MAX_COLUMNS
-                      ? `At most ${MAX_COLUMNS} columns`
-                      : 'Add a view — new column'
-                  }
-                  aria-label="Add a view"
-                  className="size-7 text-muted-foreground"
-                >
-                  <PlusIcon aria-hidden="true" />
-                </Button>
-              }
-            />
-            {columnMenu(activeNarrow, column)}
-          </span>
-        </TabsList>
-        </Tabs>
-        <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          {renderView(column.view, activeNarrow, column)}
-        </div>
-      </div>
-    )
-  }
-
   // An empty layout — just created, or with its last window closed — is the tile picker.
   if (columns.length === 0) {
     return (
@@ -195,6 +122,23 @@ export function WorkspaceColumns({
   // While a window is waiting for its view, every window shares the row equally.
   const shown = columns.length + (pending === null ? 0 : 1)
   const widthOf = (column: WorkspaceColumn) => (pending === null ? column.width : 100 / shown)
+  const pendingHeader = (
+    <header className="flex h-8 shrink-0 items-center gap-1.5 border-b border-border/70 bg-background pl-4 pr-1.5 text-xs font-medium text-muted-foreground">
+      <LayoutGridIcon aria-hidden="true" className="size-3.5 shrink-0" />
+      <span className="min-w-0 flex-1 truncate">New window</span>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        aria-label="Close new window"
+        title="Close"
+        onClick={() => setPendingAt(null)}
+        className="text-soft-foreground"
+      >
+        <XIcon aria-hidden="true" className="size-3.5" />
+      </Button>
+    </header>
+  )
   const pendingWindow =
     pending === null ? null : (
       <div
@@ -204,26 +148,85 @@ export function WorkspaceColumns({
         className="relative flex min-w-0 flex-col border-l border-border/70 first:border-l-0"
         style={{ width: `${100 / shown}%` }}
       >
-        <header className="flex h-8 shrink-0 items-center gap-1.5 border-b border-border/70 bg-background pl-4 pr-1.5 text-xs font-medium text-muted-foreground">
-          <LayoutGridIcon aria-hidden="true" className="size-3.5 shrink-0" />
-          <span className="min-w-0 flex-1 truncate">New window</span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Close new window"
-            title="Close"
-            onClick={() => setPendingAt(null)}
-            className="text-soft-foreground"
-          >
-            <XIcon aria-hidden="true" className="size-3.5" />
-          </Button>
-        </header>
+        {pendingHeader}
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
           <ViewTiles scope="window" onPick={fillPending} />
         </div>
       </div>
     )
+
+  if (!desktop) {
+    /*
+     * One window at a time (spec §5.2), with the SAME controls a window has on a wide screen: its
+     * name switches the view, the columns icon splits it, the X closes it. What a narrow screen
+     * adds is a switcher above that bar, only once there is more than one window to switch
+     * between — a window still waiting for its view counts, and is where a split lands you.
+     */
+    const slots: Array<number | 'pending'> = columns.map((_, index) => index)
+    if (pending !== null) slots.splice(pending, 0, 'pending')
+    const slotIndex = Math.min(narrowIndex, slots.length - 1)
+    const slot = slots[slotIndex]!
+    const column = slot === 'pending' ? null : columns[slot]!
+    return (
+      <div data-slot="workspace-columns" data-narrow="" className="flex min-h-0 flex-1 flex-col">
+        {slots.length > 1 ? (
+          <Tabs
+            value={String(slotIndex)}
+            onValueChange={(value) => setNarrowIndex(Number(value))}
+            className="shrink-0 gap-0"
+          >
+            <TabsList
+              aria-label="Windows of this layout"
+              className="grid w-full auto-cols-fr grid-flow-col gap-1 rounded-none border-b border-border bg-transparent px-3 py-1.5 group-data-[orientation=horizontal]/tabs:h-auto"
+            >
+              {slots.map((entry, index) => {
+                const Icon = entry === 'pending' ? LayoutGridIcon : VIEW_ICONS[columns[entry]!.view]
+                return (
+                  <TabsTrigger
+                    key={index}
+                    value={String(index)}
+                    className="h-auto min-w-0 rounded-md border-0 px-2 py-1 text-xs data-[state=active]:bg-muted data-[state=active]:font-medium group-data-[variant=default]/tabs-list:data-[state=active]:shadow-none"
+                  >
+                    <Icon aria-hidden="true" className="size-3.5 shrink-0" />
+                    <span className="truncate">{entry === 'pending' ? 'New window' : viewLabel(columns[entry]!.view)}</span>
+                  </TabsTrigger>
+                )
+              })}
+            </TabsList>
+          </Tabs>
+        ) : null}
+        {column === null ? (
+          <>
+            {pendingHeader}
+            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+              <ViewTiles scope="window" onPick={fillPending} />
+            </div>
+          </>
+        ) : (
+          <>
+            {editable ? (
+              <ColumnHeader
+                index={slot as number}
+                column={column}
+                count={columns.length}
+                actions={actions}
+                menu={columns.length > 1 ? columnMenu(slot as number, column) : null}
+                onSplit={() => {
+                  setPendingAt((slot as number) + 1)
+                  setNarrowIndex((slot as number) + 1)
+                }}
+                canSplit={canSplit}
+                grip={false}
+              />
+            ) : null}
+            <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+              {renderView(column.view, slot as number, column)}
+            </div>
+          </>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div
@@ -312,7 +315,10 @@ function ColumnHeader({
   trailing,
   onSplit,
   canSplit = true,
+  grip = true,
 }: {
+  /** Whether the window can be dragged to reorder — not on a narrow screen, which shows one. */
+  grip?: boolean
   /** Split this window: a new, empty one opens to its right. Absent on a fixed card. */
   onSplit?: () => void
   canSplit?: boolean
@@ -363,7 +369,7 @@ function ColumnHeader({
         `draggable` on the whole header, a press on a button that moved even slightly began a drag
         instead of activating it. Dropping stays on the header, so the target is the full width.
       */}
-      {count > 1 ? (
+      {count > 1 && grip ? (
         <span
           draggable
           onDragStart={startDrag}
@@ -395,9 +401,9 @@ function ColumnHeader({
         </DropdownMenuContent>
       </DropdownMenu>
       <span
-        draggable={count > 1}
+        draggable={count > 1 && grip}
         onDragStart={startDrag}
-        className={cn('h-full min-w-0 flex-1', count > 1 && 'cursor-grab active:cursor-grabbing')}
+        className={cn('h-full min-w-0 flex-1', count > 1 && grip && 'cursor-grab active:cursor-grabbing')}
       />
       {onSplit ? (
         <Tooltip>
@@ -419,7 +425,7 @@ function ColumnHeader({
             </span>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {canSplit ? 'Split view' : `At most ${MAX_COLUMNS} windows`}
+            {canSplit ? 'Split view (\\)' : `At most ${MAX_COLUMNS} windows`}
           </TooltipContent>
         </Tooltip>
       ) : null}
