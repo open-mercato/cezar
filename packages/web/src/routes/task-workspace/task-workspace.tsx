@@ -3,7 +3,6 @@ import {
   LoaderCircleIcon,
   Maximize2Icon,
   MessageSquareTextIcon,
-  Minimize2Icon,
   SearchXIcon,
   TerminalIcon,
 } from 'lucide-react'
@@ -45,7 +44,7 @@ import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 
 import { LayoutCards } from './layout-cards'
-import { WorkspaceMaximizeContext, usePanelCover } from './maximize'
+import { FullViewExit, WorkspaceMaximizeContext, usePanelCover } from './maximize'
 import { ViewPickerMenu } from './view-picker'
 import { WorkspaceColumns, type ColumnActions } from './workspace-columns'
 import { useWorkspaceLayouts } from './use-workspace-layouts'
@@ -298,6 +297,8 @@ function WorkspaceView({
   const toggleMaximized = useCallback(() => setMaximized((current) => !current), [])
   const cover = usePanelCover<HTMLDivElement>(maximized, exitMaximized)
   const maximize = useMemo(() => ({ maximized, toggle: toggleMaximized }), [maximized, toggleMaximized])
+  // One element for the life of the view: `RunHeader` is memo'd on prop identity.
+  const fullViewExit = useMemo(() => <FullViewExit />, [])
 
   // Policy, read from the one place that knows it. A cockpit where a shell is not allowed shows
   // no button at all rather than one that explains itself after the click.
@@ -495,25 +496,10 @@ function WorkspaceView({
             cover.covering && 'fixed z-40 overflow-hidden bg-background md:rounded-xl md:border md:border-border/70',
           )}
         >
-          {/* The way back. In the bottom corner, the one place no view keeps a control of its own
-              — column headers own the top. */}
-          {cover.covering ? (
-            <Button
-              variant="outline"
-              size="icon-sm"
-              data-action="exit-full-view"
-              aria-label="Exit full view"
-              title="Exit full view (Esc)"
-              className="absolute right-3 bottom-3 z-30 size-8 bg-card text-muted-foreground shadow-md"
-              onClick={exitMaximized}
-            >
-              <Minimize2Icon aria-hidden="true" />
-            </Button>
-          ) : null}
           {overview ? (
             // The task's bar, then the conversation in the scroller slot every thread resolves.
             <>
-              <RunHeader run={run} onMarkedUnread={markedUnread} mode="overview" />
+              <RunHeader run={run} onMarkedUnread={markedUnread} mode="overview" trailingEnd={fullViewExit} />
               <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
                 <ConversationColumn run={run} onMarkedUnread={onMarkedUnread} />
               </div>

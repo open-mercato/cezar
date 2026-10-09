@@ -1,4 +1,8 @@
+import { Minimize2Icon } from 'lucide-react'
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
+
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 /**
  * Full view (the workspace's maximize): the active layout — one view or several columns side by
@@ -64,4 +68,28 @@ export function usePanelCover<T extends HTMLElement>(maximized: boolean, onExit:
   }, [maximized, onExit])
 
   return { ref, covering: maximized && box !== null, style: maximized && box ? box : undefined }
+}
+
+/**
+ * The way out of full view: a labelled button for the top-right corner of whatever bar the view
+ * already has — a column's header, the task's bar. Renders nothing outside full view, so a bar
+ * can carry it unconditionally.
+ */
+export function FullViewExit({ className }: { className?: string }) {
+  const maximize = useWorkspaceMaximize()
+  if (!maximize?.maximized) return null
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="xs"
+      data-action="exit-full-view"
+      title="Exit full view (Esc)"
+      onClick={maximize.toggle}
+      className={cn('shrink-0 text-foreground', className)}
+    >
+      <Minimize2Icon aria-hidden="true" />
+      Exit full view
+    </Button>
+  )
 }

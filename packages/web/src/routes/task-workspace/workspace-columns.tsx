@@ -23,6 +23,7 @@ import {
   type ViewId,
   type WorkspaceColumn,
 } from './layout-state'
+import { FullViewExit, useWorkspaceMaximize } from './maximize'
 import { VIEW_ICONS, ViewItems, ViewPickerMenu } from './view-picker'
 
 /** Narrower than this and the layout shows one column at a time (spec §5.2, §11). Tailwind's
@@ -68,6 +69,9 @@ export function WorkspaceColumns({
   // on read rather than synced in an effect, so closing a column can never leave a dangling index.
   const [narrowIndex, setNarrowIndex] = useState(0)
   const activeNarrow = Math.min(narrowIndex, columns.length - 1)
+  // In full view every column wears its header — a lone one too — so there is always a bar,
+  // and the way out sits at the right end of the last one: the top-right corner.
+  const maximized = useWorkspaceMaximize()?.maximized ?? false
 
 
   const columnMenu = (index: number, column: WorkspaceColumn) => (
@@ -184,13 +188,14 @@ export function WorkspaceColumns({
           {/* A lone column needs no bar of its own: the layout tab above already names it, and
               its menu moves to the edge strip. The bar returns with the second column, where it
               is what tells the columns apart and what a column is dragged by. */}
-          {columns.length > 1 ? (
+          {columns.length > 1 || maximized ? (
             <ColumnHeader
               index={index}
               column={column}
               count={columns.length}
               actions={actions}
               menu={columnMenu(index, column)}
+              trailing={index === columns.length - 1 ? <FullViewExit className="ml-1.5" /> : null}
             />
           ) : null}
           <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
@@ -276,12 +281,15 @@ function ColumnHeader({
   count,
   actions,
   menu,
+  trailing,
 }: {
   index: number
   column: WorkspaceColumn
   count: number
   actions: ColumnActions
   menu: ReactNode
+  /** After the close button, at the header's far right — the full-view exit. */
+  trailing?: ReactNode
 }) {
   const [dropTarget, setDropTarget] = useState(false)
   const ViewIcon = VIEW_ICONS[column.view]
@@ -309,7 +317,7 @@ function ColumnHeader({
         actions.moveColumn(from, index)
       }}
       className={cn(
-        'group/column flex h-8 shrink-0 items-center gap-0.5 border-b border-border/70 bg-background pl-4 pr-1.5',
+        'group/column flex h-9 shrink-0 items-center gap-0.5 border-b border-border/70 bg-background pl-4 pr-1.5',
         dropTarget && 'bg-muted',
       )}
     >
@@ -335,17 +343,22 @@ function ColumnHeader({
         <span className="truncate">{viewLabel(column.view)}</span>
       </span>
       {menu}
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-xs"
-        aria-label={`Close column ${viewLabel(column.view)}`}
-        title="Close column"
-        onClick={() => actions.closeColumn(index)}
-        className="text-soft-foreground"
-      >
-        <XIcon aria-hidden="true" className="size-3.5" />
-      </Button>
+      {/* A lone column only has a header in full view, beside the exit — no close there: one
+          slip would empty the layout. */}
+      {count > 1 ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label={`Close column ${viewLabel(column.view)}`}
+          title="Close column"
+          onClick={() => actions.closeColumn(index)}
+          className="text-soft-foreground"
+        >
+          <XIcon aria-hidden="true" className="size-3.5" />
+        </Button>
+      ) : null}
+      {trailing}
     </header>
   )
 }
