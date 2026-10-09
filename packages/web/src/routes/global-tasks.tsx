@@ -2,8 +2,10 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArchiveIcon,
   ArchiveRestoreIcon,
+  CheckIcon,
   EyeIcon,
   EyeOffIcon,
+  FolderGit2Icon,
   LayersIcon,
   ListChecksIcon,
   Rows3Icon,
@@ -26,7 +28,21 @@ import {
 } from '@/api/queries'
 import type { ProjectListEntry, RunIndexEntry, RunsIndexResponse } from '@open-mercato/cezar-api-client'
 import { dispatchKindLabel, subtaskLabel, taskTreeRows, type TaskTreeInput } from '@/lib/task-tree'
+import { ContextSidebar } from '@/components/context-sidebar'
 import { FacetMenu } from '@/components/facet-filter'
+import {
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuBadge,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from '@/components/ui/sidebar'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   LIST_CELL_CLASS,
   LIST_HEAD_CLASS,
@@ -447,37 +463,52 @@ export function GlobalTasksRoute() {
 
   return (
     <Page data-route="global-tasks">
+      <GlobalTasksSidebar
+        view={view}
+        onViewChange={setView}
+        groupBy={groupBy}
+        onGroupByChange={setGroupBy}
+        filters={filters}
+        onToggle={toggle}
+        onClear={hasActiveFilters(filters) || groupBy !== 'none' ? clearAll : undefined}
+        projects={registry}
+        tasks={tasks}
+        shown={visible.length}
+      />
       <PageHeader title="All tasks" description="Work across every project in this workspace." />
 
       <PageToolbar>
-        <ListViewTabs view={view} onChange={setView} />
-        <FilterMenu filters={filters} onToggle={toggle} projects={registry} tasks={tasks} view={view} />
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" data-slot="group-by" aria-label="Group tasks by">
-              <Rows3Icon aria-hidden="true" />
-              {groupBy === 'none' ? (
-                'Group'
-              ) : (
-                <>
-                  <span className="text-muted-foreground">Group:</span>
-                  {GROUP_BY_OPTIONS.find((option) => option.value === groupBy)?.label}
-                </>
-              )}
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="min-w-44">
-            <DropdownMenuLabel>Group by</DropdownMenuLabel>
-            <DropdownMenuRadioGroup value={groupBy} onValueChange={(next) => setGroupBy(next as GroupBy)}>
-              <DropdownMenuRadioItem value="none">None</DropdownMenuRadioItem>
-              {GROUP_BY_OPTIONS.map((option) => (
-                <DropdownMenuRadioItem key={option.value} value={option.value} data-value={option.value}>
-                  {option.label}
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {/* From `md` up these three live in the contextual sidebar; a phone keeps them here. */}
+        <div className="contents md:hidden">
+          <ListViewTabs view={view} onChange={setView} />
+          <FilterMenu filters={filters} onToggle={toggle} projects={registry} tasks={tasks} view={view} />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" data-slot="group-by" aria-label="Group tasks by">
+                <Rows3Icon aria-hidden="true" />
+                {groupBy === 'none' ? (
+                  'Group'
+                ) : (
+                  <>
+                    <span className="text-muted-foreground">Group:</span>
+                    {GROUP_BY_OPTIONS.find((option) => option.value === groupBy)?.label}
+                  </>
+                )}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="min-w-44">
+              <DropdownMenuLabel>Group by</DropdownMenuLabel>
+              <DropdownMenuRadioGroup value={groupBy} onValueChange={(next) => setGroupBy(next as GroupBy)}>
+                <DropdownMenuRadioItem value="none">None</DropdownMenuRadioItem>
+                {GROUP_BY_OPTIONS.map((option) => (
+                  <DropdownMenuRadioItem key={option.value} value={option.value} data-value={option.value}>
+                    {option.label}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
         <div className="flex-1" />
         <span data-slot="global-tasks-count" className="hidden text-[13px] text-muted-foreground tabular-nums sm:inline">
           {visible.length} of {tasks.length}
@@ -601,6 +632,240 @@ export function GlobalTasksRoute() {
 }
 
 /**
+ * What each filter option would leave, counted against the list as the OTHER facets narrow it.
+ * One `tasksExcludingFacet` per facet: the counts a facet shows must not already assume that
+ * facet's own ticks, or unticking a value would promise fewer rows than it delivers.
+ */
+function useFacetCounts(tasks: readonly GlobalTask[], filters: GlobalTaskFilters, view: ListView) {
+  return React.useMemo(() => {
+    const per = (facet: FacetId, valueOf: (task: GlobalTask) => readonly string[]) =>
+      facetCounts(tasksExcludingFacet(tasks, filters, view, facet), valueOf)
+    return {
+      tags: per('tags', tagValuesOf),
+      statuses: per('statuses', (task) => [task.run.status]),
+      workflows: per('workflows', (task) => [task.run.workflow]),
+    }
+  }, [tasks, filters, view])
+}
+
+/**
+ * All tasks' contextual sidebar: how the cross-project list is cut. Active | Archived, the
+ * grouping, the three facets as tickable rows with live counts, and the projects themselves —
+ * as links, not a filter, because one project's tasks are that project's own Tasks page.
+ * Everything here writes the same URL state the page reads, so it is the toolbar's controls in
+ * a roomier place rather than a second copy of them.
+ */
+function GlobalTasksSidebar({
+  view,
+  onViewChange,
+  groupBy,
+  onGroupByChange,
+  filters,
+  onToggle,
+  onClear,
+  projects,
+  tasks,
+  shown,
+}: {
+  view: ListView
+  onViewChange: (view: ListView) => void
+  groupBy: GroupBy
+  onGroupByChange: (groupBy: GroupBy) => void
+  filters: GlobalTaskFilters
+  onToggle: (facet: FacetId, value: string) => void
+  /** Present only while a filter or a grouping is on. */
+  onClear?: () => void
+  projects: readonly ProjectListEntry[]
+  tasks: readonly GlobalTask[]
+  /** How many rows the current cut leaves. */
+  shown: number
+}) {
+  const globalSettings = useGlobalSettings()
+  const tags = React.useMemo(() => allProjectTags(projects), [projects])
+  const counts = useFacetCounts(tasks, filters, view)
+  const perProject = React.useMemo(() => {
+    const map = new Map<string, number>()
+    for (const task of filterGlobalTasks(tasks, NO_FILTERS, view)) {
+      map.set(task.run.projectId, (map.get(task.run.projectId) ?? 0) + 1)
+    }
+    return map
+  }, [tasks, view])
+  const tagChecked = (tag: string) => filters.tags.some((picked) => picked.toLowerCase() === tag.toLowerCase())
+
+  return (
+    <ContextSidebar>
+      <SidebarHeader className="gap-3 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="px-1 text-[15px] font-semibold text-foreground">All tasks</h2>
+          <span className="px-1 text-xs text-muted-foreground tabular-nums">
+            {shown} of {tasks.length}
+          </span>
+        </div>
+        <Tabs value={view} onValueChange={(next) => onViewChange(next as ListView)}>
+          <TabsList className="w-full">
+            <TabsTrigger value="active">Active</TabsTrigger>
+            <TabsTrigger value="archived">Archived</TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </SidebarHeader>
+      <SidebarContent>
+        <SidebarGroup className="pt-0">
+          <SidebarGroupLabel>Group by</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {[{ value: 'none' as GroupBy, label: 'None' }, ...GROUP_BY_OPTIONS].map((option) => (
+                <SidebarMenuItem key={option.value}>
+                  <SidebarMenuButton
+                    isActive={groupBy === option.value}
+                    aria-pressed={groupBy === option.value}
+                    data-slot="sidebar-group-by"
+                    data-value={option.value}
+                    onClick={() => onGroupByChange(option.value)}
+                  >
+                    <span>{option.label}</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <FacetGroup
+          label="Status"
+          options={allStatuses(tasks).map((status) => ({
+            value: status,
+            label: sentenceCase(status),
+            count: counts.statuses.get(status) ?? 0,
+            checked: filters.statuses.includes(status),
+          }))}
+          onToggle={(value) => onToggle('statuses', value)}
+        />
+        <FacetGroup
+          label="Workflow"
+          options={allWorkflows(tasks).map((workflow) => ({
+            value: workflow,
+            label: workflow,
+            count: counts.workflows.get(workflow) ?? 0,
+            checked: filters.workflows.includes(workflow),
+          }))}
+          onToggle={(value) => onToggle('workflows', value)}
+        />
+        <FacetGroup
+          label="Tag"
+          options={
+            tags.length === 0
+              ? []
+              : [
+                  ...tags.map((tag) => ({
+                    value: tag,
+                    label: tag,
+                    count: counts.tags.get(tag) ?? 0,
+                    checked: tagChecked(tag),
+                  })),
+                  {
+                    value: UNTAGGED,
+                    label: 'Untagged',
+                    count: counts.tags.get(UNTAGGED) ?? 0,
+                    checked: filters.tags.includes(UNTAGGED),
+                  },
+                ]
+          }
+          onToggle={(value) => onToggle('tags', value)}
+          empty={
+            <button
+              type="button"
+              onClick={() => globalSettings.open('projects')}
+              className="px-2 text-left text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            >
+              Tag your projects to filter and group by tag
+            </button>
+          }
+        />
+
+        <SidebarGroup>
+          <SidebarGroupLabel>Projects</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {projects.map((project) => (
+                <SidebarMenuItem key={project.id}>
+                  <SidebarMenuButton asChild title={`Open ${project.name}'s tasks`}>
+                    <Link to={scopeTo(project.id, '/')}>
+                      <FolderGit2Icon aria-hidden="true" />
+                      <span>{project.name}</span>
+                    </Link>
+                  </SidebarMenuButton>
+                  <SidebarMenuBadge>{perProject.get(project.id) ?? 0}</SidebarMenuBadge>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
+      {onClear ? (
+        <SidebarFooter className="border-t border-border/70 p-3">
+          <Button variant="outline" size="sm" onClick={onClear}>
+            Clear filters and grouping
+          </Button>
+        </SidebarFooter>
+      ) : null}
+    </ContextSidebar>
+  )
+}
+
+/** One facet as a group of tickable rows; an option that would leave nothing dims. */
+function FacetGroup({
+  label,
+  options,
+  onToggle,
+  empty,
+}: {
+  label: string
+  options: readonly { value: string; label: string; count: number; checked: boolean }[]
+  onToggle: (value: string) => void
+  /** Shown instead of the rows when the facet has no options at all. */
+  empty?: React.ReactNode
+}) {
+  if (options.length === 0 && !empty) return null
+  return (
+    <SidebarGroup>
+      <SidebarGroupLabel>{label}</SidebarGroupLabel>
+      <SidebarGroupContent>
+        {options.length === 0 ? (
+          empty
+        ) : (
+          <SidebarMenu>
+            {options.map((option) => (
+              <SidebarMenuItem key={option.value}>
+                <SidebarMenuButton
+                  role="checkbox"
+                  aria-checked={option.checked}
+                  data-slot="sidebar-facet-option"
+                  data-facet={label.toLowerCase()}
+                  onClick={() => onToggle(option.value)}
+                  className={cn(option.count === 0 && !option.checked && 'text-muted-foreground')}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={cn(
+                      'flex size-4 shrink-0 items-center justify-center rounded-[5px] border border-input bg-card',
+                      option.checked && 'border-contrast bg-contrast text-contrast-foreground',
+                    )}
+                  >
+                    {option.checked ? <CheckIcon className="size-3" /> : null}
+                  </span>
+                  <span>{option.label}</span>
+                </SidebarMenuButton>
+                <SidebarMenuBadge>{option.count}</SidebarMenuBadge>
+              </SidebarMenuItem>
+            ))}
+          </SidebarMenu>
+        )}
+      </SidebarGroupContent>
+    </SidebarGroup>
+  )
+}
+
+/**
  * The filters, behind one button.
  *
  * Every option carries the number of rows it would leave, counted against the list as the OTHER
@@ -625,18 +890,7 @@ function FilterMenu({
 }) {
   const globalSettings = useGlobalSettings()
   const tags = React.useMemo(() => allProjectTags(projects), [projects])
-
-  // One `tasksExcludingFacet` per facet: the counts a facet shows must not already assume that
-  // facet's own ticks, or unticking a value would promise fewer rows than it delivers.
-  const counts = React.useMemo(() => {
-    const per = (facet: FacetId, valueOf: (task: GlobalTask) => readonly string[]) =>
-      facetCounts(tasksExcludingFacet(tasks, filters, view, facet), valueOf)
-    return {
-      tags: per('tags', tagValuesOf),
-      statuses: per('statuses', (task) => [task.run.status]),
-      workflows: per('workflows', (task) => [task.run.workflow]),
-    }
-  }, [tasks, filters, view])
+  const counts = useFacetCounts(tasks, filters, view)
 
   const tagChecked = (tag: string) => filters.tags.some((picked) => picked.toLowerCase() === tag.toLowerCase())
 
