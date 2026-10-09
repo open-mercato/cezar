@@ -350,14 +350,14 @@ function WorkspaceView({
         <Separator orientation="vertical" className="mx-1 data-[orientation=vertical]:h-5" />
         <Button
           variant="outline"
-          size="icon-sm"
+          size="sm"
           data-action="maximize-layout"
-          aria-label="Full view"
           title="Full view — hide everything but this layout"
-          className="text-foreground"
+          className="shrink-0 text-foreground"
           onClick={toggleMaximized}
         >
           <Maximize2Icon aria-hidden="true" />
+          Full view
         </Button>
       </>
     ),
