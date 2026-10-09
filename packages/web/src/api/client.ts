@@ -435,7 +435,7 @@ export async function getStarCount(opts?: ReadOptions): Promise<StarCountPayload
   return unwrap(await cez.api.v1['star-count'].$get({}, init(opts)), '/star-count')
 }
 
-/** Host-local catalog for one discovery runner (`claude`, `codex`, `opencode`, `cursor` — #794, #784).
+/** Host-local catalog for one discovery runner (`claude`, `codex`, `opencode`, `cursor`, `pi`, `junie` — #794, #784, #893).
  *  Workspace-level: one CLI/account serves every project. */
 export async function getRunnerModels(
   runner: ModelDiscoveryRunner,

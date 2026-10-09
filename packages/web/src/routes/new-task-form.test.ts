@@ -141,6 +141,7 @@ describe('model option resolution', () => {
     ['claude', 'Claude'],
     ['junie', 'Junie'],
     ['cursor', 'Cursor'],
+    ['pi', 'pi'],
   ] as const)('names %s in its stale/unavailable rows without exposing raw reasons', (runner, label) => {
     expect(modelCatalogStatus(runner, { runner, models: [], source: 'cache', stale: true, reason: 'raw' })).toBe(`Using cached ${label} model list`)
     expect(modelCatalogStatus(runner, { runner, models: [], source: 'unavailable', stale: false, reason: 'raw' })).toBe(`Latest ${label} models unavailable`)
@@ -161,10 +162,10 @@ describe('model option resolution', () => {
   })
 
   it('exactly the runners with a host catalog discover their models', () => {
-    // #794 gave OpenCode a catalog, #784 gave Claude one and #807 gave Cursor one. The contract's
-    // list is the single source both the route and the picker compile against — this asserts they
-    // still agree on who discovers, and that a runner is never added to it by accident.
-    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode', 'cursor', 'junie'])
+    // #794 gave OpenCode a catalog, #784 gave Claude one, #807 gave Cursor one and #893 gave pi one.
+    // The contract's list is the single source both the route and the picker compile against — this
+    // asserts they still agree on who discovers, and that a runner is never added to it by accident.
+    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie'])
     expect(MODEL_DISCOVERY_RUNNERS.every((runner) => runnerDiscoversModels(runner))).toBe(true)
   })
 
@@ -176,7 +177,8 @@ describe('model option resolution', () => {
   it('copilot stays OUT of discovery: free text plus its own presets, and no /models request', () => {
     // Copilot's catalog is fetched from GitHub per account, so cezar cannot list it truthfully and
     // `GET /models?runner=copilot` would 400. The picker therefore offers Copilot's own documented
-    // `auto` and whatever the user types (#582; spec § API Contracts, same rule as pi).
+    // `auto` and whatever the user types (#582; spec § API Contracts). pi used to share this rule
+    // and left it in #893, so Copilot is now the only non-discovering runner.
     expect(runnerDiscoversModels('copilot')).toBe(false)
     expect(MODEL_DISCOVERY_RUNNERS).not.toContain('copilot')
     expect(modelsForRunner('copilot').map((m) => m.id)).toEqual([''])
