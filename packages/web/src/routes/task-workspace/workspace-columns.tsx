@@ -202,11 +202,10 @@ export function WorkspaceColumns({
           menu: it is how a layout gains its second and third column, and it is the ONLY way to
           add one to a layout whose columns have all been closed — that case has no column menu
           to open. Disabled at three, which is the cap the same paragraph sets. */}
-      <AddColumnEdge
-        count={columns.length}
-        onPick={actions.addColumn}
-        extra={columns.length === 1 ? columnMenu(0, columns[0]!) : null}
-      />
+      {/* Only for a layout with no columns left, where it is the one way to put a view back.
+          Beside real columns the strip is gone: adding a view to a layout is being redesigned,
+          and until then a layout keeps the columns it has. */}
+      {columns.length === 0 ? <AddColumnEdge count={0} onPick={actions.addColumn} /> : null}
     </div>
   )
 }
