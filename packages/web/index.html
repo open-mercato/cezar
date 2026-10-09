@@ -27,17 +27,18 @@
         } catch (e) {
           // Storage or matchMedia unavailable — the default dark tokens already apply.
         }
-        // Accent + density before first paint, from the localStorage MIRROR of ui-state.json
+        // Accent + density + reading width before first paint, from the localStorage MIRROR of ui-state.json
         // (src/lib/appearance.ts owns the contract; keep the two in sync). Defaults are the
-        // absence of the attribute, so only the known deviations are stamped.
+        // absence of the attribute, so only the known deviations are stamped. A pre-upgrade
+        // `cez-width=narrow` mirror can flash once before the server migration settles.
         try {
           if (localStorage.getItem('cez-accent') === 'violet')
             document.documentElement.dataset.accent = 'violet'
           var density = localStorage.getItem('cez-density')
           if (density === 'compact' || density === 'ultra')
             document.documentElement.dataset.density = density
-          if (localStorage.getItem('cez-width') === 'wide')
-            document.documentElement.dataset.width = 'wide'
+          if (localStorage.getItem('cez-width') === 'narrow')
+            document.documentElement.dataset.width = 'narrow'
         } catch (e) {
           // Storage unavailable — lime/comfortable defaults already apply.
         }
