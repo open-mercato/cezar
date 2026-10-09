@@ -21,14 +21,16 @@ Non-goals: server routes/SSE, other `RunStore` behavior, contracts, UI, auth lat
 
 ### Phase 2: Verification and delivery
 
-- [ ] 2.1 Run targeted red/green proof and the configured validation gate; perform scoped self-review.
-- [ ] 2.2 Publish the PR with tracking/status metadata, evidence, labels, and limitations.
+- [x] 2.1 Run targeted red/green proof and the configured validation gate; perform scoped self-review. — f7ac8c05
+- [x] 2.2 Publish the PR with tracking/status metadata, evidence, labels, and limitations. — f7ac8c05
 
 ## Risks
 
 The cache must survive `RunStore` replacement without being keyed by store object, and must never reserve a key permanently when an append fails or re-enters synchronously. Production incident IDs are fresh UUIDs after restart, so this intentionally does not seed from disk.
 
 ## Progress
+
+PR: #1344 (https://github.com/open-mercato/cezar/pull/1344)
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
@@ -39,5 +41,5 @@ The cache must survive `RunStore` replacement without being keyed by store objec
 
 ### Phase 2: Verification and delivery
 
-- [ ] 2.1 Run targeted red/green proof and the configured validation gate; perform scoped self-review.
-- [ ] 2.2 Publish the PR with tracking/status metadata, evidence, labels, and limitations.
+- [x] 2.1 Run targeted red/green proof and the configured validation gate; perform scoped self-review. — f7ac8c05
+- [x] 2.2 Publish the PR with tracking/status metadata, evidence, labels, and limitations. — f7ac8c05
