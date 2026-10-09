@@ -19,7 +19,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import type { GitAction, GitActionBar, GitActionId } from '@/lib/git-actions'
-import { isHttpUrl } from '@/lib/utils'
+import { cn, isHttpUrl } from '@/lib/utils'
 
 import { FullViewExit } from '../task-workspace/maximize'
 import { BranchChip, DiffViewToggles } from './diff-controls'
@@ -41,6 +41,7 @@ export function GitToolbar({
   onModeChange,
   onWrapChange,
   onAction,
+  className,
 }: {
   bar: GitActionBar
   branch?: string
@@ -50,11 +51,15 @@ export function GitToolbar({
   onModeChange: (mode: DiffMode) => void
   onWrapChange: (wrap: boolean) => void
   onAction: (id: GitActionId) => void
+  className?: string
 }) {
   return (
     <div
       data-slot="git-toolbar"
-      className="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-border/70 px-4 py-1.5 sm:px-6"
+      className={cn(
+        'flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-border/70 px-4 py-1.5 sm:px-6',
+        className,
+      )}
     >
       {branch ? <BranchChip branch={branch} /> : null}
       {stat ? <AnimatedDiffStat stat={stat} /> : null}

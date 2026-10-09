@@ -247,6 +247,10 @@ export function ChangesView({
         onModeChange={setMode}
         onWrapChange={setWrap}
         onAction={onAction}
+        // In a workspace column the toolbar is the view's own top edge: it stays put while the
+        // diff scrolls, and the tree and the file headers park directly under it. Without that
+        // they parked 40px down with the diff showing through the gap above them.
+        className={embedded ? 'sticky top-0 z-20 bg-background' : undefined}
       />
 
       {changes.data?.repointedHead ? (
@@ -279,7 +283,7 @@ export function ChangesView({
       ) : (
         // The run header scrolls away on mobile; only desktop reserves space for it.
         <div
-          className={cn('flex min-h-0 flex-1 items-start gap-5 px-4 py-4 [--diff-sticky-top:0px] md:px-6', embedded ? 'md:[--diff-sticky-top:2.5rem]' : 'md:[--diff-sticky-top:10rem]')}
+          className={cn('flex min-h-0 flex-1 items-start gap-5 px-4 py-4 [--diff-sticky-top:0px] md:px-6', embedded ? '[--diff-sticky-top:2.75rem]' : 'md:[--diff-sticky-top:10rem]')}
           style={
             {
               '--changes-dock': `${showDock ? dockHeight : 0}px`,
@@ -295,7 +299,7 @@ export function ChangesView({
               inside it from chaining into the diff once it bottoms out. */}
           <aside
             data-slot="changes-tree-pane"
-            className={cn('sticky', embedded ? 'top-10' : 'top-40', 'hidden max-h-[calc(100dvh_-_var(--diff-sticky-top)_-_1rem)] w-60 pb-[var(--changes-dock,0px)] shrink-0 overflow-y-auto overscroll-contain md:block lg:w-72')}
+            className={cn('sticky', embedded ? 'top-[calc(2.75rem+1rem)]' : 'top-40', 'hidden max-h-[calc(100dvh_-_var(--diff-sticky-top)_-_1rem)] w-60 pb-[var(--changes-dock,0px)] shrink-0 overflow-y-auto overscroll-contain md:block lg:w-72')}
           >
             <ChangesTree root={tree} selected={selected} onSelect={selectFile} commentCounts={commentCounts} />
           </aside>
