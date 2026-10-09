@@ -3,6 +3,7 @@ import { useState } from 'react'
 
 import type { AutomationEvent } from '@open-mercato/cezar-api-client'
 import { Chip } from '@/components/chip'
+import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -70,14 +71,16 @@ export function EditorGithubFields({
       </div>
       <Collapsible open={open} onOpenChange={setOpen}>
         <CollapsibleTrigger asChild>
-          <button
+          <Button
             type="button"
-            className="inline-flex h-7 items-center gap-1.5 self-start text-[13px] font-medium text-muted-foreground hover:text-foreground"
+            variant="ghost"
+            size="sm"
+            className="h-7 self-start rounded-none p-0 hover:bg-transparent active:translate-y-0"
           >
             <ChevronDownIcon aria-hidden="true" className={cn('size-3.5 transition-transform', open ? '' : '-rotate-90')} />
             Filters
             {changedMissing ? <span className="text-danger">· changed labels required</span> : null}
-          </button>
+          </Button>
         </CollapsibleTrigger>
         <CollapsibleContent>
           <div data-slot="editor-github-filters" className="grid grid-cols-1 gap-x-4 gap-y-4 pt-3 sm:grid-cols-2">

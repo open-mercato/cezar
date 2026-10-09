@@ -28,6 +28,7 @@ import { memo } from 'react'
 import type * as React from 'react'
 
 import { Link } from '@/lib/project-router'
+import { Button } from '@/components/ui/button'
 
 import type { WorkflowGraph, WorkflowGraphNode, WorkflowNodeCatalogResponse } from '@open-mercato/cezar-api-client'
 import { cn } from '@/lib/utils'
@@ -421,10 +422,12 @@ export const GraphNodeView = memo(function GraphNodeView({
                   {open && onAddFromPort && (
                     <>
                       <span aria-hidden="true" className="h-px w-6 bg-border" />
-                      <button
+                      <Button
                         type="button"
+                        variant="outline"
+                        size="icon-xs"
                         // `nodrag nopan`: a click here is a button press, not the start of a node drag.
-                        className="nodrag nopan flex size-5 items-center justify-center rounded-full border border-border bg-card text-muted-foreground shadow-xs hover:border-muted-foreground/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                        className="nodrag nopan size-5 rounded-full border-border text-muted-foreground shadow-xs hover:border-muted-foreground/60 hover:bg-card hover:text-foreground active:translate-y-0"
                         aria-label={`Add a node after ${node.name ?? node.id} → ${port}`}
                         title={`Add a node on “${port}”`}
                         onClick={(e) => {
@@ -433,7 +436,7 @@ export const GraphNodeView = memo(function GraphNodeView({
                         }}
                       >
                         <PlusIcon className="size-3" />
-                      </button>
+                      </Button>
                     </>
                   )}
                 </div>

@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 
 import { cn } from '@/lib/utils'
+import { Input } from '@/components/ui/input'
 
 /**
  * The ONE inline-rename state machine (#389, spec step 15). Two surfaces flip a title into an
@@ -76,9 +77,20 @@ export function useTitleEditor(title: string, onCommit: (next: string) => void):
 /** The in-place input, wired to the machine: Enter commits, Escape abandons, blur commits —
  *  except for an untouched editor restored from a draft (`commitOnBlur`).
  *  Sizing/typography come from the surface via `className`; the chrome is shared. */
+const MD_SIZE: Record<string, string> = {
+  'text-xs': 'md:text-xs',
+  'text-sm': 'md:text-sm',
+  'text-base': 'md:text-base',
+  'text-lg': 'md:text-lg',
+  'text-xl': 'md:text-xl',
+}
+function mdSize(className: string | undefined): string | undefined {
+  return className?.split(/\s+/).map((token) => MD_SIZE[token]).find(Boolean)
+}
+
 export function TitleEditInput({ editor, className }: { editor: TitleEditor; className?: string }) {
   return (
-    <input
+    <Input
       data-slot="title-input"
       aria-label="Task title"
       // eslint-disable-next-line jsx-a11y/no-autofocus — the user just asked to edit this field
@@ -98,8 +110,10 @@ export function TitleEditInput({ editor, className }: { editor: TitleEditor; cla
         }
       }}
       className={cn(
-        'w-full min-w-0 rounded-sm border border-border bg-card px-1.5 py-0.5 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50',
-        className
+        'h-auto w-full min-w-0 rounded-sm border border-border bg-card px-1.5 py-0.5 text-[length:inherit] shadow-none outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 md:text-[length:inherit] dark:bg-card',
+        className,
+        // The surface's own size has to win past the primitive's `md:` step as well.
+        mdSize(className),
       )}
     />
   )

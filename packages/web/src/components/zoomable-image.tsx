@@ -1,14 +1,14 @@
-import { useEffect, useState, type ImgHTMLAttributes } from 'react'
-import { createPortal } from 'react-dom'
+import { useState, type ImgHTMLAttributes } from 'react'
 
 import { resolveApiUrl } from '@open-mercato/cezar-api-client'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 
 /**
  * An image that enlarges to a full-screen lightbox on click (#image-zoom). Used for conversation
  * images — the agent's own screenshots and the user's attachments — so a thumbnail can be read
- * without leaving the thread. Dismiss by clicking the backdrop or pressing Escape. The overlay is
- * portalled to <body> so it escapes the thread's overflow/scroll containers.
+ * without leaving the thread. Dismiss by clicking anywhere or pressing Escape. The lightbox is a
+ * full-bleed shadcn Dialog, portalled to <body> so it escapes the thread's overflow/scroll containers.
  *
  * `src` is always a cockpit-served `/api/...` URL (the server persists them into the transcript
  * — `/api/runs/:id/images/…` — and `taskImages`/`runFileRawUrl` are the same origin), so the
@@ -29,15 +29,6 @@ export function ZoomableImage({
   const [open, setOpen] = useState(false)
   const src = resolveApiUrl(rawSrc)
 
-  useEffect(() => {
-    if (!open) return
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false)
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [open])
-
   return (
     <>
       <img
@@ -48,25 +39,22 @@ export function ZoomableImage({
         onClick={() => setOpen(true)}
         className={cn('cursor-zoom-in', className)}
       />
-      {open
-        ? createPortal(
-            <div
-              role="dialog"
-              aria-modal="true"
-              aria-label="Image preview"
-              data-slot="image-lightbox"
-              onClick={() => setOpen(false)}
-              className="fixed inset-0 z-[100] flex cursor-zoom-out items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
-            >
-              <img
-                src={src}
-                alt={alt}
-                className="max-h-full max-w-full rounded-md object-contain shadow-2xl"
-              />
-            </div>,
-            document.body,
-          )
-        : null}
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent
+          showCloseButton={false}
+          aria-describedby={undefined}
+          data-slot="image-lightbox"
+          onClick={() => setOpen(false)}
+          className="inset-0 top-0 left-0 z-[100] flex h-full w-full max-w-none translate-x-0 translate-y-0 cursor-zoom-out items-center justify-center rounded-none border-0 bg-black/80 p-4 shadow-none backdrop-blur-sm sm:max-w-none"
+        >
+          <DialogTitle className="sr-only">Image preview</DialogTitle>
+          <img
+            src={src}
+            alt={alt}
+            className="max-h-full max-w-full rounded-md object-contain shadow-2xl"
+          />
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

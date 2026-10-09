@@ -2,6 +2,8 @@ import type { AgentProfile, ProviderStatusResponse, Runner } from '@open-mercato
 import { cn } from '@/lib/utils'
 import { providerStatusFor } from '@/lib/provider-status'
 import { RUNNERS } from '@/routes/new-task-form'
+import { Button } from '@/components/ui/button'
+import { bareButton } from '@/components/bare-control'
 
 /**
  * "Which agent, and which of its logins" as ONE flat list (spec 2026-07-29-agent-profiles):
@@ -108,7 +110,8 @@ export function DefaultAgentPicker({
         const hasAccountChoice = rows.filter((other) => other.runner.id === row.runner.id).length > 1
         const checked = row.runner.id === runner && row.account === accountFor(row.runner.id)
         return (
-          <button
+          <Button
+            variant="ghost"
             key={`${row.runner.id}:${row.account ?? ''}`}
             type="button"
             role="radio"
@@ -121,8 +124,11 @@ export function DefaultAgentPicker({
             }
             onClick={() => onPick(row.runner.id, row.account, hasAccountChoice)}
             className={cn(
+              bareButton,
               'rounded-sm px-3 py-1.5 text-left font-mono text-[13px] font-medium transition-colors disabled:opacity-50',
-              checked ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground',
+              checked
+                ? 'bg-muted text-foreground hover:bg-muted hover:text-foreground'
+                : 'text-muted-foreground hover:text-foreground',
             )}
           >
             {row.label}
@@ -135,7 +141,7 @@ export function DefaultAgentPicker({
                 {row.desc}
               </span>
             ) : null}
-          </button>
+          </Button>
         )
       })}
     </div>

@@ -6,6 +6,7 @@ import type { DiffStat } from '@open-mercato/cezar-api-client'
 import { CommentCount } from '@/components/comment-count'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { highlight, highlightSync, langForPath, type SynToken } from '@/lib/highlighter'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 import {
@@ -568,12 +569,12 @@ function DiffFileCard({
           header (Git / run header) rather than colliding with it; `z-10` keeps it beneath the
           page header's higher layer. Defaults to 0 for consumers without a sticky header. */}
       <header className="sticky top-[var(--diff-sticky-top,0px)] z-10 rounded-t-md border-b border-border/50 bg-card">
-        <button
+        <Button
           type="button"
           data-slot="diff-file-header"
           aria-expanded={open}
           onClick={onToggle}
-          className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-muted/50"
+          variant="ghost" className="flex h-auto w-full justify-start gap-2 rounded-none px-3 py-2 text-left text-[length:inherit] font-normal whitespace-normal text-inherit hover:bg-muted/50 hover:text-inherit focus-visible:ring-inset active:translate-y-0"
         >
           <ChevronRightIcon
             className={cn('size-3.5 shrink-0 text-soft-foreground transition-transform', open && 'rotate-90')}
@@ -607,7 +608,7 @@ function DiffFileCard({
             <CommentCount count={commentCount} />
             <DiffStatLabel stat={{ adds: file.adds, dels: file.dels, files: 1 }} className="text-[11px]" />
           </span>
-        </button>
+        </Button>
       </header>
       {open ? (
         <DiffFileBody
@@ -829,14 +830,14 @@ function GapRow({ gap, onExpand }: { gap: ContextGap; onExpand?: (gap: ContextGa
     )
   }
   return (
-    <button
+    <Button
       type="button"
       data-slot="diff-gap"
       onClick={() => onExpand(gap)}
-      className="block w-full border-y border-border/40 bg-muted/20 px-4 py-0.5 text-left text-[11px] text-soft-foreground hover:bg-muted/50 hover:text-foreground"
+      variant="ghost" className="block h-auto w-full rounded-none border-y border-border/40 bg-muted/20 px-4 py-0.5 text-left text-[11px] font-normal text-soft-foreground hover:bg-muted/50 active:translate-y-0"
     >
       {label} — expand
-    </button>
+    </Button>
   )
 }
 

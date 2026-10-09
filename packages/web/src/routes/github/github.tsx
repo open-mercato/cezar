@@ -67,6 +67,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   SidebarContent,
@@ -101,6 +102,7 @@ import {
 } from './github-filter'
 import { GithubLoading } from './github-loading'
 import { HandToAgent } from './hand-to-agent'
+import { Label } from '@/components/ui/label'
 import { readFollowupSelection, writeFollowupSelection } from './hand-to-agent-draft'
 
 /**
@@ -1355,7 +1357,7 @@ function GithubMergeBox({ number }: { number: number }) {
           .map((blocker) => <li key={blocker.code} className="text-muted-foreground">{blocker.message}</li>)}
       </ul>
       {state.canOverride ? (
-        <label className="mt-4 flex cursor-pointer items-start gap-2.5 rounded-lg bg-pending/10 p-3 text-[13px]">
+        <Label className="mt-4 cursor-pointer items-start gap-2.5 rounded-lg bg-pending/10 p-3 text-[13px] leading-normal font-normal select-auto">
           <Checkbox
             checked={overrideRules}
             onCheckedChange={(checked) => setOverrideRules(checked === true)}
@@ -1365,7 +1367,7 @@ function GithubMergeBox({ number }: { number: number }) {
             <span className="block font-medium">Merge without waiting for requirements</span>
             <span className="mt-0.5 block text-muted-foreground">GitHub will allow this only if your permissions can bypass the repository rules.</span>
           </span>
-        </label>
+        </Label>
       ) : null}
       {state.state === 'open' && state.methods.length > 0 ? (
         <div className="mt-4 flex flex-col gap-2 sm:flex-row">
@@ -1461,11 +1463,15 @@ function GithubPrChanges({ item }: { item: GithubItem }) {
             <InputGroupAddon><SearchIcon aria-hidden="true" /></InputGroupAddon>
             <InputGroupInput aria-label="Filter changed files" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter files…" />
           </InputGroup>
-          <select aria-label="Select changed file" value={selected ?? ''} onChange={(e) => setSelected(e.target.value)} className="mt-2 h-10 w-full rounded-md border border-input bg-card px-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 lg:hidden">
-            {files.map((file) => <option key={file.path}>{file.path}</option>)}
-          </select>
+          {/* Native on purpose (shadcn `native-select`): this is the phone-width file picker, and a
+              PR can list hundreds of paths — the OS wheel handles that better than a popover. */}
+          <div className="mt-2 lg:hidden [&>[data-slot=native-select-wrapper]]:w-full">
+            <NativeSelect aria-label="Select changed file" value={selected ?? ''} onChange={(e) => setSelected(e.target.value)} className="h-10 bg-card px-2 dark:bg-card dark:hover:bg-card">
+              {files.map((file) => <NativeSelectOption key={file.path}>{file.path}</NativeSelectOption>)}
+            </NativeSelect>
+          </div>
           <ul className="mt-2 hidden max-h-[60vh] flex-col gap-px overflow-auto lg:flex">
-            {files.map((file) => <li key={file.path}><button type="button" onClick={() => setSelected(file.path)} className={cn('flex min-h-9 w-full items-center gap-2 rounded-md px-2 text-left text-xs text-muted-foreground hover:bg-muted/60', selected === file.path && 'bg-muted font-medium text-foreground')} title={`${file.status} · ${file.path}`}><span className="min-w-0 flex-1 truncate [direction:rtl]"><bdi>{file.path}</bdi></span><span className="sr-only">{file.status}</span><span className="shrink-0 font-mono text-[11px] tabular-nums"><span className="text-success">+{file.additions}</span> <span className="text-danger">−{file.deletions}</span></span></button></li>)}
+            {files.map((file) => <li key={file.path}><Button type="button" variant="ghost" onClick={() => setSelected(file.path)} className={cn('flex h-auto min-h-9 w-full justify-start gap-2 px-2 text-left text-xs font-normal hover:bg-muted/60 hover:text-muted-foreground', selected === file.path && 'bg-muted font-medium text-foreground hover:text-foreground')} title={`${file.status} · ${file.path}`}><span className="min-w-0 flex-1 truncate [direction:rtl]"><bdi>{file.path}</bdi></span><span className="sr-only">{file.status}</span><span className="shrink-0 font-mono text-[11px] tabular-nums"><span className="text-success">+{file.additions}</span> <span className="text-danger">−{file.deletions}</span></span></Button></li>)}
           </ul>
         </aside>
         <div className="min-w-0">
@@ -1657,16 +1663,17 @@ function CommitGroup({ commits, colors }: { commits: GithubTimelineEvent[]; colo
     return (
       <>
         <li data-slot="gh-commit-group" data-open="true" className="min-w-0">
-          <button
+          <Button
             type="button"
+            variant="ghost"
             aria-expanded={true}
             onClick={() => setOpen(false)}
-            className="relative flex items-center gap-2 text-[13px] text-muted-foreground hover:text-foreground"
+            className="relative flex h-auto justify-start gap-2 p-0 text-[13px] font-normal whitespace-normal hover:bg-transparent"
           >
             <EventMarker kind="committed" />
             <span className="font-medium text-foreground">{actor}</span>
             <span>added {commits.length} commits</span>
-          </button>
+          </Button>
         </li>
         {commits.map((commit) => (
           <EventRow key={commit.id} event={commit} colors={colors} />
@@ -1677,17 +1684,18 @@ function CommitGroup({ commits, colors }: { commits: GithubTimelineEvent[]; colo
 
   return (
     <li data-slot="gh-commit-group" data-open="false" className="min-w-0">
-      <button
+      <Button
         type="button"
+        variant="ghost"
         aria-expanded={false}
         onClick={() => setOpen(true)}
-        className="relative flex items-center gap-2 text-[13px] text-muted-foreground hover:text-foreground"
+        className="relative flex h-auto justify-start gap-2 p-0 text-[13px] font-normal whitespace-normal hover:bg-transparent"
       >
         <EventMarker kind="committed" />
         <span className="font-medium text-foreground">{actor}</span>
         <span>added {commits.length} commits</span>
         <span className="shrink-0 text-xs tabular-nums">{shortAge(commits[commits.length - 1]!.createdAt)}</span>
-      </button>
+      </Button>
     </li>
   )
 }

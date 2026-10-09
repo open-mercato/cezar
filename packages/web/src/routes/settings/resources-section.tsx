@@ -156,14 +156,15 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
         >
           <SettingsNote>
             Need a different limit for one project?{' '}
-            <button
+            <Button
               type="button"
+              variant="link"
               data-slot="resources-project-limits-link"
               onClick={() => globalSettings.open('projects')}
-              className="font-medium text-foreground underline decoration-border underline-offset-4 hover:decoration-foreground"
+              className="inline h-auto p-0 text-[length:inherit] whitespace-normal font-medium underline decoration-border hover:decoration-foreground"
             >
               Configure per-project limits
-            </button>
+            </Button>
             .
           </SettingsNote>
         </SettingsField>

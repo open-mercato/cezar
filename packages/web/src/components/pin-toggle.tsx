@@ -1,5 +1,7 @@
 import { PinIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Toggle } from '@/components/ui/toggle'
+import { bareToggle } from '@/components/bare-control'
 
 /**
  * The pin control (#935) — one button, shared by every surface that lists a task: the sidebar
@@ -26,12 +28,11 @@ export function PinToggle({
   className?: string
 }) {
   return (
-    <button
-      type="button"
+    <Toggle
       data-slot="pin-toggle"
       data-pinned={pinned ? 'true' : undefined}
       // A toggle, so `aria-pressed` — the same call `ViewTab` and the column headers make.
-      aria-pressed={pinned}
+      pressed={pinned}
       aria-label={pinned ? 'Unpin task' : 'Pin task'}
       title={pinned ? 'Unpin from the top of the list' : 'Pin to the top of the list'}
       // Deliberately never disabled while the mutation is in flight: `usePinRun` invalidates
@@ -43,12 +44,13 @@ export function PinToggle({
         onToggle(!pinned)
       }}
       className={cn(
+        bareToggle,
         'inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-soft-foreground transition-[color,background-color,opacity] hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
-        pinned && 'text-violet hover:text-violet',
+        'data-[state=on]:text-violet data-[state=on]:hover:text-violet',
         className,
       )}
     >
       <PinIcon className={cn('size-3.5', pinned && 'fill-current')} aria-hidden="true" />
-    </button>
+    </Toggle>
   )
 }

@@ -82,17 +82,18 @@ export function ProjectLocationNav() {
   return (
     <div data-slot="project-location" data-variant="nav" className="px-2.5">
       <p className="text-xs text-soft-foreground">Project folder</p>
-      <button
+      <Button
         type="button"
+        variant="ghost"
         data-action="project-location-copy"
         title={`${root} — click to copy`}
         onClick={() => copyPath(root)}
-        className="block w-full truncate text-left font-mono text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+        className="block h-auto w-full truncate p-0 text-left font-mono text-[11px] font-normal hover:bg-transparent"
         // Keep the END of the path visible: the folder name is the part that tells projects apart.
         style={{ direction: 'rtl' }}
       >
         <bdi>{root}</bdi>
-      </button>
+      </Button>
     </div>
   )
 }

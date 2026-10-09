@@ -17,6 +17,8 @@ import {
 } from 'lucide-react'
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 
+import { Button } from '@/components/ui/button'
+import { Textarea } from '@/components/ui/textarea'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { ZoomableImage } from '@/components/zoomable-image'
 import { Link } from '@/lib/project-router'
@@ -178,7 +180,7 @@ export function UserBubble({
         data-editing="true"
         className="max-w-[85%] self-end rounded-2xl rounded-br-md bg-muted px-4 py-2.5 text-sm leading-[1.6] md:max-w-[75%]"
       >
-        <textarea
+        <Textarea
           autoFocus
           aria-label="Edit the message"
           value={draft}
@@ -194,25 +196,25 @@ export function UserBubble({
               void save()
             }
           }}
-          className="block max-h-[220px] min-h-[60px] w-full resize-none rounded-md border border-input bg-card px-2.5 py-1.5 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
+          className="block field-sizing-fixed max-h-[220px] min-h-[60px] px-2.5 py-1.5 text-sm shadow-none focus-visible:ring-ring/40 dark:bg-card"
         />
         <span className="mt-1.5 flex justify-end gap-1.5">
-          <button
+          <Button
             type="button"
             onClick={cancel}
             disabled={busy}
-            className="rounded-sm px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-background hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+            variant="ghost" size="xs" className="h-auto px-2 py-1 hover:bg-background focus-visible:ring-ring/50"
           >
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             onClick={() => void save()}
             disabled={busy}
-            className="rounded-sm bg-foreground px-2.5 py-1 text-xs font-medium text-background hover:opacity-90 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+            variant="default" size="xs" className="h-auto bg-foreground px-2.5 py-1 text-background shadow-none hover:bg-foreground hover:opacity-90 focus-visible:ring-ring/50"
           >
             {busy ? <LoaderCircleIcon className="size-3.5 animate-spin" /> : 'Save'}
-          </button>
+          </Button>
         </span>
         {actionError ? <p role="alert" className="mt-1.5 text-xs text-danger">{actionError}</p> : null}
       </div>
@@ -230,26 +232,26 @@ export function UserBubble({
           className="mb-1 flex justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
         >
           {onEdit ? (
-            <button
+            <Button
               type="button"
               aria-label={editLabel}
               onClick={startEditing}
               disabled={busy}
-              className="rounded-sm p-1 text-soft-foreground hover:bg-background hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+              variant="ghost" size="icon-xs" className="size-[22px] text-soft-foreground hover:bg-background focus-visible:opacity-100 focus-visible:ring-ring/50"
             >
               <SquarePenIcon className="size-3.5" />
-            </button>
+            </Button>
           ) : null}
           {onRemove ? (
-            <button
+            <Button
               type="button"
               aria-label={removeLabel}
               onClick={() => void remove()}
               disabled={busy}
-              className="rounded-sm p-1 text-soft-foreground hover:bg-background hover:text-danger focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+              variant="ghost" size="icon-xs" className="size-[22px] text-soft-foreground hover:bg-background hover:text-danger focus-visible:opacity-100 focus-visible:ring-ring/50"
             >
               <Trash2Icon className="size-3.5" />
-            </button>
+            </Button>
           ) : null}
         </span>
       ) : null}
@@ -524,14 +526,14 @@ function ToolOutput({ text, streaming }: { text: string; streaming: boolean }) {
         ) : null}
       </div>
       {!streaming && lines > OUTPUT_CLAMP_LINES ? (
-        <button
+        <Button
           type="button"
           data-slot="tool-output-toggle"
           onClick={() => setExpanded((value) => !value)}
-          className="block w-full px-4 py-2 text-left text-xs font-medium text-muted-foreground hover:text-foreground"
+          variant="ghost" size="xs" className="flex h-auto w-full justify-start rounded-none px-4 py-2 text-left hover:bg-transparent"
         >
           {expanded ? 'Show less' : `Show all ${lines} lines`}
-        </button>
+        </Button>
       ) : null}
     </div>
   )

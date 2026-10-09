@@ -8,6 +8,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 
 import { layoutDisplayName, splitCards, type ViewId, type WorkspaceLayout } from './layout-state'
@@ -57,14 +58,15 @@ export function LayoutCards({
       {overflow.length > 0 ? (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button
+            <Button
               type="button"
-              className="-mb-px flex h-9 shrink-0 items-center gap-1 border-b-2 border-transparent px-2 text-[13px] font-medium text-muted-foreground hover:text-foreground"
+              variant="ghost"
+              className="-mb-px h-9 gap-1 rounded-none border-b-2 border-transparent px-2 text-[13px] hover:bg-transparent"
             >
               More
               <span className="tabular-nums">({overflow.length})</span>
               <ChevronDownIcon aria-hidden="true" className="size-3.5" />
-            </button>
+            </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="max-h-72 w-52 overflow-y-auto">
             {overflow.map((layout) => (
@@ -191,8 +193,9 @@ function LayoutCard({
           onCancel={() => setEditing(false)}
         />
       ) : (
-        <button
+        <Button
           type="button"
+          variant="ghost"
           aria-current={active ? 'page' : undefined}
           onClick={onSelect}
           // Double-click renames (spec §5.2 — "Double-click a card to rename it"). The context
@@ -203,25 +206,27 @@ function LayoutCard({
             startRename()
           }}
           title={`${shown} — double-click to rename, right-click for more`}
-          className="max-w-40 truncate outline-none focus-visible:underline"
+          className="inline-block h-auto max-w-40 shrink truncate rounded-none p-0 text-[13px] text-inherit hover:bg-transparent hover:text-inherit focus-visible:underline focus-visible:ring-0 active:translate-y-0"
         >
           {shown}
-        </button>
+        </Button>
       )}
 
       {/* Always rendered so the card's width does not jump on hover; revealed on hover, focus
           within the card, and on the active card, which is the one a user closes most often. */}
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="icon-xs"
         aria-label={`Close layout ${shown}`}
         onClick={onClose}
         className={cn(
-          'grid size-5 shrink-0 place-items-center rounded-sm opacity-0 transition-opacity hover:bg-muted focus-visible:opacity-100 group-hover:opacity-100',
+          'size-5 text-inherit opacity-0 transition-opacity hover:text-inherit focus-visible:opacity-100 group-hover:opacity-100',
           active && 'opacity-50',
         )}
       >
         <XIcon aria-hidden="true" className="size-3.5" />
-      </button>
+      </Button>
     </div>
   )
 }
@@ -263,7 +268,7 @@ function RenameField({
   }
 
   return (
-    <input
+    <Input
       ref={inputRef}
       autoFocus
       aria-label={`Layout name ${name}`}
@@ -279,7 +284,7 @@ function RenameField({
           cancel()
         }
       }}
-      className="h-6 w-28 rounded-sm border border-input bg-card px-1.5 text-[13px] outline-none focus-visible:border-ring"
+      className="h-6 w-28 rounded-sm px-1.5 py-0 text-[13px] shadow-none focus-visible:ring-0 md:text-[13px] dark:bg-card"
     />
   )
 }

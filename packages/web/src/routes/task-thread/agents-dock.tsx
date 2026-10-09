@@ -2,6 +2,7 @@ import { BotIcon, ChevronDownIcon } from 'lucide-react'
 import { useState } from 'react'
 
 import type { ToolStatus } from '@open-mercato/cezar-api-client'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 import { activeSubagent, subagentActivityText, subagentCounts, type SubagentSummary } from './subagent-dock'
@@ -60,11 +61,15 @@ export function AgentsDock({
     >
       {/* The mockup's `.grad-edge` — the brand gradient as a hairline top edge. */}
       <div aria-hidden data-slot="grad-edge" className="hidden" />
-      <button
+      <Button
         type="button"
         onClick={toggle}
         aria-expanded={open}
-        className={cn('flex w-full items-center gap-2 px-4 text-left text-[13px]', open ? 'pt-2.5 pb-2' : 'py-2.5')}
+        variant="ghost"
+        className={cn(
+          'flex h-auto w-full justify-start gap-2 rounded-none px-4 text-left text-[13px] font-normal whitespace-normal text-inherit hover:bg-transparent hover:text-inherit focus-visible:ring-inset active:translate-y-0',
+          open ? 'pt-2.5 pb-2' : 'py-2.5',
+        )}
       >
         <BotIcon aria-hidden className="size-3.5 shrink-0 text-soft-foreground" />
         <span className="shrink-0 font-semibold">Agents</span>
@@ -80,7 +85,7 @@ export function AgentsDock({
           aria-hidden
           className={cn('ml-auto size-3.5 shrink-0 text-soft-foreground transition-transform', !open && 'rotate-180')}
         />
-      </button>
+      </Button>
       {open ? (
         <ul data-slot="agents-list" className="flex flex-col gap-2 px-4 pb-3">
           {agents.map((agent) => (
@@ -119,14 +124,14 @@ function AgentRow({ agent, onSelect }: { agent: SubagentSummary; onSelect?: (id:
   return (
     <li data-slot="agent-item" data-status={agent.status} className="min-w-0 text-[13px]">
       {onSelect ? (
-        <button
+        <Button
           type="button"
           onClick={() => onSelect(agent.id)}
           aria-haspopup="dialog"
-          className="flex min-h-5 w-full min-w-0 items-center gap-2.5 rounded-sm text-left hover:bg-muted/50"
+          variant="ghost" className="flex h-auto min-h-5 w-full min-w-0 shrink justify-start gap-2.5 rounded-sm p-0 text-left text-[13px] font-normal whitespace-normal text-inherit hover:bg-muted/50 hover:text-inherit active:translate-y-0"
         >
           {body}
-        </button>
+        </Button>
       ) : (
         <div className="flex min-h-5 min-w-0 items-center gap-2.5">{body}</div>
       )}

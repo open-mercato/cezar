@@ -10,6 +10,9 @@ import {
 import { parseProviderStatusResponse } from '@/lib/provider-status'
 
 import { StatusDot } from './status-dot'
+import { Button } from '@/components/ui/button'
+import { bareButton } from '@/components/bare-control'
+import { cn } from '@/lib/utils'
 
 interface ProviderBannerProps {
   status: ProviderStatusResponse | undefined
@@ -53,14 +56,15 @@ export function ProviderBanner({
         >
           Open agent settings
         </Link>
-        <button
+        <Button
+          variant="ghost"
           type="button"
           aria-label="Dismiss provider authentication alert"
           onClick={() => onDismissAuthFailures(incidents)}
-          className="shrink-0 rounded-sm p-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className={cn(bareButton, 'shrink-0 rounded-sm p-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring')}
         >
           <XIcon className="size-4" aria-hidden="true" />
-        </button>
+        </Button>
       </div>
     )
   }

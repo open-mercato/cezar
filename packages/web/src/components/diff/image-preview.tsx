@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button'
 import { ZoomableImage } from '@/components/zoomable-image'
 
 import type { DiffFileChange } from './types'
@@ -48,14 +49,14 @@ export function ImagePreview({
     <div data-slot="diff-image-preview" className="flex flex-col items-center gap-2 p-4">
       <ZoomableImage src={imageSrc(file.path)} alt={file.path} className="max-h-[60vh] max-w-full rounded-sm" />
       {onOpenInApp ? (
-        <button
+        <Button
           type="button"
           data-slot="diff-image-open"
           onClick={() => onOpenInApp(file.path)}
-          className="text-[11px] font-medium text-soft-foreground hover:text-foreground hover:underline"
+          variant="link" className="h-auto rounded-none p-0 text-[11px] text-soft-foreground underline-offset-auto hover:text-foreground"
         >
           Open in default app
-        </button>
+        </Button>
       ) : null}
     </div>
   )

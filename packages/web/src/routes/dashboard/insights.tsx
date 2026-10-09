@@ -10,6 +10,8 @@ import { useDashboardInsights } from '@/api/dashboard-insights'
 import { useProjects } from '@/api/queries'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Label } from '@/components/ui/label'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { StatusDot } from '@/components/status-dot'
 import { shortAge } from '@/lib/format'
 import { useAutomationsGate } from '@/routes/automations/use-automations'
@@ -18,7 +20,7 @@ import { ExportRows } from './export-rows'
 import { Coverage } from './rows'
 import { formatAmount, formatHours } from './format'
 import { CircleCheck, Cpu, Workflow } from 'lucide-react'
-import { FilterSelect, filterLabel, Freshness, InfoHint, Notice, ReportNote, tableHead, tableRow, WidgetEmpty, WidgetSkeleton, widgetBody, widgetHeader, widgetHeading, widgetMeta } from './presentation'
+import { FilterSelect, filterLabel, Freshness, InfoHint, Notice, ReportNote, tableBody, tableCell, tableHead, tableHeader, tableHeaderRow, tableRow, WidgetEmpty, WidgetSkeleton, widgetBody, widgetHeader, widgetHeading, widgetMeta } from './presentation'
 import { useDashboardFilter } from './url-filter'
 
 type Period = DashboardInsights['period']
@@ -48,13 +50,17 @@ function PeriodSelect({
   onChange: (value: Period) => void
 }) {
   return (
-    <label className={filterLabel}>
+    <Label className={filterLabel}>
       {label}
-      <FilterSelect value={value} onChange={(e) => onChange(e.target.value === '30d' ? '30d' : '7d')}>
-        <option value="7d">Last 7 days</option>
-        <option value="30d">Last 30 days</option>
-      </FilterSelect>
-    </label>
+      <FilterSelect<Period>
+        value={value}
+        onValueChange={(next) => onChange(next === '30d' ? '30d' : '7d')}
+        options={[
+          { value: '7d', label: 'Last 7 days' },
+          { value: '30d', label: 'Last 30 days' },
+        ]}
+      />
+    </Label>
   )
 }
 
@@ -264,23 +270,23 @@ export function BackendComparison() {
             <Coverage coverage={data.coverage} retry={() => void query.refetch()} />
             {data.backends.length ? (
               <div className="-mx-3 overflow-x-auto" role="region" aria-label="Backend comparison" tabIndex={0}>
-                <table className="w-full text-left text-sm">
-                  <thead>
-                    <tr>
-                      <th className={th}>Backend</th>
-                      <th className={`${th} text-right`}>Finished</th>
-                      <th className={th}>Success</th>
-                      <th className={`${th} text-right`}>Median cycle</th>
-                      {cost && <th className={`${th} text-right`}>Reported USD</th>}
-                      {cost && <th className={`${th} text-right`}>Per completed</th>}
-                    </tr>
-                  </thead>
-                  <tbody>
+                <Table className="text-left">
+                  <TableHeader className={tableHeader}>
+                    <TableRow className={tableHeaderRow}>
+                      <TableHead className={th}>Backend</TableHead>
+                      <TableHead className={`${th} text-right`}>Finished</TableHead>
+                      <TableHead className={th}>Success</TableHead>
+                      <TableHead className={`${th} text-right`}>Median cycle</TableHead>
+                      {cost && <TableHead className={`${th} text-right`}>Reported USD</TableHead>}
+                      {cost && <TableHead className={`${th} text-right`}>Per completed</TableHead>}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody className={tableBody}>
                     {data.backends.map((b) => (
                       <BackendRow key={`${b.backend}:${b.model ?? ''}`} stat={b} cost={!!cost} />
                     ))}
-                  </tbody>
-                </table>
+                  </TableBody>
+                </Table>
               </div>
             ) : (
               <WidgetEmpty icon={Cpu} title="No finished tasks in this period." />
@@ -312,15 +318,15 @@ function BackendRow({ stat: b, cost }: { stat: DashboardBackendStat; cost: boole
   const rate = percent(b.done, b.finished)
   const usd = b.costUsd?.value
   return (
-    <tr className={tableRow}>
-      <td className="px-3 py-2.5">
+    <TableRow className={tableRow}>
+      <TableCell className={`${tableCell} px-3 py-2.5`}>
         <span className="block font-medium">{backendName(b.backend)}</span>
         <span className="block font-mono text-[11px] text-soft-foreground">
           {b.backend === 'mixed' ? 'steps ran on different backends' : (b.model ?? 'default model')}
         </span>
-      </td>
-      <td className="px-3 py-2.5 text-right tabular-nums">{b.finished}</td>
-      <td className="min-w-40 px-3 py-2.5">
+      </TableCell>
+      <TableCell className={`${tableCell} px-3 py-2.5 text-right tabular-nums`}>{b.finished}</TableCell>
+      <TableCell className={`${tableCell} min-w-40 px-3 py-2.5`}>
         <span className="flex items-center gap-2">
           <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-danger/30" aria-hidden="true">
             <span className="block h-full rounded-full bg-success" style={{ width: `${rate}%` }} />
@@ -330,24 +336,24 @@ function BackendRow({ stat: b, cost }: { stat: DashboardBackendStat; cost: boole
         <span className="block text-xs text-soft-foreground">
           {b.done} done · {b.failed} failed
         </span>
-      </td>
-      <td className="px-3 py-2.5 text-right tabular-nums">
+      </TableCell>
+      <TableCell className={`${tableCell} px-3 py-2.5 text-right tabular-nums`}>
         {b.timedTasks ? formatHours(b.medianCycleHours) : '—'}
-      </td>
+      </TableCell>
       {cost && (
-        <td className="px-3 py-2.5 text-right tabular-nums">
+        <TableCell className={`${tableCell} px-3 py-2.5 text-right tabular-nums`}>
           {usd == null ? '—' : formatAmount(usd, true)}
           <span className="block text-xs text-soft-foreground">
             {b.costUsd?.reportedTasks ?? 0}/{b.finished} reported
           </span>
-        </td>
+        </TableCell>
       )}
       {cost && (
-        <td className="px-3 py-2.5 text-right tabular-nums">
+        <TableCell className={`${tableCell} px-3 py-2.5 text-right tabular-nums`}>
           {usd == null || !b.done ? '—' : formatAmount(usd / b.done, true)}
-        </td>
+        </TableCell>
       )}
-    </tr>
+    </TableRow>
   )
 }
 
@@ -443,19 +449,19 @@ export function AutomationOutcomes() {
                 )}
                 {sorted.length ? (
                   <div className="-mx-3 overflow-x-auto" role="region" aria-label="Automation outcomes" tabIndex={0}>
-                    <table className="w-full text-left text-sm">
-                      <thead>
-                        <tr>
-                          <th className={th}>Automation</th>
-                          <th className={`${th} text-right`}>Tasks</th>
-                          <th className={`${th} text-right`}>Done</th>
-                          <th className={`${th} text-right`}>Failed</th>
-                          <th className={`${th} text-right`}>Active</th>
-                          <th className={th}>Last run</th>
-                          {cost && <th className={`${th} text-right`}>Reported USD</th>}
-                        </tr>
-                      </thead>
-                      <tbody>
+                    <Table className="text-left">
+                      <TableHeader className={tableHeader}>
+                        <TableRow className={tableHeaderRow}>
+                          <TableHead className={th}>Automation</TableHead>
+                          <TableHead className={`${th} text-right`}>Tasks</TableHead>
+                          <TableHead className={`${th} text-right`}>Done</TableHead>
+                          <TableHead className={`${th} text-right`}>Failed</TableHead>
+                          <TableHead className={`${th} text-right`}>Active</TableHead>
+                          <TableHead className={th}>Last run</TableHead>
+                          {cost && <TableHead className={`${th} text-right`}>Reported USD</TableHead>}
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody className={tableBody}>
                         {sorted.map((row) => (
                           <AutomationOutcome
                             key={`${row.projectId}:${row.automationId}`}
@@ -464,8 +470,8 @@ export function AutomationOutcomes() {
                             projectName={projectName}
                           />
                         ))}
-                      </tbody>
-                    </table>
+                      </TableBody>
+                    </Table>
                   </div>
                 ) : (
                   <WidgetEmpty icon={Workflow} title="No automations yet.">
@@ -508,11 +514,11 @@ function AutomationOutcome({
   projectName: (id: string) => string
 }) {
   const s = row.stat
-  const cell = 'px-3 py-2.5 text-right tabular-nums'
+  const cell = `${tableCell} px-3 py-2.5 text-right tabular-nums`
   const zero = (n: number | undefined) => (n ? n : <span className="text-soft-foreground">0</span>)
   return (
-    <tr className={tableRow}>
-      <td className="px-3 py-2.5">
+    <TableRow className={tableRow}>
+      <TableCell className={`${tableCell} px-3 py-2.5`}>
         {row.definition === 'removed' ? (
           <span className="block font-medium">{row.name}</span>
         ) : (
@@ -534,12 +540,12 @@ function AutomationOutcome({
                 ? 'Enabled'
                 : 'Disabled'}
         </span>
-      </td>
-      <td className={cell}>{zero(s?.tasks)}</td>
-      <td className={cell}>{zero(s?.done)}</td>
-      <td className={`${cell} ${s?.failed ? 'text-danger' : ''}`}>{zero(s?.failed)}</td>
-      <td className={cell}>{zero(s?.active)}</td>
-      <td className="whitespace-nowrap px-3 py-2.5 text-xs text-muted-foreground">
+      </TableCell>
+      <TableCell className={cell}>{zero(s?.tasks)}</TableCell>
+      <TableCell className={cell}>{zero(s?.done)}</TableCell>
+      <TableCell className={`${cell} ${s?.failed ? 'text-danger' : ''}`}>{zero(s?.failed)}</TableCell>
+      <TableCell className={cell}>{zero(s?.active)}</TableCell>
+      <TableCell className={`${tableCell} whitespace-nowrap px-3 py-2.5 text-xs text-muted-foreground`}>
         {s?.lastRunAt ? (
           <time dateTime={s.lastRunAt} title={new Date(s.lastRunAt).toLocaleString()}>
             {shortAge(s.lastRunAt)} ago · {s.lastStatus}
@@ -547,12 +553,12 @@ function AutomationOutcome({
         ) : (
           '—'
         )}
-      </td>
+      </TableCell>
       {cost && (
-        <td className={cell}>
+        <TableCell className={cell}>
           {s?.costUsd?.value == null ? '—' : formatAmount(s.costUsd.value, true)}
-        </td>
+        </TableCell>
       )}
-    </tr>
+    </TableRow>
   )
 }

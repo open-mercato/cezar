@@ -250,7 +250,7 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
  *  command copyable, like the header's resume hint. */
 function ManualMergeLine({ command }: { command: string }) {
   return (
-    <button
+    <Button
       type="button"
       data-slot="review-manual"
       title="Copy the command"
@@ -260,11 +260,11 @@ function ManualMergeLine({ command }: { command: string }) {
           .then(() => toast('Command copied to clipboard.'))
           .catch(() => toast(`Run manually: ${command}`))
       }}
-      className="flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left font-mono text-[11px] text-soft-foreground hover:bg-muted hover:text-foreground"
+      variant="ghost" size="xs" className="flex h-auto w-full min-w-0 shrink justify-start gap-1.5 px-1 py-0.5 text-left font-mono text-[11px] font-normal text-soft-foreground"
     >
       <CopyIcon className="size-3 shrink-0" aria-hidden="true" />
       <span className="truncate">manual path: {command}</span>
-    </button>
+    </Button>
   )
 }
 

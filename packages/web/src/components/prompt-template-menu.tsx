@@ -15,6 +15,8 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import type { PromptTemplate } from '@/lib/prompt-templates'
 import { multiWordFilter } from '@/lib/skills'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { bareButton } from '@/components/bare-control'
 
 /**
  * "Insert a template" — the trigger shared by all three follow-up composers: the GitHub
@@ -57,13 +59,15 @@ export function PromptTemplateMenu({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
+        <Button
+          variant="ghost"
           type="button"
           data-slot="prompt-template-trigger"
           aria-label="Insert a prompt template"
           title="Insert a prompt template"
           disabled={disabled}
           className={cn(
+            bareButton,
             'inline-flex items-center gap-1.5 rounded-md text-[12.5px] font-medium text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50 data-[state=open]:bg-muted data-[state=open]:text-foreground',
             // Icon-only sits beside the paperclip as a ghost icon button; labelled is a chip.
             iconOnly ? 'size-8 justify-center' : 'h-7 border border-border bg-card px-2',
@@ -77,7 +81,7 @@ export function PromptTemplateMenu({
               <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
             </>
           )}
-        </button>
+        </Button>
       </PopoverTrigger>
       <PopoverContent
         align="start"

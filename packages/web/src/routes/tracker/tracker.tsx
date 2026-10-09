@@ -165,7 +165,7 @@ function TrackerBrowse({ scopePending, association, selectedId, drafts, selectio
       else { setQuery(next); setState(nextState) }
     }}>
       <SidebarInput type="search" aria-label="Search tracker" title="Press Enter to search" maxLength={256} value={queryDraft} onChange={(event) => setQueryDraft(event.target.value)} placeholder="Search issues…" className="min-w-0 flex-1" />
-      <button type="submit" className="sr-only" disabled={result.isFetching}>Search</button>
+      <Button type="submit" className="sr-only h-px p-0" disabled={result.isFetching}>Search</Button>
       <TrackerLabelFilter options={items.flatMap(item => item.labels)} selected={labels} onChange={setLabels} />
     </form>
   </>

@@ -1,8 +1,7 @@
 import { GitBranchIcon, WrapTextIcon } from 'lucide-react'
 
 import type { DiffMode } from '@/components/diff'
-import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
+import { Toggle } from '@/components/ui/toggle'
 
 /**
  * The diff view's local controls, extracted from the Changes toolbar (R5 1.7) so the repo
@@ -32,18 +31,17 @@ export function DiffViewToggles({
         <ModeButton current={mode} value="unified" onModeChange={onModeChange} />
         <ModeButton current={mode} value="split" onModeChange={onModeChange} />
       </span>
-      <Button
-        variant="ghost"
-        size="icon-sm"
+      <Toggle
+        size="sm"
         data-slot="wrap-toggle"
-        aria-pressed={wrap}
+        pressed={wrap}
+        onPressedChange={onWrapChange}
         aria-label="Wrap long lines"
         title="Wrap long lines"
-        className={cn(wrap && 'bg-muted text-foreground')}
-        onClick={() => onWrapChange(!wrap)}
+        className="size-8 min-w-8 shrink-0 px-0 text-muted-foreground hover:text-foreground active:translate-y-px data-[state=on]:bg-muted data-[state=on]:text-foreground"
       >
         <WrapTextIcon aria-hidden="true" />
-      </Button>
+      </Toggle>
     </>
   )
 }
@@ -59,18 +57,15 @@ function ModeButton({
 }) {
   const active = current === value
   return (
-    <button
+    <Toggle
       type="button"
       data-mode={value}
-      aria-pressed={active}
-      onClick={() => onModeChange(value)}
-      className={cn(
-        'rounded-[5px] px-2 py-0.5 text-[11px] font-medium capitalize',
-        active ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground',
-      )}
+      pressed={active}
+      onPressedChange={() => onModeChange(value)}
+      className="h-auto min-w-0 rounded-[5px] px-2 py-0.5 text-[11px] capitalize text-muted-foreground hover:bg-transparent hover:text-foreground data-[state=on]:bg-muted data-[state=on]:text-foreground"
     >
       {value}
-    </button>
+    </Toggle>
   )
 }
 

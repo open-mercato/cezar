@@ -1,5 +1,8 @@
-import type { ComponentProps, ReactNode } from 'react'
-import { ChevronDown, ChevronRight, Info, type LucideIcon } from 'lucide-react'
+import { useState, type ComponentProps, type ReactNode } from 'react'
+import { ChevronRight, Info, type LucideIcon } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
@@ -14,40 +17,115 @@ export const widgetHeader =
 export const widgetBody = 'space-y-4 px-5 pt-3 pb-5 text-sm'
 // Counts, freshness and other quiet facts beside a heading.
 export const widgetMeta = 'text-xs text-muted-foreground tabular-nums'
-export const tableHead = 'whitespace-nowrap px-3 py-2.5 text-xs font-medium text-muted-foreground'
-export const tableRow = 'border-t border-border/70 transition-colors hover:bg-muted/50'
-// A <details> summary without the browser's triangle: a chevron that turns when the
-// disclosure opens. The rotation keys off `details[open] > summary`, the chevron's own
-// disclosure, so an open outer <details> never turns a nested one.
+// Class overrides that keep ui/table's parts on the dashboard's own grid: quiet header cells,
+// a hairline above every body row (none under the header), cells that wrap.
+export const tableHead = 'h-auto px-3 py-2.5 text-xs font-medium text-muted-foreground'
+export const tableHeader = '[&_tr]:border-b-0'
+export const tableHeaderRow = 'hover:bg-transparent'
+export const tableBody = '[&_tr:last-child]:border-t'
+export const tableRow = 'border-t border-b-0 border-border/70'
+export const tableCell = 'whitespace-normal'
+// A disclosure trigger: a chevron that turns when the disclosure opens. The rotation keys
+// off the trigger's own `data-state`, so an open outer disclosure never turns a nested one.
 export const disclosureSummary =
-  'flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-sm text-[13px] text-muted-foreground transition-colors select-none hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 [&::-webkit-details-marker]:hidden'
+  'flex w-fit cursor-pointer items-center gap-1.5 rounded-sm text-[13px] text-muted-foreground transition-colors select-none hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50'
 export function DisclosureChevron() {
   return (
     <ChevronRight
       aria-hidden="true"
-      className="size-3.5 shrink-0 text-soft-foreground transition-transform duration-150 motion-reduce:transition-none [details[open]>summary>&]:rotate-90"
+      className="size-3.5 shrink-0 text-soft-foreground transition-transform duration-150 motion-reduce:transition-none [[data-state=open]>&]:rotate-90"
     />
   )
 }
-// Filter label beside a FilterSelect: quiet, so the value reads first.
-export const filterLabel = 'flex items-center gap-2 text-[13px] text-muted-foreground'
-// A native <select> (keyboard, mobile pickers and the export's filter capture all rely on
-// it) dressed as the cockpit's Select trigger.
-export function FilterSelect({ className = '', ...props }: ComponentProps<'select'>) {
+// The content of a closed disclosure stays mounted (`forceMount`) and is only hidden by
+// CSS: the export reads the rendered DOM and has always carried collapsed details.
+export const disclosureContent = 'data-[state=closed]:hidden'
+// A `Collapsible` with the dashboard's quiet chevron trigger. `open` + `onOpenChange`
+// control it; `forceOpen` opens it when it turns true and closes it when it turns false,
+// leaving the user free to toggle in between. The export turns the trigger into a heading
+// (`exportHeading`, or its text).
+export function Disclosure({
+  summary,
+  exportHeading,
+  summaryClassName,
+  open,
+  onOpenChange,
+  forceOpen,
+  children,
+  ...props
+}: Omit<ComponentProps<typeof Collapsible>, 'open' | 'onOpenChange' | 'defaultOpen'> & {
+  summary: ReactNode
+  exportHeading?: string
+  summaryClassName?: string
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+  forceOpen?: boolean
+}) {
+  const [own, setOwn] = useState(!!forceOpen)
+  const [forced, setForced] = useState(forceOpen)
+  if (forced !== forceOpen) {
+    setForced(forceOpen)
+    setOwn(!!forceOpen)
+  }
   return (
-    <span className="relative inline-flex">
-      <select
-        {...props}
+    <Collapsible
+      {...props}
+      open={open ?? own}
+      onOpenChange={(next) => {
+        setOwn(next)
+        onOpenChange?.(next)
+      }}
+    >
+      <CollapsibleTrigger
+        className={cn(disclosureSummary, summaryClassName)}
+        data-export-heading={exportHeading}
+      >
+        <DisclosureChevron />
+        {summary}
+      </CollapsibleTrigger>
+      <CollapsibleContent forceMount className={disclosureContent}>
+        {children}
+      </CollapsibleContent>
+    </Collapsible>
+  )
+}
+// Filter label beside a FilterSelect: quiet, so the value reads first.
+export const filterLabel =
+  'flex items-center gap-2 text-[13px] leading-normal font-normal text-muted-foreground'
+// The cockpit's Select, sized for a widget header. There is no native <select> to read any
+// more, so the trigger carries the chosen label in `data-export-filter` for the export's
+// filter capture (export.ts); the filter's name is still the enclosing label's text.
+export function FilterSelect<T extends string>({
+  value,
+  onValueChange,
+  options,
+  className,
+}: {
+  value: T
+  onValueChange: (value: T) => void
+  options: readonly { value: T; label: string }[]
+  className?: string
+}) {
+  return (
+    <Select value={value} onValueChange={(next) => onValueChange(next as T)}>
+      <SelectTrigger
+        size="sm"
+        data-export-filter={options.find((option) => option.value === value)?.label ?? ''}
         className={cn(
-          'h-8 cursor-pointer appearance-none rounded-md border border-input bg-card pr-8 pl-3 text-[13px] text-foreground shadow-xs outline-none transition-[color,box-shadow] hover:bg-muted focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 no-hover:min-h-11',
+          'cursor-pointer gap-1.5 bg-card pr-2.5 pl-3 text-[13px] text-foreground no-hover:min-h-11 dark:bg-card',
           className,
         )}
-      />
-      <ChevronDown
-        aria-hidden="true"
-        className="pointer-events-none absolute top-1/2 right-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
-      />
-    </span>
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((option) => (
+          <SelectItem key={option.value} value={option.value} className="text-[13px]">
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   )
 }
 // The long explanation behind a metric, one hover away. The button is dropped from the
@@ -63,14 +141,16 @@ export function InfoHint({
     <TooltipProvider delayDuration={150}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon-xs"
             data-export-exclude
             aria-label={label}
-            className="inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-soft-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 no-hover:size-11"
+            className="text-soft-foreground hover:bg-transparent no-hover:size-11"
           >
             <Info className="size-3.5" aria-hidden="true" />
-          </button>
+          </Button>
         </TooltipTrigger>
         <TooltipContent className="max-w-72 text-left leading-relaxed text-pretty">
           {children}

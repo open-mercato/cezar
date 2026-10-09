@@ -21,6 +21,7 @@ import {
 import { Link, useActiveProjectId } from '@/lib/project-router'
 import { ProjectGeneral } from './project-general'
 import { ProjectLocationNav } from './project-location'
+import { Button } from '@/components/ui/button'
 import { visibleSettingsSections, type SettingsScope, type SettingsSection } from './registry'
 
 /**
@@ -218,14 +219,15 @@ export function SettingsIndexRoute({ capabilities }: { capabilities?: Caps }) {
             where the rest is. */}
         <p className="text-[13px] text-muted-foreground">
           Appearance, notifications, host resources and the project registry live in{' '}
-          <button
+          <Button
             type="button"
+            variant="link"
             data-slot="settings-global-link"
             onClick={() => globalSettings.open()}
-            className="font-medium text-foreground underline decoration-border underline-offset-4 hover:decoration-foreground"
+            className="inline h-auto p-0 text-[length:inherit] whitespace-normal font-medium underline decoration-border hover:decoration-foreground"
           >
             Global settings
-          </button>
+          </Button>
           .
         </p>
       </div>

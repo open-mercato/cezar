@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
+import { Toggle } from '@/components/ui/toggle'
 import { Link } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 
@@ -186,16 +187,16 @@ function AskQuestionBlock({
         {question.options.map((option) => {
           const isSelected = selected.includes(option.label)
           return (
-            <button
+            <Toggle
               key={option.label}
               type="button"
               disabled={disabled}
-              aria-pressed={isSelected}
-              onClick={() => pick(option.label)}
+              pressed={isSelected}
+              onPressedChange={() => pick(option.label)}
               className={cn(
-                'flex w-full flex-col gap-0.5 rounded-lg border px-3.5 py-2.5 text-left transition-colors',
-                'hover:bg-muted/60 disabled:pointer-events-none disabled:opacity-50',
-                isSelected ? 'border-foreground/40 bg-muted' : 'border-border bg-card',
+                'flex h-auto w-full flex-col items-stretch justify-start gap-0.5 rounded-lg border border-border bg-card px-3.5 py-2.5 text-left font-normal whitespace-normal transition-colors',
+                'hover:bg-muted/60 hover:text-inherit',
+                'data-[state=on]:border-foreground/40 data-[state=on]:bg-muted data-[state=on]:text-inherit data-[state=on]:hover:bg-muted/60',
               )}
             >
               <span className="flex min-w-0 items-start gap-2 text-sm font-medium text-foreground">
@@ -219,7 +220,7 @@ function AskQuestionBlock({
                   {option.description}
                 </span>
               ) : null}
-            </button>
+            </Toggle>
           )
         })}
       </div>

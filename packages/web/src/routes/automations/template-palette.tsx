@@ -7,10 +7,10 @@ import { getAutomationTemplates } from '@/api/client'
 import { BranchChip } from '@/components/branch-chip'
 import { GithubIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { BUILTIN_AUTOMATION_TEMPLATES } from '@/lib/automation-templates'
 import { triggerLabel } from '@/lib/automation-format'
 import { useActiveProjectId } from '@/lib/project-router'
-import { cn } from '@/lib/utils'
 
 import { templatePick, type TemplatePick } from './editor-draft'
 
@@ -51,10 +51,12 @@ export function TemplatePalette({ onPick }: { onPick: (template: TemplatePick) =
   return (
     <section data-slot="template-palette" className="rounded-xl border bg-card p-4 shadow-xs">
       <div className="flex flex-wrap items-center gap-3">
-        <div role="tablist" aria-label="Template source" className="inline-flex shrink-0 gap-0.5 rounded-md bg-muted p-[3px]">
-          <PaletteTab active={tab === 'builtin'} onClick={() => setTab('builtin')}>Built-in</PaletteTab>
-          <PaletteTab active={tab === 'mine'} onClick={() => setTab('mine')}>From your other projects</PaletteTab>
-        </div>
+        <Tabs value={tab} onValueChange={(next) => setTab(next as Tab)} className="shrink-0">
+          <TabsList aria-label="Template source" className="h-auto gap-0.5 group-data-[orientation=horizontal]/tabs:h-auto">
+            <TabsTrigger value="builtin" className="h-7 flex-none border-0 py-0">Built-in</TabsTrigger>
+            <TabsTrigger value="mine" className="h-7 flex-none border-0 py-0">From your other projects</TabsTrigger>
+          </TabsList>
+        </Tabs>
         <span className="ml-auto min-w-0 truncate text-xs text-muted-foreground">
           {tab === 'builtin' ? 'Starting points that ship with cezar' : 'Registered in ~/.cezar/config.json'}
         </span>
@@ -96,25 +98,5 @@ export function TemplatePalette({ onPick }: { onPick: (template: TemplatePick) =
         </div>
       )}
     </section>
-  )
-}
-
-/** The `TabLink` grammar without a URL: the palette's tabs switch a panel, not a route. */
-function PaletteTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: string }) {
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={active}
-      onClick={onClick}
-      className={cn(
-        'flex h-7 items-center rounded-sm px-3 text-[12.5px] font-medium',
-        active
-          ? 'bg-card font-semibold text-foreground shadow-xs'
-          : 'text-muted-foreground hover:text-foreground',
-      )}
-    >
-      {children}
-    </button>
   )
 }

@@ -181,18 +181,20 @@ function PromptTemplatesForm({ initial }: { initial: PromptTemplate[] }) {
                     {/* Chips live OUTSIDE the dropdown — the house rule from the GitHub picker:
                         cmdk may filter the list, never your selection. */}
                     {(template.skills ?? []).map((name) => (
-                      <button
+                      <Button
                         key={name}
                         type="button"
+                        variant="secondary"
+                        size="xs"
                         data-slot="prompt-template-skill-chip"
                         data-skill={name}
                         title={`Stop applying “${template.label}” automatically with ${name}`}
                         onClick={() => toggleTemplateSkill(template.id, name)}
-                        className="inline-flex h-6 items-center gap-1 rounded-full bg-muted px-2 font-mono text-[11px] text-foreground transition-colors hover:bg-danger/10 hover:text-danger"
+                        className="rounded-full bg-muted font-mono text-[11px] font-normal text-foreground hover:bg-danger/10 hover:text-danger"
                       >
                         {name}
                         <XIcon aria-hidden="true" className="size-3" />
-                      </button>
+                      </Button>
                     ))}
                   </div>
                 </div>
@@ -348,21 +350,23 @@ function TemplateSkillsPicker({
       }}
     >
       <PopoverTrigger asChild>
-        <button
+        <Button
           type="button"
+          variant="outline"
+          size="xs"
           data-slot="prompt-template-skills-trigger"
           aria-label={`Apply ${label || 'this template'} automatically with a skill`}
           title="Pick the skills this template applies itself to"
           disabled={skills.length === 0}
           className={cn(
-            'inline-flex h-6 items-center gap-1.5 rounded-full border border-input bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50',
+            'gap-1.5 rounded-full px-2.5 text-muted-foreground shadow-none hover:text-foreground',
             selected.length > 0 && 'text-foreground',
           )}
         >
           <SparklesIcon aria-hidden="true" className="size-3 shrink-0 text-violet" />
           {skills.length === 0 ? 'No skills found' : 'Apply with…'}
           <ChevronDownIcon aria-hidden="true" className="size-2.5 shrink-0 text-soft-foreground" />
-        </button>
+        </Button>
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={8} className="w-[336px] max-w-[calc(100vw-2rem)] p-0">
         <Command shouldFilter={false}>

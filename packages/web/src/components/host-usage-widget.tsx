@@ -5,6 +5,8 @@ import { useGlobalSettings } from '@/components/global-settings'
 import { effectiveHostView, formatCpuCores, formatMemPair } from '@/lib/host-effective'
 import { useIsDesktop } from '@/lib/use-desktop'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { bareButton } from '@/components/bare-control'
 
 /**
  * The sidebar glance: two labelled meters - effective CPU and RAM, each a bar and a percentage -
@@ -116,7 +118,8 @@ function HostUsageWidgetRow() {
   const summary =`CPU ${cpuText}${cpuCores === undefined ? '' : ` of ${cpuCores}`}, RAM ${memPctText} (${memText})`
 
   return (
-    <button
+    <Button
+      variant="ghost"
       type="button"
       // Resources are a global section, so this opens the settings dialog in place. The row sits
       // in the cockpit menu without being a menu item, so nothing closes that menu for it: the
@@ -132,6 +135,7 @@ function HostUsageWidgetRow() {
       aria-label={`Machine usage: ${summary}. Open Settings, Resources.`}
       title={summary}
       className={cn(
+        bareButton,
         // Six columns on ONE 14px line: label · bar · value, twice. The two `minmax(0,1fr)`
         // tracks are the bars, so they split whatever the fixed text leaves over and stay equal
         // to each other however wide `sampling…` renders. `leading-[14px]` is load-bearing: the
@@ -154,7 +158,7 @@ function HostUsageWidgetRow() {
         value={memPctText}
         gutter
       />
-    </button>
+    </Button>
   )
 }
 

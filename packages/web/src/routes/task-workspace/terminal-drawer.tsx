@@ -22,6 +22,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 
 import {
@@ -240,10 +241,10 @@ export function TerminalDrawer({
       {unavailable ? null : <DetectedUrlsStrip runId={runId} onOpen={onOpenInBrowser} />}
 
       <header className="flex h-9 shrink-0 items-center gap-1 border-b border-border/70 pl-3 pr-2">
-        <div
-          role="tablist"
+        <Tabs value={activeId ?? ''} onValueChange={setActiveId} className="min-w-0 flex-1 gap-0">
+        <TabsList
           aria-label="Terminal tabs"
-          className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto"
+          className="flex w-full min-w-0 justify-start gap-0.5 overflow-x-auto rounded-none bg-transparent p-0 group-data-[orientation=horizontal]/tabs:h-auto"
         >
           {sessions.map((session) => (
             <TerminalTab
@@ -262,14 +263,16 @@ export function TerminalDrawer({
             // there is nothing to ask, and the button just opens it.
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="icon-xs"
                   aria-label="New terminal tab"
                   title="New terminal tab — pick a shell"
-                  className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+                  className="rounded"
                 >
                   <PlusIcon aria-hidden="true" className="size-3.5" />
-                </button>
+                </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-56">
                 <DropdownMenuLabel>New tab</DropdownMenuLabel>
@@ -284,17 +287,20 @@ export function TerminalDrawer({
               </DropdownMenuContent>
             </DropdownMenu>
           ) : (
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon-xs"
               aria-label="New terminal tab"
               title="New terminal tab"
               onClick={() => addTab()}
-              className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="rounded"
             >
               <PlusIcon aria-hidden="true" className="size-3.5" />
-            </button>
+            </Button>
           )}
-        </div>
+        </TabsList>
+        </Tabs>
 
         {active ? (
           // HOST · PROJECT · WORKTREE, stated (spec §6: terminal input "must be explicitly
@@ -333,15 +339,17 @@ export function TerminalDrawer({
             Stop
           </Button>
         ) : null}
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon-xs"
           aria-label="Hide terminal"
           title="Hide terminal — processes keep running"
           onClick={onClose}
-          className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="rounded"
         >
           <XIcon aria-hidden="true" className="size-3.5" />
-        </button>
+        </Button>
       </header>
 
       {unavailable ? (
@@ -413,27 +421,29 @@ function TerminalTab({
         active ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground',
       )}
     >
-      <button
-        type="button"
-        role="tab"
-        aria-selected={active}
+      {/* Radix selects on pointer-down and on arrow-key focus (`onValueChange` on the list);
+          `onClick` stays for a synthetic click, and re-selecting the active tab is a no-op. */}
+      <TabsTrigger
+        value={session.id}
         onClick={onSelect}
         title={session.exitCode === null ? session.label : `${session.label} — exited (${session.exitCode})`}
-        className="max-w-40 truncate outline-none focus-visible:underline"
+        className="inline-block h-auto max-w-40 flex-none truncate rounded-none border-0 p-0 text-xs font-medium text-inherit hover:text-inherit focus-visible:underline focus-visible:ring-0 focus-visible:outline-0 data-[state=active]:bg-transparent data-[state=active]:font-medium data-[state=active]:text-inherit group-data-[variant=default]/tabs-list:data-[state=active]:shadow-none"
       >
         {session.label}
-      </button>
-      <button
+      </TabsTrigger>
+      <Button
         type="button"
+        variant="ghost"
+        size="icon-xs"
         aria-label={`Close ${session.label}`}
         onClick={onClose}
         className={cn(
-          'ml-1 grid size-4 shrink-0 place-items-center rounded opacity-0 transition-opacity hover:bg-background focus-visible:opacity-100 group-hover:opacity-100',
+          'ml-1 size-4 rounded text-inherit opacity-0 transition-opacity hover:bg-background hover:text-inherit focus-visible:opacity-100 group-hover:opacity-100',
           active && 'opacity-60',
         )}
       >
         <XIcon aria-hidden="true" className="size-3" />
-      </button>
+      </Button>
     </div>
   )
 }

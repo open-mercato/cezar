@@ -30,6 +30,8 @@ import { formatCost, taskReference, taskReferences } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { bareButton } from '@/components/bare-control'
 
 /**
  * The sidebar's task quick-list (spec, "App shell & navigation"): Active/Archived tabs, then the
@@ -240,13 +242,14 @@ function Row({
       {/* Like RunRow: the compare link is the toggle button's flex SIBLING, not its child —
           a link inside a button is invalid, and both targets are real. */}
       <div className="flex items-center rounded-md hover:bg-sidebar-accent">
-        <button
+        <Button
+          variant="ghost"
           type="button"
           data-slot="group-tile"
           data-group-id={row.groupId}
           aria-expanded={expanded}
           onClick={() => onToggle(row.groupId)}
-          className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left"
+          className={cn(bareButton, 'flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left')}
         >
           <ChevronDownIcon
             className={cn('size-3 shrink-0 text-soft-foreground transition-transform', !expanded && '-rotate-90')}
@@ -258,7 +261,7 @@ function Row({
           <span className="shrink-0 rounded-full bg-muted px-1.5 py-px font-mono text-[10.5px] font-semibold text-muted-foreground">
             ×{row.members.length}
           </span>
-        </button>
+        </Button>
         <Link
           to={scopeTo(scope, `/compare/${row.groupId}`)}
           data-slot="group-compare"

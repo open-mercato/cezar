@@ -1,4 +1,4 @@
-import { SettingsIcon } from 'lucide-react'
+import { ChevronRightIcon, SettingsIcon } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useGlobalSettings } from '@/components/global-settings'
@@ -18,6 +18,9 @@ import {
 import { Input } from '@/components/ui/input'
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Spinner } from '@/components/ui/spinner'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { bareButton } from '@/components/bare-control'
+import { cn } from '@/lib/utils'
 
 /**
  * GitHub prints this URL when an otherwise-valid OAuth token still needs SAML
@@ -272,12 +275,22 @@ export function CloneProjectDialog({
                     ? ' — return here after authorizing, or choose Retry clone.'
                     : ' — return to this tab to retry, or choose Retry clone.'}
                 </p>
-                <details className="min-w-0">
-                  <summary>Error details</summary>
-                  <p className="whitespace-pre-wrap break-all">
-                    {checkout.error instanceof Error ? checkout.error.message : null}
-                  </p>
-                </details>
+                <Collapsible className="min-w-0">
+                  <CollapsibleTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      className={cn(bareButton, 'gap-1 hover:underline [&[data-state=open]>svg]:rotate-90')}
+                    >
+                      <ChevronRightIcon aria-hidden="true" className="size-3 transition-transform" />
+                      Error details
+                    </Button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <p className="whitespace-pre-wrap break-all">
+                      {checkout.error instanceof Error ? checkout.error.message : null}
+                    </p>
+                  </CollapsibleContent>
+                </Collapsible>
               </>
             ) : (
               <p className="min-w-0 whitespace-pre-wrap break-all">

@@ -8,6 +8,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { highlight, highlightSync, type SynToken } from '@/lib/highlighter'
 import { diffTotals, parseUnifiedDiff, type DiffFile } from '@/lib/unified-diff'
 import { cn } from '@/lib/utils'
+import { bareButton } from '@/components/bare-control'
 
 /**
  * A run's worktree diff (`GET /api/runs/:id/diff`) as collapsible per-file sections — shared by
@@ -195,14 +196,15 @@ function DiffFileBody({ lines }: { lines: string[] }) {
         ))}
       </pre>
       {lines.length > DIFF_CLAMP_LINES ? (
-        <button
+        <Button
+          variant="ghost"
           type="button"
           data-slot="diff-file-toggle"
           onClick={() => setExpanded((value) => !value)}
-          className="block w-full border-t border-border/50 px-4 py-1.5 text-left text-[11px] font-medium text-soft-foreground hover:text-foreground"
+          className={cn(bareButton, 'block w-full border-t border-border/50 px-4 py-1.5 text-left text-[11px] font-medium text-soft-foreground hover:text-foreground')}
         >
           {expanded ? 'Show less' : `Show all ${lines.length} lines`}
-        </button>
+        </Button>
       ) : null}
     </>
   )

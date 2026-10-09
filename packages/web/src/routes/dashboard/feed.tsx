@@ -1,5 +1,5 @@
 import { Inbox } from 'lucide-react'
-import { DisclosureChevron, disclosureSummary, Notice, WidgetEmpty, WidgetSkeleton, widgetHeading, widgetMeta } from './presentation'
+import { Disclosure, Notice, WidgetEmpty, WidgetSkeleton, widgetHeading, widgetMeta } from './presentation'
 import { ExportRows } from './export-rows'
 import { useContext, useLayoutEffect, useMemo, useRef } from 'react'
 import type { DashboardFeed, DashboardFeedRow } from '@open-mercato/cezar-api-client'
@@ -99,13 +99,12 @@ export function Feed({
           </p>
         )}
         {filter !== 'tasks' && !tasksOnly && (
-          <details
+          <Disclosure
             className="text-xs text-muted-foreground"
-            open={errors.length || githubFailed ? true : undefined}
-          >
-            <summary className={`${disclosureSummary} py-1 no-hover:min-h-11`}>
-              <DisclosureChevron />
-              {errors.length || githubFailed
+            forceOpen={!!(errors.length || githubFailed)}
+            summaryClassName="py-1 no-hover:min-h-11"
+            summary={
+              errors.length || githubFailed
                 ? 'GitHub needs attention'
                 : loading
                   ? 'Checking GitHub…'
@@ -113,8 +112,9 @@ export function Feed({
                     ? 'GitHub not configured'
                     : fetched
                       ? `GitHub checked ${shortAge(fetched)} ago`
-                      : 'GitHub source'}
-            </summary>
+                      : 'GitHub source'
+            }
+          >
             <div className="flex flex-wrap items-center justify-between gap-x-3 pl-5 text-[13px]">
               <p>
                 {errors.length || githubFailed
@@ -147,7 +147,7 @@ export function Feed({
                 </Button>
               )}
             </div>
-          </details>
+          </Disclosure>
         )}
       </div>
       <div
@@ -265,11 +265,11 @@ export function Feed({
           </div>
         )}
         {!tasksOnly && query.data?.sources.some((s) => s.state !== 'ready' || s.truncated) && (
-          <details className="px-5 py-3 text-xs text-muted-foreground">
-            <summary className={`${disclosureSummary} py-1 no-hover:min-h-11`}>
-              <DisclosureChevron />
-              Source details
-            </summary>
+          <Disclosure
+            className="px-5 py-3 text-xs text-muted-foreground"
+            summaryClassName="py-1 no-hover:min-h-11"
+            summary="Source details"
+          >
             {query.data.sources.map((s) => (
               <p className="break-words py-1 pl-5" key={s.key}>
                 {sourceLabel(s.key)}:{' '}
@@ -282,7 +282,7 @@ export function Feed({
                 {s.fetchedAt ? ` · checked ${shortAge(s.fetchedAt)}` : ''}
               </p>
             ))}
-          </details>
+          </Disclosure>
         )}
       </div>
     </Card>

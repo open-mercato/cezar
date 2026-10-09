@@ -2,7 +2,6 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArchiveIcon,
   ArchiveRestoreIcon,
-  CheckIcon,
   EyeIcon,
   EyeOffIcon,
   FolderGit2Icon,
@@ -61,6 +60,8 @@ import { StatusDot } from '@/components/status-dot'
 import { SubtaskToggle } from '@/components/subtask-toggle'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Label } from '@/components/ui/label'
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -772,13 +773,14 @@ function GlobalTasksSidebar({
           }
           onToggle={(value) => onToggle('tags', value)}
           empty={
-            <button
+            <Button
               type="button"
+              variant="link"
               onClick={() => globalSettings.open('projects')}
-              className="px-2 text-left text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+              className="h-auto justify-start px-2 py-0 text-left text-xs font-normal whitespace-normal text-muted-foreground hover:text-foreground"
             >
               Tag your projects to filter and group by tag
-            </button>
+            </Button>
           }
         />
 
@@ -836,24 +838,25 @@ function FacetGroup({
           <SidebarMenu>
             {options.map((option) => (
               <SidebarMenuItem key={option.value}>
+                {/* The row is the Checkbox's LABEL, not a button around it: one control, and a
+                    click anywhere on the row still ticks it. */}
                 <SidebarMenuButton
-                  role="checkbox"
-                  aria-checked={option.checked}
-                  data-slot="sidebar-facet-option"
-                  data-facet={label.toLowerCase()}
-                  onClick={() => onToggle(option.value)}
-                  className={cn(option.count === 0 && !option.checked && 'text-muted-foreground')}
+                  asChild
+                  className={cn(
+                    'cursor-pointer font-normal has-focus-visible:ring-2',
+                    option.count === 0 && !option.checked && 'text-muted-foreground',
+                  )}
                 >
-                  <span
-                    aria-hidden="true"
-                    className={cn(
-                      'flex size-4 shrink-0 items-center justify-center rounded-[5px] border border-input bg-card',
-                      option.checked && 'border-contrast bg-contrast text-contrast-foreground',
-                    )}
-                  >
-                    {option.checked ? <CheckIcon className="size-3" /> : null}
-                  </span>
-                  <span>{option.label}</span>
+                  <Label>
+                    <Checkbox
+                      checked={option.checked}
+                      onCheckedChange={() => onToggle(option.value)}
+                      data-slot="sidebar-facet-option"
+                      data-facet={label.toLowerCase()}
+                      className="rounded-[5px] bg-card shadow-none focus-visible:ring-0 data-[state=checked]:border-contrast data-[state=checked]:bg-contrast data-[state=checked]:text-contrast-foreground dark:bg-card dark:data-[state=checked]:bg-contrast [&_svg]:size-3"
+                    />
+                    <span>{option.label}</span>
+                  </Label>
                 </SidebarMenuButton>
                 <SidebarMenuBadge>{option.count}</SidebarMenuBadge>
               </SidebarMenuItem>
@@ -951,13 +954,14 @@ function FilterMenu({
             // A workspace with no tags anywhere is the ONE state where the feature is invisible.
             <p data-slot="no-tags-hint">
               Tag connected repositories in{' '}
-              <button
+              <Button
                 type="button"
+                variant="link"
                 onClick={() => globalSettings.open('projects')}
-                className="font-medium text-foreground underline underline-offset-4"
+                className="inline h-auto p-0 text-[length:inherit] font-medium whitespace-normal underline"
               >
                 Settings → Projects
-              </button>{' '}
+              </Button>{' '}
               to filter and group their tasks here.
             </p>
           ) : undefined
@@ -1017,14 +1021,16 @@ function ActiveFilters({
         >
           <span className="text-muted-foreground">{chip.label}</span>
           <span className="max-w-40 truncate font-medium">{chip.value}</span>
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon-xs"
             aria-label={`Remove ${chip.label.toLowerCase()} filter ${chip.value}`}
             onClick={chip.onRemove}
-            className="inline-flex size-5 items-center justify-center rounded-full text-muted-foreground hover:bg-background hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+            className="size-5 rounded-full hover:bg-background"
           >
             <XIcon className="size-3" aria-hidden="true" />
-          </button>
+          </Button>
         </Badge>
       ))}
       {canReset({ filters, groupBy }) ? (
@@ -1326,19 +1332,18 @@ function ReadToggle({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon-xs"
           data-action={unread ? 'mark-read' : 'mark-unread'}
           aria-label={label}
           disabled={busy}
           onClick={() => onSetRead(task, unread)}
-          className={cn(
-            'inline-flex size-7 items-center justify-center rounded-sm transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-wait disabled:opacity-50',
-            unread ? 'text-violet' : 'text-muted-foreground',
-          )}
+          className={cn('size-7', unread && 'text-violet')}
         >
           <Icon className="size-3.5" aria-hidden="true" />
-        </button>
+        </Button>
       </TooltipTrigger>
       <TooltipContent side="left">{unread ? 'Mark read' : 'Mark unread'}</TooltipContent>
     </Tooltip>
@@ -1374,16 +1379,18 @@ function ArchiveToggle({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon-xs"
           data-action={archived ? 'unarchive-run' : 'archive-run'}
           aria-label={label}
           disabled={busy}
           onClick={() => onArchive(task, !archived)}
-          className="inline-flex size-7 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-wait disabled:opacity-50"
+          className="size-7"
         >
           <Icon className="size-3.5" aria-hidden="true" />
-        </button>
+        </Button>
       </TooltipTrigger>
       <TooltipContent side="left">{archived ? 'Restore' : 'Archive'}</TooltipContent>
     </Tooltip>
@@ -1506,8 +1513,9 @@ function ReferenceOverflow({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
+        <Button
           type="button"
+          variant="ghost"
           data-slot="reference-overflow"
           aria-label={`Show all ${references.length} references for ${taskTitle}`}
           onPointerEnter={onPointerEnter}
@@ -1519,10 +1527,10 @@ function ReferenceOverflow({
           onClick={() => {
             openedByHover.current = false
           }}
-          className="shrink-0 rounded-full px-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          className="h-auto rounded-full px-1 py-0 text-xs"
         >
           +{hidden}
-        </button>
+        </Button>
       </PopoverTrigger>
       <PopoverContent
         align="start"

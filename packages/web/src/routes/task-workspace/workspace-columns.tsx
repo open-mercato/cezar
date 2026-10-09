@@ -10,6 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useIsDesktop } from '@/lib/use-desktop'
 import { cn } from '@/lib/utils'
 
@@ -94,26 +95,24 @@ export function WorkspaceColumns({
         {/* Compact tabs labelled by view, the spec's narrow-screen switcher. Several columns on the
             same view are a legitimate layout, so the label alone is ambiguous — the index
             disambiguates without inventing per-column names. */}
-        <div role="tablist" aria-label="Layout columns" className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
+        <Tabs
+          value={String(activeNarrow)}
+          onValueChange={(value) => setNarrowIndex(Number(value))}
+          className="shrink-0 gap-0"
+        >
+        <TabsList aria-label="Layout columns" className="flex w-full justify-start gap-1 overflow-x-auto rounded-none border-b border-border bg-transparent px-3 py-1.5 group-data-[orientation=horizontal]/tabs:h-auto">
           {columns.map((entry, index) => (
-            <button
+            <TabsTrigger
               key={index}
-              type="button"
-              role="tab"
-              aria-selected={index === activeNarrow}
+              value={String(index)}
               onClick={() => setNarrowIndex(index)}
-              className={cn(
-                'shrink-0 rounded-md px-2.5 py-1 text-xs font-medium',
-                index === activeNarrow
-                  ? 'bg-muted text-foreground'
-                  : 'text-muted-foreground hover:text-foreground',
-              )}
+              className="h-auto flex-none rounded-md border-0 px-2.5 py-1 text-xs data-[state=active]:bg-muted data-[state=active]:font-medium group-data-[variant=default]/tabs-list:data-[state=active]:shadow-none"
             >
               {viewLabel(entry.view)}
               {columns.filter((other) => other.view === entry.view).length > 1 ? (
                 <span className="ml-1 text-soft-foreground tabular-nums">{index + 1}</span>
               ) : null}
-            </button>
+            </TabsTrigger>
           ))}
           {/* The `+` §5.2 asks for at "the right edge of the view area", in the place a narrow
               viewport actually has one: the end of the tab row. A vertical strip beside the
@@ -144,7 +143,8 @@ export function WorkspaceColumns({
             />
             {columnMenu(activeNarrow, column)}
           </span>
-        </div>
+        </TabsList>
+        </Tabs>
         <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           {renderView(column.view, activeNarrow, column)}
         </div>
@@ -336,15 +336,17 @@ function ColumnHeader({
         <span className="truncate">{viewLabel(column.view)}</span>
       </span>
       {menu}
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="icon-xs"
         aria-label={`Close column ${viewLabel(column.view)}`}
         title="Close column"
         onClick={() => actions.closeColumn(index)}
-        className="grid size-6 shrink-0 place-items-center rounded-sm text-soft-foreground hover:bg-muted hover:text-foreground"
+        className="text-soft-foreground"
       >
         <XIcon aria-hidden="true" className="size-3.5" />
-      </button>
+      </Button>
     </header>
   )
 }

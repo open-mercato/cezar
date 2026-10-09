@@ -1,6 +1,7 @@
 import { ChevronRightIcon, FolderIcon, FolderOpenIcon } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 
+import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { SidebarMenu, SidebarMenuItem, SidebarMenuSub } from '@/components/ui/sidebar'
 import { cn } from '@/lib/utils'
@@ -12,12 +13,12 @@ import type { TreeFile } from './file-tree'
  * `sidebar-11` shape: a `SidebarMenu` of rows, folders as a `Collapsible` whose children hang
  * off a `SidebarMenuSub` rail, a chevron that rotates when the folder opens.
  *
- * The rows are plain buttons carrying the sidebar menu button's look rather than
+ * The rows are ghost `Button`s carrying the sidebar menu button's look rather than
  * `SidebarMenuButton` itself: that one reads the sidebar context, and these trees also render
  * inside a task workspace column card, which is not a sidebar.
  */
 const ROW =
-  'flex h-8 w-full min-w-0 items-center gap-1.5 rounded-md px-2 text-left text-[13px] outline-hidden ring-sidebar-ring hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0'
+  'flex h-8 w-full min-w-0 shrink justify-start gap-1.5 rounded-md px-2 text-left text-[13px] font-normal text-inherit outline-hidden hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring active:translate-y-0 [&>svg]:size-4 [&>svg]:shrink-0'
 
 export function TreeRoot({ className, children }: { className?: string; children: ReactNode }) {
   return <SidebarMenu className={cn('gap-0.5', className)}>{children}</SidebarMenu>
@@ -47,7 +48,7 @@ export function TreeFolder({
     <SidebarMenuItem>
       <Collapsible open={open} onOpenChange={setOpen}>
         <CollapsibleTrigger asChild>
-          <button type="button" data-slot={slot} data-path={path} title={name} className={ROW}>
+          <Button type="button" variant="ghost" data-slot={slot} data-path={path} title={name} className={ROW}>
             <ChevronRightIcon
               aria-hidden="true"
               className={cn('text-muted-foreground transition-transform', open && 'rotate-90')}
@@ -55,7 +56,7 @@ export function TreeFolder({
             <Folder aria-hidden="true" className="text-muted-foreground" />
             <span className="min-w-0 flex-1 truncate">{name}</span>
             {trailing ? <span className="flex shrink-0 items-center gap-2">{trailing(open)}</span> : null}
-          </button>
+          </Button>
         </CollapsibleTrigger>
         <CollapsibleContent>
           <SidebarMenuSub className="mr-0 ml-3.5 gap-0.5 pr-0 pl-1.5">{children}</SidebarMenuSub>
@@ -84,8 +85,9 @@ export function TreeFileRow({
 }) {
   return (
     <SidebarMenuItem>
-      <button
+      <Button
         type="button"
+        variant="ghost"
         data-slot={slot}
         data-path={path}
         data-active={active}
@@ -100,7 +102,7 @@ export function TreeFileRow({
         {icon}
         <span className="min-w-0 flex-1 truncate">{name}</span>
         {trailing ? <span className="flex shrink-0 items-center gap-2">{trailing}</span> : null}
-      </button>
+      </Button>
     </SidebarMenuItem>
   )
 }

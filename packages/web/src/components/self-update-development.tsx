@@ -7,6 +7,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { shortAge } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { bareButton } from '@/components/bare-control'
 
 /** The PR number a preview version was cut for (`0.13.0-pr1169.1234` → 1169), else null. */
 export function pullOfVersion(version: string): number | null {
@@ -91,32 +93,35 @@ export function DevelopmentPanel({
   return (
     <div data-slot="self-update-development" className="flex min-w-0 flex-col gap-2">
       <div className="flex items-center justify-between gap-2">
-        <div role="tablist" aria-label="Development builds" className="flex gap-0.5 rounded-lg bg-muted p-[3px]">
+        <Tabs
+          value={tab}
+          onValueChange={(next) => {
+            setTab(next as typeof tab)
+            setPicked(null)
+          }}
+          className="gap-0"
+        >
+          <TabsList
+            aria-label="Development builds"
+            className="gap-0.5 rounded-lg group-data-[orientation=horizontal]/tabs:h-auto"
+          >
           {(
             [
               ...(hasWorktrees ? [{ value: 'worktrees', label: 'Worktrees', count: checkouts.length } as const] : []),
               { value: 'pulls', label: 'Pull requests', count: (pulls?.items.length ?? 0) - unbuilt } as const,
             ]
           ).map((entry) => (
-            <button
+            <TabsTrigger
               key={entry.value}
-              type="button"
-              role="tab"
-              aria-selected={tab === entry.value}
-              onClick={() => {
-                setTab(entry.value)
-                setPicked(null)
-              }}
-              className={cn(
-                'flex h-7 items-center rounded-md px-3 text-[13px] font-medium transition-colors',
-                tab === entry.value ? 'bg-card text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground',
-              )}
+              value={entry.value}
+              className="h-7 flex-none rounded-md py-0 text-[13px] data-[state=active]:font-medium"
             >
               {entry.label}
               {dev.data ? <span className="ml-1.5 font-normal tabular-nums text-muted-foreground">{entry.count}</span> : null}
-            </button>
+            </TabsTrigger>
           ))}
-        </div>
+          </TabsList>
+        </Tabs>
         <Button variant="ghost" size="sm" onClick={() => refresh.mutate()} disabled={refresh.isPending || dev.isFetching}>
           {refresh.isPending ? 'Refreshing…' : 'Refresh'}
         </Button>
@@ -176,15 +181,16 @@ export function DevelopmentPanel({
               ))}
             </div>
             {unbuilt > 0 ? (
-              <button
+              <Button
+                variant="ghost"
                 type="button"
                 onClick={() => setShowUnbuilt((value) => !value)}
-                className="w-full border-t border-border px-3 py-2 text-left text-xs text-muted-foreground hover:text-foreground"
+                className={cn(bareButton, 'w-full border-t border-border px-3 py-2 text-left text-xs text-muted-foreground hover:text-foreground')}
               >
                 {showUnbuilt
                   ? `Hide the ${unbuilt} without a preview build`
                   : `${unbuilt} more without a preview build (forks, CI not green yet) — show`}
-              </button>
+              </Button>
             ) : null}
           </>
         )}

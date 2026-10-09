@@ -14,6 +14,8 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/
 import { Switch } from '@/components/ui/switch'
 import { useIsDesktop } from '@/lib/use-desktop'
 import { RUNNERS, modelsForRunner, type ModelPreset } from '@/routes/new-task-form'
+import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 /**
  * The composer's Dispatch control (spec 2026-09-10-dispatch), one row of the /new "Options"
@@ -164,16 +166,18 @@ export function DispatchToggle({
 function Row({ label, htmlFor, children }: { label: string; htmlFor: string; children: ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-3">
-      <label htmlFor={htmlFor} className="shrink-0 text-xs text-foreground">
+      <Label htmlFor={htmlFor} className="shrink-0 text-xs font-normal text-foreground">
         {label}
-      </label>
+      </Label>
       {children}
     </div>
   )
 }
 
-const selectClass =
-  'h-7 max-w-[180px] rounded-md border border-input bg-card px-2 text-xs shadow-xs outline-none transition-[color,box-shadow] hover:bg-muted focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50'
+const selectClass = 'max-w-[180px] gap-1.5 px-2 py-0 text-xs data-[size=sm]:h-7'
+/** Radix forbids an empty-string item value, so "no choice" travels as this sentinel. */
+const NONE = '__none'
+const itemClass = 'text-xs'
 
 const MAX_SUBTASKS_CHOICES = [2, 3, 4, 5, 8, 10, 15, 20, 30, 50] as const
 const BUDGET_MIN_USD = 0.5
@@ -251,87 +255,96 @@ function DispatchSettings({
 
       <div className="flex flex-col gap-2 border-t border-border pt-3">
         <Row label="Max subtasks" htmlFor={`${id}-max`}>
-          <select
-            id={`${id}-max`}
-            data-slot="dispatch-max-subtasks"
-            className={selectClass}
-            value={intent.maxSubtasks ?? ''}
-            onChange={(event) =>
-              set({ maxSubtasks: event.target.value === '' ? undefined : Number(event.target.value) })
-            }
+          <Select
+            value={intent.maxSubtasks === undefined ? NONE : String(intent.maxSubtasks)}
+            onValueChange={(next) => set({ maxSubtasks: next === NONE ? undefined : Number(next) })}
           >
-            <option value="">unlimited</option>
-            {maxChoices.map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger id={`${id}-max`} data-slot="dispatch-max-subtasks" size="sm" className={selectClass}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NONE} className={itemClass}>
+                unlimited
+              </SelectItem>
+              {maxChoices.map((n) => (
+                <SelectItem key={n} value={String(n)} className={itemClass}>
+                  {n}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </Row>
         <Row label="In flight at once" htmlFor={`${id}-flight`}>
-          <select
-            id={`${id}-flight`}
-            data-slot="dispatch-in-flight"
-            className={selectClass}
-            value={intent.inFlight ?? DISPATCH_MAX_IN_FLIGHT}
+          <Select
+            value={String(intent.inFlight ?? DISPATCH_MAX_IN_FLIGHT)}
             // The engine's ceiling is the default, so choosing it is choosing nothing.
-            onChange={(event) => {
-              const n = Number(event.target.value)
+            onValueChange={(next) => {
+              const n = Number(next)
               set({ inFlight: n === DISPATCH_MAX_IN_FLIGHT ? undefined : n })
             }}
           >
-            {Array.from({ length: DISPATCH_MAX_IN_FLIGHT }, (_, i) => i + 1).map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger id={`${id}-flight`} data-slot="dispatch-in-flight" size="sm" className={selectClass}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {Array.from({ length: DISPATCH_MAX_IN_FLIGHT }, (_, i) => i + 1).map((n) => (
+                <SelectItem key={n} value={String(n)} className={itemClass}>
+                  {n}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </Row>
         <Row label="Subtask runner" htmlFor={`${id}-runner`}>
-          <select
-            id={`${id}-runner`}
-            data-slot="dispatch-runner"
-            className={selectClass}
-            value={intent.runner ?? ''}
+          <Select
+            value={intent.runner ?? NONE}
             // Presets are per-runner, so a kept model would be one the new runner lacks — the
             // same rule the composer's runner pill applies to its model pill.
-            onChange={(event) =>
-              set({
-                runner: event.target.value === '' ? undefined : (event.target.value as Runner),
-                model: undefined,
-              })
+            onValueChange={(next) =>
+              set({ runner: next === NONE ? undefined : (next as Runner), model: undefined })
             }
           >
-            <option value="">same as parent</option>
-            {runnerOptions.map((runner) => (
-              <option key={runner.id} value={runner.id}>
-                {runner.label}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger id={`${id}-runner`} data-slot="dispatch-runner" size="sm" className={selectClass}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NONE} className={itemClass}>
+                same as parent
+              </SelectItem>
+              {runnerOptions.map((runner) => (
+                <SelectItem key={runner.id} value={runner.id} className={itemClass}>
+                  {runner.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </Row>
         <Row label="Subtask model" htmlFor={`${id}-model`}>
-          <select
-            id={`${id}-model`}
-            data-slot="dispatch-model"
-            className={selectClass}
-            value={intent.model ?? ''}
-            onChange={(event) =>
-              set({ model: event.target.value === '' ? undefined : event.target.value })
-            }
+          <Select
+            value={intent.model ?? NONE}
+            onValueChange={(next) => set({ model: next === NONE ? undefined : next })}
           >
-            <option value="">same as parent</option>
-            {models.map((preset) => (
-              <option key={preset.id} value={preset.id}>
-                {preset.label}
-              </option>
-            ))}
-            {/* A model pinned under a runner whose catalog no longer lists it stays selectable
-                rather than silently showing "same as parent" for a value that is still sent. */}
-            {intent.model !== undefined && !models.some((preset) => preset.id === intent.model) ? (
-              <option value={intent.model}>{intent.model}</option>
-            ) : null}
-          </select>
+            <SelectTrigger id={`${id}-model`} data-slot="dispatch-model" size="sm" className={selectClass}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NONE} className={itemClass}>
+                same as parent
+              </SelectItem>
+              {models.map((preset) => (
+                <SelectItem key={preset.id} value={preset.id} className={itemClass}>
+                  {preset.label}
+                </SelectItem>
+              ))}
+              {/* A model pinned under a runner whose catalog no longer lists it stays selectable
+                  rather than silently showing "same as parent" for a value that is still sent. */}
+              {intent.model !== undefined && !models.some((preset) => preset.id === intent.model) ? (
+                <SelectItem value={intent.model} className={itemClass}>
+                  {intent.model}
+                </SelectItem>
+              ) : null}
+            </SelectContent>
+          </Select>
         </Row>
         <Row label="Budget per subtask" htmlFor={`${id}-budget`}>
           <span className="flex items-center gap-1.5">

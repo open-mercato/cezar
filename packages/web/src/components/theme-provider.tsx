@@ -63,3 +63,9 @@ export function useTheme(): ThemeContextValue {
   if (!context) throw new Error('cezar: useTheme() must be called inside <ThemeProvider>')
   return context
 }
+
+/** `useTheme()` for the few leaf primitives that also render outside the provider (the toaster in
+ *  a bare unit test): `null` there instead of a throw. */
+export function useOptionalTheme(): ThemeContextValue | null {
+  return React.useContext(ThemeContext)
+}

@@ -39,6 +39,10 @@ import {
 } from './composer-attachments'
 import { applyCompletion, detectTrigger, type TriggerState } from './composer-text'
 import { formatElapsed, useDictation } from './dictation'
+import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
+import { bareField } from '@/components/bare-control'
+import { bareButton } from '@/components/bare-control'
 
 /**
  * The SHARED composer (spec §"Task thread" composer + §"New task" composer intelligence —
@@ -524,16 +528,18 @@ export function Composer({
             <div data-slot="composer-thumbs" className={cn('flex flex-wrap items-center gap-2 pt-3', hero ? 'px-4 md:px-5 md:pt-4' : 'px-4')}>
               {draftItems}
               {images.map((attachment, index) => (
-                <button
+                <Button
+                  variant="ghost"
                   key={`${attachment.name}-${index}`}
                   type="button"
                   aria-label={`Remove ${attachment.name}`}
                   title="Click to remove"
                   className={cn(
+                    bareButton,
                     'group relative overflow-hidden rounded-md border border-border',
                     attachment.isImage
                       ? 'size-12'
-                      : 'flex h-12 max-w-[200px] items-center gap-1.5 bg-muted/40 px-2.5 text-xs text-muted-foreground',
+                      : 'flex h-12 max-w-[200px] items-center gap-1.5 bg-muted/40 px-2.5 text-xs text-muted-foreground hover:bg-muted/40 hover:text-muted-foreground',
                   )}
                   onClick={() => setImages((current) => current.filter((_, i) => i !== index))}
                 >
@@ -550,12 +556,12 @@ export function Composer({
                   <span className="absolute inset-0 hidden items-center justify-center bg-background/70 group-hover:flex group-focus-visible:flex">
                     <XIcon aria-hidden="true" className="size-4" />
                   </span>
-                </button>
+                </Button>
               ))}
             </div>
           ) : null}
 
-          <textarea
+          <Textarea
             ref={textareaRef}
             // `rows` is the phone case's floor, not the height: it is deliberately not
             // responsive, so the height comes from the `min-h`/`md:min-h` pair below (44px
@@ -569,7 +575,9 @@ export function Composer({
             placeholder={disabled ? disabledReason : placeholder}
             // 16px on touch widths — iOS zooms any focused input below 16px (spec mobile rule).
             className={cn(
-              'block w-full resize-none bg-transparent text-base outline-none placeholder:text-soft-foreground disabled:cursor-not-allowed',
+              bareField,
+              // `field-sizing-fixed`: the height is the autosize pass's, not the browser's.
+              'block field-sizing-fixed w-full resize-none bg-transparent text-base outline-none placeholder:text-soft-foreground disabled:cursor-not-allowed',
               hero
                 ? 'max-h-[320px] min-h-[88px] px-4 pt-4 pb-2 leading-relaxed md:min-h-[112px] md:px-5 md:pt-5 md:text-[15px]'
                 : 'max-h-[220px] min-h-11 px-3 pt-2.5 pb-1 leading-normal md:min-h-[54px] md:px-4 md:pt-3 md:text-sm',
@@ -736,7 +744,7 @@ function AttachButton({
       </Button>
       {/* Both spellings of every type: an OS dialog filters on the extension as often as on the
           MIME type, and `accept="image/*,text/plain"` alone greys out a `.md` on Windows (#950). */}
-      <input
+      <Input
         ref={inputRef}
         type="file"
         accept="image/*,application/pdf,text/plain,text/markdown,.pdf,.txt,.md,.markdown,.log"

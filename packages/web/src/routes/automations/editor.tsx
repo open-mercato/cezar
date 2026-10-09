@@ -17,10 +17,10 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { Toggle } from '@/components/ui/toggle'
 import { useNavigate } from '@/lib/project-router'
 import { availablePromptTemplates, insertTemplate, normalizePromptTemplates } from '@/lib/prompt-templates'
 import { orderSkillsByUsage } from '@/lib/skills'
-import { cn } from '@/lib/utils'
 import { settingsSectionPath } from '@/routes/settings/settings-shell'
 
 import { CopyAsCliCard } from './copy-as-cli-card'
@@ -418,21 +418,17 @@ function KindSegment({ value, editing, githubAvailable, githubReason, onChange }
   return (
     <div data-slot="editor-kind" role="group" aria-label="Trigger" className="inline-flex flex-wrap gap-0.5 self-start rounded-md bg-muted p-[3px]">
       {options.map((option) => (
-        <button
+        <Toggle
           key={option.value}
-          type="button"
           data-value={option.value}
-          aria-pressed={option.value === value}
+          pressed={option.value === value}
           disabled={option.disabled}
           title={option.title}
-          onClick={() => { if (option.value !== value) onChange(option.value) }}
-          className={cn(
-            'flex h-8 items-center justify-center gap-1.5 rounded-sm px-3 text-[13px] font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50',
-            option.value === value && 'bg-card font-semibold text-foreground shadow-xs',
-          )}
+          onPressedChange={() => { if (option.value !== value) onChange(option.value) }}
+          className="h-8 min-w-0 gap-1.5 rounded-sm px-3 text-[13px] text-muted-foreground transition-colors hover:bg-transparent hover:text-foreground data-[state=on]:bg-card data-[state=on]:font-semibold data-[state=on]:text-foreground data-[state=on]:shadow-xs"
         >
           {option.label}
-        </button>
+        </Toggle>
       ))}
     </div>
   )

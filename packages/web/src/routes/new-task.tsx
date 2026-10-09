@@ -105,6 +105,7 @@ import {
   startedRunPath,
   type TaskSource,
 } from './new-task-form'
+import { Button } from '@/components/ui/button'
 import { parseNewTaskParams } from './new-task-params'
 
 /**
@@ -709,8 +710,9 @@ export function NewTaskRoute() {
                   that says what it does. */}
               <Popover>
                 <PopoverTrigger asChild>
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
                     data-slot="run-options-trigger"
                     aria-label="Run options"
                     title="Variants, worktree, autonomy, dispatch and base branch"
@@ -721,7 +723,7 @@ export function NewTaskRoute() {
                     {optionsMarked ? (
                       <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-primary" />
                     ) : null}
-                  </button>
+                  </Button>
                 </PopoverTrigger>
                 <PopoverContent
                   align="start"
@@ -1001,8 +1003,9 @@ function ProjectPill({
       }}
     >
       <PopoverTrigger asChild>
-        <button
+        <Button
           type="button"
+          variant="ghost"
           data-slot="project-pill"
           aria-label="Project"
           title="Which project this task runs in — its skills, workflows, settings and draft"
@@ -1013,7 +1016,7 @@ function ProjectPill({
               while it is still loading, so the pill never renders an empty label. */}
           <span className="max-w-40 truncate">{selected?.name ?? projectId}</span>
           {chevron}
-        </button>
+        </Button>
       </PopoverTrigger>
       <PopoverContent
         align="start"
@@ -1123,7 +1126,13 @@ function Suggestions({ onPick }: { onPick: (text: string) => void }) {
       <ItemGroup className="gap-2 sm:grid sm:grid-cols-3">
         {SUGGESTIONS.map(({ text, hint, icon: Icon }) => (
           <Item key={text} asChild variant="outline" size="sm" className="items-start gap-2.5 rounded-xl bg-card/60 px-3.5 text-left hover:bg-muted/60">
-            <button type="button" data-slot="suggested-chip" onClick={() => onPick(text)}>
+            <Button
+              type="button"
+              variant="ghost"
+              data-slot="suggested-chip"
+              onClick={() => onPick(text)}
+              className="h-auto justify-start font-normal whitespace-normal text-foreground"
+            >
               <ItemMedia>
                 <Icon aria-hidden="true" className="size-4 text-muted-foreground" />
               </ItemMedia>
@@ -1131,7 +1140,7 @@ function Suggestions({ onPick }: { onPick: (text: string) => void }) {
                 <ItemTitle className="text-[13.5px] leading-snug text-pretty">{text}</ItemTitle>
                 <ItemDescription className="text-xs text-pretty">{hint}</ItemDescription>
               </ItemContent>
-            </button>
+            </Button>
           </Item>
         ))}
       </ItemGroup>

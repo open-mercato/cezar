@@ -1,5 +1,6 @@
 import { FileIcon, XIcon } from 'lucide-react'
 
+import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Link } from '@/lib/project-router'
 
@@ -53,14 +54,15 @@ export function DiffCommentChips({
                   <FileIcon className="size-3.5" />
                 </span>
                 {onOpen ? (
-                  <button
+                  <Button
                     type="button"
                     onClick={() => onOpen(comment)}
-                    className="min-w-0 truncate px-2 font-medium hover:underline"
+                    variant="link"
+                    className="inline-block h-auto min-w-0 shrink truncate rounded-none px-2 text-xs underline-offset-auto"
                     aria-label={`Show comment on ${comment.path} ${where}`}
                   >
                     {label}
-                  </button>
+                  </Button>
                 ) : (
                   <Link
                     // Straight to THIS comment on the Changes tab, not the top of its file.
@@ -76,14 +78,14 @@ export function DiffCommentChips({
                     {label}
                   </Link>
                 )}
-                <button
+                <Button
                   type="button"
                   aria-label={`Remove comment on ${name} ${where}`}
                   onClick={() => onRemove(comment.id)}
-                  className="flex h-full items-center px-1.5 text-soft-foreground hover:bg-muted hover:text-foreground"
+                  variant="ghost" className="h-full rounded-none px-1.5 text-soft-foreground"
                 >
                   <XIcon aria-hidden="true" className="size-3.5" />
-                </button>
+                </Button>
               </span>
             </TooltipTrigger>
             <TooltipContent side="top" sideOffset={6} className="max-w-[320px] text-left">

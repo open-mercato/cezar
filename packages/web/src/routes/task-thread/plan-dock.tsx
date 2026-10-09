@@ -2,6 +2,7 @@ import { ChevronDownIcon } from 'lucide-react'
 import { useState } from 'react'
 
 import type { PlanEntry, PlanStatus } from '@open-mercato/cezar-api-client'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 /**
@@ -79,11 +80,15 @@ export function PlanDock({
     >
       {/* The mockup's `.grad-edge` — the brand gradient as a hairline top edge. */}
       <div aria-hidden data-slot="grad-edge" className="hidden" />
-      <button
+      <Button
         type="button"
         onClick={toggle}
         aria-expanded={open}
-        className={cn('flex w-full items-center gap-2 px-4 text-left text-[13px]', open ? 'pt-2.5 pb-2' : 'py-2.5')}
+        variant="ghost"
+        className={cn(
+          'flex h-auto w-full justify-start gap-2 rounded-none px-4 text-left text-[13px] font-normal whitespace-normal text-inherit hover:bg-transparent hover:text-inherit focus-visible:ring-inset active:translate-y-0',
+          open ? 'pt-2.5 pb-2' : 'py-2.5',
+        )}
       >
         <span className="shrink-0 font-semibold">Plan</span>
         <span data-slot="plan-count" className="shrink-0 text-muted-foreground tabular-nums">
@@ -103,7 +108,7 @@ export function PlanDock({
           aria-hidden
           className={cn('ml-auto size-3.5 shrink-0 text-soft-foreground transition-transform', !open && 'rotate-180')}
         />
-      </button>
+      </Button>
       {open ? (
         <ul data-slot="plan-list" className="flex flex-col gap-2 px-4 pb-3">
           {entries.map((entry, index) => (

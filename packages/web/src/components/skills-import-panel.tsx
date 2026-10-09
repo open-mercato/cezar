@@ -23,6 +23,7 @@ import { toast } from '@/components/ui/toaster'
 import { useNavigate } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 import { startedRunPath } from '@/routes/new-task-form'
+import { Label } from '@/components/ui/label'
 
 const SKILLS_REPO_URL = 'https://github.com/open-mercato/skills'
 
@@ -219,12 +220,12 @@ export function ImportSkillsPanel({ projectId }: { projectId: string }) {
             {shown.map((skill) => {
               const checked = imported.has(skill.name)
               return (
-                <label
+                <Label
                   key={skill.name}
                   data-slot="import-row"
                   data-skill={skill.name}
                   data-imported={checked ? 'true' : undefined}
-                  className="flex cursor-pointer items-start gap-3 px-4 py-3 transition-colors hover:bg-muted/50"
+                  className="cursor-pointer items-start gap-3 px-4 py-3 text-[length:inherit] leading-[inherit] font-normal transition-colors select-auto hover:bg-muted/50"
                 >
                   <Checkbox
                     data-slot="import-toggle"
@@ -247,7 +248,7 @@ export function ImportSkillsPanel({ projectId }: { projectId: string }) {
                       </span>
                     ) : null}
                   </span>
-                </label>
+                </Label>
               )
             })}
           </Card>

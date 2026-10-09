@@ -2,6 +2,8 @@ import { ChevronDownIcon } from 'lucide-react'
 import * as React from 'react'
 
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { bareButton } from '@/components/bare-control'
 
 /**
  * The mockup's `.chip` (spec 2026-09-14-automations-redesign § Primitives): a quiet 28px
@@ -40,12 +42,14 @@ export function Chip({
   icon?: React.ReactNode
 }) {
   return (
-    <button
+    <Button
+      variant="ghost"
       type={type}
       data-slot="chip"
       data-active={active ? 'true' : undefined}
       data-skill={skill ? 'true' : undefined}
       className={cn(
+        bareButton,
         chipClass,
         active && 'border-foreground font-semibold text-foreground',
         skill && 'border-violet font-mono font-semibold text-foreground',
@@ -57,6 +61,6 @@ export function Chip({
       {icon}
       {children}
       {chevron ? chipChevron : null}
-    </button>
+    </Button>
   )
 }

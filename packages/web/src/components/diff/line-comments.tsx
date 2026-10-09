@@ -3,6 +3,7 @@ import { createContext, useContext, useEffect, useRef, useState, type KeyboardEv
 
 import { Button } from '@/components/ui/button'
 import { isSubmitShortcut } from '@/lib/use-submit-shortcut'
+import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 
 import { describeLines } from './line-label'
@@ -216,8 +217,10 @@ export function AddCommentButton({
   const stretchable =
     editing !== null && editing.commentId === undefined && editing.anchor.path === anchor.path && file !== null
   return (
-    <button
+    <Button
       type="button"
+      variant="primary"
+      size="icon-xs"
       data-slot="diff-add-comment"
       // The file is named: every file has a "line 4", and a list of controls that all read
       // "Comment on line 4" is no list at all to a screen reader.
@@ -244,13 +247,13 @@ export function AddCommentButton({
       }}
       className={cn(
         // Inside the 1rem marker column it sits in — never over the line numbers beside it.
-        'absolute top-1/2 left-0 z-[1] flex size-4 -translate-y-1/2 items-center justify-center rounded-sm',
-        'bg-primary text-primary-foreground opacity-0 shadow-xs transition-opacity',
-        'group-hover/line:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'absolute top-1/2 left-0 z-[1] size-4 -translate-y-1/2 rounded-sm active:-translate-y-1/2',
+        'opacity-0 transition-opacity hover:brightness-100',
+        'group-hover/line:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring',
       )}
     >
       <PlusIcon aria-hidden="true" className="size-2.5" strokeWidth={3} />
-    </button>
+    </Button>
   )
 }
 
@@ -439,7 +442,7 @@ function CommentEditor({
     <div data-slot="diff-comment-editor" className="flex flex-col gap-2">
       {/* No visible "Commenting on lines…" caption: the covered rows are tinted right above, and
           the textarea's accessible name still says it. */}
-      <textarea
+      <Textarea
         ref={ref}
         rows={3}
         maxLength={COMMENT_MAX}
@@ -451,7 +454,7 @@ function CommentEditor({
           api.pendingText.set(editing.key, event.target.value)
         }}
         onKeyDown={onKeyDown}
-        className="block w-full resize-y rounded-md border border-ring/60 bg-background px-3 py-2 text-base leading-normal outline-none placeholder:text-muted-foreground focus:border-ring focus:ring-[3px] focus:ring-ring/15 md:text-sm"
+        className="block field-sizing-fixed min-h-0 resize-y border-ring/60 bg-background leading-normal shadow-none placeholder:text-muted-foreground focus:border-ring focus:ring-[3px] focus:ring-ring/15 focus-visible:ring-ring/15"
       />
       <div className="flex items-center justify-end gap-1.5">
         <Button type="button" variant="ghost" size="sm" onClick={cancel}>

@@ -1,6 +1,8 @@
 import { ChevronRightIcon } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { bareButton } from '@/components/bare-control'
 
 /**
  * The "N subtasks" chip, grown into the accordion's handle (#1110): a parent row's one control
@@ -26,13 +28,15 @@ export function SubtaskToggle({
   className?: string
 }) {
   return (
-    <button
+    <Button
+      variant="ghost"
       type="button"
       data-slot="subtask-toggle"
       aria-expanded={expanded}
       aria-label={`${expanded ? 'Collapse' : 'Expand'} ${label}`}
       onClick={onToggle}
       className={cn(
+        bareButton,
         'inline-flex h-5 shrink-0 items-center gap-0.5 rounded-full bg-muted pr-2 pl-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
         className,
       )}
@@ -42,6 +46,6 @@ export function SubtaskToggle({
         aria-hidden="true"
       />
       {label}
-    </button>
+    </Button>
   )
 }

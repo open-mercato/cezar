@@ -8,6 +8,7 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react'
+import { Button } from '@/components/ui/button'
 import { Virtualizer, type VirtualizerHandle } from 'virtua'
 
 import {
@@ -608,14 +609,14 @@ function VirtualRows({
 /** The floating "Jump to latest" pill, absolutely positioned above the dock by its caller. */
 export function JumpToLatestPill({ onJump }: { onJump: () => void }) {
   return (
-    <button
+    <Button
       type="button"
       data-slot="jump-to-latest"
       onClick={onJump}
-      className="pointer-events-auto inline-flex min-h-8 items-center gap-1.5 rounded-full border border-border bg-background px-3.5 text-xs font-medium text-muted-foreground shadow-modal hover:text-foreground"
+      variant="outline" size="sm" className="pointer-events-auto h-auto min-h-8 rounded-full border-border bg-background px-3.5 text-xs text-muted-foreground shadow-modal hover:bg-background hover:text-foreground"
     >
       <ArrowDownIcon aria-hidden className="size-3.5" />
       Jump to latest
-    </button>
+    </Button>
   )
 }

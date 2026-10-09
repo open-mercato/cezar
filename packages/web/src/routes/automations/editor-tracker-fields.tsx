@@ -1,9 +1,11 @@
 import { useInfiniteQuery } from '@tanstack/react-query'
+import { ChevronRightIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { queryScope, type TrackerTrigger } from '@open-mercato/cezar-api-client'
 import { getTrackerAutomationOptions } from '@/api/client'
 import { Chip } from '@/components/chip'
 import { Button } from '@/components/ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { TrackerLabelSuggestions } from './tracker-label-suggestions'
@@ -72,13 +74,20 @@ export function EditorTrackerFields({ trigger, intervalSeconds, onChange, onVali
         }}>{event}</Chip>)}
       </div>
       {sameSource && trigger ? <TrackerLabelSuggestions key={JSON.stringify(ready.association)} association={ready.association} selected={trigger.requiredLabels ?? []} onRemove={label => onChange({ trackerTrigger: { ...trigger, requiredLabels: (trigger.requiredLabels ?? []).filter(value => value !== label) } })} onSelect={label => onChange({ trackerTrigger: { ...trigger, requiredLabels: [...new Set([...(trigger.requiredLabels ?? []), label])] } })} /> : null}
-      <details className="text-xs text-muted-foreground">
-        <summary className="cursor-pointer">Integration details</summary>
-        <div className="mt-2 flex flex-col gap-2">
-          <p>Label choices come from loaded tasks in this project, including closed tasks. Saved selections remain available.</p>
-          {ready.limitations.map(note => <p key={note}>{note}</p>)}
-        </div>
-      </details>
+      <Collapsible className="text-xs text-muted-foreground">
+        <CollapsibleTrigger asChild>
+          <Button variant="ghost" size="xs" className="group h-auto gap-1 rounded-none p-0 font-normal hover:bg-transparent hover:text-muted-foreground">
+            <ChevronRightIcon aria-hidden="true" className="size-3 transition-transform group-data-[state=open]:rotate-90" />
+            Integration details
+          </Button>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <div className="mt-2 flex flex-col gap-2">
+            <p>Label choices come from loaded tasks in this project, including closed tasks. Saved selections remain available.</p>
+            {ready.limitations.map(note => <p key={note}>{note}</p>)}
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
       {trigger?.events.some(event => event !== 'issue.opened') ? <>
         <Input aria-label={searchLabel} placeholder={searchLabel} value={search} onChange={e => setSearch(e.target.value)} />
         {results.isFetching ? <p role="status">Searching…</p> : null}

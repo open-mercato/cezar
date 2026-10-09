@@ -1,4 +1,4 @@
-import { FilterSelect, filterLabel, Freshness, InfoHint, Notice, ReportNote, WidgetEmpty, WidgetSkeleton, widgetBody, widgetHeader, widgetHeading } from './presentation'
+import { disclosureContent, FilterSelect, filterLabel, Freshness, InfoHint, Notice, ReportNote, WidgetEmpty, WidgetSkeleton, widgetBody, widgetHeader, widgetHeading } from './presentation'
 import { useDashboardFilter } from './url-filter'
 import { Table2, ChevronDown, ChartColumn } from 'lucide-react'
 import { formatAmount, formatHours } from './format'
@@ -10,6 +10,9 @@ import { useHealth } from '@/api/queries'
 import { usageMetricVisibility, type UsageMetricVisibility } from '@/lib/token-metrics'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Label } from '@/components/ui/label'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   Tooltip,
   TooltipContent,
@@ -71,18 +74,19 @@ function BarRow({
           return (
             <Tooltip key={point.date}>
               <TooltipTrigger asChild>
-                <button
+                <Button
+                  variant="ghost"
                   data-export-keep
                   aria-label={describe(point)}
                   type="button"
-                  className="group/bar min-w-0 flex-1 rounded-t-[3px] transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                  className="group/bar h-auto min-w-0 flex-1 gap-0 rounded-none rounded-t-[3px] p-0 hover:bg-muted/70 active:translate-y-0"
                   style={{ height: '100%', display: 'flex', alignItems: 'end' }}
                 >
                   <span
                     style={{ height: `${pct}%` }}
                     className={`mx-auto block w-full max-w-7 rounded-t-[3px] ${accent}`}
                   />
-                </button>
+                </Button>
               </TooltipTrigger>
               <TooltipContent sideOffset={4} className="tabular-nums">
                 {renderTooltip(point)}
@@ -99,6 +103,7 @@ function BarRow({
     </TooltipProvider>
   )
 }
+const dataHead = 'h-auto px-0 py-1 font-medium text-muted-foreground'
 /** Accessible daily values for the on-screen disclosure and the expanded PDF report. */
 function DailyValuesTable({
   metrics,
@@ -108,36 +113,38 @@ function DailyValuesTable({
   series: DashboardCostSeriesPoint[]
 }) {
   return (
-    <table className="w-full text-left text-xs">
-      <thead>
-        <tr className="border-b text-muted-foreground">
-          <th className="py-1 pr-2 font-medium">Date</th>
+    <Table className="text-left text-xs">
+      <TableHeader>
+        <TableRow className="text-muted-foreground hover:bg-transparent">
+          <TableHead className={`${dataHead} pr-2`}>Date</TableHead>
           {metrics.map((metric) => (
-            <th key={metric} className="py-1 pr-2 text-right font-medium">
+            <TableHead key={metric} className={`${dataHead} pr-2 text-right`}>
               {labels[metric]}
-            </th>
+            </TableHead>
           ))}
-          <th className="py-1 pr-2 text-right font-medium">Completed</th>
-          <th className="py-1 text-right font-medium">Avg cycle</th>
-        </tr>
-      </thead>
-      <tbody>
+          <TableHead className={`${dataHead} pr-2 text-right`}>Completed</TableHead>
+          <TableHead className={`${dataHead} text-right`}>Avg cycle</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
         {series.map((point) => (
-          <tr key={point.date} className="border-b border-border/70 last:border-0">
-            <td className="py-1 pr-2">{formatDate(point.date)}</td>
+          <TableRow key={point.date} className="border-border/70 hover:bg-transparent">
+            <TableCell className="px-0 py-1 pr-2">{formatDate(point.date)}</TableCell>
             {metrics.map((metric) => (
-              <td key={metric} className="py-1 pr-2 text-right tabular-nums">
+              <TableCell key={metric} className="px-0 py-1 pr-2 text-right tabular-nums">
                 {formatValue(point[fields[metric]]?.value, metric)}
-              </td>
+              </TableCell>
             ))}
-            <td className="py-1 pr-2 text-right tabular-nums">{point.completed}</td>
-            <td className="py-1 text-right tabular-nums">
+            <TableCell className="px-0 py-1 pr-2 text-right tabular-nums">
+              {point.completed}
+            </TableCell>
+            <TableCell className="p-0 py-1 text-right tabular-nums">
               {point.avgCycleHours === null ? '—' : formatHours(point.avgCycleHours)}
-            </td>
-          </tr>
+            </TableCell>
+          </TableRow>
         ))}
-      </tbody>
-    </table>
+      </TableBody>
+    </Table>
   )
 }
 function TrendMetricChart({
@@ -255,16 +262,17 @@ export function Trends({ visibility }: { visibility: UsageMetricVisibility }) {
           <h2 className={widgetHeading}>Trends</h2>
           <InfoHint label="How these metrics work">{definitions}</InfoHint>
         </div>
-        <label className={filterLabel}>
+        <Label className={filterLabel}>
           Period
-          <FilterSelect
+          <FilterSelect<TrendPeriod>
             value={period}
-            onChange={(e) => setPeriod(e.target.value as TrendPeriod)}
-          >
-            <option value="7d">Last 7 days</option>
-            <option value="30d">Last 30 days</option>
-          </FilterSelect>
-        </label>
+            onValueChange={setPeriod}
+            options={[
+              { value: '7d', label: 'Last 7 days' },
+              { value: '30d', label: 'Last 30 days' },
+            ]}
+          />
+        </Label>
       </div>
       <div className={widgetBody}>
         {data && (
@@ -344,26 +352,28 @@ export function Trends({ visibility }: { visibility: UsageMetricVisibility }) {
               )}
               <ThroughputChart series={data.series} />
             </div>
-            <details className="group print:block">
-              <summary
+            <Collapsible className="group print:block">
+              <CollapsibleTrigger
                 data-export-heading="Daily data"
-                className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-sm text-[13px] text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 no-hover:min-h-11 [&::-webkit-details-marker]:hidden"
+                className="flex w-fit cursor-pointer items-center gap-1.5 rounded-sm text-[13px] text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 no-hover:min-h-11"
               >
                 <Table2 className="size-3.5" aria-hidden="true" /> View data table
                 <ChevronDown
-                  className="size-3.5 transition-transform group-open:rotate-180 motion-reduce:transition-none"
+                  className="size-3.5 transition-transform group-data-[state=open]:rotate-180 motion-reduce:transition-none"
                   aria-hidden="true"
                 />
-              </summary>
-              <div
-                className="mt-3 max-h-80 overflow-auto print:max-h-none print:overflow-visible"
-                role="region"
-                aria-label="Daily trend values"
-                tabIndex={0}
-              >
-                <DailyValuesTable metrics={metrics} series={data.series} />
-              </div>
-            </details>
+              </CollapsibleTrigger>
+              <CollapsibleContent forceMount className={`${disclosureContent} print:block!`}>
+                <div
+                  className="mt-3 max-h-80 overflow-auto print:max-h-none print:overflow-visible"
+                  role="region"
+                  aria-label="Daily trend values"
+                  tabIndex={0}
+                >
+                  <DailyValuesTable metrics={metrics} series={data.series} />
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
           </>
         )}
         {data && (

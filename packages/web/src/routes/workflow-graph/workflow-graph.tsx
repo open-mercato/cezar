@@ -60,6 +60,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -70,6 +71,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
@@ -719,11 +721,13 @@ function WorkflowGraphEditor() {
             Unsaved
           </Badge>
         )}
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           className={cn(
-            'flex h-7 items-center gap-1.5 rounded-md px-2 text-xs hover:bg-muted',
-            issues.length ? 'font-medium text-danger' : 'text-muted-foreground',
+            'h-7 px-2 text-xs',
+            issues.length ? 'text-danger hover:text-danger' : 'font-normal hover:text-muted-foreground',
           )}
           title={issues.join('\n') || 'The server validated this workflow'}
           onClick={() => {
@@ -733,7 +737,7 @@ function WorkflowGraphEditor() {
         >
           {issues.length ? <AlertTriangleIcon className="size-3.5" /> : <CheckCircle2Icon className="size-3.5 text-success" />}
           {issues.length ? `${issues.length} issue${issues.length > 1 ? 's' : ''}` : 'Valid'}
-        </button>
+        </Button>
         <div className="ml-auto flex items-center gap-1.5">
           <Button
             size="sm"
@@ -866,16 +870,17 @@ function WorkflowGraphEditor() {
                     {entries.map((entry) => {
                       const Icon = ICONS[entry.type]
                       return (
-                        <button
+                        <Button
                           key={entry.type}
                           type="button"
+                          variant="ghost"
                           draggable
                           onDragStart={(e) => {
                             e.dataTransfer.setData(DRAG_MIME, entry.type)
                             e.dataTransfer.effectAllowed = 'move'
                           }}
                           onClick={() => addNode(entry.type)}
-                          className="flex w-full cursor-grab items-center gap-3 rounded-lg px-2 py-1.5 text-left hover:bg-muted"
+                          className="h-auto w-full cursor-grab justify-start gap-3 rounded-lg px-2 py-1.5 text-left font-normal whitespace-normal text-foreground active:translate-y-0"
                           title={`${entry.description} — drag onto the canvas, or click to add`}
                         >
                           <span
@@ -888,7 +893,7 @@ function WorkflowGraphEditor() {
                             <span className="block text-[13px] leading-tight font-medium">{entry.label}</span>
                             <span className="block truncate text-xs text-muted-foreground">{entry.description}</span>
                           </span>
-                        </button>
+                        </Button>
                       )
                     })}
                   </section>
@@ -913,11 +918,12 @@ function WorkflowGraphEditor() {
                     })
                     .slice(0, 40)
                     .map((sk) => (
-                      <button
+                      <Button
                         key={`${sk.source}:${sk.name}`}
                         type="button"
+                        variant="ghost"
                         onClick={() => addNode('agent', undefined, sk.name)}
-                        className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left hover:bg-muted"
+                        className="h-auto w-full justify-start gap-3 rounded-lg px-2 py-1.5 text-left font-normal whitespace-normal text-foreground active:translate-y-0"
                         title={sk.description ?? sk.name}
                       >
                         <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted font-mono text-xs text-muted-foreground">
@@ -929,7 +935,7 @@ function WorkflowGraphEditor() {
                             <span className="block truncate text-xs text-muted-foreground">{sk.description}</span>
                           ) : null}
                         </span>
-                      </button>
+                      </Button>
                     ))
                 )}
               </section>
@@ -988,13 +994,15 @@ function WorkflowGraphEditor() {
               <div>
                 <div className="mb-1.5 flex items-center justify-between text-xs">
                   <span className="font-medium text-foreground">YAML</span>
-                  <button
+                  <Button
                     type="button"
-                    className="text-muted-foreground hover:text-foreground"
+                    variant="ghost"
+                    size="xs"
+                    className="h-auto rounded-none p-0 font-normal hover:bg-transparent"
                     onClick={() => void navigator.clipboard?.writeText(graphYaml(name, description, graph))}
                   >
                     Copy
-                  </button>
+                  </Button>
                 </div>
                 <pre className="max-h-64 overflow-auto rounded-md bg-muted/60 p-2.5 font-mono text-[11px] leading-relaxed">
                   {graphYaml(name, description, graph)}
@@ -1136,19 +1144,15 @@ function SkillField({ value, onChange }: { value: string | undefined; onChange: 
   const known = value === undefined || names.includes(value)
   return (
     <Field label="skill">
-      <select
-        className="w-full h-9 rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      <InspectorSelect
         value={value ?? ''}
-        onChange={(e) => onChange(e.target.value || undefined)}
-      >
-        <option value="">no skill</option>
-        {!known && <option value={value}>{value} (not in this repo)</option>}
-        {names.map((n) => (
-          <option key={n} value={n}>
-            {n}
-          </option>
-        ))}
-      </select>
+        onChange={(v) => onChange(v || undefined)}
+        options={[
+          { value: '', label: 'no skill' },
+          ...(!known && value !== undefined ? [{ value, label: `${value} (not in this repo)` }] : []),
+          ...names.map((n) => ({ value: n, label: n })),
+        ]}
+      />
     </Field>
   )
 }
@@ -1184,20 +1188,16 @@ function WorkflowSelect({
   const workflows = useWorkflows()
   const names = (workflows.data?.workflows ?? []).map((w) => w.name)
   return (
-    <select
+    <InspectorSelect
       aria-label={label}
-      className="w-full h-9 rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
       value={value ?? ''}
-      onChange={(e) => onChange(e.target.value || undefined)}
-    >
-      {optional ? <option value="">one agent step</option> : null}
-      {value && !names.includes(value) ? <option value={value}>{value} (not found)</option> : null}
-      {names.map((n) => (
-        <option key={n} value={n}>
-          {n}
-        </option>
-      ))}
-    </select>
+      onChange={(v) => onChange(v || undefined)}
+      options={[
+        ...(optional ? [{ value: '', label: 'one agent step' }] : []),
+        ...(value && !names.includes(value) ? [{ value, label: `${value} (not found)` }] : []),
+        ...names.map((n) => ({ value: n, label: n })),
+      ]}
+    />
   )
 }
 
@@ -1223,23 +1223,26 @@ function ConditionEditor({ condition, onChange }: { condition: ConditionValue; o
   return (
     <>
       <Field label="look at">
-        <select className="w-full h-9 rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" value={condition.kind} onChange={(e) => switchKind(e.target.value as ConditionValue['kind'])}>
-          <option value="diff-lines">the task's diff — changed lines</option>
-          <option value="diff-files">the task's diff — changed files</option>
-          <option value="paths-changed">which paths changed (glob)</option>
-          <option value="output">another node's output</option>
-          <option value="branch">the base branch</option>
-        </select>
+        <InspectorSelect
+          value={condition.kind}
+          onChange={(v) => switchKind(v as ConditionValue['kind'])}
+          options={[
+            { value: 'diff-lines', label: "the task's diff — changed lines" },
+            { value: 'diff-files', label: "the task's diff — changed files" },
+            { value: 'paths-changed', label: 'which paths changed (glob)' },
+            { value: 'output', label: "another node's output" },
+            { value: 'branch', label: 'the base branch' },
+          ]}
+        />
       </Field>
       {(condition.kind === 'diff-lines' || condition.kind === 'diff-files') && (
         <div className="grid grid-cols-[5rem_1fr] gap-2">
-          <select className="w-full h-9 rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label="operator" value={condition.op} onChange={(e) => onChange({ ...condition, op: e.target.value as (typeof numericOps)[number] })}>
-            {numericOps.map((o) => (
-              <option key={o} value={o}>
-                {o}
-              </option>
-            ))}
-          </select>
+          <InspectorSelect
+            aria-label="operator"
+            value={condition.op}
+            onChange={(v) => onChange({ ...condition, op: v as (typeof numericOps)[number] })}
+            options={numericOps.map((o) => ({ value: o, label: o }))}
+          />
           <Input type="number" min={0} aria-label="threshold" value={condition.value} onChange={(e) => onChange({ ...condition, value: Math.max(0, Number(e.target.value) || 0) })} className="text-[13px]" />
         </div>
       )}
@@ -1254,23 +1257,27 @@ function ConditionEditor({ condition, onChange }: { condition: ConditionValue; o
             <Input value={condition.ref} onChange={(e) => onChange({ ...condition, ref: e.target.value.trim() })} className="font-mono text-xs" />
           </Field>
           <div className="grid grid-cols-[7rem_1fr] gap-2">
-            <select className="w-full h-9 rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label="operator" value={condition.op} onChange={(e) => onChange({ ...condition, op: e.target.value as (typeof outputOps)[number] })}>
-              {outputOps.map((o) => (
-                <option key={o} value={o}>
-                  {o}
-                </option>
-              ))}
-            </select>
+            <InspectorSelect
+              aria-label="operator"
+              value={condition.op}
+              onChange={(v) => onChange({ ...condition, op: v as (typeof outputOps)[number] })}
+              options={outputOps.map((o) => ({ value: o, label: o }))}
+            />
             <Input aria-label="value" value={String(condition.value)} onChange={(e) => onChange({ ...condition, value: e.target.value })} className="text-[13px]" />
           </div>
         </>
       )}
       {condition.kind === 'branch' && (
         <div className="grid grid-cols-[7rem_1fr] gap-2">
-          <select className="w-full h-9 rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label="operator" value={condition.op} onChange={(e) => onChange({ ...condition, op: e.target.value as 'equals' | 'matches' })}>
-            <option value="equals">equals</option>
-            <option value="matches">matches glob</option>
-          </select>
+          <InspectorSelect
+            aria-label="operator"
+            value={condition.op}
+            onChange={(v) => onChange({ ...condition, op: v as 'equals' | 'matches' })}
+            options={[
+              { value: 'equals', label: 'equals' },
+              { value: 'matches', label: 'matches glob' },
+            ]}
+          />
           <Input aria-label="branch" value={condition.value} onChange={(e) => onChange({ ...condition, value: e.target.value })} className="font-mono text-xs" />
         </div>
       )}
@@ -1281,10 +1288,41 @@ function ConditionEditor({ condition, onChange }: { condition: ConditionValue; o
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <label className="block">
+    <Label className="block text-[13px] leading-normal font-normal select-auto">
       <span className="mb-1.5 block text-xs font-medium text-foreground first-letter:uppercase">{label}</span>
       {children}
-    </label>
+    </Label>
+  )
+}
+
+/** Radix forbids an empty-string item value, so the "none / inherit" option travels as a sentinel. */
+const NONE_VALUE = '__none'
+
+/** The inspector's one select: the same `''`-means-unset contract the native element had. */
+function InspectorSelect({
+  value,
+  onChange,
+  options,
+  'aria-label': ariaLabel,
+}: {
+  value: string
+  onChange: (value: string) => void
+  options: { value: string; label: string }[]
+  'aria-label'?: string
+}) {
+  return (
+    <Select value={value === '' ? NONE_VALUE : value} onValueChange={(v) => onChange(v === NONE_VALUE ? '' : v)}>
+      <SelectTrigger aria-label={ariaLabel} className="w-full min-w-0 px-2.5 text-[13px]">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((o) => (
+          <SelectItem key={o.value} value={o.value === '' ? NONE_VALUE : o.value} className="text-[13px]">
+            {o.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   )
 }
 
@@ -1407,14 +1445,11 @@ function Inspector({
           <SkillField value={node.skill} onChange={(skill) => set({ skill })} />
           <div className="grid grid-cols-2 gap-2">
             <Field label="runner">
-              <select className="w-full h-9 rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" value={node.runner ?? ''} onChange={(e) => set({ runner: e.target.value || undefined })}>
-                <option value="">task default</option>
-                {RUNNERS.map((r) => (
-                  <option key={r} value={r}>
-                    {r}
-                  </option>
-                ))}
-              </select>
+              <InspectorSelect
+                value={node.runner ?? ''}
+                onChange={(v) => set({ runner: v || undefined })}
+                options={[{ value: '', label: 'task default' }, ...RUNNERS.map((r) => ({ value: r, label: r }))]}
+              />
             </Field>
             <Field label="model">
               <Input value={node.model ?? ''} onChange={(e) => set({ model: e.target.value })} className="text-[13px]" />
@@ -1422,15 +1457,13 @@ function Inspector({
           </div>
           {isBranch ? (
             <>
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  className="size-4 accent-foreground"
+              <Label className="text-[13px] leading-normal font-normal">
+                <Checkbox
                   checked={node.review ?? false}
-                  onChange={(e) => set({ review: e.target.checked || undefined })}
+                  onCheckedChange={(checked) => set({ review: checked === true || undefined })}
                 />
                 reviewer — judges the task branch, never implements
-              </label>
+              </Label>
               <Field label="budget USD — carved from this run">
                 <Input
                   type="number"
@@ -1460,20 +1493,16 @@ function Inspector({
                 />
               </Field>
               <Field label="session">
-                <select
-                  className="w-full h-9 rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                <InspectorSelect
                   value={node.session?.continue ?? ''}
-                  onChange={(e) => set({ session: e.target.value ? { continue: e.target.value } : undefined })}
-                >
-                  <option value="">fresh session</option>
-                  {graph.nodes
-                    .filter((n) => n.type === 'agent' && n.id !== node.id)
-                    .map((n) => (
-                      <option key={n.id} value={n.id}>
-                        continue {n.name ?? n.id}
-                      </option>
-                    ))}
-                </select>
+                  onChange={(v) => set({ session: v ? { continue: v } : undefined })}
+                  options={[
+                    { value: '', label: 'fresh session' },
+                    ...graph.nodes
+                      .filter((n) => n.type === 'agent' && n.id !== node.id)
+                      .map((n) => ({ value: n.id, label: `continue ${n.name ?? n.id}` })),
+                  ]}
+                />
               </Field>
             </>
           )}
@@ -1543,18 +1572,11 @@ function Inspector({
           </Field>
           <div className="grid grid-cols-2 gap-2">
             <Field label="runner">
-              <select
-                className="w-full h-9 rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              <InspectorSelect
                 value={node.runner ?? ''}
-                onChange={(e) => set({ runner: e.target.value || undefined })}
-              >
-                <option value="">task default</option>
-                {RUNNERS.map((r) => (
-                  <option key={r} value={r}>
-                    {r}
-                  </option>
-                ))}
-              </select>
+                onChange={(v) => set({ runner: v || undefined })}
+                options={[{ value: '', label: 'task default' }, ...RUNNERS.map((r) => ({ value: r, label: r }))]}
+              />
             </Field>
             <Field label="budget USD">
               <Input
@@ -1606,17 +1628,11 @@ function Inspector({
       {node.type === 'fork' && (
         <>
           <Field label="branches — one agent each, all at once">
-            <select
-              className="w-full h-9 rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-              value={node.branches}
-              onChange={(e) => onGraphEdit((g) => setForkBranches(g, node.id, Number(e.target.value)))}
-            >
-              {[2, 3, 4].map((n) => (
-                <option key={n} value={n}>
-                  {n} agents
-                </option>
-              ))}
-            </select>
+            <InspectorSelect
+              value={String(node.branches)}
+              onChange={(v) => onGraphEdit((g) => setForkBranches(g, node.id, Number(v)))}
+              options={[2, 3, 4].map((n) => ({ value: String(n), label: `${n} agents` }))}
+            />
           </Field>
           <p className="text-xs text-pretty text-muted-foreground">
             Each branch is the agent it is wired to: set its prompt, runner and budget there. They run as subtasks in
@@ -1627,14 +1643,14 @@ function Inspector({
 
       {node.type === 'join' && (
         <Field label="wait for">
-          <select
-            className="w-full h-9 rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          <InspectorSelect
             value={node.wait}
-            onChange={(e) => set({ wait: e.target.value })}
-          >
-            <option value="all">every branch (done only if all succeed)</option>
-            <option value="any">the first to succeed (the rest are cancelled)</option>
-          </select>
+            onChange={(v) => set({ wait: v })}
+            options={[
+              { value: 'all', label: 'every branch (done only if all succeed)' },
+              { value: 'any', label: 'the first to succeed (the rest are cancelled)' },
+            ]}
+          />
         </Field>
       )}
 
@@ -1662,10 +1678,10 @@ function Inspector({
 
       {node.type === 'github.pr-update' && (
         <>
-          <label className="flex items-center gap-2">
-            <input type="checkbox" className="size-4 accent-foreground" checked={node.ready ?? false} onChange={(e) => set({ ready: e.target.checked || undefined })} />
+          <Label className="text-[13px] leading-normal font-normal">
+            <Checkbox checked={node.ready ?? false} onCheckedChange={(checked) => set({ ready: checked === true || undefined })} />
             <span>mark ready for review</span>
-          </label>
+          </Label>
           <ListField label="add labels — comma-separated" value={node.addLabels} onChange={(addLabels) => set({ addLabels })} />
           <ListField label="request reviewers — comma-separated logins" value={node.reviewers} onChange={(reviewers) => set({ reviewers })} />
         </>
@@ -1706,10 +1722,14 @@ function Inspector({
 
       {node.type === 'end' && (
         <Field label="run status">
-          <select className="w-full h-9 rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" value={node.status} onChange={(e) => set({ status: e.target.value })}>
-            <option value="success">success</option>
-            <option value="failed">failed</option>
-          </select>
+          <InspectorSelect
+            value={node.status}
+            onChange={(v) => set({ status: v })}
+            options={[
+              { value: 'success', label: 'success' },
+              { value: 'failed', label: 'failed' },
+            ]}
+          />
         </Field>
       )}
 

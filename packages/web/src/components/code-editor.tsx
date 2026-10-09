@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { canonicalLang, highlight, highlightSync, type SynToken } from '@/lib/highlighter'
 import { cn } from '@/lib/utils'
+import { Textarea } from '@/components/ui/textarea'
+import { bareField } from '@/components/bare-control'
 
 /**
  * A raw, syntax-highlighted text editor: a transparent-text `<textarea>` over a
@@ -98,7 +100,7 @@ export function CodeEditor({ value, onChange, language, readOnly, className, ...
           </span>
         ))}
       </pre>
-      <textarea
+      <Textarea
         ref={taRef}
         data-slot="code-editor-input"
         value={value}
@@ -111,8 +113,11 @@ export function CodeEditor({ value, onChange, language, readOnly, className, ...
         autoComplete="off"
         wrap="off"
         className={cn(
+          bareField,
           SURFACE,
-          'relative block resize-none overflow-auto bg-transparent text-transparent caret-foreground outline-none',
+          // `md:text-xs` restates SURFACE's size past the primitive's own `md:text-sm`: the caret
+          // only lands on its glyph while both layers share exact metrics.
+          'relative block field-sizing-fixed resize-none md:text-xs overflow-auto bg-transparent text-transparent caret-foreground outline-none',
           'selection:bg-primary/30 focus-visible:ring-0',
           readOnly && 'cursor-default',
         )}

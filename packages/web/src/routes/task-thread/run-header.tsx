@@ -568,14 +568,14 @@ function EditableTitle({ run }: { run: ApiRun }) {
       <h1 className="min-w-0 truncate text-lg leading-7 font-semibold text-foreground" title={run.task}>
         {title}
       </h1>
-      <button
+      <Button
         type="button"
         aria-label="Rename task"
         onClick={editor.begin}
-        className="shrink-0 rounded-sm p-1 text-soft-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+        variant="ghost" size="icon-xs" className="size-[22px] text-soft-foreground opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-ring/50"
       >
         <PencilIcon className="size-3.5" aria-hidden="true" />
-      </button>
+      </Button>
     </span>
   )
 }
@@ -622,10 +622,10 @@ function CopyBranchChip({ branch }: { branch: string }) {
           }}
         >
           <TooltipTrigger asChild>
-            <button
+            <Button
               type="button"
               data-slot="branch-chip"
-              className="inline-flex max-w-56 cursor-copy items-center gap-1 rounded-sm px-1 py-0.5 font-mono text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              variant="ghost" size="xs" className="h-auto max-w-56 shrink cursor-copy justify-start px-1 py-0.5 font-mono font-normal focus-visible:ring-ring/50"
               aria-label={`Copy branch name ${branch}`}
               onClick={copy}
             >
@@ -634,7 +634,7 @@ function CopyBranchChip({ branch }: { branch: string }) {
               <span className="sr-only" role="status">
                 {copied ? 'Branch name copied' : ''}
               </span>
-            </button>
+            </Button>
           </TooltipTrigger>
           <TooltipContent>{copied ? 'Copied' : 'Copy branch name'}</TooltipContent>
       </Tooltip>

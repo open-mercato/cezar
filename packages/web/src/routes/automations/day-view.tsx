@@ -91,12 +91,13 @@ export function DayView({ data }: { data: AutomationsResponse }) {
       <section data-slot="agenda" className="min-w-0">
         <h2 className="px-2 pb-2 text-[15px] font-semibold">Agenda</h2>
         {polls.map((automation) => (
-          <button
+          <Button
             key={automation.id}
             type="button"
+            variant="ghost"
             data-slot="agenda-poll"
             onClick={() => navigate(`/automations/${encodeURIComponent(automation.id)}`)}
-            className="grid w-full cursor-pointer grid-cols-[44px_1fr] gap-2.5 rounded-lg px-2 py-2 text-left hover:bg-muted/60"
+            className="grid h-auto w-full cursor-pointer grid-cols-[44px_1fr] items-start justify-normal gap-2.5 rounded-lg px-2 py-2 text-left font-normal whitespace-normal text-foreground hover:bg-muted/60 active:translate-y-0"
           >
             <span className="pt-px text-xs text-muted-foreground">Poll</span>
             <span className="min-w-0">
@@ -108,19 +109,20 @@ export function DayView({ data }: { data: AutomationsResponse }) {
                 {triggerLabel(automation)} · continuous
               </span>
             </span>
-          </button>
+          </Button>
         ))}
         {events.map(({ occurrence }) => {
           const past = occurrence.at < now
           const { automation } = occurrence
           return (
-            <button
+            <Button
               key={`${automation.id}-${occurrence.at}`}
               type="button"
+              variant="ghost"
               data-slot="agenda-row"
               data-past={past ? 'true' : 'false'}
               onClick={() => navigate(`/automations/${encodeURIComponent(automation.id)}`)}
-              className="grid w-full cursor-pointer grid-cols-[44px_1fr] gap-2.5 rounded-lg px-2 py-2 text-left hover:bg-muted/60"
+              className="grid h-auto w-full cursor-pointer grid-cols-[44px_1fr] items-start justify-normal gap-2.5 rounded-lg px-2 py-2 text-left font-normal whitespace-normal text-foreground hover:bg-muted/60 active:translate-y-0"
             >
               <span className={cn('pt-px text-[13px] font-medium tabular-nums', past ? 'text-muted-foreground' : 'text-foreground')}>
                 {hm(occurrence.parts.hour, occurrence.parts.minute)}
@@ -134,7 +136,7 @@ export function DayView({ data }: { data: AutomationsResponse }) {
                   {automation.task.prompt}
                 </span>
               </span>
-            </button>
+            </Button>
           )
         })}
         {events.length === 0 ? (

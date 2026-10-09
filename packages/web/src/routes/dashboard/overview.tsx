@@ -1,6 +1,6 @@
 import { useSheetState, useSheetPosition, newSheetSelection, useSheetTrigger } from './sheet-state'
 import { useDashboardTruth } from '@/api/dashboard-truth'
-import { InfoHint, MetricContent, metricSurface, metricTones, Notice, ReportNote, tableHead, tableRow, WidgetEmpty, WidgetSkeleton, widgetHeader, widgetHeading, widgetMeta } from './presentation'
+import { InfoHint, MetricContent, metricSurface, metricTones, Notice, ReportNote, tableBody, tableCell, tableHead, tableHeader, tableHeaderRow, tableRow, WidgetEmpty, WidgetSkeleton, widgetHeader, widgetHeading, widgetMeta } from './presentation'
 import { formatHours as hours } from './format'
 import { CircleHelp, Activity, CheckCheck, CircleAlert, ChevronRight, FolderOpen, Inbox } from 'lucide-react'
 import { useDashboardLive } from '@/api/dashboard-live'
@@ -10,6 +10,7 @@ import type { DashboardOverview, DashboardOverviewGroup } from '@open-mercato/ce
 import { useDashboardOverview } from '@/api/dashboard-overview'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import {
@@ -153,16 +154,22 @@ export function Overview({
                       ? 'danger'
                       : 'neutral'
               return (
-                <button
+                <Button
                   key={group}
                   type="button"
+                  variant="outline"
                   data-outcome-trigger
                   data-export-keep
                   className={cn(
+                    'h-auto items-stretch justify-start gap-0 border-border font-normal whitespace-normal active:translate-y-0',
                     metricSurface,
                     metricTones[tone],
                     'cursor-pointer hover:shadow-sm',
-                    tone === 'neutral' && 'hover:border-foreground/15',
+                    tone === 'neutral'
+                      ? 'hover:border-foreground/15 hover:bg-card'
+                      : tone === 'violet'
+                        ? 'hover:bg-violet/[0.07]'
+                        : 'hover:bg-danger/[0.06]',
                   )}
                   onClick={(event) => {
                     if (onCurrent && (group === 'running' || group === 'needs-you'))
@@ -203,7 +210,7 @@ export function Overview({
                       </span>
                     </span>
                   </MetricContent>
-                </button>
+                </Button>
               )
             })}
           </div>
@@ -272,29 +279,29 @@ export function Overview({
           aria-label="Project outcomes"
           tabIndex={0}
         >
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr>
+          <Table className="text-left">
+            <TableHeader className={tableHeader}>
+              <TableRow className={tableHeaderRow}>
                 {['Project', 'Needs you', 'Running', 'Completed', 'Failed', 'Median cycle'].map(
                   (label) => (
-                    <th
+                    <TableHead
                       key={label}
                       className={`${tableHead} ${label === 'Project' ? '' : 'text-right'}`}
                     >
                       {label}
-                    </th>
+                    </TableHead>
                   ),
                 )}
-              </tr>
-            </thead>
-            <tbody>
+              </TableRow>
+            </TableHeader>
+            <TableBody className={tableBody}>
               {data.projects.map((project) => {
                 const source = data.coverage.projects.find(
                   (p) => p.projectId === project.projectId,
                 )
                 return (
-                  <tr key={project.projectId} className={tableRow}>
-                    <td className="px-3 py-2">
+                  <TableRow key={project.projectId} className={tableRow}>
+                    <TableCell className={`${tableCell} px-3 py-2`}>
                       <Link
                         className="font-medium underline-offset-4 hover:underline"
                         to={`/p/${encodeURIComponent(project.projectId)}/tasks`}
@@ -306,11 +313,11 @@ export function Overview({
                           Incomplete data
                         </span>
                       )}
-                    </td>
+                    </TableCell>
                     {(['needs-you', 'running', 'completed', 'failed'] as const).map((group) => {
                       const value = project[group === 'needs-you' ? 'needsYou' : group]
                       return (
-                        <td key={group} className="px-1 py-1 text-right">
+                        <TableCell key={group} className={`${tableCell} px-1 py-1 text-right`}>
                           <Button
                             data-export-keep
                             variant="ghost"
@@ -331,20 +338,20 @@ export function Overview({
                           >
                             {source?.state === 'unavailable' ? 'Unavailable' : value}
                           </Button>
-                        </td>
+                        </TableCell>
                       )
                     })}
-                    <td className="px-3 py-2 text-right tabular-nums">
+                    <TableCell className={`${tableCell} px-3 py-2 text-right tabular-nums`}>
                       {hours(project.medianCycleHours)}
                       <span className="block text-xs text-soft-foreground">
                         {project.timedTasks}/{project.completed} timed
                       </span>
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 )
               })}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
           {!data.projects.length && (
             <WidgetEmpty icon={FolderOpen} title="No projects to compare yet." />
           )}

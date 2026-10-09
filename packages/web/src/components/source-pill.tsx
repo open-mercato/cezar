@@ -31,6 +31,8 @@ import {
 } from '@/lib/skills'
 import { cn } from '@/lib/utils'
 import { QUICK_TASK, type TaskSource } from '@/lib/task-source'
+import { Button } from '@/components/ui/button'
+import { bareButton } from '@/components/bare-control'
 
 /**
  * The workflow/skill picker (#385's searchable cmdk dropdown, #519's tier ordering): ONE pill
@@ -120,7 +122,8 @@ export function SourcePill({
         ) : null}
         {/* Read-only "View skill" (spec §Skills) — the Settings catalog's detail component
             as a dialog. stopPropagation: viewing must not pick the source. */}
-        <button
+        <Button
+          variant="ghost"
           type="button"
           data-slot="source-skill-view"
           aria-label={`View skill ${skill.name}`}
@@ -130,10 +133,10 @@ export function SourcePill({
             event.stopPropagation()
             setPreview(skill)
           }}
-          className="ml-auto shrink-0 rounded-sm p-0.5 text-soft-foreground transition-colors hover:text-foreground"
+          className={cn(bareButton, 'ml-auto shrink-0 rounded-sm p-0.5 text-soft-foreground transition-colors hover:text-foreground')}
         >
           <EyeIcon aria-hidden="true" className="size-3.5" />
-        </button>
+        </Button>
         {selected ? <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary-strong" /> : null}
       </CommandItem>
     )
@@ -144,7 +147,8 @@ export function SourcePill({
   // pill in this row shows a resolved choice, so a filled-looking pill that nobody chose was
   // read as one that could not be changed.
   const trigger = (
-    <button
+    <Button
+      variant="ghost"
       type="button"
       data-slot="source-pill"
       data-source-kind={source?.source ?? 'none'}
@@ -164,6 +168,7 @@ export function SourcePill({
         onPick(null)
       }}
       className={cn(
+        bareButton,
         chipClass,
         source === null
           ? 'border-dashed'
@@ -176,7 +181,7 @@ export function SourcePill({
       />
       <span className="max-w-44 truncate">{!ready ? '…' : (source?.ref ?? 'Add skill')}</span>
       {chevron}
-    </button>
+    </Button>
   )
 
   return (
@@ -194,19 +199,21 @@ export function SourcePill({
         <span className="inline-flex min-w-0 items-center">
           <PopoverTrigger asChild>{trigger}</PopoverTrigger>
           {source !== null && ready ? (
-            <button
+            <Button
+              variant="ghost"
               type="button"
               data-slot="source-pill-clear"
               aria-label={`Clear the ${source.source} ${source.ref}`}
               title="Run without it"
               onClick={() => onPick(null)}
               className={cn(
+                bareButton,
                 chipClass,
                 'rounded-l-none px-1.5 text-soft-foreground hover:text-foreground',
               )}
             >
               <XIcon aria-hidden="true" className="size-3.5" />
-            </button>
+            </Button>
           ) : null}
         </span>
         <PopoverContent

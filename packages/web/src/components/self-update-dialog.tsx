@@ -23,6 +23,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { cn } from '@/lib/utils'
 
 import { DevelopmentPanel, pullOfVersion } from './self-update-development'
+import { bareButton } from '@/components/bare-control'
 
 /**
  * The dialog behind the footer's version chip (self-update PoC): which channel cezar follows,
@@ -198,7 +199,8 @@ function ChannelToggle({
         {CHANNELS.map((channel) => {
           const active = data.channel === channel.value
           return (
-            <button
+            <Button
+              variant="ghost"
               key={channel.value}
               type="button"
               role="radio"
@@ -206,12 +208,15 @@ function ChannelToggle({
               disabled={busy}
               onClick={() => !active && onChange(channel.value)}
               className={cn(
+                bareButton,
                 'flex h-7 items-center rounded-md px-3 text-[13px] font-medium transition-colors',
-                active ? 'bg-card text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground',
+                active
+                  ? 'bg-card text-foreground shadow-xs hover:bg-card hover:text-foreground'
+                  : 'text-muted-foreground hover:text-foreground',
               )}
             >
               {channel.label}
-            </button>
+            </Button>
           )
         })}
       </div>

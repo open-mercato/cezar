@@ -21,6 +21,10 @@ import { RUNNERS } from '@/routes/new-task-form'
 /** The mockup's `.chip` — defined once in `components/chip.tsx` (spec 2026-09-14-automations-redesign
  *  § Primitives) and re-exported here for the composer's existing importers. */
 import { chipChevron as chevron, chipClass } from '@/components/chip'
+import { Input } from '@/components/ui/input'
+import { bareField } from '@/components/bare-control'
+import { Button } from '@/components/ui/button'
+import { bareButton } from '@/components/bare-control'
 
 export { chevron, chipClass }
 
@@ -90,18 +94,19 @@ export function PickerPill({
     )
   }
   const trigger = (
-    <button
+    <Button
+      variant="ghost"
       type="button"
       data-slot={slot}
       aria-label={ariaLabel}
       disabled={disabled}
       title={disabled ? disabledHint : hint}
-      className={cn(chipClass, className)}
+      className={cn(bareButton, chipClass, className)}
     >
       {icon}
       <span className="min-w-0 truncate">{label}</span>
       {chevron}
-    </button>
+    </Button>
   )
   // Radix never opens a disabled trigger, but `disabled:pointer-events-none` would also kill
   // the explanatory title tooltip — so the disabled pill renders bare, in a plain span wrapper
@@ -126,7 +131,7 @@ export function PickerPill({
         {searchPlaceholder ? (
           <div className="mb-1 flex h-9 items-center gap-2 border-b border-border px-2">
             <SearchIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-            <input
+            <Input
               ref={searchRef}
               type="search"
               aria-label={searchPlaceholder}
@@ -148,7 +153,7 @@ export function PickerPill({
                   event.stopPropagation()
                 }
               }}
-              className="h-full min-w-48 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+              className={cn(bareField, 'h-full min-w-48 text-sm placeholder:text-muted-foreground')}
             />
           </div>
         ) : null}

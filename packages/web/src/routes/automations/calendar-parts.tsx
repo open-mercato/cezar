@@ -8,6 +8,7 @@ import {
 } from '@open-mercato/cezar-api-client'
 
 import { StatusDot } from '@/components/status-dot'
+import { Button } from '@/components/ui/button'
 import { hm, triggerLabel } from '@/lib/automation-format'
 import { useNavigate } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
@@ -100,16 +101,17 @@ export function EventBlock({
   const time = hm(Math.floor(minute / 60), minute % 60)
   const runAs = [automation.task.workflow, automation.task.runner].filter(Boolean).join(' · ')
   return (
-    <button
+    <Button
       type="button"
+      variant="outline"
       data-slot="event-block"
       data-automation={automation.id}
       data-enabled={automation.enabled ? 'true' : 'false'}
       title={`${automation.name} · ${time}`}
       onClick={() => navigate(`/automations/${encodeURIComponent(automation.id)}`)}
       className={cn(
-        'absolute right-1 left-1 flex cursor-pointer overflow-hidden rounded-sm border border-border/70 bg-card text-left text-xs leading-tight font-medium text-foreground shadow-xs transition-colors hover:bg-muted',
-        wide ? 'h-12 flex-col items-start gap-0.5 px-2.5 py-1.5' : 'h-6 flex-row items-center gap-1.5 px-1.5',
+        'absolute right-1 left-1 flex cursor-pointer justify-start overflow-hidden rounded-sm border-border/70 text-left text-xs leading-tight text-foreground shadow-xs transition-colors active:translate-y-0',
+        wide ? 'h-12 flex-col items-start justify-center gap-0.5 px-2.5 py-1.5' : 'h-6 flex-row items-center gap-1.5 px-1.5',
         !automation.enabled && 'opacity-50',
       )}
       style={{ top: (minute / 60) * HOUR_H + 1 + STACK_STEP * stack }}
@@ -124,7 +126,7 @@ export function EventBlock({
           {runAs ? ` · ${runAs}` : ''}
         </span>
       ) : null}
-    </button>
+    </Button>
   )
 }
 

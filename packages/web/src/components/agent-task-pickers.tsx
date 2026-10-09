@@ -7,6 +7,8 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { SkillPreviewDialog } from '@/components/skill-detail'
 import { isProjectSkill, partitionSkillsForDisplay, searchSkills, searchWorkflows, skillKeywords } from '@/lib/skills'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { bareButton } from '@/components/bare-control'
 
 /**
  * The workflow dropdown: single-select, and — legacy parity — selecting the chosen workflow
@@ -37,16 +39,17 @@ export function WorkflowPicker({
       }}
     >
       <PopoverTrigger asChild>
-        <button
+        <Button
+          variant="ghost"
           type="button"
           data-slot={`${slotPrefix}-workflow-trigger`}
           aria-label="Choose a workflow"
-          className={cn(chipClass, value && 'text-foreground')}
+          className={cn(bareButton, chipClass, value && 'text-foreground')}
         >
           <WorkflowIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />
           <span className="max-w-44 truncate">{value ?? 'workflow'}</span>
           <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
-        </button>
+        </Button>
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={8} className="w-[320px] max-w-[calc(100vw-2rem)] p-0">
         <Command label="Choose a workflow" shouldFilter={false}>
@@ -140,7 +143,8 @@ export function SkillsPicker({
         {skill.description ? (
           <span className="min-w-0 flex-1 truncate text-xs text-soft-foreground">{skill.description}</span>
         ) : null}
-        <button
+        <Button
+          variant="ghost"
           type="button"
           data-slot={`${slotPrefix}-skill-view`}
           aria-label={`View skill ${skill.name}`}
@@ -151,10 +155,10 @@ export function SkillsPicker({
             event.stopPropagation()
             setPreview(skill)
           }}
-          className="ml-auto shrink-0 rounded-sm p-0.5 text-soft-foreground transition-colors hover:text-foreground"
+          className={cn(bareButton, 'ml-auto shrink-0 rounded-sm p-0.5 text-soft-foreground transition-colors hover:text-foreground')}
         >
           <EyeIcon aria-hidden="true" className="size-3.5" />
-        </button>
+        </Button>
         {isSelected ? <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary" /> : null}
       </CommandItem>
     )
@@ -172,16 +176,17 @@ export function SkillsPicker({
         }}
       >
         <PopoverTrigger asChild>
-          <button
+          <Button
+            variant="ghost"
             type="button"
             data-slot={`${slotPrefix}-skills-trigger`}
             aria-label="Choose skills"
-            className={cn(chipClass, selected.length > 0 && 'text-foreground')}
+            className={cn(bareButton, chipClass, selected.length > 0 && 'text-foreground')}
           >
             <SparklesIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />
             skills{selected.length > 0 ? ` · ${selected.length}` : ''}
             <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
-          </button>
+          </Button>
         </PopoverTrigger>
         <PopoverContent align="start" sideOffset={8} className="w-[336px] max-w-[calc(100vw-2rem)] p-0">
           <Command label="Choose skills" shouldFilter={false}>

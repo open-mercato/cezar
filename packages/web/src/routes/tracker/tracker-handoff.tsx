@@ -17,6 +17,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
 import { MAX_CHAIN_STEPS } from '@/lib/github-task'
 import { Link } from '@/lib/project-router'
+import { Label } from '@/components/ui/label'
 import { TRACKER_TASK_LIMIT, trackerLosses, trackerRunBody, trackerTaskPrompt } from '@/lib/tracker-task'
 
 export type TrackerDraftCache = Map<string, { instruction: string; supplemental: string; acknowledgedSnapshot: string | null }>
@@ -105,10 +106,10 @@ export function TrackerHandoff({ item, workflows, skills, selection, onSelection
             <FieldLabel htmlFor="tracker-supplemental">Supplemental context</FieldLabel>
             <Textarea id="tracker-supplemental" value={supplemental} onChange={(event) => setSupplemental(event.target.value)} placeholder="Paste any missing context here…" className="min-h-20 bg-card" />
           </Field>
-          {losses.length ? <label className="flex items-start gap-2.5">
+          {losses.length ? <Label className="items-start gap-2.5 text-[length:inherit] leading-[inherit] font-normal select-auto">
             <Checkbox className="mt-0.5" checked={acknowledgeLoss} onCheckedChange={(checked) => setAcknowledgedSnapshot(checked === true ? snapshotIdentity : null)} />
             I understand the agent receives this snapshot and the supplemental context above.
-          </label> : null}
+          </Label> : null}
         </div>
       ) : null}
       <Field>
@@ -125,7 +126,7 @@ export function TrackerHandoff({ item, workflows, skills, selection, onSelection
         <EnginePills pick={engine} onChange={setEngine} accounts disabled={start.isPending || !resolved.canRun} />
         <AgentProviderGate resolved={resolved} dataSlot="tracker-provider-gate" />
       </div>
-      {validSkills.length ? <div className="flex flex-wrap gap-1.5">{validSkills.map(name => <button type="button" key={name} aria-label={`Remove skill ${name}`} onClick={() => toggleSkill(name)} className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger">{name}<XIcon aria-hidden="true" className="size-3" /></button>)}</div> : null}
+      {validSkills.length ? <div className="flex flex-wrap gap-1.5">{validSkills.map(name => <Button type="button" variant="secondary" size="xs" key={name} aria-label={`Remove skill ${name}`} onClick={() => toggleSkill(name)} className="h-auto rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] text-foreground hover:bg-danger/10 hover:text-danger">{name}<XIcon aria-hidden="true" className="size-3" /></Button>)}</div> : null}
       {workflow === null && validSkills.length >= MAX_CHAIN_STEPS ? (
         <p className={`text-xs ${skillChainOverLimit ? 'text-danger' : 'text-muted-foreground'}`}>
           Skill chains support at most {MAX_CHAIN_STEPS} skills. Remove one before selecting another.

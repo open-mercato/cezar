@@ -14,6 +14,9 @@ import { Segmented } from '@/components/segmented'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
+import { Toggle } from '@/components/ui/toggle'
+import { bareToggle } from '@/components/bare-control'
+import { bareButton } from '@/components/bare-control'
 
 /**
  * A multi-select filter pill: a chip that opens a searchable, tickable list.
@@ -76,12 +79,14 @@ export function FacetFilter({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
+        <Button
+          variant="ghost"
           type="button"
           data-slot={`facet-${slot}`}
           data-active={active ? 'true' : undefined}
           aria-label={`Filter by ${label.toLowerCase()}`}
           className={cn(
+            bareButton,
             'inline-flex h-7 items-center gap-1.5 rounded-full border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
             active && 'border-violet/40 bg-violet/10 text-foreground',
           )}
@@ -89,7 +94,7 @@ export function FacetFilter({
           <span className={cn(active && 'text-soft-foreground')}>{label}</span>
           {active ? <span className="max-w-[140px] truncate font-semibold">{summary}</span> : null}
           <ChevronDownIcon aria-hidden="true" className="size-2.5 shrink-0 text-soft-foreground" />
-        </button>
+        </Button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-64 p-0" data-testid={`facet-${slot}-menu`}>
         <Command>
@@ -135,14 +140,15 @@ export function FacetFilter({
         </Command>
         {active ? (
           <div className="border-t border-border p-1">
-            <button
+            <Button
+              variant="ghost"
               type="button"
               data-action={`facet-${slot}-clear`}
               onClick={() => onClear()}
-              className="w-full rounded-sm px-2 py-1.5 text-left text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+              className={cn(bareButton, 'w-full rounded-sm px-2 py-1.5 text-left text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground')}
             >
               Clear {label.toLowerCase()}
-            </button>
+            </Button>
           </div>
         ) : null}
       </PopoverContent>
@@ -269,18 +275,18 @@ export function ToggleChip({
   tone?: 'neutral' | 'tag'
 }) {
   return (
-    <button
-      type="button"
+    <Toggle
       data-slot={slot}
       data-selected={selected ? 'true' : undefined}
-      aria-pressed={selected}
+      pressed={selected}
       onClick={onToggle}
       className={cn(
+        bareToggle,
         'inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-colors',
         tone === 'tag'
-          ? 'border-violet/25 bg-violet/10 text-violet hover:bg-violet/20'
+          ? 'border-violet/25 bg-violet/10 text-violet hover:bg-violet/20 hover:text-violet'
           : 'border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground',
-        selected && 'border-violet bg-violet text-violet-foreground hover:bg-violet',
+        'data-[state=on]:border-violet data-[state=on]:bg-violet data-[state=on]:text-violet-foreground data-[state=on]:hover:bg-violet data-[state=on]:hover:text-violet-foreground',
       )}
     >
       {label}
@@ -289,7 +295,7 @@ export function ToggleChip({
           {count}
         </span>
       )}
-    </button>
+    </Toggle>
   )
 }
 

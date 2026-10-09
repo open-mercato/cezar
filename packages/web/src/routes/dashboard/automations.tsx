@@ -8,7 +8,7 @@ import { useNow } from '@/lib/use-now'
 import { dayTime, relativeIn } from '@/lib/automation-format'
 import { enabledAutomations, useDashboardAutomations } from './automations-data'
 import { ExportRows } from './export-rows'
-import { DisclosureChevron, disclosureSummary, Freshness, Notice, WidgetEmpty, WidgetSkeleton, widgetHeader, widgetHeading, widgetMeta } from './presentation'
+import { Disclosure, Freshness, Notice, WidgetEmpty, WidgetSkeleton, widgetHeader, widgetHeading, widgetMeta } from './presentation'
 
 export function DashboardAutomations() {
   const gate = useAutomationsGate()
@@ -153,14 +153,12 @@ export function DashboardAutomations() {
             </Button>
           )}
           {!pending && (
-            <details className="border-t border-border/70 px-5 py-3 text-[13px] text-muted-foreground">
-              <summary
-                className={`${disclosureSummary} py-1 no-hover:min-h-11`}
-                data-export-heading="Project automations"
-              >
-                <DisclosureChevron />
-                Manage automations by project
-              </summary>
+            <Disclosure
+              className="border-t border-border/70 px-5 py-3 text-[13px] text-muted-foreground"
+              summaryClassName="py-1 no-hover:min-h-11"
+              exportHeading="Project automations"
+              summary="Manage automations by project"
+            >
               {query.data?.map((p) => (
                 <Link
                   key={p.id}
@@ -170,7 +168,7 @@ export function DashboardAutomations() {
                   {p.name}
                 </Link>
               ))}
-            </details>
+            </Disclosure>
           )}
         </>
       )}

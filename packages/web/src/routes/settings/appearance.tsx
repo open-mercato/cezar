@@ -320,7 +320,9 @@ function BrandingFields() {
             </p>
             <p className="text-xs text-muted-foreground">Choose an image to preview it before saving.</p>
           </div>
-          <input
+          {/* Still a file input, and still hidden: the browser's file picker can only be opened
+              by one. "Choose logo" below is the visible control that clicks it. */}
+          <Input
             ref={logoInput}
             data-slot="branding-logo"
             aria-label="Upload logo"

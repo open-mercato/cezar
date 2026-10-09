@@ -269,18 +269,20 @@ export function HandToAgent({
       {validSkills.length > 0 ? (
         <div data-slot="gh-skill-chips" className="flex flex-wrap gap-1.5">
           {validSkills.map((name) => (
-            <button
+            <Button
               key={name}
               type="button"
+              variant="secondary"
+              size="xs"
               data-slot="gh-skill-chip"
               data-skill={name}
               onClick={() => toggleSkill(name)}
               title="Remove this skill"
-              className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger"
+              className="h-auto rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] text-foreground hover:bg-danger/10 hover:text-danger"
             >
               {name}
               <XIcon aria-hidden="true" className="size-3" />
-            </button>
+            </Button>
           ))}
         </div>
       ) : null}

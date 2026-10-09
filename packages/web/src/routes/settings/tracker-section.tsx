@@ -25,6 +25,7 @@ import {
   SettingsNote,
   SettingsPane,
 } from './settings-field'
+import { Toggle } from '@/components/ui/toggle'
 import { toast } from '@/components/ui/toaster'
 
 export function TrackerSection() {
@@ -305,19 +306,16 @@ export function TrackerSection() {
               {candidates.isError ? <CandidateFailure reason={candidates.error.message} generation={candidates.errorUpdatedAt} retry={() => void candidates.refetch()} /> : null}
               {candidateFailure && !candidateFailure.available ? <CandidateFailure reason={candidateFailure.reason} generation={candidates.dataUpdatedAt} retryAfterSeconds={candidateFailure.code === 'rate_limited' ? candidateFailure.retryAfterSeconds : undefined} retry={() => void candidates.refetch()} /> : null}
               {options.map((candidate) => (
-                <button
+                <Toggle
                   key={candidate.id}
-                  type="button"
-                  aria-pressed={selected?.id === candidate.id}
-                  className={cn(
-                    'flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors',
-                    selected?.id === candidate.id ? 'bg-muted font-medium text-foreground' : 'text-foreground hover:bg-muted/60',
-                  )}
-                  onClick={() => setSelected(candidate)}
+                  pressed={selected?.id === candidate.id}
+                  // A pick, not an on/off switch: pressing the chosen row again keeps it chosen.
+                  onPressedChange={() => setSelected(candidate)}
+                  className="flex h-auto w-full justify-between gap-2 px-3 py-2 text-left text-sm font-normal whitespace-normal text-foreground hover:bg-muted/60 hover:text-foreground data-[state=on]:bg-muted data-[state=on]:font-medium data-[state=on]:text-foreground"
                 >
                   {candidate.name}
                   {selected?.id === candidate.id ? <CheckIcon aria-hidden="true" className="size-4" /> : null}
-                </button>
+                </Toggle>
               ))}
               {!candidates.isPending && !candidates.isError && !candidateFailure && options.length === 0 ? <p className="py-3 text-sm text-muted-foreground">No projects or teams match.</p> : null}
               {candidates.hasNextPage ? (

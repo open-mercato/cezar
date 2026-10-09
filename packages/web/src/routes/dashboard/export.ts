@@ -90,10 +90,19 @@ function sanitizeModule(source: HTMLElement) {
       document.createTextNode(': ' + (selected?.selectedOptions[0]?.textContent ?? '')),
     )
   })
+  // A cockpit Select has no <select>: its trigger carries the chosen label instead.
+  node.querySelectorAll<HTMLElement>('[data-export-filter]').forEach((el) => {
+    el.replaceWith(document.createTextNode(': ' + el.dataset.exportFilter))
+  })
   node
     .querySelectorAll('[data-export-row],[data-dashboard-row]')
     .forEach((el) => el.classList.add('report-row'))
-  node.querySelectorAll('summary').forEach((el) => {
+  // A Collapsible reads as <details> did: trigger → heading, content → inline. ui/table's
+  // scroll container is unwrapped too, so the report holds the bare table.
+  node
+    .querySelectorAll('[data-slot="collapsible-content"],[data-slot="table-container"]')
+    .forEach((el) => el.replaceWith(...el.childNodes))
+  node.querySelectorAll('summary,[data-slot="collapsible-trigger"]').forEach((el) => {
     const heading = document.createElement('h3')
     heading.textContent = el.getAttribute('data-export-heading') || el.textContent
     el.replaceWith(heading)
@@ -143,10 +152,16 @@ export function collectDashboardExport(
       .filter(Boolean),
     modules: [...root.querySelectorAll<HTMLElement>('[data-dashboard-module]')].map(
       (module) => {
-        const filters = [...module.querySelectorAll('select')]
+        const filters = [
+          ...module.querySelectorAll<HTMLElement>('select,[data-export-filter]'),
+        ]
           .map(
             (select) =>
-              `${select.closest('label')?.childNodes[0]?.textContent?.trim() ?? 'Filter'}: ${select.selectedOptions[0]?.textContent}`,
+              `${select.closest('label')?.childNodes[0]?.textContent?.trim() ?? 'Filter'}: ${
+                select instanceof HTMLSelectElement
+                  ? select.selectedOptions[0]?.textContent
+                  : select.dataset.exportFilter
+              }`,
           )
           .concat(
             [...module.querySelectorAll<HTMLElement>('[data-export-context]')].map(

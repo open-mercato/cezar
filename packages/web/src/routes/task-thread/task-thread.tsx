@@ -545,18 +545,18 @@ function HistoryBoundary({
       aria-busy={loading}
       className="flex min-h-8 items-center justify-center text-xs text-muted-foreground"
     >
-      <button
+      <Button
         type="button"
         onClick={onLoad}
         disabled={loading}
-        className="rounded-md px-3 py-1.5 font-medium hover:bg-muted disabled:cursor-wait"
+        variant="ghost" size="xs" className="h-auto rounded-md px-3 py-1.5 hover:text-muted-foreground disabled:pointer-events-auto disabled:cursor-wait disabled:opacity-100"
       >
         {loading ?
           'Loading 100 earlier items…'
         : error ?
           'Couldn’t load earlier items · Retry'
         : 'Load 100 earlier items'}
-      </button>
+      </Button>
       <span className="sr-only" aria-live="polite">
         {loading ? 'Loading earlier session history' : error ? error : ''}
       </span>

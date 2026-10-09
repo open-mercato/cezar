@@ -11,6 +11,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Button } from '@/components/ui/button'
+import { bareButton } from '@/components/bare-control'
+import { cn } from '@/lib/utils'
 
 /**
  * The sidebar footer's Tools dropdown (spec, "App shell & navigation" footer): one compact
@@ -87,16 +90,17 @@ export function ToolsMenu({ health }: { health: HealthResponse | undefined }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
+        <Button
+          variant="ghost"
           type="button"
           data-slot="tools-menu-trigger"
           title={toolsTooltip(health)}
-          className="flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[13px] text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/40"
+          className={cn(bareButton, 'flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[13px] text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/40')}
         >
           <StatusDot tone={blocker ? 'pending' : 'success'} />
           Tools
           <ChevronDownIcon className="size-[11px]" aria-hidden="true" />
-        </button>
+        </Button>
       </DropdownMenuTrigger>
 
       {/* Anchored above the trigger — the trigger sits in the shell's bottom edge. */}

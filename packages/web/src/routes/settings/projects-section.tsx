@@ -602,18 +602,20 @@ export function ProjectTagsEditor({
           className="inline-flex h-6 max-w-full items-center gap-0.5 rounded-full bg-muted pr-1 pl-2 text-xs font-medium whitespace-nowrap text-foreground"
         >
           {tag}
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon-xs"
             data-action="project-tag-remove"
             // Names the project as well as the tag: in a table of rows that all offer a bare
             // "\u00d7", the row context a sighted reader has is not read out with the control.
             aria-label={`Remove tag ${tag} from ${project.name}`}
             disabled={update.isPending}
             onClick={() => remove(tag)}
-            className="rounded-full p-0.5 text-muted-foreground hover:bg-border hover:text-foreground disabled:opacity-50"
+            className="size-4 rounded-full hover:bg-border"
           >
             <XIcon className="size-3" aria-hidden="true" />
-          </button>
+          </Button>
         </span>
       ))}
       {/* A Radix popover rather than an absolutely-positioned div: the registry table sits inside
@@ -621,7 +623,7 @@ export function ProjectTagsEditor({
           escapes that box; the input stays the anchor and keeps focus throughout. */}
       <Popover open={listOpen} onOpenChange={setOpen}>
         <PopoverAnchor asChild>
-          <input
+          <Input
             ref={inputRef}
             type="text"
             data-slot="project-tag-input"
@@ -694,7 +696,7 @@ export function ProjectTagsEditor({
                 if (last !== undefined) remove(last)
               }
             }}
-            className="h-6 w-16 min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1.5 text-xs outline-none placeholder:text-soft-foreground hover:border-input focus-visible:border-ring focus-visible:bg-card focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+            className="h-6 w-16 flex-1 border-transparent bg-transparent px-1.5 py-0 text-xs shadow-none hover:border-input focus-visible:bg-card md:text-xs dark:bg-transparent dark:focus-visible:bg-card"
           />
         </PopoverAnchor>
         <PopoverContent
@@ -726,9 +728,10 @@ export function ProjectTagsEditor({
             Tags used in this workspace
           </p>
           {suggestions.map((tag, index) => (
-            <button
+            <Button
               key={tag}
               type="button"
+              variant="ghost"
               id={`${listId}-${index}`}
               role="option"
               aria-selected={index === highlight}
@@ -742,12 +745,12 @@ export function ProjectTagsEditor({
               }}
               onMouseEnter={() => setHighlight(index)}
               className={cn(
-                'flex w-full items-center rounded-sm px-2 py-1.5 text-left text-[13px] text-foreground',
-                index === highlight && 'bg-muted',
+                'flex h-auto w-full justify-start rounded-sm px-2 py-1.5 text-left text-[13px] font-normal text-foreground hover:bg-transparent active:translate-y-0',
+                index === highlight && 'bg-muted hover:bg-muted',
               )}
             >
               {tag}
-            </button>
+            </Button>
           ))}
         </PopoverContent>
       </Popover>

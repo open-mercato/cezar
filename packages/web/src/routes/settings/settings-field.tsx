@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
 
 /**
@@ -99,7 +100,7 @@ export function SettingsField({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-8">
         <div className="min-w-0 flex-1 space-y-1">
           <FieldTitle className="text-[13.5px]">
-            {htmlFor ? <label htmlFor={htmlFor}>{title}</label> : <h3>{title}</h3>}
+            {htmlFor ? <Label htmlFor={htmlFor} className="inline text-[length:inherit] leading-[inherit] font-[inherit] select-auto">{title}</Label> : <h3>{title}</h3>}
           </FieldTitle>
           {hint ? (
             <FieldDescription className="max-w-prose text-[13px] text-pretty">{hint}</FieldDescription>

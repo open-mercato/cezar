@@ -11,6 +11,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { useHealth } from '@/api/queries'
 import { CenteredState } from '@/components/centered-state'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 
 import {
@@ -223,10 +226,14 @@ export function BrowserView({
 
   return (
     <div data-slot="browser-view" className="flex h-full min-h-0 flex-col">
-      <div
-        role="tablist"
+      <Tabs
+        value={String(active)}
+        onValueChange={(value) => onChange({ ...state, active: Number(value) })}
+        className="shrink-0 gap-0"
+      >
+      <TabsList
         aria-label="Browser tabs"
-        className="flex h-9 shrink-0 items-center gap-0.5 overflow-x-auto px-3"
+        className="flex w-full justify-start gap-0.5 overflow-x-auto rounded-none bg-transparent px-3 py-0"
       >
         {tabs.map((tab, index) => (
           <div
@@ -238,41 +245,48 @@ export function BrowserView({
               index === active ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground',
             )}
           >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={index === active}
-              onClick={() => onChange({ ...state, active: index })}
+            {/* Radix selects on pointer-down and on arrow-key focus (`onValueChange` above);
+                `onClick` stays for a synthetic click and skips the tab that is already showing. */}
+            <TabsTrigger
+              value={String(index)}
+              onClick={() => {
+                if (index !== active) onChange({ ...state, active: index })
+              }}
               title={tab || 'New tab'}
-              className="max-w-32 truncate outline-none focus-visible:underline"
+              className="inline-block h-auto max-w-32 flex-none truncate rounded-none border-0 p-0 text-xs font-medium text-inherit hover:text-inherit focus-visible:underline focus-visible:ring-0 focus-visible:outline-0 data-[state=active]:bg-transparent data-[state=active]:font-medium data-[state=active]:text-inherit group-data-[variant=default]/tabs-list:data-[state=active]:shadow-none"
             >
               {tabLabel(tab)}
-            </button>
-            <button
+            </TabsTrigger>
+            <Button
               type="button"
+              variant="ghost"
+              size="icon-xs"
               aria-label={`Close tab ${tabLabel(tab)}`}
               onClick={() => closeTab(index)}
               className={cn(
-                'ml-1 grid size-4 shrink-0 place-items-center rounded opacity-0 transition-opacity hover:bg-background focus-visible:opacity-100 group-hover:opacity-100',
+                'ml-1 size-4 rounded text-inherit opacity-0 transition-opacity hover:bg-background hover:text-inherit focus-visible:opacity-100 group-hover:opacity-100',
                 index === active && 'opacity-60',
               )}
             >
               <XIcon aria-hidden="true" className="size-3" />
-            </button>
+            </Button>
           </div>
         ))}
         {tabs.length < MAX_BROWSER_TABS ? (
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon-xs"
             aria-label="New tab"
             title="New tab"
             onClick={addTab}
-            className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="rounded"
           >
             <PlusIcon aria-hidden="true" className="size-3.5" />
-          </button>
+          </Button>
         ) : null}
-      </div>
+      </TabsList>
+      </Tabs>
 
       <div className="flex shrink-0 items-center gap-1 border-b border-border/70 px-3 pb-2">
         {/* Back and Forward walk this view's OWN per-tab stack — see `navByTab`. They can
@@ -305,13 +319,13 @@ export function BrowserView({
             commit(draft)
           }}
         >
-          <input
+          <Input
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             placeholder="Enter an address, e.g. http://localhost:3000"
             aria-label="Address"
             spellCheck={false}
-            className="h-8 w-full rounded-md border border-input bg-card px-3 text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/30"
+            className="h-8 text-[13px] focus-visible:ring-ring/30 md:text-[13px] dark:bg-card"
           />
         </form>
       </div>
@@ -387,16 +401,18 @@ function ToolbarButton({
   disabled?: boolean
 }) {
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
+      size="icon-sm"
       aria-label={label}
       title={label}
       onClick={onClick}
       disabled={disabled}
-      className="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+      className="disabled:opacity-40"
     >
       {icon}
-    </button>
+    </Button>
   )
 }
 

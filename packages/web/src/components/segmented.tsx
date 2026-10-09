@@ -1,6 +1,8 @@
 import * as React from 'react'
 
 import { cn } from '@/lib/utils'
+import { Toggle } from '@/components/ui/toggle'
+import { bareToggle } from '@/components/bare-control'
 
 /**
  * The mockup's segmented control (spec 2026-09-14-automations-redesign § Primitives): one row of
@@ -57,28 +59,28 @@ export function Segmented<T extends string>({
       {options.map((option) => {
         const isActive = option.value === value
         return (
-          <button
+          <Toggle
             key={option.value}
-            type="button"
             data-value={option.value}
             // These re-slice one thing in place, they do not switch panels — `aria-pressed` is
             // the honest reading of a toggle, and of one that can be released.
-            aria-pressed={isActive}
+            pressed={isActive}
             onClick={() => {
               if (isActive && !allowRelease) return
               onChange(option.value)
             }}
             className={cn(
+              bareToggle,
               'flex h-full items-center justify-center gap-1.5 rounded-md px-3 text-[13px] font-medium whitespace-nowrap text-muted-foreground transition-[color,box-shadow,background-color] outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50',
               full && 'flex-1',
-              isActive && 'bg-card text-foreground shadow-xs',
+              'data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs data-[state=on]:hover:bg-card',
             )}
           >
             {option.label}
             {option.count !== undefined ? (
               <small className="text-xs font-normal tabular-nums text-muted-foreground">{option.count}</small>
             ) : null}
-          </button>
+          </Toggle>
         )
       })}
     </div>

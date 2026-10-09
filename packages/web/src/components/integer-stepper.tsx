@@ -2,6 +2,10 @@ import { ChevronDownIcon, ChevronUpIcon } from 'lucide-react'
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
 
 import { cn } from '@/lib/utils'
+import { Input } from '@/components/ui/input'
+import { bareField } from '@/components/bare-control'
+import { Button } from '@/components/ui/button'
+import { bareButton } from '@/components/bare-control'
 
 /**
  * A whole-number input with up/down arrows — the settings control for small integer limits
@@ -160,7 +164,7 @@ export function IntegerStepper({
           className,
         )}
       >
-        <input
+        <Input
           type="text"
           inputMode="numeric"
           role="spinbutton"
@@ -177,10 +181,11 @@ export function IntegerStepper({
           onChange={(event) => updateDraft(event.target.value)}
           onBlur={commit}
           onKeyDown={onKeyDown}
-          className="min-w-0 flex-1 bg-transparent px-3 py-1.5 text-sm outline-none placeholder:text-soft-foreground"
+          className={cn(bareField, 'w-auto min-w-0 flex-1 px-3 py-1.5 text-sm')}
         />
         <div className="flex flex-col border-l border-input">
-          <button
+          <Button
+            variant="ghost"
             type="button"
             tabIndex={-1}
             aria-label={`Increase ${ariaLabel}`}
@@ -189,11 +194,12 @@ export function IntegerStepper({
             // Keep focus in the field so the click does not blur-commit the draft first.
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => step(1)}
-            className={buttonClass}
+            className={cn(bareButton, buttonClass)}
           >
             <ChevronUpIcon className="size-3.5" />
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="ghost"
             type="button"
             tabIndex={-1}
             aria-label={`Decrease ${ariaLabel}`}
@@ -201,10 +207,10 @@ export function IntegerStepper({
             disabled={disabled || (numeric !== null && numeric <= min)}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => step(-1)}
-            className={cn(buttonClass, 'border-t border-input')}
+            className={cn(bareButton, buttonClass, 'border-t border-input')}
           >
             <ChevronDownIcon className="size-3.5" />
-          </button>
+          </Button>
         </div>
       </div>
       {invalid ? (

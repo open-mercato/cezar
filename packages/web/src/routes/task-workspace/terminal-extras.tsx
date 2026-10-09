@@ -12,6 +12,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 
 /**
@@ -92,15 +93,17 @@ export function DetectedUrlsStrip({
           {/* §7 names this control literally — "The user clicks `Otwórz w Przeglądarce`" — so the
               words are on it, not only in its tooltip. An icon alone was discoverable by hover
               and by screen reader, and invisible to everyone reading the strip. */}
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="xs"
             aria-label={`Open ${entry.url} in Browser`}
             onClick={() => setNoRoom(!onOpen(entry.url))}
-            className="flex items-center gap-1 rounded-sm px-1.5 py-0.5 font-medium text-muted-foreground hover:bg-background hover:text-foreground"
+            className="h-auto px-1.5 py-0.5 text-[length:inherit] hover:bg-background"
           >
             <ExternalLinkIcon aria-hidden="true" className="size-3" />
             <span>Open in Browser</span>
-          </button>
+          </Button>
         </span>
       ))}
       {noRoom ? (
@@ -173,7 +176,7 @@ export function CommandPicker({
             onRun(command)
           }}
         >
-          <input
+          <Input
             value={manual}
             onChange={(event) => setManual(event.target.value)}
             // Radix would treat typing as menu type-ahead and steal the keystrokes.
@@ -181,7 +184,7 @@ export function CommandPicker({
             placeholder="e.g. npm run dev"
             aria-label="Custom command"
             spellCheck={false}
-            className="h-8 w-full rounded-md border border-input bg-card px-2 font-mono text-xs outline-none focus-visible:border-ring"
+            className="h-8 px-2 font-mono text-xs shadow-none focus-visible:ring-0 md:text-xs dark:bg-card"
           />
         </form>
       </DropdownMenuContent>

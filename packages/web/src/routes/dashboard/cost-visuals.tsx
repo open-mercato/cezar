@@ -1,4 +1,5 @@
 import { MetricContent } from './presentation'
+import { Button } from '@/components/ui/button'
 import type { DashboardCostProject, DashboardCosts } from '@open-mercato/cezar-api-client'
 import { ArrowDownLeft, ArrowUpRight, DollarSign, ChevronRight } from 'lucide-react'
 import {
@@ -104,10 +105,11 @@ export function CostProjectBars({
           return (
             <Tooltip key={project.projectId}>
               <TooltipTrigger asChild>
-                <button
+                <Button
+                  variant="ghost"
                   data-export-row
                   data-export-keep
-                  className="group w-full cursor-pointer rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-50 motion-reduce:transition-none"
+                  className="group block h-auto w-full cursor-pointer rounded-lg px-3 py-2.5 text-left text-sm font-normal whitespace-normal text-foreground hover:bg-muted/60 motion-reduce:transition-none"
                   disabled={!currentProjects.some((p) => p.projectId === project.projectId)}
                   onClick={() => onSelect(project.projectId)}
                 >
@@ -142,7 +144,7 @@ export function CostProjectBars({
                     {measure?.reportedTasks ?? 0} of {project.tasks} tasks report this metric
                     {!available ? ' · No measured value' : ''}
                   </p>
-                </button>
+                </Button>
               </TooltipTrigger>
               <TooltipContent className="max-w-64">
                 <p className="font-medium">

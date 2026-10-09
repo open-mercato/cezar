@@ -5,6 +5,7 @@ import { queryKeys } from '@/api/queries'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { useGlobalSettings } from '@/components/global-settings'
 import { StatusDot } from '@/components/status-dot'
+import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 
 /**
@@ -64,24 +65,24 @@ export function AutoResumeHint({ run }: { run: ApiRun }) {
           {label}
         </time>
       </span>
-      <button
+      <Button
         type="button"
         data-action="auto-resume-cancel"
         disabled={cancel.isPending}
         onClick={() => cancel.mutate()}
-        className="font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground disabled:opacity-50"
+        variant="link" className="h-auto rounded-none p-0 text-xs underline decoration-border underline-offset-2 hover:decoration-foreground"
       >
         Don’t resume
-      </button>
+      </Button>
       {/* Global settings are a dialog, so this opens it in place — the task stays on screen. */}
-      <button
+      <Button
         type="button"
         data-slot="auto-resume-settings-link"
         onClick={() => globalSettings.open('resources')}
-        className="font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
+        variant="link" className="h-auto rounded-none p-0 text-xs underline decoration-border underline-offset-2 hover:decoration-foreground"
       >
         Auto-resume settings
-      </button>
+      </Button>
     </div>
   )
 }

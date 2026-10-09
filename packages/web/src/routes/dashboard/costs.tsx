@@ -12,6 +12,7 @@ import { useHealth } from '@/api/queries'
 import { usageMetricVisibility, type UsageMetricVisibility } from '@/lib/token-metrics'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Label } from '@/components/ui/label'
 import { deriveAttention } from '@/lib/attention'
 import { StatusDot } from '@/components/status-dot'
 import {
@@ -60,19 +61,14 @@ function SortSelect({
   visibility: UsageMetricVisibility
 }) {
   return (
-    <label className={filterLabel}>
+    <Label className={filterLabel}>
       Sort by
-      <FilterSelect
+      <FilterSelect<Sort>
         value={value}
-        onChange={(e) => onChange(e.target.value as Sort)}
-      >
-        {choices(visibility).map((sort) => (
-          <option key={sort} value={sort}>
-            {labels[sort]}
-          </option>
-        ))}
-      </FilterSelect>
-    </label>
+        onValueChange={onChange}
+        options={choices(visibility).map((sort) => ({ value: sort, label: labels[sort] }))}
+      />
+    </Label>
   )
 }
 export function DashboardUsageCosts() {
@@ -176,17 +172,18 @@ function CostPeriod({
         <h2 className={widgetHeading}>Usage &amp; cost</h2>
         <InfoHint label="How these metrics work">{definitions}</InfoHint>
       </div>
-      <label className={filterLabel}>
+      <Label className={filterLabel}>
         Tasks created
-        <FilterSelect
+        <FilterSelect<DashboardCosts['period']>
           value={period}
-          onChange={(e) => setPeriod(e.target.value as DashboardCosts['period'])}
-        >
-          <option value="all">All time</option>
-          <option value="7d">Last 7 days</option>
-          <option value="30d">Last 30 days</option>
-        </FilterSelect>
-      </label>
+          onValueChange={setPeriod}
+          options={[
+            { value: 'all', label: 'All time' },
+            { value: '7d', label: 'Last 7 days' },
+            { value: '30d', label: 'Last 30 days' },
+          ]}
+        />
+      </Label>
     </div>
     <div className={widgetBody}>
       {data && (

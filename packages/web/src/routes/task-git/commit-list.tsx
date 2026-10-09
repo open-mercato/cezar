@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import { Virtualizer } from 'virtua'
 
 import { Link } from '@/lib/project-router'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 /**
@@ -119,15 +120,15 @@ function CommitRow({ commit, onSelect }: { commit: CommitListItem; onSelect?: (s
     // same to a screen reader here — each row's accessible name is its own link text.
     <div className="[contain-intrinsic-block-size:auto_41px] [content-visibility:auto]">
       {onSelect ? (
-        <button
+        <Button
           type="button"
           data-slot="commit-row"
           data-sha={commit.sha}
           onClick={() => onSelect(commit.sha)}
-          className="flex w-full min-w-0 items-baseline gap-3 rounded-sm px-2 py-2.5 text-left hover:bg-muted"
+          variant="ghost" className="flex h-auto w-full min-w-0 shrink items-baseline justify-start gap-3 rounded-sm px-2 py-2.5 text-left text-[length:inherit] font-normal whitespace-normal text-inherit hover:text-inherit active:translate-y-0"
         >
           <CommitRowBody commit={commit} />
-        </button>
+        </Button>
       ) : (
       <Link
         data-slot="commit-row"

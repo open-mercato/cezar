@@ -10,7 +10,7 @@ import { deriveAttention, isNeedsYouStatus } from '@/lib/attention'
 import { taskReferences } from '@/lib/tasks-table'
 import { shortAge } from '@/lib/format'
 import { Button } from '@/components/ui/button'
-import { DisclosureChevron, disclosureSummary } from './presentation'
+import { Disclosure } from './presentation'
 export const taskKey = (row: DashboardTaskRow) => `${row.projectId}:${row.id}`
 export function TaskRow({
   row,
@@ -132,18 +132,18 @@ export function Coverage({
             : 'One project has incomplete coverage.'
           : `${unavailable.length} projects have incomplete coverage.`}
       </p>
-      <details className="mt-1.5">
-        <summary className={`${disclosureSummary} py-1 no-hover:min-h-11`}>
-          <DisclosureChevron />
-          View unavailable {unavailable.length === 1 ? 'project' : 'projects'}
-        </summary>
+      <Disclosure
+        className="mt-1.5"
+        summaryClassName="py-1 no-hover:min-h-11"
+        summary={<>View unavailable {unavailable.length === 1 ? 'project' : 'projects'}</>}
+      >
         {unavailable.map((p) => (
           <p key={p.projectId} className="pl-5 text-muted-foreground">
             {p.projectId}: {p.reason ?? p.state}
             {p.omittedRuns > 0 ? ` · ${p.omittedRuns} omitted tasks` : ''}
           </p>
         ))}
-      </details>
+      </Disclosure>
       <Button variant="outline" size="sm" onClick={retry} className="mt-2">
         Retry
       </Button>

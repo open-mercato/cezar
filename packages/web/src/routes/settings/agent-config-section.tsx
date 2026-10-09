@@ -183,15 +183,16 @@ function AgentPane({
             <ul className="mt-1.5 flex flex-col gap-0.5">
               {files.map((file) => (
                 <li key={file.id}>
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
                     data-slot="agent-config-file"
                     data-selected={file.id === selectedId}
                     aria-current={file.id === selectedId ? 'true' : undefined}
                     onClick={() => onSelect(file.id)}
                     className={cn(
-                      'flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
-                      file.id === selectedId ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+                      'flex h-auto min-h-8 w-full justify-start gap-2 px-2 py-1.5 text-left font-normal',
+                      file.id === selectedId ? 'bg-muted text-foreground' : 'hover:bg-muted/60',
                       !file.exists && file.id !== selectedId && 'text-soft-foreground',
                     )}
                   >
@@ -200,7 +201,7 @@ function AgentPane({
                     {file.seeded && <span className="shrink-0 text-[11px] text-muted-foreground">seeded</span>}
                     {file.private && <span className="shrink-0 text-[11px] text-muted-foreground">private</span>}
                     {!file.exists && <span className="shrink-0 text-[11px] text-soft-foreground">absent</span>}
-                  </button>
+                  </Button>
                 </li>
               ))}
             </ul>

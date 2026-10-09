@@ -5,7 +5,7 @@ import { useContext, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
 import { ChevronRightIcon, CoinsIcon, InboxIcon, LayoutDashboardIcon, SlidersHorizontalIcon, ZapIcon } from 'lucide-react'
 import { StatusDot } from '@/components/status-dot'
-import { DisclosureChevron, disclosureSummary, Notice, WidgetEmpty, WidgetSkeleton, widgetHeader, widgetHeading, widgetMeta } from './presentation'
+import { Disclosure, Notice, WidgetEmpty, WidgetSkeleton, widgetHeader, widgetHeading, widgetMeta } from './presentation'
 import type {
   DashboardFeed,
   DashboardGroup,
@@ -503,12 +503,13 @@ function DashboardView({ entryKey }: { entryKey: string }) {
                                 ['scheduled', 'Scheduled', query.data.counts.scheduled],
                               ] as const
                             ).map(([group, label, total]) => (
-                              <button
+                              <Button
                                 key={group}
                                 type="button"
+                                variant="ghost"
                                 data-export-keep
                                 aria-label={`${label}: ${total}`}
-                                className="group/stat cursor-pointer rounded-lg px-2 py-2.5 text-left transition-colors outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/40"
+                                className="group/stat block h-auto cursor-pointer rounded-lg px-2 py-2.5 text-left font-normal whitespace-normal text-foreground"
                                 onClick={(e) => open(group, e.currentTarget)}
                               >
                                 <span className="flex items-center justify-between text-[13px] text-muted-foreground">
@@ -522,18 +523,16 @@ function DashboardView({ entryKey }: { entryKey: string }) {
                                 <span className="mt-2 block text-[28px] leading-none font-semibold tracking-tight tabular-nums">
                                   {total}
                                 </span>
-                              </button>
+                              </Button>
                             ))}
                           </div>
-                          <details
+                          <Disclosure
                             open={technicalOpen}
-                            onToggle={(event) => setTechnicalOpen(event.currentTarget.open)}
+                            onOpenChange={setTechnicalOpen}
                             className="px-5 pt-1 pb-4 text-xs text-muted-foreground"
+                            summaryClassName="py-1.5 no-hover:min-h-11"
+                            summary="Technical details"
                           >
-                            <summary className={`${disclosureSummary} py-1.5 no-hover:min-h-11`}>
-                              <DisclosureChevron />
-                              Technical details
-                            </summary>
                             <div className="flex flex-col gap-1 pt-1 pl-5">
                               <span>
                                 {query.data.counts.monitoring} monitoring (included in Running)
@@ -543,7 +542,7 @@ function DashboardView({ entryKey }: { entryKey: string }) {
                                 <FleetTelemetry running={query.data.counts.running} />
                               )}
                             </div>
-                          </details>
+                          </Disclosure>
                         </Card>
                       ) : tiles.fleet && query.isPending ? (
                         <ModuleSkeleton title="Queue & scheduling" />
