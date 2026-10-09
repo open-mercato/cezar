@@ -1,6 +1,7 @@
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
+  ChevronDownIcon,
   Columns2Icon,
   GripVerticalIcon,
   LayoutGridIcon,
@@ -263,7 +264,7 @@ export function WorkspaceColumns({
               column={column}
               count={columns.length}
               actions={actions}
-              menu={columnMenu(index, column)}
+              menu={columns.length > 1 ? columnMenu(index, column) : null}
               onSplit={editable ? () => setPendingAt(index + 1) : undefined}
               canSplit={canSplit}
               trailing={index === columns.length - 1 ? <FullViewExit className="ml-1.5" /> : null}
@@ -325,6 +326,10 @@ function ColumnHeader({
 }) {
   const [dropTarget, setDropTarget] = useState(false)
   const ViewIcon = VIEW_ICONS[column.view]
+  const startDrag = (event: React.DragEvent) => {
+    event.dataTransfer.setData('text/cez-column', String(index))
+    event.dataTransfer.effectAllowed = 'move'
+  }
 
   return (
     <header
@@ -354,29 +359,46 @@ function ColumnHeader({
       )}
     >
       {/*
-        THE TITLE is the drag grip, not the whole header.
-        With `draggable` on the header, an HTML5 drag starts from the nearest draggable ancestor —
-        so a press on the menu trigger or the close X that moved even slightly began a column drag
-        instead of activating the button, which made the X unreliable on any two- or three-column
-        layout. Dropping stays on the header, so the target is still the full width.
+        The grip and the empty stretch of the bar drag the window; the buttons never do. With
+        `draggable` on the whole header, a press on a button that moved even slightly began a drag
+        instead of activating it. Dropping stays on the header, so the target is the full width.
       */}
+      {count > 1 ? (
+        <span
+          draggable
+          onDragStart={startDrag}
+          title="Drag to reorder"
+          className="-ml-2 flex h-full shrink-0 cursor-grab items-center text-soft-foreground/70 active:cursor-grabbing"
+        >
+          <GripVerticalIcon aria-hidden="true" className="size-3.5" />
+        </span>
+      ) : null}
+      {/* The window's name IS its view switcher. */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            data-action="change-view"
+            aria-label={`${viewLabel(column.view)} — change view`}
+            className="-ml-1.5 h-6 gap-1.5 px-1.5 text-xs font-medium text-muted-foreground hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground"
+          >
+            <ViewIcon aria-hidden="true" className="size-3.5 shrink-0" />
+            <span className="truncate">{viewLabel(column.view)}</span>
+            <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-48">
+          <DropdownMenuLabel>Change view</DropdownMenuLabel>
+          <ViewItems onPick={(view) => actions.setColumnView(index, view)} disabled={column.view} />
+        </DropdownMenuContent>
+      </DropdownMenu>
       <span
         draggable={count > 1}
-        onDragStart={(event) => {
-          event.dataTransfer.setData('text/cez-column', String(index))
-          event.dataTransfer.effectAllowed = 'move'
-        }}
-        className={cn(
-          'flex min-w-0 flex-1 items-center gap-1.5 text-xs font-medium text-muted-foreground',
-          count > 1 && 'cursor-grab active:cursor-grabbing',
-        )}
-      >
-        {count > 1 ? (
-          <GripVerticalIcon aria-hidden="true" className="-ml-2 size-3.5 shrink-0 text-soft-foreground/70" />
-        ) : null}
-        <ViewIcon aria-hidden="true" className="size-3.5 shrink-0" />
-        <span className="truncate">{viewLabel(column.view)}</span>
-      </span>
+        onDragStart={startDrag}
+        className={cn('h-full min-w-0 flex-1', count > 1 && 'cursor-grab active:cursor-grabbing')}
+      />
       {onSplit ? (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -455,11 +477,8 @@ function ColumnMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
-        <DropdownMenuLabel>Change view</DropdownMenuLabel>
-        <ViewItems onPick={(view) => actions.setColumnView(index, view)} disabled={column.view} />
         {count > 1 ? (
           <>
-            <DropdownMenuSeparator />
             <DropdownMenuItem disabled={index === 0} onSelect={() => actions.moveColumn(index, index - 1)}>
               <ArrowLeftIcon aria-hidden="true" />
               Move left
