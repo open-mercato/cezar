@@ -14,6 +14,7 @@ Scope: `packages/cezar/src/planner.ts` and its dedicated catalog tests. Non-goal
 Risks: prompt content changes only on catalogs over the documented threshold; ranking quality is intentionally heuristic and deterministic.
 
 ## Progress
+PR: #1345
 
 > Convention: `- [ ]` pending, `- [x]` done. Append — <commit sha> when a step lands.
 
@@ -21,3 +22,9 @@ Risks: prompt content changes only on catalogs over the documented threshold; ra
 - [x] 2. Implement bounded catalog builder
 - [x] 3. Add regression tests
 - [x] 4. Run validation, review, and report — review performed locally; GitHub self-review prohibited
+
+## Independent review and final handoff
+
+[Final independent review](https://github.com/open-mercato/cezar/pull/1345#issuecomment-6072578744) approved source head `575788b933de2617f8035d523fe99198ebecfbde` with no findings. GitHub rejected formal approval because the authenticated account authored this PR. This finalization commit changes this plan only; reviewed source is unchanged. No merge was performed.
+
+Clean local full gate passed. GitHub CI encountered the known abandoned-lock race tracked by #1117 (automation store, outside this diff); failed jobs were rerun. CI success is not assumed and remains a merge gate.
