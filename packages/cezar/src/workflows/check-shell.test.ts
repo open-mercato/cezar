@@ -29,19 +29,18 @@ describe('resolveCheckShell', () => {
     ).toBe(String.raw`C:\Program Files\Git\bin\bash.exe`);
   });
 
-  it('falls back to bare bash without attempting a second command', () => {
+  it('falls back to bare bash when Git Bash is not installed', () => {
     let probes = 0;
     expect(
       resolveCheckShell({
         platform: 'win32',
-        env: { PATH: String.raw`C:\Windows\System32` },
+        env: { PATH: String.raw`C:\Windows\System32`, ProgramFiles: String.raw`C:\Program Files` },
         fileExists: () => {
           probes += 1;
           return false;
         },
       }),
     ).toBe('bash');
-    expect(probes).toBe(0);
+    expect(probes).toBe(1);
   });
 });
-
