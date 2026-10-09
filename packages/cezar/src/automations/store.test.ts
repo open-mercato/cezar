@@ -314,3 +314,26 @@ it('keeps old tracker receipts while the definition can resume history, then exp
   store.compact();
   expect(store.receipts()).toEqual([]);
 });
+
+describe('AutomationStore — read-only data dir (zero-config degradation)', () => {
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'opens with one warning and turns every write into a no-op',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'cezar-automations-ro-'));
+      dirs.push(root);
+      const warnings: string[] = [];
+      chmodSync(root, 0o500);
+      try {
+        const store = AutomationStore.open(join(root, 'data'), { warn: (message) => warnings.push(message) });
+        expect(store.list()).toEqual([]);
+        expect(() => store.setState('a', (current) => ({ ...current, nextRunAt: '2026-09-15T00:00:00.000Z' }))).not.toThrow();
+        expect(() => store.appendLog({ automationId: 'a', revision: 1, result: 'no-match' })).not.toThrow();
+        expect(() => store.appendReceipt({ automationId: 'a', revision: 1, eventId: 'e', receiptKey: 'a:e', receiptId: 'r', status: 'reserved', observedAt: '2026-09-15T00:00:00.000Z', updatedAt: '2026-09-15T00:00:00.000Z' })).not.toThrow();
+        expect(store.acquireLease()).toBeUndefined();
+        expect(warnings).toHaveLength(1);
+      } finally {
+        chmodSync(root, 0o700);
+      }
+    },
+  );
+});
