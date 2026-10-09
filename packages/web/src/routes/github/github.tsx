@@ -395,7 +395,7 @@ export function GithubRoute({
           <p className="text-xs leading-relaxed text-soft-foreground">
             The tab needs the <span className="font-mono">gh</span> CLI, logged in (
             <span className="font-mono">gh auth login</span>), and a repo with a GitHub remote.
-            Everything else in cezar works without it.
+            Everything else in the cockpit works without it.
           </p>
         </CenteredState>
       </div>

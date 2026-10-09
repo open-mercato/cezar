@@ -516,9 +516,9 @@ describe('tasks table overview', () => {
  * A row under width contention, and the column the user can widen (#788, option C).
  *
  * Its own fixture server, like the empty case below: this is one deliberately worst-case record —
- * a long `NNN: `-prefixed title competing with a five-digit diff pair, a PR chip and the unread
- * marker, all at once — and dropping it into the shared fixture above would rewrite every
- * ordering, count and screenshot assertion in this file for one row's sake.
+ * a long `NNN: `-prefixed title competing with a five-digit diff pair and a PR chip at once —
+ * plus a dispatched chain two levels deep, and dropping them into the shared fixture above would
+ * rewrite every ordering, count and screenshot assertion in this file for a few rows' sake.
  *
  * jsdom cannot answer any of this: the whole question is what the REAL CSS does with 264px, so
  * every assertion below reads a resolved computed style or a measured rectangle.
@@ -532,6 +532,12 @@ describe('a row under width contention, in a column the user can widen', () => {
   const ROW_ID = '[data-slot="task-row"][data-run-id="wide-load"]'
   const HANDLE = '[data-slot="sidebar-resize-handle"]'
   const FULL_TITLE = '775: implementing comment threads across the whole thread view'
+  /** The dispatched chain: a root, its `review` child, and that child's `implement` child. */
+  const NESTED: { id: string; parent?: string; kind?: 'review' | 'implement' }[] = [
+    { id: 'nest-root' },
+    { id: 'nest-review', parent: 'nest-root', kind: 'review' },
+    { id: 'nest-impl', parent: 'nest-review', kind: 'implement' },
+  ]
 
   /** The `<aside>`'s resolved width in px — the number the drag is actually moving. */
   const sidebarWidth = () =>
@@ -584,8 +590,8 @@ describe('a row under width contention, in a column the user can widen', () => {
             task: 'implement comment threads',
             status: 'done',
             createdAt: ago(4 * 3_600_000),
-            // Finished and never opened, so the row also wears the unread marker — the fourth
-            // element that used to compete with the name.
+            // Finished and never opened, so the row is unread. That is now the title's weight
+            // alone; it used to be a trailing dot, a fourth element competing with the name.
             finishedAt: ago(3_600_000),
             tokensUsed: 512_000,
             diffStat: { adds: 59_514, dels: 12_160, files: 208 },
@@ -593,6 +599,21 @@ describe('a row under width contention, in a column the user can widen', () => {
             archived: false,
             steps: [],
           },
+          // A dispatched chain, two levels deep: the nested rows carry an indent AND a kind chip
+          // AND an age, which is what overflowed the 264px column before the pin swap.
+          ...NESTED.map(({ id, parent, kind }, index) => ({
+            id,
+            title: `${kind ?? 'adding'} the comment thread draft endpoint and its stale diff guard`,
+            workflow: 'default',
+            task: 'nested dispatch row',
+            status: 'done',
+            createdAt: ago(3 * 3_600_000),
+            finishedAt: ago((3 - index) * 600_000),
+            seenAt: ago(60_000),
+            ...(parent ? { dispatch: { rootRunId: NESTED[0]!.id, parentRunId: parent, kind } } : {}),
+            archived: false,
+            steps: [],
+          })),
         ],
         null,
         2
@@ -671,6 +692,61 @@ describe('a row under width contention, in a column the user can widen', () => {
     expect(measured.overflows).toBe(false)
 
     browser.screenshot(`${artifactsDir}/quick-list-width-contention-264.png`, { viewport: true })
+  })
+
+  it('fits a nested dispatched row at 264px, at rest and with the pin revealed', () => {
+    expect(sidebarWidth()).toBe(264)
+
+    /** Every nested row's painted children against the row's own box, in px past its right edge. */
+    const overflowPx = (id: string) =>
+      Number(
+        browser.evaluate(`(() => {
+          const row = document.querySelector('[data-slot="task-row"][data-run-id="${id}"]')
+          const edge = row.getBoundingClientRect().right
+          let worst = 0
+          for (const el of row.querySelectorAll('*')) {
+            const r = el.getBoundingClientRect()
+            if (r.width === 0 || getComputedStyle(el).display === 'none') continue
+            if (el.classList.contains('sr-only')) continue
+            worst = Math.max(worst, r.right - edge)
+          }
+          return worst
+        })()`)
+      )
+    const shown = (id: string, slot: string) =>
+      String(
+        browser.evaluate(`(() => {
+          const el = document.querySelector('[data-run-id="${id}"] [data-slot="${slot}"]')
+          return el ? getComputedStyle(el).display : 'absent'
+        })()`)
+      )
+
+    for (const { id, parent } of NESTED) {
+      if (!parent) continue
+      expect(
+        browser.evaluate(`document.querySelector('[data-run-id="${id}"]').getAttribute('data-depth')`)
+      ).toBe(id === 'nest-review' ? '1' : '2')
+      // At rest: the kind chip stays (it is what tells a child from a typed task), the age is the
+      // droppable metadata, and nothing paints past the row.
+      expect(shown(id, 'dispatch-kind')).not.toBe('none')
+      expect(shown(id, 'task-row-age')).toBe('none')
+      expect(overflowPx(id)).toBeLessThanOrEqual(0.5)
+
+      // Hovered: the pin takes the kind chip's slot instead of pushing the row past the column.
+      browser.hover(`[data-slot="task-row"][data-run-id="${id}"]`)
+      expect(shown(id, 'dispatch-kind')).toBe('none')
+      expect(
+        Number(
+          browser.evaluate(
+            `document.querySelector('[data-run-id="${id}"] [data-slot="pin-toggle"]').getBoundingClientRect().width`
+          )
+        )
+      ).toBeGreaterThan(0)
+      expect(overflowPx(id)).toBeLessThanOrEqual(0.5)
+    }
+
+    browser.hover(`[data-slot="task-row"][data-run-id="nest-impl"]`)
+    browser.screenshot(`${artifactsDir}/quick-list-nested-264-hover.png`, { viewport: true })
   })
 
   it('grows the name as the column grows, without ever shrinking it', () => {

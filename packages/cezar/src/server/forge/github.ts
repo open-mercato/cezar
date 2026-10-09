@@ -2577,6 +2577,61 @@ interface ExecResult {
   notFound: boolean;
 }
 
+/**
+ * Post a comment on a PR through `gh` — the graph `github.pr-comment` node (spec
+ * 2026-09-30-workflow-node-editor). Never throws: every failure is a one-line error, and
+ * `CEZ_DRY_RUN=1` answers ok without touching the network.
+ */
+/** Mark a PR ready and/or add labels and reviewers (the graph `github.pr-update` node). Never
+ *  throws; `CEZ_DRY_RUN=1` answers ok offline. */
+export async function updatePr(
+  repoRoot: string,
+  number: number,
+  changes: { ready?: boolean; addLabels?: string[]; reviewers?: string[] },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (process.env.CEZ_DRY_RUN === '1') return { ok: true };
+  const fail = (res: ExecResult, what: string) =>
+    res.notFound ? 'gh is not installed' : (res.stderr || res.stdout).trim().split('\n')[0] || `${what} failed`;
+  if (changes.ready) {
+    const res = await execTool(['pr', 'ready', String(number)], repoRoot, 'gh', 60_000);
+    if (!res.ok) return { ok: false, error: fail(res, 'gh pr ready') };
+  }
+  const edit = [
+    ...(changes.addLabels ?? []).flatMap((l) => ['--add-label', l]),
+    ...(changes.reviewers ?? []).flatMap((r) => ['--add-reviewer', r]),
+  ];
+  if (edit.length) {
+    const res = await execTool(['pr', 'edit', String(number), ...edit], repoRoot, 'gh', 60_000);
+    if (!res.ok) return { ok: false, error: fail(res, 'gh pr edit') };
+  }
+  return { ok: true };
+}
+
+/** Comment on an issue (the graph `github.issue-comment` node). Same contract as `commentOnPr`. */
+export async function commentOnIssue(
+  repoRoot: string,
+  number: number,
+  body: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (process.env.CEZ_DRY_RUN === '1') return { ok: true };
+  const res = await execTool(['issue', 'comment', String(number), '--body', body], repoRoot, 'gh', 60_000);
+  if (res.notFound) return { ok: false, error: 'gh is not installed' };
+  if (res.ok) return { ok: true };
+  return { ok: false, error: (res.stderr || res.stdout).trim().split('\n')[0] || 'gh issue comment failed' };
+}
+
+export async function commentOnPr(
+  repoRoot: string,
+  number: number,
+  body: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (process.env.CEZ_DRY_RUN === '1') return { ok: true };
+  const res = await execTool(['pr', 'comment', String(number), '--body', body], repoRoot, 'gh', 60_000);
+  if (res.notFound) return { ok: false, error: 'gh is not installed' };
+  if (res.ok) return { ok: true };
+  return { ok: false, error: (res.stderr || res.stdout).trim().split('\n')[0] || 'gh pr comment failed' };
+}
+
 function execTool(args: string[], cwd: string, bin: string, timeoutMs = 30_000): Promise<ExecResult> {
   return new Promise((resolve) => {
     execFile(

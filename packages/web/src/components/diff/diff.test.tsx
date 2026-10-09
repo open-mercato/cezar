@@ -43,6 +43,23 @@ async function renderDiff(ui: React.ReactElement, settleText = 'src/a.ts') {
 }
 
 describe('Diff facade', () => {
+  // Rows scroll UNDER a stuck file header, so it must hide them completely. A rounded header
+  // showed rows through its corners once stuck mid-card, a 50%-alpha divider let text show
+  // through, and in WKWebView (the desktop app) a sub-pixel seam above it showed one row of text
+  // that the 1px card-coloured shadow covers. The seam itself is WebKit-only and does not occur
+  // in a test browser, so these classes are the regression guard.
+  it('keeps the sticky file header fully opaque over the rows scrolling beneath it', async () => {
+    await renderDiff(<Diff files={[MODIFIED]} />)
+
+    const header = document.querySelector('[data-slot="diff-file"] > header') as HTMLElement
+    expect(header.className).toContain('sticky')
+    expect(header.className).toContain('bg-card')
+    expect(header.className).not.toMatch(/\brounded/)
+    expect(header.className).not.toContain('border-border/50')
+    expect(header.className).toContain('border-[color-mix(in_oklab,var(--border)_50%,var(--card))]')
+    expect(header.className).toContain('shadow-[0_-1px_0_var(--card)]')
+  })
+
   it('renders every file with its path, per-file ± and status badge', async () => {
     await renderDiff(<Diff files={[MODIFIED, ADDED]} />)
 

@@ -20,6 +20,8 @@ import type {
   pickVariantResponseSchema,
   planResponseSchema,
   saveWorkflowResponseSchema,
+  validateWorkflowGraphResponseSchema,
+  workflowNodeCatalogResponseSchema,
   workflowsResponseSchema,
 } from '@open-mercato/cezar-contract';
 import type { AppType } from './app-type.ts';
@@ -45,6 +47,9 @@ describe('src/contract workflows/skills/agent-config schemas match the routes ex
   type DeleteWorkflow200 = InferResponseType<(typeof client.api.v1.workflows)[':name']['$delete'], 200>;
   type ParseWorkflow200 = InferResponseType<typeof client.api.v1.workflows.parse.$post, 200>;
   type Plan200 = InferResponseType<typeof client.api.v1.plan.$post, 200>;
+  type Nodes200 = InferResponseType<typeof client.api.v1.workflows.nodes.$get, 200>;
+  type Validate200 = InferResponseType<typeof client.api.v1.workflows.validate.$post, 200>;
+  type SaveGraph201 = InferResponseType<typeof client.api.v1.workflows.graph.$post, 201>;
 
   // ---- parallel variants -----------------------------------------------------------------
   type Group200 = InferResponseType<(typeof client.api.v1.groups)[':groupId']['$get'], 200>;
@@ -69,6 +74,9 @@ describe('src/contract workflows/skills/agent-config schemas match the routes ex
     Assert<Exact<z.infer<typeof deleteWorkflowResponseSchema>, DeleteWorkflow200>>,
     Assert<Exact<z.infer<typeof parsedWorkflowSchema>, ParseWorkflow200>>,
     Assert<Exact<z.infer<typeof planResponseSchema>, Plan200>>,
+    Assert<Exact<z.infer<typeof workflowNodeCatalogResponseSchema>, Nodes200>>,
+    Assert<Exact<z.infer<typeof validateWorkflowGraphResponseSchema>, Validate200>>,
+    Assert<Exact<z.infer<typeof saveWorkflowResponseSchema>, SaveGraph201>>,
     Assert<Exact<z.infer<typeof groupResponseSchema>, Group200>>,
     Assert<Exact<z.infer<typeof pickVariantResponseSchema>, Pick200>>,
     Assert<Exact<z.infer<typeof skillSchema>[], Skills200>>,

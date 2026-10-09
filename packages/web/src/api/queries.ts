@@ -38,6 +38,8 @@ import {
   getRunCommits,
   getRepoChanges,
   getRepoCommit,
+  getRepoFile,
+  getRepoTree,
   getRun,
   getRunChanges,
   getRunDiff,
@@ -57,6 +59,7 @@ import {
   getTrackerItems,
   getUiState,
   getWorkflows,
+  getWorkflowNodes,
   getWorkspaceConfig,
   getWorkspaceUiState,
   getSkillsUpdate,
@@ -186,6 +189,9 @@ export const queryKeys = {
   get workflows() {
     return [queryScope(), 'workflows'] as const
   },
+  get workflowNodes() {
+    return [queryScope(), 'workflow-nodes'] as const
+  },
   get skills() {
     return [queryScope(), 'skills'] as const
   },
@@ -212,6 +218,12 @@ export const queryKeys = {
     return [queryScope(), 'repo', 'changes'] as const
   },
   repoCommit: (sha: string) => [queryScope(), 'repo', 'commit', sha] as const,
+  /** The Files sub-tab's path index (#1279) — also under `repo`, so a branch switch invalidates
+   *  the tree along with the diff. */
+  get repoTree() {
+    return [queryScope(), 'repo', 'tree'] as const
+  },
+  repoFile: (path: string) => [queryScope(), 'repo', 'file', path] as const,
   get uiState() {
     return [queryScope(), 'ui-state'] as const
   },
@@ -375,8 +387,7 @@ export const workspaceQueryKeys = {
    *  GUI prefs, e.g. the sidebar's per-project collapse map (step 3.3), and — since step 3.5 —
    *  appearance + notifications, which describe the user rather than a repo. */
   uiState: ['workspace', 'ui-state'] as const,
-  /** `~/.cezar/config.json`'s settings slice via `GET/PUT /api/workspace/config` (step 2.7):
-   *  the global Resources knobs and the checkout root. */
+  /** `~/.cezar/config.json`'s workspace settings slice, including instance branding. */
   config: ['workspace', 'config'] as const,
   /** Live host totals (spec `.ai/specs/2026-09-20-host-resource-telemetry.md`). One cache for
    *  both transports: local cockpits fold pushed `host` frames into it, remote ones refetch it
@@ -1171,9 +1182,19 @@ export function useTodos(enabled = true) {
   })
 }
 
-export function useWorkflows() {
+/** The graph editor's node catalog — static per server build, so it never refetches. */
+export function useWorkflowNodes() {
+  return useQuery({
+    queryKey: queryKeys.workflowNodes,
+    queryFn: ({ signal }) => getWorkflowNodes({ signal }),
+    staleTime: Infinity,
+  })
+}
+
+export function useWorkflows(opts: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: queryKeys.workflows,
+    enabled: opts.enabled ?? true,
     queryFn: ({ signal }) => getWorkflows({ signal }),
   })
 }
@@ -1261,6 +1282,44 @@ export function useRepoChanges() {
     queryKey: queryKeys.repoChanges,
     queryFn: ({ signal }) => getRepoChanges({ signal }),
     retry: false,
+  })
+}
+
+/**
+ * The repository's path index behind the Git tab's Files sub-tab (#1279). Same 409 stance as the
+ * rest of the family: "not a git repository" is an answer, not a hiccup. One read per visit feeds
+ * both the tree and the filter.
+ *
+ * `/repo/*` is deliberately NOT on the SSE stream, so there is no invalidation to ride and the
+ * query-client doctrine's "the stream says when something changed" does not cover it. This is the
+ * same hole `useRunChanges` opted out of, for the same reason and with the same two knobs: the data
+ * is a working tree an agent is actively editing, so coming back to the tab must re-read it rather
+ * than serve a snapshot from before the agent ran. `refetchOnWindowFocus` alone would not do it —
+ * the shared 5-minute `staleTime` would swallow the refetch — which is why `staleTime: 0` is here
+ * too. No polling: this fires on focus, not on a schedule.
+ */
+export function useRepoTree() {
+  return useQuery({
+    queryKey: queryKeys.repoTree,
+    queryFn: ({ signal }) => getRepoTree({ signal }),
+    retry: false,
+    refetchOnWindowFocus: true,
+    staleTime: 0,
+  })
+}
+
+/** One repository file for the Files sub-tab's viewer. `path` is `undefined` while nothing is
+ *  selected. A 409 ("path is not in the repository index: …", "symlinks are not served: …") is the
+ *  server's answer, so retries are off; cached per path, making re-selection free. Same freshness
+ *  override as `useRepoTree` — the pane must not keep showing bytes an agent has since rewritten. */
+export function useRepoFile(path: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.repoFile(path ?? ''),
+    queryFn: ({ signal }) => getRepoFile(path as string, { signal }),
+    enabled: path !== undefined && path !== '',
+    retry: false,
+    refetchOnWindowFocus: true,
+    staleTime: 0,
   })
 }
 
@@ -1373,10 +1432,11 @@ export function useAgentProfiles() {
  * trip that cannot produce a different answer — and a decorative count is the last thing in the
  * cockpit that should retry, poll, or hold the query client's attention. One read per session.
  */
-export function useStarCount() {
+export function useStarCount(enabled = true) {
   return useQuery({
     queryKey: workspaceQueryKeys.starCount,
     queryFn: ({ signal }) => getStarCount({ signal }),
+    enabled,
     staleTime: Infinity,
     retry: false,
     refetchOnMount: false,

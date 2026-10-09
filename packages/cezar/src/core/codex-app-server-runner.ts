@@ -17,6 +17,7 @@ import {
 } from './claude-cli-runner.ts';
 import { ASK_MAX_QUESTIONS, parseAskRequest, type AskQuestion } from './ask.ts';
 import { readNdjson } from './ndjson.ts';
+import { skippedServersNote, toCodexConfigOverrides } from './private-mcp.ts';
 import { V1TextCoalescer } from './v1-text-coalescer.ts';
 import {
   CodexAppServerRpc,
@@ -418,6 +419,9 @@ class CodexSession implements AgentSession {
       // CEZ_CODEX_NETWORK=0 remains the backwards-compatible explicit sandbox opt-out.
       sandbox: process.env.CEZ_CODEX_NETWORK === '0' ? 'workspace-write' : 'danger-full-access',
       approvalPolicy: 'never',
+      // Private MCP servers (spec 2026-10-07-private-project-mcp) ride in as per-server dotted
+      // config overrides, so the user's own [mcp_servers] table is extended, never replaced.
+      config: this.privateMcpConfig(),
     };
     if (this.spec.resume && this.spec.sessionId) {
       await this.rpc.request('thread/resume', { threadId: this.spec.sessionId, ...clean(overrides) });
@@ -604,6 +608,15 @@ class CodexSession implements AgentSession {
       default:
         break;
     }
+  }
+
+  private privateMcpConfig(): Record<string, unknown> | undefined {
+    if (!this.spec.mcpServers?.length) return undefined;
+    const { config, skipped } = toCodexConfigOverrides(this.spec.mcpServers);
+    if (skipped.length) {
+      this.emit({ type: 'note', message: skippedServersNote('codex', skipped, 'Codex supports stdio and streamable HTTP MCP servers, not SSE') });
+    }
+    return Object.keys(config).length ? config : undefined;
   }
 
   private emit(event: AgentEvent): void {

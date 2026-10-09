@@ -82,7 +82,9 @@ function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
       className="rounded-lg border border-primary/25 bg-primary/[0.04] px-4 pt-3.5 pb-3.5"
     >
       <div className="mb-2.5 flex items-center gap-2">
-        <span className="text-xs font-medium text-primary">The agent is asking</span>
+        <span className="text-xs font-medium text-primary">
+          {ask.fromWorkflow ? 'The workflow is asking' : 'The agent is asking'}
+        </span>
       </div>
       <div className="flex flex-col gap-4">
         {questions.map((question, index) => (

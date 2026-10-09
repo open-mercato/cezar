@@ -22,6 +22,7 @@ export interface ConfigFileListing {
   tracked: ConfigFileDef['tracked'];
   seeded: boolean;
   holdsMcp: boolean;
+  private: boolean;
   precedence: string;
   hotReload?: string;
   docsUrl: string;
@@ -100,6 +101,7 @@ export async function listAgentConfig(
         tracked: def.tracked,
         seeded: Boolean(def.seeded),
         holdsMcp: Boolean(def.holdsMcp),
+        private: Boolean(def.private),
         precedence: def.precedence,
         hotReload: def.hotReload,
         docsUrl: def.docsUrl,
