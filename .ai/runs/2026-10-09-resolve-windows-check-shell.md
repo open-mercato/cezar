@@ -19,6 +19,7 @@ Implementation plan:
 Risks: Windows executable discovery and shell quoting can affect command execution; keep the resolver narrow and leave non-Windows paths unchanged.
 
 ## Progress
+PR: #1341
 
 > Convention: `- [ ]` pending, `- [x]` done. Append — <commit sha> when a step lands. Do not rename step titles.
 
@@ -31,3 +32,9 @@ Risks: Windows executable discovery and shell quoting can affect command executi
 
 - [x] 2.1 Document Windows check shell behavior — cd9d347b
 - [x] 2.2 Run the full validation gate — 645ae0e6 (typecheck/build/unit/package pass; broad suite rerun with `env -u CEZ_API_URL -u CEZ_BIN TMPDIR=/tmp TEMP=/tmp` exceeded 240s without a summary)
+
+## Independent review and final handoff
+
+[Final independent review](https://github.com/open-mercato/cezar/pull/1341#issuecomment-6072577688) approved source head `9159c6a02263e09af9615b9aade42264d007083d` with no findings. GitHub rejected formal approval because the authenticated account authored this PR. This finalization commit changes this plan only; reviewed source is unchanged. No merge was performed.
+
+The exact reviewed head subsequently passed the GitHub Unit, build, E2E, and package workflow. Local broad-suite timeout remains disclosed; native Windows QA remains required (`needs-qa`), and no QA approval is claimed.
