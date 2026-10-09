@@ -73,6 +73,7 @@ import { Separator } from '@/components/ui/separator'
 import { Spinner } from '@/components/ui/spinner'
 import { toast } from '@/components/ui/toaster'
 import { useNavigate } from '@/lib/project-router'
+import { useTheme } from '@/components/theme-provider'
 import { cn } from '@/lib/utils'
 import {
   advance,
@@ -268,6 +269,7 @@ function WorkflowGraphEditor() {
   const workflows = useWorkflows()
   const catalog = useWorkflowNodes()
   const flow = useReactFlow()
+  const { resolvedTheme } = useTheme()
 
 
   const [graph, setGraph] = useState<WorkflowGraph>(blankGraph)
@@ -566,6 +568,9 @@ function WorkflowGraphEditor() {
       if (e.key !== 'Escape' || confirm) return
       // Escape inside a field belongs to the field (and the target may be the window itself).
       if (e.target instanceof Element && e.target.closest('input, textarea, select')) return
+      // A popover, menu or select that is open owns this Escape: closing the validation list must
+      // not also close the inspector behind it.
+      if (e.defaultPrevented || document.querySelector('[data-slot="popover-content"], [role="menu"], [role="listbox"]')) return
       if (selectedId || workflowPanel) {
         setSelectedId(null)
         setWorkflowPanel(false)
@@ -748,7 +753,7 @@ function WorkflowGraphEditor() {
             setName(e.target.value)
             setDirty(true)
           }}
-          className="h-8 w-56 max-w-full border-transparent bg-transparent px-2 text-sm font-semibold shadow-none hover:bg-muted focus-visible:bg-card"
+          className="h-8 w-56 max-w-full min-w-40 flex-1 border-transparent sm:flex-none bg-transparent px-2 text-sm font-semibold shadow-none hover:bg-muted focus-visible:bg-card"
         />
         {opened?.source === 'built-in' ? (
           <Badge
@@ -783,7 +788,7 @@ function WorkflowGraphEditor() {
                 ) : (
                   <CheckCircle2Icon className="size-3.5 text-success" />
                 )}
-                {issues.length ? `${issues.length} issue${issues.length > 1 ? 's' : ''}` : 'Valid'}
+                <span className="max-sm:hidden">{issues.length ? `${issues.length} issue${issues.length > 1 ? 's' : ''}` : 'Valid'}</span>
               </Button>
             </PopoverTrigger>
             <PopoverContent align="end" className="w-80 p-0">
@@ -824,16 +829,17 @@ function WorkflowGraphEditor() {
             size="sm"
             variant={paletteOpen ? 'secondary' : 'outline'}
             aria-pressed={paletteOpen}
+            aria-label="Add node"
             disabled={Boolean(sim)}
             onClick={() => {
               setAttach(null)
               setPaletteOpen((o) => !o)
             }}
           >
-            <PlusIcon /> Add node
+            <PlusIcon /> <span className="max-sm:hidden">Add node</span>
           </Button>
-          <Button size="sm" variant={sim ? 'secondary' : 'outline'} aria-pressed={Boolean(sim)} onClick={() => setSim((s) => (s ? null : startSim(graph)))}>
-            {sim ? <SquareIcon /> : <PlayIcon />} {sim ? 'Stop' : 'Simulate'}
+          <Button size="sm" variant={sim ? 'secondary' : 'outline'} aria-pressed={Boolean(sim)} aria-label={sim ? 'Stop' : 'Simulate'} onClick={() => setSim((s) => (s ? null : startSim(graph)))}>
+            {sim ? <SquareIcon /> : <PlayIcon />} <span className="max-sm:hidden">{sim ? 'Stop' : 'Simulate'}</span>
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -877,10 +883,11 @@ function WorkflowGraphEditor() {
             size="sm"
             variant="primary"
             disabled={!canSave}
+            aria-label="Save"
             title={!name.trim() ? 'Name the workflow to save it' : issues.length ? 'Fix the issues to save' : undefined}
             onClick={() => (shadowsBuiltIn ? setConfirm({ kind: 'shadow' }) : save.mutate(savingOwnFile))}
           >
-            <SaveIcon /> Save
+            <SaveIcon /> <span className="max-sm:hidden">Save</span>
           </Button>
         </div>
       </header>
@@ -905,7 +912,10 @@ function WorkflowGraphEditor() {
           fitView
           fitViewOptions={{ padding: 0.2, maxZoom: 1.2 }}
           minZoom={0.2}
-          colorMode="system"
+          // The APP theme, never the OS one: React Flow stamps `.light`/`.dark` on its root, and
+          // `.light` is the cockpit's own token flip — "system" turned the canvas white inside a
+          // dark cockpit whenever the OS disagreed with it.
+          colorMode={resolvedTheme}
           style={CANVAS_THEME}
           proOptions={{ hideAttribution: true }}
         >

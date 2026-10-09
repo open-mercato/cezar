@@ -19,6 +19,7 @@ import { Link } from '@/lib/project-router'
 import { useRun } from '@/api/queries'
 import type { ApiRun, WorkflowGraphNode } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
+import { useTheme } from '@/components/theme-provider'
 import {
   graphForWorkflow,
   loopEdges,
@@ -112,6 +113,7 @@ export function GraphView({ run, embedded = false }: { run: ApiRun; embedded?: b
 }
 
 function TaskGraphView({ run, embedded = false }: { run: ApiRun; embedded?: boolean }) {
+  const { resolvedTheme } = useTheme()
   const def = run.workflowDef
   const graph = useMemo(() => (def ? graphForWorkflow(def) : null), [def])
   const overlay = useMemo(() => (graph ? runOverlay(graph, run) : null), [graph, run])
@@ -197,7 +199,10 @@ function TaskGraphView({ run, embedded = false }: { run: ApiRun; embedded?: bool
             fitView
             fitViewOptions={{ padding: 0.2, maxZoom: 1.2 }}
             minZoom={0.2}
-            colorMode="system"
+            // The APP theme, never the OS one: React Flow stamps `.light`/`.dark` on its root, and
+          // `.light` is the cockpit's own token flip — "system" turned the canvas white inside a
+          // dark cockpit whenever the OS disagreed with it.
+          colorMode={resolvedTheme}
             style={CANVAS_THEME}
             proOptions={{ hideAttribution: true }}
           >

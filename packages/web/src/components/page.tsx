@@ -74,7 +74,9 @@ export function PageHeader({
   return (
     <PageRow data-slot="page-header" className={cn('pt-6 pb-4 sm:pt-8', className)}>
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
-        <div className="min-w-0 flex-1 space-y-1">
+        {/* A floor on the title's width: without one the actions kept the row and the title block
+            shrank to nothing — one word per line on a phone. With it, the actions wrap below. */}
+        <div className="min-w-[min(16rem,100%)] flex-1 space-y-1">
           {eyebrow ? <div className="text-xs font-medium text-muted-foreground">{eyebrow}</div> : null}
           <h1 className="truncate text-[22px] leading-7 font-semibold text-foreground">{title}</h1>
           {description ? (

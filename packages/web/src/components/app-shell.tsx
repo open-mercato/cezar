@@ -74,6 +74,7 @@ import { Link, scopeTo, stripProjectPrefix } from '@/lib/project-router'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
 import type { Theme } from '@/lib/theme'
 import { commandShortcutHint } from '@/lib/use-command-shortcut'
+import { useIsDesktop } from '@/lib/use-desktop'
 import { cn } from '@/lib/utils'
 
 export type RepoChip = {
@@ -144,6 +145,9 @@ export function routeOwnsScrollArrival(pathname: string): boolean {
 
 const SIDEBAR_OPEN_KEY = 'cez-context-sidebar-open'
 
+/** Narrower than this, the contextual sidebar starts closed (see `AppShell`). */
+const CONTEXT_SIDEBAR_MIN_WIDTH = 1100
+
 function readSidebarOpen(): boolean {
   try {
     return window.localStorage.getItem(SIDEBAR_OPEN_KEY) !== 'false'
@@ -172,15 +176,28 @@ const NOOP = () => {}
  * and the commit list all resolve their scroll owner through.
  */
 export const AppShell = React.memo(function AppShell({ children, banner, ...props }: AppShellProps) {
-  const [open, setOpen] = React.useState(readSidebarOpen)
-  const onOpenChange = React.useCallback((next: boolean) => {
-    setOpen(next)
-    try {
-      window.localStorage.setItem(SIDEBAR_OPEN_KEY, String(next))
-    } catch {
-      // A browser that refuses storage still gets a sidebar; it just forgets the answer.
-    }
-  }, [])
+  const [wideOpen, setWideOpen] = React.useState(readSidebarOpen)
+  /*
+   * Between a phone (where the sidebar is a sheet) and a roomy window, an open contextual sidebar
+   * takes 18rem out of a panel that has little to give — at 820px it left the screen itself
+   * under half the width. So there it starts CLOSED and its state is this visit's only: opening
+   * it is a glance, and it must not overwrite the choice a wide window remembers.
+   */
+  const roomy = useIsDesktop(CONTEXT_SIDEBAR_MIN_WIDTH)
+  const [narrowOpen, setNarrowOpen] = React.useState(false)
+  const open = roomy ? wideOpen : narrowOpen
+  const onOpenChange = React.useCallback(
+    (next: boolean) => {
+      if (!roomy) return setNarrowOpen(next)
+      setWideOpen(next)
+      try {
+        window.localStorage.setItem(SIDEBAR_OPEN_KEY, String(next))
+      } catch {
+        // A browser that refuses storage still gets a sidebar; it just forgets the answer.
+      }
+    },
+    [roomy],
+  )
   const desktop = useDesktopShell()
 
   // The contextual sidebar's portal target, and how many screens are currently filling it.
@@ -596,7 +613,14 @@ function MobileAreas(props: RailProps) {
 
   // The sheet must not outlive the navigation it triggered — back/forward and the ⌘K palette
   // navigate without going through any of its links.
+  //
+  // Only on a CHANGED path. This component lives inside the sheet, so it mounts when the sheet
+  // opens — and an effect that closed on every run closed the sheet in the same breath it opened,
+  // which left a phone with no way to reach the navigation at all.
+  const lastPath = React.useRef(pathname)
   React.useEffect(() => {
+    if (lastPath.current === pathname) return
+    lastPath.current = pathname
     setOpenMobile(false)
   }, [pathname, setOpenMobile])
 
