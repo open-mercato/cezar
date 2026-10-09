@@ -459,6 +459,7 @@ function AppRail(props: RailProps) {
           singleProject={singleProject}
           brandName={brandName}
         />
+        <div aria-hidden="true" className="mx-auto h-px w-5 shrink-0 bg-foreground/12" />
         <SidebarMenu className="items-center">
           <SidebarMenuItem>
             <SidebarMenuButton
