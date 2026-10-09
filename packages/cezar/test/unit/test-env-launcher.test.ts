@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, test } from 'node:test';
@@ -40,6 +40,12 @@ function makeFixture(withSetsid: boolean): { root: string; path: string } {
   writeFileSync(join(root, '.ai/browsers/agent-browser.md'), '# test provider\n');
   writeFileSync(join(root, 'package.json'), '{"private":true}\n');
   writeFileSync(join(root, 'package-lock.json'), '{}\n');
+  // Both are reuse-check build inputs (`BUILD_INPUT_PATHS`), compared with `find -newermt` against
+  // a `startedAt` truncated to whole seconds. Written in the same second the cold boot records,
+  // they read as "source changed since boot" on GNU find and the warm run reboots instead of
+  // reusing — a CI-only flake (BSD find cannot parse the timestamp, so macOS never sees it).
+  const beforeBoot = new Date(Date.now() - 60_000);
+  for (const input of ['package.json', 'package-lock.json']) utimesSync(join(root, input), beforeBoot, beforeBoot);
 
   const commands = ['cat', 'chmod', 'curl', 'date', 'dirname', 'find', 'grep', 'id', 'kill', 'mkdir', 'mv', 'nohup', 'pwd', 'rm', 'sh', 'sleep', 'tail', 'uname'];
   if (withSetsid) commands.push('setsid');

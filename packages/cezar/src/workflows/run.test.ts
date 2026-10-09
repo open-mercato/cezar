@@ -254,19 +254,11 @@ it('parallel variants ignore a worktree opt-out and retain isolated mode', () =>
  * Turn-end bookkeeping (#389, task auto-naming spec) against a REAL fixture
  * repo: `recordTurnEnd` is the exact method both agent-event paths fire on
  * `turn-end`, driven directly here because a live agent session is the only
- * other way to reach it. CEZ_AUTONAME=0 keeps the namer (an LLM call) out of
- * these fixtures — titles are ONLY ever namer-owned or user-owned now, never
- * derived from turn text.
+ * other way to reach it. The suite-wide CEZ_AUTONAME=0 (vitest.setup.ts) keeps
+ * the namer (an LLM call) out of these fixtures — titles are ONLY ever
+ * namer-owned or user-owned now, never derived from turn text.
  */
 describe('RunManager.recordTurnEnd', () => {
-  const savedAutoname = process.env.CEZ_AUTONAME;
-  beforeAll(() => {
-    process.env.CEZ_AUTONAME = '0';
-  });
-  afterAll(() => {
-    if (savedAutoname === undefined) delete process.env.CEZ_AUTONAME;
-    else process.env.CEZ_AUTONAME = savedAutoname;
-  });
   let repoRoot: string;
   let store: RunStore;
   let manager: RunManager;
@@ -684,13 +676,11 @@ describe('RunManager.continueRun override', () => {
  */
 describe('RunManager.settleSuccess — optional review gate', () => {
   const savedGate = process.env.CEZ_REVIEW_GATE;
-  const savedAutoname = process.env.CEZ_AUTONAME;
   let repoRoot: string;
   let store: RunStore;
   let manager: RunManager;
 
   beforeAll(async () => {
-    process.env.CEZ_AUTONAME = '0';
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-reviewgate-'));
     await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
     writeFileSync(join(repoRoot, 'a.txt'), 'one\ntwo\nthree\n');
@@ -705,8 +695,6 @@ describe('RunManager.settleSuccess — optional review gate', () => {
     rmSync(repoRoot, { recursive: true, force: true });
     if (savedGate === undefined) delete process.env.CEZ_REVIEW_GATE;
     else process.env.CEZ_REVIEW_GATE = savedGate;
-    if (savedAutoname === undefined) delete process.env.CEZ_AUTONAME;
-    else process.env.CEZ_AUTONAME = savedAutoname;
   });
 
   afterEach(() => {

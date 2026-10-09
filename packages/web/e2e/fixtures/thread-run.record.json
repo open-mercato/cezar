@@ -34,7 +34,7 @@
   ],
   "workflowDef": {
     "name": "quick-task",
-    "description": "One agent run on your task \u2014 no ceremony.",
+    "description": "One agent run on your task — no ceremony.",
     "source": "built-in",
     "steps": [
       {
@@ -55,7 +55,7 @@
   "baseBranch": "main",
   "costUsd": 0.0352,
   "pullRequestUrl": "https://github.com/open-mercato/demo/pull/123",
-  "titleSummary": "\u2014 looking into: Summarize what this project does.Done with the first pass \u2014 ope\u2026",
+  "titleSummary": "— looking into: Summarize what this project does.Done with the first pass — ope…",
   "diffStat": {
     "files": 1,
     "adds": 1,
@@ -63,5 +63,7 @@
   },
   "peakRssBytes": 50987008,
   "peakProcCount": 1,
-  "finishedAt": "2026-07-14T20:28:17.180Z"
+  "finishedAt": "2026-07-14T20:28:17.180Z",
+  "inputTokens": 2900,
+  "outputTokens": 720
 }

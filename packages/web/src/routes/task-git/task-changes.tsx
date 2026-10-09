@@ -35,6 +35,12 @@ import { GitToolbar } from './git-toolbar'
  * Below `md` the view forces unified+wrap (spec: "unified+wrap forced <md") and hides the
  * tree — the per-file sticky headers carry the file names, and a 360px phone has no honest
  * room for a second column.
+ *
+ * From `md` up the view is a SPLIT layout, in CSS alone: the route fills `main` (`md:h-full`), the
+ * header and toolbar keep their natural height, and the body below is two columns that each scroll
+ * on their own. Nothing is sized from the header (#918, and the takeover line that outgrew a
+ * hard-coded `10rem` offset), so a header of any height can neither clip the tree nor cover a
+ * diff file header. Below `md` the page scrolls as one, as before.
  */
 export function TaskChangesRoute() {
   const { id } = useParams<{ id: string }>()
@@ -42,7 +48,9 @@ export function TaskChangesRoute() {
 
   if (run.isPending) return <GitTabLoading tab="changes" />
   if (run.isError) return <GitTabLoadError tab="changes" error={run.error} />
-  return <ChangesView run={run.data} />
+  // Keyed on the run: its tree and diff columns are scrollers of their own, which the shell's
+  // per-pathname reset of `main` never touches, so a new task must mean a fresh pair at the top.
+  return <ChangesView key={run.data.id} run={run.data} />
 }
 
 function ChangesView({ run }: { run: ApiRun }) {
@@ -77,8 +85,9 @@ function ChangesView({ run }: { run: ApiRun }) {
   if (dockHeld && commentCount === 0 && !composerDraft.hasDraft && !sending) setDockHeld(false)
   const showDock = commentCount > 0 || sending || (dockHeld && composerDraft.hasDraft)
   // The dock floats OVER the diff and the file tree. It takes no room of its own (a negative top
-  // margin cancels its height), so both columns get that height back as bottom padding instead —
-  // their last lines can still be scrolled up above the box.
+  // margin cancels its height), so the content gets that height back as bottom padding instead —
+  // from md up inside each scroll column, on phones on the page body — and its last lines can still
+  // be scrolled up above the box while the columns stay visible around it.
   const [dockHeight, setDockHeight] = useState(0)
   const dockRef = useCallback((element: HTMLDivElement | null) => {
     if (!element) {
@@ -218,7 +227,7 @@ function ChangesView({ run }: { run: ApiRun }) {
   }, [diffShown, revealOrScroll, searchParams, searchTarget])
 
   return (
-    <div data-route="task-changes" className="flex min-h-full flex-col">
+    <div data-route="task-changes" className="flex min-h-full flex-col md:h-full">
       <RunHeader run={run} tab="changes" />
 
       <GitToolbar
@@ -260,52 +269,58 @@ function ChangesView({ run }: { run: ApiRun }) {
           subtitle="The worktree matches its base branch. Changes appear here as the agent works."
         />
       ) : (
-        // The run header scrolls away on mobile; only desktop reserves space for it.
+        // The dock floats over the bottom of this body (see `dockHeight`). The body itself must
+        // NOT stop above it on desktop — the transparent dock would then sit on an empty band — so
+        // the clearance is padding INSIDE each scroll column there, and page padding on phones.
         <div
-          className="flex min-h-0 flex-1 items-start gap-5 px-4 py-4 [--diff-sticky-top:0px] md:[--diff-sticky-top:10rem] md:px-6"
-          style={
-            {
-              '--changes-dock': `${showDock ? dockHeight : 0}px`,
-              paddingBottom: showDock ? `calc(1rem + ${dockHeight}px)` : undefined,
-            } as React.CSSProperties
-          }
+          className="flex min-h-0 flex-1 gap-5 px-4 py-4 max-md:pb-[calc(1rem_+_var(--changes-dock,0px))] md:px-6 md:py-0"
+          style={{ '--changes-dock': `${showDock ? dockHeight : 0}px` } as React.CSSProperties}
         >
-          {/* The tree column: sticky under the header so long diffs scroll beside it, and its OWN
-              scroller. Sticky alone is not enough — a tree taller than the viewport grows the page
-              instead, so the only way to reach its last file was to drag the shared `main` scroller
-              (and the diff with it) to the bottom. Capping the pane at the space left under the
-              sticky chrome gives the list its own scrollbar; `overscroll-contain` keeps a wheel
-              inside it from chaining into the diff once it bottoms out. */}
+          {/* The tree: its own scroller, as tall as the body (flex stretch), so its last file is
+              always reachable without moving the diff; `overscroll-contain` keeps a wheel that
+              bottoms out in it from chaining into anything else. */}
           <aside
             data-slot="changes-tree-pane"
-            className="sticky top-40 hidden max-h-[calc(100dvh_-_var(--diff-sticky-top)_-_1rem)] w-60 pb-[var(--changes-dock,0px)] shrink-0 overflow-y-auto overscroll-contain md:block lg:w-72"
+            className="hidden w-60 shrink-0 overflow-y-auto overscroll-contain pt-4 pb-[calc(1rem_+_var(--changes-dock,0px))] md:block lg:w-72"
           >
             <ChangesTree root={tree} selected={selected} onSelect={selectFile} commentCounts={commentCounts} />
           </aside>
-          <Diff
-            // Keyed by run: the open comment editor and its unsent text are keyed by path + line
-            // only, and walking to another task keeps this view mounted — without the key a
-            // half-written note would reappear on the same path + line of the next task.
-            key={run.id}
-            files={files}
-            viewRef={diffRef}
-            mode={effectiveMode}
-            wrap={effectiveWrap}
-            loadFileText={(path) => loadWorktreeText(run.id, path)}
-            imageSrc={(path) => runFileRawUrl(run.id, path)}
-            onOpenInApp={
-              health.data?.capabilities.localHandoff ? (path) => openImage.mutate(path) : undefined
-            }
-            comments={diffComments.comments}
-            // Not until the stored comments have loaded — see `DiffComments.ready`.
-            onAddComment={diffComments.ready ? diffComments.add : undefined}
-            onEditComment={diffComments.update}
-            onRemoveComment={diffComments.remove}
-            // Reserve the dock's covered area on diff targets only. Scroll padding on `main`
-            // also affects the dock textarea: Chromium scrolls the page on every keystroke
-            // trying to bring its caret above the very dock it lives in.
-            className="min-w-0 flex-1 [&_[data-slot=diff-comment-editor]]:scroll-mb-[var(--changes-dock,0px)] [&_[data-slot=diff-line-comment]]:scroll-mb-[var(--changes-dock,0px)] [&_[data-slot=diff-line]]:scroll-mb-[var(--changes-dock,0px)]"
-          />
+          {/* The diff's own scroller from md up; its file headers stick to ITS top, so the
+              header above never covers them. Its vertical padding lives on the Diff inside, not on
+              the scroller: sticky offsets count from the scroller's padding edge, so padding here
+              would park every stuck header 16px below the top with rows scrolling past above it. */}
+          <div
+            data-slot="diff-pane"
+            data-diff-scroller={desktop ? '' : undefined}
+            className="min-w-0 flex-1 md:overflow-y-auto md:overscroll-contain"
+          >
+            <Diff
+              // Keyed by run: the open comment editor and its unsent text are keyed by path + line
+              // only, so a half-written note must not reappear on the same path + line of another
+              // task. NOT keyed by breakpoint: crossing md swaps the scroller (this column ↔ `main`),
+              // and the Diff rebinds its virtualized list itself, keeping an unsent note.
+              key={run.id}
+              files={files}
+              viewRef={diffRef}
+              mode={effectiveMode}
+              wrap={effectiveWrap}
+              loadFileText={(path) => loadWorktreeText(run.id, path)}
+              imageSrc={(path) => runFileRawUrl(run.id, path)}
+              onOpenInApp={
+                health.data?.capabilities.localHandoff ? (path) => openImage.mutate(path) : undefined
+              }
+              comments={diffComments.comments}
+              // Not until the stored comments have loaded — see `DiffComments.ready`.
+              onAddComment={diffComments.ready ? diffComments.add : undefined}
+              onEditComment={diffComments.update}
+              onRemoveComment={diffComments.remove}
+              // The column runs under the floating dock, so its content pads its end by the dock's
+              // height, and reveals keep their target above the box. Diff targets only: scroll
+              // padding on a scroller also affects the dock textarea, and Chromium scrolls the page
+              // on every keystroke trying to bring its caret above the very dock it lives in.
+              className="min-w-0 md:pt-4 md:pb-[calc(1rem_+_var(--changes-dock,0px))] [&_[data-slot=diff-comment-editor]]:scroll-mb-[var(--changes-dock,0px)] [&_[data-slot=diff-line-comment]]:scroll-mb-[var(--changes-dock,0px)] [&_[data-slot=diff-line]]:scroll-mb-[var(--changes-dock,0px)]"
+            />
+          </div>
         </div>
       )}
 

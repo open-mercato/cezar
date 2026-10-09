@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
+import { workflowGraphSchema } from './graph.ts';
 
 /**
  * A workflow is an ordered list of steps. Two step kinds:
@@ -91,6 +92,10 @@ export const workflowDefSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
   steps: z.array(workflowStepSchema),
+  /** A `version: 2` graph workflow (spec 2026-09-30-workflow-node-editor). When present the
+   *  executor walks the graph; `steps` is then derived from its agent/check nodes
+   *  (`graphToSteps`) so every step-reading path keeps working. Absent on v1 workflows. */
+  graph: workflowGraphSchema.optional(),
   source: z.enum(['built-in', 'file']),
   path: z.string().optional(),
 });

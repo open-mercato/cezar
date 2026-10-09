@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, readdir, stat, rm, chmod, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, realpath, stat, rm, chmod, symlink, writeFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -7,7 +7,7 @@ import { promises as fs } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { TrackerConnections } from './connections.ts';
 let root: string;
-beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'tracker-secret-')); });
+beforeEach(async () => { root = await realpath(await mkdtemp(join(tmpdir(), 'tracker-secret-'))); });
 afterEach(async () => { vi.restoreAllMocks(); await rm(root, { recursive: true, force: true }); });
 it('stores each project outside its checkout with private permissions and fresh revisions', async () => {
   const home = join(root, 'home');

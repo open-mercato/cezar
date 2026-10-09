@@ -495,6 +495,11 @@ To be first-class:
    `buildChildEnv` is least-privilege per backend, so a multi-provider runner
    must receive credentials for every provider its own model ids can name
    without widening other backends.
+12. **Private MCP** — honor `AgentRunSpec.mcpServers` through the backend's own launch-time
+   channel (a flag, a config override, an env var, or ACP's `session/new` `mcpServers`), never by
+   writing into `cwd`; translators live in `private-mcp.ts`. Add the id to `PRIVATE_MCP_RUNNERS`
+   only once that works — a backend outside the list gets a run note naming the servers it could
+   not attach (spec `.ai/specs/2026-10-07-private-project-mcp.md`).
 
 ## 10. The plan channel (PR #443)
 
