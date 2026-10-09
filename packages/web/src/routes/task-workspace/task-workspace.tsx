@@ -1,4 +1,12 @@
-import { LayoutGridIcon, LoaderCircleIcon, MessageSquareTextIcon, SearchXIcon, TerminalIcon } from 'lucide-react'
+import {
+  LayoutGridIcon,
+  LoaderCircleIcon,
+  Maximize2Icon,
+  MessageSquareTextIcon,
+  Minimize2Icon,
+  SearchXIcon,
+  TerminalIcon,
+} from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigationType, useParams } from 'react-router'
 
@@ -33,7 +41,10 @@ import { useRunRecordReconcile } from '../task-thread/run-reconcile'
 import { reduceThread } from '../task-thread/thread-state'
 
 import { BrowserView } from './browser-view'
+import { cn } from '@/lib/utils'
+
 import { LayoutCards } from './layout-cards'
+import { WorkspaceMaximizeContext, usePanelCover } from './maximize'
 import { ViewPickerMenu } from './view-picker'
 import { WorkspaceColumns, type ColumnActions } from './workspace-columns'
 import { useWorkspaceLayouts } from './use-workspace-layouts'
@@ -272,6 +283,23 @@ function WorkspaceView({
     },
     [run.id],
   )
+  /**
+   * Full view of the active layout (see `maximize.tsx`). A way of looking, not a setting: reset
+   * per task like the drawer above, and left by picking another layout.
+   */
+  const [maximized, setMaximized] = useState(false)
+  const maximizedFor = useRef(run.id)
+  if (maximizedFor.current !== run.id) {
+    maximizedFor.current = run.id
+    setMaximized(false)
+  }
+  const exitMaximized = useCallback(() => setMaximized(false), [])
+  const toggleMaximized = useCallback(() => setMaximized((current) => !current), [])
+  const cover = usePanelCover<HTMLDivElement>(maximized, exitMaximized)
+  const loneBrowser =
+    !overview && layouts.layout?.columns.length === 1 && layouts.layout.columns[0]?.view === 'browser'
+  const maximize = useMemo(() => ({ maximized, toggle: toggleMaximized }), [maximized, toggleMaximized])
+
   // Policy, read from the one place that knows it. A cockpit where a shell is not allowed shows
   // no button at all rather than one that explains itself after the click.
   const terminalAllowed = useHealth().data?.capabilities?.terminal === true
@@ -314,6 +342,26 @@ function WorkspaceView({
         </Button>
       ) : null,
     [terminalAllowed, drawerOpen, updateDrawer],
+  )
+  // The strip's right-end controls: full view, then the terminal.
+  const stripControls = useMemo(
+    () => (
+      <>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          data-action="maximize-layout"
+          aria-label="Full view"
+          title="Full view — hide everything but this layout"
+          className="text-muted-foreground"
+          onClick={toggleMaximized}
+        >
+          <Maximize2Icon aria-hidden="true" />
+        </Button>
+        {terminalToggle}
+      </>
+    ),
+    [terminalToggle, toggleMaximized],
   )
 
   /**
@@ -417,7 +465,7 @@ function WorkspaceView({
         run={run}
         onMarkedUnread={markedUnread}
         tabs={tabs}
-        trailing={terminalToggle}
+        trailing={stripControls}
         mode="strip"
         bareStrip={overview}
       />
@@ -434,40 +482,70 @@ function WorkspaceView({
           come back after a refresh.
         </div>
       ) : null}
-      {overview ? (
-        // The task's bar, then the conversation in the scroller slot every thread resolves.
-        <>
-          <RunHeader run={run} onMarkedUnread={markedUnread} mode="overview" />
-          <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-            <ConversationColumn run={run} onMarkedUnread={onMarkedUnread} />
-          </div>
-        </>
-      ) : !layouts.ready ? (
-        // The host still owes us this task's layouts (spec §5.3). Painting the default card first
-        // and swapping it a tick later would flash a workspace the user never built, so the view
-        // area holds the same skeleton a cold load of this URL already shows.
-        <DeepLinkLoading view={deepLinkView} />
-      ) : layouts.layout ? (
-        <WorkspaceColumns columns={layouts.layout.columns} actions={actions} renderView={renderView} />
-      ) : (
-        // The workspace the user emptied by closing its last card. It stays empty for this visit
-        // and comes back as a fresh `Czat` on the next one (§5.3) — the state module's recovery
-        // rule, not a second code path here.
-        <CenteredState
-          icon={<LayoutGridIcon />}
-          tone="neutral"
-          heading="h2"
-          title="No layouts"
-          subtitle="You closed every layout of this task. Create a new one, or come back later — the task will open with a Chat layout."
-          actions={
-            <ViewPickerMenu
-              heading="New layout"
-              onPick={addLayout}
-              trigger={<Button variant="outline">New layout</Button>}
+      <WorkspaceMaximizeContext.Provider value={maximize}>
+        <div
+          ref={cover.ref}
+          data-slot="workspace-stage"
+          data-maximized={cover.covering ? '' : undefined}
+          style={cover.style}
+          className={cn(
+            'relative flex min-h-0 flex-1 flex-col',
+            // Wears the panel's own corners and edge, so it reads as the panel showing one thing.
+            cover.covering && 'fixed z-40 overflow-hidden bg-background md:rounded-xl md:border md:border-border/70',
+          )}
+        >
+          {/* The way back. In the bottom corner, the one place no view keeps a control of its own
+              — column headers and edge strips own the top. Not over a lone browser, whose tab
+              strip carries the toggle. */}
+          {cover.covering && !loneBrowser ? (
+            <Button
+              variant="outline"
+              size="icon-sm"
+              data-action="exit-full-view"
+              aria-label="Exit full view"
+              title="Exit full view (Esc)"
+              className="absolute right-3 bottom-3 z-30 size-8 bg-card text-muted-foreground shadow-md"
+              onClick={exitMaximized}
+            >
+              <Minimize2Icon aria-hidden="true" />
+            </Button>
+          ) : null}
+          {overview ? (
+            // The task's bar, then the conversation in the scroller slot every thread resolves.
+            <>
+              <RunHeader run={run} onMarkedUnread={markedUnread} mode="overview" />
+              <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+                <ConversationColumn run={run} onMarkedUnread={onMarkedUnread} />
+              </div>
+            </>
+          ) : !layouts.ready ? (
+            // The host still owes us this task's layouts (spec §5.3). Painting the default card first
+            // and swapping it a tick later would flash a workspace the user never built, so the view
+            // area holds the same skeleton a cold load of this URL already shows.
+            <DeepLinkLoading view={deepLinkView} />
+          ) : layouts.layout ? (
+            <WorkspaceColumns columns={layouts.layout.columns} actions={actions} renderView={renderView} />
+          ) : (
+            // The workspace the user emptied by closing its last card. It stays empty for this visit
+            // and comes back as a fresh `Czat` on the next one (§5.3) — the state module's recovery
+            // rule, not a second code path here.
+            <CenteredState
+              icon={<LayoutGridIcon />}
+              tone="neutral"
+              heading="h2"
+              title="No layouts"
+              subtitle="You closed every layout of this task. Create a new one, or come back later — the task will open with a Chat layout."
+              actions={
+                <ViewPickerMenu
+                  heading="New layout"
+                  onPick={addLayout}
+                  trigger={<Button variant="outline">New layout</Button>}
+                />
+              }
             />
-          }
-        />
-      )}
+          )}
+        </div>
+      </WorkspaceMaximizeContext.Provider>
       <AlertDialog open={pendingView !== null} onOpenChange={(open) => !open && setPendingView(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>

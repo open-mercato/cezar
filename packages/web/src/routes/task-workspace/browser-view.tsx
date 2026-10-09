@@ -9,7 +9,7 @@ import {
   Maximize2Icon,
   Minimize2Icon,
 } from 'lucide-react'
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { useHealth } from '@/api/queries'
 import { CenteredState } from '@/components/centered-state'
@@ -17,6 +17,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
+
+import { useWorkspaceMaximize } from './maximize'
 
 import {
   MAX_BROWSER_TABS,
@@ -226,58 +228,12 @@ export function BrowserView({
     [active, onChange, tabs],
   )
 
-  /**
-   * Full view: the browser takes the whole content panel — over the contextual sidebar, the
-   * top bar, the layout strip and the terminal — and gives it back on the same button or Escape.
-   *
-   * Done by pinning this element over the panel's box rather than by moving it there: an iframe
-   * that changes parent reloads, and losing the page you were looking at to see more of it would
-   * defeat the point. The box is re-measured whenever the panel resizes.
-   */
-  const rootRef = useRef<HTMLDivElement>(null)
-  const [maximized, setMaximized] = useState(false)
-  const [box, setBox] = useState<{ top: number; left: number; width: number; height: number } | null>(null)
-  useLayoutEffect(() => {
-    if (!maximized) {
-      setBox(null)
-      return
-    }
-    const panel = rootRef.current?.closest<HTMLElement>('[data-slot="panel"]')
-    if (!panel) return
-    const measure = () => {
-      const rect = panel.getBoundingClientRect()
-      setBox({ top: rect.top, left: rect.left, width: rect.width, height: rect.height })
-    }
-    measure()
-    const observer = new ResizeObserver(measure)
-    observer.observe(panel)
-    window.addEventListener('resize', measure)
-    return () => {
-      observer.disconnect()
-      window.removeEventListener('resize', measure)
-    }
-  }, [maximized])
-  useEffect(() => {
-    if (!maximized) return
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setMaximized(false)
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [maximized])
+  // Full view is the workspace's; the toggle rides this strip because the tabs are here.
+  const maximize = useWorkspaceMaximize()
+  const maximized = maximize?.maximized ?? false
 
   return (
-    <div
-      ref={rootRef}
-      data-slot="browser-view"
-      data-maximized={maximized ? '' : undefined}
-      style={maximized && box ? box : undefined}
-      className={cn(
-        'flex h-full min-h-0 flex-col',
-        // Wears the panel's own corners and edge, so it reads as the panel showing one thing.
-        maximized && box && 'fixed z-40 h-auto overflow-hidden bg-background pt-1.5 md:rounded-xl md:border md:border-border/70',
-      )}
-    >
+    <div data-slot="browser-view" className="flex h-full min-h-0 flex-col">
       <Tabs
         value={String(active)}
         onValueChange={(value) => onChange({ ...state, active: Number(value) })}
@@ -337,23 +293,25 @@ export function BrowserView({
             <PlusIcon aria-hidden="true" className="size-3.5" />
           </Button>
         ) : null}
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-xs"
-          data-action="toggle-maximize"
-          aria-label={maximized ? 'Exit full view' : 'Full view'}
-          aria-pressed={maximized}
-          title={maximized ? 'Exit full view (Esc)' : 'Full view — hide everything but the browser'}
-          onClick={() => setMaximized((current) => !current)}
-          className="sticky right-0 ml-auto rounded bg-background"
-        >
-          {maximized ? (
-            <Minimize2Icon aria-hidden="true" className="size-3.5" />
-          ) : (
-            <Maximize2Icon aria-hidden="true" className="size-3.5" />
-          )}
-        </Button>
+        {maximize ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            data-action="toggle-maximize"
+            aria-label={maximized ? 'Exit full view' : 'Full view'}
+            aria-pressed={maximized}
+            title={maximized ? 'Exit full view (Esc)' : 'Full view — hide everything but this layout'}
+            onClick={maximize.toggle}
+            className="sticky right-0 ml-auto rounded bg-background"
+          >
+            {maximized ? (
+              <Minimize2Icon aria-hidden="true" className="size-3.5" />
+            ) : (
+              <Maximize2Icon aria-hidden="true" className="size-3.5" />
+            )}
+          </Button>
+        ) : null}
       </TabsList>
       </Tabs>
 
