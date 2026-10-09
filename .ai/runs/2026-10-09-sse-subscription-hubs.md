@@ -33,5 +33,5 @@ The replay-to-live handoff is ordering-sensitive; the handler’s existing buffe
 ### Phase 2: SSE integration and verification
 
 - [x] 2.1 Route per-run, project/global, and workspace deletion subscriptions through the hubs while preserving replay and project detach behavior. — 276774f2
-- [x] 2.2 Run focused regression tests and the full repository validation gate. — 606e5e50
+- [x] 2.2 Run focused regression tests and the full repository validation gate. — b4856ec6
 - [ ] 2.3 Complete review and publish the child PR.
