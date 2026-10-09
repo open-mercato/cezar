@@ -689,6 +689,7 @@ function ProjectSwitcher({
   brandName: string
 }) {
   const { isMobile } = useSidebar()
+  const globalSettings = useGlobalSettings()
   const navigate = useNavigate()
   const [browsing, setBrowsing] = React.useState(false)
   const [cloning, setCloning] = React.useState(false)
@@ -760,11 +761,9 @@ function ProjectSwitcher({
                   <GithubIcon aria-hidden="true" />
                   Clone from GitHub…
                 </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <RouterLink to="/settings/global/projects">
-                    <Settings2Icon aria-hidden="true" />
-                    Manage projects
-                  </RouterLink>
+                <DropdownMenuItem onSelect={() => globalSettings.open('projects')}>
+                  <Settings2Icon aria-hidden="true" />
+                  Manage projects
                 </DropdownMenuItem>
               </>
             )}

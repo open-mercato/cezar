@@ -1,6 +1,7 @@
 import { SettingsIcon } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link as RouterLink, useNavigate } from 'react-router'
+import { useNavigate } from 'react-router'
+import { useGlobalSettings } from '@/components/global-settings'
 
 import { onWorkspaceEvent } from '@/api/global-events'
 import { useCheckoutProject, useProjects } from '@/api/queries'
@@ -69,6 +70,7 @@ export function CloneProjectDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
+  const globalSettings = useGlobalSettings()
   const [url, setUrl] = useState('')
   const [name, setName] = useState('')
   const [progress, setProgress] = useState<string | null>(null)
@@ -217,15 +219,21 @@ export function CloneProjectDialog({
                 <SettingsIcon className="size-3.5" aria-hidden="true" />
               </Button>
             ) : (
-              <Button asChild variant="ghost" size="icon-sm" className="size-7">
-                <RouterLink
-                  to="/settings/global/projects"
-                  data-slot="clone-root-settings"
-                  aria-label="Edit checkout root"
-                  title="Edit checkout root"
-                >
-                  <SettingsIcon className="size-3.5" aria-hidden="true" />
-                </RouterLink>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="size-7"
+                data-slot="clone-root-settings"
+                aria-label="Edit checkout root"
+                title="Edit checkout root"
+                // One modal at a time: this dialog steps aside for the settings one.
+                onClick={() => {
+                  onOpenChange(false)
+                  globalSettings.open('projects')
+                }}
+              >
+                <SettingsIcon className="size-3.5" aria-hidden="true" />
               </Button>
             )}
           </div>

@@ -1,15 +1,17 @@
-import { ChevronRightIcon, FileIcon, FolderIcon } from 'lucide-react'
-import { createContext, useContext, useState } from 'react'
+import { FileIcon } from 'lucide-react'
+import { createContext, useContext } from 'react'
 
 import { CommentCount } from '@/components/comment-count'
-import { cn } from '@/lib/utils'
 
 import type { TreeDir, TreeFile } from './file-tree'
+import { StatusLetter, TreeCounts, TreeFileRow, TreeFolder, TreeRoot } from './tree-parts'
 
 /**
  * The Changes tab's file tree (spec #390: "file tree (left, folders collapsible, per-file ±)").
  * Pure presentation over `buildFileTree`'s data — clicking a file tells the parent, which
- * scrolls the diff; the tree itself owns nothing but its collapse state.
+ * scrolls the diff; the tree itself owns nothing but its collapse state. Drawn with the shared
+ * sidebar-style rows (tree-parts.tsx), so it reads the same in the Git screen's contextual
+ * sidebar and inside a task workspace column.
  */
 export function ChangesTree({
   root,
@@ -26,16 +28,11 @@ export function ChangesTree({
 }) {
   return (
     <CommentCountsContext.Provider value={commentCounts}>
-    <nav data-slot="changes-tree" aria-label="Changed files" className="min-w-0 text-[13px]">
-      <ul className="flex flex-col gap-px">
-        {root.dirs.map((dir) => (
-          <DirNode key={dir.path} dir={dir} depth={0} selected={selected} onSelect={onSelect} />
-        ))}
-        {root.files.map((file) => (
-          <FileNode key={file.path} file={file} depth={0} selected={selected} onSelect={onSelect} />
-        ))}
-      </ul>
-    </nav>
+      <nav data-slot="changes-tree" aria-label="Changed files" className="min-w-0">
+        <TreeRoot>
+          <DirChildren dir={root} selected={selected} onSelect={onSelect} />
+        </TreeRoot>
+      </nav>
     </CommentCountsContext.Provider>
   )
 }
@@ -51,110 +48,62 @@ function dirCommentCount(dir: TreeDir, counts: ReadonlyMap<string, number>): num
   return total
 }
 
-/** ±12/−3 in miniature — the tree's per-row counts (the aggregate label lives in the toolbar). */
-function Counts({ adds, dels }: { adds: number; dels: number }) {
+type NodeProps = { selected: string | null; onSelect: (path: string) => void }
+
+function DirChildren({ dir, selected, onSelect }: NodeProps & { dir: TreeDir }) {
   return (
-    <span className="shrink-0 font-mono text-[11px] font-medium tabular-nums">
-      {adds > 0 ? <span className="text-success">+{adds}</span> : null}
-      {adds > 0 && dels > 0 ? ' ' : null}
-      {dels > 0 ? <span className="text-danger">−{dels}</span> : null}
-    </span>
+    <>
+      {dir.dirs.map((child) => (
+        <DirNode key={child.path} dir={child} selected={selected} onSelect={onSelect} />
+      ))}
+      {dir.files.map((file) => (
+        <FileNode key={file.path} file={file} selected={selected} onSelect={onSelect} />
+      ))}
+    </>
   )
 }
 
-function DirNode({
-  dir,
-  depth,
-  selected,
-  onSelect,
-}: {
-  dir: TreeDir
-  depth: number
-  selected: string | null
-  onSelect: (path: string) => void
-}) {
-  const [open, setOpen] = useState(true)
-  // Only while collapsed: an open folder's files show their own counts, so a total here would
-  // just repeat them. Collapsed, it is the one place that says the folder holds comments.
+function DirNode({ dir, selected, onSelect }: NodeProps & { dir: TreeDir }) {
   const counts = useContext(CommentCountsContext)
-  const comments = open ? 0 : dirCommentCount(dir, counts)
   return (
-    <li>
-      <button
-        type="button"
-        data-slot="tree-dir"
-        data-path={dir.path}
-        data-state={open ? 'open' : 'closed'}
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-        className="flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1.5 py-1 text-left text-muted-foreground hover:bg-muted hover:text-foreground"
-        style={{ paddingLeft: `${6 + depth * 14}px` }}
-      >
-        <ChevronRightIcon
-          aria-hidden="true"
-          className={cn('size-3.5 shrink-0 transition-transform', open && 'rotate-90')}
-        />
-        <FolderIcon aria-hidden="true" className="size-3.5 shrink-0" />
-        <span className="min-w-0 truncate font-medium">{dir.name}</span>
-        <span className="ml-auto flex shrink-0 items-center gap-2 pl-2">
-          <CommentCount count={comments} />
-          <Counts adds={dir.adds} dels={dir.dels} />
-        </span>
-      </button>
-      {open ? (
-        <ul className="flex flex-col gap-px">
-          {dir.dirs.map((child) => (
-            <DirNode key={child.path} dir={child} depth={depth + 1} selected={selected} onSelect={onSelect} />
-          ))}
-          {dir.files.map((file) => (
-            <FileNode key={file.path} file={file} depth={depth + 1} selected={selected} onSelect={onSelect} />
-          ))}
-        </ul>
-      ) : null}
-    </li>
+    <TreeFolder
+      slot="tree-dir"
+      path={dir.path}
+      name={dir.name}
+      defaultOpen
+      // Only while collapsed: an open folder's files show their own counts, so totals here would
+      // just repeat them (and cost the name its room). Collapsed, the row says what it holds.
+      trailing={(open) =>
+        open ? null : (
+          <>
+            <CommentCount count={dirCommentCount(dir, counts)} />
+            <TreeCounts adds={dir.adds} dels={dir.dels} />
+          </>
+        )
+      }
+    >
+      <DirChildren dir={dir} selected={selected} onSelect={onSelect} />
+    </TreeFolder>
   )
 }
 
-/** The status tint mirrors the diff cards' badges: added grows, deleted shrinks. */
-const statusTone: Partial<Record<TreeFile['status'], string>> = {
-  added: 'text-success',
-  deleted: 'text-danger',
-}
-
-function FileNode({
-  file,
-  depth,
-  selected,
-  onSelect,
-}: {
-  file: TreeFile
-  depth: number
-  selected: string | null
-  onSelect: (path: string) => void
-}) {
-  const active = selected === file.path
+function FileNode({ file, selected, onSelect }: NodeProps & { file: TreeFile }) {
   const comments = useContext(CommentCountsContext).get(file.path) ?? 0
   return (
-    <li>
-      <button
-        type="button"
-        data-slot="tree-file"
-        data-path={file.path}
-        aria-current={active ? 'true' : undefined}
-        onClick={() => onSelect(file.path)}
-        className={cn(
-          'flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1.5 py-1 text-left hover:bg-muted',
-          active ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground',
-        )}
-        style={{ paddingLeft: `${24 + depth * 14}px` }}
-      >
-        <FileIcon aria-hidden="true" className={cn('size-3.5 shrink-0', statusTone[file.status])} />
-        <span className="min-w-0 truncate">{file.name}</span>
-        <span className="ml-auto flex shrink-0 items-center gap-2 pl-2">
+    <TreeFileRow
+      slot="tree-file"
+      path={file.path}
+      name={file.name}
+      icon={<FileIcon aria-hidden="true" className="text-muted-foreground" />}
+      active={selected === file.path}
+      onSelect={onSelect}
+      trailing={
+        <>
           <CommentCount count={comments} />
-          <Counts adds={file.adds} dels={file.dels} />
-        </span>
-      </button>
-    </li>
+          <TreeCounts adds={file.adds} dels={file.dels} />
+          <StatusLetter status={file.status} />
+        </>
+      }
+    />
   )
 }

@@ -1,4 +1,5 @@
 import { ZapIcon } from 'lucide-react'
+import { useState } from 'react'
 import { useParams, useSearchParams } from 'react-router'
 
 import { Page, PageBody, PageHeader } from '@/components/page'
@@ -9,6 +10,8 @@ import { useNavigate } from '@/lib/project-router'
 import { AutomationEditor } from './editor'
 import { AutomationLog } from './log'
 import { AutomationsList } from './automations-list'
+import { AutomationsSidebar } from './automations-sidebar'
+import { NextRunsRail, nextRuns } from './next-runs-rail'
 import { useAutomationActions, useAutomationsGate, useAutomationsQuery } from './use-automations'
 
 export type AutomationsView = 'list' | 'week' | 'day'
@@ -30,6 +33,8 @@ export function AutomationsRoute({ mode = 'list' }: { mode?: 'list' | 'new' | 'e
   const actions = useAutomationActions(query.data)
   const [searchParams, setSearchParams] = useSearchParams()
   const view = viewOf(searchParams.get('view'))
+  // The "Next runs" sheet opens from the sidebar, so it belongs to the area, not to one view.
+  const [railOpen, setRailOpen] = useState(false)
 
   if (!gate.known) {
     return <StatePage text="Loading automations…" loading />
@@ -52,36 +57,68 @@ export function AutomationsRoute({ mode = 'list' }: { mode?: 'list' | 'new' | 'e
   }
 
   const back = () => navigate('/automations')
-  if (mode === 'new') {
-    return <AutomationEditor data={query.data} onBack={back} onSaved={back} />
-  }
-  if (mode === 'edit') {
-    const automation = query.data?.automations.find((item) => item.id === automationId)
-    if (query.data && !automation) return <StatePage text="Automation not found." />
-    return automation
-      ? <AutomationEditor data={query.data} automation={automation} actions={actions} onBack={back} onSaved={back} onLog={() => navigate(`/automations/${encodeURIComponent(automation.id)}/log`)} />
-      : <StatePage text="Loading automation…" loading />
-  }
-  if (mode === 'log') {
-    const automation = query.data?.automations.find((item) => item.id === automationId)
-    return automationId
-      ? <AutomationLog automationId={automationId} automation={automation} timeZone={query.data?.timeZone} onBack={back} />
-      : <StatePage text="Automation not found." />
-  }
+  const data = query.data
+  const now = Date.now()
+  const upcoming = data ? nextRuns(data.automations, now, data.timeZone, 12) : []
+  const pollCount = data ? data.automations.filter((automation) => automation.kind === 'github' && automation.enabled).length : 0
   return (
-    <AutomationsList
-      data={query.data}
-      error={query.error ? String(query.error instanceof Error ? query.error.message : query.error) : undefined}
-      actions={actions}
-      view={view}
-      onViewChange={(next) => setSearchParams((current) => {
-        const params = new URLSearchParams(current)
-        if (next === 'list') params.delete('view')
-        else params.set('view', next)
-        return params
-      }, { replace: true })}
-    />
+    <>
+      <AutomationsSidebar
+        data={data}
+        view={mode === 'list' ? view : null}
+        activeId={mode === 'edit' || mode === 'log' ? automationId : undefined}
+        upcomingCount={upcoming.length}
+        onNextRuns={() => setRailOpen(true)}
+      />
+      {screen()}
+      {data ? (
+        <NextRunsRail
+          open={railOpen}
+          onOpenChange={setRailOpen}
+          upcoming={upcoming}
+          pollCount={pollCount}
+          timeZone={data.timeZone}
+          now={now}
+        />
+      ) : null}
+    </>
   )
+
+  function screen() {
+    if (mode === 'new') {
+      return <AutomationEditor data={query.data} onBack={back} onSaved={back} />
+    }
+    if (mode === 'edit') {
+      const automation = query.data?.automations.find((item) => item.id === automationId)
+      if (query.data && !automation) return <StatePage text="Automation not found." />
+      return automation
+        ? <AutomationEditor data={query.data} automation={automation} actions={actions} onBack={back} onSaved={back} onLog={() => navigate(`/automations/${encodeURIComponent(automation.id)}/log`)} />
+        : <StatePage text="Loading automation…" loading />
+    }
+    if (mode === 'log') {
+      const automation = query.data?.automations.find((item) => item.id === automationId)
+      return automationId
+        ? <AutomationLog automationId={automationId} automation={automation} timeZone={query.data?.timeZone} onBack={back} />
+        : <StatePage text="Automation not found." />
+    }
+    return (
+      <AutomationsList
+        data={query.data}
+        error={query.error ? String(query.error instanceof Error ? query.error.message : query.error) : undefined}
+        actions={actions}
+        view={view}
+        upcoming={upcoming}
+        pollCount={pollCount}
+        onNextRuns={() => setRailOpen(true)}
+        onViewChange={(next) => setSearchParams((current) => {
+          const params = new URLSearchParams(current)
+          if (next === 'list') params.delete('view')
+          else params.set('view', next)
+          return params
+        }, { replace: true })}
+      />
+    )
+  }
 }
 
 function viewOf(raw: string | null): AutomationsView {

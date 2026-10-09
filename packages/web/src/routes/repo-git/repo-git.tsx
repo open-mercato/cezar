@@ -2,16 +2,14 @@ import { GitBranchIcon, TriangleAlertIcon } from 'lucide-react'
 
 import { useRepo } from '@/api/queries'
 import type { RepoInfo, RepoResponse } from '@open-mercato/cezar-api-client'
-import { Page, PageHeader } from '@/components/page'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Link } from '@/lib/project-router'
+import { Page } from '@/components/page'
 
-import { BranchChip } from '../task-git/diff-controls'
 import { RepoBranchesSection } from './repo-branches'
 import { RepoChangesSection } from './repo-changes'
 import { RepoCommitsSection } from './repo-commits'
 import { RepoEmpty } from './repo-empty'
 import { RepoGitLoading } from './repo-git-loading'
+import { RepoSidebarHeader, type RepoTab } from './repo-sidebar'
 
 /**
  * `/git` — the repo view rebuilt on the task git view's own components (spec §"Session git
@@ -21,16 +19,12 @@ import { RepoGitLoading } from './repo-git-loading'
  * base-branch picker. Forge-specific rows (PR links, checks) render only when
  * `/api/health` says the forge driver is available.
  *
- * The sections are tabs, and each one is a URL (`/git`, `/git/commits[/:sha]`,
- * `/git/branches`), so every surface deep-links and survives a refresh.
+ * Master–detail: the contextual sidebar holds the section switch and the section's list (the
+ * changed-files tree, the commit log, the branches); the main area is the detail only. Each
+ * section is a URL (`/git`, `/git/commits[/:sha]`, `/git/branches`), so every surface
+ * deep-links and survives a refresh.
  */
-export type RepoTab = 'changes' | 'commits' | 'branches'
-
-const TABS: { value: RepoTab; to: string; label: string }[] = [
-  { value: 'changes', to: '/git', label: 'Changes' },
-  { value: 'commits', to: '/git/commits', label: 'Commits' },
-  { value: 'branches', to: '/git/branches', label: 'Branches' },
-]
+export type { RepoTab }
 
 export function RepoGitRoute({ tab }: { tab: RepoTab }) {
   const repo = useRepo()
@@ -64,44 +58,20 @@ export function RepoGitRoute({ tab }: { tab: RepoTab }) {
 }
 
 function RepoView({ repo, info, tab }: { repo: RepoResponse; info: RepoInfo; tab: RepoTab }) {
+  // Each section renders its own `<ContextSidebar>` (list and detail share state), led by this.
+  const header = (extra?: React.ReactNode) => (
+    <RepoSidebarHeader info={info} tab={tab}>
+      {extra}
+    </RepoSidebarHeader>
+  )
   return (
-    <Page data-route="repo-git" width="wide">
-      <PageHeader
-        title="Git"
-        description="The main working tree: uncommitted changes, recent commits and branches."
-      >
-        <div data-slot="repo-header" className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
-          <Tabs value={tab}>
-            <TabsList data-slot="repo-tabs">
-              {TABS.map((entry) => (
-                <TabsTrigger key={entry.value} value={entry.value} asChild>
-                  <Link to={entry.to} aria-current={tab === entry.value ? 'page' : undefined}>
-                    {entry.label}
-                  </Link>
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
-          <div className="flex min-w-0 items-center gap-2.5">
-            {info.remote ? (
-              <span
-                data-slot="repo-remote"
-                className="hidden max-w-80 min-w-0 truncate text-xs text-muted-foreground md:inline"
-              >
-                {info.remote}
-              </span>
-            ) : null}
-            <BranchChip branch={info.branch} />
-          </div>
-        </div>
-      </PageHeader>
-
+    <Page data-route="repo-git" width="full">
       {tab === 'changes' ? (
-        <RepoChangesSection />
+        <RepoChangesSection header={header()} />
       ) : tab === 'commits' ? (
-        <RepoCommitsSection log={repo.log} />
+        <RepoCommitsSection log={repo.log} header={header()} />
       ) : (
-        <RepoBranchesSection repo={repo} info={info} />
+        <RepoBranchesSection repo={repo} info={info} header={header} />
       )}
     </Page>
   )

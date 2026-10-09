@@ -1,11 +1,12 @@
 import { useQueryClient, type QueryClient, type QueryKey } from '@tanstack/react-query'
-import { AlertTriangleIcon, ArrowLeftIcon, CheckIcon, CircleDotIcon, ExternalLinkIcon, MoreHorizontalIcon, PlayIcon, RefreshCwIcon, SearchIcon, SettingsIcon, TicketIcon } from 'lucide-react'
+import { AlertTriangleIcon, ArrowLeftIcon, CheckIcon, CircleDotIcon, ExternalLinkIcon, MoreHorizontalIcon, PlayIcon, RefreshCwIcon, SettingsIcon, TicketIcon } from 'lucide-react'
 import { useEffect, useMemo, useState, type DragEvent } from 'react'
 import { useParams } from 'react-router'
 
 import type { TrackerAssociation, TrackerItem, TrackerItemResponse } from '@open-mercato/cezar-api-client'
-import { IssueBrowserEmpty, IssueBrowserLayout } from '@/components/issue-browser-layout'
-import { useIsDesktop } from '@/lib/use-desktop'
+import { ContextSidebar } from '@/components/context-sidebar'
+import { IssueBrowserEmpty } from '@/components/issue-browser-layout'
+import { Page } from '@/components/page'
 import { shortAge } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { TRACKER_PROVIDERS } from '@/lib/tracker-providers'
@@ -18,7 +19,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '@/components/ui/input-group'
+import { SidebarContent, SidebarGroup, SidebarGroupContent, SidebarHeader, SidebarInput, SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from '@/components/ui/sidebar'
 import { Spinner } from '@/components/ui/spinner'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toaster'
@@ -44,8 +45,8 @@ export function TrackerRoute() {
     const current = previous?.key === associationKey ? previous.value : emptySelection()
     return { key: associationKey, value: typeof update === 'function' ? update(current) : update }
   })
-  if (association.isPending) return <PageState text="Loading tracker…" loading />
-  if (association.isError) return (
+  if (association.isPending) return <TrackerFrame><PageState text="Loading tracker…" loading /></TrackerFrame>
+  if (association.isError) return <TrackerFrame>
     <IssueBrowserEmpty
       icon={<AlertTriangleIcon />}
       tone="danger"
@@ -53,13 +54,13 @@ export function TrackerRoute() {
       description={association.error.message}
       actions={<Button asChild variant="outline"><Link to="/settings/tracker">Open tracker settings</Link></Button>}
     />
-  )
+  </TrackerFrame>
   if (!association.data.association) return <SetupState />
   // Connection-bound scopes survive disconnect so Settings can display their selection.
   // They must not mount a browser/watch without the corresponding credentials.
   if (association.data.association.connectionId) {
-    if (connection.isPending) return <PageState text="Loading tracker…" loading />
-    if (connection.isError) return <div role="alert" className="flex min-h-full flex-col">
+    if (connection.isPending) return <TrackerFrame><PageState text="Loading tracker…" loading /></TrackerFrame>
+    if (connection.isError) return <TrackerFrame role="alert">
       <IssueBrowserEmpty
         icon={<AlertTriangleIcon />}
         tone="danger"
@@ -67,7 +68,7 @@ export function TrackerRoute() {
         description="The connection check did not answer. Your tracker settings are unchanged."
         actions={<Button variant="outline" onClick={() => void connection.refetch()}><RefreshCwIcon aria-hidden="true" />Retry connection</Button>}
       />
-    </div>
+    </TrackerFrame>
     if (!connection.data.demo && (
       connection.data.connection?.id !== association.data.association.connectionId
       || connection.data.connection?.kind !== association.data.association.kind
@@ -80,8 +81,20 @@ function trackerAssociationKey(association: TrackerAssociation): string {
   return `${association.kind}:${association.source.id}:${association.source.webUrl}:${association.externalId}:${association.connectionId ?? 'legacy'}`
 }
 
+/** A tracker screen with no list to show: the sidebar carries only its header, main the state. */
+function TrackerFrame({ children, ...props }: React.ComponentProps<typeof Page>) {
+  return <Page width="full" data-route="tracker" {...props}>
+    <ContextSidebar>
+      <SidebarHeader className="gap-3 p-3">
+        <h2 className="px-1 text-[15px] font-semibold text-foreground">Tracker</h2>
+      </SidebarHeader>
+    </ContextSidebar>
+    {children}
+  </Page>
+}
+
 function SetupState() {
-  return (
+  return <TrackerFrame>
     <IssueBrowserEmpty
       slot="tracker-setup"
       icon={<TicketIcon />}
@@ -89,14 +102,15 @@ function SetupState() {
       description="Choose a project or team from your issue tracker in project settings. Its issues then show up here, ready to hand to an agent."
       actions={<Button asChild variant="primary"><Link to="/settings/tracker"><SettingsIcon aria-hidden="true" />Open tracker settings</Link></Button>}
     />
-  )
+  </TrackerFrame>
 }
 
 function TrackerBrowse({ scopePending, association, selectedId, drafts, selection, setSelection }: { scopePending: boolean; association: TrackerAssociation; selectedId?: string; drafts: TrackerDraftCache; selection: TrackerHandoffSelection; setSelection: React.Dispatch<React.SetStateAction<TrackerHandoffSelection>> }) {
   const queryClient = useQueryClient()
-  const desktop = useIsDesktop()
-  const listVisible = desktop || selectedId === undefined
-  const [initialSelection, setInitialSelection] = useState<{ filter: string; id: string } | null>(null)
+  // The list lives in the contextual sidebar: a column on desktop, a sheet on phones. A phone
+  // reading an issue only needs the list while that sheet is open.
+  const { isMobile, openMobile } = useSidebar()
+  const listVisible = !isMobile || selectedId === undefined || openMobile
   const [queryDraft, setQueryDraft] = useState('')
   const [query, setQuery] = useState('')
   const [state, setState] = useState<'active' | 'all'>('active')
@@ -108,13 +122,7 @@ function TrackerBrowse({ scopePending, association, selectedId, drafts, selectio
   const failure = pages.find((page) => !page.available)
   const items = pages.flatMap((page) => page.available ? page.items : [])
 
-  const filterKey = JSON.stringify([query, state, labels])
-  const initialId = initialSelection?.filter === filterKey ? initialSelection.id : null
-  useEffect(() => {
-    if (initialId === null && items[0]) setInitialSelection({ filter: filterKey, id: items[0].id })
-  }, [initialId, items, filterKey])
-  // Pin implicit selection across automatic updates, but reset it for explicit filters.
-  const detailId = selectedId ?? (desktop ? initialId : null)
+  const detailId = selectedId ?? null
   const provider = TRACKER_PROVIDERS[association.kind].label
   // Mirrors GitHub's refresh (`github.tsx`'s `openThreadRef` cascade): a manual refresh must also
   // reach the item on screen, not just the list — otherwise "refresh" is theatre for whoever is
@@ -124,57 +132,73 @@ function TrackerBrowse({ scopePending, association, selectedId, drafts, selectio
     await (watch.ready ? watch.refresh() : result.restart())
     if (detailId) void queryClient.invalidateQueries({ queryKey: queryKeys.tracker.detail(association, detailId) })
   }
+  const busy = watch.checking || result.isFetching
+  const syncedLabel = watch.checkedAt ? `Synced ${shortAge(watch.checkedAt)} ago` : null
+  const countLabel = `${items.length}${result.hasNextPage ? '+' : ''} ${items.length === 1 && !result.hasNextPage ? 'issue' : 'issues'}`
 
-  return <IssueBrowserLayout name="tracker" route="tracker" selected={selectedId !== undefined} list={<>
-    <header data-slot="tracker-header" className="sticky top-0 z-10 bg-background/95 px-4 pt-5 pb-3 backdrop-blur">
-      <div className="flex min-w-0 items-center gap-2">
-        <div className="min-w-0 flex-1">
-          <h1 className="text-[22px] leading-7 font-semibold">{provider}</h1>
-          <p className="truncate text-[13px] text-muted-foreground" title={association.externalName}>{association.externalName}</p>
-        </div>
-        <Button variant="ghost" size="sm" aria-label="Refresh" title={`Refresh from ${provider}`} disabled={watch.checking || result.isFetching} onClick={() => void refresh()} className="shrink-0 font-normal tabular-nums">
-          <RefreshCwIcon aria-hidden="true" className={cn((watch.checking || result.isFetching) && 'motion-safe:animate-spin')} />
-          {watch.checkedAt ? `Synced ${shortAge(watch.checkedAt)} ago` : 'Refresh'}
-        </Button>
-        <Button asChild variant="ghost" size="icon-sm" className="shrink-0">
-          <Link to="/settings/tracker" aria-label="Connection settings" title="Connection settings"><SettingsIcon aria-hidden="true" /></Link>
-        </Button>
+  // One fragment for the list's chrome and one for its rows, rendered in the contextual sidebar
+  // and — on phones, on the bare `/tracker` — in main.
+  const listHeader = <>
+    <div data-slot="tracker-header" className="flex min-w-0 items-start gap-1">
+      <div className="min-w-0 flex-1 px-1">
+        <h2 className="text-[15px] font-semibold text-foreground">{provider}</h2>
+        <p className="truncate text-xs text-muted-foreground tabular-nums" title={association.externalName}>{association.externalName} · {countLabel}</p>
       </div>
-      <div className="mt-4 flex items-center justify-between gap-3">
-        <Tabs value={state} onValueChange={(next) => { setState(next === 'all' ? 'all' : 'active'); setStateExplicit(true) }}>
-          <TabsList aria-label="Issue state">
-            <TabsTrigger value="active">Active</TabsTrigger>
-            <TabsTrigger value="all">All states</TabsTrigger>
-          </TabsList>
-        </Tabs>
-        <h2 className="shrink-0 text-[13px] font-normal text-muted-foreground tabular-nums">{items.length}{result.hasNextPage ? '+' : ''} {items.length === 1 && !result.hasNextPage ? 'issue' : 'issues'}</h2>
-      </div>
-      <form className="mt-3 flex items-center gap-2" onSubmit={(event) => {
-        event.preventDefault()
-        const next = queryDraft.trim()
-        const nextState = stateExplicit ? state : next ? 'all' : 'active'
-        if (next === query && nextState === state) void refresh()
-        else { setQuery(next); setState(nextState) }
-      }}>
-        <InputGroup className="min-w-0 flex-1">
-          <InputGroupAddon><SearchIcon aria-hidden="true" /></InputGroupAddon>
-          <InputGroupInput type="search" aria-label="Search tracker" maxLength={256} value={queryDraft} onChange={(event) => setQueryDraft(event.target.value)} placeholder="Search issues…" />
-          <InputGroupAddon align="inline-end">
-            <InputGroupButton type="submit" variant="secondary" disabled={result.isFetching}>Search</InputGroupButton>
-          </InputGroupAddon>
-        </InputGroup>
-        <TrackerLabelFilter options={items.flatMap(item => item.labels)} selected={labels} onChange={setLabels} />
-      </form>
-    </header>
-    {watch.error ? <p role="status" className="px-4 py-2 text-[13px] text-danger">{watch.error} The displayed list may be outdated.</p> : null}
-    {watch.hasChanges ? <div className="mx-3 mb-2 flex items-center gap-3 rounded-lg bg-muted/60 px-3 py-2.5 text-[13px]"><p className="min-w-0 flex-1 text-pretty">New changes are available. Your loaded pages have been preserved.</p><Button size="sm" className="shrink-0" variant="outline" onClick={() => void watch.applyChanges()}>Show changes</Button></div> : null}
+      <Button variant="ghost" size="icon-sm" aria-label="Refresh" title={syncedLabel ? `${syncedLabel} — refresh from ${provider}` : `Refresh from ${provider}`} disabled={busy} onClick={() => void refresh()} className="shrink-0">
+        <RefreshCwIcon aria-hidden="true" className={cn(busy && 'motion-safe:animate-spin')} />
+      </Button>
+      <Button asChild variant="ghost" size="icon-sm" className="shrink-0">
+        <Link to="/settings/tracker" aria-label="Connection settings" title="Connection settings"><SettingsIcon aria-hidden="true" /></Link>
+      </Button>
+    </div>
+    <Tabs value={state} onValueChange={(next) => { setState(next === 'all' ? 'all' : 'active'); setStateExplicit(true) }}>
+      <TabsList aria-label="Issue state" className="w-full">
+        <TabsTrigger value="active">Active</TabsTrigger>
+        <TabsTrigger value="all">All states</TabsTrigger>
+      </TabsList>
+    </Tabs>
+    <form className="flex items-center gap-1.5" onSubmit={(event) => {
+      event.preventDefault()
+      const next = queryDraft.trim()
+      const nextState = stateExplicit ? state : next ? 'all' : 'active'
+      if (next === query && nextState === state) void refresh()
+      else { setQuery(next); setState(nextState) }
+    }}>
+      <SidebarInput type="search" aria-label="Search tracker" title="Press Enter to search" maxLength={256} value={queryDraft} onChange={(event) => setQueryDraft(event.target.value)} placeholder="Search issues…" className="min-w-0 flex-1" />
+      <button type="submit" className="sr-only" disabled={result.isFetching}>Search</button>
+      <TrackerLabelFilter options={items.flatMap(item => item.labels)} selected={labels} onChange={setLabels} />
+    </form>
+  </>
+
+  const listRows = <>
+    {watch.error ? <p role="status" className="px-2 py-2 text-[13px] text-danger">{watch.error} The displayed list may be outdated.</p> : null}
+    {watch.hasChanges ? <div className="mb-2 flex flex-col items-start gap-2 rounded-lg bg-muted/60 px-3 py-2.5 text-[13px]"><p className="text-pretty">New changes are available. Your loaded pages have been preserved.</p><Button size="sm" variant="outline" onClick={() => void watch.applyChanges()}>Show changes</Button></div> : null}
     {result.isPending && listVisible ? <PageState text="Loading issues…" loading /> : null}
-    {result.isError ? <div className="px-3"><Failure reason={result.error.message} generation={result.errorUpdatedAt} retryAfterSeconds={result.error instanceof TrackerRefreshError && result.error.failure.code === 'rate_limited' ? result.error.failure.retryAfterSeconds : undefined} retry={() => void result.restart()} /></div> : null}
-    {failure && !failure.available ? <div className="px-3"><Failure reason={failure.reason} generation={result.dataUpdatedAt} retryAfterSeconds={failure.code === 'rate_limited' ? failure.retryAfterSeconds : undefined} retry={() => void result.restart()} /></div> : null}
+    {result.isError ? <Failure reason={result.error.message} generation={result.errorUpdatedAt} retryAfterSeconds={result.error instanceof TrackerRefreshError && result.error.failure.code === 'rate_limited' ? result.error.failure.retryAfterSeconds : undefined} retry={() => void result.restart()} /> : null}
+    {failure && !failure.available ? <Failure reason={failure.reason} generation={result.dataUpdatedAt} retryAfterSeconds={failure.code === 'rate_limited' ? failure.retryAfterSeconds : undefined} retry={() => void result.restart()} /> : null}
     {!result.isPending && !result.isError && !failure && items.length === 0 ? <PageState text={query.trim() ? 'No issues match this search.' : 'No issues in this view.'} /> : null}
-    <ul data-slot="tracker-rows" className="flex flex-col gap-px px-2 pb-3">{items.map(item => <TrackerRow scopePending={scopePending} key={item.id} association={association} item={item} active={detailId === item.id} />)}</ul>
-    {result.hasNextPage ? <Button className="mx-4 mb-4 shrink-0" variant="outline" onClick={() => void result.fetchNextPage()} disabled={result.isFetchingNextPage}>Load more</Button> : null}
-  </>} detail={detailId ? <TrackerDetail scopePending={scopePending} key={`${trackerAssociationKey(association)}:${detailId}`} association={association} id={detailId} drafts={drafts} selection={selection} onSelectionChange={setSelection} /> : <IssueBrowserEmpty icon={<CircleDotIcon />} title="Nothing selected" description="Choose an issue from the list." />} />
+    <SidebarMenu data-slot="tracker-rows">{items.map(item => <TrackerRow scopePending={scopePending} key={item.id} association={association} item={item} active={detailId === item.id} />)}</SidebarMenu>
+    {result.hasNextPage ? <Button className="mt-2 w-full shrink-0" variant="outline" size="sm" onClick={() => void result.fetchNextPage()} disabled={result.isFetchingNextPage}>Load more</Button> : null}
+  </>
+
+  return <Page width="full" data-route="tracker">
+    <ContextSidebar>
+      <SidebarHeader className="gap-3 p-3">{listHeader}</SidebarHeader>
+      <SidebarContent>
+        <SidebarGroup className="pt-0">
+          <SidebarGroupContent data-slot="tracker-list">{listRows}</SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
+    </ContextSidebar>
+    {detailId
+      ? <TrackerDetail scopePending={scopePending} key={`${trackerAssociationKey(association)}:${detailId}`} association={association} id={detailId} drafts={drafts} selection={selection} onSelectionChange={setSelection} />
+      : isMobile
+        ? <section data-slot="tracker-list" aria-label="Issues" className="flex flex-col">
+            <div className="flex flex-col gap-3 p-3">{listHeader}</div>
+            <div className="px-2 pb-6">{listRows}</div>
+          </section>
+        : <IssueBrowserEmpty slot="tracker-pick" icon={<CircleDotIcon />} title="Pick an issue" description="Choose one from the list to read it and hand it to an agent." />}
+  </Page>
 }
 
 /** How many label chips a list row shows before folding the rest into "+n". */
@@ -209,14 +233,17 @@ function TrackerRow({ scopePending, association, item, active }: { scopePending:
   }
   const shownLabels = item.labels.slice(0, ROW_LABELS)
   const hiddenLabels = item.labels.length - shownLabels.length
-  return <li><Link to={`/tracker/${encodeURIComponent(item.id)}`} draggable onMouseEnter={preload} onFocus={preload} onDragStart={drag} data-slot="tracker-row" aria-current={active ? 'page' : undefined} title="Drag into the composer to prefill a task" className={cn('flex min-h-14 gap-2.5 rounded-lg px-2.5 py-2.5 transition-colors outline-none hover:bg-muted/60 focus-visible:bg-muted/60', active && 'bg-muted hover:bg-muted')}>
-    <CircleDotIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-    <span className="flex min-w-0 flex-1 flex-col gap-1">
-      <span className={cn('line-clamp-2 text-[13.5px] leading-snug font-medium text-pretty', active && 'font-semibold')}>{item.title}</span>
-      <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground tabular-nums"><span className="shrink-0">{item.id}</span><span aria-hidden="true">·</span><span className="min-w-0 truncate">{item.author}</span><span aria-hidden="true">·</span><span className="shrink-0" title={new Date(item.updatedAt).toLocaleString()}>{shortAge(item.updatedAt)}</span></span>
-      <span className="flex flex-wrap items-center gap-1 pt-0.5"><Badge variant="secondary" className="px-1.5 py-0 font-normal">{item.status}</Badge>{shownLabels.map(label => <LabelChip key={label} label={label} />)}{hiddenLabels > 0 ? <span title={item.labels.slice(ROW_LABELS).join(', ')} className="text-xs text-muted-foreground tabular-nums">+{hiddenLabels}</span> : null}</span>
-    </span>
-  </Link></li>
+  return <SidebarMenuItem><SidebarMenuButton asChild isActive={active} className="h-auto items-start gap-2.5 py-2">
+    <Link to={`/tracker/${encodeURIComponent(item.id)}`} draggable onMouseEnter={preload} onFocus={preload} onDragStart={drag} data-slot="tracker-row" aria-current={active ? 'page' : undefined} title="Drag into the composer to prefill a task">
+      <CircleDotIcon aria-hidden="true" className="mt-0.5 text-muted-foreground" />
+      {/* A div, not a span: the menu button truncates its last child SPAN to one line. */}
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <span className="line-clamp-2 text-[13px] leading-snug text-pretty">{item.title}</span>
+        <span className="flex min-w-0 items-center gap-1.5 text-xs font-normal text-muted-foreground tabular-nums"><span className="shrink-0">{item.id}</span><span aria-hidden="true">·</span><span className="min-w-0 truncate">{item.author}</span><span aria-hidden="true">·</span><span className="shrink-0" title={new Date(item.updatedAt).toLocaleString()}>{shortAge(item.updatedAt)}</span></span>
+        <span className="flex flex-wrap items-center gap-1 pt-0.5"><Badge variant="secondary" className="px-1.5 py-0 font-normal">{item.status}</Badge>{shownLabels.map(label => <LabelChip key={label} label={label} />)}{hiddenLabels > 0 ? <span title={item.labels.slice(ROW_LABELS).join(', ')} className="text-xs font-normal text-muted-foreground tabular-nums">+{hiddenLabels}</span> : null}</span>
+      </div>
+    </Link>
+  </SidebarMenuButton></SidebarMenuItem>
 }
 
 function LabelChip({ label }: { label: string }) {
@@ -269,7 +296,7 @@ function TrackerDetail({ scopePending, association, id, selection, onSelectionCh
             <Badge variant="secondary" className="font-medium">{item.status}</Badge>
             <span>Issue <span className="tabular-nums">{item.id}</span></span>
           </div>
-          <h2 className="text-[22px] leading-7 font-semibold text-pretty">{item.title}</h2>
+          <h1 className="text-[22px] leading-7 font-semibold text-pretty">{item.title}</h1>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {queuedRunId ? (

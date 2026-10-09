@@ -1,5 +1,4 @@
 import { CalendarClockIcon, PlusIcon, ZapIcon } from 'lucide-react'
-import { useState } from 'react'
 import type { AutomationsResponse } from '@open-mercato/cezar-api-client'
 
 import { Page, PageBody, PageHeader, PageToolbar } from '@/components/page'
@@ -12,7 +11,7 @@ import { Link } from '@/lib/project-router'
 import { PageState, type AutomationsView } from './automations-route'
 import { AutomationsTable } from './automations-table'
 import { DayView } from './day-view'
-import { NextRunsRail, nextRuns } from './next-runs-rail'
+import type { NextRun } from './next-runs-rail'
 import { StatsStrip } from './stats-strip'
 import type { AutomationActions } from './use-automations'
 import { WeekView } from './week-view'
@@ -24,8 +23,9 @@ const VIEWS: { value: AutomationsView; label: string }[] = [
 ]
 
 /**
- * `/automations` (spec 2026-09-14-automations-redesign § UI/UX 1–3): the header with the
- * List | Week | Day switch, then whichever of the three the `?view=` param names. One header for
+ * `/automations` (spec 2026-09-14-automations-redesign § UI/UX 1–3): the header, then whichever
+ * of List | Week | Day the `?view=` param names. The switch and "Next runs" live in the contextual
+ * sidebar; the toolbar keeps its own copy below `md`, where the sidebar is a closed sheet. One header for
  * all three so the switch never jumps; the status trio (scheduler · GitHub · zone) reads from the
  * same payload the table does, so "GitHub unavailable" and the capability-paused rows agree.
  */
@@ -35,17 +35,21 @@ export function AutomationsList({
   actions,
   view,
   onViewChange,
+  upcoming,
+  pollCount,
+  onNextRuns,
 }: {
   data: AutomationsResponse | undefined
   error?: string
   actions: AutomationActions
   view: AutomationsView
   onViewChange: (view: AutomationsView) => void
+  /** Computed once by the route, which also owns the "Next runs" sheet the sidebar opens. */
+  upcoming: readonly NextRun[]
+  pollCount: number
+  onNextRuns: () => void
 }) {
-  const [railOpen, setRailOpen] = useState(false)
   const now = Date.now()
-  const upcoming = data ? nextRuns(data.automations, now, data.timeZone, 12) : []
-  const pollCount = data ? data.automations.filter((automation) => automation.kind === 'github' && automation.enabled).length : 0
 
   return (
     <Page data-route="automations" width="wide">
@@ -68,6 +72,7 @@ export function AutomationsList({
           size="sm"
           data-slot="automations-view"
           aria-label="View"
+          className="md:hidden"
           value={view}
           onValueChange={(next) => {
             // Radio semantics: re-clicking the pressed view keeps it.
@@ -102,9 +107,8 @@ export function AutomationsList({
           <Button
             variant="outline"
             size="sm"
-            aria-expanded={railOpen}
-            className="shrink-0 max-lg:ml-auto"
-            onClick={() => setRailOpen(true)}
+            className="shrink-0 max-lg:ml-auto md:hidden"
+            onClick={onNextRuns}
           >
             <CalendarClockIcon aria-hidden="true" />
             Next runs
@@ -149,14 +153,6 @@ export function AutomationsList({
             pollCount={pollCount}
             upcoming={upcoming}
             timeZone={data.timeZone}
-          />
-          <NextRunsRail
-            open={railOpen}
-            onOpenChange={setRailOpen}
-            upcoming={upcoming}
-            pollCount={pollCount}
-            timeZone={data.timeZone}
-            now={now}
           />
         </PageBody>
       )}

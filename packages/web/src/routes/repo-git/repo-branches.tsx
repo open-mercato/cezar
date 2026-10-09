@@ -9,11 +9,12 @@ import {
   PlusIcon,
   SearchIcon,
 } from 'lucide-react'
-import { useState, type FormEvent } from 'react'
+import { useRef, useState, type FormEvent, type ReactNode } from 'react'
 
 import { createRepoBranch, putConfig } from '@/api/client'
 import { queryKeys, useGithub, useHealth } from '@/api/queries'
 import type { GithubItem, HealthResponse, RepoInfo, RepoResponse } from '@open-mercato/cezar-api-client'
+import { ContextSidebar } from '@/components/context-sidebar'
 import { PageBody, PageSection, PageToolbar } from '@/components/page'
 import { StatusDot } from '@/components/status-dot'
 import { Badge } from '@/components/ui/badge'
@@ -29,10 +30,21 @@ import { Field, FieldDescription, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import {
+  SidebarContent,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarInput,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from '@/components/ui/sidebar'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from '@/components/ui/toaster'
 import { cn, isHttpUrl } from '@/lib/utils'
+
+import { useCloseSidebarSheet } from './repo-sidebar'
 
 /** Radix Select has no empty-string item: this stands for "no base branch configured". */
 const FOLLOW_CHECKED_OUT = '__follow__'
@@ -48,8 +60,21 @@ const FOLLOW_CHECKED_OUT = '__follow__'
  * the forge driver available — no driver, no PR surface, per the forge-seam doctrine. The
  * component gate doubles as the fetch gate: `<ForgePullRequests>` mounts (and so queries
  * `/api/github`) only behind it.
+ *
+ * The contextual sidebar carries the filterable branch list (current/base marked); picking one
+ * brings its row — and so its actions — into view in the table. The filter is one piece of
+ * state: the sidebar's input and the phone toolbar's input both write it, and both lists read it.
  */
-export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: RepoInfo }) {
+export function RepoBranchesSection({
+  repo,
+  info,
+  header,
+}: {
+  repo: RepoResponse
+  info: RepoInfo
+  /** The Git sidebar header, given this section's filter row to hold. */
+  header: (extra?: ReactNode) => ReactNode
+}) {
   const health = useHealth()
   const queryClient = useQueryClient()
   const onError = (error: Error) => toast(error.message, { tone: 'danger' })
@@ -108,14 +133,50 @@ export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: 
       },
     })
   }
+  // The branch picked in the sidebar: its table row is scrolled to and marked.
+  const [focused, setFocused] = useState<string | null>(null)
+  const rows = useRef(new Map<string, HTMLTableRowElement>())
+  const focusBranch = (name: string) => {
+    setFocused(name)
+    rows.current.get(name)?.scrollIntoView({ block: 'center' })
+  }
   const copyName = (name: string) => {
     void navigator.clipboard?.writeText(name).then(() => toast(`Copied ${name}`))
   }
 
   return (
     <section data-slot="repo-branches" className="flex flex-1 flex-col">
-      <PageToolbar>
-        <InputGroup className="w-full sm:max-w-xs">
+      <ContextSidebar>
+        {header(
+          <SidebarInput
+            aria-label="Filter branches"
+            placeholder="Filter branches…"
+            value={branchQuery}
+            onChange={(event) => setBranchQuery(event.target.value)}
+          />,
+        )}
+        <SidebarContent>
+          <SidebarGroup className="pt-0">
+            <SidebarGroupContent>
+              <BranchMenu
+                branches={filteredBranches}
+                current={info.branch}
+                base={repo.baseBranch}
+                focused={focused}
+                onPick={focusBranch}
+              />
+              {filteredBranches.length === 0 ? (
+                <p className="px-2 py-1.5 text-xs text-muted-foreground">No branches match.</p>
+              ) : null}
+            </SidebarGroupContent>
+          </SidebarGroup>
+        </SidebarContent>
+      </ContextSidebar>
+
+      <PageToolbar className="gap-x-3 pt-4">
+        <h1 className="text-[15px] font-semibold text-foreground">Branches</h1>
+        {/* Phones filter here — the sidebar (and its filter) is a closed sheet. */}
+        <InputGroup className="order-last w-full md:hidden">
           <InputGroupAddon>
             <SearchIcon aria-hidden="true" />
           </InputGroupAddon>
@@ -182,7 +243,17 @@ export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: 
                 const current = name === info.branch
                 const base = name === repo.baseBranch
                 return (
-                  <TableRow key={name} data-slot="branch-row" data-branch={name} className="h-11 hover:bg-muted/50">
+                  <TableRow
+                    key={name}
+                    ref={(el) => {
+                      if (el) rows.current.set(name, el)
+                      else rows.current.delete(name)
+                    }}
+                    data-slot="branch-row"
+                    data-branch={name}
+                    data-state={focused === name ? 'selected' : undefined}
+                    className="h-11 hover:bg-muted/50"
+                  >
                     <TableCell className="max-w-0 pl-4">
                       <div className="flex min-w-0 items-center gap-2.5">
                         <GitBranchIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
@@ -277,6 +348,54 @@ export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: 
         </div>
       </PageBody>
     </section>
+  )
+}
+
+/** The sidebar's branch list. Its own component because closing the phone sheet after a pick
+ *  needs the sidebar context, which exists only inside `<ContextSidebar>`. */
+function BranchMenu({
+  branches,
+  current,
+  base,
+  focused,
+  onPick,
+}: {
+  branches: string[]
+  current: string
+  base: string | null | undefined
+  focused: string | null
+  onPick: (name: string) => void
+}) {
+  const closeSheet = useCloseSidebarSheet()
+  return (
+    <SidebarMenu data-slot="repo-branch-menu">
+      {branches.map((name) => (
+        <SidebarMenuItem key={name}>
+          <SidebarMenuButton
+            isActive={focused === name}
+            title={name}
+            onClick={() => {
+              closeSheet()
+              onPick(name)
+            }}
+          >
+            <GitBranchIcon aria-hidden="true" className="text-muted-foreground" />
+            <span className={cn('min-w-0 flex-1 truncate font-mono text-[12.5px]', name === current && 'font-semibold')}>
+              {name}
+            </span>
+            {name === current ? (
+              <span className="flex shrink-0 items-center gap-1.5 text-xs font-normal text-muted-foreground">
+                <StatusDot tone="success" />
+                Current
+              </span>
+            ) : null}
+            {name === base ? (
+              <span className="shrink-0 text-xs font-normal text-muted-foreground">Base</span>
+            ) : null}
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+      ))}
+    </SidebarMenu>
   )
 }
 

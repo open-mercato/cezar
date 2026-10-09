@@ -15,7 +15,7 @@ export function TrackerLabelFilter({ options, selected, onChange }: {
   const toggle = (label: string) => onChange(selected.includes(label) ? selected.filter(value => value !== label) : [...selected, label])
   const custom = query.trim()
   return <Popover onOpenChange={open => { if (!open) setQuery('') }}>
-    <PopoverTrigger asChild><Button variant="outline" aria-label="Filter labels" className={cn('shrink-0 px-2.5 font-normal text-muted-foreground', selected.length > 0 && 'text-foreground')}><TagIcon aria-hidden="true" />Labels{selected.length ? <Badge variant="secondary" className="px-1.5 py-0 tabular-nums">{selected.length}</Badge> : null}</Button></PopoverTrigger>
+    <PopoverTrigger asChild><Button variant="outline" size="sm" aria-label="Filter labels" className={cn('shrink-0 px-2 font-normal text-muted-foreground', selected.length > 0 && 'text-foreground')}><TagIcon aria-hidden="true" />Labels{selected.length ? <Badge variant="secondary" className="px-1.5 py-0 tabular-nums">{selected.length}</Badge> : null}</Button></PopoverTrigger>
     <PopoverContent align="end" sideOffset={6} className="w-60 p-0">
       <Command label="Find or add label" shouldFilter={false}>
         <CommandInput aria-label="Find or add label" placeholder="Find or add label…" value={query} onValueChange={setQuery} maxLength={256} />

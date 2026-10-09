@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import * as React from 'react'
 import { Link, useSearchParams } from 'react-router'
+import { useGlobalSettings } from '@/components/global-settings'
 
 import { archiveProjectRun, setProjectRunRead } from '@/api/client'
 import {
@@ -622,6 +623,7 @@ function FilterMenu({
   tasks: readonly GlobalTask[]
   view: ListView
 }) {
+  const globalSettings = useGlobalSettings()
   const tags = React.useMemo(() => allProjectTags(projects), [projects])
 
   // One `tasksExcludingFacet` per facet: the counts a facet shows must not already assume that
@@ -695,9 +697,13 @@ function FilterMenu({
             // A workspace with no tags anywhere is the ONE state where the feature is invisible.
             <p data-slot="no-tags-hint">
               Tag connected repositories in{' '}
-              <Link to="/settings/global/projects" className="font-medium text-foreground underline underline-offset-4">
+              <button
+                type="button"
+                onClick={() => globalSettings.open('projects')}
+                className="font-medium text-foreground underline underline-offset-4"
+              >
                 Settings → Projects
-              </Link>{' '}
+              </button>{' '}
               to filter and group their tasks here.
             </p>
           ) : undefined

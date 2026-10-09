@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
 import { useHostHistory, useHostLastFrameAt, useHostTransport, useHostUsage } from '@/api/host-usage'
-import { Link } from '@/lib/project-router'
+import { useGlobalSettings } from '@/components/global-settings'
 import { effectiveHostView, formatCpuCores, formatMemPair } from '@/lib/host-effective'
 import { useIsDesktop } from '@/lib/use-desktop'
 import { cn } from '@/lib/utils'
@@ -67,6 +67,7 @@ export function HostUsageWidget() {
 }
 
 function HostUsageWidgetRow() {
+  const globalSettings = useGlobalSettings()
   const sample = useHostUsage()
   const history = useHostHistory()
   const lastFrameAt = useHostLastFrameAt()
@@ -115,8 +116,15 @@ function HostUsageWidgetRow() {
   const summary =`CPU ${cpuText}${cpuCores === undefined ? '' : ` of ${cpuCores}`}, RAM ${memPctText} (${memText})`
 
   return (
-    <Link
-      to="/settings/resources"
+    <button
+      type="button"
+      // Resources are a global section, so this opens the settings dialog in place. The row sits
+      // in the cockpit menu without being a menu item, so nothing closes that menu for it: the
+      // Escape is how it asks the menu to step aside before the dialog mounts.
+      onClick={(event) => {
+        event.currentTarget.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+        globalSettings.open('resources')
+      }}
       data-slot="host-usage-widget"
       data-state={stale ? 'stale' : 'live'}
       // How many frames the store holds - the e2e proof that the root writer keeps feeding it.
@@ -129,7 +137,7 @@ function HostUsageWidgetRow() {
         // to each other however wide `sampling…` renders. `leading-[14px]` is load-bearing: the
         // default `normal` line box for 11px text is ~13px, and pinning it keeps the row's height
         // a property of this file rather than of the font the browser happened to pick.
-        'grid grid-cols-[auto_minmax(0,1fr)_auto_auto_minmax(0,1fr)_auto] items-center gap-x-1.5 rounded-md border border-border px-2 py-1 text-[11px] leading-[14px] text-soft-foreground transition-colors hover:bg-muted hover:text-foreground',
+        'grid w-full grid-cols-[auto_minmax(0,1fr)_auto_auto_minmax(0,1fr)_auto] items-center text-left gap-x-1.5 rounded-md border border-border px-2 py-1 text-[11px] leading-[14px] text-soft-foreground transition-colors hover:bg-muted hover:text-foreground',
         stale ? 'opacity-70' : null,
       )}
     >
@@ -146,7 +154,7 @@ function HostUsageWidgetRow() {
         value={memPctText}
         gutter
       />
-    </Link>
+    </button>
   )
 }
 

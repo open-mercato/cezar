@@ -14,10 +14,8 @@ export function SkillsLoading() {
         data-slot="skills-loading"
         role="status"
         aria-label="Loading skills…"
-        className="grid items-start gap-6 md:grid-cols-[19rem_minmax(0,1fr)] lg:grid-cols-[21rem_minmax(0,1fr)]"
       >
-        <Skeleton className="h-72 w-full rounded-xl" />
-        <Skeleton className="hidden h-96 w-full rounded-xl md:block" />
+        <Skeleton className="h-96 w-full rounded-xl" />
         <span className="sr-only">Loading skills…</span>
       </PageBody>
     </Page>

@@ -3,7 +3,7 @@ import { AutomationOutcomes, BackendComparison } from './insights'
 import { Overview } from './overview'
 import { useContext, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
-import { ChevronRightIcon, InboxIcon, LayoutDashboardIcon, SlidersHorizontalIcon } from 'lucide-react'
+import { ChevronRightIcon, CoinsIcon, InboxIcon, LayoutDashboardIcon, SlidersHorizontalIcon, ZapIcon } from 'lucide-react'
 import { StatusDot } from '@/components/status-dot'
 import { DisclosureChevron, disclosureSummary, Notice, WidgetEmpty, WidgetSkeleton, widgetHeader, widgetHeading, widgetMeta } from './presentation'
 import type {
@@ -21,6 +21,16 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Page, PageBody, PageHeader } from '@/components/page'
+import { ContextSidebar } from '@/components/context-sidebar'
+import {
+  SidebarContent,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from '@/components/ui/sidebar'
 import { useDashboardFilter } from './url-filter'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
@@ -52,9 +62,9 @@ import {
 import { useDashboardPage, useDisplacedRows } from './pages'
 
 const views = [
-  ['overview', 'Overview'],
-  ['costs', 'Usage & cost'],
-  ['automations', 'Automations'],
+  ['overview', 'Overview', LayoutDashboardIcon],
+  ['costs', 'Usage & cost', CoinsIcon],
+  ['automations', 'Automations', ZapIcon],
 ] as const
 
 export function DashboardRoute() {
@@ -229,11 +239,45 @@ function DashboardView({ entryKey }: { entryKey: string }) {
       : view === 'automations'
         ? { label: 'Launched', value: automationsPeriod, set: setAutomationsPeriod }
         : null
+  // One view switch for the sidebar and the phone header: `?view=`, dropping any open panel.
+  const openView = (id: string) => {
+    const next = new URLSearchParams(search)
+    next.set('view', id)
+    next.delete('panel')
+    void navigate(`?${next}`, {
+      state: { ...location.state, dashboardEntry: undefined },
+    })
+  }
   return (
     <DashboardEntryContext.Provider value={entryKey}>
       <DashboardReconciledContext.Provider
         value={!restored || (!query.isFetching && !query.isError)}
       >
+        <ContextSidebar>
+          <SidebarHeader className="p-3">
+            <h2 className="px-1 text-[15px] font-semibold text-foreground">Dashboard</h2>
+          </SidebarHeader>
+          <SidebarContent>
+            <SidebarGroup className="pt-0">
+              <SidebarGroupContent>
+                <SidebarMenu aria-label="Dashboard views">
+                  {views.map(([id, label, Icon]) => (
+                    <SidebarMenuItem key={id}>
+                      <SidebarMenuButton
+                        isActive={view === id}
+                        aria-current={view === id ? 'page' : undefined}
+                        onClick={() => openView(id)}
+                      >
+                        <Icon aria-hidden="true" />
+                        <span>{label}</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          </SidebarContent>
+        </ContextSidebar>
         <Page ref={root} width="wide" data-route="dashboard">
           <PageHeader
             title={
@@ -346,18 +390,9 @@ function DashboardView({ entryKey }: { entryKey: string }) {
               </>
             }
           >
-            <Tabs
-              value={view}
-              activationMode="manual"
-              onValueChange={(id) => {
-                const next = new URLSearchParams(search)
-                next.set('view', id)
-                next.delete('panel')
-                void navigate(`?${next}`, {
-                  state: { ...location.state, dashboardEntry: undefined },
-                })
-              }}
-            >
+            {/* The views live in the contextual sidebar; below md, where that is a closed sheet,
+                the header keeps the switch. */}
+            <Tabs value={view} activationMode="manual" onValueChange={openView} className="md:hidden">
               <div className="border-b">
                 <TabsList variant="line" aria-label="Dashboard views" className="-mb-px gap-4 p-0">
                   {views.map(([id, label]) => (

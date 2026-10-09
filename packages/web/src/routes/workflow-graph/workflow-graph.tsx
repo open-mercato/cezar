@@ -70,7 +70,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
-import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
 import { useNavigate } from '@/lib/project-router'
@@ -107,6 +107,7 @@ import {
 } from '@/lib/workflow-graph'
 
 import { WorkflowsLoading } from '../workflows/workflows-loading'
+import { WorkflowsSidebar } from '../workflows/workflows-sidebar'
 import { backLanes, CANVAS_THEME, CATEGORY_ORDER, TYPE_LABEL, edgeStyle, edgeTypes, GraphNodeView, ICONS, type InnerStep, TILE, TONE, WIDE_WIDTH } from './graph-node'
 
 /**
@@ -126,8 +127,6 @@ import { backLanes, CANVAS_THEME, CATEGORY_ORDER, TYPE_LABEL, edgeStyle, edgeTyp
 
 const RUNNERS = ['claude', 'codex', 'opencode', 'cursor', 'pi'] as const
 const DRAG_MIME = 'application/x-cezar-node'
-/** Radix Select has no empty-string item: this stands for the blank canvas at `/workflows`. */
-const NEW_WORKFLOW = '__new__'
 
 type FlowNodeData = {
   node: WorkflowGraphNode
@@ -650,9 +649,31 @@ function WorkflowGraphEditor() {
     setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
 
-  if (catalog.isPending || (routeName && workflows.isPending)) return <WorkflowsLoading />
+  // The list of workflows lives in the contextual sidebar; opening another one from a canvas
+  // with unsaved edits asks first, exactly as the toolbar's picker did.
+  const sidebar = (
+    <WorkflowsSidebar
+      activeName={routeName}
+      onOpen={(to) => {
+        if (!dirty) return true
+        setConfirm({ kind: 'discard', to })
+        return false
+      }}
+    />
+  )
+
+  if (catalog.isPending || (routeName && workflows.isPending)) {
+    return (
+      <>
+        {sidebar}
+        <WorkflowsLoading />
+      </>
+    )
+  }
   if (catalog.isError) {
     return (
+      <>
+      {sidebar}
       <Empty data-slot="centered-state" className="min-h-full flex-1">
         <EmptyHeader>
           <EmptyMedia variant="icon"><AlertTriangleIcon /></EmptyMedia>
@@ -660,6 +681,7 @@ function WorkflowGraphEditor() {
           <EmptyDescription>{catalog.error instanceof Error ? catalog.error.message : 'Try again in a moment.'}</EmptyDescription>
         </EmptyHeader>
       </Empty>
+      </>
     )
   }
 
@@ -676,48 +698,11 @@ function WorkflowGraphEditor() {
 
   return (
     <Page width="full" data-route="workflows" className="h-full min-h-0">
-      {/* The slim toolbar: which workflow, its name and state on the left; the canvas tools, the
+      {sidebar}
+      {/* The slim toolbar: the workflow's name and state on the left; the canvas tools, the
           secondary actions menu and the one primary — Save — on the right. */}
       <header className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border bg-background px-3 py-1.5">
-        <Select
-          value={routeName ?? NEW_WORKFLOW}
-          onValueChange={(value) => {
-            const to = value === NEW_WORKFLOW ? '/workflows' : `/workflows/${encodeURIComponent(value)}`
-            if (dirty) setConfirm({ kind: 'discard', to })
-            else void navigate(to)
-          }}
-        >
-          <SelectTrigger size="sm" aria-label="Open workflow" className="max-w-48 border-transparent bg-transparent font-medium shadow-none hover:bg-muted">
-            <WorkflowIcon aria-hidden="true" className="text-muted-foreground" />
-            <SelectValue placeholder={routeName ?? 'Open workflow'} />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={NEW_WORKFLOW}>New workflow</SelectItem>
-            <SelectSeparator />
-            <SelectGroup>
-              <SelectLabel>This repo</SelectLabel>
-              {workflows.data?.workflows
-                .filter((w) => w.source === 'file')
-                .map((w) => (
-                  <SelectItem key={w.name} value={w.name}>
-                    {w.name}
-                    {w.graph ? '' : ' (v1)'}
-                  </SelectItem>
-                ))}
-            </SelectGroup>
-            <SelectGroup>
-              <SelectLabel>Built-in templates</SelectLabel>
-              {workflows.data?.workflows
-                .filter((w) => w.source === 'built-in')
-                .map((w) => (
-                  <SelectItem key={w.name} value={w.name}>
-                    {w.name}
-                  </SelectItem>
-                ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-        <span aria-hidden="true" className="text-soft-foreground">/</span>
+        <WorkflowIcon aria-hidden="true" className="ml-1 size-4 shrink-0 text-muted-foreground" />
         <Input
           aria-label="Workflow name"
           placeholder="Name this workflow"

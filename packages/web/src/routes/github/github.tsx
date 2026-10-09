@@ -37,7 +37,9 @@ import type {
   GithubPrMergeState,
   UiState,
 } from '@open-mercato/cezar-api-client'
-import { IssueBrowserEmpty, IssueBrowserLayout } from '@/components/issue-browser-layout'
+import { ContextSidebar } from '@/components/context-sidebar'
+import { IssueBrowserEmpty } from '@/components/issue-browser-layout'
+import { Page } from '@/components/page'
 import { Diff, type DiffFileChange } from '@/components/diff'
 import { useRememberedEnginePick } from '@/components/engine-pills'
 import { GithubIcon } from '@/components/icons'
@@ -66,6 +68,18 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import {
+  SidebarContent,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInput,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  useSidebar,
+} from '@/components/ui/sidebar'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
@@ -167,6 +181,8 @@ export function GithubRoute({
   index?: boolean
 }) {
   const { n } = useParams()
+  // Phones have no sidebar column (it is a sheet), so the bare list URLs render the list in main.
+  const { isMobile } = useSidebar()
   // One fast shot now that the list dropped `statusCheckRollup` (#664) — no more fast/full swap.
   const list = useGithub({ limit: LIST_LIMIT })
   // #801: automations are opt-in, so the cross-link into them exists exactly while the server
@@ -378,14 +394,15 @@ export function GithubRoute({
   if (!gh) {
     if (list.isError) {
       return (
-        <div data-route="github" className="flex min-h-full flex-col">
+        <Page width="full" data-route="github">
+          <GithubSidebarTitle />
           <IssueBrowserEmpty
             icon={<TriangleAlertIcon />}
             tone="danger"
             title="Could not load GitHub"
             description={list.error.message}
           />
-        </div>
+        </Page>
       )
     }
     return <GithubLoading />
@@ -396,7 +413,8 @@ export function GithubRoute({
 
   if (!gh.available) {
     return (
-      <div data-route="github" className="flex min-h-full flex-col">
+      <Page width="full" data-route="github">
+        <GithubSidebarTitle />
         <IssueBrowserEmpty
           icon={<GithubIcon />}
           title="GitHub is unavailable here"
@@ -419,7 +437,7 @@ export function GithubRoute({
             Everything else in the cockpit works without it.
           </p>
         </IssueBrowserEmpty>
-      </div>
+      </Page>
     )
   }
 
@@ -458,18 +476,17 @@ export function GithubRoute({
   const labelColors = { ...(searchPayload?.labelColors ?? {}), ...(gh.labelColors ?? {}) }
   const labelOptions = allLabels(allItems)
   const number = n === undefined ? null : Number.parseInt(n, 10)
-  // No URL selection → the first item, like the legacy tab (rendered, not navigated-to). The
-  // selection may point at an item outside the current filter — keep resolving it from the full
-  // list so a deep link to #N still opens even while a filter is active. Search hits are the last
-  // resort so a found-on-GitHub row is openable in the detail pane like any other.
+  // No URL selection → nothing selected: the list lives in the contextual sidebar and main asks
+  // the user to pick. The selection may point at an item outside the current filter — keep
+  // resolving it from the full list so a deep link to #N still opens even while a filter is
+  // active. Search hits are the last resort so a found-on-GitHub row is openable like any other.
   const selected =
     number === null
-      ? (items[0] ?? searchHits[0] ?? null)
+      ? null
       : (allItems.find((item) => item.number === number) ??
         searchHits.find((item) => item.number === number) ??
         null)
-  // Feed the refresh mutation the thread that is genuinely rendered — including the no-`:n`
-  // fallback to items[0], which is what the bare /github and /github/prs routes show.
+  // Feed the refresh mutation the thread that is genuinely rendered (none on the bare list URLs).
   openThreadRef.current = selected ? { kind: selected.kind, number: selected.number } : null
 
   const listPath = view === 'issues' ? '/github' : '/github/prs'
@@ -516,223 +533,258 @@ export function GithubRoute({
     <p>No open {view === 'issues' ? 'issues' : 'pull requests'} match your filter.</p>
   )
 
-  return (
-    <IssueBrowserLayout name="gh" route="github" selected={n !== undefined} list={<>
-        <header data-slot="gh-header" className="sticky top-0 z-10 bg-background/95 px-4 pt-5 pb-3 backdrop-blur">
-          <div className="flex min-w-0 items-center gap-2">
-            <div className="min-w-0 flex-1">
-              <h1 className="text-[22px] leading-7 font-semibold">GitHub</h1>
-              {gh.repo ? (
-                <p data-slot="gh-repo" className="truncate text-[13px] text-muted-foreground">
-                  {gh.repo}
-                </p>
-              ) : null}
-            </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              data-slot="gh-refresh"
-              title="Refresh from GitHub"
-              disabled={refresh.isPending}
-              onClick={() => refresh.mutate()}
-              className="shrink-0 font-normal tabular-nums"
-            >
-              <RefreshCwIcon aria-hidden="true" className={cn(refresh.isPending && 'motion-safe:animate-spin')} />
-              {gh.syncedAt ? `Synced ${shortAge(gh.syncedAt)} ago` : 'Refresh'}
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon-sm" aria-label="List options" data-slot="gh-list-menu" className="shrink-0">
-                  <MoreHorizontalIcon aria-hidden="true" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-52">
-                {/* One click to work the backlog from the long-waiting end instead of the newest.
-                    There is no third "unordered" state — the payload's incoming order is `newest`. */}
-                <DropdownMenuLabel>Sort order</DropdownMenuLabel>
-                <DropdownMenuRadioGroup
-                  data-slot="gh-sort"
-                  value={sort}
-                  onValueChange={(next) => saveGithubSort(next === 'oldest' ? 'oldest' : 'newest')}
-                >
-                  <DropdownMenuRadioItem value="newest">Newest first</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="oldest">Oldest first</DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-                {automationsAvailable ? (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem asChild>
-                      <Link to="/automations/new">
-                        <ZapIcon aria-hidden="true" />
-                        Set up automations
-                      </Link>
-                    </DropdownMenuItem>
-                  </>
-                ) : null}
-                {gh.repo ? (
-                  <DropdownMenuItem asChild>
-                    <a href={`https://github.com/${gh.repo}`} target="_blank" rel="noopener noreferrer">
-                      <ExternalLinkIcon aria-hidden="true" />
-                      Open repository on GitHub
-                    </a>
-                  </DropdownMenuItem>
-                ) : null}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-          <Tabs value={view} className="mt-4">
-            <TabsList data-slot="gh-tabs" className="w-full">
-              <TabsTrigger value="issues" asChild>
-                <Link to="/github" aria-current={view === 'issues' ? 'page' : undefined} onClick={() => saveGithubView('issues')}>
-                  Issues
-                  <span className="font-normal text-muted-foreground tabular-nums">{countLabel(gh.issues.length)}</span>
-                </Link>
-              </TabsTrigger>
-              <TabsTrigger value="prs" asChild>
-                <Link to="/github/prs" aria-current={view === 'prs' ? 'page' : undefined} onClick={() => saveGithubView('prs')}>
-                  Pull requests
-                  <span className="font-normal text-muted-foreground tabular-nums">{countLabel(gh.prs.length)}</span>
-                </Link>
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
-          <div className="mt-3 flex items-center gap-2">
-            <InputGroup className="min-w-0 flex-1">
-              <InputGroupAddon>
-                <SearchIcon aria-hidden="true" />
-              </InputGroupAddon>
-              <InputGroupInput
-                type="search"
-                data-slot="gh-search"
-                aria-label={`Search ${view}`}
-                placeholder="Search #id, title, author…"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-              />
-            </InputGroup>
-            <LabelFilter
-              options={labelOptions}
-              colors={labelColors}
-              selected={labelFilter}
-              onChange={setLabelFilter}
-            />
-            {sort === 'oldest' ? (
-              <Button
-                variant="ghost"
-                size="icon"
-                title="Oldest first — click for newest first"
-                aria-label="Sorted oldest first. Switch to newest first"
-                className="shrink-0 text-foreground"
-                onClick={() => saveGithubSort('newest')}
-              >
-                <ArrowUpDownIcon aria-hidden="true" />
-              </Button>
-            ) : null}
-          </div>
-        </header>
+  const kindPlural = view === 'issues' ? 'issues' : 'pull requests'
+  const syncedLabel = gh.syncedAt ? `Synced ${shortAge(gh.syncedAt)} ago` : null
 
-        {items.length === 0 ? (
-          // Nothing in the OPEN list matched. Rather than the old flat "no match" — which was a
-          // lie whenever the item existed but was closed or merged (#730) — report what the forge
-          // search found, is finding, or could not do. No verdict to report (the hits below are
-          // the answer) means no wrapper at all, so its padding cannot leave a gap.
-          emptyState && (
-            <div data-slot="gh-empty" className="px-4 py-6 text-[13px] text-muted-foreground">
-              {emptyState}
-            </div>
-          )
-        ) : (
-          <ul data-slot="gh-rows" className="flex flex-col gap-px px-2 pb-3">
-            {items.map((item) => (
-              <GithubRow
-                key={item.url}
-                item={item}
-                view={view}
-                colors={labelColors}
-                active={selected?.url === item.url}
-                queued={queued.has(item.url)}
-                checks={item.kind === 'pr' ? checksMap?.[item.number] ?? item.checks : item.checks}
-                open
-              />
-            ))}
-          </ul>
-        )}
-
-        {/* Cross-state hits (#730) — rendered under their own heading so it is never ambiguous
-            whether a row came from the open list or from a search that reached past it. */}
-        {searchHits.length > 0 ? (
-          <div data-slot="gh-search-hits">
-            <p className="px-4 pt-3 pb-1.5 text-xs font-medium text-muted-foreground">
-              Found on GitHub{searchPayload?.truncated ? ' (first matches)' : ''}
+  // The list's own chrome: title, sync, the list menu, the Issues | Pull requests switch and the
+  // filters. One fragment, rendered in the contextual sidebar and — on phones, where that sidebar
+  // is a sheet — at the top of main on the bare list URLs.
+  const listHeader = (
+    <>
+      <div data-slot="gh-header" className="flex min-w-0 items-start gap-1">
+        <div className="min-w-0 flex-1 px-1">
+          <h2 className="text-[15px] font-semibold text-foreground">GitHub</h2>
+          {gh.repo ? (
+            <p data-slot="gh-repo" className="truncate text-xs text-muted-foreground" title={gh.repo}>
+              {gh.repo}
             </p>
-            <ul className="flex flex-col gap-px px-2 pb-3">
-              {searchHits.map((item) => (
-                <GithubRow
-                  key={item.url}
-                  item={item}
-                  view={view}
-                  colors={labelColors}
-                  active={selected?.url === item.url}
-                  queued={queued.has(item.url)}
-                  checks={item.kind === 'pr' ? checksMap?.[item.number] ?? item.checks : item.checks}
-                />
-              ))}
-            </ul>
-          </div>
-        ) : null}
-    </>} detail={<>
-        {selected ? (
-          <GithubDetail
-            item={selected}
-            listPath={listPath}
-            colors={labelColors}
-            changes={changes}
-            checks={selected.kind === 'pr' ? checksMap?.[selected.number] ?? selected.checks : selected.checks}
-            open={allItems.some((item) => item.url === selected.url)}
-            queuedRunId={queued.get(selected.url) ?? null}
-            handOpen={handFor === selected.url}
-            onHandOpenChange={(next) => setHandFor(next ? selected.url : null)}
+          ) : null}
+        </div>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          data-slot="gh-refresh"
+          title={syncedLabel ? `${syncedLabel} — refresh from GitHub` : 'Refresh from GitHub'}
+          aria-label={syncedLabel ? `${syncedLabel}. Refresh from GitHub` : 'Refresh from GitHub'}
+          disabled={refresh.isPending}
+          onClick={() => refresh.mutate()}
+          className="shrink-0"
+        >
+          <RefreshCwIcon aria-hidden="true" className={cn(refresh.isPending && 'motion-safe:animate-spin')} />
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon-sm" aria-label="List options" data-slot="gh-list-menu" className="shrink-0">
+              <MoreHorizontalIcon aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-52">
+            {/* One click to work the backlog from the long-waiting end instead of the newest.
+                There is no third "unordered" state — the payload's incoming order is `newest`. */}
+            <DropdownMenuLabel>Sort order</DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              data-slot="gh-sort"
+              value={sort}
+              onValueChange={(next) => saveGithubSort(next === 'oldest' ? 'oldest' : 'newest')}
+            >
+              <DropdownMenuRadioItem value="newest">Newest first</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="oldest">Oldest first</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+            {automationsAvailable ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem asChild>
+                  <Link to="/automations/new">
+                    <ZapIcon aria-hidden="true" />
+                    Set up automations
+                  </Link>
+                </DropdownMenuItem>
+              </>
+            ) : null}
+            {gh.repo ? (
+              <DropdownMenuItem asChild>
+                <a href={`https://github.com/${gh.repo}`} target="_blank" rel="noopener noreferrer">
+                  <ExternalLinkIcon aria-hidden="true" />
+                  Open repository on GitHub
+                </a>
+              </DropdownMenuItem>
+            ) : null}
+            {syncedLabel ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel className="font-normal text-muted-foreground tabular-nums">{syncedLabel}</DropdownMenuLabel>
+              </>
+            ) : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+      <Tabs value={view}>
+        <TabsList data-slot="gh-tabs" className="w-full">
+          <TabsTrigger value="issues" asChild>
+            <Link to="/github" aria-current={view === 'issues' ? 'page' : undefined} onClick={() => saveGithubView('issues')}>
+              Issues
+              <span className="font-mono text-[11px] tabular-nums opacity-70">{countLabel(gh.issues.length)}</span>
+            </Link>
+          </TabsTrigger>
+          <TabsTrigger value="prs" asChild>
+            <Link to="/github/prs" aria-current={view === 'prs' ? 'page' : undefined} onClick={() => saveGithubView('prs')}>
+              Pull requests
+              <span className="font-mono text-[11px] tabular-nums opacity-70">{countLabel(gh.prs.length)}</span>
+            </Link>
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+      <div className="flex items-center gap-1.5">
+        <SidebarInput
+          type="search"
+          data-slot="gh-search"
+          aria-label={`Search ${view}`}
+          placeholder="Search #id, title, author…"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          className="min-w-0 flex-1"
+        />
+        <LabelFilter
+          options={labelOptions}
+          colors={labelColors}
+          selected={labelFilter}
+          onChange={setLabelFilter}
+        />
+        {sort === 'oldest' ? (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            title="Oldest first — click for newest first"
+            aria-label="Sorted oldest first. Switch to newest first"
+            className="shrink-0 text-foreground"
+            onClick={() => saveGithubSort('newest')}
           >
-            <HandToAgent
-              key={selected.url}
-              item={selected}
-              workflows={workflows.data?.workflows ?? []}
-              skills={skillList}
-              workflow={workflow}
-              onWorkflowChange={setWorkflow}
-              selectedSkills={selectedSkills}
-              onSkillsChange={setSelectedSkills}
-              engine={engine}
-              onEngineChange={setEngine}
-              queuedRunId={queued.get(selected.url) ?? null}
-              onQueued={(url, runId) => {
-                setQueued((current) => new Map(current).set(url, runId))
-                setHandFor(null)
-              }}
-            />
-          </GithubDetail>
-        ) : (
-          <IssueBrowserEmpty
-            icon={view === 'issues' ? <CircleDotIcon /> : <GitPullRequestIcon />}
-            title={number === null ? 'Nothing selected' : 'Not found'}
-            description={
-              number === null
-                ? `No open ${view === 'issues' ? 'issues' : 'pull requests'} to show.`
-                : // Since #730 a closed or merged item IS reachable — type its number into the
-                  // search box and the tab asks GitHub directly — so the honest advice is to
-                  // search, not the old "it may be closed" shrug.
-                  `#${number} is not among the open ${view === 'issues' ? 'issues' : 'pull requests'}. Search for ${number} in the list to look it up on GitHub, closed and merged included.`
-            }
-            actions={
-              number === null ? undefined : (
-                <Button asChild variant="outline" size="sm">
-                  <Link to={listPath}>Back to the list</Link>
-                </Button>
-              )
-            }
+            <ArrowUpDownIcon aria-hidden="true" />
+          </Button>
+        ) : null}
+      </div>
+    </>
+  )
+
+  const renderRow = (item: GithubItem, open: boolean) => (
+    <GithubRow
+      key={item.url}
+      item={item}
+      view={view}
+      colors={labelColors}
+      active={selected?.url === item.url}
+      queued={queued.has(item.url)}
+      checks={item.kind === 'pr' ? checksMap?.[item.number] ?? item.checks : item.checks}
+      open={open}
+    />
+  )
+
+  const listRows = (
+    <>
+      {items.length === 0 ? (
+        // Nothing in the OPEN list matched. Rather than the old flat "no match" — which was a
+        // lie whenever the item existed but was closed or merged (#730) — report what the forge
+        // search found, is finding, or could not do. No verdict to report (the hits below are
+        // the answer) means no wrapper at all, so its padding cannot leave a gap.
+        emptyState && (
+          <div data-slot="gh-empty" className="px-2 py-4 text-[13px] text-pretty text-muted-foreground">
+            {emptyState}
+          </div>
+        )
+      ) : (
+        <SidebarMenu data-slot="gh-rows">{items.map((item) => renderRow(item, true))}</SidebarMenu>
+      )}
+
+      {/* Cross-state hits (#730) — rendered under their own heading so it is never ambiguous
+          whether a row came from the open list or from a search that reached past it. */}
+      {searchHits.length > 0 ? (
+        <div data-slot="gh-search-hits">
+          <SidebarGroupLabel>
+            Found on GitHub{searchPayload?.truncated ? ' (first matches)' : ''}
+          </SidebarGroupLabel>
+          <SidebarMenu>{searchHits.map((item) => renderRow(item, false))}</SidebarMenu>
+        </div>
+      ) : null}
+    </>
+  )
+
+  // Phones: the bare list URLs show the list itself; a selected item shows only its detail.
+  const listInMain = isMobile && n === undefined
+
+  return (
+    <Page width="full" data-route="github">
+      <ContextSidebar>
+        <SidebarHeader className="gap-3 p-3">{listHeader}</SidebarHeader>
+        <SidebarContent>
+          <SidebarGroup className="pt-0">
+            <SidebarGroupContent data-slot="gh-list">{listRows}</SidebarGroupContent>
+          </SidebarGroup>
+        </SidebarContent>
+      </ContextSidebar>
+
+      {listInMain ? (
+        <section data-slot="gh-list" aria-label={`Open ${kindPlural}`} className="flex flex-col">
+          <div className="flex flex-col gap-3 p-3">{listHeader}</div>
+          <div className="px-2 pb-6">{listRows}</div>
+        </section>
+      ) : selected ? (
+        <GithubDetail
+          item={selected}
+          listPath={listPath}
+          colors={labelColors}
+          changes={changes}
+          checks={selected.kind === 'pr' ? checksMap?.[selected.number] ?? selected.checks : selected.checks}
+          open={allItems.some((item) => item.url === selected.url)}
+          queuedRunId={queued.get(selected.url) ?? null}
+          handOpen={handFor === selected.url}
+          onHandOpenChange={(next) => setHandFor(next ? selected.url : null)}
+        >
+          <HandToAgent
+            key={selected.url}
+            item={selected}
+            workflows={workflows.data?.workflows ?? []}
+            skills={skillList}
+            workflow={workflow}
+            onWorkflowChange={setWorkflow}
+            selectedSkills={selectedSkills}
+            onSkillsChange={setSelectedSkills}
+            engine={engine}
+            onEngineChange={setEngine}
+            queuedRunId={queued.get(selected.url) ?? null}
+            onQueued={(url, runId) => {
+              setQueued((current) => new Map(current).set(url, runId))
+              setHandFor(null)
+            }}
           />
-        )}
-    </>} />
+        </GithubDetail>
+      ) : number === null ? (
+        <IssueBrowserEmpty
+          slot="gh-pick"
+          icon={view === 'issues' ? <CircleDotIcon /> : <GitPullRequestIcon />}
+          title="Pick an issue or pull request"
+          description={
+            allItems.length === 0
+              ? `No open ${kindPlural} in this repository.`
+              : 'Choose one from the list to read it and hand it to an agent.'
+          }
+        />
+      ) : (
+        <IssueBrowserEmpty
+          icon={view === 'issues' ? <CircleDotIcon /> : <GitPullRequestIcon />}
+          title="Not found"
+          // Since #730 a closed or merged item IS reachable — type its number into the search
+          // box and the tab asks GitHub directly — so the honest advice is to search, not the
+          // old "it may be closed" shrug.
+          description={`#${number} is not among the open ${kindPlural}. Search for ${number} in the list to look it up on GitHub, closed and merged included.`}
+          actions={
+            <Button asChild variant="outline" size="sm">
+              <Link to={listPath}>Back to the list</Link>
+            </Button>
+          }
+        />
+      )}
+    </Page>
+  )
+}
+
+/** The sidebar of a GitHub tab that has no list to show (load error, forge unavailable). */
+function GithubSidebarTitle() {
+  return (
+    <ContextSidebar>
+      <SidebarHeader className="gap-3 p-3">
+        <h2 className="px-1 text-[15px] font-semibold text-foreground">GitHub</h2>
+      </SidebarHeader>
+    </ContextSidebar>
   )
 }
 
@@ -792,71 +844,68 @@ function GithubRow({
   const hiddenLabels = item.labels.length - shownLabels.length
 
   return (
-    <li>
-      <Link
-        to={`${view === 'issues' ? '/github/issues' : '/github/prs'}/${item.number}`}
-        draggable
-        onDragStart={onDragStart}
-        onMouseEnter={prefetchThread}
-        onFocus={prefetchThread}
-        data-slot="gh-row"
-        data-number={item.number}
-        aria-current={active ? 'page' : undefined}
-        title="Drag into the composer to prefill a task"
-        className={cn(
-          'flex min-h-14 gap-2.5 rounded-lg px-2.5 py-2.5 transition-colors outline-none hover:bg-muted/60 focus-visible:bg-muted/60',
-          active && 'bg-muted hover:bg-muted',
-        )}
-      >
-        <Icon
-          aria-hidden="true"
-          className={cn(
-            'mt-0.5 size-4 shrink-0',
-            !open ? 'text-muted-foreground' : item.isDraft ? 'text-muted-foreground' : 'text-success',
-          )}
-        />
-        <span className="flex min-w-0 flex-1 flex-col gap-1">
-          <span className={cn('line-clamp-2 text-[13.5px] leading-snug font-medium text-pretty', active && 'font-semibold')}>
-            {item.title}
-          </span>
-          <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground tabular-nums">
-            <span className="shrink-0">#{item.number}</span>
-            <span aria-hidden="true">·</span>
-            <span className="min-w-0 truncate">{item.author}</span>
-            <span aria-hidden="true">·</span>
-            <span className="shrink-0">{shortAge(item.createdAt)}</span>
-            <CommentCount count={item.comments} />
-            {checks ? <ChecksGlyph checks={checks} /> : null}
-            {item.isDraft ? (
-              <Badge variant="outline" className="px-1.5 py-0 font-normal text-muted-foreground">
-                Draft
-              </Badge>
-            ) : null}
-          </span>
-          {shownLabels.length > 0 || queued ? (
-            <span className="flex flex-wrap items-center gap-1 pt-0.5">
-              {queued ? (
-                <Badge data-slot="gh-queued-flag" variant="secondary" className="bg-violet/12 px-1.5 py-0 font-medium text-violet">
-                  Run queued
+    <SidebarMenuItem>
+      <SidebarMenuButton asChild isActive={active} className="h-auto items-start gap-2.5 py-2">
+        <Link
+          to={`${view === 'issues' ? '/github/issues' : '/github/prs'}/${item.number}`}
+          draggable
+          onDragStart={onDragStart}
+          onMouseEnter={prefetchThread}
+          onFocus={prefetchThread}
+          data-slot="gh-row"
+          data-number={item.number}
+          aria-current={active ? 'page' : undefined}
+          title="Drag into the composer to prefill a task"
+        >
+          <Icon
+            aria-hidden="true"
+            className={cn(
+              'mt-0.5',
+              !open ? 'text-muted-foreground' : item.isDraft ? 'text-muted-foreground' : 'text-success',
+            )}
+          />
+          {/* A div, not a span: the menu button truncates its last child SPAN to one line. */}
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
+            <span className="line-clamp-2 text-[13px] leading-snug text-pretty">{item.title}</span>
+            <span className="flex min-w-0 items-center gap-1.5 text-xs font-normal text-muted-foreground tabular-nums">
+              <span className="shrink-0">#{item.number}</span>
+              <span aria-hidden="true">·</span>
+              <span className="min-w-0 truncate">{item.author}</span>
+              <span aria-hidden="true">·</span>
+              <span className="shrink-0">{shortAge(item.createdAt)}</span>
+              <CommentCount count={item.comments} />
+              {checks ? <ChecksGlyph checks={checks} /> : null}
+              {item.isDraft ? (
+                <Badge variant="outline" className="px-1.5 py-0 font-normal text-muted-foreground">
+                  Draft
                 </Badge>
               ) : null}
-              {shownLabels.map((label) => (
-                <LabelChip key={label} label={label} color={colors[label]} />
-              ))}
-              {hiddenLabels > 0 ? (
-                <span
-                  data-slot="gh-label-more"
-                  title={item.labels.slice(ROW_LABELS).join(', ')}
-                  className="text-xs text-muted-foreground tabular-nums"
-                >
-                  +{hiddenLabels}
-                </span>
-              ) : null}
             </span>
-          ) : null}
-        </span>
-      </Link>
-    </li>
+            {shownLabels.length > 0 || queued ? (
+              <span className="flex flex-wrap items-center gap-1 pt-0.5">
+                {queued ? (
+                  <Badge data-slot="gh-queued-flag" variant="secondary" className="bg-violet/12 px-1.5 py-0 font-medium text-violet">
+                    Run queued
+                  </Badge>
+                ) : null}
+                {shownLabels.map((label) => (
+                  <LabelChip key={label} label={label} color={colors[label]} />
+                ))}
+                {hiddenLabels > 0 ? (
+                  <span
+                    data-slot="gh-label-more"
+                    title={item.labels.slice(ROW_LABELS).join(', ')}
+                    className="text-xs font-normal text-muted-foreground tabular-nums"
+                  >
+                    +{hiddenLabels}
+                  </span>
+                ) : null}
+              </span>
+            ) : null}
+          </div>
+        </Link>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
   )
 }
 
@@ -881,9 +930,10 @@ function LabelFilter({
       <PopoverTrigger asChild>
         <Button
           variant="outline"
+          size="sm"
           data-slot="gh-label-filter"
           disabled={options.length === 0}
-          className={cn('shrink-0 px-2.5 font-normal text-muted-foreground', selected.length > 0 && 'text-foreground')}
+          className={cn('shrink-0 px-2 font-normal text-muted-foreground', selected.length > 0 && 'text-foreground')}
         >
           <TagIcon aria-hidden="true" />
           Labels
@@ -1001,7 +1051,7 @@ function GithubDetail({
               {kindLabel} <span className="tabular-nums">#{item.number}</span>
             </span>
           </div>
-          <h2 className="text-[22px] leading-7 font-semibold text-pretty">{item.title}</h2>
+          <h1 className="text-[22px] leading-7 font-semibold text-pretty">{item.title}</h1>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {queuedRunId ? (

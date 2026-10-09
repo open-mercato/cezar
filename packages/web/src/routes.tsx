@@ -1,4 +1,4 @@
-import { lazy, memo, Suspense } from 'react'
+import { lazy, memo, Suspense, useEffect } from 'react'
 import {
   matchPath,
   Navigate,
@@ -31,6 +31,7 @@ import {
   SettingsSectionRoute,
   settingsSectionPath,
 } from './routes/settings/settings-shell'
+import { useGlobalSettings } from './components/global-settings'
 import { TasksAreaLayout } from './components/tasks-sidebar'
 import { TasksOverviewRoute } from './routes/tasks-overview'
 import { GlobalTasksRoute } from './routes/global-tasks'
@@ -110,23 +111,23 @@ function SettingsSkillsRedirect() {
   )
 }
 
-/** A settings section that MOVED from the project area to the global one. Its own hop, not an
- *  inline `<Navigate>`, because `settingsSectionPath` returns a bare pathname: only a component
- *  can read `useLocation` and carry the query and hash across. Legacy flat URLs reach here on a
- *  SECOND hop (`LegacyPathRedirect` first), and dropping either half there would silently undo
- *  what that hop just preserved. Plain Navigate — the target is outside every project. */
+/** A settings section that MOVED from the project area to the global one — which is now a
+ *  dialog. The old URL (`/p/<id>/settings/appearance`, and the legacy flat `/settings/appearance`
+ *  that `LegacyPathRedirect` turns into it) opens the dialog on that section over the project's
+ *  own settings, so every pre-split bookmark still lands on the thing it named. */
 function MovedSettingsSectionRedirect({ sectionId }: { sectionId: SettingsSectionId }) {
-  const location = useLocation()
-  return (
-    <Navigate
-      to={{
-        pathname: settingsSectionPath('global', sectionId),
-        search: location.search,
-        hash: location.hash,
-      }}
-      replace
-    />
-  )
+  const { open } = useGlobalSettings()
+  useEffect(() => open(sectionId), [open, sectionId])
+  return <ScopedNavigate to="/settings" replace />
+}
+
+/** `/settings/global[/<section>]` — a deep link, no longer a page. Opens the global settings
+ *  dialog (on that section, when one is named) and hands the URL to the bare root, whose
+ *  redirect restores the last project location or lands on the boot project. */
+function GlobalSettingsDeepLink({ sectionId }: { sectionId?: SettingsSectionId }) {
+  const { open } = useGlobalSettings()
+  useEffect(() => open(sectionId), [open, sectionId])
+  return <Navigate to="/" replace />
 }
 
 /** What renders while a redirect target is still being resolved (the boot id from `/api/health`,
@@ -570,20 +571,20 @@ export const AppRoutes = memo(function AppRoutes() {
             honest 404s until the section ships (notifications unhides in Step 1.7).
 
             Only the PROJECT-scoped sections live here (multi-project spec, step 3.5); the
-            global ones are the top-level `/settings/global/*` block below. */}
-        <Route path="settings" element={<SettingsIndexRoute scope="project" capabilities={capabilities} />} />
+            global ones are a dialog, deep-linked by the `/settings/global/*` block below. */}
+        <Route path="settings" element={<SettingsIndexRoute capabilities={capabilities} />} />
         <Route path="settings/skills" element={<SettingsSkillsRedirect />} />
         {visibleSettingsSections('project', capabilities).map((section) => (
           <Route
             key={section.id}
             path={`settings/${section.id}`}
-            element={<SettingsSectionRoute section={section} scope="project" capabilities={capabilities} />}
+            element={<SettingsSectionRoute section={section} capabilities={capabilities} />}
           />
         ))}
         {/* A section that MOVED out of the project area keeps its old URL working: every
             pre-3.5 bookmark and every legacy flat `/settings/appearance` (which the redirect
-            below turns into `/p/<boot>/settings/appearance`) lands on the global twin instead
-            of a 404 — query and hash intact across both hops. */}
+            below turns into `/p/<boot>/settings/appearance`) opens the global settings dialog
+            on that section instead of a 404. */}
         {visibleSettingsSections('global', capabilities).map((section) => (
           <Route
             key={section.id}
@@ -606,20 +607,17 @@ export const AppRoutes = memo(function AppRoutes() {
       <Route path="/tasks" element={<GlobalTasksRoute />} />
       <Route path="/dashboard" element={<Suspense fallback={<div role="status" className="p-6 text-sm text-muted-foreground">Loading dashboard…</div>}><DashboardRoute /></Suspense>} />
 
-      {/* Global settings (multi-project spec, step 3.5) — the one cockpit area that is NOT
-          under `/p/:projectId`, because nothing here belongs to a project: appearance and
-          notifications are the user's, resources are the machine's, and the Projects pane IS
-          the registry. No `ProjectScopeProvider` above it, so its sections must read/write the
-          workspace routes (`/api/workspace/*`), which are never scope-prefixed.
+      {/* Global settings are a dialog (`GlobalSettingsDialog`), not a page — nothing in them
+          belongs to a project. Their old URLs stay as deep links that open it.
 
           Static segments outrank the `*` legacy redirect below in React Router's ranking, so
           these win regardless of order — listed here for readability. */}
-      <Route path="/settings/global" element={<SettingsIndexRoute scope="global" capabilities={capabilities} />} />
+      <Route path="/settings/global" element={<GlobalSettingsDeepLink />} />
       {visibleSettingsSections('global', capabilities).map((section) => (
         <Route
           key={section.id}
           path={settingsSectionPath('global', section.id)}
-          element={<SettingsSectionRoute section={section} scope="global" capabilities={capabilities} />}
+          element={<GlobalSettingsDeepLink sectionId={section.id} />}
         />
       ))}
 

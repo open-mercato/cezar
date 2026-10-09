@@ -1,18 +1,21 @@
 import { FileDiffIcon, TriangleAlertIcon } from 'lucide-react'
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState, type ReactNode } from 'react'
 
 import { ApiError } from '@/api/client'
 import { useRepoChanges } from '@/api/queries'
+import { ContextSidebar } from '@/components/context-sidebar'
 import { Diff, type DiffHandle, type DiffMode } from '@/components/diff'
 import { PageBody, PageToolbar } from '@/components/page'
+import { SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel } from '@/components/ui/sidebar'
 import { Spinner } from '@/components/ui/spinner'
 import { useIsDesktop } from '@/lib/use-desktop'
 
 import { ChangesTree } from '../task-git/changes-tree'
 import { DiffViewToggles } from '../task-git/diff-controls'
-import { buildFileTree } from '../task-git/file-tree'
+import { buildFileTree, type TreeDir } from '../task-git/file-tree'
 import { AnimatedDiffStat } from '../task-git/git-toolbar'
 import { RepoEmpty } from './repo-empty'
+import { useCloseSidebarSheet } from './repo-sidebar'
 
 /**
  * The repo view's Changes segment (R5 Step 1.7): the MAIN working tree's uncommitted diff
@@ -21,10 +24,12 @@ import { RepoEmpty } from './repo-empty'
  * toggles. No git action bar here: committing on the main tree is the CLI's business; the
  * cockpit's commit/push flows belong to task worktrees (task-changes.tsx).
  *
- * Below `md` the same rule as the task tab applies: unified+wrap forced, tree hidden — the
- * per-file sticky headers carry the names.
+ * The changed-files tree lives in the contextual sidebar; the main area is the toolbar and the
+ * diffs. Picking a file scrolls its diff into view. Below `md` the same rule as the task tab
+ * applies: unified+wrap forced — the tree is in the sheet, and the per-file sticky headers
+ * carry the names.
  */
-export function RepoChangesSection() {
+export function RepoChangesSection({ header }: { header: ReactNode }) {
   const changes = useRepoChanges()
   const desktop = useIsDesktop()
 
@@ -50,8 +55,31 @@ export function RepoChangesSection() {
 
   return (
     <section data-slot="repo-changes" className="flex min-h-0 flex-1 flex-col">
-      <PageToolbar data-slot="repo-changes-toolbar" className="gap-x-3">
-        <span className="text-[13px] font-medium text-foreground">Uncommitted changes</span>
+      <ContextSidebar>
+        {header}
+        <SidebarContent>
+          <SidebarGroup className="pt-0">
+            <SidebarGroupLabel className="justify-between">
+              Changes
+              {files.length > 0 ? <span className="font-mono tabular-nums">{files.length}</span> : null}
+            </SidebarGroupLabel>
+            <SidebarGroupContent data-slot="changes-tree-pane">
+              {changes.isPending ? (
+                <p className="px-2 py-1.5 text-xs text-muted-foreground">Loading changes…</p>
+              ) : files.length === 0 ? (
+                <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                  {changes.isError ? 'Changes are unavailable.' : 'Working tree clean.'}
+                </p>
+              ) : (
+                <SidebarChangesTree root={tree} selected={selected} onSelect={selectFile} />
+              )}
+            </SidebarGroupContent>
+          </SidebarGroup>
+        </SidebarContent>
+      </ContextSidebar>
+
+      <PageToolbar data-slot="repo-changes-toolbar" className="gap-x-3 pt-4">
+        <h1 className="text-[15px] font-semibold text-foreground">Uncommitted changes</h1>
         {changes.data ? <AnimatedDiffStat stat={changes.data.stat} /> : null}
         {/* Same rule as the task toolbar: toggles exist ≥md only — phones force unified+wrap. */}
         <span className="ml-auto hidden items-center gap-1 md:flex">
@@ -78,18 +106,34 @@ export function RepoChangesSection() {
           description="No uncommitted changes in the main working tree. Edits show up here as they happen."
         />
       ) : (
-        <PageBody className="flex min-h-0 items-start gap-6 [--diff-sticky-top:0rem]">
-          {/* Same deal as the task Changes tab: sticky AND its own scroller, so a long file list
-              never has to drag the diff to the bottom to show its last row. */}
-          <aside
-            data-slot="changes-tree-pane"
-            className="sticky top-4 hidden max-h-[calc(100dvh_-_6rem)] w-60 shrink-0 overflow-y-auto overscroll-contain md:block lg:w-72"
-          >
-            <ChangesTree root={tree} selected={selected} onSelect={selectFile} />
-          </aside>
-          <Diff files={files} viewRef={diffRef} mode={effectiveMode} wrap={effectiveWrap} className="min-w-0 flex-1" />
+        <PageBody className="[--diff-sticky-top:0rem]">
+          <Diff files={files} viewRef={diffRef} mode={effectiveMode} wrap={effectiveWrap} className="min-w-0" />
         </PageBody>
       )}
     </section>
+  )
+}
+
+/** The tree as the sidebar shows it: a pick also dismisses the phone sheet, which a file click
+ *  (no navigation) would otherwise leave covering the diff it just scrolled to. */
+function SidebarChangesTree({
+  root,
+  selected,
+  onSelect,
+}: {
+  root: TreeDir
+  selected: string | null
+  onSelect: (path: string) => void
+}) {
+  const closeSheet = useCloseSidebarSheet()
+  return (
+    <ChangesTree
+      root={root}
+      selected={selected}
+      onSelect={(path) => {
+        closeSheet()
+        onSelect(path)
+      }}
+    />
   )
 }

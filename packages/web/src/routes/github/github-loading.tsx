@@ -1,3 +1,4 @@
+import { ContextSidebar } from '@/components/context-sidebar'
 import { Skeleton } from '@/components/ui/skeleton'
 
 /**
@@ -8,18 +9,20 @@ import { Skeleton } from '@/components/ui/skeleton'
  */
 export function GithubLoading() {
   return (
-    <div data-route="github" aria-busy="true" aria-label="Loading GitHub…" className="flex h-full min-h-0 items-stretch">
-      <div className="flex w-full flex-col gap-4 border-border px-4 pt-5 md:w-[380px] md:shrink-0 md:border-r">
-        <Skeleton className="h-6 w-28" />
-        <Skeleton className="h-9 w-full" />
-        {Array.from({ length: 6 }, (_, index) => (
-          <div key={index} className="space-y-2">
-            <Skeleton className="h-4 w-4/5" />
-            <Skeleton className="h-3 w-2/5" />
-          </div>
-        ))}
-      </div>
-      <div className="hidden flex-1 flex-col gap-4 px-10 pt-8 md:flex">
+    <div data-route="github" aria-busy="true" aria-label="Loading GitHub…" className="flex min-h-full flex-col">
+      <ContextSidebar>
+        <div className="flex flex-col gap-4 p-4">
+          <Skeleton className="h-5 w-24" />
+          <Skeleton className="h-8 w-full" />
+          {Array.from({ length: 6 }, (_, index) => (
+            <div key={index} className="space-y-2">
+              <Skeleton className="h-4 w-4/5" />
+              <Skeleton className="h-3 w-2/5" />
+            </div>
+          ))}
+        </div>
+      </ContextSidebar>
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 pt-5 md:px-10 md:pt-8">
         <Skeleton className="h-7 w-1/2" />
         <Skeleton className="h-4 w-1/3" />
         <Skeleton className="mt-4 h-32 w-full max-w-2xl" />

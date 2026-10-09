@@ -11,7 +11,10 @@ import type { SettingsSectionId } from '@/routes/settings/registry'
 type GlobalSettingsValue = {
   open: (section?: SettingsSectionId) => void
   close: () => void
-  /** The section on screen, or null while the dialog is closed. */
+  /** Switch section while the dialog stays open — its own nav calls this. */
+  setSection: (section: SettingsSectionId) => void
+  /** The section last asked for; null until one is picked (the dialog then shows its first).
+   *  Kept across close, so reopening lands where you left. */
   section: SettingsSectionId | null
   isOpen: boolean
 }
@@ -36,14 +39,16 @@ export function GlobalSettingsProvider({
     isOpen: false,
     section: null,
   })
-  const value = React.useMemo<GlobalSettingsValue>(
+  // The actions never change identity, so an effect may depend on them (the deep-link routes do).
+  const actions = React.useMemo<Pick<GlobalSettingsValue, 'open' | 'close' | 'setSection'>>(
     () => ({
-      ...state,
       open: (section) => setState((current) => ({ isOpen: true, section: section ?? current.section })),
       close: () => setState((current) => ({ ...current, isOpen: false })),
+      setSection: (section) => setState((current) => ({ ...current, section })),
     }),
-    [state],
+    [],
   )
+  const value = React.useMemo<GlobalSettingsValue>(() => ({ ...state, ...actions }), [state, actions])
   return (
     <GlobalSettingsContext.Provider value={value}>
       {children}

@@ -1,9 +1,9 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Link as GlobalLink } from 'react-router'
 
 import { cancelAutoResume } from '@/api/client'
 import { queryKeys } from '@/api/queries'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
+import { useGlobalSettings } from '@/components/global-settings'
 import { StatusDot } from '@/components/status-dot'
 import { toast } from '@/components/ui/toaster'
 
@@ -34,6 +34,7 @@ import { toast } from '@/components/ui/toaster'
  */
 export function AutoResumeHint({ run }: { run: ApiRun }) {
   const queryClient = useQueryClient()
+  const globalSettings = useGlobalSettings()
   const cancel = useMutation({
     mutationFn: () => cancelAutoResume(run.id),
     onSuccess: () => {
@@ -72,16 +73,15 @@ export function AutoResumeHint({ run }: { run: ApiRun }) {
       >
         Don’t resume
       </button>
-      {/* Global settings live OUTSIDE every project scope, so this is react-router's own Link:
-          the scope-aware one would prefix it into `/p/<id>/settings/global/…`, which is not a
-          route. Same reason `clone-project-dialog.tsx` reaches for `RouterLink`. */}
-      <GlobalLink
-        to="/settings/global/resources"
+      {/* Global settings are a dialog, so this opens it in place — the task stays on screen. */}
+      <button
+        type="button"
         data-slot="auto-resume-settings-link"
+        onClick={() => globalSettings.open('resources')}
         className="font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
       >
         Auto-resume settings
-      </GlobalLink>
+      </button>
     </div>
   )
 }

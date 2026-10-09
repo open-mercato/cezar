@@ -1,10 +1,10 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { Link } from 'react-router'
 
 import { putWorkspaceConfig } from '@/api/client'
 import { useWorkspaceConfig, workspaceQueryKeys } from '@/api/queries'
 import type { SetWorkspaceConfigInput, WorkspaceConfigResponse } from '@open-mercato/cezar-api-client'
+import { useGlobalSettings } from '@/components/global-settings'
 import { IntegerStepper } from '@/components/integer-stepper'
 import { Button } from '@/components/ui/button'
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
@@ -61,6 +61,7 @@ export function ResourcesSection() {
 
 function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
   const queryClient = useQueryClient()
+  const globalSettings = useGlobalSettings()
 
   const save = useMutation({
     mutationFn: (patch: SetWorkspaceConfigInput) => putWorkspaceConfig(patch),
@@ -155,13 +156,14 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
         >
           <SettingsNote>
             Need a different limit for one project?{' '}
-            <Link
-              to="/settings/global/projects"
+            <button
+              type="button"
               data-slot="resources-project-limits-link"
+              onClick={() => globalSettings.open('projects')}
               className="font-medium text-foreground underline decoration-border underline-offset-4 hover:decoration-foreground"
             >
               Configure per-project limits
-            </Link>
+            </button>
             .
           </SettingsNote>
         </SettingsField>
