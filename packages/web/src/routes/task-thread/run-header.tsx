@@ -192,9 +192,49 @@ function RunHeaderView({
   return (
     <header
       data-slot="run-header"
-      className="relative z-20 shrink-0 border-b border-border bg-background px-4 pt-3 sm:px-6 md:sticky md:top-0 md:pt-4"
+      className="relative z-20 shrink-0 border-b border-border bg-background px-4 pt-1.5 pb-3 sm:px-6 md:sticky md:top-0"
     >
-      <div className="flex min-w-0 items-center gap-3">
+      {/* The layout strip leads the header: it is what you switch between, and everything below
+          it — the title, the facts, the actions — is about the task whichever layout is up. It
+          bleeds to the header's edges so its rule reads as the strip's own. */}
+      <div
+        data-slot="run-tabs"
+        className="-mx-4 flex items-end gap-2 border-b border-border px-4 sm:-mx-6 sm:px-6"
+      >
+        <div className="flex min-w-0 flex-1 items-end gap-1 overflow-x-auto">
+          {/* `tabs` is the workspace's saved-layout strip, which REPLACES this row (spec
+              `2026-10-07-task-workspace` §5.2: "do not show both strips"). The fallback is what
+              every other consumer of this header still gets — including the Graph tab, which
+              belongs to the route strip rather than to the workspace's layout cards. */}
+          {tabs ?? (
+            <>
+              <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
+                Chat
+              </TabLink>
+              <TabLink to={`/tasks/${run.id}/changes`} active={tab === 'changes'}>
+                Changes
+              </TabLink>
+              <TabLink to={`/tasks/${run.id}/commits`} active={tab === 'commits'}>
+                Commits
+              </TabLink>
+              <TabLink to={`/tasks/${run.id}/files`} active={tab === 'files'}>
+                Files
+              </TabLink>
+              {/* The live workflow graph — every run with a definition: a step list opens as its graph. */}
+              {run.workflowDef ? (
+                <TabLink to={`/tasks/${run.id}/graph`} active={tab === 'graph'}>
+                  Graph
+                </TabLink>
+              ) : null}
+            </>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-1 pb-1">
+          <WorkflowSteps runId={run.id} steps={run.steps} className="hidden max-w-80 sm:flex" />
+          {trailing}
+        </div>
+      </div>
+      <div className="flex min-w-0 items-center gap-3 pt-3 md:pt-4">
         <div className="flex min-w-0 flex-1 items-center gap-2.5">
           <EditableTitle run={run} />
           <Badge variant="outline" data-slot="run-status" className="gap-1.5 font-medium text-muted-foreground">
@@ -270,40 +310,6 @@ function RunHeaderView({
       <DispatchParentLine run={run} />
       <DispatchChildrenLine run={run} />
 
-      <div data-slot="run-tabs" className="mt-2 flex items-end gap-2 md:mt-3">
-        <div className="flex min-w-0 flex-1 items-end gap-1 overflow-x-auto">
-          {/* `tabs` is the workspace's saved-layout strip, which REPLACES this row (spec
-              `2026-10-07-task-workspace` §5.2: "do not show both strips"). The fallback is what
-              every other consumer of this header still gets — including the Graph tab, which
-              belongs to the route strip rather than to the workspace's layout cards. */}
-          {tabs ?? (
-            <>
-              <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
-                Chat
-              </TabLink>
-              <TabLink to={`/tasks/${run.id}/changes`} active={tab === 'changes'}>
-                Changes
-              </TabLink>
-              <TabLink to={`/tasks/${run.id}/commits`} active={tab === 'commits'}>
-                Commits
-              </TabLink>
-              <TabLink to={`/tasks/${run.id}/files`} active={tab === 'files'}>
-                Files
-              </TabLink>
-              {/* The live workflow graph — every run with a definition: a step list opens as its graph. */}
-              {run.workflowDef ? (
-                <TabLink to={`/tasks/${run.id}/graph`} active={tab === 'graph'}>
-                  Graph
-                </TabLink>
-              ) : null}
-            </>
-          )}
-        </div>
-        <div className="flex shrink-0 items-center gap-1 pb-1">
-          <WorkflowSteps runId={run.id} steps={run.steps} className="hidden max-w-80 sm:flex" />
-          {trailing}
-        </div>
-      </div>
       {run.steps.length > 0 ? (
         // Phone width: the stepper gets its own row instead of squeezing the tabs.
         <div className="-mx-2 border-t border-border py-1 sm:hidden">
