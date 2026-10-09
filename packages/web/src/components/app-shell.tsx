@@ -459,6 +459,22 @@ function AppRail(props: RailProps) {
           singleProject={singleProject}
           brandName={brandName}
         />
+        <SidebarMenu className="items-center">
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              asChild
+              tooltip={{ children: 'New task · C', hidden: false }}
+              className={cn(
+                RAIL_BUTTON,
+                'bg-primary text-primary-foreground shadow-xs hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground',
+              )}
+            >
+              <Link to="/new" data-slot="new-task-link" aria-label="New task">
+                <PlusIcon aria-hidden="true" />
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
         <div aria-hidden="true" className="mx-auto h-px w-5 shrink-0 bg-foreground/12" />
       </SidebarHeader>
 
@@ -496,23 +512,9 @@ function AppRail(props: RailProps) {
           </SidebarMenuItem>
         </SidebarMenu>
         <div aria-hidden="true" className="mx-auto h-px w-5 shrink-0 bg-foreground/12" />
-        {/* Then the project: New task, its areas, and its settings last. */}
+        {/* Then the project: its areas, and its settings last. */}
         <nav aria-label="Main">
           <SidebarMenu className="items-center py-3">
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                asChild
-                tooltip={{ children: 'New task · C', hidden: false }}
-                className={cn(
-                  RAIL_BUTTON,
-                  'bg-primary text-primary-foreground shadow-xs hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground',
-                )}
-              >
-                <Link to="/new" data-slot="new-task-link" aria-label="New task">
-                  <PlusIcon aria-hidden="true" />
-                </Link>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
             {workItems.map((item) => {
               const Icon = item.icon
               const active = item.to === activeTo
