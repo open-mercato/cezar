@@ -77,6 +77,9 @@ export interface WorkspaceLayouts {
  *  it in practice. */
 const SAVE_DEBOUNCE_MS = 400
 
+/** How long after a refused save the one retry goes out. */
+const SAVE_RETRY_MS = 1500
+
 export function useWorkspaceLayouts(taskId: string): WorkspaceLayouts {
   const [state, setState] = useState<WorkspaceState>(defaultState)
   const [ready, setReady] = useState(false)
@@ -151,14 +154,29 @@ export function useWorkspaceLayouts(taskId: string): WorkspaceLayouts {
   const save = useCallback((forTask: string, value: WorkspaceState) => {
     sent.current = value
     const ticket = (seq.current += 1)
-    void putRunLayouts(forTask, value)
-      .then(() => {
-        if (ticket === seq.current) setSaveFailed(false)
-      })
-      .catch(() => {
-        // Only the newest save speaks: an older one failing says nothing about what is stored.
-        if (ticket === seq.current) setSaveFailed(true)
-      })
+    const attempt = (retriesLeft: number): void => {
+      void putRunLayouts(forTask, value)
+        .then(() => {
+          if (ticket === seq.current) setSaveFailed(false)
+        })
+        .catch(() => {
+          // Only the newest save speaks: an older one failing says nothing about what is stored,
+          // and a newer one is already carrying everything this one held.
+          if (ticket !== seq.current) return
+          // One refusal is not yet a fact about the host: a save that lands while the server is
+          // restarting, or loses a rename to another cezar on the same repo, succeeds a moment
+          // later. Without the second try that blip left "could not be saved" on screen — and the
+          // layout really unsaved — until the user happened to change something else.
+          if (retriesLeft > 0) {
+            setTimeout(() => {
+              if (ticket === seq.current) attempt(retriesLeft - 1)
+            }, SAVE_RETRY_MS)
+            return
+          }
+          setSaveFailed(true)
+        })
+    }
+    attempt(1)
   }, [])
 
   /**
