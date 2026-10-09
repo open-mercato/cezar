@@ -37,7 +37,7 @@ export function UnknownProjectRoute({
         // folder cezar is serving WITHOUT having registered it. Offering that row
         // under a sentence calling it registered contradicts the "· not registered"
         // marker the same folder carries in Settings.
-        subtitle="This cezar doesn’t serve a project by that id. The link may come from another machine’s workspace — these are the projects this one can open:"
+        subtitle="This workspace doesn’t serve a project by that id. The link may come from another machine’s workspace — these are the projects this one can open:"
       >
         <ul data-slot="registered-projects" className="mx-auto flex w-full max-w-xs flex-col gap-1.5 text-left">
           {projects.map((project) => (

@@ -66,6 +66,8 @@ describe('agent-config catalog', () => {
   it('holdsMcp is set exactly where MCP servers actually live', () => {
     const mcp = CONFIG_FILES.filter((f) => f.holdsMcp).map((f) => f.id).sort();
     expect(mcp).toEqual([
+      // cezar's own private, per-project servers (spec 2026-10-07-private-project-mcp).
+      'cezar.private.mcp',
       'claude.project.mcp',
       'codex.project.config',
       'codex.user.config',

@@ -11,7 +11,7 @@ import { useParams, useSearchParams } from 'react-router'
 
 import { Link, useNavigate } from '@/lib/project-router'
 
-import { createRun, getLaunchKey, postPlan, putConfig, putUiState } from '@/api/client'
+import { createRun, getLaunchKey, putConfig, putUiState } from '@/api/client'
 import { useProjectScope } from '@/api/project-scope-context'
 import { hasAccountChoice, useAgentAccounts } from '@/api/agent-accounts'
 import {
@@ -93,16 +93,11 @@ import {
   type TaskSource,
 } from './new-task-form'
 import { parseNewTaskParams } from './new-task-params'
-import { buildPlannedRunBody, pendingPlanOf, type PendingPlan } from './new-task-plan'
-import { PlanReview } from './plan-review'
 
 /**
  * `/new` — the full-screen new-task hero (spec §"New task (full-screen, #386)"; visual
  * contract docs/mockups/new-task.html): centered composer card on the twinkle surface, the
  * picker pill row inside the card below the textarea, suggested-task ghost chips underneath.
- * In plan-first mode (#383, the `Start | Plan first` segment) submit runs `POST /api/plan`
- * and opens the review overlay (plan-review.tsx) instead of starting a run.
- *
  * This route also owns the saved-bookmarklet contract (spec 011, BACKWARD_COMPATIBILITY.md):
  * a full document load of `/new?skill=&ref=&auto=1&key=` auto-starts a run unattended when the
  * key matches `GET /api/launch-key`, and only prefills otherwise — `handleDeepLink()` in
@@ -321,12 +316,9 @@ export function NewTaskRoute() {
   // Autonomous (#autonomous): the run never pauses for the user. An explicit toggle this session
   // wins; then an interactive skill recommends handing the ball back; otherwise the configured
   // workspace default applies ('source-dependent' → skills default ON, everything else OFF).
-  // Plan-first forces it OFF (and disables the toggle): planning is inherently interactive, so
-  // the run must be able to hand the ball back.
   const runMode = resolveComposerRunMode({
     hasGit,
     variants,
-    planFirst: draft.planFirst,
     explicitAutonomous: draft.autonomous,
     explicitWorktree: draft.worktree,
     interactive: selectedSkill?.interactive,
@@ -357,11 +349,6 @@ export function NewTaskRoute() {
   const generateFollowupsOn = followupsToggleShown
     ? (draft.generateFollowups ?? uiState.data?.lastGenerateFollowups ?? true)
     : false
-
-  // ---- plan mode (#383 + spec 008) ----------------------------------------------------------
-  const [plan, setPlan] = useState<PendingPlan | null>(null)
-  const [planning, setPlanning] = useState(false)
-  const [starting, setStarting] = useState(false)
 
   // ---- bookmarklet deep-link (spec 011 — legacy handleDeepLink, verbatim) -------------------
   // `auto=1` with a ref arms the unattended start; the composer stays hidden behind a
@@ -462,7 +449,7 @@ export function NewTaskRoute() {
     // Legacy focused the Run button so a bare Enter submits the reviewed form.
     document
       .querySelector<HTMLButtonElement>(
-        '[data-slot="composer"] button[aria-label="Start task"], [data-slot="composer"] button[aria-label="Plan task"]',
+        '[data-slot="composer"] button[aria-label="Start task"]',
       )
       ?.focus()
   }, [notice, sourcesReady]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -480,21 +467,6 @@ export function NewTaskRoute() {
     if (!sourcesReady) {
       // Rejection restores the draft — nothing typed is lost to a race with the pickers.
       throw new Error('Still loading workflows and skills — try again in a second.')
-    }
-    if (draft.planFirst) {
-      // Plan mode: submit means PLAN. A rejection propagates — the composer toasts and
-      // restores the draft; a success restores the text ourselves (the composer already
-      // cleared optimistically) so Discard hands back exactly what was typed. The review
-      // overlay is deliberate: it's where steps are edited and saved as a reusable chain.
-      setPlanning(true)
-      try {
-        setPlan(pendingPlanOf(text, submitted, await postPlan(text)))
-        update({ text })
-        setImages(images)
-      } finally {
-        setPlanning(false)
-      }
-      return
     }
     const created = await createRun(
       buildCreateRunBody({
@@ -545,48 +517,6 @@ export function NewTaskRoute() {
     clearStartedDraft(draftProjectId)
     void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
     navigate(startedRunPath(created))
-  }
-
-  /** ▶ Start on the reviewed plan: the (possibly edited) steps go INLINE, with the composer's
-   *  current picker choices — legacy `startPlannedRun` semantics on the new surface. */
-  const startPlanned = async () => {
-    if (plan === null || plan.steps.length === 0 || starting || !providersReady || runner === null) return
-    setStarting(true)
-    try {
-      const created = await createRun(
-        buildPlannedRunBody({
-          task: plan.task,
-          steps: plan.steps,
-          model,
-          modelsLocked,
-          runner,
-          runnerExplicit: draft.runner !== null,
-          defaultRunner,
-          variants,
-          images: plan.images,
-          generateFollowups: generateFollowupsOn,
-          todoId: deepLink.todo, // #374: planning first must not lose the inbox entry
-          dispatch,
-        }),
-      )
-      // Run-mode choices live in the current draft; stable defaults come from workspace policy.
-      // persisting the forced `false` would overwrite their real preference, so turning
-      // CEZ_FOLLOWUPS back on later would silently come up off.
-      if (followupsToggleShown) {
-        void putUiState({ lastGenerateFollowups: generateFollowupsOn })
-          .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.uiState }))
-          .catch(() => {})
-      }
-      clearStartedDraft(draftProjectId)
-      setImages([])
-      setPlan(null)
-      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
-      navigate(startedRunPath(created))
-    } catch (error) {
-      toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
-    } finally {
-      setStarting(false)
-    }
   }
 
   // The unattended bookmarklet start in flight: no composer, no params echoed anywhere —
@@ -645,8 +575,8 @@ export function NewTaskRoute() {
           autoFocus
           placeholder="Describe a task for the agent — / for skills…"
           ariaLabel="Describe a task for the agent"
-          sendAriaLabel={draft.planFirst ? 'Plan task' : 'Start task'}
-          disabled={!providersReady || starting}
+          sendAriaLabel="Start task"
+          disabled={!providersReady}
           disabledReason={
             providers.isPending
               ? 'Checking agent providers…'
@@ -773,7 +703,6 @@ export function NewTaskRoute() {
               ) : null}
               <AutonomousToggle
                 on={autonomousOn}
-                disabled={draft.planFirst}
                 onChange={(on) => update({ autonomous: on })}
               />
               {followupsToggleShown ? (
@@ -821,11 +750,6 @@ export function NewTaskRoute() {
                   Configure providers
                 </Link>
               ) : null}
-              <ModeSegment
-                planFirst={draft.planFirst}
-                planning={planning}
-                onModeChange={(planFirst) => update({ planFirst })}
-              />
               <kbd
                 aria-hidden="true"
                 className="rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-[10.5px] font-medium text-muted-foreground"
@@ -850,28 +774,6 @@ export function NewTaskRoute() {
         <SuggestedChips onPick={(text) => update({ text })} />
       </div>
 
-      {plan !== null ? (
-        <PlanReview
-          plan={plan}
-          starting={starting}
-          startAvailable={providersReady}
-          startUnavailableReason={
-            providers.isPending
-              ? 'Checking agent providers…'
-              : providers.isError
-                ? 'Provider authentication could not be verified.'
-                : 'Connect an agent provider before starting a task.'
-          }
-          startUnavailableAction={
-            !providers.isPending ? (
-              <Link to="/settings/agents#providers">Configure providers</Link>
-            ) : undefined
-          }
-          onStepsChange={(steps) => setPlan((current) => (current ? { ...current, steps } : current))}
-          onStart={() => void startPlanned()}
-          onDiscard={() => setPlan(null)}
-        />
-      ) : null}
     </div>
   )
 }
@@ -1157,61 +1059,6 @@ function BaseBranchPill({ repo }: { repo: RepoResponse }) {
         ...repo.branches.map((branch) => ({ value: branch, label: branch })),
       ]}
     />
-  )
-}
-
-/** The `Start | Plan first` segment (#383): a real toggle with an UNMISTAKABLE selected state.
- *  "Start" selected keeps the quiet card fill; "Plan first" selected takes the mockup's
- *  contrast fill + focus ring (`.seg .plan-active`) — plan mode must never be ambient. The
- *  active plan segment doubles as the busy indicator while `POST /api/plan` is in flight. */
-function ModeSegment({
-  planFirst,
-  planning,
-  onModeChange,
-}: {
-  planFirst: boolean
-  planning: boolean
-  onModeChange: (planFirst: boolean) => void
-}) {
-  return (
-    <div
-      data-slot="mode-seg"
-      role="radiogroup"
-      aria-label="Run mode"
-      className="inline-flex items-center gap-0.5 rounded-lg bg-muted p-[3px]"
-    >
-      <button
-        type="button"
-        role="radio"
-        aria-checked={!planFirst}
-        onClick={() => onModeChange(false)}
-        className={cn(
-          'h-6 rounded-md px-2 text-xs transition-colors',
-          !planFirst
-            ? 'bg-card font-semibold text-foreground shadow-xs'
-            : 'font-medium text-muted-foreground hover:text-foreground',
-        )}
-      >
-        Start
-      </button>
-      <button
-        type="button"
-        role="radio"
-        aria-checked={planFirst}
-        aria-busy={planning || undefined}
-        data-slot="mode-plan"
-        onClick={() => onModeChange(true)}
-        className={cn(
-          'h-6 rounded-md px-2 text-xs transition-colors',
-          planFirst
-            ? 'bg-contrast font-semibold text-contrast-foreground ring-2 ring-ring/55'
-            : 'font-medium text-muted-foreground hover:text-foreground',
-          planning && 'animate-pulse',
-        )}
-      >
-        {planning ? 'Planning…' : 'Plan first'}
-      </button>
-    </div>
   )
 }
 

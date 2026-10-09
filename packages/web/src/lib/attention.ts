@@ -63,8 +63,8 @@ function hasPendingPermission(_run: AttentionInput): boolean {
  * Still always false here, but now by DESIGN rather than for want of data. The "finished while
  * you weren't looking" question is answered by the read/unread channel (#unread-done-items):
  * `RunRecord.seenAt` + `isUnread()` in `lib/read-state.ts`. That signal is deliberately kept OFF
- * the status dot — the dot keeps saying done/failed, and unread rides its own trailing violet
- * marker (the approved "Option B") so status and "have I seen it" never collapse into one dot.
+ * the status dot — the dot keeps saying done/failed, and unread rides the title's weight, so
+ * status and "have I seen it" never collapse into one dot.
  * Routing unread through this `unseen` bucket would recolor the status dot violet, which is
  * exactly the conflation that design avoids, so the bucket stays reserved and unused.
  */

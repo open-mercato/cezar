@@ -80,10 +80,15 @@ const TrackerRoute = lazy(() =>
   import('./routes/tracker/tracker').then((m) => ({ default: m.TrackerRoute })),
 )
 
-/** Lazy because the builder carries dnd-kit (R6 Step 1.6) — drag machinery only this surface
- *  uses, so only this surface pays for it. */
-const WorkflowsRoute = lazy(() =>
-  import('./routes/workflows/workflows').then((m) => ({ default: m.WorkflowsRoute })),
+/** The live workflow graph of a task (same spec, phase 3) — the editor's chunk, loaded lazily. */
+const TaskGraphRoute = lazy(() =>
+  import('./routes/workflow-graph/task-graph').then((m) => ({ default: m.TaskGraphRoute })),
+)
+
+/** The workflow node editor (spec 2026-09-30-workflow-node-editor) — the Workflows surface. Lazy
+ *  so React Flow stays out of the main bundle. */
+const WorkflowGraphRoute = lazy(() =>
+  import('./routes/workflow-graph/workflow-graph').then((m) => ({ default: m.WorkflowGraphRoute })),
 )
 
 /** Lazy because the skill detail renders the skill body through the same markdown stack the
@@ -104,6 +109,10 @@ const AutomationsRoute = lazy(() =>
  *  still land. The scoped Navigate keeps the redirect inside the active project. */
 function SettingsSkillsRedirect() {
   const location = useLocation()
+  const legacySkill = new URLSearchParams(location.search).get('skill')
+  if (legacySkill === '__bm') {
+    return <ScopedNavigate to={{ pathname: '/settings/bookmarklets', hash: location.hash }} replace />
+  }
   return (
     <ScopedNavigate
       to={{ pathname: '/skills', search: location.search, hash: location.hash }}
@@ -362,6 +371,14 @@ export const AppRoutes = memo(function AppRoutes() {
           }
         />
         <Route
+          path="tasks/:id/graph"
+          element={
+            <Suspense fallback={<GitTabLoading tab="changes" />}>
+              <TaskGraphRoute />
+            </Suspense>
+          }
+        />
+        <Route
           path="tasks/:id/commits"
           element={
             <Suspense fallback={<GitTabLoading tab="changes" />}>
@@ -417,6 +434,25 @@ export const AppRoutes = memo(function AppRoutes() {
           element={
             <Suspense fallback={<RepoGitLoading />}>
               <RepoGitRoute tab="branches" />
+            </Suspense>
+          }
+        />
+        {/* The repository file browser (#1279). Two routes, because a file path contains slashes:
+            the bare tab, and the splat that carries the selected file so `/git/files/a/b.ts` is the
+            file's own address. */}
+        <Route
+          path="git/files"
+          element={
+            <Suspense fallback={<RepoGitLoading />}>
+              <RepoGitRoute tab="files" />
+            </Suspense>
+          }
+        />
+        <Route
+          path="git/files/*"
+          element={
+            <Suspense fallback={<RepoGitLoading />}>
+              <RepoGitRoute tab="files" />
             </Suspense>
           }
         />
@@ -526,13 +562,13 @@ export const AppRoutes = memo(function AppRoutes() {
             bundle like the overview does. */}
         <Route path="inbox" element={<InboxRoute />} />
 
-        {/* The workflow builder (R6 Step 1.6): /workflows opens the canvas on the repo's first
-            saved chain, /workflows/:name deep-links a specific one. */}
+        {/* The workflow node editor (spec 2026-09-30-workflow-node-editor): /workflows opens a new
+            canvas, /workflows/:name deep-links a saved workflow (v1 files open as graphs). */}
         <Route
           path="workflows"
           element={
             <Suspense fallback={<WorkflowsLoading />}>
-              <WorkflowsRoute />
+              <WorkflowGraphRoute />
             </Suspense>
           }
         />
@@ -540,10 +576,12 @@ export const AppRoutes = memo(function AppRoutes() {
           path="workflows/:name"
           element={
             <Suspense fallback={<WorkflowsLoading />}>
-              <WorkflowsRoute />
+              <WorkflowGraphRoute />
             </Suspense>
           }
         />
+        {/* The editor's preview address while it was built beside the old builder. */}
+        <Route path="workflows-new/*" element={<ScopedNavigate to="/workflows" replace />} />
 
         {/* Settings (R6 Step 1.3): registry-driven — the section list, nav and routes all come
             from routes/settings/registry.tsx. Hidden sections are NOT routed, so their URLs are

@@ -310,6 +310,61 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
   // ---- reports and the settle→parent wake ----------------------------------------------------
 
   describe('reports', () => {
+    it('does not report an idle-closed ask early, then reports exactly once after Continue settles it', async () => {
+      const stdinFile = join(repoRoot, 'mock-stdin-ask-settle.ndjson');
+      savedEnv.CEZ_MOCK_STDIN_FILE = process.env.CEZ_MOCK_STDIN_FILE;
+      process.env.CEZ_MOCK_STDIN_FILE = stdinFile;
+
+      const parent = await parkedRoot();
+      const child = start('mock:ask which library?', childOf(parent.id), { autonomous: true });
+      await waitFor(child.id, (r) => r?.status === 'waiting');
+
+      const live = (manager as unknown as {
+        active: Map<string, { idleClosed?: boolean; session?: { end(): void } }>;
+      }).active.get(child.id);
+      live!.idleClosed = true;
+      live!.session!.end();
+      await waitFor(child.id, (r) => r?.status === 'failed' && r.awaitingAnswerSince !== undefined);
+      await waitFor(child.id, (r) => !manager.isActive(r?.id ?? child.id));
+      expect(notes(parent.id).some((note) => note.includes('report received from task'))).toBe(false);
+
+      expect(manager.continueRun(child.id, { text: 'mock:done use zod' })).toEqual({ ok: true });
+      await waitFor(child.id, (r) => r?.status === 'done' || r?.status === 'review');
+      await waitFor(parent.id, () => stdin(stdinFile).includes('Report from task'), 40_000);
+      const reportNotes = notes(parent.id).filter((note) => note.includes('report received from task'));
+      expect(reportNotes).toHaveLength(1);
+      expect(store.getRun(child.id)?.awaitingAnswerSince).toBeUndefined();
+    }, 60_000);
+
+    it('reports an unanswered child exactly once when cancellation explicitly retires it', async () => {
+      const stdinFile = join(repoRoot, 'mock-stdin-ask-cancel.ndjson');
+      savedEnv.CEZ_MOCK_STDIN_FILE = process.env.CEZ_MOCK_STDIN_FILE;
+      process.env.CEZ_MOCK_STDIN_FILE = stdinFile;
+
+      const parent = await parkedRoot();
+      const child = start('mock:ask which library?', childOf(parent.id), { autonomous: true });
+      await waitFor(child.id, (r) => r?.status === 'waiting');
+      expect(manager.cancel(child.id)).toBe(true);
+      await waitFor(child.id, (r) => r?.status === 'cancelled');
+      await waitFor(parent.id, (r) => (r?.dispatch?.pendingReports?.length ?? 0) === 1, 40_000);
+      const reportNotes = notes(parent.id).filter((note) => note.includes('report received from task'));
+      expect(reportNotes).toHaveLength(1);
+      expect(stdin(stdinFile)).not.toContain('Report from task'); // cancellation never wakes a parent
+      expect(store.getRun(child.id)?.awaitingAnswerSince).toBeUndefined();
+    }, 60_000);
+
+    it('reports an unanswered child exactly once when Finish explicitly retires it', async () => {
+      const parent = await parkedRoot();
+      const child = start('mock:ask which library?', childOf(parent.id), { autonomous: true });
+      await waitFor(child.id, (r) => r?.status === 'waiting');
+      expect(manager.finish(child.id)).toBe(true);
+      await waitFor(child.id, (r) => r?.status === 'done' || r?.status === 'review');
+      await waitFor(parent.id, () => notes(parent.id).some((note) => note.includes('report received from task')), 40_000);
+      const reportNotes = notes(parent.id).filter((note) => note.includes('report received from task'));
+      expect(reportNotes).toHaveLength(1);
+      expect(store.getRun(child.id)?.awaitingAnswerSince).toBeUndefined();
+    }, 60_000);
+
     it('records a child’s own report and delivers it into the parent’s open session at settle', async () => {
       const stdinFile = join(repoRoot, 'mock-stdin.ndjson');
       savedEnv.CEZ_MOCK_STDIN_FILE = process.env.CEZ_MOCK_STDIN_FILE;

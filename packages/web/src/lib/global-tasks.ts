@@ -2,6 +2,7 @@ import type { ProjectListEntry, RunIndexEntry } from '@open-mercato/cezar-api-cl
 
 import { allProjectTags } from '@/lib/project-tags'
 import { runTitle } from '@/lib/task-groups'
+import { automationIdOf, matchesOrigin, type TaskOrigin } from '@/lib/task-origin'
 
 /**
  * The pure half of the global Tasks page (`/tasks`): joining the cross-project run index to the
@@ -165,6 +166,37 @@ export function toGlobalTasks(
       tags: project?.tags ?? [],
     }
   })
+}
+
+/** A row's identity across projects — run ids are only unique inside one `runs.json`. */
+export const globalTaskKey = (run: Pick<RunIndexEntry, 'projectId' | 'id'>): string => `${run.projectId}/${run.id}`
+
+/**
+ * Each row's automation, resolved once per list: its own `automationId`, or — for a dispatched
+ * child, which carries none — its root's, looked up in the SAME project (a dispatch tree never
+ * spans two).
+ */
+export function globalAutomationIndex(tasks: readonly GlobalTask[]): Map<string, string | undefined> {
+  const byKey = new Map(tasks.map((task) => [globalTaskKey(task.run), task.run]))
+  return new Map(
+    tasks.map((task) => [
+      globalTaskKey(task.run),
+      automationIdOf(task.run, (rootId) => byKey.get(`${task.run.projectId}/${rootId}`)),
+    ]),
+  )
+}
+
+/**
+ * The rows an origin admits — Regular (started by a person or a person's task), Automations, or
+ * All. Applied BEFORE the facets, the way the Active/Archived split is: it chooses which list you
+ * are reading, so every count on the filter bar is a count of that list.
+ */
+export function filterGlobalTasksByOrigin(
+  tasks: readonly GlobalTask[],
+  origin: TaskOrigin,
+  automations: ReadonlyMap<string, string | undefined>,
+): GlobalTask[] {
+  return tasks.filter((task) => matchesOrigin(automations.get(globalTaskKey(task.run)), origin))
 }
 
 /** Every workflow present in the CURRENT list — the workflow facet's options. Derived from the
