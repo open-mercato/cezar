@@ -57,6 +57,10 @@ describe('planner skill catalog', () => {
   });
 
   test('reduces catalogs above the 6,000-character threshold', () => {
+    const exactDescription = 'q'.repeat(6_000 - '- boundary — '.length);
+    const exactCatalog = buildSkillCatalog('unrelated task', [skill('boundary', exactDescription)]);
+    expect(exactCatalog).toBe(`- boundary — ${exactDescription}`);
+
     const skills = [skill('large', 'z'.repeat(6_100))];
     expect(buildSkillCatalog('unrelated task', skills)).toBe('- large — ' + 'z'.repeat(160));
     expect(PLANNER_CATALOG_DEFAULTS).toEqual({ maxFull: 15, maxDescriptionChars: 160, budgetChars: 6000 });
