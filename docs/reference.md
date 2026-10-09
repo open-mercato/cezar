@@ -254,8 +254,10 @@ steps:
 ```
 
 `{{task}}` is replaced with the task text you typed. When a check fails and loops
-back, its failing output is appended to the retried agent's prompt so the next
-attempt can see what broke.
+back, the retried agent step reopens the session its previous attempt left and is
+sent only the failing output, so it keeps what it already read. When that session
+cannot be reopened (another backend or account, or the backend no longer has it),
+the step starts a fresh session with the task and the failing output appended.
 
 `onFail.retryOn` narrows the loop to the exit codes that mean *the work is
 wrong*. Omitted, any non-zero code loops back — right for `npm test`, which

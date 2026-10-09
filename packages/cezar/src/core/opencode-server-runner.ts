@@ -15,6 +15,7 @@ import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.t
 import { parseModelIdentity } from './model-identity.ts';
 import { V1TextCoalescer } from './v1-text-coalescer.ts';
 import {
+  OpencodeHttpError,
   OpencodeTransportError,
   openOpencodeEventStream,
   opencodeRequest,
@@ -59,10 +60,13 @@ export const TURN_IDLE_GRACE_MS = 5_000;
  * the opencode TUI talks to) with an SSE event stream. One server per session,
  * bound to the run's `cwd` (worktree), gives OpenCode the same multi-turn shape
  * as the Claude runner: each `sendMessage` posts another prompt to the same
- * session (history is kept server-side) and `session/abort` cancels. "Continue"
- * starts a fresh server and a fresh session — `bootstrap()` always `POST
- * /session` and does not read `spec.sessionId`; resuming a server-side session
- * id is not implemented.
+ * session (history is kept server-side) and `session/abort` cancels. A session
+ * outlives its server — opencode keeps it in its own storage — so "Continue"
+ * (`spec.resume`) boots a fresh server and reopens `spec.sessionId` with `GET
+ * /session/:id`; a session that is gone (a 404, or an id that is not an opencode `ses_…` id)
+ * fails loudly, unless the caller supplied a `resumeFallbackPrompt`, in which case the
+ * continuation opens a fresh session with that portable context instead of dead-ending. A
+ * transport drop or any other status is no evidence the session is gone and propagates.
  *
  * Auth = the host's opencode config/logins. The agent runs autonomously
  * (auto-approved permissions); OpenCode has no per-tool allowlist, so
@@ -70,6 +74,7 @@ export const TURN_IDLE_GRACE_MS = 5_000;
  */
 export class OpencodeServerRunner implements AgentRunner {
   readonly backend = 'opencode' as const;
+  readonly strictResume = true;
 
   private readonly bin: string;
   private readonly timeoutMs: number;
@@ -374,11 +379,49 @@ class OpencodeSession implements AgentSession {
   }
 
   private async bootstrap(): Promise<void> {
-    const created = await this.http('POST', '/session', { title: 'cezar task' });
-    this.sessionId = stringField(created, 'id');
-    if (!this.sessionId) throw new Error('opencode did not return a session id');
-    this.emit({ type: 'session', sessionId: this.sessionId });
-    const sessionId = this.sessionId;
+    const resumeId = this.spec.resume ? this.spec.sessionId : undefined;
+    let sessionId: string | undefined;
+    let resumed = false;
+    let fallbackPrompt: string | undefined;
+    if (resumeId) {
+      let missingError: Error | undefined;
+      // Opencode mints its own `ses_…` ids; anything else is cezar's pre-assigned placeholder for a
+      // session that died before opencode announced its id. It resolves to nothing (the real server
+      // answers 500, not 404), so treat it as missing rather than asking.
+      if (!resumeId.startsWith('ses_')) {
+        missingError = new Error(`opencode cannot resume non-session id ${resumeId}`);
+      } else {
+        try {
+          const existing = await this.http('GET', `/session/${encodeURIComponent(resumeId)}`, undefined);
+          const found = stringField(existing, 'id');
+          if (found !== resumeId) missingError = new Error(`opencode could not reopen session ${resumeId}`);
+          else sessionId = found;
+        } catch (err) {
+          // Only a 404 ("no such session") justifies a fresh session. A transport drop or a 5xx is
+          // no evidence the session is gone, and replacing it would discard provider-owned context
+          // for nothing — so those propagate, exactly as before.
+          if (err instanceof OpencodeHttpError && err.status === 404) missingError = err;
+          else throw err;
+        }
+      }
+      if (missingError) {
+        // With a portable opening prompt the continuation degrades to a fresh session; without
+        // one the original failure stands. The prompt is built here, not by the caller, because
+        // it reads the whole event log.
+        fallbackPrompt = this.spec.resumeFallbackPrompt?.();
+        if (!fallbackPrompt) throw missingError;
+        this.emit({ type: 'note', message: `opencode: session ${resumeId} could not be reopened — continuing in a fresh session` });
+      } else {
+        resumed = true;
+      }
+    }
+    if (!sessionId) {
+      const created = await this.http('POST', '/session', { title: 'cezar task' });
+      sessionId = stringField(created, 'id');
+      if (!sessionId) throw new Error('opencode did not return a session id');
+    }
+    this.sessionId = sessionId;
+    this.emit({ type: 'session', sessionId });
     this.emitUi((state) => opencodeSessionStarted(sessionId, state));
 
     // The SSE subscription must be LIVE before the first prompt posts —
@@ -386,7 +429,10 @@ class OpencodeSession implements AgentSession {
     // lost (a race this await closes; the bundled mock made it visible).
     await this.consumeEvents();
 
-    const first = prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt);
+    // A reopened session already holds the system prompt from its own first turn.
+    const first = resumed
+      ? this.spec.userPrompt
+      : prependSystemPrompt(this.spec.systemPrompt, fallbackPrompt ?? this.spec.userPrompt);
     await this.prompt(first);
   }
 
@@ -642,9 +688,9 @@ class OpencodeSession implements AgentSession {
    * global `fetch` so no undici `headersTimeout`/`bodyTimeout` default cuts the
    * prompt long-poll at 300 s (#897) — see that module's header for why.
    *
-   * Rejects with `OpencodeTransportError` when the connection failed and a
-   * plain `Error` when the server answered with a status; only the caller can
-   * tell whether the first of those means anything.
+   * Rejects with `OpencodeTransportError` when the connection failed and
+   * `OpencodeHttpError` (carrying the status) when the server answered with a
+   * non-2xx status; only the caller can tell whether either means anything.
    */
   private async http(
     method: string,
@@ -654,7 +700,7 @@ class OpencodeSession implements AgentSession {
     if (!this.baseUrl) throw new Error('opencode server not ready');
     const res = await opencodeRequest(`${this.baseUrl}${path}`, { method, body });
     if (res.status < 200 || res.status >= 300) {
-      throw new Error(`${method} ${path} → ${res.status} ${res.body.slice(0, 200)}`);
+      throw new OpencodeHttpError(res.status, method, path, res.body);
     }
     if (!res.body) return {};
     try {

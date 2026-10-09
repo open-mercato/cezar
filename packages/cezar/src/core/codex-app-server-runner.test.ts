@@ -1,12 +1,13 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import type { AgentEvent } from './agent-runner.js';
+import type { AgentEvent, AgentRunSpec } from './agent-runner.js';
+import { prependSystemPrompt } from './agent-runner.js';
 import { KILL_GRACE_MS } from './claude-cli-runner.js';
 import { CodexAppServerRunner } from './codex-app-server-runner.js';
 import { RunStore } from '../runs/store.ts';
@@ -63,6 +64,29 @@ describe('a teardown cezar initiated (codex app-server)', () => {
     expect(
       events.some((e) => e.type === 'note' && e.message.includes('terminated by cezar (code 143)')),
     ).toBe(true);
+  }, 15_000);
+
+  it('sends the system prompt into a new thread only, never into a resumed one', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-codex-turns-'));
+    const turnsFile = join(dir, 'turns.ndjson');
+    try {
+      const open = async (spec: Partial<AgentRunSpec>): Promise<void> => {
+        const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+        const session = runner.startSession(
+          { userPrompt: 'check the working tree', cwd: process.cwd(), systemPrompt: 'SKILL BODY', env: { MOCK_CODEX_TURNS_FILE: turnsFile }, ...spec },
+          undefined,
+          { autoEndAfterFirstTurn: true },
+        );
+        await session.result;
+      };
+      await open({});
+      await open({ sessionId: 'th_mock_1', resume: true, userPrompt: 'the check failed; fix it' });
+
+      const turns = readFileSync(turnsFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as string);
+      expect(turns).toEqual([prependSystemPrompt('SKILL BODY', 'check the working tree'), 'the check failed; fix it']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }, 15_000);
 
   it('surfaces a failed turn as an AgentEvent error', async () => {

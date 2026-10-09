@@ -60,6 +60,7 @@ export interface CodexRunnerOptions {
  */
 export class CodexAppServerRunner implements AgentRunner {
   readonly backend = 'codex' as const;
+  readonly strictResume = true;
 
   private readonly bin: string;
   private readonly timeoutMs: number;
@@ -423,7 +424,8 @@ class CodexSession implements AgentSession {
       // config overrides, so the user's own [mcp_servers] table is extended, never replaced.
       config: this.privateMcpConfig(),
     };
-    if (this.spec.resume && this.spec.sessionId) {
+    const resumed = Boolean(this.spec.resume && this.spec.sessionId);
+    if (resumed) {
       await this.rpc.request('thread/resume', { threadId: this.spec.sessionId, ...clean(overrides) });
       this.threadId = this.spec.sessionId;
     } else {
@@ -440,8 +442,9 @@ class CodexSession implements AgentSession {
 
     // Seed the first turn. The system prompt (skill body + handoff contract)
     // has no dedicated app-server field, so it rides along as a leading block
-    // of the opening message.
-    const first = prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt);
+    // of the opening message — of a new thread only: a resumed thread already
+    // holds it from its own first turn.
+    const first = resumed ? this.spec.userPrompt : prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt);
     await this.startOrSteerTurn(first);
   }
 

@@ -1,10 +1,13 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AgentEvent } from './agent-runner.ts';
+import type { AgentEvent, AgentRunSpec } from './agent-runner.ts';
+import { prependSystemPrompt } from './agent-runner.ts';
 import {
   KILL_GRACE_MS,
   OpencodeServerRunner,
@@ -404,5 +407,124 @@ describe('#897 a turn that outlives its prompt POST', () => {
     // Nothing to wait for, so no grace window is spent.
     expect(types(events).filter((t) => t === 'turn-end')).toHaveLength(1);
     expect(Date.now() - started).toBeLessThan(TURN_IDLE_GRACE_MS);
+  }, 30_000);
+});
+
+describe('opencode session resume', () => {
+  const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
+
+  async function runOnce(spec: Partial<AgentRunSpec>, promptsFile: string) {
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 }).startSession(
+      { userPrompt: 'check the tree', cwd: process.cwd(), systemPrompt: 'SKILL BODY', env: { MOCK_OPENCODE_PROMPTS_FILE: promptsFile }, ...spec },
+      (event) => events.push(event),
+      { autoEndAfterFirstTurn: true },
+    );
+    const result = await session.result;
+    return { events, result };
+  }
+
+  it('reopens the stored session and sends only the new instruction', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-opencode-resume-'));
+    const promptsFile = join(dir, 'prompts.ndjson');
+    try {
+      await runOnce({}, promptsFile);
+      const resumed = await runOnce({ sessionId: 'ses_mock_1', resume: true, userPrompt: 'the check failed; fix it' }, promptsFile);
+
+      const prompts = readFileSync(promptsFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as string);
+      expect(prompts).toEqual([prependSystemPrompt('SKILL BODY', 'check the tree'), 'the check failed; fix it']);
+      expect(resumed.result.sessionId).toBe('ses_mock_1');
+      expect(resumed.events).toContainEqual({ type: 'session', sessionId: 'ses_mock_1' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('fails loudly when the session to resume is gone, instead of starting a blank one', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-opencode-resume-'));
+    const promptsFile = join(dir, 'prompts.ndjson');
+    try {
+      const { events } = await runOnce({ sessionId: 'ses_gone', resume: true }, promptsFile);
+      expect(events.some((event) => event.type === 'error' && event.message.includes('GET /session/ses_gone → 404'))).toBe(true);
+      expect(events.some((event) => event.type === 'session')).toBe(false);
+      expect(() => readFileSync(promptsFile, 'utf8')).toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('degrades to a fresh session carrying the portable context when the session is gone', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-opencode-resume-'));
+    const promptsFile = join(dir, 'prompts.ndjson');
+    try {
+      const fallback = '## Original task\nfix the checkout bug\n\n---\n\n## New user instruction\nthe check failed';
+      const { events, result } = await runOnce(
+        { sessionId: 'ses_gone', resume: true, userPrompt: 'the check failed', resumeFallbackPrompt: () => fallback },
+        promptsFile,
+      );
+
+      const prompts = readFileSync(promptsFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as string);
+      expect(prompts).toEqual([prependSystemPrompt('SKILL BODY', fallback)]);
+      expect(result.sessionId).toBe('ses_mock_1');
+      expect(events).toContainEqual({ type: 'session', sessionId: 'ses_mock_1' });
+      expect(events.some((event) => event.type === 'error')).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('propagates a server error on the session lookup instead of opening a fresh session', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-opencode-resume-'));
+    const promptsFile = join(dir, 'prompts.ndjson');
+    try {
+      const { events } = await runOnce(
+        { sessionId: 'ses_server_error', resume: true, userPrompt: 'the check failed', resumeFallbackPrompt: () => 'portable context' },
+        promptsFile,
+      );
+
+      // A 500 is not "the session is gone": the continuation must fail loudly rather than replace
+      // the stored session with a fresh one and lose the provider-owned conversation.
+      expect(events.some((event) => event.type === 'error' && event.message.includes('GET /session/ses_server_error → 500'))).toBe(true);
+      expect(events.some((event) => event.type === 'session')).toBe(false);
+      expect(() => readFileSync(promptsFile, 'utf8')).toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('treats a non-`ses_` id as missing without a lookup — a step that died before its session event', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-opencode-resume-'));
+    const promptsFile = join(dir, 'prompts.ndjson');
+    const fallback = '## Original task\nfix the checkout bug\n\n---\n\n## New user instruction\nthe check failed';
+    try {
+      // cezar pre-assigns a randomUUID to every step; opencode mints its own `ses_…` id and only
+      // announces it with a `session` event. A step that failed before that event leaves the
+      // placeholder, which real opencode answers with 500 — the fresh-session fallback is correct.
+      const { events, result } = await runOnce(
+        { sessionId: '3f9a2c10-0000-4000-8000-000000000000', resume: true, userPrompt: 'the check failed', resumeFallbackPrompt: () => fallback },
+        promptsFile,
+      );
+
+      const prompts = readFileSync(promptsFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as string);
+      expect(prompts).toEqual([prependSystemPrompt('SKILL BODY', fallback)]);
+      expect(result.sessionId).toBe('ses_mock_1');
+      expect(events).toContainEqual({ type: 'session', sessionId: 'ses_mock_1' });
+      expect(events.some((event) => event.type === 'error')).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('fails when a non-`ses_` id has no fallback prompt', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-opencode-resume-'));
+    const promptsFile = join(dir, 'prompts.ndjson');
+    try {
+      const { events } = await runOnce({ sessionId: 'not-a-session', resume: true }, promptsFile);
+      expect(events.some((event) => event.type === 'error')).toBe(true);
+      expect(events.some((event) => event.type === 'session')).toBe(false);
+      expect(() => readFileSync(promptsFile, 'utf8')).toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }, 30_000);
 });

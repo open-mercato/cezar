@@ -55,7 +55,15 @@ if (process.env.CEZ_MOCK_ARGS_FILE) {
   }
 }
 
-emit({ type: 'system', subtype: 'init' });
+// A `--resume` spawn models a CLI reopening a stored conversation: init is emitted only once the
+// session is known to exist (in `respond`), so a missing conversation emits no init and looks like
+// the pre-session failure the engine's fallback keys on. A fresh spawn emits init immediately.
+const resumedSpawn = process.argv.includes('--resume');
+let initEmitted = false;
+if (!resumedSpawn) {
+  emit({ type: 'system', subtype: 'init' });
+  initEmitted = true;
+}
 
 let turn = 0;
 
@@ -123,6 +131,75 @@ function writeHandoffAndTodo() {
 async function respond(userText, imageCount) {
   turn += 1;
   await sleep(250);
+  // `mock:session-gone` on a `--resume` spawn → the envelope Claude Code emits for a conversation
+  // it no longer has: an `is_error` result carrying the reason in `errors`, then exit 1.
+  // `mock:session-gone-text` also puts the reason into `result`.
+  const resumeAt = process.argv.indexOf('--resume');
+  if (resumeAt >= 0 && userText.includes('mock:session-gone')) {
+    const reason = `No conversation found with session ID: ${process.argv[resumeAt + 1]}`;
+    emit({
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      ...(userText.includes('mock:session-gone-text') ? { result: reason } : {}),
+      errors: [reason],
+      usage: { input_tokens: 0, output_tokens: 0 },
+      total_cost_usd: 0,
+    });
+    process.stdout.write('', () => process.exit(1));
+    return new Promise(() => {});
+  }
+  // `mock:resume-mystery` on a `--resume` spawn → a resume failure whose wording is not one of the
+  // known missing-session strings. The fallback is keyed on "not a provider refusal", so this must
+  // still degrade to a fresh session rather than dead-ending.
+  if (resumeAt >= 0 && userText.includes('mock:resume-mystery')) {
+    emit({
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      errors: ['resume failed: ERR_RESUME_PROTOCOL_v7'],
+      usage: { input_tokens: 0, output_tokens: 0 },
+      total_cost_usd: 0,
+    });
+    process.stdout.write('', () => process.exit(1));
+    return new Promise(() => {});
+  }
+  // The conversation exists, so the CLI announces the session before the turn. A `--resume` spawn
+  // that never reached this point (a missing conversation, handled above) emits no init.
+  if (!initEmitted) {
+    initEmitted = true;
+    emit({ type: 'system', subtype: 'init' });
+  }
+  // `mock:resume-mid-fail` on a `--resume` spawn → the session reopened and its turn STARTED (the
+  // init above flushes the turn.started), then the provider failed mid-turn. This must settle as a
+  // real failure, never as "could not reopen": a fresh retry would repeat it and double the spend.
+  if (resumeAt >= 0 && userText.includes('mock:resume-mid-fail')) {
+    emit({
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      errors: ['API Error: 500 Internal Server Error'],
+      usage: { input_tokens: 5, output_tokens: 5 },
+      total_cost_usd: 0,
+    });
+    process.stdout.write('', () => process.exit(1));
+    return new Promise(() => {});
+  }
+  // `mock:resume-limit` on a `--resume` spawn → the account, not the conversation, is the problem:
+  // the session reopened fine but the provider refuses the turn. Distinct from `mock:session-gone`
+  // so a retry can prove it does NOT pay for a whole fresh session on a usage limit.
+  if (resumeAt >= 0 && userText.includes('mock:resume-limit')) {
+    emit({
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      result: `Claude AI usage limit reached|${Math.floor(Date.now() / 1_000) + 3_600}`,
+      usage: { input_tokens: 0, output_tokens: 0 },
+      total_cost_usd: 0,
+    });
+    process.stdout.write('', () => process.exit(1));
+    return new Promise(() => {});
+  }
   // `mock:done` anywhere in the message → the reply ends with the CEZ:DONE
   // completion marker (#347), so the auto-close path is testable dry. `mock:report` implies it:
   // a unit that has reported is finished, and a report with no done marker would leave the child

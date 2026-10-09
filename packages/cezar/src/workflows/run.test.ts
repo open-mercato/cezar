@@ -19,7 +19,7 @@ import { createWorktree } from '../git-worktree.ts';
 import { RunStore, type RunRecord, type StepState } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { parseTaskMarkers } from '../runs/task-markers.ts';
-import { appendTurnText, endsWithMonitoringMarker, RunManager, turnEndMarkerText } from './run.ts';
+import { appendTurnText, endsWithMonitoringMarker, isProviderRefusalError, RunManager, turnEndMarkerText } from './run.ts';
 import type { WorkflowDef } from './types.ts';
 
 type UsageAccountingHarness = {
@@ -70,6 +70,29 @@ describe('appendTurnText', () => {
     expect(appendTurnText('', 'first')).toBe('first');
     expect(appendTurnText('first', '')).toBe('first');
     expect(appendTurnText(appendTurnText('', 'first'), 'second')).toBe('first\nsecond');
+  });
+});
+
+describe('isProviderRefusalError', () => {
+  it.each([
+    ["You've hit your usage limit. Upgrade to Pro to continue."],
+    ['insufficient_quota: You exceeded your current quota'],
+    ['Credit balance is too low'],
+    ['quota exceeded for this billing period'],
+    ['Your weekly limit has been reached'],
+    ['429 Too Many Requests'],
+    ['Service overloaded, please retry'],
+  ])('treats a provider refusal as one: %s', (message) => {
+    expect(isProviderRefusalError(message)).toBe(true);
+  });
+
+  it.each([
+    'No conversation found with session ID: abc',
+    'opencode could not reopen session ses_x',
+    'resume failed: ERR_RESUME_PROTOCOL_v7',
+    'API Error: 500 Internal Server Error',
+  ])('does not mistake a session failure for a refusal: %s', (message) => {
+    expect(isProviderRefusalError(message)).toBe(false);
   });
 });
 
@@ -490,6 +513,34 @@ describe('RunManager.continueRun override', () => {
     expect(manager.continueRun(id, { runner: 'claude' })).toEqual({ ok: true });
     expect(calls[0]?.[2]).toBe('sess-1');
     expect(calls[0]?.[3]).toBe('claude');
+  });
+
+  it('does not resume a session id the provider never confirmed', () => {
+    // A step that died before its backend minted a session leaves cezar's randomUUID placeholder;
+    // resuming it resolves to nothing on the provider, so Continue must open a fresh session
+    // carrying the portable context instead.
+    const id = resumableRun();
+    store.updateStep(id, 's1', { backend: 'opencode', sessionConfirmed: false });
+    const calls: unknown[][] = [];
+    (manager as unknown as { runContinuation: (...args: unknown[]) => Promise<void> }).runContinuation = async (...args) => {
+      calls.push(args);
+    };
+
+    expect(manager.continueRun(id, { text: 'keep going', runner: 'opencode' })).toEqual({ ok: true });
+    expect(calls[0]?.[2]).toBeUndefined();
+    expect(calls[0]?.[3]).toBe('opencode');
+  });
+
+  it('resumes a session id the provider confirmed', () => {
+    const id = resumableRun();
+    store.updateStep(id, 's1', { backend: 'opencode', sessionConfirmed: true });
+    const calls: unknown[][] = [];
+    (manager as unknown as { runContinuation: (...args: unknown[]) => Promise<void> }).runContinuation = async (...args) => {
+      calls.push(args);
+    };
+
+    expect(manager.continueRun(id, { text: 'keep going', runner: 'opencode' })).toEqual({ ok: true });
+    expect(calls[0]?.[2]).toBe('sess-1');
   });
 
   it('an omitted override preserves the run current backend/model (backward compat)', () => {
