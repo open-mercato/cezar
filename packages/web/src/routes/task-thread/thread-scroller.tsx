@@ -612,11 +612,14 @@ export function JumpToLatestPill({ onJump }: { onJump: () => void }) {
     <Button
       type="button"
       data-slot="jump-to-latest"
+      aria-label="Jump to latest"
+      title="Jump to latest"
       onClick={onJump}
-      variant="outline" size="sm" className="pointer-events-auto h-auto min-h-8 rounded-full border-border bg-background px-3.5 text-xs text-muted-foreground shadow-modal hover:bg-background hover:text-foreground"
+      variant="outline"
+      size="icon"
+      className="pointer-events-auto rounded-full border-border bg-card text-muted-foreground shadow-md hover:bg-card hover:text-foreground"
     >
-      <ArrowDownIcon aria-hidden className="size-3.5" />
-      Jump to latest
+      <ArrowDownIcon aria-hidden />
     </Button>
   )
 }

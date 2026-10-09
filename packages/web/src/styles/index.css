@@ -193,6 +193,10 @@
   --shadow-color: 0 0 0;
   --shadow-strength: 0.5;
 
+  /* the user's own messages in a thread — a solid bubble that reads apart from the agent's prose */
+  --user-bubble: #22386b;
+  --user-bubble-foreground: #eef3ff;
+
   /* terminal (xterm) — the 16 ANSI colours and the selection, tuned to this theme's surface */
   --term-black: #3f3f46;
   --term-red: #f87171;
@@ -258,6 +262,9 @@
 
   --shadow-color: 24 24 27;
   --shadow-strength: 0.07;
+
+  --user-bubble: #e4ecff;
+  --user-bubble-foreground: #172554;
 
   /* terminal (xterm) — the 16 ANSI colours and the selection, tuned to this theme's surface */
   --term-black: #18181b;
@@ -375,6 +382,8 @@
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
 
+  --color-user-bubble: var(--user-bubble);
+  --color-user-bubble-foreground: var(--user-bubble-foreground);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);

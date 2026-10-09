@@ -1,7 +1,9 @@
 import {
   BotIcon,
   BrainIcon,
+  CheckIcon,
   ChevronRightIcon,
+  CopyIcon,
   FileTextIcon,
   FolderInputIcon,
   GlobeIcon,
@@ -178,7 +180,7 @@ export function UserBubble({
       <div
         data-slot="user-bubble"
         data-editing="true"
-        className="max-w-[85%] self-end rounded-2xl rounded-br-md bg-muted px-4 py-2.5 text-sm leading-[1.6] md:max-w-[75%]"
+        className="max-w-[88%] self-end rounded-2xl bg-muted px-4 py-3 text-sm leading-[1.6] md:max-w-[78%]"
       >
         <Textarea
           autoFocus
@@ -222,80 +224,112 @@ export function UserBubble({
   }
 
   return (
-    <div
-      data-slot="user-bubble"
-      className="group max-w-[85%] min-w-0 self-end rounded-2xl rounded-br-md bg-muted px-4 py-2.5 text-sm leading-[1.6] md:max-w-[75%]"
-    >
-      {onEdit || onRemove ? (
-        <span
-          data-slot="bubble-actions"
-          className="mb-1 flex justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
-        >
-          {onEdit ? (
-            <Button
-              type="button"
-              aria-label={editLabel}
-              onClick={startEditing}
-              disabled={busy}
-              variant="ghost" size="icon-xs" className="size-[22px] text-soft-foreground hover:bg-background focus-visible:opacity-100 focus-visible:ring-ring/50"
-            >
-              <SquarePenIcon className="size-3.5" />
-            </Button>
-          ) : null}
-          {onRemove ? (
-            <Button
-              type="button"
-              aria-label={removeLabel}
-              onClick={() => void remove()}
-              disabled={busy}
-              variant="ghost" size="icon-xs" className="size-[22px] text-soft-foreground hover:bg-background hover:text-danger focus-visible:opacity-100 focus-visible:ring-ring/50"
-            >
-              <Trash2Icon className="size-3.5" />
-            </Button>
-          ) : null}
-        </span>
-      ) : null}
-      {actionError ? <p role="alert" className="mb-1 text-xs text-danger">{actionError}</p> : null}
-      <UserText text={text} />
-      {images.length > 0 ? (
-        <span data-slot="user-images" className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
-          {/* One list carries both kinds (#950), so the NAME decides how each entry renders: an
-              image is shown, a file is offered as a download — rendering a `.pdf` in an `<img>`
-              would show the user a broken image where their attachment should be. */}
-          {images.map((url) =>
-            isImageAttachmentName(url.split('/').pop() ?? '') ? (
-              <ZoomableImage
-                key={url}
-                src={url}
-                alt="attached"
-                className="max-h-40 max-w-[220px] rounded-md border border-border object-contain"
-              />
-            ) : (
-              <a
-                key={url}
-                href={url}
-                download
-                data-slot="user-file"
-                className="inline-flex max-w-[220px] items-center gap-1.5 rounded-md border border-border bg-background/60 px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
-              >
-                <PaperclipIcon aria-hidden="true" className="size-3.5 shrink-0" />
-                <span className="truncate">{url.split('/').pop()}</span>
-              </a>
-            ),
-          )}
-        </span>
-      ) : null}
-      {missing > 0 ? (
-        <span className="mt-1 block text-xs text-soft-foreground">
-          {missing} image{missing > 1 ? 's' : ''} attached
-        </span>
-      ) : null}
-      {ts !== undefined ? (
-        <span className="mt-1 flex justify-end">
-          <MessageTime ts={ts} />
-        </span>
-      ) : null}
+    // The bubble, then one quiet line under it: when it was sent, copy, and — where the message
+    // can still be changed — edit and remove. The line belongs to the message but sits outside
+    // the bubble, so the bubble holds nothing but what was said.
+    <div data-slot="user-message" className="group flex max-w-[88%] min-w-0 flex-col items-end gap-1.5 self-end md:max-w-[78%]">
+      <div
+        data-slot="user-bubble"
+        className="min-w-0 max-w-full rounded-2xl bg-user-bubble px-5 py-3.5 text-[15px] leading-[1.65] text-user-bubble-foreground [&_[data-streamdown=inline-code]]:bg-user-bubble-foreground/15 [&_a]:underline"
+      >
+        {actionError ? <p role="alert" className="mb-1 text-xs text-danger">{actionError}</p> : null}
+        <UserText text={text} />
+        {images.length > 0 ? (
+          <span data-slot="user-images" className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
+            {/* One list carries both kinds (#950), so the NAME decides how each entry renders: an
+                image is shown, a file is offered as a download — rendering a `.pdf` in an `<img>`
+                would show the user a broken image where their attachment should be. */}
+            {images.map((url) =>
+              isImageAttachmentName(url.split('/').pop() ?? '') ? (
+                <ZoomableImage
+                  key={url}
+                  src={url}
+                  alt="attached"
+                  className="max-h-40 max-w-[220px] rounded-xl border border-user-bubble-foreground/15 object-contain"
+                />
+              ) : (
+                <a
+                  key={url}
+                  href={url}
+                  download
+                  data-slot="user-file"
+                  className="inline-flex max-w-[220px] items-center gap-1.5 rounded-lg border border-user-bubble-foreground/20 bg-user-bubble-foreground/10 px-2 py-1 text-xs"
+                >
+                  <PaperclipIcon aria-hidden="true" className="size-3.5 shrink-0" />
+                  <span className="truncate">{url.split('/').pop()}</span>
+                </a>
+              ),
+            )}
+          </span>
+        ) : null}
+        {missing > 0 ? (
+          <span className="mt-1 block text-xs opacity-70">
+            {missing} image{missing > 1 ? 's' : ''} attached
+          </span>
+        ) : null}
+      </div>
+      <div data-slot="bubble-actions" className="flex items-center gap-1 pr-1.5 text-soft-foreground">
+        {ts !== undefined ? <MessageTime ts={ts} /> : null}
+        <CopyButton text={text} />
+        {onEdit ? (
+          <Button
+            type="button"
+            aria-label={editLabel}
+            title={editLabel}
+            onClick={startEditing}
+            disabled={busy}
+            variant="ghost"
+            size="icon-xs"
+            className="text-soft-foreground opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+          >
+            <SquarePenIcon className="size-3.5" />
+          </Button>
+        ) : null}
+        {onRemove ? (
+          <Button
+            type="button"
+            aria-label={removeLabel}
+            title={removeLabel}
+            onClick={() => void remove()}
+            disabled={busy}
+            variant="ghost"
+            size="icon-xs"
+            className="text-soft-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-danger focus-visible:opacity-100"
+          >
+            <Trash2Icon className="size-3.5" />
+          </Button>
+        ) : null}
+      </div>
     </div>
+  )
+}
+
+/** Copy a message's text; the icon confirms for a moment, the way the header's copy chips do. */
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 1500)
+    return () => clearTimeout(timer)
+  }, [copied])
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-xs"
+      data-slot="copy-message"
+      aria-label={copied ? 'Copied' : 'Copy message'}
+      title={copied ? 'Copied' : 'Copy message'}
+      onClick={() => {
+        void navigator.clipboard?.writeText(text).then(
+          () => setCopied(true),
+          () => undefined,
+        )
+      }}
+      className="text-soft-foreground"
+    >
+      {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
+    </Button>
   )
 }
 
@@ -318,7 +352,7 @@ function UserText({ text }: { text: string }) {
 /** An assistant message item, as markdown. */
 export function AssistantMessage({ text }: { text: string }) {
   return (
-    <div data-slot="assistant-message" className="min-w-0 py-1 text-[14.5px] leading-[1.7] text-foreground">
+    <div data-slot="assistant-message" className="min-w-0 py-1 text-[15px] leading-[1.75] text-foreground">
       <Markdown>{text}</Markdown>
     </div>
   )
@@ -776,5 +810,39 @@ export function ImageItem({ image }: { image: ThreadImage }) {
       alt={image.name ?? 'image from the agent session'}
       className="max-h-72 max-w-full self-start rounded-xl border border-border"
     />
+  )
+}
+
+/**
+ * Everything the agent did before it answered — tool calls, reasoning, interim remarks — folded
+ * into one line: "Worked for 28s". The answer under it is what a returning reader wants first;
+ * the work is one click away, in order, exactly as it streamed.
+ */
+export function WorkGroup({
+  label,
+  count,
+  children,
+}: {
+  /** "Worked for 28s", or a plain fallback when the turn carries no usable clock. */
+  label: string
+  count: number
+  children: ReactNode
+}) {
+  return (
+    <Collapsible data-slot="work-group" className="group/work min-w-0">
+      <CollapsibleTrigger
+        title={`${count} ${count === 1 ? 'step' : 'steps'}`}
+        className="flex w-full items-center gap-1.5 border-b border-border pb-2.5 text-left text-[13.5px] text-muted-foreground outline-none hover:text-foreground focus-visible:text-foreground"
+      >
+        <span>{label}</span>
+        <ChevronRightIcon
+          aria-hidden="true"
+          className="size-3.5 transition-transform group-data-[state=open]/work:rotate-90"
+        />
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="flex flex-col gap-2 border-b border-border py-3">{children}</div>
+      </CollapsibleContent>
+    </Collapsible>
   )
 }

@@ -13,11 +13,12 @@ import {
   ReasoningItem,
   ToolCard,
   ToolStreak,
+  WorkGroup,
   UserBubble,
 } from './thread-items'
 import { ThreadCardCache } from './thread-open-cards'
 import { threadRenderMode } from './thread-scroll'
-import { DaySeparator, TurnTime, localDayKey } from './thread-time'
+import { DaySeparator, TurnTime, localDayKey, turnDuration } from './thread-time'
 import {
   JumpToLatestPill,
   ThreadRows,
@@ -77,6 +78,8 @@ export interface TranscriptRowModel {
     | { kind: 'block'; block: ThreadBlock }
     | { kind: 'day-separator'; ts: string }
     | { kind: 'turn-time'; completedAt: string; startedAt?: string }
+    /** A finished turn's work, folded behind one "Worked for …" line — see `foldWork`. */
+    | { kind: 'work'; blocks: readonly ThreadBlock[]; completedAt: string; startedAt?: string }
 }
 
 export interface SessionTranscriptProps {
@@ -202,7 +205,21 @@ export function buildTranscriptRows(
         content: { kind: 'user-message', message: section.userMessage },
       })
     }
-    for (const block of groupThreadItems([...section.entries])) {
+    const blocks = groupThreadItems([...section.entries])
+    const folded = section.completedAt !== undefined ? foldWork(blocks) : 0
+    if (folded > 0 && section.completedAt !== undefined) {
+      rows.push({
+        key: `${section.id}:work`,
+        scope: section.id,
+        content: {
+          kind: 'work',
+          blocks: blocks.slice(0, folded),
+          completedAt: section.completedAt,
+          ...(section.startedAt !== undefined ? { startedAt: section.startedAt } : {}),
+        },
+      })
+    }
+    for (const block of blocks.slice(folded)) {
       rows.push({
         key: `${section.id}:${block.id}`,
         scope: section.id,
@@ -222,6 +239,26 @@ export function buildTranscriptRows(
     }
   }
   return rows
+}
+
+/**
+ * How many leading blocks of a FINISHED turn are "the work" — everything before the agent's last
+ * message — and so fold behind one "Worked for …" line. Zero when there is nothing to fold.
+ *
+ * Only a finished turn folds: a live one is being watched, and hiding what streams would hide the
+ * very thing on screen. And a turn that asked the user something, or stopped on a sign-in, never
+ * folds — a question waiting for an answer must not sit behind a disclosure.
+ */
+function foldWork(blocks: readonly ThreadBlock[]): number {
+  let last = -1
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index]!
+    if (block.kind !== 'entry') continue
+    if (block.entry.kind === 'ask' || block.entry.kind === 'provider-auth-required') return 0
+    if (block.entry.kind === 'message' && block.entry.role === 'assistant') last = index
+  }
+  // Nothing before the answer, or no answer at all: leave the turn as it is.
+  return last > 0 ? last : 0
 }
 
 export function SessionTranscript({
@@ -335,6 +372,19 @@ function renderRowContent(
       )
     case 'block':
       return <ThreadBlockRenderer block={row.content.block} scope={row.scope} renderAsk={renderAsk} />
+    case 'work': {
+      const duration = turnDuration(row.content.startedAt, row.content.completedAt)
+      return (
+        <WorkGroup
+          label={duration !== undefined ? `Worked for ${duration}` : 'Show the work'}
+          count={row.content.blocks.length}
+        >
+          {row.content.blocks.map((block) => (
+            <ThreadBlockRenderer key={block.id} block={block} scope={row.scope} renderAsk={renderAsk} />
+          ))}
+        </WorkGroup>
+      )
+    }
     default:
       return assertNever(row.content)
   }
