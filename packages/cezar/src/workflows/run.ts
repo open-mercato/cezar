@@ -3407,6 +3407,18 @@ export class RunManager {
     return { ok: true, delivered: false, message };
   }
 
+  /** Reword a prompt that is still waiting, in place — it keeps its position and its id. Null
+   *  once it is no longer in the queue: a delivered prompt is the agent's to work on, not the
+   *  user's to rewrite. */
+  editQueuedPrompt(runId: string, msgId: string, text: string): QueuedMessage | null {
+    const queue = this.store.getRun(runId)?.promptQueue;
+    const current = queue?.find((m) => m.id === msgId);
+    if (!queue || !current) return null;
+    const replacement: QueuedMessage = { ...current, text };
+    this.store.updateRun(runId, { promptQueue: queue.map((m) => (m.id === msgId ? replacement : m)) });
+    return replacement;
+  }
+
   /** Take one prompt back out of the queue. Allowed in every run state: an undelivered prompt
    *  on a closed run must stay removable, or the queue would be a state with no exit. */
   removeQueuedPrompt(runId: string, msgId: string): boolean {

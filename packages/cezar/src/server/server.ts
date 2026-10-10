@@ -4591,6 +4591,16 @@ export function createApp(deps: ServerDeps) {
       return c.json({ queued: true, message: result.message });
     })
 
+    // Reworded in place while it still waits; 404 once delivered (or never there).
+    .patch('/runs/:id/prompt-queue/:msgId', jsonZodValidator(promptQueueInputSchema), (c) => {
+      const { store, manager } = c.get('project');
+      const id = c.req.param('id');
+      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+      const message = manager.editQueuedPrompt(id, c.req.param('msgId'), c.req.valid('json').text);
+      if (!message) return c.json({ error: 'not found' }, 404);
+      return c.json({ message });
+    })
+
     // Removable in every run state — an undelivered prompt on a closed run included.
     .delete('/runs/:id/prompt-queue/:msgId', (c) => {
       const { store, manager } = c.get('project');

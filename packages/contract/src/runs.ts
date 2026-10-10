@@ -584,6 +584,11 @@ export const promptQueueResponseSchema = z.union([
 ]);
 export type PromptQueueResponse = z.infer<typeof promptQueueResponseSchema>;
 
+/** `PATCH /runs/:id/prompt-queue/:msgId` — reword a prompt that is still waiting. It keeps its
+ *  place in the queue; once it has been delivered there is nothing left to edit (`404`). */
+export const editQueuedPromptResponseSchema = z.object({ message: queuedMessageSchema });
+export type EditQueuedPromptResponse = z.infer<typeof editQueuedPromptResponseSchema>;
+
 export const removeQueuedPromptResponseSchema = z.object({ removed: z.literal(true) });
 export type RemoveQueuedPromptResponse = z.infer<typeof removeQueuedPromptResponseSchema>;
 

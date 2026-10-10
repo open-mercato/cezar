@@ -209,6 +209,29 @@ describe('the session prompt queue', () => {
     expect(store.getRun(record.id)?.promptQueue).toBeUndefined();
   }, 60_000);
 
+  it('rewords a waiting prompt in place, and refuses once it has been delivered', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:pause the first job', worktree: false });
+    currentId = record.id;
+    let first: { id: string } | undefined;
+    await waitFor(record.id, (r) => {
+      if (r?.status !== 'running') return false;
+      const result = manager.enqueuePrompt(record.id, 'draft wording');
+      if (result.ok && !result.delivered) first = result.message;
+      return result.ok;
+    });
+    manager.enqueuePrompt(record.id, 'second in line');
+
+    // Same id, same place in line, new words.
+    expect(manager.editQueuedPrompt(record.id, first!.id, 'final wording')).toMatchObject({ id: first!.id, text: 'final wording' });
+    expect(queued(record.id)).toEqual(['final wording', 'second in line']);
+    expect(manager.editQueuedPrompt(record.id, 'no-such-id', 'x')).toBeNull();
+
+    // What the agent receives is the reworded prompt — and after that it is no longer editable.
+    await waitFor(record.id, () => userMessages(record.id).includes('final wording'));
+    expect(userMessages(record.id)).not.toContain('draft wording');
+    expect(manager.editQueuedPrompt(record.id, first!.id, 'too late')).toBeNull();
+  }, 60_000);
+
   it('caps the queue', async () => {
     const record = manager.startRun(SINGLE_STEP, { task: 'mock:slow a long job', worktree: false });
     currentId = record.id;
