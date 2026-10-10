@@ -1,5 +1,5 @@
 import { MessageSquareOffIcon, PencilIcon, PlusIcon } from 'lucide-react'
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { isSubmitShortcut } from '@/lib/use-submit-shortcut'
@@ -204,7 +204,8 @@ export function LineSelectionProvider({ path, children }: { path: string; childr
     return () => window.removeEventListener('mouseup', finish)
   }, [finish, selecting])
 
-  const api: LineSelectionApi = {
+  // Memoized: a fresh value on every card render would rebuild this file's marks map each time.
+  const api = useMemo((): LineSelectionApi => ({
     selection,
     beginSelect: (selectedPath, order, lines) => {
       if (selectedPath !== path) return
@@ -218,7 +219,7 @@ export function LineSelectionProvider({ path, children }: { path: string; childr
       selectionRef.current = { ...current, to: order }
       setSelection(selectionRef.current)
     },
-  }
+  }), [path, selection])
 
   return <LineSelectionContext.Provider value={api}>{children}</LineSelectionContext.Provider>
 }

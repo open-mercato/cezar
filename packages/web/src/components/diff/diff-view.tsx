@@ -955,7 +955,6 @@ function SplitRowView({
 }) {
   if (row.type === 'hunk') return <HunkHeaderRow hunk={row.hunk} />
   if (row.type === 'gap') return <GapRow gap={row.gap} onExpand={onExpand} />
-  const selection = useLineSelection()
   const leftAnchor = row.left ? anchorForLine(path, row.left.line) : undefined
   const rightAnchor = row.right ? anchorForLine(path, row.right.line) : undefined
   return (
