@@ -116,17 +116,58 @@ describe('selecting an element', () => {
     expect(marks()).toHaveLength(2)
   })
 
-  it('deselects on a second click: the lime frame goes and the hover frame is back', async () => {
+  it('opens the element\'s note again on a second click — it is neither picked twice nor deselected', async () => {
     const button = page.document.querySelector('.buy')!
-    mouse('mousemove', button)
     mouse('click', button)
     await settle()
     const key = posted.find((message) => message.type === 'picked')!.element!.mark!
     mouse('click', button)
-    expect(marks()).toHaveLength(0)
-    expect(shown(hoverBox())).toBe(true)
+    expect(marks()).toHaveLength(1)
     await settle()
-    expect(posted.at(-1)).toMatchObject({ type: 'unpicked', key })
+    expect(posted.filter((message) => message.type === 'picked')).toHaveLength(1)
+    expect(posted.at(-1)).toMatchObject({ type: 'mark-clicked', key })
+  })
+
+  it('leaves Esc to the cockpit: it is reported, and the picker keeps selecting', async () => {
+    const button = page.document.querySelector('.buy')!
+    page.document.dispatchEvent(new page.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    await settle()
+    expect(posted.at(-1)).toMatchObject({ type: 'cancel' })
+    mouse('click', button)
+    expect(marks()).toHaveLength(1)
+  })
+})
+
+describe('sent notes and drafts that outlive the page', () => {
+  it('numbers the frame of a sent note and leaves a draft\'s frame plain', async () => {
+    mouse('click', page.document.querySelector('.buy')!)
+    mouse('click', page.document.querySelector('#title')!)
+    await settle()
+    const [first, second] = posted.filter((message) => message.type === 'picked').map((message) => message.element!.mark!)
+    tell({ type: 'set-marks', marks: [{ key: first, n: 3 }, { key: second }] })
+    const badges = marks().map((mark) => mark.textContent)
+    expect(badges).toEqual(['3', ''])
+    // Sent, then the number changes with a withdrawal ahead of it; a draft never grows one.
+    tell({ type: 'set-marks', marks: [{ key: first, n: 2 }, { key: second }] })
+    expect(marks().map((mark) => mark.textContent)).toEqual(['2', ''])
+  })
+
+  it('frames a draft\'s element again from its selector — in a document that never saw the click', () => {
+    tell({ type: 'set-marks', marks: [{ key: 'old-7', selector: 'body > main > button.buy', path: page.location.pathname }] })
+    expect(marks()).toHaveLength(1)
+    // And it is that element: hovering it shows no blue frame, as for any selected element.
+    mouse('mousemove', page.document.querySelector('.buy')!)
+    expect(shown(hoverBox())).toBe(false)
+  })
+
+  it.each([
+    ['names no element', 'body > main > a.gone', undefined],
+    ['names more than one element', 'main > *', undefined],
+    ['is not a selector at all', 'main >>> ???', undefined],
+    ['belongs to another page', 'body > main > button.buy', '/some/other/page'],
+  ])('does not guess when the selector %s', (_label, selector, path) => {
+    tell({ type: 'set-marks', marks: [{ key: 'old-7', selector, path: path ?? page.location.pathname }] })
+    expect(marks()).toHaveLength(0)
   })
 })
 

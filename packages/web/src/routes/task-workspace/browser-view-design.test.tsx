@@ -192,57 +192,61 @@ describe('the picker conversation', () => {
 })
 
 describe('marks and the note popup', () => {
-  it('tells the page which elements to frame and what number each wears', async () => {
+  const DRAFT = { key: 'abc-1', selector: 'main > button.save', path: '/settings', label: 'button.save', draft: true }
+  const SENT = { key: 'abc-2', n: 1, label: 'p.price', draft: false }
+
+  /** A view whose marks the test controls, with a note that names the element it is about. */
+  function harness(onEscape = vi.fn()) {
     const onChange = vi.fn()
-    const { rerender } = render(
-      <BrowserView state={{ tabs: [APP], active: 0 }} onChange={onChange} onPickElement={() => true} designMarks={[]} />,
+    const view = (marks: (typeof DRAFT | typeof SENT)[], onPick: () => boolean = () => true) => (
+      <BrowserView
+        state={{ tabs: [APP], active: 0 }}
+        onChange={onChange}
+        onPickElement={onPick}
+        designMarks={marks}
+        onDesignEscape={onEscape}
+        renderDesignNote={({ mark, close }) => (
+          <button type="button" data-testid="note" data-mark={mark} onClick={close}>
+            note
+          </button>
+        )}
+      />
     )
+    return { view, onEscape }
+  }
+  const note = () => document.querySelector<HTMLElement>('[data-slot=browser-design-note]')!
+
+  it('tells the page what to frame: a draft with how to find it again, a sent note with its number', async () => {
+    const { view } = harness()
+    const { rerender } = render(view([]))
     await enterDesignMode()
     const post = vi.spyOn(frame().contentWindow!, 'postMessage').mockImplementation(() => {})
     deliver({ source: 'cezar-design', type: 'ready' }, MIRROR, frame().contentWindow)
     expect(post).toHaveBeenCalledWith({ source: 'cezar-design-host', type: 'set-marks', marks: [] }, MIRROR)
-    // The second element of the note is the first the page can still frame: it keeps number 2.
-    rerender(
-      <BrowserView
-        state={{ tabs: [APP], active: 0 }}
-        onChange={onChange}
-        onPickElement={() => true}
-        designMarks={[{ key: 'abc-4', n: 2 }]}
-      />,
-    )
+    rerender(view([DRAFT, SENT]))
     expect(post).toHaveBeenLastCalledWith(
-      { source: 'cezar-design-host', type: 'set-marks', marks: [{ key: 'abc-4', n: 2 }] },
+      {
+        source: 'cezar-design-host',
+        type: 'set-marks',
+        marks: [
+          { key: 'abc-1', selector: 'main > button.save', path: '/settings' },
+          { key: 'abc-2', n: 1 },
+        ],
+      },
       MIRROR,
     )
   })
 
-  it('opens the note beside a picked element, and follows the element when the page reports it moved', async () => {
-    const renderNote = vi.fn(({ close }: { close: () => void }) => (
-      <button type="button" data-testid="note" onClick={close}>
-        note
-      </button>
-    ))
-    const view = (count: number) => (
-      <BrowserView
-        state={{ tabs: [APP], active: 0 }}
-        onChange={onChange}
-        onPickElement={() => true}
-        designPickCount={count}
-        renderDesignNote={renderNote}
-      />
-    )
-    const onChange = vi.fn()
-    // jsdom lays nothing out, so the frame area would be 0×0 and every position would clamp to
-    // the margin. Give it a size; the popup itself stays 0×0, which is enough to see WHERE.
+  it('opens the note under a picked element and follows it when the page reports it moved', async () => {
     const width = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(800)
     const height = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600)
     onTestFinished(() => {
       width.mockRestore()
       height.mockRestore()
     })
-    const { rerender } = render(view(0))
+    const { view } = harness()
+    const { rerender } = render(view([]))
     await enterDesignMode()
-    // Selecting, nothing picked: no note — the hint says what to do.
     expect(screen.queryByTestId('note')).toBeNull()
 
     deliver(
@@ -250,13 +254,9 @@ describe('marks and the note popup', () => {
       MIRROR,
       frame().contentWindow,
     )
-    rerender(view(1))
-    const note = () => document.querySelector<HTMLElement>('[data-slot=browser-design-note]')!
-    expect(screen.getByTestId('note')).toBeTruthy()
-    // Shown in the note, so no toast about a composer the user is not looking at.
+    rerender(view([DRAFT]))
+    expect(screen.getByTestId('note').dataset.mark).toBe('abc-1')
     expect(toast).not.toHaveBeenCalled()
-    // Only the anchoring itself is observable here:
-    // the popup's left edge is the element's, and it sits under it.
     expect(note().style.left).toBe('40px')
     expect(note().style.top).toBe('80px')
 
@@ -269,103 +269,87 @@ describe('marks and the note popup', () => {
     expect(note().style.top).toBe('330px')
   })
 
-  it('closes on request, comes back when a mark is clicked, and goes when the note is emptied', async () => {
-    const view = (count: number) => (
-      <BrowserView
-        state={{ tabs: [APP], active: 0 }}
-        onChange={onChange}
-        onPickElement={() => true}
-        designPickCount={count}
-        renderDesignNote={({ close }) => (
-          <button type="button" data-testid="note" onClick={close}>
-            note
-          </button>
-        )}
-      />
-    )
-    const onChange = vi.fn()
-    const { rerender } = render(view(0))
+  it('moves to another element when it is picked, and back when the first frame is clicked', async () => {
+    const { view } = harness()
+    const { rerender } = render(view([]))
     await enterDesignMode()
     deliver({ source: 'cezar-design', type: 'picked', element: { ...ELEMENT, mark: 'abc-1' } }, MIRROR, frame().contentWindow)
-    rerender(view(1))
+    rerender(view([DRAFT]))
+    deliver({ source: 'cezar-design', type: 'picked', element: { ...ELEMENT, mark: 'abc-2' } }, MIRROR, frame().contentWindow)
+    rerender(view([DRAFT, { ...DRAFT, key: 'abc-2' }]))
+    expect(screen.getByTestId('note').dataset.mark).toBe('abc-2')
+    // The first element kept its frame and its draft; clicking the frame is the way back to it.
+    deliver({ source: 'cezar-design', type: 'mark-clicked', key: 'abc-1' }, MIRROR, frame().contentWindow)
+    expect(screen.getByTestId('note').dataset.mark).toBe('abc-1')
+  })
+
+  it('closes on request, and when the note it was showing is gone', async () => {
+    const { view } = harness()
+    const { rerender } = render(view([]))
+    await enterDesignMode()
+    deliver({ source: 'cezar-design', type: 'picked', element: { ...ELEMENT, mark: 'abc-1' } }, MIRROR, frame().contentWindow)
+    rerender(view([DRAFT]))
     fireEvent.click(screen.getByTestId('note'))
     expect(screen.queryByTestId('note')).toBeNull()
 
-    // Clicking the marked element again is how the note comes back — it is not picked twice.
     deliver({ source: 'cezar-design', type: 'mark-clicked', key: 'abc-1' }, MIRROR, frame().contentWindow)
     expect(screen.getByTestId('note')).toBeTruthy()
-
-    // Sent (or emptied): there is nothing left for a note to be about.
-    rerender(view(0))
+    // Discarded (or withdrawn): there is no note left for a popup to be about.
+    rerender(view([]))
     expect(screen.queryByTestId('note')).toBeNull()
   })
 
-  it('ignores a malformed report of where the marks are', async () => {
-    const view = (
-      <BrowserView
-        state={{ tabs: [APP], active: 0 }}
-        onChange={vi.fn()}
-        onPickElement={() => true}
-        designPickCount={1}
-        renderDesignNote={() => <span data-testid="note">note</span>}
-      />
-    )
-    render(view)
+  it('reads Esc in the page as "close this note" while one is open, and "leave Design Mode" otherwise', async () => {
+    const { view, onEscape } = harness()
+    const { rerender } = render(view([]))
     await enterDesignMode()
-    deliver({ source: 'cezar-design', type: 'picked', element: { ...ELEMENT, mark: 'abc-1', rect: { x: 40, y: 50, width: 100, height: 20 } } }, MIRROR, frame().contentWindow)
-    for (const rects of ['nope', [{ key: '../../x', x: 1 }], [null, 7], [{ key: 'abc-1', x: 'left', y: Number.NaN, width: 5, height: 5 }]]) {
-      deliver({ source: 'cezar-design', type: 'rects', rects }, MIRROR, frame().contentWindow)
-    }
-    // Still there, still on screen: a hostile page can move its own note, not break the view.
-    expect(screen.getByTestId('note')).toBeTruthy()
+    deliver({ source: 'cezar-design', type: 'picked', element: { ...ELEMENT, mark: 'abc-1' } }, MIRROR, frame().contentWindow)
+    rerender(view([DRAFT]))
+
+    deliver({ source: 'cezar-design', type: 'cancel' }, MIRROR, frame().contentWindow)
+    expect(onEscape).toHaveBeenCalledWith('abc-1')
+    expect(screen.queryByTestId('note')).toBeNull()
+    expect(toggle().getAttribute('aria-pressed')).toBe('true')
+
+    deliver({ source: 'cezar-design', type: 'cancel' }, MIRROR, frame().contentWindow)
+    expect(onEscape).toHaveBeenCalledTimes(1)
+    expect(toggle().getAttribute('aria-pressed')).toBe('false')
   })
 
-  it('reports an element deselected in the page', async () => {
-    const onUnpickElement = vi.fn()
-    render(
-      <BrowserView
-        state={{ tabs: [APP], active: 0 }}
-        onChange={vi.fn()}
-        onPickElement={() => true}
-        onUnpickElement={onUnpickElement}
-      />,
-    )
+  it('offers a draft whose element the page could not find, instead of losing it', async () => {
+    const { view } = harness()
+    render(view([DRAFT, SENT]))
     await enterDesignMode()
-    deliver({ source: 'cezar-design', type: 'unpicked', key: 'abc-4' }, MIRROR, frame().contentWindow)
-    expect(onUnpickElement).toHaveBeenCalledWith('abc-4')
+    // Not before the page has reported: an unreported draft is not a lost one.
+    expect(document.querySelector('[data-slot=browser-design-adrift]')).toBeNull()
+    deliver({ source: 'cezar-design', type: 'rects', rects: [] }, MIRROR, frame().contentWindow)
+    const adrift = document.querySelector('[data-slot=browser-design-adrift]')!
+    // The draft only — a sent note without a frame has nothing left to write.
+    expect(adrift.textContent).toBe('Draft · button.save')
+    fireEvent.click(adrift.querySelector('button')!)
+    expect(screen.getByTestId('note').dataset.mark).toBe('abc-1')
   })
 
   it('tells the page to drop the frame of a pick the host did not keep', async () => {
-    // The page frames an element the moment it is clicked. A refused pick must not stay lime.
-    render(
-      <BrowserView
-        state={{ tabs: [APP], active: 0 }}
-        onChange={vi.fn()}
-        onPickElement={() => false}
-        designMarks={[{ key: 'abc-1', n: 1 }]}
-      />,
-    )
+    const { view } = harness()
+    render(view([SENT], () => false))
     await enterDesignMode()
     const post = vi.spyOn(frame().contentWindow!, 'postMessage').mockImplementation(() => {})
-    deliver({ source: 'cezar-design', type: 'picked', element: { ...ELEMENT, mark: 'abc-2' } }, MIRROR, frame().contentWindow)
-    expect(post).toHaveBeenCalledWith(
-      { source: 'cezar-design-host', type: 'set-marks', marks: [{ key: 'abc-1', n: 1 }] },
-      MIRROR,
-    )
+    deliver({ source: 'cezar-design', type: 'picked', element: { ...ELEMENT, mark: 'abc-9' } }, MIRROR, frame().contentWindow)
+    expect(post).toHaveBeenCalledWith({ source: 'cezar-design-host', type: 'set-marks', marks: [{ key: 'abc-2', n: 1 }] }, MIRROR)
+    expect(screen.queryByTestId('note')).toBeNull()
   })
 
-  it('shows the queues strip whenever the host provides one', () => {
-    const { rerender } = render(<BrowserView state={{ tabs: [APP], active: 0 }} onChange={vi.fn()} onPickElement={() => true} />)
-    expect(screen.queryByTestId('dock')).toBeNull()
-    rerender(
-      <BrowserView
-        state={{ tabs: [APP], active: 0 }}
-        onChange={vi.fn()}
-        onPickElement={() => true}
-        designDock={<div data-testid="dock">queues</div>}
-      />,
-    )
-    expect(screen.getByTestId('dock')).toBeTruthy()
+  it('ignores a malformed report of where the frames are', async () => {
+    const { view } = harness()
+    const { rerender } = render(view([]))
+    await enterDesignMode()
+    deliver({ source: 'cezar-design', type: 'picked', element: { ...ELEMENT, mark: 'abc-1' } }, MIRROR, frame().contentWindow)
+    rerender(view([DRAFT]))
+    for (const rects of ['nope', [{ key: '../../x', x: 1 }], [null, 7], [{ key: 'abc-1', x: 'left', y: Number.NaN, width: 5, height: 5 }]]) {
+      deliver({ source: 'cezar-design', type: 'rects', rects }, MIRROR, frame().contentWindow)
+    }
+    expect(screen.getByTestId('note')).toBeTruthy()
   })
 })
 

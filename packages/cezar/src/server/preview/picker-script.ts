@@ -126,6 +126,36 @@ const PICKER_SOURCE = String.raw`(function () {
     document.documentElement.appendChild(entry.node);
   }
 
+  // A SENT note's frame wears the note's number; a draft's frame is plain. Same lime either way.
+  function setBadge(entry, label) {
+    var badge = entry.node.firstChild;
+    if (!label) {
+      if (badge) entry.node.removeChild(badge);
+      return;
+    }
+    if (!badge) {
+      badge = document.createElement('div');
+      badge.style.cssText = 'position:absolute;top:-10px;left:-10px;min-width:20px;height:20px;padding:0 5px;' +
+        'box-sizing:border-box;border-radius:10px;background:#a3e635;color:#1a2e05;' +
+        'font:700 12px/20px ui-sans-serif,system-ui,sans-serif;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.35);';
+      entry.node.appendChild(badge);
+    }
+    badge.textContent = label;
+  }
+
+  // A draft note outlives the document it was written on (a hot reload, a refresh of the
+  // cockpit). The cockpit sends the element's selector and page with it, and the frame is put
+  // back ONLY when that selector names exactly one element on the same page — a frame on the
+  // wrong element would be worse than no frame, because the note would then describe it.
+  function reattach(mark) {
+    if (typeof mark.selector !== 'string' || !mark.selector) return null;
+    if (typeof mark.path === 'string' && mark.path !== location.pathname) return null;
+    var found;
+    try { found = document.querySelectorAll(mark.selector); } catch (e) { return null; }
+    if (found.length !== 1 || ownNode(found[0]) || keyOf(found[0])) return null;
+    return found[0];
+  }
+
   function dropMark(key) {
     var entry = picked[key];
     if (!entry) return;
@@ -147,10 +177,16 @@ const PICKER_SOURCE = String.raw`(function () {
   function setMarks(marks) {
     var wanted = {};
     for (var i = 0; i < marks.length; i++) {
-      if (marks[i] && typeof marks[i].key === 'string') wanted[marks[i].key] = String(marks[i].n);
+      var mark = marks[i];
+      if (!mark || typeof mark.key !== 'string') continue;
+      wanted[mark.key] = typeof mark.n === 'number' ? String(mark.n) : '';
+      if (!picked[mark.key]) {
+        var el = reattach(mark);
+        if (el) picked[mark.key] = { el: el, node: null };
+      }
     }
     for (var key in picked) {
-      if (key in wanted) ensureMark(picked[key]);
+      if (key in wanted) { ensureMark(picked[key]); setBadge(picked[key], wanted[key]); }
       else dropMark(key);
     }
     placeMarks();
@@ -341,16 +377,11 @@ const PICKER_SOURCE = String.raw`(function () {
     swallow(event);
     var el = targetOf(event);
     if (!el) return;
-    // Clicking a selected element again deselects it: the lime frame goes, the hover frame is back.
+    // Clicking a framed element opens ITS note again — the draft being written about it, or the
+    // note already sent. It is not picked twice, and it is not deselected: that is the note's
+    // own Esc / close, where a stray click cannot throw a half-written note away.
     var existing = keyOf(el);
-    if (existing) {
-      dropMark(existing);
-      placeMarks();
-      syncMarkTimer();
-      highlight(el);
-      post({ type: 'unpicked', key: existing });
-      return;
-    }
+    if (existing) { post({ type: 'mark-clicked', key: existing }); return; }
     var key = docId + '-' + nextKey++;
     // Described BEFORE the frame is drawn, so the element's own markup and styles are what is
     // reported — and the frame is drawn before the cockpit answers, so the click lands at once.
@@ -367,7 +398,8 @@ const PICKER_SOURCE = String.raw`(function () {
   function onKey(event) {
     if (event.key !== 'Escape') return;
     swallow(event);
-    setActive(false);
+    // What Esc means is the cockpit's call: with a note open it closes the note, otherwise it
+    // leaves Design Mode — and then the cockpit switches this picker off itself.
     post({ type: 'cancel' });
   }
 

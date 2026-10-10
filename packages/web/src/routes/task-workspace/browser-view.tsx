@@ -67,10 +67,8 @@ export function BrowserView({
   onChange,
   onPickElement,
   designMarks,
-  onUnpickElement,
   renderDesignNote,
-  designPickCount = 0,
-  designDock,
+  onDesignEscape,
 }: {
   state: BrowserState
   /** Persisted into the column (spec §7). Called only for changes worth keeping — a successful
@@ -82,22 +80,21 @@ export function BrowserView({
    * Absent, the view has no Design Mode at all — a host with nowhere to send an element.
    */
   onPickElement?: (pick: NewDesignPick) => boolean
-  /** The elements of the note being written that the page can still frame: the picker's key
-   *  (`DesignPick.mark`) and the number the note gives the element. */
-  designMarks?: readonly { key: string; n: number }[]
-  /** A selected element was clicked again in the page — it is no longer selected. */
-  onUnpickElement?: (mark: string) => void
   /**
-   * The note being written, as a popup beside the element it is about. Rendered by the host —
-   * what a note is, and where it goes, is its business; this view only decides WHEN it shows
-   * (an element was picked, or its mark clicked) and WHERE (anchored to that element, following
-   * it as the page scrolls). `close` hides it until the next pick or mark click.
+   * Every element with a note on it — what the page keeps framed. A draft's frame is plain and
+   * carries how to find the element again after a reload; a sent note's wears its number.
    */
-  renderDesignNote?: (controls: { close: () => void }) => React.ReactNode
-  /** How many elements the note holds. At zero there is no note to show. */
-  designPickCount?: number
-  /** A strip under the page — the host's queues. Shown whenever the host provides it. */
-  designDock?: React.ReactNode
+  designMarks?: readonly DesignMark[]
+  /**
+   * The note about one element, as a popup under its frame. Rendered by the host — what a note
+   * is, and where it goes, is its business; this view only decides WHEN it shows (the element
+   * was picked, or its frame clicked) and WHERE (anchored to the element, following it as the
+   * page scrolls). `close` hides it.
+   */
+  renderDesignNote?: (controls: { mark: string; close: () => void }) => React.ReactNode
+  /** Esc was pressed in the page while the note for `mark` was open. The view closes the popup;
+   *  the host decides what else that means (a draft is discarded). */
+  onDesignEscape?: (mark: string) => void
 }) {
   const tabs = state.tabs.length > 0 ? state.tabs : ['']
   const active = Math.min(state.active, tabs.length - 1)
@@ -241,46 +238,69 @@ export function BrowserView({
   const [noteOpen, setNoteOpen] = useState(false)
   const [anchor, setAnchor] = useState<string | null>(null)
   const [rects, setRects] = useState<Record<string, MarkRect>>({})
+  /** The page of THIS document has said where its frames are at least once — before that, a
+   *  draft with no rect is not "lost", it is merely not reported yet. */
+  const [rectsReported, setRectsReported] = useState(false)
   const areaRef = useRef<HTMLDivElement>(null)
   const noteRef = useRef<HTMLDivElement>(null)
   const [notePosition, setNotePosition] = useState<{ left: number; top: number } | null>(null)
   const closeNote = useCallback(() => setNoteOpen(false), [])
-  const noteVisible = hasNote && designAllowed && noteOpen && designPickCount > 0
+  const marks = designMarks ?? NO_MARKS
+  const anchored = anchor !== null && marks.some((mark) => mark.key === anchor)
+  const noteVisible = hasNote && designAllowed && noteOpen && anchored
   const anchorRect = anchor !== null ? rects[anchor] : undefined
+  /** Drafts whose element the page could not find again (it changed, or this is another page).
+   *  The note is not lost — it is offered from a corner instead of from a frame. */
+  const adrift = hasNote && mirror !== null && rectsReported ? marks.filter((mark) => mark.draft && !(mark.key in rects)) : NO_MARKS
 
-  // Nothing left in the note (it was sent, or emptied): the popup has nothing to be about.
+  // The note it was showing is gone (sent and closed, discarded, withdrawn): nothing to show.
+  // "Gone" means it WAS there: a pick opens the popup in the same breath as the host creates the
+  // note, and the popup must not close itself in the instant before the host's list catches up.
+  const seenAnchored = useRef<string | null>(null)
   useEffect(() => {
-    if (designPickCount === 0) setNoteOpen(false)
-  }, [designPickCount])
+    if (anchored) seenAnchored.current = anchor
+    else if (noteOpen && seenAnchored.current === anchor) setNoteOpen(false)
+  }, [anchor, anchored, noteOpen])
 
-  // Switching Design Mode on with a note already waiting brings the note back with it.
+  // A new document knows nothing of the old one's frames.
   useEffect(() => {
-    if (designActive && designPickCount > 0) setNoteOpen(true)
-    // Only the switch: a later pick opens the note through its own path.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [designActive])
+    setRects({})
+    setRectsReported(false)
+  }, [frameSrc, reloadToken])
 
-  // Beside the element: under it when there is room, above it when there is not, and always
-  // inside the frame area. Without a known rect (a pick from a page since reloaded) it parks in
-  // the bottom-right corner rather than guess.
+  // Under the element when there is room, above it when there is not, and always inside the
+  // frame area. Without a known rect it parks in the bottom-right corner rather than guess.
   useLayoutEffect(() => {
     if (!noteVisible) return
     const area = areaRef.current
     const note = noteRef.current
     if (!area || !note) return
     setNotePosition(placeNote(anchorRect, { width: area.clientWidth, height: area.clientHeight }, { width: note.offsetWidth, height: note.offsetHeight }))
-  }, [anchorRect, designPickCount, noteVisible])
+  }, [anchor, anchorRect, noteVisible])
 
-  const marksKey = (designMarks ?? []).map((mark) => `${mark.key}:${mark.n}`).join(' ')
+  // The click that opened the note happened INSIDE the frame, so that is where the keyboard
+  // still is — and the note is drawn hidden until it is placed, which defeats `autoFocus`. Once
+  // it is placed, the cursor is put in it: point, type.
+  const placed = notePosition !== null
+  useEffect(() => {
+    if (noteVisible && placed) noteRef.current?.querySelector<HTMLElement>('textarea')?.focus()
+  }, [anchor, noteVisible, placed])
+
+  const marksKey = JSON.stringify(marks.map(({ key, n, selector, path }) => ({ key, n, selector, path })))
   const sendMarks = useCallback(() => {
     if (mirror === null) return
-    const marks =
-      marksKey === '' ? [] : marksKey.split(' ').map((entry) => ({ key: entry.split(':')[0]!, n: Number(entry.split(':')[1]) }))
-    frameRef.current?.contentWindow?.postMessage({ source: 'cezar-design-host', type: 'set-marks', marks }, mirror)
+    frameRef.current?.contentWindow?.postMessage(
+      { source: 'cezar-design-host', type: 'set-marks', marks: JSON.parse(marksKey) as unknown },
+      mirror,
+    )
   }, [marksKey, mirror])
   useEffect(() => {
     if (pickerReady) sendMarks()
   }, [pickerReady, sendMarks])
+
+  // What Esc in the page means depends on state the listener below must read fresh.
+  const openNote = useRef<string | null>(null)
+  openNote.current = noteVisible ? anchor : null
 
   useEffect(() => {
     if (mirror === null) return
@@ -297,12 +317,20 @@ export function BrowserView({
       } | null
       if (data === null || typeof data !== 'object' || data.source !== 'cezar-design') return
       if (data.type === 'ready') setPickerReady(true)
-      else if (data.type === 'cancel') setDesign(false)
-      else if (data.type === 'mark-clicked' && typeof data.key === 'string') {
+      else if (data.type === 'cancel') {
+        // Esc in the page: with a note open it closes that note (the host discards a draft);
+        // with none it leaves Design Mode.
+        if (openNote.current !== null) {
+          onDesignEscape?.(openNote.current)
+          setNoteOpen(false)
+        } else setDesign(false)
+      } else if (data.type === 'mark-clicked' && typeof data.key === 'string') {
         setAnchor(data.key)
         setNoteOpen(true)
-      } else if (data.type === 'unpicked' && typeof data.key === 'string') onUnpickElement?.(data.key)
-      else if (data.type === 'rects') setRects(parseMarkRects(data.rects))
+      } else if (data.type === 'rects') {
+        setRects(parseMarkRects(data.rects))
+        setRectsReported(true)
+      }
       else if (data.type === 'picked') {
         const pick = parseDesignPick(data.element)
         if (!pick || !onPickElement?.(pick)) {
@@ -324,7 +352,7 @@ export function BrowserView({
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [hasNote, mirror, onPickElement, onUnpickElement, sendMarks])
+  }, [hasNote, mirror, onDesignEscape, onPickElement, sendMarks])
 
   /** With the switch off, a navigation is where the mirror is let go. */
   const releaseMirror = useCallback(() => {
@@ -579,7 +607,27 @@ export function BrowserView({
                 respond or does not allow embedding. The address is still in the bar; you can fix it.
               </div>
             ) : null}
-            {designActive && status === 'idle' && !noteVisible ? (
+            {adrift.length > 0 ? (
+              <div data-slot="browser-design-adrift" className="absolute bottom-3 left-3 z-10 flex max-w-[60%] flex-wrap gap-1.5">
+                {adrift.map((mark) => (
+                  <Button
+                    key={mark.key}
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    title="A note in progress — its element could not be found on this page"
+                    onClick={() => {
+                      setAnchor(mark.key)
+                      setNoteOpen(true)
+                    }}
+                    className="max-w-48"
+                  >
+                    <span className="truncate">Draft · {mark.label}</span>
+                  </Button>
+                ))}
+              </div>
+            ) : null}
+            {designActive && status === 'idle' && !noteVisible && adrift.length === 0 ? (
               <p
                 data-slot="browser-design-hint"
                 className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-border bg-background/95 px-3 py-1 text-xs whitespace-nowrap text-soft-foreground shadow-sm"
@@ -628,15 +676,10 @@ export function BrowserView({
             style={notePosition ? { left: notePosition.left, top: notePosition.top } : { left: 0, top: 0, visibility: 'hidden' }}
             className="absolute z-20 w-[min(360px,calc(100%-16px))] rounded-xl border border-border bg-background shadow-lg"
           >
-            {renderDesignNote({ close: closeNote })}
+            {anchor !== null ? renderDesignNote({ mark: anchor, close: closeNote }) : null}
           </div>
         ) : null}
       </div>
-      {designDock !== undefined && designAllowed ? (
-        <div data-slot="browser-design-dock" className="shrink-0 border-t border-border/70">
-          {designDock}
-        </div>
-      ) : null}
     </div>
   )
 }
@@ -667,6 +710,18 @@ function ToolbarButton({
     </Button>
   )
 }
+
+/** One element the page keeps framed. Structural on purpose: this view knows frames, not notes. */
+export interface DesignMark {
+  key: string
+  n?: number
+  selector?: string
+  path?: string
+  label: string
+  draft: boolean
+}
+
+const NO_MARKS: readonly DesignMark[] = []
 
 /** Where a marked element is, in the framed document's viewport. */
 interface MarkRect {

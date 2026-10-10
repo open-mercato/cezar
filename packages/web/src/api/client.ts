@@ -110,6 +110,7 @@ import type {
   DesignProxyRequest,
   PromptQueueResponse,
   RemoveQueuedPromptResponse,
+  EditQueuedPromptResponse,
   DesignProxyResponse,
   WorktreeEntry,
   SaveWorkflowInput,
@@ -1299,6 +1300,17 @@ export async function queueRunPrompt(id: string, text: string): Promise<PromptQu
       json: { text },
     }),
     runPath(id, '/prompt-queue'),
+  )
+}
+
+/** Reword a prompt that is still waiting in the queue; it keeps its place. 404 once delivered. */
+export async function editQueuedRunPrompt(id: string, msgId: string, text: string): Promise<EditQueuedPromptResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id']['prompt-queue'][':msgId'].$patch({
+      param: { projectId: queryScope(), id: encodeURIComponent(id), msgId: encodeURIComponent(msgId) },
+      json: { text },
+    }),
+    runPath(id, `/prompt-queue/${encodeURIComponent(msgId)}`),
   )
 }
 
