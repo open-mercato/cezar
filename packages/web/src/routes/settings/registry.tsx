@@ -12,6 +12,7 @@ import {
   NotebookPenIcon,
   PaletteIcon,
   KeyRoundIcon,
+  MonitorCheckIcon,
   TicketIcon,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
@@ -31,6 +32,7 @@ import { SkillsSection } from './skills-section'
 import { WorktreesSection } from './worktrees-section'
 import { TrackerSection } from './tracker-section'
 import { ProjectSecretsSection, WorkspaceSecretsSection } from './secrets-section'
+import { E2eSection } from './e2e-section'
 
 /**
  * The Settings section registry (R6 Step 1.3, spec §"Settings"): the ONE place a section is
@@ -63,6 +65,7 @@ export type SettingsSectionId =
   | 'skills'
   | 'tracker'
   | 'secrets'
+  | 'e2e'
   | 'workspace-secrets'
 
 /** Which settings area a section belongs to — and therefore which store it writes. */
@@ -112,6 +115,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Encrypted values for this project’s check steps and cezar — never for agents.',
     icon: KeyRoundIcon,
     component: ProjectSecretsSection,
+    scope: 'project',
+  },
+  {
+    id: 'e2e',
+    title: 'End-to-end tests',
+    description: 'Let cezar install and configure browser e2e tests for this project.',
+    icon: MonitorCheckIcon,
+    component: E2eSection,
     scope: 'project',
   },
   {

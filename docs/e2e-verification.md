@@ -14,7 +14,33 @@ examples use.
 
 ---
 
-## Before the first run
+## One click: let cezar set it up
+
+**Settings → (project) → End-to-end tests → Set up e2e.** That is the whole setup.
+Optionally pick a model provider and paste its key first; without one the smoke
+test still runs, and only `agent.*` steps need a model.
+
+cezar then starts a task, in its own worktree like any other, that:
+
+1. runs `npx e2e init --yes` and installs what it added with the repository's package manager;
+2. points `e2e.config.ts` at **this** project's dev server on a per-task port
+   (`http://127.0.0.1:0` with a `{port}` app command, so parallel tasks never collide)
+   and wires the model provider for the key you stored;
+3. replaces the example with a `tests/smoke.e2e.ts` that needs no model key;
+4. writes `.ai/cezar/workflows/implement-and-e2e.yaml` (Level 1 below, with your install and unit-test commands);
+5. proves it — `e2e list` and an `e2e run` of the smoke test are check steps of the
+   setup task, and a failure loops the setup agent back with the output until they pass.
+
+The task ends at the review gate: look at the diff, merge its branch, and the
+`implement-and-e2e` workflow is in your catalog. The key is stored encrypted as a
+project secret (audience `checks`), so it reaches the e2e check steps and never an
+agent session — the reason not to `export` it (see below). `e2e`'s own telemetry is
+turned off (`E2E_TELEMETRY_DISABLED=1`) in every command cezar writes.
+
+Everything below is what that task does for you, for when you want to do it by hand
+or change it.
+
+## Before the first run (by hand)
 
 In the repo you want tested (not in cezar):
 

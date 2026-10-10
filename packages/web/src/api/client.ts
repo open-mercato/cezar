@@ -134,6 +134,7 @@ import type {
   TrackerItemsResponse,
   TrackerKind, TrackerCredentials, TrackerConnectionResponse,
   SecretsList, SecretValueInput,
+  E2eStatus, E2eSetupInput, E2eSetupResponse,
 } from '@open-mercato/cezar-api-client'
 import { parseProviderStatusResponse } from '@/lib/provider-status'
 import {
@@ -888,6 +889,17 @@ export async function saveWorkspaceSecret(name: string, input: SecretValueInput)
 }
 export async function removeWorkspaceSecret(name: string): Promise<void> {
   await expectNoContent(await cez.api.v1.workspace.secrets[':name'].$delete({ param: { name } }))
+}
+
+// ---- one-click e2e setup (spec 2026-10-10-e2e-one-click-setup) ----
+
+export async function getE2eStatus(opts?: ReadOptions): Promise<E2eStatus> {
+  return unwrap(await cez.api.v1.p[':projectId'].e2e.$get(
+    { param: { projectId: queryScope() } }, init(opts)), '/e2e')
+}
+export async function startE2eSetup(input: E2eSetupInput): Promise<E2eSetupResponse> {
+  return unwrap(await cez.api.v1.p[':projectId'].e2e.setup.$post(
+    { param: { projectId: queryScope() }, json: input }), '/e2e/setup')
 }
 
 export async function getTrackerAssociation(opts?: ReadOptions): Promise<TrackerAssociationResponse> {

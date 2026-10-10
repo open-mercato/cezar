@@ -53,7 +53,7 @@ import {
   getSkills,
   getSkillsWhenReady,
   getTodos,
-  getTrackerAssociation, getTrackerConnection, getProjectSecrets, getWorkspaceSecrets,
+  getTrackerAssociation, getTrackerConnection, getProjectSecrets, getWorkspaceSecrets, getE2eStatus,
   getTrackerCandidates,
   getTrackerItem,
   getTrackerItems,
@@ -145,6 +145,10 @@ export const queryKeys = {
   secrets: {
     allFor: (projectId: string) => ['secrets', projectId] as const,
     list: () => ['secrets', queryScope()] as const,
+  },
+  e2e: {
+    allFor: (projectId: string) => ['e2e', projectId] as const,
+    status: () => ['e2e', queryScope()] as const,
   },
   tracker: {
     allFor: (projectId: string) => ['tracker', projectId] as const,
@@ -279,6 +283,12 @@ export function useProjectSecrets() {
 /** The user's own secrets (spec 2026-10-10-project-secrets-vault-options). Not scope-led: one machine, one set. */
 export function useWorkspaceSecrets() {
   return useQuery({ queryKey: workspaceQueryKeys.secrets, queryFn: ({ signal }) => getWorkspaceSecrets({ signal }) })
+}
+
+/** `GET /e2e` (spec 2026-10-10-e2e-one-click-setup). The setup run's live status comes from
+ *  `useRun`, which the global event stream keeps current — no poll here. */
+export function useE2eStatus() {
+  return useQuery({ queryKey: queryKeys.e2e.status(), queryFn: ({ signal }) => getE2eStatus({ signal }) })
 }
 
 export function useTrackerConnection() {
