@@ -17,8 +17,8 @@ Risks: this is test-only; it does not alter production lazy loading or automatio
 
 ### Phase 1: Deterministic regression
 
-- [ ] 1.1 Remove timeout inflation while retaining lazy-module preload
-- [ ] 1.2 Verify focused regression and negative assertion mutation
+- [x] 1.1 Remove timeout inflation while retaining lazy-module preload — b92e0f63
+- [x] 1.2 Verify focused regression and negative assertion mutation — b92e0f63
 
 ### Phase 2: Validation and handoff
 
