@@ -1,3 +1,92 @@
+# 0.15.0 (2026-10-10)
+
+## Highlights
+Workflows become graphs: a node editor with loops, gates, fan-out/join and a live graph view on every run, while v1 YAML workflows keep working. The Git tab gains a repository file browser, the Changes tab takes line comments that go to the agent as a review plus a Markdown preview, and each project can keep private MCP servers for every agent. The cockpit can carry your own name and logo, and tasks started by automations no longer bury the ones you started. Plan mode is gone from the composer. The rest is fixes, mostly to runs, git and the runners.
+
+## ⚠️ Breaking
+- ⚠️ The composer's Start | Plan first switch and the plan review overlay are removed; Start always creates a run. (#1328) *(@pat-lewczuk)*
+
+## ✨ Features
+- ✨ Workflow node editor and graph engine — loops, gates, dispatch/fork/join, composition, git and GitHub nodes, YAML import/export, simulation and a live graph on task runs; v1 workflows still run. (#1322) *(@kinelm)*
+- ✨ Browse the repository from the Git tab: file tree, viewer and path filter (fixes #1279). (#1299, #1280) *(@pat-lewczuk)*
+- ✨ Comment on diff lines in the Changes tab and send them to the agent as one review. (#1283) *(@martaradziszewska)*
+- ✨ Markdown preview toggle in the Changes diff. (#1349) *(@martaradziszewska)*
+- ✨ Private per-project MCP servers in `.ai/cezar/mcp.local.json`, git-ignored and passed to every agent that accepts MCP at launch. (#1324) *(@patzick)*
+- ✨ Customizable cockpit branding: display name and logo, set in Appearance settings. (#1327) *(@kinelm)*
+- ✨ Filter tasks by origin (Regular, Automations, All), defaulting to Regular. (#1336) *(@pat-lewczuk)*
+- ✨ Skills browsing, activation and preview live in one place. (#1082) *(@Igloczek)*
+- ✨ Check steps can gate their retry loop by exit code, so an e2e check that could not run stops blaming the diff. (#1265) *(@pat-lewczuk)*
+- ✨ Check steps get run context: run, branch, attempt, shared cache and GitHub provenance. (#1292) *(@pat-lewczuk)*
+- ✨ Automations can verify a pull request's head with `checkout: 'pr-head'`. (#1293) *(@pat-lewczuk)*
+- ✨ `cez runs list`, a human message for a missing `CEZ_API_URL`, and docs for the `/api/v1` API. (#1133) *(@KamilMichalski0)*
+
+## ⚡ Performance
+- ⚡ Per-run SSE connections share one store listener per project (fixes #1222). (#1342) *(@pat-lewczuk)*
+- ⚡ Runner model catalogs refresh in the background instead of blocking the picker (fixes #1220). (#1343) *(@pat-lewczuk)*
+- ⚡ The process sampler builds its PID indexes once per sample (fixes #1214). (#1333) *(@pat-lewczuk)*
+- ⚡ Repeated handoff heartbeats are coalesced and capped (fixes #1215). (#1332) *(@pat-lewczuk)*
+
+## 🔒 Security
+- 🔒 Cloud credentials are forwarded by backend identity, not by an env-prefix match (fixes #850). (#1228) *(@pat-lewczuk)*
+- 🔒 `server-install` allocates loopback ports machine-wide, so two unix users no longer share a cockpit (fixes #913). (#1003) *(@pat-lewczuk)*
+
+## 🐛 Fixes
+- 🐛 An unanswered `CEZ:ASK` stays under Needs you after the idle close, a crash or a restart. (#1290) *(@pat-lewczuk)*
+- 🐛 A workflow step that parked and later finished with `CEZ:DONE` no longer fails. (#1282) *(@pat-lewczuk)*
+- 🐛 A dispatched child stopped on an unanswered ask no longer reports a false outcome to its parent (fixes #1307). (#1331) *(@pat-lewczuk)*
+- 🐛 `CEZ:ASK` accepts more than four questions and options. (#1312) *(@pat-lewczuk)*
+- 🐛 A multi-question ask card keeps its picks when the thread unmounts it (fixes #1247). (#1249) *(@matgren)*
+- 🐛 A queued run starts with the workflow as it is at dequeue. (#1134) *(@KamilMichalski0)*
+- 🐛 SHA-pinned task diffs stay fresh when the base advances (fixes #1325). (#1329) *(@pat-lewczuk)*
+- 🐛 Concurrent worktree creation no longer fights over `.git/config` locks (fixes #1301). (#1318) *(@pat-lewczuk)*
+- 🐛 Numeric issue search no longer returns pull requests (fixes #949). (#1320) *(@pat-lewczuk)*
+- 🐛 Live sessions get the attachment library in their grants (fixes #987). (#1257) *(@pat-lewczuk)*
+- 🐛 Runner fixes: OpenCode port 0, string Codex RPC ids, a dead Claude stdin. (#1179) *(@lbajsarowicz)*
+- 🐛 Codex events stop after teardown (fixes #1105). (#1230) *(@pat-lewczuk)*
+- 🐛 Pi keeps markers intact across content parts (fixes #902, #903). (#1208) *(@pat-lewczuk)*
+- 🐛 OpenCode 2.x credential rows are recognized (fixes #1270). (#1271) *(@pat-lewczuk)*
+- 🐛 Claude explains headless permission denials instead of retrying (fixes #1248). (#1256) *(@pat-lewczuk)*
+- 🐛 Unsupported agent identities get a provider-specific explanation (fixes #1233). (#1258) *(@pat-lewczuk)*
+- 🐛 Dispatch and automation help derive their runner lists from the registry (fixes #1236). (#1278) *(@pat-lewczuk)*
+- 🐛 Dispatch settings offer the subtask runner's own models. (#1269) *(@pat-lewczuk)*
+- 🐛 The engine pick is remembered on the GitHub and Inbox hand-offs (fixes #906). (#907) *(@sapersky)*
+- 🐛 Drafts with only attachments survive a project switch (fixes #1095). (#1255) *(@pat-lewczuk)*
+- 🐛 Discarding a plan keeps its attachments (fixes #1094). (#1229) *(@pat-lewczuk)*
+- 🐛 Bookmark autostart keeps the form open when its runner is unavailable (fixes #874). (#1210) *(@pat-lewczuk)*
+- 🐛 The idle timeout setting is persisted (fixes #1232). (#1242) *(@pat-lewczuk)*
+- 🐛 Skills keep valid YAML frontmatter, and workspace JSON writes are atomic (fixes #1218). (#1231) *(@pat-lewczuk)*
+- 🐛 Reusable prompt templates hold up to 20,000 characters (fixes #908). (#1273) *(@pat-lewczuk)*
+- 🐛 Automation receipts with legacy keys deduplicate correctly. (#1127) *(@pat-lewczuk)*
+- 🐛 Directories are no longer accepted as launchers (fixes #1066). (#1153) *(@pat-lewczuk)*
+- 🐛 Rootless Linux finds staged agent-browser dependencies (fixes #890). (#1294) *(@pat-lewczuk)*
+- 🐛 `server-install` fails on nginx parse errors and on macOS restart errors (fixes #1001, #1011). (#1174, #1149) *(@pat-lewczuk)*
+- 🐛 Jump to latest lands at the tail without reloading the thread. (#1313) *(@martaradziszewska)*
+- 🐛 The Changes tree and diff scroll in their own columns. (#1305) *(@martaradziszewska)*
+- 🐛 Nested sidebar rows fit at minimum width; unread is shown by weight only. (#1311) *(@martaradziszewska)*
+- 🐛 The Subtasks panel collapses and scrolls instead of growing the header (fixes #1050). (#1051) *(@piotrchabros)*
+- 🐛 Long model-picker descriptions wrap (fixes #870). (#1298) *(@pat-lewczuk)*
+- 🐛 The mobile step-rail has a usable touch target (fixes #958). (#1244) *(@pat-lewczuk)*
+
+## 🧪 Testing
+- 🧪 The test suite no longer calls a real model to name tasks. (#1254) *(@matgren)*
+- 🧪 Deterministic automation-gate warm-up and issue-804 teardown (fixes #930, #804). (#1330, #1297) *(@pat-lewczuk)*
+- 🧪 The parked-gate `maxParallel` test carries `mock:done` again. (#1348) *(@martaradziszewska)*
+- 🧪 Four stale e2e assertions repaired. (#1339) *(@kinelm)*
+- 🧪 Screenshots queued before task startup are covered. (#1246) *(@pat-lewczuk)*
+
+## 👥 Contributors
+
+- @pat-lewczuk
+- @kinelm
+- @martaradziszewska
+- @patzick
+- @KamilMichalski0
+- @matgren
+- @Igloczek
+- @lbajsarowicz
+- @piotrchabros
+- @sapersky
+
 # 0.14.0 (2026-10-02)
 
 ## Highlights
