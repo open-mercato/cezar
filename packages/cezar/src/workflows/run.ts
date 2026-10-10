@@ -4062,6 +4062,9 @@ export class RunManager {
       this.store.updateRun(runId, {
         modelIdentity: normalized ? formatModelIdentity(normalized.identity) : undefined,
       });
+      if (normalized) {
+        this.store.updateStep(runId, stepId, { modelIdentity: formatModelIdentity(normalized.identity) });
+      }
     } catch (err) {
       if (!(err instanceof ModelIdentityError)) throw err;
       failBeforeSpawn(err.message);
@@ -5900,6 +5903,9 @@ export class RunManager {
       this.store.updateRun(runId, {
         modelIdentity: normalized ? formatModelIdentity(normalized.identity) : undefined,
       });
+      if (normalized) {
+        this.store.updateStep(runId, step.id, { modelIdentity: formatModelIdentity(normalized.identity) });
+      }
     } catch (err) {
       if (err instanceof ModelIdentityError) return err.message;
       throw err;

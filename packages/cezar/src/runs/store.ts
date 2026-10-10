@@ -92,6 +92,9 @@ const stepStateSchema = z.object({
    *  a PAIR. Without it, changing the project's account would silently make Continue resume
    *  against the wrong account's session store. Absent = the discovered default. */
   profileId: z.string().optional(),
+  /** Canonical provider/model identity resolved for this step. Optional so older runs.json files
+   *  remain readable and auto-model steps can retain an absent identity. */
+  modelIdentity: z.string().optional(),
   /** Dollar cost reported by the claude CLI for this step's turns. */
   costUsd: z.number().optional(),
 });

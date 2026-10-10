@@ -158,6 +158,40 @@ describe('model identity wiring (dry run)', () => {
     expect(store.getRun(id)?.modelIdentity).toBe('anthropic/haiku');
   }, 40_000);
 
+  it('retains the first step identity when a continuation switches to auto (#545)', async () => {
+    const id = await runToEnd({ task: 'do the thing', model: 'opus' });
+    expect(store.getRun(id)?.steps.find((step) => step.id === 'work')?.modelIdentity).toBe('anthropic/opus');
+
+    expect(manager.continueRun(id, { text: 'keep going', model: '' })).toEqual({ ok: true });
+    const deadline = Date.now() + 20_000;
+    while (readFileSync(argsFile, 'utf8').trim().split('\n').length < 2) {
+      if (Date.now() > deadline) throw new Error('continuation did not start in time');
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const record = store.getRun(id);
+    expect(record?.modelIdentity).toBeUndefined();
+    expect(record?.steps.find((step) => step.id === 'work')?.modelIdentity).toBe('anthropic/opus');
+    expect(record?.steps.find((step) => step.id === 'continue-1')?.modelIdentity).toBeUndefined();
+  }, 40_000);
+
+  it('persists distinct identities for model-specific steps (#545)', async () => {
+    const multiModelWorkflow: WorkflowDef = {
+      name: 'multi-model-identity-test',
+      source: 'built-in',
+      steps: [
+        { id: 'first', model: 'opus', prompt: '{{task}}' },
+        { id: 'second', model: 'haiku', prompt: '{{task}}' },
+        { id: 'verify', command: 'true' },
+      ],
+    };
+    writeFileSync(argsFile, '', 'utf8');
+    const record = manager.startRun(multiModelWorkflow, { task: 'do the thing' });
+    await settle(record.id);
+    const saved = store.getRun(record.id);
+    expect(saved?.steps.find((step) => step.id === 'first')?.modelIdentity).toBe('anthropic/opus');
+    expect(saved?.steps.find((step) => step.id === 'second')?.modelIdentity).toBe('anthropic/haiku');
+  }, 40_000);
+
   it('Claude gateway models run with their provider-qualified wire id', async () => {
     const id = await runToEnd({ task: 'do the thing', model: 'deepseek/deepseek-v4-flash' });
     const record = store.getRun(id);
