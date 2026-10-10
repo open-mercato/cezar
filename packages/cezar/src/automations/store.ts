@@ -314,6 +314,10 @@ export class AutomationStore {
       lockfilePath: `${path}${GUARD_SUFFIX}`,
       realpath: false,
       stale: GUARD_STALE_MS,
+      // Keep compromise detection responsive even though stale recovery is deliberately longer:
+      // proper-lockfile otherwise defaults heartbeat checks to stale / 2 (7.5s here), which lets
+      // a deleted guard go unnoticed through an entire poll await.
+      update: 1_000,
       // proper-lockfile's default throws from its heartbeat timer. Never take the
       // cockpit down for a lost guard; callers check validity before launching or
       // publishing after an asynchronous compromise notification.
