@@ -130,11 +130,34 @@ describe('LifecycleStore', () => {
     })));
     expect(max).toBe(1);
   });
-  it('recovers a dead owner without removing a live owner lease', async () => {
+  it('retries when a releasing owner removes its directory between stat and readdir', async () => {
+    const lock = join(root, 'releasing.lock');
+    await fs.mkdir(lock);
+    await fs.writeFile(join(lock, `${process.pid}-${randomUUID()}`), '');
+    const reading = vi.spyOn(fs, 'readdir').mockImplementationOnce(async () => {
+      await fs.rm(lock, {recursive: true});
+      throw Object.assign(new Error('owner released'), {code: 'ENOENT'});
+    });
+    try {
+      await expect(withLifecycleFileLock(lock, async () => 42, {wait: false})).resolves.toBe(42);
+    } finally { reading.mockRestore(); }
+    expect(await fs.stat(lock).catch(() => null)).toBeNull();
+  });
+  it('nonblocking acquisition leaves a live owner and its lease untouched', async () => {
+    const lock = join(root, 'live.lock');
+    await withLifecycleFileLock(lock, async () => {
+      const before = await fs.readdir(lock);
+      const mutate = vi.fn(async () => undefined);
+      await expect(withLifecycleFileLock(lock, mutate, {wait: false})).rejects.toThrow('busy');
+      expect(mutate).not.toHaveBeenCalled();
+      expect(await fs.readdir(lock)).toEqual(before);
+    });
+  });
+  it.each([true, false])('recovers a dead owner with wait=%s', async wait => {
     const lock = join(root, 'test.lock');
     await fs.mkdir(lock);
     await fs.writeFile(join(lock, `999999999-${randomUUID()}`), '');
-    await expect(withLifecycleFileLock(lock, async () => 42)).resolves.toBe(42);
+    await expect(withLifecycleFileLock(lock, async () => 42, {wait})).resolves.toBe(42);
     expect(await fs.stat(lock).catch(() => null)).toBeNull();
   });
 });

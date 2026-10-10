@@ -89,6 +89,27 @@ describe('worktree lifecycle coordinator with real Git and command fixtures', ()
     expect(p.resume).not.toHaveBeenCalled();
   });
 
+  it('reconciles without rewriting a script still owned by another coordinator', async () => {
+    const p = await project();
+    await p.config([entry('touch started; while [ ! -f release ]; do sleep 0.02; done; echo ready > result')]);
+    const preparing = p.prepare();
+    const outcome = preparing.then(value => ({value}), error => ({error}));
+    const path = join(p.root, '.ai/cezar/worktrees', p.id);
+    await vi.waitFor(() => expect(existsSync(join(path, 'started'))).toBe(true), {timeout: 5000});
+    const record = await p.coordinator.store.readWorktree(p.id);
+    const before = await p.coordinator.store.readOperation(record!.activeOperationId!);
+    const peer = new WorktreeLifecycleCoordinator(p.root, p.runs, {semaphore: p.semaphore,
+      busySlots: () => 0, isActive: () => false, cancelAndWait: p.cancelAndWait, resume: p.resume});
+    coordinators.push(peer);
+    try {
+      await peer.reconcile();
+      expect(await peer.store.readOperation(before!.id)).toEqual(before);
+    } finally { await writeFile(join(path, 'release'), ''); }
+    expect(await outcome).toMatchObject({value: {ready: true}});
+    expect(await readFile(join(path, 'result'), 'utf8')).toBe('ready\n');
+    expect((await peer.operation(before!.id)).state).toBe('completed');
+  });
+
   it('does not replace an existing teardown intent when a variant is discarded', async () => {
     const p = await project(); await p.config([], [entry('exit 19')]); await p.prepare();
     const removal = await p.coordinator.startRemoval({requestId: randomUUID(), runId: p.id, intent: 'reclaim'});

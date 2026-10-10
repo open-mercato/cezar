@@ -16,7 +16,7 @@ import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { createWorktree, createWorktreeWithOutcome, removeWorktree, worktreePathFor, branchFor } from '../git-worktree.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
-import { LifecycleStore, withLifecycleFileLock } from './store.ts';
+import { LifecycleStore, LifecycleConflictError, withLifecycleFileLock } from './store.ts';
 import { readLifecycleConfig, withLifecycleConfigLock } from './config.ts';
 import { renderLifecycleCommand, lifecycleCommandFingerprint, type LifecycleTemplateContext } from './templates.ts';
 import { executeLifecycleCommand, probeLifecycleProcess } from './executor.ts';
@@ -686,22 +686,29 @@ export class WorktreeLifecycleCoordinator {
       const summary = this.attentionSummary(item.id, item.error);
       this.runs.updateRun(item.id, {status: 'waiting', error: item.error, worktreeLifecycle: {worktreeId: summary.worktreeId, generation: 1, needsAttention: true}});
     }
-    for (const record of records) {
-      if (!record.activeOperationId) { this.changed(record); continue; }
+    for (const candidate of records) {
       try {
-        const operation = await this.store.readOperation(record.activeOperationId);
-        if (!operation) throw new Error('Lifecycle operation is missing');
-        if (operation.state === 'running' || operation.state === 'committing') {
-          operation.state = 'interrupted'; operation.error = operation.agentQuiescencePending
-            ? 'Variant cancellation was interrupted. Cezar cannot verify that its previous agent exited; worktree retained for manual recovery.'
-            : 'Cezar stopped before completion was recorded; choose an explicit recovery action';
-          for (const execution of operation.executions) if (execution.state === 'running') execution.state = 'interrupted';
-          await this.save(record, operation);
-        } else this.changed(record, operation);
-        if (operation.state === 'queued' && operation.phase === 'teardown') this.queue.set(operation.id, Date.parse(operation.createdAt));
-      } catch {
-        if (this.runs.getRun(record.runId)) this.runs.updateRun(record.runId, {status: 'waiting', error: 'Lifecycle context is incomplete; worktree retained',
-          worktreeLifecycle: {worktreeId: record.worktreeId, generation: record.generation, needsAttention: true}});
+        // A peer may still own setup/teardown. Startup neither waits for that
+        // command nor rewrites its checkpoint; only an abandoned lease is recovered.
+        await this.store.withWorktreeLock(candidate.runId, async () => {
+          const record = await this.store.readWorktree(candidate.runId);
+          if (!record) return;
+          if (!record.activeOperationId) { this.changed(record); return; }
+          const operation = await this.store.readOperation(record.activeOperationId);
+          if (!operation) throw new Error('Lifecycle operation is missing');
+          if (operation.state === 'running' || operation.state === 'committing') {
+            operation.state = 'interrupted'; operation.error = operation.agentQuiescencePending
+              ? 'Variant cancellation was interrupted. Cezar cannot verify that its previous agent exited; worktree retained for manual recovery.'
+              : 'Cezar stopped before completion was recorded; choose an explicit recovery action';
+            for (const execution of operation.executions) if (execution.state === 'running') execution.state = 'interrupted';
+            await this.save(record, operation);
+          } else this.changed(record, operation);
+          if (operation.state === 'queued' && operation.phase === 'teardown') this.queue.set(operation.id, Date.parse(operation.createdAt));
+        }, {wait: false});
+      } catch (error) {
+        if (error instanceof LifecycleConflictError) continue;
+        if (this.runs.getRun(candidate.runId)) this.runs.updateRun(candidate.runId, {status: 'waiting', error: 'Lifecycle context is incomplete; worktree retained',
+          worktreeLifecycle: {worktreeId: candidate.worktreeId, generation: candidate.generation, needsAttention: true}});
       }
     }
   }

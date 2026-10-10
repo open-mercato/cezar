@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -10,6 +10,15 @@ import { createAutoUi } from './ui.ts';
 import { nginxVhost, systemdUnit } from './platforms/ubuntu-vps.ts';
 import type { BackendCheck } from '../core/backend-detect.ts';
 import type { Runner } from './types.ts';
+
+// The dry-run installer uses a fake command runner; dependency discovery must
+// likewise be independent of installed CLIs. Keep real socket/port isolation.
+vi.mock('../core/backend-detect.ts', () => ({
+  detectEnvironment: async (): Promise<BackendCheck[]> => [
+    { name: 'git', available: true },
+    { name: 'codex', available: false, hint: 'fixture missing tool' },
+  ],
+}));
 
 const noRunner: Runner = { capture: async () => ({ code: 0, stdout: '', stderr: '' }), interactive: async () => 0 };
 

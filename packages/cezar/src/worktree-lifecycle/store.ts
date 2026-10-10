@@ -57,7 +57,7 @@ export async function atomicLifecycleWrite(path: string, value: unknown): Promis
 }
 
 /** Same atomic mkdir + PID-owner lease used by tracker-association, with unique owner tokens. */
-export async function withLifecycleFileLock<T>(path: string, action: () => Promise<T>): Promise<T> {
+export async function withLifecycleFileLock<T>(path: string, action: () => Promise<T>, options: { wait?: boolean } = {}): Promise<T> {
   await fs.mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const ownerName = `${process.pid}-${randomUUID()}`;
   const owner = join(path, ownerName);
@@ -69,23 +69,28 @@ export async function withLifecycleFileLock<T>(path: string, action: () => Promi
       break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      if (attempt >= 250) throw new LifecycleConflictError('Worktree lifecycle is busy in another operation');
       const stat = await fs.lstat(path).catch(() => null);
       if (!stat) continue;
       if (!stat.isDirectory() || stat.isSymbolicLink()) throw new LifecycleStoreError('Invalid lifecycle lock');
-      const owners = await fs.readdir(path);
+      const owners = await fs.readdir(path).catch(error => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw error;
+      });
+      // The holder can finish between lstat and readdir; retry acquisition.
+      if (owners === null) continue;
       const match = owners.length === 1 ? /^([1-9][0-9]*)-[0-9a-f-]{36}$/.exec(owners[0]!) : null;
       if (match) {
         try { process.kill(Number(match[1]), 0); }
         catch (error) {
           if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
             // The unique owner filename elects one reaper. Never unlink a replacement lease.
-            try { await fs.unlink(join(path, owners[0]!)); await fs.rmdir(path); } catch {}
+            try { await fs.unlink(join(path, owners[0]!)); await fs.rmdir(path); continue; } catch {}
           }
         }
       } else if (owners.length === 0 && Date.now() - stat.mtimeMs > 60_000) {
-        await fs.rmdir(path).catch(() => undefined);
+        try { await fs.rmdir(path); continue; } catch { /* another owner won the lease */ }
       }
+      if (options.wait === false || attempt >= 250) throw new LifecycleConflictError('Worktree lifecycle is busy in another operation');
       await new Promise(resolve => setTimeout(resolve, 20));
     }
   }
@@ -102,8 +107,8 @@ export class LifecycleStore {
     await assertLifecyclePath(path, this.projectRoot);
     return path;
   }
-  async withWorktreeLock<T>(runId: string, action: () => Promise<T>): Promise<T> {
-    return withLifecycleFileLock(await this.path('locks', safeRunId(runId), 'lock'), action);
+  async withWorktreeLock<T>(runId: string, action: () => Promise<T>, options: { wait?: boolean } = {}): Promise<T> {
+    return withLifecycleFileLock(await this.path('locks', safeRunId(runId), 'lock'), action, options);
   }
   async validateContext(record: WorktreeLifecycleRecord): Promise<void> {
     const root = await fs.realpath(this.projectRoot);
