@@ -1546,7 +1546,7 @@ describe('fetchGithub omits statusCheckRollup from the list call (#664)', () => 
         graphqlQuery = argv[argv.indexOf('-f') + 1] ?? '';
         stdout = JSON.stringify({ data: { repository: {
           issues: { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-          pullRequests: { totalCount: 1, nodes: [{ number: 7, title: 'a pr', author: { login: 'x' }, createdAt: '2026-07-01T00:00:00Z', labels: [], url: 'https://github.com/owner/n/pull/7', isDraft: false, additions: 1, deletions: 2 }], pageInfo: { hasNextPage: false, endCursor: null } },
+          pullRequests: { totalCount: 9, nodes: [{ number: 7, title: 'a pr', author: { login: 'x' }, createdAt: '2026-07-01T00:00:00Z', labels: [], url: 'https://github.com/owner/n/pull/7', comments: { totalCount: 4 }, isDraft: false, additions: 1, deletions: 2 }], pageInfo: { hasNextPage: true, endCursor: 'next-pr' } },
         } } });
       }
       cb(null, { stdout, stderr: '' });
@@ -1555,7 +1555,11 @@ describe('fetchGithub omits statusCheckRollup from the list call (#664)', () => 
     const data = await fetchGithub('/repo/no-rollup-664');
     expect(graphqlQuery).not.toContain('statusCheckRollup');
     expect(graphqlQuery).toContain('isDraft');
+    expect(graphqlQuery).toContain('comments { totalCount }');
     expect(data.prs[0]?.checks).toBeNull();
+    expect(data.prs[0]?.comments).toBe(4);
+    expect(data.prsTotal).toBe(9);
+    expect(data.prsNextCursor).toBe('next-pr');
   });
 });
 
