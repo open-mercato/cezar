@@ -24,6 +24,6 @@ Risks: completion may be observed on initial render for historical runs; avoid s
 
 ### Phase 1: Implement and verify
 
-- [ ] 1.1 Add completion-transition collapse and tests
+- [x] 1.1 Add completion-transition collapse and tests
 - [ ] 1.2 Run targeted and full validation
 - [ ] 1.3 Review diff and report limitations
