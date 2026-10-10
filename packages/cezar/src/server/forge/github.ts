@@ -685,11 +685,14 @@ const ghSearchHitSchema = ghIssueSchema.extend({
 });
 
 /** `gh {issue,pr} view <n> --json …` — the exact-number path. Shares `ghIssueSchema`'s core;
- *  `isDraft`/`additions`/`deletions` are PR-only and default harmlessly for issues. */
+ *  `isDraft`/`additions`/`deletions` are PR-only and default harmlessly for issues. `comments` is
+ *  requested only for this one-result path so its length can align the comment badge with text
+ *  search; the list path deliberately never asks for comment bodies. */
 const ghViewHitSchema = ghIssueSchema.extend({
   isDraft: z.boolean().default(false),
   additions: z.number().default(0),
   deletions: z.number().default(0),
+  comments: z.array(z.unknown()).default([]),
 });
 
 function urlKind(url: string): 'issue' | 'pr' | null {
@@ -699,8 +702,9 @@ function urlKind(url: string): 'issue' | 'pr' | null {
 }
 
 /** Flatten one validated hit into the `ForgeItem` the tab's rows already render. `checks: null`
- *  is what the list tier ships too since #664 — the glyph hydrates lazily via `/api/github/checks`
- *  — so a searched row and a listed row are indistinguishable to the UI. */
+ *  is what the list tier ships too since #664 — the glyph hydrates lazily via `/api/github/checks`.
+ *  Both search paths carry comment counts now; text-search PR rows intentionally omit additions /
+ *  deletions because supplying them would require one expensive view lookup per result. */
 function toSearchItem(
   kind: 'issue' | 'pr',
   hit: z.infer<typeof ghSearchHitSchema> | z.infer<typeof ghViewHitSchema>,
@@ -718,7 +722,7 @@ function toSearchItem(
     labels: hit.labels.map((l) => l.name),
     body: (hit.body ?? '').slice(0, 8_000),
     url: hit.url,
-    comments: 'commentsCount' in hit ? hit.commentsCount : 0,
+    comments: 'commentsCount' in hit ? hit.commentsCount : 'comments' in hit ? hit.comments.length : 0,
   };
   if (kind === 'pr') {
     item.isDraft = hit.isDraft;
@@ -785,7 +789,7 @@ export async function searchGithubItems(
           'view',
           String(number),
           '--json',
-          kind === 'pr' ? `${SEARCH_FIELDS},isDraft,additions,deletions` : SEARCH_FIELDS,
+          kind === 'pr' ? `${SEARCH_FIELDS},isDraft,additions,deletions,comments` : `${SEARCH_FIELDS},comments`,
         ]);
         const hit = ghViewHitSchema.parse(JSON.parse(out));
         // GitHub's `issue view` endpoint accepts a PR number because PRs are issues too. The
