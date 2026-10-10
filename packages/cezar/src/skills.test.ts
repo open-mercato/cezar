@@ -1,10 +1,11 @@
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   discoverSkills,
   filterImportedTeamSkills,
+  invalidateSkillsCache,
   parseFrontmatter,
   readImportedSkills,
   type Skill,
@@ -156,6 +157,57 @@ describe('discoverSkills local entrypoints', () => {
     expect(skills).toHaveLength(1);
     expect(skills[0]?.source).toBe('agents');
   });
+});
+
+describe('discoverSkills memo', () => {
+  async function repoWithSkill(): Promise<{ repoRoot: string; skillFile: string }> {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'cezar-skills-memo-'));
+    tempDirs.push(repoRoot);
+    const dir = join(repoRoot, '.agents/skills/om-example');
+    await mkdir(dir, { recursive: true });
+    const skillFile = join(dir, 'SKILL.md');
+    await writeFile(skillFile, '---\ndescription: v1\n---\nBody v1');
+    return { repoRoot, skillFile };
+  }
+  const find = async (repoRoot: string, name = 'om-example') =>
+    (await discoverSkills(repoRoot)).find((skill) => skill.name === name);
+
+  it('serves an unchanged tree from memory instead of re-reading every skill', async () => {
+    const { repoRoot } = await repoWithSkill();
+    const first = await find(repoRoot);
+    const second = await find(repoRoot);
+    expect(second?.body).toBe('Body v1');
+    expect(second).toBe(first);
+  }, 30_000);
+
+  it('re-reads a skill file edited in place', async () => {
+    const { repoRoot, skillFile } = await repoWithSkill();
+    await find(repoRoot);
+    await writeFile(skillFile, '---\ndescription: v2\n---\nBody v2');
+    const later = new Date(Date.now() + 5_000);
+    await utimes(skillFile, later, later);
+    expect((await find(repoRoot))?.description).toBe('v2');
+  }, 30_000);
+
+  it('picks up a skill added next to the cached ones, and a dir created after the first scan', async () => {
+    const { repoRoot } = await repoWithSkill();
+    await find(repoRoot);
+    await mkdir(join(repoRoot, '.agents/skills/om-added'), { recursive: true });
+    await writeFile(join(repoRoot, '.agents/skills/om-added/SKILL.md'), 'Added');
+    await mkdir(join(repoRoot, '.ai/skills'), { recursive: true });
+    await writeFile(join(repoRoot, '.ai/skills/flat.md'), 'Flat');
+    expect((await find(repoRoot, 'om-added'))?.body).toBe('Added');
+    expect((await find(repoRoot, 'flat'))?.body).toBe('Flat');
+  }, 30_000);
+
+  it('re-reads disk after an explicit invalidation', async () => {
+    const { repoRoot } = await repoWithSkill();
+    const first = await find(repoRoot);
+    invalidateSkillsCache(repoRoot);
+    const second = await find(repoRoot);
+    expect(second).not.toBe(first);
+    expect(second).toEqual(first);
+  }, 30_000);
 });
 
 describe('parseFrontmatter', () => {

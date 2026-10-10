@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import {
   ensureBareClone,
   getTeamSkillsCached,
@@ -12,6 +12,7 @@ import {
   listRemoteSkills,
   refreshTeamSkills,
   safeRemoteFor,
+  waitForTeamSkills,
 } from '../../src/skills-remote.js';
 
 // ---- safeRemoteFor: repo/URL injection guard (#428) --------------------------
@@ -203,4 +204,47 @@ test('team-skills cache is keyed by repoRoot — projects never see each other\'
   // A's scope was served B's skills. Each root must keep its own entry.
   assert.deepEqual(getTeamSkillsCached(rootA).map((s) => s.name), ['alpha-skill']);
   assert.deepEqual(getTeamSkillsCached(rootB).map((s) => s.name), ['beta-skill']);
+});
+
+// ---- passive refresh after the TTL (B19) -------------------------------------
+
+test('a passive touch reloads team skills once the last load is older than the six-hour TTL', async (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'cez-home-'));
+  const src = mkdtempSync(join(tmpdir(), 'cez-src-ttl-'));
+  const root = mkdtempSync(join(tmpdir(), 'cez-root-ttl-'));
+  const prevHome = process.env.HOME;
+  process.env.HOME = home;
+  mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  t.after(() => {
+    mock.timers.reset();
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    for (const d of [home, src, root]) rmSync(d, { recursive: true, force: true });
+  });
+
+  const g = (args: string[]) => execFileSync('git', args, { cwd: src, encoding: 'utf8' });
+  const addSkill = (name: string) => {
+    mkdirSync(join(src, name));
+    writeFileSync(join(src, name, 'SKILL.md'), `---\ndescription: ${name}\n---\n${name} body\n`);
+    g(['add', '-A']);
+    g(['commit', '-m', name]);
+  };
+  g(['-c', 'init.defaultBranch=main', 'init']);
+  g(['config', 'user.email', 'test@example.com']);
+  g(['config', 'user.name', 'Test']);
+  addSkill('first-skill');
+  mkdirSync(join(root, '.ai/cezar'), { recursive: true });
+  writeFileSync(join(root, '.ai/cezar', 'config.json'), JSON.stringify({ skillsRepos: [{ repo: src, ref: 'main' }] }));
+
+  assert.deepEqual((await waitForTeamSkills(root)).map((s) => s.name), ['first-skill']);
+  addSkill('second-skill');
+
+  mock.timers.tick(60 * 60 * 1_000);
+  getTeamSkillsCached(root);
+  assert.deepEqual((await waitForTeamSkills(root)).map((s) => s.name), ['first-skill'], 'still fresh: no reload');
+
+  mock.timers.tick(5 * 60 * 60 * 1_000 + 1);
+  getTeamSkillsCached(root);
+  assert.deepEqual((await waitForTeamSkills(root)).map((s) => s.name), ['first-skill', 'second-skill']);
+  assert.deepEqual(getTeamSkillsCached(root).map((s) => s.name), ['first-skill', 'second-skill']);
 });
