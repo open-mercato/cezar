@@ -133,6 +133,7 @@ import type {
   TrackerItemResponse,
   TrackerItemsResponse,
   TrackerKind, TrackerCredentials, TrackerConnectionResponse,
+  CheckEnvNames,
 } from '@open-mercato/cezar-api-client'
 import { parseProviderStatusResponse } from '@/lib/provider-status'
 import {
@@ -859,6 +860,25 @@ export async function saveTrackerConnection(input: TrackerCredentials): Promise<
 export async function removeTrackerConnection(): Promise<TrackerClearedResponse> {
   return unwrap(await cez.api.v1.p[':projectId'].tracker.connection.$delete(
     { param: { projectId: queryScope() } }), '/tracker/connection')
+}
+
+// ---- project check credentials (names only; a value goes in once and never comes back) ----
+
+export async function getCheckEnvNames(opts?: ReadOptions): Promise<CheckEnvNames> {
+  return unwrap(await cez.api.v1.p[':projectId']['check-env'].$get(
+    { param: { projectId: queryScope() } }, init(opts)), '/check-env')
+}
+/** Both writes answer 204, which has no body for `unwrap` to parse — only the status matters. */
+async function expectNoContent(res: Response): Promise<void> {
+  if (!res.ok) throw errorFor(res.status, res.statusText, await res.text())
+}
+export async function saveCheckEnv(name: string, value: string): Promise<void> {
+  await expectNoContent(await cez.api.v1.p[':projectId']['check-env'][':name'].$put(
+    { param: { projectId: queryScope(), name }, json: { value } }))
+}
+export async function removeCheckEnv(name: string): Promise<void> {
+  await expectNoContent(await cez.api.v1.p[':projectId']['check-env'][':name'].$delete(
+    { param: { projectId: queryScope(), name } }))
 }
 
 export async function getTrackerAssociation(opts?: ReadOptions): Promise<TrackerAssociationResponse> {

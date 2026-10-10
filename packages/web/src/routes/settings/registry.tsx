@@ -11,6 +11,7 @@ import {
   KeyboardIcon,
   NotebookPenIcon,
   PaletteIcon,
+  KeyRoundIcon,
   TicketIcon,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
@@ -29,6 +30,7 @@ import { ResourcesSection } from './resources-section'
 import { SkillsSection } from './skills-section'
 import { WorktreesSection } from './worktrees-section'
 import { TrackerSection } from './tracker-section'
+import { CheckEnvSection } from './check-env-section'
 
 /**
  * The Settings section registry (R6 Step 1.3, spec §"Settings"): the ONE place a section is
@@ -60,6 +62,7 @@ export type SettingsSectionId =
   | 'keyboard'
   | 'skills'
   | 'tracker'
+  | 'check-env'
 
 /** Which settings area a section belongs to — and therefore which store it writes. */
 export type SettingsScope = 'project' | 'global'
@@ -100,6 +103,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Connect this project to Jira or Linear.',
     icon: TicketIcon,
     component: TrackerSection,
+    scope: 'project',
+  },
+  {
+    id: 'check-env',
+    title: 'Check credentials',
+    description: 'Secrets handed to this project’s check steps only.',
+    icon: KeyRoundIcon,
+    component: CheckEnvSection,
     scope: 'project',
   },
   {

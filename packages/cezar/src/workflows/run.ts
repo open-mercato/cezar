@@ -3,6 +3,8 @@ import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
+import { assertCezarHomeWriteIsSandboxed, cezarHomeDir } from '../paths.ts';
 import { basename, dirname, join } from 'node:path';
 import {
   parseAskMarker,
@@ -123,6 +125,10 @@ import { reviewGateEnabled } from '../runs/review-gate.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
 import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
 import { WorkspaceSemaphore, type AccountHolds } from '../workspace/semaphore.ts';
+import { CheckEnv } from '../workspace/check-env.ts';
+import { PROJECT_ID_RE } from '../workspace/config.ts';
+import { prunePrHeadRefs } from '../automations/pr-head.ts';
+import { MIN_SECRET_LEN } from '../core/secret-redaction.ts';
 import { UiEventSink } from '../runs/ui-event-sink.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import {
@@ -729,6 +735,14 @@ export interface StartRunInput {
    *  and make the task bubble render the stack's images as its own. In-memory
    *  only: rebuilt from the record on every hydration, never persisted. */
   stackedImages?: ContentBlock[];
+  /**
+   * Fork the worktree from this commit instead of the configured base (spec
+   * 2026-10-06-agentic-e2e-checks Phase 3) — a pull request's fetched head. Internal: only
+   * `checkout: 'pr-head'` automations set it; `POST /runs` has no such field. Recorded as the
+   * run's `baseBranch`, so diffs measure only what this run changed on top of the PR, and it
+   * forces a worktree — testing a PR in the user's own checkout would test the wrong tree.
+   */
+  forkRef?: { sha: string; label: string; pr: RunRecord['prHead'] & object; prUrl: string; untrusted: boolean };
 }
 
 /**
@@ -1139,6 +1153,9 @@ export class RunManager {
   private readonly projectId: string | undefined;
 
   /** See the constructor option of the same name. */
+  private readonly checkEnv: CheckEnv;
+
+  /** See the constructor option of the same name. */
   private readonly resolveTrackerEnv: ((root: string, expected: TrackerAssociation | undefined) => Promise<Record<string, string>>) | undefined;
 
   constructor(
@@ -1153,11 +1170,14 @@ export class RunManager {
        * reach an agent. Secrets are registered with RunStore before any output arrives.
        */
       resolveTrackerEnv?: (root: string, expected: TrackerAssociation | undefined) => Promise<Record<string, string>>;
+      /** The project's check credentials store (spec 2026-10-06-agentic-e2e-checks). */
+      checkEnv?: CheckEnv;
     } = {},
   ) {
     this.dataDir = join(repoRoot, '.ai/cezar');
     this.projectId = options.projectId;
     this.resolveTrackerEnv = options.resolveTrackerEnv;
+    this.checkEnv = options.checkEnv ?? new CheckEnv();
     this.semaphore = options.semaphore ?? new WorkspaceSemaphore();
     this.offSemaphore = this.semaphore.register({
       busySlots: () => this.busySlots(),
@@ -1368,6 +1388,8 @@ export class RunManager {
       // its commits, and an in-place run has no branch to fork. Overridden on the INPUT, which is
       // what `execute()` reads, not only on the record.
       ...(input.dispatchIntent && input.worktree === false ? { worktree: undefined } : {}),
+      // A pull-request head is verified in its own worktree, never in the user's checkout.
+      ...(input.forkRef && input.worktree === false ? { worktree: undefined } : {}),
     };
     const run = this.store.createRun({
       title: makeRunTitle(input.task, workflow) + (group ? ` (${group.variant})` : ''),
@@ -1389,7 +1411,7 @@ export class RunManager {
       autonomous: input.autonomous === true,
       // Persist the explicit opt-out so queued-run restart recovery and the
       // session Git routes can distinguish it from a removed isolated worktree.
-      worktree: !group && !input.dispatchIntent && input.worktree === false ? false : undefined,
+      worktree: !group && !input.dispatchIntent && !input.forkRef && input.worktree === false ? false : undefined,
       groupId: group?.groupId,
       variant: group?.variant,
       steps: workflow.graph
@@ -1399,6 +1421,18 @@ export class RunManager {
     // Persist the full definition so a queued run survives a restart (#367) —
     // ad-hoc "(planned)" chains exist nowhere else to re-resolve from.
     this.store.updateRun(run.id, { workflowDef: workflow });
+    // A pull-request head run (spec 2026-10-06-agentic-e2e-checks Phase 3): the fetched sha is
+    // recorded as the fork point BEFORE the run is queued, so `execute` — and a restart that
+    // revives the queued run — forks from it through the "recorded fork point wins" rule rather
+    // than re-resolving the configured base. The PR becomes the run's referenced pull request.
+    if (input.forkRef) {
+      this.store.updateRun(run.id, {
+        baseBranch: input.forkRef.sha,
+        prHead: input.forkRef.pr,
+        ...(input.forkRef.untrusted ? { untrustedHead: true } : {}),
+      });
+      this.store.recordPrRef(run.id, { number: input.forkRef.pr.number, url: input.forkRef.prUrl, origin: 'marker' });
+    }
     // The run's place in a dispatch tree (spec 2026-09-10-dispatch), written the way
     // automation provenance is (`automations/task-template.ts`): an update straight after create,
     // rather than a tenth key on `createRun`'s parameter object. Persisting it here — not merely
@@ -4790,14 +4824,17 @@ export class RunManager {
       } else {
         const rendered = nodeToStep(node);
         if (rendered.command) rendered.command = renderNodeRefs(rendered.command, outputs);
-        const { ok, output, exitCode } = await this.runCheckStep(state, rendered, emit);
+        const { ok, output, exitCode } = await this.runCheckStep(runId, state, rendered, emit);
         if (state.cancelled) return null;
         outputs.set(node.id, { exitCode, output });
         if (ok) {
           this.finishStep(runId, node.id, 'done', undefined, emit);
           port = 'pass';
         } else {
-          checkFailure = output;
+          // The output goes into the next agent prompt — to the agent's model provider — so it is
+          // scrubbed like an event is: host secrets, this run's registered secrets (project
+          // secrets included) and token patterns. Strictly narrowing, for every workflow.
+          checkFailure = this.store.redactRunText(runId, output);
           if (node.retryOn?.length && !node.retryOn.includes(exitCode)) {
             const codes = node.retryOn.join(', ');
             const error = `check "${node.id}" exited ${exitCode}, which onFail.retryOn (${codes}) does not retry`;
@@ -6785,16 +6822,115 @@ export class RunManager {
     }
   }
 
-  private runCheckStep(
+  /**
+   * The environment a check step runs with: the server's own, plus the project's check
+   * credentials (spec 2026-10-06-agentic-e2e-checks). Read fresh for every check execution, so
+   * an edit applies to the next check, never one mid-command. The values are registered as run
+   * secrets BEFORE the spawn, so the first byte of output is already scrubbed; values shorter
+   * than the host-secret floor are not, or a flag like `=1` would redact every `1` in the log.
+   */
+  private async checkStepEnv(
+    runId: string,
+    state: ActiveRun,
+    step: WorkflowStepDef,
+    emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void,
+  ): Promise<NodeJS.ProcessEnv> {
+    // A fork's head is untrusted code (Phase 3): like GitHub Actions withholding secrets from fork
+    // PRs, its checks get the server env only — the credentials are neither read nor handed over.
+    const untrusted = this.store.getRun(runId)?.untrustedHead === true;
+    const read = this.projectId && !untrusted
+      ? await this.checkEnv.read(this.projectId, this.repoRoot)
+      : { values: {} as Record<string, string> };
+    // A store that exists and was not used is the one case the user cannot diagnose on their
+    // own: the value is write-only, so `check-env list` and Settings show the same empty list
+    // whether nothing was stored or this run ignored it. Say which, once, on the step.
+    if (read.skipped) {
+      emit({ type: 'note', stepId: step.id, message: `check credentials skipped — ${read.skipped}` });
+    }
+    this.store.registerRunSecrets(
+      runId,
+      Object.values(read.values).filter((value) => value.length >= MIN_SECRET_LEN),
+    );
+    // The run context wins last (Phase 2). Its names are first removed from what the server
+    // inherited — a cezar started inside another cezar task carries that task's `CEZ_*` — so a
+    // variable this run does not set is absent, never a stale value from somewhere else. The
+    // login shell `runCheckStep` spawns sources the user's profile after this, so the guarantee
+    // is about the server's environment, not about a profile that exports one of these names.
+    const base: NodeJS.ProcessEnv = { ...process.env };
+    for (const name of CHECK_CONTEXT_VARS) {
+      // `CEZ_PROJECT_ID` is the one context name that is ALSO a documented CLI input
+      // (BACKWARD_COMPATIBILITY.md §1 — `cez task`/`cez automation` address a cockpit with it),
+      // so it is replaced, never stripped. A headless `cezar run` builds its manager without a
+      // projectId, and deleting the operator's value there would leave `CEZ_API_URL` in place
+      // while `cez task create` silently fell back to the cockpit's boot project.
+      if (name === 'CEZ_PROJECT_ID' && !this.projectId) continue;
+      delete base[name];
+    }
+    return { ...base, ...read.values, ...(await this.checkContextEnv(runId, state, step.id)) };
+  }
+
+  /**
+   * What a check step knows about the run it verifies (spec 2026-10-06-agentic-e2e-checks
+   * Phase 2). Cezar-set outputs, not knobs: every value is a string, and a value this run does
+   * not have is omitted rather than set empty, so `[ -n "$CEZ_GITHUB_NUMBER" ]` means what it
+   * says. `CEZ_SHARED_CACHE_DIR` is one directory per project, shared by its tasks, so a
+   * replay cache recorded in one worktree is warm in the next.
+   */
+  private async checkContextEnv(runId: string, state: ActiveRun, stepId: string): Promise<Record<string, string>> {
+    const run = this.store.getRun(runId);
+    const context: Record<string, string> = {
+      CEZ_RUN_ID: runId,
+      CEZ_WORKTREE: state.cwd,
+      CEZ_STEP_ID: stepId,
+      CEZ_ATTEMPT: String(run?.steps.find((step) => step.id === stepId)?.iterations ?? 1),
+    };
+    if (this.projectId) {
+      context.CEZ_PROJECT_ID = this.projectId;
+      const cache = await sharedCheckCacheDir(this.projectId);
+      if (cache) context.CEZ_SHARED_CACHE_DIR = cache;
+    }
+    if (run?.branch) context.CEZ_BRANCH = run.branch;
+    if (run?.baseBranch) context.CEZ_BASE = run.baseBranch;
+    const github = run?.automation ? parseGithubItemUrl(run.automation.githubUrl) : undefined;
+    if (github && run?.automation) {
+      context.CEZ_GITHUB_REPO = github.repo;
+      context.CEZ_GITHUB_NUMBER = String(github.number);
+      context.CEZ_GITHUB_EVENT = run.automation.event;
+    }
+    if (run?.prHead) {
+      context.CEZ_PR_HEAD_SHA = run.prHead.headSha;
+      context.CEZ_PR_HEAD_REF = run.prHead.headRef;
+      context.CEZ_PR_BASE_REF = run.prHead.baseRef;
+    }
+    return context;
+  }
+
+  /**
+   * Delete the `refs/cezar/pr/<n>` refs no run with a live worktree still needs (Phase 3).
+   * Called after every worktree-removal path; idempotent and never throws.
+   */
+  async sweepPrHeadRefs(): Promise<void> {
+    const needed = new Set<number>();
+    for (const run of this.store.listRuns()) {
+      if (run.prHead && run.worktreePath && existsSync(run.worktreePath)) needed.add(run.prHead.number);
+    }
+    await prunePrHeadRefs(this.repoRoot, needed).catch(() => undefined);
+  }
+
+  private async runCheckStep(
+    runId: string,
     state: ActiveRun,
     step: WorkflowStepDef,
     emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void,
   ): Promise<{ ok: boolean; output: string; exitCode: number }> {
     const command = step.command as string;
     emit({ type: 'note', stepId: step.id, message: `$ ${command}` });
+    const env = await this.checkStepEnv(runId, state, step, emit);
+    // A cancel that landed during the read had no child to interrupt; do not spawn one now.
+    if (state.cancelled) return { ok: false, output: 'cancelled', exitCode: -1 };
     return new Promise((resolve) => {
       // Check steps run in the same cwd as the agent steps — the worktree.
-      const child = spawn('bash', ['-lc', command], { cwd: state.cwd, env: process.env });
+      const child = spawn('bash', ['-lc', command], { cwd: state.cwd, env });
       state.interrupt = () => child.kill('SIGTERM');
 
       let output = '';
@@ -6839,6 +6975,58 @@ export class RunManager {
     });
     emit({ type: 'step-end', stepId, status, ...(error ? { error } : {}) });
     appendHandoffHeartbeat(this.dataDir, runId, `step "${stepId}" complete — status=${status}`);
+  }
+}
+
+/**
+ * Every variable a check step's run context may set (spec 2026-10-06-agentic-e2e-checks
+ * Phase 2) — also the list stripped from the inherited env, so an unset one is truly absent.
+ * Documented in `docs/reference.md` and `.env.example`; keep the three in step.
+ */
+export const CHECK_CONTEXT_VARS = [
+  'CEZ_RUN_ID',
+  'CEZ_PROJECT_ID',
+  'CEZ_WORKTREE',
+  'CEZ_BRANCH',
+  'CEZ_BASE',
+  'CEZ_STEP_ID',
+  'CEZ_ATTEMPT',
+  'CEZ_SHARED_CACHE_DIR',
+  'CEZ_GITHUB_REPO',
+  'CEZ_GITHUB_NUMBER',
+  'CEZ_GITHUB_EVENT',
+  'CEZ_PR_HEAD_SHA',
+  'CEZ_PR_HEAD_REF',
+  'CEZ_PR_BASE_REF',
+] as const;
+
+/** `https://github.com/<owner>/<repo>/(pull|issues)/<n>` → its repo and number. */
+export function parseGithubItemUrl(url: string): { repo: string; number: number } | undefined {
+  const match = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/(?:pull|issues)\/([1-9][0-9]*)(?:[/?#].*)?$/.exec(url);
+  return match ? { repo: match[1]!, number: Number(match[2]) } : undefined;
+}
+
+/**
+ * `~/.cezar/cache/<projectId>`, created `0700` on first use — the shared replay cache of a
+ * project's check steps. `undefined` when the home cannot hold it: the check then runs with a
+ * cold cache, exactly as before this variable existed. Nothing prunes it — `removeProject` is
+ * unregister-only — so `docs/e2e-verification.md` says how to reclaim the space.
+ *
+ * `projectId` is re-validated here even though every caller's id is already slug-shaped, for the
+ * same reason `workspace/check-env.ts` re-validates before building
+ * `~/.cezar/check-env/<projectId>.env`: this is where the value becomes a path, and a
+ * `recursive` mkdir is the wrong place to find out the guard moved upstream.
+ */
+async function sharedCheckCacheDir(projectId: string): Promise<string | undefined> {
+  if (!PROJECT_ID_RE.test(projectId)) return undefined;
+  try {
+    // Inside the `try` with the write: resolving the home is part of "the home cannot hold it".
+    const dir = join(cezarHomeDir(), 'cache', projectId);
+    assertCezarHomeWriteIsSandboxed(dir);
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    return dir;
+  } catch {
+    return undefined;
   }
 }
 

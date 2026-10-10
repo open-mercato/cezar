@@ -7,6 +7,7 @@ import type { RunManager, StartRunInput } from '../workflows/run.ts';
 import type { GithubCandidate } from './github-poller.ts';
 import type { ScheduleOccurrence } from './schedule-runner.ts';
 import type { TrackerAutomationCandidate } from './tracker-poller.ts';
+import { resolvePrHead, type CommandRunner } from './pr-head.ts';
 import type { AutomationDefinition, GithubAutomationDefinition, ScheduleAutomationDefinition, TrackerAutomationDefinition } from './types.ts';
 
 const GITHUB_PLACEHOLDERS = new Set([
@@ -161,10 +162,65 @@ export async function launchAutomationRun(options: {
   receiptId: string;
   /** `capabilities.dispatch` — off, the automation's dispatch setting is ignored, never refused. */
   dispatchEnabled?: boolean;
+  /** Test seam for the `gh`/`git` calls a `checkout: 'pr-head'` launch makes. */
+  runCommand?: CommandRunner;
 }): Promise<{ runId: string }> {
   const { definition, candidate } = options;
   const workflow = await resolveWorkflow(options.root, definition);
   const input = startInput(definition, renderAutomationTask(definition, candidate), options.dispatchEnabled ?? false);
+  // `checkout: 'pr-head'` (spec 2026-10-06-agentic-e2e-checks Phase 3): resolve the PR's head
+  // BEFORE any run exists. A closed PR, an unadmitted fork or an unreachable head ends here, as
+  // a receipt — never as a run that tests the wrong tree.
+  if (definition.task.checkout === 'pr-head') {
+    const resolution = await resolvePrHead({
+      root: options.root,
+      repo: candidate.repo,
+      number: candidate.number,
+      allowForkHeads: definition.task.allowForkHeads === true,
+      run: options.runCommand,
+    });
+    if (resolution.kind === 'skipped') throw new AutomationLaunchOutcome('skipped', resolution.reason);
+    if (resolution.kind === 'failed') throw new AutomationLaunchOutcome('failed', resolution.reason);
+    const { head } = resolution;
+    input.forkRef = {
+      sha: head.headSha,
+      label: `pr/${head.number}`,
+      pr: {
+        number: head.number, repo: head.repo, headRepo: head.headRepo, headRef: head.headRef,
+        headSha: head.headSha, baseRef: head.baseRef, ref: head.ref,
+      },
+      prUrl: head.url,
+      untrusted: head.untrusted,
+    };
+    const launched = await launchRuns(options, workflow, input);
+    if (resolution.note) {
+      for (const runId of launched.runIds) options.store.appendEvent(runId, { type: 'note', message: resolution.note });
+    }
+    return { runId: launched.runId };
+  }
+  return { runId: (await launchRuns(options, workflow, input)).runId };
+}
+
+/**
+ * A launch that ended without a run, on purpose (`skipped`) or because the pull request's head
+ * could not be reached (`failed`). `launchEventCandidate` turns it into a receipt and a log row
+ * rather than a poll-cycle error, so one closed PR never backs off the whole automation.
+ */
+export class AutomationLaunchOutcome extends Error {
+  constructor(
+    readonly result: 'skipped' | 'failed',
+    readonly reason: string,
+  ) {
+    super(reason);
+  }
+}
+
+async function launchRuns(
+  options: { manager: RunManager; store: RunStore; definition: GithubAutomationDefinition; candidate: GithubCandidate; receiptId: string },
+  workflow: WorkflowDef,
+  input: StartRunInput,
+): Promise<{ runId: string; runIds: string[] }> {
+  const { definition, candidate } = options;
   const runs = (definition.task.variants ?? 1) > 1
     ? options.manager.startVariants(workflow, input, definition.task.variants ?? 1)
     : [options.manager.startRun(workflow, input)];
@@ -180,7 +236,7 @@ export async function launchAutomationRun(options: {
   if (!first) throw new Error('run manager did not create a run');
   // Receipt/checkpoint acknowledgement must follow durable run provenance, not its debounce.
   options.store.flush({ throwOnError: true });
-  return { runId: first.id };
+  return { runId: first.id, runIds: runs.map((run) => run.id) };
 }
 
 /** A scheduled automation's launch (spec 2026-09-14): the same ordinary run, `automationTrigger` provenance. */

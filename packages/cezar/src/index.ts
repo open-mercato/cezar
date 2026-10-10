@@ -44,6 +44,7 @@ import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
 
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
+import { runCheckEnvCommand } from './workspace/check-env-cli.ts';
 
 const HELP = `cezar — local cockpit for AI agent tasks in your repo
 
@@ -56,6 +57,8 @@ Usage:
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)
   cezar tracker-connections <list|remove ID>  inspect or delete local project credentials
+  cezar check-env <list|set NAME|unset NAME>  credentials for this project's check steps
+                            (set reads the value from stdin; agents never receive them)
   cezar server-install      interactive wizard to host cezar on a server
   cezar server-deploy       redeploy a new version (reload the service) + verify
   cezar server-uninstall    reverse a server-install
@@ -101,6 +104,11 @@ workflows in .ai/cezar/workflows/.`;
 async function main(): Promise<void> {
   if (process.argv[2] === 'tracker-connections') {
     process.exitCode = await runTrackerConnectionsCommand(process.argv.slice(3));
+    return;
+  }
+  // Local-only, like tracker-connections: `set` reads its value from stdin, never argv.
+  if (process.argv[2] === 'check-env') {
+    process.exitCode = await runCheckEnvCommand(process.argv.slice(3));
     return;
   }
   // `cez task …` (spec 2026-09-10-dispatch) has its own flags, so it is routed before the

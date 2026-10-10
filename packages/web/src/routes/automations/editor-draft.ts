@@ -69,6 +69,11 @@ export interface EditorDraft {
   maxSubtasks: number
   reviewChild: boolean
   enabled: boolean
+  /** `task.checkout`/`task.allowForkHeads` (spec 2026-10-06-agentic-e2e-checks Phase 3). The editor
+   *  has no control for them yet; they are carried so saving a PR-head verifier from the cockpit
+   *  never silently turns it back into a base-branch one. */
+  checkout?: 'base' | 'pr-head'
+  allowForkHeads?: boolean
 }
 
 /** The seven events the poller reconstructs (Q6: nothing else is offered). */
@@ -192,6 +197,8 @@ export function fromDefinition(definition: AutomationDefinition): EditorDraft {
     maxSubtasks: task.dispatch?.maxSubtasks ?? base.maxSubtasks,
     reviewChild: task.dispatch?.reviewChild ?? base.reviewChild,
     enabled: definition.enabled,
+    ...(task.checkout !== undefined ? { checkout: task.checkout } : {}),
+    ...(task.allowForkHeads !== undefined ? { allowForkHeads: task.allowForkHeads } : {}),
   }
 }
 
@@ -304,7 +311,11 @@ export function toBody(draft: EditorDraft): AutomationBody {
       lookbackDays: clamp(f.lookbackDays, 1, 90),
       maxRecords: clamp(f.maxRecords, 1, 100),
     },
-    task,
+    task: {
+      ...task,
+      ...(draft.checkout !== undefined ? { checkout: draft.checkout } : {}),
+      ...(draft.allowForkHeads !== undefined ? { allowForkHeads: draft.allowForkHeads } : {}),
+    },
   }
 }
 

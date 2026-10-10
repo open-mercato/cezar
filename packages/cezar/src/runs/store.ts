@@ -273,6 +273,27 @@ export const runRecordSchema = z.object({
    */
   awaitingAnswerSince: z.string().datetime().optional().catch(undefined),
   /**
+   * A run a `checkout: 'pr-head'` automation launched on a pull request's head (spec
+   * 2026-10-06-agentic-e2e-checks Phase 3). `headSha` is what was fetched and tested — also the
+   * run's `baseBranch` — and `ref` the namespaced `refs/cezar/pr/<n>` holding it. Its presence
+   * is what refuses `POST /runs/:id/pr`: the branch would contain the whole foreign PR.
+   */
+  prHead: z
+    .object({
+      number: z.number().int().positive(),
+      repo: z.string(),
+      headRepo: z.string(),
+      headRef: z.string(),
+      headSha: z.string(),
+      baseRef: z.string(),
+      ref: z.string(),
+    })
+    .optional()
+    .catch(undefined),
+  /** The PR head came from a fork the automation admitted (`allowForkHeads`): untrusted code, so
+   *  its check steps never receive the project's check credentials. */
+  untrustedHead: z.boolean().optional().catch(undefined),
+  /**
    * Exact deadline at which a run stopped by a provider USAGE LIMIT resumes itself
    * (spec 2026-08-03-auto-resume-after-usage-limit) — the reset instant the provider named plus a
    * short grace. Present only while such a resume is pending: the run is `failed`, the timer is
