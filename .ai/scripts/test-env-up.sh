@@ -2,6 +2,8 @@
 # om-prepare-test-env: generated entrypoint (contract v2)
 # regenerate with: om-prepare-test-env --regenerate
 # history:
+#   2026-10-10 use Node detached spawn when setsid is unavailable (macOS), so
+#             the QA server survives process-group cleanup after the bootstrap shell exits.
 #   2026-07-14 generated (cold ~40s, warm ~2s) — cezar has no backing services, so
 #             the service-provisioning step of the contract is deliberately absent.
 #   2026-07-21 detach the app with nohup so non-interactive bootstrap shells do not
@@ -361,11 +363,25 @@ start_app() {
   if command -v setsid >/dev/null 2>&1; then
     (cd "$REPO_ROOT" && exec setsid nohup node packages/cezar/dist/index.js --port "$PORT" --no-open --repo "$REPO_ROOT" \
       >"$APP_LOG" 2>&1 </dev/null) &
+    APP_PID=$!
   else
-    (cd "$REPO_ROOT" && exec nohup node packages/cezar/dist/index.js --port "$PORT" --no-open --repo "$REPO_ROOT" \
-      >"$APP_LOG" 2>&1 </dev/null) &
+    # Node provides detached process-session creation on POSIX even where the
+    # standalone setsid utility is absent. nohup alone retains the caller's
+    # process group and is reaped by non-interactive tool runners at shell exit.
+    APP_PID=$(node --input-type=module - "$REPO_ROOT" "$PORT" "$APP_LOG" <<'NODE'
+import { spawn } from 'node:child_process';
+import { openSync, closeSync } from 'node:fs';
+const [root, port, logPath] = process.argv.slice(2);
+const log = openSync(logPath, 'w');
+const child = spawn(process.execPath, ['packages/cezar/dist/index.js', '--port', port, '--no-open', '--repo', root], {
+  cwd: root, detached: true, stdio: ['ignore', log, log],
+});
+child.once('error', error => { console.error(error.message); process.exitCode = 1; });
+child.once('spawn', () => { console.log(child.pid); child.unref(); });
+closeSync(log);
+NODE
+    )
   fi
-  APP_PID=$!
 
   waited=0
   while [ "$waited" -lt "$HEALTH_TIMEOUT" ]; do
