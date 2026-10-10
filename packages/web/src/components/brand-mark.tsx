@@ -51,21 +51,23 @@ export function BrandMark({ height = BRAND_LOCKUP.mark, className }: { height?: 
 }
 
 /** The mark beside the name, at the navigation sizes. */
-export function BrandLockup({ className }: { className?: string }) {
+export function BrandLockup({ className, name = 'cezar', logoUrl = null }: { className?: string; name?: string; logoUrl?: string | null }) {
   return (
     <span
       data-slot="brand-lockup"
       className={cn('flex min-w-0 items-center text-foreground', className)}
       style={{ gap: BRAND_LOCKUP.gap }}
     >
-      <BrandMark />
+      {logoUrl ? <img data-slot="brand-logo" src={logoUrl} alt="" className="size-[26px] shrink-0 object-contain" /> : <BrandMark />}
       <span
         data-slot="brand-name"
-        className="leading-none font-semibold tracking-normal lowercase"
+        className={cn('max-w-full truncate leading-none font-semibold tracking-normal', name === 'cezar' && 'lowercase')}
         style={{ fontFamily: 'var(--brand)', fontSize: BRAND_LOCKUP.name }}
       >
-        cezar
+        {name}
       </span>
     </span>
   )
 }
+
+/** Runtime brand settings are workspace-global and cached by the shared config query. */

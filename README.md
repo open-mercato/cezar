@@ -203,6 +203,7 @@ The [reference](docs/reference.md) covers everything else:
 [environment variables](docs/reference.md#how-it-runs-agents),
 [agent backends](docs/reference.md#coding-agent-backends),
 [multiple projects](docs/reference.md#multiple-projects-one-cockpit),
+[the CLI and HTTP API](docs/reference.md#talking-to-a-running-cockpit),
 [remote access](docs/reference.md#remote-access-host-cezar-on-a-server) and
 [local development](docs/reference.md#local-development).
 

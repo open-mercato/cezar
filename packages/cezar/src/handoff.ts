@@ -23,6 +23,106 @@ export interface HandoffSeed {
   worktreePath?: string;
 }
 
+/** Maximum number of engine heartbeat entries retained in a Progress log. */
+export const MAX_HANDOFF_HEARTBEATS = 100;
+
+interface ParsedHeartbeat {
+  raw: string;
+  timestamp: string;
+  note: string;
+  count: number;
+  coalesced: boolean;
+}
+
+const HEARTBEAT_RE = /^(?:- )?(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{3})?)?Z) — ((?:turn complete|step "|picked from).*)$/;
+const COUNT_SUFFIX_RE = / \(×(\d+)\)$/;
+
+function parseHeartbeat(line: string): ParsedHeartbeat | undefined {
+  const match = HEARTBEAT_RE.exec(line);
+  if (!match) return undefined;
+  const timestamp = match[1];
+  const rawNote = match[2];
+  if (!timestamp || !rawNote) return undefined;
+  const timestampParts = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{3})?)?Z$/.exec(
+    timestamp,
+  );
+  if (!timestampParts) return undefined;
+  const parsedDate = new Date(timestamp);
+  if (
+    !Number.isFinite(parsedDate.getTime()) ||
+    parsedDate.getUTCFullYear() !== Number(timestampParts[1]) ||
+    parsedDate.getUTCMonth() + 1 !== Number(timestampParts[2]) ||
+    parsedDate.getUTCDate() !== Number(timestampParts[3]) ||
+    parsedDate.getUTCHours() !== Number(timestampParts[4]) ||
+    parsedDate.getUTCMinutes() !== Number(timestampParts[5]) ||
+    parsedDate.getUTCSeconds() !== Number(timestampParts[6] ?? 0)
+  ) {
+    return undefined;
+  }
+  const countMatch = COUNT_SUFFIX_RE.exec(rawNote);
+  const count = countMatch ? Number(countMatch[1]) : 1;
+  if (!Number.isSafeInteger(count) || count < 1) return undefined;
+  return {
+    raw: line,
+    timestamp,
+    note: countMatch ? rawNote.slice(0, countMatch.index) : rawNote,
+    count,
+    coalesced: false,
+  };
+}
+
+function formatHeartbeat(heartbeat: ParsedHeartbeat): string {
+  return `- ${heartbeat.timestamp} — ${heartbeat.note}${heartbeat.count > 1 ? ` (×${heartbeat.count})` : ''}`;
+}
+
+function boundProgressLog(text: string): string {
+  const marker = '## Progress log\n';
+  const markerIndex = text.indexOf(marker);
+  if (markerIndex < 0) return text;
+
+  const sectionStart = markerIndex + marker.length;
+  const remainder = text.slice(sectionStart);
+  const boundaryOffset = remainder.search(/^## /m);
+  const sectionEnd = boundaryOffset < 0 ? text.length : sectionStart + boundaryOffset;
+  const lines = text.slice(sectionStart, sectionEnd).split('\n');
+  const coalesced: Array<string | ParsedHeartbeat> = [];
+  let previousHeartbeat: ParsedHeartbeat | undefined;
+
+  for (const line of lines) {
+    const heartbeat = parseHeartbeat(line);
+    if (!heartbeat) {
+      coalesced.push(line);
+      previousHeartbeat = undefined;
+      continue;
+    }
+    if (
+      previousHeartbeat &&
+      previousHeartbeat.note === heartbeat.note &&
+      previousHeartbeat.count <= Number.MAX_SAFE_INTEGER - heartbeat.count
+    ) {
+      previousHeartbeat.count += heartbeat.count;
+      previousHeartbeat.coalesced = true;
+      coalesced[coalesced.length - 1] = previousHeartbeat;
+    } else {
+      coalesced.push(heartbeat);
+      previousHeartbeat = heartbeat;
+    }
+  }
+
+  const eligible = coalesced.reduce<number[]>((indices, entry, index) => {
+    if (typeof entry !== 'string') indices.push(index);
+    return indices;
+  }, []);
+  const overflow = new Set(eligible.slice(MAX_HANDOFF_HEARTBEATS));
+  const bounded = coalesced
+    .filter((_, index) => !overflow.has(index))
+    .map((entry) =>
+      typeof entry === 'string' ? entry : entry.coalesced ? formatHeartbeat(entry) : entry.raw,
+    )
+    .join('\n');
+  return `${text.slice(0, sectionStart)}${bounded}${text.slice(sectionEnd)}`;
+}
+
 /** Create the handoff skeleton. Idempotent — an existing file (resume,
  *  continuation) is never overwritten. Returns the file path. */
 export function seedHandoffFile(dataDir: string, run: HandoffSeed): string {
@@ -68,7 +168,7 @@ export function appendHandoffHeartbeat(dataDir: string, runId: string, note: str
       ? `${text.slice(0, idx + marker.length)}\n${line}${text.slice(idx + marker.length).replace(/^\n+/, '')}`
       : `${text}${text.endsWith('\n') || text === '' ? '' : '\n'}${line}`;
   try {
-    writeFileSync(file, next, 'utf8');
+    writeFileSync(file, boundProgressLog(next), 'utf8');
   } catch {
     // best effort
   }

@@ -43,6 +43,23 @@ async function renderDiff(ui: React.ReactElement, settleText = 'src/a.ts') {
 }
 
 describe('Diff facade', () => {
+  // Rows scroll UNDER a stuck file header, so it must hide them completely. A rounded header
+  // showed rows through its corners once stuck mid-card, a 50%-alpha divider let text show
+  // through, and in WKWebView (the desktop app) a sub-pixel seam above it showed one row of text
+  // that the 1px card-coloured shadow covers. The seam itself is WebKit-only and does not occur
+  // in a test browser, so these classes are the regression guard.
+  it('keeps the sticky file header fully opaque over the rows scrolling beneath it', async () => {
+    await renderDiff(<Diff files={[MODIFIED]} />)
+
+    const header = document.querySelector('[data-slot="diff-file"] > header') as HTMLElement
+    expect(header.className).toContain('sticky')
+    expect(header.className).toContain('bg-card')
+    expect(header.className).not.toMatch(/\brounded/)
+    expect(header.className).not.toContain('border-border/50')
+    expect(header.className).toContain('border-[color-mix(in_oklab,var(--border)_50%,var(--card))]')
+    expect(header.className).toContain('shadow-[0_-1px_0_var(--card)]')
+  })
+
   it('renders every file with its path, per-file ± and status badge', async () => {
     await renderDiff(<Diff files={[MODIFIED, ADDED]} />)
 
@@ -273,5 +290,93 @@ describe('Diff facade — an SVG is text, not a picture (#365 regression)', () =
     expect(document.querySelector('[data-slot="diff-image-preview"]')).toBeNull()
     expect(screen.queryByText('Binary file — no text diff.')).toBeNull()
     expect(document.querySelector('pre')?.textContent).toContain('M2 2h12v12H2z')
+  })
+
+  describe('Markdown preview', () => {
+    const EDITED_MD: DiffFileChange = {
+      path: 'docs/guide.md',
+      status: 'modified',
+      adds: 1,
+      dels: 1,
+      patch: ['diff --git a/docs/guide.md b/docs/guide.md', '@@ -1,2 +1,2 @@', ' # Guide', '-old line', '+**new** line', ''].join(
+        '\n',
+      ),
+    }
+
+    it('renders an added Markdown file as a document from its patch', async () => {
+      await renderDiff(<Diff files={[MODIFIED, ADDED]} preview />)
+
+      const preview = await waitFor(() => {
+        const element = document.querySelector('[data-slot="diff-markdown-preview"]')
+        expect(element).not.toBeNull()
+        return element!
+      })
+      expect(preview.querySelector('h1')?.textContent).toBe('Title')
+      // Reading scale, not the chat's compact one.
+      expect(preview.querySelector('.thread-markdown.markdown-document')).not.toBeNull()
+      expect(preview.textContent).not.toContain('Showing the changed sections only')
+      // Non-Markdown files keep their rows.
+      expect(document.querySelector('[data-slot="diff-file-body"]')).not.toBeNull()
+    })
+
+    it('renders the full worktree text when a loader is wired', async () => {
+      const loadFileText = vi.fn().mockResolvedValue('# Guide\n\nWhole **document**')
+      await renderDiff(<Diff files={[EDITED_MD]} preview loadFileText={loadFileText} />, 'docs/guide.md')
+
+      await waitFor(() => expect(document.querySelector('[data-slot="diff-markdown-preview"] [data-streamdown="strong"]')?.textContent).toBe('document'))
+      expect(loadFileText).toHaveBeenCalledWith('docs/guide.md')
+    })
+
+    it('says so when only the changed sections are available', async () => {
+      await renderDiff(<Diff files={[EDITED_MD]} preview />, 'docs/guide.md')
+
+      await screen.findByText('Showing the changed sections only.')
+      expect(document.querySelector('[data-slot="diff-markdown-preview"]')?.textContent).not.toContain('old line')
+    })
+
+    it('keeps the last text up while a changed file reloads', async () => {
+      let resolveSecond: (text: string) => void = () => {}
+      const loadFileText = vi
+        .fn()
+        .mockResolvedValueOnce('# First')
+        .mockReturnValueOnce(new Promise<string>((resolve) => (resolveSecond = resolve)))
+      const { rerender } = await renderDiff(<Diff files={[EDITED_MD]} preview loadFileText={loadFileText} />, 'docs/guide.md')
+      await waitFor(() => expect(document.querySelector('[data-slot="diff-markdown-preview"] h1')?.textContent).toBe('First'))
+
+      // The poll saw another write: a new patch for the same path.
+      rerender(<Diff files={[{ ...EDITED_MD, patch: `${EDITED_MD.patch}+more\n` }]} preview loadFileText={loadFileText} />)
+      await waitFor(() => expect(loadFileText).toHaveBeenCalledTimes(2))
+      expect(screen.queryByText('Loading preview…')).toBeNull()
+      expect(document.querySelector('[data-slot="diff-markdown-preview"] h1')?.textContent).toBe('First')
+
+      resolveSecond('# Second')
+      await waitFor(() => expect(document.querySelector('[data-slot="diff-markdown-preview"] h1')?.textContent).toBe('Second'))
+    })
+
+    it('loads relative images through imageSrc, resolved against the file', async () => {
+      const loadFileText = vi.fn().mockResolvedValue('![logo](../assets/logo.png)')
+      const imageSrc = (path: string) => `/raw?path=${path}`
+      await renderDiff(<Diff files={[EDITED_MD]} preview loadFileText={loadFileText} imageSrc={imageSrc} />, 'docs/guide.md')
+
+      await waitFor(() =>
+        expect(document.querySelector('[data-slot="diff-markdown-preview"] img')?.getAttribute('src')).toBe('/raw?path=assets/logo.png'),
+      )
+    })
+
+    it('never renders a javascript: link from a previewed file', async () => {
+      const loadFileText = vi.fn().mockResolvedValue('[click](javascript:void(0)) and [docs](https://example.com)')
+      await renderDiff(<Diff files={[EDITED_MD]} preview loadFileText={loadFileText} />, 'docs/guide.md')
+
+      await waitFor(() => expect(document.querySelector('[data-slot="diff-markdown-preview"]')?.textContent).toContain('docs'))
+      const hrefs = [...document.querySelectorAll('[data-slot="diff-markdown-preview"] [href]')].map((a) => a.getAttribute('href'))
+      expect(hrefs.some((href) => href?.startsWith('javascript:'))).toBe(false)
+    })
+
+    it('leaves Markdown as a diff when preview is off', async () => {
+      await renderDiff(<Diff files={[EDITED_MD]} />, 'docs/guide.md')
+
+      expect(document.querySelector('[data-slot="diff-markdown-preview"]')).toBeNull()
+      expect(document.querySelector('[data-slot="diff-file-body"]')).not.toBeNull()
+    })
   })
 })

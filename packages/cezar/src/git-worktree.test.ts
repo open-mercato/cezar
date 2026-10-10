@@ -102,6 +102,29 @@ describe('worktreeSizeBytes (#483)', () => {
 });
 
 describe('createWorktree recovery (real git)', () => {
+  it('creates from a remote base while the shared config is locked (#1301)', async () => {
+    const repo = await fixtureRepo('cez-worktree-config-lock-');
+    const runId = '44444444-4444-4444-8444-444444444444';
+    const head = (await run('git', ['rev-parse', 'HEAD'], { cwd: repo })).stdout.trim();
+    await run('git', ['remote', 'add', 'origin', repo], { cwd: repo });
+    await run('git', ['update-ref', 'refs/remotes/origin/main', head], { cwd: repo });
+    const configLock = join(repo, '.git', 'config.lock');
+    writeFileSync(configLock, 'held by another concurrent task\n');
+
+    try {
+      const created = await createWorktree(repo, runId, 'origin/main');
+      expect(created.branch).toBe(branchFor(runId));
+      expect((await run('git', ['rev-parse', 'HEAD'], { cwd: created.path })).stdout.trim()).toBe(head);
+
+      // The task branch must not depend on repository-wide upstream metadata.
+      await expect(run('git', ['config', '--get', `branch.${created.branch}.remote`], { cwd: repo })).rejects.toMatchObject({
+        code: 1,
+      });
+    } finally {
+      rmSync(configLock, { force: true });
+    }
+  });
+
   it('is idempotent when the task worktree is already registered', async () => {
     const repo = await fixtureRepo('cez-worktree-idempotent-');
     const runId = '11111111-1111-4111-8111-111111111111';

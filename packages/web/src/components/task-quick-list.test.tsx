@@ -70,9 +70,17 @@ const row = (id: string) => document.querySelector(`[data-run-id="${id}"]`)
 const dotOf = (id: string) => document.querySelector(`[data-run-id="${id}"] [data-slot="status-dot"]`)
 
 /** The rendered text of each row under one bucket header, in order. */
+/** What an element PAINTS — screen-reader-only text (the unread marker) is not painted. */
+const paintedText = (el: Element | null | undefined): string | undefined => {
+  if (!el) return undefined
+  const painted = el.cloneNode(true) as Element
+  painted.querySelectorAll('.sr-only').forEach((hidden) => hidden.remove())
+  return painted.textContent ?? ''
+}
+
 const rowsIn = (label: string): string[] =>
   [...bucket(label).querySelectorAll('[data-slot="task-row"], [data-slot="group-tile"]')].map((el) =>
-    (el.textContent ?? '').trim()
+    (paintedText(el) ?? '').trim()
   )
 
 afterEach(cleanup)
@@ -333,8 +341,8 @@ describe('TaskQuickList', () => {
     })
 
     it('gives the title a floor and makes the diff pair the element that drops', () => {
-      // The worst case from the issue: a title competing with a 5-digit diff pair, a PR chip and
-      // the unread dot all at once. The title must still be the growing element with a floor,
+      // The worst case from the issue: a title competing with a 5-digit diff pair and a PR chip
+      // at once (the unread dot it once also competed with is retired). The title must still be the growing element with a floor,
       // and the diff pair must be the one carrying the container query that drops it.
       renderList({
         runs: [
@@ -363,8 +371,8 @@ describe('TaskQuickList', () => {
       // Dropped from view, never from reach — the exact numbers stay in its tooltip.
       expect(diff.getAttribute('title')).toBe('+59514 −12160 across 208 files')
 
-      // Everything the row paints, in reading order: reference, name, diff, unread marker. No
-      // age — the reference took that slot.
+      // Everything the row paints, in reading order: reference, name, diff. No age — the
+      // reference took that slot. Unread is the title's weight, so it paints no text either.
       expect(rowsIn('Recent')).toEqual(['#775implementing comment threads across the whole thread view+59514 −12160'])
     })
 
@@ -394,8 +402,8 @@ describe('TaskQuickList', () => {
           run({ id: 'new', title: 'New', status: 'running', createdAt: ago(4 * 60_000) }),
         ],
       })
-      expect(row('old')?.textContent).toBe('Old2h')
-      expect(row('new')?.textContent).toBe('New4m')
+      expect(paintedText(row('old'))).toBe('Old2h')
+      expect(paintedText(row('new'))).toBe('New4m')
     })
 
     it('shows the queue position instead of an age for queued runs', () => {
@@ -439,7 +447,7 @@ describe('TaskQuickList', () => {
           }),
         ],
       })
-      expect(row('aged')?.textContent).toBe('#9Finished with a PR')
+      expect(paintedText(row('aged'))).toBe('#9Finished with a PR')
     })
   })
 
@@ -800,7 +808,7 @@ describe('dispatched subtasks in the quick-list', () => {
   })
 
   // The kind chip tells a dispatched row from a typed one at a glance, and it is the one piece
-  // of metadata the sidebar keeps at every width. Never on the root.
+  // of metadata the sidebar keeps at every width (it only yields to the hover pin). Never on the root.
   it('labels a child with its kind, an absent kind as implement, and a root with nothing', () => {
     renderList({
       runs: [
@@ -813,5 +821,90 @@ describe('dispatched subtasks in the quick-list', () => {
     expect(kindOf('rev')).toBe('review')
     expect(kindOf('imp')).toBe('implement')
     expect(kindOf('p')).toBeNull()
+  })
+
+  // A nested row at the 264px minimum had no room for indent + title floor + kind + age, and the
+  // hover pin pushed the row past the column. The kind yields its slot to the pin while the pin
+  // shows, and a child's age is droppable metadata below 19rem.
+  it('swaps the kind chip for the pin on hover and drops a child age in a narrow column', () => {
+    renderList({
+      runs: [
+        run({ id: 'p', status: 'done' }),
+        run({ id: 'rev', status: 'done', dispatch: { rootRunId: 'p', parentRunId: 'p', kind: 'review' } }),
+      ],
+      onTogglePin: vi.fn(),
+    })
+    const kind = row('rev')?.querySelector('[data-slot="dispatch-kind"]') as HTMLElement
+    expect(kind.className).toContain('group-hover/task-row:hidden')
+    expect(kind.className).toContain('group-focus-within/task-row:hidden')
+    expect(kind.className).toContain('no-hover:hidden')
+
+    const childAge = row('rev')?.querySelector('[data-slot="task-row-age"]') as HTMLElement
+    expect(childAge.className).toContain('hidden')
+    expect(childAge.className).toContain('@min-[19rem]/sidebar:inline')
+    // A root row keeps its age at every width.
+    const rootAge = row('p')?.querySelector('[data-slot="task-row-age"]') as HTMLElement
+    expect(rootAge.className).not.toContain('hidden')
+  })
+
+  // Violet is the status dot's colour for running / needs review, so a trailing violet dot that
+  // meant "unread" read as the same signal. Unread is the title's weight, plus a word for AT.
+  it('marks an unread row by weight and a screen-reader word, with no trailing dot', () => {
+    renderList({ runs: [run({ id: 'u', status: 'done', finishedAt: '2026-07-14T09:00:00Z' })] })
+    const rowEl = row('u') as HTMLElement
+    const marker = rowEl.querySelector('[data-slot="unread-marker"]') as HTMLElement
+    expect(marker.className).toContain('sr-only')
+    expect(marker.closest('a')).not.toBeNull()
+    expect(rowEl.querySelector('[data-slot="task-row-title"]')?.className).toContain('font-semibold')
+    // Only the leading status dot remains.
+    expect(rowEl.querySelectorAll('[data-slot="status-dot"]')).toHaveLength(1)
+  })
+
+  // A child filed in another bucket than its parent is a TOP-LEVEL row: no indent to pay for and
+  // no parent above it to date it, so it keeps its age at every width.
+  it('keeps the age on a dispatched row that is not nested', () => {
+    renderList({
+      runs: [
+        run({ id: 'p', status: 'running' }),
+        run({ id: 'c', status: 'done', dispatch: { rootRunId: 'p', parentRunId: 'p', kind: 'review' } }),
+      ],
+      onTogglePin: vi.fn(),
+    })
+    expect(row('c')?.getAttribute('data-depth')).toBe('0')
+    const age = row('c')?.querySelector('[data-slot="task-row-age"]') as HTMLElement
+    expect(age.className).not.toContain('hidden')
+    // Still a dispatched row, so the kind chip is there to tell it apart.
+    expect(row('c')?.querySelector('[data-slot="dispatch-kind"]')?.textContent).toBe('review')
+  })
+
+  // A pinned row's pin is permanent, not hover-revealed, so the kind chip yields for good there —
+  // otherwise both sit on the row at rest and a nested row overflows the 264px column.
+  it('hides the kind chip outright on a pinned child, where the pin never goes away', () => {
+    renderList({
+      runs: [
+        run({ id: 'p', status: 'done' }),
+        run({
+          id: 'rev',
+          status: 'done',
+          pinned: true,
+          dispatch: { rootRunId: 'p', parentRunId: 'p', kind: 'review' },
+        }),
+      ],
+      onTogglePin: vi.fn(),
+    })
+    const kind = row('rev')?.querySelector('[data-slot="dispatch-kind"]') as HTMLElement
+    expect(kind.className.split(' ')).toContain('hidden')
+    expect(row('rev')?.querySelector('[data-slot="pin-toggle"]')?.getAttribute('data-pinned')).toBe('true')
+  })
+
+  it('keeps the kind chip unconditionally when the row has no pin to swap in', () => {
+    renderList({
+      runs: [
+        run({ id: 'p', status: 'done' }),
+        run({ id: 'rev', status: 'done', dispatch: { rootRunId: 'p', parentRunId: 'p', kind: 'review' } }),
+      ],
+    })
+    const kind = row('rev')?.querySelector('[data-slot="dispatch-kind"]') as HTMLElement
+    expect(kind.className).not.toContain('hidden')
   })
 })

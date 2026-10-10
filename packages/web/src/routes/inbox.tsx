@@ -96,7 +96,7 @@ export function InboxRoute() {
             icon={<InboxIcon />}
             tone="neutral"
             title="The follow-up inbox is off"
-            subtitle="Agents are not asked to leave follow-ups. Set CEZ_FOLLOWUPS=1 and restart cezar to turn the inbox on."
+            subtitle="Agents are not asked to leave follow-ups. Set CEZ_FOLLOWUPS=1 and restart the service to turn the inbox on."
             heading="h2"
           />
         ) : todos === undefined ? (

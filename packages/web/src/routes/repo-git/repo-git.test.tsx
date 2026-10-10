@@ -5,7 +5,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import { queryKeys } from '@/api/queries'
-import type { ChangesPayload, GithubData, HealthResponse, RepoCommitPayload, RepoResponse } from '@open-mercato/cezar-api-client'
+import type {
+  ChangesPayload,
+  GithubData,
+  HealthResponse,
+  RepoCommitPayload,
+  RepoResponse,
+  RepoTree,
+  WorktreeEntry,
+} from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 
 import { RepoGitRoute } from './repo-git'
@@ -64,6 +72,19 @@ const CHANGES: ChangesPayload = {
   stat: { adds: 5, dels: 1, files: 2 },
 }
 
+/** The repository path index behind the Files sub-tab (#1279) — a compactable chain, a sibling
+ *  folder, a root dotfile and a markdown file, which is every tree case the tests need. */
+const TREE: RepoTree = {
+  paths: [
+    '.gitignore',
+    'README.md',
+    'docs/guide.md',
+    'packages/web/src/app.tsx',
+    'packages/web/src/lib/x.ts',
+  ],
+  truncated: false,
+}
+
 const COMMIT: RepoCommitPayload = {
   sha: 'abc1234def5678abc1234def5678abc1234def56',
   subject: 'feat: add the thing',
@@ -116,6 +137,7 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
       if (override) return override()
       if (method === 'GET' && path === '/api/v1/repo') return jsonResponse(REPO)
       if (method === 'GET' && path === '/api/v1/repo/changes') return jsonResponse(CHANGES)
+      if (method === 'GET' && path === '/api/v1/repo/tree') return jsonResponse(TREE)
       if (method === 'GET' && path === '/api/v1/repo/commit/abc1234?structured=1') return jsonResponse(COMMIT)
       if (method === 'GET' && path === '/api/v1/health') return jsonResponse(HEALTH)
       if (method === 'GET' && path === '/api/v1/github?limit=20') return jsonResponse(GITHUB)
@@ -136,6 +158,8 @@ function renderAt(entry: string) {
           <Route path="/git/commits" element={<RepoGitRoute tab="commits" />} />
           <Route path="/git/commits/:sha" element={<RepoGitRoute tab="commits" />} />
           <Route path="/git/branches" element={<RepoGitRoute tab="branches" />} />
+          <Route path="/git/files" element={<RepoGitRoute tab="files" />} />
+          <Route path="/git/files/*" element={<RepoGitRoute tab="files" />} />
         </Routes>
         <Toaster />
       </MemoryRouter>
@@ -164,6 +188,7 @@ describe('the repo view Changes segment', () => {
       { text: 'Changes', href: '/git', current: 'page' },
       { text: 'Commits', href: '/git/commits', current: null },
       { text: 'Branches', href: '/git/branches', current: null },
+      { text: 'Files', href: '/git/files', current: null },
     ])
 
     // The SAME tree + facade the task Changes tab uses: compacted folder, per-file ±.
@@ -172,9 +197,17 @@ describe('the repo view Changes segment', () => {
     // …including its own bounded scroller, so a long list never drags the diff down with it.
     await waitFor(() => expect(document.querySelector('[data-slot="changes-tree-pane"]')).not.toBeNull())
     const pane = document.querySelector('[data-slot="changes-tree-pane"]') as HTMLElement
-    expect(pane.className).toContain('max-h-[calc(100dvh_-_var(--diff-sticky-top)_-_1rem)]')
     expect(pane.className).toContain('overflow-y-auto')
     expect(pane.className).toContain('overscroll-contain')
+    // …beside the diff's own scroller (the split layout: no height math, see task-changes.tsx).
+    const diffPane = document.querySelector('[data-slot="diff-pane"]') as HTMLElement
+    expect(diffPane.hasAttribute('data-diff-scroller')).toBe(true)
+    expect(diffPane.className).toContain('md:overflow-y-auto')
+    expect(document.querySelector('[data-route="repo-git"]')?.className).toContain('md:h-full')
+    // Below md the diff scrolls in `main` under the repo header, which stays sticky at every
+    // width, so its file headers must still park below that header there (and only there).
+    expect(pane.parentElement?.className).toContain('max-md:[--diff-sticky-top:7rem]')
+    expect(pane.parentElement?.className).not.toMatch(/(^|\s)(md:)?\[--diff-sticky-top/)
     await waitFor(() => expect(document.querySelectorAll('[data-slot="diff-file"]')).toHaveLength(2))
     expect(document.querySelector('[data-slot="changes-stat"]')?.textContent).toContain('+5')
     // The view toggles are the shared control, wired to the facade's mode.
@@ -182,6 +215,25 @@ describe('the repo view Changes segment', () => {
     await waitFor(() =>
       expect(document.querySelector('[data-slot="diff"]')?.getAttribute('data-mode')).toBe('split'),
     )
+  })
+
+  it('the preview toggle renders an added Markdown file from its patch', async () => {
+    stubFetch()
+    renderAt('/git')
+    const toggle = await waitFor(() => {
+      const element = document.querySelector('[data-slot="repo-changes-toolbar"] [data-slot="markdown-preview-toggle"]')
+      expect(element).not.toBeNull()
+      return element!
+    })
+    fireEvent.click(toggle)
+    // No file loader in the repo view: the added file's patch IS the whole document.
+    const preview = await waitFor(() => {
+      const element = document.querySelector('[data-slot="diff-markdown-preview"]')
+      expect(element).not.toBeNull()
+      return element!
+    })
+    expect(preview.textContent).toContain('one')
+    expect(preview.textContent).not.toContain('Showing the changed sections only')
   })
 
   it('a clean tree renders the honest empty state', async () => {
@@ -434,5 +486,316 @@ describe('the repo view Branches segment', () => {
     await waitFor(() => expect(document.querySelector('[data-slot="repo-branch-list"]')).not.toBeNull())
     // available:false gates the section off entirely — PR links would all be dead ends.
     expect(document.querySelector('[data-slot="repo-prs"]')).toBeNull()
+  })
+})
+
+// ---- files (#1279) -----------------------------------------------------------------------------
+
+/** One file entry from `GET /api/v1/repo/files`. */
+const fileEntry = (path: string, content: string): WorktreeEntry => ({
+  type: 'file',
+  path,
+  size: content.length,
+  binary: false,
+  tooLarge: false,
+  content,
+})
+
+const filePath = (path: string) => `/api/v1/repo/files?path=${encodeURIComponent(path)}`
+
+describe('the repo view Files segment', () => {
+  it('builds the tree from one /api/v1/repo/tree read, folders closed, chains compacted', async () => {
+    const sent = stubFetch()
+    renderAt('/git/files')
+
+    await waitFor(() => expect(document.querySelector('[data-slot="repo-files-tree"]')).not.toBeNull())
+
+    const dirs = [...document.querySelectorAll('[data-slot="repo-files-dir"]')].map((el) => ({
+      path: el.getAttribute('data-path'),
+      text: el.textContent,
+      state: el.getAttribute('data-state'),
+    }))
+    // `packages/web/src` is a single-child chain — one row, not three indent levels.
+    expect(dirs).toEqual([
+      { path: 'docs', text: 'docs', state: 'closed' },
+      { path: 'packages/web/src', text: 'packages/web/src', state: 'closed' },
+    ])
+    // Root files render; nothing inside a closed folder does.
+    expect([...document.querySelectorAll('[data-slot="repo-files-file"]')].map((el) => el.getAttribute('data-path')))
+      .toEqual(['.gitignore', 'README.md'])
+
+    // ONE tree request backs the whole view — no per-folder fetch.
+    expect(sent.filter((r) => r.path === '/api/v1/repo/tree')).toHaveLength(1)
+    expect(document.querySelector('[data-slot="repo-files-truncated"]')).toBeNull()
+  })
+
+  it('expanding a folder costs no request and reveals its children', async () => {
+    const sent = stubFetch()
+    renderAt('/git/files')
+    await waitFor(() => expect(document.querySelector('[data-slot="repo-files-tree"]')).not.toBeNull())
+    const before = sent.length
+
+    fireEvent.click(document.querySelector('[data-slot="repo-files-dir"][data-path="docs"]')!)
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="repo-files-file"][data-path="docs/guide.md"]')).not.toBeNull(),
+    )
+    expect(document.querySelector('[data-slot="repo-files-dir"][data-path="docs"]')?.getAttribute('data-state')).toBe('open')
+    expect(sent.length).toBe(before)
+  })
+
+  it('selecting a file puts it in the URL and previews its highlighted content', async () => {
+    stubFetch({
+      [`GET ${filePath('README.md')}`]: () => jsonResponse(fileEntry('README.md', 'const x = 1\n')),
+    })
+    renderAt('/git/files')
+    await waitFor(() => expect(document.querySelector('[data-slot="repo-files-tree"]')).not.toBeNull())
+
+    fireEvent.click(document.querySelector('[data-slot="repo-files-file"][data-path="README.md"]')!)
+    await waitFor(() => expect(document.querySelector('[data-slot="file-preview-head"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="file-preview-head"]')?.textContent).toContain('README.md')
+  })
+
+  it('a deep link selects the file and expands its ancestors', async () => {
+    stubFetch({
+      [`GET ${filePath('packages/web/src/lib/x.ts')}`]: () =>
+        jsonResponse(fileEntry('packages/web/src/lib/x.ts', 'export const x = 1\n')),
+    })
+    renderAt('/git/files/packages/web/src/lib/x.ts')
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="repo-files-file"][data-path="packages/web/src/lib/x.ts"]')).not.toBeNull(),
+    )
+    const chain = document.querySelector('[data-slot="repo-files-dir"][data-path="packages/web/src"]')
+    expect(chain?.getAttribute('data-state')).toBe('open')
+    expect(document.querySelector('[data-slot="repo-files-dir"][data-path="packages/web/src/lib"]')?.getAttribute('data-state'))
+      .toBe('open')
+    expect(
+      document.querySelector('[data-slot="repo-files-file"][data-path="packages/web/src/lib/x.ts"]')
+        ?.getAttribute('aria-current'),
+    ).toBe('true')
+    // The closed sibling stays closed — only the selection's ancestors open.
+    expect(document.querySelector('[data-slot="repo-files-dir"][data-path="docs"]')?.getAttribute('data-state')).toBe('closed')
+  })
+
+  it("the server's 409 for a non-indexed path is shown as an answer, not an outage", async () => {
+    stubFetch({
+      [`GET ${filePath('README.md')}`]: () =>
+        jsonResponse({ error: 'path is not in the repository index: README.md' }, 409),
+    })
+    renderAt('/git/files/README.md')
+    await waitFor(() => expect(screen.getByText('Cannot preview this file')).not.toBeNull())
+    expect(screen.getByText('path is not in the repository index: README.md')).not.toBeNull()
+  })
+
+  it('renders a .md file as markdown by default, with a toggle to the source', async () => {
+    stubFetch({
+      [`GET ${filePath('docs/guide.md')}`]: () =>
+        jsonResponse(fileEntry('docs/guide.md', '# Heading\n\n- one\n- two\n')),
+    })
+    renderAt('/git/files/docs/guide.md')
+
+    await waitFor(() => expect(document.querySelector('[data-slot="file-preview-markdown"]')).not.toBeNull())
+    // Real elements, not the raw text: the heading and the list are parsed.
+    expect(screen.getByRole('heading', { level: 1, name: 'Heading' })).not.toBeNull()
+    expect(document.querySelectorAll('[data-slot="file-preview-markdown"] li')).toHaveLength(2)
+
+    fireEvent.click(document.querySelector('[data-slot="markdown-view-toggle"] [data-mode="source"]')!)
+    await waitFor(() => expect(document.querySelector('[data-slot="file-preview-code"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="file-preview-code"]')?.textContent).toContain('# Heading')
+
+    // …and back, so the toggle is a real two-way control.
+    fireEvent.click(document.querySelector('[data-slot="markdown-view-toggle"] [data-mode="rendered"]')!)
+    await waitFor(() => expect(document.querySelector('[data-slot="file-preview-markdown"]')).not.toBeNull())
+  })
+
+  it('a non-markdown file gets no view toggle at all', async () => {
+    stubFetch({
+      [`GET ${filePath('packages/web/src/app.tsx')}`]: () =>
+        jsonResponse(fileEntry('packages/web/src/app.tsx', 'export const App = () => null\n')),
+    })
+    renderAt('/git/files/packages/web/src/app.tsx')
+    await waitFor(() => expect(document.querySelector('[data-slot="file-preview-code"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="markdown-view-toggle"]')).toBeNull()
+  })
+
+  it('a truncated index says so above the tree', async () => {
+    stubFetch({
+      'GET /api/v1/repo/tree': () => jsonResponse({ paths: TREE.paths, truncated: true }),
+    })
+    renderAt('/git/files')
+    await waitFor(() => expect(document.querySelector('[data-slot="repo-files-truncated"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="repo-files-truncated"]')?.textContent).toContain('has more')
+  })
+
+  it('an empty index is an honest empty state, not a blank pane', async () => {
+    stubFetch({ 'GET /api/v1/repo/tree': () => jsonResponse({ paths: [], truncated: false }) })
+    renderAt('/git/files')
+    await waitFor(() => expect(screen.getByText('No files yet')).not.toBeNull())
+    expect(document.querySelector('[data-slot="repo-files-tree"]')).toBeNull()
+  })
+
+  it('a 409 from /repo/tree is the view-level answer, same stance as the Changes tab', async () => {
+    stubFetch({
+      'GET /api/v1/repo/tree': () => jsonResponse({ error: 'not a git repository' }, 409),
+    })
+    renderAt('/git/files')
+    await waitFor(() => expect(screen.getByText('No files to browse')).not.toBeNull())
+  })
+})
+
+// ---- the filter box and keyboard access (#1279 Phase 2) ----------------------------------------
+
+const filterInput = () => document.querySelector('[data-slot="repo-files-filter"]') as HTMLInputElement
+const rowPaths = () =>
+  [...document.querySelectorAll('[data-slot="repo-files-file"], [data-slot="repo-files-dir"]')].map((el) =>
+    el.getAttribute('data-path'),
+  )
+
+describe('the repo Files filter', () => {
+  it('flattens to full paths as you type, and Escape restores the tree', async () => {
+    stubFetch()
+    renderAt('/git/files')
+    await waitFor(() => expect(document.querySelector('[data-slot="repo-files-filter"]')).not.toBeNull())
+
+    // A subsequence spanning three directories — the case that justifies subsequence matching.
+    fireEvent.change(filterInput(), { target: { value: 'weblibx' } })
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="repo-files-tree"]')?.getAttribute('data-filtering')).toBe('true'),
+    )
+    // A result list of FULL paths — not a filtered hierarchy that hides the match behind a
+    // collapsed ancestor — and no folder rows at all.
+    expect(rowPaths()).toEqual(['packages/web/src/lib/x.ts'])
+    expect(document.querySelector('[data-slot="repo-files-file"]')?.textContent).toBe('packages/web/src/lib/x.ts')
+
+    fireEvent.keyDown(filterInput(), { key: 'Escape' })
+    await waitFor(() => expect(document.querySelector('[data-slot="repo-files-dir"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="repo-files-tree"]')?.getAttribute('data-filtering')).toBeNull()
+  })
+
+  it('selecting a filtered result opens the file', async () => {
+    stubFetch({
+      [`GET ${filePath('docs/guide.md')}`]: () => jsonResponse(fileEntry('docs/guide.md', '# G\n')),
+    })
+    renderAt('/git/files')
+    await waitFor(() => expect(document.querySelector('[data-slot="repo-files-filter"]')).not.toBeNull())
+
+    fireEvent.change(filterInput(), { target: { value: 'guide' } })
+    await waitFor(() => expect(document.querySelector('[data-slot="repo-files-file"][data-path="docs/guide.md"]')).not.toBeNull())
+    fireEvent.click(document.querySelector('[data-slot="repo-files-file"][data-path="docs/guide.md"]')!)
+    await waitFor(() => expect(document.querySelector('[data-slot="file-preview-head"]')?.textContent).toContain('docs/guide.md'))
+  })
+
+  it('caps the rendered matches and says how many more there are', async () => {
+    const many = Array.from({ length: 250 }, (_, i) => `src/file-${String(i).padStart(3, '0')}.ts`)
+    stubFetch({ 'GET /api/v1/repo/tree': () => jsonResponse({ paths: many, truncated: false }) })
+    renderAt('/git/files')
+    await waitFor(() => expect(document.querySelector('[data-slot="repo-files-filter"]')).not.toBeNull())
+
+    fireEvent.change(filterInput(), { target: { value: 'file' } })
+    await waitFor(() => expect(document.querySelector('[data-slot="repo-files-more"]')).not.toBeNull())
+    expect(document.querySelectorAll('[data-slot="repo-files-file"]')).toHaveLength(200)
+    expect(document.querySelector('[data-slot="repo-files-more"]')?.textContent).toContain('50 more')
+  })
+
+  it('no match says so, naming the query, instead of an empty pane', async () => {
+    stubFetch()
+    renderAt('/git/files')
+    await waitFor(() => expect(document.querySelector('[data-slot="repo-files-filter"]')).not.toBeNull())
+
+    fireEvent.change(filterInput(), { target: { value: 'zzzzzzz' } })
+    await waitFor(() => expect(document.querySelector('[data-slot="repo-files-no-match"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="repo-files-no-match"]')?.textContent).toContain('zzzzzzz')
+    expect(document.querySelector('[data-slot="repo-files-tree"]')).toBeNull()
+  })
+
+  it('announces the result count in a polite live region', async () => {
+    stubFetch()
+    renderAt('/git/files')
+    await waitFor(() => expect(document.querySelector('[data-slot="repo-files-count"]')).not.toBeNull())
+    const count = document.querySelector('[data-slot="repo-files-count"]')!
+    expect(count.getAttribute('aria-live')).toBe('polite')
+    expect(count.textContent).toBe('5 files')
+
+    fireEvent.change(filterInput(), { target: { value: 'md' } })
+    await waitFor(() => expect(count.textContent).toContain('match md'))
+  })
+
+  it('`/` focuses the filter from the tree, and does not hijack typing inside it', async () => {
+    stubFetch()
+    renderAt('/git/files')
+    await waitFor(() => expect(document.querySelector('[data-slot="repo-files-tree"]')).not.toBeNull())
+
+    fireEvent.keyDown(document.querySelector('[data-slot="repo-files-tree"]')!, { key: '/' })
+    await waitFor(() => expect(document.activeElement).toBe(filterInput()))
+    // Already inside the input, `/` is just a character — the handler must not preventDefault it.
+    expect(fireEvent.keyDown(filterInput(), { key: '/' })).toBe(true)
+  })
+})
+
+describe('the repo Files tree keyboard access', () => {
+  const tree = () => document.querySelector('[data-slot="repo-files-tree"]')!
+
+  it('is a role=tree of treeitems with levels, aria-expanded and a roving tabindex', async () => {
+    stubFetch()
+    renderAt('/git/files')
+    await waitFor(() => expect(document.querySelector('[data-slot="repo-files-tree"]')).not.toBeNull())
+
+    expect(tree().getAttribute('role')).toBe('tree')
+    expect(tree().getAttribute('aria-label')).toBe('Repository files')
+    const dir = document.querySelector('[data-slot="repo-files-dir"][data-path="docs"]')!
+    expect(dir.getAttribute('role')).toBe('treeitem')
+    expect(dir.getAttribute('aria-expanded')).toBe('false')
+    expect(dir.getAttribute('aria-level')).toBe('1')
+    // Exactly one row is tabbable — the rest are reachable by arrow key.
+    const tabbable = [...document.querySelectorAll('[role="treeitem"]')].filter((el) => el.getAttribute('tabindex') === '0')
+    expect(tabbable).toHaveLength(1)
+    expect(tree().getAttribute('aria-activedescendant')).toBe(tabbable[0]!.getAttribute('id'))
+  })
+
+  it('↓/↑ move the active row, →/← expand and collapse, Enter opens a file', async () => {
+    stubFetch({
+      [`GET ${filePath('.gitignore')}`]: () => jsonResponse(fileEntry('.gitignore', 'node_modules\n')),
+    })
+    renderAt('/git/files')
+    await waitFor(() => expect(document.querySelector('[data-slot="repo-files-tree"]')).not.toBeNull())
+    const activePath = () =>
+      document.querySelector('[role="treeitem"][tabindex="0"]')?.getAttribute('data-path')
+
+    // Rows: docs, packages/web/src, .gitignore, README.md.
+    expect(activePath()).toBe('docs')
+    fireEvent.keyDown(tree(), { key: 'ArrowDown' })
+    await waitFor(() => expect(activePath()).toBe('packages/web/src'))
+    fireEvent.keyDown(tree(), { key: 'ArrowUp' })
+    await waitFor(() => expect(activePath()).toBe('docs'))
+
+    // → opens the folder, → again steps into it, ← comes back out to the parent.
+    fireEvent.keyDown(tree(), { key: 'ArrowRight' })
+    await waitFor(() => expect(document.querySelector('[data-path="docs"]')?.getAttribute('data-state')).toBe('open'))
+    fireEvent.keyDown(tree(), { key: 'ArrowRight' })
+    await waitFor(() => expect(activePath()).toBe('docs/guide.md'))
+    fireEvent.keyDown(tree(), { key: 'ArrowLeft' })
+    await waitFor(() => expect(activePath()).toBe('docs'))
+    fireEvent.keyDown(tree(), { key: 'ArrowLeft' })
+    await waitFor(() => expect(document.querySelector('[data-path="docs"]')?.getAttribute('data-state')).toBe('closed'))
+
+    // Enter on a file selects it.
+    fireEvent.keyDown(tree(), { key: 'ArrowDown' })
+    fireEvent.keyDown(tree(), { key: 'ArrowDown' })
+    await waitFor(() => expect(activePath()).toBe('.gitignore'))
+    fireEvent.keyDown(tree(), { key: 'Enter' })
+    await waitFor(() => expect(document.querySelector('[data-slot="file-preview-head"]')?.textContent).toContain('.gitignore'))
+  })
+
+  it('↑ at the top and ↓ at the bottom stay put rather than wrapping or crashing', async () => {
+    stubFetch()
+    renderAt('/git/files')
+    await waitFor(() => expect(document.querySelector('[data-slot="repo-files-tree"]')).not.toBeNull())
+    const activePath = () =>
+      document.querySelector('[role="treeitem"][tabindex="0"]')?.getAttribute('data-path')
+
+    fireEvent.keyDown(tree(), { key: 'ArrowUp' })
+    await waitFor(() => expect(activePath()).toBe('docs'))
+    for (let i = 0; i < 10; i += 1) fireEvent.keyDown(tree(), { key: 'ArrowDown' })
+    await waitFor(() => expect(activePath()).toBe('README.md'))
   })
 })

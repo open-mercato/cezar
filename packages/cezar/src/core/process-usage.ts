@@ -35,6 +35,11 @@ export interface ProcStat {
   cpuPct: number;
 }
 
+interface ProcessIndex {
+  byPid: Map<number, ProcStat>;
+  children: Map<number, number[]>;
+}
+
 /**
  * Parse `ps -axo pid=,ppid=,rss=,%cpu=` output (the `=` suffixes suppress
  * headers on darwin and linux alike). Malformed lines are skipped — `ps`
@@ -66,6 +71,10 @@ export function parsePsOutput(text: string): ProcStat[] {
  * sample) — callers treat that as "no data", not zero usage.
  */
 export function aggregateTreeUsage(procs: ProcStat[], rootPid: number): ProcessUsage | null {
+  return aggregateIndexedTreeUsage(indexProcesses(procs), rootPid);
+}
+
+function indexProcesses(procs: ProcStat[]): ProcessIndex {
   const byPid = new Map<number, ProcStat>();
   const children = new Map<number, number[]>();
   for (const p of procs) {
@@ -74,8 +83,12 @@ export function aggregateTreeUsage(procs: ProcStat[], rootPid: number): ProcessU
     if (siblings) siblings.push(p.pid);
     else children.set(p.ppid, [p.pid]);
   }
-  if (!byPid.has(rootPid)) return null;
+  return { byPid, children };
+}
 
+function aggregateIndexedTreeUsage(index: ProcessIndex, rootPid: number): ProcessUsage | null {
+  const { byPid, children } = index;
+  if (!byPid.has(rootPid)) return null;
   let cpuPct = 0;
   let rssKb = 0;
   let procCount = 0;
@@ -188,9 +201,10 @@ async function sample(): Promise<void> {
     const text = await runPs();
     if (text === null) return; // ps unavailable — degrade to no data
     const procs = parsePsOutput(text);
+    const index = indexProcesses(procs);
     const sampledAt = new Date().toISOString();
     for (const entry of entries.values()) {
-      const usage = aggregateTreeUsage(procs, entry.pid);
+      const usage = aggregateIndexedTreeUsage(index, entry.pid);
       entry.last = usage ?? undefined;
       entry.sampledAt = usage ? sampledAt : undefined;
       if (usage) {

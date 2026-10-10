@@ -16,6 +16,8 @@ import {
   widestLineChars,
 } from './diff-scroll'
 import { ImagePreview, shouldPreviewImage } from './image-preview'
+import { canPreviewMarkdown } from './markdown'
+import { MarkdownPreview } from './markdown-preview'
 import {
   AddCommentButton,
   anchorForLine,
@@ -116,6 +118,7 @@ export function DiffView({
   files,
   mode = 'unified',
   wrap = false,
+  preview = false,
   loadFileText,
   imageSrc,
   onOpenInApp,
@@ -186,6 +189,13 @@ export function DiffView({
   // from the top of the page after every comment.
   const returnFocus = useRef<{ element: HTMLElement | null; commentId?: string }>({ element: null })
   const rootForFocus = useRef<HTMLDivElement | null>(null)
+  // The scroller the virtualized list is bound to. virtua reads its scroll element once, at
+  // mount, so when the consumer's layout swaps it (the Changes tab's own column from md up, the
+  // app shell's `main` below) only the LIST is remounted, under a fresh key — never this view,
+  // whose state (the open comment editor and its unsent text, collapsed files, expanded context)
+  // must survive a window crossing the breakpoint.
+  const boundScroller = useRef<HTMLElement | null>(null)
+  const [scrollerEpoch, setScrollerEpoch] = useState(0)
   const captureOpener = (commentId?: string) => {
     const active = document.activeElement
     returnFocus.current = {
@@ -398,6 +408,8 @@ export function DiffView({
         onExpand={(gap) => void expandGap(file, gap)}
         mode={mode}
         wrap={wrap}
+        preview={preview && canPreviewMarkdown(file)}
+        loadFileText={loadFileText}
         canExpand={loadFileText !== undefined}
         imageSrc={imageSrc}
         onOpenInApp={onOpenInApp}
@@ -411,7 +423,11 @@ export function DiffView({
       ref={(el) => {
         rootRef.current = el
         rootForFocus.current = el
-        if (el) scrollElRef.current = el.closest<HTMLElement>('[data-slot="main"]')
+        if (!el) return
+        const scroller = diffScroller(el)
+        scrollElRef.current = scroller
+        if (boundScroller.current && boundScroller.current !== scroller) setScrollerEpoch((epoch) => epoch + 1)
+        boundScroller.current = scroller
       }}
       data-slot="diff"
       data-mode={mode}
@@ -424,7 +440,7 @@ export function DiffView({
         <DiffStatLabel stat={stat} />
       </p>
       {renderMode === 'virtual' ? (
-        <VirtualFiles files={files} handleRef={virtualizerRef} scrollElRef={scrollElRef} card={card} />
+        <VirtualFiles key={scrollerEpoch} files={files} handleRef={virtualizerRef} scrollElRef={scrollElRef} card={card} />
       ) : (
         <div data-slot="diff-files" data-virtualized="false">
           {files.map((file) => (
@@ -449,9 +465,18 @@ export function DiffView({
 }
 
 /**
- * The file cards through virtua, on the app shell's scroller (`[data-slot="main"]`) — the one
- * scroll owner, exactly as the thread does it. No `shift`: a diff only ever changes in place,
- * so start-anchored offsets stay correct.
+ * The element the diff scrolls in: a view's own column when it declares one (`data-diff-scroller`
+ * — the split Changes layouts, where the tree and the diff scroll independently), else the app
+ * shell's `main`. A view sets the marker only where that column really scrolls (md and up).
+ */
+function diffScroller(el: HTMLElement): HTMLElement | null {
+  return el.closest<HTMLElement>('[data-diff-scroller], [data-slot="main"]')
+}
+
+/**
+ * The file cards through virtua, on the diff's scroller (`diffScroller`: the view's own column, or
+ * the app shell's `[data-slot="main"]`) — one scroll owner, exactly as the thread does it. No
+ * `shift`: a diff only ever changes in place, so start-anchored offsets stay correct.
  *
  * No measurement cache (the thread's `CacheSnapshot` trick): virtua's snapshot is only valid
  * at the item count it was taken at, and a diff's file list changes under an active run's
@@ -503,7 +528,7 @@ function VirtualFiles({
     <div
       ref={(el) => {
         containerRef.current = el
-        if (el) scrollElRef.current = el.closest<HTMLElement>('[data-slot="main"]')
+        if (el) scrollElRef.current = diffScroller(el)
       }}
       data-slot="diff-files"
       data-virtualized="true"
@@ -540,6 +565,8 @@ function DiffFileCard({
   onExpand,
   mode,
   wrap,
+  preview,
+  loadFileText,
   canExpand,
   imageSrc,
   onOpenInApp,
@@ -551,6 +578,9 @@ function DiffFileCard({
   onExpand: (gap: ContextGap) => void
   mode: 'unified' | 'split'
   wrap: boolean
+  /** Render this (Markdown) file as a document — already narrowed by `canPreviewMarkdown`. */
+  preview: boolean
+  loadFileText?: (path: string) => Promise<string | null>
   canExpand: boolean
   imageSrc?: (path: string) => string
   onOpenInApp?: (path: string) => void
@@ -566,8 +596,17 @@ function DiffFileCard({
       {/* Sticky within the consumer's scroll container — the reader always knows which file.
           The offset is a consumer-set CSS var so the file header parks BELOW a sticky page
           header (Git / run header) rather than colliding with it; `z-10` keeps it beneath the
-          page header's higher layer. Defaults to 0 for consumers without a sticky header. */}
-      <header className="sticky top-[var(--diff-sticky-top,0px)] z-10 rounded-t-md border-b border-border/50 bg-card">
+          page header's higher layer. Defaults to 0 for consumers without a sticky header.
+          Fully opaque, because rows scroll UNDER it once it is stuck: no rounding of its own (the
+          card's `overflow-clip` already rounds it where it sits at the card's top, and once stuck
+          mid-card its own rounded corners were see-through), and its divider is the half-tone
+          border pre-mixed onto the card colour rather than a 50%-alpha line text shows through.
+          The 1px card-coloured shadow above it closes a sub-pixel seam: when the scroller's top
+          edge sits on a fractional pixel, WKWebView (the desktop app) snaps the scroller's clip and
+          the stuck header to different device pixels, and one row of scrolling text showed above
+          the header. Flush, the shadow lies outside the scroller and is clipped away; at the card's
+          top, the card's `overflow-clip` hides it. */}
+      <header className="sticky top-[var(--diff-sticky-top,0px)] z-10 border-b border-[color-mix(in_oklab,var(--border)_50%,var(--card))] bg-card shadow-[0_-1px_0_var(--card)]">
         <button
           type="button"
           data-slot="diff-file-header"
@@ -603,13 +642,20 @@ function DiffFileCard({
               binary
             </span>
           ) : null}
+          {preview ? (
+            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+              preview
+            </span>
+          ) : null}
           <span className="ml-auto flex shrink-0 items-center gap-2">
             <CommentCount count={commentCount} />
             <DiffStatLabel stat={{ adds: file.adds, dels: file.dels, files: 1 }} className="text-[11px]" />
           </span>
         </button>
       </header>
-      {open ? (
+      {open && preview ? (
+        <MarkdownPreview file={file} loadFileText={loadFileText} imageSrc={imageSrc} />
+      ) : open ? (
         <DiffFileBody
           file={file}
           expanded={expanded}

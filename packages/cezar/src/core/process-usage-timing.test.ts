@@ -30,6 +30,43 @@ describe('timestamped process telemetry', () => {
     expect(usage.currentTimedUsage('a')).toBeUndefined();
     usage.unregisterRunProcess('a');
   });
+
+  it('samples multiple roots from one snapshot without changing their independent totals', async () => {
+    const usage = await import('./process-usage.ts');
+    let mapCount = 0;
+    const NativeMap = Map;
+    class CountingMap<K, V> extends NativeMap<K, V> {
+      constructor(entries?: readonly (readonly [K, V])[] | null) {
+        super(entries);
+        mapCount += 1;
+      }
+    }
+    vi.stubGlobal('Map', CountingMap);
+    answer('100 1 100 1\n101 100 50 2\n200 1 200 3\n201 200 25 4\n');
+    usage.registerRunProcess('ancestor', 100);
+    usage.registerRunProcess('descendant', 101);
+    await tick();
+
+    expect(usage.currentUsage('ancestor')).toEqual({ cpuPct: 3, rssBytes: 153600, procCount: 2 });
+    expect(usage.currentUsage('descendant')).toEqual({ cpuPct: 2, rssBytes: 51200, procCount: 1 });
+    expect(mapCount).toBe(2);
+    expect(usage.unregisterRunProcess('ancestor')).toEqual({ peakRssBytes: 153600, peakProcCount: 2 });
+    expect(usage.unregisterRunProcess('descendant')).toEqual({ peakRssBytes: 51200, peakProcCount: 1 });
+  });
+
+  it('clears last and sampledAt when a registered root is missing', async () => {
+    const usage = await import('./process-usage.ts');
+    answer('100 1 100 1\n');
+    usage.registerRunProcess('a', 100);
+    await tick();
+    expect(usage.currentTimedUsage('a')).toEqual({ sampledAt: '2026-09-18T00:00:00.000Z', cpuPct: 1, rssBytes: 102400, procCount: 1 });
+
+    answer('200 1 100 1\n');
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(usage.currentUsage('a')).toBeUndefined();
+    expect(usage.currentTimedUsage('a')).toBeUndefined();
+    expect(usage.unregisterRunProcess('a')).toEqual({ peakRssBytes: 102400, peakProcCount: 1 });
+  });
   it('reports Windows CPU as unmeasured while preserving legacy numeric usage', async () => {
     const usage = await import('./process-usage.ts');
     expect(usage).toHaveProperty('currentTimedUsage');
