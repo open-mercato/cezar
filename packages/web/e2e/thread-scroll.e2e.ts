@@ -114,6 +114,31 @@ function openThread(query = '') {
   browser.waitForFunction(
     `document.querySelector('[data-slot="thread-rows"]') !== null && document.body.textContent.includes('goal achieved — session closed')`,
   )
+  // React's callback ref installs the shell-scroller listener after the first hydrated paint.
+  // Give that attachment a frame before the boundary helper drives its load action.
+  browser.evaluate('new Promise((resolve) => setTimeout(resolve, 250))')
+}
+
+/** Progressive hydration starts with one retained page. Load the real older-page control
+ * before making transcript-size assertions; a hard-coded row count from the pre-#739 full
+ * replay would only prove that this fixture still happens to be large. */
+function loadRetainedPages(target = 5) {
+  const current = Number(browser.evaluate(
+    `document.querySelector('[data-slot="history-boundary"]')?.dataset.retainedPages ?? 1`,
+  ))
+  for (let page = current + 1; page <= target; page += 1) {
+    browser.waitForFunction(
+      `(() => {
+        const main = document.querySelector('[data-slot="main"]')
+        return main && main.scrollHeight > main.clientHeight &&
+          document.querySelector('[data-slot="history-boundary"] button:not([disabled])') !== null
+      })()`,
+    )
+    browser.evaluate(`document.querySelector('[data-slot="history-boundary"] button:not([disabled])')?.click()`)
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="history-boundary"]')?.dataset.retainedPages === '${page}'`,
+    )
+  }
 }
 
 beforeAll(async () => {
@@ -156,45 +181,32 @@ afterAll(() => {
 })
 
 describe('thread virtualization on a 1,000-row transcript', () => {
+  let initialFlatRows = 0
+  let initialFlatDom = 0
   let flatRows = 0
   let flatDom = 0
   let flatAssistantWidth = 0
 
-  it('force-flat renders every row (the before measurement)', () => {
+  it('force-flat renders all rows retained after progressive history loading', () => {
     openThread('?thread=flat')
     expect(browser.evaluate(`document.querySelector('[data-slot="thread-rows"]').dataset.virtualized`)).toBe('false')
+    initialFlatRows = rowCount()
+    initialFlatDom = domSize()
+    expect(initialFlatRows).toBeGreaterThan(0)
+    expect(initialFlatRows).toBeLessThan(ROWS)
+    expect(browser.evaluate(nearBottom)).toBe(true)
+
+    loadRetainedPages()
     flatRows = rowCount()
     flatDom = domSize()
     flatAssistantWidth = assistantWidth()
-    expect(flatRows).toBe(ROWS) // the generator's own arithmetic, end to end
+    expect(flatRows).toBeGreaterThan(initialFlatRows)
     expect(flatAssistantWidth).toBeGreaterThan(200)
   }, 90_000)
 
-  it('auto mode virtualizes past the threshold and keeps the DOM bounded', () => {
-    openThread()
-    expect(browser.evaluate(`document.querySelector('[data-slot="thread-rows"]').dataset.virtualized`)).toBe('true')
-
-    const virtualRows = rowCount()
-    const virtualDom = domSize()
-    // The honest metric, same transcript, same browser: virtua holds a viewport window plus
-    // overscan, not the list. The exact window varies with row heights — the bound is what
-    // matters: an order of magnitude fewer live rows than flat mode.
-    expect(virtualRows).toBeGreaterThan(0)
-    expect(virtualRows).toBeLessThan(flatRows / 10)
-    expect(virtualDom).toBeLessThan(flatDom / 2)
-    const virtualAssistantWidth = assistantWidth()
-    expect(virtualAssistantWidth).toBeGreaterThan(200)
-    expect(Math.abs(virtualAssistantWidth - flatAssistantWidth)).toBeLessThan(2)
-    // The numbers themselves are checkpoint material — persisted next to the screenshots.
-    mkdirSync(artifactsDir, { recursive: true })
-    writeFileSync(
-      join(artifactsDir, 'thread-scroll-metrics.json'),
-      JSON.stringify({ transcriptEvents: largeThreadEvents(TURNS).length, rows: { flat: flatRows, virtualized: virtualRows }, domElements: { flat: flatDom, virtualized: virtualDom } }, null, 2),
-      'utf8',
-    )
-  }, 90_000)
-
-  it('arrives pinned to the live tail (bottom-anchored), with no jump pill', () => {
+  it('retains the live tail after progressive history loading, with no jump pill', () => {
+    openThread('?thread=flat')
+    loadRetainedPages()
     expect(browser.evaluate(nearBottom)).toBe(true)
     expect(browser.count('[data-slot="jump-to-latest"]')).toBe(0)
     browser.screenshot(`${artifactsDir}/thread-long-desktop.png`)
@@ -210,15 +222,18 @@ describe('thread virtualization on a 1,000-row transcript', () => {
     browser.click('[data-slot="jump-to-latest"]')
     browser.waitForFunction(nearBottom)
     browser.waitForFunction(`document.querySelector('[data-slot="jump-to-latest"]') === null`)
-    // Let the smooth scroll LAND, not merely enter the near-bottom slack — the next test
-    // parks mid-thread, and a still-running animation would carry its park away.
+    // Jump-to-latest also discards retained older pages. This is the bounded-history contract,
+    // and waiting for it avoids racing the next test's fresh page loads.
     browser.waitForFunction(
-      `(() => { const m = ${MAIN}; return Math.abs(m.scrollHeight - m.clientHeight - m.scrollTop) < 2 })()`,
+      `document.querySelector('[data-slot="history-boundary"]')?.dataset.retainedPages === '1'`,
     )
   })
 
   it('restores the scroll position across a client-side leave and return', () => {
-    // Park mid-thread (a position the arrival logic would never pick on its own).
+    // Rehydrate older pages after the preceding jump-to-tail reset, then park mid-thread (a
+    // position the arrival logic would never pick on its own).
+    openThread('?thread=flat')
+    loadRetainedPages()
     parkAt(`Math.round((m.scrollHeight - m.clientHeight) / 2)`)
     browser.waitForFunction(`document.querySelector('[data-slot="jump-to-latest"]') !== null`)
     const parked = Number(browser.evaluate(`${MAIN}.scrollTop`))
@@ -236,6 +251,35 @@ describe('thread virtualization on a 1,000-row transcript', () => {
     // The replay re-grows the thread; the cached offset is re-applied until reachable.
     browser.waitForFunction(`Math.abs(${MAIN}.scrollTop - ${parked}) < 200`)
     expect(browser.evaluate(nearBottom)).toBe(false) // back where the reader parked, not the tail
+  }, 90_000)
+
+  it('virtual mode stays DOM-bounded on the hydrated page', () => {
+    // Progressive history loading is exercised above through the real boundary. The five-page
+    // cap is intentionally below the auto threshold for this event density, so force the virtual
+    // renderer here to retain direct browser coverage of its DOM bound; the threshold rule is
+    // unit-tested separately. This is last because route changes intentionally preserve the
+    // bounded history cache used by the preceding scroll assertions.
+    openThread('?thread=virtual')
+    expect(browser.evaluate(`document.querySelector('[data-slot="thread-rows"]').dataset.virtualized`)).toBe('true')
+
+    const virtualRows = rowCount()
+    const virtualDom = domSize()
+    // The honest metric on the same five-page hydrated history: virtua holds a viewport window plus
+    // overscan, not the list. The exact window varies with row heights — the bound is what
+    // matters: fewer live rows than flat mode. Progressive page growth is measured separately.
+    expect(virtualRows).toBeGreaterThan(0)
+    expect(virtualRows).toBeLessThan(initialFlatRows / 2)
+    expect(virtualDom).toBeLessThan(initialFlatDom / 2)
+    const virtualAssistantWidth = assistantWidth()
+    expect(virtualAssistantWidth).toBeGreaterThan(200)
+    expect(Math.abs(virtualAssistantWidth - flatAssistantWidth)).toBeLessThan(2)
+    // The numbers themselves are checkpoint material — persisted next to the screenshots.
+    mkdirSync(artifactsDir, { recursive: true })
+    writeFileSync(
+      join(artifactsDir, 'thread-scroll-metrics.json'),
+      JSON.stringify({ transcriptEvents: largeThreadEvents(TURNS).length, rows: { flatInitial: initialFlatRows, flatRetained: flatRows, virtualizedRetained: virtualRows }, domElements: { flatInitial: initialFlatDom, flatRetained: flatDom, virtualizedRetained: virtualDom } }, null, 2),
+      'utf8',
+    )
   }, 90_000)
 })
 
