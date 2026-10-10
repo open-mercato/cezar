@@ -48,6 +48,7 @@ import {
   normalizeReviews,
   normalizeMergeState,
   parseCountsPage,
+  parseGithubListPage,
   parseOwnerName,
   rollupToChecks,
   THREAD_ENTRY_CAP,
@@ -438,6 +439,10 @@ const ghByCwd = () =>
     const who = opts?.cwd?.includes('proj-b') ? 'b' : 'a';
     let stdout = '';
     if (argv[0] === 'repo') stdout = `owner/${who}\n`;
+    else if (argv[0] === 'api' && argv[1] === 'graphql') stdout = JSON.stringify({ data: { repository: {
+      issues: { totalCount: 1, nodes: [{ number: 1, title: `${who}-issue`, author: { login: who }, createdAt: '2026-07-01T00:00:00Z', labels: [], url: `https://github.com/owner/${who}/issues/1` }], pageInfo: { hasNextPage: false, endCursor: null } },
+      pullRequests: { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+    } } });
     else if (argv[0] === 'issue')
       stdout = JSON.stringify([
         {
@@ -462,7 +467,7 @@ const ghByCwd = () =>
         },
       ]);
     else if (argv[1]?.includes('/reviews')) stdout = '[]';
-    else stdout = '{}'; // graphql counts — malformed page degrades to empty maps
+    else stdout = '{}';
     cb(null, { stdout, stderr: '' });
   });
 
@@ -1531,37 +1536,30 @@ describe('fetchGithub omits statusCheckRollup from the list call (#664)', () => 
   });
 
   it('does not request the rollup field and leaves list PR checks null', async () => {
-    let prJsonArg = '';
+    let graphqlQuery = '';
     execFileMock.mockImplementation((...args: unknown[]) => {
       const argv = args[1] as string[];
       const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
       let stdout = '{}';
       if (argv[0] === 'repo') stdout = 'owner/n\n';
-      else if (argv[0] === 'issue') stdout = '[]';
-      else if (argv[0] === 'pr') {
-        prJsonArg = argv[argv.indexOf('--json') + 1] ?? '';
-        stdout = JSON.stringify([
-          {
-            number: 7,
-            title: 'a pr',
-            author: { login: 'x' },
-            createdAt: '2026-07-01T00:00:00Z',
-            labels: [],
-            body: 'b',
-            url: 'https://github.com/owner/n/pull/7',
-            isDraft: false,
-            additions: 1,
-            deletions: 2,
-          },
-        ]);
+      else if (argv[0] === 'api' && argv[1] === 'graphql') {
+        graphqlQuery = argv[argv.indexOf('-f') + 1] ?? '';
+        stdout = JSON.stringify({ data: { repository: {
+          issues: { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+          pullRequests: { totalCount: 9, nodes: [{ number: 7, title: 'a pr', author: { login: 'x' }, createdAt: '2026-07-01T00:00:00Z', labels: [], url: 'https://github.com/owner/n/pull/7', comments: { totalCount: 4 }, isDraft: false, additions: 1, deletions: 2 }], pageInfo: { hasNextPage: true, endCursor: 'next-pr' } },
+        } } });
       }
       cb(null, { stdout, stderr: '' });
     });
 
     const data = await fetchGithub('/repo/no-rollup-664');
-    expect(prJsonArg).not.toContain('statusCheckRollup');
-    expect(prJsonArg).toContain('isDraft');
+    expect(graphqlQuery).not.toContain('statusCheckRollup');
+    expect(graphqlQuery).toContain('isDraft');
+    expect(graphqlQuery).toContain('comments { totalCount }');
     expect(data.prs[0]?.checks).toBeNull();
+    expect(data.prs[0]?.comments).toBe(4);
+    expect(data.prsTotal).toBe(9);
+    expect(data.prsNextCursor).toBe('next-pr');
   });
 });
 

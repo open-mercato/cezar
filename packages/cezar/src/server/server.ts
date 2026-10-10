@@ -57,6 +57,7 @@ import {
   type StarCountPayload,
   type WorkspaceConfigResponse,
   workspaceBrandingLogoResponseSchema,
+  githubListQuerySchema,
 } from '@open-mercato/cezar-contract';
 // A contract VALUE, like `workspaceUiStateSchema` in workspace/migrations.ts — the request
 // schema this route validates with is the same one the client compiles against.
@@ -3177,8 +3178,13 @@ export function createApp(deps: ServerDeps) {
     // the local cockpit gets them pushed over the `host` topic, but a remote one opens no
     // WebSocket, so this is its snapshot + reconcile target. Same staleness-ruled sampler read as
     // the topic — never a second compute path — and `cpuPct` is absent until a bounded delta
-    // window exists (the card renders `sampling…` and follows up once ~2.5 s later).
-    .get('/workspace/host-usage', async (c) => c.json(hostSampler.sampleHostUsage()))
+    // window exists (the card renders `sampling…` and follows up once ~2.5 s later). The read
+    // keeps the sampler warm, so a cockpit polling this route gets a fresh delta each time.
+    .get('/workspace/host-usage', async (c) => {
+      const usage = hostSampler.sampleHostUsage();
+      hostSampler.keepWarm();
+      return c.json(usage);
+    })
 
     .put('/workspace/config', jsonZodValidator(() => setWorkspaceConfigInputSchema), async (c) => {
       const parsed = { data: c.req.valid('json') };
@@ -5936,12 +5942,15 @@ export function createApp(deps: ServerDeps) {
       '/github',
       // `limit` stays a bare string: the handler's `Number.parseInt`/`Number.isFinite` fallback to
       // 30 already accepts `?limit=banana`, and a numeric schema would 400 it instead.
-      queryZodValidator(z.object({ limit: queryValue, refresh: queryValue })),
+      queryZodValidator(githubListQuerySchema),
       async (c) => {
         const { root: repoRoot } = c.get('project');
         const query = c.req.valid('query');
         const limit = Number.parseInt(query.limit ?? '', 10);
-        return c.json(await fetchGithub(repoRoot, query.refresh === '1', Number.isFinite(limit) ? limit : 30));
+        return c.json(await fetchGithub(repoRoot, query.refresh === '1', Number.isFinite(limit) ? limit : 50, {
+          issuesCursor: query.issuesCursor,
+          prsCursor: query.prsCursor,
+        }));
       },
     )
 
