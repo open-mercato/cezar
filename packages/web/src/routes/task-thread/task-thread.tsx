@@ -17,6 +17,7 @@ import {
 import { useRunHistory, type RunHistoryState } from '@/api/run-history'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
+import { TaskLifecycleCard } from '@/components/worktree-lifecycle-operation'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { useKeyboardInsetVar } from '@/lib/keyboard-inset'
@@ -212,6 +213,7 @@ export function ThreadView({
   // Derived from `sessionOpen` rather than enumerated, so it cannot drift when a status is
   // added: anything that is neither live nor still queued is closed. `review` matters most —
   // it is where this pipeline's runs normally END, and `threadFooter` already calls it closed.
+  const lifecycleGate = !!run.worktreeLifecycle?.activeOperationId
   const runIsTerminal = !sessionOpen && run.status !== 'queued'
   const agents = useMemo(
     () => collectSubagents(currentThread.turns, runIsTerminal),
@@ -322,6 +324,7 @@ export function ThreadView({
       {/* Row spacing lives on each thread row (pb-2.5, both render modes measure alike);
           this gap only separates the sections — rows, empty state, footer, review panel. */}
       <div className="mx-auto flex w-full max-w-[var(--measure)] flex-1 flex-col gap-2.5 px-3 py-3 md:gap-3.5 md:px-6 md:py-5">
+        {run.worktreeLifecycle ? <TaskLifecycleCard worktreeId={run.worktreeLifecycle.worktreeId} operationId={run.worktreeLifecycle.activeOperationId} worktreePath={run.worktreePath} taskTitle={run.title ?? run.task} /> : null}
         {history ? (
           <HistoryBoundary
             hasOlder={history.hasOlder}
@@ -357,7 +360,7 @@ export function ThreadView({
         {/* Live session heartbeat: while the engine owns the turn (`running`), a spinner tails
             the thread so quiet gaps between bursts don't read as "finished". `waiting` hands
             off to the dock's reply hint, `queued` to the placeholder above — so `running` only. */}
-        {run.status === 'running' ? (
+        {run.status === 'running' && !lifecycleGate ? (
           <WorkingIndicator since={liveTurnStart(run, currentThread)} lastActivityAt={currentThread.lastEventAt} />
         ) : null}
 
@@ -406,7 +409,7 @@ export function ThreadView({
         {/* The review gate (spec 009): a finished run with changes parks here — nothing
             auto-merges. The panel exists exactly while the run rests at `review`. */}
         {/* Send back carries the drafted line comments, like the composer does. */}
-        {run.status === 'review' ? <ReviewPanel run={run} diffComments={diffComments} /> : null}
+        {run.status === 'review' && !lifecycleGate ? <ReviewPanel run={run} diffComments={diffComments} /> : null}
       </div>
 
       <AcceptCelebration status={run.status} />
@@ -453,7 +456,7 @@ export function ThreadView({
             dock says so before the composer offers a Continue nobody needs to press. */}
         <AutoResumeHint run={run} />
 
-        {budget ? (
+        {!lifecycleGate && budget ? (
           <div
             data-slot="budget-hint"
             className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
@@ -461,7 +464,7 @@ export function ThreadView({
             <StatusDot tone="pending" pulse />
             Budget reached — spent ${budget.spent.toFixed(2)} of ${budget.ceiling.toFixed(2)}; send a message to continue.
           </div>
-        ) : run.status === 'waiting' ? (
+        ) : !lifecycleGate && run.status === 'waiting' ? (
           <div
             data-slot="paused-hint"
             className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
@@ -481,13 +484,13 @@ export function ThreadView({
           </div>
         ) : null}
 
-        <TaskComposer
+        {!lifecycleGate ? <TaskComposer
           run={run}
           draft={draft}
           diffComments={diffComments}
           continueAction={continueAction}
           getMentionCandidates={() => threadFilePaths(thread)}
-        />
+        /> : <p className="px-1 text-xs text-muted-foreground">Resolve the worktree operation above before continuing this task.</p>}
       </TaskDock>
     </div>
   )

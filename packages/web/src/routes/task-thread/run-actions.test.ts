@@ -307,3 +307,12 @@ describe('queuePosition — the legacy FIFO math (web/app.js), 1-based among que
     expect(queuePosition([], 'anything')).toBeUndefined()
   })
 })
+
+describe('lifecycle action exclusion', () => {
+  it.each(['waiting', 'review', 'done'] as const)('keeps ordinary task/session actions out of an active gate (%s)', status => {
+    const record = run(status, {worktreeLifecycle:{worktreeId:'worktree',generation:1,activeOperationId:'operation',phase:'setup',state:'needs_attention',needsAttention:true}})
+    expect(runActionFlags(record)).toMatchObject({finish:false,continueRun:false,terminal:false,cancel:false,deleteRun:false})
+    expect(resumeHint(record)).toBeUndefined()
+    expect(cliTargetResumes(record, 'claude')).toBe(false)
+  })
+})

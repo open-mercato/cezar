@@ -26,6 +26,9 @@ export const DATA_GITIGNORE_ENTRIES = [
   // is not named here is covered by nothing at all. `data-gitignore.test.ts` guards that rule.
   'attachments/',
   'worktrees/',
+  'lifecycle/', // independent durable worktree preparation/cleanup history
+  'config.lifecycle.lock/',
+  'config.json.*.tmp',
   'tmp/', // per-run agent temp directories (#785)
   'drafts/', // unsent composer text + pasted screenshots (#939) — never in git history
   'todos.json',

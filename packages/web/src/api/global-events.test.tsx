@@ -1,3 +1,4 @@
+import { lifecycleQueryKeys } from './worktree-lifecycle'
 import { MemoryRouter } from 'react-router'
 import { TaskRow } from '@/routes/dashboard/rows'
 import { dashboardTruthRevision, reconcileDashboardTruth } from './dashboard-truth'
@@ -1198,4 +1199,38 @@ it.each(['event', 'reconnect', 'visibility'])('discards old project/tracker requ
     await act(async () => controls.forEach(({ resolveOld }) => resolveOld('old')))
     controls.forEach(({ queryKey }) => expect(client.getQueryData(queryKey)).toBe('new'))
   } finally { controls.forEach(({ unsubscribe }) => unsubscribe()) }
+})
+
+
+describe('worktree lifecycle SSE invalidations', () => {
+  const identity = '11111111-1111-4111-8111-111111111111'
+  it('validates payloads, marks only the matching project stale, and never seeds output', async () => {
+    vi.useFakeTimers()
+    const activeKey = lifecycleQueryKeys.operation(identity)
+    const otherKey = lifecycleQueryKeys.operation(identity, 'other-project')
+    client.setQueryData(activeKey, {operation:'active'})
+    client.setQueryData(otherKey, {operation:'other'})
+    const {source} = mount()
+    source.emit('worktree-lifecycle', JSON.stringify({projectId:BOOT,worktreeId:'invalid',revision:1}))
+    await act(async () => { await vi.advanceTimersByTimeAsync(110) })
+    expect(client.getQueryState(activeKey)?.isInvalidated).toBe(false)
+    source.emit('worktree-lifecycle', JSON.stringify({projectId:'other-project',worktreeId:identity,operationId:identity,revision:1}))
+    await act(async () => { await vi.advanceTimersByTimeAsync(110) })
+    expect(client.getQueryState(activeKey)?.isInvalidated).toBe(false)
+    expect(client.getQueryState(otherKey)?.isInvalidated).toBe(true)
+    source.emit('worktree-lifecycle', JSON.stringify({projectId:BOOT,worktreeId:identity,operationId:identity,revision:2}))
+    await act(async () => { await vi.advanceTimersByTimeAsync(110) })
+    expect(client.getQueryState(activeKey)?.isInvalidated).toBe(true)
+    expect(client.getQueryData(lifecycleQueryKeys.output(identity))).toBeUndefined()
+  })
+  it('cancels staged output refresh when the global stream unmounts', async () => {
+    vi.useFakeTimers()
+    const key = lifecycleQueryKeys.operation(identity)
+    client.setQueryData(key, {operation:'active'})
+    const {source,unmount} = mount()
+    source.emit('worktree-lifecycle', JSON.stringify({projectId:BOOT,worktreeId:identity,revision:2}))
+    unmount()
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) })
+    expect(client.getQueryState(key)?.isInvalidated).toBe(false)
+  })
 })

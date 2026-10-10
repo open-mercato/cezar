@@ -78,7 +78,7 @@ function isUnseen(_run: AttentionInput): boolean {
  *  optional (#490), so status-only callers keep working unchanged. */
 export type AttentionInput = Pick<
   RunRecord,
-  'status' | 'activity' | 'autoResumeAt' | 'awaitingAnswerSince' | 'dispatch' | 'costUsd'
+  'status' | 'activity' | 'autoResumeAt' | 'awaitingAnswerSince' | 'dispatch' | 'costUsd' | 'worktreeLifecycle'
 >
 
 export type BudgetStop = {
@@ -104,8 +104,8 @@ export function isAwaitingAnswer(run: Pick<RunRecord, 'status' | 'awaitingAnswer
 }
 
 /** The runs a "needs you" list keeps: waiting, in review, or awaiting an answer. */
-export function isNeedsYouStatus(run: Pick<RunRecord, 'status' | 'awaitingAnswerSince'>): boolean {
-  return run.status === 'waiting' || run.status === 'review' || isAwaitingAnswer(run)
+export function isNeedsYouStatus(run: Pick<RunRecord, 'status' | 'awaitingAnswerSince' | 'worktreeLifecycle'>): boolean {
+  return !!run.worktreeLifecycle?.needsAttention || run.status === 'waiting' || run.status === 'review' || isAwaitingAnswer(run)
 }
 
 /**
@@ -122,6 +122,9 @@ export function isNeedsYouStatus(run: Pick<RunRecord, 'status' | 'awaitingAnswer
  *  - `done`/`failed` → the green/red outcome, still.
  */
 export function deriveAttention(run: AttentionInput): Attention {
+  const lifecycle = run.worktreeLifecycle
+  if (lifecycle?.needsAttention) return {bucket: 'waiting', tone: 'pending', pulse: false, label: lifecycle.phase === 'setup' ? 'setup needs attention' : 'cleanup needs attention'}
+  if (lifecycle?.activeOperationId) return {bucket: 'running', tone: 'pending', pulse: true, label: lifecycle.phase === 'setup' ? 'preparing worktree' : 'cleaning up worktree'}
   if (hasPendingPermission(run)) {
     return { bucket: 'permission', tone: 'violet', pulse: true, label: 'needs permission' }
   }
