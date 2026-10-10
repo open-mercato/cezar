@@ -353,6 +353,42 @@ describe('host sampler', () => {
     sampler.dispose();
   });
 
+  it('keeps sampling for one stale window after a route read, so a polling reader gets real deltas', () => {
+    vi.useFakeTimers();
+    const probe = cpuTimesProbe();
+    const sampler = createHostSampler({
+      cpuTimes: probe.source,
+      readMeminfo: () => undefined,
+      now: () => Date.now(),
+    });
+
+    expect(sampler.sampleHostUsage().cpuPct).toBeUndefined(); // the first read only primes
+    sampler.keepWarm();
+    for (let poll = 0; poll < 3; poll += 1) {
+      probe.advance({ idle: 500, busy: 500 });
+      vi.advanceTimersByTime(HOST_SAMPLE_INTERVAL_MS);
+      const read = sampler.sampleHostUsage();
+      sampler.keepWarm();
+      expect(read.cpuPct).toBe(50);
+      expect(read.sampledAt).toBe(new Date(Date.now()).toISOString()); // the tick's, not a replay
+    }
+
+    // A subscriber joining a warm timer must not start a second interval or re-prime it.
+    const listener = vi.fn();
+    const stop = sampler.onHostUsage(listener);
+    expect(vi.getTimerCount()).toBe(2); // the interval + the warm lease
+    probe.advance({ idle: 500, busy: 500 });
+    vi.advanceTimersByTime(HOST_SAMPLE_INTERVAL_MS);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener.mock.calls[0]?.[0]).toMatchObject({ cpuPct: 50 });
+    stop();
+
+    // The lease outlives the subscriber; once it lapses unrenewed, the timer stops on its own.
+    vi.advanceTimersByTime(HOST_SAMPLE_STALE_MS);
+    expect(vi.getTimerCount()).toBe(0);
+    sampler.dispose();
+  });
+
   it('keeps the stale bound at three sampling intervals', () => {
     expect(HOST_SAMPLE_STALE_MS).toBe(3 * HOST_SAMPLE_INTERVAL_MS);
   });

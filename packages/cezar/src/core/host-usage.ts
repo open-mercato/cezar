@@ -188,6 +188,11 @@ export interface HostSampler {
   sampleHostUsage(): HostUsage;
   /** 0→1 primes the baseline and starts the timer; the returned stop runs on 1→0. */
   onHostUsage(listener: (usage: HostUsage) => void): () => void;
+  /**
+   * A route read is demand too: keep the timer ticking for one stale window, so a client polling
+   * the route (a refused `host` topic, #1363) reads measured deltas rather than re-primed baselines.
+   */
+  keepWarm(): void;
   /** Stops everything and forgets the state — for tests and process teardown. */
   dispose(): void;
 }
@@ -344,6 +349,7 @@ export function createHostSampler(options: HostSamplerOptions = {}): HostSampler
   let previousCpuAt = 0;
   let previousCgroupUsage: CgroupUsageSnapshot | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
+  let warmTimer: ReturnType<typeof setTimeout> | undefined;
   const listeners = new Set<(usage: HostUsage) => void>();
 
   const buildSample = (cpuPct: number | undefined): HostUsage => {
@@ -383,6 +389,37 @@ export function createHostSampler(options: HostSamplerOptions = {}): HostSampler
       ...(effective.hostCpuCount === undefined ? {} : { hostCpuCount: effective.hostCpuCount }),
       ...(effective.cgroupProbe === undefined ? {} : { cgroupProbe: effective.cgroupProbe }),
     };
+  };
+
+  const startTimer = (): void => {
+    if (timer !== undefined) return;
+    timer = setInterval(() => {
+      let sample: HostUsage;
+      try {
+        sample = takeSample(true);
+      } catch {
+        // One bad read (a /proc file that vanished mid-tick, a probe that threw) must not kill
+        // the interval: a cockpit that dies because telemetry hiccuped is worse than a gap,
+        // and the next tick re-reads everything from scratch.
+        return;
+      }
+      for (const current of [...listeners]) {
+        try {
+          current(sample);
+        } catch {
+          // A throwing listener is that listener's problem; the sampler keeps publishing.
+        }
+      }
+    }, HOST_SAMPLE_INTERVAL_MS);
+    timer.unref?.();
+  };
+
+  /** No listener and no warm route reader left: nothing needs the next tick. */
+  const stopTimerIfIdle = (): void => {
+    if (listeners.size === 0 && warmTimer === undefined && timer !== undefined) {
+      clearInterval(timer);
+      timer = undefined;
+    }
   };
 
   /** The one read path: capture CPU times, derive a delta only from a bounded window. */
@@ -426,7 +463,9 @@ export function createHostSampler(options: HostSamplerOptions = {}): HostSampler
     sampleHostUsage: () => takeSample(false),
     onHostUsage(listener) {
       listeners.add(listener);
-      if (listeners.size === 1) {
+      // A timer a warm route read already started keeps its baseline: re-priming it would cut the
+      // next tick's window below the minimum and drop one reading.
+      if (listeners.size === 1 && timer === undefined) {
         // Prime BOTH baselines on 0→1 - host CPU times and the cgroup usage read - so the first
         // tick two seconds later is a real delta on both series. The snapshot the hub takes right
         // after `start()` therefore answers without `cpuPct` and without `container.cpuPct`, as a
@@ -439,35 +478,25 @@ export function createHostSampler(options: HostSamplerOptions = {}): HostSampler
         }
         const facts = probe();
         if (facts?.cpuUsageUs !== undefined) previousCgroupUsage = { cpuUsageUs: facts.cpuUsageUs, at: now() };
-        timer = setInterval(() => {
-          let sample: HostUsage;
-          try {
-            sample = takeSample(true);
-          } catch {
-            // One bad read (a /proc file that vanished mid-tick, a probe that threw) must not kill
-            // the interval: a cockpit that dies because telemetry hiccuped is worse than a gap,
-            // and the next tick re-reads everything from scratch.
-            return;
-          }
-          for (const current of [...listeners]) {
-            try {
-              current(sample);
-            } catch {
-              // A throwing listener is that listener's problem; the sampler keeps publishing.
-            }
-          }
-        }, HOST_SAMPLE_INTERVAL_MS);
-        timer.unref?.();
+        startTimer();
       }
       return () => {
         listeners.delete(listener);
-        if (listeners.size === 0 && timer !== undefined) {
-          clearInterval(timer);
-          timer = undefined;
-        }
+        stopTimerIfIdle();
       };
     },
+    keepWarm() {
+      clearTimeout(warmTimer);
+      warmTimer = setTimeout(() => {
+        warmTimer = undefined;
+        stopTimerIfIdle();
+      }, HOST_SAMPLE_STALE_MS);
+      warmTimer.unref?.();
+      startTimer();
+    },
     dispose() {
+      clearTimeout(warmTimer);
+      warmTimer = undefined;
       if (timer !== undefined) {
         clearInterval(timer);
         timer = undefined;
