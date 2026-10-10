@@ -490,6 +490,10 @@ loads it in the current tab.
   archived, permanently deleted, or the Cezar server restarts. They must not hold a task's `maxParallel` slot
   after the agent ends.
 - Design-mode element selection is outside the first Browser release.
+  > **IMPLEMENTATION NOTE (2026-10-09) — added since, in its own spec:**
+  > `.ai/specs/2026-10-09-design-mode.md`. It uses a proxy, but not the one refused above: a
+  > mirror on its OWN loopback port, a different origin from the cockpit. The refusal of a proxy
+  > on the cockpit's origin, and the hosted-mode gap, both stand unchanged.
 
 ## 8. Non-goals for Milestone 1
 
