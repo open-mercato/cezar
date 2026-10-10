@@ -370,7 +370,7 @@ describe('the GitHub tab lists', () => {
     const p203: GithubItem = { ...PR_137, number: 203, url: 'u203', checks: null }
     const pr137: GithubItem = { ...PR_137, checks: null }
     stubFetch({
-      'GET /api/v1/github?limit=1000': () => jsonResponse({ ...GITHUB, prs: [pr137, p201, p202, p203] }),
+      'GET /api/v1/github?limit=50': () => jsonResponse({ ...GITHUB, prs: [pr137, p201, p202, p203] }),
       // The window follows the RENDERED order, not the payload order (#gh-sort), so it is the
       // sort's answer for these four — all copies of PR_137, hence one `createdAt` and the
       // number tiebreak, newest-first — that names the request.
@@ -439,13 +439,13 @@ describe('the GitHub tab lists', () => {
 
   it('shows the exact open count from the single fast load — no 30+ guesswork (#664)', async () => {
     // The two-shot is gone: one fast fetch (limit 1000, no rollup) returns the whole open set, so
-    // the tab reports the real count instead of the old fast-batch "30+" placeholder.
+    // the tab reports the server's exact total when the page is smaller than the open set.
     const many: GithubData = {
       ...GITHUB,
       issues: Array.from({ length: 45 }, (_, i) => ({ ...ISSUE_142, number: i + 1, url: `u${i}` })),
     }
     stubFetch({
-      'GET /api/v1/github?limit=1000': () => jsonResponse(many),
+      'GET /api/v1/github?limit=50': () => jsonResponse({ ...many, issuesTotal: 45 }),
     })
     renderAt('/github')
 
@@ -632,7 +632,7 @@ describe('sorting the list newest or oldest first', () => {
       createdAt: '2026-06-01T08:00:00.000Z',
     }
     stubUiStateFetch({
-      'GET /api/v1/github?limit=1000': () => jsonResponse({ ...GITHUB, prs: [PR_137, olderPr] }),
+      'GET /api/v1/github?limit=50': () => jsonResponse({ ...GITHUB, prs: [PR_137, olderPr] }),
       'GET /api/v1/github/checks?prs=137%2C120': () => jsonResponse({ available: true, checks: {} }),
       'GET /api/v1/github/checks?prs=120%2C137': () => jsonResponse({ available: true, checks: {} }),
     })
@@ -1333,8 +1333,8 @@ describe('the unavailable forge state', () => {
   it('renders the server reason and the gh hint, and Try again refetches with refresh=1', async () => {
     const unavailable: GithubData = { available: false, reason: 'gh not installed', issues: [], prs: [] }
     const sent = stubFetch({
-      'GET /api/v1/github?limit=1000': () => jsonResponse(unavailable),
-      'GET /api/v1/github?limit=1000&refresh=1': () => jsonResponse(unavailable),
+      'GET /api/v1/github?limit=50': () => jsonResponse(unavailable),
+      'GET /api/v1/github?limit=50&refresh=1': () => jsonResponse(unavailable),
     })
     renderAt('/github')
 
@@ -1342,12 +1342,12 @@ describe('the unavailable forge state', () => {
       expect(screen.getByRole('heading', { level: 1, name: 'GitHub is unavailable here' })).toBeTruthy(),
     )
     expect(screen.getByText('gh not installed')).toBeTruthy()
-    // One fast fetch now (#664): the single limit=1000 load is what proved the forge unreachable.
-    expect(sent.some((request) => request.path === '/api/v1/github?limit=1000')).toBe(true)
+    // The first cursor page is the request that proved the forge unreachable.
+    expect(sent.some((request) => request.path === '/api/v1/github?limit=50')).toBe(true)
 
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
     await waitFor(() =>
-      expect(sent.some((request) => request.path === '/api/v1/github?limit=1000&refresh=1')).toBe(true),
+      expect(sent.some((request) => request.path === '/api/v1/github?limit=50&refresh=1')).toBe(true),
     )
   })
 })
@@ -2992,7 +2992,7 @@ describe('cross-state search fallback (#730)', () => {
     const MERGED_STREAM: GithubItem = { ...MERGED_PR, title: 'Stream reconcile' }
 
     const sent = stubFetch({
-      'GET /api/v1/github?limit=1000': () => jsonResponse({ ...GITHUB, prs: [PR_137, PR_200] }),
+      'GET /api/v1/github?limit=50': () => jsonResponse({ ...GITHUB, prs: [PR_137, PR_200] }),
       // A real `gh search prs Stream` answers with the OPEN #137 alongside the merged one — which
       // is what made the stale payload render #137 a second time.
       'GET /api/v1/github/search?kind=pr&q=Stream': () =>
@@ -3095,7 +3095,7 @@ describe('cross-state search fallback (#730)', () => {
       checks: null,
     }
     const sent = stubFetch({
-      'GET /api/v1/github?limit=1000': () => jsonResponse({ ...GITHUB, prs: [PR_137, PR_200] }),
+      'GET /api/v1/github?limit=50': () => jsonResponse({ ...GITHUB, prs: [PR_137, PR_200] }),
     })
     renderAt('/github/prs')
     await waitFor(() => expect(rows()).toHaveLength(2))
