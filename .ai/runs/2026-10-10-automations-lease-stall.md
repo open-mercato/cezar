@@ -43,9 +43,9 @@ The longer stale interval delays recovery from a killed owner; the real SIGKILL 
 
 ### Phase 1: Reproduce and fix lease liveness
 
-- [ ] 1.1 Reproduce the concurrent-acquirer failure and baseline current exclusivity/recovery tests.
-- [ ] 1.2 Raise and document the guard stale interval; add a regression test with a real concurrent contender during a bounded event-loop stall.
-- [ ] 1.3 Adjust only the real SIGKILL recovery fixture for the chosen bound and run focused tests.
+- [x] 1.1 Reproduce the concurrent-acquirer failure and baseline current exclusivity/recovery tests. — f37a727b
+- [x] 1.2 Raise and document the guard stale interval; add a regression test with a real concurrent contender during a bounded event-loop stall. — f37a727b
+- [x] 1.3 Adjust only the real SIGKILL recovery fixture for the chosen bound and run focused tests. — f37a727b
 
 ### Phase 2: Validate and publish
 
