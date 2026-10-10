@@ -10,6 +10,7 @@ import {
   createWorktree,
   parseShortstat,
   resolveBaseRef,
+  worktreeChangedPaths,
   worktreeShortstat,
   worktreeSizeBytes,
 } from './git-worktree.ts';
@@ -485,6 +486,19 @@ describe('worktreeShortstat (real git)', () => {
         files: 1,
       });
     });
+  });
+});
+
+describe('worktreeChangedPaths', () => {
+  it('parses rename records and nested untracked files without corrupting paths', async () => {
+    const repo = await fixtureRepo('cez-changed-paths-');
+    await run('git', ['mv', 'base.txt', 'renamed.txt'], { cwd: repo });
+    mkdirSync(join(repo, 'generated', 'nested'), { recursive: true });
+    writeFileSync(join(repo, 'generated', 'nested', 'output.txt'), 'check\n');
+
+    expect(await worktreeChangedPaths(repo)).toEqual(
+      expect.arrayContaining(['base.txt', 'renamed.txt', 'generated/nested/output.txt']),
+    );
   });
 });
 
