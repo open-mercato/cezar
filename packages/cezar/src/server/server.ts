@@ -2,7 +2,7 @@ import {
   trackerWatchInputSchema, trackerWatchParamsSchema, trackerWatchQuerySchema,
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
   trackerCredentialsSchema, trackerItemParamsSchema, trackerAssociationInputSchema, type TrackerChangedEvent,
-  secretParamsSchema, secretValueInputSchema, type SecretsList,
+  secretParamsSchema, secretValueInputSchema, type SecretsList, type SecretValueInput,
 } from '@open-mercato/cezar-contract';
 import { SecretStore, SecretsError, type SecretScopeRef } from '../workspace/secrets.ts';
 import { createTrackerService } from './tracker/index.ts';
@@ -5709,7 +5709,7 @@ export function createApp(deps: ServerDeps) {
     const [listed, keyBackend] = await Promise.all([secretStore.list(scope), secretStore.keyBackend()]);
     return { secrets: listed.secrets, keyBackend };
   };
-  const putSecret = async (scope: SecretScopeRef, name: string, input: { value: string; audiences?: readonly ('checks' | 'cezar')[] }) => {
+  const putSecret = async (scope: SecretScopeRef, name: string, input: SecretValueInput) => {
     try {
       await secretStore.set(scope, name, input.value, input.audiences);
     } catch (error) {
