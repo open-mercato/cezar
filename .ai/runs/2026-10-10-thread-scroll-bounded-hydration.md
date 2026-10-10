@@ -13,8 +13,8 @@ Scope: `packages/web/e2e/thread-scroll.e2e.ts` and this issue-specific plan/evid
 
 ### Phase 2: Verify and ship
 
-- [ ] 2.1 Run the focused browser test and capture red/green evidence and screenshots where available.
-- [ ] 2.2 Run the configured validation gate, review the diff, open and review the issue PR, and report exact results and limitations.
+- [x] 2.1 Run the focused browser test and capture red/green evidence and screenshots where available. — browser provider unavailable; no green browser result can be claimed
+- [x] 2.2 Run the configured validation gate, review the diff, open and review the issue PR, and report exact results and limitations. — f1b9f11d, 7e376609
 
 ## Risks
 
@@ -27,6 +27,7 @@ Scope: `packages/web/e2e/thread-scroll.e2e.ts` and this issue-specific plan/evid
 - Build precondition: `npm run build` is blocked by pre-existing contract/server drift outside this scope (missing contract exports and unrelated workspace type mismatches).
 - Focused unaffected unit coverage: `npx vitest run packages/web/src/routes/task-thread/thread-scroller.test.tsx packages/web/src/routes/task-thread/thread-scroll.test.ts --config vitest.config.ts` — 2 files, 42 tests passed.
 - Web typecheck: `npx tsc -p packages/web/tsconfig.json --noEmit` — passed.
+- Final configured gate after rebuilding generated artifacts: `npm run typecheck` passed; `npm run test:unit` passed (42/42); `npm run build` passed; `npm run test:package` passed (17/17). `npm test` exposed unrelated existing server failures in `projects-api.test.ts`, `git-worktree.test.ts`, `git-changes.test.ts`, `automations-api.test.ts`, `route-parity.test.ts`, `repo-files-api.test.ts`, `health-forge.test.ts`, `attachments-api.test.ts`, `agent-profile-wiring.test.ts`, and `git.test.ts`; it was stopped without changing those areas.
 
 ## Progress
 
@@ -39,5 +40,5 @@ Scope: `packages/web/e2e/thread-scroll.e2e.ts` and this issue-specific plan/evid
 
 ### Phase 2: Verify and ship
 
-- [ ] 2.1 Run the focused browser test and capture red/green evidence and screenshots where available.
-- [ ] 2.2 Run the configured validation gate, review the diff, open and review the issue PR, and report exact results and limitations.
+- [x] 2.1 Run the focused browser test and capture red/green evidence and screenshots where available. — browser provider unavailable; no green browser result can be claimed
+- [x] 2.2 Run the configured validation gate, review the diff, open and review the issue PR, and report exact results and limitations. — f1b9f11d, 7e376609
