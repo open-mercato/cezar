@@ -30,7 +30,7 @@ Prevent a busy event loop plus a concurrent lease contender from falsely comprom
 
 ### Phase 2: Validate and publish
 
-- [ ] 2.1 Run the configured validation gate and inspect the final diff.
+- [x] 2.1 Run the configured validation gate and inspect the final diff. — a36160b4 (focused gate green; full gate has unrelated baseline failures documented on PR #1355)
 - [ ] 2.2 Run authoritative PR review/autofix, finalize the PR, and report exact evidence.
 
 ## Risks
