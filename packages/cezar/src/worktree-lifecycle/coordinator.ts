@@ -1,0 +1,452 @@
+import { randomUUID, createHash } from 'node:crypto';
+import { existsSync, realpathSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import {
+  lifecycleOperationViewSchema,
+  type LifecycleAction, type LifecycleActionInput, type LifecycleOperation,
+  type LifecycleOperationView, type LifecyclePendingLaunch, type LifecycleIntent,
+  type StartLifecycleRemovalInput, type WorktreeLifecycleRecord,
+  type WorktreeLifecycleSummary, type WorktreeLifecycleDetail, type LifecyclePreviewResponse,
+} from '@open-mercato/cezar-contract';
+import type { RunStore } from '../runs/store.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import { createWorktree, removeWorktree, worktreePathFor, branchFor } from '../git-worktree.ts';
+import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
+import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
+import { LifecycleStore } from './store.ts';
+import { readLifecycleConfig, withLifecycleConfigLock } from './config.ts';
+import { renderLifecycleCommand, lifecycleCommandFingerprint, type LifecycleTemplateContext } from './templates.ts';
+import { executeLifecycleCommand, probeLifecycleProcess } from './executor.ts';
+
+const terminal = new Set(['completed', 'bypassed', 'cancelled', 'kept']);
+const attention = new Set(['needs_attention', 'interrupted']);
+const now = () => new Date().toISOString();
+const bodyHash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+export class LifecycleConflict extends Error {}
+export class LifecycleNotFound extends Error {}
+
+/** The coordinator is project-local and deliberately knows nothing about HTTP. */
+export class WorktreeLifecycleCoordinator {
+  readonly store: LifecycleStore;
+  private readonly listeners = new Set<(event: {worktreeId: string; operationId?: string; revision: number}) => void>();
+  private readonly controllers = new Map<string, AbortController>();
+  private readonly executing = new Set<string>();
+  private readonly queue = new Map<string, number>();
+  private readonly offSemaphore: () => void;
+  private disposed = false;
+  constructor(private readonly root: string, private readonly runs: RunStore, private readonly options: {
+    semaphore: WorkspaceSemaphore;
+    busySlots: () => number;
+    isActive: (runId: string) => boolean;
+    cancelAndWait: (runId: string) => Promise<boolean>;
+    resume: (runId: string, launch: LifecyclePendingLaunch | undefined) => Promise<void>;
+  }) {
+    this.store = new LifecycleStore(join(root, '.ai/cezar'), root);
+    this.offSemaphore = options.semaphore.register({
+      busySlots: () => this.executing.size,
+      oldestQueuedAt: () => Math.min(...this.queue.values()) === Infinity ? null : Math.min(...this.queue.values()),
+      pump: () => this.pump(),
+    });
+  }
+  onChange(listener: (event: {worktreeId: string; operationId?: string; revision: number}) => void): () => void {
+    this.listeners.add(listener); return () => { this.listeners.delete(listener); };
+  }
+  private changed(record: WorktreeLifecycleRecord, operation?: LifecycleOperation): void {
+    if (this.runs.getRun(record.runId)) this.runs.updateRun(record.runId, {
+      worktreeLifecycle: {
+        worktreeId: record.worktreeId, generation: record.generation,
+        ...(record.activeOperationId ? {activeOperationId: record.activeOperationId} : {}),
+        ...(operation ? {phase: operation.phase, state: operation.state} : {}),
+        needsAttention: operation ? attention.has(operation.state) : false,
+      },
+    });
+    for (const listener of this.listeners) listener({worktreeId: record.worktreeId, ...(operation ? {operationId: operation.id} : {}), revision: operation?.revision ?? 0});
+  }
+  isBlocked(runId: string): boolean {
+    const gate = this.runs.getRun(runId)?.worktreeLifecycle;
+    return !!gate?.activeOperationId && !!gate.state && !terminal.has(gate.state);
+  }
+  async requiresGate(runId: string): Promise<boolean> {
+    const config = await readLifecycleConfig(this.root);
+    return config.config.afterCreate.length > 0 || config.config.beforeRemove.length > 0 || !!await this.store.readWorktree(runId);
+  }
+  private context(record: WorktreeLifecycleRecord): LifecycleTemplateContext {
+    const expected = resolve(worktreePathFor(this.root, record.runId));
+    if (resolve(record.projectRoot) !== resolve(this.root) || resolve(record.worktreePath) !== expected) throw new LifecycleConflict('Worktree context does not belong to this project');
+    if (existsSync(expected) && realpathSync(expected) !== expected) throw new LifecycleConflict('Worktree path resolves outside its managed location');
+    return {root_path: this.root, worktree_path: expected, worktree_id: `cez-${record.worktreeId}`, task_id: record.runId};
+  }
+  private async recordById(id: string): Promise<WorktreeLifecycleRecord> {
+    const { records } = await this.store.listWorktrees();
+    const record = records.find(item => item.worktreeId === id);
+    if (!record) throw new LifecycleNotFound('Unknown worktree lifecycle identity');
+    this.context(record); return record;
+  }
+  private async save(record: WorktreeLifecycleRecord, operation: LifecycleOperation): Promise<void> {
+    const expected = operation.revision;
+    operation.revision++; operation.updatedAt = now(); record.updatedAt = operation.updatedAt;
+    await this.store.writeOperation(operation, expected);
+    await this.store.writeWorktree(record);
+    this.changed(record, operation);
+  }
+  private makeOperation(record: WorktreeLifecycleRecord, intent: LifecycleIntent, launch?: LifecyclePendingLaunch): LifecycleOperation {
+    return {schemaVersion: 1, id: randomUUID(), worktreeId: record.worktreeId, generation: record.generation,
+      intent, phase: intent === 'create' || intent === 'recreate' ? 'setup' : 'teardown', state: 'queued', revision: 0,
+      createdAt: now(), updatedAt: now(), executions: [], successfulEntries: [], requests: [],
+      ...(launch ? {pendingLaunch: launch} : {}),
+    };
+  }
+  private async enroll(runId: string): Promise<WorktreeLifecycleRecord> {
+    const prior = await this.store.readWorktree(runId);
+    if (prior) { this.context(prior); return prior; }
+    const run = this.runs.getRun(runId);
+    if (!run?.worktreePath) throw new LifecycleConflict('Task has no managed worktree');
+    const record: WorktreeLifecycleRecord = {schemaVersion: 1, worktreeId: randomUUID(), runId,
+      projectRoot: this.root, worktreePath: run.worktreePath, ...(run.branch ? {branch: run.branch} : {}),
+      generation: 1, preparedBy: 'completed', autoCleanupSuppressed: false, createdAt: now(), updatedAt: now()};
+    this.context(record); await this.store.writeWorktree(record); return record;
+  }
+  /** Caller already holds normal task admission. No second slot is acquired for setup. */
+  async prepare(runId: string, base: string, pendingLaunch: LifecyclePendingLaunch): Promise<{ready: boolean; path: string; branch: string; baseBranch: string; operationId?: string}> {
+    const configured = await readLifecycleConfig(this.root);
+    const prior = await this.store.readWorktree(runId);
+    if (!prior && !configured.config.afterCreate.length && !configured.config.beforeRemove.length) {
+      const wt = await createWorktree(this.root, runId, base);
+      await seedAgentConfigLocalLayer(this.root, wt.path).catch(() => []);
+      return {ready: true, ...wt};
+    }
+    return this.store.withWorktreeLock(runId, async () => {
+      let record = await this.store.readWorktree(runId);
+      const materialized = existsSync(worktreePathFor(this.root, runId));
+      if (record?.preparedBy && materialized && !record.activeOperationId) return {ready: true, path: record.worktreePath, branch: record.branch ?? branchFor(runId), baseBranch: base};
+      if (!record) record = {schemaVersion: 1, worktreeId: randomUUID(), runId, projectRoot: this.root,
+        worktreePath: worktreePathFor(this.root, runId), branch: branchFor(runId), generation: 1,
+        autoCleanupSuppressed: false, createdAt: now(), updatedAt: now()};
+      this.context(record);
+      let operation = record.activeOperationId ? await this.store.readOperation(record.activeOperationId) : undefined;
+      if (operation && operation.state !== 'queued' && !terminal.has(operation.state)) {
+        return {ready: false, path: record.worktreePath, branch: record.branch ?? branchFor(runId), baseBranch: base, operationId: operation.id};
+      }
+      if (!operation || terminal.has(operation.state)) {
+        if (!materialized && prior) record.generation++;
+        delete record.preparedBy; record.autoCleanupSuppressed = false;
+        operation = this.makeOperation(record, prior && !materialized ? 'recreate' : 'create', pendingLaunch);
+        record.activeOperationId = operation.id;
+        await this.store.writeOperation(operation); await this.store.writeWorktree(record);
+      }
+      try {
+        if (process.env.CEZ_DRY_RUN !== '1') {
+          const wt = await createWorktree(this.root, runId, base);
+          record.worktreePath = wt.path; record.branch = wt.branch;
+          this.runs.updateRun(runId, {worktreePath: wt.path, branch: wt.branch, baseBranch: wt.baseBranch, worktreeReclaimedAt: undefined});
+          await seedAgentConfigLocalLayer(this.root, wt.path).catch(() => []);
+        }
+        await this.runCommands(record, operation);
+      } catch (error) { await this.fail(record, operation, error, 'context'); }
+      return {ready: record.preparedBy !== undefined, path: record.worktreePath, branch: record.branch ?? branchFor(runId), baseBranch: base, operationId: operation.id};
+    });
+  }
+  private async fail(record: WorktreeLifecycleRecord, operation: LifecycleOperation, error: unknown, stage: LifecycleOperation['failureStage']): Promise<void> {
+    operation.state = 'needs_attention'; operation.failureStage = stage;
+    operation.error = redactSecrets(error instanceof Error ? error.message : String(error), collectSecretValues(process.env));
+    await this.save(record, operation);
+  }
+  private async runCommands(record: WorktreeLifecycleRecord, operation: LifecycleOperation): Promise<void> {
+    const controller = new AbortController(); this.controllers.set(operation.id, controller);
+    try {
+      const context = this.context(record);
+      if (operation.decision?.action === 'force-delete' || operation.decision?.action === 'start-anyway') {
+        await withLifecycleConfigLock(this.root, () => this.commit(record, operation));
+        return;
+      }
+      let changes = 0; let revision: string | null | undefined;
+      for (;;) {
+        if (this.disposed || controller.signal.aborted) { await this.fail(record, operation, 'Scripts stopped; choose Retry to continue', 'command'); return; }
+        const snapshot = await readLifecycleConfig(this.root);
+        if (revision !== undefined && revision !== snapshot.revision && ++changes > 10) { await this.fail(record, operation, 'Configuration kept changing; retry when edits are finished.', 'config'); return; }
+        revision = snapshot.revision; operation.configRevision = snapshot.revision;
+        const entries = operation.phase === 'setup' ? snapshot.config.afterCreate : snapshot.config.beforeRemove;
+        const planned = entries.map((entry, ordinal) => ({entry, ordinal, rendered: renderLifecycleCommand(entry.command, context), fingerprint: lifecycleCommandFingerprint(entry.command, context)}));
+        const pending = planned.find(({entry, fingerprint}) => !operation.successfulEntries.some(success => success.entryId === entry.id && success.fingerprint === fingerprint));
+        if (!pending) {
+          const committed = await withLifecycleConfigLock(this.root, async () => {
+            const latest = await readLifecycleConfig(this.root);
+            if (latest.revision !== revision) return false;
+            await this.commit(record, operation); return true;
+          });
+          if (committed) return;
+          continue;
+        }
+        if (process.env.CEZ_DRY_RUN !== '1' && !existsSync(context.worktree_path)) { await this.fail(record, operation, 'Worktree directory is missing; scripts cannot run in the project root', 'context'); return; }
+        const {entry, ordinal, rendered, fingerprint} = pending;
+        const execution = {id: randomUUID(), operationId: operation.id, entryId: entry.id, fingerprint, ordinal,
+          label: redactSecrets(entry.name || `Command ${ordinal + 1}`, collectSecretValues(process.env)),
+          commandPreview: redactSecrets(rendered, collectSecretValues(process.env)),
+          attempt: operation.executions.filter(item => item.entryId === entry.id).length + 1,
+          state: 'running' as const, startedAt: now()};
+        operation.executions.push(execution); operation.executions = operation.executions.slice(-100);
+        operation.state = 'running'; delete operation.error; delete operation.failureStage;
+        await this.save(record, operation); // Failure here MUST prevent spawn.
+        const result = await executeLifecycleCommand({command: rendered, cwd: context.worktree_path,
+          ...(entry.timeoutSeconds ? {timeoutSeconds: entry.timeoutSeconds} : {}), signal: controller.signal,
+          dryRun: process.env.CEZ_DRY_RUN === '1',
+          onStart: async identity => {
+            const current = operation.executions.at(-1)!;
+            current.process = identity; await this.save(record, operation);
+          },
+          onOutput: async frame => {
+            await this.store.appendOutput(operation.id, {executionId: execution.id, stream: frame.stream, text: frame.text, time: now()});
+            this.changed(record, operation);
+          },
+        });
+        const current = operation.executions.at(-1)!;
+        current.state = result.state; current.finishedAt = now();
+        if (result.exitCode !== undefined) current.exitCode = result.exitCode;
+        if (result.signal !== undefined) current.signal = result.signal;
+        if (result.reason) current.reason = result.reason;
+        if (current.process) current.process.quiescent = result.quiescent;
+        current.outputTruncated = result.truncated;
+        if (result.state !== 'succeeded' || !result.quiescent) {
+          operation.state = result.quiescent ? 'needs_attention' : 'interrupted'; operation.failureStage = 'command';
+          operation.error = result.reason ?? 'Command failed; edit scripts or choose a recovery action';
+          await this.save(record, operation); return;
+        }
+        operation.successfulEntries.push({entryId: entry.id, fingerprint});
+        await this.save(record, operation);
+      }
+    } finally { this.controllers.delete(operation.id); this.changed(record, operation); }
+  }
+  private async commit(record: WorktreeLifecycleRecord, operation: LifecycleOperation): Promise<void> {
+    operation.state = 'committing'; await this.save(record, operation);
+    try {
+      if (operation.phase === 'setup') {
+        record.preparedBy = operation.decision?.action === 'start-anyway' ? 'bypassed' : 'completed';
+      } else {
+        if (this.options.isActive(record.runId)) throw new LifecycleConflict('Task is still active; directory retained');
+        this.context(record);
+        if (process.env.CEZ_DRY_RUN !== '1') {
+          await removeWorktree(this.root, record.worktreePath, operation.intent === 'reclaim' ? undefined : record.branch);
+          if (existsSync(record.worktreePath)) throw new Error('Scripts completed but the worktree directory could not be removed');
+          if (operation.intent === 'delete-task') this.runs.deleteRun(record.runId);
+          else if (this.runs.getRun(record.runId)) this.runs.updateRun(record.runId, operation.intent === 'reclaim'
+            ? {worktreeReclaimedAt: now()} : {worktreePath: undefined, branch: undefined});
+        }
+        delete record.preparedBy;
+      }
+      operation.state = operation.phase === 'setup' && operation.decision?.action === 'start-anyway' ? 'bypassed' : 'completed';
+      operation.finishedAt = now(); delete operation.error; delete operation.failureStage; delete record.activeOperationId;
+      await this.save(record, operation);
+    } catch (error) { await this.fail(record, operation, error, 'commit'); }
+  }
+  async withWorktreeMutation<T>(runId: string, mutate: () => Promise<T>): Promise<T> {
+    return this.store.withWorktreeLock(runId, async () => {
+      const record = await this.store.readWorktree(runId);
+      const operation = record?.activeOperationId ? await this.store.readOperation(record.activeOperationId) : undefined;
+      if (operation && !terminal.has(operation.state)) throw new LifecycleConflict('Worktree lifecycle operation is pending; resolve it first');
+      return mutate();
+    });
+  }
+  async startRemoval(input: StartLifecycleRemovalInput): Promise<LifecycleOperationView> {
+    const record = 'runId' in input ? await this.enroll(input.runId) : await this.recordById(input.worktreeId);
+    return this.startRecordRemoval(record, input.intent, input.requestId, bodyHash(input));
+  }
+  private async startRecordRemoval(record: WorktreeLifecycleRecord, intent: LifecycleIntent, requestId: string, hash: string): Promise<LifecycleOperationView> {
+    return this.store.withWorktreeLock(record.runId, async () => {
+      const operations = await this.store.listOperations(record.worktreeId);
+      for (const prior of operations) {
+        const request = prior.requests.find(item => item.requestId === requestId);
+        if (request) {
+          if (request.bodyHash !== hash) throw new LifecycleConflict('Request ID was already used for a different action');
+          return this.view(prior, record);
+        }
+      }
+      record = await this.store.readWorktree(record.runId) ?? record;
+      if (record.activeOperationId) {
+        const existing = await this.store.readOperation(record.activeOperationId);
+        if (existing && !terminal.has(existing.state)) throw new LifecycleConflict('Worktree already has a pending lifecycle operation');
+      }
+      if (this.options.isActive(record.runId)) throw new LifecycleConflict('Task is active; cancel it before removing its worktree');
+      const operation = this.makeOperation(record, intent);
+      operation.requests.push({requestId, bodyHash: hash}); record.activeOperationId = operation.id;
+      await this.store.writeOperation(operation); await this.store.writeWorktree(record); this.changed(record, operation);
+      this.queue.set(operation.id, Date.now()); queueMicrotask(() => { void this.pump(); });
+      return this.view(operation, record);
+    });
+  }
+  async reclaim(runId: string): Promise<boolean> {
+    try {
+      if (!await this.requiresGate(runId)) return false;
+      const record = await this.enroll(runId);
+      if (record.autoCleanupSuppressed || record.activeOperationId) return false;
+      await this.startRecordRemoval(record, 'reclaim', randomUUID(), bodyHash({runId, intent: 'reclaim'}));
+    } catch { /* automatic cleanup preserves ambiguous context */ }
+    return false; // Queued removal is never reported as reclaimed.
+  }
+  async discardVariant(runId: string): Promise<LifecycleOperationView | null> {
+    if (!await this.options.cancelAndWait(runId)) throw new LifecycleConflict('Variant process has not exited; worktree retained');
+    if (!await this.requiresGate(runId)) return null;
+    const record = await this.enroll(runId);
+    if (record.activeOperationId) {
+      const operation = await this.store.readOperation(record.activeOperationId);
+      if (operation && !terminal.has(operation.state)) {
+        const controller = this.controllers.get(operation.id); controller?.abort();
+        if (controller) throw new LifecycleConflict('Variant scripts are stopping; retry cleanup after they exit');
+        operation.state = 'cancelled'; operation.finishedAt = now(); delete record.activeOperationId; await this.save(record, operation);
+      }
+    }
+    return this.startRecordRemoval(record, 'discard-variant', randomUUID(), bodyHash({runId, intent: 'discard-variant'}));
+  }
+  private async pump(): Promise<void> {
+    if (this.disposed) return;
+    for (const [id] of this.queue) {
+      if (this.options.semaphore.busy() >= this.options.semaphore.maxParallel() || this.executing.size + this.options.busySlots() >= this.options.semaphore.projectMaxParallel(this.root)) break;
+      this.queue.delete(id); this.executing.add(id);
+      void this.activate(id).finally(() => { this.executing.delete(id); void this.options.semaphore.release(); });
+    }
+  }
+  private async activate(id: string): Promise<void> {
+    try {
+      const operation = await this.store.readOperation(id);
+      if (!operation || operation.state !== 'queued') return;
+      const record = await this.recordById(operation.worktreeId);
+      await this.store.withWorktreeLock(record.runId, async () => {
+        const latest = await this.store.readOperation(id);
+        if (!latest || latest.state !== 'queued') return;
+        try { await this.runCommands(record, latest); }
+        catch (error) { await this.fail(record, latest, error, 'config'); }
+      });
+    } catch { /* durable queued operation remains visible if storage is unavailable */ }
+  }
+  private async processQuiescent(operation: LifecycleOperation): Promise<boolean> {
+    if (this.controllers.has(operation.id)) return false;
+    for (const execution of operation.executions) {
+      if (!execution.process || execution.process.quiescent) continue;
+      if (await probeLifecycleProcess(execution.process) !== 'quiescent') return false;
+    }
+    return true;
+  }
+  async action(id: string, input: LifecycleActionInput): Promise<LifecycleOperationView> {
+    const operation = await this.store.readOperation(id);
+    if (!operation) throw new LifecycleNotFound('Unknown lifecycle operation');
+    const record = await this.recordById(operation.worktreeId);
+    // Stop cannot wait for the executor's worktree lease: it must first terminate it.
+    if (input.action === 'stop' && this.controllers.has(id)) {
+      if (operation.revision !== input.expectedRevision) throw new LifecycleConflict('Operation changed; refresh and try again');
+      this.controllers.get(id)!.abort();
+      return this.view(operation, record);
+    }
+    return this.store.withWorktreeLock(record.runId, async () => {
+      const current = await this.store.readOperation(id);
+      if (!current) throw new LifecycleNotFound('Unknown lifecycle operation');
+      const hash = bodyHash(input);
+      const prior = current.requests.find(item => item.requestId === input.requestId);
+      if (prior) {
+        if (prior.bodyHash !== hash) throw new LifecycleConflict('Request ID was already used for a different action');
+        return this.view(current, record);
+      }
+      if (current.revision !== input.expectedRevision) throw new LifecycleConflict('Operation changed; refresh and try again');
+      const view = await this.view(current, record);
+      if (!view.allowedActions.includes(input.action)) throw new LifecycleConflict('Action is not available for this operation');
+      if (!await this.processQuiescent(current)) throw new LifecycleConflict('Previous script may still be running; stop that process before retrying');
+      current.requests.push({requestId: input.requestId, bodyHash: hash});
+      current.decision = {action: input.action, actor: 'local-user', at: now()};
+      if (input.action === 'stop') {
+        this.queue.delete(id); current.state = 'needs_attention'; current.error = 'Scripts stopped; choose Retry to continue';
+      } else if (input.action === 'cancel-task' || input.action === 'keep-worktree') {
+        current.state = input.action === 'cancel-task' ? 'cancelled' : 'kept'; current.finishedAt = now();
+        record.autoCleanupSuppressed = true; delete record.activeOperationId;
+        if (input.action === 'cancel-task' && this.runs.getRun(record.runId)) this.runs.updateRun(record.runId, {status: 'cancelled', finishedAt: now()});
+      } else {
+        current.state = 'queued'; delete current.error; delete current.failureStage;
+        if (input.action === 'retry') delete current.decision;
+      }
+      await this.save(record, current);
+      if (current.state === 'queued') {
+        if (current.phase === 'setup') queueMicrotask(() => { void this.options.resume(record.runId, current.pendingLaunch).catch(error => this.fail(record, current, error, 'context')); });
+        else { this.queue.set(id, Date.now()); queueMicrotask(() => { void this.pump(); }); }
+      }
+      return this.view(current, record);
+    });
+  }
+  private async view(operation: LifecycleOperation, record: WorktreeLifecycleRecord): Promise<LifecycleOperationView> {
+    let entries: LifecycleOperationView['entries'] = [];
+    try {
+      const config = await readLifecycleConfig(this.root);
+      const current = operation.phase === 'setup' ? config.config.afterCreate : config.config.beforeRemove;
+      entries = current.map((entry, index) => {
+        const fingerprint = lifecycleCommandFingerprint(entry.command, this.context(record));
+        const latest = [...operation.executions].reverse().find(item => item.entryId === entry.id && item.fingerprint === fingerprint);
+        const succeeded = operation.successfulEntries.some(item => item.entryId === entry.id && item.fingerprint === fingerprint);
+        return {entryId: entry.id, label: entry.name || `Command ${index + 1}`,
+          commandPreview: redactSecrets(renderLifecycleCommand(entry.command, this.context(record)), collectSecretValues(process.env)),
+          state: succeeded ? 'already-completed' : latest?.state ?? 'pending', attempt: latest?.attempt ?? 0};
+      });
+      const present = new Set(current.map(entry => entry.id));
+      for (const execution of operation.executions) if (!present.has(execution.entryId)) {
+        entries.push({entryId: execution.entryId, label: execution.label, commandPreview: execution.commandPreview, state: 'removed', attempt: execution.attempt}); present.add(execution.entryId);
+      }
+    } catch { /* config failure is represented by operation.error; historical output stays readable */ }
+    let allowedActions: LifecycleAction[] = [];
+    if (operation.state === 'queued' || operation.state === 'running') allowedActions = ['stop'];
+    if (attention.has(operation.state) && await this.processQuiescent(operation)) allowedActions = operation.phase === 'setup'
+      ? ['retry', 'start-anyway', 'cancel-task'] : ['retry', 'keep-worktree', 'force-delete'];
+    return lifecycleOperationViewSchema.parse({...operation, history: operation.executions, entries, allowedActions});
+  }
+  async operation(id: string): Promise<LifecycleOperationView> {
+    const operation = await this.store.readOperation(id);
+    if (!operation) throw new LifecycleNotFound('Unknown lifecycle operation');
+    return this.view(operation, await this.recordById(operation.worktreeId));
+  }
+  output(id: string, query: {afterSeq?: number; limit?: number} = {}) {
+    return this.store.readOutput(id, query.afterSeq ?? 0, query.limit ?? 100);
+  }
+  private async summary(record: WorktreeLifecycleRecord): Promise<WorktreeLifecycleSummary> {
+    const run = this.runs.getRun(record.runId);
+    const operation = record.activeOperationId ? await this.store.readOperation(record.activeOperationId) : undefined;
+    return {worktreeId: record.worktreeId, runId: record.runId, task: run ? {id: run.id, title: run.title ?? run.task} : null,
+      worktreePath: record.worktreePath, generation: record.generation, onDisk: existsSync(record.worktreePath),
+      prepared: record.preparedBy !== undefined, needsAttention: operation ? attention.has(operation.state) : false,
+      autoCleanupSuppressed: record.autoCleanupSuppressed, ...(operation ? {operation: await this.view(operation, record)} : {})};
+  }
+  async list(query: {attentionOnly?: boolean; cursor?: string; limit?: number} = {}): Promise<{worktrees: WorktreeLifecycleSummary[]; nextCursor?: string}> {
+    const {records} = await this.store.listWorktrees();
+    let summaries = await Promise.all(records.map(record => this.summary(record)));
+    if (query.attentionOnly) summaries = summaries.filter(record => record.needsAttention);
+    summaries.sort((a,b) => a.worktreeId.localeCompare(b.worktreeId));
+    if (query.cursor) summaries = summaries.filter(record => record.worktreeId > query.cursor!);
+    const worktrees = summaries.slice(0, query.limit ?? 50);
+    return {worktrees, ...(summaries.length > worktrees.length ? {nextCursor: worktrees.at(-1)!.worktreeId} : {})};
+  }
+  async detail(id: string): Promise<WorktreeLifecycleDetail> {
+    const record = await this.recordById(id);
+    const history = await this.store.listOperations(id);
+    return {...await this.summary(record), history: await Promise.all(history.slice(-20).map(operation => this.view(operation, record)))};
+  }
+  async preview(input: {command: string; worktreeId?: string}): Promise<LifecyclePreviewResponse> {
+    const variables: LifecycleTemplateContext = input.worktreeId ? this.context(await this.recordById(input.worktreeId))
+      : {root_path: '/example/project', worktree_path: '/example/project/.ai/cezar/worktrees/example-task', worktree_id: 'cez-00000000-0000-4000-8000-000000000000', task_id: '00000000-0000-4000-8000-000000000000'};
+    const secrets = collectSecretValues(process.env);
+    return {renderedCommand: redactSecrets(renderLifecycleCommand(input.command, variables), secrets),
+      variables: Object.fromEntries(Object.entries(variables).map(([key,value]) => [key,redactSecrets(value,secrets)])) as LifecycleTemplateContext,
+      cwd: redactSecrets(variables.worktree_path, secrets), illustrative: !input.worktreeId};
+  }
+  /** Reconcile metadata only. Never execute scripts on the boot critical path. */
+  async reconcile(): Promise<void> {
+    const {records} = await this.store.listWorktrees();
+    for (const record of records) {
+      if (!record.activeOperationId) { this.changed(record); continue; }
+      try {
+        const operation = await this.store.readOperation(record.activeOperationId);
+        if (!operation) continue;
+        if (operation.state === 'running' || operation.state === 'committing') {
+          operation.state = 'interrupted'; operation.error = 'Cezar stopped before completion was recorded; choose an explicit recovery action';
+          for (const execution of operation.executions) if (execution.state === 'running') execution.state = 'interrupted';
+          await this.save(record, operation);
+        } else this.changed(record, operation);
+        if (operation.state === 'queued' && operation.phase === 'teardown') this.queue.set(operation.id, Date.parse(operation.createdAt));
+      } catch { /* independent corrupt records cannot prevent boot */ }
+    }
+  }
+  start(): void { void this.pump(); }
+  dispose(): void { this.disposed = true; this.offSemaphore(); this.queue.clear(); for (const controller of this.controllers.values()) controller.abort(); }
+}
