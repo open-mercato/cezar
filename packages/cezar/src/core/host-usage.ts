@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { availableParallelism, cpus, freemem, loadavg, totalmem } from 'node:os';
 import type { HostUsage, HostUsageContainer } from '@open-mercato/cezar-contract';
@@ -27,6 +28,8 @@ import {
  * 2. **Every read is best-effort.** Memory comes from `os`, swap from `/proc/meminfo` (the one
  *    value Node does not expose; Linux only), load from `os.loadavg()` (absent on Windows where
  *    it reports zeros). A missing fact is OMITTED, never zeroed, and nothing here throws.
+ *    macOS is the exception for memory and swap: `os.freemem()` there is the bare free list, so
+ *    both come from `vm_stat` / `sysctl vm.swapusage` instead (#1363), falling back to `os`.
  * 3. **Effective capacity, one scope at a time** (spec
  *    `.ai/specs/2026-09-20-host-telemetry-sidebar-widget.md`). Beside the host totals the sampler
  *    asks the cgroup probe for the PROCESS's own limits and emits an additive `container` object
@@ -36,7 +39,7 @@ import {
  *    whose value is unreadable is omitted rather than replaced by the host figure.
  *
  * Cost, stated accurately (review minor): one `os.cpus()`-equivalent read plus a handful of small
- * `/proc` and cgroup reads per sample. With no subscriber the timer never starts, so a workspace
+ * `/proc` and cgroup reads per sample (on macOS, two ~2 ms `vm_stat`/`sysctl` spawns instead). With no subscriber the timer never starts, so a workspace
  * with no cockpit open pays nothing; the read-through path costs one read per route hit. But the
  * main deployment DOES hold a subscription: since the sidebar glance landed, a local desktop
  * cockpit's root writer (`packages/web/src/api/host-usage.tsx`) holds the `host` topic for the
@@ -67,6 +70,10 @@ export interface HostSamplerOptions {
   platform?: NodeJS.Platform;
   /** Injectable for tests; defaults to reading `/proc/meminfo` on Linux. */
   readMeminfo?: () => string | undefined;
+  /** Injectable for tests; defaults to running `vm_stat` on macOS. */
+  readVmStat?: () => string | undefined;
+  /** Injectable for tests; defaults to `sysctl -n vm.swapusage` on macOS. */
+  readSwapUsage?: () => string | undefined;
   /** Injectable for tests; defaults to reading `/proc/self/cgroup` and the cgroup files. */
   readCgroupFile?: CgroupFileReader;
   /** Injectable for tests; defaults to `createCgroupProbe({ readFile: readCgroupFile })`. */
@@ -219,6 +226,78 @@ function readMeminfoFor(platform: NodeJS.Platform): () => string | undefined {
   return platform === 'linux' ? defaultReadMeminfo : () => undefined;
 }
 
+/** A darwin tool's stdout, or `undefined` when it is missing, slow or failing — never a throw. */
+function runDarwinTool(file: string, args: string[]): string | undefined {
+  try {
+    return execFileSync(file, args, {
+      encoding: 'utf8',
+      timeout: 1_000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+function readVmStatFor(platform: NodeJS.Platform): () => string | undefined {
+  return platform === 'darwin' ? () => runDarwinTool('/usr/bin/vm_stat', []) : () => undefined;
+}
+
+function readSwapUsageFor(platform: NodeJS.Platform): () => string | undefined {
+  return platform === 'darwin'
+    ? () => runDarwinTool('/usr/sbin/sysctl', ['-n', 'vm.swapusage'])
+    : () => undefined;
+}
+
+/**
+ * Available memory as Activity Monitor counts it. `os.freemem()` on darwin is libuv's bare
+ * `free_count`, so the reclaimable file cache macOS keeps RAM full of reads as used (~95 % on an
+ * idle machine). Used = App Memory (anonymous − purgeable) + Wired + Compressed; the rest —
+ * free, file-backed, purgeable, speculative — is reclaimable. `undefined` when a count is missing.
+ */
+export function parseVmStatAvailable(
+  output: string | undefined,
+  totalBytes: number,
+): number | undefined {
+  if (output === undefined || totalBytes <= 0) return undefined;
+  const pageSize = Number(/page size of (\d+) bytes/.exec(output)?.[1]);
+  const pages = (label: string): number | undefined => {
+    const match = new RegExp(`^${label}:\\s+(\\d+)\\.?$`, 'm').exec(output);
+    return match ? Number(match[1]) : undefined;
+  };
+  const anonymous = pages('Anonymous pages');
+  const purgeable = pages('Pages purgeable');
+  const wired = pages('Pages wired down');
+  const compressor = pages('Pages occupied by compressor');
+  if (
+    !(pageSize > 0) ||
+    anonymous === undefined ||
+    purgeable === undefined ||
+    wired === undefined ||
+    compressor === undefined
+  ) {
+    return undefined;
+  }
+  const usedBytes = (Math.max(0, anonymous - purgeable) + wired + compressor) * pageSize;
+  return Math.max(0, totalBytes - Math.min(totalBytes, usedBytes));
+}
+
+/** `vm.swapusage` reads `total = 6144.00M  used = 4449.25M  free = ...`; no swap file is `0.00M`. */
+export function parseDarwinSwap(
+  output: string | undefined,
+): { totalBytes: number; usedBytes: number } | undefined {
+  if (output === undefined) return undefined;
+  const UNITS: Record<string, number> = { K: 1024, M: 1024 ** 2, G: 1024 ** 3, T: 1024 ** 4 };
+  const readField = (name: string): number | undefined => {
+    const match = new RegExp(`${name} = ([\\d.]+)([KMGT])`).exec(output);
+    return match ? Math.round(Number(match[1]) * (UNITS[match[2]!] ?? 1)) : undefined;
+  };
+  const totalBytes = readField('total');
+  const usedBytes = readField('used');
+  if (totalBytes === undefined || usedBytes === undefined || !(totalBytes > 0)) return undefined;
+  return { totalBytes, usedBytes: Math.min(totalBytes, Math.max(0, usedBytes)) };
+}
+
 /** `/proc/meminfo` expresses sizes in kB; swap used is `SwapTotal − SwapFree`. */
 function parseSwap(meminfo: string | undefined): { totalBytes: number; usedBytes: number } | undefined {
   if (meminfo === undefined) return undefined;
@@ -246,6 +325,8 @@ export function createHostSampler(options: HostSamplerOptions = {}): HostSampler
   const cpuTimesSource = options.cpuTimes ?? defaultCpuTimes;
   const platform = options.platform ?? process.platform;
   const readMeminfo = options.readMeminfo ?? readMeminfoFor(platform);
+  const readVmStat = options.readVmStat ?? readVmStatFor(platform);
+  const readSwapUsage = options.readSwapUsage ?? readSwapUsageFor(platform);
   const probe =
     options.cgroupProbe ??
     createCgroupProbe({
@@ -268,8 +349,11 @@ export function createHostSampler(options: HostSamplerOptions = {}): HostSampler
   const buildSample = (cpuPct: number | undefined): HostUsage => {
     const at = now();
     const memTotalBytes = totalmem();
-    const memAvailableBytes = freemem();
-    const swap = parseSwap(readMeminfo());
+    const memAvailableBytes =
+      (platform === 'darwin' ? parseVmStatAvailable(readVmStat(), memTotalBytes) : undefined) ??
+      freemem();
+    const swap =
+      platform === 'darwin' ? parseDarwinSwap(readSwapUsage()) : parseSwap(readMeminfo());
     // Windows reports `[0, 0, 0]` — absent on the wire, hidden by the card, never a fake row.
     const load = platform === 'win32' ? undefined : loadavg();
     const facts = probe();
