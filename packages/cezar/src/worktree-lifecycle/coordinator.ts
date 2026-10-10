@@ -599,9 +599,11 @@ export class WorktreeLifecycleCoordinator {
         const fingerprint = lifecycleCommandFingerprint(entry.command, this.context(record));
         const latest = [...operation.executions].reverse().find(item => item.entryId === entry.id && item.fingerprint === fingerprint);
         const succeeded = operation.successfulEntries.some(item => item.entryId === entry.id && item.fingerprint === fingerprint);
+        const skipped = (operation.state === 'bypassed' || operation.state === 'completed')
+          && operation.decision?.skippedEntryIds?.includes(entry.id);
         return {entryId: entry.id, label: redactSecrets(entry.name || `Command ${index + 1}`, collectSecretValues(process.env)),
           commandPreview: redactSecrets(renderLifecycleCommand(entry.command, this.context(record)), collectSecretValues(process.env)),
-          state: succeeded ? 'already-completed' : latest?.state ?? 'pending', attempt: latest?.attempt ?? 0};
+          state: succeeded ? 'already-completed' : skipped ? 'skipped' : latest?.state ?? 'pending', attempt: latest?.attempt ?? 0};
       });
       const present = new Set(current.map(entry => entry.id));
       for (const execution of operation.executions) if (!present.has(execution.entryId)) {

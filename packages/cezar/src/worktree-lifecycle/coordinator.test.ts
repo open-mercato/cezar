@@ -237,6 +237,21 @@ describe('worktree lifecycle coordinator with real Git and command fixtures', ()
     expect(await readFile(join(prepared.path, 'resumed'), 'utf8')).toBe('repaired\n');
   });
 
+  it('projects bypassed current entries as skipped while preserving completed credits and failed history', async () => {
+    const p = await project();
+    const commands = [entry('echo ready'), entry('exit 4'), entry('echo never')];
+    await p.config(commands); const prepared = await p.prepare();
+    const before = await p.coordinator.operation(prepared.operationId!);
+    expect(before.entries.map(item => item.state)).toEqual(['already-completed', 'failed', 'pending']);
+    await p.action(prepared.operationId!, 'start-anyway');
+    expect((await p.prepare()).ready).toBe(true);
+    const bypassed = await p.coordinator.operation(prepared.operationId!);
+    expect(bypassed.state).toBe('bypassed');
+    expect(bypassed.entries.map(item => item.state)).toEqual(['already-completed', 'skipped', 'skipped']);
+    expect(bypassed.history).toEqual(before.history);
+    expect(bypassed.decision?.skippedEntryIds).toEqual(commands.slice(1).map(item => item.id));
+  });
+
   it('explicit setup bypass does not require corrected templates, while cancel retains resources', async () => {
     const p = await project(); const failing = entry('echo partial > resource; exit 4');
     await p.config([failing]); const prepared = await p.prepare();
