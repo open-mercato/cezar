@@ -81,23 +81,18 @@ import { readFollowupSelection, writeFollowupSelection } from './hand-to-agent-d
  * `/github/prs`, `/github/issues/:n`, `/github/prs/:n`. PR rows also carry a compact checks
  * glyph (#400) — the same tones as the detail pane's `ChecksBadge`, just the symbol.
  *
- * Data loads in ONE fast shot (#664): the list call no longer fetches `statusCheckRollup` — the
- * CI rollup for every open PR was the dominant cost and forced the old two-shot `30 → 1000`
- * pattern — so a single `limit`-capped fetch paints the whole open set quickly and search works
- * across it immediately. Each PR row's checks glyph is then hydrated lazily, for the on-screen
- * rows only, via `useGithubChecks` (`GET /api/github/checks`), the same way comment counts fill
- * in a beat later. A cheap React-Query prefetch on row hover/focus warms the thread so an opened
- * item is usually instant. (Cursor pagination + "Load more"/infinite scroll + row virtualization
- * are the Phase 2 follow-up.)
+ * Data loads in cheap cursor pages (#664/#1261): the list call no longer fetches
+ * `statusCheckRollup` or bodies, while exact open totals and comment counts come from lightweight
+ * GraphQL fields. PR checks are hydrated lazily for the visible rows, and selected body/diffstat
+ * details arrive through the background thread request. A cheap React-Query prefetch on row
+ * hover/focus warms the thread so an opened item is usually instant.
  *
  * Gating: the nav item is hidden by the shell when health reports no forge — but the URL
  * stays reachable (pasted links), so an unavailable payload renders the honest explainer
  * with the server's own reason, never an error.
  */
 
-/** The single fast list fetch (`/api/github` limit). No longer split into a fast batch + a slow
- *  everything-open shot — dropping `statusCheckRollup` from the list made one fetch of the whole
- *  open set cheap. A count AT this cap still reads `N+`, since the open set may exceed it. */
+/** The first cursor page size. Totals are supplied independently by GitHub's GraphQL connection. */
 const LIST_LIMIT = 50
 
 /** How many on-screen PR rows one checks request covers (matches the server's `GH_CHECKS_MAX`).
@@ -164,10 +159,12 @@ export function GithubRoute({
     if (!pages || pages.length === 0) return undefined
     const first = pages[0]
     const last = pages[pages.length - 1]
+    if (!first || !last) return undefined
     return {
       ...first,
-      issues: pages.flatMap((page) => page.issues),
-      prs: pages.flatMap((page) => page.prs),
+      available: first.available ?? false,
+      issues: pages.flatMap((page) => page.issues ?? []),
+      prs: pages.flatMap((page) => page.prs ?? []),
       labelColors: Object.assign({}, ...pages.map((page) => page.labelColors ?? {})),
       issuesNextCursor: last.issuesNextCursor,
       prsNextCursor: last.prsNextCursor,
@@ -225,8 +222,7 @@ export function GithubRoute({
   }
 
   // The list order (#gh-sort), remembered the same way the sub-tab is. A presentation pref, not a
-  // fetch parameter: `LIST_LIMIT` pulls the whole open set in one shot, so flipping the order
-  // re-renders what is already in hand and never re-slices which items were fetched.
+  // fetch parameter: flipping the order re-renders all loaded pages and never re-fetches them.
   //
   // Same read-then-write shape as `saveGithubView`, including the eager cache patch — without it
   // the toggle would render the OLD order until the PUT resolved, which on a slow write reads as
@@ -732,8 +728,7 @@ export function GithubRoute({
   )
 }
 
-/** The exact open count from the single fast fetch — with a `+` only when it hit the list cap, so
- *  a repo with more than `LIST_LIMIT` open items reads honestly as "at least this many". */
+/** Counts are exact when supplied by the server; this fallback keeps older payloads readable. */
 function countLabel(count: number): string {
   return String(count)
 }
@@ -1060,8 +1055,8 @@ function GithubMergeBox({ number }: { number: number }) {
       setConfirming(false)
       toast(`Pull request #${number} merged`)
       void queryClient.invalidateQueries({ queryKey: queryKeys.githubMergeState(number) })
-      // The single list query (#664) — a merged PR drops out of the open set on the next fetch.
-      void queryClient.invalidateQueries({ queryKey: queryKeys.github({ limit: LIST_LIMIT }) })
+      // A merged PR drops out of the first page on the next paged fetch.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.githubPages(LIST_LIMIT) })
       void queryClient.invalidateQueries({ queryKey: queryKeys.githubComments('pr', number) })
     },
     onError: (error) => {

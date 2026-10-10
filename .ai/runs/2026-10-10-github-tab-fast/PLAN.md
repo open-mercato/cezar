@@ -19,7 +19,7 @@
 | 2 | 2.2 | Render cursor pages with load-more and virtualization | dispatch:capable | done | 6cb18e79 |
 | 2 | 2.3 | Hydrate details and visible metadata in the background | group:B:capable | done | pending |
 | 3 | 3.1 | Add regression coverage for pagination, totals, migration, and hydration | group:B:standard | done | pending |
-| 3 | 3.2 | Run dry-run UI verification and finalize documentation | inline | todo | — |
+| 3 | 3.2 | Run dry-run UI verification and finalize documentation | inline | done | pending |
 
 ## Goal
 
