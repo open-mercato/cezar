@@ -36,6 +36,18 @@ describe('readAgentModelDefaults', () => {
     });
   });
 
+  it('reads Pi defaultModel from project settings before the global settings', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'cez-native-models-repo-'));
+    const home = mkdtempSync(join(tmpdir(), 'cez-native-models-home-'));
+    roots.push(repo, home);
+    mkdirSync(join(repo, '.pi'), { recursive: true });
+    mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
+    writeFileSync(join(home, '.pi', 'agent', 'settings.json'), '{ "defaultModel": "anthropic/global" }\n');
+    writeFileSync(join(repo, '.pi', 'settings.json'), '{\n  // project wins\n  "defaultModel": "openai/project",\n}\n');
+
+    await expect(readAgentModelDefaults(repo, { HOME: home })).resolves.toEqual({ pi: 'openai/project' });
+  });
+
   it('falls back when a higher-precedence file is missing or malformed', async () => {
     const repo = mkdtempSync(join(tmpdir(), 'cez-native-models-repo-'));
     const home = mkdtempSync(join(tmpdir(), 'cez-native-models-home-'));

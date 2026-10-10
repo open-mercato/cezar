@@ -41,7 +41,7 @@ const HEALTH = {
   version: '0.0.0',
   repoRoot: '/repo',
   repo: null,
-  checks: [{ name: 'claude', available: true }],
+  checks: [{ name: 'claude', available: true }, { name: 'pi', available: true }],
   defaultRunner: 'claude',
   forge: null,
   capabilities: { localHandoff: true },
@@ -89,6 +89,25 @@ afterEach(() => {
 })
 
 describe('AgentConfigSection', () => {
+  it('shows Pi settings and shared instructions, including absent files', async () => {
+    serve({
+      editable: true,
+      files: [
+        fileOf({ id: 'pi.user.settings', label: '~/.pi/agent/settings.json', runners: ['pi'], format: 'jsonc', scope: 'user', exists: false }),
+        fileOf({ id: 'project.agents', label: 'AGENTS.md', runners: ['pi'], kind: 'memory', format: 'markdown', exists: true }),
+      ],
+      userMcp: null,
+    })
+    renderSection()
+    await waitFor(() => expect(agentTab('pi')).toBeTruthy())
+    fireEvent.click(agentTab('pi'))
+    await waitFor(() => expect(screen.getByText('~/.pi/agent/settings.json')).toBeTruthy())
+    expect(screen.getByText('~/.pi/agent/settings.json').parentElement?.textContent).toContain('absent')
+    expect(screen.getByText('AGENTS.md')).toBeTruthy()
+    expect(document.querySelector('[data-slot="agent-config-group"][data-group="settings"]')).toBeTruthy()
+    expect(document.querySelector('[data-slot="agent-config-group"][data-group="memory"]')).toBeTruthy()
+  })
+
   it('renders the agent selector with a not-installed badge from health', async () => {
     serve({
       editable: true,
