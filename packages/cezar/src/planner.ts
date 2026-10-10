@@ -25,6 +25,15 @@ const PLANNER_SYSTEM_PROMPT =
   "the user's task text belongs; 1-5 steps; prefer fewer; \"title\" is a short kebab-case name for " +
   'the whole workflow (2-4 words, e.g. "fix-and-review").';
 
+const PLANNER_REDUCED_SYSTEM_PROMPT =
+  `${PLANNER_SYSTEM_PROMPT} Names listed without a description are still valid choices.`;
+
+export const PLANNER_CATALOG_DEFAULTS = {
+  maxFull: 15,
+  maxDescriptionChars: 160,
+  budgetChars: 6_000,
+} as const;
+
 const plannerResponseSchema = z.object({
   /** A short workflow name the builder pre-fills. Optional so older / partial answers still parse. */
   title: z.string().optional(),
@@ -60,6 +69,7 @@ export async function planChain(repoRoot: string, task: string): Promise<PlanRes
   ]);
   const skillNames = new Set(skills.map((s) => s.name));
   const userPrompt = buildPlannerPrompt(task, skills, verifyCommands);
+  const systemPrompt = buildPlannerSystemPrompt(skills);
 
   // Plan with the configured default runner. `plannerModel` ("sonnet") is a
   // Claude alias, so only pass it when the planner runs on Claude — Codex /
@@ -75,7 +85,7 @@ export async function planChain(repoRoot: string, task: string): Promise<PlanRes
     let text: string;
     try {
       const result = await runner.run({
-        systemPrompt: PLANNER_SYSTEM_PROMPT,
+        systemPrompt,
         userPrompt,
         cwd: repoRoot,
         allowedTools: [],
@@ -103,10 +113,8 @@ export async function planChain(repoRoot: string, task: string): Promise<PlanRes
 }
 
 /** The `[cez-planner]` marker lets the CEZ_DRY_RUN mock recognize a planning call. */
-function buildPlannerPrompt(task: string, skills: Skill[], verifyCommands: string[]): string {
-  const catalog = skills.length
-    ? skills.map((s) => `- ${s.name} — ${s.description ?? ''}`).join('\n')
-    : '(no skills available)';
+export function buildPlannerPrompt(task: string, skills: Skill[], verifyCommands: string[]): string {
+  const catalog = buildSkillCatalog(task, skills);
   const verify = verifyCommands.length
     ? verifyCommands.map((c) => `- ${c}`).join('\n')
     : '(none detected)';
@@ -122,6 +130,85 @@ function buildPlannerPrompt(task: string, skills: Skill[], verifyCommands: strin
     'Verification commands detected in this repo:',
     verify,
   ].join('\n');
+}
+
+/** Keep the original system prompt for small catalogs; explain the name-only tail only when used. */
+export function buildPlannerSystemPrompt(skills: Skill[]): string {
+  return buildFullSkillCatalog(skills).length > PLANNER_CATALOG_DEFAULTS.budgetChars
+    ? PLANNER_REDUCED_SYSTEM_PROMPT
+    : PLANNER_SYSTEM_PROMPT;
+}
+
+export interface SkillCatalogOptions {
+  maxFull?: number;
+  maxDescriptionChars?: number;
+  budgetChars?: number;
+}
+
+/** Build the planner's bounded skill catalog without changing discovery order or Skill objects. */
+export function buildSkillCatalog(
+  task: string,
+  skills: Skill[],
+  options: SkillCatalogOptions = {},
+): string {
+  const { maxFull, maxDescriptionChars, budgetChars } = {
+    ...PLANNER_CATALOG_DEFAULTS,
+    ...options,
+  };
+  const original = buildFullSkillCatalog(skills);
+  if (original.length <= budgetChars) return original;
+
+  const explicit = new Set(
+    skills.filter((skill) => mentionsSkill(task, skill.name)).map((skill) => skill.name),
+  );
+  const described = skills.filter((skill) => explicit.has(skill.name));
+  const ranked = skills
+    .filter((skill) => !explicit.has(skill.name))
+    .sort((a, b) => {
+      const score = scoreSkill(task, b) - scoreSkill(task, a);
+      return score || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    });
+  described.push(...ranked.slice(0, Math.max(0, maxFull - described.length)));
+  const describedNames = new Set(described.map((skill) => skill.name));
+  const describedLines = described.map(
+    (skill) => `- ${skill.name} — ${(skill.description ?? '').slice(0, maxDescriptionChars)}`,
+  );
+  const nameOnlyLines = skills
+    .filter((skill) => !describedNames.has(skill.name))
+    .map((skill) => `- ${skill.name}`);
+  return [...describedLines, ...nameOnlyLines].join('\n');
+}
+
+function buildFullSkillCatalog(skills: Skill[]): string {
+  return skills.length
+    ? skills.map((s) => `- ${s.name} — ${s.description ?? ''}`).join('\n')
+    : '(no skills available)';
+}
+
+function mentionsSkill(task: string, name: string): boolean {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![A-Za-z0-9_-])/?${escaped}(?![A-Za-z0-9_-])`, 'i').test(task);
+}
+
+const SCORER_STOP_WORDS = new Set([
+  'a', 'an', 'and', 'for', 'in', 'of', 'on', 'or', 'the', 'to', 'with', 'this', 'that',
+]);
+
+function scoreSkill(task: string, skill: Skill): number {
+  const taskTokens = new Set(tokens(task));
+  const nameTokens = tokens(skill.name);
+  const descriptionTokens = tokens(skill.description ?? '');
+  return (
+    nameTokens.filter((token) => taskTokens.has(token)).length * 3 +
+    descriptionTokens.filter((token) => taskTokens.has(token)).length
+  );
+}
+
+function tokens(value: string): string[] {
+  return value
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length > 1 && !SCORER_STOP_WORDS.has(token));
 }
 
 /** Config files that mean the repo has an agentic browser/device suite (`e2e`). */
