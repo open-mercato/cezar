@@ -433,6 +433,24 @@ Useful environment variables:
 | `CEZ_NO_BANNER=1` | Silence every promo: the `open-mercato/skills` banner and the star-ask line on `cezar serve` startup, the sidebar's ⭐ chip, and the star-ask dialog (shown at most three times per browser, only after a task ends well once three have, and only while you are at the screen). It is also the star count's off switch — with it set, `GET /api/v1/star-count` answers `available: false` and cezar makes no request to github.com for it. Dismissing the banner in the cockpit (back when it had one) still silences the terminal half on its own. |
 | `VITE_CEZ_API_BASE=http://localhost:4321` | **Build time only**, and only when the cockpit bundle is deployed apart from the service it talks to. Empty (the default) means "the origin that served this page", which is right for both normal cases: the CLI serves the bundle itself, and `npm run dev` proxies `/api` to the local service. A deployment that must be configured without a rebuild can put `<meta name="cez-api-base" content="…">` in the served HTML instead, which wins over this. |
 
+### Running the same app in several tasks at once: the task slot
+
+Every task has its own worktree, but a port belongs to the machine: two tasks that both run the project's dev command both ask for the same port. cezar gives each task worktree a **slot** — a number from 1 to 99 that no other task on the machine holds — and tells every process it starts for that task: the agent, a workflow's `command:` steps, and the workspace terminal.
+
+| Variable | Value |
+| --- | --- |
+| `CEZ_TASK_SLOT` | The task's number, e.g. `3`. Empty for a task that runs in the repo itself (worktree off) — that task uses the project's ordinary ports. |
+| `CEZ_TASK_PORT_BASE` | The first of a hundred ports reserved for that slot: `20000 + slot × 100`, e.g. `20300`. Empty when the slot is. |
+
+cezar does not renumber a project's ports; the project derives them. In a `package.json` script or a Makefile:
+
+```bash
+PORT=$(( ${CEZ_TASK_PORT_BASE:-3000} ))        # 3000 in the main checkout, 20300 in slot 3
+DATABASE_NAME=app${CEZ_TASK_SLOT:+_$CEZ_TASK_SLOT}   # app, or app_3
+```
+
+A slot is held for as long as the worktree directory exists and is free again once it is gone — nothing has to release it. The leases are plain files in `~/.cezar/task-slots/`; delete the directory and cezar hands the numbers out again.
+
 ### Troubleshooting: the agent's shell returns nothing
 
 **Symptom.** A task on the Claude backend keeps working, but every shell command

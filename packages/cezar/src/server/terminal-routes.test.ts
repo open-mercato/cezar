@@ -38,6 +38,7 @@ describe('the workspace terminal routes', () => {
   let store: RunStore;
   let sessions: TerminalSessions;
   let ptys: FakePty[];
+  let spawned: PtySpawnOptions[];
   const savedRemote = process.env.CEZ_REMOTE;
   const savedTerminal = process.env.CEZ_TERMINAL;
   const savedDryRun = process.env.CEZ_DRY_RUN;
@@ -51,10 +52,12 @@ describe('the workspace terminal routes', () => {
     delete process.env.CEZ_TERMINAL;
     process.env.CEZ_DRY_RUN = '1';
     ptys = [];
+    spawned = [];
     const binding = async (): Promise<PtyBinding> => ({
       available: true,
       module: {
-        spawn: (_file: string, _args: string[], _options: PtySpawnOptions) => {
+        spawn: (_file: string, _args: string[], options: PtySpawnOptions) => {
+          spawned.push(options);
           const pty = new FakePty();
           ptys.push(pty);
           return pty;
@@ -186,6 +189,22 @@ describe('the workspace terminal routes', () => {
       const reclaimed = seedRun({ worktreePath: undefined });
       const none = await (await apiRequest(makeApp(), `/api/v1/runs/${reclaimed}/terminal/commands`)).json();
       expect(none).toEqual({ commands: [] });
+    });
+
+    it('tells each task’s shell its own slot, and an in-place task’s that it has none', async () => {
+      const other = join(repoRoot, 'wt-2');
+      mkdirSync(other, { recursive: true });
+      await openSession(seedRun());
+      await openSession(seedRun({ worktreePath: other }));
+      await openSession(seedRun({ worktreePath: undefined, worktree: false }));
+
+      const slots = spawned.map((options) => options.env?.CEZ_TASK_SLOT);
+      expect(slots[0]).toMatch(/^\d+$/);
+      expect(slots[1]).toMatch(/^\d+$/);
+      expect(slots[1]).not.toBe(slots[0]);
+      // Present and empty, so a slot this cezar inherited cannot reach the shared stack.
+      expect(slots[2]).toBe('');
+      expect(spawned[0]!.env?.CEZ_TASK_PORT_BASE).toBe(String(20000 + Number(slots[0]) * 100));
     });
 
     it('404s for a task that does not exist', async () => {

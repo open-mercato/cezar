@@ -9,6 +9,7 @@ import {
 } from '@open-mercato/cezar-contract';
 import { createTrackerService } from './tracker/index.ts';
 import { TrackerWatches } from './tracker/watch.ts';
+import { taskSlotEnv } from '../task-slot.ts';
 import { discoverCommands } from './terminal/commands.ts';
 import { DetectedUrls } from './terminal/detected-urls.ts';
 import { processSnapshot } from './terminal/foreground.ts';
@@ -6058,6 +6059,9 @@ export function createApp(deps: ServerDeps) {
         runId: run.id,
         cwd,
         ...c.req.valid('json'),
+        // After the body, so nothing in a request can stand in for it. A worktree-off task
+        // shares the repo's own stack and gets the keys empty (`taskSlotEnv`).
+        env: taskSlotEnv(run.id, worktreeOf(run) ?? undefined),
       });
       if (!created.ok) return c.json({ error: created.reason }, 409);
       registerTerminalTopic(created.session.id);

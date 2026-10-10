@@ -143,6 +143,8 @@ describe('RunManager agent-profile resolution', () => {
     expect(Object.keys(env).sort()).toEqual([
       'CEZ_HANDOFF_FILE',
       'CEZ_TASK_ID',
+      'CEZ_TASK_PORT_BASE',
+      'CEZ_TASK_SLOT',
       'CEZ_TODOS_FILE',
       'TEMP',
       'TMP',

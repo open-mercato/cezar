@@ -100,6 +100,9 @@ export interface CreateSessionInput {
   /** One of the host's discovered shells (`discoverShells()`). Anything else is refused rather
    *  than spawned — see the allowlist reasoning in `shells.ts`. */
   shell?: string;
+  /** Layered over the server's own environment — what this task's shell is told that another
+   *  task's is not (its slot). Chosen by the server, never read from a request. */
+  env?: Record<string, string>;
 }
 
 export type CreateSessionResult =
@@ -157,7 +160,7 @@ export class TerminalSessions {
         cols,
         rows,
         cwd: input.cwd,
-        env: terminalEnv(),
+        env: { ...terminalEnv(), ...input.env },
       });
     } catch (error) {
       // A worktree that was reclaimed between the check and the spawn lands here, as does a shell

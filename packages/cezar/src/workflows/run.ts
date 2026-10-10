@@ -58,6 +58,7 @@ import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
 import { materializeSkillDir } from '../skills-remote.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { seedWorktreeEnvFiles } from '../worktree-env.ts';
+import { taskSlotEnv } from '../task-slot.ts';
 import { readAgentModelProvider } from '../agent-config/models.ts';
 import { loadConfig, resolveWorktreeRetention } from '../config.ts';
 import {
@@ -1285,6 +1286,13 @@ export class RunManager {
    *  write-probed here, on the last common path before a spawn, so an unusable
    *  temp directory throws `AgentTempDirError` at the caller rather than
    *  turning into empty command output inside a running agent. */
+  /** One reading of a task's slot for every process cezar starts on its behalf — the agent and
+   *  a workflow's check steps here, the terminal in the server — so they cannot disagree. */
+  private slotEnv(runId: string): Record<string, string> {
+    const worktree = this.store.getRun(runId)?.worktreePath;
+    return taskSlotEnv(runId, worktree && existsSync(worktree) ? worktree : undefined);
+  }
+
   private agentEnv(runId: string, generateFollowups = true): Record<string, string> {
     const dispatch = this.dispatchOf(runId);
     // The same ONE gate the dispatch prompt uses, so an agent is never told about a CLI whose
@@ -1295,6 +1303,9 @@ export class RunManager {
       CEZ_TASK_ID: runId,
       CEZ_TODOS_FILE: generateFollowups ? todosPath(this.dataDir) : '',
       ...agentTmpEnv(this.dataDir, runId),
+      // The task's own number on this machine, for anything the agent starts that needs a port
+      // or a database of its own (spec 2026-10-10-task-slots). Empty for an in-place run.
+      ...this.slotEnv(runId),
       // Task dispatch (spec 2026-09-10-dispatch): where the `cez task` CLI reaches this server and
       // which project the run belongs to. Absent (not empty) while the feature is off, so the env
       // is byte-for-byte as before.
@@ -4898,7 +4909,7 @@ export class RunManager {
       } else {
         const rendered = nodeToStep(node);
         if (rendered.command) rendered.command = renderNodeRefs(rendered.command, outputs);
-        const { ok, output, exitCode } = await this.runCheckStep(state, rendered, emit);
+        const { ok, output, exitCode } = await this.runCheckStep(runId, state, rendered, emit);
         if (state.cancelled) return null;
         outputs.set(node.id, { exitCode, output });
         if (ok) {
@@ -6875,6 +6886,7 @@ export class RunManager {
   }
 
   private runCheckStep(
+    runId: string,
     state: ActiveRun,
     step: WorkflowStepDef,
     emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void,
@@ -6883,7 +6895,10 @@ export class RunManager {
     emit({ type: 'note', stepId: step.id, message: `$ ${command}` });
     return new Promise((resolve) => {
       // Check steps run in the same cwd as the agent steps — the worktree.
-      const child = spawn('bash', ['-lc', command], { cwd: state.cwd, env: process.env });
+      const child = spawn('bash', ['-lc', command], {
+        cwd: state.cwd,
+        env: { ...process.env, ...this.slotEnv(runId) },
+      });
       state.interrupt = () => child.kill('SIGTERM');
 
       let output = '';
