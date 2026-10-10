@@ -1,10 +1,11 @@
 # Handoff — 2026-10-10-github-tab-fast
 
-**Last updated:** 2026-10-10T20:34:00Z
+**Last updated:** 2026-10-10T20:38:00Z
 **Branch:** `cez/4882295a`
 **PR:** not yet opened
-**Current phase/step:** complete; final review/PR promotion pending
-**Last commit:** `d1cfce22` — fix: preserve GitHub query key compatibility
+**Current phase/step:** complete; PR ready for QA/merge
+**Last commit:** `6daef799` — chore: record GitHub final validation gate
+**PR:** https://github.com/open-mercato/cezar/pull/1362
 
 ## What just happened
 
@@ -13,7 +14,7 @@
 
 ## Next concrete action
 
-- Review PR #1362, apply final labels/summary, and promote the draft when review is clean.
+- Manual QA is pending because no browser provider is configured; merge after the QA gate is satisfied.
 
 ## Blockers / open questions
 
