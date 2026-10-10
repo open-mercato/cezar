@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -165,6 +165,27 @@ describe('the workspace terminal routes', () => {
       expect(res.status).toBe(409);
       expect((await res.json() as { error: string }).error).toContain('no worktree');
       expect(ptys).toHaveLength(0);
+    });
+
+    it('opens a worktree-off task in the repo checkout it ran in', async () => {
+      // Not the fallback the case above refuses: this task never had a worktree, so the repo
+      // working tree IS its tree — the same answer its Changes and Commits views read.
+      const runId = seedRun({ worktreePath: undefined, worktree: false });
+      const session = await openSession(runId);
+      expect(session.cwd).toBe(repoRoot);
+      expect(ptys).toHaveLength(1);
+    });
+
+    it('discovers a worktree-off task’s commands in the repo checkout', async () => {
+      writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ scripts: { dev: 'vite' } }));
+      const off = seedRun({ worktreePath: undefined, worktree: false });
+      const found = await (await apiRequest(makeApp(), `/api/v1/runs/${off}/terminal/commands`)).json();
+      expect(JSON.stringify(found)).toContain('dev');
+
+      // A task that merely lost its worktree is still offered nothing from the boot repo.
+      const reclaimed = seedRun({ worktreePath: undefined });
+      const none = await (await apiRequest(makeApp(), `/api/v1/runs/${reclaimed}/terminal/commands`)).json();
+      expect(none).toEqual({ commands: [] });
     });
 
     it('404s for a task that does not exist', async () => {

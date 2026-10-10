@@ -5932,20 +5932,22 @@ export function createApp(deps: ServerDeps) {
       }));
     })
     .post('/runs/:id/terminal', jsonZodValidator(terminalCreateSchema), async (c) => {
-      const { store } = c.get('project');
+      const { root: repoRoot, store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
       const refusal = terminalPolicyRefusal(capabilities());
       if (refusal) return c.json({ error: refusal }, 409);
-      // The task's OWN worktree or nothing. Falling back to the repo root the way open-in-cli
+      // The task's OWN tree or nothing. Falling back to the repo root the way open-in-cli
       // does would put the user in the boot checkout while the header says they are in a task —
-      // exactly the "panels must not silently display the boot repo" rule (spec §3.3).
-      if (!run.worktreePath || !existsSync(run.worktreePath)) {
+      // exactly the "panels must not silently display the boot repo" rule (spec §3.3). A
+      // worktree-off task is not that fallback: the repo checkout IS the tree it ran in.
+      const cwd = workingDirectoryOf(run, repoRoot);
+      if (!cwd) {
         return c.json({ error: 'this task has no worktree to open a terminal in' }, 409);
       }
       const created = await terminalSessions.create({
         runId: run.id,
-        cwd: run.worktreePath,
+        cwd,
         ...c.req.valid('json'),
       });
       if (!created.ok) return c.json({ error: created.reason }, 409);
@@ -6009,12 +6011,12 @@ export function createApp(deps: ServerDeps) {
       return c.json(detectedUrlsSchema.parse({ urls }));
     })
     .get('/runs/:id/terminal/commands', async (c) => {
-      const { store } = c.get('project');
+      const { root: repoRoot, store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
-      // The task's own worktree or nothing: suggesting the boot repo's scripts for a task would
-      // offer commands that run against the wrong tree (spec §3.3).
-      const worktree = run.worktreePath && existsSync(run.worktreePath) ? run.worktreePath : null;
+      // The task's own tree or nothing: suggesting the boot repo's scripts for a task would
+      // offer commands that run against the wrong tree (spec §3.3). Same tree the terminal opens.
+      const worktree = workingDirectoryOf(run, repoRoot);
       const commands = worktree ? await discoverCommands(worktree) : [];
       return c.json(discoveredCommandsSchema.parse({ commands }));
     })
