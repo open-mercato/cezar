@@ -14,6 +14,7 @@
 | 1 | 1.1 | Define paged GitHub contracts and body-detail migration | dispatch:standard | done | bc3fa35c |
 | 1 | 1.2 | Implement GraphQL cursor pages and cheap open totals | group:A:capable | done | d52a2d88 |
 | 1 | 1.3 | Add validated paged GitHub API parameters and detail payload | group:A:capable | done | 9569babd |
+| 1 | 1.4 | Update forge fixtures for the GraphQL list migration | inline | done | pending |
 | 2 | 2.1 | Add paged GitHub client queries and cache helpers | dispatch:standard | todo | — |
 | 2 | 2.2 | Render cursor pages with load-more and virtualization | dispatch:capable | todo | — |
 | 2 | 2.3 | Hydrate details and visible metadata in the background | group:B:capable | todo | — |

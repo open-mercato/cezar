@@ -2288,13 +2288,6 @@ export async function fetchGithubComments(
     gh(repoRoot, ['api', `repos/{owner}/{repo}/issues/${number}/comments`, '--paginate']);
   try {
     let detailBody: string | undefined;
-    try {
-      const detailOut = await gh(repoRoot, [kind === 'pr' ? 'pr' : 'issue', 'view', String(number), '--json', 'body']);
-      const detail = ghDetailSchema.parse(JSON.parse(detailOut));
-      detailBody = detail.body ?? undefined;
-    } catch {
-      // The detail tier is best-effort: a missing body must not hide an otherwise readable thread.
-    }
     let commentRows: unknown[] = [];
     let events: ForgeTimelineEvent[] | undefined;
     let eventsTruncated = false;
@@ -2358,6 +2351,16 @@ export async function fetchGithubComments(
       // special-cased, since rate-limit replies are immediate and it costs one fast spawn.)
       commentRows = z.array(z.unknown()).parse(JSON.parse(await legacyComments()));
       events = undefined;
+    }
+
+    // Body is a separate, best-effort detail tier. Fetch it only after the thread succeeds so a
+    // missing CLI does not create a second failing subprocess on the ordinary degrade path.
+    try {
+      const detailOut = await gh(repoRoot, [kind === 'pr' ? 'pr' : 'issue', 'view', String(number), '--json', 'body']);
+      const detail = ghDetailSchema.parse(JSON.parse(detailOut));
+      detailBody = detail.body ?? undefined;
+    } catch {
+      // The detail tier is best-effort: a missing body must not hide an otherwise readable thread.
     }
 
     // Per-commit CI (#525 Phase 2). One extra subprocess per opened thread that contains commits,
