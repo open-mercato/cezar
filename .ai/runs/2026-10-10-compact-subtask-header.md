@@ -25,15 +25,16 @@ Risks: completion may be observed on initial render for historical runs; avoid s
 ### Phase 1: Implement and verify
 
 - [x] 1.1 Add completion-transition collapse and tests
-- [x] 1.2 Run targeted and full validation — focused test green; configured gate attempted, with unrelated typecheck/build/package failures documented below
+- [x] 1.2 Run targeted and full validation — local dependency repair made typecheck/build/package green; full Vitest remains blocked by an inherited environment assertion and a long-running suite
 - [x] 1.3 Review diff and report limitations
 
 Validation notes:
 
 - `npm test --workspace packages/web -- --run src/routes/task-thread/agents-dock.test.tsx`: 18/18 passed.
 - Regression proof without implementation: 1 test failed (`aria-expanded` stayed `true`); restored implementation returns 18/18.
-- `npm run typecheck`: fails on pre-existing server/contract generated-type drift (missing `omittedQuestions`, contract exports, `awaitingAnswerSince`, `gemini`, workflow graph types, and related errors).
-- `npm run test:unit`: 42/42 passed.
-- `npm run build`: fails on the same unrelated server/contract drift.
-- `npm run test:package`: 15/17 passed; unrelated inline-contract repointing and release-tarball `web/dist/index.html` assertions failed.
-- Browser capture unavailable: `agent-browser` is not installed in this environment.
+- `npm run typecheck`: passed after local `npm install --ignore-scripts --no-audit --no-fund`; the previous failure came from resolving the parent checkout's node_modules.
+- `npm run test:unit`: 42/42 passed after local dependency installation.
+- `npm run build`: passed, including Vite web build and `check:pack`.
+- `npm run test:package`: 17/17 passed after local dependency installation.
+- Full Vitest with `--maxWorkers=2 --no-file-parallelism`: an unrelated `agent-profile-wiring.test.ts` assertion fails because inherited `CEZ_API_URL`/`CEZ_BIN` are present, and the suite then did not settle within the bounded run; the isolated failing test reproduced 10/11 passing with that same environment mismatch.
+- Browser provider was installed from the repository descriptor and launched with staged libraries, `--no-sandbox`, and a short HOME; cockpit smoke screenshot: `.ai/qa/issue-1237-cockpit-smoke.png`. The provider's generated descriptor still reports unavailable because its standard environment path cannot launch under this task's long TMP path.
