@@ -239,8 +239,7 @@ export const queryKeys = {
   get worktrees() {
     return [queryScope(), 'worktrees'] as const
   },
-  github: (params: { limit?: number; issuesCursor?: string; prsCursor?: string } = {}) =>
-    [queryScope(), 'github', params.limit ?? null, params.issuesCursor ?? null, params.prsCursor ?? null] as const,
+  github: (params: { limit?: number } = {}) => [queryScope(), 'github', params.limit ?? null] as const,
   githubPages: (limit = 50) => [queryScope(), 'github', 'pages', limit] as const,
   /** Lazy PR checks glyphs (`GET /api/github/checks`, #664), keyed by the sorted PR numbers so the
    *  same visible window de-dupes to one cache entry. */
