@@ -528,6 +528,17 @@
 .thread-markdown {
   line-height: 1.6;
 }
+/* A run with no break opportunity — a pasted box-drawing rule (`┌────┬────┐`), a long JSON
+ * blob, a URL — scrolls sideways inside its own block instead of painting past the bubble.
+ * Scroll, not wrap: wrapping shreds box-drawing art. Ordinary prose still wraps at spaces, so
+ * only the offending block ever grows a scrollbar — the same treatment Streamdown already gives
+ * tables and code fences. `overflow-y: hidden` because a horizontal scroller computes `auto` on
+ * the other axis too, and inline-code padding would otherwise earn every paragraph a 1px
+ * vertical scrollbar. Not on `li`: clipping there would hide the outside list markers. */
+.thread-markdown :is(p, blockquote, h1, h2, h3, h4, h5, h6) {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
 .thread-markdown :is(h1, h2, h3, h4, h5, h6) {
   margin: 0.9em 0 0.35em;
   font-size: 1.05em;

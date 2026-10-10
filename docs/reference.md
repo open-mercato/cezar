@@ -379,7 +379,8 @@ the task's worktree — but note the zero-config default list (`Read`, `Edit`,
 `bashAllowlist`, so treat a run as having full shell access in its worktree,
 not a sandboxed allowlist. Set `CEZ_APPROVAL_GATE=1` to select Claude's
 `acceptEdits` mode, but cezar has no cockpit permission response channel, so
-approval prompts are not actionable in the cockpit. Codex, Junie and OpenCode are driven through their own
+approval prompts are not actionable in the cockpit. To keep the setting, add
+`export CEZ_APPROVAL_GATE=1` to `~/.zshrc`. Codex, Junie and OpenCode are driven through their own
 native protocols and don't honor `allowedTools` at all — see
 [Coding agent backends](#coding-agent-backends) for what each one actually
 locks down. Nothing runs on a server you don't own.
