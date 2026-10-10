@@ -3246,7 +3246,7 @@ describe('registry /skill expansion survives a continuation (#811)', () => {
     readFileSync(join(repoRoot, '.ai/cezar/runs', `${id}.ndjson`), 'utf8')
       .trim()
       .split('\n')
-      .map((line) => JSON.parse(line) as { type: string; text?: string; stepId?: string });
+      .map((line) => JSON.parse(line) as { type: string; text?: string; message?: string; stepId?: string });
 
   const waitFor = async (predicate: () => boolean, ms = 20_000) => {
     const deadline = Date.now() + ms;

@@ -50,7 +50,7 @@ import {
   PENDING_ASK_MAX_QUESTIONS,
   sanitizeAttachmentName,
 } from '@open-mercato/cezar-contract';
-import type { AgentEvent, ContentBlock } from '../core/agent-runner.ts';
+import { isMissingSessionError, type AgentEvent, type ContentBlock } from '../core/agent-runner.ts';
 import { discoverSkills, type Skill } from '../skills.ts';
 import { automationsReachable } from '../automations/builtin-skill.ts';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
@@ -3716,6 +3716,9 @@ export class RunManager {
     persistedImages: ContentBlock[] = [],
     persistedAttachments: PersistedAttachment[] = [],
     ownerToken?: symbol,
+    fallbackContext?: string,
+    fallbackTreeBlocks?: string[],
+    suppressUserMessage = false,
   ): Promise<void> {
     const effectiveOwnerToken = ownerToken ?? Symbol('run-owner');
     // Continuation runs in the task's worktree when it still exists (spec
@@ -3730,7 +3733,12 @@ export class RunManager {
     // A provider/account switch cannot resume the old provider-owned session. Reconstruct the
     // portable context from Cezar's durable record + redacted event stream before this new turn's
     // user-message is appended. This works even when the interrupted agent never wrote HANDOFF.md.
-    const portableContext = record && sessionId === undefined
+    const portableContext = fallbackContext ?? (record && sessionId === undefined
+      ? freshContinuationContext(record, this.store.readEvents(runId))
+      : undefined);
+    // Capture the old session's durable context before persisting this turn. A fallback must not
+    // include its own prompt twice, and must retain reports that were flushed for the first try.
+    const resumeContext = record && sessionId !== undefined && !fallbackContext
       ? freshContinuationContext(record, this.store.readEvents(runId))
       : undefined;
     // A fresh session is pinned and recorded up front, exactly like a workflow step's
@@ -3828,16 +3836,18 @@ export class RunManager {
     // appended to the prompt (so it can operate on them — and because codex/opencode drop image
     // blocks before they reach the model). An image ALSO rides along as a base64 block so the
     // model can view it; a file (#950) has nothing to view and travels as its path alone.
-    const freshAttachments = this.persistPastedAttachments(runId, images);
+    const freshAttachments = suppressUserMessage ? [] : this.persistPastedAttachments(runId, images);
     const openingImages = [...contentBlocksOf(images), ...persistedImages];
     const attachments = [...freshAttachments, ...persistedAttachments];
-    this.store.appendEvent(runId, {
-      type: 'user-message',
-      stepId,
-      text: prompt,
-      imageCount: openingImages.filter((b) => b.type === 'image').length,
-      ...(attachments.length ? { images: attachments.map((saved) => saved.url) } : {}),
-    });
+    if (!suppressUserMessage) {
+      this.store.appendEvent(runId, {
+        type: 'user-message',
+        stepId,
+        text: prompt,
+        imageCount: openingImages.filter((b) => b.type === 'image').length,
+        ...(attachments.length ? { images: attachments.map((saved) => saved.url) } : {}),
+      });
+    }
 
     let stepCost = 0;
     let turnText = '';
@@ -4119,9 +4129,7 @@ export class RunManager {
     // Reports that arrived while this run had no session (spec Q7) open the continuation, ahead
     // of whatever prompted it — a commander resumed by its own children's reports has to be told
     // what they said. Delivery-only, like the `/skill` rewrite above.
-    const treeReports = this.flushPendingReports(runId);
-    const treeInbox = this.flushInbox(runId);
-    const treeBlocks = [treeReports, treeInbox].filter((block): block is string => Boolean(block));
+    const treeBlocks = fallbackTreeBlocks ?? [this.flushPendingReports(runId), this.flushInbox(runId)].filter((block): block is string => Boolean(block));
     const openingPrompt = treeBlocks.length ? `${treeBlocks.join('\n\n')}\n\n---\n\n${expandedPrompt}` : expandedPrompt;
     // The previous runner's portable context (#954) opens the session first, then the tree
     // blocks above, then the instruction that prompted this continuation.
@@ -4214,6 +4222,36 @@ export class RunManager {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      if (
+        sessionId !== undefined &&
+        !fallbackContext &&
+        !state.cancelled &&
+        isMissingSessionError(message, continueBackend)
+      ) {
+        this.store.appendEvent(runId, {
+          type: 'note',
+          stepId,
+          message: `could not reopen the previous session (${message}) — retrying in a fresh session with portable context`,
+        });
+        await this.runContinuation(
+          runId,
+          stepId,
+          undefined,
+          continueBackend,
+          prompt,
+          images,
+          persistedImages,
+          // The first attempt already persisted these attachments before the missing-session
+          // error. Suppress only the duplicate user-message event on the fallback; retain the
+          // saved metadata so file paths and the attachment-library hint reach the fresh session.
+          [...persistedAttachments, ...freshAttachments],
+          effectiveOwnerToken,
+          resumeContext,
+          treeBlocks,
+          true,
+        );
+        return;
+      }
       sink.sessionEnded('error', message);
       if (!state.cancelled && this.active.get(runId) === state) {
         this.store.updateStep(runId, stepId, { status: 'failed', error: message, finishedAt: finishedAt() });

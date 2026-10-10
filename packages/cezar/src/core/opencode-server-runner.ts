@@ -374,8 +374,12 @@ class OpencodeSession implements AgentSession {
   }
 
   private async bootstrap(): Promise<void> {
-    const created = await this.http('POST', '/session', { title: 'cezar task' });
+    const resumeId = this.spec.resume ? this.spec.sessionId : undefined;
+    const created = resumeId
+      ? await this.http('GET', `/session/${encodeURIComponent(resumeId)}`, undefined)
+      : await this.http('POST', '/session', { title: 'cezar task' });
     this.sessionId = stringField(created, 'id');
+    if (resumeId && this.sessionId !== resumeId) throw new Error(`opencode could not reopen session ${resumeId}`);
     if (!this.sessionId) throw new Error('opencode did not return a session id');
     this.emit({ type: 'session', sessionId: this.sessionId });
     const sessionId = this.sessionId;
@@ -386,7 +390,7 @@ class OpencodeSession implements AgentSession {
     // lost (a race this await closes; the bundled mock made it visible).
     await this.consumeEvents();
 
-    const first = prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt);
+    const first = resumeId ? this.spec.userPrompt : prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt);
     await this.prompt(first);
   }
 

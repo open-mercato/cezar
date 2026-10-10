@@ -72,6 +72,11 @@ const server = createServer((req, res) => {
     send({ type: 'server.connected', properties: {} });
     return;
   }
+  if (req.method === 'GET' && url === `/session/${SESSION_ID}`) {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id: SESSION_ID, title: 'cezar task' }));
+    return;
+  }
   let body = '';
   req.on('data', (chunk) => (body += chunk));
   req.on('end', () => {
