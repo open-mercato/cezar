@@ -166,6 +166,34 @@ describe('useDeliverPrompt', () => {
     expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(1)
   })
 
+  it('the teardown race: a fresh record that still reads done hands the exact refusal to the bounded retry', async () => {
+    let attempts = 0
+    const { sent, deliver } = await renderDeliver(run('done'), {
+      // The backend is still releasing the closed session when the first Continue lands; by the
+      // second it is gone. This is the window the composer exists to survive.
+      'POST /api/v1/runs/r1/continue': () => {
+        attempts += 1
+        return attempts === 1
+          ? jsonResponse({ error: 'run is still active' }, 409)
+          : jsonResponse({ continued: true })
+      },
+      'GET /api/v1/runs/r1': () => jsonResponse(run('done')),
+    })
+
+    await expect(deliver('one more thing')).resolves.toBeTruthy()
+
+    // Both Continues carried the draft — the prompt was never bounced back into the composer.
+    expect(posts(sent, '/api/v1/runs/r1/continue').map((request) => request.body)).toEqual([
+      { text: 'one more thing' },
+      { text: 'one more thing' },
+    ])
+    // One refetch decided it. A fresh record still naming Continue makes this a teardown race,
+    // not a routing mistake, so the retry runs on the same path without asking again…
+    expect(sent.filter((request) => request.method === 'GET' && request.path === '/api/v1/runs/r1')).toHaveLength(1)
+    // …and the live endpoint is never tried: the run really is closed.
+    expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(0)
+  })
+
   it('an empty submit is a Continue, and a run that is already live has nothing to continue', async () => {
     const { sent, deliver } = await renderDeliver(run('done'), {
       'POST /api/v1/runs/r1/continue': () => jsonResponse({ error: 'run is still active' }, 409),
