@@ -139,6 +139,8 @@ describe('the Agents dock against a replayed fan-out', () => {
   it('docks both sub-agents with odometer, type badge, activity and tool count', () => {
     browser.goto(`${baseUrl}/tasks/${RUN_ID}`)
     // The dock mounts only once the replay has produced the fan-out.
+    browser.waitForFunction(`document.querySelector('${DOCK}') !== null`)
+    browser.click(`${DOCK} > button`)
     browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 2`)
     browser.waitForFunction(
       `document.querySelector('[data-slot="agents-count"]')?.textContent.includes('2/2')`,
@@ -167,6 +169,8 @@ describe('the Agents dock against a replayed fan-out', () => {
 
   it('a row opens the drill-down sheet with that agent’s output and nobody else’s', () => {
     browser.goto(`${baseUrl}/tasks/${RUN_ID}`)
+    browser.waitForFunction(`document.querySelector('${DOCK}') !== null`)
+    browser.click(`${DOCK} > button`)
     browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 2`)
 
     // The second agent's row — a real dialog-opening button.
@@ -198,6 +202,8 @@ describe('the Agents dock against a replayed fan-out', () => {
 
   it('the long agent panel scrolls, detaches from follow-tail, and exposes the jump pill', () => {
     browser.goto(`${baseUrl}/tasks/${RUN_ID}`)
+    browser.waitForFunction(`document.querySelector('${DOCK}') !== null`)
+    browser.click(`${DOCK} > button`)
     browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 2`)
     browser.click(`${ROW}:nth-of-type(1) button`)
     browser.waitForFunction(`document.querySelector('[data-slot="transcript-viewport"]') !== null`)
@@ -231,6 +237,8 @@ describe('the Agents dock against a replayed fan-out', () => {
 
   it('collapses to a one-line odometer', () => {
     browser.goto(`${baseUrl}/tasks/${RUN_ID}`)
+    browser.waitForFunction(`document.querySelector('${DOCK}') !== null`)
+    browser.click(`${DOCK} > button`)
     browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 2`)
 
     browser.click(`${DOCK} > button`)
