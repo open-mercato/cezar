@@ -494,6 +494,12 @@ loads it in the current tab.
   > `.ai/specs/2026-10-09-design-mode.md`. It uses a proxy, but not the one refused above: a
   > mirror on its OWN loopback port, a different origin from the cockpit. The refusal of a proxy
   > on the cockpit's origin, and the hosted-mode gap, both stand unchanged.
+  >
+  > **IMPLEMENTATION NOTE (2026-10-10) — the hosted-mode gap is closed, opt-in:**
+  > `.ai/specs/2026-10-10-preview-gateway.md`. Where an operator names a pool of ports, a task's
+  > loopback app is re-served on one of them and framed from there. Each app gets a port of its
+  > own, so the refusal of a proxy on the cockpit's ORIGIN still stands; without a pool the
+  > Browser column refuses a loopback address exactly as before.
 
 ## 8. Non-goals for Milestone 1
 
