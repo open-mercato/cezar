@@ -299,7 +299,11 @@ export const githubCommentsDataSchema = z.object({
   /** Timeline events (#525) — additive; absent when the server degraded to the legacy
    *  comments-only fetch. Capped independently of `comments`. */
   events: z.array(githubTimelineEventSchema).optional(),
-  detail: z.object({ body: z.string() }).optional(),
+  detail: z.object({
+    body: z.string(),
+    additions: z.number().int().nonnegative().optional(),
+    deletions: z.number().int().nonnegative().optional(),
+  }).optional(),
 });
 export type GithubCommentsData = z.infer<typeof githubCommentsDataSchema>;
 

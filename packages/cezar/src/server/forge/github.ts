@@ -228,6 +228,7 @@ const ghListNodeSchema = z.object({
   createdAt: z.string(),
   labels: z.array(ghLabel).default([]),
   url: z.string(),
+  comments: z.object({ totalCount: z.number().int().nonnegative() }).optional(),
   isDraft: z.boolean().default(false),
   additions: z.number().optional(),
   deletions: z.number().optional(),
@@ -422,12 +423,12 @@ query ($owner: String!, $name: String!, $limit: Int!, $issuesCursor: String, $pr
   repository(owner: $owner, name: $name) {
     issues(first: $limit, after: $issuesCursor, states: OPEN, orderBy: {field: CREATED_AT, direction: DESC}) {
       totalCount
-      nodes { number title author { login } createdAt labels { name color } url }
+      nodes { number title author { login } createdAt labels { name color } url comments { totalCount } }
       pageInfo { hasNextPage endCursor }
     }
     pullRequests(first: $limit, after: $prsCursor, states: OPEN, orderBy: {field: CREATED_AT, direction: DESC}) {
       totalCount
-      nodes { number title author { login } createdAt labels { name color } url isDraft additions deletions }
+      nodes { number title author { login } createdAt labels { name color } url comments { totalCount } isDraft additions deletions }
       pageInfo { hasNextPage endCursor }
     }
   }
@@ -475,7 +476,7 @@ export async function fetchGithub(
           createdAt: i.createdAt,
           labels: i.labels.map((l) => l.name),
           url: i.url,
-          comments: 0,
+          comments: i.comments?.totalCount ?? 0,
         };
       },
     );
@@ -490,7 +491,7 @@ export async function fetchGithub(
           createdAt: p.createdAt,
           labels: [...p.labels.map((l) => l.name), ...(p.isDraft ? ['draft'] : [])],
           url: p.url,
-          comments: 0,
+          comments: p.comments?.totalCount ?? 0,
           isDraft: p.isDraft,
           additions: p.additions,
           deletions: p.deletions,
@@ -817,7 +818,11 @@ const ghIssueCommentSchema = z.object({
   body: z.string().nullish(),
   html_url: z.string(),
 });
-const ghDetailSchema = z.object({ body: z.string().nullish() });
+const ghDetailSchema = z.object({
+  body: z.string().nullish(),
+  additions: z.number().int().nonnegative().nullish(),
+  deletions: z.number().int().nonnegative().nullish(),
+});
 const ghReviewSchema = z.object({
   id: z.number(),
   user: ghCommentUser,
@@ -2287,7 +2292,7 @@ export async function fetchGithubComments(
   const legacyComments = () =>
     gh(repoRoot, ['api', `repos/{owner}/{repo}/issues/${number}/comments`, '--paginate']);
   try {
-    let detailBody: string | undefined;
+    let detail: { body: string; additions?: number; deletions?: number } | undefined;
     let commentRows: unknown[] = [];
     let events: ForgeTimelineEvent[] | undefined;
     let eventsTruncated = false;
@@ -2356,9 +2361,16 @@ export async function fetchGithubComments(
     // Body is a separate, best-effort detail tier. Fetch it only after the thread succeeds so a
     // missing CLI does not create a second failing subprocess on the ordinary degrade path.
     try {
-      const detailOut = await gh(repoRoot, [kind === 'pr' ? 'pr' : 'issue', 'view', String(number), '--json', 'body']);
-      const detail = ghDetailSchema.parse(JSON.parse(detailOut));
-      detailBody = detail.body ?? undefined;
+      const fields = kind === 'pr' ? 'body,additions,deletions' : 'body';
+      const detailOut = await gh(repoRoot, [kind === 'pr' ? 'pr' : 'issue', 'view', String(number), '--json', fields]);
+      const parsed = ghDetailSchema.parse(JSON.parse(detailOut));
+      if (parsed.body !== null && parsed.body !== undefined) {
+        detail = {
+          body: parsed.body,
+          ...(parsed.additions !== null && parsed.additions !== undefined ? { additions: parsed.additions } : {}),
+          ...(parsed.deletions !== null && parsed.deletions !== undefined ? { deletions: parsed.deletions } : {}),
+        };
+      }
     } catch {
       // The detail tier is best-effort: a missing body must not hide an otherwise readable thread.
     }
@@ -2397,7 +2409,7 @@ export async function fetchGithubComments(
       // rather than replaced.
       truncated: truncated || eventsTruncated || stoppedShort || undefined,
     };
-    if (detailBody !== undefined) data.detail = { body: detailBody.slice(0, COMMENT_BODY_CAP) };
+    if (detail) data.detail = { ...detail, body: detail.body.slice(0, COMMENT_BODY_CAP) };
     if (events) data.events = events;
     cacheComments(key, data);
     return data;

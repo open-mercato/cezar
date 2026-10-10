@@ -15,9 +15,9 @@
 | 1 | 1.2 | Implement GraphQL cursor pages and cheap open totals | group:A:capable | done | 1ebbcfa9 |
 | 1 | 1.3 | Add validated paged GitHub API parameters and detail payload | group:A:capable | done | 2424bdf5 |
 | 1 | 1.4 | Update forge fixtures for the GraphQL list migration | inline | done | bb75ed0f |
-| 2 | 2.1 | Add paged GitHub client queries and cache helpers | dispatch:standard | done | b29aff0c |
-| 2 | 2.2 | Render cursor pages with load-more and virtualization | dispatch:capable | todo | — |
-| 2 | 2.3 | Hydrate details and visible metadata in the background | group:B:capable | todo | — |
+| 2 | 2.1 | Add paged GitHub client queries and cache helpers | dispatch:standard | done | abe9fed7 |
+| 2 | 2.2 | Render cursor pages with load-more and virtualization | dispatch:capable | done | 6cb18e79 |
+| 2 | 2.3 | Hydrate details and visible metadata in the background | group:B:capable | done | pending |
 | 3 | 3.1 | Add regression coverage for pagination, totals, migration, and hydration | group:B:standard | todo | — |
 | 3 | 3.2 | Run dry-run UI verification and finalize documentation | inline | todo | — |
 

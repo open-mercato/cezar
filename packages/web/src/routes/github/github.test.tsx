@@ -723,6 +723,19 @@ describe('the GitHub detail pane', () => {
     expect(checks?.getAttribute('rel')).toBe('noopener noreferrer')
   })
 
+  it('hydrates the selected PR body and diffstat without changing the list row', async () => {
+    stubFetch({
+      'GET /api/v1/github/comments/pr/137': () => jsonResponse({
+        ...THREAD,
+        detail: { body: 'Hydrated PR description', additions: 240, deletions: 12 },
+      }),
+    })
+    renderAt('/github/prs/137')
+
+    await waitFor(() => expect(document.querySelector('[data-slot="gh-body"]')?.textContent).toContain('Hydrated PR description'))
+    expect(document.querySelector('[data-slot="gh-diffstat"]')?.textContent).toBe('+240 −12')
+  })
+
   it('renders the issue body through the markdown pipeline', async () => {
     stubFetch()
     renderAt('/github/issues/142')

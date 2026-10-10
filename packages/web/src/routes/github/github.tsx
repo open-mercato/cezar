@@ -924,7 +924,9 @@ function GithubDetail({
   const kindWord = item.kind === 'pr' ? 'pull request' : 'issue'
   const detailQuery = useGithubComments(item.kind, item.number)
   const detailBody = detailQuery.data?.detail?.body ?? item.body
-  const hasDiffStat = item.kind === 'pr' && Boolean(item.additions || item.deletions)
+  const detailAdditions = detailQuery.data?.detail?.additions ?? item.additions
+  const detailDeletions = detailQuery.data?.detail?.deletions ?? item.deletions
+  const hasDiffStat = item.kind === 'pr' && Boolean(detailAdditions || detailDeletions)
   return (
     <article data-slot="gh-detail-inner" className="min-w-0 px-4 py-4 md:px-7 md:py-5">
       <Link
@@ -948,8 +950,8 @@ function GithubDetail({
           <>
             ·
             <span data-slot="gh-diffstat">
-              <span className="text-success">+{item.additions ?? 0}</span>{' '}
-              <span className="text-danger">−{item.deletions ?? 0}</span>
+              <span className="text-success">+{detailAdditions ?? 0}</span>{' '}
+              <span className="text-danger">−{detailDeletions ?? 0}</span>
             </span>
           </>
         ) : null}

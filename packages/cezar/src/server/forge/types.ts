@@ -126,7 +126,7 @@ export interface ForgeCommentsData {
    *  the legacy comments-only call. Capped independently of `comments`, which keeps its exact
    *  pre-#525 shape, contents and cap (BACKWARD_COMPATIBILITY.md §2). */
   events?: ForgeTimelineEvent[];
-  detail?: { body: string };
+  detail?: { body: string; additions?: number; deletions?: number };
 }
 
 export interface ForgeListOptions {
