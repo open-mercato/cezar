@@ -389,6 +389,7 @@ export type ApiRun = z.infer<typeof apiRunSchema>;
  * different labels in one palette.
  */
 export const runIndexEntrySchema = z.object({
+  worktreeLifecycle: worktreeLifecycleProjectionSchema.optional(),
   /** The registered project this run belongs to. Joins against `GET /projects`. */
   projectId: z.string(),
   id: z.string(),
