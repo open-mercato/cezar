@@ -237,6 +237,71 @@ What differs per instance:
 
 ---
 
+## Previewing a task's app (the preview gateway)
+
+On a hosted cockpit the workspace's Browser column cannot frame `http://localhost:3000`: in your
+browser that address is your own computer, not the VPS. The **preview gateway** closes the gap.
+You name a pool of ports; when you open a local address in the Browser column, cezar re-serves
+that app on one of them and frames it. It is off until you set it up — the installer does not do
+this for you.
+
+Three things have to agree: cezar's pool, the front that forwards it, and the firewall.
+
+**1. Give cezar a pool.** Add to the service's environment (`systemctl edit cezar`, then
+`systemctl restart cezar`):
+
+```ini
+[Service]
+Environment=CEZ_PREVIEW_PORTS=18500-18519
+Environment=CEZ_PREVIEW_PUBLIC_PORTS=8500-8519
+```
+
+cezar listens on `127.0.0.1:18500…18519`; browsers reach them as `:8500…8519`. The two ranges
+differ because nginx, on the same host, cannot bind a port cezar already holds.
+
+**2. Forward the ports from nginx**, with the cockpit's own certificate and **without**
+`auth_basic` — the gateway authenticates every request itself, and a second login prompt inside
+a frame would never be answered:
+
+```nginx
+map $server_port $cez_preview_upstream { ~^(\d+)$ 1$1; }   # 8500 -> 18500
+
+server {
+    listen 8500-8519 ssl;                  # a port range needs nginx 1.15.10 or newer
+    server_name cezar.example.com;
+    ssl_certificate     /etc/letsencrypt/live/cezar.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/cezar.example.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:$cez_preview_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;       # hot reload is a WebSocket
+        proxy_set_header Connection "upgrade";
+        proxy_buffering off;
+    }
+}
+```
+
+**3. Open the ports**: `ufw allow 8500:8519/tcp`, and the same range in any cloud firewall.
+
+What to expect:
+
+- A preview is opened with a one-time ticket only the logged-in cockpit can obtain, exchanged
+  for a cookie scoped to that one port. A request with neither gets `401` and never reaches the
+  app.
+- Each previewed app has its own port, so its own origin. It cannot read the cockpit, and the
+  cockpit's API refuses its requests like any other foreign origin's.
+- The app's own absolute addresses are not rewritten. A storefront configured to call its API at
+  `http://localhost:9000` will make that call from your browser, to your machine. Open the API in
+  a second Browser tab to learn its gateway address, and point the app at that.
+- Design Mode stays local-only.
+
+> This wiring is documented from the gateway's behaviour, which is covered by the test suite. The
+> nginx block above has not been exercised on a live VPS yet — treat a first setup as a trial and
+> check `nginx -t` before reloading.
+
+---
+
 ## Uninstall
 
 ```bash
