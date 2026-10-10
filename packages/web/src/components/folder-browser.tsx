@@ -4,20 +4,13 @@ import type { ReactNode } from 'react'
 import { ApiError } from '@/api/client'
 import { useFsBrowse } from '@/api/queries'
 import type { FsBrowseDir } from '@open-mercato/cezar-api-client'
+import { parentDir } from '@/lib/fs-path'
 import { cn } from '@/lib/utils'
 
 /** System Settings ▸ Privacy & Security ▸ Files & Folders. */
 const PRIVACY_SETTINGS_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders'
 const errorAction =
   'inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-foreground hover:bg-muted'
-
-/** The folder a failed listing can step back to — the same path minus its last segment. */
-function parentOf(path: string): string | null {
-  const trimmed = path.replace(/[\\/]+$/, '')
-  const cut = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
-  if (cut < 0) return null
-  return cut === 0 ? trimmed.slice(0, 1) : trimmed.slice(0, cut)
-}
 
 /**
  * The server-side folder picker, shared by "Add project" and "Add agent account".
@@ -63,6 +56,7 @@ export function FolderBrowser({
 }) {
   const listing = useFsBrowse(path, showHidden)
   const parent = listing.data?.parent ?? null
+  const errorParent = path === null ? null : parentDir(path)
 
   return (
     <>
@@ -88,8 +82,8 @@ export function FolderBrowser({
             </p>
           ) : null}
           <div className="flex flex-wrap gap-2 text-[12.5px]">
-            {path !== null && parentOf(path) !== null ? (
-              <button type="button" data-slot="fs-error-back" onClick={() => onEnter(parentOf(path)!)} className={errorAction}>
+            {errorParent !== null ? (
+              <button type="button" data-slot="fs-error-back" onClick={() => onEnter(errorParent)} className={errorAction}>
                 <CornerLeftUpIcon className="size-3.5" aria-hidden />
                 Back
               </button>
