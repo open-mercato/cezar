@@ -1,0 +1,44 @@
+# cezar in a container (docs/docker.md).
+#
+#   docker compose -f docker/compose.yml up -d --build
+#   open http://localhost:4321
+#
+# Everything is published on the host's LOOPBACK only. cezar has no login of its own, and this
+# container hands out a shell; `127.0.0.1:` below is what keeps both on your machine. To reach it
+# from elsewhere, put an authenticated front in front of it — never widen these addresses.
+name: cezar
+
+services:
+  cezar:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: cezar:local
+    init: true
+    # For the Docker daemon inside the container, which runs the PROJECT's own services
+    # (docker/entrypoint.sh says why it is inside). Remove it and cezar still runs, without them.
+    privileged: true
+    ports:
+      - "127.0.0.1:4321:4321"
+      # The preview gateway: one port per app open in a Browser column.
+      - "127.0.0.1:8500-8519:8500-8519"
+    environment:
+      # Optional, read from the shell or a `.env` beside this file. Without them, log the
+      # agent and `gh` in once from inside:  docker compose exec -u node cezar claude
+      - ANTHROPIC_API_KEY
+      - CLAUDE_CODE_OAUTH_TOKEN
+      - GITHUB_TOKEN
+    volumes:
+      - data:/data
+      - projects:/projects
+      - docker:/var/lib/docker
+    restart: unless-stopped
+
+volumes:
+  # cezar's registry and task state, the agents' logins, git identity, SSH keys.
+  data:
+  # The repositories. A volume, not a folder of yours: a Linux filesystem is what makes
+  # `npm install` and a thousand small files fast, and the cockpit is the editor.
+  projects:
+  # Images and volumes of the projects' own services.
+  docker:

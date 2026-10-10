@@ -1,0 +1,2 @@
+# Copied into a Linux image from whatever checkout builds it: a CRLF shebang does not run.
+docker/** text eol=lf

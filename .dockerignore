@@ -1,0 +1,13 @@
+# The image is built from source (docker/Dockerfile); nothing built or installed on the host
+# may leak into it — a Windows node_modules in a Linux image is the classic way that goes wrong.
+.git
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+packages/desktop
+.ai
+.agents
+.claude
+docs
+*.md
+!README.md
