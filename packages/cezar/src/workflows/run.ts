@@ -1,3 +1,4 @@
+import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
 import type { TrackerAssociation } from '@open-mercato/cezar-contract';
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
 import { randomUUID } from 'node:crypto';
@@ -450,6 +451,7 @@ interface ActiveRun {
   /** Identity of this async owner; stale promises must not mutate a replacement owner. */
   ownerToken: symbol;
   cancelled: boolean;
+  releaseWorktree?: () => void;
   interrupt: () => void;
   /** Where this run's steps execute: the task worktree, or the repo root. */
   cwd: string;
@@ -1040,6 +1042,8 @@ interface PersistedAttachments {
  * The user's working tree is never touched.
  */
 export class RunManager {
+  readonly lifecycle: WorktreeLifecycleCoordinator;
+
   private readonly active = new Map<string, ActiveRun>();
   // Queue + `starting` set (spec 006, janitor's pump() pattern): `starting`
   // covers the window between shifting a run off the queue and the run
@@ -1165,6 +1169,23 @@ export class RunManager {
       oldestQueuedAt: () => this.oldestQueuedAt(),
       accountHolds: () => this.accountHolds(),
     });
+    this.lifecycle = new WorktreeLifecycleCoordinator(repoRoot, store, {
+      semaphore: this.semaphore,
+      deferCleanup: true,
+      busySlots: () => this.busySlots(),
+      isActive: id => this.isActive(id),
+      cancelAndWait: id => this.cancelAndWait(id),
+      resume: async (id, launch) => {
+        const run = this.store.getRun(id);
+        if (!run || this.isActive(id)) throw new Error('Task cannot be resumed while active or missing');
+        this.store.updateRun(id, {status: 'queued', error: undefined, finishedAt: undefined});
+        if (launch?.kind === 'continuation' && typeof launch.stepId === 'string' && typeof launch.backend === 'string' && typeof launch.prompt === 'string') {
+          this.pendingContinuations.set(id, launch as unknown as PendingContinuation);
+          this.queue.push(id);
+        } else await this.reviveQueuedRun(this.store.getRun(id)!, 'worktree setup recovery');
+        void this.pump();
+      },
+    });
     // Memory guard (#memory-guard): the shared process-tree sampler already ticks ~every 2 s for
     // the runs table; piggyback on it to enforce the per-task memory ceiling.
     this.offUsage = onUsage((snapshot) => void this.enforceMemoryLimit(snapshot));
@@ -1183,6 +1204,7 @@ export class RunManager {
    * dispose only guarantees the manager makes no further moves on its own.
    */
   dispose(): void {
+    this.lifecycle.dispose();
     this.offUsage();
     this.offSemaphore();
     clearInterval(this.queueWatchdog);
@@ -1190,6 +1212,7 @@ export class RunManager {
       this.clearIdleTimer(state);
       this.clearMonitoringWakeTimer(state, runId);
       this.clearAutosaveTimer(state);
+      state.releaseWorktree?.();
       state.releaseRepoRoot?.();
       state.releaseRepoRoot = undefined;
     }
@@ -1778,6 +1801,7 @@ export class RunManager {
    * Call once, before the server starts taking requests.
    */
   async recover(): Promise<void> {
+    await this.lifecycle.reconcile();
     const live = this.store
       .listRuns()
       .filter((r) => ['queued', 'waiting', 'running'].includes(r.status))
@@ -1787,6 +1811,10 @@ export class RunManager {
     // per-run directory here — bounded to `<dataDir>/tmp`, never a sibling.
     sweepAgentTmpDirs(this.dataDir, live.map((r) => r.id));
     for (const run of live) {
+      if (this.lifecycle.isBlocked(run.id)) {
+        this.store.updateRun(run.id, {status: 'waiting', error: 'Worktree scripts need an explicit recovery action'});
+        continue;
+      }
       if (run.status === 'queued') {
         await this.reviveQueuedRun(run, 'cezar restarted');
         continue;
@@ -1970,6 +1998,7 @@ export class RunManager {
     // continuation (or another owner) may have claimed the same run id by the time that old
     // promise reaches finally; never let stale cleanup release the newer owner's slot.
     if (expectedState !== undefined && state !== expectedState) return;
+    state?.releaseWorktree?.();
     state?.releaseRepoRoot?.();
     if (state) state.releaseRepoRoot = undefined;
     if (state?.cancellationTimer) clearTimeout(state.cancellationTimer);
@@ -2884,7 +2913,7 @@ export class RunManager {
   private async enforceRetention(): Promise<void> {
     try {
       const keep = await resolveWorktreeRetention(this.repoRoot);
-      await reclaimWorktrees(this.repoRoot, this.store, keep);
+      await reclaimWorktrees(this.repoRoot, this.store, keep, {lifecycle: this.lifecycle});
     } catch {
       // retention is best-effort; swallow so terminal transitions never break.
     }
@@ -3036,6 +3065,7 @@ export class RunManager {
    * this run's own — a cascade that cancelled nothing must not make `cancel` claim it did.
    */
   cancel(runId: string): boolean {
+    if (this.lifecycle.isBlocked(runId)) return false;
     this.cancelDescendants(runId, new Set([runId]));
     return this.cancelOne(runId);
   }
@@ -3095,6 +3125,33 @@ export class RunManager {
       state.cancellationTimer.unref?.();
     }
     return true;
+  }
+
+  /** Removal waits for the captured provider result, never merely the cancel flag. */
+  async cancelAndWait(runId: string): Promise<boolean> {
+    const state = this.active.get(runId);
+    const result = state?.session?.result;
+    if (!this.isActive(runId)) return true;
+    if (!this.cancel(runId)) return false;
+    if (!result) return !this.isActive(runId);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settled = await Promise.race([
+      result.then(() => true, () => true),
+      new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), 10_000); }),
+    ]);
+    if (timer) clearTimeout(timer);
+    return settled && !this.isActive(runId);
+  }
+
+  private parkLifecycle(runId: string, state: ActiveRun, operationId?: string): void {
+    this.clearIdleTimer(state); this.clearAutosaveTimer(state); this.clearMonitoringWakeTimer(state, runId);
+    state.releaseWorktree?.();
+    state.releaseRepoRoot?.();
+    this.active.delete(runId); this.starting.delete(runId); this.waiting.delete(runId);
+    this.monitoring.delete(runId); this.unitParents.delete(runId);
+    this.store.updateRun(runId, {status: 'waiting', error: `Worktree scripts need attention${operationId ? ` (${operationId})` : ''}`});
+    this.store.appendEvent(runId, {type: 'note', message: `Worktree preparation paused${operationId ? ` — operation ${operationId}` : ''}; use Worktrees settings to Retry, Start task anyway, or Cancel task.`});
+    this.releaseSlot();
   }
 
   isActive(runId: string): boolean {
@@ -3417,6 +3474,7 @@ export class RunManager {
   /** Shared live-session delivery. Synthetic scheduler prompts reuse lifecycle
    * bookkeeping without masquerading as user-authored transcript messages. */
   private deliverMessage(runId: string, content: PastedContent[], userAuthored: boolean): boolean {
+    if (this.lifecycle.isBlocked(runId)) return false;
     const state = this.active.get(runId);
     // A graph gate/question parked with no session (1c) takes the user's reply as its answer.
     // Only a USER-authored message answers it: a child report or a wake nudge must not approve a gate.
@@ -3570,6 +3628,7 @@ export class RunManager {
      *  continuations are queued; an explicit user Continue remains immediate. */
     deferForCapacity = false,
   ): { ok: boolean; error?: string } {
+    if (this.lifecycle.isBlocked(runId)) return {ok: false, error: 'Resolve the worktree lifecycle operation first'};
     if (agentModelsLocked(this.repoRoot) && opts.model?.trim()) {
       return { ok: false, error: AGENT_MODELS_LOCKED_ERROR };
     }
@@ -3581,7 +3640,13 @@ export class RunManager {
       return { ok: false, error: `cannot continue a ${run.status} run` };
     }
     const sessionStep = [...run.steps].reverse().find((s) => s.sessionId);
-    if (!sessionStep?.sessionId) return { ok: false, error: 'no agent session to resume' };
+    if (!sessionStep?.sessionId) {
+      if (run.worktreeLifecycle?.phase === 'setup' && run.worktreeLifecycle.state === 'cancelled') {
+        void this.lifecycle.reopenSetup(runId).catch(error => this.store.updateRun(runId, {error: String(error)}));
+        return {ok: true};
+      }
+      return { ok: false, error: 'no agent session to resume' };
+    }
     const targetRunner = opts.runner ?? run.runner ?? 'claude';
     // Session ids are provider-owned opaque values. New records carry explicit
     // affinity; for legacy records, the run's current runner is the conservative
@@ -3725,7 +3790,16 @@ export class RunManager {
     // the stamp so the session regains its isolated tree and the run is eligible
     // for retention again — otherwise it keeps a dir on disk while staying
     // invisible to the enforcer forever. Best-effort; falls back to repoRoot.
-    await rematerializeReclaimedWorktree(this.repoRoot, this.store, runId);
+    const beforePreparation = this.store.getRun(runId);
+    if (beforePreparation?.worktreePath && await this.lifecycle.requiresGate(runId)) {
+      // Keep the original continuation intent durable before any script can start.
+      const preparing: ActiveRun = {ownerToken: effectiveOwnerToken, cancelled: false, interrupt: () => undefined, cwd: beforePreparation.worktreePath, autonomous: beforePreparation.autonomous === true, autoContinues: 0};
+      this.active.set(runId, preparing); this.starting.delete(runId);
+      const gate = await this.lifecycle.prepare(runId, beforePreparation.baseBranch ?? 'HEAD', {
+        kind: 'continuation', runId, stepId, sessionId, backend, prompt, images, persistedImages, persistedAttachments,
+      });
+      if (!gate.ready) { this.parkLifecycle(runId, preparing, gate.operationId); return; }
+    } else await rematerializeReclaimedWorktree(this.repoRoot, this.store, runId);
     const record = this.store.getRun(runId);
     // A provider/account switch cannot resume the old provider-owned session. Reconstruct the
     // portable context from Cezar's durable record + redacted event stream before this new turn's
@@ -3763,6 +3837,7 @@ export class RunManager {
     };
     this.active.set(runId, state);
     this.starting.delete(runId);
+    if (record?.worktreePath && state.cwd !== this.repoRoot) state.releaseWorktree = await this.lifecycle.acquireAgentLease(runId);
     if (state.cwd === this.repoRoot) {
       if (repositoryRootLockDisabled()) {
         this.store.appendEvent(runId, {
@@ -4337,8 +4412,10 @@ export class RunManager {
           emit({ type: 'note', message }),
         ));
       try {
-        const wt = await createWorktree(this.repoRoot, runId, base);
+        const wt = await this.lifecycle.prepare(runId, base, {kind: 'initial', runId});
+        if (!wt.ready) { this.parkLifecycle(runId, state, wt.operationId); return; }
         state.cwd = wt.path;
+        state.releaseWorktree = await this.lifecycle.acquireAgentLease(runId);
         this.store.updateRun(runId, {
           worktreePath: wt.path,
           branch: wt.branch,
@@ -4347,10 +4424,6 @@ export class RunManager {
         emit({ type: 'note', message: `worktree ready — branch ${wt.branch} (base ${wt.baseBranch})` });
         // Seed from this manager's project root: each multi-project context has
         // its own manager/repoRoot and must never copy another project's layer.
-        const seededConfig = await seedAgentConfigLocalLayer(this.repoRoot, state.cwd).catch(() => []);
-        if (seededConfig.length > 0) {
-          emit({ type: 'note', message: `seeded personal agent config: ${seededConfig.join(', ')}` });
-        }
         this.armAutosave(runId, state);
       } catch (err) {
         if (state.cancelled) {

@@ -25,6 +25,8 @@ async function project(semaphore = new WorkspaceSemaphore({initial: {maxParallel
   const id = randomUUID();
   const records = new Map<string, FakeRun>([[id, {id, task: 'fixture task', status: 'running'}]]);
   const runs = {
+    flush: () => undefined,
+    listRuns: () => [...records.values()],
     getRun: (runId: string) => records.get(runId),
     updateRun: (runId: string, patch: Record<string, unknown>) => { const run = records.get(runId); if (run) Object.assign(run, patch); },
     deleteRun: (runId: string) => { records.delete(runId); },
@@ -123,6 +125,30 @@ describe('worktree lifecycle coordinator with real Git and command fixtures', ()
     expect((await p.coordinator.operation(prepared.operationId!)).state).toBe('completed');
   });
 
+  it('reacquires preparation from the resume callback without holding the worktree lock', async () => {
+    const p = await project(); await p.config([entry('exit 4')]); const prepared = await p.prepare();
+    await p.config([entry('echo repaired > resumed')]);
+    p.resume.mockImplementation(async () => { await p.prepare(); });
+    await p.action(prepared.operationId!, 'retry');
+    expect((await settled(p.coordinator, prepared.operationId!)).state).toBe('completed');
+    expect(await readFile(join(prepared.path, 'resumed'), 'utf8')).toBe('repaired\n');
+  });
+
+  it('explicit setup bypass does not require corrected templates, while cancel retains resources', async () => {
+    const p = await project(); const failing = entry('echo partial > resource; exit 4');
+    await p.config([failing]); const prepared = await p.prepare();
+    await p.config([{...failing, command: 'echo "{{root_path}}"'}]);
+    await p.action(prepared.operationId!, 'start-anyway');
+    expect((await p.prepare()).ready).toBe(true);
+    expect((await p.coordinator.operation(prepared.operationId!)).state).toBe('bypassed');
+    expect(await readFile(join(prepared.path, 'resource'), 'utf8')).toBe('partial\n');
+    const second = await project(); await second.config([entry('echo kept > resource; exit 2')]);
+    const failed = await second.prepare(); await second.action(failed.operationId!, 'cancel-task');
+    expect(second.records.get(second.id)?.status).toBe('cancelled');
+    expect(existsSync(failed.path)).toBe(true);
+    expect(await second.coordinator.store.readWorktree(second.id)).toMatchObject({autoCleanupSuppressed: true});
+  });
+
   it('retains a worktree after failed teardown and Keep suppresses automatic reclamation', async () => {
     const p = await project(); await p.config([], [entry('echo partial > cleanup; exit 3')]);
     const prepared = await p.prepare();
@@ -159,6 +185,17 @@ describe('worktree lifecycle coordinator with real Git and command fixtures', ()
     const action = {requestId: randomUUID(), expectedRevision: current.revision, action: 'keep-worktree' as const};
     expect((await p.coordinator.action(operation.id, action)).state).toBe('kept');
     expect((await p.coordinator.action(operation.id, action)).state).toBe('kept');
+  });
+
+  it('rejects reusing one request ID for a different worktree in the same project', async () => {
+    const p = await project(); await p.config([], [entry('exit 6')]); await p.prepare();
+    const otherId = randomUUID(); p.records.set(otherId, {id: otherId, task: 'other task', status: 'done'});
+    const other = await p.coordinator.prepare(otherId, 'main', {kind: 'initial', runId: otherId});
+    const requestId = randomUUID();
+    const first = await p.coordinator.startRemoval({requestId, runId: p.id, intent: 'reclaim'});
+    await settled(p.coordinator, first.id);
+    await expect(p.coordinator.startRemoval({requestId, runId: otherId, intent: 'reclaim'})).rejects.toThrow('different action');
+    expect(existsSync(other.path)).toBe(true);
   });
 
   it('shares one admission slot across projects and releases it when scripts fail', async () => {

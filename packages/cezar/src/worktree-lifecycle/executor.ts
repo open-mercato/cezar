@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import type { LifecycleOutputFrame, LifecycleProcessIdentity } from '@open-mercato/cezar-contract';
 export type { LifecycleProcessIdentity } from '@open-mercato/cezar-contract';
@@ -23,6 +24,8 @@ export interface LifecycleExecutorOptions {
   onOutput?: (frame: LifecycleExecutorOutput) => Promise<void> | void;
   /** Dependency injection for runtime-unavailable tests; production uses bash. */
   bashPath?: string;
+  /** Platform seam for process-supervision fixtures; defaults to the host. */
+  platform?: NodeJS.Platform;
 }
 export interface LifecycleExecutionResult {
   state: 'succeeded' | 'failed' | 'interrupted';
@@ -48,7 +51,10 @@ function alive(pid: number): boolean {
 /** A read-only conservative recovery probe. Never signal a PID loaded from disk. */
 export async function probeLifecycleProcess(identity: LifecycleProcessIdentity): Promise<'quiescent' | 'running' | 'unknown'> {
   if (identity.hostname !== hostname() || !Number.isSafeInteger(identity.pid) || identity.pid <= 0) return 'unknown';
-  const groupAlive = process.platform === 'win32' ? alive(identity.pid) : alive(-identity.pid);
+  // Without a native job handle, a vanished Windows leader does not prove its
+  // descendants have exited. Persisted identities are never sent to taskkill.
+  if (process.platform === 'win32') return identity.quiescent ? 'quiescent' : 'unknown';
+  const groupAlive = alive(-identity.pid);
   if (!groupAlive) return 'quiescent';
   if (!identity.startIdentity) return 'unknown';
   const current = await processStart(identity.pid);
@@ -63,9 +69,12 @@ export async function executeLifecycleCommand(options: LifecycleExecutorOptions)
   if (!Number.isFinite(timeout) || timeout < 1 || timeout > 86400) throw new Error('Lifecycle timeout must be 1–86400 seconds');
   if (options.dryRun || process.env.CEZ_DRY_RUN === '1') return { state: 'succeeded', exitCode: 0, quiescent: true, truncated: false };
   if (options.signal?.aborted) return { state: 'interrupted', exitCode: null, reason: 'Stopped before launch', quiescent: true, truncated: false };
-  // Windows cannot provide the POSIX process-group guarantee used for directory ownership.
-  // Refuse safely instead of launching a child whose descendants cannot be supervised.
-  if (process.platform === 'win32') return { state: 'failed', exitCode: null, reason: 'Lifecycle process supervision requires a POSIX host with Bash', quiescent: true, truncated: false };
+  const windows = (options.platform ?? process.platform) === 'win32';
+  const completionMarker = `__cezar_${randomUUID().replaceAll('-', '')}`;
+  let windowsCommandCode: number | undefined;
+  let windowsTermination: Promise<boolean> | undefined;
+  let childExited = false;
+  let childClosed = false;
   const secrets = collectSecretValues();
   const redactor = new StreamRedaction();
   let retained = 0;
@@ -117,21 +126,46 @@ export async function executeLifecycleCommand(options: LifecycleExecutorOptions)
         }
       }
       if (piece.endsWith('\n')) {
-        if (!discarding[stream]) safeLine(stream, buffers[stream]);
+        if (windows && stream === 'stderr' && buffers[stream].startsWith(`${completionMarker}:`)) {
+          const code = Number(buffers[stream].slice(completionMarker.length + 1).trim());
+          if (Number.isInteger(code) && code >= 0 && code <= 255) { windowsCommandCode = code; void terminateWindows(); }
+        } else if (!discarding[stream]) safeLine(stream, buffers[stream]);
         buffers[stream] = ''; discarding[stream] = false;
       }
     }
   };
   const bash = options.bashPath ?? 'bash';
-  const child = spawn(bash, ['-c', 'IFS= read -r _cezar_launch || exit 125; exec "$0" -c "$1"', bash, options.command], {
-    cwd: options.cwd, env: process.env, detached: true, stdio: ['pipe', 'pipe', 'pipe'],
+  // Keep the Windows supervisor alive until taskkill has captured its tree. The
+  // command itself still receives EOF on stdin; the private marker is not output.
+  const wrapper = windows
+    ? `IFS= read -r _cezar_launch || exit 125; "$0" -c "$1" </dev/null; _cezar_status=$?; printf '\\n%s:%s\\n' "$2" "$_cezar_status" >&2; IFS= read -r _cezar_shutdown`
+    : 'IFS= read -r _cezar_launch || exit 125; exec "$0" -c "$1"';
+  const child = spawn(bash, ['-c', wrapper, bash, options.command, completionMarker], {
+    cwd: options.cwd, env: process.env, detached: true, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
   });
-  const closed = new Promise<void>(resolve => child.once('close', () => resolve()));
+  const closed = new Promise<void>(resolve => child.once('close', () => { childClosed = true; resolve(); }));
   child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
   child.stdout.on('data', (chunk: string) => receive('stdout', chunk));
   child.stderr.on('data', (chunk: string) => receive('stderr', chunk));
   child.stdin.on('error', () => { /* a stopped gate may already be closed */ });
   let stopReason: string | undefined;
+  // Only an owned, still-live ChildProcess reaches taskkill. On failure, killing
+  // just the leader is best effort and never authorizes directory destruction.
+  function terminateWindows(): Promise<boolean> {
+    if (windowsTermination) return windowsTermination;
+    windowsTermination = (async () => {
+      if (!child.pid || childExited) return false;
+      try {
+        await execFileAsync('taskkill', ['/PID', String(child.pid), '/T', '/F'], {timeout: 5000, windowsHide: true});
+        await Promise.race([closed, delay(1000)]);
+        return childExited && childClosed;
+      } catch {
+        try { child.kill('SIGKILL'); } catch { /* ownership remains uncertain */ }
+        return false;
+      }
+    })();
+    return windowsTermination;
+  }
   let forced: ReturnType<typeof setTimeout> | undefined;
   const signalGroup = (signal: NodeJS.Signals): void => {
     if (!child.pid) return;
@@ -140,6 +174,7 @@ export async function executeLifecycleCommand(options: LifecycleExecutorOptions)
   function stop(reason: string): void {
     if (stopReason) return;
     stopReason = reason;
+    if (windows) { void terminateWindows(); return; }
     child.stdin.end(); signalGroup('SIGTERM');
     forced = setTimeout(() => signalGroup('SIGKILL'), 5000);
   }
@@ -149,25 +184,27 @@ export async function executeLifecycleCommand(options: LifecycleExecutorOptions)
   const batch = setInterval(flush, 100);
   const completed = new Promise<{ code: number | null; signal?: string; error?: string }>(resolve => {
     child.once('error', error => resolve({ code: null, error: redactSecrets(error.message, secrets) }));
-    child.once('exit', (code, signal) => resolve({ code, ...(signal ? { signal } : {}) }));
+    child.once('exit', (code, signal) => { childExited = true; resolve({ code, ...(signal ? { signal } : {}) }); });
   });
   let identity: LifecycleProcessIdentity | undefined;
   if (child.pid) {
-    const start = await processStart(child.pid);
+    const start = windows ? undefined : await processStart(child.pid);
     identity = { pid: child.pid, hostname: hostname(), startedAt: new Date().toISOString(), ...(start ? { startIdentity: start } : {}) };
     try {
       await options.onStart?.(identity);
-      if (!stopReason) child.stdin.end('start\n');
+      if (!stopReason) {
+        if (windows) child.stdin.write('start\n'); else child.stdin.end('start\n');
+      }
     } catch { stop('Could not persist command start; command was not launched'); }
   }
   const outcome = await completed;
   // Background children that did not detach must not outlive ownership of the directory.
-  if (child.pid && alive(-child.pid)) {
+  if (!windows && child.pid && alive(-child.pid)) {
     stop(stopReason ?? 'Command left background processes attached');
     const deadline = Date.now() + 5500;
     while (alive(-child.pid) && Date.now() < deadline) await delay(25);
   }
-  const quiescent = !child.pid || !alive(-child.pid);
+  const quiescent = !child.pid || (windows ? await (windowsTermination ?? Promise.resolve(false)) : !alive(-child.pid));
   finished = true;
   clearTimeout(timer); clearInterval(batch); if (forced) clearTimeout(forced);
   options.signal?.removeEventListener('abort', aborted);
@@ -177,10 +214,11 @@ export async function executeLifecycleCommand(options: LifecycleExecutorOptions)
   for (const stream of ['stdout', 'stderr'] as const) if (buffers[stream]) safeLine(stream, buffers[stream]);
   for (const event of redactor.drain('execution', { type: 'turn.completed' })) enqueue(event.itemId as 'stdout' | 'stderr', event.delta as string);
   flush(); await outputChain;
-  const reason = outcome.error ?? (outputError ? 'Could not persist lifecycle output' : stopReason);
+  const code = windowsCommandCode ?? outcome.code;
+  const reason = outcome.error ?? (outputError ? 'Could not persist lifecycle output' : stopReason) ?? (!quiescent ? 'Could not verify command process-tree termination; directory retained' : undefined);
   return {
-    state: reason ? (stopReason && !outputError && !stopReason.startsWith('Could not persist') ? 'interrupted' : 'failed') : outcome.code === 0 && quiescent ? 'succeeded' : 'failed',
-    exitCode: outcome.code, ...(outcome.signal ? { signal: outcome.signal } : {}), ...(reason ? { reason } : {}),
+    state: reason ? (stopReason && !outputError && !stopReason.startsWith('Could not persist') ? 'interrupted' : 'failed') : code === 0 && quiescent ? 'succeeded' : 'failed',
+    exitCode: code, ...(outcome.signal && windowsCommandCode === undefined ? { signal: outcome.signal } : {}), ...(reason ? { reason } : {}),
     ...(identity ? { identity } : {}), quiescent, truncated,
   };
 }

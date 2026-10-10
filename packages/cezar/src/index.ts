@@ -253,7 +253,7 @@ async function serveCommand(
 
   // Startup reconcile (spec 006): sweep worktrees whose run no longer exists.
   if (repo) {
-    const orphans = await pruneOrphans(repoRoot, new Set(store.listRuns().map((r) => r.id))).catch(
+    const orphans = await pruneOrphans(repoRoot, new Set(store.listRuns().map((r) => r.id)), id => manager.lifecycle.allowOrphanPrune(id)).catch(
       () => [] as string[],
     );
     if (orphans.length > 0) {
@@ -263,7 +263,7 @@ async function serveCommand(
     // the keep-limit (directory only — `cez/<id8>` branch kept, so recoverable).
     // Best-effort; never blocks boot.
     const keep = await resolveWorktreeRetention(repoRoot).catch(() => DEFAULT_WORKTREE_RETENTION);
-    const reclaimed = await reclaimWorktrees(repoRoot, store, keep).catch(() => [] as string[]);
+    const reclaimed = await reclaimWorktrees(repoRoot, store, keep, {lifecycle: manager.lifecycle}).catch(() => [] as string[]);
     if (reclaimed.length > 0) {
       console.log(`  reclaimed ${reclaimed.length} old worktree(s), branch kept: ${reclaimed.map((id) => id.slice(0, 8)).join(', ')}`);
     }
@@ -332,6 +332,7 @@ async function serveCommand(
     workspaceEvents,
     selfUpdate,
   }, port);
+  httpServer.once('listening', () => manager.lifecycle.start());
   const url = `http://localhost:${port}`;
 
   console.log(`\n  cezar v${version} — ${repoRoot}`);
@@ -530,7 +531,11 @@ async function runCommand(
   // the GUI's review gate; the diff waits on the task branch/cockpit instead.
   const final = await new Promise<string>((resolveStatus) => {
     store.on('run', (r) => {
-      if (r.id === run.id && ['done', 'review', 'failed', 'cancelled'].includes(r.status)) resolveStatus(r.status);
+      if (r.id !== run.id) return;
+      if (r.worktreeLifecycle?.needsAttention) {
+        console.error(`Worktree scripts need attention — operation ${r.worktreeLifecycle.activeOperationId ?? '?'}; open Worktrees settings in the cockpit to recover.`);
+        resolveStatus('failed');
+      } else if (['done', 'review', 'failed', 'cancelled'].includes(r.status)) resolveStatus(r.status);
     });
   });
   store.flush();
@@ -539,6 +544,7 @@ async function runCommand(
     console.log(`\n  changes ready for review on branch ${record?.branch ?? '?'} — inspect them in the cockpit: npx cezar`);
   }
   console.log(`\nrun ${final} — ${record?.tokensUsed ?? 0} tokens — details in the cockpit: npx cezar`);
+  manager.dispose();
   process.exitCode = final === 'done' || final === 'review' ? 0 : 1;
 }
 

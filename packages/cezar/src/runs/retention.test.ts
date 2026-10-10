@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
 import type { RunRecord, RunStatus } from './store.ts';
-import { isReclaimable, selectReclaimableWorktrees } from './retention.ts';
+import { isReclaimable, selectReclaimableWorktrees, reclaimWorktrees } from './retention.ts';
 
 /**
  * The pure retention selector (#483). It only reads a handful of fields, so the
@@ -88,5 +91,37 @@ describe('selectReclaimableWorktrees (#483)', () => {
     expect(isReclaimable(run({ id: 'x', status: 'review' }))).toBe(false);
     expect(isReclaimable(run({ id: 'x', status: 'done', worktreePath: null }))).toBe(false);
     expect(isReclaimable(run({ id: 'x', status: 'done', worktreeReclaimedAt: '2026-07-05T00:00:00Z' }))).toBe(false);
+  });
+});
+
+
+describe('reclamation lifecycle gate', () => {
+  it('reports only verified removals and keeps scanning after gated or malformed candidates', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cez-retention-lifecycle-'));
+    try {
+      const records = ['malformed', 'gated', 'ordinary', 'newest'].map((id, index) => {
+        const path = join(root, id); mkdirSync(path);
+        return run({ id, status: 'done', worktreePath: path, finishedAt: `2026-07-0${index + 1}T00:00:00Z` });
+      });
+      const update = vi.fn((id: string, patch: {worktreeReclaimedAt?: string}) => Object.assign(records.find(record => record.id === id)!, patch));
+      const gatedReclaim = vi.fn(async () => false);
+      const remove = vi.fn(async (_root: string, path: string) => { rmSync(path, { recursive: true }); });
+      const reclaimed = await reclaimWorktrees(root, { listRuns: () => records, updateRun: update }, 1, {
+        remove,
+        lifecycle: {
+          requiresGate: async id => { if (id === 'malformed') throw new Error('malformed config'); return id === 'gated'; },
+          reclaim: gatedReclaim,
+        },
+      });
+      expect(reclaimed).toEqual(['ordinary']);
+      expect(gatedReclaim).toHaveBeenCalledWith('gated');
+      expect(remove).toHaveBeenCalledTimes(1);
+      expect(existsSync(join(root, 'ordinary'))).toBe(false);
+      expect(existsSync(join(root, 'gated'))).toBe(true);
+      expect(existsSync(join(root, 'malformed'))).toBe(true);
+      expect(existsSync(join(root, 'newest'))).toBe(true);
+      expect(update).toHaveBeenCalledTimes(1);
+      expect(records.find(record => record.id === 'gated')?.worktreeReclaimedAt).toBeUndefined();
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

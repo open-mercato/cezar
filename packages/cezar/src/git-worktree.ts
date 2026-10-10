@@ -723,6 +723,7 @@ export async function worktreeShortstat(
 export async function pruneOrphans(
   repoRoot: string,
   validIds: ReadonlySet<string>,
+  canRemove?: (runId: string) => Promise<boolean>,
 ): Promise<string[]> {
   await git(repoRoot, ['worktree', 'prune']);
   let entries: Dirent[];
@@ -734,6 +735,7 @@ export async function pruneOrphans(
   const removed: string[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || validIds.has(entry.name)) continue;
+    if (canRemove && !await canRemove(entry.name).catch(() => false)) continue;
     await removeWorktree(repoRoot, worktreePathFor(repoRoot, entry.name), branchFor(entry.name));
     removed.push(entry.name);
   }

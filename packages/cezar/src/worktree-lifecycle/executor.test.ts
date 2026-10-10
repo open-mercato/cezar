@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -57,5 +57,36 @@ describe('supervised lifecycle executor', () => {
     expect(result).toMatchObject({ state: 'succeeded', truncated: true, quiescent: true });
     expect(frames.every(frame => Buffer.byteLength(frame.text) <= 16384)).toBe(true);
     expect(frames.reduce((sum, frame) => sum + Buffer.byteLength(frame.text), 0)).toBeLessThanOrEqual(1048700);
+  });
+});
+
+
+describe('Windows supervision with a taskkill fixture', () => {
+  async function taskkillFixture(fail = false): Promise<void> {
+    const path = join(cwd, 'taskkill');
+    await writeFile(path, '#!/bin/bash\nprintf "%s\\n" "$@" > "$(dirname "$0")/taskkill-args"\n' + (fail ? 'exit 1\n' : 'kill -KILL -- "-$2"\n'));
+    await chmod(path, 0o700);
+    vi.stubEnv('PATH', `${cwd}:${process.env.PATH}`);
+  }
+  it('terminates the captured live supervisor tree and preserves the command exit code', async () => {
+    await taskkillFixture();
+    const frames: LifecycleExecutorOutput[] = [];
+    const result = await executeLifecycleCommand({command: 'echo command; exit 7', cwd, platform: 'win32', onOutput: frame => { frames.push(frame); }});
+    expect(result).toMatchObject({state: 'failed', exitCode: 7, quiescent: true});
+    expect((await readFile(join(cwd, 'taskkill-args'), 'utf8')).trim().split('\n')).toEqual(['/PID', String(result.identity!.pid), '/T', '/F']);
+    expect(frames.map(frame => frame.text).join('')).toContain('command');
+    expect(frames.map(frame => frame.text).join('')).not.toContain('__cezar_');
+  });
+  it('returns uncertain quiescence when native taskkill fails', async () => {
+    await taskkillFixture(true);
+    const result = await executeLifecycleCommand({command: 'true', cwd, platform: 'win32'});
+    expect(result).toMatchObject({state: 'failed', quiescent: false});
+    expect(result.reason).toContain('directory retained');
+  });
+  it('uses tree termination on stop while the Bash command is running', async () => {
+    await taskkillFixture();
+    const controller = new AbortController();
+    const result = await executeLifecycleCommand({command: 'sleep 30', cwd, platform: 'win32', signal: controller.signal, onStart: async () => { setTimeout(() => controller.abort(), 100); }});
+    expect(result).toMatchObject({state: 'interrupted', quiescent: true});
   });
 });
