@@ -98,6 +98,18 @@ describe('LifecycleStore', () => {
     await store.pruneHistory(() => false, Date.now() + 8 * 86400_000);
     expect(await store.readOperation(op.id)).not.toBeNull();
   });
+  it('expires completed old-generation history after recreation while retaining current facts and identity', async () => {
+    await store.writeWorktree({ ...record, generation: 2 });
+    await fs.mkdir(record.worktreePath, { recursive: true });
+    const previous = { ...operation(), state: 'completed' as const };
+    const current = { ...operation(), generation: 2, state: 'completed' as const };
+    await store.writeOperation(previous, null);
+    await store.writeOperation(current, null);
+    await store.pruneHistory(() => true, Date.now() + 8 * 86400_000);
+    expect(await store.readOperation(previous.id)).toBeNull();
+    expect(await store.readOperation(current.id)).not.toBeNull();
+    expect((await store.readWorktree(record.runId))?.worktreeId).toBe(record.worktreeId);
+  });
   it('pages persisted output and rejects duplicate sequence numbers', async () => {
     const op = operation();
     const frame = { seq: 1, time: record.createdAt, executionId: randomUUID(), stream: 'stdout' as const, text: 'safe output' };

@@ -1175,9 +1175,16 @@ export class RunManager {
       busySlots: () => this.busySlots(),
       isActive: id => this.isActive(id),
       cancelAndWait: id => this.cancelAndWait(id),
+      cancelPending: id => {
+        const queued = this.queue.indexOf(id);
+        if (queued >= 0) this.queue.splice(queued, 1);
+        this.pendingJobs.delete(id); this.pendingContinuations.delete(id);
+      },
       resume: async (id, launch) => {
         const run = this.store.getRun(id);
-        if (!run || this.isActive(id)) throw new Error('Task cannot be resumed while active or missing');
+        if (!run) throw new Error('Task cannot be resumed because it is missing');
+        if (this.queue.includes(id)) { void this.pump(); return; }
+        if (this.isActive(id)) throw new Error('Task cannot be resumed while active');
         this.store.updateRun(id, {status: 'queued', error: undefined, finishedAt: undefined});
         if (launch?.kind === 'continuation' && typeof launch.stepId === 'string' && typeof launch.backend === 'string' && typeof launch.prompt === 'string') {
           this.pendingContinuations.set(id, launch as unknown as PendingContinuation);
@@ -1212,7 +1219,13 @@ export class RunManager {
       this.clearIdleTimer(state);
       this.clearMonitoringWakeTimer(state, runId);
       this.clearAutosaveTimer(state);
-      state.releaseWorktree?.();
+      // Project disposal deliberately leaves providers alive. Their directory lease must
+      // survive the manager too, until the actual provider result confirms its exit.
+      const releaseWorktree = state.releaseWorktree;
+      state.releaseWorktree = undefined;
+      if (state.session && releaseWorktree) {
+        void state.session.result.then(releaseWorktree, releaseWorktree);
+      } else releaseWorktree?.();
       state.releaseRepoRoot?.();
       state.releaseRepoRoot = undefined;
     }
@@ -3791,13 +3804,17 @@ export class RunManager {
     // for retention again — otherwise it keeps a dir on disk while staying
     // invisible to the enforcer forever. Best-effort; falls back to repoRoot.
     const beforePreparation = this.store.getRun(runId);
-    if (beforePreparation?.worktreePath && await this.lifecycle.requiresGate(runId)) {
+    const gatedContinuation = !!beforePreparation?.worktreePath && await this.lifecycle.requiresGate(runId).catch(() => true);
+    if (beforePreparation?.worktreePath && gatedContinuation) {
       // Keep the original continuation intent durable before any script can start.
       const preparing: ActiveRun = {ownerToken: effectiveOwnerToken, cancelled: false, interrupt: () => undefined, cwd: beforePreparation.worktreePath, autonomous: beforePreparation.autonomous === true, autoContinues: 0};
       this.active.set(runId, preparing); this.starting.delete(runId);
+      const preparationController = new AbortController();
+      preparing.interrupt = () => preparationController.abort();
       const gate = await this.lifecycle.prepare(runId, beforePreparation.baseBranch ?? 'HEAD', {
         kind: 'continuation', runId, stepId, sessionId, backend, prompt, images, persistedImages, persistedAttachments,
-      });
+      }, preparationController.signal);
+      if (preparing.cancelled) { this.dropActive(runId, preparing); return; }
       if (!gate.ready) { this.parkLifecycle(runId, preparing, gate.operationId); return; }
     } else await rematerializeReclaimedWorktree(this.repoRoot, this.store, runId);
     const record = this.store.getRun(runId);
@@ -3818,7 +3835,7 @@ export class RunManager {
     // follow-ups after it is switched off.
     const generateFollowups = followupsEnabled() && record?.generateFollowups !== false;
     const cwd =
-      record?.worktreePath && existsSync(record.worktreePath)
+      record?.worktreePath && (gatedContinuation || existsSync(record.worktreePath))
         ? record.worktreePath
         : this.repoRoot;
     // `autonomous` comes off the RECORD, not off an input: a continuation builds its OWN
@@ -4412,7 +4429,10 @@ export class RunManager {
           emit({ type: 'note', message }),
         ));
       try {
-        const wt = await this.lifecycle.prepare(runId, base, {kind: 'initial', runId});
+        const preparationController = new AbortController();
+        state.interrupt = () => preparationController.abort();
+        const wt = await this.lifecycle.prepare(runId, base, {kind: 'initial', runId}, preparationController.signal);
+        if (state.cancelled) { this.dropActive(runId, state); return; }
         if (!wt.ready) { this.parkLifecycle(runId, state, wt.operationId); return; }
         state.cwd = wt.path;
         state.releaseWorktree = await this.lifecycle.acquireAgentLease(runId);

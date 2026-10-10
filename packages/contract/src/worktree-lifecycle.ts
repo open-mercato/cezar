@@ -108,9 +108,11 @@ export const lifecycleOperationSchema = z.object({
   updatedAt: z.string(),
   finishedAt: z.string().optional(),
   pendingLaunch: lifecyclePendingLaunchSchema.optional(),
+  /** A variant cancellation was requested but the owning manager has not proven agent exit. */
+  agentQuiescencePending: z.boolean().optional(),
   failureStage: z.enum(['config', 'context', 'storage', 'command', 'commit', 'process']).optional(),
   error: z.string().optional(),
-  decision: z.object({ action: lifecycleActionSchema, actor: z.string(), at: z.string() }).optional(),
+  decision: z.object({ action: lifecycleActionSchema, actor: z.string(), at: z.string(), skippedEntryIds: z.array(lifecycleIdSchema).optional() }).optional(),
   configRevision: z.string().nullable().optional(),
   executions: z.array(scriptExecutionSchema).max(100),
   /** Compact successes survive history pruning; these are facts, never executable snapshots. */
@@ -127,7 +129,7 @@ export const lifecycleEntrySummarySchema = z.object({
   attempt: z.number().int().nonnegative(),
 });
 export const lifecycleExecutionViewSchema = scriptExecutionSchema.omit({ process: true }).strip();
-export const lifecycleOperationViewSchema = lifecycleOperationSchema.omit({ schemaVersion: true, pendingLaunch: true, requests: true, successfulEntries: true, executions: true }).strip().extend({
+export const lifecycleOperationViewSchema = lifecycleOperationSchema.omit({ schemaVersion: true, pendingLaunch: true, agentQuiescencePending: true, requests: true, successfulEntries: true, executions: true }).strip().extend({
   history: z.array(lifecycleExecutionViewSchema),
   entries: z.array(lifecycleEntrySummarySchema),
   allowedActions: z.array(lifecycleActionSchema),

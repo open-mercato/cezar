@@ -214,16 +214,17 @@ export class LifecycleStore {
     for (const record of records) {
       const operations = await this.listOperations(record.worktreeId);
       const active = record.activeOperationId ? await this.readOperation(record.activeOperationId).catch(() => null) : undefined;
-      if (record.activeOperationId && (!active || !terminalStates.has(active.state))) continue;
+      if (record.activeOperationId && !active) continue;
       const allTerminal = operations.every(operation => terminalStates.has(operation.state));
       const onDisk = await fs.lstat(record.worktreePath).then(() => true, () => false);
-      if (onDisk || !allTerminal) continue;
       for (const operation of operations) {
+        if (!terminalStates.has(operation.state) || operation.id === record.activeOperationId) continue;
+        if (onDisk && operation.generation >= record.generation) continue;
         if (now - Date.parse(operation.finishedAt ?? operation.updatedAt) < HISTORY_TTL) continue;
         await fs.unlink(await this.path('operations', operation.id)).catch(() => undefined);
         await fs.unlink(await this.path('output', operation.id, 'ndjson')).catch(() => undefined);
       }
-      if (!await taskExists(record.runId) && now - Date.parse(record.updatedAt) >= HISTORY_TTL) {
+      if (!onDisk && allTerminal && !await taskExists(record.runId) && now - Date.parse(record.updatedAt) >= HISTORY_TTL) {
         await fs.unlink(await this.path('worktrees', safeRunId(record.runId))).catch(() => undefined);
       }
     }

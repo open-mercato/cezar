@@ -204,11 +204,17 @@ function canonicalPath(path: string): string {
  * unregistered paths are never deleted because they may hold recoverable
  * uncommitted work.
  */
-export async function createWorktree(
+export async function createWorktree(repoRoot: string, runId: string, baseBranch: string): Promise<WorktreeInfo> {
+  const {materialized: _materialized, ...info} = await createWorktreeWithOutcome(repoRoot, runId, baseBranch);
+  return info;
+}
+
+/** Internal generation boundary; the public helper retains its original response shape. */
+export async function createWorktreeWithOutcome(
   repoRoot: string,
   runId: string,
   baseBranch: string,
-): Promise<WorktreeInfo> {
+): Promise<WorktreeInfo & { materialized: boolean }> {
   let base = baseBranch;
   if (!base || base === 'HEAD') {
     // Detached HEAD — pin the base to the current commit so the record and
@@ -236,7 +242,7 @@ export async function createWorktree(
         `managed worktree path is registered to ${atPath.branch ?? 'a detached HEAD'}, expected ${branchRef}`,
       );
     }
-    return worktreeInfo(atPath.path, branch, base);
+    return {...worktreeInfo(atPath.path, branch, base), materialized: false};
   }
 
   // If the directory survived but its administrative entry did not, let Git
@@ -252,7 +258,7 @@ export async function createWorktree(
           `managed worktree path is registered to ${atPath.branch ?? 'a detached HEAD'}, expected ${branchRef}`,
         );
       }
-      return worktreeInfo(atPath.path, branch, base);
+      return {...worktreeInfo(atPath.path, branch, base), materialized: false};
     }
     const entries = await readdir(absolutePath).catch(() => ['unreadable']);
     if (entries.length > 0) {
@@ -270,13 +276,13 @@ export async function createWorktree(
       if (basename(byBranch.path) !== runId) {
         throw new Error(`task branch ${branch} is already checked out at ${byBranch.path}`);
       }
-      return worktreeInfo(byBranch.path, branch, base);
+      return {...worktreeInfo(byBranch.path, branch, base), materialized: false};
     }
     const attach = await git(repoRoot, ['worktree', 'add', absolutePath, branch]);
     if (!attach.ok) {
       throw new Error(`git worktree reattach failed: ${attach.stderr.trim() || attach.stdout.trim()}`);
     }
-    return worktreeInfo(absolutePath, branch, base);
+    return {...worktreeInfo(absolutePath, branch, base), materialized: true};
   }
 
   // Task branches do not need upstream metadata: every diff/base decision passes
@@ -287,7 +293,7 @@ export async function createWorktree(
   if (!create.ok) {
     throw new Error(`git worktree add failed: ${create.stderr.trim() || create.stdout.trim()}`);
   }
-  return worktreeInfo(absolutePath, branch, base);
+  return {...worktreeInfo(absolutePath, branch, base), materialized: true};
 }
 
 /**

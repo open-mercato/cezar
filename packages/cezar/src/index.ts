@@ -241,6 +241,18 @@ async function serveCommand(
   // the previous process exited are re-queued or resumed instead of failed.
   const store = openStore(repoRoot, { keepLive: true });
   const manager = new RunManager(store, repoRoot, { semaphore, projectId: bootProjectId, resolveTrackerEnv: resolveTrackerAgentEnv });
+  let httpServer: ReturnType<typeof startServer> | null = null;
+  let shuttingDown = false;
+  const shutdown = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    void (httpServer?.shutdownLifecycle() ?? manager.lifecycle.shutdown()).then(() => process.exit(0)).catch((error: unknown) => {
+      console.error('cezar: lifecycle shutdown failed', error);
+      process.exit(1);
+    });
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
   const providerAuth = new ProviderAuthService({ cwd: repoRoot });
   const workspaceEvents = new WorkspaceEventBus();
   const providerRuntimeAuth = new ProviderRuntimeAuthObserver(providerAuth, (status) => {
@@ -286,15 +298,18 @@ async function serveCommand(
   // chip can apply it when this cezar runs from the managed layout (`cezar install`).
   const pkgName = readOwnName();
   const update: { latest?: string } = {};
-  let httpServer: ReturnType<typeof startServer> | null = null;
   const selfUpdate = buildSelfUpdateService({
     activeRuns: () => store.listRuns().filter((r) => ['queued', 'waiting', 'running'].includes(r.status)).length,
     // The server's own predicate, not a second spelling of it: the `/apply` guard decides hosted
     // mode through `resolveCapabilities`, and the two must never disagree (they did, on 127.0.0.2).
     trimPaths: () => !resolveCapabilities(process.env, bindHost).localHandoff,
     restart: () => {
-      store.flush();
-      restartProcess({ server: httpServer, args: process.argv.slice(2), port, supervised: isSupervised() });
+      void (httpServer?.shutdownLifecycle() ?? manager.lifecycle.shutdown()).then(() => {
+        restartProcess({ server: httpServer, args: process.argv.slice(2), port, supervised: isSupervised() });
+      }).catch((error: unknown) => {
+        console.error('cezar: lifecycle shutdown failed before restart', error);
+        process.exit(1);
+      });
     },
   });
   void selfUpdate.updateAvailable().then((latest) => {
@@ -349,12 +364,6 @@ async function serveCommand(
   // The star ask's terminal line — same block, same two off switches.
   await printStarBanner(repoRoot);
 
-  const shutdown = () => {
-    store.flush();
-    process.exit(0);
-  };
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
   // Under the desktop shell a managed install may exist without launchers (the shell installs
   // cezar itself on first launch, spec 2026-09-25-desktop-distribution): write them so
   // `cezar` in a terminal works too. Idempotent; never touches the shell profile.
@@ -396,11 +405,10 @@ async function serveCommand(
       if (!gone) return;
       try {
         process.stderr.write('  supervisor is gone — shutting down\n');
-        store.flush();
       } catch {
-        // Nothing left to save that is worth staying alive for.
+        // A closed stderr must not prevent draining scripts.
       }
-      process.exit(0);
+      shutdown();
     }, 2_000).unref();
   }
 
@@ -498,6 +506,19 @@ async function runCommand(
   const semaphore = new WorkspaceSemaphore();
   await semaphore.refresh();
   const manager = new RunManager(store, repoRoot, { semaphore });
+  let shuttingDown = false;
+  const shutdown = (exitCode: number) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    void manager.lifecycle.shutdown().then(() => process.exit(exitCode)).catch((error: unknown) => {
+      console.error('cezar: lifecycle shutdown failed', error);
+      process.exit(1);
+    });
+  };
+  const interrupt = () => shutdown(130);
+  const terminate = () => shutdown(143);
+  process.on('SIGINT', interrupt);
+  process.on('SIGTERM', terminate);
 
   store.on('event', ({ event }) => {
     switch (event.type) {
@@ -544,7 +565,10 @@ async function runCommand(
     console.log(`\n  changes ready for review on branch ${record?.branch ?? '?'} — inspect them in the cockpit: npx cezar`);
   }
   console.log(`\nrun ${final} — ${record?.tokensUsed ?? 0} tokens — details in the cockpit: npx cezar`);
+  await manager.lifecycle.shutdown();
   manager.dispose();
+  process.off('SIGINT', interrupt);
+  process.off('SIGTERM', terminate);
   process.exitCode = final === 'done' || final === 'review' ? 0 : 1;
 }
 

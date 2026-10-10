@@ -94,6 +94,7 @@ export class ProjectContextError extends Error {
  */
 export class ProjectContexts {
   private readonly contexts = new Map<string, ProjectContext>();
+  private shutdownPromise?: Promise<void>;
   private readonly building = new Map<string, Promise<ProjectContext>>();
   /** Live store-created subscribers; invoked before RunManager recovery. */
   private readonly storeListeners = new Set<(store: RunStore) => void>();
@@ -110,6 +111,7 @@ export class ProjectContexts {
   /** The built context for `projectId`, building it on first access.
    *  Throws `ProjectContextError` for unknown ids and missing roots. */
   async context(projectId: string): Promise<ProjectContext> {
+    if (this.shutdownPromise) throw new Error('Project contexts are shutting down');
     const existing = this.contexts.get(projectId);
     if (existing) return existing;
     const inFlight = this.building.get(projectId);
@@ -199,6 +201,23 @@ export class ProjectContexts {
   /** Tear down every built context (process shutdown). */
   disposeAll(): void {
     for (const id of this.ids()) this.dispose(id);
+  }
+
+  /** Drain every opened project, including builds already in flight, before disposal. */
+  shutdownAll(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
+    this.shutdownPromise = (async () => {
+      // Abort existing scripts immediately; slow project discovery must not delay them.
+      const opened = new Set(this.contexts.values());
+      const existing = Promise.allSettled([...opened].map(ctx => ctx.manager.lifecycle.shutdown()));
+      await Promise.allSettled([...this.building.values()]);
+      const newlyBuilt = [...this.contexts.values()].filter(ctx => !opened.has(ctx));
+      const results = [...await existing, ...await Promise.allSettled(newlyBuilt.map(ctx => ctx.manager.lifecycle.shutdown()))];
+      this.disposeAll();
+      const failure = results.find(result => result.status === 'rejected');
+      if (failure?.status === 'rejected') throw failure.reason;
+    })();
+    return this.shutdownPromise;
   }
 
   private async build(projectId: string): Promise<ProjectContext> {

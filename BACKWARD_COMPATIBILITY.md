@@ -127,6 +127,45 @@ Breaking: removing/renaming a route; making a previously optional body field req
 
 Written by one version, read by the next, and hand-editable by design:
 
+- **Worktree lifecycle scripts (2026-10-10):** optional local project configuration
+  `worktreeLifecycle: {afterCreate, beforeRemove}` and derived
+  `worktreeLifecycleRevision` are additive. Missing/empty lists preserve the
+  hook-free path; malformed/unreadable lifecycle configuration pauses managed
+  transitions rather than granting deletion. Config PUT omission preserves,
+  `null` clears, and a supplied object replaces both lists atomically under an
+  expected revision; unrelated config keys survive. Stable entry UUIDs and exact
+  execution fingerprints reconcile Retry against current saved commands, never
+  an executable historical snapshot.
+- **Independent lifecycle state:** ignored `lifecycle/worktrees/<runId>.json`,
+  `lifecycle/operations/<operationId>.json`, bounded redacted
+  `lifecycle/output/<operationId>.ndjson`, and private mutation locks retain
+  identity, generation, pending intent and outcomes outside removable worktrees
+  and task records. Optional `RunRecord.worktreeLifecycle` is a rebuildable
+  projection; no existing run-status enum value is renamed or added. Completed
+  history expires after 7 days only when safe; unresolved operations/retained
+  directories remain. Identity persists while the task exists, including through
+  reclamation and later recreation. A corrupt independent record is retained and
+  diagnosed rather than interpreted as permission to remove its directory.
+- **Lifecycle wire/event additions:** the project-scoped operation family in §2
+  uses the same Zod middleware, scope aliases and authentication/origin guards.
+  Workspace SSE adds `worktree-lifecycle` invalidation data containing only
+  `projectId`, `worktreeId`, optional `operationId`, and `revision`; no command,
+  output, environment or process handle appears in that event. Unknown event
+  names remain ignorable by older clients. Lifecycle detail/output fetches are
+  demand-driven and reconcile after reconnect/focus; no browser WebSocket is added.
+  Hook-enabled legacy destructive calls intentionally return 409 before mutation;
+  a queued operation never redefines `{removed: true}` or the reclaim result's
+  list of actually reclaimed IDs. Headless setup attention exits 1 with a durable
+  operation reference; ordinary done/review remains exit 0.
+- **Downgrade boundary:** versions without lifecycle support cannot protect
+  pending worktree gates. Before downgrading, finish, Keep, or explicitly Force
+  pending operations, then disable hooks. Older executables may delete a
+  directory without its teardown commands; deleting local metadata cannot undo
+  containers/volumes or recover ownership evidence. Arbitrary user commands have
+  host privileges, partial side effects are not rolled back, and interrupted
+  execution does not promise exactly-once external effects. See
+  [the lifecycle reference](docs/reference.md#worktree-lifecycle-scripts).
+
 - **`tracker.json`** — optional, non-secret project association (provider, source, scope and connection
   UUID). Unknown persisted keys survive read/update round trips at every object level; network
   mutation inputs remain strict. Disconnect deletes only this association, not credentials.

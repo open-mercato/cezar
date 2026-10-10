@@ -6696,7 +6696,8 @@ export function createApp(deps: ServerDeps) {
   return routed;
 }
 
-export function startServer(deps: ServerDeps, port: number): ServerType {
+export function startServer(deps: ServerDeps, port: number): ServerType & { shutdownLifecycle(): Promise<void> } {
+  let shutdownPromise: Promise<void> | undefined;
   const workspaceEvents = deps.workspaceEvents ?? new WorkspaceEventBus();
   const skillsUpdate = deps.skillsUpdate ?? new SkillsUpdateService({ invalidateCatalog: refreshTeamSkills });
   // The subscription hub rides the same HTTP server (one port, zero config):
@@ -6824,6 +6825,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
   });
   server.once('listening', () => {
     void listProjects().then((projects) => {
+      if (shutdownPromise) return;
       const all = projects.some((project) => project.root === deps.repoRoot)
         ? projects : [{ id: deps.bootProjectId ?? 'default', root: deps.repoRoot, status: 'ok' as const }, ...projects];
       coordinator.start(all);
@@ -6839,12 +6841,28 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
           : sharedContexts.peek(project.id)?.store;
         if (automationStore && runStore) reconcileAutomationReceipts(automationStore, runStore);
         if (automationStore) rebaselineIdleAutomations(automationStore, (automationId, revision) => workspaceEvents.emit('automation-change', { project: project.id, automationId, revision }));
-      })).then(() => automationScheduler.start()).catch(() => undefined);
+      })).then(() => { if (!shutdownPromise) automationScheduler.start(); }).catch(() => undefined);
     }).catch(() => undefined);
   });
   server.once('close', () => { for (const cleanup of appCleanups) cleanup(); unsubscribe(); coordinator.stop(); automationScheduler.stop(); });
   socketHub.attach(server, (req) => verifyWsUpgrade(req, deps.bindHost));
-  return server;
+  return Object.assign(server, {
+    shutdownLifecycle(): Promise<void> {
+      if (shutdownPromise) return shutdownPromise;
+      // Stop HTTP admission and automatic task sources before draining detached scripts.
+      server.close();
+      coordinator.stop();
+      automationScheduler.stop();
+      shutdownPromise = (async () => {
+        const results = await Promise.allSettled([deps.manager.lifecycle.shutdown(), sharedContexts.shutdownAll()]);
+        deps.manager.dispose();
+        deps.store.flush({throwOnError: true});
+        const failure = results.find(result => result.status === 'rejected');
+        if (failure?.status === 'rejected') throw failure.reason;
+      })();
+      return shutdownPromise;
+    },
+  });
 }
 
 /**

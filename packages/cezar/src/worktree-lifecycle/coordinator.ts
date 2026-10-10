@@ -13,7 +13,7 @@ import {
 } from '@open-mercato/cezar-contract';
 import type { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
-import { createWorktree, removeWorktree, worktreePathFor, branchFor } from '../git-worktree.ts';
+import { createWorktree, createWorktreeWithOutcome, removeWorktree, worktreePathFor, branchFor } from '../git-worktree.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
 import { LifecycleStore, withLifecycleFileLock } from './store.ts';
@@ -34,6 +34,7 @@ export class WorktreeLifecycleCoordinator {
   readonly store: LifecycleStore;
   private readonly listeners = new Set<(event: {worktreeId: string; operationId?: string; revision: number}) => void>();
   private readonly controllers = new Map<string, AbortController>();
+  private readonly ownedDiscardReservations = new Set<string>();
   private readonly executing = new Set<string>();
   private readonly liveOperations = new Map<string, LifecycleOperation>();
   private readonly completions = new Map<string, Promise<void>>();
@@ -47,10 +48,12 @@ export class WorktreeLifecycleCoordinator {
     busySlots: () => number;
     isActive: (runId: string) => boolean;
     cancelAndWait: (runId: string) => Promise<boolean>;
+    cancelPending?: (runId: string) => void;
     resume: (runId: string, launch: LifecyclePendingLaunch | undefined) => Promise<void>;
   }) {
+    try { this.root = realpathSync(root); } catch { /* missing roots remain a local attention failure */ }
     this.cleanupStarted = !options.deferCleanup;
-    this.store = new LifecycleStore(join(root, '.ai/cezar'), root);
+    this.store = new LifecycleStore(join(this.root, '.ai/cezar'), this.root);
     this.offSemaphore = options.semaphore.register({
       busySlots: () => this.executing.size,
       oldestQueuedAt: () => Math.min(...this.queue.values()) === Infinity ? null : Math.min(...this.queue.values()),
@@ -85,6 +88,7 @@ export class WorktreeLifecycleCoordinator {
   }
   private context(record: WorktreeLifecycleRecord): LifecycleTemplateContext {
     const expected = resolve(worktreePathFor(this.root, record.runId));
+    if (record.branch && record.branch !== branchFor(record.runId)) throw new LifecycleConflict('Lifecycle branch is not the managed task branch');
     if (resolve(record.projectRoot) !== resolve(this.root) || resolve(record.worktreePath) !== expected) throw new LifecycleConflict('Worktree context does not belong to this project');
     if (existsSync(expected) && realpathSync(expected) !== expected) throw new LifecycleConflict('Worktree path resolves outside its managed location');
     return {root_path: this.root, worktree_path: expected, worktree_id: `cez-${record.worktreeId}`, task_id: record.runId};
@@ -121,7 +125,7 @@ export class WorktreeLifecycleCoordinator {
     this.context(record); await this.store.writeWorktree(record); return record;
   }
   /** Caller already holds normal task admission. No second slot is acquired for setup. */
-  async prepare(runId: string, base: string, pendingLaunch: LifecyclePendingLaunch): Promise<{ready: boolean; path: string; branch: string; baseBranch: string; operationId?: string}> {
+  async prepare(runId: string, base: string, pendingLaunch: LifecyclePendingLaunch, signal?: AbortSignal): Promise<{ready: boolean; path: string; branch: string; baseBranch: string; operationId?: string}> {
     this.runs.flush();
     const prior = await this.store.readWorktree(runId);
     let configured: Awaited<ReturnType<typeof readLifecycleConfig>>;
@@ -147,7 +151,7 @@ export class WorktreeLifecycleCoordinator {
     }
     return this.store.withWorktreeLock(runId, async () => {
       let record = await this.store.readWorktree(runId);
-      const materialized = existsSync(worktreePathFor(this.root, runId));
+      const materialized = existsSync(join(worktreePathFor(this.root, runId), '.git'));
       if (record?.preparedBy && materialized && !record.activeOperationId) return {ready: true, path: record.worktreePath, branch: record.branch ?? branchFor(runId), baseBranch: base};
       if (!record) record = {schemaVersion: 1, worktreeId: randomUUID(), runId, projectRoot: this.root,
         worktreePath: worktreePathFor(this.root, runId), branch: branchFor(runId), generation: 1,
@@ -163,16 +167,30 @@ export class WorktreeLifecycleCoordinator {
         operation = this.makeOperation(record, prior && !materialized ? 'recreate' : 'create', pendingLaunch);
         record.activeOperationId = operation.id;
         await this.store.writeOperation(operation); await this.store.writeWorktree(record);
+        this.changed(record, operation);
       }
       try {
+        if (signal?.aborted) throw new Error('Preparation cancelled before materialization');
         if (process.env.CEZ_DRY_RUN !== '1') {
-          const wt = await createWorktree(this.root, runId, base);
+          const wt = await createWorktreeWithOutcome(this.root, runId, base);
           record.worktreePath = wt.path; record.branch = wt.branch;
           this.runs.updateRun(runId, {worktreePath: wt.path, branch: wt.branch, baseBranch: wt.baseBranch, worktreeReclaimedAt: undefined});
           await seedAgentConfigLocalLayer(this.root, wt.path).catch(() => []);
+          if (!prior && !wt.materialized && materialized) {
+            // Enroll a legacy already-prepared directory for future teardown;
+            // enabling hooks is not itself a creation event.
+            record.preparedBy = 'completed'; delete record.activeOperationId;
+            operation.state = 'completed'; operation.finishedAt = now();
+            await this.save(record, operation);
+            return {ready: true, path: wt.path, branch: wt.branch, baseBranch: wt.baseBranch, operationId: operation.id};
+          }
         }
-        await this.runCommands(record, operation);
+        await this.runCommands(record, operation, signal);
       } catch (error) { await this.fail(record, operation, error, 'context'); }
+      if (signal?.aborted && !record.preparedBy) {
+        operation.state = 'cancelled'; operation.finishedAt = now(); record.autoCleanupSuppressed = true; delete record.activeOperationId;
+        await this.save(record, operation);
+      }
       return {ready: record.preparedBy !== undefined, path: record.worktreePath, branch: record.branch ?? branchFor(runId), baseBranch: base, operationId: operation.id};
     });
   }
@@ -193,14 +211,26 @@ export class WorktreeLifecycleCoordinator {
     operation.error = redactSecrets(error instanceof Error ? error.message : String(error), collectSecretValues(process.env));
     await this.save(record, operation);
   }
-  private async runCommands(record: WorktreeLifecycleRecord, operation: LifecycleOperation): Promise<void> {
+  private async runCommands(record: WorktreeLifecycleRecord, operation: LifecycleOperation, signal?: AbortSignal): Promise<void> {
     const controller = new AbortController(); this.controllers.set(operation.id, controller);
+    const abort = () => controller.abort();
+    signal?.addEventListener('abort', abort, {once: true});
+    if (signal?.aborted) controller.abort();
     this.liveOperations.set(operation.id, operation);
+    let outputNotification: ReturnType<typeof setTimeout> | undefined;
     let complete!: () => void;
     this.completions.set(operation.id, new Promise<void>(resolve => { complete = resolve; }));
     try {
       const context = this.context(record);
       if (operation.decision?.action === 'force-delete' || operation.decision?.action === 'start-anyway') {
+        try {
+          const current = await readLifecycleConfig(this.root);
+          const entries = operation.phase === 'setup' ? current.config.afterCreate : current.config.beforeRemove;
+          operation.decision.skippedEntryIds = entries.filter(entry => {
+            try { return !operation.successfulEntries.some(success => success.entryId === entry.id && success.fingerprint === lifecycleCommandFingerprint(entry.command, context)); }
+            catch { return true; }
+          }).map(entry => entry.id);
+        } catch { operation.decision.skippedEntryIds = operation.executions.filter(entry => entry.state !== 'succeeded').map(entry => entry.entryId); }
         await withLifecycleConfigLock(this.root, () => this.commit(record, operation));
         return;
       }
@@ -241,7 +271,9 @@ export class WorktreeLifecycleCoordinator {
           },
           onOutput: async frame => {
             await this.store.appendOutput(operation.id, {executionId: execution.id, stream: frame.stream, text: frame.text, time: now()});
-            this.changed(record, operation);
+            if (!outputNotification) outputNotification = setTimeout(() => {
+              outputNotification = undefined; this.changed(record, operation);
+            }, 100);
           },
         });
         const current = operation.executions.at(-1)!;
@@ -259,7 +291,7 @@ export class WorktreeLifecycleCoordinator {
         operation.successfulEntries.push({entryId: entry.id, fingerprint});
         await this.save(record, operation);
       }
-    } finally { this.controllers.delete(operation.id); this.liveOperations.delete(operation.id); this.changed(record, operation); complete(); this.completions.delete(operation.id); }
+    } finally { if (outputNotification) clearTimeout(outputNotification); signal?.removeEventListener('abort', abort); this.controllers.delete(operation.id); this.liveOperations.delete(operation.id); this.changed(record, operation); complete(); this.completions.delete(operation.id); }
   }
   private async commit(record: WorktreeLifecycleRecord, operation: LifecycleOperation): Promise<void> {
     operation.state = 'committing'; await this.save(record, operation);
@@ -298,7 +330,14 @@ export class WorktreeLifecycleCoordinator {
     let acquired!: () => void;
     let rejectAcquired!: (error: unknown) => void;
     const ready = new Promise<void>((resolve, reject) => { acquired = resolve; rejectAcquired = reject; });
-    void this.withWorktreeMutation(runId, async () => { acquired(); await released; }).catch(rejectAcquired);
+    void this.withWorktreeMutation(runId, async () => {
+      const record = await this.store.readWorktree(runId);
+      if (!record?.preparedBy || !existsSync(join(record.worktreePath, '.git'))) {
+        throw new LifecycleConflict('Prepared worktree is no longer available; retry preparation before starting the agent');
+      }
+      this.context(record);
+      acquired(); await released;
+    }).catch(rejectAcquired);
     await ready;
     return release;
   }
@@ -354,28 +393,109 @@ export class WorktreeLifecycleCoordinator {
       return this.view(operation, record);
     });
   }
+  /** Reservations serialize with retention without waiting on the agent's lifetime worktree lease. */
+  private variantIntentLock<T>(runId: string, action: () => Promise<T>): Promise<T> {
+    return withLifecycleFileLock(join(this.store.directory, 'locks', `variant-${runId}.lock`), action);
+  }
   async reclaim(runId: string): Promise<boolean> {
     try {
       if (!await this.requiresGate(runId)) return false;
-      const record = await this.enroll(runId);
-      if (record.autoCleanupSuppressed || record.activeOperationId) return false;
-      await this.startRecordRemoval(record, 'reclaim', randomUUID(), bodyHash({runId, intent: 'reclaim'}));
+      await this.variantIntentLock(runId, async () => {
+        const record = await this.enroll(runId);
+        if (record.autoCleanupSuppressed || record.activeOperationId) return;
+        // A discard intent is durable before cancellation can trigger terminal retention.
+        // It may briefly precede the active pointer while an owned setup child is stopping.
+        const operations = await this.store.listOperations(record.worktreeId);
+        if (operations.some(operation => operation.intent === 'discard-variant' && !terminal.has(operation.state))) return;
+        await this.startRecordRemoval(record, 'reclaim', randomUUID(), bodyHash({runId, intent: 'reclaim'}));
+      });
     } catch { /* automatic cleanup preserves ambiguous context */ }
     return false; // Queued removal is never reported as reclaimed.
   }
   async discardVariant(runId: string): Promise<LifecycleOperationView | null> {
-    if (!await this.options.cancelAndWait(runId)) throw new LifecycleConflict('Variant process has not exited; worktree retained');
-    if (!await this.requiresGate(runId)) return null;
-    const record = await this.enroll(runId);
-    if (record.activeOperationId) {
-      const operation = await this.store.readOperation(record.activeOperationId);
-      if (operation && !terminal.has(operation.state)) {
-        const controller = this.controllers.get(operation.id); controller?.abort();
-        if (controller) throw new LifecycleConflict('Variant scripts are stopping; retry cleanup after they exit');
-        operation.state = 'cancelled'; operation.finishedAt = now(); delete record.activeOperationId; await this.save(record, operation);
-      }
+    const known = await this.store.readWorktree(runId);
+    if (!known && !this.runs.getRun(runId)?.worktreePath) {
+      if (!await this.options.cancelAndWait(runId)) throw new LifecycleConflict('Variant process has not exited; worktree retained');
+      return null;
     }
-    return this.startRecordRemoval(record, 'discard-variant', randomUUID(), bodyHash({runId, intent: 'discard-variant'}));
+    // Even a hook-free materialized variant is enrolled before cancellation: otherwise
+    // dropActive's retention can remove its directory and retain the branch first.
+    const reservation = await this.variantIntentLock(runId, async () => {
+      const record = await this.enroll(runId);
+      const active = record.activeOperationId ? await this.store.readOperation(record.activeOperationId) : null;
+      if (record.activeOperationId && !active) throw new LifecycleConflict('Variant lifecycle metadata is missing; worktree retained');
+      if (active?.phase === 'teardown' && !terminal.has(active.state) && active.intent !== 'discard-variant') {
+        throw new LifecycleConflict('Variant already has a pending teardown; resolve that operation first');
+      }
+      if (active?.agentQuiescencePending && !this.ownedDiscardReservations.has(active.id)) {
+        throw new LifecycleConflict('Cannot verify that the previous variant agent exited; worktree retained for manual recovery');
+      }
+      if (active?.intent === 'discard-variant' && active.state !== 'committing') return {record, operation: active, existing: true};
+      const pending = (await this.store.listOperations(record.worktreeId)).find(operation =>
+        operation.generation === record.generation && operation.intent === 'discard-variant' && operation.state === 'committing');
+      if (pending?.agentQuiescencePending && !this.ownedDiscardReservations.has(pending.id)) {
+        throw new LifecycleConflict('Cannot verify that the previous variant agent exited; worktree retained for manual recovery');
+      }
+      const operation = pending ?? this.makeOperation(record, 'discard-variant');
+      if (!pending) {
+        operation.state = 'committing'; // No recovery actions while the old executor could still own the directory.
+        operation.error = 'Stopping the variant before cleanup can begin';
+        operation.failureStage = 'process';
+        operation.agentQuiescencePending = true;
+        operation.requests.push({requestId: randomUUID(), bodyHash: bodyHash({runId, intent: 'discard-variant'})});
+        await this.store.writeOperation(operation, null);
+        this.ownedDiscardReservations.add(operation.id);
+      }
+      record.autoCleanupSuppressed = true;
+      const setupId = active?.phase === 'setup' && !terminal.has(active.state) ? active.id : undefined;
+      if (!setupId) record.activeOperationId = operation.id;
+      // Persist the exclusion before cancelAndWait, but defer its run projection: the
+      // ordinary manager cancellation guard must still be able to stop its agent.
+      await this.store.writeWorktree(record);
+      return {record, operation, existing: false, setupId};
+    });
+    if (reservation.existing) return this.view(reservation.operation, reservation.record);
+    const {operation, setupId} = reservation;
+    if (setupId) {
+      const completion = this.completions.get(setupId);
+      this.controllers.get(setupId)?.abort();
+      if (completion) await completion;
+      await this.store.withWorktreeLock(runId, async () => {
+        const record = await this.store.readWorktree(runId);
+        if (!record) throw new LifecycleConflict('Variant context disappeared; worktree retained');
+        if (record.activeOperationId && record.activeOperationId !== setupId && record.activeOperationId !== operation.id) {
+          throw new LifecycleConflict('Variant lifecycle changed while stopping; worktree retained');
+        }
+        const setup = await this.store.readOperation(setupId);
+        if (!setup || !await this.processQuiescent(setup) || setup.executions.some(execution =>
+          (execution.state === 'running' || execution.state === 'interrupted') && !execution.process)) {
+          throw new LifecycleConflict('Previous setup process may still be running; worktree retained');
+        }
+        record.autoCleanupSuppressed = true;
+        if (!terminal.has(setup.state)) {
+          setup.state = 'cancelled'; setup.finishedAt = now(); delete record.activeOperationId;
+          await this.save(record, setup);
+        }
+        record.activeOperationId = operation.id;
+        await this.store.writeWorktree(record);
+      });
+    }
+    this.options.cancelPending?.(runId);
+    if (!await this.options.cancelAndWait(runId)) {
+      throw new LifecycleConflict('Variant process has not exited; its cleanup intent and worktree are retained');
+    }
+    return this.store.withWorktreeLock(runId, async () => {
+      const record = await this.store.readWorktree(runId);
+      const current = await this.store.readOperation(operation.id);
+      if (!record || !current || record.activeOperationId !== operation.id) throw new LifecycleConflict('Variant cleanup context changed; worktree retained');
+      if (current.state !== 'committing') return this.view(current, record);
+      if (this.options.isActive(runId)) throw new LifecycleConflict('Variant is still active; worktree retained');
+      current.state = 'queued'; delete current.error; delete current.failureStage; delete current.agentQuiescencePending;
+      await this.save(record, current);
+      this.ownedDiscardReservations.delete(current.id);
+      this.queue.set(current.id, Date.now()); queueMicrotask(() => { void this.pump(); });
+      return this.view(current, record);
+    });
   }
   private async pump(): Promise<void> {
     if (this.disposed || !this.cleanupStarted) return;
@@ -399,6 +519,7 @@ export class WorktreeLifecycleCoordinator {
     } catch { /* durable queued operation remains visible if storage is unavailable */ }
   }
   private async processQuiescent(operation: LifecycleOperation): Promise<boolean> {
+    if (operation.agentQuiescencePending) return false;
     if (this.controllers.has(operation.id)) return false;
     for (const execution of operation.executions) {
       if (!execution.process || execution.process.quiescent) continue;
@@ -453,7 +574,10 @@ export class WorktreeLifecycleCoordinator {
       } else if (input.action === 'cancel-task' || input.action === 'keep-worktree') {
         current.state = input.action === 'cancel-task' ? 'cancelled' : 'kept'; current.finishedAt = now();
         record.autoCleanupSuppressed = true; delete record.activeOperationId;
-        if (input.action === 'cancel-task' && this.runs.getRun(record.runId)) this.runs.updateRun(record.runId, {status: 'cancelled', finishedAt: now()});
+        if (input.action === 'cancel-task') {
+          this.options.cancelPending?.(record.runId);
+          if (this.runs.getRun(record.runId)) this.runs.updateRun(record.runId, {status: 'cancelled', finishedAt: now()});
+        }
       } else {
         current.state = 'queued'; delete current.error; delete current.failureStage;
         if (input.action === 'retry') delete current.decision;
@@ -475,7 +599,7 @@ export class WorktreeLifecycleCoordinator {
         const fingerprint = lifecycleCommandFingerprint(entry.command, this.context(record));
         const latest = [...operation.executions].reverse().find(item => item.entryId === entry.id && item.fingerprint === fingerprint);
         const succeeded = operation.successfulEntries.some(item => item.entryId === entry.id && item.fingerprint === fingerprint);
-        return {entryId: entry.id, label: entry.name || `Command ${index + 1}`,
+        return {entryId: entry.id, label: redactSecrets(entry.name || `Command ${index + 1}`, collectSecretValues(process.env)),
           commandPreview: redactSecrets(renderLifecycleCommand(entry.command, this.context(record)), collectSecretValues(process.env)),
           state: succeeded ? 'already-completed' : latest?.state ?? 'pending', attempt: latest?.attempt ?? 0};
       });
@@ -502,6 +626,7 @@ export class WorktreeLifecycleCoordinator {
   private async summary(record: WorktreeLifecycleRecord): Promise<WorktreeLifecycleSummary> {
     const run = this.runs.getRun(record.runId);
     const operation = record.activeOperationId ? await this.store.readOperation(record.activeOperationId) : undefined;
+    if (record.activeOperationId && !operation) throw new LifecycleConflict('Lifecycle operation metadata is missing; worktree retained');
     return {worktreeId: record.worktreeId, runId: record.runId, task: run ? {id: run.id, title: run.title ?? run.task} : null,
       worktreePath: record.worktreePath, generation: record.generation, onDisk: existsSync(record.worktreePath),
       prepared: record.preparedBy !== undefined, needsAttention: operation ? attention.has(operation.state) : false,
@@ -542,7 +667,7 @@ export class WorktreeLifecycleCoordinator {
   async detail(id: string): Promise<WorktreeLifecycleDetail> {
     const record = await this.recordById(id);
     const history = await this.store.listOperations(id);
-    return {...await this.summary(record), history: await Promise.all(history.slice(-20).map(operation => this.view(operation, record)))};
+    return {...await this.summary(record), history: await Promise.all(history.slice(0, 20).map(operation => this.view(operation, record)))};
   }
   async preview(input: {command: string; worktreeId?: string}): Promise<LifecyclePreviewResponse> {
     const variables: LifecycleTemplateContext = input.worktreeId ? this.context(await this.recordById(input.worktreeId))
@@ -567,7 +692,9 @@ export class WorktreeLifecycleCoordinator {
         const operation = await this.store.readOperation(record.activeOperationId);
         if (!operation) throw new Error('Lifecycle operation is missing');
         if (operation.state === 'running' || operation.state === 'committing') {
-          operation.state = 'interrupted'; operation.error = 'Cezar stopped before completion was recorded; choose an explicit recovery action';
+          operation.state = 'interrupted'; operation.error = operation.agentQuiescencePending
+            ? 'Variant cancellation was interrupted. Cezar cannot verify that its previous agent exited; worktree retained for manual recovery.'
+            : 'Cezar stopped before completion was recorded; choose an explicit recovery action';
           for (const execution of operation.executions) if (execution.state === 'running') execution.state = 'interrupted';
           await this.save(record, operation);
         } else this.changed(record, operation);
@@ -594,6 +721,12 @@ export class WorktreeLifecycleCoordinator {
       }
       await this.store.pruneHistory(id => !!this.runs.getRun(id));
     } catch { /* no boot dependency on lifecycle storage */ }
+  }
+  /** Stop admitting scripts and wait for owned children and their durable results. */
+  async shutdown(): Promise<void> {
+    this.dispose();
+    await Promise.all([...this.completions.values()]);
+    this.runs.flush({throwOnError: true});
   }
   dispose(): void { this.disposed = true; this.offSemaphore(); this.queue.clear(); for (const controller of this.controllers.values()) controller.abort(); }
 }

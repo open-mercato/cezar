@@ -1,14 +1,29 @@
-import { execFile } from 'node:child_process';
+import { execFile, type SpawnOptions } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunStore, type RunRecord } from '../runs/store.ts';
 import { graphIssues, graphRailSteps, graphToSteps, type WorkflowGraph } from './graph.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunManager } from './run.ts';
 import { QUICK_TASK_WORKFLOW, type WorkflowDef } from './types.ts';
+
+// These graph fixtures compare exact check output, including numeric branch inputs.
+// Keep the real Bash commands/stdio, but isolate them from the developer's login
+// profile (which can print warnings or change cwd). Production retains -lc semantics.
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawn: (file: string, args: readonly string[], options?: SpawnOptions) => actual.spawn(
+      file,
+      file === 'bash' && args[0] === '-lc' ? ['--noprofile', '--norc', ...args] : args,
+      options ?? {},
+    ),
+  };
+});
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];

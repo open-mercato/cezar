@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LifecycleAction, LifecycleOperationView, ScriptEntry, WorktreeLifecycleConfig } from '@open-mercato/cezar-contract';
 import type { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import { createWorktreeWithOutcome } from '../git-worktree.ts';
 import { WorktreeLifecycleCoordinator } from './coordinator.ts';
 import { readLifecycleConfig, writeLifecycleConfig } from './config.ts';
 
@@ -32,7 +33,8 @@ async function project(semaphore = new WorkspaceSemaphore({initial: {maxParallel
     deleteRun: (runId: string) => { records.delete(runId); },
   } as unknown as RunStore;
   const resume = vi.fn(async () => {});
-  const coordinator = new WorktreeLifecycleCoordinator(root, runs, {semaphore, busySlots: () => 0, isActive: () => false, cancelAndWait: async () => true, resume});
+  const cancelAndWait = vi.fn(async () => true);
+  const coordinator = new WorktreeLifecycleCoordinator(root, runs, {semaphore, busySlots: () => 0, isActive: () => false, cancelAndWait, resume});
   coordinators.push(coordinator);
   const config = async (afterCreate: ScriptEntry[] = [], beforeRemove: ScriptEntry[] = []) => {
     const prior = await readLifecycleConfig(root);
@@ -43,7 +45,7 @@ async function project(semaphore = new WorkspaceSemaphore({initial: {maxParallel
     const operation = await coordinator.operation(operationId);
     return coordinator.action(operationId, {action, expectedRevision: operation.revision, requestId: randomUUID()});
   };
-  return {root, id, git, records, coordinator, config, prepare, action, resume, semaphore};
+  return {root, id, git, records, runs, coordinator, config, prepare, action, resume, cancelAndWait, semaphore};
 }
 async function settled(coordinator: WorktreeLifecycleCoordinator, id: string): Promise<LifecycleOperationView> {
   let current: LifecycleOperationView | undefined;
@@ -66,6 +68,86 @@ afterEach(async () => {
 });
 
 describe('worktree lifecycle coordinator with real Git and command fixtures', () => {
+  it.skipIf(process.platform === 'win32')('shutdown drains the script process group before persisting stopped recovery state', async () => {
+    const p = await project();
+    await p.config([entry('sleep 120 & child=$!; printf "%s" "$child" > child.pid; wait')]);
+    const preparing = p.prepare();
+    const childFile = join(p.root, '.ai/cezar/worktrees', p.id, 'child.pid');
+    await vi.waitFor(() => expect(existsSync(childFile)).toBe(true), {timeout: 5000});
+    const pid = Number(await readFile(childFile, 'utf8'));
+    expect(() => process.kill(pid, 0)).not.toThrow();
+    await p.coordinator.shutdown();
+    const result = await preparing;
+    expect(result.ready).toBe(false);
+    const operation = await p.coordinator.operation(result.operationId!);
+    expect(operation.state).toBe('needs_attention');
+    const stored = await p.coordinator.store.readOperation(result.operationId!);
+    expect(stored?.executions.at(-1)?.state).toBe('interrupted');
+    expect(stored?.executions.at(-1)?.process?.quiescent).toBe(true);
+    expect(() => process.kill(pid, 0)).toThrow();
+    expect(existsSync(result.path)).toBe(true);
+    expect(p.resume).not.toHaveBeenCalled();
+  });
+
+  it('does not replace an existing teardown intent when a variant is discarded', async () => {
+    const p = await project(); await p.config([], [entry('exit 19')]); await p.prepare();
+    const removal = await p.coordinator.startRemoval({requestId: randomUUID(), runId: p.id, intent: 'reclaim'});
+    expect((await settled(p.coordinator, removal.id)).state).toBe('needs_attention');
+    await expect(p.coordinator.discardVariant(p.id)).rejects.toThrow('teardown');
+    expect((await p.coordinator.operation(removal.id)).intent).toBe('reclaim');
+    expect((await p.coordinator.operation(removal.id)).state).toBe('needs_attention');
+    expect(existsSync(p.records.get(p.id)!.worktreePath!)).toBe(true);
+  });
+
+  it('retains interrupted setup with an unverifiable process rather than converting it to variant removal', async () => {
+    const p = await project(); await p.config([entry('exit 9')]);
+    const prepared = await p.prepare();
+    const setup = await p.coordinator.store.readOperation(prepared.operationId!);
+    setup!.state = 'interrupted';
+    setup!.executions.at(-1)!.process = {pid: 123, hostname: 'unverifiable-host', startedAt: new Date().toISOString(), quiescent: false};
+    setup!.revision++;
+    await p.coordinator.store.writeOperation(setup!, setup!.revision - 1);
+    await expect(p.coordinator.discardVariant(p.id)).rejects.toThrow('process');
+    expect(existsSync(prepared.path)).toBe(true);
+    expect((await p.coordinator.store.readOperation(setup!.id))?.state).toBe('interrupted');
+  });
+
+  it('keeps a crashed variant cancellation blocked when the prior agent exit cannot be verified', async () => {
+    const p = await project(); await p.config([entry('true')], [entry('touch should-not-run')]);
+    const prepared = await p.prepare();
+    p.cancelAndWait.mockResolvedValue(false);
+    await expect(p.coordinator.discardVariant(p.id)).rejects.toThrow('has not exited');
+    const record = await p.coordinator.store.readWorktree(p.id);
+    const operationId = record!.activeOperationId!;
+    expect((await p.coordinator.store.readOperation(operationId))?.agentQuiescencePending).toBe(true);
+    p.coordinator.dispose();
+    const cancelAndWait = vi.fn(async () => true);
+    const restarted = new WorktreeLifecycleCoordinator(p.root, p.runs, {semaphore: p.semaphore, busySlots: () => 0, isActive: () => false, cancelAndWait, resume: p.resume});
+    coordinators.push(restarted);
+    await expect(restarted.discardVariant(p.id)).rejects.toThrow('Cannot verify');
+    await restarted.reconcile();
+    const interrupted = await restarted.operation(operationId);
+    expect(interrupted).toMatchObject({state: 'interrupted', allowedActions: [], error: expect.stringContaining('manual recovery')});
+    for (const action of ['retry', 'force-delete'] as const) {
+      await expect(restarted.action(operationId, {requestId: randomUUID(), expectedRevision: interrupted.revision, action})).rejects.toThrow('not available');
+    }
+    expect(cancelAndWait).not.toHaveBeenCalled();
+    expect(existsSync(prepared.path)).toBe(true);
+    expect(existsSync(join(prepared.path, 'should-not-run'))).toBe(false);
+    expect(p.semaphore.busy()).toBe(0);
+  });
+
+  it('lists a missing active operation as persistent attention rather than a prepared worktree', async () => {
+    const p = await project(); await p.config([entry('exit 3')]);
+    const prepared = await p.prepare();
+    await rm(join(p.coordinator.store.directory, 'operations', `${prepared.operationId}.json`));
+    const result = await p.coordinator.list({attentionOnly: true});
+    expect(result.worktrees).toHaveLength(1);
+    expect(result.worktrees[0]).toMatchObject({runId: p.id, needsAttention: true, prepared: false, error: expect.stringContaining('missing')});
+    expect(result.worktrees[0]?.operation).toBeUndefined();
+    expect(existsSync(prepared.path)).toBe(true);
+  });
+
   it('runs setup before ready, reuses prepared directories, and preserves identity across reclamation', async () => {
     const p = await project();
     await p.config([entry('printf ready >> prepared')]);
@@ -231,4 +313,57 @@ describe('worktree lifecycle coordinator with real Git and command fixtures', ()
     expect((await p.coordinator.operation(operation.id)).state).toBe('interrupted');
     expect(existsSync(prepared.path)).toBe(true); expect(p.resume).not.toHaveBeenCalled();
   });
+  it('enrolls an existing legacy generation without rerunning newly configured setup', async () => {
+    const p = await project();
+    const first = await createWorktreeWithOutcome(p.root, p.id, 'main');
+    expect(first.materialized).toBe(true);
+    expect((await createWorktreeWithOutcome(p.root, p.id, 'main')).materialized).toBe(false);
+    Object.assign(p.records.get(p.id)!, {worktreePath: first.path, branch: first.branch});
+    await p.config([entry('touch should-not-run')], [entry('true')]);
+    expect((await p.prepare()).ready).toBe(true);
+    expect(existsSync(join(first.path, 'should-not-run'))).toBe(false);
+    expect(await p.coordinator.store.readWorktree(p.id)).toMatchObject({generation: 1, preparedBy: 'completed'});
+  });
+
+  it('replans edits made during a running command before declaring the worktree ready', async () => {
+    const p = await project();
+    const first = entry('touch started; sleep 0.2; printf first >> order');
+    await p.config([first]);
+    const preparing = p.prepare();
+    const path = join(p.root, '.ai/cezar/worktrees', p.id);
+    await vi.waitFor(() => expect(existsSync(join(path, 'started'))).toBe(true));
+    await p.config([first, entry('printf second >> order')]);
+    expect((await preparing).ready).toBe(true);
+    expect(await readFile(join(path, 'order'), 'utf8')).toBe('firstsecond');
+  });
+
+  it('retains task and branch metadata when physical removal cannot finish its branch commit', async () => {
+    const p = await project();
+    await p.config([entry('true')], [entry('printf cleaned >> {{root_path}}/cleanup-count')]);
+    const prepared = await p.prepare();
+    const other = join(p.root, 'other-checkout');
+    p.git('worktree', 'add', '--force', other, prepared.branch);
+    const op = await p.coordinator.startRemoval({requestId: randomUUID(), runId: p.id, intent: 'delete-task'});
+    const failed = await settled(p.coordinator, op.id);
+    expect(failed).toMatchObject({state: 'needs_attention', failureStage: 'commit'});
+    expect(p.records.has(p.id)).toBe(true);
+    expect(p.records.get(p.id)?.branch).toBe(prepared.branch);
+    p.git('worktree', 'remove', '--force', other);
+    await p.action(op.id, 'retry');
+    expect((await settled(p.coordinator, op.id)).state).toBe('completed');
+    expect(p.records.has(p.id)).toBe(false);
+    expect(await readFile(join(p.root, 'cleanup-count'), 'utf8')).toBe('cleaned');
+  });
+
+  it('surfaces corrupt and missing orphan context as attention without authorizing removal', async () => {
+    const p = await project(); await p.config([entry('true')]); await p.prepare();
+    await writeFile(join(p.root, '.ai/cezar/lifecycle/worktrees', `${p.id}.json`), '{broken');
+    expect(await p.coordinator.allowOrphanPrune(p.id)).toBe(false);
+    const listed = await p.coordinator.list();
+    expect(listed.worktrees).toHaveLength(1);
+    expect(listed.worktrees[0]).toMatchObject({needsAttention: true, error: expect.stringContaining('retained')});
+    await p.coordinator.reconcile();
+    expect(p.coordinator.isBlocked(p.id)).toBe(true);
+  });
+
 });

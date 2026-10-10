@@ -16,7 +16,7 @@ const variables = [
   ['worktree_id', 'Stable cez-prefixed resource identity'],
   ['task_id', 'The original task ID'],
 ] as const
-const control = 'w-full rounded-md border border-input bg-card px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50'
+const control = 'w-full rounded-md border border-input bg-card px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50'
 
 /** Local drafts survive validation/conflict failures. Saving config never resumes a parked task. */
 export function WorktreeLifecycleEditor({ config }: { config: ConfigResponse }) {

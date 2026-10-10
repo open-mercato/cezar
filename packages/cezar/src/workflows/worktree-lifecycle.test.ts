@@ -10,6 +10,7 @@ import { ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { readLifecycleConfig, writeLifecycleConfig } from '../worktree-lifecycle/config.ts';
+import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
 import { RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
 
@@ -50,6 +51,7 @@ afterEach(async () => {
   for (const { manager, store } of projects) {
     for (const run of store.listRuns()) if (manager.isActive(run.id)) manager.cancel(run.id);
     manager.dispose(); store.flush();
+    for (const record of (await manager.lifecycle.store.listWorktrees()).records) await manager.lifecycle.store.withWorktreeLock(record.runId, async () => {});
   }
   // Disposal stops shell children asynchronously; never delete their cwd before quiescence.
   await new Promise(resolve => setTimeout(resolve, 100));
@@ -187,6 +189,138 @@ describe('RunManager worktree lifecycle admission', () => {
     expect(launched[1]?.resume).toBe(true);
     expect(launched[1]?.userPrompt).toContain('continue exactly this request');
     expect(readFileSync(join(launched[1]!.cwd, 'prepared'), 'utf8')).toBe('restored');
+    await wait(() => expect(p.manager.isActive(run.id)).toBe(false));
+  });
+
+  it('reserves variant cleanup before cancelling an agent, waits for its result, and excludes retention', async () => {
+    const p = await project();
+    await writeLifecycleConfig(p.root, { afterCreate: [entry('true')], beforeRemove: [entry('printf cleanup > {{ root_path }}/variant-cleanup')] }, null);
+    let finishAgent!: () => void;
+    const interrupted = vi.fn();
+    vi.mocked(ClaudeCliRunner.prototype.startSession).mockImplementation(spec => {
+      launched.push(spec);
+      return { result: new Promise(resolve => { finishAgent = () => resolve({text: '', toolCalls: [], tokensUsed: 0, sessionId: spec.sessionId}); }), open: true, sendMessage: () => true, end: interrupted, interrupt: interrupted };
+    });
+    const run = p.manager.startRun(workflow, { task: 'active losing variant', runner: 'claude' });
+    await wait(() => expect(launched).toHaveLength(1));
+    const record = await p.manager.lifecycle.store.readWorktree(run.id);
+    p.manager.lifecycle.start();
+    const discarding = p.manager.lifecycle.discardVariant(run.id);
+    try {
+      await wait(() => expect(interrupted).toHaveBeenCalled());
+      const operations = await p.manager.lifecycle.store.listOperations(record!.worktreeId);
+      expect(operations.some(operation => operation.intent === 'discard-variant' && operation.state === 'committing')).toBe(true);
+      expect(existsSync(record!.worktreePath)).toBe(true);
+      expect(existsSync(join(p.root, 'variant-cleanup'))).toBe(false);
+      expect(await p.manager.lifecycle.reclaim(run.id)).toBe(false);
+      expect((await p.manager.lifecycle.store.listOperations(record!.worktreeId)).some(operation => operation.intent === 'reclaim')).toBe(false);
+    } finally { finishAgent(); await discarding.catch(() => undefined); }
+    const cleanup = await discarding;
+    expect(cleanup?.intent).toBe('discard-variant');
+    await vi.waitFor(async () => expect((await p.manager.lifecycle.operation(cleanup!.id)).state).toBe('completed'), {timeout: 12_000, interval: 25});
+    expect(readFileSync(join(p.root, 'variant-cleanup'), 'utf8')).toBe('cleanup');
+    expect(existsSync(record!.worktreePath)).toBe(false);
+    await expect(exec('git', ['show-ref', '--verify', `refs/heads/${record!.branch}`], {cwd: p.root})).rejects.toThrow();
+    expect(p.store.getRun(run.id)?.worktreeReclaimedAt).toBeUndefined();
+  });
+
+  it.each(['resolved', 'rejected'] as const)('retains a surviving agent worktree lease after manager disposal until its result is %s', async outcome => {
+    const p = await project();
+    await writeLifecycleConfig(p.root, { afterCreate: [entry('true')], beforeRemove: [] }, null);
+    let settleAgent!: () => void;
+    const end = vi.fn();
+    const interrupt = vi.fn();
+    vi.mocked(ClaudeCliRunner.prototype.startSession).mockImplementation(spec => {
+      launched.push(spec);
+      return { result: new Promise((resolve, reject) => {
+        settleAgent = () => outcome === 'resolved'
+          ? resolve({text: '', toolCalls: [], tokensUsed: 0, sessionId: spec.sessionId})
+          : reject(new Error('fixture provider exited'));
+      }), open: true, sendMessage: () => true, end, interrupt };
+    });
+    const run = p.manager.startRun(workflow, { task: 'survives project context disposal', runner: 'claude' });
+    await wait(() => expect(launched).toHaveLength(1));
+    const worktreePath = launched[0]!.cwd;
+    p.manager.dispose();
+    const other = new WorktreeLifecycleCoordinator(p.root, p.store, {
+      semaphore, busySlots: () => 0, isActive: () => false,
+      cancelAndWait: async () => true, resume: async () => undefined,
+    });
+    let mutated = false;
+    const mutation = other.withWorktreeMutation(run.id, async () => {
+      await exec('git', ['worktree', 'remove', '--force', worktreePath], {cwd: p.root});
+      mutated = true;
+    });
+    try {
+      await new Promise(resolve => setTimeout(resolve, 150));
+      expect(end).not.toHaveBeenCalled();
+      expect(interrupt).not.toHaveBeenCalled();
+      expect(mutated).toBe(false);
+      expect(existsSync(worktreePath)).toBe(true);
+    } finally {
+      settleAgent();
+      await mutation;
+      other.dispose();
+    }
+    expect(mutated).toBe(true);
+    expect(existsSync(worktreePath)).toBe(false);
+  });
+
+  it('releases a disposed worktree lease immediately when no provider session owns it', async () => {
+    const p = await project();
+    await writeLifecycleConfig(p.root, { afterCreate: [entry('true')], beforeRemove: [] }, null);
+    const run = p.manager.startRun(workflow, { task: 'prepared idle worktree', runner: 'claude' });
+    await wait(() => expect(p.store.getRun(run.id)?.status).toBe('done'));
+    await wait(() => expect(p.manager.isActive(run.id)).toBe(false));
+    const releaseWorktree = await p.manager.lifecycle.acquireAgentLease(run.id);
+    // A prepared, idle graph/startup state owns the directory but has no provider result.
+    const active = (p.manager as unknown as { active: Map<string, {releaseWorktree: () => void}> }).active;
+    active.set(run.id, {releaseWorktree});
+    p.manager.dispose();
+    let acquired = false;
+    await p.manager.lifecycle.store.withWorktreeLock(run.id, async () => { acquired = true; });
+    expect(acquired).toBe(true);
+  });
+
+  it('stops an active setup variant before cleanup and never launches its agent', async () => {
+    const p = await project();
+    await writeLifecycleConfig(p.root, { afterCreate: [entry('printf started > setup-started; sleep 30')], beforeRemove: [entry('test -f setup-started; printf cleanup > {{ root_path }}/setup-variant-cleanup')] }, null);
+    const run = p.manager.startRun(workflow, { task: 'variant discarded during setup', runner: 'claude' });
+    const worktreePath = join(p.root, '.ai/cezar/worktrees', run.id);
+    await wait(() => expect(existsSync(join(worktreePath, 'setup-started'))).toBe(true));
+    const before = await p.manager.lifecycle.store.readWorktree(run.id);
+    const setupId = before!.activeOperationId!;
+    p.manager.lifecycle.start();
+    const cleanup = await p.manager.lifecycle.discardVariant(run.id);
+    expect(cleanup?.intent).toBe('discard-variant');
+    const stopped = await p.manager.lifecycle.store.readOperation(setupId);
+    expect(stopped?.state).toBe('cancelled');
+    expect(stopped?.executions.at(-1)?.process?.quiescent).toBe(true);
+    await vi.waitFor(async () => expect((await p.manager.lifecycle.operation(cleanup!.id)).state).toBe('completed'), {timeout: 12_000, interval: 25});
+    expect(readFileSync(join(p.root, 'setup-variant-cleanup'), 'utf8')).toBe('cleanup');
+    expect(existsSync(worktreePath)).toBe(false);
+    expect(launched).toHaveLength(0);
+  });
+
+  it('fails visibly if a managed continuation loses its directory between preparation and agent admission', async () => {
+    const p = await project();
+    await writeLifecycleConfig(p.root, { afterCreate: [entry('true')], beforeRemove: [] }, null);
+    const run = p.manager.startRun(workflow, {task: 'task before concurrent reclamation', runner: 'claude'});
+    await wait(() => expect(p.store.getRun(run.id)?.status).toBe('done'));
+    await wait(() => expect(p.manager.isActive(run.id)).toBe(false));
+    const prepare = p.manager.lifecycle.prepare.bind(p.manager.lifecycle);
+    vi.spyOn(p.manager.lifecycle, 'prepare').mockImplementation(async (...args) => {
+      const result = await prepare(...args);
+      if (result.ready) await exec('git', ['worktree', 'remove', '--force', result.path], {cwd: p.root});
+      return result;
+    });
+    expect(p.manager.continueRun(run.id, {text: 'continue after a concurrent reclamation'}).ok).toBe(true);
+    await wait(() => expect(p.store.getRun(run.id)?.status === 'failed' || launched.length > 1).toBe(true));
+    expect(launched.some(spec => spec.cwd === p.root)).toBe(false);
+    expect(p.store.getRun(run.id)?.status).toBe('failed');
+    expect(launched).toHaveLength(1);
+    expect(p.store.getRun(run.id)?.error).toMatch(/worktree|prepar/i);
+    expect(launched.some(spec => spec.cwd === p.root)).toBe(false);
     await wait(() => expect(p.manager.isActive(run.id)).toBe(false));
   });
 

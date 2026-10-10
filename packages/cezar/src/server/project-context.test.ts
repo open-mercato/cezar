@@ -31,6 +31,34 @@ describe('ProjectContexts', () => {
     return new ProjectContexts({ listProjects: async () => projects });
   }
 
+  it('shutdown waits for opened and still-building projects, then prevents new contexts', async () => {
+    let releaseRegistry!: () => void;
+    let delayRegistry = false;
+    const contexts = new ProjectContexts({listProjects: async () => {
+      if (delayRegistry) await new Promise<void>(resolve => { releaseRegistry = resolve; });
+      return [{id: 'a', root: rootA, status: 'not-git'}, {id: 'b', root: rootB, status: 'not-git'}];
+    }});
+    const first = await contexts.context('a');
+    let finishDrain!: () => void;
+    const drain = vi.spyOn(first.manager.lifecycle, 'shutdown').mockImplementation(() => new Promise<void>(resolve => { finishDrain = resolve; }));
+    const dispose = vi.spyOn(first.manager, 'dispose');
+    delayRegistry = true;
+    const building = contexts.context('b');
+    const stopping = contexts.shutdownAll();
+    expect(contexts.shutdownAll()).toBe(stopping);
+    expect(drain).toHaveBeenCalledOnce();
+    expect(dispose).not.toHaveBeenCalled();
+    await expect(contexts.context('a')).rejects.toThrow('shutting down');
+    releaseRegistry();
+    const second = await building;
+    const secondDrain = vi.spyOn(second.manager.lifecycle, 'shutdown');
+    finishDrain();
+    await stopping;
+    expect(secondDrain).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(contexts.ids()).toEqual([]);
+  });
+
   it('builds lazily: nothing on construction, first access builds, second returns the same instance', async () => {
     const contexts = makeContexts([
       { id: 'a', root: rootA, status: 'not-git' },
