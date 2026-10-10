@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { RunStore } from '../runs/store.ts';
+import { cleanupRunStores, registerRunStore } from '../test-utils/run-store-cleanup.ts';
 import { RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
 
@@ -85,7 +86,7 @@ function fixtureRepo(): Fixture {
   const root = mkdtempSync(join(tmpdir(), 'cez-root-lease-'));
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root });
   execFileSync('git', [...GIT_ID, 'commit', '--allow-empty', '-q', '-m', 'base'], { cwd: root });
-  const store = RunStore.open(join(root, '.ai/cezar'));
+  const store = registerRunStore(RunStore.open(join(root, '.ai/cezar')));
   const manager = new RunManager(store, root);
   // Under `.ai/cezar` on purpose: nothing treats that directory as repository
   // content, so the gate can never turn up in a worktree diff or the review gate.
@@ -169,6 +170,9 @@ afterEach(async () => {
       // subscription and its semaphore membership alive for the rest of the suite.
       fixture.manager.dispose();
     }
+    cleanupRunStores();
+    const persisted = JSON.parse(readFileSync(join(fixture.root, '.ai/cezar', 'runs.json'), 'utf8')) as Array<{ id: string }>;
+    expect(fixture.started.every((id) => persisted.some((run) => run.id === id))).toBe(true);
     // Reached only once nothing is still writing into the fixture. A failed
     // drain therefore leaks a temp directory, which is strictly better than
     // deleting one out from under a live run — the failure this file is fixing.
