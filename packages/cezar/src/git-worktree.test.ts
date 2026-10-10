@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -9,7 +9,11 @@ import {
   chooseForkBase,
   createWorktree,
   parseShortstat,
+  realIndexPathCount,
   resolveBaseRef,
+  withScratchIntentToAddIndex,
+  worktreeDiff,
+  worktreeDiffStat,
   worktreeShortstat,
   worktreeSizeBytes,
 } from './git-worktree.ts';
@@ -171,6 +175,44 @@ describe('createWorktree recovery (real git)', () => {
   });
 });
 
+describe('worktreeDiff / worktreeDiffStat / worktreeShortstat leave the index alone (real git)', () => {
+  it('list an untracked file without staging it into the worktree index', async () => {
+    const root = await fixtureRepo('cez-wt-readdiff-');
+    writeFileSync(join(root, 'base.txt'), 'edited\n');
+    writeFileSync(join(root, 'new.txt'), 'untracked\n');
+    const indexBefore = readFileSync(join(root, '.git', 'index'));
+
+    const diff = await worktreeDiff(root, 'main');
+    const stat = await worktreeDiffStat(root, 'main');
+    const shortstat = await worktreeShortstat(root, 'main');
+
+    expect(diff).toContain('+untracked');
+    expect(diff).toContain('+edited');
+    expect(stat).toContain('new.txt');
+    expect(shortstat?.files).toBe(2);
+    expect(readFileSync(join(root, '.git', 'index'))).toEqual(indexBefore);
+    const { stdout } = await run('git', ['status', '--porcelain', 'new.txt'], { cwd: root });
+    expect(stdout.startsWith('??')).toBe(true);
+  });
+});
+
+describe('withScratchIntentToAddIndex (real git)', () => {
+  it('remembers a bounded number of worktree index paths', async () => {
+    const root = await fixtureRepo('cez-wt-indexpaths-');
+    const links = mkdtempSync(join(tmpdir(), 'cez-wt-indexpaths-links-'));
+    try {
+      for (let i = 0; i < 80; i++) {
+        const alias = join(links, `wt${i}`);
+        symlinkSync(root, alias);
+        await withScratchIntentToAddIndex(alias, async () => undefined);
+      }
+      expect(realIndexPathCount()).toBeLessThanOrEqual(64);
+    } finally {
+      rmSync(links, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
+
 describe('worktreeShortstat (real git)', () => {
   let repo: string;
 
@@ -197,8 +239,6 @@ describe('worktreeShortstat (real git)', () => {
   it('answers all zeros for a clean tree, not null', async () => {
     await run('git', ['checkout', '-q', '--', '.'], { cwd: repo });
     rmSync(join(repo, 'new.txt'), { force: true });
-    // Drop the intent-to-add entry the previous test staged.
-    await run('git', ['reset', '-q'], { cwd: repo });
     const stat = await worktreeShortstat(repo, 'main');
     expect(stat).toEqual({ adds: 0, dels: 0, files: 0 });
   });

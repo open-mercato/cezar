@@ -142,6 +142,38 @@ function createRunsIndexRefresher(queryClient: QueryClient): {
   }
 }
 
+/**
+ * Every agent message bumps the run record, so a chatty step sends a run event every few hundred
+ * milliseconds, and each Changes refetch costs the server a `git status` even when nothing moved.
+ * One refetch per window per open Changes cache bounds that. The first event opens the window and
+ * its end always fires, so a steady stream delays a refresh by one window at most, never starves it.
+ */
+const CHANGES_REFRESH_WINDOW_MS = 1_500
+
+function createChangesRefresher(queryClient: QueryClient): {
+  onEvent: (queryKey: readonly unknown[]) => void
+  cancel: () => void
+} {
+  const pending = new Map<string, ReturnType<typeof setTimeout>>()
+  return {
+    onEvent(queryKey) {
+      const id = JSON.stringify(queryKey)
+      if (pending.has(id)) return
+      pending.set(
+        id,
+        setTimeout(() => {
+          pending.delete(id)
+          void queryClient.invalidateQueries({ queryKey })
+        }, CHANGES_REFRESH_WINDOW_MS),
+      )
+    },
+    cancel() {
+      for (const timer of pending.values()) clearTimeout(timer)
+      pending.clear()
+    },
+  }
+}
+
 function projectCacheScopes(queryClient: QueryClient, project: string): string[] {
   let bootProject: string | undefined
   for (const query of queryClient.getQueryCache().getAll()) {
@@ -237,6 +269,7 @@ function createRunEventBatcher(
   queryClient: QueryClient,
   usage: UsageStore,
   onDroppedProject: (project: string) => void,
+  onChangesEvent: (queryKey: readonly unknown[]) => void,
 ): {
   onEvent: (event: Extract<GlobalEvent, { type: 'run' | 'run-deleted' }>, project: string) => void
   beginReconcile: () => void
@@ -260,7 +293,7 @@ function createRunEventBatcher(
     for (const queued of events.values()) {
       // The route can change while the 50 ms window is open. Never resolve the cache keys from
       // the new scope for an event that arrived under the old one.
-      if (queued.project === project) applyGlobalEvent(queryClient, usage, queued.event)
+      if (queued.project === project) applyGlobalEvent(queryClient, usage, queued.event, onChangesEvent)
       else onDroppedProject(queued.project)
     }
   }
@@ -381,11 +414,22 @@ function activeProject(queryClient: QueryClient): string | undefined {
   return getApiScope() ?? (queryClient.getQueryData(queryKeys.health) as HealthResponse | undefined)?.bootProject
 }
 
+function stepProgress(run: ApiRun | undefined): string | undefined {
+  if (!run) return undefined
+  return [run.status, run.currentStepId ?? '', ...(run.steps ?? []).map((step) => `${step.id}:${step.status}`)].join('|')
+}
+
 /** Fold one stream message into the cache. The reducers it calls are pure and table-tested in
  *  events.ts; this is only the wiring from an event to the cache it belongs in. */
-function applyGlobalEvent(queryClient: QueryClient, usage: UsageStore, event: GlobalEvent): void {
+function applyGlobalEvent(
+  queryClient: QueryClient,
+  usage: UsageStore,
+  event: GlobalEvent,
+  onChangesEvent: (queryKey: readonly unknown[]) => void,
+): void {
   switch (event.type) {
     case 'run': {
+      const previous = queryClient.getQueryData<ApiRun[]>(queryKeys.runs.list())?.find((run) => run.id === event.run.id)
       queryClient.setQueryData<ApiRun[]>(queryKeys.runs.list(), (list) => applyRunEvent(list, event.run))
       // Only a detail cache that exists: `setQueryData` would happily create one, leaving an entry
       // for a run nobody opened — and, worse, one built from a summary rather than from
@@ -400,8 +444,13 @@ function applyGlobalEvent(queryClient: QueryClient, usage: UsageStore, event: Gl
       // itself — but only when one already exists, so a background tab that never opened the
       // Changes view doesn't fetch a diff nobody is looking at (same stance as the detail guard).
       const changesKey = queryKeys.runs.changes(event.run.id)
-      if (queryClient.getQueryData(changesKey) !== undefined) {
-        void queryClient.invalidateQueries({ queryKey: changesKey })
+      if (queryClient.getQueryData(changesKey) !== undefined) onChangesEvent(changesKey)
+      // The commit list moves far less often than the record does (every agent message bumps its
+      // token count), so only a step or run state change refetches it; a commit made mid-step
+      // shows by the Commits tab's slow backstop.
+      const commitsKey = queryKeys.runs.commits(event.run.id)
+      if (queryClient.getQueryData(commitsKey) !== undefined && stepProgress(previous) !== stepProgress(event.run)) {
+        void queryClient.invalidateQueries({ queryKey: commitsKey })
       }
       // A terminal transition can reclaim (or re-materialize) a worktree (#483); keep the
       // panel live. invalidateQueries only refetches while the panel is actually mounted.
@@ -465,10 +514,12 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     }
     const runsIndexRefresher = createRunsIndexRefresher(queryClient)
     const inactiveProjectRefresher = createInactiveProjectRefresher(queryClient)
+    const changesRefresher = createChangesRefresher(queryClient)
     const runEventBatcher = createRunEventBatcher(
       queryClient,
       usage,
       inactiveProjectRefresher.onEvent,
+      changesRefresher.onEvent,
     )
     let reopenTimer: ReturnType<typeof setTimeout> | undefined
     let everOpened = false
@@ -630,7 +681,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           } else if (parsed.event.type === 'todos' && reconciliationDepth > 0) {
             if (parsed.project !== null) pendingTodos.add(parsed.project)
           } else {
-            applyGlobalEvent(queryClient, usage, parsed.event)
+            applyGlobalEvent(queryClient, usage, parsed.event, changesRefresher.onEvent)
           }
         })
       }
@@ -766,6 +817,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       runsIndexRefresher.cancel()
       inactiveProjectRefresher.cancel()
       runEventBatcher.cancel()
+      changesRefresher.cancel()
       pendingTodos.clear()
       pendingProviderRows = []
       document.removeEventListener('visibilitychange', onVisibilityChange)

@@ -33,6 +33,7 @@ import {
   type LineCommentsApi,
   type LineSelection,
 } from './line-comments'
+import { PATCH_OMITTED_NOTE } from './notes'
 
 import {
   buildSplitRows,
@@ -772,6 +773,9 @@ function DiffFileBody({
   }
   if (file.binary) {
     return <Note>Binary file — no text diff.</Note>
+  }
+  if (file.patchOmitted) {
+    return <Note>{PATCH_OMITTED_NOTE}</Note>
   }
   if (parsed.hunks.length === 0) {
     return <Note>{parsed.truncated ? 'Patch truncated by the server.' : 'No content changes (metadata only).'}</Note>

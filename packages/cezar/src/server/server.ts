@@ -4758,8 +4758,6 @@ export function createApp(deps: ServerDeps) {
         taskBranch: run.branch,
         // Anchors a repointed worktree at the branch as this run found it (#751).
         runStartedAt: run.startedAt,
-        // A read-only GET against the user's real checkout must never modify its index.
-        intentToAdd: run.worktreePath ? undefined : false,
       });
       if (!result.ok) return c.json({ error: result.error }, 409);
       return c.json(result.changes);
@@ -6028,10 +6026,7 @@ export function createApp(deps: ServerDeps) {
       const { root: repoRoot } = c.get('project');
       const info = await getRepoInfo(repoRoot);
       if (!info) return c.json({ error: 'not a git repository' }, 409);
-      // The user's REAL working tree — never stage into their index (a GET must not write).
-      const result = await collectChanges(info.root, 'HEAD', {
-        intentToAdd: false,
-      });
+      const result = await collectChanges(info.root, 'HEAD');
       if (!result.ok) return c.json({ error: result.error }, 409);
       return c.json(result.changes);
     })

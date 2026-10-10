@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -119,6 +119,18 @@ describe('RunStore — titleSummary + diffStat (#389)', () => {
 
   afterEach(() => {
     rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('stages runs.json through a per-writer tmp file, so another writer cannot collide with it', () => {
+    // A second cezar process on the same repo (`serve` + `run`) mid-way through its own save
+    // holds the staging name; a fixed `runs.json.tmp` is shared, and here blocks the save.
+    mkdirSync(join(dataDir, 'runs.json.tmp'));
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 'one writer', workflow: 'quick-task', task: 'one writer', steps: [] });
+    store.flush();
+
+    expect(RunStore.open(dataDir).getRun(run.id)?.title).toBe('one writer');
+    expect(readdirSync(dataDir).filter((name) => name.startsWith('runs.json.') && name !== 'runs.json.tmp')).toEqual([]);
   });
 
   it('round-trips the new fields through runs.json', () => {

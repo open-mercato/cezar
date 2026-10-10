@@ -9,6 +9,9 @@ import { z } from 'zod';
 import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH } from '@open-mercato/cezar-contract';
 import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
 import { assertCezarHomeWriteIsSandboxed, workspaceConfigPath } from '../paths.ts';
+import { atomicTmpPath } from '../atomic-tmp.ts';
+
+export { atomicTmpPath };
 
 /**
  * `~/.cezar/config.json` — the per-user workspace config + project registry
@@ -349,21 +352,6 @@ export async function loadWorkspaceConfig(path: string = workspaceConfigPath()):
     `[cez] workspace config ${path} is corrupt — using defaults (re-add projects with \`cezar projects add\`)`,
   );
   return defaultWorkspaceConfig();
-}
-
-/**
- * The tmp path an atomic write stages through — UNIQUE PER WRITE, never a
- * fixed `${path}.tmp`. `~/.cezar/` is shared by every cezar process on the
- * machine (a `serve` per repo, `cezar run`s, a settings PUT), and two writers
- * staging through the same tmp name interleave: writer B's `O_TRUNC` open can
- * empty the file between writer A's write and rename, so A renames a
- * truncated/half-written file into place — and B's own rename then throws
- * `ENOENT` on the name A consumed. The pid + random suffix gives every writer
- * its own staging file, so the only cross-process contention left is the
- * rename itself, which is atomic.
- */
-export function atomicTmpPath(path: string): string {
-  return `${path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
 }
 
 /** Atomic JSON write (`0600`, dir `0700`) via a per-writer tmp + rename —

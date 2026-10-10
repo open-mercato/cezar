@@ -46,4 +46,12 @@ describe('Diff fallback path', () => {
 
     expect(document.querySelector('[data-slot="diff-empty"]')?.textContent).toBe('No changes.')
   })
+
+  it('says a capped file\'s patch was omitted instead of calling it metadata-only', async () => {
+    const capped: DiffFileChange = { path: 'src/big.ts', status: 'added', adds: 250, dels: 0, patch: '', patchOmitted: true }
+    render(<Diff files={[capped]} />)
+
+    expect(await screen.findByText(/Patch omitted/)).not.toBeNull()
+    expect(screen.queryByText('No content changes (metadata only).')).toBeNull()
+  })
 })
