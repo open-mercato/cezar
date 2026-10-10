@@ -129,15 +129,49 @@ does not hold, the change is one line in `designModeEnabled`.
 
 ## 7. The note popup and numbered marks (second cut, 2026-10-09)
 
-> **Being rolled out in stages, with the owner, one behaviour at a time (2026-10-10).**
-> **Stage 1 — live:** a click SELECTS. The blue hover frame stays on the clicked element and
-> turns lime, at once (the page draws it before the cockpit answers; the cockpit remains the
-> authority and a pick it refuses loses the frame). A selected element shows no blue frame on
-> hover; a second click deselects it. No number, no popup. The element still joins the run's
-> picks and shows as a chip in the Chat composer.
-> **Parked until their own stages** — built, tested, not wired into the workspace: the number
-> badge on a mark, the note popup (`DesignNote` / `renderDesignNote`), and the queues strip's
-> only feeder. Everything below this note describes that parked design, not what is on screen.
+> **Rolled out in stages, with the owner, one behaviour at a time. What is on screen is §7a
+> below; the rest of this section is the earlier, wider design and is NOT built as described** —
+> multi-element notes, the "new task" destination and the queues strip were removed from the
+> tree when stage 2 replaced them (they are in history at `59d134b1`).
+
+### 7a. What is live (stages 1–2, agreed 2026-10-10)
+
+**One element, one note.** Decided with the owner question by question; each line is a decision.
+
+- **Selecting.** Hover frames an element in blue. A click keeps the frame and turns it lime, at
+  once — the page draws it before the cockpit answers; the cockpit stays the authority and a pick
+  it refuses loses the frame. A selected element shows no blue frame on hover.
+- **The note.** The click opens a small window under the frame (above when there is no room),
+  following the element as the page scrolls, with the cursor in it. It holds the element's name
+  (component, or e.g. `button.btn-primary`), a text field and Send. `Ctrl/Cmd+Enter` sends;
+  an empty note cannot be sent. The window is drawn by the cockpit over the page, never inside
+  it: what the user types must not live in an untrusted document.
+- **Drafts.** Clicking another element leaves the first one framed WITH its unsent text and opens
+  a window on the new one — several drafts at once. Clicking a framed element opens its note
+  again; it is never picked twice. `Esc` or ✕ on a draft discards it and deselects the element.
+  `Esc` with no note open leaves Design Mode.
+- **Drafts survive.** They are written through to the run's draft store (`design-picks`), so a
+  half-written note outlives a reload of the page, of the cockpit, and a layout switch. On a new
+  document the picker frames the element again from its selector — only when that selector names
+  exactly ONE element on the same path; it never guesses. A draft whose element cannot be found
+  is offered from a chip in the corner of the frame instead of being lost.
+- **Sending.** Agent free → starts now. Agent working → waits in the session's prompt queue (§8)
+  and runs when the work before it ends. Session closed → "Reopen & send" (Continue). Task not
+  started → joins its first prompt. The agent receives the user's words, then the one element.
+- **After sending.** The frame stays, lime, with the note's number (order sent), until the page
+  reloads. Colour never changes; the status is in the note: *In queue → In progress → Done*, or
+  *Agent is waiting for your answer* when the turn ended on a question. Clicking a numbered frame
+  shows the note. While it waits in the queue it can be reworded in place (`PATCH
+  /runs/:id/prompt-queue/:msgId`, keeping its turn) or removed; once it is with the agent the
+  window is read-only.
+- **Not in the Chat composer.** A picked element no longer becomes a chip there: one way to send.
+
+**How a sent note's status is known.** It is not stored — it is read off the run: its entry is
+in `promptQueue` → in queue; delivered and the run working → in progress; the run came to rest →
+done or asking. Both transitions wait for evidence, not for an absence, because this window's
+copy of the run always lags the request that changed it (`advance` in `design-notes.ts`). Sent
+notes are memory-only: a receipt for this review. The WORK does not depend on them — a queued
+prompt lives on the run record.
 
 The first cut sent picks to the Chat composer only. Reviewing an app means leaving several notes
 in one pass, so a pick now opens a note **beside the element it is about**:
@@ -237,8 +271,13 @@ binary is now run through this process's own Node on `win32` only (`scriptAwareC
 - `packages/web/src/routes/task-workspace/browser-view-design.test.tsx` — the toggle, the mirror
   swap, message filtering by origin and source window, marks, the note popup (opening, anchoring,
   following the page's report, closing, hostile rect reports) and `placeNote`.
-- `packages/web/src/routes/task-workspace/design-dock.test.tsx` — where a note is routed for each
-  run status, the new-task path, and the queues strip with its two lists apart.
+- `packages/web/src/routes/task-workspace/design-notes.test.tsx` — a note's whole life: the draft
+  written through and restored, where Send goes for each session state, numbering, rewording and
+  withdrawing while queued, the status following the run (including both lag guards), the popup's
+  three faces.
+- `packages/web/src/routes/task-workspace/design-picker.test.ts` — the real picker script in a
+  framed DOM: blue on hover, lime on click, the note reopened by a second click, numbers on sent
+  frames, a draft's frame restored from its selector and never guessed.
 - `packages/cezar/src/workflows/prompt-queue.test.ts` — the engine, dry: one prompt per turn in
   order, straight-in at rest, the continuation twin, DONE with a queue, the ask and monitoring
   refusals, the closed-run exits, the cap. The continuation case was confirmed red with the
