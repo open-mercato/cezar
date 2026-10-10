@@ -38,6 +38,7 @@ it('uses finish dates for outcomes, excludes scheduled retries and preserves cur
     row('bad-clock', { startedAt: 'bad' }),
     row('failed', { status: 'failed' }),
     row('retry', { status: 'failed', autoResumeAt: at }),
+    row('asked', { status: 'failed', awaitingAnswerSince: at }),
     row('waiting', { status: 'waiting', finishedAt: undefined }),
     row('archived-waiting', { status: 'waiting', archived: true }),
     row('running', { status: 'running', finishedAt: undefined }),
@@ -46,7 +47,7 @@ it('uses finish dates for outcomes, excludes scheduled retries and preserves cur
   dashboardOverviewSchema.parse(result);
   expect(result.metrics).toEqual({
     running: 1,
-    needsYou: 1,
+    needsYou: 2,
     completed: 2,
     failed: 1,
     timedTasks: 1,

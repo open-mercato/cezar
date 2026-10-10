@@ -98,6 +98,7 @@ function serve(answers: Answers = {}) {
     projectsDir: '~/cezar/projects',
   }
   const config: WorkspaceConfigResponse = {
+    branding: { name: 'cezar', logoUrl: null },
     agentDefaults: {},
     browseRoot: '~/',
     projectsDir: '~/cezar/projects',
@@ -112,6 +113,7 @@ function serve(answers: Answers = {}) {
     resources: {
       maxParallel: 2,
       maxMonitoringSessions: 2,
+      idleTimeoutMinutes: 15,
       monitoringWakeIntervalMinutes: null,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,

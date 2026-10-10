@@ -351,12 +351,35 @@ export function useRunHistory(runId: string | undefined): RunHistoryState {
   const jumpToLatest = useCallback(async () => {
     historyGenerationRef.current += 1
     historyMutationRef.current = Promise.resolve()
-    newestPageRef.current = undefined
-    queryClient.removeQueries({ queryKey: tailKey, exact: true })
-    // resetQueries cancels the in-flight older-page request, clears its data immediately, and
-    // refetches the active cursorless page. Do not await the refetch: the scroller must jump now.
-    void queryClient.resetQueries({ queryKey: historyKey, exact: true })
-  }, [historyKey, queryClient, tailKey])
+    // Trim to the tail IN PLACE. Resetting the query blanked it, which flipped `isPending` and
+    // swapped the whole thread for its loading skeleton mid-jump — the pill read as a reload,
+    // and the scroll ran against the skeleton. The tail page is the one the live stream resumes
+    // from, so dropping older pages around it needs no refetch and no reconnect.
+    const latestTail = (pages: readonly RunHistoryPage[]) => newestPageRef.current
+      ?? newestCursorlessPage(pages)
+      ?? queryClient.getQueryData<RunHistoryPage>(tailKey)
+    const current = queryClient.getQueryData<InfiniteData<RunHistoryPage, string | undefined>>(historyKey)
+    if (!latestTail(current?.pages ?? [])) {
+      // No tail anywhere in the cache (should not happen once hydrated): reload it the old way.
+      newestPageRef.current = undefined
+      queryClient.removeQueries({ queryKey: tailKey, exact: true })
+      void queryClient.resetQueries({ queryKey: historyKey, exact: true })
+      return
+    }
+    if (current?.pages.length === 1 && current.pages[0] === latestTail(current.pages) && !history.isFetchingPreviousPage) return
+    // Abandon an in-flight older page so it cannot land after the trim.
+    await queryClient.cancelQueries({ queryKey: historyKey, exact: true })
+    // Re-read after the await: a compaction may have installed a newer tail meanwhile.
+    const settled = queryClient.getQueryData<InfiniteData<RunHistoryPage, string | undefined>>(historyKey)
+    const tail = latestTail(settled?.pages ?? [])
+    if (!tail) return
+    queryClient.setQueryData<InfiniteData<RunHistoryPage, string | undefined>>(historyKey, {
+      pages: [tail],
+      pageParams: [undefined],
+    })
+    queryClient.setQueryData(tailKey, tail)
+    newestPageRef.current = tail
+  }, [history.isFetchingPreviousPage, historyKey, queryClient, tailKey])
 
   return {
     visibleEvents,

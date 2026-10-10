@@ -9,12 +9,13 @@ import {
   LoaderCircleIcon,
   PaperclipIcon,
   SearchIcon,
+  SparklesIcon,
   SquarePenIcon,
   SquareTerminalIcon,
   Trash2Icon,
   WrenchIcon,
 } from 'lucide-react'
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { ZoomableImage } from '@/components/zoomable-image'
@@ -22,7 +23,9 @@ import { Link } from '@/lib/project-router'
 import { isImageAttachmentName, type FileDiff, type ToolKind, type UiToolItem } from '@open-mercato/cezar-api-client'
 import { cn } from '@/lib/utils'
 
+import { parseReviewMessage } from './diff-comments'
 import { Markdown } from './markdown'
+import { ReviewCommentsBlock } from './review-comments-block'
 import { useDraft } from './thread-draft'
 import { splitToolTitle, streakLabel, type ContextGroupBlock } from './thread-groups'
 import { useThreadCardCache } from './thread-open-cards'
@@ -251,7 +254,7 @@ export function UserBubble({
         </span>
       ) : null}
       {actionError ? <p role="alert" className="mb-1 text-xs text-danger">{actionError}</p> : null}
-      <Markdown breaks>{text}</Markdown>
+      <UserText text={text} />
       {images.length > 0 ? (
         <span data-slot="user-images" className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
           {/* One list carries both kinds (#950), so the NAME decides how each entry renders: an
@@ -294,6 +297,22 @@ export function UserBubble({
   )
 }
 
+/**
+ * A user message's text. A message that carries a diff review (comments drafted on the Changes
+ * tab) renders the review as comment cards under whatever was typed; anything else is the plain
+ * Markdown it always was.
+ */
+function UserText({ text }: { text: string }) {
+  const review = useMemo(() => parseReviewMessage(text), [text])
+  if (!review) return <Markdown breaks>{text}</Markdown>
+  return (
+    <>
+      {review.lead !== '' ? <Markdown breaks>{review.lead}</Markdown> : null}
+      <ReviewCommentsBlock items={review.items} />
+    </>
+  )
+}
+
 /** An assistant message item, as markdown. */
 export function AssistantMessage({ text }: { text: string }) {
   return (
@@ -320,8 +339,11 @@ export function NoteLine({ note }: { note: ThreadNote }) {
 const PROVIDER_LABEL: Record<ThreadProviderAuthRequired['provider'], string> = {
   claude: 'Claude Code',
   codex: 'Codex',
+  junie: 'Junie',
   opencode: 'OpenCode',
+  cursor: 'Cursor',
   pi: 'pi',
+  copilot: 'GitHub Copilot CLI',
 }
 
 /** Persisted recovery guidance for an authoritative runtime authentication rejection. */
@@ -443,7 +465,10 @@ const TOOL_ICONS: Record<ToolKind, typeof WrenchIcon> = {
   execute: SquareTerminalIcon,
   think: BrainIcon,
   fetch: GlobeIcon,
+  // A skill is not an agent (#1202): the bot belongs to `task` alone, so a reader can tell a
+  // dispatched sub-agent from a skill the main agent loaded at a glance.
   task: BotIcon,
+  skill: SparklesIcon,
   plan: ListTodoIcon,
   other: WrenchIcon,
 }

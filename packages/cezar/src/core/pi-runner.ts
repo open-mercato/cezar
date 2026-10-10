@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { disclaimedCommand } from './disclaim-spawn.ts';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve as resolvePath } from 'node:path';
 import type {
@@ -58,10 +59,9 @@ export class PiRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
-    const child = nodeSpawn(this.bin, buildPiArgs(spec), {
-      cwd: spec.cwd,
-      env: buildChildEnv({ backend: this.backend, extraEnv: spec.env }),
-    });
+    const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
+    const [file, argv] = disclaimedCommand(this.bin, buildPiArgs(spec), env);
+    const child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
     let open = true;
     let settled = true;
     let timedOut = false;
@@ -193,7 +193,10 @@ export class PiRunner implements AgentRunner {
               textCoalescer.append(undefined, update.delta);
             }
           } else if (value.type === 'message_end' && isRecord(value.message) && value.message.role === 'assistant') {
-            textCoalescer.complete(undefined, contentText(value.message.content));
+            // Pi's assistant snapshots can split one logical message across text content parts.
+            // Keep those bytes adjacent: control markers may land on opposite sides of a part
+            // boundary just as they can across text_delta frames.
+            textCoalescer.complete(undefined, assistantMessageText(value.message.content));
             const usage = usageValues(value.message.usage);
             if (usage) {
               tokensUsed += usage.weighted;
@@ -348,6 +351,15 @@ function contentText(value: unknown): string | undefined {
     .map((part) => (isRecord(part) && part.type === 'text' ? string(part.text) : undefined))
     .filter((part): part is string => part !== undefined);
   return text.length > 0 ? text.join('\n') : undefined;
+}
+
+function assistantMessageText(value: unknown): string | undefined {
+  if (typeof value === 'string') return value;
+  if (!Array.isArray(value)) return undefined;
+  const text = value
+    .map((part) => (isRecord(part) && part.type === 'text' ? string(part.text) : undefined))
+    .filter((part): part is string => part !== undefined);
+  return text.length > 0 ? text.join('') : undefined;
 }
 
 function rpcError(value: Record<string, unknown>): string {

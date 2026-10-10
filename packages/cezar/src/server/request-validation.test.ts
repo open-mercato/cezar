@@ -23,6 +23,8 @@ describe('request validation bounds (#429)', () => {
   let app: Hono;
   let captured: StartRunInput | undefined;
   let continueText: string | undefined;
+  let retiredQuestionRunId: string | undefined;
+  let retiredQuestionCount = 0;
 
   beforeEach(() => {
     delete process.env.CEZ_REMOTE;
@@ -30,6 +32,8 @@ describe('request validation bounds (#429)', () => {
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     captured = undefined;
     continueText = undefined;
+    retiredQuestionRunId = undefined;
+    retiredQuestionCount = 0;
     const manager = {
       startRun: (_workflow: WorkflowDef, input: StartRunInput) => {
         captured = input;
@@ -40,6 +44,10 @@ describe('request validation bounds (#429)', () => {
       continueRun: (_id: string, opts: { text?: string } = {}) => {
         continueText = opts.text;
         return { ok: true };
+      },
+      notifyQuestionRetired: (id: string) => {
+        retiredQuestionRunId = id;
+        retiredQuestionCount += 1;
       },
     } as unknown as RunManager;
     app = createApp({
@@ -136,6 +144,21 @@ describe('request validation bounds (#429)', () => {
     const res = await apiRequest(app, `/api/v1/runs/${run.id}/archive`, { method: 'POST' });
     expect(res.status).toBe(200);
     expect(store.getRun(run.id)?.archived).toBe(true);
+  });
+
+  it('notifies dispatch when archiving explicitly retires an unanswered question', async () => {
+    const run = store.createRun({ title: 'child', workflow: 'quick-task', task: 'ask', steps: [] });
+    store.updateRun(run.id, {
+      status: 'failed',
+      awaitingAnswerSince: new Date().toISOString(),
+      dispatch: { rootRunId: 'root', parentRunId: 'root', pendingAsk: { questions: ['Continue?'], askedAt: new Date().toISOString() } },
+    });
+    const res = await apiRequest(app, `/api/v1/runs/${run.id}/archive`, { method: 'POST' });
+    expect(res.status).toBe(200);
+    await apiRequest(app, `/api/v1/runs/${run.id}/archive`, { method: 'POST' });
+    expect(retiredQuestionRunId).toBe(run.id);
+    expect(retiredQuestionCount).toBe(1);
+    expect(store.getRun(run.id)?.awaitingAnswerSince).toBeUndefined();
   });
 
   it('rejects a wrong-typed archived flag with a 400', async () => {

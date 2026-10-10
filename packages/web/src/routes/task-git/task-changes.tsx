@@ -1,17 +1,23 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { FileDiffIcon, GitCommitHorizontalIcon } from 'lucide-react'
-import { useMemo, useRef, useState } from 'react'
-import { useParams } from 'react-router'
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
+import { useParams, useSearchParams } from 'react-router'
 
 import { ApiError, createRunPr, getRunFile, openRunFileInApp, openRunInCli, pushRun, runFileRawUrl } from '@/api/client'
 import { queryKeys, useHealth, useRepo, useRun, useRunChanges } from '@/api/queries'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
-import { Diff, type DiffHandle, type DiffMode } from '@/components/diff'
+import { Diff, type DiffHandle, type DiffMode, type DiffRevealTarget } from '@/components/diff'
 import { toast } from '@/components/ui/toaster'
 import { gitActionPolicy, type GitActionId } from '@/lib/git-actions'
 import { useIsDesktop } from '@/lib/use-desktop'
 
+import { useDiffComments } from '../task-thread/diff-comments'
+import { useContinueAction } from '../task-thread/follow-up-engine'
+import { revealFromSearch } from '../task-thread/review-comments-block'
+import { TaskComposer, TaskDock } from '../task-thread/task-composer'
+import { useDraft } from '../task-thread/thread-draft'
+import { useKeyboardInsetVar } from '@/lib/keyboard-inset'
 import { isRunActive, lastSessionId } from '../task-thread/run-actions'
 import { RunHeader } from '../task-thread/run-header'
 import { ChangesTree } from './changes-tree'
@@ -29,6 +35,12 @@ import { GitToolbar } from './git-toolbar'
  * Below `md` the view forces unified+wrap (spec: "unified+wrap forced <md") and hides the
  * tree — the per-file sticky headers carry the file names, and a 360px phone has no honest
  * room for a second column.
+ *
+ * From `md` up the view is a SPLIT layout, in CSS alone: the route fills `main` (`md:h-full`), the
+ * header and toolbar keep their natural height, and the body below is two columns that each scroll
+ * on their own. Nothing is sized from the header (#918, and the takeover line that outgrew a
+ * hard-coded `10rem` offset), so a header of any height can neither clip the tree nor cover a
+ * diff file header. Below `md` the page scrolls as one, as before.
  */
 export function TaskChangesRoute() {
   const { id } = useParams<{ id: string }>()
@@ -36,7 +48,9 @@ export function TaskChangesRoute() {
 
   if (run.isPending) return <GitTabLoading tab="changes" />
   if (run.isError) return <GitTabLoadError tab="changes" error={run.error} />
-  return <ChangesView run={run.data} />
+  // Keyed on the run: its tree and diff columns are scrollers of their own, which the shell's
+  // per-pathname reset of `main` never touches, so a new task must mean a fresh pair at the top.
+  return <ChangesView key={run.data.id} run={run.data} />
 }
 
 function ChangesView({ run }: { run: ApiRun }) {
@@ -54,6 +68,43 @@ function ChangesView({ run }: { run: ApiRun }) {
   const [selected, setSelected] = useState<string | null>(null)
   const [commitOpen, setCommitOpen] = useState(false)
   const diffRef = useRef<DiffHandle | null>(null)
+  // Line comments for the agent (self-review): drafted here, and sent from the SAME composer the
+  // Session tab docks — floated here while there is something to send, so the review can be given
+  // a message (or a skill) without leaving the diff. This route is the one host of both drafts.
+  const diffComments = useDiffComments(run.id)
+  const commentCount = diffComments.comments.length
+  const composerDraft = useDraft(run.id, 'composer')
+  // Shown once there are comments, kept while a typed message is unsent — so deleting the last
+  // comment never whisks away a half-written reply — and kept while a send is in flight: the
+  // composer clears optimistically, and a box that vanished mid-send could not show the outcome.
+  const [sending, setSending] = useState(false)
+  // The dock opens for COMMENTS. Once open, a typed message keeps it up after the last comment
+  // goes; but a draft left on the Session tab, with no comment here, never pulls it up on its own.
+  const [dockHeld, setDockHeld] = useState(false)
+  if (commentCount > 0 && !dockHeld) setDockHeld(true)
+  if (dockHeld && commentCount === 0 && !composerDraft.hasDraft && !sending) setDockHeld(false)
+  const showDock = commentCount > 0 || sending || (dockHeld && composerDraft.hasDraft)
+  // The dock floats OVER the diff and the file tree. It takes no room of its own (a negative top
+  // margin cancels its height), so the content gets that height back as bottom padding instead —
+  // from md up inside each scroll column, on phones on the page body — and its last lines can still
+  // be scrolled up above the box while the columns stay visible around it.
+  const [dockHeight, setDockHeight] = useState(0)
+  const dockRef = useCallback((element: HTMLDivElement | null) => {
+    if (!element) {
+      setDockHeight(0)
+      return
+    }
+    setDockHeight(element.offsetHeight)
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => setDockHeight(element.offsetHeight))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+  const commentCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const comment of diffComments.comments) counts.set(comment.path, (counts.get(comment.path) ?? 0) + 1)
+    return counts
+  }, [diffComments.comments])
 
   const queryClient = useQueryClient()
   const invalidateRuns = () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
@@ -134,6 +185,7 @@ function ChangesView({ run }: { run: ApiRun }) {
   }
 
   const files = changes.data?.files ?? []
+  const diffShown = !changes.isPending && !changes.isError && files.length > 0
   const tree = useMemo(() => buildFileTree(files), [files])
 
   // Phones force the readable combination; the toggles only exist ≥md (toolbar hides them).
@@ -146,9 +198,36 @@ function ChangesView({ run }: { run: ApiRun }) {
     setSelected(path)
     diffRef.current?.scrollToPath(path)
   }
+  /** To one comment or line — the exact spot, not the top of its file — wherever the renderer can. */
+  const revealOrScroll = useCallback((target: DiffRevealTarget) => {
+    setSelected(target.path)
+    const handle = diffRef.current
+    if (handle?.reveal) handle.reveal(target)
+    else handle?.scrollToPath(target.path)
+  }, [])
+
+  // Arrived from a link to a comment or a line (a chip on the Session tab, a review in the
+  // transcript): reveal it once the diff has rendered. The renderer is a lazy chunk, so its handle
+  // may appear a moment after the files do — keep checking briefly. Once per target.
+  const [searchParams] = useSearchParams()
+  const searchTarget = useMemo(() => revealFromSearch(searchParams), [searchParams])
+  const revealed = useRef<string | null>(null)
+  useEffect(() => {
+    if (!searchTarget || !diffShown) return
+    const key = searchParams.toString()
+    if (revealed.current === key) return
+    let tries = 0
+    const timer = setInterval(() => {
+      if (!diffRef.current && ++tries < 40) return
+      clearInterval(timer)
+      revealed.current = key
+      revealOrScroll(searchTarget)
+    }, 75)
+    return () => clearInterval(timer)
+  }, [diffShown, revealOrScroll, searchParams, searchTarget])
 
   return (
-    <div data-route="task-changes" className="flex min-h-full flex-col">
+    <div data-route="task-changes" className="flex min-h-full flex-col md:h-full">
       <RunHeader run={run} tab="changes" />
 
       <GitToolbar
@@ -190,37 +269,99 @@ function ChangesView({ run }: { run: ApiRun }) {
           subtitle="The worktree matches its base branch. Changes appear here as the agent works."
         />
       ) : (
-        <div className="flex min-h-0 flex-1 items-start gap-5 px-4 py-4 [--diff-sticky-top:10rem] md:px-6">
-          {/* The tree column: sticky under the header so long diffs scroll beside it, and its OWN
-              scroller. Sticky alone is not enough — a tree taller than the viewport grows the page
-              instead, so the only way to reach its last file was to drag the shared `main` scroller
-              (and the diff with it) to the bottom. Capping the pane at the space left under the
-              sticky chrome gives the list its own scrollbar; `overscroll-contain` keeps a wheel
-              inside it from chaining into the diff once it bottoms out. */}
+        // The dock floats over the bottom of this body (see `dockHeight`). The body itself must
+        // NOT stop above it on desktop — the transparent dock would then sit on an empty band — so
+        // the clearance is padding INSIDE each scroll column there, and page padding on phones.
+        <div
+          className="flex min-h-0 flex-1 gap-5 px-4 py-4 max-md:pb-[calc(1rem_+_var(--changes-dock,0px))] md:px-6 md:py-0"
+          style={{ '--changes-dock': `${showDock ? dockHeight : 0}px` } as React.CSSProperties}
+        >
+          {/* The tree: its own scroller, as tall as the body (flex stretch), so its last file is
+              always reachable without moving the diff; `overscroll-contain` keeps a wheel that
+              bottoms out in it from chaining into anything else. */}
           <aside
             data-slot="changes-tree-pane"
-            className="sticky top-40 hidden max-h-[calc(100dvh_-_var(--diff-sticky-top)_-_1rem)] w-60 shrink-0 overflow-y-auto overscroll-contain md:block lg:w-72"
+            className="hidden w-60 shrink-0 overflow-y-auto overscroll-contain pt-4 pb-[calc(1rem_+_var(--changes-dock,0px))] md:block lg:w-72"
           >
-            <ChangesTree root={tree} selected={selected} onSelect={selectFile} />
+            <ChangesTree root={tree} selected={selected} onSelect={selectFile} commentCounts={commentCounts} />
           </aside>
-          <Diff
-            files={files}
-            viewRef={diffRef}
-            mode={effectiveMode}
-            wrap={effectiveWrap}
-            loadFileText={(path) => loadWorktreeText(run.id, path)}
-            imageSrc={(path) => runFileRawUrl(run.id, path)}
-            onOpenInApp={
-              health.data?.capabilities.localHandoff ? (path) => openImage.mutate(path) : undefined
-            }
-            className="min-w-0 flex-1"
-          />
+          {/* The diff's own scroller from md up; its file headers stick to ITS top, so the
+              header above never covers them. Its vertical padding lives on the Diff inside, not on
+              the scroller: sticky offsets count from the scroller's padding edge, so padding here
+              would park every stuck header 16px below the top with rows scrolling past above it. */}
+          <div
+            data-slot="diff-pane"
+            data-diff-scroller={desktop ? '' : undefined}
+            className="min-w-0 flex-1 md:overflow-y-auto md:overscroll-contain"
+          >
+            <Diff
+              // Keyed by run: the open comment editor and its unsent text are keyed by path + line
+              // only, so a half-written note must not reappear on the same path + line of another
+              // task. NOT keyed by breakpoint: crossing md swaps the scroller (this column ↔ `main`),
+              // and the Diff rebinds its virtualized list itself, keeping an unsent note.
+              key={run.id}
+              files={files}
+              viewRef={diffRef}
+              mode={effectiveMode}
+              wrap={effectiveWrap}
+              loadFileText={(path) => loadWorktreeText(run.id, path)}
+              imageSrc={(path) => runFileRawUrl(run.id, path)}
+              onOpenInApp={
+                health.data?.capabilities.localHandoff ? (path) => openImage.mutate(path) : undefined
+              }
+              comments={diffComments.comments}
+              // Not until the stored comments have loaded — see `DiffComments.ready`.
+              onAddComment={diffComments.ready ? diffComments.add : undefined}
+              onEditComment={diffComments.update}
+              onRemoveComment={diffComments.remove}
+              // The column runs under the floating dock, so its content pads its end by the dock's
+              // height, and reveals keep their target above the box. Diff targets only: scroll
+              // padding on a scroller also affects the dock textarea, and Chromium scrolls the page
+              // on every keystroke trying to bring its caret above the very dock it lives in.
+              className="min-w-0 md:pt-4 md:pb-[calc(1rem_+_var(--changes-dock,0px))] [&_[data-slot=diff-comment-editor]]:scroll-mb-[var(--changes-dock,0px)] [&_[data-slot=diff-line-comment]]:scroll-mb-[var(--changes-dock,0px)] [&_[data-slot=diff-line]]:scroll-mb-[var(--changes-dock,0px)]"
+            />
+          </div>
         </div>
       )}
+
+      {showDock ? (
+        // `mt-auto` so a short view still parks it at the bottom, exactly where the Session tab's is.
+        // Only over the diff does it float (the negative margin): above a loading line or an empty
+        // state there is nothing to see through, and pulling it up would overlap the toolbar.
+        <TaskDock
+          ref={dockRef}
+          floating
+          className="mt-auto"
+          style={{ marginTop: diffShown && dockHeight ? -dockHeight : undefined }}
+        >
+          <DockedComposer
+            run={run}
+            draft={composerDraft}
+            diffComments={diffComments}
+            onSendingChange={setSending}
+            onOpenComment={(comment) =>
+              revealOrScroll({ path: comment.path, side: comment.side, line: comment.line, commentId: comment.id })
+            }
+            getMentionCandidates={() => files.map((file) => file.path)}
+          />
+        </TaskDock>
+      ) : null}
 
       <CommitDialog run={run} open={commitOpen} onOpenChange={setCommitOpen} />
     </div>
   )
+}
+
+/**
+ * The composer as the Changes tab docks it. Its own component so that what only a VISIBLE
+ * composer needs — the continue engine's queries (runner models, accounts, providers) and the
+ * iOS keyboard tracking behind the dock's `bottom: var(--kb)` — runs only while the dock is shown,
+ * not on every visit to the tab.
+ */
+function DockedComposer(props: Omit<ComponentProps<typeof TaskComposer>, 'continueAction'>) {
+  const continueAction = useContinueAction(props.run)
+  useKeyboardInsetVar()
+  return <TaskComposer {...props} continueAction={continueAction} />
 }
 
 /** The facade's expandable-context source: the file's current text from the worktree, or

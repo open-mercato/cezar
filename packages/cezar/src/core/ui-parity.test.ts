@@ -3,14 +3,36 @@
  *
  * The spec (`.ai/specs/2026-07-14-cockpit-ui-redesign.md` §"Backend parity
  * requirement") demands that every capability in the parity matrix is
- * emitted by EVERY backend, so the GUI degrades per-capability, never
+ * emitted by every first-class backend, so the GUI degrades per-capability, never
  * per-backend. This table test asserts it over the golden fixtures' expected
  * outputs (the hand-verified wire-faithful contract for each mapper): if a
  * future mapper change drops a capability — or a new fixture set forgets to
  * cover one — a named row fails here.
  *
  * `BACKENDS` lists every backend that owns a wire mapper. Pi uses its documented
- * RPC protocol and therefore has its own wire-faithful fixture set.
+ * RPC protocol and therefore has its own wire-faithful fixture set. Copilot speaks ACP through
+ * the shared mapper, but keeps its own fixtures and dialect for the same reason every backend
+ * does — parity is asserted over what the wire really produces, per runner.
+ *
+ * Every row below is a hard rule for every backend — see `BACKWARD_COMPATIBILITY.md`
+ * §7 and `AGENT_PROTOCOL.md` §6 ("a new backend is not 'done' until it produces
+ * every row"). junie's `plan.updated`/reasoning rows are backed by
+ * `__fixtures__/junie/schema-plan-reasoning.*`, a fixture derived from the public
+ * ACP schema rather than a live capture (see `junie-ui-mapper.ts`'s module doc) —
+ * schema-derived is enough to satisfy the row under §7's existing fixture-provenance
+ * rule (cite the upstream schema/source, PR #443 precedent), since the row asserts
+ * the mapper CAN produce the capability, not that it was observed live. A future
+ * junie/model revision that emits either live should get a real, captured fixture
+ * replacing the schema-derived one — re-check this the next time junie's ACP surface
+ * or model lineup changes materially.
+ *
+ * "sub-agent task items" and its nesting cell cannot exist on junie's wire:
+ * junie speaks unmodified core ACP, whose `tool_call.kind` enum has no `task` value
+ * and which publishes no wire shape for `nativeSubagentSessions` (see
+ * `junie-ui-mapper.ts`'s module doc). That is `BACKWARD_COMPATIBILITY.md` §7's
+ * "provably cannot exist on that backend's own wire format", so junie takes the
+ * documented path — a cited, row-scoped `except` in `CAPABILITIES` (`AGENT_PROTOCOL.md`
+ * §6), the same one cursor uses.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -20,7 +42,7 @@ import { describe, expect, it } from 'vitest';
 import type { UiEvent, UiItem } from './ui-events.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const BACKENDS = ['claude', 'codex', 'opencode', 'pi'] as const;
+const BACKENDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot'] as const;
 
 /** Every event across every golden fixture of one backend. */
 function fixtureEvents(backend: (typeof BACKENDS)[number]): UiEvent[] {
@@ -47,8 +69,12 @@ function hasToolStatus(events: UiEvent[], status: string): boolean {
 }
 
 /** The parity matrix (spec §"Backend parity requirement"): capability →
- *  predicate over a backend's full v2 fixture output. */
-const CAPABILITIES: ReadonlyArray<[name: string, produced: (events: UiEvent[]) => boolean]> = [
+ *  predicate over a backend's full v2 fixture output, plus the backends known NOT to
+ *  reach that cell (documented gap, not a bug) — same precedent as the sub-agent
+ *  NESTING exclusion below. */
+const CAPABILITIES: ReadonlyArray<
+  [name: string, produced: (events: UiEvent[]) => boolean, except?: ReadonlyArray<(typeof BACKENDS)[number]>]
+> = [
   [
     'plan.updated with entries (TodoWrite / todoList / todowrite)',
     (events) => events.some((e) => e.type === 'plan.updated' && e.entries.length > 0),
@@ -61,6 +87,9 @@ const CAPABILITIES: ReadonlyArray<[name: string, produced: (events: UiEvent[]) =
   [
     'reasoning items (thinking / reasoning items / reasoning parts)',
     (events) => items(events).some((item) => item.kind === 'reasoning' && item.text.trim() !== ''),
+    // Cursor's docs are explicit: "`thinking` events are suppressed in print mode and will
+    // not appear in any output format" (cursor.com/docs/cli/reference/output-format).
+    ['cursor'],
   ],
   [
     'structured diffs (Edit input / fileChange.changes / patch parts)',
@@ -69,10 +98,17 @@ const CAPABILITIES: ReadonlyArray<[name: string, produced: (events: UiEvent[]) =
   [
     'sub-agent task items (Task / review-mode items / subtask parts)',
     (events) => items(events).some((item) => item.kind === 'tool' && item.toolKind === 'task'),
+    // junie's `tool_call.kind` is unmodified core ACP — read/edit/delete/move/search/execute/
+    // think/fetch/other, no `task` (agentclientprotocol.com/protocol/schema#toolkind) — and
+    // `nativeSubagentSessions` has no published wire shape, so there is nothing to map.
+    ['junie'],
   ],
   [
     'usage.updated with raw token counts',
     (events) => events.some((e) => e.type === 'usage.updated' && e.usage.total > 0),
+    // Cursor's documented terminal `result` frame has no `usage` field — only
+    // {type, subtype, is_error, duration_ms, duration_api_ms, result, session_id, request_id}.
+    ['cursor'],
   ],
   [
     'turn.completed with per-turn directional usage',
@@ -80,14 +116,17 @@ const CAPABILITIES: ReadonlyArray<[name: string, produced: (events: UiEvent[]) =
       events.some(
         (e) => e.type === 'turn.completed' && (e.usage?.input ?? 0) > 0 && (e.usage?.output ?? 0) > 0,
       ),
+    // Same absent `result.usage` as the row above.
+    ['cursor'],
   ],
   ['turn.completed with a stopReason', (events) => events.some((e) => e.type === 'turn.completed' && e.stopReason !== undefined)],
 ] as const;
 
-describe('protocol v2 backend parity (every mapper emits every matrix capability)', () => {
+describe('protocol v2 backend parity (all first-class mappers emit every matrix capability)', () => {
   for (const backend of BACKENDS) {
     const events = fixtureEvents(backend);
-    for (const [name, produced] of CAPABILITIES) {
+    for (const [name, produced, except] of CAPABILITIES) {
+      if (except?.includes(backend)) continue;
       it(`${backend} produces ${name}`, () => {
         expect(produced(events)).toBe(true);
       });
@@ -95,10 +134,14 @@ describe('protocol v2 backend parity (every mapper emits every matrix capability
   }
 
   // Sub-agent NESTING rides on parentItemId where the wire attributes work
-  // to its parent: claude `parent_tool_use_id` and opencode child-session
-  // parts under a `subtask`. Codex's wire has no parent attribution — its
-  // matrix cell is the review-mode task items asserted above.
-  for (const backend of ['claude', 'opencode'] as const) {
+  // to its parent: claude `parent_tool_use_id`, opencode child-session parts
+  // under a `subtask`, and copilot's `_meta["github.com/copilot"].agentId`,
+  // which carries the delegating `task` call's own id. Codex and Cursor
+  // print-mode wire have no parent attribution, and pi's RPC protocol carries
+  // no parent-item id either — all three's matrix cell is the task-kind tool
+  // items asserted above. junie (core ACP) has no parent attribution either, and
+  // its task-kind substitute is excluded above for the same protocol reason.
+  for (const backend of ['claude', 'opencode', 'copilot'] as const) {
     it(`${backend} nests sub-agent work via parentItemId`, () => {
       expect(items(fixtureEvents(backend)).some((item) => item.parentItemId !== undefined)).toBe(true);
     });

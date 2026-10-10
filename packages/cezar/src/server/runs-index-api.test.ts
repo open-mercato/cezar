@@ -166,6 +166,7 @@ describe('workspace runs index API', () => {
       'issueNumber',
       'referencedIssueUrl',
       'markerRefs',
+      'prRefs',
       'costUsd',
       'peakRssBytes',
       'peakProcCount',
@@ -289,6 +290,66 @@ describe('workspace runs index API', () => {
       status: 'failed',
       autoResumeAt: '2026-07-14T15:00:00Z',
     });
+  });
+
+  it('carries `awaitingAnswerSince`, so an unanswered question still reads as "needs you"', async () => {
+    await registerProject(repoRoot);
+    await registerProject(otherRoot);
+    seedColdProject(otherRoot, [
+      storedRun({
+        id: 'asked',
+        title: 'Waiting on an answer',
+        status: 'failed',
+        finishedAt: '2026-07-14T11:00:00Z',
+        awaitingAnswerSince: '2026-07-14T11:00:00.000Z',
+      }),
+    ]);
+
+    const body = await getIndex();
+
+    expect(body.runs[0]).toMatchObject({
+      id: 'asked',
+      status: 'failed',
+      awaitingAnswerSince: '2026-07-14T11:00:00.000Z',
+    });
+  });
+
+  it('carries `automationId` from every provenance key, so the origin filter can split the rows', async () => {
+    await registerProject(repoRoot);
+    await registerProject(otherRoot);
+    const base = { automationRevision: 1, receiptId: 'rc' };
+    seedColdProject(otherRoot, [
+      storedRun({ id: 'mine', title: 'A person’s task', createdAt: '2026-07-14T10:04:00Z' }),
+      storedRun({
+        id: 'gh',
+        title: 'From a PR poll',
+        createdAt: '2026-07-14T10:03:00Z',
+        automation: { ...base, automationId: 'auto-gh', event: 'pull_request.opened', githubUrl: 'https://github.com/acme/demo/pull/1' },
+      }),
+      storedRun({
+        id: 'cron',
+        title: 'From a schedule',
+        createdAt: '2026-07-14T10:02:00Z',
+        automationTrigger: { ...base, automationId: 'auto-cron', trigger: 'schedule', occurrenceAt: '2026-07-14T10:00:00Z' },
+      }),
+      storedRun({
+        id: 'jira',
+        title: 'From a tracker',
+        createdAt: '2026-07-14T10:01:00Z',
+        automationTracker: { ...base, automationId: 'auto-jira', provider: 'jira', key: 'OPS-1', url: 'https://acme.atlassian.net/browse/OPS-1' },
+      }),
+    ]);
+
+    const body = await getIndex();
+
+    expect(body.runs.map((run) => [run.id, run.automationId])).toEqual([
+      ['mine', undefined],
+      ['gh', 'auto-gh'],
+      ['cron', 'auto-cron'],
+      ['jira', 'auto-jira'],
+    ]);
+    // Absent, not null, on a person's task — the slim row's rule for every optional key.
+    expect(Object.keys(body.runs[0]!)).not.toContain('automationId');
   });
 
   it('reads a crashed process’s `running` row as interrupted, exactly as opening it would', async () => {

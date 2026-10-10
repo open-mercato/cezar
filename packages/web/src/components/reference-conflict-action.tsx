@@ -1,11 +1,13 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 
 import { useProjectRun } from '@/api/queries'
 import { ReferenceChip, useCloseReferenceCard } from '@/components/reference-chip'
+import { useReferenceStatusLookup } from '@/components/reference-status'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { runTitle } from '@/lib/task-groups'
+import { prioritizeTaskReferences, taskReferences } from '@/lib/tasks-table'
 import { useAskAnswer } from '@/routes/task-thread/ask-answer'
 import { resolveConflictsPrompt } from '@/routes/task-thread/run-actions'
 
@@ -140,13 +142,43 @@ export function TaskReferenceChip({
    *  there is room for words in a panel wherever the row it hangs off is. */
   compact?: boolean
 }) {
+  const { lookup, projectId } = useReferenceStatusLookup()
+  // The caller supplies the already-resolved primary (including a repoBase-synthesized URL).
+  // Add only additional PRs when that primary is a PR; an issue chip must not suddenly grow an
+  // unrelated PR from the run's history, and preserving the supplied primary keeps synthesized
+  // links reachable on surfaces that do not carry project metadata.
+  const additional =
+    reference.kind === 'PR'
+      ? taskReferences(run).filter(
+          (candidate) =>
+            candidate.kind === 'PR' &&
+            (candidate.number !== reference.number ||
+              (!!candidate.url && !!reference.url && candidate.url !== reference.url)),
+        )
+      : []
+  const chips =
+    reference.number === undefined
+      ? [reference, ...additional]
+      : prioritizeTaskReferences(
+          [{ ...reference, number: reference.number }, ...additional],
+          (candidate) =>
+            projectId
+              ? lookup({ projectId, kind: candidate.kind, number: candidate.number }).status
+              : undefined,
+        )
   return (
-    <ReferenceChip
-      reference={reference}
-      taskTitle={runTitle(run)}
-      conflictAction={<ResolveConflictsButton run={run} prNumber={reference.number} />}
-      className={className}
-      compact={compact}
-    />
+    <>
+      {chips.map((item, index) => (
+        <Fragment key={`${item.kind}-${item.number ?? 'unknown'}-${item.url ?? index}`}>
+          <ReferenceChip
+            reference={item}
+            taskTitle={runTitle(run)}
+            conflictAction={<ResolveConflictsButton run={run} prNumber={item.number} />}
+            className={className}
+            compact={compact}
+          />
+        </Fragment>
+      ))}
+    </>
   )
 }

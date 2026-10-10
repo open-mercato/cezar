@@ -1,9 +1,10 @@
 import { readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve, basename, dirname, extname } from 'node:path';
+import { parse as parseYaml } from 'yaml';
 import { gatedSkillsRepos } from './config.ts';
 import { getTeamSkillsCached } from './skills-remote.ts';
-import { readWorkspaceUiState } from './workspace/ui-state.ts';
+import { readUiState } from './ui-state.ts';
 import { builtinSkills } from './automations/builtin-skill.ts';
 
 /**
@@ -78,12 +79,11 @@ const GLOBAL_SKILL_DIRS: Array<{ dir: string; source: Skill['source'] }> = [
  *
  * Opt-out gate: skills from a *default* (vendor) skills repo — `open-mercato/skills`
  * for the zero-config majority, see `gatedSkillsRepos` — appear unless the user has
- * curated them away. `importedSkills` in the GLOBAL `~/.cezar/ui-state.json` (not the
- * per-repo file — the selection describes the person and must not depend on the launch
- * directory, multi-project workspace) is a tri-state: ABSENT means "not curated" and
- * every default skill shows (the historical behavior — no upgrade break for existing
- * installs); a PRESENT array (even `[]`) means the user has taken control and only those
- * names show. A repo that sets its own `skillsRepos` gates nothing regardless. This is the
+ * curated them away. `importedSkills` in this repo's `.ai/cezar/ui-state.json` is a tri-state:
+ * ABSENT means "not curated" and every default skill shows unless an older workspace-level
+ * selection exists (readUiState supplies that as a compatibility fallback); a PRESENT array
+ * (even `[]`) means the project has taken control and only those names show. A repo that sets
+ * its own `skillsRepos` gates nothing regardless. This is the
  * single chokepoint, so the decision is identical for every consumer — catalog, composer
  * picker, planner, runner.
  */
@@ -94,7 +94,7 @@ export async function discoverSkills(repoRoot: string): Promise<Skill[]> {
       ...GLOBAL_SKILL_DIRS.map(({ dir, source }) => readMarkdownSkills(dir, source)),
     ]),
     gatedSkillsRepos(repoRoot),
-    readWorkspaceUiState(),
+    readUiState(repoRoot),
   ]);
   const teamSkills = filterImportedTeamSkills(
     getTeamSkillsCached(repoRoot),
@@ -228,13 +228,13 @@ async function readMarkdownSkills(dir: string, source: Skill['source']): Promise
       typeof frontmatter.description === 'string' && frontmatter.description.trim()
         ? frontmatter.description.trim()
         : undefined;
-    const interactive = frontmatter.interactive === 'true' ? true : undefined;
+    const interactive = frontmatter.interactive === true || frontmatter.interactive === 'true' ? true : undefined;
     skills.push({ name, description, interactive, body, path: absPath, source });
   }
   return skills;
 }
 
-type FrontmatterValue = string | string[];
+type FrontmatterValue = string | boolean | string[];
 
 /**
  * Tiny purpose-built frontmatter parser — a leading `---\n … \n---\n` block
@@ -246,21 +246,36 @@ export function parseFrontmatter(raw: string): {
   frontmatter: Record<string, FrontmatterValue>;
   body: string;
 } {
-  // Normalize CRLF and lone CR — otherwise frontmatter is silently dropped.
-  const text = raw.replace(/\r\n?/g, '\n');
-  if (!text.startsWith('---\n')) return { frontmatter: {}, body: raw };
+  // Normalize CRLF and lone CR, and strip a UTF-8 BOM — otherwise frontmatter is silently dropped.
+  const text = raw.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+  const match = /^---\n([\s\S]*?)\n---[ \t]*(?:\n|$)/.exec(text);
+  if (!match) return { frontmatter: {}, body: raw };
 
-  // Match the closing delimiter only on its own line so a `---` thematic
-  // break inside the body doesn't terminate the block early.
-  const end = text.indexOf('\n---\n', 4);
-  const endAtEof = text.endsWith('\n---') ? text.length - 4 : -1;
-  const closeAt = end === -1 ? endAtEof : end;
-  if (closeAt === -1) return { frontmatter: {}, body: raw };
+  const block = match[1] ?? '';
+  const body = text.slice(match[0].length);
+  const legacy = parseLegacyFrontmatter(block);
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(block);
+  } catch {
+    return { frontmatter: legacy, body };
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { frontmatter: legacy, body };
+  }
 
-  const block = text.slice(4, closeAt);
-  const afterDelimiter = end === -1 ? -1 : text.indexOf('\n', closeAt + 1);
-  const body = afterDelimiter === -1 ? '' : text.slice(afterDelimiter + 1);
+  const frontmatter: Record<string, FrontmatterValue> = { ...legacy };
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (typeof value === 'string' || (key === 'interactive' && typeof value === 'boolean')) {
+      frontmatter[key] = value;
+    } else if (Array.isArray(value) && value.every((item) => typeof item === 'string')) {
+      frontmatter[key] = value as string[];
+    }
+  }
+  return { frontmatter, body };
+}
 
+function parseLegacyFrontmatter(block: string): Record<string, FrontmatterValue> {
   const frontmatter: Record<string, FrontmatterValue> = {};
   const lines = block.split('\n');
   for (let i = 0; i < lines.length; i++) {
@@ -295,7 +310,7 @@ export function parseFrontmatter(raw: string): {
     frontmatter[key] = stripQuotes(rest);
   }
 
-  return { frontmatter, body };
+  return frontmatter;
 }
 
 function stripQuotes(s: string): string {

@@ -1,19 +1,21 @@
+<p align="center">
+  <img src="docs/brand/cezar-icon-black.svg" alt="" width="104" />
+</p>
+
 <div align="center">
   <h1>Cezar：協調數百個 AI 編碼代理，全天候 24/7。</h1>
 </div>
 
-<h4 align="center">
+<p align="center">
   <a href="https://www.youtube.com/watch?v=nNLJm9gArnE">示範</a>&nbsp;·
   <a href="#快速開始">快速開始</a>&nbsp;·
   <a href="docs/reference.md">文件</a>&nbsp;·
   <a href="https://github.com/open-mercato/cezar/issues">問題回報</a>
-</h4>
+</p>
 
 <p align="center">
   <a href="README.md">English</a> | <a href="README.zh-CN.md">简体中文</a> | 繁體中文
 </p>
-
-> 本文譯自 README.md @ 33aee0ee；如有出入，以英文版為準。
 
 <div align="center">
   <h2>
@@ -23,7 +25,11 @@
   </h2>
 </div>
 
+> 本文譯自 README.md @ 33aee0ee；如有出入，以英文版為準。
+
 <p align="center">
+  <a href="https://cezar.run/">
+    <img alt="官網：cezar.run" src="https://img.shields.io/badge/website-cezar.run-9655FD" /></a>
   <a href="LICENSE">
     <img alt="MIT 授權條款" src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
   <a href="https://www.npmjs.com/package/@open-mercato/cezar">

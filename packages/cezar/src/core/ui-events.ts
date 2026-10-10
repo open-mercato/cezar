@@ -25,7 +25,7 @@
 /** The backend that produced a session — mirrors `RunnerId` in
  *  `agent-runner.ts` (kept structurally identical; a type-level test
  *  guards against drift so this module stays dependency-free). */
-export type UiBackend = 'claude' | 'codex' | 'opencode' | 'pi';
+export type UiBackend = 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'junie' | 'copilot';
 
 /**
  * Tool lifecycle status (ACP: pending/in_progress/completed/failed).
@@ -41,6 +41,10 @@ export type ToolStatus = 'pending' | 'running' | 'completed' | 'failed' | 'decli
 /**
  * Icon/verb hint for a tool item — a superset of ACP's ToolKind.
  * `task` = subagent spawn (claude Task / opencode subtask / codex review).
+ * `skill` = a skill invocation (claude `Skill`): instructions loaded into the CURRENT agent's
+ * turn, NOT a second agent. Kept apart from `task` because surfaces that count live fan-out key
+ * on the kind — the Agents dock and the history root-episode retention both do — and a skill
+ * that answers to `task` is counted as an agent that never started (#1202).
  */
 export type ToolKind =
   | 'read'
@@ -52,6 +56,7 @@ export type ToolKind =
   | 'think'
   | 'fetch'
   | 'task'
+  | 'skill'
   | 'plan'
   | 'other';
 
@@ -355,6 +360,9 @@ export interface UiAskRequestedEvent {
   type: 'ask.requested';
   requestId: string;
   questions: UiAskQuestion[];
+  /** Who asks: absent = the agent (a `CEZ:ASK` marker); `'workflow'` = a graph gate or
+   *  question node (spec 2026-09-30-workflow-node-editor) — the card says so. */
+  source?: 'workflow';
 }
 
 /**

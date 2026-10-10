@@ -53,9 +53,13 @@ function serve(uiState: Record<string, unknown> = {}) {
             { provider: 'claude', status: 'connected', enabled: true },
             { provider: 'codex', status: 'connected', enabled: true },
             { provider: 'opencode', status: 'connected', enabled: true },
-          ],
+            { provider: 'cursor', status: 'connected', enabled: true },
+        ],
         })
-      if (url === '/api/v1/models?runner=codex') return json({ runner: 'codex', models: [], source: 'unavailable', stale: false })
+      if (url.startsWith('/api/v1/models?runner=')) {
+        const runner = url.includes('cursor') ? 'cursor' : 'codex'
+        return json({ runner, models: [], source: 'unavailable', stale: false })
+      }
       return new Promise<never>(() => {})
     }),
   )

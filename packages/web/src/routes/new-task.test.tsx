@@ -97,14 +97,18 @@ const PROVIDERS_CONNECTED: ProviderStatusResponse = {
     { provider: 'claude', status: 'connected', enabled: true },
     { provider: 'codex', status: 'disconnected', enabled: true },
     { provider: 'opencode', status: 'not-installed', enabled: true },
+    { provider: 'cursor', status: 'not-installed', enabled: true },
   ],
 }
 
+/** Two usable runners (claude + codex). Cursor stays not-installed so multi-backend
+ *  scenarios stay a 2-choice pill unless a test opts Cursor in explicitly. */
 const PROVIDERS_MULTI: ProviderStatusResponse = {
   providers: [
     { provider: 'claude', status: 'connected', enabled: true },
     { provider: 'codex', status: 'connected', enabled: true },
     { provider: 'opencode', status: 'disconnected', enabled: true },
+    { provider: 'cursor', status: 'not-installed', enabled: true },
   ],
 }
 
@@ -113,6 +117,7 @@ const PROVIDERS_NONE: ProviderStatusResponse = {
     { provider: 'claude', status: 'disconnected', enabled: true },
     { provider: 'codex', status: 'not-installed', enabled: true },
     { provider: 'opencode', status: 'disconnected', enabled: true },
+    { provider: 'cursor', status: 'disconnected', enabled: true },
   ],
 }
 
@@ -153,6 +158,7 @@ const CONFIG: ConfigResponse = {
 }
 
 const WORKSPACE_CONFIG: WorkspaceConfigResponse = {
+  branding: { name: 'cezar', logoUrl: null },
   agentDefaults: {},
   browseRoot: '~/',
   projectsDir: '~/cezar/projects',
@@ -167,28 +173,12 @@ const WORKSPACE_CONFIG: WorkspaceConfigResponse = {
   resources: {
     maxParallel: 2,
     maxMonitoringSessions: 2,
+    idleTimeoutMinutes: 15,
     monitoringWakeIntervalMinutes: null,
     autoResumeOnUsageLimit: true,
     memoryLimitMb: null,
     worktreeRetentionDefault: 10,
   },
-}
-
-/** The shape `POST /api/v1/plan` answers (spec 008) — three steps so reorder/remove are provable. */
-const PLAN = {
-  steps: [
-    { id: 'implement', name: 'Implement', prompt: '{{task}}' },
-    { id: 'verify', name: 'Verify', command: 'npm test' },
-    { id: 'review', name: 'Review', skill: 'om-fix', prompt: 'Review the changes for {{task}}' },
-  ],
-  rationale: 'Implement, verify with tests, then review.',
-  fallback: false,
-}
-
-const FALLBACK_PLAN = {
-  steps: [{ id: 'task', name: 'Do the task', prompt: '{{task}}' }],
-  rationale: 'planner unavailable — single-step plan',
-  fallback: true,
 }
 
 // ---- harness ---------------------------------------------------------------------------------
@@ -229,10 +219,6 @@ function serve(overrides: {
   createRunStatus?: number
   /** What `GET /api/v1/launch-key` answers — the bookmarklet auto-start secret. */
   launchKey?: string
-  /** `POST /api/v1/plan` — a payload, or a handler for delayed/failing answers. */
-  plan?: unknown | (() => Promise<Response>)
-  /** `POST /api/v1/workflows` — answers in call order (409-then-201 for the overwrite flow). */
-  saveWorkflow?: Array<{ status: number; body: unknown }>
   /** Agent accounts (spec 2026-07-29-agent-profiles). Omitted answers a 404, which is how every
    *  pre-existing test here keeps a composer with no account pill at all. */
   agentProfiles?: AgentProfilesResponse
@@ -251,12 +237,9 @@ function serve(overrides: {
     createRun: { id: 'r1' },
     createRunStatus: 201,
     launchKey: 'k-real',
-    plan: PLAN,
-    saveWorkflow: [{ status: 201, body: { path: '.ai/cezar/workflows/my-chain.yaml', name: 'my chain' } }],
     ...overrides,
   }
   requests = []
-  let saves = 0
   const json = (payload: unknown, status = 200) =>
     new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } })
   vi.stubGlobal(
@@ -278,16 +261,9 @@ function serve(overrides: {
       // single shared answer would let a codex-only fixture stand in for claude's picker.
       if (url === '/api/v1/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
       if (url === '/api/v1/models?runner=claude') return json({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
+      if (url === '/api/v1/models?runner=cursor') return json({ runner: 'cursor', models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }], source: 'live', stale: false })
       if (url === '/api/v1/skills') return json(data.skills)
       if (url === '/api/v1/workflows' && method === 'GET') return json(data.workflows)
-      if (url === '/api/v1/workflows' && method === 'POST') {
-        const answer = data.saveWorkflow[Math.min(saves, data.saveWorkflow.length - 1)]!
-        saves += 1
-        return json(answer.body, answer.status)
-      }
-      if (url === '/api/v1/plan' && method === 'POST') {
-        return typeof data.plan === 'function' ? (data.plan as () => Promise<Response>)() : json(data.plan)
-      }
       if (url === '/api/v1/repo') return json(data.repo)
       if (url === '/api/v1/launch-key') return json({ key: data.launchKey })
       if (url === '/api/v1/ui-state' && method === 'GET') return json(data.uiState, data.uiStateStatus)
@@ -332,6 +308,18 @@ function renderNewTask(entry = '/new') {
 }
 
 const textarea = () => screen.getByLabelText('Describe a task for the agent') as HTMLTextAreaElement
+
+const pngFile = (name = 'shot.png', bytes: number[] = [1, 2, 3]) =>
+  new File([new Uint8Array(bytes)], name, { type: 'image/png' })
+
+const paste = (target: HTMLTextAreaElement, files: File[]) =>
+  fireEvent.paste(target, {
+    clipboardData: {
+      items: files.map((file) => ({ kind: 'file', type: file.type, getAsFile: () => file })),
+    },
+  })
+
+const attachmentChips = () => screen.queryAllByLabelText(/^Remove /)
 const sourcePill = () => screen.getByRole('button', { name: 'Choose a skill or workflow' })
 const location = () => screen.getByTestId('location').textContent
 
@@ -360,6 +348,15 @@ const postedBody = () => requests.find((r) => r.method === 'POST' && r.url === '
 // ---- the hero surface -------------------------------------------------------------------------
 
 describe('the hero surface', () => {
+  it('offers one Start action without a plan-mode switcher', async () => {
+    serve()
+    renderNewTask()
+    await pillReady()
+
+    expect(screen.getByRole('button', { name: 'Start task' })).toBeTruthy()
+    expect(screen.queryByRole('radiogroup', { name: 'Run mode' })).toBeNull()
+  })
+
   it('renders the mockup hero: title, subtitle, twinkles, and focus lands in the textarea', async () => {
     serve()
     renderNewTask()
@@ -456,6 +453,7 @@ describe('picker data flows', () => {
           { provider: 'claude', status: 'connected', enabled: false },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'connected', enabled: false },
+          { provider: 'cursor', status: 'connected', enabled: false },
         ],
       },
     })
@@ -466,10 +464,43 @@ describe('picker data flows', () => {
     expect(textarea().disabled).toBe(false)
   })
 
+  it('offers Cursor in the runner pill when the provider is connected and enabled', async () => {
+    serve({
+      health: {
+        ...HEALTH,
+        checks: [
+          { name: 'claude', available: true },
+          { name: 'codex', available: true },
+          { name: 'cursor', available: true },
+          { name: 'git', available: true },
+        ],
+      },
+      providerStatus: {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'disconnected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'connected', enabled: true },
+        ],
+      },
+    })
+    renderNewTask()
+    await pillReady()
+
+    const runnerPill = document.querySelector('[data-slot="runner-pill"]') as HTMLElement
+    await waitFor(() => expect(runnerPill).not.toBeNull())
+    fireEvent.pointerDown(runnerPill)
+    const options = await screen.findAllByRole('menuitemradio')
+    expect(options.map((option) => option.textContent)).toEqual([
+      expect.stringContaining('claude'),
+      expect.stringContaining('cursor'),
+    ])
+  })
+
   it('drops a persisted model preset that belongs to another runner', async () => {
     writeDraft({
       text: '', source: null, runner: 'codex', agentProfile: null, model: 'claude-opus-4-8', variants: 1,
-      planFirst: false, worktree: null, autonomous: null, generateFollowups: null, dispatch: null,
+      worktree: null, autonomous: null, generateFollowups: null, dispatch: null,
     })
     serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
     renderNewTask()
@@ -823,7 +854,7 @@ describe('provider authentication gate', () => {
     )
   })
 
-  it('disables Start and Plan and links to project-aware provider settings when none connect', async () => {
+  it('disables Start and links to project-aware provider settings when none connect', async () => {
     serve({ providerStatus: PROVIDERS_NONE })
     renderNewTask('/p/acme/new')
 
@@ -831,8 +862,6 @@ describe('provider authentication gate', () => {
       expect(textarea().placeholder).toBe('Connect an agent provider before starting a task.'),
     )
     expect((screen.getByRole('button', { name: 'Start task' }) as HTMLButtonElement).disabled).toBe(true)
-    fireEvent.click(screen.getByRole('radio', { name: 'Plan first' }))
-    expect((screen.getByRole('button', { name: 'Plan task' }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByRole('link', { name: 'Configure providers' }).getAttribute('href')).toBe(
       '/p/acme/settings/agents#providers',
     )
@@ -859,6 +888,7 @@ describe('provider authentication gate', () => {
           { provider: 'claude', status: 'disconnected', enabled: true },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     })
@@ -890,6 +920,7 @@ describe('provider authentication gate', () => {
           { provider: 'claude', status: 'disconnected', enabled: true },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     })
@@ -908,6 +939,7 @@ describe('provider authentication gate', () => {
           { provider: 'claude', status: 'unknown', enabled: true },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     })
@@ -980,7 +1012,7 @@ describe('submit', () => {
     // lands in its errored state immediately and the test stays deterministic.
     writeDraft({
       text: '', source: { source: 'skill', ref: 'om-fix' }, runner: null, agentProfile: null, model: null,
-      variants: 1, planFirst: false, worktree: null, autonomous: null, generateFollowups: null, dispatch: null,
+      variants: 1, worktree: null, autonomous: null, generateFollowups: null, dispatch: null,
     })
     serve({ createRun: { id: 'run-9' }, uiStateStatus: 404 })
     renderNewTask()
@@ -1474,7 +1506,7 @@ describe('bookmarklet auto-start', () => {
     ])
   })
 
-  it('waits for project config and sends a connected fallback when that default is unavailable', async () => {
+  it('waits for project config and keeps the form when that default is unavailable', async () => {
     const delayedConfig = deferredJson<ConfigResponse>()
     const delayedProviders = deferredJson<ProviderStatusResponse>()
     serve({ config: delayedConfig.fetch, providerStatus: delayedProviders.fetch })
@@ -1495,14 +1527,9 @@ describe('bookmarklet auto-start', () => {
     expect(runsPosted()).toHaveLength(0)
 
     delayedConfig.release({ ...CONFIG, defaultRunner: 'codex' })
-    await waitFor(() => expect(screen.queryByTestId('elsewhere')).not.toBeNull())
-    expect(runsPosted().map((request) => request.body)).toEqual([
-      {
-        task: 'hello',
-        steps: [{ id: 'task', name: 'deploy', skill: 'deploy', prompt: '{{task}}' }],
-        runner: 'claude',
-      },
-    ])
+    await waitFor(() => expect(textarea().value).toBe('hello'))
+    expect(runsPosted()).toHaveLength(0)
+    expect(screen.queryByTestId('elsewhere')).toBeNull()
   })
 
   it('valid key + auto=1 + skill/ref → starts unattended with the exact legacy body, then the thread', async () => {
@@ -1521,26 +1548,41 @@ describe('bookmarklet auto-start', () => {
     expect(requests.some((r) => r.method === 'PUT' && r.url === '/api/v1/ui-state')).toBe(false)
   })
 
-  it('uses an explicit connected fallback when the saved server default is disconnected', async () => {
+  it('keeps the prefilled composer when the saved server default is disconnected', async () => {
     serve({
       providerStatus: {
         providers: [
           { provider: 'claude', status: 'disconnected', enabled: true },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     })
     renderNewTask('/new?skill=deploy&ref=hello&auto=1&key=k-real')
-    await waitFor(() => expect(screen.queryByTestId('elsewhere')).not.toBeNull())
+    await waitFor(() => expect(textarea().value).toBe('hello'))
 
-    expect(runsPosted().map((request) => request.body)).toEqual([
-      {
-        task: 'hello',
-        steps: [{ id: 'task', name: 'deploy', skill: 'deploy', prompt: '{{task}}' }],
-        runner: 'codex',
+    expect(runsPosted()).toHaveLength(0)
+    expect(screen.queryByTestId('elsewhere')).toBeNull()
+  })
+
+  it('keeps the prefilled composer when the saved server default is disabled', async () => {
+    serve({
+      config: { defaultRunner: 'claude' },
+      providerStatus: {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: false },
+          { provider: 'codex', status: 'connected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
       },
-    ])
+    })
+    renderNewTask('/new?skill=deploy&ref=hello&auto=1&key=k-real')
+    await waitFor(() => expect(textarea().value).toBe('hello'))
+
+    expect(runsPosted()).toHaveLength(0)
+    expect(screen.queryByTestId('elsewhere')).toBeNull()
   })
 
   it('keeps the prefilled composer disabled and does not POST when none are connected', async () => {
@@ -1661,338 +1703,7 @@ describe('bookmarklet auto-start', () => {
   })
 })
 
-// ---- plan mode (#383 + spec 008) ----------------------------------------------------------------
-
-const planToggle = () => screen.getByRole('radio', { name: /Plan first|Planning…/ })
-const startToggle = () => screen.getByRole('radio', { name: 'Start' })
-const stepIds = () =>
-  [...document.querySelectorAll('[data-slot="plan-step"]')].map((el) =>
-    el.getAttribute('data-step-id'),
-  )
-
-/** Toggle plan mode, type, submit — resolves once the review overlay is up. */
-async function planTask(text = 'Tighten the flaky suite') {
-  await pillReady()
-  fireEvent.click(planToggle())
-  fireEvent.change(textarea(), { target: { value: text } })
-  fireEvent.click(screen.getByRole('button', { name: 'Plan task' }))
-  await screen.findByText('Proposed chain')
-}
-
-describe('the Start | Plan first toggle', () => {
-  it('flips the selected state (#383): aria-checked moves, the submit becomes "Plan task"', async () => {
-    serve()
-    renderNewTask()
-    await pillReady()
-
-    expect(startToggle().getAttribute('aria-checked')).toBe('true')
-    expect(planToggle().getAttribute('aria-checked')).toBe('false')
-    expect(screen.queryByRole('button', { name: 'Start task' })).not.toBeNull()
-
-    fireEvent.click(planToggle())
-    expect(planToggle().getAttribute('aria-checked')).toBe('true')
-    expect(startToggle().getAttribute('aria-checked')).toBe('false')
-    // The selected plan segment takes the contrast fill — the unmistakable state.
-    expect(planToggle().className).toContain('bg-contrast')
-    expect(screen.queryByRole('button', { name: 'Plan task' })).not.toBeNull()
-
-    fireEvent.click(startToggle())
-    expect(planToggle().getAttribute('aria-checked')).toBe('false')
-    expect(startToggle().getAttribute('aria-checked')).toBe('true')
-  })
-
-  it('disables the Autonomous toggle in plan mode (planning is interactive)', async () => {
-    serve()
-    renderNewTask()
-    await pillReady()
-    const autonomous = () =>
-      document.querySelector('[data-slot="autonomous-toggle"]') as HTMLButtonElement
-
-    // Off plan mode the toggle is interactive.
-    expect(autonomous().disabled).toBe(false)
-    fireEvent.click(planToggle())
-    expect(autonomous().disabled).toBe(true)
-    expect(autonomous().getAttribute('aria-checked')).toBe('false')
-  })
-
-  it('persists in the draft store across unmount/remount', async () => {
-    serve()
-    const first = renderNewTask()
-    await pillReady()
-    fireEvent.click(planToggle())
-    first.unmount()
-
-    renderNewTask()
-    await pillReady()
-    expect(planToggle().getAttribute('aria-checked')).toBe('true')
-  })
-})
-
-describe('the plan flow', () => {
-  it('submit in plan mode POSTs /api/v1/plan (never /api/v1/runs) and opens the review overlay', async () => {
-    serve()
-    renderNewTask()
-    await planTask('Tighten the flaky suite')
-
-    expect(requests.find((r) => r.url === '/api/v1/plan')?.body).toEqual({
-      task: 'Tighten the flaky suite',
-    })
-    expect(requests.some((r) => r.url === '/api/v1/runs' && r.method === 'POST')).toBe(false)
-
-    // Task line, rationale, numbered cards with skill/check badges and hints.
-    expect(document.querySelector('[data-slot="plan-task"]')?.textContent).toBe(
-      'Tighten the flaky suite',
-    )
-    expect(screen.getByText('Implement, verify with tests, then review.')).toBeTruthy()
-    expect(stepIds()).toEqual(['implement', 'verify', 'review'])
-    expect(document.querySelector('[data-slot="plan-badge-check"]')).not.toBeNull()
-    expect(document.querySelector('[data-slot="plan-badge-skill"]')?.textContent).toBe('om-fix')
-    expect(screen.getByText('npm test')).toBeTruthy()
-  })
-
-  it('a degraded answer shows the fallback note instead of a rationale', async () => {
-    serve({ plan: FALLBACK_PLAN })
-    renderNewTask()
-    await planTask()
-    expect(document.querySelector('[data-slot="plan-fallback"]')?.textContent).toBe(
-      'planner unavailable — single-step plan',
-    )
-    expect(document.querySelector('[data-slot="plan-rationale"]')).toBeNull()
-    expect(stepIds()).toEqual(['task'])
-  })
-
-  it('shows the busy state while planning: "Planning…" on the segment, submit disabled', async () => {
-    let release!: () => void
-    serve({
-      plan: () =>
-        new Promise<Response>((resolve) => {
-          release = () =>
-            resolve(
-              new Response(JSON.stringify(PLAN), {
-                status: 200,
-                headers: { 'content-type': 'application/json' },
-              }),
-            )
-        }),
-    })
-    renderNewTask()
-    await pillReady()
-    fireEvent.click(planToggle())
-    fireEvent.change(textarea(), { target: { value: 'slow plan' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Plan task' }))
-
-    await screen.findByText('Planning…')
-    expect((screen.getByRole('button', { name: 'Plan task' }) as HTMLButtonElement).disabled).toBe(true)
-
-    release()
-    await screen.findByText('Proposed chain')
-    expect(screen.queryByText('Planning…')).toBeNull()
-  })
-
-  it('✕ removes a step and ↑/↓ reorder (the touch-honest path)', async () => {
-    serve()
-    renderNewTask()
-    await planTask()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Remove step 2' }))
-    expect(stepIds()).toEqual(['implement', 'review'])
-
-    fireEvent.click(screen.getByRole('button', { name: 'Move step 2 up' }))
-    expect(stepIds()).toEqual(['review', 'implement'])
-
-    // Edges are disabled — the first card cannot move up, the last cannot move down.
-    expect((screen.getByRole('button', { name: 'Move step 1 up' }) as HTMLButtonElement).disabled).toBe(true)
-    expect((screen.getByRole('button', { name: 'Move step 2 down' }) as HTMLButtonElement).disabled).toBe(true)
-  })
-
-  it('removing everything leaves the honest empty line and disables Start + Save', async () => {
-    serve({ plan: FALLBACK_PLAN })
-    renderNewTask()
-    await planTask()
-    fireEvent.click(screen.getByRole('button', { name: 'Remove step 1' }))
-
-    expect(screen.getByText('(no steps left — discard and plan again)')).toBeTruthy()
-    expect((document.querySelector('[data-slot="plan-start"]') as HTMLButtonElement).disabled).toBe(true)
-    expect((document.querySelector('[data-slot="plan-save"]') as HTMLButtonElement).disabled).toBe(true)
-  })
-
-  it('▶ Start posts the EDITED steps inline — the exact wire payload — and navigates', async () => {
-    serve({ createRun: { id: 'planned-1' } })
-    renderNewTask()
-    await planTask('Tighten the flaky suite')
-
-    fireEvent.click(screen.getByRole('button', { name: 'Remove step 2' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Move step 2 up' }))
-    fireEvent.click(document.querySelector('[data-slot="plan-start"]') as HTMLElement)
-
-    await waitFor(() =>
-      expect(requests.some((r) => r.url === '/api/v1/runs' && r.method === 'POST')).toBe(true),
-    )
-    expect(postedBody()).toEqual({
-      task: 'Tighten the flaky suite',
-      steps: [
-        { id: 'review', name: 'Review', skill: 'om-fix', prompt: 'Review the changes for {{task}}' },
-        { id: 'implement', name: 'Implement', prompt: '{{task}}' },
-      ],
-    })
-    await waitFor(() => expect(location()).toBe('/tasks/planned-1'))
-  })
-
-  it('▶ Start omits a locked native default from the planned run request', async () => {
-    serve({
-      config: { defaultModels: { claude: 'native-sonnet' }, modelsLocked: true },
-      createRun: { id: 'planned-native' },
-    })
-    renderNewTask()
-    await planTask('Plan with native settings')
-    expect((document.querySelector('[data-slot="model-pill"]') as HTMLElement).textContent).toContain(
-      'native-sonnet',
-    )
-
-    fireEvent.click(document.querySelector('[data-slot="plan-start"]') as HTMLElement)
-    await waitFor(() => expect(postedBody()).toBeDefined())
-    expect(postedBody()).toEqual({
-      task: 'Plan with native settings',
-      steps: PLAN.steps,
-    })
-  })
-
-  it('▶ Start uses project config while boot health is still pending', async () => {
-    const delayedHealth = deferredJson<HealthResponse>()
-    serve({ health: delayedHealth.fetch, createRun: { id: 'planned-before-health' } })
-    renderNewTask()
-    await planTask('Plan before health resolves')
-
-    fireEvent.click(document.querySelector('[data-slot="plan-start"]') as HTMLElement)
-    await waitFor(() => expect(postedBody()).toBeDefined())
-
-    expect((postedBody() as Record<string, unknown>).runner).toBeUndefined()
-    delayedHealth.release(HEALTH)
-  })
-
-  it('does not start a reviewed plan after provider status loses every connection', async () => {
-    let current = PROVIDERS_CONNECTED
-    serve({
-      providerStatus: () =>
-        Promise.resolve(
-          new Response(JSON.stringify(current), {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-          }),
-        ),
-    })
-    const { client } = renderNewTask()
-    await planTask('Wait for a connected provider')
-
-    current = PROVIDERS_NONE
-    await client.invalidateQueries({ queryKey: workspaceQueryKeys.providerStatus })
-    await waitFor(() => expect(textarea().disabled).toBe(true))
-    const start = document.querySelector<HTMLButtonElement>('[data-slot="plan-start"]')!
-    expect(start.disabled).toBe(true)
-    expect(screen.getByText('Connect an agent provider before starting a task.')).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'Configure providers' }).getAttribute('href')).toBe(
-      '/settings/agents#providers',
-    )
-    start.removeAttribute('disabled')
-    fireEvent.click(start)
-
-    expect(requests.some((request) => request.url === '/api/v1/runs')).toBe(false)
-  })
-
-  it('▶ Start carries the follow-up opt-out from the composer and remembers it', async () => {
-    serve({ createRun: { id: 'planned-no-followups' } })
-    renderNewTask()
-    await pillReady()
-    fireEvent.click(
-      document.querySelector('[data-slot="generate-followups-toggle"]') as HTMLElement,
-    )
-    await planTask('Plan without follow-ups')
-    fireEvent.click(document.querySelector('[data-slot="plan-start"]') as HTMLElement)
-
-    await waitFor(() => expect((postedBody() as Record<string, unknown>).generateFollowups).toBe(false))
-    await waitFor(() =>
-      expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/ui-state')?.body).toEqual({
-        lastGenerateFollowups: false,
-      }),
-    )
-  })
-
-  it('Discard closes the overlay and hands back the draft untouched', async () => {
-    serve()
-    renderNewTask()
-    await planTask('keep this text')
-
-    fireEvent.click(screen.getByRole('button', { name: 'Discard' }))
-    await waitFor(() => expect(screen.queryByText('Proposed chain')).toBeNull())
-    expect(textarea().value).toBe('keep this text')
-    expect(requests.some((r) => r.url === '/api/v1/runs' && r.method === 'POST')).toBe(false)
-  })
-})
-
-describe('save as chain', () => {
-  it('asks for the name in a dialog and posts { name, steps } — no overwrite key uninvited', async () => {
-    serve()
-    renderNewTask()
-    await planTask()
-
-    fireEvent.click(document.querySelector('[data-slot="plan-save"]') as HTMLElement)
-    const nameInput = await screen.findByLabelText('Chain name')
-    fireEvent.change(nameInput, { target: { value: '  my chain  ' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-
-    await waitFor(() =>
-      expect(requests.some((r) => r.url === '/api/v1/workflows' && r.method === 'POST')).toBe(true),
-    )
-    expect(requests.find((r) => r.url === '/api/v1/workflows' && r.method === 'POST')?.body).toEqual({
-      name: 'my chain',
-      steps: PLAN.steps,
-    })
-    // Dialog closes on success; the review itself stays open (start is a separate decision).
-    await waitFor(() => expect(screen.queryByLabelText('Chain name')).toBeNull())
-    expect(screen.getByText('Proposed chain')).toBeTruthy()
-    await screen.findByText('Saved — my-chain.yaml')
-  })
-
-  it('a 409 opens the overwrite confirm; Yes retries with overwrite: true', async () => {
-    serve({
-      saveWorkflow: [
-        { status: 409, body: { error: 'workflow file already exists: x.yaml', exists: true } },
-        { status: 201, body: { path: '.ai/cezar/workflows/my-chain.yaml', name: 'my chain' } },
-      ],
-    })
-    renderNewTask()
-    await planTask()
-
-    fireEvent.click(document.querySelector('[data-slot="plan-save"]') as HTMLElement)
-    fireEvent.change(await screen.findByLabelText('Chain name'), { target: { value: 'my chain' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-
-    await screen.findByText('Overwrite “my chain”?')
-    fireEvent.click(screen.getByRole('button', { name: 'Overwrite' }))
-
-    await waitFor(() => {
-      const saves = requests.filter((r) => r.url === '/api/v1/workflows' && r.method === 'POST')
-      expect(saves).toHaveLength(2)
-      expect(saves[1]?.body).toEqual({ name: 'my chain', steps: PLAN.steps, overwrite: true })
-    })
-    await waitFor(() => expect(screen.queryByLabelText('Chain name')).toBeNull())
-  })
-
-  it('a non-409 failure surfaces the server message and keeps the dialog open', async () => {
-    serve({ saveWorkflow: [{ status: 400, body: { error: 'step 2: needs prompt or command' } }] })
-    renderNewTask()
-    await planTask()
-
-    fireEvent.click(document.querySelector('[data-slot="plan-save"]') as HTMLElement)
-    fireEvent.change(await screen.findByLabelText('Chain name'), { target: { value: 'bad' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-
-    await screen.findByText('step 2: needs prompt or command')
-    expect(screen.getByLabelText('Chain name')).toBeTruthy()
-  })
-})
-
-// ---- prompt templates on /new (#413 follow-up) ---------------------------------------------------
+ // ---- prompt templates on /new (#413 follow-up) ---------------------------------------------------
 
 describe('prompt templates on the new-task composer', () => {
   const ASSIGNED = [
@@ -2404,7 +2115,7 @@ describe('the Dispatch toggle', () => {
     expect((postedBody() as Record<string, unknown>).dispatch).toEqual({ maxSubtasks: 10, inFlight: 2 })
   })
 
-  it('the settings offer the host runners and the model presets of the chosen subtask runner', async () => {
+  it('the settings offer the host runners and the model catalog of the chosen subtask runner', async () => {
     const toggle = await readyWithDispatch({ health: { ...HEALTH_DISPATCH, checks: HEALTH_MULTI.checks }, providerStatus: PROVIDERS_MULTI })
     fireEvent.click(settingsTrigger()!)
     await waitFor(() => expect(settings()).not.toBeNull())
@@ -2416,20 +2127,46 @@ describe('the Dispatch toggle', () => {
     await waitFor(() => expect(Array.from(model().options).map((o) => o.value)).toEqual(['', 'opus', 'sonnet']))
 
     // Picking a model, then another runner: the model pin is dropped with it (presets are
-    // per-runner), and codex's list here is its static presets — auto only, which the select
-    // folds into "same as parent" — because only the parent's runner gets the live catalog.
+    // per-runner), and the list becomes CODEX's — its own discovered catalog, not the parent's
+    // and not the `auto`-only static presets discovery replaced (#784/#794).
     fireEvent.change(model(), { target: { value: 'sonnet' } })
     expect(readDraft().dispatch).toEqual({ model: 'sonnet' })
     fireEvent.change(runner, { target: { value: 'codex' } })
     expect(readDraft().dispatch).toEqual({ runner: 'codex' })
-    expect(Array.from(model().options).map((o) => o.value)).toEqual([''])
+    await waitFor(() => expect(Array.from(model().options).map((o) => o.value)).toEqual(['', 'gpt-future']))
+    fireEvent.change(model(), { target: { value: 'gpt-future' } })
+    expect(readDraft().dispatch).toEqual({ runner: 'codex', model: 'gpt-future' })
     fireEvent.change(screen.getByLabelText('Budget per subtask'), { target: { value: '2.5' } })
-    expect(readDraft().dispatch).toEqual({ runner: 'codex', budgetUsd: 2.5 })
+    expect(readDraft().dispatch).toEqual({ runner: 'codex', model: 'gpt-future', budgetUsd: 2.5 })
+
+    // Back to the parent's runner: the pin is dropped again and the parent's catalog returns.
+    fireEvent.change(runner, { target: { value: '' } })
+    expect(readDraft().dispatch).toEqual({ budgetUsd: 2.5 })
+    await waitFor(() => expect(Array.from(model().options).map((o) => o.value)).toEqual(['', 'opus', 'sonnet']))
 
     // The header switch is the same on/off as the pill.
     fireEvent.click(document.querySelector('[data-slot="dispatch-settings-switch"]')!)
     expect(toggle.getAttribute('aria-checked')).toBe('false')
     expect(readDraft().dispatch).toBeNull()
+  })
+
+  it("a Codex subtask under a Claude parent can pin a Codex model, and it rides the body", async () => {
+    await readyWithDispatch({ health: { ...HEALTH_DISPATCH, checks: HEALTH_MULTI.checks }, providerStatus: PROVIDERS_MULTI })
+    fireEvent.click(settingsTrigger()!)
+    await waitFor(() => expect(settings()).not.toBeNull())
+
+    // The composer itself stays on claude — only the SUBTASKS run as codex.
+    fireEvent.change(screen.getByLabelText('Subtask runner'), { target: { value: 'codex' } })
+    const model = () => screen.getByLabelText('Subtask model') as HTMLSelectElement
+    await waitFor(() => expect(Array.from(model().options).map((o) => o.value)).toEqual(['', 'gpt-future']))
+    fireEvent.change(model(), { target: { value: 'gpt-future' } })
+
+    fireEvent.change(textarea(), { target: { value: 'Fan this out to codex' } })
+    await startTask()
+    const body = postedBody() as Record<string, unknown>
+    expect(body.dispatch).toEqual({ runner: 'codex', model: 'gpt-future' })
+    // The parent's own engine is untouched by the subtask pick.
+    expect(body).not.toHaveProperty('model')
   })
 
   it('the keyboard reaches the settings with ArrowDown', async () => {

@@ -15,18 +15,26 @@ import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
 import { providerStatusFor } from '@/lib/provider-status'
 
-const PROVIDERS = [
+/** The provider cards this pane renders, in order. Exported so tests count them from the
+ *  source of truth rather than from a literal that a new runner silently invalidates. */
+export const PROVIDERS = [
   { id: 'claude', label: 'Claude Code', login: 'claude auth login' },
   { id: 'codex', label: 'Codex', login: 'codex login' },
+  { id: 'junie', label: 'Junie', login: 'junie login' },
   { id: 'opencode', label: 'OpenCode', login: 'opencode auth login' },
+  { id: 'cursor', label: 'Cursor', login: 'agent login' },
   { id: 'pi', label: 'pi', login: 'pi /login' },
+  { id: 'copilot', label: 'GitHub Copilot CLI', login: 'copilot login' },
 ] as const
 
 const providerWriteState = <T,>(value: T): Record<ProviderId, T> => ({
   claude: value,
   codex: value,
+  junie: value,
   opencode: value,
+  cursor: value,
   pi: value,
+  copilot: value,
 })
 
 const STATUS_PRESENTATION = {
@@ -238,7 +246,7 @@ export function ProviderSettings() {
                       </p>
                     ) : state === 'unknown' || (status.isError && !state) ? (
                       <p className="mt-1.5 text-xs text-soft-foreground">
-                        Verification failed. Check again when the provider is available.
+                        {current?.hint ?? 'Verification failed. Check again when the provider is available.'}
                       </p>
                     ) : current?.hint ? (
                       <p className="mt-1.5 text-xs text-soft-foreground">{current.hint}</p>

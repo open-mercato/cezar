@@ -35,9 +35,9 @@ id — that is the whole point of the seam.
 ### Identity
 
 ```ts
-const RUNNER_IDS = ['claude', 'codex', 'opencode', 'pi'] as const;  // the source of truth
-type RunnerId     = (typeof RUNNER_IDS)[number];                   // user-selectable
-type AgentBackend = RunnerId | 'claude-cli';                       // + legacy id, still parses
+const RUNNER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie'] as const;  // the source of truth
+type RunnerId     = (typeof RUNNER_IDS)[number];                             // user-selectable
+type AgentBackend = RunnerId | 'claude-cli';                                 // + legacy id, still parses
 ```
 
 `RUNNER_IDS` is the tuple every other enumeration derives from — the zod schemas
@@ -218,11 +218,17 @@ type UiItem = UiMessageItem | UiReasoningItem | UiToolItem;
 `parent_tool_use_id`, opencode `subtask` parts, Codex collaboration receiver
 thread ids).
 
+`toolKind: 'task'` means a **subagent spawn** and nothing else — surfaces that count live
+fan-out (the cockpit's Agents dock, the history root-episode retention) key on it directly. A
+skill invocation is `toolKind: 'skill'`: instructions loaded into the current agent's turn, with
+no second agent behind it and no children to adopt. Conflating the two reports a fan-out that
+never happened (#1202).
+
 ### Enumerations
 
 ```ts
 type ToolStatus = 'pending' | 'running' | 'completed' | 'failed' | 'declined';
-type ToolKind   = 'read'|'edit'|'delete'|'move'|'search'|'execute'|'think'|'fetch'|'task'|'plan'|'other';
+type ToolKind   = 'read'|'edit'|'delete'|'move'|'search'|'execute'|'think'|'fetch'|'task'|'skill'|'plan'|'other';
 type StopReason = 'end_turn'|'max_tokens'|'refusal'|'cancelled'|'timeout'|'error';
 type PlanStatus = 'pending' | 'in_progress' | 'completed';
 ```
@@ -260,8 +266,10 @@ backend-neutral: the agent asks a structured
 multiple-choice question by ending a turn with a `CEZ:ASK <json>` control marker
 (a sibling of `CEZ:DONE` / `CEZ:MONITORING`); the RunManager detects it on the
 *assembled* turn text — uniform across claude, codex and opencode with no mapper
-work — validates the payload (`packages/cezar/src/core/ask.ts`, modeled on Claude Code's
-`AskUserQuestion`: 1–4 questions, 2–4 options each, `header` ≤12 chars), emits
+work — validates the payload (`packages/cezar/src/core/ask.ts`, shaped after Claude Code's
+`AskUserQuestion`: `header` ≤12 chars, 1–`ASK_MAX_QUESTIONS` questions,
+2–`ASK_MAX_OPTIONS` options each — 20 and 10, finite for payload size and a
+scrollable card rather than for parity with that tool's 4 and 4), emits
 `ask.requested` and parks the run `waiting`. The cockpit renders clickable option
 chips; the user's pick (or a free-form reply) rides the normal reply seam
 (`POST /api/runs/:id/messages`), and the card resolves client-side when that
@@ -307,18 +315,25 @@ Each backend has a mapper (`packages/cezar/src/core/<backend>-ui-mapper.ts`) tur
 transport into `UiEvent`s. The authoritative table is
 `agent-event-protocols.md` §7.1; the load-bearing rows:
 
-| v2 event / field | claude (stream-json) | codex (app-server JSON-RPC) | opencode (serve HTTP+SSE) |
-|---|---|---|---|
-| `session.started` | `system/init` (model, tools, cwd) | `thread/started` / `thread/start` result | `POST /session` response |
-| `turn.started` | each stdin user message | `turn/started` | each prompt POST |
-| `turn.completed` + `stopReason` | `result` subtype (`success→end_turn`, `error_max_turns→max_tokens`, `error_during_execution→error`) | `turn/completed→end_turn`, `turn/failed→error`, interrupt→`cancelled` | `session.idle→end_turn` (or `error` if a `session.error` preceded) |
-| message item | `assistant` `text` blocks (deltas via `--include-partial-messages`) | `agentMessage` items | text parts |
-| reasoning item | `thinking` blocks | `reasoning` items (+ `textDelta`) | `reasoning` parts |
-| tool item | `tool_use`→running, `tool_result`→completed/failed, `permission_denials`→`declined` | `commandExecution`→execute (+`exitCode`, `outputDelta`), `fileChange`→edit (`diffs`), `mcpToolCall`→other, `webSearch`→fetch, collaboration spawn→task | tool parts (state `pending/running/completed/error→failed`, `patch` parts→`diffs`) |
-| `item.delta` `output` (live terminal) | *(none — card fills on completion; per-capability degradation)* | `item/commandExecution/outputDelta` | running-state metadata |
-| `plan.updated` | `TodoWrite` input | `todoList` / `plan` items | `todowrite` tool |
-| subagent nesting (`parentItemId`) | `parent_tool_use_id` | collaboration receiver thread id (review mode remains childless) | child-session parts under a `subtask` |
-| `usage.updated` | `result.usage` + `total_cost_usd` | `thread/tokenUsage/updated` (no USD) | `message.updated` tokens/cost + `step-finish` |
+| v2 event / field | claude (stream-json) | codex (app-server JSON-RPC) | opencode (serve HTTP+SSE) | cursor (stream-json print mode) | copilot (ACP over stdio) |
+|---|---|---|---|---|---|
+| `session.started` | `system/init` (model, tools, cwd) | `thread/started` / `thread/start` result | `POST /session` response | `system/init` (model, cwd) | `session/new` result (`sessionId`; the request's `cwd`) |
+| `turn.started` | each stdin user message | `turn/started` | each prompt POST | no stdin turn boundary in print mode — starts `turn_1` with the session | each outbound `session/prompt` |
+| `turn.completed` + `stopReason` | `result` subtype (`success→end_turn`, `error_max_turns→max_tokens`, `error_during_execution→error`) | `turn/completed→end_turn`, `turn/failed→error`, interrupt→`cancelled` | `session.idle→end_turn` (or `error` if a `session.error` preceded) | `result` (`is_error→error`, `subtype=error_max_turns→max_tokens`, else `end_turn`) | the `session/prompt` result's `stopReason` (`end_turn`, `max_tokens`, `max_turn_requests→max_tokens`, `refusal`, `cancelled`) |
+| message item | `assistant` `text` blocks (deltas via `--include-partial-messages`) | `agentMessage` items | text parts | `assistant` `text` content blocks | `agent_message_chunk` |
+| reasoning item | `thinking` blocks | `reasoning` items (+ `textDelta`) | `reasoning` parts | *(none — docs: `thinking` events are suppressed in print mode)* | `agent_thought_chunk` |
+| tool item | `tool_use`→running, `tool_result`→completed/failed, `permission_denials`→`declined` | `commandExecution`→execute (+`exitCode`, `outputDelta`), `fileChange`→edit (`diffs`), `mcpToolCall`→other, `webSearch`→fetch, collaboration spawn→task | tool parts (state `pending/running/completed/error→failed`, `patch` parts→`diffs`) | `tool_call` started/completed (`readToolCall`/`writeToolCall`/`editToolCall`/`shellToolCall`, or the generic `tool_call.function` wrapper) | `tool_call`→running (Copilot announces a STARTED tool as ACP `pending` and never sends `in_progress`), `tool_call_update`→completed/failed, `content[].type: "diff"`→`diffs` |
+| `item.delta` `output` (live terminal) | *(none — card fills on completion; per-capability degradation)* | `item/commandExecution/outputDelta` | running-state metadata | *(none)* | *(none — `tool.execution_progress` is dropped by Copilot's own ACP bridge)* |
+| `plan.updated` | `TodoWrite` input | `todoList` / `plan` items | `todowrite` tool | `TodoWrite` via `tool_call.function` — **tool name/shape not confirmed against a live CLI transcript** (#807) | the native `plan` update (`entries[] {content, priority, status}`) |
+| subagent nesting (`parentItemId`) | `parent_tool_use_id` | collaboration receiver thread id (review mode remains childless) | child-session parts under a `subtask` | *(none — print-mode wire has no parent attribution; the task-kind tool item is the matrix cell)* | `_meta["github.com/copilot"].agentId`, which IS the delegating `task` call's `toolCallId` |
+| `usage.updated` | `result.usage` + `total_cost_usd` | `thread/tokenUsage/updated` (no USD) | `message.updated` tokens/cost + `step-finish` | *(none — the documented terminal `result` frame carries no `usage`/`total_cost_usd` field)* | the `session/prompt` result's top-level `usage` (no USD). Its separate `usage_update` frame is a context-window gauge (`{used, size}`), NOT token counts, and is deliberately unmapped |
+
+`copilot` shares one vendor-neutral transport and mapper with any future ACP backend
+(`core/acp-client.ts`, `core/acp-ui-mapper.ts`); what differs per agent is a small `AcpDialect`
+(`core/copilot-ui-mapper.ts`). The wire record behind the column above is
+`.ai/runs/2026-09-27-copilot-cli-runner/copilot-acp-notes.md`, and
+`__fixtures__/copilot/README.md` states exactly which of those frames are a live capture and
+which were read out of the CLI's own ACP bridge.
 
 **Mapper robustness contract.** Inputs come off the wire and may be `null`,
 partial or malformed. A mapper **must never throw**: unparseable NDJSON lines are
@@ -347,8 +362,10 @@ heuristic subtitle. `mcp__server__tool` names collapse to `server.tool`.
 
 ## 6. Backend parity — the hard rule (`packages/cezar/src/core/ui-parity.test.ts`)
 
-> Every capability in the parity matrix MUST be emitted by **every**
-> backend, so the GUI degrades **per-capability, never per-backend**.
+> Every capability in the parity matrix MUST be emitted by **every first-class
+> backend**, so the GUI degrades **per-capability, never per-backend** — unless
+> the backend's own wire format provably cannot carry that capability, in which
+> case the exclusion is written down and cited (see below).
 
 This is made executable: `ui-parity.test.ts` asserts each capability over each
 backend's golden-fixture expected output. If a mapper change drops a capability —
@@ -365,10 +382,25 @@ or a new fixture set forgets one — a named row fails. The matrix:
   `.ai/specs/2026-07-20-grouped-subagent-display.md`, #474)
 - `usage.updated` with raw token counts
 - `turn.completed` with a `stopReason`
-- sub-agent **nesting** via `parentItemId` where the upstream wire attributes
-  child work to a parent
+- sub-agent **nesting** via `parentItemId` — only where the wire attributes work
+  to its parent (claude's `parent_tool_use_id`, opencode's child-session parts
+  under a `subtask`); codex, cursor and pi have no parent attribution in their
+  wire format, so their matrix cell is the task-kind tool items above instead.
+  junie (core ACP) has no parent attribution either, and its task-kind
+  substitute is unavailable for the same protocol reason (core ACP's
+  `tool_call.kind` has no `task` value), so that row carries a cited `except`
 
-A new backend is not "done" until it produces every row.
+A new backend is not "done" until it produces every row its wire format is
+capable of. **Documented exceptions are allowed** when a capability provably
+cannot be produced from the backend's own wire format — never for "not
+implemented yet". An exception must: (1) cite the upstream source proving the
+capability is absent (a vendor doc quote, or an honest "no live CLI available to
+verify" when that citation cannot be obtained), (2) exclude only that backend
+from that one row via `ui-parity.test.ts`'s `CAPABILITIES` table `except` list,
+and (3) still assert every row the backend's wire format can produce. Cursor is
+the first backend to use this: its documented print-mode `result` frame carries
+no `usage`, and `thinking` events are documented as suppressed in print mode —
+both cited inline next to the exclusion in the test.
 
 ## 7. The golden-fixture testing contract
 
@@ -435,13 +467,17 @@ To be first-class:
    immutable state.
 5. **v1 alongside v2** — wire `SessionOptions.onUiEvent`; keep the v1
    `AgentEvent` stream flowing unchanged.
-6. **Golden fixtures** — `packages/cezar/src/core/__fixtures__/<runner>/*.ndjson` +
-   `*.expected.json`, wire-faithful and citing their upstream source, covering
-   **every** parity matrix capability (§6), and a `<runner>-ui-mapper.test.ts`
-   replaying them.
-7. **Parity** — add the id to `BACKENDS` in `ui-parity.test.ts`; every capability
-   row must pass. (If the backend has no wire parent attribution, document the
-   nesting cell's substitute the way codex's review-mode items are handled.)
+6. **Golden fixtures** — `packages/cezar/src/core/__fixtures__/pi/*.ndjson` + `*.expected.json`,
+   wire-faithful and citing their upstream source, covering every parity matrix
+   capability the backend's wire format is able to produce (§6) — and a
+   `pi-ui-mapper.test.ts` replaying them. Where a capability genuinely cannot be
+   produced, cite why in the fixture/test the way cursor's `usage`/`thinking`
+   exclusions do; never fabricate a frame to fill a row.
+7. **Parity** — add `pi` to `BACKENDS` in `ui-parity.test.ts`; every capability
+   row must pass, or be excluded via that row's `except` list with a cited
+   reason (§6) — never silently skipped. (If the backend has no wire parent
+   attribution, document the nesting cell's substitute the way codex's
+   review-mode items are handled.)
 8. **Plumbing** — the run-store `runner` enum, workflow step schema, the
    `POST /api/runs` / `PUT /api/config` bodies, `resumeCommand()`, the web
    `Runner` type, composer pills/presets, and Settings → Agents. Keep additive
@@ -451,10 +487,19 @@ To be first-class:
    the existing inconsistencies (opencode drops a bare model silently) — do not
    reproduce a silent-drop. A backend with no default provider gets no entry in
    `BACKEND_MODEL_MAP`'s default column, so a bare id fails loud.
-10. **Credentials** — one entry in `BACKEND_ALLOW_PREFIXES` (`agent-env.ts`):
+10. **Permissions** — a backend cezar starts in an "approve everything" mode MUST still answer an
+   approval request that arrives anyway. No cockpit surface can answer one yet, so a run parked on
+   a `session/request_permission` would be a state with no exit; `copilot-acp-runner.ts`
+   auto-approves with a `note` instead.
+11. **Credentials** — one entry in `BACKEND_ALLOW_PREFIXES` (`agent-env.ts`):
    `buildChildEnv` is least-privilege per backend, so a multi-provider runner
    must receive credentials for every provider its own model ids can name
    without widening other backends.
+12. **Private MCP** — honor `AgentRunSpec.mcpServers` through the backend's own launch-time
+   channel (a flag, a config override, an env var, or ACP's `session/new` `mcpServers`), never by
+   writing into `cwd`; translators live in `private-mcp.ts`. Add the id to `PRIVATE_MCP_RUNNERS`
+   only once that works — a backend outside the list gets a run note naming the servers it could
+   not attach (spec `.ai/specs/2026-10-07-private-project-mcp.md`).
 
 ## 10. The plan channel (PR #443)
 

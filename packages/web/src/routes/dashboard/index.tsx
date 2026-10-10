@@ -1,8 +1,11 @@
 import { DashboardAutomations } from './automations'
+import { AutomationOutcomes, BackendComparison } from './insights'
 import { Overview } from './overview'
 import { useContext, useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useSearchParams } from 'react-router'
 import { LayoutDashboardIcon, SlidersHorizontalIcon } from 'lucide-react'
+import { StatusDot } from '@/components/status-dot'
+import { DisclosureChevron, disclosureSummary, widgetHeader, widgetHeading } from './presentation'
 import type {
   DashboardFeed,
   DashboardGroup,
@@ -20,7 +23,6 @@ import {
   SheetTitle,
   SheetDescription,
 } from '@/components/ui/sheet'
-import { CenteredState } from '@/components/centered-state'
 import { shortAge } from '@/lib/format'
 import { DashboardUsageCosts } from './costs'
 import { DashboardTrends } from './trends'
@@ -42,6 +44,12 @@ import {
 } from './state'
 import { useDashboardPage, useDisplacedRows } from './pages'
 
+const views = [
+  ['overview', 'Overview'],
+  ['costs', 'Usage & cost'],
+  ['automations', 'Automations'],
+] as const
+
 export function DashboardRoute() {
   const location = useLocation()
   const entryKey =
@@ -61,15 +69,23 @@ function DashboardView({ entryKey }: { entryKey: string }) {
   const [customizeOpen, setCustomizeOpen] = useState(false)
   const preferences = useDashboardPreferences()
   const [technicalOpen, setTechnicalOpen] = useState(false)
-  const view = search.get('view') === 'costs' ? 'costs' : 'overview'
+  const view =
+    search.get('view') === 'costs'
+      ? 'costs'
+      : search.get('view') === 'automations'
+        ? 'automations'
+        : 'overview'
+  const viewLabel = views.find(([id]) => id === view)![1]
   const viewTiles =
     view === 'costs'
       ? (['usage', 'trends'] as const)
-      : (['fleet', 'needsYou', 'recent', 'automations'] as const)
+      : view === 'automations'
+        ? (['automations'] as const)
+        : (['fleet', 'needsYou', 'recent'] as const)
   const scope =
-    view === 'costs'
-      ? [...viewTiles]
-      : ['overview' as const, 'portfolio' as const, ...viewTiles]
+    view === 'overview'
+      ? ['overview' as const, 'portfolio' as const, ...viewTiles]
+      : [...viewTiles]
   const resetOrder = resetViewOrder(preferences.order, scope)
   const showViewTiles = () =>
     preferences.setTiles({
@@ -79,10 +95,10 @@ function DashboardView({ entryKey }: { entryKey: string }) {
   const savedTiles = preferences.tiles
   const tiles = {
     ...savedTiles,
-    automations: view === 'overview' && savedTiles.automations,
+    automations: view === 'automations' && savedTiles.automations,
     fleet: view === 'overview' && savedTiles.fleet,
-    needsYou: view !== 'costs' && savedTiles.needsYou,
-    recent: view !== 'costs' && savedTiles.recent,
+    needsYou: view === 'overview' && savedTiles.needsYou,
+    recent: view === 'overview' && savedTiles.recent,
     usage: view === 'costs' && savedTiles.usage,
     trends: view === 'costs' && savedTiles.trends,
   }
@@ -204,13 +220,20 @@ function DashboardView({ entryKey }: { entryKey: string }) {
         <div
           ref={root}
           data-route="dashboard"
-          className="mx-auto w-full max-w-[1440px] space-y-5 p-4 md:p-6"
+          className="mx-auto w-full max-w-[1440px] space-y-6 p-4 md:px-8 md:py-7"
         >
-          <header className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h1 className="text-xl font-semibold">Dashboard</h1>
-              <p className="mt-1 text-xs text-muted-foreground">
+          <header className="flex flex-wrap items-end justify-between gap-4">
+            <div className="min-w-0">
+              <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+              <p className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
                 Across your workspace · Includes subtasks
+                <span
+                  data-export-exclude
+                  className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[10.5px] uppercase tracking-[0.1em]"
+                >
+                  <StatusDot tone={live.connected ? 'success' : 'neutral'} pulse={live.connected} />
+                  {live.connected ? 'Live' : 'Offline'}
+                </span>
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -259,7 +282,7 @@ function DashboardView({ entryKey }: { entryKey: string }) {
                       className="min-h-11"
                       onClick={() => preferences.setOrder(resetOrder)}
                     >
-                      Reset {view === 'overview' ? 'Overview' : 'Usage & cost'} order
+                      Reset {viewLabel} order
                     </Button>
                   )}
                   <p className="my-3 text-xs text-muted-foreground">
@@ -275,20 +298,15 @@ function DashboardView({ entryKey }: { entryKey: string }) {
                         setCustomizeOpen(false)
                       }}
                     >
-                      Show all in {view === 'overview' ? 'Overview' : 'Usage & cost'}
+                      Show all in {viewLabel}
                     </Button>
                   )}
                 </PopoverContent>
               </Popover>
             </div>
           </header>
-          <nav aria-label="Dashboard views" className="flex flex-wrap gap-2 border-b pb-3">
-            {(
-              [
-                ['overview', 'Overview'],
-                ['costs', 'Usage & cost'],
-              ] as const
-            ).map(([id, label]) => {
+          <nav aria-label="Dashboard views" className="-mt-2 flex flex-wrap gap-5 border-b">
+            {views.map(([id, label]) => {
               const next = new URLSearchParams(search)
               next.set('view', id)
               next.delete('panel')
@@ -296,8 +314,8 @@ function DashboardView({ entryKey }: { entryKey: string }) {
                 <Button
                   key={id}
                   asChild
-                  variant={view === id ? 'outline' : 'ghost'}
-                  className="min-h-11"
+                  variant="ghost"
+                  className={`-mb-px min-h-11 rounded-none border-b-2 px-0.5 hover:bg-transparent ${view === id ? 'border-primary text-foreground' : 'border-transparent'}`}
                 >
                   <Link
                     aria-current={view === id ? 'page' : undefined}
@@ -338,16 +356,16 @@ function DashboardView({ entryKey }: { entryKey: string }) {
               </Button>
             </p>
           )}
-          {view !== 'overview' && !Object.values(tiles).some(Boolean) ? (
-            <CenteredState
-              icon={<LayoutDashboardIcon />}
-              title="All modules in this view are hidden"
-              actions={
-                <Button className="min-h-11" onClick={() => showViewTiles()}>
-                  Show all in Usage & cost
-                </Button>
-              }
-            />
+          {/* A notice, not a full-view empty state: Backends & models stays on this view, so
+              "everything is hidden" would be false while a populated table sits below it. */}
+          {view === 'costs' && !Object.values(tiles).some(Boolean) ? (
+            <p role="status" className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+              <LayoutDashboardIcon className="size-4" aria-hidden="true" />
+              Optional modules in this view are hidden.
+              <Button variant="outline" className="min-h-11" onClick={() => showViewTiles()}>
+                Show all in {viewLabel}
+              </Button>
+            </p>
           ) : null}
           {query.isPending && (tiles.fleet || tiles.needsYou) && (
             <p className="text-sm">Loading dashboard…</p>
@@ -359,6 +377,7 @@ function DashboardView({ entryKey }: { entryKey: string }) {
               retry={() => void query.refetch()}
             />
           )}
+          {view === 'automations' && <AutomationOutcomes />}
           <Overview active={view === 'overview'} onCurrent={open}>
             {(overviewModules) =>
               preferences.ready && (
@@ -384,9 +403,10 @@ function DashboardView({ entryKey }: { entryKey: string }) {
                               asOf: query.data!.asOf,
                             }))}
                           />
-                          <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
-                            <h2 className="text-sm font-semibold">Queue & scheduling</h2>
-                            <span className="text-xs text-muted-foreground">
+                          <div className={widgetHeader}>
+                            <h2 className={widgetHeading}>Queue & scheduling</h2>
+                            <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                              <StatusDot tone={live.connected ? 'success' : 'neutral'} />
                               {live.connected ? 'Tasks connected' : 'Tasks disconnected'}
                             </span>
                           </div>
@@ -401,13 +421,15 @@ function DashboardView({ entryKey }: { entryKey: string }) {
                                 key={group}
                                 data-export-keep
                                 aria-label={`${label}: ${total}`}
-                                className="min-h-24 p-4 text-left hover:bg-muted/50 focus-visible:outline-ring"
+                                className="min-h-24 p-4 text-left transition-colors hover:bg-muted/40 focus-visible:outline-ring"
                                 onClick={(e) => open(group, e.currentTarget)}
                               >
-                                <span className="block text-2xl font-semibold tabular-nums">
+                                <span className="block font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+                                  {label}
+                                </span>
+                                <span className="mt-3 block text-3xl font-semibold leading-none tracking-tight tabular-nums">
                                   {total}
                                 </span>
-                                <span className="text-xs text-muted-foreground">{label}</span>
                               </button>
                             ))}
                           </div>
@@ -416,7 +438,10 @@ function DashboardView({ entryKey }: { entryKey: string }) {
                             onToggle={(event) => setTechnicalOpen(event.currentTarget.open)}
                             className="border-t px-4 py-3 text-xs text-muted-foreground"
                           >
-                            <summary className="cursor-pointer py-2">Technical details</summary>
+                            <summary className={`${disclosureSummary} py-2`}>
+                              <DisclosureChevron />
+                              Technical details
+                            </summary>
                             <div className="flex flex-wrap gap-x-5 gap-y-2">
                               <span>
                                 {query.data.counts.monitoring} monitoring (included in Running)
@@ -464,6 +489,7 @@ function DashboardView({ entryKey }: { entryKey: string }) {
               )
             }
           </Overview>
+          {view === 'costs' && <BackendComparison />}
           <Sheet
             open={!!panel}
             onOpenChange={(open) => {

@@ -71,20 +71,20 @@ describe('CEZ:MONITORING on a non-final workflow step (#1076)', () => {
     ]);
   }, 40_000);
 
-  it('nudges an autonomous non-final monitoring step before it can advance', async () => {
+  it('parks an autonomous non-final monitoring step without nudging it', async () => {
     const record = manager.startRun(workflow, {
       task: 'mock:monitoring compare in the background',
       worktree: false,
       autonomous: true,
     });
     currentId = record.id;
-    await waitFor(record.id, (current) => current?.status === 'done');
+    await waitFor(record.id, (current) => current?.activity === 'monitoring');
 
     const events = store.readEvents(record.id);
-    expect(events.some((event) => String(event.message ?? '').includes('autonomous — continuing'))).toBe(true);
+    expect(events.some((event) => String(event.message ?? '').includes('autonomous — continuing'))).toBe(false);
     expect(store.getRun(record.id)?.steps.map(({ id, status }) => ({ id, status }))).toEqual([
-      { id: 'implement', status: 'done' },
-      { id: 'verify', status: 'done' },
+      { id: 'implement', status: 'running' },
+      { id: 'verify', status: 'pending' },
     ]);
   }, 40_000);
 

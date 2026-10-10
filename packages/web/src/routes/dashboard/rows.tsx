@@ -6,10 +6,11 @@ import { Link } from 'react-router'
 import type { DashboardTaskRow, DashboardCoverage } from '@open-mercato/cezar-api-client'
 import { StatusDot } from '@/components/status-dot'
 import { ReferenceChip } from '@/components/reference-chip'
-import { deriveAttention } from '@/lib/attention'
+import { deriveAttention, isNeedsYouStatus } from '@/lib/attention'
 import { taskReferences } from '@/lib/tasks-table'
 import { shortAge } from '@/lib/format'
 import { Button } from '@/components/ui/button'
+import { DisclosureChevron, disclosureSummary } from './presentation'
 export const taskKey = (row: DashboardTaskRow) => `${row.projectId}:${row.id}`
 export function TaskRow({
   row,
@@ -17,7 +18,10 @@ export function TaskRow({
   queue = false,
   checking = false,
   checkFailed = false,
+  kicker,
 }: {
+  /** A one-line label above the title, inside the row (the feed's "Latest result: …"). */
+  kicker?: string
   checking?: boolean
   checkFailed?: boolean
   row: DashboardTaskRow
@@ -27,12 +31,15 @@ export function TaskRow({
   const reconciled = useContext(DashboardReconciledContext) && !checking && !checkFailed
   const truth = useDashboardTruth(row)
   removed = removed || truth === null || (queue && truth?.archived === true)
-  if (truth) row = { ...row, status: truth.status }
+  if (truth) row = { ...row, status: truth.status, awaitingAnswerSince: truth.awaitingAnswerSince }
   const attention = deriveAttention(row)
-  const obsolete = queue && !['waiting', 'review'].includes(row.status)
+  const obsolete = queue && !isNeedsYouStatus(row)
   const inactive = removed || obsolete || !reconciled
   return (
-    <div data-dashboard-row={taskKey(row)} className="min-w-0 border-b px-4 py-3 last:border-0">
+    <div
+      data-dashboard-row={taskKey(row)}
+      className="min-w-0 border-b px-4 py-3 transition-colors last:border-0 hover:bg-muted/30"
+    >
       <ExportRows
         rows={[
           {
@@ -50,8 +57,13 @@ export function TaskRow({
           { section: 'task', entity: taskKey(row), metric: 'createdAt', value: row.createdAt },
         ]}
       />
+      {kicker && (
+        <p className="mb-1 pl-[15px] font-mono text-[10.5px] uppercase tracking-[0.1em] text-soft-foreground">
+          {kicker}
+        </p>
+      )}
       <div className="flex items-start gap-2">
-        <StatusDot tone={attention.tone} className="mt-2" />
+        <StatusDot tone={attention.tone} className="mt-[7px]" />
         <div className="min-w-0 flex-1">
           <Link
             tabIndex={inactive ? -1 : undefined}
@@ -60,12 +72,12 @@ export function TaskRow({
               if (inactive) e.preventDefault()
             }}
             to={`/p/${encodeURIComponent(row.projectId)}/tasks/${encodeURIComponent(row.id)}`}
-            className="block min-h-11 break-words text-sm font-medium leading-relaxed hover:underline"
+            className="block break-words text-sm font-medium leading-relaxed hover:underline no-hover:min-h-11"
           >
             {row.titleSummary || row.title}
           </Link>
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-            <span>{row.projectId}</span>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+            <span className="font-mono text-[11px] text-soft-foreground">{row.projectId}</span>
             <span>
               {checkFailed
                 ? 'Could not check current state'
@@ -88,7 +100,7 @@ export function TaskRow({
                   reference={ref}
                   taskTitle={row.title}
                   projectId={row.projectId}
-                  className="min-h-11"
+                  className="no-hover:min-h-11"
                 />
               ))}
           </div>
@@ -109,7 +121,7 @@ export function Coverage({
   const unavailable = coverage.projects.filter((p) => p.state !== 'complete')
   if (!unavailable.length) return null
   return (
-    <div className="rounded-md border border-pending/40 bg-muted/40 p-3 text-sm" role="status">
+    <div className="rounded-lg border border-pending/40 bg-card-2 p-3 text-sm" role="status">
       <p>
         {count !== undefined
           ? `${count} tasks need you in the available data. Complete coverage: ${coverage.projects.length - unavailable.length} of ${coverage.projects.length} projects. `
@@ -121,7 +133,8 @@ export function Coverage({
           : `${unavailable.length} projects have incomplete coverage.`}
       </p>
       <details className="mt-2">
-        <summary className="min-h-11 cursor-pointer py-2">
+        <summary className={`${disclosureSummary} min-h-11`}>
+          <DisclosureChevron />
           View unavailable {unavailable.length === 1 ? 'project' : 'projects'}
         </summary>
         {unavailable.map((p) => (

@@ -192,7 +192,10 @@ export class AutomationStore {
 
   latestReceipts(): Map<string, AutomationReceipt> {
     const latest = new Map<string, AutomationReceipt>();
-    for (const row of this.receipts()) latest.set(row.receiptKey, row);
+    // receiptKey is redundant with the durable identity.  Normalize from the identity rather
+    // than trusting the persisted spelling so imported or otherwise legacy rows cannot split
+    // deduplication across equivalent event identities.
+    for (const row of this.receipts()) latest.set(receiptKeyFor(row.automationId, row.eventId), row);
     return latest;
   }
 
@@ -209,7 +212,7 @@ export class AutomationStore {
     /** schedule kind: the occurrence being reserved. */
     occurrenceAt?: string;
   }): AutomationReceipt | undefined {
-    const receiptKey = `${input.automationId}:${input.eventId}`;
+    const receiptKey = receiptKeyFor(input.automationId, input.eventId);
     if (this.latestReceipts().has(receiptKey)) return undefined;
     const now = this.now().toISOString();
     const receipt = automationReceiptSchema.parse({
@@ -450,6 +453,10 @@ export class AutomationStore {
     this.warned.add(key);
     this.options.warn?.(message);
   }
+}
+
+function receiptKeyFor(automationId: string, eventId: string): string {
+  return `${automationId}:${eventId}`;
 }
 
 /**

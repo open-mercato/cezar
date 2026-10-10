@@ -172,7 +172,9 @@ describe('the thread composer against a live waiting session', () => {
     )
     expect(
       browser.evaluate(`[...document.querySelectorAll('[data-slot="user-bubble"]')].at(-1).textContent`),
-    ).toBe('Please run /lint-fix')
+      // The bubble renders a `MessageTime` beneath its text, so `textContent` ends in a wall
+      // clock no assertion can pin — the same staleness `task-thread.e2e.ts` carried.
+    ).toMatch(/^Please run \/lint-fix\s*\d{1,2}:\d{2}/)
   })
 
   it('the mock answers the reply and the run parks at waiting again', async () => {

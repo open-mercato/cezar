@@ -111,6 +111,25 @@ describe('GET /api/v1/fs/browse (step 4.1)', () => {
     );
   });
 
+  it('never looks inside the privacy-protected home folders (no macOS access prompt)', async () => {
+    // A `.git` inside ~/Music would be found by the probe — so `isRepo: false` proves it never ran.
+    mkdirSync(join(home, 'Music/.git'), { recursive: true });
+    mkdirSync(join(home, 'Documents/.git'), { recursive: true });
+    mkdirSync(join(home, 'code/.git'), { recursive: true });
+    const payload = await body(await browse());
+    expect(payload.dirs).toEqual(
+      expect.arrayContaining([
+        { name: 'Music', path: join(home, 'Music'), isRepo: false },
+        { name: 'Documents', path: join(home, 'Documents'), isRepo: false },
+        { name: 'code', path: join(home, 'code'), isRepo: true },
+      ]),
+    );
+    // Only directly under home: the same name deeper down is an ordinary folder.
+    mkdirSync(join(home, 'projects/Music/.git'), { recursive: true });
+    const nested = await body(await browse(`?path=${encodeURIComponent(join(home, 'projects'))}`));
+    expect(nested.dirs).toContainEqual({ name: 'Music', path: join(home, 'projects/Music'), isRepo: true });
+  });
+
   it('a relative path resolves against the root', async () => {
     expect((await body(await browse('?path=projects'))).path).toBe(join(home, 'projects'));
   });

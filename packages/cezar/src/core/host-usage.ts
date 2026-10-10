@@ -253,7 +253,9 @@ export function createHostSampler(options: HostSamplerOptions = {}): HostSampler
       platform,
     });
   const hostCores = options.hostCoreCount ?? hostCoreCount;
-  const now = options.now ?? Date.now;
+  // Resolved per call, not captured: a reference taken here outlives `vi.useFakeTimers()`, which
+  // swaps `Date` and leaves this singleton reading the real clock.
+  const now = options.now ?? (() => Date.now());
 
   let lastSample: HostUsage | undefined;
   let lastSampleAt = 0;

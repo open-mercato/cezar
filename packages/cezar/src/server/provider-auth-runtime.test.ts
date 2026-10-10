@@ -23,6 +23,13 @@ vi.mock('../core/claude-bin.ts', async (importOriginal) => ({
   resolveClaudeBin: () => process.env.CEZ_CLAUDE_BIN ?? 'claude',
 }));
 
+// Junie has no read-only auth-status command, so `ProviderAuthService` probes it through a real
+// ACP session instead of `runCommand`. Left unmocked, every status probe in this suite spawned a
+// real `junie` process (#M3 review). Every test here expects junie 'connected'.
+vi.mock('../core/junie-auth-probe.ts', () => ({
+  probeJunieAuthentication: vi.fn(async () => ({ connected: true })),
+}));
+
 const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   claude: '{"loggedIn":true}',
   codex: 'Logged in using ChatGPT',
@@ -31,11 +38,24 @@ const CONNECTED_OUTPUT: Record<ProviderId, string> = {
     '●  Anthropic oauth',
     '└  1 credential',
   ].join('\n'),
+  cursor: JSON.stringify({
+    status: 'authenticated',
+    isAuthenticated: true,
+    userInfo: { email: 'dev@example.com' },
+  }),
   pi: 'provider  model  context  max-out  thinking  images\nanthropic  claude  200K  64K  yes  yes',
+  // junie never reaches `runCommand`/`parse` at all — `probe()` special-cases it onto
+  // `probeJunieAuthentication` (mocked above), so this value is only here to satisfy
+  // `Record<ProviderId, string>` and is never read.
+  junie: 'Junie version: 26.9.22 (3419.7)',
+  // Copilot's probe drives its ACP server, so its "connected" evidence is the `session/new`
+  // answer (`.ai/runs/2026-09-27-copilot-cli-runner/copilot-acp-notes.md`).
+  copilot: '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"3f1b6f2e-0000-4000-8000-1f2e3d4c5b6a"}}',
 };
 
 const providerForExecutable = (executable: string): ProviderId => {
-  if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi') return executable;
+  if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi' || executable === 'junie' || executable === 'copilot') return executable;
+  if (executable === 'agent') return 'cursor';
   throw new Error(`unexpected executable: ${executable}`);
 };
 

@@ -6,6 +6,25 @@ import { RunStore } from './store.ts';
 
 import type { RunRecord } from './store.ts';
 
+/** Every store a case opens schedules its debounced runs.json write 300ms out, and every case
+ *  removes its data dir in `afterEach` — so the timer fires into a deleted directory and logs
+ *  "failed to save runs.json" after the case settled. A log landing while the worker tears down
+ *  fails the whole run (`EnvironmentTeardownError: Closing rpc while "onUserConsoleLog" was
+ *  pending`, the 0.13.0 release run). Cancel what is still pending once each case ends. */
+const openedStores = new Set<RunStore>();
+const openStore = RunStore.open.bind(RunStore);
+RunStore.open = (dataDir, opts) => {
+  const store = openStore(dataDir, opts);
+  openedStores.add(store);
+  return store;
+};
+afterEach(() => {
+  for (const store of openedStores) {
+    clearTimeout((store as unknown as { saveTimer: NodeJS.Timeout | null }).saveTimer ?? undefined);
+  }
+  openedStores.clear();
+});
+
 /** A minimal pre-#389 record, exactly as an old runs.json holds it — no
  *  titleSummary, no diffStat. Loading it must keep working (additive proof). */
 const LEGACY_RUN = {
@@ -830,6 +849,43 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     return { store, run };
   };
 
+  it('keeps earlier PR associations when a follow-up declaration arrives', () => {
+    const { store, run } = freshRun('Address GitHub pull request #4326');
+    store.applyMarkerRefs(run.id, { pr: 4326 });
+    store.applyMarkerRefs(run.id, { pr: 5366 });
+    expect(store.getRun(run.id)?.prRefs?.map((ref) => ref.number)).toEqual([4326, 5366]);
+    expect(store.getRun(run.id)?.prNumber).toBe(4326);
+  });
+
+  it('deduplicates repeated declarations and preserves a URL when it arrives later', () => {
+    const { store, run } = freshRun();
+    store.applyMarkerRefs(run.id, { pr: 42 });
+    store.recordPrRef(run.id, {
+      number: 42,
+      url: 'https://github.com/open-mercato/cezar/pull/42',
+      origin: 'marker',
+    });
+    expect(store.getRun(run.id)?.prRefs).toHaveLength(1);
+    expect(store.getRun(run.id)?.prRefs?.[0]?.url).toBe('https://github.com/open-mercato/cezar/pull/42');
+  });
+
+  it('preserves legacy scalar associations before a replacement patch is applied', () => {
+    const { store, run } = freshRun();
+    store.updateRun(run.id, { pullRequestUrl: 'https://github.com/o/r/pull/7' });
+    store.updateRun(run.id, { pullRequestUrl: 'https://github.com/o/r/pull/8' });
+    expect(store.getRun(run.id)?.prRefs?.map((ref) => ref.number)).toEqual([7, 8]);
+  });
+
+  it('keeps same-number PRs from different repositories as separate links', () => {
+    const { store, run } = freshRun();
+    store.recordPrRef(run.id, { number: 7, url: 'https://github.com/o/r/pull/7', origin: 'created' });
+    store.recordPrRef(run.id, { number: 7, url: 'https://github.com/other/r/pull/7', origin: 'marker' });
+    expect(store.getRun(run.id)?.prRefs?.map((ref) => ref.url)).toEqual([
+      'https://github.com/o/r/pull/7',
+      'https://github.com/other/r/pull/7',
+    ]);
+  });
+
   it('marker numbers land on the record and persist', () => {
     const { store, run } = freshRun();
     store.applyMarkerRefs(run.id, { pr: 442, issue: 433 });
@@ -939,9 +995,8 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     expect(loaded?.referencedPullRequestUrl).toBe(
       'https://github.com/open-mercato/open-mercato/pull/4326',
     );
-    // The about-number too: it is what paints a numeric-only chip, and the created PR already
-    // has a field of its own.
-    expect(loaded?.prNumber).toBe(4326);
+    // The compatibility projection follows the created tier; the about PR remains in prRefs.
+    expect(loaded?.prNumber).toBe(5366);
     expect(loaded?.markerRefs?.pr).toBe(5366);
   });
 
@@ -1016,7 +1071,7 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     );
   });
 
-  it('a declaration naming some OTHER PR still overrides the fuzzy tier', () => {
+  it('a declaration naming some OTHER PR stays alongside the created PR', () => {
     const { store, run } = freshRun('task');
     store.appendEvent(run.id, {
       type: 'result',
@@ -1024,7 +1079,9 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     });
     store.applyMarkerRefs(run.id, { pr: 500 });
     const loaded = store.getRun(run.id);
-    expect(loaded?.prNumber).toBe(500);
+    // Created provenance is stronger than a later marker; both remain reachable in prRefs.
+    expect(loaded?.prNumber).toBe(42);
+    expect(loaded?.prRefs?.map((ref) => ref.number)).toEqual([42, 500]);
     expect(loaded?.referencedPullRequestUrl).toBeUndefined(); // no candidate ends in /500
   });
 });
@@ -1751,6 +1808,103 @@ describe('RunStore — read receipts (#unread-done-items)', () => {
   });
 });
 
+/**
+ * `awaitingAnswerSince`: a `failed` run whose session closed on an unanswered `CEZ:ASK`. The
+ * cockpit keeps it under "needs you", so the store owns the invariant that only a `failed` run
+ * carries it — a Continue, a Finish, a cancel, an archive and a reload all retire it on their own.
+ */
+describe('RunStore — awaitingAnswerSince', () => {
+  let dataDir: string;
+  const AT = '2026-10-05T10:00:00.000Z';
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-awaiting-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const awaiting = (store: RunStore): string => {
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    store.updateRun(run.id, { status: 'failed', finishedAt: AT, awaitingAnswerSince: AT });
+    return run.id;
+  };
+
+  it('survives a failed-to-failed write and a reload', () => {
+    const store = RunStore.open(dataDir);
+    const id = awaiting(store);
+    store.updateRun(id, { status: 'failed', error: 'still unanswered' });
+    expect(store.getRun(id)?.awaitingAnswerSince).toBe(AT);
+    store.flush();
+    expect(RunStore.open(dataDir, { keepLive: true }).getRun(id)?.awaitingAnswerSince).toBe(AT);
+  });
+
+  it.each(['running', 'queued', 'waiting', 'done', 'review', 'cancelled'] as const)(
+    'is retired when the run moves to %s',
+    (status) => {
+      const store = RunStore.open(dataDir);
+      const id = awaiting(store);
+      store.updateRun(id, { status });
+      expect(store.getRun(id)?.awaitingAnswerSince).toBeUndefined();
+    },
+  );
+
+  it('is retired by archiving that one run', () => {
+    const store = RunStore.open(dataDir);
+    const one = awaiting(store);
+    store.setArchived(one, true);
+    expect(store.getRun(one)?.awaitingAnswerSince).toBeUndefined();
+  });
+
+  it('is a gate the "Archive finished" sweep leaves alone, like review', () => {
+    const store = RunStore.open(dataDir);
+    const open = awaiting(store);
+    const outcome = store.createRun({ title: 'o', workflow: 'quick-task', task: 'o', steps: [] });
+    store.updateRun(outcome.id, { status: 'failed', finishedAt: AT });
+    expect(store.archiveFinished()).toBe(1);
+    expect(store.getRun(outcome.id)?.archived).toBe(true);
+    expect(store.getRun(open)?.archived).toBe(false);
+    expect(store.getRun(open)?.awaitingAnswerSince).toBe(AT);
+  });
+
+  it('markAllRead leaves an awaiting run alone, exactly as the cockpit rule does', () => {
+    const store = RunStore.open(dataDir);
+    const id = awaiting(store);
+    expect(store.markAllRead()).toBe(0);
+    expect(store.getRun(id)?.seenAt).toBeUndefined();
+  });
+
+  it('a reader that does not recover turns a waiting ASK park into an awaiting failure', () => {
+    const store = RunStore.open(dataDir);
+    const parked = store.createRun({ title: 'p', workflow: 'quick-task', task: 'p', steps: [] });
+    store.updateRun(parked.id, { status: 'waiting', askParked: true });
+    const plain = store.createRun({ title: 'w', workflow: 'quick-task', task: 'w', steps: [] });
+    store.updateRun(plain.id, { status: 'waiting' });
+    store.flush();
+
+    const reopened = RunStore.open(dataDir);
+    expect(reopened.getRun(parked.id)?.status).toBe('failed');
+    // Stamped from `finishedAt`, so repeated cold reads agree on the instant.
+    expect(reopened.getRun(parked.id)?.awaitingAnswerSince).toBe(reopened.getRun(parked.id)?.finishedAt);
+    expect(reopened.getRun(parked.id)?.askParked).toBeUndefined();
+    expect(reopened.getRun(plain.id)?.status).toBe('failed');
+    expect(reopened.getRun(plain.id)?.awaitingAnswerSince).toBeUndefined();
+  });
+
+  it('drops a stray value from a non-failed record on load', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    store.updateRun(run.id, { status: 'done', finishedAt: AT });
+    store.flush();
+    const path = join(dataDir, 'runs.json');
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as Array<Record<string, unknown>>;
+    raw.find((r) => r.id === run.id)!.awaitingAnswerSince = AT;
+    writeFileSync(path, JSON.stringify(raw));
+    expect(RunStore.open(dataDir).getRun(run.id)?.awaitingAnswerSince).toBeUndefined();
+  });
+});
+
 describe('RunStore — the legacy `claude-cli` runner id (#547)', () => {
   let dataDir: string;
 
@@ -1808,6 +1962,25 @@ describe('RunStore — the legacy `claude-cli` runner id (#547)', () => {
     const store = RunStore.open(dataDir);
     expect(store.getRun('legacy-cli')?.runner).toBe('claude');
     expect(store.getRun('modern')?.runner).toBe('codex');
+  });
+
+  it('a `cursor` record and a `claude-cli` record round-trip together — neither evicts the file (#807)', () => {
+    // The regression this guards: widening `storedRunnerSchema` for the fourth backend without
+    // keeping the legacy `claude-cli` member (or vice versa) would make one of the two records
+    // a parse failure, and since the loader `safeParse`s the WHOLE array, that drops every run
+    // in the file — not just the one carrying the id neither side kept.
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([
+        { ...LEGACY_RUN, id: 'legacy-cli', runner: 'claude-cli' },
+        { ...LEGACY_RUN, id: 'cursor-run', runner: 'cursor' },
+      ]),
+      'utf8',
+    );
+
+    const store = RunStore.open(dataDir);
+    expect(store.getRun('legacy-cli')?.runner).toBe('claude');
+    expect(store.getRun('cursor-run')?.runner).toBe('cursor');
   });
 
   it('rewrites the folded id on the next save, so the narrowing is one-way', () => {

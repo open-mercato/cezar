@@ -21,11 +21,17 @@ export function buildDashboardOverview(
   const selected = (row: DashboardTaskRow, group: DashboardOverviewQuery['group']) => {
     if (group === 'running') return !row.archived && row.status === 'running';
     if (group === 'needs-you')
-      return !row.archived && (row.status === 'waiting' || row.status === 'review');
+      return (
+        !row.archived &&
+        (row.status === 'waiting' ||
+          row.status === 'review' ||
+          (row.status === 'failed' && Boolean(row.awaitingAnswerSince)))
+      );
     const finished = Date.parse(row.finishedAt ?? '');
     return (
       row.status === (group === 'completed' ? 'done' : 'failed') &&
       !row.autoResumeAt &&
+      !row.awaitingAnswerSince &&
       finished >= start &&
       finished <= at
     );

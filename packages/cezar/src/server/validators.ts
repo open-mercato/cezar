@@ -165,3 +165,36 @@ export function queryZodValidator<S extends z.ZodType, E extends Env = Env, P ex
     return parsed.success ? (parsed.data as z.infer<S>) : reject(c, parsed.error, message);
   }) as MiddlewareHandler<E, P, { in: { query: z.input<S> }; out: { query: z.output<S> } }>;
 }
+
+/**
+ * Multipart/form-data, the one other body-carrying target besides `json`. No guard wrapper like
+ * `jsonZodValidator`'s: Hono's own `form` case already answers both failure modes that needed
+ * working around there — a non-multipart content-type parses as `{}`, which the schema rejects on
+ * its own terms (same as a bodyless JSON request), and there is no "well-formed but wrong
+ * content-type" case to smooth over since a browser `FormData` body carries its own boundary.
+ *
+ * The request type is hand-spelled from `z.input<S>`/`z.output<S>` rather than left to Hono's own
+ * `form`-target inference, which types every key as `string | File` (or an array of those)
+ * regardless of the schema: precise here is strictly narrower, which is the direction a route's
+ * type is allowed to tighten safely.
+ *
+ * `safeParseAsync`, not `safeParse`: the one schema this guards (the branding logo upload) sniffs
+ * the file's own bytes for its real format, which only resolves through `file.arrayBuffer()`.
+ */
+type FormValidator<S extends z.ZodType, E extends Env, P extends string> = MiddlewareHandler<
+  E,
+  P,
+  { in: { form: z.input<S> }; out: { form: z.output<S> } }
+>;
+
+export function multipartZodValidator<
+  S extends z.ZodType,
+  E extends Env = Env,
+  P extends string = string,
+>(schema: S | (() => S), { message }: ErrorOptions = {}): FormValidator<S, E, P> {
+  return validator('form', async (value, c) => {
+    const resolved = typeof schema === 'function' ? schema() : schema;
+    const parsed = await resolved.safeParseAsync(value);
+    return parsed.success ? (parsed.data as z.infer<S>) : reject(c, parsed.error, message);
+  }) as unknown as FormValidator<S, E, P>;
+}

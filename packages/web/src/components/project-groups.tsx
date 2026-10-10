@@ -30,9 +30,11 @@ import { toast } from '@/components/ui/toaster'
 import { Link, pathnameProjectId, scopeTo, stripProjectPrefix, useProjectMatch } from '@/lib/project-router'
 import { moveProjectId, orderProjects } from '@/lib/project-order'
 import { isProjectCollapsed, readStoredCollapsed, writeStoredCollapsed } from '@/lib/sidebar-collapse'
+import { filterRunsByOrigin } from '@/lib/task-filters'
 import { capBuckets, groupRuns, listCounts, type ListView } from '@/lib/task-groups'
+import { useTaskOrigin } from '@/lib/task-origin'
 import { useProjectOrder } from '@/lib/use-project-order'
-import { taskReference } from '@/lib/tasks-table'
+import { taskReference, taskReferences } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
@@ -438,8 +440,13 @@ function ProjectGroup({
     [pinMutation.mutate],
   )
 
+  // The badge counts EVERY run that needs you, automation-started or not — a question nobody sees
+  // is the one failure a filter must not cause. The rows follow the remembered origin split.
+  const [origin] = useTaskOrigin()
   const waiting = runs.data ? listCounts(runs.data).waiting : 0
-  const buckets = runs.data ? capBuckets(groupRuns(runs.data, view), RECENT_LIMIT) : []
+  const buckets = runs.data
+    ? capBuckets(groupRuns(filterRunsByOrigin(runs.data, origin), view), RECENT_LIMIT)
+    : []
   // Only the rows this group actually paints: `buckets` is the capped list, so a project with
   // four hundred runs asks about the handful on screen rather than all of them.
   //
@@ -451,8 +458,11 @@ function ProjectGroup({
     bucket.rows.flatMap((row) => {
       // A collapsed variant group paints its FIRST member's chip, so that is the one to ask
       // about — the others only become visible once the tile is expanded.
-      const reference = taskReference(row.kind === 'run' ? row.run : row.members[0]!)
-      return reference ? [{ projectId: project.id, kind: reference.kind, number: reference.number }] : []
+      return taskReferences(row.kind === 'run' ? row.run : row.members[0]!).map((reference) => ({
+        projectId: project.id,
+        kind: reference.kind,
+        number: reference.number,
+      }))
     }),
   )
 

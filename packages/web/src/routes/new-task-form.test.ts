@@ -109,9 +109,38 @@ describe('model option resolution', () => {
     expect(modelsForRunner('codex', catalog, ['legacy-id']).at(-1)?.desc).toBe('Custom or legacy model')
   })
 
+  it('junie: auto plus host-discovered models', () => {
+    const catalog = { runner: 'junie' as const, models: [{ id: 'v1:model:junie:sonnet', label: 'Sonnet', description: 'Junie model' }], source: 'live' as const, stale: false }
+    expect(modelsForRunner('junie', catalog).map((m) => m.id)).toEqual(['', 'v1:model:junie:sonnet'])
+  })
+
+  it('cursor: auto alone until the host catalog answers, plus host-discovered ids once it does', () => {
+    expect(modelsForRunner('cursor').map((m) => m.id)).toEqual([''])
+    expect(
+      modelsForRunner('cursor', {
+        runner: 'cursor',
+        models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }],
+        source: 'live',
+        stale: false,
+      }).map((m) => m.id),
+    ).toEqual(['', 'composer-2.5'])
+  })
+
+  it('a pinned Cursor id the host no longer offers stays selectable', () => {
+    expect(
+      modelsForRunner(
+        'cursor',
+        { runner: 'cursor', models: [], source: 'unavailable', stale: false },
+        ['composer-2.5'],
+      ).map((m) => m.id),
+    ).toEqual(['', 'composer-2.5'])
+  })
+
   it.each([
     ['codex', 'Codex'],
     ['claude', 'Claude'],
+    ['junie', 'Junie'],
+    ['cursor', 'Cursor'],
   ] as const)('names %s in its stale/unavailable rows without exposing raw reasons', (runner, label) => {
     expect(modelCatalogStatus(runner, { runner, models: [], source: 'cache', stale: true, reason: 'raw' })).toBe(`Using cached ${label} model list`)
     expect(modelCatalogStatus(runner, { runner, models: [], source: 'unavailable', stale: false, reason: 'raw' })).toBe(`Latest ${label} models unavailable`)
@@ -131,12 +160,35 @@ describe('model option resolution', () => {
     expect(modelConflictsWithRunner('my-org/custom-tune', 'codex')).toBe(false)
   })
 
-  it('every runner cezar ships reads its models from the host', () => {
-    // #794 gave OpenCode a catalog and #784 gave Claude one, so the picker no longer has a
-    // preset-only runner. The contract's list is the single source both the route and the picker
-    // compile against — this asserts they still agree on who discovers.
-    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode'])
+  it('exactly the runners with a host catalog discover their models', () => {
+    // #794 gave OpenCode a catalog, #784 gave Claude one and #807 gave Cursor one. The contract's
+    // list is the single source both the route and the picker compile against — this asserts they
+    // still agree on who discovers, and that a runner is never added to it by accident.
+    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode', 'cursor', 'junie'])
     expect(MODEL_DISCOVERY_RUNNERS.every((runner) => runnerDiscoversModels(runner))).toBe(true)
+  })
+
+  it('reports Cursor catalog status the same way', () => {
+    expect(modelCatalogStatus('cursor', { runner: 'cursor', models: [], source: 'unavailable', stale: false })).toBe('Latest Cursor models unavailable')
+    expect(modelCatalogStatus('cursor', undefined, true)).toBe('Latest Cursor models unavailable')
+  })
+
+  it('copilot stays OUT of discovery: free text plus its own presets, and no /models request', () => {
+    // Copilot's catalog is fetched from GitHub per account, so cezar cannot list it truthfully and
+    // `GET /models?runner=copilot` would 400. The picker therefore offers Copilot's own documented
+    // `auto` and whatever the user types (#582; spec § API Contracts, same rule as pi).
+    expect(runnerDiscoversModels('copilot')).toBe(false)
+    expect(MODEL_DISCOVERY_RUNNERS).not.toContain('copilot')
+    expect(modelsForRunner('copilot').map((m) => m.id)).toEqual([''])
+    // …and a host catalog handed in anyway is ignored rather than rendered.
+    expect(
+      modelsForRunner('copilot', {
+        runner: 'copilot',
+        models: [{ id: 'gpt-5.4', label: 'gpt-5.4', description: 'via GitHub' }],
+        source: 'live',
+        stale: false,
+      }).map((m) => m.id),
+    ).toEqual([''])
   })
 
   it('opencode: auto alone until the host catalog answers (#794)', () => {

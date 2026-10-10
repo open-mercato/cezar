@@ -1,3 +1,4 @@
+import { DisclosureChevron, disclosureSummary, widgetHeading } from './presentation'
 import { ExportRows } from './export-rows'
 import { useContext, useLayoutEffect, useMemo, useRef } from 'react'
 import type { DashboardFeed, DashboardFeedRow } from '@open-mercato/cezar-api-client'
@@ -71,12 +72,12 @@ export function Feed({
       data-export-context={`Results source: ${filter}; Last 7 days; loaded ${Math.min(count, rows.length)} rows`}
       className="min-w-0 gap-0 overflow-hidden py-0"
     >
-      <div className="space-y-2 border-b px-4 py-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 ref={heading} tabIndex={-1} className="text-sm font-semibold">
+      <div className="space-y-2 border-b px-4 pt-2.5 pb-2">
+        <div className="flex min-h-9 flex-wrap items-center justify-between gap-2">
+          <h2 ref={heading} tabIndex={-1} className={widgetHeading}>
             {tasksOnly ? 'Recent results' : 'Recent results & GitHub'}
           </h2>
-          <span className="text-xs text-muted-foreground">Last 7 days</span>
+          <span className="font-mono text-[11px] text-soft-foreground">Last 7 days</span>
         </div>
         {!tasksOnly && (
           <SegmentedControl
@@ -101,7 +102,8 @@ export function Feed({
             className="text-xs text-muted-foreground"
             open={errors.length || githubFailed ? true : undefined}
           >
-            <summary className="cursor-pointer py-2">
+            <summary className={`${disclosureSummary} py-1.5`}>
+              <DisclosureChevron />
               {errors.length || githubFailed
                 ? 'GitHub needs attention'
                 : loading
@@ -188,16 +190,17 @@ export function Feed({
         )}
         {rows.slice(0, count).map(({ row, removed }) =>
           row.kind === 'task-result' ? (
-            <div key={row.key}>
-              <p className="px-4 pt-3 text-xs text-muted-foreground">
-                {removed
+            <TaskRow
+              key={row.key}
+              row={row.run}
+              kicker={
+                removed
                   ? 'Outside current results'
-                  : `Latest result: ${row.run.status === 'failed' ? 'Failed' : 'Completed'}`}
-              </p>
-              <TaskRow row={row.run} />
-            </div>
+                  : `Latest result: ${row.run.status === 'failed' ? 'Failed' : 'Completed'}`
+              }
+            />
           ) : (
-            <div key={row.key} className="border-b p-4">
+            <div key={row.key} className="border-b px-4 py-3 transition-colors hover:bg-muted/30">
               <ExportRows
                 rows={[
                   {
@@ -211,14 +214,14 @@ export function Feed({
                 ]}
               />
               <a
-                className="block min-h-11 break-words text-sm font-medium hover:underline"
+                className="block break-words text-sm font-medium hover:underline no-hover:min-h-11"
                 href={row.url}
                 target="_blank"
                 rel="noreferrer"
               >
                 {row.title}
               </a>
-              <p className="text-xs text-muted-foreground">
+              <p className="mt-1 text-xs text-muted-foreground">
                 {row.repo} · {row.itemKind === 'pr' ? 'PR' : 'Issue'} #{row.number} created ·{' '}
                 {shortAge(row.at)}
               </p>
@@ -233,7 +236,7 @@ export function Feed({
           !errors.length &&
           !loading &&
           query.data.coverage.projects.every((p) => p.state === 'complete') && (
-            <p className="p-6 text-sm">No results in the last 7 days</p>
+            <p className="px-4 py-8 text-sm text-muted-foreground">No results in the last 7 days</p>
           )}
         {count < rows.length && (
           <Button variant="ghost" className="m-2 min-h-11" onClick={more}>
@@ -251,7 +254,10 @@ export function Feed({
         )}
         {!tasksOnly && query.data?.sources.some((s) => s.state !== 'ready' || s.truncated) && (
           <details className="p-4 text-xs">
-            <summary className="min-h-11 cursor-pointer py-2">Source details</summary>
+            <summary className={`${disclosureSummary} min-h-11`}>
+              <DisclosureChevron />
+              Source details
+            </summary>
             {query.data.sources.map((s) => (
               <p className="break-words py-1" key={s.key}>
                 {sourceLabel(s.key)}:{' '}

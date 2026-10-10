@@ -28,6 +28,9 @@ import {
   getSkillsWhenReady,
   getTodos,
   getUiState,
+  getWorkspaceConfig,
+  uploadWorkspaceBrandingLogo,
+  deleteWorkspaceBrandingLogo,
   getWorkflows,
   openRunInCli,
   patchRun,
@@ -41,7 +44,7 @@ import {
   startTodo,
   retryProviderAuth,
 } from './client'
-import { setApiScope } from '@open-mercato/cezar-api-client'
+import { setApiBaseUrl, setApiScope } from '@open-mercato/cezar-api-client'
 
 /** The one seam under test: every call must go through `fetch` and nothing else. */
 const fetchMock = vi.fn<typeof fetch>()
@@ -53,6 +56,8 @@ beforeEach(() => {
 afterEach(() => {
   fetchMock.mockReset()
   vi.unstubAllGlobals()
+  setApiBaseUrl('')
+  setApiScope(null)
 })
 
 function reply(body: unknown, init: ResponseInit = {}): void {
@@ -70,7 +75,8 @@ const VALID_PROVIDER_STATUS = {
     { provider: 'claude', status: 'connected', enabled: true },
     { provider: 'codex', status: 'disconnected', enabled: true },
     { provider: 'opencode', status: 'not-installed', enabled: true },
-  ],
+    { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
 }
 
 /** The (path, init) the client actually asked for. */
@@ -132,6 +138,7 @@ describe('request shapes', () => {
     { name: 'getRunnerModels', call: () => getRunnerModels('codex'), path: '/api/v1/models?runner=codex', method: 'GET' },
     { name: 'getRunnerModels(claude)', call: () => getRunnerModels('claude'), path: '/api/v1/models?runner=claude', method: 'GET' },
     { name: 'getRunnerModels(opencode)', call: () => getRunnerModels('opencode'), path: '/api/v1/models?runner=opencode', method: 'GET' },
+    { name: 'getRunnerModels(cursor)', call: () => getRunnerModels('cursor'), path: '/api/v1/models?runner=cursor', method: 'GET' },
     { name: 'getRuns', call: () => getRuns(), path: '/api/v1/runs', method: 'GET' },
     { name: 'getRun', call: () => getRun('run-1'), path: '/api/v1/runs/run-1', method: 'GET' },
     { name: 'getRunDiff', call: () => getRunDiff('run-1'), path: '/api/v1/runs/run-1/diff', method: 'GET' },
@@ -338,6 +345,48 @@ describe('request shapes', () => {
   })
 })
 
+describe('workspace branding logo client', () => {
+  it('uploads through the configured API base with credentials and resolves the returned asset URL', async () => {
+    setApiBaseUrl('https://api.example.test/gateway')
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ logoUrl: '/api/v1/workspace/branding-logo?v=abc' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }))
+
+    const file = new File(['logo'], 'logo.png', { type: 'image/png' })
+    const logoUrl = await uploadWorkspaceBrandingLogo(file)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://api.example.test/gateway/api/v1/workspace/branding-logo')
+    expect(init.credentials).toBe('include')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBeInstanceOf(FormData)
+    expect(logoUrl).toBe('https://api.example.test/gateway/api/v1/workspace/branding-logo?v=abc')
+  })
+
+  it('deletes through the configured API base and includes credentials', async () => {
+    setApiBaseUrl('https://api.example.test/gateway')
+    reply({ logoUrl: null })
+    await deleteWorkspaceBrandingLogo()
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://api.example.test/gateway/api/v1/workspace/branding-logo')
+    expect(init).toMatchObject({ method: 'DELETE', credentials: 'include' })
+  })
+
+  it('normalizes logo URLs in workspace configuration', async () => {
+    setApiBaseUrl('https://api.example.test/gateway')
+    reply({
+      branding: { name: 'Acme', logoUrl: '/api/v1/workspace/branding-logo?v=abc' },
+      browseRoot: '~/source', projectsDir: '~/projects', skillsAutoUpdate: null,
+      effectiveSkillsAutoUpdate: true,
+      composerDefaults: { autonomous: null, worktree: null, inheritedAutonomous: 'source-dependent', inheritedWorktree: true },
+      resources: { maxParallel: 2, maxMonitoringSessions: 2, idleTimeoutMinutes: 15, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10 },
+      agentDefaults: {},
+    })
+    const config = await getWorkspaceConfig()
+    expect(config.branding.logoUrl).toBe('https://api.example.test/gateway/api/v1/workspace/branding-logo?v=abc')
+  })
+})
+
 describe('project scope (multi-project spec, step 3.1)', () => {
   // NB the WHOLE unscoped table above is this feature's other half: the critical assertion is
   // that with no scope set, every path stays byte-identical — those cases prove it by never
@@ -375,6 +424,42 @@ describe('project scope (multi-project spec, step 3.1)', () => {
 })
 
 describe('response parsing', () => {
+  const workspaceConfig = (resources: Record<string, unknown>) => ({
+    branding: { name: 'cezar', logoUrl: null },
+    browseRoot: '~/',
+    projectsDir: '~/cezar/projects',
+    skillsAutoUpdate: null,
+    effectiveSkillsAutoUpdate: true,
+    composerDefaults: {
+      autonomous: null,
+      worktree: null,
+      inheritedAutonomous: 'source-dependent',
+      inheritedWorktree: true,
+    },
+    resources: {
+      maxParallel: 2,
+      maxMonitoringSessions: 2,
+      monitoringWakeIntervalMinutes: 5,
+      autoResumeOnUsageLimit: true,
+      memoryLimitMb: null,
+      worktreeRetentionDefault: 10,
+      ...resources,
+    },
+    agentDefaults: {},
+  })
+
+  it.each([
+    ['absent defaults to 15', {}, 15],
+    ['null stays disabled', { idleTimeoutMinutes: null }, null],
+    ['zero stays disabled', { idleTimeoutMinutes: 0 }, 0],
+    ['positive values pass through', { idleTimeoutMinutes: 30 }, 30],
+  ])('normalizes idle timeout: %s', async (_label, resources, expected) => {
+    reply(workspaceConfig(resources))
+    await expect(getWorkspaceConfig()).resolves.toMatchObject({
+      resources: { idleTimeoutMinutes: expected },
+    })
+  })
+
   it('normalizes provider status into canonical order without unexpected fields', async () => {
     reply({
       ignored: 'top-level raw value',
@@ -382,7 +467,8 @@ describe('response parsing', () => {
         { provider: 'opencode', status: 'unknown', hint: 'Try again.', enabled: true, raw: 'private' },
         { provider: 'claude', status: 'connected', enabled: false, account: 'private@example.test' },
         { provider: 'codex', status: 'disconnected', enabled: true, authFailureId: 'incident-1', raw: 'private' },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     })
 
     await expect(getProviderStatus()).resolves.toEqual({
@@ -390,7 +476,8 @@ describe('response parsing', () => {
         { provider: 'claude', status: 'connected', enabled: false },
         { provider: 'codex', status: 'disconnected', enabled: true, authFailureId: 'incident-1' },
         { provider: 'opencode', status: 'unknown', hint: 'Try again.', enabled: true },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     })
   })
 
@@ -405,6 +492,7 @@ describe('response parsing', () => {
           { provider: 'claude', status: 'connected' },
           { provider: 'codex', status: 'future-state' },
           { provider: 'opencode', status: 'connected' },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     ],
@@ -415,6 +503,7 @@ describe('response parsing', () => {
           { provider: 'claude', status: 'connected' },
           { provider: 'claude', status: 'disconnected' },
           { provider: 'opencode', status: 'connected' },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     ],
@@ -424,6 +513,7 @@ describe('response parsing', () => {
         providers: [
           { provider: 'claude', status: 'connected' },
           { provider: 'codex', status: 'connected' },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     ],

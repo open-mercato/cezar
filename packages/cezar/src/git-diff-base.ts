@@ -81,10 +81,30 @@ export interface TaskDiffBase {
  * not plainly a timestamp simply disables the baseline anchor.
  */
 const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+const PINNED_COMMIT = /^[0-9a-f]{7,64}$/i;
+
+/**
+ * In-place runs persist their starting commit because they have no task branch.
+ * If that commit is now contained by the repository's advertised origin branch,
+ * use that branch as the moving base: the SHA is a fork snapshot, not a request
+ * to count every upstream commit fetched after the run began. Keep the SHA when
+ * origin/HEAD is unavailable or does not contain it; that preserves the narrow
+ * fallback for local-only and unrelated commits.
+ */
+async function freshestPinnedBaseRef(runGit: GitRunner, base: string): Promise<string> {
+  if (!PINNED_COMMIT.test(base)) return base;
+  const originHead = await runGit(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']);
+  const remote = originHead.ok ? originHead.stdout.trim() : '';
+  if (!remote.startsWith('origin/') || !isSafeGitRef(remote)) return base;
+  const contains = await runGit(['merge-base', '--is-ancestor', base, remote]);
+  return contains.ok ? remote : base;
+}
 
 /**
  * The freshest ref the configured base branch names: `origin/<base>` when the
- * local branch is behind it (or missing entirely), the local branch otherwise.
+ * local branch is behind it, the local branch when it is equal or ahead (or
+ * origin has no such branch), and — when the two diverged — whichever side the
+ * task actually forked from.
  *
  * Same rule as `resolveBaseRef` (`git-worktree.ts`), which picks the fork point
  * when the worktree is created; this one re-applies it every time a diff is
@@ -94,13 +114,30 @@ const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2
  */
 async function freshestBaseRef(runGit: GitRunner, base: string): Promise<string> {
   if (!isSafeGitRef(base) || base === 'HEAD' || base.startsWith('origin/')) return base;
+  if (PINNED_COMMIT.test(base)) return freshestPinnedBaseRef(runGit, base);
   const remote = `origin/${base}`;
   const hasRemote = await runGit(['rev-parse', '--verify', '--quiet', `${remote}^{commit}`]);
   if (!hasRemote.ok) return base;
   // Exits 0 iff local is equal to or ahead of origin — the case where the local
   // ref carries unpushed base commits and is the better answer.
   const localCurrent = await runGit(['merge-base', '--is-ancestor', remote, base]);
-  return localCurrent.ok ? base : remote;
+  if (localCurrent.ok) return base;
+  const localBehind = await runGit(['merge-base', '--is-ancestor', base, remote]);
+  if (localBehind.ok) return remote;
+  // DIVERGED. `resolveBaseRef` forks a zero-config task from the user's own
+  // diverged branch (`keepDiverged`) but a configured base from origin, and
+  // only the fork shows which: the task forked from whichever side's
+  // merge-base with HEAD is the newer one. Keep local only when its merge-base
+  // strictly descends from origin's — otherwise the stale-base rule stands.
+  const [mbLocal, mbRemote] = await Promise.all([
+    runGit(['merge-base', base, 'HEAD']),
+    runGit(['merge-base', remote, 'HEAD']),
+  ]);
+  const local = mbLocal.ok ? mbLocal.stdout.trim() : '';
+  const upstream = mbRemote.ok ? mbRemote.stdout.trim() : '';
+  if (!local || !upstream || local === upstream) return remote;
+  const forkedFromLocal = await runGit(['merge-base', '--is-ancestor', upstream, local]);
+  return forkedFromLocal.ok ? base : remote;
 }
 
 /**

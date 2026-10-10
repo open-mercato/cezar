@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
+import { workflowGraphSchema } from './graph.ts';
 
 /**
  * A workflow is an ordered list of steps. Two step kinds:
@@ -9,6 +10,17 @@ import { RUNNER_IDS } from '../core/agent-runner.ts';
  *
  * `{{task}}` in a prompt is replaced with the user's task text. When a check
  * loops back, the failing output is appended to the retried agent's prompt.
+ *
+ * `onFail.retryOn` narrows the loop to the exit codes that mean *the work is
+ * wrong*. Omitted, any non-zero code loops back — right for `npm test`, which
+ * exits 1 whether a test failed or the runner could not start, and wrong for
+ * every richer check. An agentic browser check is the worked example: `e2e`
+ * exits 1 on a failed test or a reported defect, but 2 on a config/credential
+ * error, 3 on an engine or model-provider failure and 4 on an internal error —
+ * none of which the coding agent can fix, and each of which would otherwise
+ * spend a full agent attempt (and its tokens) per retry on a cause that is not
+ * in the diff. `retryOn: [1]` loops on the verdict and fails the run on the
+ * infrastructure, naming the code.
  */
 export const workflowStepSchema = z
   .object({
@@ -36,6 +48,13 @@ export const workflowStepSchema = z
       .object({
         retry: z.string().min(1),
         max: z.number().int().positive().default(2),
+        /** Exit codes that loop back. Omitted (or empty — same thing, so a GUI that
+         *  serializes "no selection" as `[]` doesn't accidentally mean "never retry"):
+         *  any non-zero code does, which is what every workflow written before this
+         *  field expects. `0` is rejected rather than ignored: a check that exits 0
+         *  passed and never reaches the loop, so listing it is a misreading of the
+         *  field, and a load-time error says so where a silent no-op would not. */
+        retryOn: z.array(z.number().int().positive()).optional(),
       })
       .optional(),
   })
@@ -73,6 +92,10 @@ export const workflowDefSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
   steps: z.array(workflowStepSchema),
+  /** A `version: 2` graph workflow (spec 2026-09-30-workflow-node-editor). When present the
+   *  executor walks the graph; `steps` is then derived from its agent/check nodes
+   *  (`graphToSteps`) so every step-reading path keeps working. Absent on v1 workflows. */
+  graph: workflowGraphSchema.optional(),
   source: z.enum(['built-in', 'file']),
   path: z.string().optional(),
 });
@@ -123,6 +146,19 @@ export function skillStackOf(steps: WorkflowStepDef[]): string[] | null {
 
 export function stepKind(step: WorkflowStepDef): 'agent' | 'check' {
   return step.command ? 'check' : 'agent';
+}
+
+/**
+ * Does this failing exit code buy the agent another attempt? With no `retryOn`
+ * list — every workflow written before the field, and every one that doesn't
+ * care — any failure does, unchanged. With one, only the codes it names: an
+ * agentic check reports "your change is wrong" and "I could not run" as
+ * different codes, and only the first is worth re-running an agent step for.
+ * Called for a check that already FAILED, so `0` never reaches it.
+ */
+export function retryableExit(retryOn: number[] | undefined, exitCode: number): boolean {
+  if (!retryOn?.length) return true;
+  return retryOn.includes(exitCode);
 }
 
 /**

@@ -15,7 +15,7 @@ import type {
 import { resetToasts, Toaster } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
 
-import { resetDraft } from './new-task-draft'
+import { resetDraft, writeAttachments } from './new-task-draft'
 
 /**
  * The composer's project pill (multi-project spec, step 3.4).
@@ -110,6 +110,7 @@ const PROVIDERS: ProviderStatusResponse = {
     { provider: 'claude', status: 'connected', enabled: true },
     { provider: 'codex', status: 'disconnected', enabled: true },
     { provider: 'opencode', status: 'not-installed', enabled: true },
+    { provider: 'cursor', status: 'not-installed', enabled: true },
   ],
 }
 
@@ -346,6 +347,7 @@ describe('switching project', () => {
     await switchProject(OTHER)
     await composerReady()
     expect(textarea().value).toBe('fix the cezar flake')
+    expect(document.querySelector('[data-slot="toast"]')).toBeNull()
 
     // The boot project keeps the bare legacy key (unscoped invariant); the second project gets
     // the spec's suffixed one — and the text is under exactly one of them.
@@ -372,12 +374,43 @@ describe('switching project', () => {
     await composerReady()
     // Their work in progress wins …
     expect(textarea().value).toBe('ship the storefront')
+    expect(document.querySelector('[data-slot="toast"]')?.textContent).toContain(
+      'Kept your draft in cezar; shop-frontend already has an unsent draft.',
+    )
 
     // … and nothing was lost: switching back finds the cezar draft exactly where it was typed.
     await switchProject(BOOT)
     await waitFor(() => expect(pathname()).toBe(`/p/${BOOT}/new`))
     await composerReady()
     expect(textarea().value).toBe('fix the cezar flake')
+  })
+
+  it('warns with the destination display name when its attachment-only draft wins', async () => {
+    serve()
+    renderAt(`/p/${BOOT}/new`)
+    await composerReady()
+    fireEvent.change(textarea(), { target: { value: 'fix the cezar flake' } })
+    paste(textarea(), [pngFile('cezar.png')])
+    await waitFor(() => expect(attachmentChips()).toHaveLength(1))
+
+    // Attachments are deliberately memory-only, so seed the destination through the store.
+    writeAttachments([{
+      mediaType: 'image/png',
+      data: 'shop',
+      preview: 'shop',
+      name: 'shop.png',
+      isImage: true,
+    }], OTHER)
+
+    await switchProject(OTHER)
+    await composerReady()
+    // The switch is declined, so the destination keeps its own attachment-only draft rather
+    // than receiving the departing composition.
+    expect(textarea().value).toBe('')
+    expect(attachmentChips().map((node) => node.getAttribute('aria-label'))).toEqual(['Remove shop.png'])
+    expect(document.querySelector('[data-slot="toast"]')?.textContent).toContain(
+      'Kept your draft in cezar; shop-frontend already has an unsent draft.',
+    )
   })
 
   /**

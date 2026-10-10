@@ -161,6 +161,34 @@ describe('autonomous mode nudges at turn end instead of parking (#autonomous)', 
     expect(statuses).not.toContain('waiting');
   }, 40_000);
 
+  it('parks an autonomous monitoring turn at the first-session turn end', async () => {
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:monitoring keep watching',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+
+    await waitFor(record.id, (r) => r?.activity === 'monitoring');
+    expect(nudgeNotes(record.id)).toEqual([]);
+    expect(store.getRun(record.id)?.status).toBe('running');
+  }, 40_000);
+
+  it('parks an autonomous monitoring continuation without nudging it', async () => {
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:done first pass',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'done');
+
+    expect(manager.continueRun(record.id, { text: 'mock:monitoring keep watching' })).toEqual({ ok: true });
+    await waitFor(record.id, (r) => r?.activity === 'monitoring');
+    expect(nudgeNotes(record.id)).toEqual([]);
+    expect(store.getRun(record.id)?.status).toBe('running');
+  }, 40_000);
+
   it('a NON-autonomous continuation still parks at waiting (unchanged)', async () => {
     const record = manager.startRun(SINGLE_STEP, { task: 'mock:done first pass', worktree: false });
     currentId = record.id;

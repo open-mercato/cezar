@@ -194,6 +194,13 @@ const CEZAR_PLIST_LABEL = 'ai.cezar.cockpit';
 const OFFICIAL_CLI_PKG = 'cezar-cli';
 const cezarPlistPath = (): string => join(homedir(), 'Library', 'LaunchAgents', `${CEZAR_PLIST_LABEL}.plist`);
 
+/** Read the PID launchd currently associates with an agent, when available. */
+async function launchdPid(ctx: InstallContext, uid: number, label: string): Promise<string | undefined> {
+  const result = await ctx.runner.capture('launchctl', ['print', `gui/${uid}/${label}`]);
+  if (result.code !== 0) return undefined;
+  return /^\s*pid\s*=\s*(\d+)\s*$/m.exec(result.stdout)?.[1];
+}
+
 /** Resolve the argv array for the cezar launchd agent, mirroring how the CLI was launched. */
 async function resolveCezarArgv(ctx: InstallContext): Promise<string[]> {
   const node = process.execPath;
@@ -372,11 +379,29 @@ export const macosxNgrok: PlatformStrategy = {
     }
     const uid = process.getuid ? process.getuid() : 0;
     ctx.ui.info('Redeploying — restarting the cezar cockpit.');
+    const previousPid = await launchdPid(ctx, uid, CEZAR_PLIST_LABEL);
     const cezarCode = await ctx.runner.interactive('launchctl', ['kickstart', '-k', `gui/${uid}/${CEZAR_PLIST_LABEL}`]);
-    if (cezarCode !== 0) ctx.ui.warn(`launchctl kickstart returned non-zero — check \`launchctl print gui/${uid}/${CEZAR_PLIST_LABEL}\`.`);
+    if (cezarCode !== 0) {
+      throw new StepAborted(
+        `launchctl could not restart the cezar cockpit (kickstart exit ${cezarCode}) — ` +
+          `inspect it with: launchctl print gui/${uid}/${CEZAR_PLIST_LABEL}`,
+      );
+    }
+    const currentPid = await launchdPid(ctx, uid, CEZAR_PLIST_LABEL);
+    if (previousPid && currentPid && previousPid === currentPid) {
+      throw new StepAborted(
+        `the cezar cockpit did not actually restart (PID stayed ${currentPid}) — ` +
+          `inspect it with: launchctl print gui/${uid}/${CEZAR_PLIST_LABEL}`,
+      );
+    }
     ctx.ui.info('Redeploying — restarting the ngrok tunnel.');
     const code = await ctx.runner.interactive('launchctl', ['kickstart', '-k', `gui/${uid}/${PLIST_LABEL}`]);
-    if (code !== 0) ctx.ui.warn(`launchctl kickstart returned non-zero — check \`launchctl print gui/${uid}/${PLIST_LABEL}\`.`);
+    if (code !== 0) {
+      throw new StepAborted(
+        `launchctl could not restart the ngrok tunnel (kickstart exit ${code}) — ` +
+          `inspect it with: launchctl print gui/${uid}/${PLIST_LABEL}`,
+      );
+    }
     await macosxNgrokIdentityStep.run(ctx);
   },
 };

@@ -41,6 +41,68 @@ export interface DiffHandle {
   /** Scroll the file at `path` to the top of the scroll container. A no-op if it isn't in
    *  `files` — a tree selection can race a refetch that dropped the file. */
   scrollToPath: (path: string) => void
+  /**
+   * Bring one comment — or, failing that, one line — into view and flash it: the file is
+   * expanded, scrolled to (through the virtualizer when it is in play), and the target centred
+   * once it has rendered. A target that is not displayed (a line inside a collapsed context gap,
+   * a comment since removed) leaves the view at the top of its file. Absent on the fallback
+   * renderer, which has no line rows to find.
+   */
+  reveal?: (target: DiffRevealTarget) => void
+}
+
+/** What `DiffHandle.reveal` looks for: the comment card first, else the line it counts. */
+export interface DiffRevealTarget {
+  path: string
+  side: 'old' | 'new'
+  line?: number
+  commentId?: string
+}
+
+/**
+ * Where a line comment is anchored. A deleted line only exists on the old side, so it is
+ * addressed by its old number; every other line (added or context) by its new one — which is
+ * what lets a context line's comment show up under the same row in unified AND split layouts.
+ */
+export interface DiffLineAnchor {
+  path: string
+  side: 'old' | 'new'
+  line: number
+}
+
+/** One comment's length cap — generous for prose, but a pasted log must not be able to grow the
+ *  host's stored list past what it can keep. Here rather than in `line-comments.tsx` so hosts can
+ *  import it without pulling the lazy renderer chunk into the main bundle. */
+export const COMMENT_MAX = 4000
+
+/** One end of a line range — a side and a number, in the same file as its anchor. */
+export interface DiffLineEnd {
+  side: 'old' | 'new'
+  line: number
+}
+
+/** A line comment as the diff renders it — the host owns storage and identity. A RANGE comment
+ *  is anchored at its LAST line (where it renders) and carries its first in `start`. */
+export interface DiffLineComment extends DiffLineAnchor {
+  id: string
+  body: string
+  start?: DiffLineEnd
+  /** The code the comment was left on, as it read then. Given, a comment whose line now reads
+   *  differently (the agent edited the file since) is shown as outdated, with this code. */
+  excerpt?: string
+}
+
+/** What the inline editor hands back: the anchor, the commented line's text, and the note. */
+export interface DiffNewLineComment extends DiffLineAnchor {
+  /** First line of a range comment; absent for a single line. */
+  start?: DiffLineEnd
+  /** The file's pre-rename path, set for a removed line of a renamed file — its line number
+   *  belongs to the OLD file. */
+  oldPath?: string
+  /** The commented line's text (every line's, newline-joined, for a range), so the comment still
+   *  reads in context once the file moves on. */
+  excerpt: string
+  body: string
 }
 
 export interface DiffProps {
@@ -76,5 +138,17 @@ export interface DiffProps {
    * their DOM-based scroll there).
    */
   viewRef?: { current: DiffHandle | null }
+  /**
+   * Line comments for the agent (the self-review flow): rendered under the line they anchor to.
+   * `onAddComment` absent ⇒ no "+" affordance at all; `onRemoveComment` absent ⇒ read-only
+   * comments (and `onEditComment` absent ⇒ no Edit). The fallback renderer shows neither — it has no line model to anchor to.
+   */
+  comments?: readonly DiffLineComment[]
+  /** Return `false` to refuse (the host could not keep it) — the editor then stays open with
+   *  the text, instead of closing on a comment that was never stored. */
+  onAddComment?: (comment: DiffNewLineComment) => boolean | void
+  /** Absent ⇒ saved comments offer no Edit. Return `false` to refuse, as above. */
+  onEditComment?: (id: string, body: string) => boolean | void
+  onRemoveComment?: (id: string) => void
   className?: string
 }

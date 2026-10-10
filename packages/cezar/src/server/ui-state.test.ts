@@ -53,6 +53,17 @@ describe('PUT /api/v1/ui-state — promptTemplates', () => {
     expect(await read.json()).toMatchObject({ promptTemplates: templates });
   });
 
+  it('accepts long reusable skills, but rejects text beyond the documented bound', async () => {
+    const longText = 'x'.repeat(20_000);
+    expect((await put({ promptTemplates: [template({ text: longText })] })).status).toBe(200);
+    const read = await apiRequest(app, '/api/v1/ui-state');
+    expect(
+      ((await read.json()) as { promptTemplates: Array<{ text: string }> }).promptTemplates[0]?.text,
+    ).toBe(longText);
+
+    expect((await put({ promptTemplates: [template({ text: `${longText}x` })] })).status).toBe(400);
+  });
+
   it('accepts a template with NO skills key — the pre-assignment client must keep working', async () => {
     expect((await put({ promptTemplates: [template()] })).status).toBe(200);
     const read = await apiRequest(app, '/api/v1/ui-state');

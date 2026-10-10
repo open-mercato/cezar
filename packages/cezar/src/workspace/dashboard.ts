@@ -1,6 +1,11 @@
 import { readDashboardAutomations } from './dashboard-automations.ts';
 import { buildDashboardOverview } from './dashboard-overview.ts';
-import type { DashboardOverviewQuery } from '@open-mercato/cezar-contract';
+import {
+  buildDashboardInsights,
+  projectInsightRow,
+  type InsightRow,
+} from './dashboard-insights.ts';
+import type { DashboardInsightsQuery, DashboardOverviewQuery } from '@open-mercato/cezar-contract';
 import { randomUUID } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -35,6 +40,7 @@ type Projection = {
   generation: number;
   rows: DashboardTaskRow[];
   costRows: DashboardCostTask[];
+  insightRows: InsightRow[];
   coverage: DashboardCoverage;
   projects: Project[];
 };
@@ -43,6 +49,7 @@ type Cached = {
   identity: string;
   rows: DashboardTaskRow[];
   costRows: DashboardCostTask[];
+  insightRows: InsightRow[];
   coverage: DashboardCoverage['projects'][number];
   builtAt: number;
 };
@@ -57,6 +64,10 @@ const order = (a: DashboardTaskRow, b: DashboardTaskRow) =>
   createdTime(a) - createdTime(b) ||
   a.id.localeCompare(b.id) ||
   a.projectId.localeCompare(b.projectId);
+/** A `waiting` run, or a `failed` one whose session closed on an unanswered `CEZ:ASK` — both are
+ *  a question for the user, which is how the cockpit's attention layer reads them too. */
+const isQuestion = (r: DashboardTaskRow) =>
+  r.status === 'waiting' || (r.status === 'failed' && Boolean(r.awaitingAnswerSince));
 function group(rows: DashboardTaskRow[], name: DashboardGroup): DashboardTaskRow[] {
   const selected = rows
     .filter((r) => {
@@ -64,14 +75,14 @@ function group(rows: DashboardTaskRow[], name: DashboardGroup): DashboardTaskRow
       if (name === 'running') return r.status === 'running';
       if (name === 'queued') return r.status === 'queued';
       if (name === 'scheduled') return r.status === 'failed' && Boolean(r.autoResumeAt);
-      if (name === 'questions') return r.status === 'waiting';
+      if (name === 'questions') return isQuestion(r);
       if (name === 'reviews') return r.status === 'review';
-      return r.status === 'waiting' || r.status === 'review';
+      return isQuestion(r) || r.status === 'review';
     })
     .sort(order);
   return name === 'needs-you'
     ? selected
-        .filter((r) => r.status === 'waiting')
+        .filter(isQuestion)
         .concat(selected.filter((r) => r.status === 'review'))
     : selected;
 }
@@ -202,6 +213,7 @@ export class DashboardReader {
     if (generation !== this.generation) return undefined;
     const rows: DashboardTaskRow[] = [];
     const costRows: DashboardCostTask[] = [];
+    const insightRows: InsightRow[] = [];
     const coverage: DashboardCoverage = { projects: [] };
     for (const project of projects) {
       let identity: string;
@@ -271,6 +283,7 @@ export class DashboardReader {
           identity,
           rows: slim,
           costRows: diagnostic.runs.map((run) => projectCostTask(project.id, run)),
+          insightRows: diagnostic.runs.map((run) => projectInsightRow(project.id, run)),
           builtAt: this.now(),
           coverage: {
             projectId: project.id,
@@ -292,9 +305,10 @@ export class DashboardReader {
       }
       rows.push(...cached.rows);
       costRows.push(...cached.costRows);
+      insightRows.push(...cached.insightRows);
       coverage.projects.push(cached.coverage);
     }
-    return { generation, rows, costRows, coverage, projects };
+    return { generation, rows, costRows, insightRows, coverage, projects };
   }
 
   async costs(query: DashboardCostsQuery, policy: CostVisibility | (() => CostVisibility)) {
@@ -312,6 +326,24 @@ export class DashboardReader {
       projection.projects,
       query,
       visibility,
+    );
+  }
+
+  async insights(
+    query: DashboardInsightsQuery,
+    policy: CostVisibility | (() => CostVisibility),
+  ) {
+    let projection = await this.projection();
+    while (projection.generation !== this.generation) projection = await this.projection();
+    this.ensureActive();
+    // Resolved after the read, as in `costs`: a measure hidden mid-read stays hidden.
+    const visibility = typeof policy === 'function' ? policy() : policy;
+    return buildDashboardInsights(
+      projection.insightRows,
+      projection.coverage,
+      query,
+      visibility,
+      this.now(),
     );
   }
 
@@ -405,6 +437,7 @@ export class DashboardReader {
         if (
           (run.status !== 'done' && run.status !== 'failed') ||
           run.autoResumeAt ||
+          run.awaitingAnswerSince ||
           !run.finishedAt
         )
           continue;

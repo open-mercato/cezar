@@ -2,6 +2,7 @@ import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient, ty
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 
 import { mergeProviderStatusResponse } from '@/lib/provider-status'
+import { mergeRun } from './events'
 
 import {
   ApiError,
@@ -37,6 +38,8 @@ import {
   getRunCommits,
   getRepoChanges,
   getRepoCommit,
+  getRepoFile,
+  getRepoTree,
   getRun,
   getRunChanges,
   getRunDiff,
@@ -56,9 +59,16 @@ import {
   getTrackerItems,
   getUiState,
   getWorkflows,
+  getWorkflowNodes,
   getWorkspaceConfig,
   getWorkspaceUiState,
   getSkillsUpdate,
+  getSelfUpdate,
+  getSelfUpdateDevelopment,
+  getStarCount,
+  refreshSelfUpdate,
+  setSelfUpdateChannel,
+  applySelfUpdate,
   checkSkillsUpdate,
   applySkillsUpdate,
   getWorktrees,
@@ -111,6 +121,7 @@ import type {
   TrackerAssociation,
   TrackerItemsResponse,
   TrackerKind,
+  UpdateChannel,
 } from '@open-mercato/cezar-api-client'
 import { subscribeTopic } from './ws'
 
@@ -178,6 +189,9 @@ export const queryKeys = {
   get workflows() {
     return [queryScope(), 'workflows'] as const
   },
+  get workflowNodes() {
+    return [queryScope(), 'workflow-nodes'] as const
+  },
   get skills() {
     return [queryScope(), 'skills'] as const
   },
@@ -204,6 +218,12 @@ export const queryKeys = {
     return [queryScope(), 'repo', 'changes'] as const
   },
   repoCommit: (sha: string) => [queryScope(), 'repo', 'commit', sha] as const,
+  /** The Files sub-tab's path index (#1279) — also under `repo`, so a branch switch invalidates
+   *  the tree along with the diff. */
+  get repoTree() {
+    return [queryScope(), 'repo', 'tree'] as const
+  },
+  repoFile: (path: string) => [queryScope(), 'repo', 'file', path] as const,
   get uiState() {
     return [queryScope(), 'ui-state'] as const
   },
@@ -367,8 +387,7 @@ export const workspaceQueryKeys = {
    *  GUI prefs, e.g. the sidebar's per-project collapse map (step 3.3), and — since step 3.5 —
    *  appearance + notifications, which describe the user rather than a repo. */
   uiState: ['workspace', 'ui-state'] as const,
-  /** `~/.cezar/config.json`'s settings slice via `GET/PUT /api/workspace/config` (step 2.7):
-   *  the global Resources knobs and the checkout root. */
+  /** `~/.cezar/config.json`'s workspace settings slice, including instance branding. */
   config: ['workspace', 'config'] as const,
   /** Live host totals (spec `.ai/specs/2026-09-20-host-resource-telemetry.md`). One cache for
    *  both transports: local cockpits fold pushed `host` frames into it, remote ones refetch it
@@ -386,6 +405,12 @@ export const workspaceQueryKeys = {
   agentAccountStatus: (routeId: string) =>
     ['workspace', 'agent-profiles', 'status', routeId] as const,
   skillsUpdate: (projectId: string) => ['workspace', 'skills-update', projectId] as const,
+  /** cezar's own updater via `GET /api/v1/workspace/self-update` (self-update PoC). */
+  selfUpdate: ['workspace', 'self-update'] as const,
+  selfUpdateDevelopment: ['workspace', 'self-update', 'development'] as const,
+  /** cezar's own GitHub star count via `GET /api/v1/star-count`, behind the sidebar's ⭐ ask.
+   *  Workspace-led: the number is about cezar, not about whichever project is on screen. */
+  starCount: ['workspace', 'star-count'] as const,
   /** One directory listing from `GET /api/fs/browse` (step 4.2's folder picker). Keyed by the
    *  browsed path — `null` is the browse root, whose absolute location only the server knows.
    *  Not scope-led: there is one filesystem behind the workspace, not one per project. */
@@ -396,7 +421,8 @@ export const workspaceQueryKeys = {
 
 /**
  * One runner's host-discovered catalog, cached per runner (#794 — this used to be hard-wired to
- * Codex, which is why OpenCode had nothing but stale presets to show).
+ * Codex, which is why OpenCode had nothing but stale presets to show). Cursor (#807) discovers
+ * the same way — nothing runner-specific lives here, `runnerDiscoversModels` already knows it.
  *
  * A runner with no host catalog never fetches and never resolves data, so its picker falls back
  * to static presets — callers can pass any runner and read `data`/`isError` without checking
@@ -433,8 +459,11 @@ export function useRunnerModelCatalogs(
   const claude = useRunnerModels('claude', enabled)
   const codex = useRunnerModels('codex', enabled)
   const opencode = useRunnerModels('opencode', enabled)
+  const cursor = useRunnerModels('cursor', enabled)
   const pi = useRunnerModels('pi', enabled)
-  return { claude, codex, opencode, pi }
+  const junie = useRunnerModels('junie', enabled)
+  const copilot = useRunnerModels('copilot', enabled)
+  return { claude, codex, junie, opencode, cursor, pi, copilot }
 }
 
 export function useProviderStatus() {
@@ -1153,9 +1182,19 @@ export function useTodos(enabled = true) {
   })
 }
 
-export function useWorkflows() {
+/** The graph editor's node catalog — static per server build, so it never refetches. */
+export function useWorkflowNodes() {
+  return useQuery({
+    queryKey: queryKeys.workflowNodes,
+    queryFn: ({ signal }) => getWorkflowNodes({ signal }),
+    staleTime: Infinity,
+  })
+}
+
+export function useWorkflows(opts: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: queryKeys.workflows,
+    enabled: opts.enabled ?? true,
     queryFn: ({ signal }) => getWorkflows({ signal }),
   })
 }
@@ -1243,6 +1282,44 @@ export function useRepoChanges() {
     queryKey: queryKeys.repoChanges,
     queryFn: ({ signal }) => getRepoChanges({ signal }),
     retry: false,
+  })
+}
+
+/**
+ * The repository's path index behind the Git tab's Files sub-tab (#1279). Same 409 stance as the
+ * rest of the family: "not a git repository" is an answer, not a hiccup. One read per visit feeds
+ * both the tree and the filter.
+ *
+ * `/repo/*` is deliberately NOT on the SSE stream, so there is no invalidation to ride and the
+ * query-client doctrine's "the stream says when something changed" does not cover it. This is the
+ * same hole `useRunChanges` opted out of, for the same reason and with the same two knobs: the data
+ * is a working tree an agent is actively editing, so coming back to the tab must re-read it rather
+ * than serve a snapshot from before the agent ran. `refetchOnWindowFocus` alone would not do it —
+ * the shared 5-minute `staleTime` would swallow the refetch — which is why `staleTime: 0` is here
+ * too. No polling: this fires on focus, not on a schedule.
+ */
+export function useRepoTree() {
+  return useQuery({
+    queryKey: queryKeys.repoTree,
+    queryFn: ({ signal }) => getRepoTree({ signal }),
+    retry: false,
+    refetchOnWindowFocus: true,
+    staleTime: 0,
+  })
+}
+
+/** One repository file for the Files sub-tab's viewer. `path` is `undefined` while nothing is
+ *  selected. A 409 ("path is not in the repository index: …", "symlinks are not served: …") is the
+ *  server's answer, so retries are off; cached per path, making re-selection free. Same freshness
+ *  override as `useRepoTree` — the pane must not keep showing bytes an agent has since rewritten. */
+export function useRepoFile(path: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.repoFile(path ?? ''),
+    queryFn: ({ signal }) => getRepoFile(path as string, { signal }),
+    enabled: path !== undefined && path !== '',
+    retry: false,
+    refetchOnWindowFocus: true,
+    staleTime: 0,
   })
 }
 
@@ -1347,6 +1424,25 @@ export function useAgentProfiles() {
   })
 }
 
+/**
+ * cezar's own star count, for the sidebar's ⭐ ask.
+ *
+ * `staleTime: Infinity` and no retry, both deliberate. The server already caches the number for
+ * six hours and answers `{ available: false }` for every failure, so refetching it costs a round
+ * trip that cannot produce a different answer — and a decorative count is the last thing in the
+ * cockpit that should retry, poll, or hold the query client's attention. One read per session.
+ */
+export function useStarCount(enabled = true) {
+  return useQuery({
+    queryKey: workspaceQueryKeys.starCount,
+    queryFn: ({ signal }) => getStarCount({ signal }),
+    enabled,
+    staleTime: Infinity,
+    retry: false,
+    refetchOnMount: false,
+  })
+}
+
 export function useSkillsUpdate(projectId: string, enabled = true) {
   return useQuery({
     queryKey: workspaceQueryKeys.skillsUpdate(projectId),
@@ -1381,14 +1477,83 @@ export function useApplySkillsUpdate(projectId: string) {
   return useMutation({ mutationFn: () => applySkillsUpdate(projectId), onSuccess: (state) => queryClient.setQueryData(key, state) })
 }
 
+/** cezar's own update state (self-update PoC). Polls fast while an install job runs so the
+ *  dialog's log follows npm, and sits idle otherwise — the health chip carries the "update
+ *  available" signal on its own. `enabled` gates the fetch to the open dialog. */
+export function useSelfUpdate(enabled = true) {
+  return useQuery({
+    queryKey: workspaceQueryKeys.selfUpdate,
+    queryFn: ({ signal }) => getSelfUpdate({ signal }),
+    enabled,
+    refetchInterval: (query) => (query.state.data?.job?.status === 'running' ? 1_000 : false),
+  })
+}
+
+/** The development channel's worktrees and PR builds — fetched only while that channel's
+ *  panel is on screen (a git call per worktree plus a GitHub round trip). */
+export function useSelfUpdateDevelopment(enabled = true) {
+  return useQuery({
+    queryKey: workspaceQueryKeys.selfUpdateDevelopment,
+    queryFn: ({ signal }) => getSelfUpdateDevelopment({ signal }),
+    enabled,
+    staleTime: 30_000,
+  })
+}
+
+export function useRefreshSelfUpdateDevelopment() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => getSelfUpdateDevelopment({ refresh: true }),
+    onSuccess: (state) => queryClient.setQueryData(workspaceQueryKeys.selfUpdateDevelopment, state),
+  })
+}
+
+export function useRefreshSelfUpdate() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => refreshSelfUpdate(),
+    onSuccess: (state) => queryClient.setQueryData(workspaceQueryKeys.selfUpdate, state),
+  })
+}
+
+export function useSetSelfUpdateChannel() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (channel: UpdateChannel) => setSelfUpdateChannel(channel),
+    onSuccess: (state) => queryClient.setQueryData(workspaceQueryKeys.selfUpdate, state),
+  })
+}
+
+export function useApplySelfUpdate() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (version: string) => applySelfUpdate(version),
+    onSuccess: (state) => queryClient.setQueryData(workspaceQueryKeys.selfUpdate, state),
+  })
+}
+
 /** Rename a run (#389): `PATCH /api/runs/:id`. Invalidates `runs.*` so the list and the detail
  *  view refetch the authoritative record. The run header's inline title edit sits on this. */
 export function usePatchRun(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (patch: PatchRunInput) => patchRun(id, patch),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
+    onSuccess: (updated) => {
+      writePatchedRunToCaches(queryClient, updated)
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
+    },
   })
+}
+
+/** Put a successful rename receipt into every project-scoped cache before refetching. */
+export function writePatchedRunToCaches(queryClient: QueryClient, updated: RunRecord): void {
+  queryClient.setQueryData<ApiRun[]>(queryKeys.runs.list(), (list) =>
+    list?.map((current) => (current.id === updated.id ? mergeRun(current, updated) : current)),
+  )
+  queryClient.setQueryData<ApiRun>(queryKeys.runs.detail(updated.id), (current) =>
+    current ? mergeRun(current, updated) : updated,
+  )
+  invalidateRunsIndex(queryClient)
 }
 
 /**

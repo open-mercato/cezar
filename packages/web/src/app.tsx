@@ -10,6 +10,7 @@ import { AppearanceProvider } from './components/appearance-provider'
 import { LastLocationController } from './components/last-location-controller'
 import { ReferenceStatusRegistry } from './components/reference-status'
 import { RunNotifications } from './components/run-notifications'
+import { StarPromo } from './components/star-promo'
 import { ThemeProvider } from './components/theme-provider'
 import { Toaster } from './components/ui/toaster'
 import { AppRoutes } from './routes'
@@ -44,6 +45,10 @@ export function App() {
               (and reconciliation refetches), turning attention transitions into browser
               notifications when the tab is hidden (R6 1.7). Renders nothing. */}
           <RunNotifications />
+          {/* And beside it for the same reason: the star ask's one-time toast watches the same
+              run-list cache for the user's first successful run. Once per browser, ever, and
+              silent when promos are off (`CEZ_NO_BANNER=1`). Renders nothing. */}
+          <StarPromo />
           <ThemeProvider>
             {/* Beside ThemeProvider on purpose: appearance (accent/density) is the ui-state.json
                 half of the same boot contract — mirror pre-paints, server truth reconciles. */}

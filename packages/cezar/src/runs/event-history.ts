@@ -570,6 +570,9 @@ export async function deriveRunContextEvents(filePath: string): Promise<RunHisto
         };
         if (item.kind !== 'tool' || typeof item.id !== 'string' || item.id === '') continue;
         const parentId = typeof item.parentItemId === 'string' ? item.parentItemId : undefined;
+        // `task` only, never `skill` (#1202): the retained episode is a sub-agent fan-out, and a
+        // skill spawns none — it loads instructions into the main agent's turn and settles at
+        // once, so treating it as a root would pin an episode that has nothing under it.
         const isRoot = item.toolKind === 'task' && parentId === undefined;
         if (!isRoot && parentId === undefined) continue;
         const key = itemIdentity(event, item.id);

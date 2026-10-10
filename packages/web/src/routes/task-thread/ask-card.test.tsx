@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/client'
 import { AskCard } from './ask-card'
+import { readAskSelections, resetAskSelections } from './ask-selections'
 import type { ThreadAsk } from './thread-state'
 import type { ApiRun, ProviderStatusResponse, StepState } from '@open-mercato/cezar-api-client'
 
@@ -18,6 +19,7 @@ vi.mock('@/api/queries', () => ({
 
 afterEach(() => {
   cleanup()
+  resetAskSelections()
   mutateAsync.mockClear().mockResolvedValue({})
   continueAsync.mockClear().mockResolvedValue({})
   providerStatus = {
@@ -25,6 +27,7 @@ afterEach(() => {
       { provider: 'claude', status: 'connected', enabled: true },
       { provider: 'codex', status: 'not-installed', enabled: true },
       { provider: 'opencode', status: 'not-installed', enabled: true },
+      { provider: 'cursor', status: 'not-installed', enabled: true },
     ],
   }
 })
@@ -113,6 +116,16 @@ const twoQuestionAsk: ThreadAsk = {
   ],
 }
 
+describe('AskCard — who asks', () => {
+  it('names the agent by default and the workflow for a graph gate/question', () => {
+    const { unmount } = renderAsk(singleAsk)
+    expect(screen.getByText('The agent is asking')).toBeTruthy()
+    unmount()
+    renderAsk({ ...singleAsk, fromWorkflow: true })
+    expect(screen.getByText('The workflow is asking')).toBeTruthy()
+  })
+})
+
 describe('AskCard', () => {
   it('renders the header, question and each option with its description', () => {
     renderAsk(singleAsk)
@@ -185,6 +198,7 @@ describe('AskCard', () => {
         claude,
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'not-installed', enabled: true },
+        { provider: 'cursor', status: 'not-installed', enabled: true },
       ],
     }
 
@@ -196,6 +210,82 @@ describe('AskCard', () => {
       '/settings/agents#providers',
     )
     expect(mutateAsync).not.toHaveBeenCalled()
+  })
+})
+
+// #1247: the card is a thread row, and a virtualized thread unmounts every row that scrolls out
+// of view. The picks lived in component state and died with it, leaving Send disabled with
+// nothing on screen to say why.
+describe('AskCard — picks survive the row unmounting', () => {
+  it('keeps picks across an unmount and remount of the card', () => {
+    const first = renderAsk(twoQuestionAsk)
+    fireEvent.click(screen.getByRole('button', { name: /date-fns/ }))
+    fireEvent.click(screen.getByRole('button', { name: /ISO/ }))
+    first.unmount()
+
+    renderAsk(twoQuestionAsk)
+    expect(screen.getByRole('button', { name: /date-fns/ }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('button', { name: /ISO/ }).getAttribute('aria-pressed')).toBe('true')
+    const send = screen.getByRole('button', { name: 'Send answer' }) as HTMLButtonElement
+    expect(send.disabled).toBe(false)
+    fireEvent.click(send)
+    expect(mutateAsync).toHaveBeenCalledWith({ text: 'Library: date-fns\nStyle: ISO' })
+  })
+
+  it('never carries picks to another run or another ask', () => {
+    const first = renderAsk(twoQuestionAsk)
+    fireEvent.click(screen.getByRole('button', { name: /date-fns/ }))
+    first.unmount()
+
+    const other = renderAsk(twoQuestionAsk, { ...activeRun, id: 'r2' })
+    expect(screen.getByRole('button', { name: /date-fns/ }).getAttribute('aria-pressed')).toBe('false')
+    other.unmount()
+    renderAsk({ ...twoQuestionAsk, id: 'ask_4' })
+    expect(screen.getByRole('button', { name: /date-fns/ }).getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('drops the held picks once the ask resolves', () => {
+    const { rerender } = renderAsk(twoQuestionAsk)
+    fireEvent.click(screen.getByRole('button', { name: /date-fns/ }))
+    expect(readAskSelections('r1', twoQuestionAsk)).toEqual({ 0: ['date-fns'] })
+
+    rerender(
+      <MemoryRouter>
+        <AskCard ask={{ ...twoQuestionAsk, resolved: true, answer: 'free-form reply' }} run={activeRun} />
+      </MemoryRouter>,
+    )
+    expect(readAskSelections('r1', twoQuestionAsk)).toEqual({})
+  })
+
+  // Codex names asks `codex-<rpc id>`, a counter that restarts with its app-server, so a
+  // Continue can reuse an id within one run for a different question.
+  it('a reused ask id with different questions neither inherits nor wipes the old picks', () => {
+    const first = renderAsk(twoQuestionAsk)
+    fireEvent.click(screen.getByRole('button', { name: /date-fns/ }))
+    first.unmount()
+
+    const reused: ThreadAsk = {
+      ...twoQuestionAsk,
+      questions: [
+        { header: 'Host', question: 'Which host?', options: [{ label: 'date-fns' }, { label: 'Fly' }] },
+        { header: 'Region', question: 'Which region?', options: [{ label: 'EU' }, { label: 'US' }] },
+      ],
+    }
+    renderAsk(reused)
+    expect(screen.getByRole('button', { name: /date-fns/ }).getAttribute('aria-pressed')).toBe('false')
+    cleanup()
+    renderAsk({ ...reused, resolved: true, answer: 'Host: Fly' })
+    expect(readAskSelections('r1', twoQuestionAsk)).toEqual({ 0: ['date-fns'] })
+  })
+
+  it('a half-answered card names the questions still missing a pick', () => {
+    renderAsk(twoQuestionAsk, closedRun)
+    // A fresh card names nothing — every header would be noise.
+    expect(document.querySelector('[data-slot="ask-unanswered"]')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /date-fns/ }))
+    expect(document.querySelector('[data-slot="ask-unanswered"]')?.textContent).toBe('unanswered: Style')
+    fireEvent.click(screen.getByRole('button', { name: /Relative/ }))
+    expect(document.querySelector('[data-slot="ask-unanswered"]')).toBeNull()
   })
 })
 
@@ -287,6 +377,7 @@ describe('AskCard — answering after the session has ended', () => {
         { provider: 'claude', status: 'disconnected', enabled: true },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'not-installed', enabled: true },
+        { provider: 'cursor', status: 'not-installed', enabled: true },
       ],
     }
 

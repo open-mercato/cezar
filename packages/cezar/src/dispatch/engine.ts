@@ -168,7 +168,9 @@ export function childSettleReport(
     (unanswered
       ? ({
           status: 'blocked',
-          result: `unanswered question — the run settled (${child.status}) before a reply arrived: ${unanswered.questions.join(' | ')}`,
+          // The record keeps at most 4 of the question texts (see `pendingAsk`), so say how many
+          // more there were rather than letting the parent read a truncated list as the whole ask.
+          result: `unanswered question — the run settled (${child.status}) before a reply arrived: ${unanswered.questions.join(' | ')}${unanswered.omittedQuestions ? ` (+${unanswered.omittedQuestions} more)` : ''}`,
           evidence: [],
           side_effects: [],
           errors: child.error ? [child.error] : [],

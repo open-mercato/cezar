@@ -1,0 +1,3 @@
+{"method":"session/update","params":{"sessionId":"session-260927-141912-1jcp","update":{"sessionUpdate":"usage_update","used":16489,"size":1048576,"cost":{"amount":0.026533640000000004,"currency":"USD"}}}}
+{"method":"session/update","params":{"sessionId":"session-260927-141912-1jcp","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Task was interrupted"},"messageId":"9d697325-786f-400b-91f6-da1fb40ba0a9"}}}
+{"id":7,"result":{"stopReason":"cancelled","usage":{"inputTokens":2389,"outputTokens":5,"totalTokens":2394,"cachedReadTokens":0,"cachedWriteTokens":0}}}

@@ -140,6 +140,10 @@ describe('fromDefinition / toBody', () => {
     const template = { name: 'Sweep', kind: 'schedule' as const, prompt: 'sweep' }
     expect(applyTemplate(picked, { ...template, runner: 'codex' }).account).toBeNull()
     expect(applyTemplate(picked, template).account).toBe('work')
+    // junie is a runner too: a template naming it must take the runner and drop the account,
+    // not fall back to the draft's — the un-widened guard this used to have did exactly that.
+    expect(applyTemplate(picked, { ...template, runner: 'junie' }).runner).toBe('junie')
+    expect(applyTemplate(picked, { ...template, runner: 'junie' }).account).toBeNull()
   })
 
   it('clamps lookback and max records into the server bounds', () => {

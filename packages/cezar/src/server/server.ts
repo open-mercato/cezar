@@ -7,7 +7,7 @@ import { createTrackerService } from './tracker/index.ts';
 import { TrackerWatches } from './tracker/watch.ts';
 import { readTrackerAssociation, writeTrackerAssociation, clearTrackerAssociation } from '../tracker-association.ts';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { AutomationStore } from '../automations/store.ts';
 import { AutomationCoordinator } from '../automations/coordinator.ts';
 import { GithubPoller } from '../automations/github-poller.ts';
@@ -29,7 +29,7 @@ import {
 } from '../automations/types.ts';
 import { trackerTriggerSchema, trackerAutomationOptionsSchema, trackerAutomationOptionsQuerySchema, automationScheduleSchema, localTimeZone, nextOccurrence } from '@open-mercato/cezar-contract';
 import type { IncomingMessage } from 'node:http';
-import { access, constants as fsConstants, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
+import { access, constants as fsConstants, mkdir, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -38,16 +38,21 @@ import type { Next } from 'hono';
 import { serve, type ServerType } from '@hono/node-server';
 import { bodyLimit } from 'hono/body-limit';
 import { streamSSE } from 'hono/streaming';
-import { jsonZodValidator, paramZodValidator, queryZodValidator } from './validators.ts';
+import { jsonZodValidator, multipartZodValidator, paramZodValidator, queryZodValidator } from './validators.ts';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { z } from 'zod';
 import {
+  PROMPT_TEMPLATE_TEXT_MAX,
   setWorkspaceUiStateInputSchema,
+  setWorkspaceConfigInputSchema,
   type GroupResponse,
   type GroupVariant,
   type PickVariantResponse,
   type RunIndexEntry,
   type RunsIndexResponse,
+  type StarCountPayload,
+  type WorkspaceConfigResponse,
+  workspaceBrandingLogoResponseSchema,
 } from '@open-mercato/cezar-contract';
 // A contract VALUE, like `workspaceUiStateSchema` in workspace/migrations.ts — the request
 // schema this route validates with is the same one the client compiles against.
@@ -65,7 +70,9 @@ import type { ContentBlock } from '../core/agent-runner.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import { discoverClaudeModels } from '../core/claude-model-catalog.ts';
 import { discoverCodexModels } from '../core/codex-model-catalog.ts';
+import { discoverCursorModels } from '../core/cursor-model-catalog.ts';
 import { discoverOpencodeModels } from '../core/opencode-model-catalog.ts';
+import { discoverJunieModels } from '../core/junie-model-catalog.ts';
 import {
   PROVIDER_IDS,
   ProviderAuthService,
@@ -80,6 +87,13 @@ import { DashboardReader } from '../workspace/dashboard.ts';
 import { dashboardRoutes } from './dashboard.ts';
 import { WORKFLOWS_DIR, loadWorkflows } from '../workflows/load.ts';
 import {
+  NODE_CATALOG,
+  graphIssues,
+  graphToSteps,
+  workflowGraphFileSchema,
+  workflowGraphSchema,
+} from '../workflows/graph.ts';
+import {
   QUICK_TASK_WORKFLOW,
   normalizeWorkflowDoc,
   skillStackOf,
@@ -92,6 +106,9 @@ import {
 import { planChain, slugify } from '../planner.ts';
 import { discoverSkills } from '../skills.ts';
 import { SkillsUpdateConflictError, SkillsUpdateCoordinator, SkillsUpdateService, type SkillsUpdateState } from '../skills-update.ts';
+import { selfUpdateApplyRequestSchema, selfUpdateChannelRequestSchema, selfUpdateDevelopmentQuerySchema } from '@open-mercato/cezar-contract';
+import { SelfUpdateBusyError, SelfUpdateService } from '../self-update/service.ts';
+import { StarCountReader } from './star-count.ts';
 import { getTeamSkillsCached, refreshTeamSkills, waitForTeamSkills } from '../skills-remote.ts';
 import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.ts';
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
@@ -105,6 +122,7 @@ import {
 } from '../runs/event-history.ts';
 import { readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
+import { onRunDeleted, onRunEvent } from './sse-subscriptions.ts';
 import {
   countRunDraftImages,
   deleteRunDraftImage,
@@ -123,6 +141,7 @@ import {
   runHistoryQuerySchema,
   runIdParamSchema,
   setRunDraftInputSchema,
+  repoFileQuerySchema,
   type DeleteDraftResponse,
 } from '@open-mercato/cezar-contract';
 import { toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
@@ -137,13 +156,15 @@ import {
   createOrSwitchBranch,
   imageMimeType,
   isOsOpenableImage,
+  listRepoPaths,
   pushCurrentBranch,
   readWorktreePath,
+  repoIndexContains,
 } from './git-changes.ts';
 import { gatedSkillsRepos, loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
 import { findConfigFile } from '../agent-config/catalog.ts';
 import { readConfigFile, statConfigPath, writeConfigFile } from '../agent-config/files.ts';
-import { readAgentModelDefaults } from '../agent-config/models.ts';
+import { type AgentModelDefaults, readAgentModelDefaults } from '../agent-config/models.ts';
 import { listAgentConfig } from '../agent-config/service.ts';
 import { listConfigFiles, type AgentHomePaths } from '../agent-config/catalog.ts';
 import { readAccountIdentity } from '../agent-config/account-identity.ts';
@@ -195,7 +216,7 @@ import { checkoutRepo, type CloneRunner } from './checkout.ts';
 import { ProjectContextError, ProjectContexts, type ProjectContext } from './project-context.ts';
 import { reviewGateEnabled } from '../runs/review-gate.ts';
 import { readUiState, uiStatePath } from '../ui-state.ts';
-import { agentHomePaths, expandTilde } from '../paths.ts';
+import { agentHomePaths, cezarHomeDir, expandTilde } from '../paths.ts';
 import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
@@ -299,6 +320,14 @@ export interface ServerDeps {
   /** Process-wide Open Mercato skills update detector. Injected in tests and
    * shared by every workspace route/project; createApp owns the default. */
   skillsUpdate?: SkillsUpdateService;
+  /** The cockpit's own updater (`/api/v1/workspace/self-update`, src/self-update/). Built by
+   *  the CLI, which knows the entry file, the port and how to restart; absent in tests and for
+   *  bare `createApp` callers, where the family answers a read-only "not available" status. */
+  selfUpdate?: SelfUpdateService;
+  /** cezar's own GitHub star count behind `GET /api/v1/star-count` (the cockpit's ⭐ ask).
+   *  Defaults to a reader that asks github.com at most once per six hours and caches the answer
+   *  under `~/.cache/cez/`; tests inject their own so no suite ever reaches the network. */
+  starCount?: { read(): Promise<StarCountPayload> };
   /** WebSocket subscription hub (`/api/v1/ws`, src/server/ws.ts). `createApp`
    *  only registers topics on it — `startServer` builds one and attaches it
    *  to the HTTP server it binds. Optional so legacy callers/tests change
@@ -554,39 +583,6 @@ export interface UpdateProjectResponse {
   project: ProjectListEntry;
 }
 
-/** `GET/PUT /api/workspace/config` (multi-project spec, step 2.7) — the
- *  settings slice of `~/.cezar/config.json`: global knobs ONLY, never the
- *  project registry (that is `GET /api/projects`' job). */
-export interface WorkspaceConfigResponse {
-  /** Root exposed by the Add project directory browser (`~` kept). */
-  browseRoot: string;
-  /** Checkout root for GUI-cloned projects — stored as written (`~` kept). */
-  projectsDir: string;
-  /** Stored override; null means inherit CEZ_SKILLS_AUTO_UPDATE, then true. */
-  skillsAutoUpdate: boolean | null;
-  effectiveSkillsAutoUpdate: boolean;
-  composerDefaults: {
-    autonomous: boolean | null;
-    worktree: boolean | null;
-    inheritedAutonomous: boolean | 'source-dependent';
-    inheritedWorktree: boolean;
-  };
-  resources: {
-    maxParallel: number;
-    maxMonitoringSessions: number;
-    monitoringWakeIntervalMinutes: number | null;
-    autoResumeOnUsageLimit: boolean;
-    memoryLimitMb: number | null;
-    worktreeRetentionDefault: number;
-  };
-  /** What a repo that has set none of its own runs (spec 2026-07-29-agent-profiles). Both keys
-   *  optional: absent means "no opinion", which must stay distinguishable from a chosen value. */
-  agentDefaults: {
-    runner?: ProviderId;
-    models?: { claude?: string; codex?: string; opencode?: string };
-  };
-}
-
 // ---- workspace SSE (multi-project spec, step 2.8) --------------------------
 
 /** Workspace-level event names carried ONLY on `GET /api/workspace/events`
@@ -723,6 +719,14 @@ const saveWorkflowSchema = z
     message: 'provide either "steps" or "skills", not both',
   });
 
+const validateGraphSchema = z.object({ graph: workflowGraphSchema });
+const saveGraphSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  description: z.string().max(2_000, 'must be at most 2000 characters').optional(),
+  graph: workflowGraphSchema,
+  overwrite: z.boolean().optional(),
+});
+
 const parseWorkflowSchema = z.object({
   yaml: z.string().min(1).max(100_000),
 });
@@ -788,6 +792,8 @@ const uiStateSchema = z
     lastWorktree: z.boolean().optional(),
     lastAutonomous: z.boolean().optional(),
     lastGenerateFollowups: z.boolean().optional(),
+    // Default team-skill curation belongs to this repo's ui-state, never the workspace state.
+    importedSkills: z.array(z.string().min(1).max(200)).max(UI_STATE_MAX_KEYS).optional(),
     // Skill selection frequency (#408): name → times chosen, incremented on a successful run
     // start from EITHER composer (`/new`'s SourcePill and the follow-up `SkillsPicker`). Drives
     // the shared `orderSkillsByUsage` sort (web/app/src/lib/skills.ts) so both pickers float the
@@ -812,6 +818,11 @@ const uiStateSchema = z
     // The GitHub tab's last-selected sub-tab (#417): issues or PRs. ADDITIVE — an old
     // ui-state.json without the key behaves as the default (issues).
     githubView: z.enum(['issues', 'prs']).optional(),
+    // The GitHub tab's list order: newest first (what `gh` returns) or oldest first, for working
+    // the backlog from the long-waiting end. ADDITIVE, like `githubView` above — an old
+    // ui-state.json without the key behaves as the default (newest), and the sort is applied
+    // client-side, so this key changes presentation only, never what `GET /github` fetches.
+    githubSort: z.enum(['newest', 'oldest']).optional(),
     // Settings → Appearance (redesign R6): accent + density. ADDITIVE — the theme itself
     // stays in the browser (`cez-theme` localStorage, pre-paint). The cockpit always PUTs
     // the whole object because the top-level merge below is shallow.
@@ -825,7 +836,7 @@ const uiStateSchema = z
         z.object({
           id: z.string().min(1).max(64),
           label: z.string().trim().min(1).max(80),
-          text: z.string().trim().min(1).max(2000),
+          text: z.string().trim().min(1).max(PROMPT_TEMPLATE_TEXT_MAX),
           // Skill names this template auto-applies for. Optional and additive: templates
           // written before this key existed keep validating, and stay manual-only.
           skills: z.array(z.string().trim().min(1).max(200)).max(50).optional(),
@@ -835,8 +846,7 @@ const uiStateSchema = z
       .optional(),
     // Skills promo banner (#391): set once the cockpit banner is dismissed, never unset.
     // Server-persisted (not a cookie) so the "shown once" promise holds across browsers.
-    // Retained for backward compatibility — the banner is gone, replaced by the workspace-level
-    // `importedSkills` curation (see `workspaceUiStateSchema`); `.passthrough()` would preserve
+    // Retained for backward compatibility — the banner is gone; `.passthrough()` would preserve
     // the key regardless, but keep it typed.
     dismissedSkillsBanner: z.boolean().optional(),
   })
@@ -964,6 +974,80 @@ const pinSchema = z.object({
 // it only ever carries small GUI prefs.
 const GLOBAL_BODY_LIMIT = 32 * 1024 * 1024; // 32 MiB
 const UI_STATE_BODY_LIMIT = 128 * 1024; // 128 KiB
+const BRANDING_LOGO_MAX_BYTES = 2 * 1024 * 1024;
+const BRANDING_LOGO_TYPES = {
+  'image/png': { ext: '.png', signature: (b: Buffer) => b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) },
+  'image/jpeg': { ext: '.jpg', signature: (b: Buffer) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
+  'image/webp': { ext: '.webp', signature: (b: Buffer) => b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WEBP' },
+  'image/gif': { ext: '.gif', signature: (b: Buffer) => ['GIF87a', 'GIF89a'].includes(b.toString('ascii', 0, 6)) },
+  'image/avif': { ext: '.avif', signature: (b: Buffer) => b.toString('ascii', 4, 8) === 'ftyp' && /avif|avis/.test(b.toString('ascii', 8, 16)) },
+  'image/svg+xml': { ext: '.svg', signature: (b: Buffer) => isSafeBrandSvg(b.toString('utf8')) },
+} as const;
+const BRANDING_LOGO_EXTENSIONS = Object.values(BRANDING_LOGO_TYPES).map(({ ext }) => ext);
+const BRANDING_LOGO_FILE = 'branding-logo';
+
+function brandingLogoType(bytes: Buffer): [string, (typeof BRANDING_LOGO_TYPES)[keyof typeof BRANDING_LOGO_TYPES]] | null {
+  for (const [mime, type] of Object.entries(BRANDING_LOGO_TYPES)) {
+    if (type.signature(bytes)) return [mime, type];
+  }
+  return null;
+}
+
+function isSafeBrandSvg(svg: string): boolean {
+  const checked = svg.replace(/xmlns=(['"])http:\/\/www\.w3\.org\/2000\/svg\1/i, '');
+  if (checked.length === 0 || /<!DOCTYPE|<!ENTITY|<script\b|<foreignObject\b|<image\b|<use\b|<iframe\b|<style\b|\bon\w+\s*=|(?:href|src)\s*=|url\s*\(/i.test(checked)) return false;
+  return /^\s*<svg\b[\s\S]*<\/svg>\s*$/i.test(checked) && !/javascript:|data:|https?:|file:/i.test(checked);
+}
+
+/**
+ * `POST /workspace/branding-logo`'s request boundary — presence, size, declared type and (since
+ * those three are only what the browser CLAIMS about the file) the real content-sniffed format,
+ * all as one schema so the route type records a `File` field rather than the handler trusting
+ * whatever `parseBody()` handed it.
+ *
+ * EVERY check in the chain runs — zod does not stop at the first failure — so each one has to
+ * stand on its own against input the one before it would have rejected. A request can therefore
+ * collect more than one message, which is the honest trade for never letting a later check
+ * dereference something an earlier one only *meant* to have filtered out.
+ */
+export const brandingLogoUploadSchema = z.object({
+  file: z
+    .instanceof(File, { message: 'Choose an image file' })
+    .refine((f) => f.size >= 1 && f.size <= BRANDING_LOGO_MAX_BYTES, { message: 'Logo must be smaller than 2 MB' })
+    // `Object.hasOwn`, not `in`: `in` walks the prototype chain, so a part declaring
+    // `Content-Type: constructor` (or `toString`, `valueOf`, `hasOwnProperty`, `__proto__`)
+    // passed this gate, and the sniff below then read `.signature` off `Object` — undefined —
+    // and threw. A throw inside an async refine is NOT caught by `safeParseAsync`, so the
+    // request answered 500 instead of this message.
+    .refine((f) => Object.hasOwn(BRANDING_LOGO_TYPES, f.type), { message: 'Use PNG, JPEG, WebP, GIF, AVIF, or a safe SVG image' })
+    .refine(
+      async (f) => {
+        // Looked up defensively even though the refine above already rejected an unsupported
+        // type: zod runs EVERY check in a chain, it does not stop at the first failure, so this
+        // still executes for a type that is not in the table. Reading `.signature` off whatever
+        // the chain handed back then threw, and a throw inside an async refine escapes
+        // `safeParseAsync` — the route answered 500 instead of a validation error.
+        if (!Object.hasOwn(BRANDING_LOGO_TYPES, f.type)) return false;
+        const imageType = BRANDING_LOGO_TYPES[f.type as keyof typeof BRANDING_LOGO_TYPES];
+        return imageType.signature(Buffer.from(await f.arrayBuffer()));
+      },
+      { message: 'File contents do not match a supported image format' },
+    ),
+});
+
+function logoAssetUrl(): string | null {
+  for (const filename of [BRANDING_LOGO_FILE, ...BRANDING_LOGO_EXTENSIONS.map((ext) => `${BRANDING_LOGO_FILE}${ext}`)]) {
+    const path = join(cezarHomeDir(), filename);
+    if (!existsSync(path)) continue;
+    try {
+      const bytes = readFileSync(path);
+      if (!brandingLogoType(bytes)) continue;
+      const digest = createHash('sha256').update(bytes).digest('hex').slice(0, 12);
+      return `/api/v1/workspace/branding-logo?v=${digest}`;
+    } catch { /* unreadable logo degrades to no logo */ }
+  }
+  return null;
+}
 
 /** The name half of a Host header — `localhost:4321` → `localhost`,
  *  `[::1]:4321` → `[::1]`. A bracketed IPv6 literal keeps its brackets
@@ -1135,9 +1219,11 @@ export function createApp(deps: ServerDeps) {
       claude: { discover: () => discoverClaudeModels({ cwd: bootRoot }) },
       codex: { discover: () => discoverCodexModels({ cwd: bootRoot }) },
       opencode: { discover: () => discoverOpencodeModels({ cwd: bootRoot }) },
+      junie: { discover: () => discoverJunieModels({ cwd: bootRoot }) },
+      cursor: { discover: () => discoverCursorModels() },
     },
   });
-  const providerAuth = deps.providerAuth ?? new ProviderAuthService();
+  const providerAuth = deps.providerAuth ?? new ProviderAuthService({ cwd: bootRoot });
   const workspaceConfig = deps.workspaceConfig ?? {
     load: loadWorkspaceConfig,
     mergeWrite: mergeWriteWorkspaceConfig,
@@ -1190,6 +1276,20 @@ export function createApp(deps: ServerDeps) {
   const openFile = deps.openFile ?? openFileInDefaultApp;
   const openApp = deps.openApp ?? openInApp;
   const skillsUpdate = deps.skillsUpdate ?? new SkillsUpdateService();
+  // No injected updater (tests, embedded callers): a READ-ONLY service over the running entry.
+  // It has no way to restart the process, so it must not install either — an install that
+  // flips `current` under a process that keeps running the old code is the worst of both.
+  const selfUpdate =
+    deps.selfUpdate ??
+    new SelfUpdateService({
+      pkgName: '@open-mercato/cezar',
+      version: deps.version,
+      entry: process.argv[1] ?? '',
+      restart: () => {},
+      readOnly: true,
+      trimPaths: () => !capabilities().localHandoff,
+    });
+  const starCount = deps.starCount ?? new StarCountReader();
 
   // ---- workspace boot-project identity (multi-project spec) ----------------
   // The boot flow (`initWorkspace` in src/index.ts) registers the boot repo
@@ -1772,7 +1872,7 @@ export function createApp(deps: ServerDeps) {
     // `modelDiscoveryRunnerSchema` is the contract's own list of the runners with an
     // authoritative host-local catalog (#794, #784), so the client compiles against exactly what
     // this validates. A runner absent from it has no discovery path and this 400s.
-    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex or opencode' }), async (c) => {
+    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, cursor, or junie' }), async (c) => {
       const query = { data: c.req.valid('query') };
       return c.json(await modelCatalog.get(query.data.runner));
     });
@@ -1896,7 +1996,7 @@ export function createApp(deps: ServerDeps) {
       },
     )
 
-    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, opencode, or pi' }), async (c) => {
+    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, opencode, cursor, pi, or copilot' }), async (c) => {
       const body = { data: c.req.valid('json') };
 
       const provider = body.data.provider as ProviderId;
@@ -1993,6 +2093,7 @@ export function createApp(deps: ServerDeps) {
       ...(profile.provider === 'claude' ? { claude: profile.path } : {}),
       ...(profile.provider === 'codex' ? { codex: profile.path } : {}),
       ...(profile.provider === 'opencode' ? { opencodeConfig: profile.path } : {}),
+      ...(profile.provider === 'cursor' ? { cursor: profile.path } : {}),
     };
     const defs = listConfigFiles().filter(
       (def) => def.scope === 'user' && def.runners.includes(profile.provider),
@@ -2943,6 +3044,61 @@ export function createApp(deps: ServerDeps) {
       }
     });
 
+  // ---- chained family: cezar self-update (workspace-level, PoC) ----
+  // The browser supplies a version STRING (validated shape, never a URL, a path or a tarball)
+  // and a channel; the server resolves both against the npm registry and its own managed
+  // layout. Allowed in hosted mode on purpose: an update pulls a published package from the
+  // registry, so the request cannot inject code, and a VPS behind the installer's Basic auth
+  // is exactly where "update from the cockpit" replaces `cezar server-deploy` — but hosted
+  // applies are FORWARD-ONLY (see the guard on /apply below).
+  // ---- chained family: the star ask (workspace-level) ----------------------
+  // cezar's own star count, for the cockpit's ⭐ button. Workspace-level and single-mount, like
+  // `/health`: it says nothing about any project, and there is nothing for a project scope to
+  // change about it. Never fails — `{ available: false }` is the ordinary offline answer, so the
+  // cockpit's chip simply is not there rather than showing an error nobody asked for.
+  const starCountRoutes = new Hono().get('/star-count', async (c) => c.json(await starCount.read()));
+
+  const selfUpdateRoutes = new Hono()
+    .get('/workspace/self-update', async (c) => c.json(await selfUpdate.status()))
+
+    .post('/workspace/self-update/refresh', async (c) => c.json(await selfUpdate.status({ refresh: true })))
+
+    // The development channel's pickers: cezar's own worktrees and its open PRs' preview builds.
+    // A separate read because it costs a git call per worktree and a GitHub round trip.
+    .get('/workspace/self-update/development', queryZodValidator(selfUpdateDevelopmentQuerySchema), async (c) =>
+      c.json(await selfUpdate.development({ refresh: c.req.valid('query').refresh === '1' })),
+    )
+
+    .put('/workspace/self-update/channel', jsonZodValidator(selfUpdateChannelRequestSchema, { message: 'body must be { channel: "stable" | "nightly" | "development" }' }), async (c) => {
+      const { channel } = c.req.valid('json');
+      await selfUpdate.setChannel(channel);
+      return c.json(await selfUpdate.status());
+    })
+
+    .post('/workspace/self-update/apply', jsonZodValidator(selfUpdateApplyRequestSchema, { message: 'body must be { version }' }), async (c) => {
+      const { version: target } = c.req.valid('json');
+      // SECURITY: a hosted cockpit may only move FORWARD. Installing a published package cannot
+      // inject code, but installing an OLDER one can: every hosted-mode guard — the `/api/*`
+      // request-origin check (#426), the `localHandoff` 409 that closes the agent-config hooks
+      // RCE path — lives in the running version, so a downgrade to a release that predates them
+      // re-opens exactly what they close, through a route those guards never get to see. A
+      // local cockpit keeps the full picker, downgrades included: there is no boundary left to
+      // escalate across when the caller already owns the machine. `forwardOnlyRefusal` decides
+      // what "forward" means — publish time, not just semver order, because a nightly for the
+      // next minor outranks every later patch of the current one.
+      if (!capabilities().localHandoff) {
+        const refusal = await selfUpdate.forwardOnlyRefusal(target);
+        if (refusal) return c.json({ error: refusal }, 409);
+      }
+      try {
+        selfUpdate.apply(target);
+      } catch (error) {
+        if (error instanceof SelfUpdateBusyError) return c.json({ error: error.message }, 409);
+        return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
+      }
+      return c.json(await selfUpdate.status());
+    });
+
   // ---- GUI clone (multi-project spec, step 4.3) ----------------------------
   // "Add project → Clone from GitHub": clone into the checkout root, then
   // register the result through `registerFolder` above (same guards, same
@@ -2966,6 +3122,10 @@ export function createApp(deps: ServerDeps) {
   // /api/projects above, and schemaVersion (a migration cursor, not a
   // setting) is deliberately omitted.
   const workspaceConfigBody = (config: WorkspaceConfig): WorkspaceConfigResponse => ({
+    branding: {
+      name: config.branding.name ?? 'cezar',
+      logoUrl: logoAssetUrl(),
+    },
     browseRoot: config.browseRoot,
     projectsDir: config.projectsDir,
     skillsAutoUpdate: config.skillsAutoUpdate ?? null,
@@ -2988,6 +3148,7 @@ export function createApp(deps: ServerDeps) {
     resources: {
       maxParallel: config.resources.maxParallel,
       maxMonitoringSessions: config.resources.maxMonitoringSessions,
+      idleTimeoutMinutes: config.resources.idleTimeoutMinutes,
       monitoringWakeIntervalMinutes: config.resources.monitoringWakeIntervalMinutes,
       autoResumeOnUsageLimit: config.resources.autoResumeOnUsageLimit,
       memoryLimitMb: config.resources.memoryLimitMb,
@@ -3012,9 +3173,9 @@ export function createApp(deps: ServerDeps) {
     // window exists (the card renders `sampling…` and follows up once ~2.5 s later).
     .get('/workspace/host-usage', async (c) => c.json(hostSampler.sampleHostUsage()))
 
-    .put('/workspace/config', jsonZodValidator(() => workspaceConfigUpdateSchema), async (c) => {
+    .put('/workspace/config', jsonZodValidator(() => setWorkspaceConfigInputSchema), async (c) => {
       const parsed = { data: c.req.valid('json') };
-      const { browseRoot, projectsDir, skillsAutoUpdate, composerDefaults, resources, agentDefaults } = parsed.data;
+      const { browseRoot, projectsDir, skillsAutoUpdate, composerDefaults, resources, agentDefaults, branding } = parsed.data;
       for (const [configuredRoot, create] of [
         [browseRoot, false],
         [projectsDir, true],
@@ -3045,6 +3206,8 @@ export function createApp(deps: ServerDeps) {
       let written: WorkspaceConfig;
       try {
         written = await mergeWriteWorkspaceConfig((config) => {
+          if (branding?.name === null) delete config.branding.name;
+          else if (branding?.name !== undefined) config.branding.name = branding.name;
           // Roots are stored as written (`~` kept); only the probe expands them.
           if (browseRoot !== undefined) config.browseRoot = browseRoot;
           if (projectsDir !== undefined) config.projectsDir = projectsDir;
@@ -3061,6 +3224,9 @@ export function createApp(deps: ServerDeps) {
           if (resources?.maxParallel !== undefined) config.resources.maxParallel = resources.maxParallel;
           if (resources?.maxMonitoringSessions !== undefined) {
             config.resources.maxMonitoringSessions = resources.maxMonitoringSessions;
+          }
+          if (resources?.idleTimeoutMinutes !== undefined) {
+            config.resources.idleTimeoutMinutes = resources.idleTimeoutMinutes;
           }
           if (resources?.monitoringWakeIntervalMinutes !== undefined) {
             config.resources.monitoringWakeIntervalMinutes = resources.monitoringWakeIntervalMinutes;
@@ -3097,6 +3263,41 @@ export function createApp(deps: ServerDeps) {
       return c.json(workspaceConfigBody(written));
     })
 
+    .use('/workspace/branding-logo', bodyLimit({ maxSize: BRANDING_LOGO_MAX_BYTES + 64 * 1024 }))
+
+    .get('/workspace/branding-logo', async (c) => {
+      for (const filename of [BRANDING_LOGO_FILE, ...BRANDING_LOGO_EXTENSIONS.map((ext) => `${BRANDING_LOGO_FILE}${ext}`)]) {
+        try {
+          const bytes = await readFile(join(cezarHomeDir(), filename));
+          const imageType = brandingLogoType(bytes);
+          if (!imageType) continue;
+          const [mime] = imageType;
+          return c.body(new Uint8Array(bytes), 200, { 'content-type': mime, 'cache-control': 'public, max-age=31536000, immutable', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox" });
+        } catch { /* check the next supported image */ }
+      }
+      return c.json({ error: 'Brand logo not found' }, 404);
+    })
+    .post('/workspace/branding-logo', multipartZodValidator(() => brandingLogoUploadSchema), async (c) => {
+      const { file } = c.req.valid('form');
+      const bytes = Buffer.from(await file.arrayBuffer());
+      await mkdir(cezarHomeDir(), { recursive: true, mode: 0o700 });
+      const path = join(cezarHomeDir(), BRANDING_LOGO_FILE);
+      const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(tmp, bytes, { mode: 0o600, flag: 'wx' });
+        await rename(tmp, path);
+      } catch (error) {
+        await unlink(tmp).catch(() => {});
+        throw error;
+      }
+      return c.json(workspaceBrandingLogoResponseSchema.parse({ logoUrl: logoAssetUrl() }));
+    })
+    .delete('/workspace/branding-logo', async (c) => {
+      await Promise.all([BRANDING_LOGO_FILE, ...BRANDING_LOGO_EXTENSIONS.map((ext) => `${BRANDING_LOGO_FILE}${ext}`)]
+        .map((filename) => unlink(join(cezarHomeDir(), filename)).catch(() => {})));
+      return c.json(workspaceBrandingLogoResponseSchema.parse({ logoUrl: null }));
+    })
+
     // Global GUI state (`~/.cezar/ui-state.json`) — same parse/key-cap/shallow-
     // merge semantics as the per-repo /api/v1/ui-state route below (the shared half
     // is `uiStateBodySchema`), but backed by the workspace file.
@@ -3127,42 +3328,6 @@ export function createApp(deps: ServerDeps) {
   // Partial updates only — absent keys stay untouched. Bounds mirror the
   // workspace schema (src/workspace/config.ts, step 1.2) exactly, so a value
   // this route accepts can never be degraded away by the next load's `.catch`.
-  const workspaceConfigUpdateSchema = z.object({
-    browseRoot: z.string().trim().min(1).max(4096).optional(),
-    projectsDir: z.string().trim().min(1).max(4096).optional(),
-    skillsAutoUpdate: z.boolean().nullable().optional(),
-    composerDefaults: z
-      .object({
-        autonomous: z.boolean().nullable().optional(),
-        worktree: z.boolean().nullable().optional(),
-      })
-      .optional(),
-    resources: z
-      .object({
-        maxParallel: z.number().int().min(1).max(16).optional(),
-        maxMonitoringSessions: z.number().int().min(0).max(16).optional(),
-        monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().optional(),
-        autoResumeOnUsageLimit: z.boolean().optional(),
-        memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
-        worktreeRetentionDefault: z.number().int().min(0).max(1000).optional(),
-      })
-      .optional(),
-    // Bounds mirror `src/workspace/config.ts`, so a value this accepts is never degraded away by
-    // the next load's `.catch`. `null` clears a key back to "no opinion".
-    agentDefaults: z
-      .object({
-        runner: z.enum(PROVIDER_IDS).nullable().optional(),
-        models: z
-          .object({
-            claude: z.string().trim().min(1).max(200).nullable().optional(),
-            codex: z.string().trim().min(1).max(200).nullable().optional(),
-            opencode: z.string().trim().min(1).max(200).nullable().optional(),
-            pi: z.string().trim().min(1).max(200).nullable().optional(),
-          })
-          .optional(),
-      })
-      .optional(),
-  });
   // ---- chained family: filesystem browse (workspace-level) ----
   const fsBrowseRoutes = new Hono<ProjectApiEnv>()
     .get(
@@ -3199,26 +3364,16 @@ export function createApp(deps: ServerDeps) {
       return c.json(await discoverSkills(repoRoot));
     })
 
-    // The opt-in catalog for the "Import skills" panel: every skill a default
-    // (vendor) repo offers — `open-mercato/skills` — regardless of import state,
-    // so the panel can present them all with a per-skill toggle. Empty once a repo
-    // configures its own `skillsRepos` (nothing is gated then). `wait=1` lets the
-    // panel wait out a cold team-skill cache, same as `GET /skills` (spec 005).
+    // Every skill a default (vendor) repo offers — `open-mercato/skills` — regardless of
+    // enabled state, so the Skills catalog can list and preview disabled entries. Empty once a
+    // repo configures its own `skillsRepos` (nothing is gated then). `wait=1` lets the page wait
+    // out a cold team-skill cache, same as `GET /skills` (spec 005).
     .get('/skills/importable', queryZodValidator(waitQuery), async (c) => {
       const repoRoot = c.get('project').root;
       const gated = await gatedSkillsRepos(repoRoot);
       if (gated.size === 0) return c.json([]);
       if (c.req.valid('query').wait === '1') await waitForTeamSkills(repoRoot);
-      const importable = getTeamSkillsCached(repoRoot)
-        .filter((skill) => skill.team && gated.has(skill.team.repo))
-        // Spread `description` rather than writing it unconditionally: an undefined VALUE is
-        // dropped by JSON.stringify, so the key is absent on the wire, and writing it always
-        // typed the route as sending a key it does not. contract/skills.ts says `.optional()`,
-        // which is what the client actually receives.
-        .map((skill) => ({
-          name: skill.name,
-          ...(skill.description !== undefined ? { description: skill.description } : {}),
-        }));
+      const importable = getTeamSkillsCached(repoRoot).filter((skill) => skill.team && gated.has(skill.team.repo));
       return c.json(importable);
     })
 
@@ -3322,6 +3477,41 @@ export function createApp(deps: ServerDeps) {
       return c.json({ ok: true, path: target });
     })
 
+    // Graph workflows (spec 2026-09-30-workflow-node-editor): the palette's node catalog, a
+    // structural validator the editor calls as you edit, and the `version: 2` save.
+    .get('/workflows/nodes', (c) => c.json({ nodes: NODE_CATALOG }))
+    .post('/workflows/validate', jsonZodValidator(validateGraphSchema), (c) =>
+      c.json({ issues: graphIssues(c.req.valid('json').graph) }),
+    )
+    .post('/workflows/graph', jsonZodValidator(saveGraphSchema), async (c) => {
+      const { root: repoRoot } = c.get('project');
+      const body = c.req.valid('json');
+      const issues = graphIssues(body.graph);
+      if (issues.length) return c.json({ error: issues.join('; ') }, 400);
+      const slug = slugify(body.name) || 'workflow';
+      const dir = join(repoRoot, WORKFLOWS_DIR);
+      const path = join(dir, `${slug}.yaml`);
+      const { nodes, edges, layout } = body.graph;
+      const doc = {
+        version: 2,
+        name: body.name,
+        ...(body.description ? { description: body.description } : {}),
+        nodes,
+        edges,
+        ...(layout ? { layout } : {}),
+      };
+      try {
+        await mkdir(dir, { recursive: true });
+        await writeFile(path, stringifyYaml(doc), { encoding: 'utf8', flag: body.overwrite ? 'w' : 'wx' });
+      } catch (err) {
+        if (err instanceof Error && 'code' in err && err.code === 'EEXIST') {
+          return c.json({ error: `workflow file already exists: ${path}`, exists: true }, 409);
+        }
+        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+      return c.json({ path, name: body.name }, 201);
+    })
+
     // Import support for the builder (spec 012): parse + validate a pasted
     // workflow YAML (either form) and hand back the normalized definition. The
     // server owns YAML parsing — the GUI stays dependency-free.
@@ -3333,6 +3523,25 @@ export function createApp(deps: ServerDeps) {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return c.json({ error: `not valid YAML: ${message}` }, 400);
+      }
+      const rawVersion = raw && typeof raw === 'object' ? (raw as { version?: unknown }).version : undefined;
+      // Accept a quoted `version: "2"` as the same intent as the numeric literal — a hand-edited
+      // YAML easily picks up the quotes, and without this it falls through to the v1 parser below
+      // with a confusing "missing steps" error instead of a graph validation message.
+      if (raw && typeof raw === 'object' && (rawVersion === 2 || rawVersion === '2')) {
+        const graphDoc = workflowGraphFileSchema.safeParse({ ...(raw as object), version: 2 });
+        if (!graphDoc.success) {
+          return c.json({ error: graphDoc.error.issues.map((i) => i.message).join('; ') }, 400);
+        }
+        const problems = graphIssues(graphDoc.data);
+        if (problems.length) return c.json({ error: problems.join('; ') }, 400);
+        const { name, description, nodes, edges, layout } = graphDoc.data;
+        return c.json({
+          name,
+          ...(description ? { description } : {}),
+          steps: graphToSteps(graphDoc.data),
+          graph: { nodes, edges, ...(layout ? { layout } : {}) },
+        });
       }
       const doc = workflowFileSchema.safeParse(raw);
       if (!doc.success) {
@@ -3958,7 +4167,7 @@ export function createApp(deps: ServerDeps) {
     .post('/runs/read-all', (c) => c.json({ read: c.get('project').store.markAllRead() }))
 
     .post('/runs/:id/archive', jsonZodValidator(archiveSchema, { absent: ({}) }), async (c) => {
-      const { store } = c.get('project');
+      const { store, manager } = c.get('project');
       const id = c.req.param('id');
       // An empty/absent body archives (the common case); a malformed body degrades
       // to `{}` just as before, but a wrong-typed `archived` is now a 400 (#429).
@@ -3966,7 +4175,9 @@ export function createApp(deps: ServerDeps) {
       // `setArchived` itself — the bulk sweep must obey it too (spec
       // 2026-08-03-auto-resume-after-usage-limit).
       const parsed = { data: c.req.valid('json') };
+      const retiresQuestion = parsed.data.archived !== false && store.getRun(id)?.awaitingAnswerSince !== undefined;
       const run = store.setArchived(id, parsed.data.archived !== false);
+      if (run && retiresQuestion) manager.notifyQuestionRetired?.(id);
       return run ? c.json(run) : c.json({ error: 'not found' }, 404);
     })
 
@@ -5208,19 +5419,18 @@ export function createApp(deps: ServerDeps) {
             event: isV2WireEventType(event.type) ? 'ui-event' : 'run-event',
             data: JSON.stringify(event),
           });
-        const onEvent = (payload: { runId: string; event: RunEvent }) => {
-          if (payload.runId !== id) return;
-          if (replaying) buffered.push(payload.event);
-          else void writeEvent(payload.event);
+        const onEvent = (event: RunEvent) => {
+          if (replaying) buffered.push(event);
+          else void writeEvent(event);
         };
         const onRun = (run: RunRecord) => {
           if (run.id !== id) return;
           void stream.writeSSE({ event: 'run', data: JSON.stringify(run) });
         };
-        store.on('event', onEvent);
+        const offEvent = onRunEvent(store, id, onEvent);
         store.on('run', onRun);
         stream.onAbort(() => {
-          store.off('event', onEvent);
+          offEvent();
           store.off('run', onRun);
         });
 
@@ -5286,10 +5496,10 @@ export function createApp(deps: ServerDeps) {
           void stream.writeSSE({ event: 'usage', data: JSON.stringify(owned) });
         });
         store.on('run', onRun);
-        store.on('deleted', onDeleted);
+        const offDeleted = onRunDeleted(store, onDeleted);
         stream.onAbort(() => {
           store.off('run', onRun);
-          store.off('deleted', onDeleted);
+          offDeleted();
           offTodos();
           offUsage();
         });
@@ -5331,12 +5541,12 @@ export function createApp(deps: ServerDeps) {
           // watcher — and each subscription is scoped to its own dataDir (2.3).
           const offTodos = capabilities().followups ? onTodosChanged(dataDir, () => void sendTodos()) : () => undefined;
           store.on('run', onRun);
-          store.on('deleted', onDeleted);
+          const offDeleted = onRunDeleted(store, onDeleted);
           attached.set(project, {
             store,
             detach: () => {
               store.off('run', onRun);
-              store.off('deleted', onDeleted);
+              offDeleted();
               offTodos();
             },
           });
@@ -5826,6 +6036,97 @@ export function createApp(deps: ServerDeps) {
       return c.json(result.changes);
     })
 
+    // The repository's whole path index in ONE bounded response (spec
+    // `.ai/specs/2026-10-05-repo-file-browser.md`, #1279) — the Git tab's Files sub-tab builds its
+    // tree from this and filters it client-side, which is why there is no search endpoint.
+    // `git ls-files` is the source, so `.gitignore`d build output and `node_modules` never appear,
+    // and the set it returns is the membership guard the content route below enforces.
+    .get('/repo/tree', async (c) => {
+      const { root: repoRoot } = c.get('project');
+      const info = await getRepoInfo(repoRoot);
+      // Same status AND the same words as /repo/changes: the Files tab reads this 409 as "the
+      // whole Git view has nothing to show", exactly as the Changes tab does.
+      if (!info) return c.json({ error: 'not a git repository' }, 409);
+      const result = await listRepoPaths(info.root);
+      if (!result.ok) return c.json({ error: result.error }, 409);
+      return c.json({ paths: result.paths, truncated: result.truncated });
+    })
+
+    // One repository file, for the Files sub-tab's viewer — the `/runs/:id/files` handler's shape
+    // with the run lookup replaced by `getRepoInfo`, plus ONE extra guard that the run route does
+    // not need and this one cannot do without.
+    //
+    // This serves the user's REAL checkout, not an isolated worktree. `readWorktreePath` stops
+    // traversal, `.git` and symlinks — it knows nothing about `.gitignore`, so on its own
+    // `?path=.env` would be served verbatim, and AGENTS.md § Zero config's promise that a
+    // repository `.env` is never read would be one fetch away from any cockpit client. The index
+    // membership check below is that control: only a path `git ls-files` returned is readable, so
+    // the reachable set is exactly what is committed or deliberately left untracked-and-unignored.
+    // A TRACKED `.env` stays readable, by design — it is in the index and in the remote already.
+    //
+    // The index is re-derived per request rather than cached: a cache would serve a file the user
+    // has since ignored, and `ls-files` is one bounded subprocess.
+    .get('/repo/files', queryZodValidator(repoFileQuerySchema), async (c) => {
+      const { root: repoRoot } = c.get('project');
+      const query = c.req.valid('query');
+      c.header('vary', 'Accept');
+      const wantsRaw =
+        query.raw !== undefined
+          ? query.raw === '1'
+          : negotiate(c.req.header('accept'), FILE_FORMATS) === 'image/*';
+      const info = await getRepoInfo(repoRoot);
+      if (!info) return c.json({ error: 'not a git repository' }, 409);
+      const index = await repoIndexContains(info.root, query.path);
+      if (!index.ok) return c.json({ error: index.error }, 409);
+      if (!index.indexed) {
+        // Deliberately ONE message for "ignored", "untracked and ignored" and "does not exist" —
+        // a distinct wording for the ignored case would disclose that an ignored file is present
+        // on disk, which is the very thing this guard exists to keep quiet about.
+        return c.json({ error: `path is not in the repository index: ${query.path}` }, 409);
+      }
+      const result = await readWorktreePath(info.root, query.path);
+      if (result.kind === 'invalid' || result.kind === 'missing') {
+        return c.json({ error: result.error }, 409);
+      }
+      if (result.kind === 'dir') {
+        // Reachable despite every indexed path being a file: a submodule is one `ls-files` entry
+        // that resolves to a directory. Refused in the resolver's own grammar rather than
+        // inventing a submodule view.
+        return c.json({ error: `not a regular file: ${result.path}` }, 409);
+      }
+      if (wantsRaw) {
+        const mime = imageMimeType(result.path);
+        if (mime === null || result.tooLarge) {
+          // `?raw=1` asked for bytes, so it hears why it cannot have them; a mere `Accept`
+          // preference falls through to the JSON answer. Same split as `/runs/:id/files`.
+          if (query.raw !== undefined) {
+            const error =
+              mime === null
+                ? `raw serving is limited to images: ${result.path}`
+                : `file too large to serve raw (${result.size} bytes): ${result.path}`;
+            return c.json({ error }, 409);
+          }
+        } else {
+          const bytes = await readFile(join(info.root, result.path));
+          return c.body(new Uint8Array(bytes).buffer as ArrayBuffer, 200, {
+            'content-type': mime,
+            'x-content-type-options': 'nosniff',
+            'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+          });
+        }
+      }
+      return c.json({
+        // `as const` or Hono's inference widens the literal to `string` and the consumer's
+        // discriminated narrowing collapses to `never` — the same trap `/runs/:id/files` documents.
+        type: 'file' as const,
+        path: result.path,
+        size: result.size,
+        binary: result.binary,
+        tooLarge: result.tooLarge,
+        ...(result.content !== undefined ? { content: result.content } : {}),
+      });
+    })
+
     .post('/repo/branch', jsonZodValidator(() => repoBranchSchema), async (c) => {
       const { root: repoRoot } = c.get('project');
       const info = await getRepoInfo(repoRoot);
@@ -5835,6 +6136,20 @@ export function createApp(deps: ServerDeps) {
       if (!result.ok) return c.json({ error: result.error }, 409);
       return c.json({ branch: result.branch, created: result.created });
     });
+
+  // An explicit "auto" default becomes `''` on the wire (#906): the empty id IS
+  // auto in every model picker, so an older cockpit reading this answer shows
+  // auto too rather than tripping over an unknown sentinel. Only `true` counts —
+  // `false` is the absence of an opinion, not an opinion.
+  // Typed rather than left to `Object.fromEntries`' index signature: `configAnswer`'s return type
+  // is asserted `Exact` against `configResponseSchema` (contract-parity.workspace.test.ts), and an
+  // index signature leaking into the spread would widen `defaultModels` past the contract.
+  const autoModelOverrides = (auto: CezConfig['defaultModelsAuto']): AgentModelDefaults =>
+    Object.fromEntries(
+      Object.entries(auto ?? {})
+        .filter(([, isAuto]) => isAuto === true)
+        .map(([runner]) => [runner, '']),
+    );
 
   // The Settings → Agents knobs in one read (R6 Step 1.5) — an ADDITIVE
   // sibling of PUT /api/config below; /api/health keeps its protected shape.
@@ -5847,9 +6162,17 @@ export function createApp(deps: ServerDeps) {
       systemPrompt: config.systemPrompt ?? null,
       // Native defaults seed each runner independently. A Cezar preset remains
       // selectable unless the operator opts into the fixed-model policy.
+      // An explicit auto override (#906) answers `''` for that runner — the one
+      // way to say "ignore the agent's own configured default" without editing
+      // the vendor's settings file. It layers over the native seed and under a
+      // repo preset, so setting a preset later simply wins.
       defaultModels: modelsLocked
         ? nativeModels
-        : { ...nativeModels, ...(config.defaultModels ?? {}) },
+        : {
+            ...nativeModels,
+            ...autoModelOverrides(config.defaultModelsAuto),
+            ...(config.defaultModels ?? {}),
+          },
       modelsLocked,
       maxParallel: config.maxParallel,
       memoryLimitMb: config.memoryLimitMb ?? null,
@@ -5874,7 +6197,12 @@ export function createApp(deps: ServerDeps) {
     .put('/config', jsonZodValidator(() => setConfigSchema), async (c) => {
       const { root: repoRoot, dataDir } = c.get('project');
       const parsed = { data: c.req.valid('json') };
-      if (agentModelsLocked(repoRoot) && parsed.data.defaultModels !== undefined) {
+      // The auto override is a model choice too (#906), so the fixed-model
+      // policy refuses it on exactly the same terms as a preset.
+      if (
+        agentModelsLocked(repoRoot) &&
+        (parsed.data.defaultModels !== undefined || parsed.data.defaultModelsAuto !== undefined)
+      ) {
         return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
       }
       const configPath = join(dataDir, 'config.json');
@@ -5935,6 +6263,22 @@ export function createApp(deps: ServerDeps) {
         if (Object.keys(current).length === 0) delete raw.defaultModels;
         else raw.defaultModels = current;
       }
+      if (parsed.data.defaultModelsAuto !== undefined) {
+        // Same per-runner merge as the presets above, and the same "store only a
+        // real opinion" rule: `false`/`null` deletes rather than persisting a
+        // key that means nothing (#906).
+        const current =
+          raw.defaultModelsAuto && typeof raw.defaultModelsAuto === 'object'
+            ? { ...(raw.defaultModelsAuto as Record<string, unknown>) }
+            : {};
+        for (const [runner, isAuto] of Object.entries(parsed.data.defaultModelsAuto)) {
+          if (isAuto === undefined) continue;
+          if (isAuto) current[runner] = true;
+          else delete current[runner];
+        }
+        if (Object.keys(current).length === 0) delete raw.defaultModelsAuto;
+        else raw.defaultModelsAuto = current;
+      }
       try {
         await mkdir(dataDir, { recursive: true });
         await writeFile(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf8');
@@ -5951,6 +6295,7 @@ export function createApp(deps: ServerDeps) {
   // the file. All fields optional + additive: `null` (and `''` for the
   // R6 keys) clears a knob back to its default.
   const modelPresetSchema = z.string().trim().max(200).nullable().optional();
+  const autoModelSchema = z.boolean().nullable().optional();
   const setConfigSchema = z.object({
     baseBranch: z.string().trim().min(1).max(200).nullable().optional(),
     defaultRunner: z.enum(RUNNER_IDS).optional(),
@@ -5960,7 +6305,20 @@ export function createApp(deps: ServerDeps) {
         claude: modelPresetSchema,
         codex: modelPresetSchema,
         opencode: modelPresetSchema,
+        cursor: modelPresetSchema,
         pi: modelPresetSchema,
+      })
+      .optional(),
+    // Per-runner "auto is the default" override (#906). Additive, and necessarily
+    // its own key: clearing a preset cannot express an explicit auto, because the
+    // answer then falls through to the coding agent's own settings file.
+    // `false`/`null` clears the override back to no opinion.
+    defaultModelsAuto: z
+      .object({
+        claude: autoModelSchema,
+        codex: autoModelSchema,
+        opencode: autoModelSchema,
+        pi: autoModelSchema,
       })
       .optional(),
     // Concurrency + memory guard (Settings → Resources). maxParallel clamps to
@@ -6106,11 +6464,14 @@ export function createApp(deps: ServerDeps) {
     for (const number of [run.prNumber, run.issueNumber, run.markerRefs?.pr, run.markerRefs?.issue]) {
       if (typeof number === 'number' && Number.isInteger(number) && number > 0) numbers.push(number);
     }
+    for (const ref of run.prRefs ?? []) numbers.push(ref.number);
     return numbers;
   };
 
   const runIndexEntry = (projectId: string, run: RunRecord): RunIndexEntry => {
     const usage = currentUsage(run.id);
+    const automationId =
+      run.automation?.automationId ?? run.automationTrigger?.automationId ?? run.automationTracker?.automationId;
     return {
     projectId,
     id: run.id,
@@ -6124,6 +6485,7 @@ export function createApp(deps: ServerDeps) {
     ...(run.seenAt !== undefined ? { seenAt: run.seenAt } : {}),
     archived: run.archived,
     ...(run.autoResumeAt !== undefined ? { autoResumeAt: run.autoResumeAt } : {}),
+    ...(run.awaitingAnswerSince !== undefined ? { awaitingAnswerSince: run.awaitingAnswerSince } : {}),
     workflow: run.workflow,
     ...(run.branch !== undefined ? { branch: run.branch } : {}),
     ...(run.dispatch !== undefined
@@ -6135,6 +6497,7 @@ export function createApp(deps: ServerDeps) {
           },
         }
       : {}),
+    ...(automationId !== undefined ? { automationId } : {}),
     ...(run.startedAt !== undefined ? { startedAt: run.startedAt } : {}),
     // The tracker-reference inputs, verbatim — the cockpit's `taskReference()` owns the rule
     // that picks between them (see the schema's note).
@@ -6143,6 +6506,7 @@ export function createApp(deps: ServerDeps) {
       ? { referencedPullRequestUrl: run.referencedPullRequestUrl }
       : {}),
     ...(run.prNumber !== undefined ? { prNumber: run.prNumber } : {}),
+    ...(run.prRefs !== undefined ? { prRefs: run.prRefs } : {}),
     ...(run.issueNumber !== undefined ? { issueNumber: run.issueNumber } : {}),
     ...(run.referencedIssueUrl !== undefined ? { referencedIssueUrl: run.referencedIssueUrl } : {}),
     ...(run.markerRefs !== undefined ? { markerRefs: run.markerRefs } : {}),
@@ -6275,6 +6639,8 @@ export function createApp(deps: ServerDeps) {
     .route('/', projectsRoutes)
     .route('/', agentProfilesRoutes)
     .route('/', skillsUpdateRoutes)
+    .route('/', selfUpdateRoutes)
+    .route('/', starCountRoutes)
     .route('/', workspaceConfigRoutes)
     .route('/', fsBrowseRoutes)
     .route('/', automationChecksRoutes)
@@ -6588,11 +6954,20 @@ export function isSafeSessionId(sessionId: string): boolean {
   return SAFE_SESSION_ID.test(sessionId);
 }
 
+/** Only plain executable paths can cross both bash and cmd.exe safely. Refuse shell
+ * operators, expansions, controls and a trailing backslash (which can escape the closing
+ * quote). Paths with spaces remain supported, including Windows install directories. */
+export function quoteResumeBin(bin: string): string | null {
+  if (!bin.trim() || !/^[a-zA-Z0-9_./:\\ -]+$/.test(bin) || bin.endsWith('\\')) return null;
+  return /[\s\\]/.test(bin) ? `"${bin}"` : bin;
+}
+
 /**
  * The CLI command that reopens a run's session for interactive take-over, per
  * backend. Legacy/undefined records default to Claude. Returns null when the id
- * is not a shape we recognise — callers degrade (no take-over) rather than
- * splice it into a shell.
+ * is not a shape we recognise, or when a runner's overridable binary cannot be
+ * embedded safely (see {@link quoteResumeBin}) — callers degrade (no take-over)
+ * rather than splice either one into a shell.
  *
  * Validate, don't quote (#431): the session id is the only variable spliced
  * into the command string, and `openInTerminal` runs that string through bash
@@ -6607,12 +6982,25 @@ export function isSafeSessionId(sessionId: string): boolean {
 export function resumeCommand(runner: string | undefined, sessionId: string): string | null {
   if (!isSafeSessionId(sessionId)) return null;
   switch (runner) {
+    case 'junie':
+      // Verified live (`junie --help`, 26.9.22): `--resume` alone reopens the LAST session;
+      // the target session is named by the separate `--session-id=<id>` flag, not a positional
+      // argument (junie's positional slot is `[<task>]`) — `junie --resume ${sessionId}` would
+      // silently resume the wrong session and read the id as a task prompt instead.
+      return `junie --resume --session-id=${sessionId}`;
     case 'codex':
       return `codex resume ${sessionId}`;
     case 'opencode':
       return `opencode --session ${sessionId}`;
+    case 'cursor': {
+      const bin = quoteResumeBin(process.env.CEZ_CURSOR_AGENT_BIN ?? 'agent');
+      return bin === null ? null : `${bin} --resume ${sessionId}`;
+    }
     case 'pi':
       return `pi --session ${sessionId}`;
+    case 'copilot':
+      // `--resume <id>` takes a session id, a task id or an id prefix (`copilot --help`, 1.0.88).
+      return `copilot --resume ${sessionId}`;
     default:
       return `claude --resume ${sessionId}`;
   }

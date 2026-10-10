@@ -698,7 +698,10 @@ export async function searchGithubItems(
 function mockGithub(): GithubData {
   const mk = (over: Partial<GithubItem> & Pick<GithubItem, 'kind' | 'number' | 'title' | 'body'>): GithubItem => ({
     author: 'mock',
-    createdAt: new Date(Date.now() - over.number * 3_600_000).toISOString(),
+    // A HIGHER number is MORE RECENT, because GitHub hands numbers out in creation order. The
+    // subtraction used to run the other way, which made the demo's hand-written descending list
+    // ascending by age — invisible until the tab grew a newest/oldest sort that reads this field.
+    createdAt: new Date(Date.now() - (200 - over.number) * 3_600_000).toISOString(),
     labels: [],
     url: `https://github.com/mock/repo/${over.kind === 'pr' ? 'pull' : 'issues'}/${over.number}`,
     comments: 0,
@@ -2559,6 +2562,61 @@ interface ExecResult {
   stderr: string;
   /** True when the binary itself is missing (ENOENT). */
   notFound: boolean;
+}
+
+/**
+ * Post a comment on a PR through `gh` — the graph `github.pr-comment` node (spec
+ * 2026-09-30-workflow-node-editor). Never throws: every failure is a one-line error, and
+ * `CEZ_DRY_RUN=1` answers ok without touching the network.
+ */
+/** Mark a PR ready and/or add labels and reviewers (the graph `github.pr-update` node). Never
+ *  throws; `CEZ_DRY_RUN=1` answers ok offline. */
+export async function updatePr(
+  repoRoot: string,
+  number: number,
+  changes: { ready?: boolean; addLabels?: string[]; reviewers?: string[] },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (process.env.CEZ_DRY_RUN === '1') return { ok: true };
+  const fail = (res: ExecResult, what: string) =>
+    res.notFound ? 'gh is not installed' : (res.stderr || res.stdout).trim().split('\n')[0] || `${what} failed`;
+  if (changes.ready) {
+    const res = await execTool(['pr', 'ready', String(number)], repoRoot, 'gh', 60_000);
+    if (!res.ok) return { ok: false, error: fail(res, 'gh pr ready') };
+  }
+  const edit = [
+    ...(changes.addLabels ?? []).flatMap((l) => ['--add-label', l]),
+    ...(changes.reviewers ?? []).flatMap((r) => ['--add-reviewer', r]),
+  ];
+  if (edit.length) {
+    const res = await execTool(['pr', 'edit', String(number), ...edit], repoRoot, 'gh', 60_000);
+    if (!res.ok) return { ok: false, error: fail(res, 'gh pr edit') };
+  }
+  return { ok: true };
+}
+
+/** Comment on an issue (the graph `github.issue-comment` node). Same contract as `commentOnPr`. */
+export async function commentOnIssue(
+  repoRoot: string,
+  number: number,
+  body: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (process.env.CEZ_DRY_RUN === '1') return { ok: true };
+  const res = await execTool(['issue', 'comment', String(number), '--body', body], repoRoot, 'gh', 60_000);
+  if (res.notFound) return { ok: false, error: 'gh is not installed' };
+  if (res.ok) return { ok: true };
+  return { ok: false, error: (res.stderr || res.stdout).trim().split('\n')[0] || 'gh issue comment failed' };
+}
+
+export async function commentOnPr(
+  repoRoot: string,
+  number: number,
+  body: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (process.env.CEZ_DRY_RUN === '1') return { ok: true };
+  const res = await execTool(['pr', 'comment', String(number), '--body', body], repoRoot, 'gh', 60_000);
+  if (res.notFound) return { ok: false, error: 'gh is not installed' };
+  if (res.ok) return { ok: true };
+  return { ok: false, error: (res.stderr || res.stdout).trim().split('\n')[0] || 'gh pr comment failed' };
 }
 
 function execTool(args: string[], cwd: string, bin: string, timeoutMs = 30_000): Promise<ExecResult> {

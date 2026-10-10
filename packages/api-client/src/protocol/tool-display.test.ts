@@ -45,7 +45,7 @@ describe('protocol/tool-display — the mirror works under the bundle resolver',
     {
       name: 'Skill',
       input: { skill: 'om-auto-fix-issue', args: '529' },
-      expected: { toolKind: 'task', title: 'Skill: om-auto-fix-issue', subtitle: '529' },
+      expected: { toolKind: 'skill', title: 'Skill: om-auto-fix-issue', subtitle: '529' },
     },
     { name: 'TodoWrite', input: { todos: [] }, expected: { toolKind: 'plan', title: 'Update plan' } },
     { name: 'TaskCreate', input: { subject: 'x' }, expected: { toolKind: 'plan', title: 'Update plan' } },

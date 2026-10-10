@@ -23,6 +23,106 @@ export interface HandoffSeed {
   worktreePath?: string;
 }
 
+/** Maximum number of engine heartbeat entries retained in a Progress log. */
+export const MAX_HANDOFF_HEARTBEATS = 100;
+
+interface ParsedHeartbeat {
+  raw: string;
+  timestamp: string;
+  note: string;
+  count: number;
+  coalesced: boolean;
+}
+
+const HEARTBEAT_RE = /^(?:- )?(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{3})?)?Z) — ((?:turn complete|step "|picked from).*)$/;
+const COUNT_SUFFIX_RE = / \(×(\d+)\)$/;
+
+function parseHeartbeat(line: string): ParsedHeartbeat | undefined {
+  const match = HEARTBEAT_RE.exec(line);
+  if (!match) return undefined;
+  const timestamp = match[1];
+  const rawNote = match[2];
+  if (!timestamp || !rawNote) return undefined;
+  const timestampParts = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{3})?)?Z$/.exec(
+    timestamp,
+  );
+  if (!timestampParts) return undefined;
+  const parsedDate = new Date(timestamp);
+  if (
+    !Number.isFinite(parsedDate.getTime()) ||
+    parsedDate.getUTCFullYear() !== Number(timestampParts[1]) ||
+    parsedDate.getUTCMonth() + 1 !== Number(timestampParts[2]) ||
+    parsedDate.getUTCDate() !== Number(timestampParts[3]) ||
+    parsedDate.getUTCHours() !== Number(timestampParts[4]) ||
+    parsedDate.getUTCMinutes() !== Number(timestampParts[5]) ||
+    parsedDate.getUTCSeconds() !== Number(timestampParts[6] ?? 0)
+  ) {
+    return undefined;
+  }
+  const countMatch = COUNT_SUFFIX_RE.exec(rawNote);
+  const count = countMatch ? Number(countMatch[1]) : 1;
+  if (!Number.isSafeInteger(count) || count < 1) return undefined;
+  return {
+    raw: line,
+    timestamp,
+    note: countMatch ? rawNote.slice(0, countMatch.index) : rawNote,
+    count,
+    coalesced: false,
+  };
+}
+
+function formatHeartbeat(heartbeat: ParsedHeartbeat): string {
+  return `- ${heartbeat.timestamp} — ${heartbeat.note}${heartbeat.count > 1 ? ` (×${heartbeat.count})` : ''}`;
+}
+
+function boundProgressLog(text: string): string {
+  const marker = '## Progress log\n';
+  const markerIndex = text.indexOf(marker);
+  if (markerIndex < 0) return text;
+
+  const sectionStart = markerIndex + marker.length;
+  const remainder = text.slice(sectionStart);
+  const boundaryOffset = remainder.search(/^## /m);
+  const sectionEnd = boundaryOffset < 0 ? text.length : sectionStart + boundaryOffset;
+  const lines = text.slice(sectionStart, sectionEnd).split('\n');
+  const coalesced: Array<string | ParsedHeartbeat> = [];
+  let previousHeartbeat: ParsedHeartbeat | undefined;
+
+  for (const line of lines) {
+    const heartbeat = parseHeartbeat(line);
+    if (!heartbeat) {
+      coalesced.push(line);
+      previousHeartbeat = undefined;
+      continue;
+    }
+    if (
+      previousHeartbeat &&
+      previousHeartbeat.note === heartbeat.note &&
+      previousHeartbeat.count <= Number.MAX_SAFE_INTEGER - heartbeat.count
+    ) {
+      previousHeartbeat.count += heartbeat.count;
+      previousHeartbeat.coalesced = true;
+      coalesced[coalesced.length - 1] = previousHeartbeat;
+    } else {
+      coalesced.push(heartbeat);
+      previousHeartbeat = heartbeat;
+    }
+  }
+
+  const eligible = coalesced.reduce<number[]>((indices, entry, index) => {
+    if (typeof entry !== 'string') indices.push(index);
+    return indices;
+  }, []);
+  const overflow = new Set(eligible.slice(MAX_HANDOFF_HEARTBEATS));
+  const bounded = coalesced
+    .filter((_, index) => !overflow.has(index))
+    .map((entry) =>
+      typeof entry === 'string' ? entry : entry.coalesced ? formatHeartbeat(entry) : entry.raw,
+    )
+    .join('\n');
+  return `${text.slice(0, sectionStart)}${bounded}${text.slice(sectionEnd)}`;
+}
+
 /** Create the handoff skeleton. Idempotent — an existing file (resume,
  *  continuation) is never overwritten. Returns the file path. */
 export function seedHandoffFile(dataDir: string, run: HandoffSeed): string {
@@ -68,7 +168,7 @@ export function appendHandoffHeartbeat(dataDir: string, runId: string, note: str
       ? `${text.slice(0, idx + marker.length)}\n${line}${text.slice(idx + marker.length).replace(/^\n+/, '')}`
       : `${text}${text.endsWith('\n') || text === '' ? '' : '\n'}${line}`;
   try {
-    writeFileSync(file, next, 'utf8');
+    writeFileSync(file, boundProgressLog(next), 'utf8');
   } catch {
     // best effort
   }
@@ -152,7 +252,7 @@ Still-working marker: if you end a turn while still working on your OWN downstre
 
 Use CEZ:MONITORING only for that in-progress case; use CEZ:DONE when the goal is done; end plainly (no marker) only when you are genuinely waiting on the user. Never combine CEZ:MONITORING with CEZ:DONE.
 
-Structured question marker: when you are blocked on a decision that is genuinely the user's to make — one you cannot resolve from the request, the code, or sensible defaults — and it comes down to a few concrete choices, end your turn with a single line CEZ:ASK <json> instead of asking in prose. cez renders it as clickable option chips in the cockpit so the user can answer in one tap. The <json> is ONE object on ONE line, the last thing in your message: {"questions":[{"header":"≤12-char label","question":"a clear question ending in ?","multiSelect":false,"options":[{"label":"short choice","description":"what it means / the trade-off"}]}]} — use only those keys (plus an optional non-empty "id" up to 64 characters), with 1–4 questions, 2–4 options per question, unique question text and option labels, header 1–12 characters, question 1–400, option label 1–60, and description at most 280. The JSON must be syntactically valid — every brace and bracket closed, no trailing commas; re-read the line before you send it, because a payload cez cannot parse is shown to the user as raw JSON instead of chips. The user can always type a free-form reply, so never add an "Other" option. Prefer sensible defaults over asking; use CEZ:ASK only when the choice is truly the user's. Never combine CEZ:ASK with CEZ:DONE or CEZ:MONITORING.
+Structured question marker: when you are blocked on a decision that is genuinely the user's to make — one you cannot resolve from the request, the code, or sensible defaults — and it comes down to a few concrete choices, end your turn with a single line CEZ:ASK <json> instead of asking in prose. cez renders it as clickable option chips in the cockpit so the user can answer in one tap. The <json> is ONE object on ONE line, the last thing in your message: {"questions":[{"header":"≤12-char label","question":"a clear question ending in ?","multiSelect":false,"options":[{"label":"short choice","description":"what it means / the trade-off"}]}]} — use only those keys (plus an optional non-empty "id" up to 64 characters), with 1–20 questions, 2–10 options per question, unique question text and option labels, header 1–12 characters, question 1–400, option label 1–60, and description at most 280. The JSON must be syntactically valid — every brace and bracket closed, no trailing commas; re-read the line before you send it, because a payload cez cannot parse is shown to the user as raw JSON instead of chips. The user can always type a free-form reply, so never add an "Other" option. Several decisions that are genuinely all the user's ride ONE card — do not drop any to fit a count, and do not split them across turns. Prefer sensible defaults over asking; use CEZ:ASK only when the choice is truly the user's. Never combine CEZ:ASK with CEZ:DONE or CEZ:MONITORING.
 
 Task reference markers: as soon as you know which GitHub pull request or issue this task is ABOUT (it was named in the task, or you just opened it), declare it by emitting, on its own line in your message text: CEZ:PR=<number> and/or CEZ:ISSUE=<number>. Re-emit with the new number if the subject changes (e.g. you open a PR later in the task). Declare only the task's own subject — never a PR/issue you merely mention, list, or compare against. You may also emit CEZ:TITLE=<terse gerund phrase, max 40 chars, e.g. "implementing comment threads"> once the work has a clearer shape than its current title; cez uses these instead of guessing from the transcript. Put markers in plain message text, never inside a code fence, and above any CEZ:DONE / CEZ:MONITORING line — those two always come last.
 
