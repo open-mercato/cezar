@@ -56,10 +56,12 @@
   "devDependencies": {
     "@open-mercato/cezar-api-client": "^0.14.0",
     "@open-mercato/cezar-contract": "^0.14.0",
+    "@types/graceful-fs": "^4.1.9",
     "@types/node": "^20.14.0",
     "@types/proper-lockfile": "4.1.4",
     "@types/ws": "^8.18.1",
     "esbuild": "^0.28.1",
+    "graceful-fs": "^4.2.11",
     "tsx": "^4.19.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"

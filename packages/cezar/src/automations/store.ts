@@ -36,6 +36,8 @@ const MUTATION_LOCK = 'automation-mutation.lock';
 const GUARD_SUFFIX = '.guard';
 /** proper-lockfile enforces a 2s minimum; this bounds crash recovery without stealing live owners. */
 const GUARD_STALE_MS = 2_000;
+/** A stale guard can be removed by a competing reclaimer after this process has judged it stale. */
+const LEASE_RACE_RETRIES = 1;
 const RETENTION_MS = 90 * 24 * 60 * 60 * 1_000;
 
 type DefinitionsFile = ReturnType<typeof automationDefinitionsFileSchema.parse>;
@@ -292,13 +294,21 @@ export class AutomationStore {
   }
 
   private tryAcquireLease(path: string, staleAfterMs: number): AutomationLease | undefined {
-    try {
-      return this.createLease(path, staleAfterMs);
-    } catch {
-      // A held, live, malformed, or unrecoverable guard reports busy. The lock primitive owns
-      // stale recovery and performs it under its cross-platform atomic mkdir protocol (#998).
-      return undefined;
+    for (let attempt = 0; attempt <= LEASE_RACE_RETRIES; attempt += 1) {
+      try {
+        return this.createLease(path, staleAfterMs);
+      } catch (error) {
+        // proper-lockfile's stale recovery is path-based after the stale verdict. A competing
+        // reclaimer can remove this process's fresh guard, making its cleanup/probe fail with
+        // ENOENT; retry once so abandoned leases remain live under contention (#1117).
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || attempt === LEASE_RACE_RETRIES) {
+          // A held, live, malformed, or unrecoverable guard reports busy. The lock primitive owns
+          // stale recovery and performs it under its cross-platform atomic mkdir protocol (#998).
+          return undefined;
+        }
+      }
     }
+    return undefined;
   }
 
   private createLease(path: string, staleAfterMs: number): AutomationLease {

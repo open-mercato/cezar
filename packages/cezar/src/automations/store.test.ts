@@ -164,6 +164,58 @@ describe('AutomationStore.acquireLease — a lock nobody is holding any more (#9
     expect(store.acquireLease(0)).toBeDefined();
   });
 
+  it('retries when stale-guard cleanup loses the path race', async () => {
+    const dir = await lockedDirectory(JSON.stringify({ pid: UNREACHABLE_PID, startedAt: new Date().toISOString() }));
+    let attempts = 0;
+    const store = AutomationStore.open(dir, {
+      beforeLeaseMetadataWrite: () => {
+        if (attempts++ === 0) {
+          const error = new Error('guard was replaced during stale recovery') as NodeJS.ErrnoException;
+          error.code = 'ENOENT';
+          throw error;
+        }
+      },
+    });
+    const lease = store.acquireLease();
+    expect(lease).toBeDefined();
+    expect(attempts).toBe(2);
+    lease?.release();
+  });
+
+  it('bounds repeated stale-guard ENOENT failures to one retry', async () => {
+    const dir = await lockedDirectory(JSON.stringify({ pid: UNREACHABLE_PID, startedAt: new Date().toISOString() }));
+    let attempts = 0;
+    const store = AutomationStore.open(dir, {
+      beforeLeaseMetadataWrite: () => {
+        attempts += 1;
+        const error = new Error('guard keeps racing') as NodeJS.ErrnoException;
+        error.code = 'ENOENT';
+        throw error;
+      },
+    });
+    expect(store.acquireLease()).toBeUndefined();
+    expect(attempts).toBe(2);
+  });
+
+  it('does not steal a competitor that wins before the retry', async () => {
+    const dir = await lockedDirectory(JSON.stringify({ pid: UNREACHABLE_PID, startedAt: new Date().toISOString() }));
+    const replacement = JSON.stringify({ pid: process.pid, token: 'competitor', startedAt: new Date().toISOString() });
+    let first = true;
+    const store = AutomationStore.open(dir, {
+      beforeLeaseMetadataWrite: (path) => {
+        if (first) {
+          first = false;
+          writeFileSync(path, replacement);
+          const error = new Error('guard was replaced during stale recovery') as NodeJS.ErrnoException;
+          error.code = 'ENOENT';
+          throw error;
+        }
+      },
+    });
+    expect(store.acquireLease()).toBeUndefined();
+    expect(readFileSync(join(dir, 'automation-poll.lock'), 'utf8')).toBe(replacement);
+  });
+
   it('probes real pids when nothing is injected', async () => {
     const live = await lockedDirectory(JSON.stringify({ pid: process.ppid, startedAt: new Date().toISOString() }));
     expect(AutomationStore.open(live).acquireLease()).toBeUndefined();
@@ -194,8 +246,9 @@ describe('AutomationStore.acquireLease — a lock nobody is holding any more (#9
     mkdirSync(guard);
     const old = new Date(Date.now() - 20 * 60_000);
     utimesSync(guard, old, old);
+    const barriers = join(dir, 'barriers');
     const child = fileURLToPath(new URL('./store-lease-child.testkit.ts', import.meta.url));
-    const children = [0, 1].map(() => spawn(process.execPath, ['--import', 'tsx', child, dir], { stdio: ['pipe', 'pipe', 'inherit'] }));
+    const children = ['a', 'b'].map((role) => spawn(process.execPath, ['--import', 'tsx', child, dir, barriers, role], { stdio: ['pipe', 'pipe', 'inherit'] }));
     const states = children.map((childProcess) => {
       let buffer = '';
       let ready!: () => void;
