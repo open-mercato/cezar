@@ -1561,6 +1561,58 @@ describe('fetchGithub omits statusCheckRollup from the list call (#664)', () => 
     expect(data.prsTotal).toBe(9);
     expect(data.prsNextCursor).toBe('next-pr');
   });
+
+  it('sends page sizes typed and splits a limit above 100 into exact pages', async () => {
+    // `-f limit=30` reached GitHub as a String and failed the whole tab ("Could not coerce value to Int").
+    const calls: string[][] = [];
+    const node = (n: number) => ({ number: n, title: `#${n}`, author: { login: 'x' }, createdAt: '2026-07-01T00:00:00Z', labels: { nodes: [{ name: 'bug', color: 'd73a4a' }] }, url: `https://github.com/owner/n/issues/${n}`, comments: { totalCount: 0 } });
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      let stdout = '{}';
+      if (argv[0] === 'repo') stdout = 'owner/n\n';
+      else if (argv[0] === 'api' && argv[1] === 'graphql') {
+        calls.push(argv);
+        const value = (key: string) => argv.find((a) => a.startsWith(`${key}=`))?.slice(key.length + 1);
+        const issuesSize = Number(value('issuesLimit'));
+        const start = value('issuesCursor') ? Number(value('issuesCursor')) : 0;
+        const nodes = Array.from({ length: issuesSize }, (_, i) => node(start + i + 1));
+        stdout = JSON.stringify({ data: { repository: {
+          issues: { totalCount: 500, nodes, pageInfo: { hasNextPage: true, endCursor: issuesSize ? String(start + issuesSize) : null } },
+          pullRequests: { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+        } } });
+      }
+      cb(null, { stdout, stderr: '' });
+    });
+
+    const data = await fetchGithub('/repo/typed-limit', false, 150);
+    expect(calls.length).toBe(2);
+    for (const argv of calls) {
+      for (const key of ['issuesLimit', 'prsLimit']) {
+        const at = argv.findIndex((a) => a.startsWith(`${key}=`));
+        expect(argv[at - 1]).toBe('-F');
+      }
+      expect(Number(argv.find((a) => a.startsWith('issuesLimit='))?.split('=')[1])).toBeLessThanOrEqual(100);
+    }
+    expect(data.issues.map((i) => i.number)).toEqual(Array.from({ length: 150 }, (_, i) => i + 1));
+    expect(data.issuesNextCursor).toBe('150');
+    expect(data.issuesTotal).toBe(500);
+    expect(data.issues[0]?.labels).toEqual(['bug']); // GraphQL labels arrive as a connection
+    expect(data.labelColors).toEqual({ bug: 'd73a4a' });
+  });
+
+  it('reports gh stderr, not a line of the multi-line query argv', async () => {
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      if (argv[0] === 'repo') return cb(null, { stdout: 'owner/n\n', stderr: '' });
+      const err = Object.assign(new Error(`Command failed: gh ${argv.join(' ')}`), { stderr: "gh: Field 'name' doesn't exist on type 'LabelConnection'\n" });
+      cb(err, null);
+    });
+    const data = await fetchGithub('/repo/stderr-reason', true);
+    expect(data.available).toBe(false);
+    expect(data.reason).toBe("gh: Field 'name' doesn't exist on type 'LabelConnection'");
+  });
 });
 
 /**
