@@ -1125,6 +1125,14 @@ export class RunManager {
   /** The stalled-queue watchdog (see `rescueStalledQueue`). */
   private readonly queueWatchdog: ReturnType<typeof setInterval>;
 
+  /**
+   * Set by dispose(). Timers and subscriptions are torn down there, but a fire-and-forget
+   * chain that was already awaiting (turn-end bookkeeping → `git diff --shortstat` → the
+   * namer) resumes afterwards; this is what lets it see that the manager it belongs to is
+   * gone and stop before it spawns a namer agent inside a project nobody owns any more.
+   */
+  private disposed = false;
+
   /** Set by the watchdog for exactly one sweep: ignore the usage-limit hold and make progress. */
   private forceNextPump = false;
 
@@ -1190,6 +1198,7 @@ export class RunManager {
    * dispose only guarantees the manager makes no further moves on its own.
    */
   dispose(): void {
+    this.disposed = true;
     this.offUsage();
     this.offSemaphore();
     clearInterval(this.queueWatchdog);
@@ -6253,6 +6262,7 @@ export class RunManager {
     // CEZ_AUTONAME=0 kills all LLM naming; dry-run skips it too unless
     // CEZ_AUTONAME=1 forces the mock path — see autoNamingActive.
     if (!autoNamingActive()) return;
+    if (this.disposed) return;
     task = this.store.redactRunText(runId, task);
     if (live?.turnText) live = { ...live, turnText: this.store.redactRunText(runId, live.turnText) };
     try {
@@ -6261,6 +6271,7 @@ export class RunManager {
         const skills = await discoverSkills(this.repoRoot).catch(() => [] as Skill[]);
         skillDescription = skills.find((s) => s.name === skillName)?.description;
       }
+      if (this.disposed) return;
       const result = await generateRunName(this.repoRoot, { task, skillName, skillDescription, ...live });
       if (!result) return;
       const run = this.store.getRun(runId);
@@ -6308,6 +6319,9 @@ export class RunManager {
           else this.store.appendEvent(runId, { type: 'note', message: 'diff stat unavailable — git diff --shortstat failed in the worktree' });
         }
       }
+      // dispose() promises the manager makes no further moves on its own. This call sits behind
+      // the `git` await above, so a manager disposed meanwhile must not go on to launch a namer.
+      if (this.disposed) return;
       await this.maybeRefreshTitle(runId, turnText);
     } catch {
       // Bookkeeping only — nothing here may disturb the run.
@@ -6351,6 +6365,7 @@ export class RunManager {
     if (!autoNamingActive()) return;
     if (!turnText.trim()) return;
     const config = await loadConfig(this.repoRoot);
+    if (this.disposed) return;
     if (!liveTitleUpdatesEnabled(config)) return;
     const run = this.store.getRun(runId);
     if (!run || run.titleOrigin === 'user' || run.titleOrigin === 'marker') return;
@@ -6359,6 +6374,7 @@ export class RunManager {
     if (this.lastNamerKey.get(runId) === key) return;
     this.lastNamerKey.set(runId, key);
     const workflow = await this.reviveWorkflow(run);
+    if (this.disposed) return;
     const skillName = workflow?.steps.find((s) => stepKind(s) === 'agent' && s.skill)?.skill?.trim();
     void this.autoNameRun(runId, skillName, run.task, { turnText, diffStat: statText });
   }
