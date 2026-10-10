@@ -19,6 +19,18 @@ import { atomicWriteJsonSync, loadWorkspaceConfig, mergeWriteWorkspaceConfig } f
 describe('cezar home write safety', () => {
   const originalCezHome = process.env.CEZ_HOME;
   const originalHome = process.env.HOME;
+  const originalUserProfile = process.env.USERPROFILE;
+
+  /**
+   * Point `os.homedir()` at a throwaway folder — on EVERY platform. POSIX reads `HOME`; Windows
+   * ignores it and reads `USERPROFILE`. Setting only `HOME` left `workspaceConfigPath()` naming the
+   * developer's real `~/.cezar/config.json` on Windows, and the fixture write below then replaced
+   * it: this suite destroyed the very registry it exists to protect (2026-10-09).
+   */
+  const fakeHome = (dir: string): void => {
+    process.env.HOME = dir;
+    process.env.USERPROFILE = dir;
+  };
   let pinned: string;
   let elsewhere: string;
   let fakeUserHome: string;
@@ -36,6 +48,8 @@ describe('cezar home write safety', () => {
     else process.env.CEZ_HOME = originalCezHome;
     if (originalHome === undefined) delete process.env.HOME;
     else process.env.HOME = originalHome;
+    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = originalUserProfile;
     for (const dir of [pinned, elsewhere, fakeUserHome]) rmSync(dir, { recursive: true, force: true });
   });
 
@@ -76,7 +90,7 @@ describe('cezar home write safety', () => {
   });
 
   it('refuses a write into the real cezar home while running under vitest', () => {
-    process.env.HOME = fakeUserHome;
+    fakeHome(fakeUserHome);
     delete process.env.CEZ_HOME;
     const target = workspaceConfigPath();
 
@@ -86,10 +100,13 @@ describe('cezar home write safety', () => {
   });
 
   it('leaves an existing real-home registry byte-for-byte intact when a leaked write is refused', () => {
-    process.env.HOME = fakeUserHome;
+    fakeHome(fakeUserHome);
     delete process.env.CEZ_HOME;
     const target = workspaceConfigPath();
     const existing = '{"projects":[{"id":"real","root":"/repos/real"}]}\n';
+    // Never write a fixture anywhere but the throwaway home: if the redirect above ever stops
+    // working on some platform, fail HERE instead of overwriting a real registry.
+    expect(target).toBe(join(fakeUserHome, '.cezar', 'config.json'));
     mkdirSync(join(fakeUserHome, '.cezar'), { recursive: true });
     writeFileSync(target, existing);
 
@@ -113,7 +130,7 @@ describe('cezar home write safety', () => {
     // any single defence is removed.
     const packageRoot = fileURLToPath(new URL('../..', import.meta.url));
     const vitestBin = join(packageRoot, '..', '..', 'node_modules', '.bin', 'vitest');
-    const env: NodeJS.ProcessEnv = { ...process.env, HOME: fakeUserHome };
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: fakeUserHome, USERPROFILE: fakeUserHome };
     delete env.CEZ_HOME;
     delete env.VITEST;
 
@@ -130,7 +147,7 @@ describe('cezar home write safety', () => {
   }, 180_000);
 
   it('allows writes outside the real cezar home, and is inert outside vitest', () => {
-    process.env.HOME = fakeUserHome;
+    fakeHome(fakeUserHome);
     const sandboxed = join(pinned, 'config.json');
 
     expect(() => assertCezarHomeWriteIsSandboxed(sandboxed)).not.toThrow();
