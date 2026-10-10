@@ -57,6 +57,7 @@ import { automationsReachable } from '../automations/builtin-skill.ts';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
 import { materializeSkillDir } from '../skills-remote.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
+import { seedWorktreeEnvFiles } from '../worktree-env.ts';
 import { readAgentModelProvider } from '../agent-config/models.ts';
 import { loadConfig, resolveWorktreeRetention } from '../config.ts';
 import {
@@ -3777,6 +3778,24 @@ export class RunManager {
     return { ok: true };
   }
 
+  /**
+   * Give a freshly created worktree the untracked files `git worktree add` cannot: the agents'
+   * gitignored personal config and the project's gitignored env files. One helper for every
+   * site that creates a worktree directory, so a new one cannot seed half of it. Returns the
+   * notes to show; never throws.
+   *
+   * Seeds from this manager's project root: each multi-project context has its own
+   * manager/repoRoot and must never copy another project's layer.
+   */
+  private async seedWorktree(cwd: string): Promise<string[]> {
+    const notes: string[] = [];
+    const config = await seedAgentConfigLocalLayer(this.repoRoot, cwd).catch(() => []);
+    if (config.length > 0) notes.push(`seeded personal agent config: ${config.join(', ')}`);
+    const envFiles = await seedWorktreeEnvFiles(this.repoRoot, cwd).catch(() => []);
+    if (envFiles.length > 0) notes.push(`seeded env files from the main checkout: ${envFiles.join(', ')}`);
+    return notes;
+  }
+
   private async runContinuation(
     runId: string,
     stepId: string,
@@ -3802,7 +3821,14 @@ export class RunManager {
     // the stamp so the session regains its isolated tree and the run is eligible
     // for retention again — otherwise it keeps a dir on disk while staying
     // invisible to the enforcer forever. Best-effort; falls back to repoRoot.
-    await rematerializeReclaimedWorktree(this.repoRoot, this.store, runId);
+    if (await rematerializeReclaimedWorktree(this.repoRoot, this.store, runId)) {
+      // The directory was deleted whole, untracked files included — so the tree needs what a
+      // new worktree needs, or the resumed task comes back unable to start its own app.
+      const rebuilt = this.store.getRun(runId)?.worktreePath;
+      for (const message of rebuilt ? await this.seedWorktree(rebuilt) : []) {
+        this.store.appendEvent(runId, { type: 'note', message });
+      }
+    }
     const record = this.store.getRun(runId);
     // A provider/account switch cannot resume the old provider-owned session. Reconstruct the
     // portable context from Cezar's durable record + redacted event stream before this new turn's
@@ -4432,12 +4458,7 @@ export class RunManager {
           baseBranch: wt.baseBranch,
         });
         emit({ type: 'note', message: `worktree ready — branch ${wt.branch} (base ${wt.baseBranch})` });
-        // Seed from this manager's project root: each multi-project context has
-        // its own manager/repoRoot and must never copy another project's layer.
-        const seededConfig = await seedAgentConfigLocalLayer(this.repoRoot, state.cwd).catch(() => []);
-        if (seededConfig.length > 0) {
-          emit({ type: 'note', message: `seeded personal agent config: ${seededConfig.join(', ')}` });
-        }
+        for (const message of await this.seedWorktree(state.cwd)) emit({ type: 'note', message });
         this.armAutosave(runId, state);
       } catch (err) {
         if (state.cancelled) {
