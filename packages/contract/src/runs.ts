@@ -100,6 +100,9 @@ export const stepStateSchema = z.object({
    *  that created it, so resume and Continue read this rather than the project's current
    *  selection. Absent on records written before accounts existed. */
   profileId: z.string().optional(),
+  /** Canonical provider/model identity resolved for this step; absent for auto-model steps and
+   *  records written before per-step attribution existed. */
+  modelIdentity: z.string().optional(),
   costUsd: z.number().optional(),
 });
 export type StepState = z.infer<typeof stepStateSchema>;
