@@ -60,6 +60,14 @@ export const capabilitiesSchema = z.object({
    * gates is the claim that it can show THIS TASK's app.
    */
   preview: z.boolean(),
+  /**
+   * `true` means the Browser column may offer Design Mode (spec
+   * `.ai/specs/2026-10-09-design-mode.md`): click an element of the task's app and it rides the
+   * next message. It needs a second loopback listener that re-serves the app with a picker
+   * injected, so it exists only where `preview` does — a LOCAL cockpit — and `CEZ_DESIGN_MODE=0`
+   * turns it off there too. The listener opens only when a user switches Design Mode on.
+   */
+  designMode: z.boolean(),
   followups: z.boolean(),
   singleProject: z.boolean(),
   /**

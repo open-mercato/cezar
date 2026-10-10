@@ -28,3 +28,4 @@ export * from './workspace-layouts.ts';
 export * from './tracker.ts';
 export * from './self-update.ts';
 export * from './star-count.ts';
+export * from './preview.ts';

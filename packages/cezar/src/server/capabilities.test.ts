@@ -158,7 +158,7 @@ describe('resolveCapabilities — followups (#471)', () => {
     expect(resolveCapabilities({ CEZ_FOLLOWUPS: '1', CEZ_REMOTE: '1' }, '0.0.0.0')).toEqual({
       localHandoff: false,
       terminal: false,
-      preview: false,
+      preview: false, designMode: false,
       followups: true,
       singleProject: false,
       automations: true,
