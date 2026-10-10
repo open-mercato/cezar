@@ -217,6 +217,25 @@ describe('the repo view Changes segment', () => {
     )
   })
 
+  it('the preview toggle renders an added Markdown file from its patch', async () => {
+    stubFetch()
+    renderAt('/git')
+    const toggle = await waitFor(() => {
+      const element = document.querySelector('[data-slot="repo-changes-toolbar"] [data-slot="markdown-preview-toggle"]')
+      expect(element).not.toBeNull()
+      return element!
+    })
+    fireEvent.click(toggle)
+    // No file loader in the repo view: the added file's patch IS the whole document.
+    const preview = await waitFor(() => {
+      const element = document.querySelector('[data-slot="diff-markdown-preview"]')
+      expect(element).not.toBeNull()
+      return element!
+    })
+    expect(preview.textContent).toContain('one')
+    expect(preview.textContent).not.toContain('Showing the changed sections only')
+  })
+
   it('a clean tree renders the honest empty state', async () => {
     stubFetch({
       'GET /api/v1/repo/changes': () => jsonResponse({ files: [], stat: { adds: 0, dels: 0, files: 0 } }),

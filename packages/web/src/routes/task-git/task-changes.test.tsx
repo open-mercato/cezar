@@ -134,6 +134,37 @@ const toolbarAction = (id: string) =>
 // ---- the route -------------------------------------------------------------------------------
 
 describe('the Changes tab route', () => {
+  it('a Markdown file offers the preview toggle, which renders the full worktree text', async () => {
+    const sent = stubFetch({
+      'GET /api/v1/runs/r1/files?path=notes.md': () =>
+        jsonResponse({ type: 'file', path: 'notes.md', size: 40, binary: false, tooLarge: false, content: '# From the worktree\n\nWhole file' }),
+    })
+    renderChangesRoute()
+    const toggle = await waitFor(() => {
+      const element = document.querySelector('[data-slot="git-toolbar"] [data-slot="markdown-preview-toggle"]')
+      expect(element).not.toBeNull()
+      return element!
+    })
+    expect(document.querySelector('[data-slot="diff-markdown-preview"]')).toBeNull()
+
+    fireEvent.click(toggle)
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="diff-markdown-preview"] h1')?.textContent).toBe('From the worktree'),
+    )
+    expect(sent.some((request) => request.path === '/api/v1/runs/r1/files?path=notes.md')).toBe(true)
+    // The TypeScript file stays a diff.
+    expect(document.querySelector('[data-slot="diff-file"][data-path="src/util/a.ts"] [data-slot="diff-file-body"]')).not.toBeNull()
+  })
+
+  it('no Markdown in the diff, no preview toggle', async () => {
+    stubFetch({
+      'GET /api/v1/runs/r1/changes': () => jsonResponse({ files: CHANGES.files.slice(1), stat: { adds: 3, dels: 1, files: 1 } }),
+    })
+    renderChangesRoute()
+    await waitFor(() => expect(document.querySelectorAll('[data-slot="diff-file"]')).toHaveLength(1))
+    expect(document.querySelector('[data-slot="markdown-preview-toggle"]')).toBeNull()
+  })
+
   // The tree and the diff scroll in columns of their own, which the shell's per-pathname reset of
   // `main` never touches. With both tasks already cached nothing unmounts on the way from one to
   // the other, so only the view's `key` guarantees a fresh pair of columns at the top.
@@ -500,6 +531,64 @@ describe('GitToolbar renders policy fixtures verbatim', () => {
     expect(onModeChange).toHaveBeenCalledWith('split')
     fireEvent.click(document.querySelector('[data-slot="wrap-toggle"]')!)
     expect(onWrapChange).toHaveBeenCalledWith(true)
+  })
+
+  it('the Markdown preview toggle appears only when the caller wires it', () => {
+    const bar: GitActionBar = { primary: { id: 'commit', label: 'Commit', enabled: true }, secondary: [], menu: [] }
+    const { rerender } = render(
+      <GitToolbar bar={bar} mode="unified" wrap={false} onModeChange={noop} onWrapChange={noop} onAction={noop} />,
+    )
+    expect(document.querySelector('[data-slot="markdown-preview-toggle"]')).toBeNull()
+
+    const onPreviewChange = vi.fn()
+    rerender(
+      <GitToolbar
+        bar={bar}
+        mode="unified"
+        wrap={false}
+        preview={false}
+        onModeChange={noop}
+        onWrapChange={noop}
+        onPreviewChange={onPreviewChange}
+        onAction={noop}
+      />,
+    )
+    const toggle = document.querySelector('[data-slot="markdown-preview-toggle"]')!
+    expect(toggle.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(toggle)
+    expect(onPreviewChange).toHaveBeenCalledWith(true)
+  })
+
+  it('the Markdown preview toggle explains itself in a tooltip that follows its state', async () => {
+    // Radix's tooltip arrow measures itself with a ResizeObserver; jsdom has none.
+    vi.stubGlobal('ResizeObserver', class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    })
+    const bar: GitActionBar = { primary: { id: 'commit', label: 'Commit', enabled: true }, secondary: [], menu: [] }
+    const renderWith = (preview: boolean) => (
+      <GitToolbar
+        bar={bar}
+        mode="unified"
+        wrap={false}
+        preview={preview}
+        onModeChange={noop}
+        onWrapChange={noop}
+        onPreviewChange={noop}
+        onAction={noop}
+      />
+    )
+    const { rerender } = render(renderWith(false))
+    const toggle = document.querySelector('[data-slot="markdown-preview-toggle"]') as HTMLElement
+    // The styled tooltip replaces the native one — never both.
+    expect(toggle.getAttribute('title')).toBeNull()
+
+    fireEvent.focus(toggle)
+    expect((await screen.findByRole('tooltip')).textContent).toBe('Preview Markdown')
+
+    rerender(renderWith(true))
+    await waitFor(() => expect(screen.getByRole('tooltip').textContent).toBe('Show Markdown as a diff'))
   })
 })
 

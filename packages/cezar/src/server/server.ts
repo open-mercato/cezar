@@ -122,6 +122,7 @@ import {
 } from '../runs/event-history.ts';
 import { readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
+import { onRunDeleted, onRunEvent } from './sse-subscriptions.ts';
 import {
   countRunDraftImages,
   deleteRunDraftImage,
@@ -5418,19 +5419,18 @@ export function createApp(deps: ServerDeps) {
             event: isV2WireEventType(event.type) ? 'ui-event' : 'run-event',
             data: JSON.stringify(event),
           });
-        const onEvent = (payload: { runId: string; event: RunEvent }) => {
-          if (payload.runId !== id) return;
-          if (replaying) buffered.push(payload.event);
-          else void writeEvent(payload.event);
+        const onEvent = (event: RunEvent) => {
+          if (replaying) buffered.push(event);
+          else void writeEvent(event);
         };
         const onRun = (run: RunRecord) => {
           if (run.id !== id) return;
           void stream.writeSSE({ event: 'run', data: JSON.stringify(run) });
         };
-        store.on('event', onEvent);
+        const offEvent = onRunEvent(store, id, onEvent);
         store.on('run', onRun);
         stream.onAbort(() => {
-          store.off('event', onEvent);
+          offEvent();
           store.off('run', onRun);
         });
 
@@ -5496,10 +5496,10 @@ export function createApp(deps: ServerDeps) {
           void stream.writeSSE({ event: 'usage', data: JSON.stringify(owned) });
         });
         store.on('run', onRun);
-        store.on('deleted', onDeleted);
+        const offDeleted = onRunDeleted(store, onDeleted);
         stream.onAbort(() => {
           store.off('run', onRun);
-          store.off('deleted', onDeleted);
+          offDeleted();
           offTodos();
           offUsage();
         });
@@ -5541,12 +5541,12 @@ export function createApp(deps: ServerDeps) {
           // watcher — and each subscription is scoped to its own dataDir (2.3).
           const offTodos = capabilities().followups ? onTodosChanged(dataDir, () => void sendTodos()) : () => undefined;
           store.on('run', onRun);
-          store.on('deleted', onDeleted);
+          const offDeleted = onRunDeleted(store, onDeleted);
           attached.set(project, {
             store,
             detach: () => {
               store.off('run', onRun);
-              store.off('deleted', onDeleted);
+              offDeleted();
               offTodos();
             },
           });

@@ -16,6 +16,8 @@ import {
   widestLineChars,
 } from './diff-scroll'
 import { ImagePreview, shouldPreviewImage } from './image-preview'
+import { canPreviewMarkdown } from './markdown'
+import { MarkdownPreview } from './markdown-preview'
 import {
   AddCommentButton,
   anchorForLine,
@@ -117,6 +119,7 @@ export function DiffView({
   files,
   mode = 'unified',
   wrap = false,
+  preview = false,
   loadFileText,
   imageSrc,
   onOpenInApp,
@@ -372,6 +375,8 @@ export function DiffView({
         onExpand={(gap) => void expandGap(file, gap)}
         mode={mode}
         wrap={wrap}
+        preview={preview && canPreviewMarkdown(file)}
+        loadFileText={loadFileText}
         canExpand={loadFileText !== undefined}
         imageSrc={imageSrc}
         onOpenInApp={onOpenInApp}
@@ -527,6 +532,8 @@ function DiffFileCard({
   onExpand,
   mode,
   wrap,
+  preview,
+  loadFileText,
   canExpand,
   imageSrc,
   onOpenInApp,
@@ -538,6 +545,9 @@ function DiffFileCard({
   onExpand: (gap: ContextGap) => void
   mode: 'unified' | 'split'
   wrap: boolean
+  /** Render this (Markdown) file as a document — already narrowed by `canPreviewMarkdown`. */
+  preview: boolean
+  loadFileText?: (path: string) => Promise<string | null>
   canExpand: boolean
   imageSrc?: (path: string) => string
   onOpenInApp?: (path: string) => void
@@ -599,13 +609,20 @@ function DiffFileCard({
               binary
             </span>
           ) : null}
+          {preview ? (
+            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+              preview
+            </span>
+          ) : null}
           <span className="ml-auto flex shrink-0 items-center gap-2">
             <CommentCount count={commentCount} />
             <DiffStatLabel stat={{ adds: file.adds, dels: file.dels, files: 1 }} className="text-[11px]" />
           </span>
         </button>
       </header>
-      {open ? (
+      {open && preview ? (
+        <MarkdownPreview file={file} loadFileText={loadFileText} imageSrc={imageSrc} />
+      ) : open ? (
       <LineSelectionProvider path={file.path}>
         <DiffFileBody
           file={file}
