@@ -1,5 +1,5 @@
 import { BotIcon, ChevronDownIcon } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import type { ToolStatus } from '@open-mercato/cezar-api-client'
 import { cn } from '@/lib/utils'
@@ -41,6 +41,22 @@ export function AgentsDock({
   onSelect?: (id: string) => void
 }) {
   const [open, setOpen] = useState(() => openByRun.get(runId) ?? DEFAULT_OPEN)
+  const allSettled = agents.every((agent) => agent.status !== 'pending' && agent.status !== 'running')
+  const wasSettled = useRef(allSettled)
+  // Completion is a transition, not an initial-state rule: opening a historical run that is
+  // already settled must respect its remembered choice. Once an active fan-out settles, reclaim
+  // the transcript space, while the unchanged toggle still lets the reader reopen it manually.
+  useEffect(() => {
+    if (!wasSettled.current && allSettled) {
+      setOpen((value) => {
+        if (!value) return value
+        openByRun.set(runId, false)
+        return false
+      })
+    }
+    wasSettled.current = allSettled
+  }, [allSettled, runId])
+
   // No fan-out to show — the overwhelming majority of runs never mount this at all.
   if (agents.length === 0) return null
 
