@@ -109,7 +109,8 @@ describe('one-click e2e setup API (spec 2026-10-10-e2e-one-click-setup)', () => 
     expect(started).toHaveLength(1);
     const [{ workflow, input }] = started as [{ workflow: WorkflowDef; input: StartRunInput }];
     expect(workflow.name).toBe(E2E_SETUP_WORKFLOW_NAME);
-    expect(input.autonomous).toBe(true);
+    // Not autonomous: an autonomous run skips the review gate, and the setup must be reviewed.
+    expect(input.autonomous).toBeUndefined();
     expect(workflow.steps.map((s) => s.id)).toEqual(['setup', 'e2e-list', 'e2e-smoke']);
     const everything = JSON.stringify({ workflow, input });
     expect(everything).not.toContain(KEY);

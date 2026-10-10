@@ -8,7 +8,7 @@ import type { WorkflowDef } from './workflows/types.ts';
  * One-click browser e2e setup (spec `.ai/specs/2026-10-10-e2e-one-click-setup.md`).
  *
  * cezar installs TesterArmy's `e2e` the way it does any other work: as a task in its own
- * worktree, ending at the review gate. The engine learns nothing about e2e — the setup is an
+ * worktree, finishing with a branch the user merges (or at the review gate, when it is on). The engine learns nothing about e2e — the setup is an
  * ad-hoc workflow (an agent step that installs and configures, then two check steps that prove
  * it) handed to `startRun`, the same path an approved "(planned)" chain takes. It is never a
  * catalog entry, so a project that never asked for e2e never sees it.
@@ -83,6 +83,15 @@ steps:
       retryOn: [1]
 `;
 
+/**
+ * The engine substitutes `{{task}}` in every agent prompt (`applyTemplate`), so the template
+ * cannot carry it into the setup prompt verbatim: the agent would write the SETUP task's text
+ * into the user's workflow. The prompt carries a placeholder and describes the token in words;
+ * the `e2e-list` check (a command, which is never templated) proves the file has it.
+ */
+const TASK_TOKEN = '{{task}}';
+const TASK_PLACEHOLDER = '__CEZAR_TASK_TOKEN__';
+
 /** The setup agent's instructions. `credentials` are NAMES only — the agent never sees a value. */
 export function e2eSetupPrompt(credentials: readonly E2eCredentialName[]): string {
   const provider = credentials[0];
@@ -107,10 +116,10 @@ export function e2eSetupPrompt(credentials: readonly E2eCredentialName[]): strin
 
 6. Prove it locally: \`${E2E} list\` must list the smoke test, and \`${E2E} run --reporter list,markdown\` must pass (a missing browser downloads once on its own). Fix the configuration until both pass.
 
-7. Write \`${E2E_WORKFLOW_FILE}\` with exactly this content, changing only the \`deps\` install command and the \`unit\` test command to what this repository uses (drop the \`unit\` step if it has no unit tests):
+7. Write \`${E2E_WORKFLOW_FILE}\` with exactly this content, changing only the \`deps\` install command and the \`unit\` test command to what this repository uses (drop the \`unit\` step if it has no unit tests). Replace \`${TASK_PLACEHOLDER}\` with cezar's task token: two opening curly braces, the word \`task\`, two closing curly braces, with no spaces. A check step verifies that token is in the file.
 
 \`\`\`yaml
-${E2E_WORKFLOW_TEMPLATE}\`\`\`
+${E2E_WORKFLOW_TEMPLATE.replaceAll(TASK_TOKEN, TASK_PLACEHOLDER)}\`\`\`
 
 8. Commit everything with the message \`chore: set up e2e browser tests\`. Reply with three short lines: the dev-server command you configured, the model provider, and anything the user still has to do.`;
 }
@@ -130,7 +139,7 @@ export function e2eSetupWorkflow(credentials: readonly E2eCredentialName[]): Wor
       {
         id: 'e2e-list',
         name: 'e2e config loads',
-        command: `${E2E} list`,
+        command: `${E2E} list || exit $?\ngrep -qF '${TASK_TOKEN}' ${E2E_WORKFLOW_FILE} || { echo '${E2E_WORKFLOW_FILE}: missing or without the ${TASK_TOKEN} token in its implement step'; exit 1; }`,
         onFail: { retry: 'setup', max: 2 },
       },
       {

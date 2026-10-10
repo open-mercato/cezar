@@ -31,8 +31,9 @@ cezar then starts a task, in its own worktree like any other, that:
 5. proves it — `e2e list` and an `e2e run` of the smoke test are check steps of the
    setup task, and a failure loops the setup agent back with the output until they pass.
 
-The task ends at the review gate: look at the diff, merge its branch, and the
-`implement-and-e2e` workflow is in your catalog. The key is stored encrypted as a
+When the task finishes (at the review gate, if you have it on), look at its diff
+and merge its branch: the `implement-and-e2e` workflow is then in your catalog and
+the section reads *Configured*. The key is stored encrypted as a
 project secret (audience `checks`), so it reaches the e2e check steps and never an
 agent session — the reason not to `export` it (see below). `e2e`'s own telemetry is
 turned off (`E2E_TELEMETRY_DISABLED=1`) in every command cezar writes.

@@ -23,7 +23,7 @@ function setup(options: { status?: E2eStatus; runStatus?: string; postStatus?: n
         ? new Response(JSON.stringify({ runId: 'run-1234abcd' }), { status: 201 })
         : new Response(JSON.stringify({ error: 'an e2e setup is already in progress' }), { status: postStatus })
     }
-    if (url.includes('/runs/')) return new Response(JSON.stringify({ id: status.setup?.runId, status: runStatus ?? status.setup?.status }), { status: 200 })
+    if (url.includes('/runs/')) return new Response(JSON.stringify({ id: status.setup?.runId, status: runStatus ?? status.setup?.status, branch: 'cez/run-1' }), { status: 200 })
     return new Response(JSON.stringify(status), { status: 200 })
   }))
   render(
@@ -81,6 +81,11 @@ describe('End-to-end tests settings', () => {
     expect(screen.getByText('AI_GATEWAY_API_KEY')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Set up again' })).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Open the setup task' }).getAttribute('href')).toBe('/p/default/tasks/run-1')
+  })
+
+  it('tells the user to merge a finished setup whose config has not landed (review gate off by default)', async () => {
+    setup({ status: { ...EMPTY, setup: { runId: 'run-1', status: 'done' } } })
+    await screen.findByText(/Setup finished — merge branch cez\/run-1 to finish/)
   })
 
   it('keeps the key and says why when the server refuses', async () => {

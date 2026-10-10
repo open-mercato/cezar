@@ -20,11 +20,16 @@ const PROVIDER_LABELS: Record<E2eCredentialName, string> = {
 
 const IN_FLIGHT: ReadonlySet<RunStatus> = new Set(['queued', 'running', 'waiting'])
 
-/** What a setup run's status means for the person waiting on it. */
-function setupLine(status: RunStatus): string {
+/**
+ * What a setup run's status means for the person waiting on it. A finished setup whose config is
+ * not in the checkout yet has one step left — merging its branch — because the review gate is
+ * off by default and `done` alone would read as "nothing left to do".
+ */
+function setupLine(status: RunStatus, landed: boolean, branch: string | undefined): string {
   if (IN_FLIGHT.has(status)) return 'Setting up — cezar is installing and configuring e2e in its own worktree.'
-  if (status === 'review') return 'Ready for review — merge the setup task’s branch to finish.'
-  if (status === 'done') return 'Setup finished.'
+  const mergeIt = `merge ${branch ? `branch ${branch}` : 'the setup task’s branch'} to finish.`
+  if (status === 'review') return `Ready for review — ${mergeIt}`
+  if (status === 'done') return landed ? 'Setup finished.' : `Setup finished — ${mergeIt}`
   if (status === 'failed') return 'The last setup failed — open the task to see why, then try again.'
   return 'The last setup was cancelled.'
 }
@@ -40,7 +45,7 @@ function Row({ ok, children }: { ok: boolean; children: React.ReactNode }) {
 
 /**
  * Settings → project → End-to-end tests (spec 2026-10-10-e2e-one-click-setup). One button: cezar
- * installs and configures TesterArmy's `e2e` as a task that ends at the review gate. The model key
+ * installs and configures TesterArmy's `e2e` as a task whose branch the user merges. The model key
  * is optional — smoke tests run without one — and goes to the project's secret store for check
  * steps only, never to an agent.
  */
@@ -103,7 +108,7 @@ export function E2eSection() {
         ) : null}
         {status.data?.setup && setupStatus ? (
           <p className="mt-3 text-sm" data-slot="e2e-setup-run" data-status={setupStatus}>
-            {setupLine(setupStatus)}{' '}
+            {setupLine(setupStatus, Boolean(status.data.configFile), setupRun.data?.branch)}{' '}
             <Link className="underline" to={scopeTo(queryScope(), `/tasks/${status.data.setup.runId}`)}>Open the setup task</Link>
           </p>
         ) : null}

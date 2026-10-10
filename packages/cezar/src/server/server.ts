@@ -5752,7 +5752,7 @@ export function createApp(deps: ServerDeps) {
   // ---- chained family: one-click e2e setup ----------------------------------
   // Spec 2026-10-10-e2e-one-click-setup. `GET /e2e` says what the project has; `POST /e2e/setup`
   // stores the model key (when given) as a `checks` secret and starts the setup as an ordinary
-  // task — an ad-hoc workflow, never a catalog entry — that ends at the review gate.
+  // task — an ad-hoc workflow, never a catalog entry — whose branch the user merges.
   const checkSecretNames = async (project: ProjectContext): Promise<string[]> => {
     const scope = project.id === 'default' ? undefined : { projectId: project.id, root: project.root };
     try {
@@ -5775,7 +5775,7 @@ export function createApp(deps: ServerDeps) {
         return c.json({ error: `an e2e setup is already in progress (task ${running.id.slice(0, 8)})` }, 409);
       }
       if (!(await getRepoInfo(project.root))) {
-        return c.json({ error: 'e2e setup needs a git repository — it runs in its own worktree and ends at the review gate' }, 409);
+        return c.json({ error: 'e2e setup needs a git repository — it runs in its own worktree and finishes as a branch you merge' }, 409);
       }
       if (credential) {
         if (project.id === 'default') return c.json(unregisteredSecrets, 409);
@@ -5791,7 +5791,10 @@ export function createApp(deps: ServerDeps) {
         providersRequiredByWorkflow(workflow, (await loadConfig(project.root)).defaultRunner),
       );
       if (blocked) return c.json({ error: blocked }, 409);
-      const run = project.manager.startRun(workflow, { task: E2E_SETUP_TASK, autonomous: true });
+      // Not autonomous: an autonomous run skips the review gate (`settleSuccess`) a user may have
+      // turned on, and the setup's whole point is a branch the user reviews before it lands. Its agent step is not the last
+      // step, so it hands on to the checks without parking.
+      const run = project.manager.startRun(workflow, { task: E2E_SETUP_TASK });
       return c.json({ runId: run.id }, 201);
     });
 

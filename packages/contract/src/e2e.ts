@@ -3,7 +3,7 @@ import { runStatusSchema } from './runs.ts';
 
 /**
  * One-click browser e2e setup (spec `2026-10-10-e2e-one-click-setup`): cezar installs and
- * configures TesterArmy's `e2e` in a project as an ordinary task that ends at the review gate,
+ * configures TesterArmy's `e2e` in a project as an ordinary task whose branch the user merges,
  * so the user never runs `npx e2e init`, edits a config or writes a workflow by hand.
  */
 
@@ -17,8 +17,8 @@ export const e2eCredentialNameSchema = z.enum(E2E_CREDENTIAL_NAMES);
 export type E2eCredentialName = z.infer<typeof e2eCredentialNameSchema>;
 
 /**
- * `GET /e2e`: what this project already has. Read from the project's checkout, so a setup that
- * is still waiting at the review gate reads as not installed until its branch lands — `setup`
+ * `GET /e2e`: what this project already has. Read from the project's checkout, so a setup whose
+ * branch has not been merged yet reads as not installed until it lands — `setup`
  * says where that run is.
  */
 export const e2eStatusSchema = z.object({

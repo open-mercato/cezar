@@ -8,7 +8,7 @@ Status: implemented on PR #1291 · Base: `feat/check-env` @ `af752cc6` (2026-10-
 
 A user who wants browser e2e tests in a project clicks one button. cezar installs and configures
 TesterArmy's [`e2e`](https://github.com/tester-army/e2e), proves it works, and leaves an
-`implement-and-e2e` workflow behind. The user never runs `npx e2e init`, edits `e2e.config.ts`,
+`implement-and-e2e` workflow behind, on a branch the user merges. The user never runs `npx e2e init`, edits `e2e.config.ts`,
 writes workflow YAML or exports a key.
 
 ## Why this reverses two earlier non-goals
@@ -45,8 +45,9 @@ Contract in `packages/contract/src/e2e.ts`; inventoried in `BACKWARD_COMPATIBILI
 1. 409 when a setup run is queued, running or waiting (two would race on the same files).
 2. 409 when the project is not a git repository — the setup must land as a reviewable branch.
 3. Stores `credential` as a project secret with audience `checks` (the existing secrets write).
-4. Starts `e2eSetupWorkflow(credentialNames)` with `autonomous: true` (the setup must not park on
-   a question; a real blocker ends the run with the agent's explanation).
+4. Starts `e2eSetupWorkflow(credentialNames)` NOT autonomous: an autonomous run skips the review gate
+   (`settleSuccess`), and the setup must land as a reviewed branch. Its agent step is not the last
+   step, so it hands on to the checks without parking (verified in the live run).
 
 The provider gate (`providerActionError`) applies, as on `POST /runs`.
 
@@ -55,18 +56,45 @@ The provider gate (`providerActionError`) applies, as on `POST /runs`.
 | Step | Kind | What |
 | --- | --- | --- |
 | `setup` | agent | Check Node (`^22.22.3 \|\| >=24.8.0`) and that there is a web app; `npx --yes e2e@latest init --yes`; install with the repo's package manager; `app.url: http://127.0.0.1:0` with a `{port}` dev-server command; wire the provider of the first stored key name; a locator-only `tests/smoke.e2e.ts`; write `implement-and-e2e.yaml` from `E2E_WORKFLOW_TEMPLATE`; commit. |
-| `e2e-list` | check | `npx --no-install e2e list` — loads the config, collects tests, no model, no app. |
+| `e2e-list` | check | `npx --no-install e2e list` — loads the config, collects tests, no model, no app — then `grep -qF '{{task}}'` on the written workflow. |
 | `e2e-smoke` | check | `npx --no-install e2e run --reporter list,markdown --max-failures 3`, printing `.e2e/summary.md`. |
 
 Both checks loop back to `setup` (max 2) on ANY exit code: for the setup, a config (2) or app-process
 (3) failure is its own work, unlike a coding task where `retryOn: [1]` is right. The generated
 `implement-and-e2e` keeps `retryOn: [1]`.
 
+The engine substitutes `{{task}}` in every agent prompt, so the template rides in the prompt with
+a placeholder and the token described in words; the `e2e-list` check (a command, never templated)
+proves the file carries the real token. The first live run wrote the setup task's own text there.
+
 The agent is told the key NAME only. Values never enter a prompt, a workflow definition or the run
 record; check steps get them from the secret store.
 
 `--no-install` pins every check to the version the setup installed. `E2E_TELEMETRY_DISABLED=1` is on
 every e2e command cezar writes: cezar does not widen network exposure on the user's behalf.
+
+## Live verification (2026-10-10)
+
+A fresh Vite + React app (`npm create vite -- --template react-ts`), cezar booted from this branch's
+build with an isolated `CEZ_HOME`, real Claude Code runner, no model key:
+
+1. **Run 1** (`d050f86f`): all three steps green in ~2 min, but it exposed two bugs. The engine's
+   `{{task}}` substitution rewrote the template inside the prompt, so the written workflow carried
+   the setup task's text. And `autonomous: true` would skip a review gate the user turned on. Both
+   are fixed, with a regression test for the first (`e2e-setup.test.ts`).
+2. **Run 2** (`d37f3845`): green. `e2e-list` listed `tests/smoke.e2e.ts › home page renders` and
+   found the token. `e2e-smoke` ran a real `e2e run` in the task worktree: the Vite dev server
+   came up on a free port in 409 ms and 1 test passed. The agent's config used
+   `--host 127.0.0.1 --port {port} --strictPort`.
+3. After merging the branch, `GET /e2e` read `configFile: e2e.config.ts, workflow: true`, and
+   `implement-and-e2e` was in the catalog.
+4. **A real task** on `implement-and-e2e` (`1bc892d7`, "change the h1 to Hello cezar") was green
+   in ~1 min: `deps` → `implement` (it changed `App.tsx` AND the smoke test's assertion) → `browser`
+   (real e2e run, 1 passed).
+
+The review gate is off by default (`CEZ_REVIEW_GATE`), so a setup run normally settles as `done`
+with its branch unmerged. The section says "Setup finished — merge branch cez/… to finish" until
+the config is in the checkout.
 
 ## Facts the design rests on (e2e 0.19.0, verified 2026-10-10)
 

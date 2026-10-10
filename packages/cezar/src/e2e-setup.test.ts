@@ -26,8 +26,14 @@ describe('e2e setup workflow (spec 2026-10-10-e2e-one-click-setup)', () => {
     expect(doc.steps?.find((s) => s.id === 'browser')?.onFail).toEqual({ retry: 'implement', max: 2, retryOn: [1] });
   });
 
-  it('embeds the template verbatim in the agent prompt', () => {
-    expect(e2eSetupWorkflow([]).steps[0]!.prompt).toContain(E2E_WORKFLOW_TEMPLATE);
+  it('keeps the live {{task}} token out of the agent prompt, and checks the written file has it', () => {
+    // The engine substitutes {{task}} in agent prompts, so a verbatim template would make the
+    // agent write the SETUP task's text into the user's workflow (found in the live run).
+    const workflow = e2eSetupWorkflow([]);
+    const prompt = workflow.steps[0]!.prompt!;
+    expect(prompt).not.toContain('{{task}}');
+    expect(prompt).toContain(E2E_WORKFLOW_TEMPLATE.replaceAll('{{task}}', '__CEZAR_TASK_TOKEN__'));
+    expect(workflow.steps.find((s) => s.id === 'e2e-list')!.command).toContain("grep -qF '{{task}}' .ai/cezar/workflows/implement-and-e2e.yaml");
   });
 
   it('names the provider of the first stored key, in preference order', () => {
