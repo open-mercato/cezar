@@ -1,19 +1,19 @@
 # Handoff — 2026-10-10-github-tab-fast
 
-**Last updated:** 2026-10-10T20:20:30Z
+**Last updated:** 2026-10-10T20:27:30Z
 **Branch:** `cez/4882295a`
 **PR:** not yet opened
-**Current phase/step:** Phase 2 Step 2.1
-**Last commit:** `bb75ed0f` — test(github): migrate list fixtures to GraphQL
+**Current phase/step:** Phase 3 Step 3.1
+**Last commit:** `c20ad84d` — feat: hydrate GitHub detail metadata
 
 ## What just happened
 
-- Phase 1 is complete: contracts, cursor-aware GraphQL list fetch, route parameters, body detail payload, and migrated forge fixtures are committed.
-- The checkpoint passed focused contract and forge tests; the full server typecheck remains blocked by unrelated base-branch contract drift.
+- Phase 2 is complete: cursor-aware client caching, load-more/virtualized rows, exact totals, cheap comment counts, and selected-detail hydration are committed.
+- Checkpoint 2 passed contract typecheck and focused forge/web tests (332 tests); the full repository typecheck remains blocked by unrelated base-branch contract drift.
 
 ## Next concrete action
 
-- Start Step 2.1: add cursor-aware client queries and React Query cache helpers.
+- Start Step 3.1: add regression coverage for pagination, totals, migration, and hydration.
 
 ## Blockers / open questions
 
@@ -22,7 +22,7 @@
 ## Environment caveats
 
 - Dev runtime runnable: unknown
-- Browser / UI checks: enabled when the test environment is available
+- Browser / UI checks: skipped at checkpoint 2 because no browser-provider descriptor is available
 - Database/migration state: not applicable
 
 ## Worktree
