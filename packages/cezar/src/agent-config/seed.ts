@@ -35,7 +35,7 @@ async function fileExists(path: string): Promise<boolean> {
 }
 
 /** Append `line` to `info/exclude` only if it is not already present (idempotent across runs). */
-async function ensureExcluded(commonGitDir: string, line: string): Promise<void> {
+export async function ensureExcluded(commonGitDir: string, line: string): Promise<void> {
   const excludePath = join(commonGitDir, 'info', 'exclude');
   let current = '';
   try {
@@ -48,6 +48,17 @@ async function ensureExcluded(commonGitDir: string, line: string): Promise<void>
   await mkdir(dirname(excludePath), { recursive: true });
   const sep = current.length === 0 || current.endsWith('\n') ? '' : '\n';
   await writeFile(excludePath, `${current}${sep}${line}\n`, 'utf8');
+}
+
+/** The git dir a worktree shares with its repository — where `info/exclude` lives — or null
+ *  when `worktreeCwd` is not inside a repository. Always absolute. */
+export async function resolveCommonGitDir(worktreeCwd: string): Promise<string | null> {
+  const commonDir = await git(worktreeCwd, ['rev-parse', '--git-common-dir']);
+  if (!commonDir.ok) return null;
+  const commonGitDir = commonDir.stdout.trim();
+  // `isAbsolute`, not a leading-`/` test: git on Windows answers `C:/repo/.git`, and joining that
+  // onto the worktree named a directory that cannot exist — the exclude line was never written.
+  return isAbsolute(commonGitDir) ? commonGitDir : join(worktreeCwd, commonGitDir);
 }
 
 /**
@@ -65,12 +76,8 @@ export async function seedAgentConfigLocalLayer(
   const home = agentHomePaths(env);
   const seeded: string[] = [];
 
-  const commonDir = await git(worktreeCwd, ['rev-parse', '--git-common-dir']);
-  if (!commonDir.ok) return [];
-  const commonGitDir = commonDir.stdout.trim();
-  // `isAbsolute`, not a leading-`/` test: git on Windows answers `C:/repo/.git`, and joining that
-  // onto the worktree named a directory that cannot exist — the exclude line was never written.
-  const absCommonGitDir = isAbsolute(commonGitDir) ? commonGitDir : join(worktreeCwd, commonGitDir);
+  const absCommonGitDir = await resolveCommonGitDir(worktreeCwd);
+  if (!absCommonGitDir) return [];
 
   for (const def of CONFIG_FILES) {
     if (!def.seeded) continue;
