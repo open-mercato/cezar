@@ -24,10 +24,22 @@ Risks: stale issue reports may warrant no-change evidence; existing CI failures 
 ### Phase 1: Audit and dispatch
 
 - [x] 1.1 Audit issues against open PRs and current main
-- [ ] 1.2 Dispatch five independent fixes with child-owned PRs
+- [x] 1.2 Dispatch five independent fixes with child-owned PRs — seven implementation investigations dispatched; stale issues required replacements
 
 ### Phase 2: Validate and review
 
 - [ ] 2.1 Validate child reports and focused test evidence
 - [ ] 2.2 Dispatch one final review and await verdict
 - [ ] 2.3 Report PRs and remaining verification limits
+
+## Audit corrections and current outcome
+
+- #926 already fixed by merged #1246; parent verified ancestry and exact queued screenshot test (1 pass).
+- #1107 already fixed by merged #1330; parent verified ancestry and suite (22 pass).
+- #1017 already fixed by suite-level preload; child passed exact main test (132 pass) and closed unnecessary #1351. No merge.
+- #1237 remaining AgentsDock collapse: draft #1350; parent reviewed diff and passed 18 focused tests. Header overflow already fixed in #1051.
+- #826 browser regression update: draft #1352; browser execution and final review still pending.
+- Replacement #545 preserves per-step model attribution, child 667c7eca.
+- Replacement #889 preserves numeric GitHub search comment counts without N+1 lookups, child 74445cfa.
+
+Seven implementation children used; exactly one final review slot remains. No merges. Final review must cover child PR heads, since parent branch holds orchestration evidence only. Generated-type failures were traced by #1017 to cross-worktree dependency links and recovered with a local locked install; other children notified.
