@@ -1,3 +1,21 @@
+# Unreleased
+
+## ⚠️ Breaking
+- ⚠️ GitHub list rows no longer require `body`; it is optional during the deprecation window and comes from the detail payload. (#1362) *(@pat-lewczuk)*
+
+## ✨ Features
+- ✨ Encrypted project and workspace secrets (OS keychain, `0600` key file fallback) for check steps, never for agents; Settings → Secrets and `cezar secrets`. (#1291) *(@pat-lewczuk)*
+
+## ⚡ Performance
+- ⚡ The GitHub tab loads faster: cursor-paged lists, real open totals and background detail hydration (fixes #1261). (#1362) *(@pat-lewczuk)*
+
+## 🐛 Fixes
+- 🐛 Autosave commits leave out artifacts written by failed checks (fixes #1079). (#1126) *(@pat-lewczuk)*
+- 🐛 macOS RAM matches Activity Monitor, swap shows on macOS, and the host glance keeps updating. (#1363) *(@pat-lewczuk)*
+
+## 🧪 Testing
+- 🧪 Browser e2e smoke tests (TesterArmy). (#1364) *(@pat-lewczuk)*
+
 # 0.15.0 (2026-10-10)
 
 ## Highlights

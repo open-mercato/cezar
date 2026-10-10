@@ -28,7 +28,8 @@ export interface ForgeItem {
   author: string;
   createdAt: string;
   labels: string[];
-  body: string;
+  /** Deprecated in the list tier; hydrated through the detail endpoint when omitted. */
+  body?: string;
   url: string;
   comments: number;
   /** PRs only. */
@@ -125,6 +126,7 @@ export interface ForgeCommentsData {
    *  the legacy comments-only call. Capped independently of `comments`, which keeps its exact
    *  pre-#525 shape, contents and cap (BACKWARD_COMPATIBILITY.md §2). */
   events?: ForgeTimelineEvent[];
+  detail?: { body: string; additions?: number; deletions?: number };
 }
 
 export interface ForgeListOptions {
@@ -132,6 +134,8 @@ export interface ForgeListOptions {
   refresh?: boolean;
   /** Max items to fetch (driver-capped). */
   limit?: number;
+  issuesCursor?: string;
+  prsCursor?: string;
 }
 
 /** The `GET /api/github/search` payload (#730). The list tier (`listIssues`/`listPRs`) only ever

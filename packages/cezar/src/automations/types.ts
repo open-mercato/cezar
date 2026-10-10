@@ -58,6 +58,15 @@ export const automationTaskSchema = z
      *  automation on a real repository before letting it push or comment. */
     shadow: z.boolean().optional(),
     systemPrompt: z.string().max(100_000).optional(),
+    /**
+     * Where the launched run's worktree forks from (spec 2026-10-06-agentic-e2e-checks Phase 3):
+     * omitted or `'base'` is the configured base branch, exactly as before; `'pr-head'` is the
+     * matched pull request's head. GitHub `pull_request.*` automations only.
+     */
+    checkout: z.enum(['base', 'pr-head']).optional(),
+    /** With `checkout: 'pr-head'`: admit a head from a fork. Off by default; an admitted fork is
+     *  untrusted code and its check steps get no check credentials. */
+    allowForkHeads: z.boolean().optional(),
     /** The automation's own dispatch setting (spec 2026-09-14 Q4). */
     dispatch: z
       .object({
@@ -110,6 +119,29 @@ export const automationDefinitionObjectSchema = z
   })
   .passthrough()
   .superRefine((definition, ctx) => {
+    // `checkout`/`allowForkHeads` (spec 2026-10-06-agentic-e2e-checks Phase 3) name a pull
+    // request's head, so they mean something only where every event IS a pull request.
+    const prHeadKeys = (['checkout', 'allowForkHeads'] as const).filter((key) => definition.task[key] !== undefined);
+    const pullRequestOnly =
+      definition.kind === 'github' &&
+      !!definition.events?.length &&
+      definition.events.every((event) => event.startsWith('pull_request.'));
+    for (const key of prHeadKeys) {
+      if (!pullRequestOnly) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['task', key],
+          message: `${key} is accepted only on a GitHub automation whose events are all pull_request.*`,
+        });
+      }
+    }
+    if (definition.task.allowForkHeads !== undefined && definition.task.checkout !== 'pr-head') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['task', 'allowForkHeads'],
+        message: "allowForkHeads is meaningful only with checkout: 'pr-head'",
+      });
+    }
     if (definition.kind === 'schedule') {
       if (!definition.schedule) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['schedule'], message: 'a scheduled automation needs a schedule' });
@@ -215,7 +247,10 @@ export const automationReceiptSchema = z
     eventId: z.string().min(1),
     automationId: z.string().min(1),
     revision: z.number().int().positive(),
-    status: z.enum(['reserved', 'launched', 'launch-error']),
+    // `skipped` (spec 2026-10-06-agentic-e2e-checks Phase 3): the event was handled and
+    // deliberately launched nothing — a closed PR, an unadmitted fork head. Terminal, not
+    // retryable; the receipt is what stops the next poll re-firing for the same event.
+    status: z.enum(['reserved', 'launched', 'launch-error', 'skipped']),
     runId: z.string().optional(),
     observedAt: z.string().datetime(),
     updatedAt: z.string().datetime(),

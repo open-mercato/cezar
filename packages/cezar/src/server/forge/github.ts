@@ -184,6 +184,10 @@ export interface GithubData {
   /** Repo-wide map of label name → 6-hex color (no `#`), so the UI can tint chips like GitHub
    *  does. Additive (BACKWARD_COMPATIBILITY): absent on old payloads, chips fall back to neutral. */
   labelColors?: Record<string, string>;
+  issuesTotal?: number;
+  prsTotal?: number;
+  issuesNextCursor?: string | null;
+  prsNextCursor?: string | null;
 }
 
 // `gh … --json` output — validated at the boundary, extras stripped.
@@ -216,6 +220,35 @@ const ghPrSchema = ghIssueSchema.extend({
   additions: z.number().default(0),
   deletions: z.number().default(0),
 });
+
+const ghListNodeSchema = z.object({
+  number: z.number(),
+  title: z.string(),
+  author: ghAuthor,
+  createdAt: z.string(),
+  labels: z.array(ghLabel).default([]),
+  url: z.string(),
+  comments: z.object({ totalCount: z.number().int().nonnegative() }).optional(),
+  isDraft: z.boolean().default(false),
+  additions: z.number().optional(),
+  deletions: z.number().optional(),
+});
+
+const ghListPageSchema = z.object({
+  totalCount: z.number().int().nonnegative(),
+  nodes: z.array(ghListNodeSchema),
+  pageInfo: z.object({ hasNextPage: z.boolean(), endCursor: z.string().nullish() }),
+});
+
+const ghListResponseSchema = z.object({
+  issues: ghListPageSchema,
+  pullRequests: ghListPageSchema,
+});
+
+export function parseGithubListPage(out: string): z.infer<typeof ghListResponseSchema> {
+  const parsed = JSON.parse(out) as { data?: { repository?: unknown } };
+  return ghListResponseSchema.parse(parsed?.data && (parsed.data as { repository?: unknown }).repository);
+}
 const ghPrViewSchema = z.object({
   number: z.number(),
   url: z.string(),
@@ -385,50 +418,54 @@ const LIST_CACHE_MAX = 50;
 const CACHE_MS = 60_000;
 export const GH_MAX_LIMIT = 1000;
 
-export async function fetchGithub(repoRoot: string, refresh = false, limit = 30): Promise<GithubData> {
-  if (process.env.CEZ_DRY_RUN === '1') return mockGithub();
+const githubListQuery = `
+query ($owner: String!, $name: String!, $limit: Int!, $issuesCursor: String, $prsCursor: String) {
+  repository(owner: $owner, name: $name) {
+    issues(first: $limit, after: $issuesCursor, states: OPEN, orderBy: {field: CREATED_AT, direction: DESC}) {
+      totalCount
+      nodes { number title author { login } createdAt labels { name color } url comments { totalCount } }
+      pageInfo { hasNextPage endCursor }
+    }
+    pullRequests(first: $limit, after: $prsCursor, states: OPEN, orderBy: {field: CREATED_AT, direction: DESC}) {
+      totalCount
+      nodes { number title author { login } createdAt labels { name color } url comments { totalCount } isDraft additions deletions }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`;
+
+export async function fetchGithub(
+  repoRoot: string,
+  refresh = false,
+  limit = 30,
+  cursors: { issuesCursor?: string; prsCursor?: string } = {},
+): Promise<GithubData> {
+  if (process.env.CEZ_DRY_RUN === '1') return mockGithubPage(limit, cursors);
   const capped = Math.min(Math.max(limit, 1), GH_MAX_LIMIT);
-  const hit = listCache.get(repoRoot);
+  const cacheKey = `${repoRoot}\0${cursors.issuesCursor ?? ''}\0${cursors.prsCursor ?? ''}`;
+  const hit = listCache.get(cacheKey);
   if (!refresh && hit && Date.now() - hit.at < CACHE_MS && hit.limit >= capped) {
     return hit.data;
   }
   try {
-    // No `comments` field — `gh … --json comments` ships full comment bodies.
-    // No `statusCheckRollup` either (#664): the CI rollup for every open PR was the
-    // dominant cost — it forced the 60 s budget below — and is now hydrated lazily per
-    // on-screen PR row via `fetchGithubChecks`. A big list still gets a little more wall
-    // clock than the default 30, but nothing like the old rollup walk.
     const timeout = capped > 100 ? 30_000 : 15_000;
-    const fields = 'number,title,author,createdAt,labels,body,url';
-    // The repo handle first (cheap) so the counts GraphQL query — which needs owner/name —
-    // can run parallel to the two expensive list calls below.
-    const repoOut = await gh(repoRoot, ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'], timeout);
-    const ownerName = parseOwnerName(repoOut);
+    const ownerName = await resolveRepoHandle(repoRoot);
+    if (!ownerName) return { available: false, reason: 'repository handle unavailable', issues: [], prs: [] };
     const runGraphql: GraphqlRunner = (query, variables) => {
       const args = ['api', 'graphql', '-f', `query=${query}`];
       for (const [key, value] of Object.entries(variables)) args.push('-f', `${key}=${value}`);
       return gh(repoRoot, args, timeout);
     };
-    // Bound the counts pagination to the rows actually being fetched: a page is 100, so
-    // `ceil(capped / 100)` pages (still capped at GH_COUNTS_MAX_PAGES) cover exactly the visible
-    // window and no more — the default 30-item load pays ONE counts round-trip, not ten. Rows
-    // beyond the window keep `comments: 0`, which the UI reads as "no badge" (same as before).
-    const countsMaxPages = Math.min(GH_COUNTS_MAX_PAGES, Math.max(1, Math.ceil(capped / 100)));
-    const [issuesOut, prsOut, counts] = await Promise.all([
-      gh(repoRoot, ['issue', 'list', '--limit', String(capped), '--json', fields], timeout),
-      gh(repoRoot, ['pr', 'list', '--limit', String(capped), '--json', `${fields},isDraft,additions,deletions`], timeout),
-      // Real comment counts (#499). Degrades to empty maps on its own — a failure here leaves
-      // every count at 0, never fails the tab. Skipped entirely if the handle isn't parseable.
-      ownerName
-        ? fetchCommentCounts(runGraphql, ownerName.owner, ownerName.name, countsMaxPages)
-        : Promise.resolve<{ issues: Record<number, number>; prs: Record<number, number> }>({ issues: {}, prs: {} }),
-    ]);
+    const variables: Record<string, string> = { owner: ownerName.owner, name: ownerName.name, limit: String(capped) };
+    if (cursors.issuesCursor) variables.issuesCursor = cursors.issuesCursor;
+    if (cursors.prsCursor) variables.prsCursor = cursors.prsCursor;
+    const page = parseGithubListPage(await runGraphql(githubListQuery, variables));
     // One repo-wide label→color map, filled as we flatten each item's labels.
     const labelColors: Record<string, string> = {};
     const recordColor = (l: { name: string; color: string }) => {
       if (l.color && !labelColors[l.name]) labelColors[l.name] = l.color;
     };
-    const issues = z.array(ghIssueSchema).parse(JSON.parse(issuesOut)).map(
+    const issues = page.issues.nodes.map(
       (i): GithubItem => {
         i.labels.forEach(recordColor);
         return {
@@ -438,13 +475,12 @@ export async function fetchGithub(repoRoot: string, refresh = false, limit = 30)
           author: i.author?.login ?? '?',
           createdAt: i.createdAt,
           labels: i.labels.map((l) => l.name),
-          body: (i.body ?? '').slice(0, 8_000),
           url: i.url,
-          comments: counts.issues[i.number] ?? 0,
+          comments: i.comments?.totalCount ?? 0,
         };
       },
     );
-    const prs = z.array(ghPrSchema).parse(JSON.parse(prsOut)).map(
+    const prs = page.pullRequests.nodes.map(
       (p): GithubItem => {
         p.labels.forEach(recordColor);
         return {
@@ -454,9 +490,8 @@ export async function fetchGithub(repoRoot: string, refresh = false, limit = 30)
           author: p.author?.login ?? '?',
           createdAt: p.createdAt,
           labels: [...p.labels.map((l) => l.name), ...(p.isDraft ? ['draft'] : [])],
-          body: (p.body ?? '').slice(0, 8_000),
           url: p.url,
-          comments: counts.prs[p.number] ?? 0,
+          comments: p.comments?.totalCount ?? 0,
           isDraft: p.isDraft,
           additions: p.additions,
           deletions: p.deletions,
@@ -468,14 +503,18 @@ export async function fetchGithub(repoRoot: string, refresh = false, limit = 30)
     );
     const data: GithubData = {
       available: true,
-      repo: repoOut.trim() || undefined,
+      repo: `${ownerName.owner}/${ownerName.name}`,
       syncedAt: new Date().toISOString(),
       issues,
       prs,
       labelColors,
+      issuesTotal: page.issues.totalCount,
+      prsTotal: page.pullRequests.totalCount,
+      issuesNextCursor: page.issues.pageInfo.hasNextPage ? page.issues.pageInfo.endCursor ?? null : null,
+      prsNextCursor: page.pullRequests.pageInfo.hasNextPage ? page.pullRequests.pageInfo.endCursor ?? null : null,
     };
-    listCache.delete(repoRoot); // re-insert so this key becomes the newest
-    listCache.set(repoRoot, { at: Date.now(), limit: capped, data });
+    listCache.delete(cacheKey); // re-insert so this key becomes the newest
+    listCache.set(cacheKey, { at: Date.now(), limit: capped, data });
     while (listCache.size > LIST_CACHE_MAX) {
       const oldest = listCache.keys().next().value;
       if (oldest === undefined) break;
@@ -746,6 +785,23 @@ function mockGithub(): GithubData {
   };
 }
 
+function mockGithubPage(limit: number, cursors: { issuesCursor?: string; prsCursor?: string }): GithubData {
+  const full = mockGithub();
+  const issueStart = Number(cursors.issuesCursor ?? 0);
+  const prStart = Number(cursors.prsCursor ?? 0);
+  const issues = full.issues.slice(issueStart, issueStart + limit);
+  const prs = full.prs.slice(prStart, prStart + limit);
+  return {
+    ...full,
+    issues,
+    prs,
+    issuesTotal: full.issues.length,
+    prsTotal: full.prs.length,
+    issuesNextCursor: issueStart + issues.length < full.issues.length ? String(issueStart + issues.length) : null,
+    prsNextCursor: prStart + prs.length < full.prs.length ? String(prStart + prs.length) : null,
+  };
+}
+
 // ---- comment threads (#499 Phase 2) ----------------------------------------
 // A lazy per-thread fetch behind `GET /api/github/comments/:kind/:number`: the
 // conversation comments (issues endpoint — GitHub serves PR conversation
@@ -761,6 +817,11 @@ const ghIssueCommentSchema = z.object({
   created_at: z.string(),
   body: z.string().nullish(),
   html_url: z.string(),
+});
+const ghDetailSchema = z.object({
+  body: z.string().nullish(),
+  additions: z.number().int().nonnegative().nullish(),
+  deletions: z.number().int().nonnegative().nullish(),
 });
 const ghReviewSchema = z.object({
   id: z.number(),
@@ -2231,6 +2292,7 @@ export async function fetchGithubComments(
   const legacyComments = () =>
     gh(repoRoot, ['api', `repos/{owner}/{repo}/issues/${number}/comments`, '--paginate']);
   try {
+    let detail: { body: string; additions?: number; deletions?: number } | undefined;
     let commentRows: unknown[] = [];
     let events: ForgeTimelineEvent[] | undefined;
     let eventsTruncated = false;
@@ -2296,6 +2358,23 @@ export async function fetchGithubComments(
       events = undefined;
     }
 
+    // Body is a separate, best-effort detail tier. Fetch it only after the thread succeeds so a
+    // missing CLI does not create a second failing subprocess on the ordinary degrade path.
+    try {
+      const fields = kind === 'pr' ? 'body,additions,deletions' : 'body';
+      const detailOut = await gh(repoRoot, [kind === 'pr' ? 'pr' : 'issue', 'view', String(number), '--json', fields]);
+      const parsed = ghDetailSchema.parse(JSON.parse(detailOut));
+      if (parsed.body !== null && parsed.body !== undefined) {
+        detail = {
+          body: parsed.body,
+          ...(parsed.additions !== null && parsed.additions !== undefined ? { additions: parsed.additions } : {}),
+          ...(parsed.deletions !== null && parsed.deletions !== undefined ? { deletions: parsed.deletions } : {}),
+        };
+      }
+    } catch {
+      // The detail tier is best-effort: a missing body must not hide an otherwise readable thread.
+    }
+
     // Per-commit CI (#525 Phase 2). One extra subprocess per opened thread that contains commits,
     // behind the same 60 s LRU — a per-thread-open cost, not per-render. Every failure path here
     // leaves `checks` ABSENT rather than null, so commits simply render unglyphed: the fetch
@@ -2330,6 +2409,7 @@ export async function fetchGithubComments(
       // rather than replaced.
       truncated: truncated || eventsTruncated || stoppedShort || undefined,
     };
+    if (detail) data.detail = { ...detail, body: detail.body.slice(0, COMMENT_BODY_CAP) };
     if (events) data.events = events;
     cacheComments(key, data);
     return data;
@@ -2455,7 +2535,12 @@ function mockGithubComments(kind: 'issue' | 'pr'): ForgeCommentsData {
     });
   }
 
-  return { available: true, comments, events };
+  return {
+    available: true,
+    comments,
+    events,
+    detail: { body: kind === 'pr' ? 'Mock pull request body.' : 'Mock issue body.' },
+  };
 }
 
 // ---- draft-PR creation (review gate, spec 009) ------------------------------

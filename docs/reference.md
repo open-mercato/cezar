@@ -255,8 +255,71 @@ steps:
 ```
 
 `{{task}}` is replaced with the task text you typed. When a check fails and loops
-back, its failing output is appended to the retried agent's prompt so the next
-attempt can see what broke.
+back, its failing output — with host secrets, the run's registered secrets and
+known token shapes redacted — is appended to the retried agent's prompt so the
+next attempt can see what broke.
+
+A check step runs `bash -lc <command>` in the task's worktree with the server's
+environment plus the **secrets** it may read, which no agent step ever
+receives. A secret has a scope — the project (Settings → *Secrets*,
+`cezar secrets …`) or the whole workspace (Settings → Global → *Secrets*,
+`cezar secrets … --workspace`) — and audiences: `checks` (check steps) and/or
+`cezar` (cezar's own features). By default a check step gets every
+`checks`-audience secret of the workspace and the project, the project's
+winning on a shared name; a step can bind exactly the ones it needs instead:
+
+```yaml
+- id: e2e
+  command: npx e2e run
+  secrets:
+    - E2E_GATEWAY_KEY                        # as itself
+    - { name: STAGING_LOGIN, as: APP_PASSWORD }   # renamed on the way in
+```
+
+A bound name that is not stored, or that `checks` may not read, is said on the
+step as a note; `secrets:` on an agent step is a load-time error. Manage secrets
+with `cezar secrets list | set <NAME> [--audience checks,cezar] | unset <NAME>`
+(`set` reads the value from stdin; nothing is taken from argv or printed back)
+or in Settings. Names are `[A-Z_][A-Z0-9_]*`; `CEZ_*`, `DYLD_*` and shell/loader
+variables (`PATH`, `HOME`, `NODE_OPTIONS`, `LD_PRELOAD`, …) are refused. This is
+where an e2e runner's model key belongs: an exported `ANTHROPIC_API_KEY` or
+`OPENAI_API_KEY` also reaches the agents and switches them to API billing.
+
+Values are stored encrypted (AES-256-GCM) under `~/.cezar/secrets/`, with one
+per-machine data key in the OS keychain (macOS Keychain, Linux Secret Service,
+Windows Credential Manager) through the optional `@napi-rs/keyring` package.
+Without a usable keychain — a server, a container, an install that skipped
+optional packages, or `CEZ_SECRETS_KEYCHAIN=0` — the data key is a `0600` file
+beside the secrets, which makes the store exactly as strong as a private
+plaintext file; Settings and `cezar secrets list` say which one is in use. A
+secret is written for one machine: a reset keychain or a deleted key file
+leaves the store unreadable (reported on the run as a note) until the secrets
+are stored again.
+
+cezar also tells a check step about the run it is verifying. These are set by
+cezar, not settings — a variable the run does not have is absent (never empty),
+and a value inherited from the server's own environment is replaced:
+
+| Variable | Value |
+|---|---|
+| `CEZ_RUN_ID` | the run id |
+| `CEZ_PROJECT_ID` | the project id |
+| `CEZ_WORKTREE` | absolute path of the task's worktree (the check's cwd) |
+| `CEZ_BRANCH` | the run's branch |
+| `CEZ_BASE` | the recorded fork point |
+| `CEZ_STEP_ID` | this check step's id |
+| `CEZ_ATTEMPT` | 1-based attempt number of this check within the run |
+| `CEZ_SHARED_CACHE_DIR` | `~/.cezar/cache/<projectId>` (`0700`), shared by the project's tasks — e.g. an e2e replay cache |
+| `CEZ_GITHUB_REPO`, `CEZ_GITHUB_NUMBER`, `CEZ_GITHUB_EVENT` | runs a GitHub automation launched only |
+| `CEZ_PR_HEAD_SHA`, `CEZ_PR_HEAD_REF`, `CEZ_PR_BASE_REF` | runs a `checkout: "pr-head"` automation launched on a pull request's head only |
+
+`CEZ_PROJECT_ID` is the one name in that table cezar also reads as an *input*
+(it is how `cez task` and `cez automation` address a cockpit, see
+[backward compatibility](../BACKWARD_COMPATIBILITY.md) §1). A run that knows its
+own project replaces it; a headless `cezar run` that does not leaves whatever
+you exported alone, so a check step can still reach the cockpit you named.
+
+A GitHub automation whose events are all `pull_request.*` can set `"checkout": "pr-head"` in its `task`: each launched run forks its worktree from the matched PR's head (fetched into `refs/cezar/pr/<n>`) instead of the base branch, so its check steps verify the PR itself. A closed PR or a fork head launches nothing (`skipped` in the execution log) unless `"allowForkHeads": true` admits forks — whose checks then run without secrets. Such a run cannot open a draft PR (`409`). See [Verify a pull request](e2e-verification.md#verify-a-pull-request).
 
 `onFail.retryOn` narrows the loop to the exit codes that mean *the work is
 wrong*. Omitted, any non-zero code loops back — right for `npm test`, which
@@ -422,6 +485,7 @@ Useful environment variables:
 | `CEZ_ENV_PASSTHROUGH=A,B` | Forward these extra host env vars to spawned agents. By default agents get a least-privilege env (safe shell/toolchain vars + the backend's own auth + `GITHUB_TOKEN` + `CEZ_*`), not your full environment — use this to add a var an agent needs. |
 | `CEZ_AGENT_ENV_FULL=1` | Escape hatch: give spawned agents the full host environment (pre-hardening behavior). Off by default; only set it if you understand that this hands every host secret to the agent process. |
 | `CEZ_AGENT_TMPDIR=0` | Stop giving each task its own temp directory and hand agents the host `TMPDIR` again (pre-#785 behavior). On by default: every run gets `TMPDIR`/`TEMP`/`TMP` pointing at `.ai/cezar/tmp/<task-id>`, created and write-probed before the agent spawns and reaped when the run ends, so concurrent tasks stop sharing one directory and a task refuses to start rather than run against a temp directory that silently swallows its shell output (see Troubleshooting below). Only an exact `0` disables it, and it disables the whole thing — the pre-spawn check included, so this stays an escape hatch you can actually take. |
+| `CEZ_SECRETS_KEYCHAIN=0` | Keep the secret store's data key out of the OS keychain and use the `0600` key file `~/.cezar/secrets/.key` only. By default the key goes to the keychain (macOS Keychain, Linux Secret Service, Windows Credential Manager, via the optional `@napi-rs/keyring`) when one is usable, and to the file otherwise; Settings → Secrets and `cezar secrets list` say which. Only the exact value `0`. |
 | `CEZ_REDACT_SECRETS=0` | Disable scrubbing of credential values/token shapes from the on-disk state (the NDJSON transcript and the free-text fields of `runs.json`). On by default; leave it on. Best-effort defense-in-depth, not a guarantee: it catches known token shapes and the values of your own secret-named env vars, so a credential in neither category can still get through. |
 | `CEZ_TITLE_UPDATES=0` | Turn off the live task-title refresh (namer re-runs on each turn end). The Settings → Agents toggle overrides this default. |
 | `CEZ_AUTONAME=0` | Disable ALL LLM task naming (creation + live) — titles stay heuristic (`437: /om-auto-review-pr`). Under `CEZ_DRY_RUN=1` naming is already off unless forced with `CEZ_AUTONAME=1`. |

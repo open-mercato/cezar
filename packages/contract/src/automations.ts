@@ -130,6 +130,12 @@ export const automationTaskSchema = createRunInputBaseSchema
     variants: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
     systemPrompt: z.string().optional(),
     dispatch: automationDispatchSchema.optional(),
+    /** Where the launched run's worktree forks from (spec 2026-10-06-agentic-e2e-checks Phase 3):
+     *  omitted/`'base'` = the configured base; `'pr-head'` = the matched pull request's head.
+     *  GitHub automations whose events are all `pull_request.*` only. */
+    checkout: z.enum(['base', 'pr-head']).optional(),
+    /** With `checkout: 'pr-head'`: admit a head from a fork (untrusted; no secrets). */
+    allowForkHeads: z.boolean().optional(),
   });
 export type AutomationTask = z.infer<typeof automationTaskSchema>;
 

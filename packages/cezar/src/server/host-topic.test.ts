@@ -83,6 +83,7 @@ describe('host topic + sampler (live-server path)', () => {
         currentHostUsage: () => sample,
         sampleHostUsage: () => sample,
         onHostUsage: () => () => undefined,
+        keepWarm: () => undefined,
         dispose: () => undefined,
       },
     });

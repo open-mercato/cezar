@@ -11,6 +11,8 @@ import {
   KeyboardIcon,
   NotebookPenIcon,
   PaletteIcon,
+  KeyRoundIcon,
+  BlocksIcon,
   TicketIcon,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
@@ -29,6 +31,8 @@ import { ResourcesSection } from './resources-section'
 import { SkillsSection } from './skills-section'
 import { WorktreesSection } from './worktrees-section'
 import { TrackerSection } from './tracker-section'
+import { ProjectSecretsSection, WorkspaceSecretsSection } from './secrets-section'
+import { IntegrationsSection } from './integrations-section'
 
 /**
  * The Settings section registry (R6 Step 1.3, spec §"Settings"): the ONE place a section is
@@ -60,6 +64,9 @@ export type SettingsSectionId =
   | 'keyboard'
   | 'skills'
   | 'tracker'
+  | 'secrets'
+  | 'integrations'
+  | 'workspace-secrets'
 
 /** Which settings area a section belongs to — and therefore which store it writes. */
 export type SettingsScope = 'project' | 'global'
@@ -100,6 +107,22 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Connect this project to Jira or Linear.',
     icon: TicketIcon,
     component: TrackerSection,
+    scope: 'project',
+  },
+  {
+    id: 'secrets',
+    title: 'Secrets',
+    description: 'Encrypted values for this project’s check steps and cezar — never for agents.',
+    icon: KeyRoundIcon,
+    component: ProjectSecretsSection,
+    scope: 'project',
+  },
+  {
+    id: 'integrations',
+    title: 'External integrations',
+    description: 'Third-party tools cezar installs and wires into this project — test frameworks first.',
+    icon: BlocksIcon,
+    component: IntegrationsSection,
     scope: 'project',
   },
   {
@@ -173,6 +196,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Updates for skills installed on this machine.',
     icon: PackageCheckIcon,
     component: SkillsSection,
+    scope: 'global',
+  },
+  {
+    id: 'workspace-secrets',
+    title: 'Secrets',
+    description: 'Encrypted values shared by every project on this machine — never for agents.',
+    icon: KeyRoundIcon,
+    component: WorkspaceSecretsSection,
     scope: 'global',
   },
   {

@@ -170,6 +170,12 @@ describe('request shapes', () => {
       path: '/api/v1/github?limit=5&refresh=1',
       method: 'GET',
     },
+    {
+      name: 'getGithub (cursor page)',
+      call: () => getGithub({ limit: 50, issuesCursor: 'i-cursor', prsCursor: 'p-cursor' }),
+      path: '/api/v1/github?limit=50&issuesCursor=i-cursor&prsCursor=p-cursor',
+      method: 'GET',
+    },
     // `refresh: false` must not become `refresh=0` — the server tests `=== '1'`, but sending a
     // parameter we do not mean is how a "false" ends up read as truthy somewhere downstream.
     { name: 'getGithub (refresh false)', call: () => getGithub({ refresh: false }), path: '/api/v1/github', method: 'GET' },

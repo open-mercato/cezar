@@ -14,7 +14,36 @@ examples use.
 
 ---
 
-## Before the first run
+## One click: let cezar set it up
+
+**Settings → (project) → External integrations → Test frameworks → TesterArmy e2e → Set up e2e.** That is the whole setup.
+Optionally pick a model provider and paste its key first; without one the smoke
+test still runs, and only `agent.*` steps need a model.
+
+cezar then starts a task, in its own worktree like any other, that:
+
+1. runs `npx e2e init --yes` and installs what it added with the repository's package manager;
+2. points `e2e.config.ts` at **this** project's dev server on a per-task port
+   (`http://127.0.0.1:0` with a `{port}` app command, so parallel tasks never collide)
+   and wires the model provider for the key you stored;
+3. replaces the example with a `tests/smoke.e2e.ts` that needs no model key;
+4. writes `.ai/cezar/workflows/implement-and-e2e.yaml` (Level 1 below, with your install and unit-test commands);
+5. proves it — `e2e list` and an `e2e run` of the smoke test are check steps of the
+   setup task, and a failure loops the setup agent back with the output until they pass;
+6. opens a **draft PR** with all of it (through `gh`, like the review gate's Draft PR button).
+   With no GitHub remote or no `gh`, the setup still succeeds and the task says so.
+
+The task ends with a card that says whether e2e works. Merge the draft PR (or the
+task's branch): the `implement-and-e2e` workflow is then in your catalog and the
+card in Settings reads *Installed*. The key is stored encrypted as a
+project secret (audience `checks`), so it reaches the e2e check steps and never an
+agent session — the reason not to `export` it (see below). `e2e`'s own telemetry is
+turned off (`E2E_TELEMETRY_DISABLED=1`) in every command cezar writes.
+
+Everything below is what that task does for you, for when you want to do it by hand
+or change it.
+
+## Before the first run (by hand)
 
 In the repo you want tested (not in cezar):
 
@@ -216,15 +245,85 @@ for follow-ups.
 ## What cezar gives the check, and what it does not
 
 - **cwd** is the task's worktree, and the command runs under `bash -lc`.
-- **Environment** is the cezar server's own `process.env`. There is no
-  per-step `env:` — export the model credential your provider reads
-  (`AI_GATEWAY_API_KEY`, `ANTHROPIC_API_KEY`, …) before starting cezar, or use
-  a subscription with `npx e2e login`. Tests with no agent step need no model
-  at all.
+- **Environment** is the cezar server's own `process.env` plus the **secrets**
+  the step may read (below). There is no per-step `env:` — workflow files are
+  committed, and a secret's value does not belong in them; a step names the
+  secrets it needs instead. Tests with no agent step need no model at all.
+- **Model credentials go in `cezar secrets`, not in your shell.** Store the
+  key your provider reads once per project:
+
+  ```bash
+  printf %s "$MY_GATEWAY_KEY" | cezar secrets set AI_GATEWAY_API_KEY
+  cezar secrets list              # names and audiences — a value never comes back out
+  cezar secrets unset AI_GATEWAY_API_KEY
+  ```
+
+  (or Settings → *Secrets* in the cockpit; `--workspace` / Settings → Global →
+  *Secrets* for a key every project shares). `set` reads the value from stdin —
+  run it bare to type it at a hidden prompt — so it never lands in shell history
+  or `ps`. The values are handed to this project's **check steps only** and live
+  encrypted under `~/.cezar/secrets/`, with the data key in your OS keychain
+  when one is available (see [reference](reference.md#workflows) for the file
+  fallback). A check step gets every secret stored for check steps by default,
+  or exactly the ones it binds:
+
+  ```yaml
+  - id: e2e
+    command: npx e2e run
+    secrets: [AI_GATEWAY_API_KEY]
+  ```
+
+  A stored value of **12 characters or more** is also redacted from the check's
+  output and from the failing output fed back to the agent — the same floor
+  `MIN_SECRET_LEN` applies to the host's own secret-named variables, because
+  below it a "secret" is too common a word to replace safely (`POSTGRES_PASSWORD=postgres`
+  once turned `apt install postgresql-16` into `apt install [REDACTED]ql-16`).
+  A shorter value is stored and injected like any other, but it is **not**
+  scrubbed from the run transcript or the retry prompt, so keep anything that
+  must not be logged above the floor — every real API key already is.
+
+  **Why not just `export ANTHROPIC_API_KEY` before starting cezar?** Because
+  cezar passes provider-prefixed variables (`ANTHROPIC_*`, `OPENAI_*`, …) to
+  the agents it starts. A key exported for e2e would reach every Claude Code or
+  Codex session too, and switch it from the subscription account you chose in
+  Agent accounts to API billing — silently. A secret never reaches an agent:
+  agents are not an audience a secret can have.
+- **Use an API key or a service-account key**, not a subscription login: a
+  check runs unattended, and `npx e2e login`-style sessions are not supported
+  there.
 - **`CI` is not set**, so e2e uses its local defaults: no retries, workers at
   half the cores, and a read-write replay cache — a verified `agent.act`
   recorded on one attempt replays without a model call on the next. Set `CI=1`
   in the command to get the stricter CI defaults instead.
+- **The replay cache can be shared across tasks.** Every task starts in a
+  fresh worktree, and `.e2e/cache/` is gitignored, so by default each task
+  re-records every `agent.act`. cezar hands each check `CEZ_SHARED_CACHE_DIR`
+  (`~/.cezar/cache/<project>`, one per project) — point the cache there:
+
+  ```ts
+  // e2e.config.ts
+  import { join } from 'node:path'
+  cache: {
+    mode: 'read-write',
+    dir: process.env.CEZ_SHARED_CACHE_DIR ? join(process.env.CEZ_SHARED_CACHE_DIR, 'e2e') : '.e2e/cache',
+  },
+  ```
+
+  cezar hands every parallel task the same directory and takes no lock on it —
+  it does not own the writes, your e2e tool does. A recording one task
+  overwrites costs the next one a re-recording (model calls), never a wrong
+  verdict: e2e verifies the end state of every replay. Two tasks writing the
+  *same* entry at once is the case cezar cannot speak for — if your cache
+  writer is not atomic, a torn entry surfaces as an e2e error rather than a
+  re-record. Keep the cache per project (the default shape above) rather than
+  sharing one across projects, and nothing prunes the directory: it is yours to
+  reclaim with `rm -rf ~/.cezar/cache` (or one project's subdirectory), which
+  only costs the next run its warm cache. Unregistering a project does not
+  remove it.
+- **The check knows its run.** `CEZ_RUN_ID`, `CEZ_PROJECT_ID`, `CEZ_WORKTREE`,
+  `CEZ_BRANCH`, `CEZ_BASE`, `CEZ_STEP_ID` and `CEZ_ATTEMPT`, plus
+  `CEZ_GITHUB_REPO`/`CEZ_GITHUB_NUMBER`/`CEZ_GITHUB_EVENT` on a run a GitHub
+  automation launched — see the [reference](reference.md#workflow-format).
 - **No timeout.** cezar does not bound a check step; e2e's own startup,
   test and exploration timeouts are what stop a hung app from holding the
   task's parallel slot. Keep them configured.
@@ -233,6 +332,76 @@ for follow-ups.
   command the config names.
 - **Cancelling a task** sends SIGTERM to the running check, and e2e stops the
   app process it started.
+
+## Verify a pull request
+
+A task's check already gates its own changes before the review gate. To verify
+**someone else's open pull request** — a teammate's, a bot's — use a GitHub
+automation whose worktree is the PR's head instead of the base branch:
+
+```json
+{
+  "name": "Browser e2e on every new PR",
+  "kind": "github",
+  "events": ["pull_request.opened"],
+  "task": {
+    "prompt": "Verify #{{github.number}}",
+    "checkout": "pr-head",
+    "steps": [
+      {
+        "id": "e2e",
+        "name": "Browser e2e on PR head",
+        "command": "npm ci --prefer-offline --no-audit >/dev/null\nnpx e2e run --reporter list,markdown --max-failures 3; code=$?\nif [ -f .e2e/summary.md ] && [ -n \"$CEZ_GITHUB_NUMBER\" ]; then\n  gh pr comment \"$CEZ_GITHUB_NUMBER\" --repo \"$CEZ_GITHUB_REPO\" --edit-last --create-if-none --body-file .e2e/summary.md\nfi\nexit $code"
+      }
+    ]
+  }
+}
+```
+
+(`cezar automation create --file verify-prs.json` — created paused; preview it
+with `cezar automation check <id>` before enabling.) The workflow has no agent
+step: the check is the whole job, and the run settles like any other.
+
+What `checkout: "pr-head"` does at launch:
+
+1. reads the PR (`gh api repos/<repo>/pulls/<n>`); a PR that is no longer open
+   launches nothing — the execution log says `skipped: pr-not-open`;
+2. a head from a **fork** launches nothing (`skipped: fork-head`) unless the
+   automation sets `"allowForkHeads": true`;
+3. fetches the head into `refs/cezar/pr/<n>` — a ref, never a branch, so
+   nothing appears in your branch list — and forks the task's worktree from
+   that commit. If the PR moved between the poll and the launch, the fetched
+   commit is what is tested, and the run says so;
+4. a fetch or `gh` failure launches nothing (`failed: pr-head-unavailable`,
+   with the reason); Retry in the execution log tries again.
+
+The check gets `CEZ_PR_HEAD_SHA`, `CEZ_PR_HEAD_REF` and `CEZ_PR_BASE_REF` on
+top of the usual run context, the PR shows as the task's referenced pull
+request, and diffs measure only what the run changed on top of the PR. The
+ref is deleted with the last run that needs it.
+
+**Fork heads are untrusted code.** An admitted fork's checks run **without
+any secrets** — the same rule GitHub Actions applies to fork
+PRs, and the one e2e's own security model asks for. A fork check therefore has
+no model key; agent-driven tests in it will fail on the missing credential
+(exit 2) rather than run a stranger's code with your key.
+
+**A PR-head run cannot publish.** Its branch holds the whole PR under the
+run's own changes, so *Draft PR* answers `409` instead of re-proposing someone
+else's PR into your base. Report back from the check itself, as above —
+`--edit-last --create-if-none` keeps one comment per PR. If your `gh` predates
+`--create-if-none`, use two calls: `gh pr comment … --edit-last || gh pr comment …`.
+
+`pull_request.opened` fires once per PR; re-verifying on every push needs an
+event the poller cannot see yet.
+
+## On every PR, in CI
+
+For teams that already run CI, the recommended "every PR" path is a GitHub
+Actions workflow using `@e2e-dev/github`, not a cezar automation: keep the model
+key in **repository secrets**, and leave fork PRs out (GitHub does not give
+them secrets either). cezar's automation is for the machine you already run
+cezar on, with no CI to configure.
 
 ## Cost
 
