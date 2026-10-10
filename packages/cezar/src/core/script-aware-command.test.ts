@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { scriptAwareCommand } from './claude-cli-runner.ts';
+import { scriptAwareCommand } from './script-command.ts';
 
 /**
  * `CEZ_DRY_RUN=1` on Windows: the bundled mock is a `.mjs`, which Windows cannot execute by its

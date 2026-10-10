@@ -19,6 +19,7 @@ export type { AgentSession, SessionOptions } from './agent-runner.ts';
 import { isSignalTerminationExit, trackChildExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
+import { scriptAwareCommand } from './script-command.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
 import { costWeightedTokens, type RawUsage } from './usage.ts';
 import { readNdjson } from './ndjson.ts';
@@ -481,17 +482,6 @@ export function buildAllowedTools(allowedTools: string[], bashAllowlist?: string
 
 function truncate(s: string, max = 200): string {
   return s.length > max ? `${s.slice(0, max)}…` : s;
-}
-
-/**
- * The command that actually runs `bin`. A JavaScript file is executable on POSIX by its shebang
- * and not at all on Windows, where spawning one fails with `EFTYPE` — which is what the bundled
- * mock is, so `CEZ_DRY_RUN=1` could not start a single session there. On Windows a script is
- * therefore handed to this process's own Node. Every other platform, and every real binary, is
- * returned untouched.
- */
-export function scriptAwareCommand(bin: string, args: string[], platform: NodeJS.Platform = process.platform): [string, string[]] {
-  return platform === 'win32' && /.(mjs|cjs|js)$/i.test(bin) ? [process.execPath, [bin, ...args]] : [bin, args];
 }
 
 /** Path to the bundled mock (`scripts/mock-claude.mjs`), for CEZ_DRY_RUN=1. */

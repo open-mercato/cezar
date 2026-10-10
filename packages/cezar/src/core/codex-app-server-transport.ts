@@ -2,6 +2,7 @@ import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:ch
 import { trackChildExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
+import { scriptAwareCommand } from './script-command.ts';
 import { EOF_KILL_GRACE_MS, EOF_TERM_GRACE_MS, KILL_GRACE_MS } from './claude-cli-runner.ts';
 
 export interface CodexAppServerMessage {
@@ -33,7 +34,7 @@ export function spawnCodexAppServer(
 ): ChildProcessWithoutNullStreams {
   try {
     const env = buildCodexAppServerEnv(extraEnv);
-    const [file, argv] = disclaimedCommand(bin, ['app-server'], env);
+    const [file, argv] = disclaimedCommand(...scriptAwareCommand(bin, ['app-server']), env);
     return nodeSpawn(file, argv, { cwd, env });
   } catch (error) {
     throw codexSpawnError(error, bin);

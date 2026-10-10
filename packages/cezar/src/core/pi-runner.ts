@@ -1,5 +1,6 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { disclaimedCommand } from './disclaim-spawn.ts';
+import { scriptAwareCommand } from './script-command.ts';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve as resolvePath } from 'node:path';
 import type {
@@ -60,7 +61,7 @@ export class PiRunner implements AgentRunner {
     opts: SessionOptions = {},
   ): AgentSession {
     const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
-    const [file, argv] = disclaimedCommand(this.bin, buildPiArgs(spec), env);
+    const [file, argv] = disclaimedCommand(...scriptAwareCommand(this.bin, buildPiArgs(spec)), env);
     const child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
     let open = true;
     let settled = true;

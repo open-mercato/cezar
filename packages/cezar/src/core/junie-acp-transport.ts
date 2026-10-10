@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { scriptAwareCommand } from './script-command.ts';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve as resolvePath } from 'node:path';
 import { trackChildExit } from './agent-runner.ts';
@@ -54,7 +55,7 @@ export function spawnJunieAcp(
   extraEnv?: Record<string, string>,
 ): ChildProcessWithoutNullStreams {
   try {
-    return nodeSpawn(bin, ['--acp=true', '-p', cwd], {
+    return nodeSpawn(...scriptAwareCommand(bin, ['--acp=true', '-p', cwd]), {
       cwd,
       env: buildJunieAcpEnv(extraEnv),
     });

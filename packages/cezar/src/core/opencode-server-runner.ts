@@ -11,6 +11,7 @@ import type { AgentSession, SessionOptions } from './agent-runner.ts';
 import { prependSystemPrompt, trackChildExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
+import { scriptAwareCommand } from './script-command.ts';
 import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.ts';
 import { parseModelIdentity } from './model-identity.ts';
 import { V1TextCoalescer } from './v1-text-coalescer.ts';
@@ -176,7 +177,10 @@ class OpencodeSession implements AgentSession {
       if (spec.mcpServers?.length) {
         env.OPENCODE_CONFIG_CONTENT = opencodeConfigContent(spec.mcpServers, env.OPENCODE_CONFIG_CONTENT);
       }
-      const [file, argv] = disclaimedCommand(bin, ['serve', '--hostname', '127.0.0.1', '--port', String(port)], env);
+      const [file, argv] = disclaimedCommand(
+        ...scriptAwareCommand(bin, ['serve', '--hostname', '127.0.0.1', '--port', String(port)]),
+        env,
+      );
       this.child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
     } catch (err) {
       throw wrapSpawnError(err, bin);
