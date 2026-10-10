@@ -35,6 +35,7 @@ import type {
   selfUpdateStatusSchema,
   starCountSchema,
   designProxyResponseSchema,
+  previewGatewayResponseSchema,
   uiStateSchema,
   workspaceConfigResponseSchema,
   workspaceBrandingLogoResponseSchema,
@@ -129,6 +130,7 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
 
   // ---- Design Mode --------------------------------------------------------------------------
   type DesignProxy200 = InferResponseType<(typeof client.api.v1.preview)['design-proxy']['$post'], 200>;
+  type PreviewGateway200 = InferResponseType<(typeof client.api.v1.preview)['gateway']['$post'], 200>;
 
   // ---- providers, models, open targets ----------------------------------------------------
   type ProviderStatus200 = InferResponseType<typeof client.api.v1.providers.status.$get, 200>;
@@ -223,6 +225,7 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     Assert<Exact<z.infer<typeof starCountSchema>, StarCount200>>,
     // Design Mode
     Assert<Exact<z.infer<typeof designProxyResponseSchema>, DesignProxy200>>,
+    Assert<Exact<z.infer<typeof previewGatewayResponseSchema>, PreviewGateway200>>,
     // providers, models, open targets
     Assert<Exact<z.infer<typeof providerStatusResponseSchema>, ProviderStatus200>>,
     Assert<Exact<z.infer<typeof providerStatusResponseSchema>, ProviderEnabled200>>,

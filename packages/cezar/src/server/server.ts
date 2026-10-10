@@ -64,6 +64,7 @@ import {
   type RunsIndexResponse,
   type StarCountPayload,
   designProxyRequestSchema,
+  previewGatewayRequestSchema,
   promptQueueInputSchema,
   runFileCreateSchema,
   runFileRenameSchema,
@@ -127,6 +128,7 @@ import { selfUpdateApplyRequestSchema, selfUpdateChannelRequestSchema, selfUpdat
 import { SelfUpdateBusyError, SelfUpdateService } from '../self-update/service.ts';
 import { StarCountReader } from './star-count.ts';
 import { DesignProxies } from './preview/design-proxy.ts';
+import { PreviewGateways, TICKET_PARAM, parsePreviewPorts } from './preview/gateway.ts';
 import { getTeamSkillsCached, refreshTeamSkills, waitForTeamSkills } from '../skills-remote.ts';
 import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.ts';
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
@@ -354,6 +356,9 @@ export interface ServerDeps {
   /** The Design Mode proxies behind `POST /api/v1/preview/design-proxy` (src/server/preview/).
    *  Injected by tests that need to close the listeners they opened. */
   designProxies?: DesignProxies;
+  /** The preview gateways behind `POST /api/v1/preview/gateway`. Defaults to the pool named by
+   *  `CEZ_PREVIEW_PORTS` — none, unless an operator set it. Injected by tests. */
+  previewGateways?: PreviewGateways;
   /** WebSocket subscription hub (`/api/v1/ws`, src/server/ws.ts). `createApp`
    *  only registers topics on it — `startServer` builds one and attaches it
    *  to the HTTP server it binds. Optional so legacy callers/tests change
@@ -3141,6 +3146,25 @@ export function createApp(deps: ServerDeps) {
   // (the two differ under the Vite dev proxy).
   const designProxies = deps.designProxies ?? new DesignProxies();
   deps.onDispose?.(() => designProxies.closeAll());
+  const previewGateways =
+    deps.previewGateways ??
+    new PreviewGateways({
+      ports: parsePreviewPorts(process.env.CEZ_PREVIEW_PORTS),
+      publicPorts: parsePreviewPorts(process.env.CEZ_PREVIEW_PUBLIC_PORTS),
+      bindHost,
+    });
+  deps.onDispose?.(() => previewGateways.closeAll());
+  /** Every loopback port this cezar is known to answer on: the one the request arrived at, and
+   *  the one it advertises to its own agents. */
+  const ownPorts = (host: string | undefined): number[] =>
+    [host ? `http://${host}` : undefined, process.env.CEZ_API_URL].flatMap((raw) => {
+      try {
+        const url = new URL(raw ?? '');
+        return [url.port === '' ? (url.protocol === 'https:' ? 443 : 80) : Number(url.port)];
+      } catch {
+        return [];
+      }
+    });
   const previewRoutes = new Hono().post(
     '/preview/design-proxy',
     jsonZodValidator(designProxyRequestSchema),
@@ -3156,7 +3180,20 @@ export function createApp(deps: ServerDeps) {
       if (!opened.ok) return c.json({ error: opened.reason }, 400);
       return c.json({ origin: opened.origin });
     },
-  );
+  )
+    // The preview gateway (spec `.ai/specs/2026-10-10-preview-gateway.md`): a task's loopback app
+    // re-served on a port of its own, for a cockpit whose viewer is not on this machine. Policy
+    // first (409: no pool was configured, or it is full), then the address (400). The ports this
+    // server itself answers on are passed as forbidden — a preview of the cockpit would be its API
+    // behind a ticket instead of behind the front's login.
+    .post('/preview/gateway', jsonZodValidator(previewGatewayRequestSchema), async (c) => {
+      const opened = await previewGateways.open({
+        ...c.req.valid('json'),
+        forbiddenPorts: ownPorts(c.req.header('host')),
+      });
+      if (!opened.ok) return c.json({ error: opened.reason }, opened.code === 'invalid' ? 400 : 409);
+      return c.json({ origin: opened.origin, ticket: opened.ticket, ticketParam: TICKET_PARAM });
+    });
 
   const selfUpdateRoutes = new Hono()
     .get('/workspace/self-update', async (c) => c.json(await selfUpdate.status()))

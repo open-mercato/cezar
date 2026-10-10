@@ -24,3 +24,35 @@ export const designProxyResponseSchema = z.object({
   origin: z.string(),
 });
 export type DesignProxyResponse = z.infer<typeof designProxyResponseSchema>;
+
+/**
+ * `POST /api/v1/preview/gateway` — a task's app, reachable from a HOSTED cockpit (spec
+ * `.ai/specs/2026-10-10-preview-gateway.md`).
+ *
+ * On a hosted cockpit `http://localhost:3000` means the viewer's machine, not the host the task
+ * runs on. Where the operator named a pool of ports (`CEZ_PREVIEW_PORTS`), the server re-serves
+ * the app on one of them — its own origin, never the cockpit's — and the Browser column frames
+ * that instead.
+ *
+ * `target` is an ORIGIN, as for the design proxy. `parentOrigin` is the cockpit as the viewer's
+ * browser reaches it: the gateway is answered at the same scheme and hostname on its own port.
+ */
+export const previewGatewayRequestSchema = z.object({
+  target: z.string().min(1).max(2048),
+  parentOrigin: z.string().min(1).max(512),
+});
+export type PreviewGatewayRequest = z.infer<typeof previewGatewayRequestSchema>;
+
+/**
+ * `origin` has no trailing slash and no path. The gateway answers 401 to a browser that holds
+ * neither its cookie nor a ticket, so the FIRST load of a page carries `ticket` in the query
+ * parameter named by `ticketParam`; the gateway spends it, sets the cookie and redirects to the
+ * same address without it. A ticket opens one page load and expires within a minute — ask again
+ * before every load, never store one.
+ */
+export const previewGatewayResponseSchema = z.object({
+  origin: z.string(),
+  ticket: z.string(),
+  ticketParam: z.string(),
+});
+export type PreviewGatewayResponse = z.infer<typeof previewGatewayResponseSchema>;
