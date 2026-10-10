@@ -481,6 +481,10 @@ interface ActiveRun {
    *  going until it signals done or the safety cap is hit. */
   autonomous?: boolean;
   autoContinues?: number;
+  /** Number of consecutive structured questions overridden by the autonomous nudge. A clean
+   * turn resets this counter, while `lastOverriddenAsk` intentionally remains sticky for the
+   * existing verbatim-repeat guard. */
+  consecutiveOverriddenAsks?: number;
   /** Consecutive compaction-ended turns this session has been continued through (#955),
    *  bounded by `MAX_COMPACTION_CONTINUES`. Unlike `autoContinues` this is NOT a lifetime
    *  budget: any turn that ends for another reason resets it, because that turn is the proof
@@ -561,6 +565,10 @@ interface ActiveRun {
 /** Safety cap on autonomous auto-continues per run — stops a stuck agent from nudging forever.
  *  Exported so the tests assert against the real cap instead of restating `40`. */
 export const MAX_AUTO_CONTINUES = 40;
+/** An autonomous run may override two consecutive questions before the third parks for an answer.
+ * This is deliberately separate from the sticky verbatim-repeat guard: wording can change while
+ * the underlying blocker remains, but a clean turn proves the agent resumed useful work. */
+export const MAX_CONSECUTIVE_OVERRIDDEN_ASKS = 2;
 /** The turn-end nudge text for `#autonomous`. Exported because `scripts/mock-claude.mjs`
  *  RECOGNISES this string to answer a nudge with `CEZ:DONE` (it matches the opening words, since
  *  the nudge carries no `mock:` marker of its own). Rewording it without updating that mock does
@@ -3912,6 +3920,9 @@ export class RunManager {
           turnText,
           Boolean(sessionOpen) && !done && !dispatchTurn.dispatched,
         );
+        // A turn without a validated ask proves the agent resumed useful work. Reset only the
+        // consecutive bound here; `lastOverriddenAsk` stays sticky for the verbatim-repeat guard.
+        if (!ask) state.consecutiveOverriddenAsks = 0;
         // A spawn parks the parent exactly as `CEZ:MONITORING` does — it is waiting on its
         // children, not on the user, and it has to surrender its slot to them. An over-budget run
         // parks `waiting` instead, whatever it asked for (Q6 ii).
@@ -5713,6 +5724,9 @@ export class RunManager {
           turnText,
           Boolean(sessionOpen) && !done && !dispatchTurn.dispatched,
         );
+        // Keep this reset beside the twin in runContinuation: DONE and MONITORING are clean
+        // turns too, and both handlers must give the same K=2 guarantee.
+        if (!ask) state.consecutiveOverriddenAsks = 0;
         // Does this turn park the WORKFLOW — hold a non-final step open instead
         // of letting `execute` mark it done and run the next check (#917, #1076)?
         //
@@ -6580,14 +6594,24 @@ export class RunManager {
     if (state.cancelled) return false;
     // A question repeated verbatim after a nudge is not a preference the agent can settle on
     // its own — it is a blocker (the cockpit refused `cez task create`, a login is missing) that
-    // the nudge would merely make it work around, at full cost, until the cap. Park the run on
-    // the question instead, so the operator sees it now rather than after 40 more turns.
+    // the nudge would merely make it work around, at full cost. Keep this guard sticky across
+    // clean turns; the consecutive bound below is the wording-independent guard that resets on
+    // every clean turn, including DONE and MONITORING boundaries.
     const askKey = ask ? ask.questions.map((question) => question.question).join(' | ') : undefined;
     if (askKey !== undefined && askKey === state.lastOverriddenAsk) {
       this.store.appendEvent(runId, {
         type: 'note',
         stepId,
         message: `autonomous — the same question was asked again after a nudge, so the run parks on it instead of continuing: ${askKey}`,
+      });
+      return false;
+    }
+    const consecutiveAsks = state.consecutiveOverriddenAsks ?? 0;
+    if (ask && consecutiveAsks >= MAX_CONSECUTIVE_OVERRIDDEN_ASKS) {
+      this.store.appendEvent(runId, {
+        type: 'note',
+        stepId,
+        message: `autonomous — ${MAX_CONSECUTIVE_OVERRIDDEN_ASKS} consecutive questions were overridden; the run now waits for your answer: ${askKey}`,
       });
       return false;
     }
@@ -6605,6 +6629,7 @@ export class RunManager {
     // run after it parks at the cap cannot see that one was ever asked.
     if (ask) {
       state.lastOverriddenAsk = askKey;
+      state.consecutiveOverriddenAsks = consecutiveAsks + 1;
       this.store.appendEvent(runId, {
         type: 'note',
         stepId,
