@@ -25,5 +25,15 @@ Risks: completion may be observed on initial render for historical runs; avoid s
 ### Phase 1: Implement and verify
 
 - [x] 1.1 Add completion-transition collapse and tests
-- [ ] 1.2 Run targeted and full validation
-- [ ] 1.3 Review diff and report limitations
+- [x] 1.2 Run targeted and full validation — focused test green; configured gate attempted, with unrelated typecheck/build/package failures documented below
+- [x] 1.3 Review diff and report limitations
+
+Validation notes:
+
+- `npm test --workspace packages/web -- --run src/routes/task-thread/agents-dock.test.tsx`: 18/18 passed.
+- Regression proof without implementation: 1 test failed (`aria-expanded` stayed `true`); restored implementation returns 18/18.
+- `npm run typecheck`: fails on pre-existing server/contract generated-type drift (missing `omittedQuestions`, contract exports, `awaitingAnswerSince`, `gemini`, workflow graph types, and related errors).
+- `npm run test:unit`: 42/42 passed.
+- `npm run build`: fails on the same unrelated server/contract drift.
+- `npm run test:package`: 15/17 passed; unrelated inline-contract repointing and release-tarball `web/dist/index.html` assertions failed.
+- Browser capture unavailable: `agent-browser` is not installed in this environment.
