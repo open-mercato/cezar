@@ -150,6 +150,15 @@ export const runRecordSchema = z.object({
    *  deliberately NOT in `redactPatch`'s field list — scrubbing it would corrupt
    *  the run the same way scrubbing `task` would. */
   queuedMessages: z.array(queuedMessageSchema).optional(),
+  /**
+   * The session's PROMPT QUEUE (spec `2026-10-09-design-mode` §8): prompts the user lined up
+   * for a session that was busy, delivered one at a time, each as its own turn, only when the
+   * turn before it has ended. Not `queuedMessages`: those belong to a run that has not STARTED
+   * and are folded into its first prompt; these belong to a run that is working and are never
+   * folded into anything. Optional, so every older record reads as an empty queue. The text is
+   * the user's own prompt and is stored verbatim for the reason `queuedMessages` gives.
+   */
+  promptQueue: z.array(queuedMessageSchema).optional(),
   /** URLs of images attached to the initial task prompt, for the thread's first bubble
    *  (#image-display) — persisted like agent screenshots, served from `/images/`. */
   taskImages: z.array(z.string()).optional(),

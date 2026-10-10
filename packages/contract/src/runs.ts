@@ -158,6 +158,14 @@ export const runRecordSchema = z.object({
   /** Prompt messages stacked onto the run while it waited for a free agent slot (#472). Folded
    *  into the prompt at dequeue — never delivered as their own turns. Absent on pre-#472 runs. */
   queuedMessages: z.array(queuedMessageSchema).optional(),
+  /**
+   * The session's prompt queue: prompts lined up while the agent was busy, delivered one at a
+   * time, each as its own turn, when the turn before it ends (`POST /runs/:id/prompt-queue`).
+   * Distinct from `queuedMessages`, which belong to a run that has not started yet and are
+   * folded into its first prompt. Entries still here on a run whose session has closed were
+   * never delivered; the next Continue delivers them, and each can be removed.
+   */
+  promptQueue: z.array(queuedMessageSchema).optional(),
   /** URLs of the attachments on the initial task prompt (#image-display) — images and, since
    *  #950, files. One list, one numbering space; branch on `isImageAttachmentName`. */
   taskImages: z.array(z.string()).optional(),
@@ -554,6 +562,34 @@ export const messageResponseSchema = z.union([
   z.object({ deferred: z.literal(true) }),
 ]);
 export type MessageResponse = z.infer<typeof messageResponseSchema>;
+
+/**
+ * `POST /runs/:id/prompt-queue` — line a prompt up behind the work a live session is doing.
+ * Text only: the queue carries what the user wants done next, and an attachment belongs on the
+ * message that is sent now.
+ */
+export const promptQueueInputSchema = z.object({
+  text: z.string().trim().min(1).max(100_000),
+});
+export type PromptQueueInput = z.input<typeof promptQueueInputSchema>;
+
+/**
+ * `delivered`: the session was already at rest, so the prompt went straight in — there was
+ * nothing to wait behind. `queued`: it waits its turn, and the run record's `promptQueue` now
+ * lists it.
+ */
+export const promptQueueResponseSchema = z.union([
+  z.object({ delivered: z.literal(true) }),
+  z.object({ queued: z.literal(true), message: queuedMessageSchema }),
+]);
+export type PromptQueueResponse = z.infer<typeof promptQueueResponseSchema>;
+
+export const removeQueuedPromptResponseSchema = z.object({ removed: z.literal(true) });
+export type RemoveQueuedPromptResponse = z.infer<typeof removeQueuedPromptResponseSchema>;
+
+/** How many prompts one session may have lined up. A queue longer than this is a backlog, and a
+ *  backlog belongs in tasks. */
+export const PROMPT_QUEUE_MAX = 20;
 
 /** `PATCH /runs/:id/queued-messages/:msgId` (#472) — the replaced entry. */
 export const editQueuedMessageResponseSchema = z.object({ message: queuedMessageSchema });

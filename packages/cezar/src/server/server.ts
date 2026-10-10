@@ -63,6 +63,7 @@ import {
   type RunsIndexResponse,
   type StarCountPayload,
   designProxyRequestSchema,
+  promptQueueInputSchema,
   type WorkspaceConfigResponse,
   workspaceBrandingLogoResponseSchema,
 } from '@open-mercato/cezar-contract';
@@ -4566,6 +4567,36 @@ export function createApp(deps: ServerDeps) {
         return c.json({ error: 'not found' }, 404);
       }
       if (!manager.removeQueuedMessage(id, msgId)) return c.json({ error: 'run already started' }, 409);
+      return c.json({ removed: true });
+    })
+
+    // The session's PROMPT QUEUE (spec 2026-10-09-design-mode §8): line a prompt up behind the
+    // work a live session is doing, delivered as its own turn when the turn before it ends.
+    // Deliberately NOT a mode of `POST /messages`: that route steers the session NOW and the
+    // thread composer depends on exactly that, so the queue is its own route and nothing about
+    // an existing send changes. A closed run answers 409 — reopening a session is Continue's
+    // job, and the cockpit sends the prompt there instead.
+    .post('/runs/:id/prompt-queue', jsonZodValidator(promptQueueInputSchema), async (c) => {
+      const { store, manager } = c.get('project');
+      const id = c.req.param('id');
+      const run = store.getRun(id);
+      if (!run) return c.json({ error: 'not found' }, 404);
+      // The same gate a live message passes: a queued prompt IS a message to that provider,
+      // only later.
+      const blocked = await providerActionError([providerForActiveRun(run)]);
+      if (blocked) return c.json({ error: blocked }, 409);
+      const result = manager.enqueuePrompt(id, c.req.valid('json').text);
+      if (!result.ok) return c.json({ error: result.error }, 409);
+      if (result.delivered) return c.json({ delivered: true });
+      return c.json({ queued: true, message: result.message });
+    })
+
+    // Removable in every run state — an undelivered prompt on a closed run included.
+    .delete('/runs/:id/prompt-queue/:msgId', (c) => {
+      const { store, manager } = c.get('project');
+      const id = c.req.param('id');
+      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+      if (!manager.removeQueuedPrompt(id, c.req.param('msgId'))) return c.json({ error: 'not found' }, 404);
       return c.json({ removed: true });
     })
 

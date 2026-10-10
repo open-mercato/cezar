@@ -48,6 +48,7 @@ import {
   isImageAttachmentName,
   isImageMediaType,
   PENDING_ASK_MAX_QUESTIONS,
+  PROMPT_QUEUE_MAX,
   sanitizeAttachmentName,
 } from '@open-mercato/cezar-contract';
 import type { AgentEvent, ContentBlock } from '../core/agent-runner.ts';
@@ -465,6 +466,15 @@ interface ActiveRun {
   idleTimer?: NodeJS.Timeout;
   /** The inactivity watchdog closed this session; a plain final wait is not success evidence. */
   idleClosed?: boolean;
+  /**
+   * The last turn ended, asked nothing, and the session is parked with the ball in the user's
+   * court — the one state in which a prompt lined up in the PROMPT QUEUE may go straight in.
+   * Not derivable from `status: 'waiting'`: a native backend ask parks `waiting` MID-turn
+   * (`handleRunnerUiEvent`), and a prompt delivered there would be taken as its answer. Set by
+   * both turn-end park blocks, cleared by every delivery and by a native ask. A runtime fact
+   * only — never constructed, so the two `ActiveRun` literals have nothing to keep in step.
+   */
+  promptRest?: boolean;
   monitoringWakeTimer?: NodeJS.Timeout;
   monitoringWakeIntervalMinutes?: number;
   monitoringWakeups?: number;
@@ -3359,6 +3369,90 @@ export class RunManager {
   }
 
   /**
+   * Line a prompt up behind the work a live session is doing (spec `2026-10-09-design-mode` §8).
+   *
+   * This is the PROMPT QUEUE, and it is a different thing from both of its neighbours:
+   *  - `sendMessage` writes into the session NOW, mid-turn included — steering. Still what the
+   *    thread composer does, deliberately unchanged.
+   *  - `enqueueMessage` stacks text onto a run that has not STARTED, folded into its first prompt.
+   * A queued prompt is held on the record and delivered as a turn of its own, one at a time,
+   * only when the turn before it has ended (`tryReleaseQueuedPrompt`).
+   *
+   * Every way an entry leaves the queue: it is released at a turn end; it goes straight in here
+   * because the session is already at rest; the user removes it (`removeQueuedPrompt`). An entry
+   * on a run whose session closed first (Finish, cancel, failure, idle close) simply stays, is
+   * shown as undelivered, and is released by the first turn end of the next Continue — the engine
+   * never reopens a closed session on its own to drain a queue.
+   */
+  enqueuePrompt(
+    runId: string,
+    text: string,
+  ): { ok: true; delivered: true } | { ok: true; delivered: false; message: QueuedMessage } | { ok: false; error: string } {
+    const state = this.active.get(runId);
+    const run = this.store.getRun(runId);
+    if (!run || !state || state.cancelled) return { ok: false, error: 'session closed' };
+    const queue = run.promptQueue ?? [];
+    if (queue.length >= PROMPT_QUEUE_MAX) {
+      return { ok: false, error: `prompt queue is full — ${PROMPT_QUEUE_MAX} prompts at most` };
+    }
+    const message: QueuedMessage = { id: randomUUID(), text, createdAt: new Date().toISOString() };
+    this.store.updateRun(runId, { promptQueue: [...queue, message] });
+    // Already at rest: nothing to wait behind, so the head of the queue goes in now. With an
+    // empty queue that is this very prompt; otherwise it is whatever was lined up first.
+    if (state.promptRest && this.tryReleaseQueuedPrompt(runId, state, {})) {
+      if (!this.store.getRun(runId)?.promptQueue?.some((m) => m.id === message.id)) {
+        return { ok: true, delivered: true };
+      }
+    }
+    return { ok: true, delivered: false, message };
+  }
+
+  /** Take one prompt back out of the queue. Allowed in every run state: an undelivered prompt
+   *  on a closed run must stay removable, or the queue would be a state with no exit. */
+  removeQueuedPrompt(runId: string, msgId: string): boolean {
+    const queue = this.store.getRun(runId)?.promptQueue;
+    if (!queue?.some((m) => m.id === msgId)) return false;
+    const rest = queue.filter((m) => m.id !== msgId);
+    this.store.updateRun(runId, { promptQueue: rest.length ? rest : undefined });
+    return true;
+  }
+
+  /**
+   * Deliver the head of the prompt queue into the open session, as a user message and a turn of
+   * its own. The ONE helper both turn-end handlers call (and `enqueuePrompt`, for a session
+   * already at rest), so the two sites cannot drift — a third member of the family
+   * `tryAutonomousNudge` and `tryCompactionContinue` started. `true` means a message was just
+   * written into the session: the caller must NOT park, end or nudge it.
+   *
+   * When it refuses, and why each refusal is load-bearing:
+   *  - `ask`: the agent asked the user something. A queued prompt delivered now would clear the
+   *    question (`deliverMessage` retires the ask park) and be read as its answer.
+   *  - `monitoring` / a turn that dispatched or was re-prompted: the run is still working, on its
+   *    own downstream work or its children's. The queue waits for a turn that actually rests.
+   *  - over budget: the dispatch brake stopped this run; a queue must not walk it past the brake.
+   *  - `compacted`: the backend ended the turn only to compact its context — the work is half
+   *    done, and the compaction continue owns that boundary.
+   * The entry leaves the record only once delivery was accepted, so a refused send loses nothing.
+   */
+  private tryReleaseQueuedPrompt(
+    runId: string,
+    state: ActiveRun,
+    turn: { ask?: AskRequest | null; monitoring?: boolean; compacted?: boolean; dispatchTurn?: DispatchTurnResult },
+  ): boolean {
+    const queue = this.store.getRun(runId)?.promptQueue;
+    if (!queue?.length) return false;
+    if (state.cancelled || !state.session?.open) return false;
+    if (turn.ask || turn.monitoring || turn.compacted) return false;
+    if (turn.dispatchTurn && (turn.dispatchTurn.dispatched || turn.dispatchTurn.overBudget || turn.dispatchTurn.rePrompted)) {
+      return false;
+    }
+    const [next, ...rest] = queue as [QueuedMessage, ...QueuedMessage[]];
+    if (!this.deliverMessage(runId, [{ type: 'text', text: next.text }], true)) return false;
+    this.store.updateRun(runId, { promptQueue: rest.length ? rest : undefined });
+    return true;
+  }
+
+  /**
    * Deliver a user message into the run's live claude session (mid-turn or
    * while `waiting`). Returns false when there is no open session — the GUI
    * then offers "Continue" instead.
@@ -3397,6 +3491,7 @@ export class RunManager {
     // ACCEPTED here (the caller's delivery ladder stops, as it would for a sent message) and
     // delivered once the tree is ours. Every wake-up that lands meanwhile rides the same wait.
     if (state.repoRootParked && !(state.repoRootResume === undefined && this.claimFreeRepoRoot(state))) {
+      state.promptRest = false;
       const resume = (state.repoRootResume ??= this.resumeRepoRoot(runId, state));
       void resume.then((acquired) => {
         if (!acquired) return;
@@ -3447,6 +3542,8 @@ export class RunManager {
       : expanded;
     const delivered = state.session.sendMessage(deliverable);
     if (delivered) {
+      // The session is working again; whatever is lined up behind it waits for this turn to end.
+      state.promptRest = false;
       for (const write of imageLibraryWrites) write();
       this.clearPendingAsk(runId);
       this.clearIdleTimer(state);
@@ -3890,7 +3987,13 @@ export class RunManager {
           state.askPark = undefined;
           if (this.store.getRun(runId)?.askParked) this.store.updateRun(runId, { askParked: undefined });
         }
-        if (done) {
+        // The prompt queue (spec 2026-10-09-design-mode §8): the turn is over, so the next prompt
+        // the user lined up goes in — as its own turn, ahead of everything below. Before the
+        // `done` close on purpose: "goal achieved" with prompts still queued means the NEXT goal
+        // starts, not that the session ends with them undelivered. The twin of `runAgentStep`'s
+        // call, through the one helper both sites share.
+        const queuedPromptSent = Boolean(sessionOpen) && this.tryReleaseQueuedPrompt(runId, state, { ask, monitoring: Boolean(monitoring), compacted, dispatchTurn });
+        if (done && !queuedPromptSent) {
           // Goal achieved (agent contract, #347) — same as in runAgentStep.
           this.store.appendEvent(runId, { type: 'lifecycle', message: 'goal achieved — session closed' });
           appendHandoffHeartbeat(this.dataDir, runId, 'turn complete — goal achieved, session closed');
@@ -3903,6 +4006,7 @@ export class RunManager {
         // hoisted out of the branch below because the heartbeat at the end of this handler
         // needs to know whether the turn parked.
         const nudged =
+          queuedPromptSent ||
           dispatchTurn.rePrompted ||
           (!monitoring && (sessionOpen ? this.tryAutonomousNudge(runId, state, stepId, ask, dispatchTurn) : false));
         // Compaction alone never means the user owns the next action (#955). Tried LAST, so
@@ -3935,6 +4039,8 @@ export class RunManager {
               this.store.updateStep(runId, stepId, { status: 'waiting' });
               this.leaveMonitoring(runId);
               this.clearMonitoringWakeTimer(state, runId);
+              // At rest with nothing asked: a prompt queued from here on goes straight in.
+              state.promptRest = !ask;
             }
             this.parkRepoRoot(runId, state);
             this.waiting.add(runId);
@@ -3958,7 +4064,9 @@ export class RunManager {
           this.dataDir,
           runId,
           `turn complete — status=${
-            compactionContinued
+            queuedPromptSent
+              ? 'running (queued prompt delivered)'
+              : compactionContinued
               ? 'running (context compacted, continuing)'
               : autoContinued
                 ? 'running (autonomous nudge)'
@@ -5703,7 +5811,13 @@ export class RunManager {
         if (graphHooks?.lastTurn) graphHooks.lastTurn.text = turnText;
         turnText = '';
         for (const note of askNotes) emit({ type: 'note', stepId: step.id, ...note });
-        if (done) {
+        // The prompt queue — the twin of `runContinuation`'s call; see there for why it sits
+        // ahead of the `done` close. `interactive` only: a non-final step of a chained workflow
+        // closes its session after its one turn, and a user prompt written into it would derail
+        // the chain (the reason a queued run's stack is folded rather than delivered, #472).
+        const queuedPromptSent =
+          interactive && Boolean(sessionOpen) && this.tryReleaseQueuedPrompt(runId, state, { ask, monitoring: Boolean(monitoring), compacted, dispatchTurn });
+        if (done && !queuedPromptSent) {
           // Goal achieved (agent contract, #347): close the session instead
           // of parking at `waiting` — the run completes and frees its slot.
           emit({ type: 'lifecycle', message: 'goal achieved — session closed' });
@@ -5730,6 +5844,7 @@ export class RunManager {
         // the second ask. For every non-autonomous run `tryAutonomousNudge` returns at its first
         // line, so the park below behaves exactly as #917 designed it.
         const autoContinued =
+          queuedPromptSent ||
           dispatchTurn.rePrompted ||
           (!monitoring && (waiting ? this.tryAutonomousNudge(runId, state, step.id, ask, dispatchTurn) : false));
         // The compaction continuation (#955), through the same helper `runContinuation` calls.
@@ -5780,6 +5895,9 @@ export class RunManager {
             this.store.updateStep(runId, step.id, { status: 'waiting' });
             this.leaveMonitoring(runId);
             this.clearMonitoringWakeTimer(state, runId);
+            // The twin of `runContinuation`'s: at rest with nothing asked. `interactive` only,
+            // for the reason the release above is.
+            state.promptRest = interactive && !ask;
           }
           this.parkRepoRoot(runId, state);
           this.waiting.add(runId);
@@ -5823,7 +5941,9 @@ export class RunManager {
           this.dataDir,
           runId,
           `turn complete — status=${
-            compactionContinued
+            queuedPromptSent
+              ? 'running (queued prompt delivered)'
+              : compactionContinued
               ? 'running (context compacted, continuing)'
               : autoContinued
                 ? 'running (autonomous nudge)'
@@ -6004,6 +6124,8 @@ export class RunManager {
     this.recordUsageUiEvent(runId, state, event);
     sink.handle(event);
     if (event.type !== 'ask.requested' || state.cancelled) return;
+    // A question is open: a queued prompt delivered now would be read as its answer.
+    state.promptRest = false;
     this.clearIdleTimer(state);
     this.leaveMonitoring(runId);
     this.clearMonitoringWakeTimer(state, runId);
