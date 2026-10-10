@@ -36,6 +36,15 @@ Status (`configFile`, `workflow`, which model keys check steps can read, the lat
 live status via `useRun`), a provider select over `E2E_CREDENTIAL_NAMES`, an optional password
 field and one button. Submitting starts the setup and navigates to its task.
 
+### The verdict at the end of the setup task
+
+The transcript of a setup run ends on collapsed check cards and a dim "run finished", which tells
+someone who only wanted e2e set up nothing. `E2eSetupVerdict` (task thread, setup runs only, once
+settled) says it in one card: **e2e works** (`done`/`review` — reachable only after both checks
+passed) plus "merge branch cez/… " or, once the config is in the checkout, "live — pick
+`implement-and-e2e`"; **e2e is not working yet** naming the check that failed, with Continue or
+Settings → End-to-end tests as the way forward; or cancelled.
+
 ### `GET /e2e`, `POST /e2e/setup`
 
 Contract in `packages/contract/src/e2e.ts`; inventoried in `BACKWARD_COMPATIBILITY.md` §2.

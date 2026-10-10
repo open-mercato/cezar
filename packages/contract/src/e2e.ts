@@ -7,6 +7,9 @@ import { runStatusSchema } from './runs.ts';
  * so the user never runs `npx e2e init`, edits a config or writes a workflow by hand.
  */
 
+/** The workflow name a setup run carries — how `GET /e2e` and the task thread recognize one. */
+export const E2E_SETUP_WORKFLOW_NAME = 'e2e-setup';
+
 /**
  * The model keys an `e2e` config can read — one per provider package the setup knows how to
  * wire. Stored as a project secret with the `checks` audience, so it reaches the check steps

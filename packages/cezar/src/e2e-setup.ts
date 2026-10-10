@@ -1,6 +1,6 @@
 import { access } from 'node:fs/promises';
 import { join } from 'node:path';
-import { E2E_CREDENTIAL_NAMES, type E2eCredentialName, type E2eStatus } from '@open-mercato/cezar-contract';
+import { E2E_CREDENTIAL_NAMES, E2E_SETUP_WORKFLOW_NAME, type E2eCredentialName, type E2eStatus } from '@open-mercato/cezar-contract';
 import type { RunRecord } from './runs/store.ts';
 import type { WorkflowDef } from './workflows/types.ts';
 
@@ -14,8 +14,7 @@ import type { WorkflowDef } from './workflows/types.ts';
  * catalog entry, so a project that never asked for e2e never sees it.
  */
 
-/** The workflow name on the run record — how `GET /e2e` finds the latest setup run. */
-export const E2E_SETUP_WORKFLOW_NAME = 'e2e-setup';
+export { E2E_SETUP_WORKFLOW_NAME };
 
 /** Where the setup writes the project's own e2e workflow (committable: `.ai/cezar/workflows/`). */
 export const E2E_WORKFLOW_FILE = '.ai/cezar/workflows/implement-and-e2e.yaml';
