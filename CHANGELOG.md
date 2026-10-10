@@ -1,3 +1,81 @@
+# Unreleased — weekly draft (2026-10-09)
+
+Merged into `main` from 2026-10-02 16:00 UTC through 2026-10-09 16:00 UTC.
+
+## Highlights
+<!-- TODO: Highlights — maintainer editorial review before release. -->
+
+## ✨ Features
+- ✨ Comment on diff lines or ranges and send the drafts to the agent as a review with the next message. (#1283) *(@martaradziszewska)*
+- ✨ Filter check-step retries by exit code, so infrastructure failures need not trigger another agent repair attempt. (#1265) *(@pat-lewczuk)*
+- ✨ Configure private per-project MCP servers in Settings; supported runners receive them at session launch. (#1324) *(@patzick)*
+- ✨ Build and run graph workflows with a node editor, YAML import/export, simulation and a live task graph. (#1322) *(@kinelm)*
+- ✨ Customize the cockpit display name and logo in Appearance settings. (#1327) *(@kinelm)*
+- ✨ Browse repository files from the Git tab with a tree, path filter, syntax highlighting and Markdown preview (fixes #1279). (#1299) *(@pat-lewczuk)*
+- ✨ Browse, activate and preview skills in one catalog, with activation choices scoped to each project. (#1082) *(@Igloczek)*
+- ✨ Filter task lists by Regular, Automations or All; default to Regular and add task status/workflow/automation facets. (#1336) *(@pat-lewczuk)*
+
+## 🔒 Security
+- 🔒 Gate Bedrock and Vertex credential forwarding by explicit Claude backend identity (fixes #850). (#1228) *(@pat-lewczuk)*
+
+## 🐛 Fixes
+- 🐛 Remember runner/model choices on GitHub and Inbox hand-offs, including an explicit auto model choice (fixes #906). (#907) *(@sapersky)*
+- 🐛 Preserve attachment-only destination drafts when switching projects and explain declined draft transfers (fixes #1095). (#1255) *(@pat-lewczuk)*
+- 🐛 Offer the selected subtask runner’s discovered models in Dispatch settings. (#1269) *(@pat-lewczuk)*
+- 🐛 Clear stale workflow pauses when a later turn finishes, allowing subsequent steps to run. (#1282) *(@pat-lewczuk)*
+- 🐛 Keep unanswered task questions under Needs you after idle closure, crashes and restarts. (#1290) *(@pat-lewczuk)*
+- 🐛 Derive dispatch and automation runner help from the supported runner registry (fixes #1236). (#1278) *(@pat-lewczuk)*
+- 🐛 Explain unsupported identity readers separately for Pi, Junie and Copilot (fixes #1233). (#1258) *(@pat-lewczuk)*
+- 🐛 Discover staged browser libraries and preserve the effective environment for rootless Linux browser checks (fixes #890). (#1294) *(@pat-lewczuk)*
+- 🐛 Wrap long model-picker descriptions within the available width (fixes #870). (#1298) *(@pat-lewczuk)*
+- 🐛 Enlarge the mobile workflow step-rail disclosure touch target (fixes #958). (#1244) *(@pat-lewczuk)*
+- 🐛 Persist the waiting-session idle timeout setting, including null to disable it (fixes #1232). (#1242) *(@pat-lewczuk)*
+- 🐛 Deduplicate legacy or imported automation receipts using automation and event identity. (#1127) *(@pat-lewczuk)*
+- 🐛 Suppress late Codex follow-up failure delivery after session teardown (fixes #1105). (#1230) *(@pat-lewczuk)*
+- 🐛 Keep bookmark-prefilled tasks open when their runner is unavailable, allowing a replacement to be selected (fixes #874). (#1210) *(@pat-lewczuk)*
+- 🐛 Parse supported YAML skill frontmatter and flush/clean staging files for atomic workspace writes (fixes #1218). (#1231) *(@pat-lewczuk)*
+- 🐛 Guide Claude tasks through headless permission denials and the existing interactive session handoff (fixes #1248). (#1256) *(@pat-lewczuk)*
+- 🐛 Render CEZ:ASK payloads with up to 20 questions and 10 options per question. (#1312) *(@pat-lewczuk)*
+- 🐛 Recognize OpenCode 2.x credential rows while preserving legacy auth parsing (fixes #1270). (#1271) *(@pat-lewczuk)*
+- 🐛 Reject executable directories when resolving agent launchers (fixes #1066). (#1153) *(@pat-lewczuk)*
+- 🐛 Preserve adjacent Pi text bytes across content parts so task-control markers remain intact (fixes #902, #903). (#1208) *(@pat-lewczuk)*
+- 🐛 Allow reusable prompt templates up to 20,000 characters (fixes #908). (#1273) *(@pat-lewczuk)*
+- 🐛 Fail macOS ngrok redeploys when launchd cannot restart the cockpit or tunnel (fixes #1011). (#1149) *(@pat-lewczuk)*
+- 🐛 Report explicit nginx configuration parse errors as terminal Ubuntu SSL installation failures (fixes #1001). (#1174) *(@pat-lewczuk)*
+- 🐛 Jump to the latest task messages without reloading the thread or restoring an older scroll position. (#1313) *(@martaradziszewska)*
+- 🐛 Probe loopback ports machine-wide during server installation to prevent cross-user proxy misrouting (fixes #913). (#1003) *(@pat-lewczuk)*
+- 🐛 Scroll Changes trees and diffs independently on desktop, keeping file headers visible. (#1305) *(@martaradziszewska)*
+- 🐛 Fit nested tasks within narrow sidebars and distinguish unread tasks with bold titles and accessible labels. (#1311) *(@martaradziszewska)*
+- 🐛 Refresh queued runs from the current workflow definition at dequeue, retaining snapshots when unavailable. (#1134) *(@KamilMichalski0)*
+- 🐛 Collapse large Subtasks panels by default and bound their expanded height with scrolling (fixes #1050). (#1051) *(@piotrchabros)*
+- 🐛 Avoid shared Git config locks when creating task worktrees by disabling upstream tracking writes (fixes #1301). (#1318) *(@pat-lewczuk)*
+
+## 🛠️ Improvements
+- 🛠️ Start tasks directly from the composer; removing Plan first supersedes the earlier discarded-plan attachment fix (fixes #1094). (#1328, #1229) *(@pat-lewczuk)*
+
+## 🧪 Testing
+- 🧪 Cover screenshots queued before task startup through persistence, dequeue and delivery to the agent. (#1246) *(@pat-lewczuk)*
+- 🧪 Wait for auto-resume teardown and prompt-template transitions to prevent test races (fixes #804). (#1297) *(@pat-lewczuk)*
+- 🧪 Update browser assertions for message timestamps, collapsed step rails and directional token counts. (#1339) *(@kinelm)*
+- 🧪 Disable automatic task naming by default in tests to avoid unintended real-model calls. (#1254) *(@matgren)*
+
+## 📝 Specs & Documentation
+- 📝 Document the repository file-browser design subsequently implemented in #1299. (#1280) *(@pat-lewczuk)*
+
+## 👥 Contributors
+
+- @martaradziszewska
+- @pat-lewczuk
+- @patzick
+- @kinelm
+- @Igloczek
+- @sapersky
+- @KamilMichalski0
+- @piotrchabros
+- @matgren
+
+---
+
 # 0.14.0 (2026-10-02)
 
 ## Highlights
