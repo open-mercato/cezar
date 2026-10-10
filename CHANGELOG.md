@@ -1,10 +1,22 @@
+# Unreleased
+
+## ⚠️ Breaking
+- ⚠️ GitHub list rows no longer require `body`; it is optional during the deprecation window and comes from the detail payload. (#1362) *(@pat-lewczuk)*
+
+## ✨ Features
+- ✨ Encrypted project and workspace secrets (OS keychain, `0600` key file fallback) for check steps, never for agents; Settings → Secrets and `cezar secrets`. (#1291) *(@pat-lewczuk)*
+
+## ⚡ Performance
+- ⚡ The GitHub tab loads faster: cursor-paged lists, real open totals and background detail hydration (fixes #1261). (#1362) *(@pat-lewczuk)*
+
+## 🐛 Fixes
+- 🐛 Autosave commits leave out artifacts written by failed checks (fixes #1079). (#1126) *(@pat-lewczuk)*
+- 🐛 macOS RAM matches Activity Monitor, swap shows on macOS, and the host glance keeps updating. (#1363) *(@pat-lewczuk)*
+
+## 🧪 Testing
+- 🧪 Browser e2e smoke tests (TesterArmy). (#1364) *(@pat-lewczuk)*
+
 # 0.15.0 (2026-10-10)
-
-## Unreleased
-
-- GitHub tab: add cursor-paged lists and real open totals. The list-row `body` field is now
-  optional during the deprecation window; hydrate it from the comments detail payload. This is a
-  documented breaking migration for the next minor release.
 
 ## Highlights
 Workflows become graphs: a node editor with loops, gates, fan-out/join and a live graph view on every run, while v1 YAML workflows keep working. The Git tab gains a repository file browser, the Changes tab takes line comments that go to the agent as a review plus a Markdown preview, and each project can keep private MCP servers for every agent. The cockpit can carry your own name and logo, and tasks started by automations no longer bury the ones you started. Plan mode is gone from the composer. The rest is fixes, mostly to runs, git and the runners.
