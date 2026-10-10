@@ -439,8 +439,7 @@ describe('MachineCard — review fixes (freshness basis, cache read, swap pair)'
 
   it('falls back to the authenticated route when the hub refuses the host topic', async () => {
     // The dev-proxy/macOS case: the socket opens, `host` answers with an error frame and then
-    // silence. Before this fix the card claimed `live` and sat on `sampling…` forever; now it
-    // names the refusal and reads the authenticated same-origin route instead.
+    // silence. The card names the refusal and polls the authenticated same-origin route instead.
     serve(HEALTH, sample({ cpuPct: 21 }))
     render(<MachineCard />, { wrapper: wrapper() })
 
@@ -449,10 +448,9 @@ describe('MachineCard — review fixes (freshness basis, cache read, swap pair)'
       socket.refuse('host')
     })
 
-    await waitFor(() => expect(screen.getByText(/Live updates unavailable/)).toBeTruthy())
-    expect(screen.getByText('last known')).toBeTruthy()
-    // The route read fills the same store, so real values arrive instead of `sampling…`.
+    await waitFor(() => expect(screen.getByText(/refused this origin's host topic/)).toBeTruthy())
+    // The route is POLLED at the sampler's cadence (#1363), so the card stays live, not last known.
+    expect(screen.getByText('live')).toBeTruthy()
     await waitFor(() => expect(screen.getByText('21%')).toBeTruthy())
-    expect(document.querySelector('[data-slot="machine-card-cpu-sparkline"]')).toBeNull()
   })
 })
