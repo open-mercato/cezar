@@ -10,7 +10,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
-import { openDesignProxy } from '@/api/client'
+import { openDesignProxy, openPreviewGateway } from '@/api/client'
 import { useHealth } from '@/api/queries'
 import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
@@ -47,11 +47,12 @@ import {
  *    embedder cannot observe: `load` fires for the refusal too. The timeout below is the only
  *    honest signal available, and its message says what it actually knows.
  *  - On a HOSTED cockpit a loopback address means the VIEWER's machine, not the host the task
- *    runs on, so framing it would show the wrong thing — or someone else's service. That case is
- *    refused outright with the reason. Routing it through the host that owns the task needs the
- *    preview proxy §7 calls for, which is deliberately not built: serving untrusted worktree
- *    content from the cockpit's own origin would put it beside the authenticated API, which is
- *    the one thing §7 says not to do.
+ *    runs on, so framing it would show the wrong thing — or someone else's service. It is never
+ *    framed as typed. Where the operator configured the preview gateway (spec
+ *    `2026-10-10-preview-gateway`) the host re-serves the app on a port of its own and that is
+ *    framed; where not, the case is refused with the server's reason. What stays unbuilt is a
+ *    proxy on the cockpit's OWN origin: untrusted worktree content beside the authenticated API
+ *    is the one thing §7 says not to do.
  */
 
 /** How long a page gets to fire `load` before the view calls it a failure. Generous: a cold dev
@@ -167,7 +168,47 @@ export function BrowserView({
    * produced once.
    */
   const canPreview = health.data?.capabilities?.preview ?? true
-  const refused = target !== '' && !canPreview && isLoopback(target)
+  const remoteLoopback = target !== '' && !canPreview && isLoopback(target)
+
+  /**
+   * The preview gateway (spec `.ai/specs/2026-10-10-preview-gateway.md`).
+   *
+   * A loopback address on a hosted cockpit is the task's app on the HOST. Where the operator
+   * gave cezar a pool of ports, the server re-serves that app on one of them and this view
+   * frames that instead. Asked before every load, because the ticket in the answer opens exactly
+   * one. A cockpit with no gateway answers with its reason, and the view shows the refusal it
+   * always showed — now saying why.
+   */
+  const [gateway, setGateway] = useState<{ target: string; src?: string; reason?: string } | null>(null)
+  useEffect(() => {
+    setGateway(null)
+    if (!remoteLoopback) return
+    let parsed: URL
+    try {
+      parsed = new URL(target)
+    } catch {
+      return
+    }
+    let cancelled = false
+    openPreviewGateway({ target: parsed.origin, parentOrigin: window.location.origin })
+      .then((opened) => {
+        if (cancelled) return
+        const url = new URL(opened.origin + parsed.pathname + parsed.search + parsed.hash)
+        url.searchParams.set(opened.ticketParam, opened.ticket)
+        setGateway({ target, src: url.toString() })
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        setGateway({ target, reason: error instanceof Error && error.message ? error.message : 'the preview gateway did not answer' })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [remoteLoopback, reloadToken, target])
+  const viaGateway = remoteLoopback && gateway?.target === target ? gateway : null
+  const refused = viaGateway?.reason !== undefined
+  // Asked for but not answered yet: nothing is framed, least of all the address itself.
+  const awaitingGateway = remoteLoopback && viaGateway === null
 
   /**
    * Design Mode.
@@ -194,7 +235,10 @@ export function BrowserView({
   // Asked for but not answered yet: nothing is framed, so the page is not loaded directly only to
   // be loaded again a moment later through the mirror.
   const awaitingProxy = designActive && mirror === null
-  const frameSrc = mirror !== null && targetOrigin !== null ? mirror + target.slice(targetOrigin.length) : target
+  const frameSrc =
+    remoteLoopback ? (viaGateway?.src ?? '')
+    : mirror !== null && targetOrigin !== null ? mirror + target.slice(targetOrigin.length)
+    : target
 
   // Asked again before every load while the switch is on. The route is idempotent, and a mirror
   // the server closed for being idle comes back on a new port this way instead of as a dead frame.
@@ -586,7 +630,7 @@ export function BrowserView({
             tone="neutral"
             heading="h2"
             title="This address points at the machine you are sitting at"
-            subtitle="This cockpit runs remotely, so a local address would open on your computer rather than on the task's host. Previewing the task's app from hosted mode needs a proxy that does not exist yet."
+            subtitle={`This cockpit runs remotely, so a local address would open on your computer rather than on the task's host. Previewing the task's app from here needs the preview gateway: ${viaGateway?.reason ?? ''}`}
           />
         ) : target === '' ? (
           <CenteredState
@@ -635,7 +679,7 @@ export function BrowserView({
                 {hasNote ? 'Click an element to write a note about it · Esc to stop' : 'Click an element to add it to your next message · Esc to stop'}
               </p>
             ) : null}
-            {awaitingProxy ? null : (
+            {awaitingProxy || awaitingGateway ? null : (
             <iframe
               ref={frameRef}
               // Keyed by the address AND the reload token so Reload really re-fetches. It is the

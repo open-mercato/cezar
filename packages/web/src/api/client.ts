@@ -112,6 +112,8 @@ import type {
   RunsIndexResponse,
   StarCountPayload,
   DesignProxyRequest,
+  PreviewGatewayRequest,
+  PreviewGatewayResponse,
   PromptQueueResponse,
   RemoveQueuedPromptResponse,
   EditQueuedPromptResponse,
@@ -459,6 +461,16 @@ export async function getStarCount(opts?: ReadOptions): Promise<StarCountPayload
  */
 export async function openDesignProxy(input: DesignProxyRequest): Promise<DesignProxyResponse> {
   return unwrap(await cez.api.v1.preview['design-proxy'].$post({ json: input }), '/preview/design-proxy')
+}
+
+/**
+ * A gateway origin for a loopback app on the cockpit's HOST, and a ticket that opens it once
+ * (`POST /api/v1/preview/gateway`). For a hosted cockpit, where the address itself would resolve
+ * on the viewer's machine. Asked before every load: a ticket is spent by the page load it opens.
+ * Rejects with the server's reason when this cockpit has no gateway.
+ */
+export async function openPreviewGateway(input: PreviewGatewayRequest): Promise<PreviewGatewayResponse> {
+  return unwrap(await cez.api.v1.preview.gateway.$post({ json: input }), '/preview/gateway')
 }
 
 /** Host-local catalog for one discovery runner (`claude`, `codex`, `opencode`, `cursor` — #794, #784).
