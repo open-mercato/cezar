@@ -239,7 +239,9 @@ export const queryKeys = {
   get worktrees() {
     return [queryScope(), 'worktrees'] as const
   },
-  github: (params: { limit?: number } = {}) => [queryScope(), 'github', params.limit ?? null] as const,
+  github: (params: { limit?: number; issuesCursor?: string; prsCursor?: string } = {}) =>
+    [queryScope(), 'github', params.limit ?? null, params.issuesCursor ?? null, params.prsCursor ?? null] as const,
+  githubPages: (limit = 50) => [queryScope(), 'github', 'pages', limit] as const,
   /** Lazy PR checks glyphs (`GET /api/github/checks`, #664), keyed by the sorted PR numbers so the
    *  same visible window de-dupes to one cache entry. */
   githubChecks: (prNumbers: readonly number[]) =>
@@ -1796,6 +1798,25 @@ export function useGithub(params: { limit?: number } = {}, enabled = true) {
     queryKey: queryKeys.github(params),
     queryFn: ({ signal }) => getGithub({ limit: params.limit }, { signal }),
     enabled,
+  })
+}
+
+/** Cursor-paged GitHub list. Both cursors advance together because the server asks GitHub for
+ * one issue page and one PR page per round trip. React Query retains earlier pages when a later
+ * page is appended, so loading more never refetches rows already on screen. */
+export function useGithubInfinite(limit = 50, enabled = true) {
+  return useInfiniteQuery({
+    queryKey: queryKeys.githubPages(limit),
+    queryFn: ({ pageParam, signal }) =>
+      getGithub({ limit, issuesCursor: pageParam.issuesCursor, prsCursor: pageParam.prsCursor }, { signal }),
+    initialPageParam: { issuesCursor: undefined as string | undefined, prsCursor: undefined as string | undefined },
+    getNextPageParam: (last) => {
+      const issuesCursor = last.issuesNextCursor ?? undefined
+      const prsCursor = last.prsNextCursor ?? undefined
+      return issuesCursor || prsCursor ? { issuesCursor, prsCursor } : undefined
+    },
+    enabled,
+    staleTime: 60_000,
   })
 }
 
