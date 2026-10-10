@@ -26,7 +26,8 @@ export const githubItemSchema = z.object({
   author: z.string(),
   createdAt: z.string(),
   labels: z.array(z.string()),
-  body: z.string(),
+  /** Deprecated in the list tier; hydrated through the detail endpoint when omitted. */
+  body: z.string().optional(),
   url: z.string(),
   comments: z.number(),
   /** PRs only. */
@@ -54,6 +55,10 @@ export const githubDataSchema = z.object({
   prs: z.array(githubItemSchema),
   /** Repo-wide label name → 6-hex color (no `#`); lets chips tint like GitHub. Additive. */
   labelColors: z.record(z.string(), z.string()).optional(),
+  issuesTotal: z.number().int().nonnegative().optional(),
+  prsTotal: z.number().int().nonnegative().optional(),
+  issuesNextCursor: z.string().nullable().optional(),
+  prsNextCursor: z.string().nullable().optional(),
 });
 export type GithubData = z.infer<typeof githubDataSchema>;
 
@@ -285,6 +290,7 @@ export const githubCommentsDataSchema = z.object({
   /** Timeline events (#525) — additive; absent when the server degraded to the legacy
    *  comments-only fetch. Capped independently of `comments`. */
   events: z.array(githubTimelineEventSchema).optional(),
+  detail: z.object({ body: z.string() }).optional(),
 });
 export type GithubCommentsData = z.infer<typeof githubCommentsDataSchema>;
 

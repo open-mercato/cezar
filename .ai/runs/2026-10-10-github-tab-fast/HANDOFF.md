@@ -1,6 +1,6 @@
 # Handoff — 2026-10-10-github-tab-fast
 
-**Last updated:** 2026-10-10T00:00:00Z
+**Last updated:** 2026-10-10T00:05:00Z
 **Branch:** `cez/4882295a`
 **PR:** not yet opened
 **Current phase/step:** Phase 1 Step 1.1
@@ -10,6 +10,7 @@
 
 - Issue #1261 was claimed after the maintainer approved shipping the body contract migration.
 - The implementation plan is seeded against current `origin/main`.
+- Child dispatch is unavailable because the cockpit reports `unknown project: cezar`; implementation continues inline.
 
 ## Next concrete action
 
@@ -29,4 +30,3 @@
 
 - Path: `/home/cezar/cezar/.ai/cezar/worktrees/4882295a-a480-453d-a4f7-717b11e4e5f4`
 - Created this run: no
-

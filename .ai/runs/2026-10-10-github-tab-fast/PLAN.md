@@ -11,7 +11,7 @@
 
 | Phase | Step | Title | Exec | Status | Commit |
 |---|---|---|---|---|---|
-| 1 | 1.1 | Define paged GitHub contracts and body-detail migration | dispatch:standard | todo | — |
+| 1 | 1.1 | Define paged GitHub contracts and body-detail migration | dispatch:standard | done | bc3fa35c |
 | 1 | 1.2 | Implement GraphQL cursor pages and cheap open totals | group:A:capable | todo | — |
 | 1 | 1.3 | Add validated paged GitHub API parameters and detail payload | group:A:capable | todo | — |
 | 2 | 2.1 | Add paged GitHub client queries and cache helpers | dispatch:standard | todo | — |
@@ -47,4 +47,3 @@ Make the GitHub tab paint its first page and real open totals quickly on busy re
 
 - Issue: https://github.com/open-mercato/cezar/issues/1261
 - No external skill URLs were supplied.
-

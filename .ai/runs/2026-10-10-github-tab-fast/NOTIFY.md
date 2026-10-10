@@ -8,3 +8,6 @@
 - External skill URLs: none
 - Decision: ship the body migration now; the <1s target is otherwise unreachable at the measured repository size.
 
+## 2026-10-10T00:05:00Z — dispatch fallback
+
+- The configured child-task dispatcher refused Step 1.1 with `unknown project: cezar`; continuing inline to preserve scope and one-commit discipline.
