@@ -50,14 +50,16 @@ No open or merged PR addresses either issue (searched PRs for RAM/memory/host us
 
 ## Progress
 
+PR: #1363
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: macOS memory on the server
 
-- [ ] 1.1 Activity-Monitor memory from vm_stat on darwin, with os fallback
-- [ ] 1.2 macOS swap from sysctl vm.swapusage
+- [x] 1.1 Activity-Monitor memory from vm_stat on darwin, with os fallback — 7e9bd773
+- [x] 1.2 macOS swap from sysctl vm.swapusage — 7e9bd773
 
 ### Phase 2: a glance that keeps updating
 
-- [ ] 2.1 Route reads keep the sampler warm for one stale window
-- [ ] 2.2 Refused host topic polls the route from the active writer
+- [x] 2.1 Route reads keep the sampler warm for one stale window — daeb3bb8
+- [x] 2.2 Refused host topic polls the route from the active writer — e6a9da86
