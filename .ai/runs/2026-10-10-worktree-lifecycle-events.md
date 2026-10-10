@@ -54,10 +54,10 @@ Arbitrary local commands require durable intent and bounded supervised execution
 
 ### Phase 1: Contracts and core
 
-- [ ] 1.1 Define contract schemas and optional configuration/projections.
-- [ ] 1.2 Build renderer/preview validation.
-- [ ] 1.3 Implement durable generation/operation store.
-- [ ] 1.4 Implement supervised executor.
+- [x] 1.1 Define contract schemas and optional configuration/projections. — b43c3d49
+- [x] 1.2 Build renderer/preview validation. — b43c3d49
+- [x] 1.3 Implement durable generation/operation store. — b43c3d49
+- [x] 1.4 Implement supervised executor. — b43c3d49
 
 ### Phase 2: Complete integration
 
