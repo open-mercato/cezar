@@ -1,5 +1,5 @@
 import { MessageSquareOffIcon, PencilIcon, PlusIcon } from 'lucide-react'
-import { createContext, useContext, useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { isSubmitShortcut } from '@/lib/use-submit-shortcut'
@@ -137,14 +137,9 @@ export interface LineCommentsApi {
   comments: readonly DiffLineComment[]
   byKey: ReadonlyMap<string, readonly DiffLineComment[]>
   editing: LineCommentEditing | null
-  selection: LineSelection | null
   canAdd: boolean
   /** `stretch` — this re-opens the current new comment over a wider range; its text comes along. */
   open: (anchor: DiffLineAnchor, excerpt: string, start?: DiffLineEnd, stretch?: boolean) => void
-  /** Press on a "+": start a range at that row. Releasing anywhere opens the editor for it. */
-  beginSelect: (path: string, order: number, lines: readonly HunkLine[]) => void
-  /** The pointer entered another row while a range is being dragged. */
-  extendSelect: (path: string, order: number) => void
   /** Absent ⇒ saved comments are read-only. */
   edit?: (comment: DiffLineComment) => void
   cancel: () => void
@@ -162,8 +157,71 @@ export interface LineCommentsApi {
 
 export const LineCommentsContext = createContext<LineCommentsApi | null>(null)
 
+/** Test-only render probe; the default is inert and has no production observer. */
+export const DiffRenderObserverContext = createContext<((path: string) => void) | null>(null)
+
+export interface LineSelectionApi {
+  selection: LineSelection | null
+  /** Press on a "+": start a range at that row. Releasing anywhere opens the editor for it. */
+  beginSelect: (path: string, order: number, lines: readonly HunkLine[]) => void
+  /** The pointer entered another row while a range is being dragged. */
+  extendSelect: (path: string, order: number) => void
+}
+
+export const LineSelectionContext = createContext<LineSelectionApi | null>(null)
+
 export function useLineComments(): LineCommentsApi | null {
   return useContext(LineCommentsContext)
+}
+
+export function useLineSelection(): LineSelectionApi | null {
+  return useContext(LineSelectionContext)
+}
+
+/**
+ * Selection is deliberately scoped to one file. A drag changes on every row entry, but rows in
+ * other files have no visual relationship to that state and must not receive a new context value.
+ */
+export function LineSelectionProvider({ path, children }: { path: string; children: ReactNode }) {
+  const comments = useLineComments()
+  const [selection, setSelection] = useState<LineSelection | null>(null)
+  const selectionRef = useRef<LineSelection | null>(null)
+  const selectionLines = useRef<readonly HunkLine[]>([])
+  const selecting = selection !== null
+
+  const finish = useCallback(() => {
+    const done = selectionRef.current
+    selectionRef.current = null
+    setSelection(null)
+    if (!done || done.path !== path || !comments) return
+    const target = rangeTarget(done.path, selectionLines.current, done.from, done.to)
+    if (target) comments.open(target.anchor, target.excerpt, target.start)
+  }, [comments, path])
+
+  useEffect(() => {
+    if (!selecting) return
+    window.addEventListener('mouseup', finish)
+    return () => window.removeEventListener('mouseup', finish)
+  }, [finish, selecting])
+
+  // Memoized: a fresh value on every card render would rebuild this file's marks map each time.
+  const api = useMemo((): LineSelectionApi => ({
+    selection,
+    beginSelect: (selectedPath, order, lines) => {
+      if (selectedPath !== path) return
+      selectionLines.current = lines
+      selectionRef.current = { path: selectedPath, from: order, to: order }
+      setSelection(selectionRef.current)
+    },
+    extendSelect: (selectedPath, order) => {
+      const current = selectionRef.current
+      if (selectedPath !== path || current === null || current.path !== selectedPath || current.to === order) return
+      selectionRef.current = { ...current, to: order }
+      setSelection(selectionRef.current)
+    },
+  }), [path, selection])
+
+  return <LineSelectionContext.Provider value={api}>{children}</LineSelectionContext.Provider>
 }
 
 /** A device whose primary pointer cannot hover — a phone or tablet. Read at tap time, not at
@@ -209,6 +267,7 @@ export function AddCommentButton({
   line: HunkLine
 }) {
   const api = useLineComments()
+  const selection = useLineSelection()
   const file = useContext(FileLinesContext)
   if (!api?.canAdd || anchor === undefined) return null
   const order = file?.orderOf.get(line)
@@ -228,7 +287,7 @@ export function AddCommentButton({
         // No text selection while dragging across code.
         event.preventDefault()
         if (event.shiftKey && stretchable) return // the click stretches the open range
-        if (file && order !== undefined) api.beginSelect(anchor.path, order, file.lines)
+        if (file && order !== undefined) selection?.beginSelect(anchor.path, order, file.lines)
       }}
       onClick={(event) => {
         if (event.shiftKey && stretchable && order !== undefined && editing) {

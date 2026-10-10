@@ -23,15 +23,16 @@ import {
   anchorForLine,
   anchorKey,
   LineCommentsContext,
+  DiffRenderObserverContext,
+  LineSelectionProvider,
   FileLinesContext,
   LineCommentThread,
   markClass,
-  rangeTarget,
   tapToComment,
   useLineComments,
+  useLineSelection,
   type FileLines,
   type LineCommentsApi,
-  type LineSelection,
 } from './line-comments'
 
 import {
@@ -173,14 +174,6 @@ export function DiffView({
   const [editing, setEditing] = useState<LineCommentsApi['editing']>(null)
   const pendingText = useRef(new Map<string, string>()).current
   const focusRequest = useRef<string | null>(null)
-  // A range being dragged out with the "+". The dragged file's line list rides a ref: the release
-  // handler needs it, and it never has to re-render anything.
-  const [selection, setSelection] = useState<LineSelection | null>(null)
-  // Mirrored synchronously: the release handler reads THIS, so a fast release cannot finish on a
-  // render that had not yet caught up with the last row the pointer entered.
-  const selectionRef = useRef<LineSelection | null>(null)
-  const selectionLines = useRef<readonly HunkLine[]>([])
-  const selecting = selection !== null
   const editingRef = useRef(editing)
   editingRef.current = editing
   // Where focus goes back to when the editor closes (Comment, Save, Cancel, Escape): the control
@@ -249,20 +242,6 @@ export function DiffView({
     [files, pendingText],
   )
 
-  // Releasing the button ANYWHERE ends the drag — over a row, between rows, or off the diff.
-  useEffect(() => {
-    if (!selecting) return
-    const finish = () => {
-      const done = selectionRef.current
-      selectionRef.current = null
-      setSelection(null)
-      if (!done) return
-      const target = rangeTarget(done.path, selectionLines.current, done.from, done.to)
-      if (target) openEditor(target.anchor, target.excerpt, target.start)
-    }
-    window.addEventListener('mouseup', finish)
-    return () => window.removeEventListener('mouseup', finish)
-  }, [openEditor, selecting])
   const commentsApi = useMemo((): LineCommentsApi | null => {
     if (!onAddComment && (comments?.length ?? 0) === 0) return null
     const byKey = new Map<string, DiffLineComment[]>()
@@ -274,20 +253,8 @@ export function DiffView({
       comments: comments ?? [],
       byKey,
       editing,
-      selection,
       canAdd: onAddComment !== undefined,
       open: openEditor,
-      beginSelect: (path, order, lines) => {
-        selectionLines.current = lines
-        selectionRef.current = { path, from: order, to: order }
-        setSelection(selectionRef.current)
-      },
-      extendSelect: (path, order) => {
-        const current = selectionRef.current
-        if (current === null || current.path !== path || current.to === order) return
-        selectionRef.current = { ...current, to: order }
-        setSelection(selectionRef.current)
-      },
       edit: onEditComment
         ? (comment: DiffLineComment) => {
             focusRequest.current = `edit:${comment.id}`
@@ -324,7 +291,7 @@ export function DiffView({
       pendingText,
       focusRequest,
     }
-  }, [comments, editing, onAddComment, onEditComment, onRemoveComment, openEditor, pendingText, selection])
+  }, [comments, editing, onAddComment, onEditComment, onRemoveComment, openEditor, pendingText])
 
   const rowCount = useMemo(() => diffRowCount(files), [files])
   // The `?diff=` override is a measurement/debugging seam, not reactive state — read once so
@@ -656,6 +623,7 @@ function DiffFileCard({
       {open && preview ? (
         <MarkdownPreview file={file} loadFileText={loadFileText} imageSrc={imageSrc} />
       ) : open ? (
+      <LineSelectionProvider path={file.path}>
         <DiffFileBody
           file={file}
           expanded={expanded}
@@ -666,6 +634,7 @@ function DiffFileCard({
           imageSrc={imageSrc}
           onOpenInApp={onOpenInApp}
         />
+      </LineSelectionProvider>
       ) : null}
     </section>
   )
@@ -690,6 +659,8 @@ function DiffFileBody({
   imageSrc?: (path: string) => string
   onOpenInApp?: (path: string) => void
 }) {
+  const renderObserver = useContext(DiffRenderObserverContext)
+  renderObserver?.(file.path)
   const parsed = useMemo(() => parsePatch(file.patch), [file.patch])
   // The trailing (after-last-hunk) region has an unknown length — only offer it when a
   // loader can actually materialize it, and never for fully-new or deleted files.
@@ -715,6 +686,7 @@ function DiffFileBody({
   // Which rows a range or a comment covers, by position in `lineList`. Recomputed when comments,
   // the open editor or a drag change — never per keystroke (the editor's text is not state).
   const commentsApi = useLineComments()
+  const selectionApi = useLineSelection()
   const fileLines = useMemo((): FileLines | null => {
     if (!commentsApi) return null
     const orderByKey = new Map<string, number>()
@@ -737,11 +709,12 @@ function DiffFileBody({
     for (const comment of commentsApi.comments) {
       if (comment.path === file.path) markEnds(comment, comment.start, 'commented')
     }
-    const { editing, selection } = commentsApi
+    const { editing } = commentsApi
     if (editing && editing.anchor.path === file.path) markEnds(editing.anchor, editing.start, 'selected')
+    const selection = selectionApi?.selection
     if (selection && selection.path === file.path) mark(selection.from, selection.to, 'selected')
     return { path: file.path, lines: lineList, orderOf: lineIndex, markAt: (order) => marks.get(order) }
-  }, [commentsApi, file.path, lineList, lineIndex])
+  }, [commentsApi, file.path, lineList, lineIndex, selectionApi])
 
   const rows = useMemo(
     () => (mode === 'unified' ? buildUnifiedRows(parsed.hunks, gaps, expanded) : null),
@@ -929,6 +902,7 @@ function UnifiedRowView({
   onExpand?: (gap: ContextGap) => void
 }) {
   const comments = useLineComments()
+  const selection = useLineSelection()
   const fileLines = useContext(FileLinesContext)
   if (row.type === 'hunk') return <HunkHeaderRow hunk={row.hunk} />
   if (row.type === 'gap') return <GapRow gap={row.gap} onExpand={onExpand} />
@@ -949,7 +923,7 @@ function UnifiedRowView({
         data-mark={mark}
         {...tap}
         onMouseEnter={
-          comments?.selection && order !== undefined ? () => comments.extendSelect(path, order) : undefined
+          selection?.selection && order !== undefined ? () => selection.extendSelect(path, order) : undefined
         }
         className={cn('group/line flex', LINE_BG[line.kind], markClass(mark), FLASH)}
       >
@@ -1008,6 +982,7 @@ function SplitCell({
   wrap: boolean
 }) {
   const comments = useLineComments()
+  const selection = useLineSelection()
   const fileLines = useContext(FileLinesContext)
   if (!cell) {
     // The other side has no counterpart line — an honest hatch-free blank.
@@ -1025,7 +1000,7 @@ function SplitCell({
       data-mark={mark}
       {...tapToComment(comments, anchor, line.text)}
       onMouseEnter={
-        comments?.selection && order !== undefined && anchor ? () => comments.extendSelect(anchor.path, order) : undefined
+        selection?.selection && order !== undefined && anchor ? () => selection.extendSelect(anchor.path, order) : undefined
       }
       className={cn(
         'group/line flex min-w-0 overflow-x-auto',
