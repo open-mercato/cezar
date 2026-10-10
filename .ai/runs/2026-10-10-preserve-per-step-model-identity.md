@@ -20,12 +20,12 @@ Persist each resolved runner/model identity on the corresponding `StepState`, so
 
 ### Phase 1: Contract and persistence
 
-- [ ] 1.1 Add the optional per-step model identity schema/type and store persistence.
-- [ ] 1.2 Wire identity assignment across all run and continuation step construction paths.
+- [x] 1.1 Add the optional per-step model identity schema/type and store persistence. — ac4b9f33
+- [x] 1.2 Wire identity assignment across all run and continuation step construction paths. — ac4b9f33
 
 ### Phase 2: Regression proof
 
-- [ ] 2.1 Add multi-step and continuation-to-auto regression coverage plus compatibility assertions.
+- [x] 2.1 Add multi-step and continuation-to-auto regression coverage plus compatibility assertions. — ac4b9f33
 - [ ] 2.2 Run targeted tests, full validation, review, and finalize the PR.
 
 ## Risks
@@ -38,10 +38,10 @@ The existing run-level `modelIdentity` is consumed by older readers, so it must 
 
 ### Phase 1: Contract and persistence
 
-- [ ] 1.1 Add the optional per-step model identity schema/type and store persistence.
-- [ ] 1.2 Wire identity assignment across all run and continuation step construction paths.
+- [x] 1.1 Add the optional per-step model identity schema/type and store persistence. — ac4b9f33
+- [x] 1.2 Wire identity assignment across all run and continuation step construction paths. — ac4b9f33
 
 ### Phase 2: Regression proof
 
-- [ ] 2.1 Add multi-step and continuation-to-auto regression coverage plus compatibility assertions.
+- [x] 2.1 Add multi-step and continuation-to-auto regression coverage plus compatibility assertions. — ac4b9f33
 - [ ] 2.2 Run targeted tests, full validation, review, and finalize the PR.
