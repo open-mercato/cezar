@@ -6,6 +6,8 @@ export function useIsMobile() {
   const [isMobile, setIsMobile] = React.useState<boolean | undefined>(undefined)
 
   React.useEffect(() => {
+    // No matchMedia (jsdom) counts as desktop — the same convention as lib/use-desktop.ts.
+    if (typeof window.matchMedia !== "function") return
     const mql = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`)
     const onChange = () => {
       setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)

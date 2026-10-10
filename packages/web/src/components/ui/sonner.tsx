@@ -8,18 +8,20 @@ import {
 import { Toaster as Sonner, type ToasterProps } from "sonner"
 
 import { useOptionalTheme } from "@/components/theme-provider"
+import { systemPrefersLight } from "@/lib/theme"
 
 /* shadcn/ui Sonner, wired to this app's own theme provider instead of `next-themes`, and to the
  * cockpit's tokens: the everyday toast is the inverse `contrast` surface, a failure is `danger`
  * (sonner's "rich colors" slot, which only `error` uses here). */
 const Toaster = ({ style, ...props }: ToasterProps) => {
-  // `system` outside a ThemeProvider (a bare unit test) — every colour below is a token that
-  // already follows the theme, so sonner's own light/dark palette is never what paints.
-  const theme = useOptionalTheme()?.theme ?? "system"
+  // Always a RESOLVED theme, never `system`: given `system`, sonner asks `window.matchMedia`
+  // itself, unguarded, which throws wherever it is missing (jsdom). The provider has already
+  // collapsed `system` against the OS; outside one (a bare unit test) the same helper answers.
+  const theme = useOptionalTheme()?.resolvedTheme ?? (systemPrefersLight() ? "light" : "dark")
 
   return (
     <Sonner
-      theme={theme as ToasterProps["theme"]}
+      theme={theme}
       className="toaster group"
       richColors
       icons={{
