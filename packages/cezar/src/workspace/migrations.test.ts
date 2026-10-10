@@ -1,8 +1,9 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { workspaceConfigPath, workspaceUiStatePath } from '../paths.ts';
+import { expectOwnerOnlyMode } from '../private-mode.testkit.ts';
 import { defaultWorkspaceConfig, loadWorkspaceConfig } from './config.ts';
 import { runMigrations, WORKSPACE_MIGRATIONS, type WorkspaceMigration } from './migrations.ts';
 
@@ -48,7 +49,7 @@ describe('workspace migrations', () => {
     await runMigrations({ bootRepoRoot: null });
     const config = await loadWorkspaceConfig();
     expect(config).toEqual({ ...defaultWorkspaceConfig(), schemaVersion: 1 });
-    expect(statSync(workspaceConfigPath()).mode & 0o777).toBe(0o600);
+    expectOwnerOnlyMode(workspaceConfigPath());
     // nothing to import → the global ui-state file is not created
     expect(existsSync(workspaceUiStatePath())).toBe(false);
     expect(warn).not.toHaveBeenCalled();
@@ -74,7 +75,7 @@ describe('workspace migrations', () => {
       appearance: { accent: 'violet', density: 'compact' },
       notifications: { enabled: false },
     });
-    expect(statSync(workspaceUiStatePath()).mode & 0o777).toBe(0o600);
+    expectOwnerOnlyMode(workspaceUiStatePath());
     // additive: per-repo files are byte-identical
     expect(readFileSync(join(repoRoot, '.ai/cezar/config.json'), 'utf8')).toBe(repoConfigBefore);
     expect(readFileSync(join(repoRoot, '.ai/cezar/ui-state.json'), 'utf8')).toBe(repoUiBefore);
@@ -141,7 +142,14 @@ describe('workspace migrations', () => {
 
   it('an unwritable home degrades with ONE warning and never throws', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    chmodSync(home, 0o500); // read-only home dir → the atomic write fails
+    if (process.platform === 'win32') {
+      // Windows has no directory write bit — `chmod 0500` denies nothing there. A plain FILE where
+      // the home directory should be fails the same atomic write.
+      rmSync(home, { recursive: true, force: true });
+      writeFileSync(home, '');
+    } else {
+      chmodSync(home, 0o500); // read-only home dir → the atomic write fails
+    }
     await expect(runMigrations({ bootRepoRoot: null })).resolves.toBeUndefined();
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0]?.[0])).toContain('001-workspace-config');

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { autosaveCommit, createWorktree } from '../git-worktree.ts';
 import { RunStore } from '../runs/store.ts';
 import { AUTOSAVE_INTERVAL_MS, periodicAutosaveEnabled, RunManager } from './run.ts';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -52,9 +53,9 @@ describe('periodic autosave gate (#471)', () => {
     worktreePath = (await createWorktree(repoRoot, runId, 'main')).path;
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   });
 
   afterEach(() => {

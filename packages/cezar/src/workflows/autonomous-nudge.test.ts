@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore, type RunRecord } from '../runs/store.ts';
 import { AUTONOMOUS_NUDGE, MAX_AUTO_CONTINUES, RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -55,7 +56,7 @@ describe('autonomous mode nudges at turn end instead of parking (#autonomous)', 
     currentId = undefined;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (currentId) manager.cancel(currentId); // release the session + repo lock
     manager.dispose();
     for (const [key, value] of Object.entries(savedEnv)) {
@@ -63,7 +64,7 @@ describe('autonomous mode nudges at turn end instead of parking (#autonomous)', 
       else process.env[key] = value;
     }
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   });
 
   const waitFor = async (id: string, pred: (r: RunRecord | undefined) => boolean, ms = 20_000) => {

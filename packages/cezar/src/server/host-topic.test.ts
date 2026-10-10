@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 import { hostUsageSchema, type HostUsage } from '@open-mercato/cezar-contract';
 import { HOST_SAMPLE_INTERVAL_MS, hostUsageSampler } from '../core/host-usage.ts';
 import { RunStore } from '../runs/store.ts';
@@ -46,11 +47,11 @@ describe('host topic + sampler (live-server path)', () => {
     hostUsageSampler.dispose();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     hostUsageSampler.dispose();
     vi.useRealTimers();
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   });
 
   const build = () => {

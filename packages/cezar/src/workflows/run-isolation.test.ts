@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -15,6 +15,8 @@ vi.mock('../git-worktree.js', async (importOriginal) => {
 });
 
 import { RunManager } from './run.ts';
+import '../test-fixtures/no-real-namer.testkit.ts';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
 const roots: string[] = [];
@@ -27,8 +29,9 @@ function fixtureRepo(): string {
   return root;
 }
 
+// 20 s, not 5: see the note on the describe below — these waits must not undercut its timeout.
 async function waitForRuns(store: RunStore, ids: string[]): Promise<void> {
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     if (ids.every((id) => ['done', 'failed', 'cancelled'].includes(store.getRun(id)?.status ?? ''))) {
       return;
@@ -39,7 +42,7 @@ async function waitForRuns(store: RunStore, ids: string[]): Promise<void> {
 }
 
 async function waitFor(predicate: () => boolean, what: string): Promise<void> {
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -47,11 +50,15 @@ async function waitFor(predicate: () => boolean, what: string): Promise<void> {
   throw new Error(`timed out waiting for ${what}`);
 }
 
-afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+afterEach(async () => {
+  await removeTempDir(...roots.splice(0));
 });
 
-describe('RunManager repository-root isolation', () => {
+// Each case drives two or three check steps, and a check step is a `bash -lc` child that starts
+// `node`: 2.5–3.3 s per case on Windows with nothing else running, so a loaded full-suite run
+// loses the race with the default 5 s — the budget run-lease.test.ts already gives its own
+// (#797) for the same reason.
+describe('RunManager repository-root isolation', { timeout: 30_000 }, () => {
   it('runs the first task in place with the root lease before a repository has a commit', async () => {
     const root = mkdtempSync(join(tmpdir(), 'cez-unborn-isolation-'));
     roots.push(root);

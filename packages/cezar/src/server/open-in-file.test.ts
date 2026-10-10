@@ -20,6 +20,7 @@ vi.mock('./open-in-app.js', async (importOriginal) => {
 
 import { openFileInDefaultApp } from './open-in-app.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
+import { canSymlinkFiles } from './symlink-capability.testkit.ts';
 
 describe("POST /api/v1/runs/:id/open-in — target 'default' (local-mode file open, #365)", () => {
   let repoRoot: string;
@@ -98,7 +99,9 @@ describe("POST /api/v1/runs/:id/open-in — target 'default' (local-mode file op
     }
   });
 
-  it('rejects a symlink pointing outside the worktree', async () => {
+  // A FILE symlink: unprivileged Windows cannot create one. The same containment is exercised there
+  // through a directory junction in git-changes.test.ts (`readWorktreePath` is what this route calls).
+  it.skipIf(!canSymlinkFiles)('rejects a symlink pointing outside the worktree', async () => {
     const outside = mkdtempSync(join(tmpdir(), 'cez-openfile-link-'));
     try {
       writeFileSync(join(outside, 'real.png'), 'x');

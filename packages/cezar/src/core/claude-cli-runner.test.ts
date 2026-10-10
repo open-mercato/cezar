@@ -150,12 +150,16 @@ describe('a teardown cezar initiated', () => {
     expect(
       uiEvents.some((event) => event.type === 'turn.completed' && event.stopReason === 'error'),
     ).toBe(false);
+    expect(events.at(-1)).toEqual({ type: 'done' });
+    // Windows has no signal handlers: `child.kill()` is TerminateProcess, so the stub's SIGTERM
+    // handler never runs — no final result frame, and the exit is `(null, 'SIGTERM')`, not 143.
+    // The teardown still settles cleanly (asserted above); only the 143 shape is POSIX-only.
+    if (process.platform === 'win32') return;
     expect(uiEvents).toContainEqual({
       type: 'turn.completed',
       turnId: 'turn_1',
       stopReason: 'end_turn',
     });
-    expect(events.at(-1)).toEqual({ type: 'done' });
     expect(
       events.some((e) => e.type === 'note' && e.message.includes('terminated by cezar (code 143)')),
     ).toBe(true);

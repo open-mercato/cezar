@@ -96,7 +96,8 @@ describe('per-agent translation', () => {
     const config = writeClaudeMcpConfig(servers());
     expect(config).toBeDefined();
     try {
-      expect(statSync(config!.path).mode & 0o777).toBe(0o600);
+      // Windows has no POSIX mode bits (every file stats 0o666); the ACL is the profile's own.
+      if (process.platform !== 'win32') expect(statSync(config!.path).mode & 0o777).toBe(0o600);
       const written = JSON.parse(readFileSync(config!.path, 'utf8'));
       expect(written.mcpServers.tracker).toEqual({ type: 'stdio', command: 'npx', args: ['-y', 'tracker-mcp'], env: { TOKEN: 's3cret' } });
       expect(written.mcpServers.docs).toMatchObject({ type: 'http', url: 'https://mcp.example.com/mcp' });
@@ -191,7 +192,8 @@ describe('the cezar.private.mcp catalog file', () => {
     const out = await writeConfigFile('cezar.private.mcp', FILE, null, repo, { HOME: repo });
     expect(out).toMatchObject({ ok: true });
     const path = privateMcpPath(repo);
-    expect(statSync(path).mode & 0o777).toBe(0o600);
+    // Windows has no POSIX mode bits (every file stats 0o666), so the 0600 half is posix-only.
+    if (process.platform !== 'win32') expect(statSync(path).mode & 0o777).toBe(0o600);
     expect((await readConfigFile('cezar.private.mcp', repo, { HOME: repo })) as { content: string }).toMatchObject({ content: FILE });
 
     execFileSync('git', ['check-ignore', '-q', path], { cwd: repo }); // throws when not ignored

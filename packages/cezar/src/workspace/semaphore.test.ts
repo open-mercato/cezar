@@ -232,7 +232,9 @@ describe('WorkspaceSemaphore', () => {
     const real = join(dirs, 'real-root');
     const link = join(dirs, 'link-root'); // a symlink pointing at real-root
     mkdirSync(real, { recursive: true });
-    symlinkSync(real, link);
+    // 'junction': a directory link an unprivileged Windows user may create (a true symlink needs
+    // Developer Mode or elevation there). The type is ignored on every other platform.
+    symlinkSync(real, link, 'junction');
     try {
       // Registry keys by the realpath'd root (what registerProject stores)…
       const sem = new WorkspaceSemaphore({

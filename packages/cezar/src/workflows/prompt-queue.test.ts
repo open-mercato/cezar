@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -8,6 +8,7 @@ import { PROMPT_QUEUE_MAX } from '@open-mercato/cezar-contract';
 import { RunStore, type RunRecord } from '../runs/store.ts';
 import { RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -62,7 +63,7 @@ describe('the session prompt queue', () => {
     // Windows that is EPERM rather than a silent success. Retried, and never the reason a case
     // fails: what is under test finished before this line.
     try {
-      rmSync(repoRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 150 });
+      await removeTempDir(repoRoot);
     } catch {
       /* a leftover temp folder is not a test failure */
     }

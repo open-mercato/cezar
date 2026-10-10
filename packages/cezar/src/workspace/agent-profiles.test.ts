@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, normalize, sep } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PROVIDER_IDS } from '../core/provider-auth.ts';
 import { agentAccountsPath } from '../paths.ts';
@@ -47,11 +47,11 @@ describe('agent profile resolution', () => {
 
   describe('defaultAgentProfile', () => {
     it('is whatever agentHomePaths discovers, per provider', () => {
-      expect(defaultAgentProfile('claude', env).path).toBe('/home/u/.claude');
-      expect(defaultAgentProfile('codex', env).path).toBe('/home/u/.codex');
-      expect(defaultAgentProfile('opencode', env).path).toBe('/home/u/.config/opencode');
-      expect(defaultAgentProfile('cursor', env).path).toBe('/home/u/.cursor');
-      expect(defaultAgentProfile('copilot', env).path).toBe('/home/u/.copilot');
+      expect(defaultAgentProfile('claude', env).path).toBe(normalize('/home/u/.claude'));
+      expect(defaultAgentProfile('codex', env).path).toBe(normalize('/home/u/.codex'));
+      expect(defaultAgentProfile('opencode', env).path).toBe(normalize('/home/u/.config/opencode'));
+      expect(defaultAgentProfile('cursor', env).path).toBe(normalize('/home/u/.cursor'));
+      expect(defaultAgentProfile('copilot', env).path).toBe(normalize('/home/u/.copilot'));
     });
 
     it('never hands one provider another vendor\'s home — the ternary chain\'s failure (#582)', () => {
@@ -60,7 +60,7 @@ describe('agent profile resolution', () => {
       // `pi` keeps that fallback, and only because it has no home of its own to point at.
       for (const provider of PROVIDER_IDS) {
         if (provider === 'claude' || provider === 'pi') continue;
-        expect(defaultAgentProfile(provider, env).path).not.toBe('/home/u/.claude');
+        expect(defaultAgentProfile(provider, env).path).not.toBe(normalize('/home/u/.claude'));
       }
     });
 
@@ -103,7 +103,7 @@ describe('agent profile resolution', () => {
       write({ accounts: [klaudiuszProfile] });
       const [, stored] = profilesForProvider(await loadAgentAccounts(), 'claude', env);
       expect(stored?.configDir).toBe('~/.claude-klaudiusz');
-      expect(stored?.path.endsWith('/.claude-klaudiusz')).toBe(true);
+      expect(stored?.path.endsWith(`${sep}.claude-klaudiusz`)).toBe(true);
       expect(stored?.path.startsWith('~')).toBe(false);
     });
   });

@@ -1,10 +1,11 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AutomationStore } from '../automations/store.ts';
 import { emitUsageForTest } from '../core/process-usage.ts';
 import { ProjectContextError, ProjectContexts, type ProjectContextSource } from './project-context.ts';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 
 /**
  * Lazy per-project context map (spec 2026-07-20-multi-project-workspace,
@@ -22,9 +23,9 @@ describe('ProjectContexts', () => {
     rootB = mkdtempSync(join(tmpdir(), 'cez-ctx-b-'));
   });
 
-  afterEach(() => {
-    rmSync(rootA, { recursive: true, force: true });
-    rmSync(rootB, { recursive: true, force: true });
+  afterEach(async () => {
+    await removeTempDir(rootA);
+    await removeTempDir(rootB);
   });
 
   function makeContexts(projects: ProjectContextSource[]): ProjectContexts {

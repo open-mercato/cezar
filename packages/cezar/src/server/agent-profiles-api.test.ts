@@ -1,7 +1,8 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 import type { AgentProfilesResponse, AgentProfileResponse } from '@open-mercato/cezar-contract';
 import { agentAccountsPath } from '../paths.ts';
 import { RunStore } from '../runs/store.ts';
@@ -58,9 +59,9 @@ describe('agent profiles API', () => {
     clearProjectProbeCache();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     store.flush();
-    for (const dir of [home, repoRoot]) rmSync(dir, { recursive: true, force: true });
+    await removeTempDir(home, repoRoot);
     for (const [key, value] of [
       ['CEZ_HOME', saved.home],
       ['CEZ_REMOTE', saved.remote],

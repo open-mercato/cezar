@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -8,6 +8,7 @@ import type { AgentEvent, AgentRunResult, AgentRunSpec } from '../core/agent-run
 import { RunStore } from '../runs/store.ts';
 import { RunManager } from './run.ts';
 import { DEFAULT_ALLOWED_TOOLS, type WorkflowDef } from './types.ts';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -109,7 +110,7 @@ describe('a resumed session keeps its workflow step tools', () => {
     // two; elsewhere the first attempt succeeds and the loop never waits.
     for (let attempt = 0; ; attempt++) {
       try {
-        rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+        await removeTempDir(repoRoot);
         break;
       } catch (err) {
         if (attempt >= 5) throw err;

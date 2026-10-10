@@ -134,9 +134,13 @@ describe('cezar home write safety', () => {
     delete env.CEZ_HOME;
     delete env.VITEST;
 
+    // `.bin/vitest` is a shell script (and a `.cmd` shim) on Windows, which `spawnSync` cannot
+    // execute without a shell — there, hand the same entry point to this node directly.
+    const windows = process.platform === 'win32';
+    const vitestEntry = join(packageRoot, '..', '..', 'node_modules', 'vitest', 'vitest.mjs');
     const run = spawnSync(
-      vitestBin,
-      ['run', 'src/workspace/projects-cli.test.ts', '--testTimeout=15', '-t', 'remove'],
+      windows ? process.execPath : vitestBin,
+      [...(windows ? [vitestEntry] : []), 'run', 'src/workspace/projects-cli.test.ts', '--testTimeout=15', '-t', 'remove'],
       { cwd: packageRoot, env, encoding: 'utf8' },
     );
 

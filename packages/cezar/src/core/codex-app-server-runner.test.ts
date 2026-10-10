@@ -60,6 +60,10 @@ describe('a teardown cezar initiated (codex app-server)', () => {
     expect(result.text).toBe('Checking the working tree.');
     expect(events.some((e) => e.type === 'error')).toBe(false);
     expect(events.at(-1)).toEqual({ type: 'done' });
+    // Windows has no signal handlers: `child.kill()` is TerminateProcess, so the mock never gets
+    // to exit 143 — the exit is `(null, 'SIGTERM')`. The teardown still settles cleanly (asserted
+    // above); only the 143 note is POSIX-only.
+    if (process.platform === 'win32') return;
     expect(
       events.some((e) => e.type === 'note' && e.message.includes('terminated by cezar (code 143)')),
     ).toBe(true);
@@ -80,6 +84,26 @@ describe('a teardown cezar initiated (codex app-server)', () => {
     expect(events).toContainEqual({ type: 'turn-end' });
   }, 15_000);
 });
+
+/**
+ * `rmSync(dir)` for a directory that is the cwd of a child we have just signalled. POSIX unlinks a
+ * live process's cwd, so the first attempt succeeds there and this is a plain `rmSync`. Windows
+ * refuses (EPERM/EBUSY) until the process is gone, so wait for it — SYNCHRONOUSLY, because the
+ * test needs the directory gone before the runner gets to observe the exit and emit `done`.
+ */
+function removeDirHeldByDyingChild(dir: string): void {
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (process.platform !== 'win32' || attempt >= 200 || (code !== 'EPERM' && code !== 'EBUSY')) throw error;
+      Atomics.wait(pause, 0, 0, 25);
+    }
+  }
+}
 
 describe('late Codex teardown events (#1105)', () => {
   const mockBin = fileURLToPath(
@@ -113,7 +137,7 @@ describe('late Codex teardown events (#1105)', () => {
       expect(session.sendMessage([{ type: 'text', text: 'Continue' }])).toBe(true);
       session.interrupt();
       store.flush();
-      rmSync(dir, { recursive: true, force: true });
+      removeDirHeldByDyingChild(dir);
 
       const resultError = await session.result.then(
         () => undefined,

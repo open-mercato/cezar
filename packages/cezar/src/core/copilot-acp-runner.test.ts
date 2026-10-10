@@ -190,10 +190,20 @@ describe('CopilotAcpRunner — session lifecycle', () => {
 
   it('cancel settles the turn as cancelled and leaves a usable result', async () => {
     const c = collect();
-    const session = new CopilotAcpRunner({ bin: MOCK }).startSession({ userPrompt: 'long job', cwd }, c.onEvent, {
-      onUiEvent: c.onUiEvent,
+    // Resolved straight from the event rather than polled: the mock's turn is only a 20 ms beat
+    // long, and a 10 ms poll loses that race on a coarse timer (Windows ticks at ~15.6 ms) — the
+    // turn then ends `end_turn` before the cancel is ever sent.
+    let sawTool: () => void = () => {};
+    const toolStarted = new Promise<void>((resolve) => {
+      sawTool = resolve;
     });
-    await waitFor(() => c.ui.some((e) => e.type === 'item.started' && e.item.kind === 'tool'));
+    const session = new CopilotAcpRunner({ bin: MOCK }).startSession({ userPrompt: 'long job', cwd }, c.onEvent, {
+      onUiEvent: (event) => {
+        c.onUiEvent(event);
+        if (event.type === 'item.started' && event.item.kind === 'tool') sawTool();
+      },
+    });
+    await toolStarted;
     session.interrupt();
     await session.result;
 

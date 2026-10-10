@@ -439,7 +439,9 @@ describe('readWorktreePath — Files tab browsing', () => {
     expect((await readWorktreePath(dir, '.git')).kind).toBe('invalid');
     expect((await readWorktreePath(dir, '.git/config')).kind).toBe('invalid');
     expect((await readWorktreePath(dir, 'a\0.txt')).kind).toBe('invalid');
-    symlinkSync('/etc', join(dir, 'link'));
+    // 'junction' here and below: a directory link an unprivileged Windows user may create (a true
+    // symlink needs Developer Mode or elevation there). The type is ignored on every other platform.
+    symlinkSync('/etc', join(dir, 'link'), 'junction');
     expect((await readWorktreePath(dir, 'link')).kind).toBe('invalid');
     expect((await readWorktreePath(dir, 'nope.txt')).kind).toBe('missing');
   });
@@ -448,7 +450,7 @@ describe('readWorktreePath — Files tab browsing', () => {
     // A secret file outside the worktree, reached via a symlinked directory inside it.
     const outside = mkdtempSync(join(tmpdir(), 'cez-secret-'));
     writeFileSync(join(outside, 'credentials.txt'), 'SECRET\n');
-    symlinkSync(outside, join(dir, 'linkdir'));
+    symlinkSync(outside, join(dir, 'linkdir'), 'junction');
 
     // Before the fix this returned the file's contents from OUTSIDE the worktree.
     const viaLink = await readWorktreePath(dir, 'linkdir/credentials.txt');

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { clearProjectProbeCache, listProjects, registerProject } from '../workspace/projects.ts';
@@ -92,10 +93,10 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     contexts.disposeAll();
     store.flush();
-    for (const dir of [home, repoRoot, otherRoot]) rmSync(dir, { recursive: true, force: true });
+    await removeTempDir(home, repoRoot, otherRoot);
     if (savedHome === undefined) delete process.env.CEZ_HOME;
     else process.env.CEZ_HOME = savedHome;
     if (savedRemote === undefined) delete process.env.CEZ_REMOTE;

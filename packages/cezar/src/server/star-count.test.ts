@@ -217,6 +217,6 @@ describe('star count — the reader', () => {
   });
 
   it('caches under the global ~/.cache/cez directory, like every other cezar cache', () => {
-    expect(starCachePath('/home/someone')).toBe('/home/someone/.cache/cez/star-count.json');
+    expect(starCachePath('/home/someone')).toBe(join('/home/someone', '.cache', 'cez', 'star-count.json'));
   });
 });

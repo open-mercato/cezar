@@ -13,6 +13,9 @@ describe('timestamped process telemetry', () => {
   it('records sampling time, not time a cached sample is requested', async () => {
     const usage = await import('./process-usage.ts');
     expect(usage).toHaveProperty('currentTimedUsage');
+    // This case is about a measured CPU figure — the posix shape; pin it rather than inherit the host
+    // (on Windows CPU is unmeasured by design, which the last case covers the same way).
+    vi.stubGlobal('process', Object.create(process, { platform: { value: 'linux' } }));
     answer('100 1 2048 125\n'); usage.registerRunProcess('a', 100); await tick();
     expect(usage.currentTimedUsage('a')).toEqual({ sampledAt: '2026-09-18T00:00:00.000Z', cpuPct: 125, rssBytes: 2097152, procCount: 1 });
     answer(null); await vi.advanceTimersByTimeAsync(12_000);

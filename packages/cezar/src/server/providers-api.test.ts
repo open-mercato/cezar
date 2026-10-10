@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 import {
   PROVIDER_IDS,
   ProviderAuthService,
@@ -112,9 +113,9 @@ describe('workspace provider API', () => {
     delete process.env.CEZ_REMOTE;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     store.flush();
-    rmSync(root, { recursive: true, force: true });
+    await removeTempDir(root);
     if (savedModelsLocked === undefined) delete process.env.CEZ_AGENT_MODELS_LOCKED;
     else process.env.CEZ_AGENT_MODELS_LOCKED = savedModelsLocked;
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
@@ -506,7 +507,7 @@ describe('workspace provider API', () => {
     } finally {
       recover.mockRestore();
       contexts.disposeAll();
-      rmSync(lazyRoot, { recursive: true, force: true });
+      await removeTempDir(lazyRoot);
     }
   });
 

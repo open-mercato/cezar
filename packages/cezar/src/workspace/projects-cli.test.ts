@@ -116,7 +116,9 @@ describe('cezar projects CLI', () => {
     it('dedupes a symlinked spelling and says the project is already registered', async () => {
       const root = makeRepo('web');
       const link = join(repos, 'web-link');
-      symlinkSync(root, link);
+      // 'junction': a directory link an unprivileged Windows user may create (a true symlink needs
+      // Developer Mode or elevation there). The type is ignored on every other platform.
+      symlinkSync(root, link, 'junction');
       await run('add', root);
       expect(await run('add', link)).toBe(0);
       expect(io.out.join('\n')).toContain('= web (already registered)');

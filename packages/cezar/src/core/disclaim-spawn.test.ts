@@ -1,6 +1,6 @@
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { DISCLAIM_EXEC_FLAG, disclaimedCommand } from './disclaim-spawn.ts';
 
@@ -19,8 +19,11 @@ const darwin = { platform: 'darwin' as const, hostEnv: { CEZ_DISCLAIM_EXEC: tram
 
 describe('disclaimedCommand', () => {
   it('routes an agent through the desktop trampoline, resolved on the child PATH', () => {
-    expect(disclaimedCommand('claude', ['-p', 'x'], { PATH: `/nowhere:${dir}` }, darwin))
+    // The host's PATH delimiter (`:` on posix, exactly as before) so the lookup also runs on Windows.
+    expect(disclaimedCommand('claude', ['-p', 'x'], { PATH: ['/nowhere', dir].join(delimiter) }, darwin))
       .toEqual([trampoline, [DISCLAIM_EXEC_FLAG, claude, '-p', 'x']]);
+    // An absolute program is recognized by its `/` — a macOS path; a Windows `C:\…` path has none.
+    if (process.platform === 'win32') return;
     expect(disclaimedCommand(claude, [], {}, darwin)).toEqual([trampoline, [DISCLAIM_EXEC_FLAG, claude]]);
   });
 

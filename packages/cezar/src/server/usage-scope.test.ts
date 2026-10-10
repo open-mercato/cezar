@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
@@ -10,6 +10,7 @@ import { clearProjectProbeCache, listProjects, registerProject } from '../worksp
 import { ProjectContexts } from './project-context.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { createApp } from './server.ts';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 
 /**
  * Per-project `usage` SSE scoping (spec 2026-07-20-multi-project-workspace,
@@ -66,7 +67,7 @@ describe('usage SSE fan-out is scoped per project', () => {
     for (const close of closers.splice(0)) await close().catch(() => undefined);
     contexts.disposeAll();
     store.flush();
-    for (const dir of [home, repoRoot, otherRoot]) rmSync(dir, { recursive: true, force: true });
+    await removeTempDir(home, repoRoot, otherRoot);
     if (savedHome === undefined) delete process.env.CEZ_HOME;
     else process.env.CEZ_HOME = savedHome;
     if (savedRemote === undefined) delete process.env.CEZ_REMOTE;

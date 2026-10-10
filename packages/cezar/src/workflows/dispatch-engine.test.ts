@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PENDING_ASK_MAX_QUESTIONS, type DispatchInput, type RunDispatch } from '@open-mercato/cezar-contract';
 import { runRecordSchema, RunStore, type RunRecord } from '../runs/store.ts';
 import { WorkspaceSemaphore, type WorkspaceResourceLimits } from '../workspace/semaphore.ts';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 import { RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
 
@@ -70,7 +71,7 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       else process.env[key] = value;
     }
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await removeTempDir(repoRoot);
   });
 
   /** A manager with its own semaphore, so a test can decide how much of the tree may run. */

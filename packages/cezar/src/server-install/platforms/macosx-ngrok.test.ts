@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { expectOwnerOnlyMode } from '../../private-mode.testkit.ts';
 import { cezarLaunchdPlist, launchdPlist, macosxNgrok, macosxNgrokIdentityStep } from './macosx-ngrok.ts';
 import { availablePlatformIds, getStrategy } from '../strategies.ts';
 import { runInstall, runUninstall } from '../engine.ts';
@@ -137,11 +138,18 @@ describe('macosx-ngrok', () => {
 describe('macosx-ngrok review fixes (PR #423)', () => {
   let home: string;
   const original = process.env.CEZ_HOME;
+  const originalUserProfile = process.env.USERPROFILE;
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), 'cez-mac-fix-'));
     process.env.CEZ_HOME = home;
+    // These steps write and remove `~/Library/LaunchAgents/*.plist` through `os.homedir()`. The
+    // cases below redirect it with HOME, which Windows ignores — it reads USERPROFILE — so there
+    // they wrote the plist into, and `undo` deleted it from, the developer's REAL home.
+    if (process.platform === 'win32') process.env.USERPROFILE = home;
   });
   afterEach(() => {
+    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = originalUserProfile;
     if (original === undefined) delete process.env.CEZ_HOME;
     else process.env.CEZ_HOME = original;
     rmSync(home, { recursive: true, force: true });
@@ -209,8 +217,7 @@ describe('macosx-ngrok review fixes (PR #423)', () => {
     try {
       await ngrokStepOf().run(ctxFor(runner));
       const p = join(home, 'Library', 'LaunchAgents', 'ai.cezar.ngrok.plist');
-      const mode = statSync(p).mode & 0o777;
-      expect(mode).toBe(0o600);
+      expectOwnerOnlyMode(p);
       expect(readFileSync(p, 'utf8')).toContain('ops:longenough'); // creds live here → hence 0600
     } finally {
       if (oldHome === undefined) delete process.env.HOME;

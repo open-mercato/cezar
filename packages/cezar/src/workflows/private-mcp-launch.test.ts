@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -9,6 +9,7 @@ import { privateMcpPath } from '../core/private-mcp.ts';
 import { RunStore } from '../runs/store.ts';
 import { RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -69,7 +70,7 @@ describe('private MCP servers at launch', () => {
     manager?.dispose();
     manager = undefined;
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await removeTempDir(repoRoot);
   });
 
   function writePrivateMcp(servers: Record<string, unknown>): void {

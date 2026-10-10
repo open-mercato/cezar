@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -13,6 +13,7 @@ import {
   RunManager,
 } from './run.ts';
 import type { WorkflowDef } from './types.ts';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -98,7 +99,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
     // is safer than recreating the ENOENT race this test guards against.
     if (!teardownError) {
       store.flush();
-      rmSync(repoRoot, { recursive: true, force: true });
+      await removeTempDir(repoRoot);
     }
     if (teardownError) throw teardownError;
   });

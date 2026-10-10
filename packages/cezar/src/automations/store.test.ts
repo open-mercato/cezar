@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { expectOwnerOnlyMode } from '../private-mode.testkit.ts';
 import { AutomationStore } from './store.ts';
 
 const dirs: string[] = [];
@@ -43,9 +44,7 @@ describe('AutomationStore', () => {
     const persisted = JSON.parse(readFileSync(path, 'utf8'));
     expect(persisted.future).toEqual({ kept: true });
     expect(persisted.automations[0].futureDefinition).toBe(true);
-    expect((await import('node:fs/promises')).stat(path).then((stat) => stat.mode & 0o777)).resolves.toBe(
-      0o600,
-    );
+    expectOwnerOnlyMode(path);
   });
 
   it('salvages valid entries and malformed NDJSON rows with one warning per file', async () => {

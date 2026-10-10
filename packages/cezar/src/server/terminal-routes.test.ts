@@ -253,6 +253,12 @@ describe('the workspace terminal routes', () => {
       try {
         const res = await apiRequest(makeApp(), `/api/v1/runs/${runId}/terminal/${session.id}`, { method: 'DELETE' });
         expect(res.status).toBe(200);
+        if (process.platform === 'win32') {
+          // No process groups on Windows: the binding's own kill is the documented path there.
+          expect(kill).not.toHaveBeenCalled();
+          expect(ptys[0]!.killed).toBe(1);
+          return;
+        }
         // The whole process group, so what the shell started dies with it.
         expect(kill).toHaveBeenCalledWith(-777, 'SIGHUP');
       } finally {

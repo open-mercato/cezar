@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,6 +7,7 @@ import { agentAccountsPath } from '../paths.ts';
 import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
 import { registerProject } from '../workspace/projects.ts';
 import { RunManager } from './run.ts';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 
 /**
  * Which agent account a STEP spawns under (spec 2026-07-29-agent-profiles).
@@ -41,9 +42,9 @@ describe('RunManager agent-profile resolution', () => {
     await registerProject(repoRoot);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     store.flush();
-    for (const dir of [home, repoRoot]) rmSync(dir, { recursive: true, force: true });
+    await removeTempDir(home, repoRoot);
     if (savedHome === undefined) delete process.env.CEZ_HOME;
     else process.env.CEZ_HOME = savedHome;
   });

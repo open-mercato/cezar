@@ -26,11 +26,17 @@ describe('resolveShell', () => {
   });
 });
 
+/** What this host calls its default. Windows answers from `ComSpec` and never from `SHELL`: Git
+ *  Bash exports `SHELL` into every child, so a suite started from it would otherwise expect
+ *  `bash.exe` from a discovery that (correctly) reports `cmd.exe`. */
+const HOST_DEFAULT =
+  process.platform === 'win32' ? (process.env.ComSpec ?? 'cmd.exe') : (process.env.SHELL ?? '/bin/bash');
+
 describe('discoverShells', () => {
   it('always offers at least the host default, first', () => {
     const shells = discoverShells();
     expect(shells.length).toBeGreaterThan(0);
-    expect(shells[0]).toBe(process.env.SHELL ?? (process.platform === 'win32' ? process.env.ComSpec ?? 'cmd.exe' : '/bin/bash'));
+    expect(shells[0]).toBe(HOST_DEFAULT);
   });
 
   it('never repeats one', () => {
@@ -44,7 +50,7 @@ describe('discoverShells', () => {
     const shells = discoverShells(() => {
       throw new Error('ENOENT');
     });
-    expect(shells).toEqual([process.env.SHELL ?? '/bin/bash']);
+    expect(shells).toEqual([HOST_DEFAULT]);
   });
 
   it('reads the host list, keeps order, and drops comments and blanks', () => {
@@ -52,6 +58,6 @@ describe('discoverShells', () => {
     // `/nope/not-here` does not exist, so it is not offered — the list is what this host can
     // actually open, not what the file claims.
     expect(shells).not.toContain('/nope/not-here');
-    expect(shells[0]).toBe(process.env.SHELL ?? '/bin/bash');
+    expect(shells[0]).toBe(HOST_DEFAULT);
   });
 });

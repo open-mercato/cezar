@@ -114,6 +114,10 @@ describe('JunieRunner against the mock ACP process', () => {
     expect(result.text).toBe('Working on it.');
     expect(events.some((e) => e.type === 'error')).toBe(false);
     expect(events.at(-1)).toEqual({ type: 'done' });
+    // Windows has no signal handlers: `child.kill()` is TerminateProcess, so the mock never gets
+    // to exit 143 — the exit is `(null, 'SIGTERM')`. The teardown still settles cleanly (asserted
+    // above); only the 143 note is POSIX-only.
+    if (process.platform === 'win32') return;
     expect(
       events.some((e) => e.type === 'note' && e.message.includes('terminated by cezar (code 143)')),
     ).toBe(true);

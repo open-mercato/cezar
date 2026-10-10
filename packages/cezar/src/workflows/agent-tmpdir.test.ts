@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -7,6 +7,7 @@ import { RunStore } from '../runs/store.ts';
 import { AgentTempDirError, agentTmpDir } from '../runs/agent-tmpdir.ts';
 import { registerProject } from '../workspace/projects.ts';
 import { RunManager, agentDirectories } from './run.ts';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 
 /**
  * #785 wiring: the per-run temp directory has to reach the SPAWN, be gone when
@@ -45,9 +46,9 @@ describe('RunManager — task-scoped agent TMPDIR (#785)', () => {
     await registerProject(repoRoot);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     store.flush();
-    for (const dir of [home, repoRoot]) rmSync(dir, { recursive: true, force: true });
+    await removeTempDir(home, repoRoot);
     if (savedHome === undefined) delete process.env.CEZ_HOME;
     else process.env.CEZ_HOME = savedHome;
   });

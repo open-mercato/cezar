@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -8,6 +8,7 @@ import { RunStore, type RunRecord } from '../runs/store.ts';
 import { RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -17,6 +18,7 @@ describe('CEZ:MONITORING on a non-final workflow step (#1076)', () => {
   let store: RunStore;
   let manager: RunManager;
   let currentId: string | undefined;
+  let orphanedAgentPid: number | undefined;
   const savedDryRun = process.env.CEZ_DRY_RUN;
 
   const workflow: WorkflowDef = {
@@ -40,13 +42,21 @@ describe('CEZ:MONITORING on a non-final workflow step (#1076)', () => {
     currentId = undefined;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (currentId) manager.cancel(currentId);
     manager.dispose();
+    // The restart case abandons its first manager with the agent still running, as a real restart
+    // would — except that a real restart takes the agent down with the server. Here it lives on,
+    // owned by nobody, with the repository as its cwd, and Windows cannot remove a directory in
+    // that state. POSIX can, so the orphan is left exactly as it always was there.
+    if (process.platform === 'win32' && orphanedAgentPid !== undefined) {
+      try { process.kill(orphanedAgentPid); } catch { /* already gone */ }
+    }
+    orphanedAgentPid = undefined;
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   });
 
   const waitFor = async (id: string, predicate: (record: RunRecord | undefined) => boolean) => {
@@ -117,6 +127,8 @@ describe('CEZ:MONITORING on a non-final workflow step (#1076)', () => {
     currentId = record.id;
     await waitFor(record.id, (current) => current?.activity === 'monitoring');
 
+    orphanedAgentPid = (manager as unknown as { active: Map<string, { session?: { pid?: number } }> })
+      .active.get(record.id)?.session?.pid;
     manager.dispose();
     store.flush();
     const reopened = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });

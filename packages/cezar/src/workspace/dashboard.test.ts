@@ -385,7 +385,9 @@ it('keeps cold live records as observations without inventing recent failures', 
   } finally { reader.dispose(); }
 });
 
-it('refreshes cold root access failures after permissions recover without index changes', async () => {
+// Windows has no directory permission bits: `chmod 0300` leaves the root readable there, so the
+// access failure this case recovers from cannot be produced.
+it.skipIf(process.platform === 'win32')('refreshes cold root access failures after permissions recover without index changes', async () => {
   const p = root();
   disk(p, [record('review', 'review')]);
   chmodSync(p, 0o300);

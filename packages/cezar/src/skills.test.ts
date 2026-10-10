@@ -149,7 +149,9 @@ describe('discoverSkills local entrypoints', () => {
     await mkdir(canonicalDir, { recursive: true });
     await mkdir(mirrorRoot, { recursive: true });
     await writeFile(join(canonicalDir, 'SKILL.md'), '# Example skill');
-    await symlink('../../.agents/skills/om-example', join(mirrorRoot, 'om-example'), 'dir');
+    // 'junction': a directory link an unprivileged Windows user may create (a true symlink needs
+    // Developer Mode or elevation there). The type is ignored on every other platform.
+    await symlink('../../.agents/skills/om-example', join(mirrorRoot, 'om-example'), 'junction');
 
     const skills = (await discoverSkills(repoRoot)).filter((skill) => skill.name === 'om-example');
 

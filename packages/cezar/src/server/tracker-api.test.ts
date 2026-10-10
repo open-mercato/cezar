@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 import {
   trackerCandidatesResponseSchema, trackerAssociationResponseSchema, trackerItemsResponseSchema,
   trackerItemResponseSchema, trackerChangedEventSchema,
@@ -23,7 +24,7 @@ describe('tracker API boundaries and isolation', () => {
     mkdirSync(join(root, '.ai/cezar'), { recursive: true });
     store = RunStore.open(join(root, '.ai/cezar'));
   });
-  afterEach(() => { store.flush(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); rmSync(root, { recursive: true, force: true }); });
+  afterEach(async () => { store.flush(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); await removeTempDir(root); });
   const app = (workspaceEvents?: WorkspaceEventBus) => createApp({
     repoRoot: root, store, manager: {} as RunManager, version: 'test', workspaceEvents,
   });
@@ -196,5 +197,5 @@ it('keeps credential HTTP responses write-only and aliases connection routes to 
     expect((await apiRequest(instance, '/api/v1/tracker/connection', { method: 'DELETE' })).status).toBe(200);
     expect(await (await apiRequest(instance, '/api/v1/tracker/connection')).json()).toEqual({ connection: null, demo: false });
     expect(fetcher).not.toHaveBeenCalled();
-  } finally { store.flush(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); rmSync(root, { recursive: true, force: true }); }
+  } finally { store.flush(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); await removeTempDir(root); }
 });

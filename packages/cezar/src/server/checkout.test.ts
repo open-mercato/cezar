@@ -112,7 +112,10 @@ describe('checkout — GitHub transport', () => {
 });
 
 describe('checkout — persisted GitHub credentials', () => {
-  it('leaves HTTPS origin and a local helper usable from task worktrees', async () => {
+  // The gh stand-in is a `#!/bin/sh` script on a `:`-separated PATH. `spawn('gh')` runs without a
+  // shell, so on Windows it resolves only a real `gh.exe` — the script can never substitute it
+  // there (and the case would reach the user's real gh, and through it the network).
+  it.skipIf(process.platform === 'win32')('leaves HTTPS origin and a local helper usable from task worktrees', async () => {
     const root = mkdtempSync(join(realpathSync(tmpdir()), 'cez-credentials-'));
     const bin = join(root, 'bin');
     const repo = join(root, 'repo');
@@ -190,8 +193,10 @@ describe('checkout — the cleanup guard', () => {
     writeFileSync(join(insideVictim, 'precious.txt'), 'keep me', 'utf8');
     const linkOut = join(root, 'repo');
     const linkIn = join(root, 'repo2');
-    symlinkSync(victim, linkOut);
-    symlinkSync(insideVictim, linkIn);
+    // 'junction': a directory link an unprivileged Windows user may create (a true symlink needs
+    // Developer Mode or elevation there). The type is ignored on every other platform.
+    symlinkSync(victim, linkOut, 'junction');
+    symlinkSync(insideVictim, linkIn, 'junction');
     try {
       expect(await cleanupCheckout(root, linkOut)).toBe(false);
       expect(await cleanupCheckout(root, linkIn)).toBe(false);

@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { removeTempDir } from './test-fixtures/remove-temp-dir.testkit.ts';
 import {
   branchFor,
   chooseForkBase,
@@ -31,14 +32,19 @@ async function fixtureRepo(prefix: string): Promise<string> {
   return root;
 }
 
-afterEach(() => {
-  // `maxRetries` is the point: git detaches background maintenance after a clone or a
+// Real git on Windows costs a process spawn of ~100 ms per command, and these fixtures run
+// dozens of them: the file takes ~45 s alone there and single cases cross vitest's 5 s default
+// as soon as other suites share the machine. Linux and macOS keep the default.
+if (process.platform === 'win32') vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
+
+afterEach(async () => {
+  // Retrying is the point: git detaches background maintenance after a clone or a
   // commit, so a fixture's `.git` can still gain files while the removal walks it, and the
   // rmdir fails with ENOTEMPTY. It is load-dependent — this teardown reddened CI while
-  // passing locally every time. Retrying lets the stray writer finish instead.
-  for (const root of worktreeRoots.splice(0)) {
-    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
-  }
+  // passing locally every time. Retrying lets the stray writer finish instead. On Windows the
+  // same helper also waits out a git child whose cwd is still the fixture (EPERM), which
+  // `rmSync`'s own `maxRetries` does not do there.
+  await removeTempDir(...worktreeRoots.splice(0));
 });
 
 describe('parseShortstat', () => {
@@ -160,8 +166,8 @@ describe('worktreeShortstat (real git)', () => {
     await run('git', ['checkout', '-q', '-b', 'work'], { cwd: repo });
   });
 
-  afterAll(() => {
-    rmSync(repo, { recursive: true, force: true });
+  afterAll(async () => {
+    await removeTempDir(repo);
   });
 
   it('counts modified + untracked (intent-to-add) files against the base', async () => {

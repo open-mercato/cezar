@@ -21,6 +21,8 @@ import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { parseTaskMarkers } from '../runs/task-markers.ts';
 import { appendTurnText, endsWithMonitoringMarker, RunManager, turnEndMarkerText } from './run.ts';
 import type { WorkflowDef } from './types.ts';
+import '../test-fixtures/no-real-namer.testkit.ts';
+import { removeTempDir, stopRuns } from '../test-fixtures/remove-temp-dir.testkit.ts';
 
 type UsageAccountingHarness = {
   beginUsageInvocation(runId: string, state: Record<string, unknown>, stepId: string): void;
@@ -88,10 +90,10 @@ describe('RunManager directional usage accounting', () => {
     internal = manager as unknown as UsageAccountingHarness;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     manager.dispose(); // see DISPOSE at the top of this file
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   });
 
   function fixture() {
@@ -225,7 +227,7 @@ describe('RunManager directional usage accounting', () => {
   });
 });
 
-it('parallel variants ignore a worktree opt-out and retain isolated mode', () => {
+it('parallel variants ignore a worktree opt-out and retain isolated mode', async () => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'cez-variant-isolation-'));
   const store = RunStore.open(join(repoRoot, '.ai/cezar'));
   try {
@@ -246,7 +248,7 @@ it('parallel variants ignore a worktree opt-out and retain isolated mode', () =>
     expect(records.map((record) => record.worktree)).toEqual([undefined, undefined]);
   } finally {
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   }
 });
 
@@ -281,10 +283,10 @@ describe('RunManager.recordTurnEnd', () => {
     manager = new RunManager(store, repoRoot);
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     manager.dispose(); // see DISPOSE at the top of this file
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   });
 
   /** A run with a real worktree forked off main, holding an edit + a new file. */
@@ -446,10 +448,10 @@ describe('RunManager.continueRun override', () => {
     (manager as unknown as { runContinuation: () => Promise<void> }).runContinuation = async () => {};
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     manager.dispose(); // see DISPOSE at the top of this file
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   });
 
   /** A finished run with a resumable session on the `claude`/`sonnet` backend. */
@@ -700,9 +702,9 @@ describe('RunManager.settleSuccess — optional review gate', () => {
     manager = new RunManager(store, repoRoot);
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
     if (savedGate === undefined) delete process.env.CEZ_REVIEW_GATE;
     else process.env.CEZ_REVIEW_GATE = savedGate;
     if (savedAutoname === undefined) delete process.env.CEZ_AUTONAME;
@@ -801,14 +803,14 @@ describe('a chain of 2 selected skills runs BOTH steps, in order (#410)', () => 
     manager = new RunManager(store, repoRoot);
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     manager.dispose(); // see DISPOSE at the top of this file
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   });
 
   it('runs both skill steps to completion, and the second step\'s prompt carries the chain guard', async () => {
@@ -891,14 +893,14 @@ describe('a single agent step plus a check step gets NO chain note (#410)', () =
     manager = new RunManager(store, repoRoot);
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     manager.dispose(); // see DISPOSE at the top of this file
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   });
 
   it("leaves the lone agent step's prompt untouched", async () => {
@@ -971,7 +973,7 @@ describe('CEZ:MONITORING parks as running/monitoring, not waiting (#490)', () =>
     currentId = undefined;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (currentId) manager.cancel(currentId); // release the session + repo lock
     manager.dispose(); // see DISPOSE at the top of this file — after the cancel it enables
     for (const [key, value] of Object.entries(savedEnv)) {
@@ -979,7 +981,7 @@ describe('CEZ:MONITORING parks as running/monitoring, not waiting (#490)', () =>
       else process.env[key] = value;
     }
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   });
 
   const waitFor = async (id: string, pred: (r: RunRecord | undefined) => boolean, ms = 15_000) => {
@@ -1189,7 +1191,7 @@ describe('a turn that parks on its sub-agents while declaring its PR is not "nee
     currentId = undefined;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (currentId) manager.cancel(currentId);
     manager.dispose();
     for (const [key, value] of Object.entries(savedEnv)) {
@@ -1197,7 +1199,7 @@ describe('a turn that parks on its sub-agents while declaring its PR is not "nee
       else process.env[key] = value;
     }
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   });
 
   const waitFor = async (id: string, pred: (r: RunRecord | undefined) => boolean, ms = 15_000) => {
@@ -1313,7 +1315,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     currentId = undefined;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (currentId) manager.cancel(currentId);
     manager.dispose(); // see DISPOSE at the top of this file — after the cancel it enables
     for (const [key, value] of Object.entries(savedEnv)) {
@@ -1321,7 +1323,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       else process.env[key] = value;
     }
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   });
 
   const waitFor = async (id: string, pred: (r: RunRecord | undefined) => boolean, ms = 15_000) => {
@@ -1824,7 +1826,10 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(store.getRun(record.id)?.status).toBe('cancelled');
   });
 
-  it('keeps a live hanging session counted until interrupt teardown, then reaps it', async () => {
+  // The stub ignores SIGTERM so the cancel has to escalate to SIGKILL. Windows has no signals to
+  // ignore: `kill('SIGTERM')` there IS the unconditional TerminateProcess, so the grace window
+  // this case observes cannot exist.
+  it.skipIf(process.platform === 'win32')('keeps a live hanging session counted until interrupt teardown, then reaps it', async () => {
     const record = store.createRun({
       title: 'hanging session',
       workflow: 'quick-task',
@@ -2168,9 +2173,9 @@ describe('recover() over a mid-workflow ask park (#917)', () => {
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   });
 
   /** A two-step run persisted exactly as a park leaves it on disk. */
@@ -2290,9 +2295,9 @@ describe('RunManager.persistAttachment without a session (#472)', () => {
     manager = new RunManager(store, repoRoot);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     manager.dispose(); // see DISPOSE at the top of this file
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   });
 
   it('persists two attachments with no ActiveRun and gives them distinct names', () => {
@@ -2376,9 +2381,9 @@ describe('RunManager queued-stack mutators (#472)', () => {
     manager = new RunManager(store, repoRoot);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     manager.dispose(); // see DISPOSE at the top of this file
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   });
 
   it('appends messages in order while queued', () => {
@@ -2687,9 +2692,9 @@ describe('RunManager.hydrateQueuedInput (#472)', () => {
     manager = new RunManager(store, repoRoot);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     manager.dispose(); // see DISPOSE at the top of this file
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   });
 
   it('folds the task and every stacked message, in order, blank-line joined', () => {
@@ -2843,14 +2848,16 @@ describe('queued stacking reaches the backend (#472)', () => {
     manager = new RunManager(store, repoRoot);
   });
 
-  afterAll(() => {
-    manager.dispose(); // see DISPOSE at the top of this file
+  afterAll(async () => {
+    // Both runs end parked at `waiting` — live agent processes inside the repository. End them,
+    // then dispose (see DISPOSE at the top of this file).
+    await stopRuns(manager, store);
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   });
 
   it('delivers the task plus every stacked message, with the edit applied', async () => {
@@ -2907,13 +2914,24 @@ describe('recover() carries the queued stack exactly once (#472)', () => {
     steps: [{ id: 'task', name: 'Do the task', prompt: '{{task}}' }],
   };
 
+  const managers: RunManager[] = [];
+  const savedClaudeBin = process.env.CEZ_CLAUDE_BIN;
+
   beforeEach(() => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-recover-'));
     store = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });
+    // recover() re-queues a real run, and nothing here is a dry run: once the pump gets to it the
+    // engine spawns the default backend. That must never be the developer's installed `claude`
+    // (a real agent session in a temp repository, and a process holding it open) — a binary that
+    // does not exist fails the spawn at once, which is what CI, having no `claude`, always did.
+    process.env.CEZ_CLAUDE_BIN = join(repoRoot, 'no-such-claude');
   });
 
-  afterEach(() => {
-    rmSync(repoRoot, { recursive: true, force: true });
+  afterEach(async () => {
+    for (const manager of managers.splice(0)) manager.dispose(); // see DISPOSE at the top of this file
+    if (savedClaudeBin === undefined) delete process.env.CEZ_CLAUDE_BIN;
+    else process.env.CEZ_CLAUDE_BIN = savedClaudeBin;
+    await removeTempDir(repoRoot);
   });
 
   it('folds once across repeated recoveries', async () => {
@@ -2933,6 +2951,7 @@ describe('recover() carries the queued stack exactly once (#472)', () => {
     // Two successive restarts, each re-adopting the same record.
     for (let restart = 0; restart < 2; restart += 1) {
       const manager = new RunManager(store, repoRoot);
+      managers.push(manager);
       // Keep the run parked in the queue: recover() pushes and pumps, but with the
       // job still pending we can read exactly what it rebuilt.
       await manager.recover();
@@ -2968,13 +2987,13 @@ describe('native Codex requestUserInput parks and resumes the run (#565)', () =>
     manager = new RunManager(store, repoRoot);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (runId) manager.cancel(runId);
     manager.dispose(); // see DISPOSE at the top of this file — after the cancel it enables
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN; else process.env.CEZ_DRY_RUN = savedDryRun;
     if (savedCodexBin === undefined) delete process.env.CEZ_CODEX_BIN; else process.env.CEZ_CODEX_BIN = savedCodexBin;
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   });
 
   const waitFor = async (predicate: () => boolean, ms = 15_000) => {
@@ -3054,7 +3073,7 @@ describe('a context-compaction boundary keeps the run working (#955)', () => {
       if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN; else process.env.CEZ_DRY_RUN = savedDryRun;
       if (savedCodexBin === undefined) delete process.env.CEZ_CODEX_BIN; else process.env.CEZ_CODEX_BIN = savedCodexBin;
       store.flush();
-      rmSync(repoRoot, { recursive: true, force: true });
+      await removeTempDir(repoRoot);
     }
   });
 
@@ -3245,13 +3264,13 @@ describe('registry /skill expansion survives a continuation (#811)', () => {
     runId = undefined;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (runId) manager.cancel(runId);
     manager.dispose(); // see DISPOSE at the top of this file — after the cancel it enables
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   });
 
   const eventsOf = (id: string) =>
@@ -3329,7 +3348,7 @@ describe('registry /skill expansion survives a continuation (#811)', () => {
     // conversation, so the next Continue must not try to `--resume` it.
     const id = await finishedRun();
     const tmp = join(repoRoot, '.ai/cezar/tmp');
-    rmSync(tmp, { recursive: true, force: true });
+    await removeTempDir(tmp);
     writeFileSync(tmp, 'not a directory', 'utf8');
     expect(manager.continueRun(id, { runner: 'codex' })).toEqual({ ok: true });
     await waitFor(() => store.getRun(id)?.status === 'failed');
@@ -3406,12 +3425,12 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
     runId = undefined;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (runId) manager.cancel(runId);
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   });
 
   // Tolerant of the pre-first-event window: the run's ndjson does not exist until

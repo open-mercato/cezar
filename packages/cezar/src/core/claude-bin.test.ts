@@ -126,11 +126,13 @@ describe.skipIf(process.platform === 'win32')('resolveClaudeBin', () => {
 
 describe('claudeInstallCandidates', () => {
   it('covers the native installer, the legacy local install, npm global, and Homebrew on posix', () => {
+    // The home- and node-relative candidates are built with the HOST's `join` — identical to the
+    // literals they replace on posix — so spelling them the same way also holds on a Windows host.
     expect(claudeInstallCandidates('/home/u', 'linux', '/nvm/v22/bin')).toEqual([
-      '/home/u/.local/bin/claude',
-      '/home/u/.claude/local/claude',
-      '/nvm/v22/bin/claude',
-      '/home/u/.npm-global/bin/claude',
+      join('/home/u', '.local', 'bin', 'claude'),
+      join('/home/u', '.claude', 'local', 'claude'),
+      join('/nvm/v22/bin', 'claude'),
+      join('/home/u', '.npm-global', 'bin', 'claude'),
       '/opt/homebrew/bin/claude',
       '/usr/local/bin/claude',
       '/usr/bin/claude',

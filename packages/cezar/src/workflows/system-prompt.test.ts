@@ -17,6 +17,7 @@ import {
   resolveExtraSystemPrompt,
   skillSystemPrompt,
 } from './run.ts';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -100,7 +101,9 @@ describe('skill-aware task naming (#432)', () => {
  * (`--append-system-prompt`, captured via the mock's CEZ_MOCK_ARGS_FILE hook)
  * and be echoed on the RunRecord.
  */
-describe('systemPrompt end-to-end (dry run)', () => {
+// One whole run — worktree, mock agent, `bash -lc` check — takes ~4 s on Windows with nothing else
+// running (measured 4.0–4.9 s), which leaves the default 5 s no margin at all.
+describe('systemPrompt end-to-end (dry run)', { timeout: 30_000 }, () => {
   const CONFIG_PROMPT = 'CONFIG-DEFAULT: always write tests first.';
   const OVERRIDE_PROMPT = 'PER-RUN OVERRIDE: answer in bullet points.';
   const SKILL_DESCRIPTION = 'Review a pull request by number and report actionable findings.';
@@ -171,13 +174,13 @@ describe('systemPrompt end-to-end (dry run)', () => {
     });
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   });
 
   // Agent step + trailing check so the agent step is non-interactive — the
@@ -208,7 +211,10 @@ describe('systemPrompt end-to-end (dry run)', () => {
     writeFileSync(argsFile, '', 'utf8'); // fresh capture per run
     const record = manager.startRun(selectedWorkflow, input);
     const terminal = new Set(['done', 'review', 'failed', 'cancelled']);
-    const deadline = Date.now() + 20_000;
+    // The cap is 1 and earlier cases leave their runs to finish on their own, so this run can sit
+    // behind several of them: 15.7 s on Windows for `mock:refs` with nothing else running. The
+    // case's own timeout is the real bound; this only has to stay out of its way.
+    const deadline = Date.now() + 45_000;
     while (!terminal.has(store.getRun(record.id)?.status ?? '')) {
       if (Date.now() > deadline) throw new Error('run did not finish in time');
       await new Promise((r) => setTimeout(r, 100));
@@ -413,7 +419,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
     for (const event of textEvents) {
       expect(String(event.text)).not.toMatch(/^CEZ:(?:PR|ISSUE|TITLE)=/m);
     }
-  }, 30_000);
+  }, 60_000);
 
   it('a user rename made before the namer answers is never overwritten', async () => {
     writeFileSync(argsFile, '', 'utf8');
@@ -538,7 +544,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
  * gate would leave every one of those callers writing todos.json on a server that has the inbox
  * off.
  */
-describe('the global follow-up gate (dry run)', () => {
+describe('the global follow-up gate (dry run)', { timeout: 30_000 }, () => {
   const CONFIG_PROMPT = 'CONFIG-DEFAULT: always write tests first.';
   let repoRoot: string;
   let argsFile: string;
@@ -579,13 +585,13 @@ describe('the global follow-up gate (dry run)', () => {
     });
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   });
 
   const workflow: WorkflowDef = {

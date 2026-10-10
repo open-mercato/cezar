@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { execFileSync, execSync } from 'node:child_process';
 import {
   enableHttp2OnTlsListenerSed,
@@ -361,6 +361,20 @@ describe('the sed that adds http2 to certbot’s TLS listener (#910)', () => {
       return false;
     }
   })();
+  // The command line is POSIX `sh` (single-quoted program), written for the VPS. `execSync` hands it
+  // to `/bin/sh` everywhere but Windows, where the default shell is cmd.exe and the quotes reach sed
+  // verbatim — so there it needs a real `sh` (Git for Windows ships one beside its GNU sed), and the
+  // case is skipped without it.
+  const windows = process.platform === 'win32';
+  const posixShell = (() => {
+    if (!windows) return true;
+    try {
+      execFileSync('sh', ['-c', 'exit 0']);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
 
   // Exactly what `certbot --nginx … --redirect` leaves behind.
   const certbotVhost = `server {
@@ -376,15 +390,17 @@ server {
 }
 `;
 
-  it.runIf(gnuSed)('adds http2 to the TLS listeners only, and stays idempotent', () => {
+  it.runIf(gnuSed && posixShell)('adds http2 to the TLS listeners only, and stays idempotent', () => {
     const dir = mkdtempSync(join(tmpdir(), 'cez-http2-'));
     try {
       const path = join(dir, 'vhost.conf');
       writeFileSync(path, certbotVhost);
-      const sed = enableHttp2OnTlsListenerSed(path);
-      execSync(sed);
+      // `sh` reads a backslash as an escape, so on Windows the path is spelled with `/`.
+      const sed = enableHttp2OnTlsListenerSed(windows ? path.split(sep).join('/') : path);
+      const run = (): unknown => execSync(sed, windows ? { shell: 'sh' } : undefined);
+      run();
       const once = readFileSync(path, 'utf8');
-      execSync(sed); // a --reconfigure ssl re-run must not double it up
+      run(); // a --reconfigure ssl re-run must not double it up
       const twice = readFileSync(path, 'utf8');
 
       expect(once).toContain('listen 443 ssl http2; # managed by Certbot');

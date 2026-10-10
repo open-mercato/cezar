@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ContentBlock } from '../core/agent-runner.ts';
@@ -25,6 +25,7 @@ import {
   isImageAttachmentName,
   sanitizeAttachmentName,
 } from '@open-mercato/cezar-contract';
+import { removeTempDir, stopRuns } from '../test-fixtures/remove-temp-dir.testkit.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -532,13 +533,16 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
     manager = new RunManager(store, repoRoot);
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    // Runs that parked at `waiting` are live agent processes inside the repository; end them
+    // before it goes (Windows cannot remove a directory that is a process's cwd).
+    await stopRuns(manager, store);
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   });
 
   function readStdinLines(): Array<{ userText: string; imageCount: number }> {
@@ -928,7 +932,8 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
     const pathMatch = followUp?.userText.match(/- (.*pasted-\d+\.jpg)/);
     expect(pathMatch).toBeTruthy();
     const filePath = pathMatch?.[1] as string;
-    expect(filePath).toMatch(new RegExp(`^${join(dataDir, 'runs', `${record.id}-images`).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/pasted-\\d+\\.jpg$`));
+    // The separator before `pasted-` comes from `join` as well: the path is the host's own.
+    expect(filePath).toMatch(new RegExp(`^${join(dataDir, 'runs', `${record.id}-images`, 'pasted-').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\d+\\.jpg$`));
     expect(existsSync(filePath)).toBe(true);
     expect(readFileSync(filePath).equals(Buffer.from(TINY_PNG_B64, 'base64'))).toBe(true);
 
@@ -980,7 +985,7 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
       .split('\n')
       .map((line) => JSON.parse(line) as { type: string; text?: string; images?: string[] })
       .find((event) => event.type === 'user-message' && event.text === 'fix what this shows');
-    expect(userMessage?.images?.[0]).toBe(`/api/v1/runs/${record.id}/images/${filePath.split('/').pop()}`);
+    expect(userMessage?.images?.[0]).toBe(`/api/v1/runs/${record.id}/images/${basename(filePath)}`);
     expect(ndjson).not.toContain(TINY_PNG_B64);
 
     manager.finish(record.id);

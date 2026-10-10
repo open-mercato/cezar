@@ -198,6 +198,12 @@ describe('openFileInDefaultApp — the OS launcher argument surface', () => {
   });
 });
 
+/** Some cases below EMULATE a POSIX host (`platform: 'linux'`), whose PATH separator is `:`. Handed
+ *  a real Windows temp dir (`C:…`) that emulated split cuts at the drive letter, so they cannot
+ *  run on a Windows host. The win32 branch of the same function is covered beside them, and a
+ *  real `resolveOnPath` call always runs with the host's own platform and separator. */
+const posixHost = process.platform !== 'win32';
+
 describe('resolveOnPath (#469 Windows launcher safety)', () => {
   let stubDir: string;
 
@@ -220,7 +226,7 @@ describe('resolveOnPath (#469 Windows launcher safety)', () => {
     rmSync(join(stubDir, 'editor.com'));
     addStub('editor.exe');
     expect(resolveOnPath('editor', 'win32', false, stubDir)).toBe('editor.exe');
-    expect(resolveOnPath('editor', 'linux', true, stubDir)).toBe('editor.exe');
+    if (posixHost) expect(resolveOnPath('editor', 'linux', true, stubDir)).toBe('editor.exe');
   });
 
   it('does not offer .cmd or .bat shims that require a shell to execute', () => {
@@ -231,7 +237,7 @@ describe('resolveOnPath (#469 Windows launcher safety)', () => {
     expect(resolveOnPath('editor', 'linux', true, stubDir)).toBeNull();
   });
 
-  it('prefers a WSL-native bare launcher over a Windows-side executable', () => {
+  it.skipIf(!posixHost)('prefers a WSL-native bare launcher over a Windows-side executable', () => {
     addStub('editor');
     addStub('editor.exe');
     expect(resolveOnPath('editor', 'linux', true, stubDir)).toBe('editor');
@@ -306,7 +312,7 @@ describe('resolveOnPath (#1066 executable regular files)', () => {
     root = '';
   });
 
-  it('ignores directories but resolves executable files and symlinks', () => {
+  it.skipIf(!posixHost)('ignores directories but resolves executable files and symlinks', () => {
     root = mkdtempSync(join(tmpdir(), 'cez-open-in-app-'));
     mkdirSync(join(root, 'directory-launcher'));
     const executable = join(root, 'file-launcher');

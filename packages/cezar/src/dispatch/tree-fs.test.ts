@@ -1,6 +1,6 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   appendLedger,
@@ -92,7 +92,8 @@ describe('the tree directory', () => {
 
   it('names an inbox message by instant, sender and subject, and writes a readable header', () => {
     const path = writeInboxMessage(dataDir, MISSION, 'cccccccc', { from: CHILD, subject: 'Scope overlap?', body: 'we both touch auth' });
-    expect(path).toMatch(/inbox\/cccccccc\/.*-bbbbbbbb-scope-overlap\.md$/);
+    // A filesystem path, so host separators: spelled with `/` before matching (a no-op on POSIX).
+    expect(path.split(sep).join('/')).toMatch(/inbox\/cccccccc\/.*-bbbbbbbb-scope-overlap\.md$/);
     const text = readFileSync(path, 'utf8');
     expect(text).toContain('# Scope overlap?');
     expect(text).toContain(`- From: ${CHILD}`);

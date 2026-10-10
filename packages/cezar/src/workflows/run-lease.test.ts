@@ -1,11 +1,13 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { RunStore } from '../runs/store.ts';
 import { RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
+import '../test-fixtures/no-real-namer.testkit.ts';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
 
@@ -172,7 +174,7 @@ afterEach(async () => {
     // Reached only once nothing is still writing into the fixture. A failed
     // drain therefore leaks a temp directory, which is strictly better than
     // deleting one out from under a live run — the failure this file is fixing.
-    rmSync(fixture.root, { recursive: true, force: true });
+    await removeTempDir(fixture.root);
   }
 }, TEST_TIMEOUT_MS);
 

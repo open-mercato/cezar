@@ -5,7 +5,6 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
-  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -13,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { agentAccountsPath, workspaceConfigPath } from '../paths.ts';
+import { expectOwnerOnlyMode } from '../private-mode.testkit.ts';
 import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from './config.ts';
 import {
   defaultAgentAccountStore,
@@ -241,7 +241,7 @@ describe('agent accounts store', () => {
       await mergeWriteAgentAccounts((store) => {
         store.accounts.push(account('work'));
       });
-      expect(statSync(agentAccountsPath()).mode & 0o777).toBe(0o600);
+      expectOwnerOnlyMode(agentAccountsPath());
     });
 
     it('converges two concurrent writers instead of dropping one', async () => {
@@ -282,7 +282,9 @@ describe('agent accounts store', () => {
       const real = join(home, 'real-repo');
       const link = join(home, 'linked-repo');
       mkdirSync(real);
-      symlinkSync(real, link);
+      // 'junction': a directory link an unprivileged Windows user may create (a true symlink needs
+      // Developer Mode or elevation there). The type is ignored on every other platform.
+      symlinkSync(real, link, 'junction');
       write({ accounts: [account('work')], selections: { [realpathSync(real)]: { claude: 'work' } } });
       const store = await loadAgentAccounts();
 

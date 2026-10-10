@@ -85,7 +85,9 @@ describe('workspace projects', () => {
     it('dedupes a symlinked path to the realpath entry', async () => {
       const root = makeDir('real-repo');
       const link = join(repos, 'linked-repo');
-      symlinkSync(root, link);
+      // 'junction': a directory link an unprivileged Windows user may create (a true symlink needs
+      // Developer Mode or elevation there). The type is ignored on every other platform.
+      symlinkSync(root, link, 'junction');
       const first = await registerProject(root);
       const viaLink = await registerProject(link);
       expect(viaLink.id).toBe(first.id);

@@ -1,8 +1,9 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { RunStore } from '../runs/store.ts';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 import { RunManager } from './run.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { remainingBudgetUsd } from '../dispatch/engine.ts';
@@ -49,6 +50,6 @@ server.listen(0,'127.0.0.1',()=>console.log('http://127.0.0.1:'+server.address()
     manager.dispose();
     store.flush();
     vi.unstubAllEnvs();
-    rmSync(dir, { recursive: true, force: true });
+    await removeTempDir(dir);
   }
 }, 15000);

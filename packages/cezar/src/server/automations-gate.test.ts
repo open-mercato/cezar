@@ -1,7 +1,8 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 import { AutomationStore } from '../automations/store.ts';
 import { WorkspaceAutomationScheduler } from '../automations/scheduler.ts';
 import { RunStore } from '../runs/store.ts';
@@ -55,9 +56,9 @@ describe('automations gate (#801, default-on since spec 2026-09-14)', () => {
     delete process.env.CEZ_REMOTE;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
     if (savedAutomations === undefined) delete process.env.CEZ_AUTOMATIONS;
     else process.env.CEZ_AUTOMATIONS = savedAutomations;
     if (savedFollowups === undefined) delete process.env.CEZ_FOLLOWUPS;
@@ -186,8 +187,8 @@ describe('automations gate (#801, default-on since spec 2026-09-14)', () => {
       process.env.CEZ_DRY_RUN = '1';
     });
 
-    afterEach(() => {
-      rmSync(home, { recursive: true, force: true });
+    afterEach(async () => {
+      await removeTempDir(home);
       if (savedHome === undefined) delete process.env.CEZ_HOME;
       else process.env.CEZ_HOME = savedHome;
       if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
@@ -248,8 +249,8 @@ describe('automations gate (#801, default-on since spec 2026-09-14)', () => {
       staleId = seed.create({ ...DEFINITION, name: 'Stale poll', enabled: true }).id;
     });
 
-    afterEach(() => {
-      rmSync(home, { recursive: true, force: true });
+    afterEach(async () => {
+      await removeTempDir(home);
       if (savedHome === undefined) delete process.env.CEZ_HOME;
       else process.env.CEZ_HOME = savedHome;
       if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;

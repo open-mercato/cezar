@@ -1,4 +1,4 @@
-import { fstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { fstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -41,6 +41,7 @@ vi.mock('node:fs', async () => {
 });
 
 import { workspaceConfigPath } from '../paths.ts';
+import { expectOwnerOnlyMode } from '../private-mode.testkit.ts';
 import {
   atomicTmpPath,
   atomicWriteJsonSync,
@@ -199,7 +200,7 @@ describe('workspace config', () => {
       config.resources.maxParallel = 4;
       config.projects.push(project('cezar'));
     });
-    expect(statSync(workspaceConfigPath()).mode & 0o777).toBe(0o600);
+    expectOwnerOnlyMode(workspaceConfigPath());
     const config = await loadWorkspaceConfig();
     expect(config.schemaVersion).toBe(1);
     expect(config.resources.maxParallel).toBe(4);
@@ -416,7 +417,7 @@ describe('workspace config', () => {
       await registerOne();
       const snapshot = JSON.parse(readFileSync(workspaceConfigBackupPath(), 'utf8')) as WorkspaceConfig;
       expect(snapshot.projects.map((p) => p.id)).toEqual(['shop']);
-      expect(statSync(workspaceConfigBackupPath()).mode & 0o777).toBe(0o600);
+      expectOwnerOnlyMode(workspaceConfigBackupPath());
     });
 
     it('refreshes the snapshot when the last project is unregistered, so it cannot resurrect (#731)', async () => {

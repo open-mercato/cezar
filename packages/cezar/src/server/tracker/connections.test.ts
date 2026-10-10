@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { promises as fs } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { TrackerConnections } from './connections.ts';
+import { canSymlinkFiles } from '../symlink-capability.testkit.ts';
 let root: string;
 beforeEach(async () => { root = await realpath(await mkdtemp(join(tmpdir(), 'tracker-secret-'))); });
 afterEach(async () => { vi.restoreAllMocks(); await rm(root, { recursive: true, force: true }); });
@@ -17,19 +18,27 @@ it('stores each project outside its checkout with private permissions and fresh 
   const first = await store.write(a, { kind: 'linear', key: 'private-test-A' });
   expect(first).not.toBeNull();
   expect(await store.read(b)).toBeNull();
-  const alias = join(root, 'alias'); await symlink(a, alias);
+  const alias = join(root, 'alias'); await symlink(a, alias, 'junction'); // a directory link unprivileged Windows may create; the type is ignored elsewhere
   expect((await store.read(alias))?.id).toBe(first?.id);
   expect(await readdir(a)).toEqual([]);
   const dir = join(home, 'tracker-connections');
   const file = join(dir, (await readdir(dir)).find(name => name.endsWith('.env'))!);
-  expect((await stat(file)).mode & 0o777).toBe(0o600);
-  expect((await stat(dir)).mode & 0o777).toBe(0o700);
+  // Windows has no POSIX owner bits — `stat().mode` answers 0666/0777 whatever was asked for, and
+  // privacy there is the ACL inherited from the user profile — so the bits are asserted where they exist.
+  if (process.platform !== 'win32') {
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
+    expect((await stat(dir)).mode & 0o777).toBe(0o700);
+  }
   expect(await readFile(file, 'utf8')).toContain('private-test-A');
   const next = await store.write(a, { kind: 'linear', key: 'private-test-B' });
   expect(next?.id).not.toBe(first?.id);
   expect(await readFile(file, 'utf8')).not.toContain('private-test-A');
-  await chmod(file, 0o644);
-  expect(await store.read(a)).toBeNull();
+  // A group/world-readable credential file is refused — where those bits exist (the store itself
+  // skips the mode check on win32, for the reason above).
+  if (process.platform !== 'win32') {
+    await chmod(file, 0o644);
+    expect(await store.read(a)).toBeNull();
+  }
   expect(await store.remove(a)).toBe(true);
   expect(await store.remove(a)).toBe(true);
   expect(await store.read(a)).toBeNull();
@@ -105,7 +114,8 @@ it('keeps the previous env when an atomic replacement fails', async () => {
   expect(await store.write(root, { kind: 'linear', key: 'replacement' })).toBeNull();
   expect(await store.read(root)).toEqual(record);
 });
-it('does not follow credential symlinks or oversized env files, including with legacy JSON present', async () => {
+// A FILE symlink: unprivileged Windows cannot create one (Developer Mode or elevation).
+it.skipIf(!canSymlinkFiles)('does not follow credential symlinks or oversized env files, including with legacy JSON present', async () => {
   const home = join(root, 'home'); await legacy(home, root);
   const file = secretPath(home, root, '.env');
   const target = join(root, 'elsewhere'); await writeFile(target, 'dummy', { mode: 0o600 });

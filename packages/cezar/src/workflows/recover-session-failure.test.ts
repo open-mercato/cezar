@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore } from '../runs/store.ts';
 import { RunManager } from './run.ts';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -32,7 +33,7 @@ describe('recover() contains backend session failures (#562)', () => {
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (savedBin === undefined) delete process.env.CEZ_CODEX_BIN;
     else process.env.CEZ_CODEX_BIN = savedBin;
     if (savedPassthrough === undefined) delete process.env.CEZ_ENV_PASSTHROUGH;
@@ -40,7 +41,7 @@ describe('recover() contains backend session failures (#562)', () => {
     if (savedReject === undefined) delete process.env.MOCK_CODEX_REJECT_RESUME;
     else process.env.MOCK_CODEX_REJECT_RESUME = savedReject;
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    await removeTempDir(repoRoot);
   });
 
   it('marks one recovery continuation failed and does not retry it on the next boot', async () => {

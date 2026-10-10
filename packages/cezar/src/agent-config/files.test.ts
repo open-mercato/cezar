@@ -96,7 +96,9 @@ describe('writeConfigFile', () => {
   it('writes THROUGH a symlink instead of replacing it', async () => {
     // ~/.claude → a dotfiles dir; writing claude.user.settings must not clobber the link
     const dotfiles = realpathSync(mkdtempSync(join(tmpdir(), 'cez-dot-')));
-    symlinkSync(dotfiles, join(home, '.claude'));
+    // 'junction': a directory link an unprivileged Windows user may create (a true symlink needs
+    // Developer Mode or elevation there). The type is ignored on every other platform.
+    symlinkSync(dotfiles, join(home, '.claude'), 'junction');
     const out = await writeConfigFile('claude.user.settings', '{"x":1}', null, repo, env);
     expect(out).toMatchObject({ ok: true });
     // the real file landed in the dotfiles target, and ~/.claude is still a symlink

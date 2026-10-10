@@ -199,11 +199,18 @@ describe('exit', () => {
 
 describe('stopping', () => {
   it('signals the process GROUP so the shell takes its children with it', async () => {
-    const { sessions } = harness();
+    const { sessions, spawned } = harness();
     const session = await open(sessions);
     const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
     try {
       expect(sessions.kill(session.id)).toBe(true);
+      if (process.platform === 'win32') {
+        // Windows has no process groups and no SIGHUP: the binding's own kill (ConPTY closes the
+        // whole console) is the documented path there, and a negative pid must never be signalled.
+        expect(kill).not.toHaveBeenCalled();
+        expect(spawned[0]!.killed).toEqual([undefined]);
+        return;
+      }
       // Negative pid — the whole tree, not just the shell.
       expect(kill).toHaveBeenCalledWith(-4242, 'SIGHUP');
     } finally {
@@ -217,7 +224,8 @@ describe('stopping', () => {
     const kill = vi.spyOn(process, 'kill').mockImplementation(() => { throw new Error('ESRCH'); });
     try {
       sessions.kill(session.id);
-      expect(spawned[0]!.killed).toEqual(['SIGHUP']);
+      // Windows goes straight to the binding and passes no signal name — it has none to honour.
+      expect(spawned[0]!.killed).toEqual([process.platform === 'win32' ? undefined : 'SIGHUP']);
     } finally {
       kill.mockRestore();
     }
