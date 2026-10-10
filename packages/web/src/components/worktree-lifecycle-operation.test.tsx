@@ -60,6 +60,14 @@ describe('worktree lifecycle operation recovery', () => {
     expect(output.hasAttribute('aria-live')).toBe(false)
     expect(screen.getByText('Some earlier output was truncated.')).toBeTruthy()
   })
+  it.each(['kept', 'cancelled', 'bypassed', 'completed'] as const)('keeps resolved %s errors historical instead of asking for recovery', async state => {
+    operation = {...operation, state, allowedActions: []}
+    view()
+    await screen.findByText('Previous operation error')
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByText('Command failed').closest('details')).not.toBeNull()
+    expect(screen.queryByRole('button', {name: 'Retry'})).toBeNull()
+  })
   it('restores completed lifecycle history when reopening a prepared task', async () => {
     operation = {...operation,state:'completed',allowedActions:[],error:undefined}
     client.getWorktreeLifecycleDetail.mockResolvedValue({worktree:{history:[operation]}})

@@ -56,12 +56,15 @@ export function LifecycleOperationCard({operationId, worktreePath, taskTitle}: {
   }
   const frames = [...new Map((output.data?.pages.flatMap(page => page.items) ?? []).map(frame => [frame.seq, frame])).values()].sort((a,b) => a.seq - b.seq)
   const active = ['queued', 'running', 'committing'].includes(operation.state)
+  const resolved = ['completed', 'bypassed', 'cancelled', 'kept'].includes(operation.state)
   return <section data-slot="worktree-lifecycle-operation" className="rounded-lg border border-border bg-card p-3 text-sm">
     <h2 ref={status} tabIndex={-1} className="font-medium outline-none" aria-live="polite">{statusLabel(operation)}</h2>
     {taskTitle ? <p className="mt-1 break-words text-xs text-muted-foreground">{taskTitle}</p> : null}
     {worktreePath ? <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">{worktreePath}</p> : null}
     {operation.phase === 'setup' && active ? <p className="mt-1 text-xs text-muted-foreground">The agent starts after worktree preparation finishes.</p> : null}
-    {operation.error ? <p role="alert" className="mt-2 break-words text-xs text-danger">{operation.failureStage === 'commit' ? 'Scripts completed, but the worktree transition failed. ' : ''}{operation.error}</p> : null}
+    {operation.error ? resolved
+      ? <details className="mt-2 break-words text-xs text-muted-foreground"><summary className="cursor-pointer">Previous operation error</summary><p className="mt-1">{operation.error}</p></details>
+      : <p role="alert" className="mt-2 break-words text-xs text-danger">{operation.failureStage === 'commit' ? 'Scripts completed, but the worktree transition failed. ' : ''}{operation.error}</p> : null}
     <ol className="mt-3 space-y-2">
       {operation.entries.map(entry => {
         const history = [...operation.history].reverse().find(item => item.entryId === entry.entryId && item.commandPreview === entry.commandPreview)
