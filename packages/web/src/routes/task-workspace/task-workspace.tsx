@@ -37,11 +37,13 @@ import { GitTabLoading } from '../task-git/git-tab-loading'
 import { RunHeader } from '../task-thread/run-header'
 import { ThreadLoading } from '../task-thread/thread-loading'
 import { ThreadView } from '../task-thread/task-thread'
+import { useDesignPicks } from '../task-thread/design-picks'
 import { useDiffComments } from '../task-thread/diff-comments'
 import { useRunRecordReconcile } from '../task-thread/run-reconcile'
 import { reduceThread } from '../task-thread/thread-state'
 
 import { BrowserView } from './browser-view'
+import { DesignQueues, hasDesignQueues } from './design-dock'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 
@@ -449,6 +451,26 @@ function WorkspaceView({
   // about. Asking once there is no VISIBLE column left is therefore the right line — and asking
   // once per column would ask while an identical column next door still displays them.
   const diffComments = useDiffComments(run.id)
+  // Design Mode: an element picked in ANY Browser column joins the run's one list, which the
+  // Chat column's composer shows as chips — whether or not that column is on screen right now.
+  const designPicks = useDesignPicks(run.id)
+  const { add: addDesignPick, remove: removeDesignPick, picks: pickedElements } = designPicks
+  const unpickElement = useCallback(
+    (mark: string) => {
+      const pick = pickedElements.find((entry) => entry.mark === mark)
+      if (pick) removeDesignPick(pick.id)
+    },
+    [pickedElements, removeDesignPick],
+  )
+  /** Tasks the notes of this visit turned into — the task-queue strip's contents. */
+  const [designTasks, setDesignTasks] = useState<string[]>([])
+  const addDesignTasks = useCallback((ids: string[]) => setDesignTasks((known) => [...known, ...ids]), [])
+  // What the page can still frame: a pick made in the document that is showing. Its number is its
+  // place in the WHOLE note, so the page and the panel under it always agree.
+  const designMarks = useMemo(
+    () => pickedElements.flatMap((pick, index) => (pick.mark ? [{ key: pick.mark, n: index + 1 }] : [])),
+    [pickedElements],
+  )
   const [pendingView, setPendingView] = useState<{ index: number; view: ViewId } | null>(null)
   const columns = layouts.layout?.columns
   const requestColumnView = useCallback(
@@ -517,6 +539,20 @@ function WorkspaceView({
             <BrowserView
               state={column.browser ?? emptyBrowserState()}
               onChange={(browser) => setColumnBrowser(index, browser)}
+              onPickElement={addDesignPick}
+              designMarks={designMarks}
+              onUnpickElement={unpickElement}
+              // STAGE 1 of the review flow (spec 2026-10-09-design-mode §7): a click selects — the
+              // frame stays and turns lime — and nothing else happens in the page. The note popup
+              // (`DesignNote`, `renderDesignNote`) is built and parked until its own stage:
+              //   designPickCount={pickedElements.length}
+              //   renderDesignNote={({ close }) => (
+              //     <DesignNote run={run} picks={designPicks} onClose={close} onTasksCreated={addDesignTasks} />
+              //   )}
+              // The queues get a strip of their own only while there is something in them.
+              designDock={
+                hasDesignQueues(run, designTasks) ? <DesignQueues run={run} createdTasks={designTasks} /> : undefined
+              }
             />
           )
         case 'graph':
@@ -538,7 +574,7 @@ function WorkspaceView({
           )
       }
     },
-    [activeName, onMarkedUnread, run, setColumnBrowser, openReference],
+    [activeName, addDesignPick, designMarks, designTasks, onMarkedUnread, run, setColumnBrowser, openReference, unpickElement],
   )
 
   return (

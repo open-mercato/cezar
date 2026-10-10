@@ -2,19 +2,24 @@ import {
   ArrowLeftIcon,
   ArrowRightIcon,
   GlobeIcon,
+  MousePointerClickIcon,
   PlusIcon,
   RotateCwIcon,
   TriangleAlertIcon,
   XIcon,
 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
+import { openDesignProxy } from '@/api/client'
 import { useHealth } from '@/api/queries'
 import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { toast } from '@/components/ui/toaster'
 import { cn } from '@/lib/utils'
+
+import { parseDesignPick, type NewDesignPick } from '../task-thread/design-picks'
 
 import { FullViewExit } from './maximize'
 
@@ -60,11 +65,39 @@ const LOOPBACK = /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[?::1\]?|.+\.local)$/i
 export function BrowserView({
   state,
   onChange,
+  onPickElement,
+  designMarks,
+  onUnpickElement,
+  renderDesignNote,
+  designPickCount = 0,
+  designDock,
 }: {
   state: BrowserState
   /** Persisted into the column (spec §7). Called only for changes worth keeping — a successful
    *  load, a tab opened or closed — never for a failed attempt. */
   onChange: (state: BrowserState) => void
+  /**
+   * Design Mode (spec `.ai/specs/2026-10-09-design-mode.md`): given, the toolbar offers a picker
+   * and every element the user clicks in the page is handed here. Answers whether it was kept.
+   * Absent, the view has no Design Mode at all — a host with nowhere to send an element.
+   */
+  onPickElement?: (pick: NewDesignPick) => boolean
+  /** The elements of the note being written that the page can still frame: the picker's key
+   *  (`DesignPick.mark`) and the number the note gives the element. */
+  designMarks?: readonly { key: string; n: number }[]
+  /** A selected element was clicked again in the page — it is no longer selected. */
+  onUnpickElement?: (mark: string) => void
+  /**
+   * The note being written, as a popup beside the element it is about. Rendered by the host —
+   * what a note is, and where it goes, is its business; this view only decides WHEN it shows
+   * (an element was picked, or its mark clicked) and WHERE (anchored to that element, following
+   * it as the page scrolls). `close` hides it until the next pick or mark click.
+   */
+  renderDesignNote?: (controls: { close: () => void }) => React.ReactNode
+  /** How many elements the note holds. At zero there is no note to show. */
+  designPickCount?: number
+  /** A strip under the page — the host's queues. Shown whenever the host provides it. */
+  designDock?: React.ReactNode
 }) {
   const tabs = state.tabs.length > 0 ? state.tabs : ['']
   const active = Math.min(state.active, tabs.length - 1)
@@ -139,6 +172,165 @@ export function BrowserView({
   const canPreview = health.data?.capabilities?.preview ?? true
   const refused = target !== '' && !canPreview && isLoopback(target)
 
+  /**
+   * Design Mode.
+   *
+   * The framed page is cross-origin, so this view cannot see what the user points at — the whole
+   * header comment above. Design Mode therefore frames the SAME app through a second loopback
+   * origin the server opens on request, whose HTML carries a picker script; the picker reports
+   * the clicked element over `postMessage`. Only a local `http://` address can be mirrored that
+   * way, so the toggle is offered for those and nothing else.
+   *
+   * `design` is the user's switch. `proxy` is the mirror it produced, kept after the switch goes
+   * off so that leaving Design Mode does not reload the page (and lose its state) — the picker
+   * is simply told to stand down. The next navigation with the switch off drops it, and the tab
+   * is framed directly again. `tabs` never holds a proxy address: the port is this session's.
+   */
+  const [design, setDesign] = useState(false)
+  const [proxy, setProxy] = useState<{ upstream: string; origin: string } | null>(null)
+  const [pickerReady, setPickerReady] = useState(false)
+  const frameRef = useRef<HTMLIFrameElement>(null)
+  const designAllowed = onPickElement !== undefined && (health.data?.capabilities?.designMode ?? false)
+  const targetOrigin = designOrigin(target)
+  const designActive = designAllowed && design && targetOrigin !== null
+  const mirror = proxy !== null && proxy.upstream === targetOrigin ? proxy.origin : null
+  // Asked for but not answered yet: nothing is framed, so the page is not loaded directly only to
+  // be loaded again a moment later through the mirror.
+  const awaitingProxy = designActive && mirror === null
+  const frameSrc = mirror !== null && targetOrigin !== null ? mirror + target.slice(targetOrigin.length) : target
+
+  // Asked again before every load while the switch is on. The route is idempotent, and a mirror
+  // the server closed for being idle comes back on a new port this way instead of as a dead frame.
+  useEffect(() => {
+    if (!designActive || targetOrigin === null) return
+    let cancelled = false
+    openDesignProxy({ target: targetOrigin, parentOrigin: window.location.origin })
+      .then((opened) => {
+        if (!cancelled) setProxy({ upstream: targetOrigin, origin: opened.origin })
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        setDesign(false)
+        toast(error instanceof Error && error.message ? error.message : 'Design Mode could not start.', { tone: 'danger' })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [designActive, reloadToken, targetOrigin])
+
+  // A new document means a new picker, which announces itself when it is listening.
+  useEffect(() => setPickerReady(false), [frameSrc, reloadToken])
+
+  useEffect(() => {
+    if (!pickerReady || mirror === null) return
+    frameRef.current?.contentWindow?.postMessage(
+      { source: 'cezar-design-host', type: 'set-active', active: designActive },
+      mirror,
+    )
+  }, [designActive, mirror, pickerReady])
+
+  // The page keeps a frame and a number on every element still in the note. Sent again whenever
+  // the note changes and whenever a new document's picker comes up (which then knows none of them).
+  const hasNote = renderDesignNote !== undefined
+  /**
+   * The note popup. `anchor` is the picker key of the element it sits beside; `rects` is where
+   * the page says each marked element currently is, in the frame's own viewport — which is this
+   * view's frame area, since the iframe fills it. A pick's own rect seeds the map so the popup
+   * has somewhere to appear before the page's first report.
+   */
+  const [noteOpen, setNoteOpen] = useState(false)
+  const [anchor, setAnchor] = useState<string | null>(null)
+  const [rects, setRects] = useState<Record<string, MarkRect>>({})
+  const areaRef = useRef<HTMLDivElement>(null)
+  const noteRef = useRef<HTMLDivElement>(null)
+  const [notePosition, setNotePosition] = useState<{ left: number; top: number } | null>(null)
+  const closeNote = useCallback(() => setNoteOpen(false), [])
+  const noteVisible = hasNote && designAllowed && noteOpen && designPickCount > 0
+  const anchorRect = anchor !== null ? rects[anchor] : undefined
+
+  // Nothing left in the note (it was sent, or emptied): the popup has nothing to be about.
+  useEffect(() => {
+    if (designPickCount === 0) setNoteOpen(false)
+  }, [designPickCount])
+
+  // Switching Design Mode on with a note already waiting brings the note back with it.
+  useEffect(() => {
+    if (designActive && designPickCount > 0) setNoteOpen(true)
+    // Only the switch: a later pick opens the note through its own path.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [designActive])
+
+  // Beside the element: under it when there is room, above it when there is not, and always
+  // inside the frame area. Without a known rect (a pick from a page since reloaded) it parks in
+  // the bottom-right corner rather than guess.
+  useLayoutEffect(() => {
+    if (!noteVisible) return
+    const area = areaRef.current
+    const note = noteRef.current
+    if (!area || !note) return
+    setNotePosition(placeNote(anchorRect, { width: area.clientWidth, height: area.clientHeight }, { width: note.offsetWidth, height: note.offsetHeight }))
+  }, [anchorRect, designPickCount, noteVisible])
+
+  const marksKey = (designMarks ?? []).map((mark) => `${mark.key}:${mark.n}`).join(' ')
+  const sendMarks = useCallback(() => {
+    if (mirror === null) return
+    const marks =
+      marksKey === '' ? [] : marksKey.split(' ').map((entry) => ({ key: entry.split(':')[0]!, n: Number(entry.split(':')[1]) }))
+    frameRef.current?.contentWindow?.postMessage({ source: 'cezar-design-host', type: 'set-marks', marks }, mirror)
+  }, [marksKey, mirror])
+  useEffect(() => {
+    if (pickerReady) sendMarks()
+  }, [pickerReady, sendMarks])
+
+  useEffect(() => {
+    if (mirror === null) return
+    const onMessage = (event: MessageEvent) => {
+      // The mirror's origin AND this view's own frame: another Browser column may be mirroring
+      // the same app, and its picks are not this column's to report.
+      if (event.origin !== mirror || event.source !== frameRef.current?.contentWindow) return
+      const data = event.data as {
+        source?: unknown
+        type?: unknown
+        element?: unknown
+        key?: unknown
+        rects?: unknown
+      } | null
+      if (data === null || typeof data !== 'object' || data.source !== 'cezar-design') return
+      if (data.type === 'ready') setPickerReady(true)
+      else if (data.type === 'cancel') setDesign(false)
+      else if (data.type === 'mark-clicked' && typeof data.key === 'string') {
+        setAnchor(data.key)
+        setNoteOpen(true)
+      } else if (data.type === 'unpicked' && typeof data.key === 'string') onUnpickElement?.(data.key)
+      else if (data.type === 'rects') setRects(parseMarkRects(data.rects))
+      else if (data.type === 'picked') {
+        const pick = parseDesignPick(data.element)
+        if (!pick || !onPickElement?.(pick)) {
+          // The page framed the element the moment it was clicked. It was not kept (malformed,
+          // or the host refused it), so the page is told what IS selected and drops the frame.
+          sendMarks()
+          return
+        }
+        if (!hasNote) {
+          // No note popup on this host: the element went to the composer, out of sight.
+          toast('Element added to your next message.')
+          return
+        }
+        const mark = pick.mark
+        if (mark !== undefined) setRects((known) => ({ ...known, [mark]: pick.rect }))
+        setAnchor(mark ?? null)
+        setNoteOpen(true)
+      }
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [hasNote, mirror, onPickElement, onUnpickElement, sendMarks])
+
+  /** With the switch off, a navigation is where the mirror is let go. */
+  const releaseMirror = useCallback(() => {
+    if (!design) setProxy(null)
+  }, [design])
+
   // A page that never fires `load` is the only failure an embedder can detect at all.
   useEffect(() => {
     if (status !== 'loading' || target === '' || refused) return
@@ -150,6 +342,7 @@ export function BrowserView({
     (raw: string) => {
       const url = normalizeAddress(raw)
       if (url === null) return
+      releaseMirror()
       setTarget(url)
       setDraft(url)
       setStatus('loading')
@@ -165,7 +358,7 @@ export function BrowserView({
         return { ...byTab, [active]: { stack, position: stack.length - 1 } }
       })
     },
-    [active, current],
+    [active, current, releaseMirror],
   )
 
   /** Back (`-1`) and Forward (`+1`) — a move along this tab's own stack. */
@@ -174,13 +367,14 @@ export function BrowserView({
       const position = nav.position + delta
       const url = nav.stack[position]
       if (url === undefined) return
+      releaseMirror()
       setNavByTab((byTab) => ({ ...byTab, [active]: { stack: nav.stack, position } }))
       setTarget(url)
       setDraft(url)
       setStatus('loading')
       setReloadToken((token) => token + 1)
     },
-    [active, nav.position, nav.stack],
+    [active, nav.position, nav.stack, releaseMirror],
   )
 
   /** A load succeeded: only now is the address worth keeping (spec §7). */
@@ -311,6 +505,7 @@ export function BrowserView({
           label="Reload"
           onClick={() => {
             if (target === '') return
+            releaseMirror()
             setStatus('loading')
             setReloadToken((token) => token + 1)
           }}
@@ -332,9 +527,31 @@ export function BrowserView({
             className="h-8 text-[13px] focus-visible:ring-ring/30 md:text-[13px] dark:bg-card"
           />
         </form>
+        {designAllowed ? (
+          // The one control in this toolbar that is not navigation, and the only one a user has
+          // to be told exists — so it carries its name, and wears the accent while it is on.
+          <Button
+            type="button"
+            data-slot="browser-design-toggle"
+            variant={designActive ? 'primary' : 'outline'}
+            size="sm"
+            aria-pressed={designActive}
+            disabled={targetOrigin === null}
+            title={
+              targetOrigin === null ? 'Design Mode works on local http:// addresses'
+              : designActive ? 'Stop selecting elements (Esc)'
+              : 'Click an element of the page to send it to the agent'
+            }
+            onClick={() => setDesign((on) => !on)}
+            className="ml-1 disabled:opacity-40"
+          >
+            <MousePointerClickIcon aria-hidden="true" className="size-3.5" />
+            Design Mode
+          </Button>
+        ) : null}
       </div>
 
-      <div className="relative min-h-0 flex-1">
+      <div ref={areaRef} className="relative min-h-0 flex-1">
         {refused ? (
           <CenteredState
             icon={<TriangleAlertIcon />}
@@ -362,10 +579,21 @@ export function BrowserView({
                 respond or does not allow embedding. The address is still in the bar; you can fix it.
               </div>
             ) : null}
+            {designActive && status === 'idle' && !noteVisible ? (
+              <p
+                data-slot="browser-design-hint"
+                className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-border bg-background/95 px-3 py-1 text-xs whitespace-nowrap text-soft-foreground shadow-sm"
+              >
+                {hasNote ? 'Click an element to write a note about it · Esc to stop' : 'Click an element to add it to your next message · Esc to stop'}
+              </p>
+            ) : null}
+            {awaitingProxy ? null : (
             <iframe
-              // Keyed by the address AND the reload token so Reload really re-fetches.
-              key={`${target}#${reloadToken}`}
-              src={target}
+              ref={frameRef}
+              // Keyed by the address AND the reload token so Reload really re-fetches. It is the
+              // FRAMED address that keys it: entering Design Mode swaps it for the mirror's.
+              key={`${frameSrc}#${reloadToken}`}
+              src={frameSrc}
               title="Preview"
               onLoad={onLoaded}
               // Worktree-served content is untrusted (spec §7). `allow-same-origin` keeps the page
@@ -381,6 +609,7 @@ export function BrowserView({
               // flash a light rectangle into a dark cockpit for every load.
               className={cn('size-full border-0', status === 'loading' && 'invisible')}
             />
+            )}
             {status === 'loading' ? (
               <p className="absolute inset-0 grid place-items-center text-xs text-soft-foreground">
                 Loading…
@@ -388,7 +617,26 @@ export function BrowserView({
             ) : null}
           </>
         )}
+        {noteVisible ? (
+          <div
+            ref={noteRef}
+            data-slot="browser-design-note"
+            role="dialog"
+            aria-label="Note about the selected elements"
+            // Positioned once measured; rendered invisible for that first frame so it never
+            // flashes in a corner it is not staying in.
+            style={notePosition ? { left: notePosition.left, top: notePosition.top } : { left: 0, top: 0, visibility: 'hidden' }}
+            className="absolute z-20 w-[min(360px,calc(100%-16px))] rounded-xl border border-border bg-background shadow-lg"
+          >
+            {renderDesignNote({ close: closeNote })}
+          </div>
+        ) : null}
       </div>
+      {designDock !== undefined && designAllowed ? (
+        <div data-slot="browser-design-dock" className="shrink-0 border-t border-border/70">
+          {designDock}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -418,6 +666,52 @@ function ToolbarButton({
       {icon}
     </Button>
   )
+}
+
+/** Where a marked element is, in the framed document's viewport. */
+interface MarkRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/** The page's report of its marks. From a page cezar does not control: anything malformed is
+ *  dropped, and what is kept is numbers only. */
+function parseMarkRects(raw: unknown): Record<string, MarkRect> {
+  const out: Record<string, MarkRect> = {}
+  if (!Array.isArray(raw)) return out
+  for (const item of raw.slice(0, 50) as unknown[]) {
+    if (item === null || typeof item !== 'object') continue
+    const r = item as Record<string, unknown>
+    if (typeof r.key !== 'string' || !/^[a-z0-9-]{1,24}$/.test(r.key)) continue
+    const n = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : 0)
+    out[r.key] = { x: n(r.x), y: n(r.y), width: n(r.width), height: n(r.height) }
+  }
+  return out
+}
+
+const NOTE_GAP = 10
+const NOTE_MARGIN = 8
+
+/**
+ * Where the note popup goes: under its element when it fits, above when it does not, clamped
+ * into the frame area either way — an element scrolled out of view keeps its note on screen at
+ * the nearest edge instead of dragging it away. No rect: the bottom-right corner.
+ */
+export function placeNote(
+  rect: MarkRect | undefined,
+  area: { width: number; height: number },
+  note: { width: number; height: number },
+): { left: number; top: number } {
+  const maxLeft = Math.max(NOTE_MARGIN, area.width - note.width - NOTE_MARGIN)
+  const maxTop = Math.max(NOTE_MARGIN, area.height - note.height - NOTE_MARGIN)
+  if (!rect) return { left: maxLeft, top: maxTop }
+  const clamp = (value: number, max: number) => Math.min(Math.max(value, NOTE_MARGIN), max)
+  const below = rect.y + rect.height + NOTE_GAP
+  const above = rect.y - NOTE_GAP - note.height
+  const top = below + note.height + NOTE_MARGIN <= area.height ? below : above >= NOTE_MARGIN ? above : below
+  return { left: clamp(rect.x, maxLeft), top: clamp(top, maxTop) }
 }
 
 /** One tab's visited addresses and where in them it currently sits. `position` is `-1` for a tab
@@ -481,6 +775,24 @@ export function normalizeAddress(raw: string): string | null {
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
   return parsed.toString()
 }
+
+/**
+ * The origin Design Mode can mirror for this address, or null when it cannot: only a loopback
+ * `http://` dev server. The server refuses everything else too (`parseDesignTarget`); this is the
+ * same rule asked early, so the toggle is disabled with a reason instead of failing on click.
+ */
+export function designOrigin(url: string): string | null {
+  if (url === '') return null
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'http:' || !DESIGN_HOSTS.test(parsed.hostname)) return null
+    return parsed.origin
+  } catch {
+    return null
+  }
+}
+
+const DESIGN_HOSTS = /^(localhost|127\.0\.0\.1|\[::1\])$/i
 
 export function isLoopback(url: string): boolean {
   try {

@@ -107,6 +107,10 @@ import type {
   RunRecord,
   RunsIndexResponse,
   StarCountPayload,
+  DesignProxyRequest,
+  PromptQueueResponse,
+  RemoveQueuedPromptResponse,
+  DesignProxyResponse,
   WorktreeEntry,
   SaveWorkflowInput,
   SaveWorkflowResponse,
@@ -440,6 +444,16 @@ export async function getHealth(opts?: ReadOptions): Promise<HealthResponse> {
  *  answer and the chip renders nothing for it. */
 export async function getStarCount(opts?: ReadOptions): Promise<StarCountPayload> {
   return unwrap(await cez.api.v1['star-count'].$get({}, init(opts)), '/star-count')
+}
+
+/**
+ * The Design Mode proxy origin for a loopback dev server (`POST /api/v1/preview/design-proxy`).
+ * Idempotent: asking again for the same target answers the listener that is already open, so the
+ * Browser column asks before every load instead of tracking whether its proxy is still alive.
+ * Workspace-level — the dev server belongs to the machine, not to the project on screen.
+ */
+export async function openDesignProxy(input: DesignProxyRequest): Promise<DesignProxyResponse> {
+  return unwrap(await cez.api.v1.preview['design-proxy'].$post({ json: input }), '/preview/design-proxy')
 }
 
 /** Host-local catalog for one discovery runner (`claude`, `codex`, `opencode`, `cursor` — #794, #784).
@@ -1271,6 +1285,32 @@ export async function updateProject(
 }
 
 // ---- run mutations ------------------------------------------------------------------------
+
+/**
+ * Line a prompt up in a live session's PROMPT QUEUE (`POST /runs/:id/prompt-queue`): it is
+ * delivered as its own turn once the turn before it has ended, or at once when the session is
+ * already at rest. Not `sendRunMessage`, which writes into the session mid-turn. A closed run
+ * answers 409 — the caller sends the prompt through Continue instead.
+ */
+export async function queueRunPrompt(id: string, text: string): Promise<PromptQueueResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id']['prompt-queue'].$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: { text },
+    }),
+    runPath(id, '/prompt-queue'),
+  )
+}
+
+/** Take a prompt back out of the queue — allowed in every run state. */
+export async function removeQueuedRunPrompt(id: string, msgId: string): Promise<RemoveQueuedPromptResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id']['prompt-queue'][':msgId'].$delete({
+      param: { projectId: queryScope(), id: encodeURIComponent(id), msgId: encodeURIComponent(msgId) },
+    }),
+    runPath(id, `/prompt-queue/${encodeURIComponent(msgId)}`),
+  )
+}
 
 /** ×1 answers the run record; ×2/×3 answers `{ runs }` — narrow on `'runs' in result`. */
 export async function createRun(input: CreateRunInput): Promise<CreateRunResponse> {
