@@ -68,9 +68,9 @@ Arbitrary local commands require durable intent and bounded supervised execution
 
 ### Phase 3: Cockpit flow
 
-- [ ] 3.1 Extend Worktrees configuration UI.
-- [ ] 3.2 Add lifecycle progress and recovery views.
-- [ ] 3.3 Wire attention and demand-driven live updates.
+- [x] 3.1 Extend Worktrees configuration UI. — 9e8d034c
+- [x] 3.2 Add lifecycle progress and recovery views. — 9e8d034c
+- [x] 3.3 Wire attention and demand-driven live updates. — 9e8d034c
 
 ### Phase 4: Acceptance and release readiness
 
