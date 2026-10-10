@@ -7,6 +7,7 @@ import {
   cezarHomeDir,
   claudeStateFilePath,
   instanceSlug,
+  isAbsolutePath,
   serverInstancesDir,
   serverLockPath,
   serverStatePath,
@@ -58,6 +59,28 @@ describe('paths', () => {
     expect(serverLockPath('shop-example-com')).toBe(
       '/tmp/cez-home-test/server-instances/shop-example-com.install.lock',
     );
+  });
+});
+
+describe('isAbsolutePath', () => {
+  it('accepts native Windows roots on win32: drive, forward-slash drive, UNC', () => {
+    expect(isAbsolutePath('C:\\projects\\ProjectName', 'win32')).toBe(true);
+    expect(isAbsolutePath('C:/Repos', 'win32')).toBe(true);
+    expect(isAbsolutePath('\\\\server\\share\\repo', 'win32')).toBe(true);
+  });
+
+  it('refuses relative and drive-relative paths on win32', () => {
+    expect(isAbsolutePath('projects\\ProjectName', 'win32')).toBe(false);
+    expect(isAbsolutePath('..\\repo', 'win32')).toBe(false);
+    expect(isAbsolutePath('C:repo', 'win32')).toBe(false);
+    expect(isAbsolutePath('~/cezar/projects', 'win32')).toBe(false);
+  });
+
+  it('keeps the POSIX rule on POSIX — a Windows spelling is not absolute there', () => {
+    expect(isAbsolutePath('/home/me/repo', 'linux')).toBe(true);
+    expect(isAbsolutePath('/Users/me/repo', 'darwin')).toBe(true);
+    expect(isAbsolutePath('C:\\projects\\ProjectName', 'linux')).toBe(false);
+    expect(isAbsolutePath('relative/repo', 'darwin')).toBe(false);
   });
 });
 
