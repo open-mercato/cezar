@@ -1,24 +1,23 @@
 # Handoff — 2026-10-10-github-tab-fast
 
-**Last updated:** 2026-10-10T00:05:00Z
+**Last updated:** 2026-10-10T20:20:30Z
 **Branch:** `cez/4882295a`
 **PR:** not yet opened
-**Current phase/step:** Phase 1 Step 1.1
-**Last commit:** not yet committed — plan seed
+**Current phase/step:** Phase 2 Step 2.1
+**Last commit:** `bb75ed0f` — test(github): migrate list fixtures to GraphQL
 
 ## What just happened
 
-- Issue #1261 was claimed after the maintainer approved shipping the body contract migration.
-- The implementation plan is seeded against current `origin/main`.
-- Child dispatch is unavailable because the cockpit reports `unknown project: cezar`; implementation continues inline.
+- Phase 1 is complete: contracts, cursor-aware GraphQL list fetch, route parameters, body detail payload, and migrated forge fixtures are committed.
+- The checkpoint passed focused contract and forge tests; the full server typecheck remains blocked by unrelated base-branch contract drift.
 
 ## Next concrete action
 
-- Start Step 1.1: define paged list/total/detail schemas and compatibility documentation.
+- Start Step 2.1: add cursor-aware client queries and React Query cache helpers.
 
 ## Blockers / open questions
 
-- none
+- Full validation is not yet green because current `origin/main` has pre-existing generated-contract/type drift; re-run after the client/server surface is complete.
 
 ## Environment caveats
 

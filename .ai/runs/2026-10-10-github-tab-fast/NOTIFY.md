@@ -11,3 +11,8 @@
 ## 2026-10-10T00:05:00Z — dispatch fallback
 
 - The configured child-task dispatcher refused Step 1.1 with `unknown project: cezar`; continuing inline to preserve scope and one-commit discipline.
+
+## 2026-10-10T20:20:30Z — checkpoint 1
+
+- Steps 1.1–1.4 verified: contract typecheck and 200 forge tests pass; browser checks skipped because no UI changed in this window.
+- Full server typecheck is currently blocked by unrelated generated-contract drift already present on `origin/main`; GitHub-specific diagnostics were resolved.
