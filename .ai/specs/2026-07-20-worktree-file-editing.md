@@ -25,7 +25,178 @@ re-tokenizes the whole file synchronously on every content change
 (§Syntax highlighting in edit mode). Mockups of every state are in
 `.ai/specs/assets/2026-07-20-worktree-file-editing/` (§UI/UX).
 
+## Revision 2026-10-10 — owner decisions, and what shipped
+
+The owner reviewed this spec on 2026-10-10 against the brutus goal — cezar as the only window a
+project is built in, the same on a VPS — and overrode three of its answers. **Where this section
+and the text below disagree, this section wins**; each superseded passage carries a pointer back
+here rather than being rewritten, so the original reasoning stays readable.
+
+The view is also relabelled: the workspace's **Files** view is now **Code**. Only the label
+moved — the `files` view id, the `/tasks/:id/files` route and the `/runs/:id/files` API are
+unchanged. A born layout is recognized by its NAME, so `layout-state.ts` keeps answering to the
+old one (`LEGACY_VIEW_NAMES`); without that every existing task grew a stray `Files` card.
+
+### Decision 1 — the editor engine will be CodeMirror 6 (supersedes Q1 and "Alternatives: Monaco / CodeMirror")
+
+The rejection below rests on the premise "change one variable quickly". The premise is now
+"write code here": search, indentation, soft wrap and files past 1500 lines are requirements, and
+a `<textarea>` over a token layer cannot meet them. CodeMirror 6, lazy-loaded as its own chunk so
+the cockpit's first paint does not pay for it. Monaco stays rejected — far heavier, and poor on a
+phone.
+
+**Shipped as step 2 (2026-10-10)** — `packages/web/src/components/code-mirror-editor.tsx`, used
+by the Code view only; Settings → Agent config keeps the overlay `CodeEditor`, whose constraints
+(#404: Tab is never trapped) are right for a config file. Consequently **§Syntax highlighting in
+edit mode (H1–H4) and plan step 7b are not implemented and should not be**: they harden an
+overlay the Code view no longer uses. What the engine does, and where it deliberately differs:
+
+- **Loaded on first edit, never before.** `file-preview.tsx` imports it through `lazy()`, so the
+  editor and CodeMirror's core (~290 kB raw) are chunks a cockpit that only browses files never
+  fetches. Each grammar is its own chunk again (`@codemirror/language-data`), fetched when a file
+  of that kind is first opened. A name with no grammar is plain text and exactly as editable.
+- **Byte-exact line endings.** CodeMirror splits on any line break and joins with `\n`, which
+  would rewrite every line of a CRLF file on its first save — against §Encoding. The editor pins
+  the separator per file: `\r\n` for a file that is CRLF throughout, `\n` otherwise, which leaves
+  a stray `\r` in a mixed file where it was. Pinned by `code-mirror-editor.test.tsx`.
+- **Colors are the cockpit's.** The surface reads the design tokens and syntax reads the same
+  `--syn-*` variables Shiki paints the preview with, so a theme switch repaints both with no code.
+  The token *boundaries* still differ between Shiki's TextMate grammars and CodeMirror's Lezer
+  ones, so view mode and edit mode agree on palette, not on every span.
+- **Tab indents** (two spaces). Escape then Tab leaves the editor by keyboard — CodeMirror's own
+  escape hatch, and the one accessibility trade this engine makes against the overlay.
+- **Find / replace** through CodeMirror's panel (Ctrl/Cmd+F), plus a **Find** button in the
+  header: the shortcut needs the editor focused, some embedding shells take it first, and a touch
+  screen has none. **Wrap** toggles soft wrap. Ctrl/Cmd+S saves.
+- **No 1500-line plaintext fallback** — incremental parsing makes it unnecessary. The 512 kB
+  content cap is the server's and is unchanged.
+
+### Decision 2 — hosted mode is opt-in, not a hard refusal (supersedes Q5, Q6, §Security 2 and 6)
+
+`fileEdit` is a tri-state on `CEZ_FILE_EDIT`, the same shape as `CEZ_TERMINAL` and for the same
+reason:
+
+| `CEZ_FILE_EDIT` | Local cockpit | Hosted cockpit (`CEZ_REMOTE=1` or a non-loopback bind) |
+|---|---|---|
+| unset | on | **off** — `409` |
+| `1` | on | on |
+| `0` | off | off |
+
+A hard refusal made the feature unavailable exactly where the goal needs it. The risk the
+original text names is real and unchanged — cezar has no authentication of its own, so on a
+hosted cockpit this is a write into a checkout an agent then executes, reachable by anyone the
+reverse proxy admits — which is why hosted stays **off by default** and the opt-in is an explicit
+`CEZ_*` flag (AGENTS.md § Zero config). A hosted cockpit with `CEZ_TERMINAL=1` already grants
+strictly more than this does.
+
+`CEZ_NO_FILE_EDIT` never existed in code; `CEZ_FILE_EDIT=0` is the kill switch. The capability is
+its own predicate (`fileEditEnabled`), not a share of `localHandoff`.
+
+### Decision 3 — recovery is a git object, not a snapshot store (supersedes Q4, Q8, most of §Audit & recovery)
+
+Everything under `runs/<id>-edits/` is dropped: the directory, content addressing, the 20-file /
+5 MB eviction, `GET /runs/:id/edits/:hash`, its client, the `deleteRun`/`pruneOldRuns` changes and
+the "snapshot expired" state. The metadata-only `file-edited` event stays, and gains an optional
+`blob` field.
+
+The mechanism is **`git hash-object -w --no-filters --stdin`**, not the `autosaveCommit()` call
+§Alternative considered proposes. Same idea — let git hold the bytes — but a commit takes
+`index.lock`, and the case this feature exists for is a user saving *while the agent works*: an
+autosave commit there can make the agent's own `git add` fail, and would sweep the agent's
+half-finished files into a commit mid-turn. `hash-object` touches neither the index nor a ref. It
+also answers the three objections the original text raised against committing: nothing lands on a
+finished run's branch, no hook is bypassed on the user's behalf, and outside a git repository it
+degrades to an event with no `blob` instead of failing the save.
+
+Recovery is `git cat-file -p <blob>` in the task's working directory. The honest bound: an
+unreachable blob lives until git's own gc prunes it (two weeks by default), and there is no
+cockpit UI for restoring one yet — that belongs with step 3's divergence banner.
+
+### What shipped in step 1
+
+| Piece | Where |
+|---|---|
+| `hash` + `utf8` from the resolver | `readWorktreePath()`, `packages/cezar/src/server/git-changes.ts` |
+| The write primitive, the deny rule, the blob | `packages/cezar/src/server/worktree-write.ts` |
+| `PUT /api/v1/runs/:id/files`, `editable`/`editableReason`/`hash` on the `GET` | `server.ts`, contract in `packages/contract/src/repo.ts` |
+| `fileEdit` capability | `capabilities.ts`, `packages/contract/src/health.ts` |
+| Edit / Save / Cancel, conflict banner, dirty guard | `packages/web/src/routes/task-git/file-preview.tsx`, `task-files.tsx` |
+
+Differences from the text below that are not one of the three decisions:
+
+- **§Security 5 needed no work.** The server-wide request-origin guard it specifies shipped as
+  #426 and already covers every mutating route. The `GET …/edits/:hash` carve-out went away with
+  the route.
+- **The deny rule is stricter than specified.** Segments are folded the way a case-insensitive
+  filesystem matches them (`.GIT`, `.git.`), and the rule runs a second time over the OS-resolved
+  path, which is the only place a Windows 8.3 short name (`GIT~1`) is expanded.
+- **`editableReason` is omitted when the file is editable**, not `null` — the contract rule that a
+  schema describes exactly what the route sends.
+- **`?path=` is a required single string** on the `PUT`; no `abs` field on the resolver
+  (`join(root, path)` is what the `raw=1` branch already relies on); no `?meta=1` yet.
+- **The write uses the same working directory as the `GET`** (`workingDirectoryOf`), so a
+  worktree-off run edits the checkout it ran in. Whatever is browsable is addressed the same way;
+  what is *writable* is the deny rule's to decide.
+- **The base is pinned client-side.** The editor keeps the `hash` it opened with rather than
+  re-reading the cached entry, so a background refetch cannot hand a save a hash for content the
+  user never saw. The same comparison gives a first divergence banner for free, on any refetch.
+- **The draft survives a layout switch** (`useRememberedState`), which is what the spec's
+  "blocks tab switch" asked for, without a blocking dialog. Selecting another file while dirty
+  still confirms.
+
+### What shipped in step 3 — create, rename, delete (2026-10-10)
+
+Reverses "Overwrite only — no file creation" in §Proposed Solution. The `PUT` still cannot create
+a file; creating is its own route, so "save" and "new file" can never be confused by a typo in a
+path.
+
+| Route | Does | Answers |
+|---|---|---|
+| `POST /runs/:id/files?path=` `{content}` | creates a NEW file and the directories its path names | `201 {path, size, hash}` |
+| `DELETE /runs/:id/files?path=` | removes one file | `{path, blob?}` |
+| `POST /runs/:id/files/rename` `{from, to}` | moves one file to a path that does not exist | `{from, to}` |
+
+All three sit behind `fileEdit` and answer `409 {error}` for a refused target, like the save.
+
+- **Files only.** A directory is refused by delete and rename. Removing or moving a tree from a
+  browser is a different size of mistake, and nothing here needs it yet. Empty directories a
+  rename or delete leaves behind are left alone — git does not track them.
+- **Nothing is overwritten.** Create uses the exclusive flag; rename refuses an existing
+  destination. The rename's check is not a lock: a file created at that exact name in the
+  milliseconds between the check and the rename would be replaced — the same accepted window as
+  §Concurrency race 1.
+- **A path that does not exist yet has nothing on disk to inspect**, so `readWorktreePath` cannot
+  resolve it. `resolveNewPath` spells the same containment for that case: the deny rule over the
+  path as written, then real containment and the deny rule again over the nearest ancestor that
+  does exist — where a symlinked parent would redirect the write.
+- **The deny rule gained one case, for every write:** on Windows a segment containing `:` is
+  refused. NTFS reads `.git::$INDEX_ALLOCATION` as the `.git` directory, which the case fold
+  cannot see through.
+- **Delete stores the bytes first** (`recordEditBlob`) and reports the id as `blob`. A delete
+  from a browser has no trash, and an untracked file has no commit either. Binary and oversized
+  files can be deleted and renamed — neither decodes the content.
+- **Events:** `file-created {path, hash, size}`, `file-deleted {path, blob?}`,
+  `file-renamed {from, to}` — metadata only, like `file-edited`.
+- **UI:** a **New file** button above the tree (prefilled with the folder of the file being
+  looked at), and a `⋯` menu in the preview header with **Rename or move…** and **Delete…**
+  (`file-actions.tsx`). The menu is hidden while a file is being edited. A refusal is shown in
+  the dialog, in the server's words, and the dialog stays open.
+
+### Still open
+
+1. **Project-wide search** ("find in files"). The editor finds within one file; nothing in the
+   cockpit searches a task's working directory yet, and an editor is of limited use without it.
+2. **Seeing and undoing a hand edit.** The SSE-driven divergence watch (`?meta=1`, plan step 11)
+   — today the banner appears only when the open file is refetched; and surfacing the `file-*`
+   events in the thread (step 13) with a restore-from-`blob` affordance, which is the only way a
+   deleted file comes back without a terminal.
+3. **Directories** — create-empty, rename, delete.
+4. **E2E** (plan step 10) is not written. `packages/web/e2e/` still asserts the pre-English
+   `Pliki` label, so that suite needs its own pass first.
+
 ## Open Questions — resolved autonomously
+
+> **Superseded in part (2026-10-10):** Q1, Q4, Q5, Q6 and Q8 — see §Revision 2026-10-10.
 
 Written in autonomous mode (`om-spec-writing --autonomous`). These were **not**
 answered by a human; each carries the conservative default applied. Override by
@@ -317,6 +488,10 @@ instead of discovering it later in a diff.
 
 ## Audit & recovery
 
+> **Superseded (2026-10-10):** the snapshot store and its read route were not built. The
+> `file-edited` event below stands, with an optional `blob` naming a git object that holds the
+> saved bytes — see §Revision 2026-10-10, Decision 3.
+
 A human hand-edit into a live agent worktree today would leave no trace: no run
 event, no log line. The agent's next turn sees code it did not write; a user
 debugging the run has no way to know an edit happened. That is unacceptable in a
@@ -493,6 +668,10 @@ since `GET …/edits/:hash` would no longer exist. That is a further argument fo
 the descope, not against it.
 
 ## Security model
+
+> **Superseded in part (2026-10-10):** point 2 (hosted mode is opt-in via `CEZ_FILE_EDIT=1`, not
+> refused outright), point 5 (the guard shipped as #426) and point 6 (`CEZ_FILE_EDIT=0`) — see
+> §Revision 2026-10-10.
 
 The first browser-reachable write into a checkout an agent subsequently
 executes. That deserves stating plainly.
@@ -801,6 +980,9 @@ files.
 
 ## Syntax highlighting in edit mode
 
+> **Not implemented, deliberately (2026-10-10):** this section hardens the overlay editor that
+> CodeMirror 6 replaces — see §Revision 2026-10-10, Decision 1.
+
 The editor must highlight the file it has open, in the same colors as the
 preview, without making typing feel slow. That sounds like it comes free from
 reusing `file-preview.tsx`'s highlighting — it does not. Every property below is
@@ -1094,6 +1276,10 @@ the vertical split exists to protect.
 Both leave the app working. Neither changes existing behavior.
 
 ## Implementation Plan
+
+> **Status (2026-10-10):** steps 1–4, 5a, 7, the event half of 6, the dirty guard and conflict UX
+> of 8, and 9 are done. Steps 5b (already in the tree as #426), 7b, and the snapshot halves of 6
+> and 8 are dropped. Steps 10–13 are open. See §Revision 2026-10-10.
 
 Every step ends with the AGENTS.md gate: `npm run typecheck`, `npm test`, `npm
 run test:unit`, `npm run build`, `npm run test:package`; `npm run test:e2e` at

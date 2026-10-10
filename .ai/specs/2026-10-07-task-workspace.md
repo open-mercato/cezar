@@ -502,6 +502,10 @@ loads it in the current tab.
 - Building a general-purpose IDE, Monaco editor, source-control client or terminal emulator from
   scratch.
 - Editing source files in the browser. Files remains read-only.
+  > **IMPLEMENTATION NOTE (2026-10-10) — reversed by the owner, in its own spec:**
+  > `.ai/specs/2026-07-20-worktree-file-editing.md` §Revision 2026-10-10. The view is now labelled
+  > **Code** and saves one existing text file through `PUT /runs/:id/files`. The line above about
+  > a general-purpose IDE stands: no language server, no debugger.
 - Automatically staging, committing, pushing, creating PRs, merging or accepting changes.
 - Agent profile/squad redesign, new backend runners, planner orchestration, or task dispatch
   changes.
