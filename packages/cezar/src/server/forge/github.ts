@@ -547,15 +547,14 @@ const ghSearchHitSchema = ghIssueSchema.extend({
   commentsCount: z.number().default(0),
 });
 
-/** `gh {issue,pr} view <n> --json …` — the exact-number path. Shares `ghIssueSchema`'s core;
- *  `isDraft`/`additions`/`deletions` are PR-only and default harmlessly for issues. `comments` is
- *  requested only for this one-result path so its length can align the comment badge with text
- *  search; the list path deliberately never asks for comment bodies. */
-const ghViewHitSchema = ghIssueSchema.extend({
+/** The bounded metadata shape returned by the exact-number REST lookup. GitHub's REST issue and
+ * pull-request resources expose `comments` as a numeric count, unlike `gh view --json comments`,
+ * which serializes every comment body. */
+const ghNumericHitSchema = ghIssueSchema.extend({
   isDraft: z.boolean().default(false),
   additions: z.number().default(0),
   deletions: z.number().default(0),
-  comments: z.array(z.unknown()).default([]),
+  commentsCount: z.number().int().nonnegative().default(0),
 });
 
 /** Flatten one validated hit into the `ForgeItem` the tab's rows already render. `checks: null`
@@ -564,7 +563,7 @@ const ghViewHitSchema = ghIssueSchema.extend({
  *  deletions because supplying them would require one expensive view lookup per result. */
 function toSearchItem(
   kind: 'issue' | 'pr',
-  hit: z.infer<typeof ghSearchHitSchema> | z.infer<typeof ghViewHitSchema>,
+  hit: z.infer<typeof ghSearchHitSchema> | z.infer<typeof ghNumericHitSchema>,
   labelColors: Record<string, string>,
 ): ForgeItem {
   for (const label of hit.labels) {
@@ -579,7 +578,7 @@ function toSearchItem(
     labels: hit.labels.map((l) => l.name),
     body: (hit.body ?? '').slice(0, 8_000),
     url: hit.url,
-    comments: 'commentsCount' in hit ? hit.commentsCount : 'comments' in hit ? hit.comments.length : 0,
+    comments: hit.commentsCount,
   };
   if (kind === 'pr') {
     item.isDraft = hit.isDraft;
@@ -641,14 +640,19 @@ export async function searchGithubItems(
       // user input reaching an argv, so it is normalized rather than passed through verbatim.
       const number = Number(numeric);
       try {
+        // Use the REST resource's numeric `comments` field. `gh issue/pr view --json comments`
+        // returns every comment body, so a popular issue would turn this one-result lookup into
+        // an unbounded response. jq reshapes the bounded REST metadata to the shared schema while
+        // retaining one subprocess for the numeric lookup.
+        const jq =
+          '{number,title,author:{login:.user.login},createdAt:.created_at,labels,url:.html_url,body,commentsCount:(.comments // 0),isDraft:(.draft // false),additions:(.additions // 0),deletions:(.deletions // 0)}';
         const out = await gh(repoRoot, [
-          kind === 'pr' ? 'pr' : 'issue',
-          'view',
-          String(number),
-          '--json',
-          kind === 'pr' ? `${SEARCH_FIELDS},isDraft,additions,deletions,comments` : `${SEARCH_FIELDS},comments`,
+          'api',
+          `repos/{owner}/{repo}/${kind === 'pr' ? 'pulls' : 'issues'}/${number}`,
+          '--jq',
+          jq,
         ]);
-        const hit = ghViewHitSchema.parse(JSON.parse(out));
+        const hit = ghNumericHitSchema.parse(JSON.parse(out));
         return { available: true, items: [toSearchItem(kind, hit, labelColors)], labelColors };
       } catch {
         // Not a number in this repo (or not this kind) — fall through to the text search below.
