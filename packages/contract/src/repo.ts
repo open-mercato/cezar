@@ -143,9 +143,60 @@ export const worktreeEntrySchema = z.discriminatedUnion('type', [
     binary: z.boolean(),
     tooLarge: z.boolean(),
     content: z.string().optional(),
+    /** The content's version token (`sha256:<hex>` over the bytes) — present exactly when
+     *  `content` is. A save echoes it as `baseHash`. */
+    hash: z.string().optional(),
+    /** Whether THIS FILE can be saved back (spec `2026-07-20-worktree-file-editing`): false for
+     *  binary, over-cap and non-UTF-8 files and for anything under a `.git` or `node_modules`
+     *  directory. About the file only — whether this cockpit allows editing at all is the
+     *  `fileEdit` capability. */
+    editable: z.boolean(),
+    /** Why not, in the server's words. Present exactly when `editable` is false. */
+    editableReason: z.string().optional(),
   }),
 ]);
 export type WorktreeEntry = z.infer<typeof worktreeEntrySchema>;
+
+/**
+ * `PUT /api/v1/runs/:id/files?path=` — overwrite one existing text file in the task's working
+ * directory. `baseHash` is the `hash` the file was read with; a mismatch is a 409, so a save can
+ * never land on top of content the user did not see. Required from day one: the route cannot
+ * create a file, and making an optional field required later would be a breaking change.
+ */
+export const runFileWriteSchema = z.object({
+  content: z.string(),
+  baseHash: z.string(),
+});
+export type RunFileWrite = z.infer<typeof runFileWriteSchema>;
+
+/** What a successful save answers. `hash` is the NEW token, so the editor keeps saving without a
+ *  refetch. */
+export const runFileWriteResponseSchema = z.object({
+  path: z.string(),
+  size: z.number(),
+  hash: z.string(),
+});
+export type RunFileWriteResponse = z.infer<typeof runFileWriteResponseSchema>;
+
+/** `POST /api/v1/runs/:id/files?path=` — create a new text file (and the directories its path
+ *  names). Answers like a save. The path must not exist: this never overwrites. */
+export const runFileCreateSchema = z.object({ content: z.string() });
+export type RunFileCreate = z.infer<typeof runFileCreateSchema>;
+
+/** `DELETE /api/v1/runs/:id/files?path=` — one file, never a directory. `blob`, when present, is
+ *  the id of a git object holding the deleted bytes (`git cat-file -p <blob>`). */
+export const runFileDeleteResponseSchema = z.object({
+  path: z.string(),
+  blob: z.string().optional(),
+});
+export type RunFileDeleteResponse = z.infer<typeof runFileDeleteResponseSchema>;
+
+/** `POST /api/v1/runs/:id/files/rename` — move one file to a path that does not exist yet. */
+export const runFileRenameSchema = z.object({
+  from: z.string().min(1),
+  to: z.string().min(1),
+});
+export type RunFileRename = z.infer<typeof runFileRenameSchema>;
 
 /**
  * The lifecycle states a task can be in. Declared here (module-local, not exported) only because

@@ -352,7 +352,7 @@ function RunHeaderView({
                 Commits
               </TabLink>
               <TabLink to={`/tasks/${run.id}/files`} active={tab === 'files'}>
-                Files
+                Code
               </TabLink>
               {/* The live workflow graph — every run with a definition: a step list opens as its graph. */}
               {run.workflowDef ? (

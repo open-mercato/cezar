@@ -43,6 +43,10 @@ import {
   getRunDiff,
   getRunDrafts,
   getRunFile,
+  putRunFile,
+  createRunFile,
+  deleteRunFile,
+  renameRunFile,
   getRunHandoff,
   getRuns,
   getRunsIndex,
@@ -101,6 +105,7 @@ import type {
   CreateAgentProfileInput,
   ApiRun,
   HealthResponse,
+  WorktreeEntry,
   MessageInput,
   Runner,
   PatchRunInput,
@@ -1093,6 +1098,41 @@ export function useRunFile(id: string | undefined, path: string | undefined) {
     enabled: Boolean(id) && path !== undefined,
     retry: false,
   })
+}
+
+/** Save a file from the Code view's editor. On success the cached entry takes the saved content
+ *  and its NEW hash, so the preview and the next save agree without a refetch, and the Changes
+ *  view is told its diff moved. A failure touches nothing — the editor keeps the typed text. */
+export function useSaveRunFile(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ path, content, baseHash }: { path: string; content: string; baseHash: string }) =>
+      putRunFile(id, path, { content, baseHash }),
+    onSuccess: (saved, { path, content }) => {
+      queryClient.setQueryData<WorktreeEntry>(queryKeys.runs.file(id, path), (cached) =>
+        cached?.type === 'file' ? { ...cached, content, size: saved.size, hash: saved.hash } : cached,
+      )
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.changes(id) })
+    },
+  })
+}
+
+/**
+ * Create, delete or rename a file from the Code view. Any of them changes what a directory
+ * listing shows — and a rename changes two — so every cached path of this run is dropped rather
+ * than guessing which listings moved; the tree refetches only the folders that are open.
+ */
+export function useRunFileOps(id: string) {
+  const queryClient = useQueryClient()
+  const onSuccess = () => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.runs.file(id, '').slice(0, 4) })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.runs.changes(id) })
+  }
+  return {
+    create: useMutation({ mutationFn: (path: string) => createRunFile(id, path, ''), onSuccess }),
+    remove: useMutation({ mutationFn: (path: string) => deleteRunFile(id, path), onSuccess }),
+    rename: useMutation({ mutationFn: (body: { from: string; to: string }) => renameRunFile(id, body), onSuccess }),
+  }
 }
 
 /** The variant-compare data for `/compare/:groupId` (spec 010). Freshness while variants are

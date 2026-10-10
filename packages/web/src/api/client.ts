@@ -80,6 +80,10 @@ import type {
   TerminalState,
   WorkspaceLayouts,
   WorkspaceLayoutsResponse,
+  RunFileDeleteResponse,
+  RunFileRename,
+  RunFileWrite,
+  RunFileWriteResponse,
   OpenProjectInResponse,
   OpenTargetsResponse,
   ParsedWorkflow,
@@ -1129,6 +1133,55 @@ export async function getRunFile(id: string, path: string, opts?: ReadOptions): 
       init(opts),
     ),
     '/runs/:id/files',
+  )
+}
+
+/** Save one existing text file back into the run's working directory (the Code view's editor).
+ *  `baseHash` is the `hash` the file was read with: the server answers 409 when the file changed
+ *  since, so a save never lands on content the user did not see. */
+export async function putRunFile(id: string, path: string, body: RunFileWrite): Promise<RunFileWriteResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].files.$put({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      query: { path },
+      json: body,
+    }),
+    '/runs/:id/files',
+  )
+}
+
+/** Create a new text file in the run's working directory. 409 when the path already exists —
+ *  this never overwrites. */
+export async function createRunFile(id: string, path: string, content: string): Promise<RunFileWriteResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].files.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      query: { path },
+      json: { content },
+    }),
+    '/runs/:id/files',
+  )
+}
+
+/** Delete one file (never a directory) from the run's working directory. */
+export async function deleteRunFile(id: string, path: string): Promise<RunFileDeleteResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].files.$delete({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      query: { path },
+    }),
+    '/runs/:id/files',
+  )
+}
+
+/** Move one file to a path that does not exist yet. */
+export async function renameRunFile(id: string, body: RunFileRename): Promise<RunFileRename> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].files.rename.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: body,
+    }),
+    '/runs/:id/files/rename',
   )
 }
 

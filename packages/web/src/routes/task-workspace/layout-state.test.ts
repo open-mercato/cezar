@@ -9,6 +9,7 @@ import {
   defaultState,
   DEFAULT_LAYOUT_NAME,
   findLayout,
+  fixedViewOf,
   forgetTask,
   MAX_COLUMNS,
   MIN_COLUMN_WIDTH,
@@ -42,7 +43,7 @@ const widths = (state: WorkspaceState) => activeLayout(state)?.columns.map((colu
 const views = (state: WorkspaceState) => activeLayout(state)?.columns.map((column) => column.view)
 const names = (state: WorkspaceState) => state.layouts.map((layout) => layout.name)
 /** The six cards a task is born with, in order: one per view. */
-const BORN = ['Chat', 'Changes', 'Commits', 'Files', 'Browser', 'Graph']
+const BORN = ['Chat', 'Changes', 'Commits', 'Code', 'Browser', 'Graph']
 
 describe('defaultState', () => {
   it('opens a fresh task on Chat, with one full-width card per view behind it', () => {
@@ -339,6 +340,18 @@ describe('preferredActive', () => {
 })
 
 describe('openDeepLink', () => {
+  it('still knows a born card saved under the label its view used to have', () => {
+    // `Code` was `Files`. A task opened before the rename has that card SAVED as `Files`, and the
+    // name is how a born card is recognized — without this every such task grows a stray `Files`
+    // card beside a freshly minted `Code`.
+    const before = renameLayout(defaultState(), viewLabel('files'), 'Files')
+    const saved = findLayout(before, 'Files')!
+    expect(fixedViewOf(saved)).toBe('files')
+    const state = openDeepLink(before, 'files')
+    expect(state.active).toBe('Files')
+    expect(state.layouts).toEqual(before.layouts)
+  })
+
   it('selects the card the task was born with for that view and leaves the rest alone', () => {
     // The born card — still one column of the view, still under the view's own name — IS the card
     // the link means, so nothing is minted beside it.

@@ -66,7 +66,7 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: { kind: 'github', available: true },
-  capabilities: { localHandoff: true, terminal: true, preview: true, designMode: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: true, preview: true, designMode: true, fileEdit: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
 }
 
 const jsonResponse = (body: unknown, status = 200) =>
@@ -167,9 +167,9 @@ function HistoryProbe() {
 }
 
 /** The fixed cards of a task with no workflow graph, left to right: one per view, always there. */
-const FIXED = ['Chat', 'Changes', 'Commits', 'Files', 'Browser']
+const FIXED = ['Chat', 'Changes', 'Commits', 'Code', 'Browser']
 /** The saved layouts a task is born with — one plain card per view, each drawn as its fixed card. */
-const BORN = ['Chat', 'Changes', 'Commits', 'Files', 'Browser', 'Graph']
+const BORN = ['Chat', 'Changes', 'Commits', 'Code', 'Browser', 'Graph']
 
 const cards = () => Array.from(document.querySelectorAll('[data-slot="layout-card"]'))
 const cardNames = () => cards().map((card) => card.textContent?.replace(/\s+/g, ' ').trim())
@@ -245,13 +245,13 @@ describe('the task workspace', () => {
     renderWorkspace()
     await ready()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Files' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Code' }))
     await waitFor(() => expect(columnViews()).toEqual(['files']))
-    expect(activeCard()).toBe('Files')
+    expect(activeCard()).toBe('Code')
     expect(cardNames()).toEqual(FIXED)
     // A fixed card stays the one view it stands for: its window has no header to edit it by.
     expect(document.querySelector('[data-slot="workspace-column-header"]')).toBeNull()
-    await waitFor(() => expect(savedLayouts('r1').active).toBe('Files'))
+    await waitFor(() => expect(savedLayouts('r1').active).toBe('Code'))
     expect(savedNames('r1')).toEqual(BORN)
   })
 
@@ -313,7 +313,7 @@ describe('the task workspace', () => {
     await ready()
     await waitFor(() => expect(columnViews()).toHaveLength(3))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Close Files' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close Code' }))
     await waitFor(() => expect(columnViews()).toEqual(['session', 'commits']))
     expect(columns().map((column) => (column as HTMLElement).style.width)).toEqual(['50%', '50%'])
   })
@@ -328,7 +328,7 @@ describe('the task workspace', () => {
     await ready()
     await waitFor(() => expect(columnViews()).toEqual(['files']))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Close Files' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close Code' }))
     await waitFor(() => expect(columns()).toHaveLength(0))
     expect(cardNames()).toEqual([...FIXED, 'Solo'])
     expect(activeCard()).toBe('Solo')
@@ -345,7 +345,7 @@ describe('the task workspace', () => {
     await ready()
     await waitFor(() => expect(columnViews()).toEqual(['files']))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Close Files' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close Code' }))
     await waitFor(() => expect(columns()).toHaveLength(0))
 
     await pickTile('commits')
@@ -653,10 +653,10 @@ describe('the task workspace', () => {
     expect((split as HTMLButtonElement).disabled).toBe(false)
 
     fireEvent.click(split!)
-    await waitFor(() => expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Files', 'New window']))
+    await waitFor(() => expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Code', 'New window']))
     expect(screen.getAllByRole('tab')[1]!.getAttribute('aria-selected')).toBe('true')
     await pickTile('commits')
-    await waitFor(() => expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Files', 'Commits']))
+    await waitFor(() => expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Code', 'Commits']))
   })
 
   it('shows one column at a time on a narrow viewport', async () => {
@@ -676,7 +676,7 @@ describe('the task workspace', () => {
     await waitFor(() => expect(document.querySelector('[data-narrow]')).not.toBeNull())
     // Both columns are reachable as tabs, but only one is painted.
     const tabs = screen.getAllByRole('tab')
-    expect(tabs.map((tab) => tab.textContent)).toEqual(['Files', 'Commits'])
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['Code', 'Commits'])
     expect(tabs[0]!.getAttribute('aria-selected')).toBe('true')
     expect(document.querySelectorAll('[data-narrow] [data-slot="main"]')).toHaveLength(1)
 
@@ -789,7 +789,7 @@ describe('the task workspace', () => {
 
     await waitFor(() => expect(columnViews()).toEqual(['graph']))
     // A task with a workflow has a Graph card, right after Chat, and the link lights it.
-    expect(cardNames()).toEqual(['Chat', 'Graph', 'Changes', 'Commits', 'Files', 'Browser'])
+    expect(cardNames()).toEqual(['Chat', 'Graph', 'Changes', 'Commits', 'Code', 'Browser'])
     expect(activeCard()).toBe('Graph')
     const graph = await screen.findByTestId('graph-view')
     expect(graph.getAttribute('data-embedded')).toBe('')

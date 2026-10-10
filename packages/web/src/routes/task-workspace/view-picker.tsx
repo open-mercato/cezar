@@ -1,6 +1,6 @@
 import {
   FileDiffIcon,
-  FolderTreeIcon,
+  CodeXmlIcon,
   GitCommitHorizontalIcon,
   GlobeIcon,
   MessageSquareTextIcon,
@@ -35,7 +35,7 @@ export const VIEW_ICONS: Record<ViewId, ComponentType<{ className?: string }>> =
   session: MessageSquareTextIcon,
   changes: FileDiffIcon,
   commits: GitCommitHorizontalIcon,
-  files: FolderTreeIcon,
+  files: CodeXmlIcon,
   browser: GlobeIcon,
   // The same icon the standalone graph route uses, so the tile and the surface agree.
   graph: WorkflowIcon,

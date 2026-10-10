@@ -64,6 +64,9 @@ import {
   type StarCountPayload,
   designProxyRequestSchema,
   promptQueueInputSchema,
+  runFileCreateSchema,
+  runFileRenameSchema,
+  runFileWriteSchema,
   type WorkspaceConfigResponse,
   workspaceBrandingLogoResponseSchema,
 } from '@open-mercato/cezar-contract';
@@ -170,7 +173,16 @@ import {
   isOsOpenableImage,
   pushCurrentBranch,
   readWorktreePath,
+  FILE_CONTENT_CAP,
 } from './git-changes.ts';
+import {
+  createWorktreeFile,
+  deleteWorktreeFile,
+  editRefusal,
+  recordEditBlob,
+  renameWorktreeFile,
+  writeWorktreeFile,
+} from './worktree-write.ts';
 import { gatedSkillsRepos, loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
 import { findConfigFile } from '../agent-config/catalog.ts';
 import { readConfigFile, statConfigPath, writeConfigFile } from '../agent-config/files.ts';
@@ -227,7 +239,7 @@ import { ProjectContextError, ProjectContexts, type ProjectContext } from './pro
 import { reviewGateEnabled } from '../runs/review-gate.ts';
 import { readUiState, uiStatePath } from '../ui-state.ts';
 import { agentHomePaths, cezarHomeDir, expandTilde } from '../paths.ts';
-import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
+import { fileEditRefusal, isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
 import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index.ts';
@@ -988,6 +1000,9 @@ const pinSchema = z.object({
 // images at ~7 MB base64 each); the ui-state PUT gets a much tighter cap since
 // it only ever carries small GUI prefs.
 const GLOBAL_BODY_LIMIT = 32 * 1024 * 1024; // 32 MiB
+// A file save carries at most FILE_CONTENT_CAP bytes of text; JSON string escaping (quotes,
+// newlines, backslashes) can double that, plus the envelope.
+const FILE_WRITE_BODY_LIMIT = FILE_CONTENT_CAP * 2 + 64 * 1024;
 const UI_STATE_BODY_LIMIT = 128 * 1024; // 128 KiB
 const BRANDING_LOGO_MAX_BYTES = 2 * 1024 * 1024;
 const BRANDING_LOGO_TYPES = {
@@ -4986,6 +5001,9 @@ export function createApp(deps: ServerDeps) {
           });
         }
       }
+      // Editability is the FILE's answer, decided here so the cockpit never re-derives it; whether
+      // this cockpit allows editing at all is the `fileEdit` capability, and the PUT checks both.
+      const refusal = editRefusal(result);
       return c.json({
         type: 'file' as const,
         path: result.path,
@@ -4993,7 +5011,98 @@ export function createApp(deps: ServerDeps) {
         binary: result.binary,
         tooLarge: result.tooLarge,
         ...(result.content !== undefined ? { content: result.content } : {}),
+        ...(result.hash !== undefined ? { hash: result.hash } : {}),
+        editable: refusal === null,
+        ...(refusal !== null ? { editableReason: refusal } : {}),
       });
+    })
+
+    // Code view: save one existing text file back (spec `2026-07-20-worktree-file-editing`).
+    // Policy first — `fileEdit` is off on a hosted cockpit unless `CEZ_FILE_EDIT=1` opted in,
+    // because cezar has no authentication of its own and this writes into a checkout an agent
+    // then executes. The global request-origin guard (#426) already covers the CSRF and
+    // DNS-rebinding halves for every mutating route, this one included.
+    //
+    // Same working directory as the GET above, so anything browsable is addressed the same way;
+    // what may be WRITTEN is `writeWorktreeFile`'s to decide (never `.git` or `node_modules`).
+    // The cap rides on `use` for the reason spelled out at `/workspace/ui-state`.
+    .use('/runs/:id/files', bodyLimit({ maxSize: FILE_WRITE_BODY_LIMIT }))
+    .put(
+      '/runs/:id/files',
+      queryZodValidator(z.object({ path: z.string().min(1) })),
+      jsonZodValidator(runFileWriteSchema),
+      async (c) => {
+        const { root: repoRoot, store } = c.get('project');
+        if (!capabilities().fileEdit) return c.json({ error: fileEditRefusal() }, 409);
+        const run = store.getRun(c.req.param('id'));
+        if (!run) return c.json({ error: 'not found' }, 404);
+        const workingDirectory = workingDirectoryOf(run, repoRoot);
+        if (!workingDirectory) return c.json({ error: NO_WORKTREE }, 409);
+        const { content, baseHash } = c.req.valid('json');
+        const result = await writeWorktreeFile(workingDirectory, c.req.valid('query').path, content, baseHash);
+        if (!result.ok) return c.json({ error: result.error }, result.kind === 'failed' ? 500 : 409);
+        // A human edit into a worktree an agent is working in must leave a trace: the event says
+        // it happened, and `blob` names a git object holding the exact bytes, because the agent's
+        // next write can silently replace them. Metadata only — content never rides the event log.
+        const blob = await recordEditBlob(workingDirectory, Buffer.from(content, 'utf8'));
+        store.appendEvent(run.id, {
+          type: 'file-edited',
+          path: result.path,
+          baseHash,
+          hash: result.hash,
+          size: result.size,
+          ...(blob ? { blob } : {}),
+        });
+        return c.json({ path: result.path, size: result.size, hash: result.hash });
+      },
+    )
+
+    // Create / delete / rename — files only, behind the same gate and the same containment.
+    // Each leaves a metadata-only event, like a save: a human changing what is on disk under an
+    // agent must be visible in the run's own history.
+    .post(
+      '/runs/:id/files',
+      queryZodValidator(z.object({ path: z.string().min(1) })),
+      jsonZodValidator(runFileCreateSchema),
+      async (c) => {
+        const { root: repoRoot, store } = c.get('project');
+        if (!capabilities().fileEdit) return c.json({ error: fileEditRefusal() }, 409);
+        const run = store.getRun(c.req.param('id'));
+        if (!run) return c.json({ error: 'not found' }, 404);
+        const workingDirectory = workingDirectoryOf(run, repoRoot);
+        if (!workingDirectory) return c.json({ error: NO_WORKTREE }, 409);
+        const result = await createWorktreeFile(workingDirectory, c.req.valid('query').path, c.req.valid('json').content);
+        if (!result.ok) return c.json({ error: result.error }, result.kind === 'failed' ? 500 : 409);
+        store.appendEvent(run.id, { type: 'file-created', path: result.path, hash: result.hash, size: result.size });
+        return c.json({ path: result.path, size: result.size, hash: result.hash }, 201);
+      },
+    )
+    .delete('/runs/:id/files', queryZodValidator(z.object({ path: z.string().min(1) })), async (c) => {
+      const { root: repoRoot, store } = c.get('project');
+      if (!capabilities().fileEdit) return c.json({ error: fileEditRefusal() }, 409);
+      const run = store.getRun(c.req.param('id'));
+      if (!run) return c.json({ error: 'not found' }, 404);
+      const workingDirectory = workingDirectoryOf(run, repoRoot);
+      if (!workingDirectory) return c.json({ error: NO_WORKTREE }, 409);
+      const result = await deleteWorktreeFile(workingDirectory, c.req.valid('query').path);
+      if (!result.ok) return c.json({ error: result.error }, result.kind === 'failed' ? 500 : 409);
+      // `blob` is what makes this recoverable; see `deleteWorktreeFile`.
+      const blob = result.blob ? { blob: result.blob } : {};
+      store.appendEvent(run.id, { type: 'file-deleted', path: result.path, ...blob });
+      return c.json({ path: result.path, ...blob });
+    })
+    .post('/runs/:id/files/rename', jsonZodValidator(runFileRenameSchema), async (c) => {
+      const { root: repoRoot, store } = c.get('project');
+      if (!capabilities().fileEdit) return c.json({ error: fileEditRefusal() }, 409);
+      const run = store.getRun(c.req.param('id'));
+      if (!run) return c.json({ error: 'not found' }, 404);
+      const workingDirectory = workingDirectoryOf(run, repoRoot);
+      if (!workingDirectory) return c.json({ error: NO_WORKTREE }, 409);
+      const { from, to } = c.req.valid('json');
+      const result = await renameWorktreeFile(workingDirectory, from, to);
+      if (!result.ok) return c.json({ error: result.error }, result.kind === 'failed' ? 500 : 409);
+      store.appendEvent(run.id, { type: 'file-renamed', from: result.from, to: result.to });
+      return c.json({ from: result.from, to: result.to });
     })
 
     .post('/runs/:id/git/commit', jsonZodValidator(gitCommitSchema), async (c) => {

@@ -1,4 +1,6 @@
+import { isUtf8 } from 'node:buffer';
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { lstat, open, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -459,7 +461,19 @@ export interface DirEntry {
 
 export type FilesResult =
   | { kind: 'dir'; path: string; entries: DirEntry[] }
-  | { kind: 'file'; path: string; size: number; binary: boolean; tooLarge: boolean; content?: string }
+  | {
+      kind: 'file';
+      path: string;
+      size: number;
+      binary: boolean;
+      tooLarge: boolean;
+      content?: string;
+      /** Present exactly when `content` is. False when the bytes are not valid UTF-8: `content` is
+       *  then a lossy decode (U+FFFD), fine to look at and corrupting to write back. */
+      utf8?: boolean;
+      /** Present exactly when `content` is: the token a save must echo (spec #530). */
+      hash?: string;
+    }
   | { kind: 'invalid'; error: string }
   | { kind: 'missing'; error: string };
 
@@ -513,6 +527,12 @@ export function isOsOpenableImage(path: string): boolean {
   const dot = name.lastIndexOf('.');
   if (dot <= 0) return false;
   return OS_OPENABLE_EXT.has(name.slice(dot + 1).toLowerCase());
+}
+
+/** The version token of a file's content (spec `2026-07-20-worktree-file-editing`): over the
+ *  BYTES, never the decoded string, so an encoding round-trip cannot produce a false "unchanged". */
+export function fileHash(bytes: Uint8Array): string {
+  return `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 }
 
 /** True when the first 8 KB contain a NUL byte — good enough for a viewer flag. */
@@ -603,8 +623,17 @@ export async function readWorktreePath(
   if (binary || tooLarge) {
     return { kind: 'file', path: display, size: info.size, binary, tooLarge };
   }
-  const content = await readFile(target, 'utf8');
-  return { kind: 'file', path: display, size: info.size, binary: false, tooLarge: false, content };
+  const bytes = await readFile(target);
+  return {
+    kind: 'file',
+    path: display,
+    size: info.size,
+    binary: false,
+    tooLarge: false,
+    content: bytes.toString('utf8'),
+    utf8: isUtf8(bytes),
+    hash: fileHash(bytes),
+  };
 }
 
 // ---- branches -------------------------------------------------------------

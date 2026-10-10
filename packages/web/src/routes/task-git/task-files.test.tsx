@@ -1,5 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { EditorView } from '@codemirror/view'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -42,7 +43,7 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: { kind: 'github', available: true },
-  capabilities: { localHandoff: true, terminal: true, preview: true, designMode: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: true, preview: true, designMode: true, fileEdit: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
 }
 
 /** The worktree the stub serves: a root with one lazy directory and every preview kind. */
@@ -60,11 +61,11 @@ const ROOT: WorktreeEntry = {
 
 const FILES: Record<string, WorktreeEntry> = {
   src: { type: 'dir', path: 'src', entries: [{ name: 'nested.md', type: 'file', size: 8 }] },
-  'src%2Fnested.md': { type: 'file', path: 'src/nested.md', size: 8, binary: false, tooLarge: false, content: '# hello\n' },
-  'hello.ts': { type: 'file', path: 'hello.ts', size: 27, binary: false, tooLarge: false, content: "export const hi = 'world'\n" },
-  'logo.png': { type: 'file', path: 'logo.png', size: 2048, binary: true, tooLarge: false },
-  'big.txt': { type: 'file', path: 'big.txt', size: 900_000, binary: false, tooLarge: true },
-  'blob.dat': { type: 'file', path: 'blob.dat', size: 4096, binary: true, tooLarge: false },
+  'src%2Fnested.md': { type: 'file', path: 'src/nested.md', size: 8, binary: false, tooLarge: false, content: '# hello\n', hash: 'sha256:nested', editable: true },
+  'hello.ts': { type: 'file', path: 'hello.ts', size: 27, binary: false, tooLarge: false, content: "export const hi = 'world'\n", hash: 'sha256:v1', editable: true },
+  'logo.png': { type: 'file', path: 'logo.png', size: 2048, binary: true, tooLarge: false, editable: false, editableReason: 'binary files are not editable' },
+  'big.txt': { type: 'file', path: 'big.txt', size: 900_000, binary: false, tooLarge: true, editable: false, editableReason: 'file is too large to edit' },
+  'blob.dat': { type: 'file', path: 'blob.dat', size: 4096, binary: true, tooLarge: false, editable: false, editableReason: 'binary files are not editable' },
 }
 
 const jsonResponse = (body: unknown, status = 200) =>
@@ -123,7 +124,7 @@ describe('the Files tab route', () => {
     await waitFor(() => expect(document.querySelector('[data-slot="files-tree"]')).not.toBeNull())
     expect(
       document.querySelector('[data-slot="run-tabs"] a[aria-current="page"]')?.textContent,
-    ).toBe('Files')
+    ).toBe('Code')
     // Dirs first (the server's order, rendered verbatim), then files.
     const rows = [...document.querySelectorAll('[data-slot="files-dir"], [data-slot="files-file"]')].map(
       (el) => (el as HTMLElement).dataset.path,
@@ -257,5 +258,114 @@ describe('the Files tab route', () => {
       expect(screen.getByRole('heading', { level: 2, name: 'Could not load the files' })).toBeTruthy(),
     )
     expect(document.querySelector('[data-slot="centered-state"]')?.getAttribute('data-tone')).toBe('danger')
+  })
+})
+
+// ---- editing (spec 2026-07-20-worktree-file-editing) -------------------------------------------
+
+describe('editing a file in the Code view', () => {
+  /** The live CodeMirror view, once its lazy chunk has mounted. */
+  const editor = () => {
+    const host = document.querySelector('[data-slot="code-mirror"]') as HTMLElement | null
+    return host ? EditorView.findFromDOM(host) : null
+  }
+  const text = () => editor()!.state.sliceDoc()
+  /** Replace the whole document the way typing would — through a transaction the editor reports. */
+  const type = (value: string) =>
+    act(() => editor()!.dispatch({ changes: { from: 0, to: editor()!.state.doc.length, insert: value } }))
+  const button = (name: string) => screen.queryByRole('button', { name }) as HTMLButtonElement | null
+  const SAVE = 'PUT /api/v1/runs/r1/files?path=hello.ts'
+  /** The JSON body of the save the stub saw. */
+  const savedBody = () => {
+    const call = vi.mocked(fetch).mock.calls.find(([, init]) => init?.method === 'PUT')
+    return JSON.parse(String(call?.[1]?.body))
+  }
+
+  async function startEditing() {
+    await openFile('hello.ts')
+    await waitFor(() => expect(button('Edit')).not.toBeNull())
+    fireEvent.click(button('Edit')!)
+    await waitFor(() => expect(editor()).not.toBeNull())
+  }
+
+  it('saves the typed text against the hash the file was opened with', async () => {
+    stubFetch({ [SAVE]: () => jsonResponse({ path: 'hello.ts', size: 24, hash: 'sha256:v2' }) })
+    renderFilesRoute()
+    await startEditing()
+
+    expect(text()).toBe("export const hi = 'world'\n")
+    expect(button('Save')!.disabled).toBe(true) // clean — nothing to save yet
+
+    type("export const hi = 'you'\n")
+    expect(document.querySelector('[data-slot="file-edit-dirty"]')).not.toBeNull()
+    fireEvent.click(button('Save')!)
+
+    await waitFor(() => expect(document.querySelector('[data-slot="file-edit-dirty"]')).toBeNull())
+    expect(savedBody()).toEqual({ content: "export const hi = 'you'\n", baseHash: 'sha256:v1' })
+    // Still editing, on the NEW base: a second save must echo the hash the first one answered.
+    type('again\n')
+    fireEvent.click(button('Save')!)
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method === 'PUT')).toHaveLength(2))
+    const second = vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method === 'PUT')[1]!
+    expect(JSON.parse(String(second[1]?.body))).toEqual({ content: 'again\n', baseHash: 'sha256:v2' })
+  })
+
+  it('a refused save keeps the typed text and says why, in the server words', async () => {
+    stubFetch({ [SAVE]: () => jsonResponse({ error: 'file changed on disk since it was opened — reload to see the current content' }, 409) })
+    renderFilesRoute()
+    await startEditing()
+    type('mine\n')
+    fireEvent.click(button('Save')!)
+
+    await waitFor(() => expect(document.querySelector('[data-slot="file-edit-conflict"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="file-edit-conflict"]')?.textContent).toContain('changed on disk')
+    expect(text()).toBe('mine\n')
+
+    // Reload discards mine and goes back to what is on disk.
+    fireEvent.click(button('Reload from disk')!)
+    await waitFor(() => expect(editor()).toBeNull())
+    expect(document.querySelector('[data-slot="file-preview-code"]')?.textContent).toContain("export const hi = 'world'")
+  })
+
+  it('a stray click in the tree does not lose unsaved text', async () => {
+    stubFetch()
+    renderFilesRoute()
+    await startEditing()
+    type('unsaved\n')
+
+    fireEvent.click(treeButton('files-file', 'blob.dat')!)
+    await waitFor(() => expect(button('Keep editing')).not.toBeNull())
+    fireEvent.click(button('Keep editing')!)
+    await waitFor(() => expect(button('Keep editing')).toBeNull())
+    expect(text()).toBe('unsaved\n')
+
+    fireEvent.click(treeButton('files-file', 'blob.dat')!)
+    await waitFor(() => expect(button('Discard')).not.toBeNull())
+    fireEvent.click(button('Discard')!)
+    await waitFor(() => expect(screen.getByRole('heading', { level: 2, name: 'Binary file' })).toBeTruthy())
+  })
+
+  it('offers no Edit button when the cockpit does not allow editing', async () => {
+    stubFetch({
+      'GET /api/v1/health': () => jsonResponse({ ...HEALTH, capabilities: { ...HEALTH.capabilities, fileEdit: false } }),
+    })
+    renderFilesRoute()
+    await openFile('hello.ts')
+    await waitFor(() => expect(document.querySelector('[data-slot="file-preview-code"]')).not.toBeNull())
+    expect(button('Edit')).toBeNull()
+  })
+
+  it('shows a text file the server will not save as read-only, with its reason', async () => {
+    stubFetch({
+      'GET /api/v1/runs/r1/files?path=hello.ts': () =>
+        jsonResponse({ ...FILES['hello.ts'], editable: false, editableReason: 'installed dependencies are not editable' }),
+    })
+    renderFilesRoute()
+    await openFile('hello.ts')
+    await waitFor(() => expect(document.querySelector('[data-slot="file-edit-readonly"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="file-edit-readonly"]')?.getAttribute('title')).toBe(
+      'installed dependencies are not editable',
+    )
+    expect(button('Edit')).toBeNull()
   })
 })

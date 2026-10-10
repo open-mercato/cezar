@@ -1472,7 +1472,7 @@ const health = (backends: readonly Runner[]): HealthResponse => ({
   checks: backends.map((name) => ({ name, available: true })),
   defaultRunner: backends[0] ?? 'claude',
   forge: null,
-  capabilities: { localHandoff: true, terminal: true, preview: true, designMode: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: true, preview: true, designMode: true, fileEdit: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
 })
 
 /** More than one installed backend — the only state that shows the runner pill. */

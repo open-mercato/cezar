@@ -29,7 +29,7 @@ const VIEW_LABELS: Record<ViewId, string> = {
   session: 'Chat',
   changes: 'Changes',
   commits: 'Commits',
-  files: 'Files',
+  files: 'Code',
   browser: 'Browser',
   graph: 'Graph',
 }
@@ -40,7 +40,8 @@ const LEGACY_AUTO_NAMES: Record<string, string> = {
   Czat: 'Chat',
   Zmiany: 'Changes',
   Commity: 'Commits',
-  Pliki: 'Files',
+  Pliki: 'Code',
+  Files: 'Code',
   Przeglądarka: 'Browser',
   Graf: 'Graph',
 }
@@ -54,6 +55,18 @@ export function layoutDisplayName(name: string): string {
   if (base === 'Układ') return `Layout${suffix}`
   const translated = LEGACY_AUTO_NAMES[base]
   return translated ? `${translated}${suffix}` : name
+}
+
+/** Names a view's born layout was SAVED under by earlier builds. A born layout is recognized by
+ *  its name, so a relabelled view must keep answering to the old one — otherwise every existing
+ *  task grows a stray `Files` card beside the `Code` one that replaced it. */
+const LEGACY_VIEW_NAMES: Partial<Record<ViewId, readonly string[]>> = {
+  files: ['Files'],
+}
+
+/** Whether `name` is the automatic name of `view`'s own layout, under any label it has had. */
+export function isViewName(name: string, view: ViewId): boolean {
+  return name === VIEW_LABELS[view] || (LEGACY_VIEW_NAMES[view]?.includes(name) ?? false)
 }
 
 export function viewLabel(view: ViewId): string {
@@ -597,7 +610,7 @@ export function moveColumn(
  */
 export function fixedViewOf(layout: WorkspaceLayout): ViewId | null {
   const view = layout.columns.length === 1 ? layout.columns[0]?.view : undefined
-  return view !== undefined && layout.name === viewLabel(view) ? view : null
+  return view !== undefined && isViewName(layout.name, view) ? view : null
 }
 
 export function openDeepLink(state: WorkspaceState, view: ViewId): WorkspaceState {
@@ -605,7 +618,7 @@ export function openDeepLink(state: WorkspaceState, view: ViewId): WorkspaceStat
   // view's own name — is the card the link means: select it rather than minting `Changes 2`
   // beside an untouched `Changes`. Renamed or split, it is the user's own layout and is left alone.
   const born = state.layouts.find(
-    (layout) => layout.name === viewLabel(view) && layout.columns.length === 1 && layout.columns[0]?.view === view,
+    (layout) => isViewName(layout.name, view) && layout.columns.length === 1 && layout.columns[0]?.view === view,
   )
   if (born) return selectLayout(state, born.name)
   const current = activeLayout(state)

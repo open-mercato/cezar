@@ -736,7 +736,7 @@ function ConversationColumn({
         const hit = target(event)
         if (hit && !hit.node.dataset.open) {
           hit.node.dataset.open = hit.reference.view
-          hit.node.title = hit.reference.view === 'files' ? 'Open in Files' : 'Open in Commits'
+          hit.node.title = hit.reference.view === 'files' ? 'Open in Code' : 'Open in Commits'
         }
       }}
       onClick={(event) => {

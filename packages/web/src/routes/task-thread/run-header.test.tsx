@@ -1516,7 +1516,7 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(tabs.getByRole('link', { name: 'Chat' }).getAttribute('href')).toBe('/tasks/r1')
     expect(tabs.getByRole('link', { name: 'Commits' }).getAttribute('href')).toBe('/tasks/r1/commits')
     expect(tabs.getByRole('link', { name: 'Changes' }).getAttribute('href')).toBe('/tasks/r1/changes')
-    expect(tabs.getByRole('link', { name: 'Files' }).getAttribute('href')).toBe('/tasks/r1/files')
+    expect(tabs.getByRole('link', { name: 'Code' }).getAttribute('href')).toBe('/tasks/r1/files')
   })
 
   it('tabs: Graph appears for a run with a workflow definition (a step list opens as its graph)', () => {

@@ -1,16 +1,28 @@
-import { FolderTreeIcon, TriangleAlertIcon } from 'lucide-react'
-import { useState } from 'react'
+import { FilePlusIcon, FolderTreeIcon, TriangleAlertIcon } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useParams } from 'react-router'
 
 import { ApiError } from '@/api/client'
-import { useRun, useRunFile } from '@/api/queries'
+import { useHealth, useRun, useRunFile } from '@/api/queries'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useRememberedState } from '@/lib/view-memory'
 
 import { RunHeader } from '../task-thread/run-header'
-import { FilePreview } from './file-preview'
+import { FileActionDialog, type FileAction } from './file-actions'
+import { FilePreview, isDirty, type FileEdit } from './file-preview'
 import { FilesTree } from './files-tree'
 import { GitTabLoadError, GitTabLoading } from './git-tab-loading'
 
@@ -56,12 +68,54 @@ export function FilesView({
   // server's answer for the whole view, same stance as the Changes tab's /changes 409.
   const root = useRunFile(run.id, '')
   const [selected, setSelected] = useRememberedState<string | null>(stateKey, null)
+  // Remembered like the selection, so text typed in a workspace column survives the layout
+  // switch that unmounts it.
+  const [edit, setEdit] = useRememberedState<FileEdit | null>(stateKey ? `${stateKey}:edit` : undefined, null)
+  const dirty = isDirty(edit)
+
+  // The tree is a place to click around in; an edit must not be lost to a stray click.
+  const [pending, setPending] = useState<string | null>(null)
+  const open = (path: string) => {
+    setPending(null)
+    setEdit(null)
+    setSelected(path)
+  }
+  const select = (path: string) => {
+    if (path === selected) return
+    if (dirty) setPending(path)
+    else open(path)
+  }
+  useEffect(() => {
+    if (!dirty) return
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault()
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
+
+  // Create / rename / delete ride the same server gate as saving.
+  const canManage = useHealth().data?.capabilities?.fileEdit === true
+  const [action, setAction] = useState<FileAction | null>(null)
 
   const refused = root.isError && root.error instanceof ApiError && root.error.status === 409
 
   return (
     <div data-route="task-files" className="flex min-h-full flex-col">
       {embedded ? null : <RunHeader run={run} tab="files" />}
+      <AlertDialog open={pending !== null} onOpenChange={(next) => { if (!next) setPending(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard unsaved changes?</AlertDialogTitle>
+            <AlertDialogDescription>
+              <span className="font-mono text-foreground">{edit?.path}</span> has edits that were not saved.
+              Opening another file drops them.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep editing</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { if (pending !== null) open(pending) }}>Discard</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {root.isPending ? (
         <p data-slot="files-loading" className="px-4 py-6 text-center text-xs text-soft-foreground md:px-6">
@@ -87,11 +141,39 @@ export function FilesView({
             data-slot="files-tree-pane"
             className="w-full shrink-0 md:sticky md:top-[var(--diff-sticky-top)] md:max-h-[calc(100dvh_-_var(--diff-sticky-top)_-_1rem)] md:w-60 md:overflow-y-auto md:overscroll-contain lg:w-72"
           >
-            <FilesTree runId={run.id} selected={selected} onSelect={setSelected} />
+            {canManage ? (
+              <Button
+                variant="ghost"
+                size="xs"
+                className="mb-1 w-full justify-start"
+                // Beside the file being looked at, which is where a new file usually belongs.
+                onClick={() => setAction({ kind: 'create', dir: selected?.includes('/') ? selected.slice(0, selected.lastIndexOf('/')) : '' })}
+              >
+                <FilePlusIcon />
+                New file
+              </Button>
+            ) : null}
+            <FilesTree runId={run.id} selected={selected} onSelect={select} />
           </aside>
-          <FilePreview runId={run.id} path={selected} className="min-w-0 flex-1" />
+          <FilePreview
+            runId={run.id}
+            path={selected}
+            className="min-w-0 flex-1"
+            edit={edit}
+            onEdit={setEdit}
+            onAction={canManage ? setAction : undefined}
+          />
         </div>
       )}
+      <FileActionDialog
+        runId={run.id}
+        action={action}
+        onClose={() => setAction(null)}
+        onDone={(path) => {
+          setEdit(null)
+          setSelected(path)
+        }}
+      />
     </div>
   )
 }

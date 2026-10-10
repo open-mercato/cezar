@@ -23,6 +23,7 @@ describe('previewKind — the preview decision, in order', () => {
     binary: false,
     tooLarge: false,
     ...over,
+    editable: true,
   })
 
   it('too-large wins over everything — the server withholds those bytes anyway', () => {

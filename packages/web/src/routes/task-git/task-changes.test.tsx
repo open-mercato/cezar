@@ -46,7 +46,7 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: { kind: 'github', available: true },
-  capabilities: { localHandoff: true, terminal: true, preview: true, designMode: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: true, preview: true, designMode: true, fileEdit: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
 }
 
 /** The PROJECT-scoped `/repo` answer. The remote that gates Push is read from here rather than
@@ -148,7 +148,7 @@ describe('the Changes tab route', () => {
       { text: 'Chat', href: '/tasks/r1', current: null },
       { text: 'Changes', href: '/tasks/r1/changes', current: 'page' },
       { text: 'Commits', href: '/tasks/r1/commits', current: null },
-      { text: 'Files', href: '/tasks/r1/files', current: null },
+      { text: 'Code', href: '/tasks/r1/files', current: null },
     ])
   })
 

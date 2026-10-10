@@ -18,6 +18,9 @@ import type {
   repoBranchResponseSchema,
   repoCommitPayloadSchema,
   repoResponseSchema,
+  runFileDeleteResponseSchema,
+  runFileRenameSchema,
+  runFileWriteResponseSchema,
   worktreeEntrySchema,
   worktreesResponseSchema,
 } from '@open-mercato/cezar-contract';
@@ -97,6 +100,11 @@ describe('src/contract github + repo schemas match the routes exactly', () => {
     ArrayBuffer
   >;
 
+  type RunFileWrite200 = InferResponseType<(typeof client.api.v1.runs)[':id']['files']['$put'], 200>;
+  type RunFileCreate201 = InferResponseType<(typeof client.api.v1.runs)[':id']['files']['$post'], 201>;
+  type RunFileDelete200 = InferResponseType<(typeof client.api.v1.runs)[':id']['files']['$delete'], 200>;
+  type RunFileRename200 = InferResponseType<(typeof client.api.v1.runs)[':id']['files']['rename']['$post'], 200>;
+
   type Worktrees200 = InferResponseType<typeof client.api.v1.worktrees.$get, 200>;
   type ReclaimWorktrees200 = InferResponseType<typeof client.api.v1.worktrees.reclaim.$post, 200>;
 
@@ -116,6 +124,10 @@ describe('src/contract github + repo schemas match the routes exactly', () => {
     Assert<Exact<z.infer<typeof repoCommitPayloadSchema>, RepoCommit200>>,
     Assert<Exact<z.infer<typeof repoCommitPayloadSchema>, RunCommit200>>,
     Assert<Exact<z.infer<typeof worktreeEntrySchema>, RunFiles200>>,
+    Assert<Exact<z.infer<typeof runFileWriteResponseSchema>, RunFileWrite200>>,
+    Assert<Exact<z.infer<typeof runFileWriteResponseSchema>, RunFileCreate201>>,
+    Assert<Exact<z.infer<typeof runFileDeleteResponseSchema>, RunFileDelete200>>,
+    Assert<Exact<z.infer<typeof runFileRenameSchema>, RunFileRename200>>,
     Assert<Exact<z.infer<typeof worktreesResponseSchema>, Worktrees200>>,
     Assert<Exact<z.infer<typeof reclaimWorktreesResponseSchema>, ReclaimWorktrees200>>,
   ];

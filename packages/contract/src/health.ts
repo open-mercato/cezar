@@ -68,6 +68,13 @@ export const capabilitiesSchema = z.object({
    * turns it off there too. The listener opens only when a user switches Design Mode on.
    */
   designMode: z.boolean(),
+  /**
+   * `true` means a file in a task's working directory can be edited and saved from the Code view
+   * (spec `.ai/specs/2026-07-20-worktree-file-editing.md`). The same tri-state as `terminal`: on
+   * LOCALLY, off on a hosted cockpit unless `CEZ_FILE_EDIT=1` opts it in, and `CEZ_FILE_EDIT=0`
+   * turns it off everywhere. Reading files is not gated by this.
+   */
+  fileEdit: z.boolean(),
   followups: z.boolean(),
   singleProject: z.boolean(),
   /**

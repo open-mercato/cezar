@@ -158,7 +158,7 @@ describe('resolveCapabilities — followups (#471)', () => {
     expect(resolveCapabilities({ CEZ_FOLLOWUPS: '1', CEZ_REMOTE: '1' }, '0.0.0.0')).toEqual({
       localHandoff: false,
       terminal: false,
-      preview: false, designMode: false,
+      preview: false, designMode: false, fileEdit: false,
       followups: true,
       singleProject: false,
       automations: true,
@@ -305,5 +305,26 @@ describe('preview', () => {
   it('is off once the cockpit is hosted', () => {
     expect(resolveCapabilities({ CEZ_REMOTE: '1' }, '127.0.0.1').preview).toBe(false);
     expect(resolveCapabilities({}, '0.0.0.0').preview).toBe(false);
+  });
+});
+
+describe('resolveCapabilities — fileEdit (spec 2026-07-20-worktree-file-editing)', () => {
+  it('is on for a local cockpit with nothing set', () => {
+    expect(resolveCapabilities({}, undefined).fileEdit).toBe(true);
+    expect(resolveCapabilities({}, '127.0.0.1').fileEdit).toBe(true);
+  });
+
+  it('is off once the cockpit is hosted, by flag or by bind host', () => {
+    expect(resolveCapabilities({ CEZ_REMOTE: '1' }, '127.0.0.1').fileEdit).toBe(false);
+    expect(resolveCapabilities({}, '0.0.0.0').fileEdit).toBe(false);
+  });
+
+  it('CEZ_FILE_EDIT=1 opts a hosted cockpit in — and only an exact "1" does', () => {
+    expect(resolveCapabilities({ CEZ_REMOTE: '1', CEZ_FILE_EDIT: '1' }, '0.0.0.0').fileEdit).toBe(true);
+    expect(resolveCapabilities({ CEZ_REMOTE: '1', CEZ_FILE_EDIT: 'true' }, '0.0.0.0').fileEdit).toBe(false);
+  });
+
+  it('CEZ_FILE_EDIT=0 turns it off everywhere, local included', () => {
+    expect(resolveCapabilities({ CEZ_FILE_EDIT: '0' }, undefined).fileEdit).toBe(false);
   });
 });

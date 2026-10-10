@@ -42,6 +42,10 @@
  * `/runs/:id/{dispatch,report}` routes answer 409 and no task's system prompt mentions
  * dispatching; the `dispatch` field on existing run records survives the flag being off.
  *
+ * `fileEdit` (spec 2026-07-20-worktree-file-editing): saving a file from the Code view. On for a
+ * local cockpit, off for a hosted one unless `CEZ_FILE_EDIT=1`, off everywhere under
+ * `CEZ_FILE_EDIT=0` — see `fileEditEnabled`. Reading files is not gated by it.
+ *
  * Usage presentation: token counts and monetary cost stay visible by default.
  * `CEZ_HIDE_TOKEN_USAGE=1` and `CEZ_HIDE_COST=1` hide them independently;
  * legacy `CEZ_HIDE_TOKEN_METRICS=1` remains the master hide-all switch. None
@@ -200,6 +204,26 @@ function terminalEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
   return env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost);
 }
 
+/**
+ * Whether a file in a task's working directory may be WRITTEN from the cockpit (spec
+ * `2026-07-20-worktree-file-editing`). The same tri-state as `terminalEnabled`, and for the same
+ * reason. Unset: on for a local cockpit, off for a hosted one — a network-reachable write into a
+ * checkout an agent then executes is remote code execution, and cezar has no authentication of
+ * its own. `CEZ_FILE_EDIT=1` opts a hosted cockpit in, deliberately; `=0` turns it off everywhere.
+ */
+function fileEditEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
+  if (env.CEZ_FILE_EDIT === '1') return true;
+  if (env.CEZ_FILE_EDIT === '0') return false;
+  return env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost);
+}
+
+/** The 409 a write answers when `fileEdit` is off — which of the two reasons it is. */
+export function fileEditRefusal(env: NodeJS.ProcessEnv = process.env): string {
+  return env.CEZ_FILE_EDIT === '0'
+    ? 'file editing is disabled (CEZ_FILE_EDIT=0)'
+    : 'file editing is disabled — this cockpit runs in hosted mode (set CEZ_FILE_EDIT=1 to allow it)';
+}
+
 export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHost?: string): Capabilities {
   const hideAllUsage = env.CEZ_HIDE_TOKEN_METRICS === '1';
   const tokenUsageMetrics = !hideAllUsage && env.CEZ_HIDE_TOKEN_USAGE !== '1';
@@ -209,6 +233,7 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
     terminal: terminalEnabled(env, bindHost),
     preview: previewEnabled(env, bindHost),
     designMode: designModeEnabled(env, bindHost),
+    fileEdit: fileEditEnabled(env, bindHost),
     // Deliberately not re-derived here: RunManager enforces the same predicate,
     // and two spellings of "is the inbox on" would eventually disagree.
     followups: followupsEnabled(env),
