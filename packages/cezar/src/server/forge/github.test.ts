@@ -1643,6 +1643,32 @@ describe('searchGithubItems (#730)', () => {
     expect(view?.join(' ')).not.toContain('--state');
   });
 
+  it('preserves the numeric view comment count without per-result hydration', async () => {
+    const argvs = ghSpy((argv) =>
+      argv[0] === 'issue' && argv[1] === 'view'
+        ? JSON.stringify({
+            number: 851,
+            title: 'an issue with discussion',
+            author: { login: 'someone' },
+            createdAt: '2026-07-25T07:08:17Z',
+            labels: [],
+            body: 'b',
+            url: 'https://github.com/owner/n/issues/851',
+            comments: [{ body: 'first' }, { body: 'second' }],
+          })
+        : '',
+    );
+
+    const res = await searchGithubItems('/repo/search-number-comments', 'issue', '851');
+
+    expect(res.items[0]?.comments).toBe(2);
+    expect(argvs).toHaveLength(1);
+    const view = argvs[0]!;
+    expect(view[0]).toBe('issue');
+    expect(view[1]).toBe('view');
+    expect(view[view.indexOf('--json') + 1]).toContain('comments');
+  });
+
   it('accepts the `#4507` spelling the search box invites', async () => {
     ghSpy((argv) =>
       argv[0] === 'issue' && argv[1] === 'view'
@@ -1675,6 +1701,10 @@ describe('searchGithubItems (#730)', () => {
     expect(res.items[0]?.number).toBe(4507);
     // `commentsCount` is the search API's spelling of the list tier's `comments`.
     expect(res.items[0]?.comments).toBe(20);
+    // Text search deliberately does not hydrate per-PR diffstat; the numeric view path may
+    // provide additions/deletions for its one result without making this path N+1.
+    expect(res.items[0]?.additions).toBeUndefined();
+    expect(res.items[0]?.deletions).toBeUndefined();
     expect(res.items[0]?.checks).toBeNull();
     expect(res.labelColors).toEqual({ security: 'D93F0B' });
     const search = argvs.find((a) => a[0] === 'search');
