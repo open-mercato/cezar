@@ -62,6 +62,15 @@ export const githubDataSchema = z.object({
 });
 export type GithubData = z.infer<typeof githubDataSchema>;
 
+/** Query for the cursor-paged open GitHub list. Cursor values are opaque to clients. */
+export const githubListQuerySchema = z.object({
+  limit: z.string().optional(),
+  refresh: z.string().optional(),
+  issuesCursor: z.string().max(2_000).optional(),
+  prsCursor: z.string().max(2_000).optional(),
+});
+export type GithubListQuery = z.infer<typeof githubListQuerySchema>;
+
 /**
  * `GET /api/v1/github/checks?prs=…` (#664) — lazy PR checks glyphs, `number → glyph`. The list
  * call no longer ships `statusCheckRollup`, so a row's glyph is hydrated here for the on-screen

@@ -817,6 +817,7 @@ const ghIssueCommentSchema = z.object({
   body: z.string().nullish(),
   html_url: z.string(),
 });
+const ghDetailSchema = z.object({ body: z.string().nullish() });
 const ghReviewSchema = z.object({
   id: z.number(),
   user: ghCommentUser,
@@ -2286,6 +2287,14 @@ export async function fetchGithubComments(
   const legacyComments = () =>
     gh(repoRoot, ['api', `repos/{owner}/{repo}/issues/${number}/comments`, '--paginate']);
   try {
+    let detailBody: string | undefined;
+    try {
+      const detailOut = await gh(repoRoot, [kind === 'pr' ? 'pr' : 'issue', 'view', String(number), '--json', 'body']);
+      const detail = ghDetailSchema.parse(JSON.parse(detailOut));
+      detailBody = detail.body ?? undefined;
+    } catch {
+      // The detail tier is best-effort: a missing body must not hide an otherwise readable thread.
+    }
     let commentRows: unknown[] = [];
     let events: ForgeTimelineEvent[] | undefined;
     let eventsTruncated = false;
@@ -2385,6 +2394,7 @@ export async function fetchGithubComments(
       // rather than replaced.
       truncated: truncated || eventsTruncated || stoppedShort || undefined,
     };
+    if (detailBody !== undefined) data.detail = { body: detailBody.slice(0, COMMENT_BODY_CAP) };
     if (events) data.events = events;
     cacheComments(key, data);
     return data;
@@ -2510,7 +2520,12 @@ function mockGithubComments(kind: 'issue' | 'pr'): ForgeCommentsData {
     });
   }
 
-  return { available: true, comments, events };
+  return {
+    available: true,
+    comments,
+    events,
+    detail: { body: kind === 'pr' ? 'Mock pull request body.' : 'Mock issue body.' },
+  };
 }
 
 // ---- draft-PR creation (review gate, spec 009) ------------------------------
