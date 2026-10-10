@@ -314,6 +314,9 @@ export const runRecordSchema = z.object({
    *  namer result may replace it). Missing on old runs = legacy behavior (auto
    *  fills only an unset titleSummary). Precedence: user > marker > auto. */
   titleOrigin: z.enum(['user', 'auto', 'marker']).optional(),
+  /** Set once the live refresh has fired: a task's title is refreshed from turn
+   *  context at most once, then stays put so the user can find it again. */
+  titleSettled: z.boolean().optional(),
   /** References the agent itself declared via `CEZ:PR=` / `CEZ:ISSUE=` markers
    *  (spec 2026-07-18-task-ref-markers). Presence of a kind makes it
    *  authoritative: the namer may no longer write that kind, and a declared PR

@@ -6230,14 +6230,16 @@ export class RunManager {
    * like `CEZ:DONE` — never from tool output. Declared numbers overwrite the
    * regex/namer display tier (the store re-resolves the referenced-PR chip);
    * a declared title takes `titleOrigin: 'marker'`, which beats the namer but
-   * never a user rename, and silences the live refresh below.
+   * never a user rename, and silences the live refresh below. The first
+   * declared title sticks: a long task that moves between topics keeps the
+   * name the user learned to look for.
    */
   private applyTurnMarkers(runId: string, run: RunRecord, turnText: string): void {
     const markers = parseTaskMarkers(turnText);
     if (markers.pr !== undefined || markers.issue !== undefined) {
       this.store.applyMarkerRefs(runId, { pr: markers.pr, issue: markers.issue });
     }
-    if (markers.title && run.titleOrigin !== 'user') {
+    if (markers.title && run.titleOrigin !== 'user' && run.titleOrigin !== 'marker') {
       const current = this.store.getRun(runId);
       const refNumber = current?.prNumber ?? current?.issueNumber;
       const validated = postValidateTitle(markers.title, refNumber);
@@ -6254,7 +6256,9 @@ export class RunManager {
    * the turn's context. Skips: toggle off (`liveTitleUpdates` config over
    * `CEZ_TITLE_UPDATES` env, default ON), user-owned title, marker-owned title
    * (the agent declares via `CEZ:TITLE` — the token-saving fast path), dry-run
-   * mocks (canned answers add nothing), empty turn text, unchanged namer inputs.
+   * mocks (canned answers add nothing), empty turn text, unchanged namer inputs,
+   * and a title that already settled: the refresh fires once per task, so a
+   * long session that wanders across topics does not keep renaming itself.
    */
   private async maybeRefreshTitle(runId: string, turnText: string): Promise<void> {
     if (!autoNamingActive()) return;
@@ -6262,11 +6266,12 @@ export class RunManager {
     const config = await loadConfig(this.repoRoot);
     if (!liveTitleUpdatesEnabled(config)) return;
     const run = this.store.getRun(runId);
-    if (!run || run.titleOrigin === 'user' || run.titleOrigin === 'marker') return;
+    if (!run || run.titleOrigin === 'user' || run.titleOrigin === 'marker' || run.titleSettled) return;
     const statText = run.diffStat ? `${run.diffStat.files} files, +${run.diffStat.adds} -${run.diffStat.dels}` : undefined;
     const key = `${turnText.slice(0, 200)}|${statText ?? ''}`;
     if (this.lastNamerKey.get(runId) === key) return;
     this.lastNamerKey.set(runId, key);
+    this.store.updateRun(runId, { titleSettled: true });
     const workflow = await this.reviveWorkflow(run);
     const skillName = workflow?.steps.find((s) => stepKind(s) === 'agent' && s.skill)?.skill?.trim();
     void this.autoNameRun(runId, skillName, run.task, { turnText, diffStat: statText });
