@@ -74,6 +74,12 @@ Arbitrary local commands require durable intent and bounded supervised execution
 
 ### Phase 4: Acceptance and release readiness
 
-- [ ] 4.1 Run the end-to-end lifecycle matrix.
+- [x] 4.1 Run the end-to-end lifecycle matrix. — 653514ca
 - [ ] 4.2 Verify UI and document contracts.
 - [ ] 4.3 Run configured validation and architecture review.
+
+## Acceptance evidence
+
+Real Git and harmless Bash fixtures cover setup/retry/current-list edits, removal intent and branch effects, recreation identity, variant cancellation, resource release, restart uncertainty, graceful process drain, and refusal of corrupt context. Backend launch alone is mocked. Regression reversals proved legacy deletion, variant cancellation/retention, continuation root fallback, disposed-agent ownership and history expiry fail without their fixes.
+
+Initial configured gate: typecheck, node core tests (41 passed, 1 platform skip), build/tarball check, and package E2E (17 passed) passed. The complete Vitest run exposed host-profile output contamination, Node25/JSDOM storage shadowing and a missing native-select focus token. Their focused reruns passed after fixture isolation/style corrections. The authoritative review reruns the complete gate on the committed head before completion. Native Windows supervision is covered by fixtures but has not been executed on Windows. Browser QA remains pending separately.
