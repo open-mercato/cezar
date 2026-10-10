@@ -3170,8 +3170,13 @@ export function createApp(deps: ServerDeps) {
     // the local cockpit gets them pushed over the `host` topic, but a remote one opens no
     // WebSocket, so this is its snapshot + reconcile target. Same staleness-ruled sampler read as
     // the topic — never a second compute path — and `cpuPct` is absent until a bounded delta
-    // window exists (the card renders `sampling…` and follows up once ~2.5 s later).
-    .get('/workspace/host-usage', async (c) => c.json(hostSampler.sampleHostUsage()))
+    // window exists (the card renders `sampling…` and follows up once ~2.5 s later). The read
+    // keeps the sampler warm, so a cockpit polling this route gets a fresh delta each time.
+    .get('/workspace/host-usage', async (c) => {
+      const usage = hostSampler.sampleHostUsage();
+      hostSampler.keepWarm();
+      return c.json(usage);
+    })
 
     .put('/workspace/config', jsonZodValidator(() => setWorkspaceConfigInputSchema), async (c) => {
       const parsed = { data: c.req.valid('json') };
