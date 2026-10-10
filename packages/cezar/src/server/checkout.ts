@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { lstat, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 /**
  * `POST /api/projects/checkout` — the "Add project → Clone from GitHub" flow
@@ -332,7 +332,7 @@ export async function checkoutRepo(opts: CheckoutOptions): Promise<CheckoutResul
   if (!isValidCheckoutName(name)) {
     return { ok: false, status: 400, error: `not a valid folder name: ${name.slice(0, 200)}` };
   }
-  if (!opts.projectsDir.startsWith('/')) {
+  if (!isAbsolute(opts.projectsDir)) {
     return { ok: false, status: 500, error: `checkout root is not an absolute path: ${opts.projectsDir}` };
   }
   const root = resolve(opts.projectsDir);
