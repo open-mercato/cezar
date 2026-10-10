@@ -9,6 +9,8 @@ import { cn } from '@/lib/utils'
 
 import { useActiveProviderAvailability } from './active-provider'
 import { useDeliverPrompt } from './deliver-prompt'
+import { DesignPickChips } from './design-pick-chips'
+import { messageWithDesignPicks, useDesignPicks } from './design-picks'
 import { DiffCommentChips } from './diff-comment-chips'
 import {
   commentsRideWith,
@@ -30,6 +32,10 @@ import type { Draft } from './thread-draft'
  * would each keep their own copy, so a route has exactly one), and `continueAction` is shared with
  * the Session header's engine badge, which must edit the very choice this composer sends.
  * `diffComments` is the run's shared comment list — any number of hosts see the same one.
+ *
+ * The Design Mode picks (elements clicked in the Browser column) ride the same send by the same
+ * rules. They are read here rather than passed in: their store is one list per run whoever
+ * subscribes, so no host has anything to own.
  */
 export function TaskComposer({
   run,
@@ -64,9 +70,13 @@ export function TaskComposer({
   const deliverPrompt = useDeliverPrompt(run, continueAction)
 
   const hasDiffComments = diffComments.comments.length > 0
+  const designPicks = useDesignPicks(run.id)
+  const hasDesignPicks = designPicks.picks.length > 0
+  /** Anything that rides the next message besides what was typed. */
+  const hasRiders = hasDiffComments || hasDesignPicks
   // Only to tell a registry skill from a backend's own slash command (`commentsRideWith`) —
-  // fetched only while there are comments to protect.
-  const skillCatalog = useSkills(hasDiffComments)
+  // fetched only while there is something to protect.
+  const skillCatalog = useSkills(hasRiders)
   // Read defensively: the body is whatever the wire carried, and a non-list must never take the
   // view down — it only means "catalog unknown", which keeps a slash message's comments.
   const skillNames = useMemo(
@@ -103,24 +113,37 @@ export function TaskComposer({
         onSendingChange?.(true)
         try {
           return await draft.submit<unknown>(() => {
-            if (hasDiffComments && !commentsRideWith(text, skillNames)) {
-              toast(`Diff comments kept — /${slashCommandOf(text)} is a command, so they go with your next message.`)
+            if (hasRiders && !commentsRideWith(text, skillNames)) {
+              const kept =
+                hasDiffComments && hasDesignPicks ? 'Diff comments and selected elements'
+                : hasDiffComments ? 'Diff comments'
+                : 'Selected elements'
+              toast(`${kept} kept — /${slashCommandOf(text)} is a command, so they go with your next message.`)
               return deliverPrompt(text, images)
             }
-            return diffComments.submit(async (held) => deliverPrompt(messageWithReview(text, held), images))
+            // Picks outermost: each store drops what it handed over only once the send it
+            // wrapped has resolved, so a rejection leaves the comments AND the picks in place.
+            return designPicks.submit((picked) =>
+              diffComments.submit(async (held) =>
+                deliverPrompt(messageWithDesignPicks(messageWithReview(text, held), picked), images),
+              ),
+            )
           })
         } finally {
           onSendingChange?.(false)
         }
       }}
       draftItems={
-        hasDiffComments ?
-          <DiffCommentChips
-            runId={run.id}
-            comments={diffComments.comments}
-            onRemove={diffComments.remove}
-            onOpen={onOpenComment}
-          />
+        hasRiders ?
+          <>
+            <DiffCommentChips
+              runId={run.id}
+              comments={diffComments.comments}
+              onRemove={diffComments.remove}
+              onOpen={onOpenComment}
+            />
+            <DesignPickChips picks={designPicks.picks} onRemove={designPicks.remove} />
+          </>
         : undefined
       }
       disabled={providerBlocked || (!sessionOpen && !queued && !continuable)}
@@ -137,8 +160,8 @@ export function TaskComposer({
         ) : continuable ? continueAction.pills : undefined
       }
       // Continuing with nothing typed is the legacy one-click Continue, and pending diff comments
-      // are a message on their own.
-      allowEmptySubmit={continuable || hasDiffComments}
+      // or selected elements are a message on their own.
+      allowEmptySubmit={continuable || hasRiders}
       sendAriaLabel={continuable ? 'Continue' : 'Send'}
       // The closed-but-resumable box names its primary action: an arrow alone does not say that
       // sending an EMPTY box reopens the session. Not on a failed run — the failure alert right
