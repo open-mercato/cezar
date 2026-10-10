@@ -116,6 +116,21 @@ function openThread(query = '') {
   )
 }
 
+/** Progressive hydration starts with one retained page. Load the real older-page control
+ * before making transcript-size assertions; a hard-coded row count from the pre-#739 full
+ * replay would only prove that this fixture still happens to be large. */
+function loadRetainedPages(target = 5) {
+  for (let page = 2; page <= target; page += 1) {
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="history-boundary"] button:not([disabled])') !== null`,
+    )
+    browser.click('[data-slot="history-boundary"] button:not([disabled])')
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="history-boundary"]')?.dataset.retainedPages === '${page}'`,
+    )
+  }
+}
+
 beforeAll(async () => {
   dataRoot = mkdtempSync(join(tmpdir(), 'cezar-e2e-thread-scroll-'))
   mkdirSync(join(dataRoot, '.ai/cezar/runs'), { recursive: true })
@@ -156,22 +171,32 @@ afterAll(() => {
 })
 
 describe('thread virtualization on a 1,000-row transcript', () => {
+  let initialFlatRows = 0
   let flatRows = 0
   let flatDom = 0
   let flatAssistantWidth = 0
 
-  it('force-flat renders every row (the before measurement)', () => {
+  it('force-flat renders all rows retained after progressive history loading', () => {
     openThread('?thread=flat')
     expect(browser.evaluate(`document.querySelector('[data-slot="thread-rows"]').dataset.virtualized`)).toBe('false')
+    initialFlatRows = rowCount()
+    expect(initialFlatRows).toBeGreaterThan(0)
+    expect(initialFlatRows).toBeLessThan(ROWS)
+
+    loadRetainedPages()
     flatRows = rowCount()
     flatDom = domSize()
     flatAssistantWidth = assistantWidth()
-    expect(flatRows).toBe(ROWS) // the generator's own arithmetic, end to end
+    expect(flatRows).toBeGreaterThan(initialFlatRows)
     expect(flatAssistantWidth).toBeGreaterThan(200)
   }, 90_000)
 
-  it('auto mode virtualizes past the threshold and keeps the DOM bounded', () => {
-    openThread()
+  it('virtual mode stays DOM-bounded after progressive history loading', () => {
+    // The five-page cap is intentionally bounded below the old full-replay row count for this
+    // event density, so auto mode quite correctly remains flat. Force the virtual renderer here
+    // to retain direct browser coverage of its DOM bound; the threshold rule is unit-tested.
+    openThread('?thread=virtual')
+    loadRetainedPages()
     expect(browser.evaluate(`document.querySelector('[data-slot="thread-rows"]').dataset.virtualized`)).toBe('true')
 
     const virtualRows = rowCount()
@@ -180,7 +205,7 @@ describe('thread virtualization on a 1,000-row transcript', () => {
     // overscan, not the list. The exact window varies with row heights — the bound is what
     // matters: an order of magnitude fewer live rows than flat mode.
     expect(virtualRows).toBeGreaterThan(0)
-    expect(virtualRows).toBeLessThan(flatRows / 10)
+    expect(virtualRows).toBeLessThan(flatRows / 2)
     expect(virtualDom).toBeLessThan(flatDom / 2)
     const virtualAssistantWidth = assistantWidth()
     expect(virtualAssistantWidth).toBeGreaterThan(200)
@@ -210,15 +235,17 @@ describe('thread virtualization on a 1,000-row transcript', () => {
     browser.click('[data-slot="jump-to-latest"]')
     browser.waitForFunction(nearBottom)
     browser.waitForFunction(`document.querySelector('[data-slot="jump-to-latest"]') === null`)
-    // Let the smooth scroll LAND, not merely enter the near-bottom slack — the next test
-    // parks mid-thread, and a still-running animation would carry its park away.
+    // Jump-to-latest also discards retained older pages. This is the bounded-history contract,
+    // and waiting for it avoids racing the next test's fresh page loads.
     browser.waitForFunction(
-      `(() => { const m = ${MAIN}; return Math.abs(m.scrollHeight - m.clientHeight - m.scrollTop) < 2 })()`,
+      `document.querySelector('[data-slot="history-boundary"]')?.dataset.retainedPages === '1'`,
     )
   })
 
   it('restores the scroll position across a client-side leave and return', () => {
-    // Park mid-thread (a position the arrival logic would never pick on its own).
+    // Rehydrate older pages after the preceding jump-to-tail reset, then park mid-thread (a
+    // position the arrival logic would never pick on its own).
+    loadRetainedPages()
     parkAt(`Math.round((m.scrollHeight - m.clientHeight) / 2)`)
     browser.waitForFunction(`document.querySelector('[data-slot="jump-to-latest"]') !== null`)
     const parked = Number(browser.evaluate(`${MAIN}.scrollTop`))
