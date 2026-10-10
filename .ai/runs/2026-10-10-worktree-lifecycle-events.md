@@ -50,6 +50,8 @@ Arbitrary local commands require durable intent and bounded supervised execution
 
 ## Progress
 
+PR: #1358
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Contracts and core
@@ -75,11 +77,20 @@ Arbitrary local commands require durable intent and bounded supervised execution
 ### Phase 4: Acceptance and release readiness
 
 - [x] 4.1 Run the end-to-end lifecycle matrix. — 653514ca
-- [ ] 4.2 Verify UI and document contracts.
-- [ ] 4.3 Run configured validation and architecture review.
+- [x] 4.2 Verify UI and document contracts. — c2f5227d
+- [x] 4.3 Run configured validation and architecture review. — c2f5227d
 
 ## Acceptance evidence
 
 Real Git and harmless Bash fixtures cover setup/retry/current-list edits, removal intent and branch effects, recreation identity, variant cancellation, resource release, restart uncertainty, graceful process drain, and refusal of corrupt context. Backend launch alone is mocked. Regression reversals proved legacy deletion, variant cancellation/retention, continuation root fallback, disposed-agent ownership and history expiry fail without their fixes.
 
 Initial configured gate: typecheck, node core tests (41 passed, 1 platform skip), build/tarball check, and package E2E (17 passed) passed. The complete Vitest run exposed host-profile output contamination, Node25/JSDOM storage shadowing and a missing native-select focus token. Their focused reruns passed after fixture isolation/style corrections. The authoritative review reruns the complete gate on the committed head before completion. Native Windows supervision is covered by fixtures but has not been executed on Windows. Browser QA remains pending separately.
+
+
+## Final verification
+
+All five configured commands passed on c2f5227df2e6e6724d6efb884888f608f345cfb7: typecheck; Vitest (9,302 passed, 5 skipped; 549 files passed, 1 skipped, using VITEST_MAX_WORKERS=4); node unit (41 passed, 1 platform skip); build and tarball check; packaged CLI E2E (17 passed). Review fixes proved red before restoration: live-coordinator ownership and lock-directory disappearance. Browser-discovered bypass status and stale terminal alerts also have red/green regression evidence.
+
+Independent review: https://github.com/open-mercato/cezar/pull/1358#pullrequestreview-5480604401 — internal APPROVE, submitted as COMMENT because GitHub prohibits self-approval. Browser QA: https://github.com/open-mercato/cezar/pull/1358#issuecomment-6101571773 — 16 scoped scenarios passed, including both final fixes; 24 screenshots and reports preserved in the primary checkout at .ai/qa/artifacts_pr1358_worktree_lifecycle/. Browser recovery used the saved dry-run app; real Git/Bash fixtures separately prove execution and physical effects. Native Windows execution remains untested.
+
+Canonical label/assignment writes were denied, and screenshot evidence-branch publication returned 404; local-artifact fallback is recorded on the PR. Hosted CI/CodeQL requires maintainer authorization for this fork; actual GitHub approval and configured QA approval remain maintainer gates. No merge is performed. Browser and saved test environment were stopped before worktree cleanup.
