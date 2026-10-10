@@ -555,6 +555,12 @@ const ghViewHitSchema = ghIssueSchema.extend({
   deletions: z.number().default(0),
 });
 
+function urlKind(url: string): 'issue' | 'pr' | null {
+  if (/\/issues\/\d+(?:[/?#]|$)/.test(url)) return 'issue';
+  if (/\/pull\/\d+(?:[/?#]|$)/.test(url)) return 'pr';
+  return null;
+}
+
 /** Flatten one validated hit into the `ForgeItem` the tab's rows already render. `checks: null`
  *  is what the list tier ships too since #664 — the glyph hydrates lazily via `/api/github/checks`
  *  — so a searched row and a listed row are indistinguishable to the UI. */
@@ -645,6 +651,13 @@ export async function searchGithubItems(
           kind === 'pr' ? `${SEARCH_FIELDS},isDraft,additions,deletions` : SEARCH_FIELDS,
         ]);
         const hit = ghViewHitSchema.parse(JSON.parse(out));
+        // GitHub's `issue view` endpoint accepts a PR number because PRs are issues too. The
+        // requested tab kind is still part of the search contract, so verify the canonical URL
+        // before flattening; a wrong-kind hit falls through to the normal text search.
+        const actualKind = urlKind(hit.url);
+        if (actualKind !== kind) {
+          throw new Error(`GitHub returned a ${actualKind ?? 'unknown'} for an ${kind} lookup`);
+        }
         return { available: true, items: [toSearchItem(kind, hit, labelColors)], labelColors };
       } catch {
         // Not a number in this repo (or not this kind) — fall through to the text search below.
