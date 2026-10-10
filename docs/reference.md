@@ -556,6 +556,17 @@ can slot in the same way.
 
 ---
 
+## Run cezar in a container
+
+One image with cezar, a project toolchain and a Docker daemon of its own, so a machine needs
+only Docker — the same on Windows, macOS, Linux and a VPS. See **[cezar in a container](docker.md)**.
+
+```bash
+docker compose -f docker/compose.yml up -d --build
+```
+
+---
+
 ## Remote access (host cezar on a server)
 
 cezar runs on `localhost` by default. To reach the cockpit from another machine —
