@@ -44,6 +44,10 @@ type SidebarContextProps = {
 
 const SidebarContext = React.createContext<SidebarContextProps | null>(null)
 
+/* What had focus when the phone sheet was opened. The sheet is opened by state, not by a Radix
+ * `DialogTrigger`, so Radix has nothing to hand focus back to on close and it fell to <body>. */
+const SidebarReturnFocusContext = React.createContext<React.RefObject<HTMLElement | null> | null>(null)
+
 function useSidebar() {
   const context = React.useContext(SidebarContext)
   if (!context) {
@@ -88,10 +92,14 @@ function SidebarProvider({
     [setOpenProp, open]
   )
 
+  const returnFocus = React.useRef<HTMLElement | null>(null)
+
   // Helper to toggle the sidebar.
   const toggleSidebar = React.useCallback(() => {
-    return isMobile ? setOpenMobile((open) => !open) : setOpen((open) => !open)
-  }, [isMobile, setOpen, setOpenMobile])
+    if (!isMobile) return setOpen((open) => !open)
+    if (!openMobile) returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    return setOpenMobile((open) => !open)
+  }, [isMobile, openMobile, setOpen, setOpenMobile])
 
   // Adds a keyboard shortcut to toggle the sidebar.
   React.useEffect(() => {
@@ -128,25 +136,27 @@ function SidebarProvider({
 
   return (
     <SidebarContext.Provider value={contextValue}>
-      <TooltipProvider delayDuration={0}>
-        <div
-          data-slot="sidebar-wrapper"
-          style={
-            {
-              "--sidebar-width": SIDEBAR_WIDTH,
-              "--sidebar-width-icon": SIDEBAR_WIDTH_ICON,
-              ...style,
-            } as React.CSSProperties
-          }
-          className={cn(
-            "group/sidebar-wrapper flex min-h-svh w-full has-data-[variant=inset]:bg-sidebar",
-            className
-          )}
-          {...props}
-        >
-          {children}
-        </div>
-      </TooltipProvider>
+      <SidebarReturnFocusContext.Provider value={returnFocus}>
+        <TooltipProvider delayDuration={0}>
+          <div
+            data-slot="sidebar-wrapper"
+            style={
+              {
+                "--sidebar-width": SIDEBAR_WIDTH,
+                "--sidebar-width-icon": SIDEBAR_WIDTH_ICON,
+                ...style,
+              } as React.CSSProperties
+            }
+            className={cn(
+              "group/sidebar-wrapper flex min-h-svh w-full has-data-[variant=inset]:bg-sidebar",
+              className
+            )}
+            {...props}
+          >
+            {children}
+          </div>
+        </TooltipProvider>
+      </SidebarReturnFocusContext.Provider>
     </SidebarContext.Provider>
   )
 }
@@ -164,6 +174,7 @@ function Sidebar({
   collapsible?: "offcanvas" | "icon" | "none"
 }) {
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
+  const returnFocus = React.useContext(SidebarReturnFocusContext)
 
   if (collapsible === "none") {
     return (
@@ -187,7 +198,20 @@ function Sidebar({
           data-sidebar="sidebar"
           data-slot="sidebar"
           data-mobile="true"
-          className="w-(--sidebar-width) bg-sidebar p-0 text-sidebar-foreground [&>button]:hidden"
+          // Padded for the notch and the home indicator: the sheet is a full-height overlay.
+          className="w-(--sidebar-width) bg-sidebar p-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-sidebar-foreground [&>button]:hidden"
+          // Focus lands on the sheet itself, not on its first control: that control may carry a
+          // tooltip that opens on focus, and the first Escape would then close the tooltip only.
+          onOpenAutoFocus={(event) => {
+            event.preventDefault()
+            if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus()
+          }}
+          onCloseAutoFocus={(event) => {
+            const target = returnFocus?.current
+            if (!target?.isConnected) return
+            event.preventDefault()
+            target.focus()
+          }}
           style={
             {
               "--sidebar-width": SIDEBAR_WIDTH_MOBILE,
@@ -258,7 +282,7 @@ function SidebarTrigger({
   onClick,
   ...props
 }: React.ComponentProps<typeof Button>) {
-  const { toggleSidebar } = useSidebar()
+  const { toggleSidebar, isMobile, open, openMobile } = useSidebar()
 
   return (
     <Button
@@ -266,6 +290,7 @@ function SidebarTrigger({
       data-slot="sidebar-trigger"
       variant="ghost"
       size="icon"
+      aria-expanded={isMobile ? openMobile : open}
       className={cn("size-7", className)}
       onClick={(event) => {
         onClick?.(event)

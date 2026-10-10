@@ -507,7 +507,12 @@ function AppRail(props: RailProps) {
               tooltip={{ children: 'Dashboard', hidden: false }}
               className={RAIL_BUTTON}
             >
-              <RouterLink to="/dashboard" data-slot="dashboard-link" aria-label="Dashboard">
+              <RouterLink
+                to="/dashboard"
+                data-slot="dashboard-link"
+                aria-label="Dashboard"
+                aria-current={pathname === '/dashboard' ? 'page' : undefined}
+              >
                 <LayoutDashboardIcon aria-hidden="true" />
               </RouterLink>
             </SidebarMenuButton>
@@ -688,7 +693,7 @@ function MobileAreas(props: RailProps) {
             })}
             <SidebarMenuItem>
               <SidebarMenuButton asChild isActive={pathname === '/dashboard'}>
-                <RouterLink to="/dashboard" onClick={close}>
+                <RouterLink to="/dashboard" onClick={close} aria-current={pathname === '/dashboard' ? 'page' : undefined}>
                   <LayoutDashboardIcon aria-hidden="true" />
                   <span>Dashboard</span>
                 </RouterLink>
@@ -696,7 +701,7 @@ function MobileAreas(props: RailProps) {
             </SidebarMenuItem>
             <SidebarMenuItem>
               <SidebarMenuButton asChild isActive={pathname === '/tasks'}>
-                <RouterLink to="/tasks" onClick={close}>
+                <RouterLink to="/tasks" onClick={close} aria-current={pathname === '/tasks' ? 'page' : undefined}>
                   <LayersIcon aria-hidden="true" />
                   <span>All tasks</span>
                 </RouterLink>
