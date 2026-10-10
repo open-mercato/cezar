@@ -1701,7 +1701,7 @@ describe('searchGithubItems (#730)', () => {
 
   it('resolves a bare number through `pr view`, which finds merged and closed PRs alike', async () => {
     const argvs = ghSpy((argv) =>
-      argv[0] === 'pr' && argv[1] === 'view'
+      argv[0] === 'api' && argv[1]?.includes('/pulls/4507')
         ? JSON.stringify({
             number: 4507,
             title: 'a merged pr',
@@ -1713,6 +1713,7 @@ describe('searchGithubItems (#730)', () => {
             isDraft: false,
             additions: 3,
             deletions: 1,
+            commentsCount: 0,
           })
         : '',
     );
@@ -1722,16 +1723,16 @@ describe('searchGithubItems (#730)', () => {
     expect(res.available).toBe(true);
     expect(res.items.map((i) => i.number)).toEqual([4507]);
     expect(res.items[0]?.kind).toBe('pr');
-    // A view lookup carries no state filter at all — that is exactly why it reaches a merged PR.
-    const view = argvs.find((a) => a[0] === 'pr' && a[1] === 'view');
+    // The REST lookup carries no state filter at all — that is exactly why it reaches a merged PR.
+    const view = argvs.find((a) => a[0] === 'api' && a[1]?.includes('/pulls/4507'));
     expect(view).toBeDefined();
-    expect(view).toContain('4507');
+    expect(view?.join(' ')).toContain('/pulls/4507');
     expect(view?.join(' ')).not.toContain('--state');
   });
 
   it('preserves the numeric view comment count without per-result hydration', async () => {
     const argvs = ghSpy((argv) =>
-      argv[0] === 'issue' && argv[1] === 'view'
+      argv[0] === 'api' && argv[1]?.includes('/issues/851')
         ? JSON.stringify({
             number: 851,
             title: 'an issue with discussion',
@@ -1740,7 +1741,7 @@ describe('searchGithubItems (#730)', () => {
             labels: [],
             body: 'b',
             url: 'https://github.com/owner/n/issues/851',
-            comments: [{ body: 'first' }, { body: 'second' }],
+            commentsCount: 2,
           })
         : '',
     );
@@ -1750,14 +1751,15 @@ describe('searchGithubItems (#730)', () => {
     expect(res.items[0]?.comments).toBe(2);
     expect(argvs).toHaveLength(1);
     const view = argvs[0]!;
-    expect(view[0]).toBe('issue');
-    expect(view[1]).toBe('view');
-    expect(view[view.indexOf('--json') + 1]).toContain('comments');
+    expect(view[0]).toBe('api');
+    expect(view[1]).toContain('/issues/851');
+    expect(view).toContain('--jq');
+    expect(view[view.indexOf('--jq') + 1]).toContain('.comments');
   });
 
   it('accepts the `#4507` spelling the search box invites', async () => {
     ghSpy((argv) =>
-      argv[0] === 'issue' && argv[1] === 'view'
+      argv[0] === 'api' && argv[1]?.includes('/issues/4507')
         ? JSON.stringify({
             number: 4507,
             title: 'an issue',
@@ -1766,6 +1768,7 @@ describe('searchGithubItems (#730)', () => {
             labels: [],
             body: '',
             url: 'https://github.com/owner/n/issues/4507',
+            commentsCount: 0,
           })
         : '',
     );
@@ -1914,7 +1917,7 @@ describe('searchGithubItems (#730)', () => {
   it('falls back to a text search when the number resolves to nothing', async () => {
     const argvs = ghSpy((argv) => {
       if (argv[0] === 'repo') return 'owner/n\n';
-      if (argv[0] === 'pr' && argv[1] === 'view') return new Error('no pull requests found for 4507');
+      if (argv[0] === 'api' && argv[1]?.includes('/pulls/4507')) return new Error('no pull requests found for 4507');
       if (argv[0] === 'search') return JSON.stringify([searchHit({ title: 'mentions 4507' })]);
       return '';
     });
@@ -2012,7 +2015,7 @@ describe('searchGithubItems (#730)', () => {
       // The list tier: `gh pr list` without --state returns OPEN PRs only, and #4507 is merged.
       else if (argv[0] === 'pr' && argv[1] === 'list') stdout = '[]';
       else if (argv[0] === 'issue' && argv[1] === 'list') stdout = '[]';
-      else if (argv[0] === 'pr' && argv[1] === 'view') {
+      else if (argv[0] === 'api' && argv[1]?.includes('/pulls/4507')) {
         stdout = JSON.stringify({
           number: 4507,
           title: 'a merged pr',
@@ -2021,6 +2024,7 @@ describe('searchGithubItems (#730)', () => {
           labels: [],
           body: '',
           url: 'https://github.com/owner/n/pull/4507',
+          commentsCount: 0,
           isDraft: false,
           additions: 0,
           deletions: 0,
