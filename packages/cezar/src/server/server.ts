@@ -1064,6 +1064,28 @@ function logoAssetUrl(): string | null {
   return null;
 }
 
+/**
+ * `rename` onto an existing file. POSIX replaces the destination atomically and two writers
+ * never contend, so there this is `rename` and nothing else. Windows refuses the replacement
+ * (`EPERM`/`EBUSY`/`EACCES`) for the instant another handle — a second upload's rename, a reader
+ * — is on the destination, which turned two racing logo uploads into a 500. Only on win32, and
+ * only for those codes, the rename is retried briefly; anything else, and the last refusal,
+ * still throws.
+ */
+async function renameOver(from: string, to: string): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const contended = code === 'EPERM' || code === 'EBUSY' || code === 'EACCES';
+      if (process.platform !== 'win32' || !contended || attempt >= 10) throw error;
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 10 * (attempt + 1)));
+    }
+  }
+}
+
 /** The name half of a Host header — `localhost:4321` → `localhost`,
  *  `[::1]:4321` → `[::1]`. A bracketed IPv6 literal keeps its brackets
  *  (`isLoopbackHost` strips them itself); an unbracketed IPv6 spelling is
@@ -3347,7 +3369,7 @@ export function createApp(deps: ServerDeps) {
       const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
       try {
         await writeFile(tmp, bytes, { mode: 0o600, flag: 'wx' });
-        await rename(tmp, path);
+        await renameOver(tmp, path);
       } catch (error) {
         await unlink(tmp).catch(() => {});
         throw error;

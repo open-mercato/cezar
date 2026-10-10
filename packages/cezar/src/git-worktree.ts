@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync, realpathSync, type Dirent } from 'node:fs';
 import { readdir, readFile, rm, stat } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { basename, join, normalize, resolve } from 'node:path';
 import { resolveTaskDiffBase } from './git-diff-base.ts';
 import { isSafeGitRef } from './git-refs.ts';
 
@@ -162,6 +162,16 @@ export interface WorktreeInfo {
   baseBranch: string;
 }
 
+/**
+ * Git for Windows prints worktree paths with forward slashes (`C:/repo/.ai/…`), while every
+ * path cezar builds itself goes through `node:path` (backslashes). Left as printed, a
+ * RECOVERED worktree was recorded under a different spelling than the one the first
+ * `createWorktree` returned for the same directory. POSIX output is returned untouched.
+ */
+function gitReportedPath(path: string): string {
+  return process.platform === 'win32' ? normalize(path) : path;
+}
+
 /** Parse `git worktree list --porcelain` without assuming paths contain no spaces. */
 async function registeredWorktrees(repoRoot: string): Promise<RegisteredWorktree[]> {
   const res = await git(repoRoot, ['worktree', 'list', '--porcelain']);
@@ -171,7 +181,7 @@ async function registeredWorktrees(repoRoot: string): Promise<RegisteredWorktree
   for (const line of res.stdout.split('\n')) {
     if (line.startsWith('worktree ')) {
       if (current) worktrees.push(current);
-      current = { path: line.slice('worktree '.length) };
+      current = { path: gitReportedPath(line.slice('worktree '.length)) };
     } else if (current && line.startsWith('branch ')) {
       current.branch = line.slice('branch '.length);
     } else if (!line && current) {

@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join, relative } from 'node:path';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { agentHomePaths } from '../paths.ts';
 import { CONFIG_FILES } from './catalog.ts';
 
@@ -68,12 +68,17 @@ export async function seedAgentConfigLocalLayer(
   const commonDir = await git(worktreeCwd, ['rev-parse', '--git-common-dir']);
   if (!commonDir.ok) return [];
   const commonGitDir = commonDir.stdout.trim();
-  const absCommonGitDir = commonGitDir.startsWith('/') ? commonGitDir : join(worktreeCwd, commonGitDir);
+  // `isAbsolute`, not a leading-`/` test: git on Windows answers `C:/repo/.git`, and joining that
+  // onto the worktree named a directory that cannot exist — the exclude line was never written.
+  const absCommonGitDir = isAbsolute(commonGitDir) ? commonGitDir : join(worktreeCwd, commonGitDir);
 
   for (const def of CONFIG_FILES) {
     if (!def.seeded) continue;
     const src = def.resolve(repoRoot, home);
-    const rel = relative(repoRoot, src);
+    // Repo-relative, always `/`-separated: it is a git pathspec, an `info/exclude` pattern (where a
+    // backslash is an ESCAPE, not a separator) and the spelling the caller's note shows. A no-op on
+    // POSIX, where `sep` already is `/`.
+    const rel = relative(repoRoot, src).split(sep).join('/');
     // Never seed something outside the repo, or that isn't there.
     if (rel.startsWith('..') || !(await fileExists(src))) continue;
     // Only seed a genuinely-ignored file — never force-exclude a tracked one.

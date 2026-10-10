@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { cpus } from 'node:os';
-import { join } from 'node:path';
+import { posix } from 'node:path';
 
 /**
  * The process's own cgroup limits and usage (spec
@@ -226,7 +226,9 @@ function defaultReadCgroupFile(path: string): string | undefined {
 function joinCgroupPath(mountPoint: string, cgroupPath: string): string {
   const root = mountPoint.replace(/\/+$/, '') || '/';
   if (cgroupPath === '/' || cgroupPath === '') return root;
-  return join(root, cgroupPath);
+  // cgroup paths are Linux paths whatever the host: `posix.join` IS `join` on Linux, and it keeps a
+  // fixture-driven probe (`platform: 'linux'`) from growing backslashes on a Windows dev machine.
+  return posix.join(root, cgroupPath);
 }
 
 /**
