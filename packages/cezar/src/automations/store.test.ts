@@ -232,6 +232,49 @@ describe('AutomationStore.acquireLease — a lock nobody is holding any more (#9
     lease?.release();
   });
 
+  it('keeps a live owner valid when a contender arrives during an event-loop stall (#1106)', async () => {
+    const dir = await directory();
+    const owner = AutomationStore.open(dir).acquireLease();
+    expect(owner).toBeDefined();
+    const child = fileURLToPath(new URL('./store-lease-child.testkit.ts', import.meta.url));
+    const contender = spawn(process.execPath, ['--import', 'tsx', child, dir, '2500'], { stdio: ['pipe', 'pipe', 'inherit'] });
+    const closed = new Promise<void>((resolve) => contender.once('close', () => resolve()));
+    let output = '';
+    const result = new Promise<boolean>((resolve, reject) => {
+      contender.stdout.setEncoding('utf8');
+      contender.stdout.on('data', (chunk) => {
+        output += chunk;
+        for (const line of output.split('\n')) {
+          if (!line.startsWith('{')) continue;
+          try {
+            resolve((JSON.parse(line) as { held: boolean }).held);
+          } catch { /* wait for a complete line */ }
+        }
+      });
+      contender.once('error', reject);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const onData = (chunk: Buffer | string) => {
+        if (String(chunk).includes('ready\n')) {
+          contender.stdout.off('data', onData);
+          contender.stdin.write('go\n');
+          resolve();
+        }
+      };
+      contender.stdout.on('data', onData);
+      contender.once('error', reject);
+    });
+    // The contender attempts after 2.5s, while this owner blocks for 3s. Under the old 2s
+    // guard the contender replaces the guard before the live-pid check rejects its lease.
+    const until = Date.now() + 3_000;
+    while (Date.now() < until) { /* deliberate event-loop stall */ }
+    await expect(result).resolves.toBe(false);
+    expect(owner?.isValid()).toBe(true);
+    owner?.release();
+    contender.kill('SIGTERM');
+    await closed;
+  }, 12_000);
+
   it('recovers a real killed owner after the bounded guard stale window', async () => {
     const dir = await directory();
     const child = fileURLToPath(new URL('./store-lease-child.testkit.ts', import.meta.url));
@@ -249,13 +292,13 @@ describe('AutomationStore.acquireLease — a lock nobody is holding any more (#9
     await acquired;
     childProcess.kill('SIGKILL');
     await new Promise<void>((resolve) => childProcess.once('close', () => resolve()));
-    // proper-lockfile's stale threshold is 2s minimum; leave margin for the final
-    // heartbeat/stat timestamp and filesystem timestamp granularity.
-    await new Promise((resolve) => setTimeout(resolve, 3_200));
+    // Keep margin for the 15s guard threshold, final heartbeat/stat timestamp, and filesystem
+    // timestamp granularity. This is intentionally bounded real SIGKILL recovery coverage.
+    await new Promise((resolve) => setTimeout(resolve, 16_200));
     const lease = AutomationStore.open(dir).acquireLease();
     expect(lease).toBeDefined();
     lease?.release();
-  }, 8_000);
+  }, 22_000);
 });
 
 describe('AutomationStore.setState (spec 2026-09-14: read-modify-write)', () => {

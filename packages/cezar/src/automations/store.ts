@@ -34,8 +34,15 @@ const LOG = 'automation-log.ndjson';
 const POLL_LOCK = 'automation-poll.lock';
 const MUTATION_LOCK = 'automation-mutation.lock';
 const GUARD_SUFFIX = '.guard';
-/** proper-lockfile enforces a 2s minimum; this bounds crash recovery without stealing live owners. */
-const GUARD_STALE_MS = 2_000;
+/**
+ * Keep a contending process from reclaiming a live guard while its owner's event loop is stalled.
+ *
+ * The 2s proper-lockfile minimum is too short for a busy cockpit: a contender can replace the
+ * guard during a stall, then the live-pid check rejects that contender and leaves the owner
+ * compromised. Fifteen seconds is a deliberate bounded trade-off: it covers the multi-second
+ * stall we protect against, while keeping SIGKILL recovery finite and tested below.
+ */
+const GUARD_STALE_MS = 15_000;
 const RETENTION_MS = 90 * 24 * 60 * 60 * 1_000;
 
 type DefinitionsFile = ReturnType<typeof automationDefinitionsFileSchema.parse>;
