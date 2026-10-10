@@ -1025,6 +1025,15 @@ interface PersistedAttachments {
   attachments: PersistedAttachment[];
 }
 
+/** A user-authored live message is made durable before it may wait for the
+ *  repository lease. Reusing this preparation when the lease arrives prevents
+ *  duplicate transcript events and duplicate attachment files. */
+interface PreparedUserMessage {
+  text: string;
+  persisted: PersistedAttachment[];
+  imageLibraryWrites: Array<() => void>;
+}
+
 /**
  * The mini workflow engine: executes a `WorkflowDef` against a repo, one step
  * at a time, persisting every event to the RunStore (which the SSE endpoints
@@ -3416,7 +3425,12 @@ export class RunManager {
 
   /** Shared live-session delivery. Synthetic scheduler prompts reuse lifecycle
    * bookkeeping without masquerading as user-authored transcript messages. */
-  private deliverMessage(runId: string, content: PastedContent[], userAuthored: boolean): boolean {
+  private deliverMessage(
+    runId: string,
+    content: PastedContent[],
+    userAuthored: boolean,
+    preparedUserMessage?: PreparedUserMessage,
+  ): boolean {
     const state = this.active.get(runId);
     // A graph gate/question parked with no session (1c) takes the user's reply as its answer.
     // Only a USER-authored message answers it: a child report or a wake nudge must not approve a gate.
@@ -3433,6 +3447,28 @@ export class RunManager {
       return true;
     }
     if (!state?.session?.open || state.cancelled) return false;
+    // Acceptance and execution are separate when an in-place task has yielded the repository
+    // lease. Persist the user's message at acceptance time so the thread acknowledges it at once,
+    // even if another task holds the tree for minutes. The prepared payload travels through the
+    // asynchronous lease wait and is reused for delivery, so attachments and the transcript row
+    // are still written exactly once.
+    let prepared = preparedUserMessage;
+    if (userAuthored && !prepared) {
+      const text = content
+        .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
+        .map((b) => b.text)
+        .join('\n');
+      const imageLibraryWrites: Array<() => void> = [];
+      const persisted = this.persistPastedAttachments(runId, content, imageLibraryWrites);
+      prepared = { text, persisted, imageLibraryWrites };
+      this.store.appendEvent(runId, {
+        type: 'user-message',
+        stepId: state.currentStepId,
+        text,
+        imageCount: content.filter((b) => b.type === 'image').length,
+        images: persisted.map((saved) => saved.url),
+      });
+    }
     // A parked in-place run gave the working-tree lease back (`parkRepoRoot`). It must own the
     // tree again before its session resumes, and the lease is asynchronous — so the message is
     // ACCEPTED here (the caller's delivery ladder stops, as it would for a sent message) and
@@ -3445,34 +3481,20 @@ export class RunManager {
         // be stale. Delivered as its own engine message, ahead of the one the run woke for, so a
         // user-authored wake-up stays verbatim in the transcript.
         this.deliverMessage(runId, [{ type: 'text', text: REPO_ROOT_RESUMED_NOTE }], false);
-        if (this.deliverMessage(runId, content, userAuthored)) return;
+        if (this.deliverMessage(runId, content, userAuthored, prepared)) return;
         // The session closed while we waited: keep the message the way the ladder would.
         if (!this.enqueueMessage(runId, content)) this.deferMessage(runId, content);
       });
       return true;
     }
 
-    const text = content
-      .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
-      .map((b) => b.text)
-      .join('\n');
     // Persist the attachments so the thread can render them (not just count them) — the same
     // on-disk store + `/images/` route the agent's own screenshots use. `pasted` prefix marks
     // these as user attachments (vs. agent tool screenshots) on disk (#357).
     // The session can still refuse despite reporting open. Commit image library copies
     // only after it accepts; the run-local paths are needed to build the message first.
-    const imageLibraryWrites: Array<() => void> = [];
-    const persisted = userAuthored ? this.persistPastedAttachments(runId, content, imageLibraryWrites) : [];
-    const images = persisted.map((saved) => saved.url);
-    if (userAuthored) {
-      this.store.appendEvent(runId, {
-        type: 'user-message',
-        stepId: state.currentStepId,
-        text,
-        imageCount: content.filter((b) => b.type === 'image').length,
-        images,
-      });
-    }
+    const imageLibraryWrites = prepared?.imageLibraryWrites ?? [];
+    const persisted = prepared?.persisted ?? [];
 
     // Tell the agent where the pasted files live on disk (#357): image blocks still ride along
     // so the model can *view* them, but a real path is what lets it *operate* on them (save,
