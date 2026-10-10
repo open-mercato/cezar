@@ -152,6 +152,21 @@ describe('sent notes and drafts that outlive the page', () => {
     expect(marks().map((mark) => mark.textContent)).toEqual(['2', ''])
   })
 
+  it('badges a sent note with a comment glyph and its number, kept on screen at the top of the page', async () => {
+    mouse('click', page.document.querySelector('.buy')!)
+    await settle()
+    const key = posted.find((message) => message.type === 'picked')!.element!.mark!
+    tell({ type: 'set-marks', marks: [{ key, n: 4 }] })
+    const badge = marks()[0]!.firstElementChild as HTMLElement
+    expect(badge.querySelector('svg path')).not.toBeNull()
+    expect(badge.querySelector('span')!.textContent).toBe('4')
+    expect(badge.style.borderRadius).toBe('6px')
+    // jsdom lays everything out at 0,0 — the top of the viewport, where a tab ABOVE the frame
+    // would be off screen. There the badge sits inside the frame's corner instead.
+    expect(badge.style.top).toBe('4px')
+    expect(badge.style.left).toBe('4px')
+  })
+
   it('frames a draft\'s element again from its selector — in a document that never saw the click', () => {
     tell({ type: 'set-marks', marks: [{ key: 'old-7', selector: 'body > main > button.buy', path: page.location.pathname }] })
     expect(marks()).toHaveLength(1)

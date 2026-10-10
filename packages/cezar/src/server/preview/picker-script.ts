@@ -94,6 +94,7 @@ const PICKER_SOURCE = String.raw`(function () {
     entry.node.style.top = rect.top + 'px';
     entry.node.style.width = rect.width + 'px';
     entry.node.style.height = rect.height + 'px';
+    placeBadge(entry, rect);
   }
 
   var lastRects = '';
@@ -122,8 +123,40 @@ const PICKER_SOURCE = String.raw`(function () {
     entry.node = document.createElement('div');
     entry.node.setAttribute('data-cezar-design', 'mark');
     entry.node.style.cssText = 'position:fixed;z-index:2147483645;pointer-events:none;box-sizing:border-box;' +
-      'border:2px solid #a3e635;background:rgba(163,230,53,.14);border-radius:2px;';
+      'border:2px solid #a3e635;background:rgba(163,230,53,.14);border-radius:4px;';
     document.documentElement.appendChild(entry.node);
+  }
+
+  // The "comment" glyph on a sent note's badge. Built node by node rather than from a string:
+  // a page with a Trusted Types policy refuses innerHTML, and this must work on any page.
+  function commentIcon() {
+    var ns = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('width', '12');
+    svg.setAttribute('height', '12');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2.5');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.style.cssText = 'display:block;flex:none;';
+    var path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z');
+    svg.appendChild(path);
+    return svg;
+  }
+
+  // Where the badge sits: a tab on the frame's top-left corner, flush with its left edge. When
+  // the element is too close to the top of the viewport for a tab above it, the badge moves
+  // inside the same corner instead of off the screen.
+  function placeBadge(entry, rect) {
+    var badge = entry.node && entry.node.firstChild;
+    if (!badge) return;
+    var above = rect.top >= 26;
+    badge.style.top = above ? '-25px' : '4px';
+    badge.style.left = above ? '-2px' : '4px';
   }
 
   // A SENT note's frame wears the note's number; a draft's frame is plain. Same lime either way.
@@ -135,12 +168,14 @@ const PICKER_SOURCE = String.raw`(function () {
     }
     if (!badge) {
       badge = document.createElement('div');
-      badge.style.cssText = 'position:absolute;top:-10px;left:-10px;min-width:20px;height:20px;padding:0 5px;' +
-        'box-sizing:border-box;border-radius:10px;background:#a3e635;color:#1a2e05;' +
-        'font:700 12px/20px ui-sans-serif,system-ui,sans-serif;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.35);';
+      badge.style.cssText = 'position:absolute;top:-25px;left:-2px;display:flex;align-items:center;gap:4px;' +
+        'height:21px;padding:0 7px 0 6px;box-sizing:border-box;border-radius:6px;background:#a3e635;color:#1a2e05;' +
+        'font:700 12px/1 ui-sans-serif,system-ui,sans-serif;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.3);';
+      badge.appendChild(commentIcon());
+      badge.appendChild(document.createElement('span'));
       entry.node.appendChild(badge);
     }
-    badge.textContent = label;
+    badge.lastChild.textContent = label;
   }
 
   // A draft note outlives the document it was written on (a hot reload, a refresh of the

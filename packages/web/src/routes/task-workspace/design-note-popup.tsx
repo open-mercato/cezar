@@ -1,4 +1,4 @@
-import { XIcon } from 'lucide-react'
+import { MessageSquareIcon, XIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 import type { ApiRun } from '@open-mercato/cezar-api-client'
@@ -89,7 +89,13 @@ export function DesignNotePopup({
     <div data-slot="design-note" data-phase={note.phase} className="flex flex-col gap-2 p-2.5 text-xs">
       <div className="flex items-center gap-1.5">
         {note.number !== undefined ? (
-          <span className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-primary px-1 text-[11px] font-bold text-primary-foreground">
+          // The twin of the badge on the element's frame in the page: comment glyph, number.
+          <span
+            data-slot="design-note-number"
+            aria-label={`Note ${note.number}`}
+            className="flex h-[21px] shrink-0 items-center gap-1 rounded-md bg-primary pr-[7px] pl-1.5 text-xs leading-none font-bold text-primary-foreground"
+          >
+            <MessageSquareIcon aria-hidden="true" className="size-3" strokeWidth={2.5} />
             {note.number}
           </span>
         ) : null}
