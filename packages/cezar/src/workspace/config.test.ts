@@ -374,6 +374,30 @@ describe('workspace config', () => {
     expect(config.projects[1]?.source).toBe('local');
   });
 
+  it('keeps native Windows roots on win32 through a reload and an unrelated write', async () => {
+    // `registerProject` writes the platform's own realpath, so on Windows the registry holds
+    // `C:\\…` roots. A leading-`/` rule salvaged them away on read and the next merge-write
+    // persisted the loss; the platform is stubbed so the win32 rule runs on any CI host.
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+    try {
+      const roots = ['C:\\projects\\ProjectName', 'C:/Repos', '\\\\server\\share\\repo'];
+      write({
+        projects: [
+          ...roots.map((root, i) => ({ ...project(`win-${i}`), root })),
+          { ...project('drive-relative'), root: 'C:repo' }, // still refused
+        ],
+      });
+      expect((await loadWorkspaceConfig()).projects.map((p) => p.root)).toEqual(roots);
+      await mergeWriteWorkspaceConfig((config) => {
+        config.resources.maxParallel = 3;
+      });
+      expect((await loadWorkspaceConfig()).projects.map((p) => p.root)).toEqual(roots);
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+    }
+  });
+
   it('per-project maxParallel: keeps a valid value, degrades a bad one to inherit, absent stays absent', async () => {
     write({
       projects: [

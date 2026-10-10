@@ -218,7 +218,7 @@ import { checkoutRepo, type CloneRunner } from './checkout.ts';
 import { ProjectContextError, ProjectContexts, type ProjectContext } from './project-context.ts';
 import { reviewGateEnabled } from '../runs/review-gate.ts';
 import { readUiState, uiStatePath } from '../ui-state.ts';
-import { agentHomePaths, cezarHomeDir, expandTilde } from '../paths.ts';
+import { agentHomePaths, cezarHomeDir, expandTilde, isAbsolutePath } from '../paths.ts';
 import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
@@ -2862,7 +2862,7 @@ export function createApp(deps: ServerDeps) {
     // dialog hands back absolute paths, but a hand-written body (curl, a
     // future CLI) spells home the way a shell does.
     const requested = expandTilde(spelled);
-    if (!requested.startsWith('/')) {
+    if (!isAbsolutePath(requested)) {
       return {
         status: 400,
         body: { error: `not a folder: ${spelled} is not an absolute path` },
@@ -3196,7 +3196,7 @@ export function createApp(deps: ServerDeps) {
         // exist; checkout roots use `mkdir -p`. Both get a real write probe.
         // Any failure → 400 and NO change persisted.
         const expanded = expandTilde(configuredRoot);
-        if (!expanded.startsWith('/')) {
+        if (!isAbsolutePath(expanded)) {
           return c.json({ error: `not writable: ${configuredRoot} is not an absolute path` }, 400);
         }
         if (!create) {

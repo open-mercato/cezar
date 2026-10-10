@@ -1,11 +1,11 @@
 import { realpathSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { posix, resolve, win32 } from 'node:path';
+import { resolve } from 'node:path';
 import { z } from 'zod';
 import { DEFAULT_AGENT_ACCOUNT_ID } from '@open-mercato/cezar-contract';
 import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
 import { supportsProfiles } from '../core/agent-profiles.ts';
-import { agentAccountsPath, workspaceConfigPath } from '../paths.ts';
+import { agentAccountsPath, isAbsolutePath, workspaceConfigPath } from '../paths.ts';
 import { atomicWriteJsonSync } from './config.ts';
 
 /**
@@ -68,13 +68,14 @@ export { DEFAULT_AGENT_ACCOUNT_ID };
  * delegates ALL path validation to the server, so a string test would leave the whole feature
  * unreachable on the one platform the rest of this work went out of its way to support.
  *
- * `platform` is a parameter so both answers stay testable from either OS.
+ * `platform` is a parameter so both answers stay testable from either OS. The rule itself is the
+ * shared `isAbsolutePath` (`paths.ts`), so accounts and the project registry cannot disagree.
  */
 export function isAbsoluteConfigDir(
   configDir: string,
   platform: NodeJS.Platform = process.platform,
 ): boolean {
-  return (platform === 'win32' ? win32 : posix).isAbsolute(configDir);
+  return isAbsolutePath(configDir, platform);
 }
 
 /** C0 controls + DEL. A path containing one is never legitimate and would be interpolated into a

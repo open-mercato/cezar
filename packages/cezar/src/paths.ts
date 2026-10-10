@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { dirname, join, sep } from 'node:path';
+import { dirname, join, posix, sep, win32 } from 'node:path';
 import type { AgentHomePaths } from './agent-config/catalog.ts';
 
 /**
@@ -134,6 +134,21 @@ export function agentAccountsPath(): string {
 export function expandTilde(path: string): string {
   if (path === '~') return homedir();
   return path.startsWith('~/') ? join(homedir(), path.slice(2)) : path;
+}
+
+/**
+ * Is `path` absolute on `platform`? The ONE absolute-path rule for every
+ * filesystem path cezar accepts or persists — project roots, browse/checkout
+ * roots, account dirs. Never a leading-`/` test: that refuses every native
+ * Windows path (`C:\projects\app`, `\\server\share\repo`), and because the
+ * project registry salvages per entry, a refused root does not error — the
+ * project silently vanishes on the next read while `registerProject`, which
+ * writes the platform's own `realpath()`, keeps putting it back.
+ *
+ * `platform` is a parameter so both answers stay testable from either OS.
+ */
+export function isAbsolutePath(path: string, platform: NodeJS.Platform = process.platform): boolean {
+  return (platform === 'win32' ? win32 : posix).isAbsolute(path);
 }
 
 /**
