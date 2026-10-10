@@ -133,6 +133,8 @@ import type {
   TrackerItemResponse,
   TrackerItemsResponse,
   TrackerKind, TrackerCredentials, TrackerConnectionResponse,
+  SecretsList, SecretValueInput,
+  E2eStatus, E2eSetupInput, E2eSetupResponse,
 } from '@open-mercato/cezar-api-client'
 import { parseProviderStatusResponse } from '@/lib/provider-status'
 import {
@@ -861,6 +863,45 @@ export async function saveTrackerConnection(input: TrackerCredentials): Promise<
 export async function removeTrackerConnection(): Promise<TrackerClearedResponse> {
   return unwrap(await cez.api.v1.p[':projectId'].tracker.connection.$delete(
     { param: { projectId: queryScope() } }), '/tracker/connection')
+}
+
+// ---- project and workspace secrets (metadata only; a value goes in once and never comes back) ----
+
+export async function getProjectSecrets(opts?: ReadOptions): Promise<SecretsList> {
+  return unwrap(await cez.api.v1.p[':projectId'].secrets.$get(
+    { param: { projectId: queryScope() } }, init(opts)), '/secrets')
+}
+export async function getWorkspaceSecrets(opts?: ReadOptions): Promise<SecretsList> {
+  return unwrap(await cez.api.v1.workspace.secrets.$get({}, init(opts)), '/workspace/secrets')
+}
+/** Every write answers 204, which has no body for `unwrap` to parse — only the status matters. */
+async function expectNoContent(res: Response): Promise<void> {
+  if (!res.ok) throw errorFor(res.status, res.statusText, await res.text())
+}
+export async function saveProjectSecret(name: string, input: SecretValueInput): Promise<void> {
+  await expectNoContent(await cez.api.v1.p[':projectId'].secrets[':name'].$put(
+    { param: { projectId: queryScope(), name }, json: input }))
+}
+export async function removeProjectSecret(name: string): Promise<void> {
+  await expectNoContent(await cez.api.v1.p[':projectId'].secrets[':name'].$delete(
+    { param: { projectId: queryScope(), name } }))
+}
+export async function saveWorkspaceSecret(name: string, input: SecretValueInput): Promise<void> {
+  await expectNoContent(await cez.api.v1.workspace.secrets[':name'].$put({ param: { name }, json: input }))
+}
+export async function removeWorkspaceSecret(name: string): Promise<void> {
+  await expectNoContent(await cez.api.v1.workspace.secrets[':name'].$delete({ param: { name } }))
+}
+
+// ---- one-click e2e setup (spec 2026-10-10-e2e-one-click-setup) ----
+
+export async function getE2eStatus(opts?: ReadOptions): Promise<E2eStatus> {
+  return unwrap(await cez.api.v1.p[':projectId'].e2e.$get(
+    { param: { projectId: queryScope() } }, init(opts)), '/e2e')
+}
+export async function startE2eSetup(input: E2eSetupInput): Promise<E2eSetupResponse> {
+  return unwrap(await cez.api.v1.p[':projectId'].e2e.setup.$post(
+    { param: { projectId: queryScope() }, json: input }), '/e2e/setup')
 }
 
 export async function getTrackerAssociation(opts?: ReadOptions): Promise<TrackerAssociationResponse> {

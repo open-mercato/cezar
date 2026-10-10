@@ -53,7 +53,7 @@ import {
   getSkills,
   getSkillsWhenReady,
   getTodos,
-  getTrackerAssociation, getTrackerConnection,
+  getTrackerAssociation, getTrackerConnection, getProjectSecrets, getWorkspaceSecrets, getE2eStatus,
   getTrackerCandidates,
   getTrackerItem,
   getTrackerItems,
@@ -142,6 +142,14 @@ import { subscribeTopic } from './ws'
  * ever reach A's data. Call sites are unchanged — they keep writing `queryKeys.runs.list()`.
  */
 export const queryKeys = {
+  secrets: {
+    allFor: (projectId: string) => ['secrets', projectId] as const,
+    list: () => ['secrets', queryScope()] as const,
+  },
+  e2e: {
+    allFor: (projectId: string) => ['e2e', projectId] as const,
+    status: () => ['e2e', queryScope()] as const,
+  },
   tracker: {
     allFor: (projectId: string) => ['tracker', projectId] as const,
     all: () => ['tracker', queryScope()] as const,
@@ -270,6 +278,20 @@ export const queryKeys = {
 
 export const TRACKER_STALE_TIME = 60_000
 
+export function useProjectSecrets() {
+  return useQuery({ queryKey: queryKeys.secrets.list(), queryFn: ({ signal }) => getProjectSecrets({ signal }) })
+}
+/** The user's own secrets (spec 2026-10-10-project-secrets-vault-options). Not scope-led: one machine, one set. */
+export function useWorkspaceSecrets() {
+  return useQuery({ queryKey: workspaceQueryKeys.secrets, queryFn: ({ signal }) => getWorkspaceSecrets({ signal }) })
+}
+
+/** `GET /e2e` (spec 2026-10-10-e2e-one-click-setup). The setup run's live status comes from
+ *  `useRun`, which the global event stream keeps current — no poll here. */
+export function useE2eStatus() {
+  return useQuery({ queryKey: queryKeys.e2e.status(), queryFn: ({ signal }) => getE2eStatus({ signal }) })
+}
+
 export function useTrackerConnection() {
   return useQuery({ queryKey: queryKeys.tracker.connection(), queryFn: ({ signal }) => getTrackerConnection({ signal }) })
 }
@@ -384,6 +406,8 @@ export const workspaceQueryKeys = {
   /** The cross-project task index behind ⌘K. Workspace-led for the same reason the registry is:
    *  it answers for every project at once, so no scope owns it. */
   runsIndex: ['workspace', 'runs-index'] as const,
+  /** `~/.cezar/secrets/workspace.json` via `GET /api/v1/workspace/secrets` — metadata only. */
+  secrets: ['workspace', 'secrets'] as const,
   /** `~/.cezar/ui-state.json` via `GET/PUT /api/workspace/ui-state` (step 2.7) — cross-project
    *  GUI prefs, e.g. the sidebar's per-project collapse map (step 3.3), and — since step 3.5 —
    *  appearance + notifications, which describe the user rather than a repo. */

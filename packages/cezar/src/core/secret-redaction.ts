@@ -52,7 +52,7 @@ const SECRET_VALUE_NAME_ALLOW: ReadonlySet<string> = new Set([
  * Pattern-based redaction below is unaffected: it matches token *shapes*, not
  * env values, and still catches short-but-real tokens.
  */
-const MIN_SECRET_LEN = 12;
+export const MIN_SECRET_LEN = 12;
 
 /** Well-known credential shapes, independent of the host env. */
 const TOKEN_PATTERNS: readonly RegExp[] = [

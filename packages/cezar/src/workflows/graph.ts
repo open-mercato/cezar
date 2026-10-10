@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { stepSecretsSchema } from '@open-mercato/cezar-contract';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import type { WorkflowStepDef } from './types.ts';
 
@@ -76,6 +77,8 @@ export const graphNodeSchema = z.discriminatedUnion('type', [
     command: z.string().min(1),
     /** v1 compatibility: only these non-zero exits are eligible for an onFail retry. */
     retryOn: z.array(z.number().int().positive()).optional(),
+    /** The secrets this command may read (see `workflowStepSchema.secrets`). */
+    secrets: stepSecretsSchema.optional(),
   }),
   // ---- phase 1c: nodes cezar executes itself (no agent session) ----
   /** Pause for the user's approve / reject (an ask card with two options). */
