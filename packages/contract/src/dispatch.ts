@@ -50,6 +50,8 @@ export const dispatchPendingReportSchema = z.object({
   title: z.string(),
   report: dispatchReportSchema,
   at: z.string(),
+  /** The engine's own files-vs-scope verdict for the child, when it declared a scope. */
+  scopeCheck: z.string().max(2000).optional(),
 });
 export type DispatchPendingReport = z.infer<typeof dispatchPendingReportSchema>;
 
@@ -96,10 +98,21 @@ export const dispatchSchema = z.object({
   reviewOf: z.array(z.string().max(120)).max(8).optional(),
   /** This task's spend ceiling in USD, carved out of its parent's. Absent = none of its own. */
   budgetUsd: z.number().nonnegative().optional(),
+  /** The scope its order declared, as the parent wrote it. */
+  scope: z.string().max(1000).optional(),
+  /** Its order's `retry_limit`: the most auto-continues cezar gives it after an unfinished turn. */
+  retryLimit: z.number().int().min(0).max(3).optional(),
+  /** Its `retry_limit` stopped the auto-continue nudge while the task was unfinished: the run parks,
+   *  and a session that closes without the agent finishing settles it unfinished, not as a success. */
+  retryLimitReached: z.boolean().optional(),
+  /** Set at settle: the changed files checked against `scope`, as one line. */
+  scopeCheck: z.string().max(2000).optional(),
   /** This task's own report — last one wins. */
   report: dispatchReportSchema.optional(),
   /** Reports from settled children waiting for this task's next session. */
   pendingReports: z.array(dispatchPendingReportSchema).optional(),
+  /** How many older pending reports were trimmed off `pendingReports` since the last flush. */
+  droppedReports: z.number().int().nonnegative().optional(),
   /** ISO-8601 watermark: inbox files newer than this are "new" for the next digest or wake. */
   inboxSeenAt: z.string().optional(),
   /** The question this run is parked on (the Guard), cleared when an answer is delivered. */
@@ -162,3 +175,18 @@ export const dispatchResponseSchema = z.object({
   branch: z.string().optional(),
 });
 export type DispatchResponse = z.infer<typeof dispatchResponseSchema>;
+
+/** One node of `cez task list --json` / `cez task tree --json` (a CLI output, not a route): the
+ *  shape BACKWARD_COMPATIBILITY.md §1 documents. */
+export const taskTreeNodeSchema = z.strictObject({
+  id: z.string(),
+  parentRunId: z.string().optional(),
+  depth: z.number().int().min(0),
+  status: z.string(),
+  title: z.string(),
+  branch: z.string().optional(),
+  costUsd: z.number().optional(),
+  kind: dispatchKindSchema.optional(),
+  report: z.strictObject({ status: dispatchReportSchema.shape.status, verdict: dispatchReportSchema.shape.verdict }).optional(),
+});
+export type TaskTreeNode = z.infer<typeof taskTreeNodeSchema>;

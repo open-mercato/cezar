@@ -74,14 +74,14 @@ describe('autonomous mode nudges at turn end instead of parking (#autonomous)', 
     }
   };
 
-  const readEvents = (id: string): Array<{ type: string; message?: string; stepId?: string }> => {
+  const readEvents = (id: string): Array<{ type: string; message?: string; stepId?: string; status?: string }> => {
     const path = join(repoRoot, '.ai/cezar/runs', `${id}.ndjson`);
     if (!existsSync(path)) return [];
     return readFileSync(path, 'utf8')
       .trim()
       .split('\n')
       .filter(Boolean)
-      .map((line) => JSON.parse(line) as { type: string; message?: string; stepId?: string });
+      .map((line) => JSON.parse(line) as { type: string; message?: string; stepId?: string; status?: string });
   };
 
   const notesMatching = (id: string, needle: string) =>
@@ -217,6 +217,62 @@ describe('autonomous mode nudges at turn end instead of parking (#autonomous)', 
     // The cap hands the run back exactly as a non-autonomous turn end does.
     expect(store.getRun(record.id)?.activity).toBeUndefined();
   }, 180_000);
+
+  it('a retry-limit park that then goes idle settles unfinished, not as a success', async () => {
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'never finishes on its own',
+      worktree: false,
+      autonomous: true,
+      dispatch: { rootRunId: 'tree-root', parentRunId: 'tree-root', retryLimit: 0 },
+    });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    // Exactly what `armIdleTimer` does after 15 minutes of silence, and what a manual close
+    // amounts to. Before the fix this settled the run `done` and the parent read a finished task.
+    const live = (manager as unknown as {
+      active: Map<string, { session?: { end(): void; readonly open: boolean } }>;
+    }).active.get(record.id);
+    expect(live?.session?.open).toBe(true);
+    live!.session!.end();
+    await waitFor(record.id, (r) => r?.status === 'failed');
+    expect(store.getRun(record.id)?.error).toContain('retry limit stopped cezar');
+    // The step the closed session left is failed, not done: the rail must not show a finished step
+    // for work the run settlement calls unfinished (recovery fails the same step).
+    expect(store.getRun(record.id)?.steps.map((s) => s.status)).toEqual(['failed']);
+    expect(readEvents(record.id).filter((e) => e.type === 'step-end').at(-1)?.status).toBe('failed');
+    // The park is durable, so a restart settles it unfinished too rather than force-succeeding it.
+    expect(store.getRun(record.id)?.dispatch?.retryLimitReached).toBe(true);
+  }, 40_000);
+
+  it('fails the continuation step when a retry-capped session closes live', async () => {
+    // The first session finishes outright (DONE wins over the nudge), so the cap only bites on the
+    // continuation's own session — the second live settlement site.
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:done first pass',
+      worktree: false,
+      autonomous: true,
+      dispatch: { rootRunId: 'tree-root', parentRunId: 'tree-root', retryLimit: 0 },
+    });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'done');
+
+    expect(manager.continueRun(record.id, { text: 'never finishes on its own' })).toEqual({ ok: true });
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    const live = (manager as unknown as {
+      active: Map<string, { session?: { end(): void; readonly open: boolean } }>;
+    }).active.get(record.id);
+    live!.session!.end();
+    await waitFor(record.id, (r) => r?.status === 'failed');
+
+    const steps = store.getRun(record.id)?.steps ?? [];
+    const continueStep = steps.find((s) => s.id.startsWith('continue-'));
+    expect(continueStep?.status).toBe('failed');
+    expect(
+      readEvents(record.id)
+        .filter((e) => e.type === 'step-end' && e.stepId === continueStep?.id)
+        .at(-1)?.status,
+    ).toBe('failed');
+  }, 60_000);
 
   it('parks on a question the agent repeats after a nudge instead of nudging it to the cap', async () => {
     // The live-session failure this pins: the agent asked how to proceed around a refused

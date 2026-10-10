@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { dispatchInputSchema, dispatchReportSchema, taskTreeNodeSchema } from '@open-mercato/cezar-contract';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { runTaskCommand, type TaskCliIo } from './task-cli.ts';
 
@@ -88,6 +89,97 @@ describe('cez task', () => {
     expect(await runTaskCommand(['create', '--help'], env, h.io)).toBe(0);
     expect(h.out[0]).toContain('cez task create');
     expect(h.calls).toHaveLength(0);
+  });
+
+  // `--help` is the ONLY place an agent learns the flags (the prompt carries the decisions), so it
+  // must name one for every key the two request bodies accept.
+  it('--help documents a flag for every key of the dispatch and report bodies, one flag per line', async () => {
+    const h = harness({ status: 200, body: {} });
+    expect(await runTaskCommand(['--help'], {}, h.io)).toBe(0);
+    const usage = h.out.join('\n');
+    const createFlag: Record<string, string> = {
+      objective: '"<objective>"', title: '--title', kind: '--kind', review_of: '--review-of', scope: '--scope',
+      allowed_tools: '--tools', max_cost: '--budget', success_criteria: '--success', required_evidence: '--evidence',
+      retry_limit: '--retry-limit', runner: '--runner', model: '--model',
+    };
+    for (const key of Object.keys(dispatchInputSchema.shape)) {
+      expect(createFlag[key], `no flag mapped for dispatch key ${key}`).toBeDefined();
+      expect(usage).toMatch(new RegExp(`^\\s+${createFlag[key]!.replace(/[.*+?^${}()|[\]\\"]/g, '\\$&')}\\s`, 'm'));
+    }
+    const reportFlag: Record<string, string> = {
+      status: '--status', result: '--result', evidence: '--evidence', confidence: '--confidence', side_effects: '--side-effect',
+      errors: '--error', recommended_next_action: '--next', verdict: '--verdict', suggestions: '--suggestions',
+    };
+    for (const key of Object.keys(dispatchReportSchema.shape)) {
+      expect(reportFlag[key], `no flag mapped for report key ${key}`).toBeDefined();
+      expect(usage).toContain(`  ${reportFlag[key]}`);
+    }
+    // The rules the prompt used to carry.
+    expect(usage).toContain('At most 4 children in flight');
+    expect(usage).toContain('COMMIT before dispatching');
+    expect(usage).toContain('node "$CEZ_BIN" task');
+    expect(usage).toContain('--json');
+  });
+
+  it('answers a subcommand’s --help without a cockpit — the reference is read before anything is sent', async () => {
+    const h = harness({ status: 200, body: {} });
+    expect(await runTaskCommand(['create', '--help'], {}, h.io)).toBe(0);
+    expect(h.out[0]).toContain('--retry-limit');
+    expect(h.err).toEqual([]);
+    expect(h.calls).toHaveLength(0);
+  });
+
+  it('list --json prints the tree as one machine-readable array, root first then depth-first', async () => {
+    const h = harness({
+      status: 200,
+      body: [
+        { id: 'root-0000', title: 'Root', status: 'running', costUsd: 1.5, dispatch: { rootRunId: 'root-0000' } },
+        { id: 'run-1', title: 'Me', status: 'running', branch: 'cez/run1', dispatch: { rootRunId: 'root-0000', parentRunId: 'root-0000' } },
+        { id: 'kid-0000', title: 'Kid', status: 'done', costUsd: 0.1, dispatch: { rootRunId: 'root-0000', parentRunId: 'run-1', kind: 'review', report: { status: 'done', verdict: 'approve' } } },
+        { id: 'other', title: 'Unrelated', status: 'done' },
+      ],
+    });
+    expect(await runTaskCommand(['list', '--json'], env, h.io)).toBe(0);
+    expect(h.out).toHaveLength(1);
+    expect(JSON.parse(h.out[0]!)).toEqual([
+      { id: 'root-0000', depth: 0, status: 'running', title: 'Root', costUsd: 1.5 },
+      { id: 'run-1', parentRunId: 'root-0000', depth: 1, status: 'running', title: 'Me', branch: 'cez/run1' },
+      { id: 'kid-0000', parentRunId: 'run-1', depth: 2, status: 'done', title: 'Kid', costUsd: 0.1, kind: 'review', report: { status: 'done', verdict: 'approve' } },
+    ]);
+    for (const node of JSON.parse(h.out[0]!) as unknown[]) expect(taskTreeNodeSchema.safeParse(node).success).toBe(true);
+    const tree = harness({ status: 200, body: [{ id: 'root-0000', title: 'Root', status: 'done', dispatch: { rootRunId: 'root-0000' } }] });
+    expect(await runTaskCommand(['tree', '--json', 'root-0000'], env, tree.io)).toBe(0);
+    expect(JSON.parse(tree.out[0]!)).toEqual([{ id: 'root-0000', depth: 0, status: 'done', title: 'Root' }]);
+  });
+
+  it('tolerates a null costUsd — an old or hand-edited record must not throw through the schema', async () => {
+    const h = harness({
+      status: 200,
+      body: [
+        { id: 'run-1', title: 'Me', status: 'running', costUsd: null, dispatch: { rootRunId: 'run-1' } },
+      ],
+    });
+    expect(await runTaskCommand(['list', '--json'], env, h.io)).toBe(0);
+    expect(JSON.parse(h.out[0]!)).toEqual([{ id: 'run-1', depth: 0, status: 'running', title: 'Me' }]);
+    expect(await runTaskCommand(['list'], env, h.io)).toBe(0);
+    expect(h.out[1]).toBe('run-1  running  Me');
+  });
+
+  it('help says --runner and --model default to the caller\u2019s own, and how to choose a runner', async () => {
+    const h = harness({ status: 200, body: {} });
+    expect(await runTaskCommand(['help'], {}, h.io)).toBe(0);
+    const usage = h.out.join('\n');
+    expect(usage).toContain('who runs the child (default: yours)');
+    expect(usage).toContain('use the runner the user named, else a cheaper or faster one');
+    expect(usage).toContain("the child's model (default: yours)");
+  });
+
+  it('help keeps --budget optional so an uncapped parent does not invent a cap', async () => {
+    const h = harness({ status: 200, body: {} });
+    expect(await runTaskCommand(['help'], {}, h.io)).toBe(0);
+    const usage = h.out.join('\n');
+    expect(usage).toContain('Omit it unless the user or your order named a cost limit');
+    expect(usage).toContain('under a capped parent a child without one gets the whole remainder, under an uncapped parent it is uncapped');
   });
 
   it('advertises every supported runner in help as a standalone token', async () => {

@@ -690,7 +690,7 @@ export async function worktreeChangedFiles(
   if (!isSafeGitRef(baseBranch)) return null;
   await git(worktreePath, ['add', '-N', '.']);
   const { base } = await resolveTaskDiffBase((args) => git(worktreePath, args), baseBranch, opts);
-  const res = await git(worktreePath, ['diff', '--name-only', base]);
+  const res = await git(worktreePath, ['-c', 'core.quotePath=false', 'diff', '--name-only', base]);
   if (!res.ok) return null;
   return res.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
 }
