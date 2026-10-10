@@ -35,7 +35,7 @@ Scope: `packages/web/e2e/thread-scroll.e2e.ts` and this issue-specific plan/evid
 ### Phase 1: Reproduce and redesign assertions
 
 - [x] 1.1 Run the current thread-scroll browser test against the current build and capture the obsolete failures. — provider-unavailable evidence recorded above
-- [ ] 1.2 Update the fixture/test flow to load older pages through the real history boundary, then assert bounded virtualization and tail navigation from that state.
+- [x] 1.2 Update the fixture/test flow to load older pages through the real history boundary, then assert bounded virtualization and tail navigation from that state. — ba45b3fc
 
 ### Phase 2: Verify and ship
 
