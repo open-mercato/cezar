@@ -2,7 +2,8 @@ import { access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { E2E_CREDENTIAL_NAMES, E2E_SETUP_WORKFLOW_NAME, type E2eCredentialName, type E2eStatus } from '@open-mercato/cezar-contract';
 import type { RunRecord } from './runs/store.ts';
-import type { WorkflowDef } from './workflows/types.ts';
+import { compileV1, graphToSteps } from './workflows/graph.ts';
+import type { WorkflowDef, WorkflowStepDef } from './workflows/types.ts';
 
 /**
  * One-click browser e2e setup (spec `.ai/specs/2026-10-10-e2e-one-click-setup.md`).
@@ -96,7 +97,7 @@ export function e2eSetupPrompt(credentials: readonly E2eCredentialName[]): strin
   const provider = credentials[0];
   const providerLine = provider
     ? `The project has \`${provider}\` stored for its check steps, so wire the default agent to ${PROVIDER_HINTS[provider]}. Pick the model the provider's section of \`node_modules/e2e/docs/models.mdx\` recommends. Do not read, print or write the key — it reaches the check steps from cezar's secret store, never the repository.`
-    : 'No model key is stored yet. Keep the `gateway(...)` model `e2e init` generated; tests without `agent.*` steps run without a key, and the user can add `AI_GATEWAY_API_KEY` in Settings → End-to-end tests later.';
+    : 'No model key is stored yet. Keep the `gateway(...)` model `e2e init` generated; tests without `agent.*` steps run without a key, and the user can add `AI_GATEWAY_API_KEY` in Settings → External integrations → Test frameworks later.';
   return `You are setting up TesterArmy's \`e2e\` (agentic browser end-to-end testing) in this repository, so the user never has to. Work only on test setup — do NOT change application code.
 
 1. Check the toolchain. \`e2e\` needs Node.js ^22.22.3 or >=24.8.0 (\`node --version\`). If this repository has no web application that a browser could open (no dev server or start script), or Node is too old, stop: explain why in one short paragraph and change nothing.
@@ -123,31 +124,51 @@ ${E2E_WORKFLOW_TEMPLATE.replaceAll(TASK_TOKEN, TASK_PLACEHOLDER)}\`\`\`
 8. Commit everything with the message \`chore: set up e2e browser tests\`. Reply with three short lines: the dev-server command you configured, the model provider, and anything the user still has to do.`;
 }
 
+/** The draft PR's title — what the user sees in their PR list. */
+export const E2E_SETUP_PR_TITLE = 'chore: set up e2e browser tests (TesterArmy e2e)';
+
 /**
  * The setup chain. The checks re-run what step 6 asked the agent to prove, from the outside,
  * and loop back with the failing output on ANY exit code: unlike a coding task, a config,
  * dependency or app-process error (2/3) is exactly the setup's own work.
+ *
+ * Then cezar opens the draft PR itself (the `github.draft-pr` node — the same `createDraftPr`
+ * the review gate's button uses), so the setup ends with something to merge rather than a branch
+ * to go looking for. It is a `version: 2` graph only for that node: the steps compile exactly as
+ * a v1 chain would (`compileV1`), and the PR node is spliced in before `end`. A PR that cannot be
+ * opened — no `gh`, no remote, offline — still ends the run as a success: e2e works either way,
+ * the node's note says why there is no PR, and the header's Draft PR button remains.
  */
 export function e2eSetupWorkflow(credentials: readonly E2eCredentialName[]): WorkflowDef {
+  const steps: WorkflowStepDef[] = [
+    { id: 'setup', name: 'Set up e2e', prompt: e2eSetupPrompt(credentials) },
+    {
+      id: 'e2e-list',
+      name: 'e2e config loads',
+      command: `${E2E} list || exit $?\ngrep -qF '${TASK_TOKEN}' ${E2E_WORKFLOW_FILE} || { echo '${E2E_WORKFLOW_FILE}: missing or without the ${TASK_TOKEN} token in its implement step'; exit 1; }`,
+      onFail: { retry: 'setup', max: 2 },
+    },
+    {
+      id: 'e2e-smoke',
+      name: 'e2e smoke test',
+      command: `${E2E} run --reporter list,markdown --max-failures 3; code=$?\n[ -f .e2e/summary.md ] && cat .e2e/summary.md\nexit $code`,
+      onFail: { retry: 'setup', max: 2 },
+    },
+  ];
+  const graph = compileV1(steps);
+  const end = graph.nodes.find((n) => n.type === 'end')!.id;
+  const last = graph.edges.find((e) => e.from === 'e2e-smoke.pass' && e.to === end)!;
+  last.to = 'pr';
+  graph.nodes.push({ id: 'pr', name: 'Open draft PR', type: 'github.draft-pr', title: E2E_SETUP_PR_TITLE });
+  graph.edges.push({ from: 'pr.created', to: end }, { from: 'pr.failed', to: end });
   return {
     name: E2E_SETUP_WORKFLOW_NAME,
-    description: 'Install and configure TesterArmy e2e, then prove it with a smoke test.',
+    description: 'Install and configure TesterArmy e2e, prove it with a smoke test, open a draft PR.',
     source: 'built-in',
-    steps: [
-      { id: 'setup', name: 'Set up e2e', prompt: e2eSetupPrompt(credentials) },
-      {
-        id: 'e2e-list',
-        name: 'e2e config loads',
-        command: `${E2E} list || exit $?\ngrep -qF '${TASK_TOKEN}' ${E2E_WORKFLOW_FILE} || { echo '${E2E_WORKFLOW_FILE}: missing or without the ${TASK_TOKEN} token in its implement step'; exit 1; }`,
-        onFail: { retry: 'setup', max: 2 },
-      },
-      {
-        id: 'e2e-smoke',
-        name: 'e2e smoke test',
-        command: `${E2E} run --reporter list,markdown --max-failures 3; code=$?\n[ -f .e2e/summary.md ] && cat .e2e/summary.md\nexit $code`,
-        onFail: { retry: 'setup', max: 2 },
-      },
-    ],
+    // What a loaded v2 file carries (`load.ts`): the graph's agent/check nodes, for every
+    // step-reading path. The executor walks `graph`.
+    steps: graphToSteps(graph),
+    graph,
   };
 }
 

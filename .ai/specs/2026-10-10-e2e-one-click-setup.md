@@ -30,7 +30,7 @@ Neither original concern applies to an opt-in setup:
 
 ## Design
 
-### Settings → project → End-to-end tests
+### Settings → project → External integrations → Test frameworks
 
 Status (`configFile`, `workflow`, which model keys check steps can read, the latest setup run and its
 live status via `useRun`), a provider select over `E2E_CREDENTIAL_NAMES`, an optional password
@@ -43,7 +43,8 @@ someone who only wanted e2e set up nothing. `E2eSetupVerdict` (task thread, setu
 settled) says it in one card: **e2e works** (`done`/`review` — reachable only after both checks
 passed) plus "merge branch cez/… " or, once the config is in the checkout, "live — pick
 `implement-and-e2e`"; **e2e is not working yet** naming the check that failed, with Continue or
-Settings → End-to-end tests as the way forward; or cancelled.
+Settings → External integrations as the way forward; or cancelled. With a draft PR open, it links
+the PR instead of naming the branch.
 
 ### `GET /e2e`, `POST /e2e/setup`
 
@@ -60,6 +61,13 @@ Contract in `packages/contract/src/e2e.ts`; inventoried in `BACKWARD_COMPATIBILI
 
 The provider gate (`providerActionError`) applies, as on `POST /runs`.
 
+Settings groups third-party tools under **External integrations**, one tab per kind of tool
+(**Test frameworks** first). TesterArmy e2e is a card there: its logo (bundled —
+`packages/web/src/assets/integrations/tester-army.png`, the GitHub org avatar; the cockpit never
+hot-links a third-party image), a link to `github.com/tester-army/e2e`, an Installed / Not set up /
+Setting up badge, the status rows and the setup form. The provider select follows the key already
+stored, so re-running a setup does not switch providers by accident.
+
 ### The setup workflow (`e2e-setup`)
 
 | Step | Kind | What |
@@ -67,6 +75,14 @@ The provider gate (`providerActionError`) applies, as on `POST /runs`.
 | `setup` | agent | Check Node (`^22.22.3 \|\| >=24.8.0`) and that there is a web app; `npx --yes e2e@latest init --yes`; install with the repo's package manager; `app.url: http://127.0.0.1:0` with a `{port}` dev-server command; wire the provider of the first stored key name; a locator-only `tests/smoke.e2e.ts`; write `implement-and-e2e.yaml` from `E2E_WORKFLOW_TEMPLATE`; commit. |
 | `e2e-list` | check | `npx --no-install e2e list` — loads the config, collects tests, no model, no app — then `grep -qF '{{task}}'` on the written workflow. |
 | `e2e-smoke` | check | `npx --no-install e2e run --reporter list,markdown --max-failures 3`, printing `.e2e/summary.md`. |
+
+| `pr` | `github.draft-pr` | cezar opens the draft PR itself (`createDraftPr`, the review gate's mechanism), title `chore: set up e2e browser tests (TesterArmy e2e)`. Both its ports lead to the success end. |
+
+The workflow is a `version: 2` graph only for the `pr` node: the steps compile exactly as a v1
+chain would (`compileV1`) and the node is spliced in before `end`. A PR that cannot be opened (no
+`gh`, no remote, offline) still ends the run as a success, because e2e works either way. The node's
+note says why there is no PR, and the verdict card names the branch and the header's Draft PR
+button.
 
 Both checks loop back to `setup` (max 2) on ANY exit code: for the setup, a config (2) or app-process
 (3) failure is its own work, unlike a coding task where `retryOn: [1]` is right. The generated
@@ -104,6 +120,11 @@ build with an isolated `CEZ_HOME`, real Claude Code runner, no model key:
 The review gate is off by default (`CEZ_REVIEW_GATE`), so a setup run normally settles as `done`
 with its branch unmerged. The section says "Setup finished — merge branch cez/… to finish" until
 the config is in the checkout.
+
+5. **Graph + PR node** (`fbbb303d`, a copy of the app with no remote): green in ~1 min. The `pr`
+   node failed with "no git remote — add one … or merge the branch locally", the run settled `done`,
+   and the verdict read "e2e works — merge branch cez/fbbb303d (or open a draft PR from the header)".
+   The PR-created path was not run live: that needs a real GitHub repository.
 
 ## Facts the design rests on (e2e 0.19.0, verified 2026-10-10)
 

@@ -16,7 +16,7 @@ examples use.
 
 ## One click: let cezar set it up
 
-**Settings → (project) → End-to-end tests → Set up e2e.** That is the whole setup.
+**Settings → (project) → External integrations → Test frameworks → TesterArmy e2e → Set up e2e.** That is the whole setup.
 Optionally pick a model provider and paste its key first; without one the smoke
 test still runs, and only `agent.*` steps need a model.
 
@@ -29,11 +29,13 @@ cezar then starts a task, in its own worktree like any other, that:
 3. replaces the example with a `tests/smoke.e2e.ts` that needs no model key;
 4. writes `.ai/cezar/workflows/implement-and-e2e.yaml` (Level 1 below, with your install and unit-test commands);
 5. proves it — `e2e list` and an `e2e run` of the smoke test are check steps of the
-   setup task, and a failure loops the setup agent back with the output until they pass.
+   setup task, and a failure loops the setup agent back with the output until they pass;
+6. opens a **draft PR** with all of it (through `gh`, like the review gate's Draft PR button).
+   With no GitHub remote or no `gh`, the setup still succeeds and the task says so.
 
-When the task finishes (at the review gate, if you have it on), look at its diff
-and merge its branch: the `implement-and-e2e` workflow is then in your catalog and
-the section reads *Configured*. The key is stored encrypted as a
+The task ends with a card that says whether e2e works. Merge the draft PR (or the
+task's branch): the `implement-and-e2e` workflow is then in your catalog and the
+card in Settings reads *Installed*. The key is stored encrypted as a
 project secret (audience `checks`), so it reaches the e2e check steps and never an
 agent session — the reason not to `export` it (see below). `e2e`'s own telemetry is
 turned off (`E2E_TELEMETRY_DISABLED=1`) in every command cezar writes.

@@ -23,8 +23,10 @@ function Verdict({ run }: { run: ApiRun }) {
   const status = useE2eStatus()
   const landed = Boolean(status.data?.configFile)
   const works = run.status === 'done' || run.status === 'review'
-  const failedStep = run.steps.find((step) => step.status === 'failed')
-  const settings = <Link className="font-medium underline underline-offset-2" to="/settings/e2e">Settings → End-to-end tests</Link>
+  const failedStep = run.steps.find((step) => step.status === 'failed' && step.id !== 'pr')
+  // The setup's own draft PR (its `github.draft-pr` node), http(s) only (#431).
+  const prUrl = run.pullRequestUrl && /^https?:\/\//.test(run.pullRequestUrl) ? run.pullRequestUrl : undefined
+  const settings = <Link className="font-medium underline underline-offset-2" to="/settings/integrations">Settings → External integrations</Link>
 
   return (
     <div
@@ -47,7 +49,9 @@ function Verdict({ run }: { run: ApiRun }) {
             <p className="mt-1">
               {landed
                 ? <>It is live in this project: pick the <code>implement-and-e2e</code> workflow for your next task.</>
-                : <>One step left: merge branch <code>{run.branch ?? 'of this task'}</code>. Then pick the <code>implement-and-e2e</code> workflow for your next task.</>}
+                : prUrl
+                  ? <>One step left: merge the <a className="font-medium underline underline-offset-2" href={prUrl} target="_blank" rel="noreferrer">draft PR</a>. Then pick the <code>implement-and-e2e</code> workflow for your next task.</>
+                  : <>One step left: merge branch <code>{run.branch ?? 'of this task'}</code> (or open a draft PR from the header). Then pick the <code>implement-and-e2e</code> workflow for your next task.</>}
             </p>
           </>
         ) : run.status === 'cancelled' ? (

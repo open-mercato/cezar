@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { CheckIcon, MinusIcon } from 'lucide-react'
+import { CheckIcon, ExternalLinkIcon, MinusIcon } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 
@@ -9,6 +9,10 @@ import { queryKeys, useE2eStatus, useRun } from '@/api/queries'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { scopeTo } from '@/lib/project-router'
+import testerArmyLogo from '@/assets/integrations/tester-army.png'
+
+/** TesterArmy's own repository — where the card sends someone who wants to know what e2e is. */
+export const TESTER_ARMY_REPO = 'https://github.com/tester-army/e2e'
 
 /** The provider behind each key, as the person picking one knows it. */
 const PROVIDER_LABELS: Record<E2eCredentialName, string> = {
@@ -25,9 +29,11 @@ const IN_FLIGHT: ReadonlySet<RunStatus> = new Set(['queued', 'running', 'waiting
  * not in the checkout yet has one step left — merging its branch — because the review gate is
  * off by default and `done` alone would read as "nothing left to do".
  */
-function setupLine(status: RunStatus, landed: boolean, branch: string | undefined): string {
+function setupLine(status: RunStatus, landed: boolean, branch: string | undefined, prUrl: string | undefined): string {
   if (IN_FLIGHT.has(status)) return 'Setting up — cezar is installing and configuring e2e in its own worktree.'
-  const mergeIt = `merge ${branch ? `branch ${branch}` : 'the setup task’s branch'} to finish.`
+  const mergeIt = prUrl
+    ? 'its draft PR is ready — merge it to finish.'
+    : `merge ${branch ? `branch ${branch}` : 'the setup task’s branch'} to finish.`
   if (status === 'review') return `Ready for review — ${mergeIt}`
   if (status === 'done') return landed ? 'Setup finished.' : `Setup finished — ${mergeIt}`
   if (status === 'failed') return 'The last setup failed — open the task to see why, then try again.'
@@ -44,24 +50,30 @@ function Row({ ok, children }: { ok: boolean; children: React.ReactNode }) {
 }
 
 /**
- * Settings → project → End-to-end tests (spec 2026-10-10-e2e-one-click-setup). One button: cezar
+ * Settings → project → External integrations → Test frameworks → TesterArmy e2e (spec
+ * 2026-10-10-e2e-one-click-setup). One button: cezar
  * installs and configures TesterArmy's `e2e` as a task whose branch the user merges. The model key
  * is optional — smoke tests run without one — and goes to the project's secret store for check
  * steps only, never to an agent.
  */
-export function E2eSection() {
+export function TesterArmyE2eCard() {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const status = useE2eStatus()
   // The run record is what the event stream keeps live; the status payload is a snapshot.
   const setupRun = useRun(status.data?.setup?.runId)
-  const [provider, setProvider] = useState<E2eCredentialName>('AI_GATEWAY_API_KEY')
+  // Until the user picks one, the provider follows the key already stored (else the AI Gateway,
+  // `e2e init`'s own default) — re-running a setup should not quietly switch providers.
+  const [chosenProvider, setProvider] = useState<E2eCredentialName | undefined>(undefined)
   const [key, setKey] = useState('')
   const [error, setError] = useState<string | null>(null)
 
   const setupStatus = setupRun.data?.status ?? status.data?.setup?.status
+  // http(s) only (#431): the URL is written by `gh`, but a link is still a link.
+  const prUrl = setupRun.data?.pullRequestUrl && /^https?:\/\//.test(setupRun.data.pullRequestUrl) ? setupRun.data.pullRequestUrl : undefined
   const inFlight = setupStatus !== undefined && IN_FLIGHT.has(setupStatus)
   const credentials = status.data?.credentials ?? []
+  const provider: E2eCredentialName = chosenProvider ?? credentials[0] ?? 'AI_GATEWAY_API_KEY'
   const installed = Boolean(status.data?.configFile && status.data.workflow)
 
   const starting = useMutation({
@@ -84,14 +96,32 @@ export function E2eSection() {
     onError: (e: Error) => setError(e.message),
   })
 
+  const badge = inFlight ? 'Setting up' : installed ? 'Installed' : 'Not set up'
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 p-4 md:p-6" data-slot="e2e-settings">
+    <div className="flex flex-col gap-4" data-slot="e2e-settings">
       <section className="rounded-lg border border-border bg-card p-4">
-        <h2 className="text-sm font-semibold">Browser end-to-end tests</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          cezar sets up <a className="underline" href="https://github.com/tester-army/e2e" target="_blank" rel="noreferrer">TesterArmy e2e</a> for
-          this project: it installs it, points it at your dev server, writes a smoke test and an
-          {' '}<code>implement-and-e2e</code> workflow, and proves it all passes — as a task you review and merge.
+        <div className="flex items-start gap-3">
+          <img src={testerArmyLogo} alt="" width={40} height={40} className="size-10 shrink-0 rounded-md" />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-sm font-semibold">TesterArmy e2e</h2>
+              <span data-slot="e2e-badge" data-state={inFlight ? 'setting-up' : installed ? 'installed' : 'none'}
+                className={installed && !inFlight
+                  ? 'rounded-full bg-success/10 px-2 py-0.5 text-xs font-medium text-success'
+                  : 'rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground'}>
+                {badge}
+              </span>
+            </div>
+            <p className="text-xs text-muted-foreground">Agentic browser end-to-end testing</p>
+          </div>
+          <a href={TESTER_ARMY_REPO} target="_blank" rel="noreferrer"
+            className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
+            tester-army/e2e <ExternalLinkIcon className="size-3" aria-hidden />
+          </a>
+        </div>
+        <p className="mt-3 text-sm text-muted-foreground">
+          cezar installs it for this project, points it at your dev server, writes a smoke test and an
+          {' '}<code>implement-and-e2e</code> workflow, proves it all passes in a real browser and opens a draft PR for you to merge.
         </p>
         {status.isPending ? <p className="mt-4 text-sm text-muted-foreground">Loading…</p> : null}
         {status.isError ? <p role="alert" className="mt-4 text-sm text-danger">{status.error.message}</p> : null}
@@ -108,7 +138,10 @@ export function E2eSection() {
         ) : null}
         {status.data?.setup && setupStatus ? (
           <p className="mt-3 text-sm" data-slot="e2e-setup-run" data-status={setupStatus}>
-            {setupLine(setupStatus, Boolean(status.data.configFile), setupRun.data?.branch)}{' '}
+            {setupLine(setupStatus, Boolean(status.data.configFile), setupRun.data?.branch, prUrl)}{' '}
+            {prUrl && !status.data.configFile ? (
+              <><a className="underline" href={prUrl} target="_blank" rel="noreferrer">Open the draft PR</a>{' · '}</>
+            ) : null}
             <Link className="underline" to={scopeTo(queryScope(), `/tasks/${status.data.setup.runId}`)}>Open the setup task</Link>
           </p>
         ) : null}

@@ -34,6 +34,11 @@ describe('e2e setup verdict', () => {
     expect(document.querySelector('[data-slot="e2e-setup-verdict"]')?.getAttribute('data-verdict')).toBe('works')
   })
 
+  it('points at the draft PR the setup opened', () => {
+    show(run('done', { pullRequestUrl: 'https://github.com/o/r/pull/9' } as Partial<ApiRun>))
+    expect(screen.getByRole('link', { name: 'draft PR' }).getAttribute('href')).toBe('https://github.com/o/r/pull/9')
+  })
+
   it('says it is live once the config is in the checkout', async () => {
     show(run('review'), 'e2e.config.ts')
     await screen.findByText(/It is live in this project/)
@@ -43,7 +48,7 @@ describe('e2e setup verdict', () => {
     show(run('failed', { steps: [step('setup', 'Set up e2e', 'agent', 'done'), step('e2e-list', 'e2e config loads', 'check', 'done'), step('e2e-smoke', 'e2e smoke test', 'check', 'failed')] } as Partial<ApiRun>))
     expect(screen.getByText('e2e is not working yet')).toBeTruthy()
     expect(screen.getByText(/“e2e smoke test” did not pass/)).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'Settings → End-to-end tests' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Settings → External integrations' })).toBeTruthy()
   })
 
   it('says a cancelled setup left e2e unset', () => {

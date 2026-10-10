@@ -12,7 +12,7 @@ import {
   NotebookPenIcon,
   PaletteIcon,
   KeyRoundIcon,
-  MonitorCheckIcon,
+  BlocksIcon,
   TicketIcon,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
@@ -32,7 +32,7 @@ import { SkillsSection } from './skills-section'
 import { WorktreesSection } from './worktrees-section'
 import { TrackerSection } from './tracker-section'
 import { ProjectSecretsSection, WorkspaceSecretsSection } from './secrets-section'
-import { E2eSection } from './e2e-section'
+import { IntegrationsSection } from './integrations-section'
 
 /**
  * The Settings section registry (R6 Step 1.3, spec §"Settings"): the ONE place a section is
@@ -65,7 +65,7 @@ export type SettingsSectionId =
   | 'skills'
   | 'tracker'
   | 'secrets'
-  | 'e2e'
+  | 'integrations'
   | 'workspace-secrets'
 
 /** Which settings area a section belongs to — and therefore which store it writes. */
@@ -118,11 +118,11 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     scope: 'project',
   },
   {
-    id: 'e2e',
-    title: 'End-to-end tests',
-    description: 'Let cezar install and configure browser e2e tests for this project.',
-    icon: MonitorCheckIcon,
-    component: E2eSection,
+    id: 'integrations',
+    title: 'External integrations',
+    description: 'Third-party tools cezar installs and wires into this project — test frameworks first.',
+    icon: BlocksIcon,
+    component: IntegrationsSection,
     scope: 'project',
   },
   {

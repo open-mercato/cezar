@@ -1,21 +1,31 @@
 import { parse as parseYaml } from 'yaml';
 import { describe, expect, it } from 'vitest';
 import { E2E_CREDENTIAL_NAMES } from '@open-mercato/cezar-contract';
-import { E2E_WORKFLOW_TEMPLATE, e2eCredentialsAmong, e2eSetupWorkflow } from './e2e-setup.ts';
+import { E2E_SETUP_PR_TITLE, E2E_WORKFLOW_TEMPLATE, e2eCredentialsAmong, e2eSetupWorkflow } from './e2e-setup.ts';
+import { graphIssues } from './workflows/graph.ts';
 import { stepsIssue, workflowDefSchema, workflowFileSchema } from './workflows/types.ts';
 
 describe('e2e setup workflow (spec 2026-10-10-e2e-one-click-setup)', () => {
-  it('is a valid ad-hoc chain whose checks loop back to the setup step on any exit code', () => {
+  it('is a valid graph whose checks loop back to the setup step, then opens a draft PR either way', () => {
     for (const credentials of [[], ['OPENAI_API_KEY']] as const) {
       const workflow = workflowDefSchema.parse(e2eSetupWorkflow(credentials));
-      expect(stepsIssue(workflow.steps)).toBeNull();
-      const checks = workflow.steps.filter((s) => s.command);
-      expect(checks.map((s) => s.onFail)).toEqual([
-        { retry: 'setup', max: 2 },
-        { retry: 'setup', max: 2 },
-      ]);
+      const graph = workflow.graph!;
+      expect(graphIssues(graph)).toEqual([]);
+      expect(workflow.steps.map((s) => s.id)).toEqual(['setup', 'e2e-list', 'e2e-smoke']);
+      // Both checks fail into a loop (max 2) that repeats the setup agent.
+      for (const check of ['e2e-list', 'e2e-smoke']) {
+        const loop = graph.edges.find((e) => e.from === `${check}.fail`)!.to;
+        expect(graph.nodes.find((n) => n.id === loop)).toMatchObject({ type: 'loop', max: 2 });
+        expect(graph.edges.find((e) => e.from === `${loop}.repeat`)?.to).toBe('setup');
+      }
+      // Green checks → draft PR → success, whether or not the PR could be opened.
+      const end = graph.nodes.find((n) => n.type === 'end')!;
+      expect(end).toMatchObject({ status: 'success' });
+      expect(graph.edges.find((e) => e.from === 'e2e-smoke.pass')?.to).toBe('pr');
+      expect(graph.nodes.find((n) => n.id === 'pr')).toMatchObject({ type: 'github.draft-pr', title: E2E_SETUP_PR_TITLE });
+      expect(graph.edges.filter((e) => e.from.startsWith('pr.')).map((e) => [e.from, e.to])).toEqual([['pr.created', end.id], ['pr.failed', end.id]]);
       // The repo-pinned binary, never the registry's latest; vendor telemetry off.
-      for (const check of checks) expect(check.command).toMatch(/E2E_TELEMETRY_DISABLED=1 npx --no-install e2e /);
+      for (const check of workflow.steps.filter((s) => s.command)) expect(check.command).toMatch(/E2E_TELEMETRY_DISABLED=1 npx --no-install e2e /);
     }
   });
 
