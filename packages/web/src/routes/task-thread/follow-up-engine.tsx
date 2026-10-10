@@ -17,8 +17,8 @@ import { runActionFlags } from './run-actions'
 
 /** What the thread needs to offer Continue from its composer. */
 export interface ContinueAction {
-  /** Is there a session to reopen at all? (`runActionFlags.continueRun` — the same gate the
-   *  header's Continue button uses.) Everything else is inert when this is false. */
+  /** Is there a session to reopen at all? (`runActionFlags.continueRun` — the one gate every
+   *  Continue entry point shares.) Everything else is inert when this is false. */
   available: boolean
   /** Whether provider discovery currently permits reopening the session. */
   canContinue: boolean

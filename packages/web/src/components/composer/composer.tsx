@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowUpIcon, CheckIcon, MicIcon, PaperclipIcon, XIcon } from 'lucide-react'
+import { ArrowUpIcon, CheckIcon, MicIcon, PaperclipIcon, SquareIcon, XIcon } from 'lucide-react'
 import {
   useCallback,
   useEffect,
@@ -19,6 +19,7 @@ import { putUiState } from '@/api/client'
 import { queryKeys, useSkills, useUiState } from '@/api/queries'
 import type { AttachmentInput } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Command, CommandItem, CommandList } from '@/components/ui/command'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { toast } from '@/components/ui/toaster'
@@ -88,6 +89,12 @@ export interface ComposerProps {
   footerEnd?: ReactNode
   /** The send button's accessible name. */
   sendAriaLabel?: string
+  /**
+   * While the host's work is running, a Stop button sits where send does. With an empty box it is
+   * the only button (an empty box over a working agent offers to stop it); once there is something
+   * to send, Send appears beside it — a message to a busy agent still queues.
+   */
+  stop?: { label: string; onStop: () => void; pending?: boolean }
   disabled?: boolean
   /** Shown as the placeholder while disabled — e.g. the legacy "Session closed — Continue to
    *  reopen." */
@@ -145,6 +152,7 @@ export function Composer({
   footerStart,
   footerEnd,
   sendAriaLabel = 'Send',
+  stop,
   disabled = false,
   disabledReason = 'Session closed — Continue to reopen.',
   allowEmptySubmit = false,
@@ -609,18 +617,40 @@ export function Composer({
                     {footerEnd}
                   </div>
                 ) : null}
-                <Button
-                  type="button"
-                  size="icon-sm"
-                  aria-label={sendAriaLabel}
-                  disabled={
-                    disabled || busy || (text.trim() === '' && images.length === 0 && !allowEmptySubmit)
-                  }
-                  className="size-8"
-                  onClick={submitDraft}
-                >
-                  <ArrowUpIcon aria-hidden="true" />
-                </Button>
+                {stop ? (
+                  // Stop stays on screen for as long as the agent works — typing a message adds Send
+                  // beside it rather than replacing it, so stopping never means clearing the draft.
+                  <IconTooltip label={stop.label} side="top">
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="contrast"
+                      data-slot="composer-stop"
+                      aria-label={stop.label}
+                      disabled={stop.pending}
+                      className="size-8"
+                      onClick={stop.onStop}
+                    >
+                      <SquareIcon aria-hidden="true" className="size-3 fill-current" />
+                    </Button>
+                  </IconTooltip>
+                ) : null}
+                {/* With Stop showing, Send appears only once there is something to send: an empty box
+                    over a working agent offers exactly one action. */}
+                {!stop || text.trim() !== '' || images.length > 0 || allowEmptySubmit ? (
+                  <Button
+                    type="button"
+                    size="icon-sm"
+                    aria-label={sendAriaLabel}
+                    disabled={
+                      disabled || busy || (text.trim() === '' && images.length === 0 && !allowEmptySubmit)
+                    }
+                    className="size-8"
+                    onClick={submitDraft}
+                  >
+                    <ArrowUpIcon aria-hidden="true" />
+                  </Button>
+                ) : null}
               </div>
             </div>
           )}

@@ -19,6 +19,7 @@ import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
+import { toast } from '@/components/ui/toaster'
 import { useKeyboardInsetVar } from '@/lib/keyboard-inset'
 import { budgetStop, isAwaitingAnswer } from '@/lib/attention'
 import { isUnread } from '@/lib/read-state'
@@ -26,6 +27,7 @@ import { taskIssueUrl, taskPrUrl } from '@/lib/tasks-table'
 import { cn, isHttpUrl } from '@/lib/utils'
 
 import { AutoResumeHint } from './auto-resume-hint'
+import { useFinishRun } from './use-finish-run'
 import { useDraft } from './thread-draft'
 import { useDiffComments } from './diff-comments'
 import { TaskComposer, TaskDock } from './task-composer'
@@ -94,11 +96,18 @@ export function TaskThreadRoute() {
   // The one exception is "Mark unread" from this very thread (#775): clearing the receipt makes
   // `isUnread` true again, which without a guard this effect would immediately undo — the action
   // would look broken in exactly the place a user reaches for it. `suppressAutoRead` is that
-  // guard, and it holds the run id rather than a bare boolean so the reset is implicit: it only
-  // suppresses the run it was set for, and the FIRST render of a later visit (a fresh mount, or
-  // navigating to another task and back) starts from an empty ref and auto-reads normally. That
-  // is the email grammar this is modelled on — reopening the mail marks it read again.
+  // guard, and it holds the run id rather than a bare boolean: it only suppresses the run it was
+  // set for, for as long as that run stays on screen. Leaving it ends the visit — and that has to
+  // be cleared EXPLICITLY, because /tasks/A → /tasks/B → /tasks/A reuses this route element
+  // (React reconciles it, it does not remount), so a ref that only reset on mount survived the
+  // round trip and the task stayed unread however often it was reopened. That is the email
+  // grammar this is modelled on — reopening the mail marks it read again.
   const suppressAutoRead = useRef<string | undefined>(undefined)
+  // Declared BEFORE the receipt effect below on purpose: effects run in order, so arriving on a
+  // run clears another run's suppression before the receipt decides whether to fire.
+  useEffect(() => {
+    if (suppressAutoRead.current !== id) suppressAutoRead.current = undefined
+  }, [id])
   const suppressAutoReadFor = useCallback((runId: string) => {
     suppressAutoRead.current = runId
   }, [])
@@ -116,6 +125,9 @@ export function TaskThreadRoute() {
     // `isUnread` reads `archived` too, so it belongs here: un-archiving an open thread makes the
     // run unread again, and without this dep the effect would never fire to clear it.
     run.data?.archived,
+    // The route's id, not just the record's: coming back to a run whose cached record is
+    // unchanged must still re-run the receipt once the suppression above has been lifted.
+    id,
   ])
   // The two feeds can drift: a record update lost on the workspace stream leaves the thread
   // showing Working… over a "run finished" transcript. The transcript is live here, so it
@@ -372,7 +384,20 @@ export function ThreadView({
               footer.tone === 'danger' ? 'text-danger' : 'text-soft-foreground',
             )}
           >
-            {footer.label}
+            <FooterLabel
+              label={footer.label}
+              // Offered whenever there is a session to reopen — not only once the provider check
+              // has passed: while it loads (or the provider is disconnected) the button is there,
+              // greyed, saying why, instead of the advice silently degrading to plain text.
+              onContinue={hasContinuation ? () => continueAction.continueWith('', []) : undefined}
+              blockedReason={
+                continuable
+                  ? undefined
+                  : continueAction.providerPending
+                    ? 'Checking the agent provider…'
+                    : (continueAction.reason ?? 'Connect an agent provider to continue.')
+              }
+            />
             {/* href protocol guard (#431): link only for http(s) URLs. */}
             {isHttpUrl(taskPrUrl(run)) ? (
               // The run shipped as a PR (review-gate Draft PR, or agent-opened), or worked on
@@ -460,6 +485,12 @@ export function ThreadView({
           >
             <StatusDot tone="pending" pulse />
             Budget reached — spent ${budget.spent.toFixed(2)} of ${budget.ceiling.toFixed(2)}; send a message to continue.
+            {run.status === 'waiting' ? (
+              <>
+                <span aria-hidden="true">·</span>
+                <EndSessionButton runId={run.id} />
+              </>
+            ) : null}
           </div>
         ) : run.status === 'waiting' ? (
           <div
@@ -468,6 +499,10 @@ export function ThreadView({
           >
             <StatusDot tone="pending" pulse />
             The agent is paused, waiting for your reply
+            {/* The other answer to "your turn": not replying at all. It sits beside the hint
+                because that is the moment the choice is made — reply below, or end it here. */}
+            <span aria-hidden="true">·</span>
+            <EndSessionButton runId={run.id} />
           </div>
         ) : null}
 
@@ -490,6 +525,72 @@ export function ThreadView({
         />
       </TaskDock>
     </div>
+  )
+}
+
+/** The server's own advice — "… — continue to resume it" — names an action, so where that
+ *  action is on offer the word IS the action: the same one-click Continue as an empty send. */
+const CONTINUE_ADVICE = /— continue to /i
+
+function FooterLabel({
+  label,
+  onContinue,
+  blockedReason,
+}: {
+  label: string
+  /** Absent when there is no session to reopen at all — the advice then stays plain text. */
+  onContinue?: () => Promise<unknown>
+  /** Why it cannot run yet (provider loading or disconnected): the button shows, disabled. */
+  blockedReason?: string
+}) {
+  const [pending, setPending] = useState(false)
+  const match = onContinue ? CONTINUE_ADVICE.exec(label) : null
+  if (!onContinue || !match) return <span>{label}</span>
+  const before = label.slice(0, match.index)
+  const after = label.slice(match.index + match[0].length)
+  return (
+    <span>
+      {before}—{' '}
+      <button
+        type="button"
+        data-slot="footer-continue"
+        disabled={pending || blockedReason !== undefined}
+        title={blockedReason ?? 'Reopen the session and pick up where it stopped'}
+        onClick={() => {
+          setPending(true)
+          onContinue()
+            .catch((error: unknown) =>
+              toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }),
+            )
+            .finally(() => setPending(false))
+        }}
+        // A text button in the message's own red: it is part of the sentence it completes, so it
+        // keeps that sentence's colour; the weight and underline are what mark it as the action.
+        className="rounded-sm font-semibold underline underline-offset-2 hover:brightness-125 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-not-allowed disabled:no-underline disabled:opacity-60"
+      >
+        Continue
+      </button>{' '}
+      to {after}
+    </span>
+  )
+}
+
+/** Ends a waiting session (`POST /finish`): the run completes as done, or parks at review when
+ *  the worktree holds changes. A text button, like the footer's Continue — part of the hint line
+ *  it answers, not a toolbar control. */
+function EndSessionButton({ runId }: { runId: string }) {
+  const finish = useFinishRun(runId)
+  return (
+    <button
+      type="button"
+      data-slot="end-session"
+      title="Close the session — the task finishes (or goes to review if it changed files)"
+      disabled={finish.isPending}
+      onClick={() => finish.mutate()}
+      className="rounded-sm font-medium text-foreground underline-offset-2 hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60"
+    >
+      End session
+    </button>
   )
 }
 

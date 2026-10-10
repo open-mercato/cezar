@@ -1,10 +1,12 @@
 import {
-  EllipsisVerticalIcon,
-  ExternalLinkIcon,
+  ChevronDownIcon,
   GitCommitHorizontalIcon,
+  GitMergeIcon,
+  GitPullRequestDraftIcon,
   GitPullRequestIcon,
-  SquareTerminalIcon,
+  RefreshCwIcon,
   UploadIcon,
+  WrenchIcon,
 } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 
@@ -18,37 +20,33 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import type { GitAction, GitActionBar, GitActionId } from '@/lib/git-actions'
-import { isHttpUrl } from '@/lib/utils'
+import type { GitAction, GitActionId } from '@/lib/git-actions'
 
 import { BranchChip, DiffViewToggles } from './diff-controls'
 
 /**
  * The Changes tab's toolbar (spec #390). Deliberately DUMB about git: it renders whatever
- * `gitActionPolicy` returned — primary CTA, secondary buttons, overflow menu — plus the
+ * `gitActionPolicy` returned — no git step of its own (the run header carries it: its title row on
+ * desktop, its action menu on phones) — plus the
  * branch chip, the animated aggregate ± stat, and the local view toggles (unified/split,
  * wrap; hidden below `md`, where unified+wrap is forced). Every disabled action shows the
  * policy's own reason as its tooltip. No git conditionals live here — that is the policy
  * module's contract.
  */
 export function GitToolbar({
-  bar,
   branch,
   stat,
   mode,
   wrap,
   onModeChange,
   onWrapChange,
-  onAction,
 }: {
-  bar: GitActionBar
   branch?: string
   stat?: DiffStat
   mode: DiffMode
   wrap: boolean
   onModeChange: (mode: DiffMode) => void
   onWrapChange: (wrap: boolean) => void
-  onAction: (id: GitActionId) => void
 }) {
   return (
     <div
@@ -65,97 +63,97 @@ export function GitToolbar({
           <DiffViewToggles mode={mode} wrap={wrap} onModeChange={onModeChange} onWrapChange={onWrapChange} />
         </span>
 
-        {bar.secondary.map((action) => (
-          <ActionButton key={action.id} action={action} variant="outline" onAction={onAction} />
-        ))}
-        <ActionButton action={bar.primary} variant="primary" onAction={onAction} />
-
-        {bar.menu.length > 0 ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm" aria-label="More git actions">
-                <EllipsisVerticalIcon aria-hidden="true" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" data-slot="git-toolbar-menu">
-              {bar.menu.map((action) => (
-                <DropdownMenuItem
-                  key={action.id}
-                  disabled={!action.enabled}
-                  title={action.reason}
-                  onSelect={() => onAction(action.id)}
-                >
-                  {ACTION_ICONS[action.id]}
-                  {action.label}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        ) : null}
       </span>
     </div>
   )
 }
 
-const ACTION_ICONS: Record<GitActionId, ReactNode> = {
-  commit: <GitCommitHorizontalIcon aria-hidden="true" />,
-  push: <UploadIcon aria-hidden="true" />,
-  'create-pr': <GitPullRequestIcon aria-hidden="true" />,
-  'view-pr': <ExternalLinkIcon aria-hidden="true" />,
-  'open-terminal': <SquareTerminalIcon aria-hidden="true" />,
+/**
+ * The one git button: the policy's single next step, or nothing. Outline — secondary weight; the
+ * page's one primary action is the chat box's send. Rendered verbatim from the policy: which step
+ * is "next" is decided there, never here.
+ */
+export function GitActions({ action, onAction }: { action: GitAction | null; onAction: (id: GitActionId) => void }) {
+  if (!action) return null
+  const alternatives = action.alternatives ?? []
+  return (
+    <span data-slot="git-button" className="inline-flex items-center">
+      <ActionButton
+        action={action}
+        variant="outline"
+        onAction={onAction}
+        className={alternatives.length > 0 ? 'rounded-r-none' : undefined}
+      />
+      {/* The same step said differently (Create PR → Create draft PR) — never a different step:
+          the button stays one action, the chevron only changes how it is taken. */}
+      {alternatives.length > 0 ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              aria-label={`More ways to ${action.label.toLowerCase()}`}
+              className="-ml-px rounded-l-none px-1.5"
+            >
+              <ChevronDownIcon aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" data-slot="git-button-menu">
+            {alternatives.map((alternative) => (
+              <DropdownMenuItem
+                key={alternative.id}
+                data-action={alternative.id}
+                disabled={!alternative.enabled}
+                title={alternative.reason}
+                onSelect={() => onAction(alternative.id)}
+              >
+                {GIT_ACTION_ICONS[alternative.id]}
+                {alternative.label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
+    </span>
+  )
 }
 
-/** One policy entry → one button. `view-pr` renders as a real link when the policy's href is a
- *  safe URL, and disabled when it is not; everything else clicks through to the parent's
- *  mutation switch. */
+/** One icon per git step — shared with the phone action menu, so both spell a step the same. */
+export const GIT_ACTION_ICONS: Record<GitActionId, ReactNode> = {
+  commit: <GitCommitHorizontalIcon aria-hidden="true" />,
+  'commit-push': <UploadIcon aria-hidden="true" />,
+  push: <UploadIcon aria-hidden="true" />,
+  'create-pr': <GitPullRequestIcon aria-hidden="true" />,
+  'create-draft-pr': <GitPullRequestDraftIcon aria-hidden="true" />,
+  'update-branch': <RefreshCwIcon aria-hidden="true" />,
+  'resolve-conflicts': <GitMergeIcon aria-hidden="true" />,
+  'fix-checks': <WrenchIcon aria-hidden="true" />,
+}
+
+/** One policy entry → one button, clicking through to the parent's mutation switch. A disabled
+ *  entry shows the policy's reason as its tooltip. */
 function ActionButton({
   action,
   variant,
   onAction,
+  className,
 }: {
   action: GitAction
   variant: 'primary' | 'outline'
   onAction: (id: GitActionId) => void
+  className?: string
 }) {
-  // href protocol guard (#431): treat the PR link as a link only for http(s) URLs. A refused
-  // href must NOT fall through to the generic button below — the policy hardcodes view-pr as
-  // enabled and the parent's `view-pr` case is a deliberate no-op, so it would render a
-  // clickable button that silently does nothing. Disabled + a reason, like every other
-  // unavailable action.
-  if (action.id === 'view-pr') {
-    if (!isHttpUrl(action.href)) {
-      return (
-        <Button
-          variant={variant}
-          size="sm"
-          data-action={action.id}
-          disabled
-          title="View PR unavailable — the recorded PR link is not an http(s) URL"
-        >
-          {ACTION_ICONS[action.id]}
-          {action.label}
-        </Button>
-      )
-    }
-    return (
-      <Button asChild variant={variant} size="sm" data-action={action.id}>
-        <a href={action.href} target="_blank" rel="noopener noreferrer">
-          {ACTION_ICONS[action.id]}
-          {action.label}
-        </a>
-      </Button>
-    )
-  }
   return (
     <Button
       variant={variant}
       size="sm"
       data-action={action.id}
+      className={className}
       disabled={!action.enabled}
       title={action.enabled ? undefined : action.reason}
       onClick={() => onAction(action.id)}
     >
-      {ACTION_ICONS[action.id]}
+      {GIT_ACTION_ICONS[action.id]}
       {action.label}
     </Button>
   )

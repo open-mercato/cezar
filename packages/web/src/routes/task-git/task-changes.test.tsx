@@ -7,9 +7,8 @@ import { queryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
 import type { ApiRun, ChangesPayload, HealthResponse, RepoResponse } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
-import type { GitActionBar } from '@/lib/git-actions'
 
-import { GitToolbar } from './git-toolbar'
+import { GitActions, GitToolbar } from './git-toolbar'
 import { TaskChangesRoute } from './task-changes'
 
 afterEach(() => {
@@ -106,6 +105,7 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
       if (override) return override()
       if (method === 'GET' && path === '/api/v1/runs/r1') return jsonResponse(RUN)
       if (method === 'GET' && path === '/api/v1/runs/r1/changes') return jsonResponse(CHANGES)
+      if (method === 'GET' && path === '/api/v1/runs/r1/git/status') return jsonResponse({ uncommitted: 2, unpushed: null })
       if (method === 'GET' && path === '/api/v1/health') return jsonResponse(HEALTH)
       if (method === 'GET' && path === '/api/v1/repo') return jsonResponse(REPO)
       if (method === 'GET' && path === '/api/v1/runs') return jsonResponse([])
@@ -128,8 +128,13 @@ function renderChangesRoute(entry = '/tasks/r1/changes') {
   )
 }
 
+/** The run's git step, as the run header's title row paints it (desktop; phones read the same
+ *  step from the header's action menu). The Changes toolbar carries none of its own. */
+const gitButton = () => document.querySelector('[data-slot="run-header"] [data-slot="git-button"]') as HTMLElement | null
 const toolbarAction = (id: string) =>
-  document.querySelector(`[data-slot="git-toolbar"] [data-action="${id}"]`) as HTMLButtonElement | null
+  gitButton()?.querySelector(`[data-action="${id}"]`) as HTMLButtonElement | null
+/** The run record with a PR — the state in which Commit and Push are the one step. */
+const WITH_PR: ApiRun = { ...RUN, status: 'done', pullRequestUrl: 'https://github.com/acme/demo/pull/9' }
 
 // ---- the route -------------------------------------------------------------------------------
 
@@ -186,7 +191,15 @@ describe('the Changes tab route', () => {
       { text: 'Changes', href: '/tasks/r1/changes', current: 'page' },
       { text: 'Commits', href: '/tasks/r1/commits', current: null },
       { text: 'Files', href: '/tasks/r1/files', current: null },
+      { text: 'Notes', href: '/tasks/r1/notes', current: null },
     ])
+  })
+
+  it('the git step lives in the run header, not the Changes toolbar', async () => {
+    stubFetch()
+    renderChangesRoute()
+    await waitFor(() => expect(gitButton()).not.toBeNull())
+    expect(document.querySelector('[data-slot="git-toolbar"] [data-slot="git-button"]')).toBeNull()
   })
 
   it('builds the tree (compacted folders, per-file ±) and renders the diff beside it', async () => {
@@ -247,14 +260,16 @@ describe('the Changes tab route', () => {
   it('shows the empty state when the worktree is clean', async () => {
     stubFetch({
       'GET /api/v1/runs/r1/changes': () => jsonResponse({ files: [], stat: { adds: 0, dels: 0, files: 0 } }),
+      'GET /api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 0, unpushed: null }),
+      'GET /api/v1/runs/r1': () => jsonResponse({ ...RUN, diffStat: { adds: 0, dels: 0, files: 0 } }),
     })
     renderChangesRoute()
     await waitFor(() =>
       expect(screen.getByRole('heading', { level: 2, name: 'No changes yet' })).toBeTruthy(),
     )
-    // Commit has nothing to do — disabled, and it says why.
-    expect(toolbarAction('commit')?.disabled).toBe(true)
-    expect(toolbarAction('commit')?.title).toContain('no changes to commit')
+    // Autosave leaves nothing uncommitted and the stored diffStat can read +0 −0 — neither may hide
+    // Create PR while there is no PR (an empty branch gets the server's own refusal).
+    await waitFor(() => expect(toolbarAction('create-pr')?.disabled).toBe(false))
   })
 
   it('explains what a repointed review worktree is showing', async () => {
@@ -274,29 +289,55 @@ describe('the Changes tab route', () => {
     )
   })
 
-  it('a 409 ("no worktree") renders the server reason and disables the git actions', async () => {
-    stubFetch({
-      'GET /api/v1/runs/r1/changes': () =>
-        jsonResponse({ error: 'no worktree — this task ran directly in the repo working tree' }, 409),
-    })
+  it('a 409 ("no worktree") renders the server reason and offers no git step', async () => {
+    const noWorktree = () => jsonResponse({ error: 'no worktree — this task ran directly in the repo working tree' }, 409)
+    stubFetch({ 'GET /api/v1/runs/r1/changes': noWorktree, 'GET /api/v1/runs/r1/git/status': noWorktree })
     renderChangesRoute()
     await waitFor(() =>
       expect(screen.getByRole('heading', { level: 2, name: 'No changes to show' })).toBeTruthy(),
     )
     expect(document.querySelector('[data-slot="centered-state"]')?.textContent).toContain('no worktree')
-    expect(toolbarAction('commit')?.disabled).toBe(true)
-    expect(toolbarAction('push')?.disabled).toBe(true)
-    expect(toolbarAction('create-pr')?.disabled).toBe(true)
+    expect(gitButton()).toBeNull()
   })
 
-  it('commit flow: dialog prefilled with the auto-summary, POSTs the edited message, toasts the sha', async () => {
+  it('no PR yet: Create PR opens a ready-for-review PR; its chevron offers a draft', async () => {
     const sent = stubFetch({
-      'POST /api/v1/runs/r1/git/commit': () => jsonResponse({ committed: true, sha: 'abc1234def5678' }),
+      'POST /api/v1/runs/r1/pr': () => jsonResponse({ url: 'https://github.com/acme/demo/pull/9', dryRun: true }, 201),
     })
     renderChangesRoute()
-    await waitFor(() => expect(toolbarAction('commit')?.disabled).toBe(false))
+    await waitFor(() => expect(toolbarAction('create-pr')?.disabled).toBe(false))
+    fireEvent.click(toolbarAction('create-pr')!)
+    await waitFor(() =>
+      expect(sent.find((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/pr')?.body).toEqual({ draft: false }),
+    )
+  })
 
-    fireEvent.click(toolbarAction('commit')!)
+  it('Create draft PR, from the chevron, asks for a draft', async () => {
+    const sent = stubFetch({
+      'POST /api/v1/runs/r1/pr': () => jsonResponse({ url: 'https://github.com/acme/demo/pull/9', dryRun: true }, 201),
+    })
+    renderChangesRoute()
+    await waitFor(() => expect(toolbarAction('create-pr')?.disabled).toBe(false))
+    fireEvent.pointerDown(gitButton()!.querySelector('[aria-label="More ways to create pr"]')!)
+    const menu = await screen.findByRole('menu')
+    fireEvent.click(menu.querySelector('[data-action="create-draft-pr"]')!)
+    await waitFor(() =>
+      expect(sent.find((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/pr')?.body).toEqual({ draft: true }),
+    )
+    await waitFor(() => expect(document.body.textContent).toContain('Draft PR created'))
+  })
+
+  it('Commit and push: dialog prefilled with the auto-summary, commits the edited message, then pushes', async () => {
+    const sent = stubFetch({
+      'GET /api/v1/runs/r1': () => jsonResponse(WITH_PR),
+      'POST /api/v1/runs/r1/git/commit': () => jsonResponse({ committed: true, sha: 'abc1234def5678' }),
+      'POST /api/v1/runs/r1/git/push': () =>
+        jsonResponse({ pushed: true, branch: 'cez/abc12345', remote: 'origin', upstreamSet: false }),
+    })
+    renderChangesRoute()
+    await waitFor(() => expect(toolbarAction('commit-push')?.disabled).toBe(false))
+    expect(toolbarAction('commit-push')?.textContent).toContain('Commit and push')
+    fireEvent.click(toolbarAction('commit-push')!)
     const box = (await screen.findByLabelText('Commit message')) as HTMLTextAreaElement
     // Prefilled from the run's display title (titleSummary wins over the raw title).
     expect(box.value).toBe('Do the thing')
@@ -310,17 +351,23 @@ describe('the Changes tab route', () => {
     })
     await waitFor(() => expect(document.body.textContent).toContain('Committed abc1234'))
     await waitFor(() => expect(screen.queryByLabelText('Commit message')).toBeNull())
+    // The push follows the commit it publishes — after it, never before.
+    await waitFor(() => {
+      const paths = sent.filter((r) => r.method === 'POST').map((r) => r.path)
+      expect(paths.indexOf('/api/v1/runs/r1/git/push')).toBeGreaterThan(paths.indexOf('/api/v1/runs/r1/git/commit'))
+    })
+    await waitFor(() => expect(document.body.textContent).toContain('Pushed cez/abc12345 to origin'))
   })
 
-  it('a commit 409 surfaces git’s own words as a danger toast and keeps the dialog open', async () => {
-    stubFetch({
+  it('a commit 409 surfaces git’s own words, keeps the dialog open, and pushes nothing', async () => {
+    const sent = stubFetch({
+      'GET /api/v1/runs/r1': () => jsonResponse(WITH_PR),
       'POST /api/v1/runs/r1/git/commit': () =>
         jsonResponse({ error: 'nothing to commit — the working tree is clean' }, 409),
     })
     renderChangesRoute()
-    await waitFor(() => expect(toolbarAction('commit')?.disabled).toBe(false))
-
-    fireEvent.click(toolbarAction('commit')!)
+    await waitFor(() => expect(toolbarAction('commit-push')?.disabled).toBe(false))
+    fireEvent.click(toolbarAction('commit-push')!)
     await screen.findByLabelText('Commit message')
     fireEvent.click(document.querySelector('[data-slot="commit-confirm"]')!)
 
@@ -328,10 +375,13 @@ describe('the Changes tab route', () => {
       expect(document.body.textContent).toContain('nothing to commit — the working tree is clean'),
     )
     expect(screen.queryByLabelText('Commit message')).not.toBeNull()
+    expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/git/push')).toBe(false)
   })
 
   it('push clicks through to POST git/push and toasts the destination', async () => {
     const sent = stubFetch({
+      'GET /api/v1/runs/r1': () => jsonResponse(WITH_PR),
+      'GET /api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 0, unpushed: 2 }),
       'POST /api/v1/runs/r1/git/push': () =>
         jsonResponse({ pushed: true, branch: 'cez/abc12345', remote: 'origin', upstreamSet: true }),
     })
@@ -352,20 +402,26 @@ describe('the Changes tab route', () => {
   it('offers Push from the project remote even when the boot folder has no git repo', async () => {
     stubFetch({
       'GET /api/v1/health': () => jsonResponse({ ...HEALTH, repo: null }),
+      'GET /api/v1/runs/r1': () => jsonResponse(WITH_PR),
+      'GET /api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 0, unpushed: 2 }),
     })
     renderChangesRoute()
     await waitFor(() => expect(toolbarAction('push')?.disabled).toBe(false))
   })
 
-  it('Create PR uses the existing /pr flow and flips to View PR once the record carries the URL', async () => {
+  it('Create PR uses the existing /pr flow; once everything has landed there is no step left', async () => {
     let record: ApiRun = RUN
+    let landed = false
     const sent = stubFetch({
       'POST /api/v1/runs/r1/pr': () => {
-        // The server completes the run with the PR badge; the invalidated refetch sees it.
-        record = { ...RUN, status: 'done', pullRequestUrl: 'https://github.com/acme/demo/pull/9' }
+        // The server commits, pushes and completes the run with the PR badge.
+        record = WITH_PR
+        landed = true
         return jsonResponse({ url: 'https://github.com/acme/demo/pull/9', dryRun: true }, 201)
       },
       'GET /api/v1/runs/r1': () => jsonResponse(record),
+      'GET /api/v1/runs/r1/git/status': () =>
+        jsonResponse(landed ? { uncommitted: 0, unpushed: 0 } : { uncommitted: 2, unpushed: null }),
     })
     renderChangesRoute()
     await waitFor(() => expect(toolbarAction('create-pr')?.disabled).toBe(false), { timeout: 5_000 })
@@ -374,107 +430,54 @@ describe('the Changes tab route', () => {
     await waitFor(() =>
       expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/pr')).toBe(true),
     )
-    await waitFor(() => {
-      const link = document.querySelector('[data-slot="git-toolbar"] a[data-action="view-pr"]')
-      expect(link?.getAttribute('href')).toBe('https://github.com/acme/demo/pull/9')
-    })
-    expect(toolbarAction('create-pr')).toBeNull()
-  })
-
-  it('hosted mode (localHandoff: false) hides the overflow menu entirely', async () => {
-    stubFetch({
-      'GET /api/v1/health': () =>
-        jsonResponse({ ...HEALTH, capabilities: { localHandoff: false } }),
-    })
-    renderChangesRoute()
-    await waitFor(() => expect(document.querySelector('[data-slot="git-toolbar"]')).not.toBeNull())
-    await waitFor(() => expect(toolbarAction('commit')?.disabled).toBe(false))
-    expect(document.querySelector('[aria-label="More git actions"]')).toBeNull()
-  })
-
-  it('local mode offers the terminal handoff in the overflow menu', async () => {
-    stubFetch()
-    renderChangesRoute()
-    await waitFor(() =>
-      expect(document.querySelector('[aria-label="More git actions"]')).not.toBeNull(),
-    )
+    await waitFor(() => expect(gitButton()).toBeNull())
   })
 })
 
-// ---- the toolbar as a pure projector of policy fixtures ---------------------------------------
+// ---- the git button as a pure projector of the policy ------------------------------------------
 
-describe('GitToolbar renders policy fixtures verbatim', () => {
+describe('GitActions renders the policy verbatim', () => {
   const noop = () => {}
-  const renderToolbar = (bar: GitActionBar) =>
+  const action = (id: string) => document.querySelector(`[data-action="${id}"]`) as HTMLButtonElement | null
+
+  it('a disabled step renders disabled with the policy reason as the tooltip', () => {
+    render(
+      <GitActions
+        action={{ id: 'commit', label: 'Commit', enabled: false, reason: 'Commit unavailable — no changes to commit' }}
+        onAction={noop}
+      />,
+    )
+    expect(action('commit')!.disabled).toBe(true)
+    expect(action('commit')!.title).toBe('Commit unavailable — no changes to commit')
+  })
+
+  it('an enabled step clicks through with its id', () => {
+    const onAction = vi.fn()
+    render(<GitActions action={{ id: 'push', label: 'Push', enabled: true }} onAction={onAction} />)
+    fireEvent.click(action('push')!)
+    expect(onAction).toHaveBeenCalledWith('push')
+  })
+
+  it('no step renders nothing at all', () => {
+    const { container } = render(<GitActions action={null} onAction={noop} />)
+    expect(container.innerHTML).toBe('')
+  })
+})
+
+describe('GitToolbar', () => {
+  const noop = () => {}
+
+  it('shows the branch chip and the aggregate ± stat', () => {
     render(
       <GitToolbar
-        bar={bar}
         branch="cez/abc12345"
         stat={{ adds: 12, dels: 3, files: 2 }}
         mode="unified"
         wrap={false}
         onModeChange={noop}
         onWrapChange={noop}
-        onAction={noop}
       />,
     )
-
-  it('disabled entries render disabled with the policy reason as the tooltip', () => {
-    renderToolbar({
-      primary: { id: 'commit', label: 'Commit', enabled: false, reason: 'Commit unavailable — no changes to commit' },
-      secondary: [
-        { id: 'push', label: 'Push', enabled: false, reason: 'Push unavailable — no remote configured' },
-      ],
-      menu: [],
-    })
-    const commit = toolbarAction('commit')!
-    expect(commit.disabled).toBe(true)
-    expect(commit.title).toBe('Commit unavailable — no changes to commit')
-    const push = toolbarAction('push')!
-    expect(push.disabled).toBe(true)
-    expect(push.title).toBe('Push unavailable — no remote configured')
-    // No menu entries → no kebab at all.
-    expect(document.querySelector('[aria-label="More git actions"]')).toBeNull()
-  })
-
-  it('view-pr renders as a real external link carrying the policy href', () => {
-    renderToolbar({
-      primary: { id: 'view-pr', label: 'View PR', enabled: true, href: 'https://github.com/acme/demo/pull/7' },
-      secondary: [{ id: 'commit', label: 'Commit', enabled: true }],
-      menu: [],
-    })
-    const link = document.querySelector('a[data-action="view-pr"]')!
-    expect(link.getAttribute('href')).toBe('https://github.com/acme/demo/pull/7')
-    expect(link.getAttribute('target')).toBe('_blank')
-  })
-
-  it('view-pr with a non-http href renders disabled, not as a clickable no-op (#431)', () => {
-    const onAction = vi.fn()
-    render(
-      <GitToolbar
-        bar={{
-          primary: { id: 'view-pr', label: 'View PR', enabled: true, href: 'javascript:void(0)' },
-          secondary: [],
-          menu: [],
-        }}
-        mode="unified"
-        wrap={false}
-        onModeChange={noop}
-        onWrapChange={noop}
-        onAction={onAction}
-      />,
-    )
-    // No link at all — and the fallback button is inert, with the reason as its tooltip.
-    expect(document.querySelector('a[data-action="view-pr"]')).toBeNull()
-    const button = toolbarAction('view-pr')!
-    expect(button.disabled).toBe(true)
-    expect(button.title).toContain('View PR unavailable')
-    fireEvent.click(button)
-    expect(onAction).not.toHaveBeenCalled()
-  })
-
-  it('shows the branch chip and the aggregate ± stat', () => {
-    renderToolbar({ primary: { id: 'commit', label: 'Commit', enabled: true }, secondary: [], menu: [] })
     expect(document.querySelector('[data-slot="branch-chip"]')?.textContent).toContain('cez/abc12345')
     const stat = document.querySelector('[data-slot="changes-stat"]')?.textContent
     expect(stat).toContain('+12')
@@ -485,14 +488,7 @@ describe('GitToolbar renders policy fixtures verbatim', () => {
     const onModeChange = vi.fn()
     const onWrapChange = vi.fn()
     render(
-      <GitToolbar
-        bar={{ primary: { id: 'commit', label: 'Commit', enabled: true }, secondary: [], menu: [] }}
-        mode="unified"
-        wrap={false}
-        onModeChange={onModeChange}
-        onWrapChange={onWrapChange}
-        onAction={noop}
-      />,
+      <GitToolbar mode="unified" wrap={false} onModeChange={onModeChange} onWrapChange={onWrapChange} />,
     )
     const split = document.querySelector('[data-slot="diff-mode-toggle"] [data-mode="split"]')!
     expect(split.getAttribute('aria-pressed')).toBe('false')

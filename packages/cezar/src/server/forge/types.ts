@@ -267,6 +267,8 @@ export interface DraftPrInput {
   run: RunRecord;
   /** The task's handoff.md — becomes the PR body (goal + progress skim). */
   handoffText: string;
+  /** Open it as a draft. Absent = draft — what every caller got before this flag existed. */
+  draft?: boolean;
 }
 
 /** Purpose-specific creation feed; independent of open lists and relevance search. */

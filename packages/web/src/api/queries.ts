@@ -42,6 +42,7 @@ import {
   getRepoTree,
   getRun,
   getRunChanges,
+  getRunGitStatus,
   getRunDiff,
   getRunDrafts,
   getRunFile,
@@ -172,6 +173,7 @@ export const queryKeys = {
     detail: (id: string) => [queryScope(), 'runs', 'detail', id] as const,
     diff: (id: string) => [queryScope(), 'runs', 'diff', id] as const,
     changes: (id: string) => [queryScope(), 'runs', 'changes', id] as const,
+    gitStatus: (id: string) => [queryScope(), 'runs', 'git-status', id] as const,
     file: (id: string, path: string) => [queryScope(), 'runs', 'files', id, path] as const,
     handoff: (id: string) => [queryScope(), 'runs', 'handoff', id] as const,
     /** Unsent drafts for one task (#939). Read once per visit and never refetched in the
@@ -1085,6 +1087,21 @@ export function useRunChanges(id: string | undefined, live = false) {
     // focus refetch and a zero staleTime to THIS query (the global client keeps
     // refetchOnWindowFocus off + a 5-min staleTime, #query-client) so returning to a finished
     // task's Changes tab re-fetches instead of serving the last, possibly-empty snapshot.
+    refetchOnWindowFocus: true,
+    staleTime: 0,
+  })
+}
+
+/** What the run's worktree has not published yet — the header's one git button reads it on
+ *  every tab, so it is the cheap `git status` answer rather than `/changes` and its patches.
+ *  Polled while the agent may still be writing; refetched on focus, like `useRunChanges`. */
+export function useRunGitStatus(id: string, enabled: boolean, live = false) {
+  return useQuery({
+    queryKey: queryKeys.runs.gitStatus(id),
+    queryFn: ({ signal }) => getRunGitStatus(id, { signal }),
+    enabled,
+    retry: false,
+    refetchInterval: live ? 10_000 : false,
     refetchOnWindowFocus: true,
     staleTime: 0,
   })

@@ -64,6 +64,9 @@ const TaskFilesRoute = lazy(() =>
 const TaskCommitsRoute = lazy(() =>
   import('./routes/task-git/task-commits').then((m) => ({ default: m.TaskCommitsRoute })),
 )
+const TaskNotesRoute = lazy(() =>
+  import('./routes/task-thread/task-notes').then((m) => ({ default: m.TaskNotesRoute })),
+)
 
 /** Lazy because the repo view renders through the `<Diff>` facade and the Shiki singleton —
  *  the same heavy chunk the task git tabs ride; the home screen must not pay for it. */
@@ -383,6 +386,14 @@ export const AppRoutes = memo(function AppRoutes() {
           element={
             <Suspense fallback={<GitTabLoading tab="changes" />}>
               <TaskCommitsRoute />
+            </Suspense>
+          }
+        />
+        <Route
+          path="tasks/:id/notes"
+          element={
+            <Suspense fallback={<GitTabLoading tab="notes" />}>
+              <TaskNotesRoute />
             </Suspense>
           }
         />

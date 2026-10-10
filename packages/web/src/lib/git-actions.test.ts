@@ -5,161 +5,146 @@ import type { RunStatus } from '@open-mercato/cezar-api-client'
 import { gitActionPolicy, type GitActionState } from './git-actions'
 
 /**
- * The git action policy, pinned row by row. The toolbar renders whatever this function
- * returns, so these tables ARE the toolbar's behavior spec: every disabled entry must carry
- * its human reason, hosted mode must HIDE the terminal handoff (not disable it), and the
- * Create PR → View PR flip must follow the PR URL exactly.
+ * The git action policy, pinned row by row. The run's git button renders whatever this returns —
+ * one action or nothing — so these tables ARE the button's behavior spec: the right step for
+ * every state, and every disabled step carrying its human reason.
  */
 
-/** A healthy local-mode baseline: worktree + changes + github forge + remote + session. */
+const PR = 'https://github.com/acme/demo/pull/7'
+
+/** A healthy baseline: worktree + uncommitted work + never pushed + github forge + remote, no PR. */
 const base: GitActionState = {
   status: 'review',
   hasWorktree: true,
   branch: 'cez/abc12345',
-  changedFiles: 3,
+  uncommitted: 3,
+  unpushed: null,
   remote: 'git@github.com:acme/demo.git',
   forge: { kind: 'github', available: true },
-  localHandoff: true,
-  hasSession: true,
 }
 
 const withState = (extra: Partial<GitActionState>): GitActionState => ({ ...base, ...extra })
+const id = (extra: Partial<GitActionState>) => gitActionPolicy(withState(extra))?.id ?? null
 
-const find = (state: GitActionState, id: string) => {
-  const bar = gitActionPolicy(state)
-  return [bar.primary, ...bar.secondary, ...bar.menu].find((a) => a.id === id)
-}
-
-describe('gitActionPolicy — slots', () => {
-  it('without a PR: Commit is primary, Push + Create PR secondary, terminal in the menu', () => {
-    const bar = gitActionPolicy(base)
-    expect(bar.primary).toEqual({ id: 'commit', label: 'Commit', enabled: true })
-    expect(bar.secondary.map((a) => a.id)).toEqual(['push', 'create-pr'])
-    expect(bar.menu.map((a) => a.id)).toEqual(['open-terminal'])
+describe('gitActionPolicy — the one action', () => {
+  it.each<[string, Partial<GitActionState>, string | null]>([
+    // no PR yet
+    ['no PR → Create PR (it commits and pushes on its own)', {}, 'create-pr'],
+    ['no PR, everything committed → still Create PR', { uncommitted: 0 }, 'create-pr'],
+    // Regression: autosave leaves finished tasks with nothing uncommitted, and Create PR used to
+    // hide behind a stale `+0 −0` diffStat. It needs nothing from `git status` at all.
+    ['no PR, git status still loading → Create PR', { uncommitted: undefined }, 'create-pr'],
+    // a PR
+    ['PR + uncommitted changes → Commit and push', { prUrl: PR, uncommitted: 2, unpushed: 0 }, 'commit-push'],
+    ['PR + uncommitted AND unpushed → Commit and push (one step publishes both)', { prUrl: PR, uncommitted: 2, unpushed: 1 }, 'commit-push'],
+    ['PR + uncommitted but no remote to push to → plain Commit', { prUrl: PR, uncommitted: 2, unpushed: 0, remote: undefined }, 'commit'],
+    ['PR + unpushed commits → Push', { prUrl: PR, uncommitted: 0, unpushed: 2 }, 'push'],
+    ['PR + nothing to commit or push → nothing', { prUrl: PR, uncommitted: 0, unpushed: 0 }, null],
+    ['PR + no upstream to compare with → nothing', { prUrl: PR, uncommitted: 0, unpushed: null }, null],
+    ['PR merged → nothing, whatever the worktree holds', { prUrl: PR, prStatus: 'merged', uncommitted: 2 }, null],
+    ['PR closed → nothing', { prUrl: PR, prStatus: 'closed', unpushed: 3 }, null],
+    // behind the base branch
+    ['no PR but behind the base → Update branch instead of Create PR', { behind: 3 }, 'update-branch'],
+    ['no PR, up to date → Create PR', { behind: 0 }, 'create-pr'],
+    ['no PR, base unknown → Create PR', { behind: null }, 'create-pr'],
+    ['behind but the agent cannot be reached → Create PR stays (being behind blocks nothing)', { behind: 3, agentBlocked: 'no agent session to resume' }, 'create-pr'],
+    ['PR + uncommitted, behind → Commit and push first', { prUrl: PR, uncommitted: 2, unpushed: 0, behind: 3 }, 'commit-push'],
+    ['PR published but behind → Update branch', { prUrl: PR, uncommitted: 0, unpushed: 0, behind: 3 }, 'update-branch'],
+    ['PR conflicting AND behind → Resolve conflicts (it merges the base anyway)', { prUrl: PR, uncommitted: 0, unpushed: 0, behind: 3, prConflicting: true }, 'resolve-conflicts'],
+    ['PR behind AND failing CI → Update branch first', { prUrl: PR, uncommitted: 0, unpushed: 0, behind: 3, prStatus: 'checks-failing' }, 'update-branch'],
+    ['no forge, everything pushed but behind → Update branch', { forge: null, uncommitted: 0, unpushed: 0, behind: 2 }, 'update-branch'],
+    // the PR's own health, once everything is published
+    ['PR conflicting → Resolve conflicts', { prUrl: PR, uncommitted: 0, unpushed: 0, prConflicting: true }, 'resolve-conflicts'],
+    ['PR with failing CI → Fix errors', { prUrl: PR, uncommitted: 0, unpushed: 0, prStatus: 'checks-failing' }, 'fix-checks'],
+    ['conflicts AND failing CI → conflicts first (CI reruns on the merge)', { prUrl: PR, uncommitted: 0, unpushed: 0, prConflicting: true, prStatus: 'checks-failing' }, 'resolve-conflicts'],
+    ['conflicting but local work unpublished → that work first', { prUrl: PR, uncommitted: 2, unpushed: 0, prConflicting: true }, 'commit-push'],
+    ['failing CI but commits unpushed → Push (it may be the fix)', { prUrl: PR, uncommitted: 0, unpushed: 1, prStatus: 'checks-failing' }, 'push'],
+    ['checks still pending → nothing', { prUrl: PR, uncommitted: 0, unpushed: 0, prStatus: 'checks-pending' }, null],
+    ['conflict state unknown → nothing', { prUrl: PR, uncommitted: 0, unpushed: 0, prConflicting: undefined }, null],
+    // no forge: a PR cannot be opened here
+    ['no forge + uncommitted → Commit and push', { forge: null }, 'commit-push'],
+    ['no forge + committed, never pushed → Push', { forge: null, uncommitted: 0 }, 'push'],
+    ['no forge + all pushed → nothing', { forge: null, uncommitted: 0, unpushed: 0 }, null],
+    // nothing known
+    ['no worktree → nothing', { hasWorktree: false }, null],
+    ['a PR, git status still loading → nothing (no flash of a wrong step)', { prUrl: PR, uncommitted: undefined }, null],
+  ])('%s', (_name, extra, expected) => {
+    expect(id(extra)).toBe(expected)
   })
+})
 
-  it('with a PR URL: View PR takes primary (with the href) and Create PR disappears', () => {
-    const bar = gitActionPolicy(withState({ prUrl: 'https://github.com/acme/demo/pull/7' }))
-    expect(bar.primary).toEqual({
-      id: 'view-pr',
-      label: 'View PR',
-      enabled: true,
-      href: 'https://github.com/acme/demo/pull/7',
-    })
-    expect(bar.secondary.map((a) => a.id)).toEqual(['commit', 'push'])
-    expect(bar.secondary.every((a) => a.id !== 'create-pr')).toBe(true)
-  })
-
-  it('every disabled action carries a reason — no mute buttons anywhere', () => {
-    // A worst-case state: no worktree, no forge, no remote, hosted off, no session.
-    const bar = gitActionPolicy(
-      withState({
-        hasWorktree: false,
-        branch: undefined,
-        changedFiles: undefined,
-        remote: undefined,
-        forge: null,
-        hasSession: false,
-      }),
+describe('gitActionPolicy — the agent-driven steps', () => {
+  it('say why when the agent cannot be reached', () => {
+    const action = gitActionPolicy(
+      withState({ prUrl: PR, uncommitted: 0, unpushed: 0, prConflicting: true, agentBlocked: 'no agent session to resume' }),
     )
-    for (const action of [bar.primary, ...bar.secondary, ...bar.menu]) {
-      if (!action.enabled) {
-        expect(action.reason, `${action.id} must explain itself`).toBeTruthy()
-      }
-    }
+    expect(action).toMatchObject({ id: 'resolve-conflicts', enabled: false })
+    expect(action?.reason).toBe('Resolve conflicts unavailable — no agent session to resume')
   })
 })
 
-describe('gitActionPolicy — commit', () => {
-  it('enabled when the worktree has changes and the agent is not mid-turn', () => {
-    expect(find(base, 'commit')).toEqual({ id: 'commit', label: 'Commit', enabled: true })
-  })
-
-  it.each<[Partial<GitActionState>, string]>([
-    [{ hasWorktree: false }, 'no worktree'],
-    [{ status: 'running' }, 'still working'],
-    [{ changedFiles: undefined }, 'still loading'],
-    [{ changedFiles: 0 }, 'no changes to commit'],
-  ])('disabled with a reason for %j', (extra, phrase) => {
-    const action = find(withState(extra), 'commit')
-    expect(action?.enabled).toBe(false)
-    expect(action?.reason).toContain(phrase)
-  })
-
-  it.each<RunStatus>(['waiting', 'review', 'done', 'failed', 'cancelled'])(
-    'stays available while the run is %s (only running blocks it)',
-    (status) => {
-      expect(find(withState({ status }), 'commit')?.enabled).toBe(true)
-    },
-  )
-})
-
-describe('gitActionPolicy — push', () => {
-  it('enabled with a worktree, a branch and a remote', () => {
-    expect(find(base, 'push')).toEqual({ id: 'push', label: 'Push', enabled: true })
-  })
-
-  it('the spec sentence, verbatim: no remote configured', () => {
-    const action = find(withState({ remote: undefined }), 'push')
-    expect(action?.enabled).toBe(false)
-    expect(action?.reason).toBe('Push unavailable — no remote configured')
-  })
-
-  it.each<[Partial<GitActionState>, string]>([
-    [{ hasWorktree: false }, 'no worktree'],
-    [{ branch: undefined }, 'no branch'],
-    [{ status: 'running' }, 'still working'],
-  ])('disabled with a reason for %j', (extra, phrase) => {
-    const action = find(withState(extra), 'push')
-    expect(action?.enabled).toBe(false)
-    expect(action?.reason).toContain(phrase)
-  })
-})
-
-describe('gitActionPolicy — create PR', () => {
-  it('enabled when parked with a worktree, branch and an available forge', () => {
-    expect(find(base, 'create-pr')).toEqual({ id: 'create-pr', label: 'Create PR', enabled: true })
-  })
-
-  it.each<[Partial<GitActionState>, string]>([
-    [{ hasWorktree: false }, 'no worktree'],
-    [{ branch: undefined }, 'no worktree'],
-    [{ forge: null }, 'no supported forge remote'],
-    [{ forge: { kind: 'github', available: false, reason: 'gh is not logged in' } }, 'gh is not logged in'],
-    [{ forge: { kind: 'github', available: false } }, 'unreachable'],
-    [{ status: 'running' }, 'still active'],
-    [{ status: 'queued' }, 'still active'],
-    [{ status: 'waiting' }, 'still active'],
-  ])('disabled with a reason for %j', (extra, phrase) => {
-    const action = find(withState(extra), 'create-pr')
-    expect(action?.enabled).toBe(false)
-    expect(action?.reason).toContain(phrase)
-  })
-
-  it.each<RunStatus>(['review', 'done', 'failed', 'cancelled'])('enabled once the run is %s', (status) => {
-    expect(find(withState({ status }), 'create-pr')?.enabled).toBe(true)
-  })
-})
-
-describe('gitActionPolicy — terminal handoff (localHandoff gate)', () => {
-  it('hosted mode hides the entry entirely — an empty menu, not a disabled row', () => {
-    expect(gitActionPolicy(withState({ localHandoff: false })).menu).toEqual([])
-  })
-
-  it('local mode with a parked session offers it', () => {
-    expect(gitActionPolicy(base).menu).toEqual([
-      { id: 'open-terminal', label: 'Open in terminal', enabled: true },
+describe('gitActionPolicy — Create PR can be taken as a draft', () => {
+  it('Create PR carries Create draft PR as its one alternative', () => {
+    expect(gitActionPolicy(base)?.alternatives).toEqual([
+      { id: 'create-draft-pr', label: 'Create draft PR', enabled: true },
     ])
   })
 
+  it('no other step has alternatives — the button stays one action', () => {
+    expect(gitActionPolicy(withState({ prUrl: PR }))?.alternatives).toBeUndefined()
+    expect(gitActionPolicy(withState({ prUrl: PR, uncommitted: 0, unpushed: 1 }))?.alternatives).toBeUndefined()
+  })
+
+  it('a Create PR that cannot run offers no draft either — same reason, same block', () => {
+    expect(gitActionPolicy(withState({ status: 'running' }))?.alternatives).toBeUndefined()
+  })
+})
+
+describe('gitActionPolicy — a chosen step that cannot run right now says why', () => {
+  it('Create PR while the agent still owns the run', () => {
+    const action = gitActionPolicy(withState({ status: 'running' }))
+    expect(action).toMatchObject({ id: 'create-pr', enabled: false })
+    expect(action?.reason).toContain('still active')
+  })
+
   it.each<[Partial<GitActionState>, string]>([
-    [{ hasSession: false }, 'no agent session'],
-    [{ status: 'running' }, 'still active'],
-    [{ status: 'queued' }, 'still active'],
-    [{ status: 'waiting' }, 'still active'],
-  ])('disabled with a reason for %j', (extra, phrase) => {
-    const [action] = gitActionPolicy(withState(extra)).menu
-    expect(action?.enabled).toBe(false)
+    [{ forge: { kind: 'github', available: false, reason: 'gh is not logged in' } }, 'gh is not logged in'],
+    [{ forge: { kind: 'github', available: false } }, 'unreachable'],
+    [{ branch: undefined }, 'no worktree'],
+  ])('Create PR disabled for %j', (extra, phrase) => {
+    const action = gitActionPolicy(withState(extra))
+    expect(action).toMatchObject({ id: 'create-pr', enabled: false })
     expect(action?.reason).toContain(phrase)
+  })
+
+  it('Commit and push while the agent is writing in the worktree', () => {
+    const action = gitActionPolicy(withState({ prUrl: PR, status: 'running' }))
+    expect(action).toMatchObject({ id: 'commit-push', label: 'Commit and push', enabled: false })
+    expect(action?.reason).toBe('Commit and push unavailable — the agent is still working in this worktree')
+  })
+
+  it.each<RunStatus>(['waiting', 'review', 'done', 'failed', 'cancelled'])(
+    'Commit stays available while the run is %s (only running blocks it)',
+    (status) => {
+      expect(gitActionPolicy(withState({ prUrl: PR, status }))).toMatchObject({ id: 'commit-push', enabled: true })
+    },
+  )
+
+  it('Push without a remote — the spec sentence, verbatim', () => {
+    const action = gitActionPolicy(withState({ prUrl: PR, uncommitted: 0, unpushed: 1, remote: undefined }))
+    expect(action).toMatchObject({ id: 'push', enabled: false, reason: 'Push unavailable — no remote configured' })
+  })
+
+  it('every action it returns is either enabled or explains itself', () => {
+    const states: Partial<GitActionState>[] = [
+      { status: 'running' },
+      { forge: null, remote: undefined, uncommitted: 0 },
+      { prUrl: PR, status: 'running' },
+      { prUrl: PR, uncommitted: 0, unpushed: 1, branch: undefined },
+    ]
+    for (const extra of states) {
+      const action = gitActionPolicy(withState(extra))
+      if (action && !action.enabled) expect(action.reason, JSON.stringify(extra)).toBeTruthy()
+    }
   })
 })

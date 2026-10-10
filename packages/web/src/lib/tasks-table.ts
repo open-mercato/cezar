@@ -145,6 +145,25 @@ export interface TaskPrRef {
   origin: 'created' | 'marker' | 'legacy' | 'derived'
 }
 
+/**
+ * The PR this task OWNS — the one it created, or the one it declared as its subject (`CEZ:PR`) —
+ * and never one merely scraped from its transcript (`referencedPullRequestUrl`, the `legacy` and
+ * `derived` origins). This is the one to ACT on: the run header's git button offers Create PR,
+ * Commit, Push, Resolve conflicts or Fix errors against it, so a link the agent only read
+ * (a file, a log) must not stand in for it. A declaration known only by number (no link scraped
+ * yet) still counts — it carries `number` and no `url`.
+ */
+export function ownedTaskPr(run: TaskReferenceInput): { number?: number; url?: string } | undefined {
+  if (run.pullRequestUrl) {
+    const number = Number(prNumber(run.pullRequestUrl))
+    return { url: run.pullRequestUrl, ...(number > 0 ? { number } : {}) }
+  }
+  const owned = run.prRefs?.find((ref) => ref.origin === 'created' || ref.origin === 'marker')
+  if (owned) return { number: owned.number, ...(owned.url ? { url: owned.url } : {}) }
+  const declared = run.markerRefs?.pr
+  return declared === undefined ? undefined : { number: declared }
+}
+
 export function taskPrUrl(run: TaskReferenceInput): string | undefined {
   return taskPrRefs(run)[0]?.url ?? prUrls(run)[0]
 }

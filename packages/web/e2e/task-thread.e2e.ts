@@ -384,7 +384,7 @@ describe('task thread', () => {
     ).toBe('cez/fcd519dd')
   })
 
-  it('tabs point at the routed Session/Changes/Files/Graph surfaces; the done run offers the closed-run actions', () => {
+  it('tabs point at the routed Session/Changes/Commits/Files/Graph/Notes surfaces; the done run offers the closed-run actions', () => {
     const tabs = browser.evaluate(`[...document.querySelectorAll('[data-slot="run-tabs"] a')].map((a) => ({
       text: a.textContent,
       href: a.getAttribute('href'),
@@ -396,12 +396,15 @@ describe('task thread', () => {
       { text: 'Commits', href: scoped(`/tasks/${RUN_ID}/commits`), current: null },
       { text: 'Files', href: scoped(`/tasks/${RUN_ID}/files`), current: null },
       { text: 'Graph', href: scoped(`/tasks/${RUN_ID}/graph`), current: null },
+      { text: 'Notes', href: scoped(`/tasks/${RUN_ID}/notes`), current: null },
     ])
 
+    // Read/unread, Pin and Archive are icon toggles now (aria-label, no visible text) — Continue
+    // moved to the composer, Notes to its own tab.
     const actions = browser.evaluate(
-      `[...document.querySelectorAll('[data-slot="run-actions"] button')].map((b) => b.textContent.trim())`,
+      `[...document.querySelectorAll('[data-slot="run-actions"] button')].map((b) => b.textContent.trim() || b.getAttribute('aria-label'))`,
     ) as string[]
-    expect(actions).toEqual(['Continue', 'Open in…', 'Notes', 'Mark unread', 'Pin', 'Archive', 'Delete'])
+    expect(actions).toEqual(['Mark unread', 'Pin', 'Archive', 'Delete', 'Open in…'])
 
     // The take-over hint, per-backend (the fixture's last agent session, in its worktree).
     const hint = browser.evaluate(
@@ -411,19 +414,16 @@ describe('task thread', () => {
     expect(hint).toContain('cd /tmp/cezar-fixture-hg7X')
   })
 
-  it('opens the Notes panel — an unseeded handoff reads as the honest empty state', () => {
-    browser.evaluate(
-      `[...document.querySelectorAll('[data-slot="run-actions"] button')].find((b) => b.textContent.trim() === 'Notes').click()`,
-    )
+  it('opens the Notes tab — an unseeded handoff reads as the honest empty state', () => {
+    // Notes is a routed tab now (was a toggle panel over the thread) — follow the tab link.
+    browser.click(`[data-slot="run-tabs"] a[href="${scoped(`/tasks/${RUN_ID}/notes`)}"]`)
     browser.waitForFunction(`document.querySelector('[data-slot="notes-panel"]') !== null`)
     browser.waitForFunction(
       `document.querySelector('[data-slot="notes-panel"]').textContent.includes('No notes yet')`,
     )
-    // The 1.4 money shot: full header (title, meta, tabs+actions, rail, hint) + open notes.
+    // The 1.4 money shot: full header (title, meta, tabs+actions, rail, hint) + the Notes tab.
     browser.screenshot(`${artifactsDir}/thread-header-desktop.png`)
-    browser.evaluate(
-      `[...document.querySelectorAll('[data-slot="run-actions"] button')].find((b) => b.textContent.trim() === 'Notes').click()`,
-    )
+    browser.click(`[data-slot="run-tabs"] a[href="${scoped(`/tasks/${RUN_ID}`)}"]`)
     browser.waitForFunction(`document.querySelector('[data-slot="notes-panel"]') === null`)
   })
 

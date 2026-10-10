@@ -53,6 +53,7 @@ import type {
   FsBrowseResponse,
   GitCommitResponse,
   GitPushResponse,
+  GitStatusResponse,
   GithubChecksData,
   GithubSearchData,
   GithubRefStatusData,
@@ -1516,13 +1517,15 @@ export async function continueProjectRun(
   )
 }
 
-/** Draft PR from the review gate (spec 009): push the branch, `gh pr create --draft`; the run
- *  completes as done with the PR badge. On 409 the ApiError's `manual` carries the
+/** Open the run's PR (spec 009): push the branch, `gh pr create`; the run completes as done with
+ *  the PR badge. Draft unless `draft: false` — the review gate's Draft PR omits it, the run
+ *  header's Create PR asks for a ready one. On 409 the ApiError's `manual` carries the
  *  `git merge <branch>` fallback to show copyable. */
-export async function createRunPr(id: string): Promise<CreatePrResponse> {
+export async function createRunPr(id: string, opts: { draft?: boolean } = {}): Promise<CreatePrResponse> {
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].pr.$post({
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: opts,
     }),
     runPath(id, '/pr'),
   )
@@ -1684,6 +1687,17 @@ export async function commitRun(id: string, message: string): Promise<GitCommitR
       json: { message },
     }),
     runPath(id, '/git/commit'),
+  )
+}
+
+/** What the run's worktree holds that has not left it: uncommitted files, unpushed commits. */
+export async function getRunGitStatus(id: string, opts?: ReadOptions): Promise<GitStatusResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].git.status.$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    runPath(id, '/git/status'),
   )
 }
 

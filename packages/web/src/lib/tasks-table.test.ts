@@ -8,6 +8,7 @@ import {
   formatCost,
   formatMem,
   githubRepoBase,
+  ownedTaskPr,
   prNumber,
   scheduledResume,
   taskReference,
@@ -601,5 +602,31 @@ describe('compareGroups', () => {
 
   it('ignores ungrouped runs entirely', () => {
     expect(compareGroups([run(), run()], 'active')).toEqual([])
+  })
+})
+
+describe('ownedTaskPr — the PR a task may ACT on', () => {
+  it('is the PR the task created', () => {
+    expect(ownedTaskPr({ pullRequestUrl: 'https://github.com/o/r/pull/9' })).toEqual({
+      url: 'https://github.com/o/r/pull/9',
+      number: 9,
+    })
+  })
+
+  it('is the PR it declared, even known only by number', () => {
+    expect(ownedTaskPr({ markerRefs: { pr: 12 } })).toEqual({ number: 12 })
+    expect(ownedTaskPr({ prRefs: [{ number: 12, origin: 'marker' }] })).toEqual({ number: 12 })
+  })
+
+  it('is never a PR merely scraped from the transcript', () => {
+    expect(ownedTaskPr({ referencedPullRequestUrl: 'https://github.com/o/r/pull/534' })).toBeUndefined()
+    expect(
+      ownedTaskPr({
+        prRefs: [
+          { number: 534, url: 'https://github.com/o/r/pull/534', origin: 'legacy' },
+          { number: 7, origin: 'derived' },
+        ],
+      }),
+    ).toBeUndefined()
   })
 })

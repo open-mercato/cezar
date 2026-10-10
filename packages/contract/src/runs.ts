@@ -628,6 +628,19 @@ export const gitPushResponseSchema = z.object({
 });
 export type GitPushResponse = z.infer<typeof gitPushResponseSchema>;
 
+/** `GET /runs/:id/git/status` — what the run's worktree holds that has not left it yet: files
+ *  `git add -A` would commit, and commits its upstream has not seen. `unpushed` is null while the
+ *  branch has no upstream (never pushed) — "not pushed at all" is a different answer from "0".
+ *  `behind` counts the other direction: what the base has that the branch lacks. */
+export const gitStatusResponseSchema = z.object({
+  uncommitted: z.number(),
+  unpushed: z.number().nullable(),
+  /** Commits on the task's base branch (as last fetched) the branch does not have; null when the
+   *  base cannot be resolved (none recorded, a raw sha, or a ref the repo lacks). */
+  behind: z.number().nullable(),
+});
+export type GitStatusResponse = z.infer<typeof gitStatusResponseSchema>;
+
 /** A commit a run made on its worktree branch. */
 export const runCommitSchema = z.object({
   sha: z.string(),
