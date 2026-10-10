@@ -44,6 +44,8 @@ const LOG_TAIL: usize = 60;
 /// beside the app whenever it can; a busy one falls through to the next few, then to any.
 const PREFERRED_PORTS: std::ops::Range<u16> = 4321..4331;
 const PACKAGE: &str = "@open-mercato/cezar";
+/// System-wide: bring the cockpit forward on its new-task composer from any app.
+const NEW_TASK_SHORTCUT: &str = "CmdOrCtrl+Alt+N";
 
 /// Everything the supervisor thread and the menu handler share.
 struct Shell {
@@ -189,6 +191,23 @@ const INIT_SCRIPT: &str = r#"
   })();
 "#;
 
+/// Client-side navigation to the active project's `/new` (react-router follows `popstate`), so
+/// the cockpit keeps its state instead of reloading. A legacy flat `/new` redirects to the boot
+/// project. The composer focuses itself on mount.
+const OPEN_NEW_TASK_SCRIPT: &str = r#"
+  (function () {
+    var scope = location.pathname.match(/^\/p\/[^/]+/);
+    var to = (scope ? scope[0] : '') + '/new';
+    if (location.pathname === to) {
+      var box = document.querySelector('[data-slot="composer"] textarea');
+      if (box) box.focus();
+      return;
+    }
+    history.pushState(null, '', to);
+    dispatchEvent(new PopStateEvent('popstate', { state: null }));
+  })();
+"#;
+
 fn platform_name() -> &'static str {
     if cfg!(target_os = "macos") {
         "macos"
@@ -257,6 +276,22 @@ fn build_main_window(app: &AppHandle, shell: &Arc<Shell>) -> tauri::Result<Webvi
         });
     }
     Ok(window)
+}
+
+/// The global shortcut lands here: the main window comes forward, on the new-task composer once
+/// the cockpit is up (before that, on the splash that says why it is not).
+fn open_new_task(app: &AppHandle, shell: &Shell) {
+    let Some(window) = app.get_webview_window("main") else { return };
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+    let on_cockpit = window
+        .url()
+        .map(|url| url.scheme() == "http" && is_own_origin(&url, shell.port.load(Ordering::SeqCst)))
+        .unwrap_or(false);
+    if on_cockpit {
+        let _ = window.eval(OPEN_NEW_TASK_SCRIPT);
+    }
 }
 
 fn build_menu(app: &AppHandle, shell: &Shell) -> tauri::Result<()> {
@@ -554,6 +589,7 @@ pub fn run() {
             let handle = app.handle().clone();
             build_main_window(&handle, &shell_for_setup)?;
             build_menu(&handle, &shell_for_setup)?;
+            register_new_task_shortcut(&handle, &shell_for_setup);
             let shell = shell_for_setup.clone();
             let supervisor_handle = handle.clone();
             std::thread::spawn(move || supervise(supervisor_handle, shell));
@@ -668,6 +704,27 @@ pub fn run() {
             }
             _ => {}
         });
+}
+
+/// The new-task shortcut, system-wide. Another app may already own the combination; the shell
+/// then runs without it rather than failing to start.
+fn register_new_task_shortcut(app: &AppHandle, shell: &Arc<Shell>) {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+    let shell = shell.clone();
+    let plugin = tauri_plugin_global_shortcut::Builder::new()
+        .with_handler(move |app, _shortcut, event| {
+            if event.state() == ShortcutState::Pressed {
+                open_new_task(app, &shell);
+            }
+        })
+        .build();
+    if let Err(error) = app.plugin(plugin) {
+        eprintln!("[shortcut] global shortcuts unavailable: {error}");
+        return;
+    }
+    if let Err(error) = app.global_shortcut().register(NEW_TASK_SHORTCUT) {
+        eprintln!("[shortcut] {NEW_TASK_SHORTCUT} is taken by another app: {error}");
+    }
 }
 
 /// Silent self-update of the shell. `CEZ_DESKTOP_NO_UPDATE=1` disables it (development builds

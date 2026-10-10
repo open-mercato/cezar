@@ -213,7 +213,9 @@ The desktop shell ships on its own version and contains no cezar code, so ANY sh
 - **Launch** `node <entry> serve --no-open --port <n>` with `CEZ_DESKTOP=1`, `CEZ_SUPERVISED=1` and `CEZ_SUPERVISOR_PID=<shell pid>` in the environment; `GET /api/v1/health` answering `200` is readiness.
 - **Exit status 75** from `serve` means "a new version is activated — relaunch me"; any other exit is a stop the shell reports. Under `CEZ_SUPERVISED=1` cezar exits 75 instead of re-exec'ing itself after a self-update, and exits on its own when the supervisor pid is gone or it is re-parented to pid 1.
 
-Breaking: moving the entry, renaming a flag or variable, changing the meaning of 75, or making `serve` need anything else from its parent. Required path: the shell ships first with support for both shapes, then cezar changes, then the old shape is dropped a release later.
+- **The new-task route** `/p/<projectId>/new`, and the flat `/new` that redirects to the boot project's: the shell's global new-task shortcut navigates the cockpit there with `history.pushState` followed by a `popstate` event, so the router must keep following `popstate` from the URL alone.
+
+Breaking: moving the entry, renaming a flag or variable, changing the meaning of 75, moving the new-task route, or making `serve` need anything else from its parent. Required path: the shell ships first with support for both shapes, then cezar changes, then the old shape is dropped a release later.
 
 ## 7. Agent event protocol (`packages/cezar/src/core/agent-runner.ts`, `packages/cezar/src/core/ui-events.ts`)
 
