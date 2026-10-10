@@ -1,19 +1,19 @@
 # Handoff — 2026-10-10-github-tab-fast
 
-**Last updated:** 2026-10-10T20:27:30Z
+**Last updated:** 2026-10-10T20:34:00Z
 **Branch:** `cez/4882295a`
 **PR:** not yet opened
-**Current phase/step:** Phase 3 Step 3.1
-**Last commit:** `c20ad84d` — feat: hydrate GitHub detail metadata
+**Current phase/step:** complete; final review/PR promotion pending
+**Last commit:** `d1cfce22` — fix: preserve GitHub query key compatibility
 
 ## What just happened
 
 - Phase 2 is complete: cursor-aware client caching, load-more/virtualized rows, exact totals, cheap comment counts, and selected-detail hydration are committed.
-- Checkpoint 2 passed contract typecheck and focused forge/web tests (332 tests); the full repository typecheck remains blocked by unrelated base-branch contract drift.
+- Final gate recorded: typecheck, build, unit, package, and focused GitHub tests pass; full test has 13 unrelated environment/base failures.
 
 ## Next concrete action
 
-- Start Step 3.1: add regression coverage for pagination, totals, migration, and hydration.
+- Review PR #1362, apply final labels/summary, and promote the draft when review is clean.
 
 ## Blockers / open questions
 
