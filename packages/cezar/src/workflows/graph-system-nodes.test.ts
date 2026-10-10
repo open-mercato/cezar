@@ -596,7 +596,9 @@ describe('graph system nodes', () => {
       const graph: WorkflowGraph = {
         nodes: [
           { id: 'start', type: 'start' },
-          { id: 'edit', type: 'check', command: 'echo two >> a.txt' },
+          // Both halves of a check env reach a shadow check: the run context every check gets and
+          // the shadow overrides on top of it.
+          { id: 'edit', type: 'check', command: 'test "$CEZ_SHADOW" = 1 && test -n "$CEZ_RUN_ID" && echo two >> a.txt' },
           { id: 'commit', type: 'git.commit', message: 'shadow work' },
           { id: 'push', type: 'git.push' },
           { id: 'pr', type: 'github.draft-pr' },
