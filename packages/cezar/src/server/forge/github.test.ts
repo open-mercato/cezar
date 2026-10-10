@@ -1662,6 +1662,34 @@ describe('searchGithubItems (#730)', () => {
     expect(res.items.map((i) => i.number)).toEqual([4507]);
   });
 
+  it('does not misidentify a PR returned by the numeric issue lookup', async () => {
+    const argvs = ghSpy((argv) => {
+      if (argv[0] === 'issue' && argv[1] === 'view') {
+        return JSON.stringify({
+          number: 4507,
+          title: 'a pull request sharing the issue number',
+          author: { login: 'someone' },
+          createdAt: '2026-07-25T07:08:17Z',
+          labels: [],
+          body: '',
+          url: 'https://github.com/owner/n/pull/4507',
+        });
+      }
+      if (argv[0] === 'repo') return 'owner/n\n';
+      if (argv[0] === 'search') {
+        return JSON.stringify([searchHit({ title: 'a genuine issue mentioning 4507', url: 'https://github.com/owner/n/issues/12' })]);
+      }
+      return '';
+    });
+
+    const res = await searchGithubItems('/repo/search-issue-kind', 'issue', '4507');
+
+    expect(res.available).toBe(true);
+    expect(res.items[0]?.kind).toBe('issue');
+    expect(res.items[0]?.title).toBe('a genuine issue mentioning 4507');
+    expect(argvs.some((a) => a[0] === 'search' && a[1] === 'issues')).toBe(true);
+  });
+
   it('searches text with NO --state flag, so closed and merged hits are included', async () => {
     const argvs = ghSpy((argv) => {
       if (argv[0] === 'repo') return 'owner/n\n';
