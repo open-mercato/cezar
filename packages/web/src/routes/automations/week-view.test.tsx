@@ -45,11 +45,11 @@ describe('WeekView', () => {
 
     const today = columns()[2]
     expect(today?.getAttribute('data-today')).toBe('true')
-    expect(today?.className).toContain('bg-muted/35')
+    expect(today?.className).toContain('bg-muted/40')
     const line = today?.querySelector<HTMLElement>('[data-slot="now-line"]')
     expect(line?.style.top).toBe(`${((10 * 60 + 24) / 60) * HOUR_H}px`)
     expect(document.querySelectorAll('[data-slot="now-line"]')).toHaveLength(1)
-    expect(columns()[1]?.className).not.toContain('bg-muted/35')
+    expect(columns()[1]?.className).not.toContain('bg-muted/40')
   })
 
   it('moves the now line as the minutes pass', () => {

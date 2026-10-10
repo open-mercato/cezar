@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import type { ApiRun, RunStatus } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
+import { ShellProviders } from '@/test/shell-providers'
 
 import { AcceptCelebration, ReviewPanel } from './review-panel'
 import { ThreadView } from './task-thread'
@@ -95,7 +96,7 @@ function renderWithProviders(ui: ReactElement) {
   const view = render(
     <QueryClientProvider client={client}>
       <MemoryRouter>
-        {ui}
+        <ShellProviders>{ui}</ShellProviders>
         <Toaster />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -106,13 +107,18 @@ function renderWithProviders(ui: ReactElement) {
       view.rerender(
         <QueryClientProvider client={client}>
           <MemoryRouter>
-            {next}
+            <ShellProviders>{next}</ShellProviders>
             <Toaster />
           </MemoryRouter>
         </QueryClientProvider>,
       ),
   }
 }
+
+/** The toast on screen (shadcn Sonner): its words, and whether it is the danger one. */
+const toastText = () => document.querySelector('[data-sonner-toast] [data-title]')?.textContent
+const toastTone = () =>
+  document.querySelector('[data-sonner-toast]')?.getAttribute('data-type') === 'error' ? 'danger' : 'default'
 
 const diffFetches = (sent: SentRequest[]) =>
   sent.filter((r) => r.method === 'GET' && r.path === '/api/v1/runs/r1/diff').length
@@ -328,7 +334,8 @@ describe('the review gate on the thread', () => {
     await waitFor(() => expect(sendBack.disabled).toBe(false))
     fireEvent.click(sendBack)
     expect(sent.filter((r) => r.method === 'POST')).toHaveLength(0)
-    expect(document.querySelector('[data-slot="toast"]')?.textContent).toBe('Write what to change first.')
+    await waitFor(() => expect(toastText()).toBe('Write what to change first.'))
+    expect(toastTone()).toBe('default')
     expect(document.activeElement).toBe(screen.getByLabelText('Notes for the agent'))
   })
 
@@ -340,9 +347,7 @@ describe('the review gate on the thread', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Draft PR/ }))
     await waitFor(() => {
-      expect(document.querySelector('[data-slot="toast"]')?.textContent).toBe(
-        'Draft PR created — https://github.com/x/y/pull/7',
-      )
+      expect(toastText()).toBe('Draft PR created — https://github.com/x/y/pull/7')
     })
     expect(sent.filter((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/pr')).toHaveLength(1)
   })
@@ -360,9 +365,8 @@ describe('the review gate on the thread', () => {
         'manual path: git merge cez/r1',
       )
     })
-    const toastEl = document.querySelector('[data-slot="toast"]')
-    expect(toastEl?.textContent).toBe('gh pr create failed: not logged in')
-    expect(toastEl?.getAttribute('data-tone')).toBe('danger')
+    await waitFor(() => expect(toastText()).toBe('gh pr create failed: not logged in'))
+    expect(toastTone()).toBe('danger')
     // The button stays usable — the user may fix gh auth and retry.
     expect((screen.getByRole('button', { name: /Draft PR/ }) as HTMLButtonElement).disabled).toBe(false)
   })
@@ -502,7 +506,13 @@ describe('the accept celebration', () => {
     stubFetch()
     vi.stubGlobal(
       'matchMedia',
-      vi.fn((query: string) => ({ matches: query === '(prefers-reduced-motion: reduce)' })),
+      // A whole MediaQueryList, not just `matches`: the shell's sidebar subscribes to its own query.
+      vi.fn((query: string) => ({
+        matches: query === '(prefers-reduced-motion: reduce)',
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      })),
     )
     const { rerenderWithProviders } = renderWithProviders(<AcceptCelebration status="review" />)
     rerenderWithProviders(<AcceptCelebration status="done" />)

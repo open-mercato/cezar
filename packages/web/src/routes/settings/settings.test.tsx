@@ -6,8 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
 import { AppearanceProvider } from '@/components/appearance-provider'
+import { ContextSidebarContext } from '@/components/context-sidebar'
+import { ListViewProvider } from '@/components/list-view'
+import { GlobalSettingsDialog } from '@/components/global-settings-dialog'
 import { ThemeProvider } from '@/components/theme-provider'
 import { AppRoutes } from '@/routes'
+import { ShellProviders } from '@/test/shell-providers'
 import { SETTINGS_SECTIONS, visibleSettingsSections } from './registry'
 
 /**
@@ -95,13 +99,27 @@ function gateSeededClient(singleProject = false) {
   return client
 }
 
+/** The routes inside what the app shell gives them: global settings as a dialog (its state AND
+ *  the dialog itself — that is where the global sections render now) and a mounted contextual
+ *  sidebar. The project settings nav is portalled into that sidebar, so without a node to land
+ *  in there is no nav to assert on. */
 function renderAt(entry: string, { singleProject = false }: { singleProject?: boolean } = {}) {
+  const sidebar = document.createElement('div')
+  sidebar.setAttribute('data-slot', 'test-context-sidebar')
+  document.body.appendChild(sidebar)
   render(
     <QueryClientProvider client={gateSeededClient(singleProject)}>
       <ThemeProvider>
         <AppearanceProvider>
           <MemoryRouter initialEntries={[entry]}>
-            <AppRoutes />
+            <ShellProviders dialog={<GlobalSettingsDialog />}>
+              <ContextSidebarContext.Provider value={{ node: sidebar, register: NO_REGISTRATION }}>
+                {/* A global deep link hands the URL to the project home, which reads the list view. */}
+                <ListViewProvider>
+                  <AppRoutes />
+                </ListViewProvider>
+              </ContextSidebarContext.Provider>
+            </ShellProviders>
           </MemoryRouter>
         </AppearanceProvider>
       </ThemeProvider>
@@ -109,10 +127,18 @@ function renderAt(entry: string, { singleProject = false }: { singleProject?: bo
   )
 }
 
+const NO_REGISTRATION = () => () => {}
+
+/** Global settings are a dialog now; this is it, once a deep link (or a click) has opened it. */
+const globalDialog = () => document.querySelector<HTMLElement>('[data-slot="global-settings-dialog"]')
+const globalDialogSections = () =>
+  [...(globalDialog()?.querySelectorAll('button[data-section]') ?? [])].map((el) => el.getAttribute('data-section'))
+
 beforeEach(() => serve())
 
 afterEach(() => {
   cleanup()
+  document.querySelectorAll('[data-slot="test-context-sidebar"]').forEach((node) => node.remove())
   vi.unstubAllGlobals()
   localStorage.clear()
   delete document.documentElement.dataset.accent
@@ -172,9 +198,8 @@ describe('the settings shell', () => {
     expect(ids).toEqual(PROJECT_SECTIONS)
     // The active section is marked for assistive tech, not just by color.
     expect(nav.querySelector('[aria-current="page"]')?.getAttribute('data-section')).toBe('agents')
-    // The mobile pill row renders through the same registry — the two can never disagree.
-    const pills = document.querySelector('[data-slot="settings-nav-mobile"]')!
-    expect([...pills.querySelectorAll('[data-section]')].length).toBe(PROJECT_SECTIONS.length)
+    // (The mobile pill row is gone: on phones this same nav is the sidebar sheet, and the index
+    // page lists the sections — pinned by the index test below.)
   })
 
   it('every section keeps a way BACK to the index: the "General" nav entry', () => {
@@ -183,41 +208,37 @@ describe('the settings shell', () => {
     expect(
       document.querySelector('[data-slot="settings-nav"] [data-slot="settings-nav-index"]')?.getAttribute('href'),
     ).toBe('/p/boot/settings')
-    // The mobile pill row carries it too — the index is the ONLY place small screens see it.
-    expect(
-      document.querySelector('[data-slot="settings-nav-mobile"] [data-slot="settings-nav-index"]')?.getAttribute('href'),
-    ).toBe('/p/boot/settings')
     // A section is open, so "General" is not the current page.
     expect(document.querySelector('[data-slot="settings-nav-index"][aria-current="page"]')).toBeNull()
   })
 
-  it('"General" is the current page on the index itself, and unprefixed in the global area', () => {
+  it('"General" is the current page on the index itself, and the global area has no index of its own', async () => {
     renderAt('/settings')
     expect(
       document.querySelector('[data-slot="settings-nav"] [data-slot="settings-nav-index"]')?.getAttribute('aria-current'),
     ).toBe('page')
     cleanup()
 
+    // The global area is a dialog that always shows a section — there is no "General" in it.
     renderAt('/settings/global/resources')
-    expect(
-      document.querySelector('[data-slot="settings-nav"] [data-slot="settings-nav-index"]')?.getAttribute('href'),
-    ).toBe('/settings/global')
+    await waitFor(() => expect(globalDialog()?.getAttribute('data-section')).toBe('resources'))
+    expect(globalDialog()?.querySelector('[data-slot="settings-nav-index"]')).toBeNull()
   })
 
-  it('renders the GLOBAL nav at /settings/global — global sections, unprefixed links', () => {
+  it('renders the GLOBAL nav in the dialog /settings/global/<id> opens — global sections, no links', async () => {
     renderAt('/settings/global/appearance')
-    const nav = document.querySelector('[data-slot="settings-nav"]')!
-    expect(nav.getAttribute('data-scope')).toBe('global')
-    const ids = [...nav.querySelectorAll('[data-section]')].map((el) => el.getAttribute('data-section'))
-    expect(ids).toEqual(GLOBAL_SECTIONS)
-    // The whole point of the plain (non-scoped) links: no `/p/<id>` prefix may appear, or the
-    // target would not be a route at all.
-    expect(nav.querySelector('[data-section="resources"]')?.getAttribute('href')).toBe(
-      '/settings/global/resources',
-    )
-    expect(nav.querySelector('[data-section="skills"]')?.getAttribute('href')).toBe(
-      '/settings/global/skills',
-    )
+    await waitFor(() => expect(globalDialog()).not.toBeNull())
+    expect(globalDialogSections()).toEqual(GLOBAL_SECTIONS)
+    // The deep link names the section the dialog opens on, marked for assistive tech.
+    expect(globalDialog()?.getAttribute('data-section')).toBe('appearance')
+    expect(globalDialog()?.querySelector('[aria-current="page"]')?.getAttribute('data-section')).toBe('appearance')
+    // The whole point of the dialog: its nav switches the section IN PLACE. A link here would be
+    // a navigation, and a `/p/<id>`-prefixed one would not be a route at all.
+    expect(globalDialog()?.querySelector('a[href]')).toBeNull()
+    fireEvent.click(globalDialog()!.querySelector('button[data-section="resources"]')!)
+    expect(globalDialog()?.getAttribute('data-section')).toBe('resources')
+    fireEvent.click(globalDialog()!.querySelector('button[data-section="skills"]')!)
+    expect(globalDialog()?.getAttribute('data-section')).toBe('skills')
   })
 
   it('/settings is the project registry as an index — one card per visible section', () => {
@@ -229,36 +250,42 @@ describe('the settings shell', () => {
     expect(index.querySelector('[data-section="bookmarklets"]')?.getAttribute('href')).toBe(
       '/p/boot/settings/bookmarklets',
     )
-    // …and the cross-link out of the project area is NOT prefixed.
-    expect(document.querySelector('[data-slot="settings-global-link"]')?.getAttribute('href')).toBe(
-      '/settings/global',
-    )
+    // …and the cross-link out of the project area is not a link at all: it opens the global
+    // settings dialog over this page, so it can never pick up the project's prefix.
+    const crossLink = document.querySelector<HTMLElement>('[data-route="settings"] [data-slot="settings-global-link"]')!
+    expect(crossLink.getAttribute('href')).toBeNull()
+    expect(globalDialog()).toBeNull()
+    fireEvent.click(crossLink)
+    expect(globalDialog()).not.toBeNull()
+    expect(document.querySelector('[data-route="settings"]')).not.toBeNull()
   })
 
-  it('/settings/global is the global registry as an index', () => {
+  it('/settings/global opens the dialog on the whole global registry', async () => {
     renderAt('/settings/global')
-    const index = document.querySelector('[data-slot="settings-index"]')!
-    const ids = [...index.querySelectorAll('[data-section]')].map((el) => el.getAttribute('data-section'))
-    expect(ids).toEqual(GLOBAL_SECTIONS)
-    expect(index.querySelector('[data-section="projects"]')?.getAttribute('href')).toBe(
-      '/settings/global/projects',
-    )
+    await waitFor(() => expect(globalDialog()).not.toBeNull())
+    expect(globalDialogSections()).toEqual(GLOBAL_SECTIONS)
+    // No section was named, so it opens on the first one — and every other one is a click away.
+    expect(globalDialog()?.getAttribute('data-section')).toBe(GLOBAL_SECTIONS[0])
+    fireEvent.click(globalDialog()!.querySelector('button[data-section="projects"]')!)
+    expect(globalDialog()?.getAttribute('data-section')).toBe('projects')
   })
 
-  it('single-project mode removes Projects from the global index and navigation', () => {
+  it('single-project mode removes Projects from the global navigation', async () => {
     renderAt('/settings/global', { singleProject: true })
-    expect(document.querySelector('[data-slot="settings-index"] [data-section="projects"]')).toBeNull()
-    expect(document.querySelector('[data-slot="settings-nav"] [data-section="projects"]')).toBeNull()
-    expect(document.querySelector('[data-section="resources"]')).not.toBeNull()
+    await waitFor(() => expect(globalDialog()).not.toBeNull())
+    expect(globalDialog()?.querySelector('[data-section="projects"]')).toBeNull()
+    expect(globalDialog()?.querySelector('button[data-section="resources"]')).not.toBeNull()
+    expect(globalDialogSections()).toEqual(GLOBAL_SECTIONS.filter((id) => id !== 'projects'))
   })
 
   it('a moved section keeps its old URL working: /settings/appearance → the global twin', async () => {
     renderAt('/settings/appearance')
-    // Legacy flat URL → boot project → the section's new global home. Two redirects, one hop
-    // each, and the address bar ends up naming the real place.
+    // Legacy flat URL → boot project → the section's new global home: the dialog, opened on that
+    // section over the project's own settings.
     await waitFor(() => {
-      expect(document.querySelector('[data-route="settings-global-appearance"]')).not.toBeNull()
+      expect(globalDialog()?.getAttribute('data-section')).toBe('appearance')
     })
+    expect(document.querySelector('[data-route="settings"]')).not.toBeNull()
   })
 
   it('unfinished sections say so through the shared CenteredState template', () => {

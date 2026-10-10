@@ -130,9 +130,14 @@ describe('ProviderBannerContainer', () => {
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('Claude Code, OpenCode')
     expect(client.getQueryData<WorkspaceUiState>(workspaceQueryKeys.uiState)).toEqual(previous)
-    const error = screen.getByRole('status')
-    expect(error.textContent).toBe('could not save auth dismissals')
-    expect(error.getAttribute('data-tone')).toBe('danger')
+    // The toaster is sonner now: a failure is its `error` toast, the message its title.
+    const error = await waitFor(() => {
+      const toast = document.querySelector('[data-sonner-toast]')
+      if (!toast) throw new Error('no toast yet')
+      return toast
+    })
+    expect(error.querySelector('[data-title]')?.textContent).toBe('could not save auth dismissals')
+    expect(error.getAttribute('data-type')).toBe('error')
   })
 
   it('restores the last server-confirmed cache when two queued dismissals fail', async () => {

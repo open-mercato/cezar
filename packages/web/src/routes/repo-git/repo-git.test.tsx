@@ -1,14 +1,25 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import { queryKeys } from '@/api/queries'
 import type { ChangesPayload, GithubData, HealthResponse, RepoCommitPayload, RepoResponse } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
+import { ShellWithSidebar } from '@/test/shell-with-sidebar'
 
 import { RepoGitRoute } from './repo-git'
+
+beforeEach(() => {
+  // Radix menus, popovers and the Select in jsdom: floating-ui wants a ResizeObserver, and the
+  // Select scrolls its chosen item into view on open.
+  Element.prototype.scrollIntoView = vi.fn()
+  Element.prototype.hasPointerCapture = vi.fn(() => false)
+  Element.prototype.setPointerCapture = vi.fn()
+  Element.prototype.releasePointerCapture = vi.fn()
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+})
 
 afterEach(() => {
   act(() => resetToasts())
@@ -125,24 +136,33 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
   return sent
 }
 
-/** Cold-load the repo view at a URL, with the same route map routes.tsx registers. */
+/** Cold-load the repo view at a URL, with the same route map routes.tsx registers — inside a
+ *  shell with a mounted contextual sidebar, which is where the section switch and each section's
+ *  list (the changed-files tree, the commit log, the branches) live. */
 function renderAt(entry: string) {
   const client = createQueryClient()
   render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[entry]}>
+        <ShellWithSidebar>
         <Routes>
           <Route path="/git" element={<RepoGitRoute tab="changes" />} />
           <Route path="/git/commits" element={<RepoGitRoute tab="commits" />} />
           <Route path="/git/commits/:sha" element={<RepoGitRoute tab="commits" />} />
           <Route path="/git/branches" element={<RepoGitRoute tab="branches" />} />
         </Routes>
+        </ShellWithSidebar>
         <Toaster />
       </MemoryRouter>
     </QueryClientProvider>,
   )
   return client
 }
+
+const sidebar = () => document.querySelector<HTMLElement>('[data-slot="context-sidebar-body"]')!
+/** The titles of the empty/error states on screen (shadcn `Empty`: a title, not a heading). */
+const emptyTitles = () =>
+  [...document.querySelectorAll('[data-slot="centered-state"] [data-slot="empty-title"]')].map((el) => el.textContent)
 
 // ---- changes ----------------------------------------------------------------------------------
 
@@ -152,7 +172,11 @@ describe('the repo view Changes segment', () => {
     renderAt('/git')
 
     await waitFor(() => expect(document.querySelector('[data-slot="repo-header"]')).not.toBeNull())
-    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Git')
+    // The header — title, checked-out branch, section switch — leads the contextual sidebar; the
+    // page's own heading names the section.
+    expect(sidebar().querySelector('[data-slot="repo-header"]')).not.toBeNull()
+    expect(within(sidebar()).getByRole('heading', { level: 2 }).textContent).toBe('Git')
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Uncommitted changes')
     expect(document.querySelector('[data-slot="branch-chip"]')?.textContent).toContain('main')
 
     const tabs = [...document.querySelectorAll('[data-slot="repo-tabs"] a')].map((a) => ({
@@ -169,12 +193,17 @@ describe('the repo view Changes segment', () => {
     // The SAME tree + facade the task Changes tab uses: compacted folder, per-file ±.
     await waitFor(() => expect(document.querySelector('[data-slot="changes-tree"]')).not.toBeNull())
     expect(document.querySelector('[data-slot="tree-dir"]')?.textContent).toContain('src/util')
-    // …including its own bounded scroller, so a long list never drags the diff down with it.
+    // …in a scroller of its own, so a long list never drags the diff down with it. That used
+    // to be a bounded pane beside the diff; it is the sidebar's content area now, which scrolls
+    // independently of main by construction.
     await waitFor(() => expect(document.querySelector('[data-slot="changes-tree-pane"]')).not.toBeNull())
     const pane = document.querySelector('[data-slot="changes-tree-pane"]') as HTMLElement
-    expect(pane.className).toContain('max-h-[calc(100dvh_-_var(--diff-sticky-top)_-_1rem)]')
-    expect(pane.className).toContain('overflow-y-auto')
-    expect(pane.className).toContain('overscroll-contain')
+    expect(sidebar().contains(pane)).toBe(true)
+    expect(pane.querySelector('[data-slot="changes-tree"]')).not.toBeNull()
+    const scroller = pane.closest('[data-slot="sidebar-content"]') as HTMLElement
+    expect(scroller.className).toContain('overflow-auto')
+    expect(scroller.className).toContain('min-h-0')
+    expect(scroller.contains(document.querySelector('[data-slot="diff"]'))).toBe(false)
     await waitFor(() => expect(document.querySelectorAll('[data-slot="diff-file"]')).toHaveLength(2))
     expect(document.querySelector('[data-slot="changes-stat"]')?.textContent).toContain('+5')
     // The view toggles are the shared control, wired to the facade's mode.
@@ -190,7 +219,7 @@ describe('the repo view Changes segment', () => {
     })
     renderAt('/git')
     await waitFor(() =>
-      expect(screen.getByRole('heading', { level: 2, name: 'Working tree clean' })).toBeTruthy(),
+      expect(emptyTitles()).toContain('Working tree clean'),
     )
   })
 
@@ -200,7 +229,7 @@ describe('the repo view Changes segment', () => {
     })
     renderAt('/git')
     await waitFor(() =>
-      expect(screen.getByRole('heading', { level: 2, name: 'No changes to show' })).toBeTruthy(),
+      expect(emptyTitles()).toContain('No changes to show'),
     )
     expect(document.querySelector('[data-slot="repo-changes"]')?.textContent).toContain('not a git repository')
   })
@@ -227,7 +256,7 @@ describe('the repo view Changes segment', () => {
     })
     renderAt('/git')
     await waitFor(() =>
-      expect(screen.getByRole('heading', { level: 1, name: 'Not a git repository' })).toBeTruthy(),
+      expect(emptyTitles()).toEqual(['Not a git repository']),
     )
     expect(document.querySelector('[data-slot="repo-tabs"]')).toBeNull()
   })
@@ -241,7 +270,12 @@ describe('the repo view Commits segment', () => {
     renderAt('/git/commits')
     await waitFor(() => expect(document.querySelector('[data-slot="repo-commits"]')).not.toBeNull())
 
-    const rows = [...document.querySelectorAll('[data-slot="commit-row"]')].map((row) => ({
+    // The log is the sidebar's list. (Main repeats it for phones, where the sidebar is a closed
+    // sheet, so the rows are counted where a desktop user reads them.)
+    const log = document.querySelector('[data-slot="repo-commits"]') as HTMLElement
+    expect(sidebar().contains(log)).toBe(true)
+    expect(document.querySelector('[data-slot="commit-pick"]')?.textContent).toContain('Pick a commit')
+    const rows = [...log.querySelectorAll('[data-slot="commit-row"]')].map((row) => ({
       href: row.getAttribute('href'),
       text: row.textContent,
     }))
@@ -281,7 +315,7 @@ describe('the repo view Commits segment', () => {
     })
     renderAt('/git/commits/nope999')
     await waitFor(() =>
-      expect(screen.getByRole('heading', { level: 2, name: 'Commit not found' })).toBeTruthy(),
+      expect(emptyTitles()).toContain('Commit not found'),
     )
     expect(document.querySelector('[data-slot="repo-commit"]')?.textContent).toContain('unknown commit: nope999')
   })
@@ -293,7 +327,7 @@ describe('the repo view Commits segment', () => {
     })
     renderAt('/git/commits/abc1234')
     await waitFor(() =>
-      expect(screen.getByRole('heading', { level: 2, name: 'No file changes' })).toBeTruthy(),
+      expect(emptyTitles()).toContain('No file changes'),
     )
   })
 })
@@ -301,6 +335,24 @@ describe('the repo view Commits segment', () => {
 // ---- branches ----------------------------------------------------------------------------------
 
 describe('the repo view Branches segment', () => {
+  /** A branch's actions sit behind its row's "…" menu (Radix opens it on pointerDown). */
+  async function openBranchActions(branch: string) {
+    await waitFor(() => expect(document.querySelector('[data-slot="repo-branch-list"]')).not.toBeNull())
+    fireEvent.pointerDown(screen.getByRole('button', { name: `Actions for ${branch}` }))
+    await screen.findByRole('menu')
+    return document.querySelector<HTMLElement>('[data-action="switch-branch"]')!
+  }
+  async function closeMenu() {
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+  }
+  /** Open the "New branch" popover and hand back its name field. */
+  async function openCreate() {
+    fireEvent.click(await screen.findByRole('button', { name: 'New branch' }))
+    return (await screen.findByLabelText('New branch name')) as HTMLInputElement
+  }
+  const basePicker = () => screen.findByRole('combobox', { name: 'Agents’ base branch' })
+
   it('lists branches with the checkout marked current and the rest switchable', async () => {
     stubFetch()
     renderAt('/git/branches')
@@ -308,11 +360,21 @@ describe('the repo view Branches segment', () => {
 
     const current = document.querySelector('[data-slot="branch-row"][data-branch="main"]')
     expect(current?.querySelector('[data-slot="branch-current"]')).not.toBeNull()
-    expect(current?.querySelector('[data-action="switch-branch"]')).toBeNull()
-
     const other = document.querySelector('[data-slot="branch-row"][data-branch="feature"]')
     expect(other?.querySelector('[data-slot="branch-current"]')).toBeNull()
-    expect(other?.querySelector('[data-action="switch-branch"]')).not.toBeNull()
+
+    // Every row carries the same actions menu; "Switch" is disabled on the checkout itself.
+    const onCurrent = await openBranchActions('main')
+    expect(onCurrent.textContent).toBe('Switch to this branch')
+    expect(onCurrent.getAttribute('aria-disabled')).toBe('true')
+    await closeMenu()
+    const onOther = await openBranchActions('feature')
+    expect(onOther.getAttribute('aria-disabled')).not.toBe('true')
+    await closeMenu()
+
+    // The sidebar's list marks the checkout too.
+    const menu = sidebar().querySelector('[data-slot="repo-branch-menu"]') as HTMLElement
+    expect([...menu.querySelectorAll('li')].map((li) => li.textContent)).toEqual(['feature', 'mainCurrent'])
   })
 
   it('Switch POSTs /api/v1/repo/branch and toasts the outcome', async () => {
@@ -320,9 +382,8 @@ describe('the repo view Branches segment', () => {
       'POST /api/v1/repo/branch': () => jsonResponse({ branch: 'feature', created: false }),
     })
     const client = renderAt('/git/branches')
-    await waitFor(() => expect(document.querySelector('[data-action="switch-branch"]')).not.toBeNull())
 
-    fireEvent.click(document.querySelector('[data-action="switch-branch"]')!)
+    fireEvent.click(await openBranchActions('feature'))
     await waitFor(() => {
       const post = sent.find((r) => r.method === 'POST' && r.path === '/api/v1/repo/branch')
       expect(post?.body).toEqual({ name: 'feature' })
@@ -335,13 +396,25 @@ describe('the repo view Branches segment', () => {
   it('filters branch rows without narrowing the base-branch picker', async () => {
     stubFetch()
     renderAt('/git/branches')
-    const filter = await screen.findByLabelText('Filter branches')
-    const picker = (await screen.findByLabelText('Agents’ base branch')) as HTMLSelectElement
+    // The filter is the sidebar's; the toolbar repeats it for phones, and both are one state.
+    const filter = await waitFor(() => within(sidebar()).getByLabelText('Filter branches'))
+    const picker = await basePicker()
 
     fireEvent.change(filter, { target: { value: 'FEAT' } })
     expect(document.querySelector('[data-slot="branch-row"][data-branch="feature"]')).not.toBeNull()
     expect(document.querySelector('[data-slot="branch-row"][data-branch="main"]')).toBeNull()
-    expect([...picker.options].map((option) => option.value)).toEqual(['', 'feature', 'main'])
+    expect(screen.getAllByLabelText<HTMLInputElement>('Filter branches').map((input) => input.value)).toEqual(['FEAT', 'FEAT'])
+    expect([...sidebar().querySelectorAll('[data-slot="repo-branch-menu"] li')].map((li) => li.textContent)).toEqual(['feature'])
+    // A shadcn Select: its options exist only while it is open (keyboard — jsdom has no pointer).
+    fireEvent.keyDown(picker, { key: 'ArrowDown' })
+    const listbox = await screen.findByRole('listbox')
+    expect(within(listbox).getAllByRole('option').map((option) => option.textContent)).toEqual([
+      'Follow checked-out branch (default)',
+      'feature',
+      'main',
+    ])
+    fireEvent.keyDown(listbox, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull())
 
     fireEvent.change(filter, { target: { value: 'missing' } })
     expect(document.querySelector('[data-slot="branch-empty"]')?.textContent).toContain(
@@ -355,12 +428,11 @@ describe('the repo view Branches segment', () => {
         jsonResponse({ error: 'Your local changes to the following files would be overwritten by checkout' }, 409),
     })
     renderAt('/git/branches')
-    await waitFor(() => expect(document.querySelector('[data-action="switch-branch"]')).not.toBeNull())
 
-    fireEvent.click(document.querySelector('[data-action="switch-branch"]')!)
-    await waitFor(() =>
-      expect(document.body.textContent).toContain('Your local changes to the following files'),
-    )
+    fireEvent.click(await openBranchActions('feature'))
+    const refusal = await screen.findByText(/Your local changes to the following files/)
+    // The danger toast, in git's own words.
+    expect(refusal.closest('[data-sonner-toast]')?.getAttribute('data-type')).toBe('error')
   })
 
   it('the create form POSTs the new name and clears on success', async () => {
@@ -368,7 +440,7 @@ describe('the repo view Branches segment', () => {
       'POST /api/v1/repo/branch': () => jsonResponse({ branch: 'fresh-idea', created: true }),
     })
     renderAt('/git/branches')
-    const input = (await screen.findByLabelText('New branch name')) as HTMLInputElement
+    const input = await openCreate()
 
     // Empty name → the button stays disabled; nothing fires.
     expect((document.querySelector('[data-action="create-branch"]') as HTMLButtonElement).disabled).toBe(true)
@@ -380,23 +452,40 @@ describe('the repo view Branches segment', () => {
       expect(post?.body).toEqual({ name: 'fresh-idea' })
     })
     await waitFor(() => expect(document.body.textContent).toContain('Created and switched to fresh-idea'))
-    await waitFor(() => expect(input.value).toBe(''))
+    // Success closes the popover, and the field is empty the next time it opens.
+    await waitFor(() => expect(document.querySelector('[data-slot="branch-create"]')).toBeNull())
+    expect((await openCreate()).value).toBe('')
   })
 
   it('the base-branch picker PUTs /api/v1/config with the chosen branch (and null to clear)', async () => {
-    const sent = stubFetch({
-      'PUT /api/v1/config': () => jsonResponse({ baseBranch: 'feature', defaultRunner: 'claude' }),
+    // A config route that remembers what it was told, so the repo refetch each write triggers
+    // reads the new base back — the picker is controlled by the payload, not by the click.
+    let baseBranch: string | null = null
+    const sent: SentRequest[] = stubFetch({
+      'PUT /api/v1/config': () => {
+        baseBranch = (sent.at(-1)?.body as { baseBranch: string | null }).baseBranch
+        return jsonResponse({ baseBranch, defaultRunner: 'claude' })
+      },
+      'GET /api/v1/repo': () => jsonResponse({ ...REPO, baseBranch }),
     })
     renderAt('/git/branches')
-    const picker = (await screen.findByLabelText('Agents’ base branch')) as HTMLSelectElement
-    expect(picker.value).toBe('') // baseBranch: null = follow checked-out branch
+    const picker = await basePicker()
+    // baseBranch: null = follow checked-out branch
+    expect(picker.textContent).toContain('Follow checked-out branch (default)')
 
-    fireEvent.change(picker, { target: { value: 'feature' } })
-    await waitFor(() => {
-      const put = sent.find((r) => r.method === 'PUT' && r.path === '/api/v1/config')
-      expect(put?.body).toEqual({ baseBranch: 'feature' })
-    })
+    fireEvent.keyDown(picker, { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('option', { name: 'feature' }))
+    const puts = () => sent.filter((r) => r.method === 'PUT' && r.path === '/api/v1/config')
+    await waitFor(() => expect(puts().map((put) => put.body)).toEqual([{ baseBranch: 'feature' }]))
     await waitFor(() => expect(document.body.textContent).toContain('Agents now branch from feature'))
+
+    // …and "follow the checked-out branch" clears it with an explicit null.
+    await waitFor(() => expect(picker.textContent).toContain('feature'))
+    expect(document.querySelector('[data-branch="feature"] [data-slot="branch-base"]')).not.toBeNull()
+    fireEvent.keyDown(await basePicker(), { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('option', { name: 'Follow checked-out branch (default)' }))
+    await waitFor(() => expect(puts().map((put) => put.body)).toEqual([{ baseBranch: 'feature' }, { baseBranch: null }]))
+    await waitFor(() => expect(document.body.textContent).toContain('Agents now fork from the checked-out branch'))
   })
 
   it('forge available: the PR rows render with links and checks badges', async () => {

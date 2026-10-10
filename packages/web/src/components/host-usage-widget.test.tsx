@@ -1,11 +1,13 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { HostUsageProvider, useHostUsageStore } from '@/api/host-usage'
 import { createQueryClient } from '@/api/query-client'
+import { useGlobalSettings } from '@/components/global-settings'
+import { ShellProviders } from '@/test/shell-providers'
 import type { HostUsage } from '@open-mercato/cezar-api-client'
 import { HostUsageWidget, HOST_WIDGET_STALE_MS } from './host-usage-widget'
 
@@ -83,6 +85,12 @@ function Seed({ samples }: { samples: HostUsage[] }) {
   return null
 }
 
+/** Where the global-settings dialog stands — the widget opens it rather than navigating. */
+function SettingsProbe() {
+  const settings = useGlobalSettings()
+  return <output data-testid="global-settings" data-open={String(settings.isOpen)} data-section={settings.section ?? ''} />
+}
+
 function wrapper(samples: HostUsage[] = []) {
   const client = createQueryClient()
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -90,8 +98,11 @@ function wrapper(samples: HostUsage[] = []) {
       <QueryClientProvider client={client}>
         <HostUsageProvider>
           <MemoryRouter>
-            <Seed samples={samples} />
-            {children}
+            <ShellProviders>
+              <Seed samples={samples} />
+              {children}
+              <SettingsProbe />
+            </ShellProviders>
           </MemoryRouter>
         </HostUsageProvider>
       </QueryClientProvider>
@@ -136,7 +147,7 @@ afterEach(() => {
 })
 
 describe('HostUsageWidget', () => {
-  it('shows labelled CPU and RAM meters with percentages, linked to Resources', async () => {
+  it('shows labelled CPU and RAM meters with percentages, and opens Settings on Resources', async () => {
     render(<HostUsageWidget />, {
       wrapper: wrapper([
         sample({ cpuPct: 38.4, sampledAt: '2026-09-20T00:00:00.000Z' }),
@@ -154,7 +165,15 @@ describe('HostUsageWidget', () => {
     expect(cpuBar?.getAttribute('data-level')).toBe('ok')
     const row = document.querySelector('[data-slot="host-usage-widget"]')
     expect(row?.getAttribute('data-frames')).toBe('2')
-    expect(row?.closest('a')?.getAttribute('href')).toBe('/settings/resources')
+    // Global settings are a dialog now, so the row is a button that opens it ON Resources —
+    // never a link that would cost the user the page they were on.
+    expect(row?.tagName).toBe('BUTTON')
+    expect(row?.closest('a')).toBeNull()
+    const probe = screen.getByTestId('global-settings')
+    expect(probe.getAttribute('data-open')).toBe('false')
+    fireEvent.click(row!)
+    expect(probe.getAttribute('data-open')).toBe('true')
+    expect(probe.getAttribute('data-section')).toBe('resources')
     expect(row?.getAttribute('aria-label')).toContain('CPU 41%')
     expect(row?.getAttribute('aria-label')).toContain('RAM 38% (12.0/32.0 GB)')
   })

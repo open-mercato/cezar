@@ -13,7 +13,7 @@ import type { BrowserState } from './layout-state'
  * and the effect that re-points the frame on a tab switch could not tell it from one — so it
  * reset a FINISHED load back to `loading`. No second `load` event can follow, the iframe being
  * already parked on that exact address, so `LOAD_TIMEOUT_MS` later the view declared a page the
- * user was looking at "Nie udało się otworzyć", with the page itself still rendered underneath.
+ * user was looking at "Could not open", with the page itself still rendered underneath.
  *
  * Verified against the unguarded effect: the first case below fails with the failure notice
  * present twelve seconds after a load that worked.
@@ -58,13 +58,13 @@ afterEach(() => {
   cleanup()
 })
 
-const FAILURE = /Nie udało się otworzyć/
+const FAILURE = /Could not open/
 
 /** Type an address into the bar and submit it, the way a user reaches a new page. The tab must
  *  start BLANK: the bug only exists when the loaded address differs from the one the column had,
  *  because that is the only case that persists — and the persistence is what echoed back. */
 function navigateTo(url: string) {
-  const input = screen.getByPlaceholderText(/Wpisz adres/)
+  const input = screen.getByPlaceholderText(/Enter an address/)
   fireEvent.change(input, { target: { value: url } })
   fireEvent.submit(input.closest('form')!)
 }

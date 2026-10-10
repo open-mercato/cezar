@@ -83,6 +83,11 @@ function agentTab(agent: string): HTMLElement {
   return el as HTMLElement
 }
 
+/** The agent picker is a tab list now, and Radix tabs activate on mousedown, not click. */
+function pickAgent(tab: HTMLElement): void {
+  fireEvent.mouseDown(tab, { button: 0, ctrlKey: false })
+}
+
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
@@ -117,7 +122,7 @@ describe('AgentConfigSection', () => {
     await waitFor(() => expect(screen.getByText('.claude/settings.json')).toBeTruthy())
     expect(screen.queryByText('.codex/config.toml')).toBeNull()
 
-    fireEvent.click(agentTab('codex'))
+    pickAgent(agentTab('codex'))
     await waitFor(() => expect(screen.getAllByText('.codex/config.toml').length).toBeGreaterThan(0))
     expect(screen.queryByText('.claude/settings.json')).toBeNull()
     // the config.toml holds Codex's MCP servers — it must appear under Settings AND MCP
@@ -137,9 +142,9 @@ describe('AgentConfigSection', () => {
     })
     renderSection()
     await waitFor(() => expect(agentTab('codex')).toBeTruthy())
-    fireEvent.click(agentTab('codex'))
+    pickAgent(agentTab('codex'))
     await waitFor(() => expect(screen.getByText('AGENTS.md')).toBeTruthy())
-    fireEvent.click(agentTab('opencode'))
+    pickAgent(agentTab('opencode'))
     await waitFor(() => expect(screen.getByText('AGENTS.md')).toBeTruthy())
   })
 
@@ -157,7 +162,7 @@ describe('AgentConfigSection', () => {
     expect(block.textContent).toContain('sentry')
     expect(block.textContent).toContain('cezar does not edit')
     // the block belongs to Claude's pane only
-    fireEvent.click(agentTab('codex'))
+    pickAgent(agentTab('codex'))
     await waitFor(() => expect(document.querySelector('[data-slot="agent-config-user-mcp"]')).toBeNull())
   })
 
@@ -174,7 +179,7 @@ describe('AgentConfigSection', () => {
     await waitFor(() => expect(screen.getByText('.claude/settings.json')).toBeTruthy())
     fireEvent.click(screen.getByText('.claude/settings.json'))
     await waitFor(() => expect(screen.getByLabelText('.claude/settings.json contents')).toBeTruthy())
-    fireEvent.click(agentTab('opencode'))
+    pickAgent(agentTab('opencode'))
     await waitFor(() => expect(screen.queryByLabelText('.claude/settings.json contents')).toBeNull())
     expect(screen.getByText('Select a config file to view or edit it.')).toBeTruthy()
   })

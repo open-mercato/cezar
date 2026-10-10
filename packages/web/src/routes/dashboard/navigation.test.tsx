@@ -1,8 +1,9 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Routes, Route, useNavigate, useLocation } from 'react-router'
 import { afterEach, it, expect, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
+import { ShellWithSidebar } from '@/test/shell-with-sidebar'
 import { DashboardRoute } from './index'
 import { readEntry, saveEntry } from './state'
 import type { DashboardCosts } from '@open-mercato/cezar-api-client'
@@ -77,11 +78,13 @@ function setup(view = 'costs', restoredScroll?: number) {
   const client = createQueryClient()
   render(<QueryClientProvider client={client}>
     <MemoryRouter initialEntries={[{ pathname: '/dashboard', search: `?view=${view}&feed=github`, key: entry }]}>
-      <Routes>
-        <Route path="/dashboard" element={<DashboardRoute />} />
-        <Route path="*" element={<Back />} />
-      </Routes>
-      <Location />
+      <ShellWithSidebar>
+        <Routes>
+          <Route path="/dashboard" element={<DashboardRoute />} />
+          <Route path="*" element={<Back />} />
+        </Routes>
+        <Location />
+      </ShellWithSidebar>
     </MemoryRouter>
   </QueryClientProvider>)
   return { calls, client, entry }
@@ -89,6 +92,12 @@ function setup(view = 'costs', restoredScroll?: number) {
 function dashboard() {
   return document.querySelector<HTMLElement>('[data-route="dashboard"]')!
 }
+/** The dashboard's views live in the contextual sidebar the shell owns. */
+const viewButton = (name: string) =>
+  within(document.querySelector<HTMLElement>('[data-slot="context-sidebar-body"]')!).getByRole('button', { name })
+// jsdom lays nothing out and so has no `scrollIntoView`, which an opening Select calls on the
+// option it is showing.
+Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: () => {} })
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
@@ -96,7 +105,11 @@ afterEach(() => {
 it('restores direct Costs Back scroll and filter replacements without requesting hidden operational data', async () => {
   const { calls, client, entry } = setup()
   await screen.findByRole('button', { name: 'View tasks' })
-  fireEvent.change(screen.getByRole('combobox', { name: 'Tasks created' }), { target: { value: '7d' } })
+  // The filter is the cockpit's Select: opened by keyboard (jsdom has no real pointer), and a
+  // choice is made by its label.
+  fireEvent.keyDown(screen.getByRole('combobox', { name: 'Tasks created' }), { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('option', { name: 'Last 7 days' }))
+  await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('?view=costs&feed=github&usagePeriod=7d'))
   dashboard().scrollTop = 321
   fireEvent.scroll(dashboard())
   fireEvent.click(await screen.findByRole('button', { name: 'View tasks' }))
@@ -181,7 +194,7 @@ it('restores separate scroll positions across Overview and Usage history entries
   await screen.findByRole('button', { name: 'Completed: 0' })
   dashboard().scrollTop = 100
   fireEvent.scroll(dashboard())
-  fireEvent.click(screen.getByRole('link', { name: /^Usage & cost$/ }))
+  fireEvent.click(viewButton('Usage & cost'))
   await screen.findByRole('button', { name: 'View tasks' })
   dashboard().scrollTop = 321
   fireEvent.scroll(dashboard())

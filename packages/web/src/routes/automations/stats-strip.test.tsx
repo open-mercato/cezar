@@ -1,5 +1,5 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it } from 'vitest'
 
 import { NIGHTLY, NOW, STALE_PR, TIME_ZONE } from './automations-list.fixtures'
 import { StatsStrip } from './stats-strip'
@@ -15,19 +15,7 @@ const UPCOMING = [
 const stat = (label: string) => document.querySelector(`[data-slot="stat"][data-label="${label}"]`)
 
 function renderStrip(overrides: Partial<Parameters<typeof StatsStrip>[0]> = {}) {
-  const onOpenRail = vi.fn()
-  render(
-    <StatsStrip
-      stats={STATS}
-      pollCount={2}
-      upcoming={UPCOMING}
-      timeZone={TIME_ZONE}
-      railOpen={false}
-      onOpenRail={onOpenRail}
-      {...overrides}
-    />,
-  )
-  return { onOpenRail }
+  render(<StatsStrip stats={STATS} pollCount={2} upcoming={UPCOMING} timeZone={TIME_ZONE} {...overrides} />)
 }
 
 describe('StatsStrip', () => {
@@ -69,23 +57,19 @@ describe('StatsStrip', () => {
   it('names the very next run by time and automation', () => {
     renderStrip()
 
-    expect(document.querySelector('[data-slot="stats-next"]')?.textContent).toBe('next 12:00 Stale PR nudge')
+    expect(document.querySelector('[data-slot="stats-next"]')?.textContent).toBe('Next 12:00 Stale PR nudge')
   })
 
   it('shows a dash when nothing is scheduled', () => {
     renderStrip({ upcoming: [] })
 
-    expect(document.querySelector('[data-slot="stats-next"]')?.textContent).toBe('next — ')
+    expect(document.querySelector('[data-slot="stats-next"]')?.textContent).toBe('Next — ')
   })
 
-  it('opens the rail from the counted button', () => {
-    const { onOpenRail } = renderStrip()
-    const button = screen.getByRole('button', { name: /Next runs/ })
+  it('leaves the Next runs button to the page toolbar', () => {
+    renderStrip()
 
-    expect(button.textContent).toBe('Next runs2')
-    expect(button.getAttribute('aria-expanded')).toBe('false')
-    fireEvent.click(button)
-    expect(onOpenRail).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('button')).toBeNull()
   })
 
   it('renders times in the server zone, not the browser zone', () => {

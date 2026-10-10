@@ -6,8 +6,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
 import type { WorkspaceConfigResponse } from '@open-mercato/cezar-api-client'
+import { GlobalSettingsDialog } from '@/components/global-settings-dialog'
+import { ListViewProvider } from '@/components/list-view'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
+import { ShellProviders } from '@/test/shell-providers'
+import { pickOption, selectValue } from './select-test-utils'
 
 /**
  * Global settings → Resources (step 3.5): `maxParallel` and `memoryLimitMb` moved out of the
@@ -84,7 +88,13 @@ function renderResources() {
   render(
     <QueryClientProvider client={gateSeededClient()}>
       <MemoryRouter initialEntries={['/settings/global/resources']}>
-        <AppRoutes />
+        {/* What the app shell gives every route: global settings as a dialog (the global sections
+            render inside it), the sidebar, and the list view the project home reads. */}
+        <ShellProviders dialog={<GlobalSettingsDialog />}>
+          <ListViewProvider>
+            <AppRoutes />
+          </ListViewProvider>
+        </ShellProviders>
         <Toaster />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -100,7 +110,7 @@ const saveMemory = () =>
 const puts = () => requests.filter((r) => r.method === 'PUT' && r.url === '/api/v1/workspace/config')
 const monitoringSelect = () => document.querySelector<HTMLInputElement>('[data-slot="resources-max-monitoring"]')
 const idleTimeout = () => document.querySelector<HTMLInputElement>('[data-slot="resources-idle-timeout"]')
-const wakeMode = () => document.querySelector<HTMLSelectElement>('[data-slot="resources-monitoring-wake-mode"]')
+const wakeMode = () => document.querySelector<HTMLButtonElement>('[data-slot="resources-monitoring-wake-mode"]')
 const wakeInterval = () => document.querySelector<HTMLInputElement>('[data-slot="resources-monitoring-wake-interval"]')
 const saveWake = () => document.querySelector<HTMLButtonElement>('[data-action="resources-save-monitoring-wake"]')
 
@@ -139,9 +149,14 @@ describe('Global settings → Resources', () => {
     serve()
     renderResources()
 
-    const link = await screen.findByRole('link', { name: 'Configure per-project limits' })
-    expect(link.getAttribute('href')).toBe('/settings/global/projects')
+    // Both panes live in the same dialog now, so the cross-link is a button that switches its
+    // section rather than a link to another page.
+    const link = await screen.findByRole('button', { name: 'Configure per-project limits' })
     expect(screen.getByText(/Need a different limit for one project/)).not.toBeNull()
+    const dialog = document.querySelector('[data-slot="global-settings-dialog"]')
+    expect(dialog?.getAttribute('data-section')).toBe('resources')
+    fireEvent.click(link)
+    expect(dialog?.getAttribute('data-section')).toBe('projects')
   })
 
   it('saves the extra monitoring capacity and explains the two pools', async () => {
@@ -195,9 +210,9 @@ describe('Global settings → Resources', () => {
     serve({ monitoringWakeIntervalMinutes: null })
     renderResources()
     await waitFor(() => expect(wakeMode()).not.toBeNull())
-    expect(wakeMode()!.value).toBe('park')
+    expect(selectValue(wakeMode())).toBe('park')
     expect(wakeInterval()).toBeNull()
-    fireEvent.change(wakeMode()!, { target: { value: 'interval' } })
+    pickOption(wakeMode()!, 'Re-check on an interval')
     expect(wakeInterval()!.value).toBe('5')
     fireEvent.click(saveWake()!)
     await waitFor(() => expect(puts()).toHaveLength(1))
@@ -207,12 +222,12 @@ describe('Global settings → Resources', () => {
   it('shows auto-resume on by default and saves the opt-out', async () => {
     serve()
     renderResources()
-    const select = (await screen.findByLabelText('Auto-resume after a usage limit')) as HTMLSelectElement
+    const toggle = await screen.findByRole('switch', { name: 'Auto-resume after a usage limit' })
     // The shipped default (spec 2026-08-03-auto-resume-after-usage-limit) — a user who never
     // opens this pane still gets their limited tasks finished.
-    expect(select.value).toBe('on')
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
 
-    fireEvent.change(select, { target: { value: 'off' } })
+    fireEvent.click(toggle)
     await waitFor(() => expect(puts()).toHaveLength(1))
     expect(puts()[0]?.body).toEqual({ resources: { autoResumeOnUsageLimit: false } })
   })
@@ -259,14 +274,14 @@ describe('Global settings → Resources', () => {
     renderResources()
     const autonomous = await screen.findByLabelText('Autonomous by default')
     const worktree = screen.getByLabelText('Use a worktree by default')
-    expect((autonomous as HTMLSelectElement).value).toBe('inherit')
+    expect(selectValue(autonomous)).toBe('inherit')
     expect(screen.getByText(/Source-dependent — skills on, workflows off/)).toBeTruthy()
 
-    fireEvent.change(autonomous, { target: { value: 'off' } })
+    pickOption(autonomous, 'Off')
     await waitFor(() => expect(puts().at(-1)?.body).toEqual({
       composerDefaults: { autonomous: false },
     }))
-    fireEvent.change(worktree, { target: { value: 'on' } })
+    pickOption(worktree, 'On')
     await waitFor(() => expect(puts().at(-1)?.body).toEqual({
       composerDefaults: { worktree: true },
     }))

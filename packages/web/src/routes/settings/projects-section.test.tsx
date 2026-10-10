@@ -6,8 +6,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
 import type { ProjectListEntry, ProjectsResponse, WorkspaceConfigResponse } from '@open-mercato/cezar-api-client'
+import { GlobalSettingsDialog } from '@/components/global-settings-dialog'
+import { ListViewProvider } from '@/components/list-view'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
+import { ShellProviders } from '@/test/shell-providers'
 
 /**
  * Global settings → Projects (multi-project spec, step 4.4; mockup `settings-global.html`).
@@ -201,7 +204,13 @@ function renderProjects(unregisteredBoot = false) {
   render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={['/settings/global/projects']}>
-        <AppRoutes />
+        {/* What the app shell gives every route: global settings as a dialog (the global sections
+            render inside it), the sidebar, and the list view the project home reads. */}
+        <ShellProviders dialog={<GlobalSettingsDialog />}>
+          <ListViewProvider>
+            <AppRoutes />
+          </ListViewProvider>
+        </ShellProviders>
         <Toaster />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -211,7 +220,19 @@ function renderProjects(unregisteredBoot = false) {
 
 const rows = () => document.querySelectorAll('[data-slot="project-row"]')
 const row = (id: string) => document.querySelector<HTMLElement>(`[data-slot="project-row"][data-project="${id}"]`)
-const removeButton = (id: string) => row(id)?.querySelector<HTMLButtonElement>('[data-action="project-remove"]')
+/** Remove lives in the row's actions menu now. The trigger is in the row; the menu is portalled. */
+const actionsButton = (id: string) => row(id)?.querySelector<HTMLButtonElement>('button[aria-label^="Actions for"]')
+/** Opens that menu (Radix opens on pointerdown) and returns it with its Remove item. */
+async function openActions(id: string): Promise<{ menu: HTMLElement; remove: HTMLElement }> {
+  fireEvent.pointerDown(actionsButton(id)!, { button: 0, ctrlKey: false })
+  const remove = await waitFor(() => {
+    const el = document.querySelector<HTMLElement>('[role="menu"] [data-action="project-remove"]')
+    expect(el).not.toBeNull()
+    return el!
+  })
+  return { menu: remove.closest<HTMLElement>('[role="menu"]')!, remove }
+}
+const toastTexts = () => [...document.querySelectorAll('[data-sonner-toast]')].map((toast) => toast.textContent ?? '')
 const rootInput = () => document.querySelector<HTMLInputElement>('[data-slot="projects-checkout-root"]')
 const saveRoot = () => document.querySelector<HTMLButtonElement>('[data-action="projects-save-checkout-root"]')
 const inlineError = () => document.querySelector<HTMLElement>('[data-slot="projects-checkout-root-error"]')
@@ -251,7 +272,9 @@ describe('Global settings → Projects', () => {
     expect(row('shop-backend')?.textContent).toContain('checkout')
     // The `missing` row (step 3.3 greys it out in the sidebar) is actionable HERE.
     expect(row('old-spike')?.textContent).toContain('folder not found')
-    expect(removeButton('old-spike')?.disabled).toBe(false)
+    const { remove } = await openActions('old-spike')
+    expect(remove.getAttribute('aria-disabled')).not.toBe('true')
+    expect(remove.hasAttribute('data-disabled')).toBe(false)
   })
 
   it('renders the 400 reason from the writability probe INLINE, verbatim', async () => {
@@ -348,7 +371,7 @@ describe('Global settings → Projects', () => {
     serve()
     renderProjects()
     await waitFor(() => expect(rows()).toHaveLength(3))
-    fireEvent.click(removeButton('shop-backend')!)
+    fireEvent.click((await openActions('shop-backend')).remove)
     await waitFor(() => expect(confirmButton()).not.toBeNull())
 
     // The copy is the guarantee: a user must not be able to read this as "delete my repo".
@@ -367,7 +390,7 @@ describe('Global settings → Projects', () => {
     serve()
     renderProjects()
     await waitFor(() => expect(rows()).toHaveLength(3))
-    fireEvent.click(removeButton('old-spike')!)
+    fireEvent.click((await openActions('old-spike')).remove)
     await waitFor(() => expect(confirmButton()).not.toBeNull())
     fireEvent.click(screen.getByText('Keep it'))
     await waitFor(() => expect(confirmButton()).toBeNull())
@@ -379,11 +402,11 @@ describe('Global settings → Projects', () => {
     serve({ del: { status: 409, payload: { error, runningTasks: 2 } } })
     renderProjects()
     await waitFor(() => expect(rows()).toHaveLength(3))
-    fireEvent.click(removeButton('shop-backend')!)
+    fireEvent.click((await openActions('shop-backend')).remove)
     await waitFor(() => expect(confirmButton()).not.toBeNull())
     fireEvent.click(confirmButton()!)
 
-    await waitFor(() => expect(screen.getByRole('status').textContent).toContain(error))
+    await waitFor(() => expect(toastTexts().some((text) => text.includes(error))).toBe(true))
     // Refused means untouched — the row is still there.
     expect(row('shop-backend')).not.toBeNull()
   })
@@ -646,12 +669,8 @@ describe('Global settings → Projects', () => {
       fireEvent.change(tagInput('cezar')!, { target: { value: 'nope' } })
       fireEvent.keyDown(tagInput('cezar')!, { key: 'Enter' })
 
-      // `getAllByRole`: the successful first add left its own toast up, so there are two.
-      await waitFor(() =>
-        expect(
-          screen.getAllByRole('status').some((toast) => toast.textContent?.includes('tag too long')),
-        ).toBe(true),
-      )
+      // Every toast on screen: the successful first add may have left its own up.
+      await waitFor(() => expect(toastTexts().some((text) => text.includes('tag too long'))).toBe(true))
       await waitFor(() => expect(tagChips('cezar')).toEqual(['infra']))
     })
 
@@ -679,8 +698,12 @@ describe('Global settings → Projects', () => {
     renderProjects()
     await waitFor(() => expect(rows()).toHaveLength(3))
     // The server refuses it too (it is serving that repo); disabling explains it first.
-    expect(removeButton('cezar')?.disabled).toBe(true)
-    expect(removeButton('cezar')?.title).toContain('is serving this project')
+    const { menu, remove } = await openActions('cezar')
+    expect(remove.getAttribute('aria-disabled')).toBe('true')
+    expect(menu.textContent).toContain('is serving this project')
+    // Disabled for real, not just styled so: picking it opens no confirm.
+    fireEvent.click(remove)
+    expect(confirmButton()).toBeNull()
   })
 
   /**
@@ -694,7 +717,7 @@ describe('Global settings → Projects', () => {
 
     const scratch = row('scratch')!
     expect(scratch.textContent).toContain('not registered')
-    expect(removeButton('scratch')).toBeNull()
+    expect(actionsButton('scratch')).toBeNull()
     expect(maxParallelSelect('scratch')).toBeNull()
 
     const add = scratch.querySelector<HTMLButtonElement>('[data-action="project-add-boot"]')!
@@ -706,7 +729,8 @@ describe('Global settings → Projects', () => {
       ]),
     )
     // Registered now: the row becomes an ordinary one, Remove and the cap included.
-    await waitFor(() => expect(removeButton('scratch')).not.toBeNull())
+    await waitFor(() => expect(actionsButton('scratch')).not.toBeNull())
+    expect((await openActions('scratch')).remove.textContent).toContain('Remove')
     expect(maxParallelSelect('scratch')).not.toBeNull()
     expect(await screen.findByText(/scratch added to your projects/)).not.toBeNull()
   })

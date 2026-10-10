@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useParams } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -127,11 +127,11 @@ describe('the compare columns', () => {
     expect(a?.getAttribute('data-variant')).toBe('A')
     expect(b?.getAttribute('data-variant')).toBe('B')
 
-    // The letter badge and the canonical attention grammar: review → "needs review",
-    // done → "done" (deriveAttention, not a second hand-rolled mapping).
+    // The letter badge and the canonical attention grammar: review → "Needs review",
+    // done → "Done" (deriveAttention, not a second hand-rolled mapping; sentence case now).
     expect(a?.querySelector('[data-slot="variant-letter"]')?.textContent).toBe('A')
-    expect(a?.querySelector('[data-slot="pill"]')?.textContent).toContain('needs review')
-    expect(b?.querySelector('[data-slot="pill"]')?.textContent).toContain('done')
+    expect(a?.querySelector('[data-slot="pill"]')?.textContent).toBe('Needs review')
+    expect(b?.querySelector('[data-slot="pill"]')?.textContent).toBe('Done')
 
     // Directional tokens and cost per column.
     expect(a?.textContent).toContain('IN 92.0k · OUT 4.2k')
@@ -174,13 +174,13 @@ describe('the compare columns', () => {
     expect(columns()[0]?.textContent).not.toContain('$0.31')
   })
 
-  it('says "(no changes)" and "(no progress notes)" instead of empty blocks', async () => {
+  it('says "No changes" and "No progress notes" instead of empty blocks', async () => {
     stubFetch(group(variant('A', 'done', { diffStat: '', handoffExcerpt: '' }), variant('B', 'done')))
     renderCompare()
     await waitForColumns(2)
     const [a] = columns()
-    expect(a?.querySelector('[data-slot="variant-diffstat"]')?.textContent).toBe('(no changes)')
-    expect(a?.querySelector('[data-slot="variant-progress"]')?.textContent).toBe('(no progress notes)')
+    expect(a?.querySelector('[data-slot="variant-diffstat"]')?.textContent).toBe('No changes')
+    expect(a?.querySelector('[data-slot="variant-progress"]')?.textContent).toBe('No progress notes')
   })
 
   it('stacks to one column on mobile: the grid is 1-col by default, md: opens the columns', async () => {
@@ -196,7 +196,12 @@ describe('the compare columns', () => {
     stubFetch(group(variant('A', 'done'), variant('B', 'done'), variant('C', 'failed')))
     renderCompare()
     await waitForColumns(3)
-    expect(document.querySelector('[data-slot="compare-columns"]')?.className).toContain('md:grid-cols-3')
+    // Three columns need more room than two: the three-up grid opens at lg, and until then the
+    // columns stay stacked rather than squeezing into the two-up md layout.
+    const grid = document.querySelector('[data-slot="compare-columns"]')
+    expect(grid?.className).toContain('grid-cols-1')
+    expect(grid?.className).toContain('lg:grid-cols-3')
+    expect(grid?.className).not.toContain('md:grid-cols-2')
   })
 
   it('renders the 404 as a neutral CenteredState with a way home', async () => {
@@ -295,7 +300,12 @@ describe('the full diffs', () => {
     // Collapsed by default: no diff has been fetched yet.
     expect(sent.filter((r) => r.path.endsWith('/diff'))).toHaveLength(0)
 
-    fireEvent.click(screen.getByRole('button', { name: /Variant A — full diff/ }))
+    // Each row of the "Full diffs" list is its variant's trigger (the section title carries
+    // the "full diff" wording the button used to repeat).
+    expect(screen.getByRole('heading', { name: 'Full diffs' })).toBeTruthy()
+    const triggerA = within(sections[0] as HTMLElement).getByRole('button', { name: 'Variant A' })
+    expect(triggerA.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(triggerA)
     await waitFor(() => expect(document.querySelector('[data-slot="diff-file"]')).not.toBeNull())
     expect(document.querySelector('[data-slot="diff-file-path"]')?.textContent).toBe('notes.md')
     // Only the expanded variant's diff was fetched — the review gate's cards, per variant.

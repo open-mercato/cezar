@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import type { TrackerAssociation, TrackerItem } from '@open-mercato/cezar-api-client'
 import { createQueryClient } from '@/api/query-client'
 import { queryKeys } from '@/api/queries'
+import { ShellWithSidebar } from '@/test/shell-with-sidebar'
 import { TrackerRoute } from './tracker'
 
 vi.mock('@/api/ws', () => ({ subscribeTopic: () => () => {} }))
@@ -54,8 +55,11 @@ it.each([true, false])('blocks handoff during metadata reconciliation (source ch
     return new Promise<Response>(() => {})
   }))
   render(<MemoryRouter initialEntries={['/tracker/OPS-1']}><QueryClientProvider client={client}>
-    <Routes><Route path="/tracker/:id?" element={<TrackerRoute />} /></Routes>
+    <ShellWithSidebar><Routes><Route path="/tracker/:id?" element={<TrackerRoute />} /></Routes></ShellWithSidebar>
   </QueryClientProvider></MemoryRouter>)
+  // The hand-off composer is a dialog over the issue, opened from its header.
+  const openHand = async () => fireEvent.click(await screen.findByRole('button', { name: 'Hand to agent' }))
+  await openHand()
   fireEvent.change(await screen.findByLabelText('Custom instruction'), { target: { value: 'A-only instruction' } })
   replaced = true
   // Same sequence as the tracker-changed SSE handler, with metadata deliberately delayed.
@@ -85,6 +89,12 @@ it.each([true, false])('blocks handoff during metadata reconciliation (source ch
     resolveAssociation(json({ association: next }))
     await invalidation
   })
+  // A changed source remounts the browser for the new scope, which takes the open composer with
+  // it; the same source keeps it open. Either way the assertions below read the composer.
+  if (changed) {
+    expect(await screen.findByText('B description')).toBeTruthy()
+    await openHand()
+  }
   await waitFor(() => expect((screen.getByLabelText('Custom instruction') as HTMLTextAreaElement).value).toBe(changed ? '' : 'A-only instruction'))
   await waitFor(() => expect((screen.getByRole('button', { name: 'Run agent on this issue' }) as HTMLButtonElement).disabled).toBe(false))
   client.clear()

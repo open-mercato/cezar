@@ -14,7 +14,7 @@ function layout(ids: TileId[]) {
   return (id: TileId) =>
     document
       .querySelector(`[data-dashboard-module="${id}"]`)!
-      .classList.contains('lg:col-span-2')
+      .classList.contains('@3xl:col-span-2')
 }
 it('pairs adjacent compact widgets and expands an unpaired one before a table', () => {
   const wide = layout(['overview', 'needsYou', 'recent', 'fleet', 'automations', 'portfolio'])

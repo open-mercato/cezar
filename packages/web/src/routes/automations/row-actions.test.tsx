@@ -15,7 +15,7 @@ function LocationProbe() {
   return <span data-testid="location">{useLocation().pathname}</span>
 }
 
-/** The cell sits in a clickable row — every action must stop there, or a pause would also navigate. */
+/** The cell sits in a clickable row — every action must stop there, or a run would also navigate. */
 function renderActions(automation = NIGHTLY, actions = mockActions()) {
   const rowClick = vi.fn()
   render(
@@ -36,45 +36,53 @@ async function openMenu(): Promise<HTMLElement> {
 }
 
 describe('RowActions', () => {
-  it('runs now without opening the row', () => {
+  it('runs now from the menu without opening the row', async () => {
     const { actions, rowClick } = renderActions()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Run now' }))
+    fireEvent.click(within(await openMenu()).getByRole('menuitem', { name: 'Run now' }))
     expect(actions.runNow).toHaveBeenCalledWith(NIGHTLY)
     expect(rowClick).not.toHaveBeenCalled()
   })
 
-  it('offers Pause for an enabled automation and Enable for a paused one', () => {
-    const { actions } = renderActions()
-    fireEvent.click(screen.getByRole('button', { name: 'Pause' }))
-    expect(actions.toggleEnabled).toHaveBeenCalledWith(NIGHTLY)
-
-    cleanup()
-    const paused = renderActions(FLAKY)
-    expect(screen.queryByRole('button', { name: 'Pause' })).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Enable' }))
-    expect(paused.actions.toggleEnabled).toHaveBeenCalledWith(FLAKY)
+  it('leaves Pause and Enable to the row switch — the cell is one menu', async () => {
+    renderActions()
+    expect(screen.getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual(['More'])
+    const menu = await openMenu()
+    expect(within(menu).queryByRole('menuitem', { name: 'Pause' })).toBeNull()
+    expect(within(menu).queryByRole('menuitem', { name: 'Enable' })).toBeNull()
   })
 
-  it('disables the direct actions while a mutation is in flight', () => {
-    renderActions(NIGHTLY, mockActions({ busy: true }))
+  it('disables the launching actions while a mutation is in flight', async () => {
+    const tracker = { ...FLAKY, kind: 'tracker' as const }
+    const { actions } = renderActions(tracker, mockActions({ busy: true }))
+    const menu = await openMenu()
 
-    expect(screen.getByRole('button', { name: 'Run now' })).toHaveProperty('disabled', true)
-    expect(screen.getByRole('button', { name: 'Pause' })).toHaveProperty('disabled', true)
+    const runNow = within(menu).getByRole('menuitem', { name: 'Run now' })
+    const preview = within(menu).getByRole('menuitem', { name: 'Preview matches' })
+    expect(runNow.getAttribute('aria-disabled')).toBe('true')
+    expect(preview.getAttribute('aria-disabled')).toBe('true')
+    fireEvent.click(runNow)
+    fireEvent.click(preview)
+    expect(actions.runNow).not.toHaveBeenCalled()
+    expect(actions.preview).not.toHaveBeenCalled()
+    // Navigation stays reachable — only what launches waits for the mutation.
+    expect(within(menu).getByRole('menuitem', { name: 'Edit' }).getAttribute('aria-disabled')).toBeNull()
   })
 
-  it('lists the More menu in the design order with Delete set apart', async () => {
+  it('lists the menu in the design order with Delete set apart', async () => {
     const { rowClick } = renderActions()
     const menu = await openMenu()
 
+    // A schedule has nothing to preview.
     expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'Run now',
       'Edit',
       'View log',
       'Duplicate',
       'Copy as CLI',
       'Delete',
     ])
-    expect(menu.querySelector('[data-slot="dropdown-menu-separator"]')).not.toBeNull()
+    expect(menu.querySelectorAll('[data-slot="dropdown-menu-separator"]')).toHaveLength(2)
     expect(within(menu).getByRole('menuitem', { name: 'Delete' }).getAttribute('data-variant')).toBe('destructive')
     expect(rowClick).not.toHaveBeenCalled()
   })
@@ -131,10 +139,12 @@ describe('RowActions', () => {
   })
 })
 
-it('offers preview for a tracker without launching or opening its row', () => {
+it('offers preview for a tracker without launching or opening its row', async () => {
   const tracker = { ...FLAKY, kind: 'tracker' as const }
   const { actions, rowClick } = renderActions(tracker)
-  fireEvent.click(screen.getByRole('button', { name: 'Preview matches' }))
+  const menu = await openMenu()
+  expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent).slice(0, 2)).toEqual(['Run now', 'Preview matches'])
+  fireEvent.click(within(menu).getByRole('menuitem', { name: 'Preview matches' }))
   expect(actions.preview).toHaveBeenCalledWith(tracker)
   expect(actions.runNow).not.toHaveBeenCalled()
   expect(rowClick).not.toHaveBeenCalled()

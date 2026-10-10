@@ -5,14 +5,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import { queryKeys } from '@/api/queries'
+import { ShellWithSidebar } from '@/test/shell-with-sidebar'
 import { TrackerRoute, trackerDetailReadyForDrag } from './tracker'
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
+/** The hand-off composer is a dialog over the issue, opened from its header. */
+const openHand = async () => fireEvent.click(await screen.findByRole('button', { name: 'Hand to agent' }))
+
 describe('Tracker route', () => {
   it('uses vendor search and appends cursor pages without losing earlier issues', async () => {
-    // This case exercises the mobile list; desktop detail also observes the detail cache.
-    vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
+    // The bare list: no issue is open, so nothing but the row's own preload touches the detail
+    // cache the drag assertions below read. (This used to need the phone layout — on desktop the
+    // legacy tab opened the first issue by itself. Nothing is opened implicitly any more.)
     const requests: string[] = []
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
@@ -31,7 +36,7 @@ describe('Tracker route', () => {
     render(
       <MemoryRouter initialEntries={['/tracker']}>
         <QueryClientProvider client={client}>
-          <Routes><Route path="/tracker" element={<TrackerRoute />} /></Routes>
+          <ShellWithSidebar><Routes><Route path="/tracker" element={<TrackerRoute />} /></Routes></ShellWithSidebar>
         </QueryClientProvider>
       </MemoryRouter>,
     )
@@ -99,13 +104,16 @@ describe('Tracker route', () => {
     render(
       <MemoryRouter initialEntries={['/tracker/OPS-7']}>
         <QueryClientProvider client={createQueryClient()}>
-          <Routes><Route path="/tracker/:id" element={<TrackerRoute />} /></Routes>
+          <ShellWithSidebar><Routes><Route path="/tracker/:id" element={<TrackerRoute />} /></Routes></ShellWithSidebar>
         </QueryClientProvider>
       </MemoryRouter>,
     )
     expect(await screen.findByText(new RegExp(tail))).toBeTruthy()
     expect(document.querySelector('script')).toBeNull()
-    expect(screen.getByText(/description was truncated/i)).toBeTruthy()
+    // The detail itself flags the lossy snapshot and points at the composer for the specifics.
+    expect(screen.getByText('This snapshot is incomplete.')).toBeTruthy()
+    await openHand()
+    expect(await screen.findByText(/description was truncated/i)).toBeTruthy()
     expect(screen.getByText(/unsupported content/i)).toBeTruthy()
     expect((screen.getByRole('button', { name: /Run agent/i }) as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(screen.getByRole('checkbox', { name: /I understand/i }))
@@ -125,12 +133,13 @@ describe('Tracker route', () => {
     render(
       <MemoryRouter initialEntries={['/tracker/LIN-2']}>
         <QueryClientProvider client={createQueryClient()}>
-          <Routes><Route path="/tracker/:id" element={<TrackerRoute />} /></Routes>
+          <ShellWithSidebar><Routes><Route path="/tracker/:id" element={<TrackerRoute />} /></Routes></ShellWithSidebar>
         </QueryClientProvider>
       </MemoryRouter>,
     )
     expect(await screen.findByText(/No description was provided/i)).toBeTruthy()
-    expect(screen.getByRole('textbox', { name: /Supplemental context/i })).toBeTruthy()
+    await openHand()
+    expect(await screen.findByRole('textbox', { name: /Supplemental context/i })).toBeTruthy()
     expect(screen.queryByText(/I understand the agent receives/i)).toBeNull()
   })
 
@@ -144,7 +153,7 @@ describe('Tracker route', () => {
       if (new URL(url, 'http://localhost').pathname.endsWith('/tracker/OPS-8')) { detailCalls += 1; return new Response(JSON.stringify({ available: false, code: 'rate_limited', reason: 'Slow down', retryAfterSeconds: 1 }), { status: 200 }) }
       return new Promise<never>(() => {})
     }))
-    render(<MemoryRouter initialEntries={['/tracker/OPS-8']}><QueryClientProvider client={createQueryClient()}><Routes><Route path="/tracker/:id" element={<TrackerRoute />} /></Routes></QueryClientProvider></MemoryRouter>)
+    render(<MemoryRouter initialEntries={['/tracker/OPS-8']}><QueryClientProvider client={createQueryClient()}><ShellWithSidebar><Routes><Route path="/tracker/:id" element={<TrackerRoute />} /></Routes></ShellWithSidebar></QueryClientProvider></MemoryRouter>)
     const retry = await screen.findByRole('button', { name: 'Retry in 1s' }) as HTMLButtonElement
     expect(retry.disabled).toBe(true)
     expect(screen.getByRole('link', { name: /Tracker settings/i }).getAttribute('href')).toBe('/settings/tracker')

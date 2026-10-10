@@ -9,8 +9,12 @@ import type {
   AgentProfilesResponse,
   WorkspaceConfigResponse,
 } from '@open-mercato/cezar-api-client'
+import { GlobalSettingsDialog } from '@/components/global-settings-dialog'
+import { ListViewProvider } from '@/components/list-view'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
+import { ShellProviders } from '@/test/shell-providers'
+import { pickOption, selectValue } from './select-test-utils'
 
 /**
  * Global settings → Agent accounts, "Defaults for new projects" (spec 2026-07-29-agent-profiles):
@@ -152,7 +156,13 @@ function renderAccounts() {
   render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={['/settings/global/accounts']}>
-        <AppRoutes />
+        {/* What the app shell gives every route: global settings as a dialog (the global sections
+            render inside it), the sidebar, and the list view the project home reads. */}
+        <ShellProviders dialog={<GlobalSettingsDialog />}>
+          <ListViewProvider>
+            <AppRoutes />
+          </ListViewProvider>
+        </ShellProviders>
         <Toaster />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -309,11 +319,11 @@ describe('Agent accounts → Defaults for new projects', () => {
     renderAccounts()
 
     const select = () =>
-      document.querySelector<HTMLSelectElement>('[data-slot="accounts-default-model"][data-runner="claude"]')
+      document.querySelector<HTMLButtonElement>('[data-slot="accounts-default-model"][data-runner="claude"]')
     await waitFor(() => expect(select()).not.toBeNull())
-    expect(select()!.value).toBe('opus')
+    expect(selectValue(select())).toBe('opus')
 
-    fireEvent.change(select()!, { target: { value: '' } })
+    pickOption(select()!, 'auto (default)')
     await waitFor(() => expect(configPuts()).toHaveLength(1))
     // `null`, not an absent key: a partial patch cannot say "forget this" by omission, and a stale
     // value would keep seeding every unconfigured repo.

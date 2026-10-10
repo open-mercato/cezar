@@ -249,7 +249,8 @@ describe('SelfUpdateDialog', () => {
     applySelfUpdate.mockClear()
     applySelfUpdate.mockReturnValue(new Promise(() => {}))
     renderDialog({ channel: 'development' })
-    fireEvent.click(await screen.findByRole('tab', { name: /Pull requests/ }))
+    // A Radix tab is picked on pointer DOWN (and on focus), not on the click that follows.
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: /Pull requests/ }), { button: 0 })
     const list = screen.getByRole('listbox', { name: 'Pull requests' })
     // A PR without a build is hidden until asked for.
     expect(within(list).getAllByRole('option')).toHaveLength(1)

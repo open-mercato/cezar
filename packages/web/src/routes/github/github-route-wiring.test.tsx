@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import { AppRoutes } from '@/routes'
+import { ShellWithSidebar } from '@/test/shell-with-sidebar'
 
 /**
  * The GitHub tab's ROUTE WIRING, tested through the real `AppRoutes` (#730).
@@ -133,10 +134,9 @@ function stubServer(kind: 'issue' | 'pr') {
   )
 }
 
-/** The URL has to be asserted, not assumed. With no `:n` the tab already renders `searchHits[0]`
- *  in the detail pane, so "the closed issue is on screen" is true BEFORE the navigation too — a
- *  click that silently failed to navigate would sail past that assertion while the real defect
- *  (what happens on the hop) went untested. */
+/** The URL has to be asserted, not assumed: the hit's title is on screen (in its list row) BEFORE
+ *  the navigation too, so a click that silently failed to navigate must not be able to pass for
+ *  the hop this file is about. */
 function LocationProbe() {
   const location = useLocation()
   return <output data-testid="location">{location.pathname}</output>
@@ -146,7 +146,11 @@ function renderApp(entry: string) {
   render(
     <QueryClientProvider client={createQueryClient()}>
       <MemoryRouter initialEntries={[entry]}>
-        <AppRoutes />
+        {/* `AppRoutes` is the route table without the shell around it. The search box and the
+            hits live in the shell's contextual sidebar, so the test supplies that host. */}
+        <ShellWithSidebar>
+          <AppRoutes />
+        </ShellWithSidebar>
         <LocationProbe />
       </MemoryRouter>
     </QueryClientProvider>,

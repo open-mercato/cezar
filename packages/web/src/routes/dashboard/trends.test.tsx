@@ -79,6 +79,9 @@ afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
 })
+// jsdom lays nothing out and so has no `scrollIntoView`, which an opening Select calls on the
+// option it is showing.
+Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: () => {} })
 it('renders per-metric trend charts and the throughput summary', async () => {
   setup()
   expect((await screen.findAllByText('Reported USD')).length).toBeGreaterThan(0)
@@ -107,10 +110,22 @@ it('requests only 7d/30d and refetches on period change', async () => {
   const { calls } = setup()
   await screen.findByText('Completed tasks')
   expect(calls.every((u) => u.searchParams.get('period') !== 'all')).toBe(true)
-  fireEvent.change(screen.getByLabelText('Period'), { target: { value: '30d' } })
+  // The filter is the cockpit's Select: opened by keyboard (jsdom has no real pointer), and a
+  // choice is made by its label.
+  const period = screen.getByRole('combobox', { name: 'Period' })
+  expect(period.getAttribute('data-export-filter')).toBe('Last 7 days')
+  fireEvent.keyDown(period, { key: 'ArrowDown' })
+  // Two windows are offered and nothing else — there is no "All time" to ask a daily chart for.
+  expect((await screen.findAllByRole('option')).map((option) => option.textContent)).toEqual([
+    'Last 7 days',
+    'Last 30 days',
+  ])
+  fireEvent.click(screen.getByRole('option', { name: 'Last 30 days' }))
   await waitFor(() =>
     expect(calls.some((u) => u.searchParams.get('period') === '30d')).toBe(true),
   )
+  expect(calls.every((u) => u.searchParams.get('period') !== 'all')).toBe(true)
+  expect(screen.getByRole('combobox', { name: 'Period' }).getAttribute('data-export-filter')).toBe('Last 30 days')
 })
 
 it('keeps unknown daily amounts distinct from zero and names chart controls', async () => {
@@ -163,7 +178,7 @@ it('replaces empty daily charts with a compact state without exporting hidden da
   expect(screen.queryByRole('table')).toBeNull()
   const rows = JSON.parse(container.querySelector<HTMLElement>('[data-dashboard-export]')!.dataset.dashboardExport!)
   expect(rows).toEqual([])
-  expect(screen.getByRole('combobox', { name: 'Period' })).toHaveProperty('value', '7d')
+  expect(screen.getByRole('combobox', { name: 'Period' }).getAttribute('data-export-filter')).toBe('Last 7 days')
 })
 it('shows throughput for completed tasks created before the selected period', async () => {
   const older = fixture()

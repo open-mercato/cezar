@@ -3,6 +3,7 @@ import { MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { HealthResponse } from '@open-mercato/cezar-api-client'
+import { ShellProviders } from '@/test/shell-providers'
 import { AppShell } from './app-shell'
 import { ThemeProvider } from './theme-provider'
 import { ToolsMenu, forgeNote, toolsBlocker, toolsTooltip } from './tools-menu'
@@ -279,27 +280,47 @@ describe('ToolsMenu in the app shell', () => {
     return render(
       <ThemeProvider>
         <MemoryRouter initialEntries={['/']}>
-          <AppShell toolsMenu={<ToolsMenu health={HEALTH} />}>
-            <p>route content</p>
-          </AppShell>
+          <ShellProviders>
+            <AppShell toolsMenu={<ToolsMenu health={HEALTH} />}>
+              <p>route content</p>
+            </AppShell>
+          </ShellProviders>
         </MemoryRouter>
       </ThemeProvider>
     )
   }
+  const topBar = () => document.querySelector('[data-slot="top-bar"]') as HTMLElement
 
-  it('sits in the desktop sidebar footer', () => {
+  // The tools status moved out of the sidebar footer: it is a glance about the whole cockpit, so
+  // it sits in the panel's top bar, beside search — in view on every page, at every width.
+  it('sits in the top bar', () => {
     renderShell()
-    const footer = document.querySelector(
-      '[data-slot="sidebar"] [data-slot="sidebar-footer"]'
-    ) as HTMLElement
-    expect(footer.querySelector('[data-slot="tools-menu-trigger"]')).not.toBeNull()
+    expect(topBar().querySelector('[data-slot="tools-menu"] [data-slot="tools-menu-trigger"]')).not.toBeNull()
+    // Exactly one: it is not repeated on the rail or in the cockpit menu.
+    expect(document.querySelectorAll('[data-slot="tools-menu-trigger"]')).toHaveLength(1)
+    expect(document.querySelector('[data-slot="rail"] [data-slot="tools-menu-trigger"]')).toBeNull()
   })
 
-  it('comes along into the mobile drawer — same component, both framings', async () => {
-    renderShell()
-    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }))
+  it('stays in the top bar on a phone — one component, not a second copy tucked into the sheet', async () => {
+    // A phone is a width: the shell's breakpoint hook reads `innerWidth` (see app-shell.test.tsx).
+    const width = window.innerWidth
+    ;(window as { innerWidth: number }).innerWidth = 390
+    try {
+      renderShell()
+      expect(topBar().querySelector('[data-slot="tools-menu-trigger"]')).not.toBeNull()
+      fireEvent.click(within(topBar()).getByRole('button', { name: 'Toggle Sidebar' }))
 
-    const drawer = await screen.findByRole('dialog', { name: 'Navigation' })
-    expect(drawer.querySelector('[data-slot="tools-menu-trigger"]')).not.toBeNull()
+      const sheet = await screen.findByRole('dialog', { name: 'Sidebar' })
+      expect(sheet.querySelector('[data-slot="tools-menu-trigger"]')).toBeNull()
+      expect(document.querySelectorAll('[data-slot="tools-menu-trigger"]')).toHaveLength(1)
+    } finally {
+      ;(window as { innerWidth: number }).innerWidth = width
+    }
+  })
+
+  it('still opens from there', async () => {
+    renderShell()
+    const menu = await openMenu()
+    expect(within(menu).getByText('Installed tools')).toBeTruthy()
   })
 })

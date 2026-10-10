@@ -6,7 +6,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
 import type { SkillsUpdateState, WorkspaceConfigResponse } from '@open-mercato/cezar-api-client'
+import { GlobalSettingsDialog } from '@/components/global-settings-dialog'
+import { ListViewProvider } from '@/components/list-view'
 import { AppRoutes } from '@/routes'
+import { ShellProviders } from '@/test/shell-providers'
 
 let requests: Array<{ method: string; url: string; body?: unknown }> = []
 
@@ -106,7 +109,13 @@ function renderSkills() {
   render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={['/settings/global/skills']}>
-        <AppRoutes />
+        {/* What the app shell gives every route: global settings as a dialog (the global sections
+            render inside it), the sidebar, and the list view the project home reads. */}
+        <ShellProviders dialog={<GlobalSettingsDialog />}>
+          <ListViewProvider>
+            <AppRoutes />
+          </ListViewProvider>
+        </ShellProviders>
       </MemoryRouter>
     </QueryClientProvider>,
   )
@@ -127,7 +136,10 @@ describe('Global settings → Skills', () => {
     })
     expect(toggle.getAttribute('aria-checked')).toBe('true')
     expect(screen.getByText('On (default)')).toBeTruthy()
-    expect(screen.getByText(/CEZ_SKILLS_AUTO_UPDATE supplies/)).toBeTruthy()
+    // The variable is set in code type, so the sentence spans two elements.
+    expect(screen.getByText('CEZ_SKILLS_AUTO_UPDATE').parentElement?.textContent).toMatch(
+      /CEZ_SKILLS_AUTO_UPDATE\s+supplies the inherited default/,
+    )
     expect(await screen.findByText('No tracked Open Mercato installation found.')).toBeTruthy()
     expect((screen.getByRole('button', { name: 'Use default' }) as HTMLButtonElement).disabled).toBe(true)
   })

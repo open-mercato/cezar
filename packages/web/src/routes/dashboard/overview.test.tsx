@@ -29,7 +29,7 @@ const fixture: DashboardOverview = {
 function Location() {
   return <output data-testid="overview-location">{useLocation().search}</output>
 }
-function setup(active = true, entry = '', initial = fixture) {
+function setup(active = true, entry = '', initial = fixture, search = '') {
   const calls: URL[] = []
   let expired = false
   vi.stubGlobal(
@@ -46,7 +46,7 @@ function setup(active = true, entry = '', initial = fixture) {
   const client = createQueryClient()
   const view = (isActive: boolean) => (
     <QueryClientProvider client={client}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[`/${search}`]}>
         <Location />
         <DashboardEntryContext.Provider value={entry}><Overview active={isActive}>
           {(modules) => (
@@ -101,11 +101,30 @@ it('closes the outcome Sheet when the view goes inactive, so it never reopens on
   expect(screen.queryByRole('dialog')).toBeNull()
 })
 
-it('writes the reporting period into the URL', async () => {
-  setup()
+it('reads the reporting period from the URL', async () => {
+  // The control that WRITES `?period=` moved to the page header (index.tsx; pinned there by
+  // dashboard.test.tsx's "replacing the outcomes period"). What stays here is the other half of
+  // that contract: this module reports whatever period the URL names, and says so in its export.
+  const { calls } = setup(true, '', fixture, '?period=30d')
   await screen.findByRole('button', { name: 'Completed: 5' })
-  fireEvent.change(screen.getByLabelText('Outcomes period'), { target: { value: '30d' } })
+  expect(screen.queryByLabelText('Outcomes period')).toBeNull()
   expect(screen.getByTestId('overview-location').textContent).toBe('?period=30d')
+  const overview = calls.filter((url) => url.pathname.includes('/dashboard/overview'))
+  expect(overview.length).toBeGreaterThan(0)
+  expect(overview.every((url) => url.searchParams.get('period') === '30d')).toBe(true)
+  expect(document.querySelector('[data-export-context]')!.getAttribute('data-export-context')).toBe(
+    'Outcomes period: Last 30 days',
+  )
+})
+it('falls back to seven days when the URL names no period', async () => {
+  const { calls } = setup()
+  await screen.findByRole('button', { name: 'Completed: 5' })
+  const overview = calls.filter((url) => url.pathname.includes('/dashboard/overview'))
+  expect(overview.length).toBeGreaterThan(0)
+  expect(overview.every((url) => url.searchParams.get('period') === '7d')).toBe(true)
+  expect(document.querySelector('[data-export-context]')!.getAttribute('data-export-context')).toBe(
+    'Outcomes period: Last 7 days',
+  )
 })
 
 it.each(['task', 'project'])('disables historical outcome navigation after %s removal', async (kind) => {

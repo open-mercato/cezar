@@ -6,8 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import type { HealthResponse, RunRecord } from '@open-mercato/cezar-api-client'
-import { ListViewProvider } from '@/components/list-view'
+import { ContextSidebarContext } from '@/components/context-sidebar'
+import { ListViewProvider, useListView } from '@/components/list-view'
 import { TaskQuickList, TaskQuickListContainer } from '@/components/task-quick-list'
+import { TasksSidebar } from '@/components/tasks-sidebar'
+import { ShellProviders } from '@/test/shell-providers'
 
 const NOW = Date.parse('2026-07-14T12:00:00.000Z')
 const ago = (ms: number) => new Date(NOW - ms).toISOString()
@@ -592,43 +595,19 @@ describe('TaskQuickList', () => {
     })
   })
 
-  describe('the Active/Archived tabs', () => {
+  // The list no longer carries its own Active/Archived tabs — it FOLLOWS the view it is handed
+  // (the switch moved to the Tasks sidebar header; see "the Active/Archived tabs" below).
+  describe('the Active/Archived view', () => {
     const runs = () => [
       run({ id: 'a', status: 'running' }),
       run({ id: 'b', status: 'waiting' }),
       run({ id: 'c', status: 'done', archived: true }),
     ]
 
-    it('shows counts and which view is on', () => {
+    it('carries no second copy of the switch', () => {
       renderList({ runs: runs(), view: 'active' })
-      const active = screen.getByRole('button', { name: /Active/ })
-      const archived = screen.getByRole('button', { name: /Archived/ })
-      expect(active.textContent).toBe('Active2')
-      expect(archived.textContent).toBe('Archived1')
-      expect(active.getAttribute('aria-pressed')).toBe('true')
-      expect(archived.getAttribute('aria-pressed')).toBe('false')
-    })
-
-    it('reports the view the user picked', () => {
-      const { onViewChange } = renderList({ runs: runs(), view: 'active' })
-      fireEvent.click(screen.getByRole('button', { name: /Archived/ }))
-      expect(onViewChange).toHaveBeenCalledWith('archived')
-    })
-
-    it('renders no count for an empty bucket', () => {
-      renderList({ runs: [run({ status: 'running' })] })
-      // "Archived 0" is noise — an empty bucket says so by being empty.
-      expect(screen.getByRole('button', { name: /Archived/ }).textContent).toBe('Archived')
-    })
-
-    it('flags waiting runs on the Active tab only while you are looking elsewhere', () => {
-      const { unmount } = renderList({ runs: runs(), view: 'archived' })
-      expect(document.querySelector('[data-slot="waiting-dot"]')?.getAttribute('data-tone')).toBe('pending')
-      unmount()
-
-      // On the Active view the rows themselves say it — the tab dot would be noise.
-      renderList({ runs: runs(), view: 'active' })
-      expect(document.querySelector('[data-slot="waiting-dot"]')).toBeNull()
+      expect(screen.queryByRole('tab')).toBeNull()
+      expect(screen.queryByRole('button', { name: /Archived/ })).toBeNull()
     })
 
     it('shows the archived view when asked', () => {
@@ -739,13 +718,128 @@ describe('TaskQuickListContainer', () => {
     )
   })
 
-  it('drives the shared Active/Archived view', async () => {
-    renderContainer([run({ id: 'a', status: 'running' }), run({ id: 'b', status: 'done', archived: true })])
+  it('follows the shared Active/Archived view', async () => {
+    // The switch is someone else's control now (the Tasks sidebar header, the Tasks table); the
+    // container's part is to repaint when that one shared value changes.
+    function PickArchived() {
+      const [, setView] = useListView()
+      return <button onClick={() => setView('archived')}>pick archived</button>
+    }
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const body =
+        String(input) === '/api/v1/health'
+          ? HEALTH
+          : [run({ id: 'a', status: 'running' }), run({ id: 'b', status: 'done', archived: true })]
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/']}>
+          <ListViewProvider>
+            <PickArchived />
+            <TaskQuickListContainer />
+          </ListViewProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    await waitFor(() => expect(row('a')).not.toBeNull())
+    expect(row('b')).toBeNull()
 
-    fireEvent.click(await screen.findByRole('button', { name: /Archived/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'pick archived' }))
 
     await waitFor(() => expect(row('b')).not.toBeNull())
     expect(row('a')).toBeNull()
+  })
+})
+
+/**
+ * The Active | Archived switch. It used to sit on top of the quick-list itself; the redesign moved
+ * it into the Tasks sidebar's header (`TasksSidebar`), as shadcn tabs over the one shared
+ * `useListView()` value, and the list below it follows.
+ */
+describe('the Active/Archived tabs (Tasks sidebar)', () => {
+  const fetchMock = vi.fn<typeof fetch>()
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock)
+  })
+
+  afterEach(() => {
+    cleanup()
+    fetchMock.mockReset()
+    vi.unstubAllGlobals()
+  })
+
+  const runs = () => [
+    run({ id: 'a', status: 'running' }),
+    run({ id: 'b', status: 'waiting' }),
+    run({ id: 'c', status: 'done', archived: true }),
+  ]
+
+  /** `TasksSidebar` portals itself into the shell's contextual sidebar; this is that slot. */
+  function renderSidebar(list: RunRecord[]) {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const body = String(input) === '/api/v1/health' ? HEALTH : list
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+    const slot = document.createElement('div')
+    const utils = render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/']}>
+          <ShellProviders>
+            <ListViewProvider>
+              <ContextSidebarContext.Provider value={{ node: slot, register: () => () => {} }}>
+                <TasksSidebar />
+              </ContextSidebarContext.Provider>
+            </ListViewProvider>
+          </ShellProviders>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    utils.container.appendChild(slot)
+    return utils
+  }
+
+  it('shows counts and which view is on', async () => {
+    renderSidebar(runs())
+    const active = screen.getByRole('tab', { name: /Active/ })
+    const archived = screen.getByRole('tab', { name: /Archived/ })
+    await waitFor(() => expect(active.textContent).toBe('Active2'))
+    expect(archived.textContent).toBe('Archived1')
+    expect(active.getAttribute('aria-selected')).toBe('true')
+    expect(archived.getAttribute('aria-selected')).toBe('false')
+  })
+
+  it('switches the list below it to the view the user picked', async () => {
+    renderSidebar(runs())
+    await waitFor(() => expect(row('a')).not.toBeNull())
+    expect(row('c')).toBeNull()
+
+    // A Radix tab is picked on pointer DOWN (and on focus), not on the click that follows.
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /Archived/ }), { button: 0 })
+
+    await waitFor(() => expect(row('c')).not.toBeNull())
+    expect(row('a')).toBeNull()
+    expect(screen.getByRole('tab', { name: /Archived/ }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByRole('tab', { name: /Active/ }).getAttribute('aria-selected')).toBe('false')
+  })
+
+  it('declares the container the rows size their metadata against', async () => {
+    // The width-priority rule in `task-quick-list.tsx` drops metadata with an
+    // `@min-[…]/sidebar:` query; without this container it has nothing to query. (It used to be
+    // declared by the app shell's own sidebar column; the list's new home declares it now.)
+    renderSidebar(runs())
+    await waitFor(() => expect(row('a')).not.toBeNull())
+    const container = row('a')!.closest('[data-slot="task-quick-list"]') as HTMLElement
+    expect(container).not.toBeNull()
+    expect(container.classList.contains('@container/sidebar')).toBe(true)
+  })
+
+  it('renders no count for an empty bucket', async () => {
+    renderSidebar([run({ id: 'only', status: 'running' })])
+    await waitFor(() => expect(screen.getByRole('tab', { name: /Active/ }).textContent).toBe('Active1'))
+    // "Archived 0" is noise — an empty bucket says so by being empty.
+    expect(screen.getByRole('tab', { name: /Archived/ }).textContent).toBe('Archived')
   })
 })
 

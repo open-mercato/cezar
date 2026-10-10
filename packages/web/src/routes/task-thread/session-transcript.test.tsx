@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render } from '@testing-library/react'
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -293,7 +293,9 @@ describe('transcript adapters and row building', () => {
           } as ThreadState)}
         /></QueryClientProvider>,
       )
-      expect(document.querySelector('[data-slot="user-bubble"] [data-slot="message-time"]')).not.toBeNull()
+      // The stamp sits on the quiet line under the bubble, not inside it.
+      expect(document.querySelector('[data-slot="user-message"] [data-slot="message-time"]')).not.toBeNull()
+      expect(document.querySelector('[data-slot="user-bubble"] [data-slot="message-time"]')).toBeNull()
       expect(document.querySelector('[data-slot="turn-time"]')?.textContent).toContain('· 4m 12s')
     })
   })
@@ -481,7 +483,7 @@ describe('SessionTranscript', () => {
     expect(document.querySelector('[data-slot="tool-nested"]')?.textContent).toContain('npm test')
   })
 
-  it('keeps canonical output, errors, diffs, and exit codes in the agent panel', () => {
+  it('keeps canonical output, errors, diffs, and exit codes in the agent panel', async () => {
     render(
       <SessionTranscript
         runId="r1"
@@ -502,11 +504,13 @@ describe('SessionTranscript', () => {
       />,
     )
     const trigger = document.querySelector('[data-slot="tool-card"] button')!
-    expect(trigger.textContent).toContain('1')
+    expect(trigger.querySelector('[data-slot="tool-exit"]')?.textContent).toBe('exit 1')
     fireEvent.click(trigger)
     const card = document.querySelector('[data-slot="tool-card"]')!
     expect(card.textContent).toContain('1 test passed')
     expect(card.textContent).toContain('1 test failed')
+    // The diff renders on the shared (lazily loaded) Diff surface.
+    await waitFor(() => expect(card.querySelector('[data-slot="diff-file"]')).not.toBeNull())
     expect(card.textContent).toContain('src/session.ts')
   })
 

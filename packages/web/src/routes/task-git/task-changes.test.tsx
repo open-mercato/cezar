@@ -144,7 +144,8 @@ describe('the Changes tab route', () => {
       current: a.getAttribute('aria-current'),
     }))
     expect(tabs).toEqual([
-      { text: 'Session', href: '/tasks/r1', current: null },
+      // The transcript's tab is "Chat" now (it read "Session").
+      { text: 'Chat', href: '/tasks/r1', current: null },
       { text: 'Changes', href: '/tasks/r1/changes', current: 'page' },
       { text: 'Commits', href: '/tasks/r1/commits', current: null },
       { text: 'Files', href: '/tasks/r1/files', current: null },
@@ -158,21 +159,26 @@ describe('the Changes tab route', () => {
     await waitFor(() => expect(document.querySelector('[data-slot="changes-tree"]')).not.toBeNull())
     // src/util is a pure chain → one compacted row.
     const dir = document.querySelector('[data-slot="tree-dir"]') as HTMLElement
-    expect(dir.textContent).toContain('src/util')
-    expect(dir.textContent).toContain('+3')
-    expect(dir.textContent).toContain('−1')
+    // An OPEN folder is just its name: its files carry their own ±, so a total would repeat them.
+    expect(dir.textContent).toBe('src/util')
     const fileRows = [...document.querySelectorAll('[data-slot="tree-file"]')].map((el) => el.textContent)
     expect(fileRows.some((t) => t?.includes('a.ts'))).toBe(true)
     expect(fileRows.some((t) => t?.includes('notes.md'))).toBe(true)
+    const nested = document.querySelector('[data-slot="tree-file"][data-path="src/util/a.ts"]') as HTMLElement
+    expect(nested.textContent).toContain('+3')
+    expect(nested.textContent).toContain('−1')
+    expect(nested.querySelector('[data-slot="tree-status"]')?.getAttribute('data-status')).toBe('modified')
 
     // The facade renders both files (the engine chunk is lazy — wait for it).
     await waitFor(() => expect(document.querySelectorAll('[data-slot="diff-file"]')).toHaveLength(2))
     // The aggregate animated stat shows the payload's totals.
     expect(document.querySelector('[data-slot="changes-stat"]')?.textContent).toContain('+5')
     expect(document.querySelector('[data-slot="changes-stat"]')?.textContent).toContain('−1')
-    // Collapsing a folder folds its rows.
+    // Collapsing a folder folds its rows — and the folder row then says what it holds.
     fireEvent.click(dir)
     expect(document.querySelectorAll('[data-slot="tree-file"]')).toHaveLength(1)
+    expect(dir.textContent).toContain('+3')
+    expect(dir.textContent).toContain('−1')
   })
 
   // The tree column is its OWN scroller. Sticky alone left a tree taller than the viewport

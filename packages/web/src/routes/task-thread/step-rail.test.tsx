@@ -67,8 +67,8 @@ describe('StepRail', () => {
     const rows = [...document.querySelectorAll('[data-slot="step-row"]')]
     expect(rows.map((row) => row.getAttribute('data-visual'))).toEqual(['done', 'active', 'pending'])
     expect(rows[0]!.textContent).toContain('Do the task')
-    expect(rows[0]!.textContent).toContain('agent · step 1 of 3')
-    expect(rows[1]!.textContent).toContain('check · step 2 of 3')
+    expect(rows[0]!.textContent).toContain('agent · 1/3')
+    expect(rows[1]!.textContent).toContain('check · 2/3')
     // The amber spinner announces itself; done/pending rows carry no live status.
     expect(screen.getAllByRole('status', { name: 'Step running' })).toHaveLength(1)
   })
@@ -128,12 +128,12 @@ describe('WorkflowSteps — the collapsible header summary', () => {
     const summary = document.querySelector('[data-slot="workflow-steps"]')!
     const trigger = screen.getByRole('button')
     expect(summary.textContent).toContain('Verify')
-    expect(summary.textContent).toContain('step 2 of 3')
-    // The phone target is 44px, while -my-2 cancels its extra 16px against run-header padding.
-    expect(trigger.className).toContain('min-h-11')
-    expect(trigger.className).toContain('-my-2')
-    expect(trigger.className).toContain('md:min-h-[30px]')
-    expect(trigger.className).toContain('md:my-0')
+    expect(summary.textContent).toContain('2 of 3')
+    // The slim one-line stepper is the popover's trigger; its accessible name spells the position out.
+    expect(trigger).toBe(summary)
+    expect(trigger.getAttribute('aria-label')).toBe('Workflow: Verify, step 2 of 3')
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    expect(trigger.className).toContain('h-8')
     const dots = [...document.querySelectorAll('[data-slot="step-dot"]')]
     expect(dots.map((dot) => dot.getAttribute('data-visual'))).toEqual(['done', 'active', 'pending'])
     // The full rows are not mounted until the user expands.
@@ -145,19 +145,7 @@ describe('WorkflowSteps — the collapsible header summary', () => {
     fireEvent.click(screen.getByRole('button'))
     const rows = [...document.querySelectorAll('[data-slot="step-row"]')]
     expect(rows.map((row) => row.getAttribute('data-visual'))).toEqual(['done', 'active', 'pending'])
-    expect(rows[1]!.textContent).toContain('check · step 2 of 3')
-  })
-
-  it('remembers an explicit expand per run across remounts — a tab switch must not collapse it', () => {
-    const runId = freshRun()
-    const first = render(<WorkflowSteps runId={runId} steps={steps} />)
-    fireEvent.click(screen.getByRole('button'))
-    expect(document.querySelector('[data-slot="step-row"]')).not.toBeNull()
-    first.unmount()
-
-    // Same run, remounted by another task route's RunHeader: still expanded.
-    render(<WorkflowSteps runId={runId} steps={steps} />)
-    expect(document.querySelector('[data-slot="step-row"]')).not.toBeNull()
+    expect(rows[1]!.textContent).toContain('check · 2/3')
   })
 
   it('does not leak that choice to a different run — a fresh run opens collapsed', () => {

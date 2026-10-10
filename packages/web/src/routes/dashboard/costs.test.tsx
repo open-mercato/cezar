@@ -128,6 +128,27 @@ afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
 })
+/** What each filter value reads as in its menu — the filters are the cockpit's Select now, so a
+ *  choice is made by its label rather than by setting a native control's value. */
+const optionLabels = {
+  all: 'All time',
+  '7d': 'Last 7 days',
+  '30d': 'Last 30 days',
+  cost: 'Reported USD',
+  input: 'Input tokens',
+  output: 'Output tokens',
+} as const
+// jsdom lays nothing out and so has no `scrollIntoView`, which an opening Select calls on the
+// option it is showing.
+Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: () => {} })
+/** Open a filter by keyboard (jsdom has no real pointer) and choose one of its options. */
+async function choose(trigger: HTMLElement, value: keyof typeof optionLabels) {
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('option', { name: optionLabels[value] }))
+  await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull())
+}
+/** The option a filter is showing: the label its trigger hands the export (`FilterSelect`). */
+const chosen = (trigger: HTMLElement) => trigger.getAttribute('data-export-filter')
 it('keeps tiny reported USD, measured zero and absent output distinct', async () => {
   setup()
   await screen.findAllByText('$0.000012')
@@ -217,17 +238,15 @@ it('disables a deleted task immediately before the next snapshot', async () => {
 it('labels created-date cohorts honestly and sends period and metric choices', async () => {
   const { calls } = setup()
   await screen.findAllByText('$0.000012')
-  fireEvent.change(screen.getByRole('combobox', { name: 'Tasks created' }), {
-    target: { value: '7d' },
-  })
+  // The honest label is the one for the unbounded cohort too: nothing here is "spending".
+  expect(screen.getByText('Lifetime totals of retained tasks')).toBeTruthy()
+  await choose(screen.getByRole('combobox', { name: 'Tasks created' }), '7d')
   expect(
     await screen.findByText(
-      'Lifetime usage of tasks created in this period — not spending during the period.',
+      'Lifetime totals of retained tasks created in this period — not spending during the period',
     ),
   ).toBeTruthy()
-  fireEvent.change(await screen.findByRole('combobox', { name: 'Sort by' }), {
-    target: { value: 'output' },
-  })
+  await choose(await screen.findByRole('combobox', { name: 'Sort by' }), 'output')
   await waitFor(() =>
     expect(
       calls.some(
@@ -362,7 +381,7 @@ it('uses a compact empty state for complete zero-task usage without dropping exp
   const rows = JSON.parse(container.querySelector<HTMLElement>('[data-dashboard-export]')!.dataset.dashboardExport!)
   expect(rows).toEqual([])
   expect(screen.getByText('Lifetime totals of retained tasks')).toBeTruthy()
-  expect(screen.getByRole('combobox', { name: 'Tasks created' })).toHaveProperty('value', 'all')
+  expect(chosen(screen.getByRole('combobox', { name: 'Tasks created' }))).toBe('All time')
 })
 it('keeps zero readable tasks with partial coverage qualified as unavailable', async () => {
   const empty = fixture()
@@ -466,7 +485,7 @@ it('sorts the accepted task cohort without accepting a pending update', async ()
   await within(sheet).findByRole('button', { name: 'Updates available — Show' })
   const sort = within(sheet).getByRole('combobox', { name: 'Sort by' })
   sort.focus()
-  fireEvent.change(sort, { target: { value: 'input' } })
+  await choose(sort, 'input')
   await waitFor(() => expect(calls.filter(url => url.searchParams.get('sort') === 'input').at(-1)?.searchParams.get('snapshotId')).toBe('s1'))
   expect(within(sheet).queryByRole('link', { name: 'Unaccepted candidate' })).toBeNull()
   expect(within(sheet).getByRole('link', { name: 'Measured task' })).toBeTruthy()
@@ -477,12 +496,15 @@ it('keeps keyboard focus when changing the usage period and ranking metric', asy
   setup()
   const period = await screen.findByRole('combobox', { name: 'Tasks created' })
   period.focus()
-  fireEvent.change(period, { target: { value: '7d' } })
+  await choose(period, '7d')
+  expect(chosen(period)).toBe('Last 7 days')
+  // The same control, not a remounted copy of it — which is what would have dropped the focus.
+  expect(screen.getByRole('combobox', { name: 'Tasks created' })).toBe(period)
   expect(document.activeElement).toBe(period)
   const sort = await screen.findByRole('combobox', { name: 'Sort by' })
   sort.focus()
-  fireEvent.change(sort, { target: { value: 'input' } })
-  await waitFor(() => expect(screen.getByRole('combobox', { name: 'Sort by' })).toHaveProperty('value', 'input'))
+  await choose(sort, 'input')
+  await waitFor(() => expect(chosen(screen.getByRole('combobox', { name: 'Sort by' }))).toBe('Input tokens'))
   expect(document.activeElement).toBe(sort)
 })
 
@@ -495,7 +517,7 @@ it('keeps expired task rows until explicitly accepting the replacement after sor
   next.tasks.rows[0]!.title = 'Replacement after sorting'
   setData(next)
   expire()
-  fireEvent.change(within(sheet).getByRole('combobox', { name: 'Sort by' }), { target: { value: 'input' } })
+  await choose(within(sheet).getByRole('combobox', { name: 'Sort by' }), 'input')
   const show = await within(sheet).findByRole('button', { name: 'Updates available — Show' })
   expect(within(sheet).queryByRole('link', { name: 'Replacement after sorting' })).toBeNull()
   expect(within(sheet).getByRole('link', { name: 'Measured task' })).toBeTruthy()
@@ -511,7 +533,7 @@ it('loads a new cohort when changing period without retaining the prior totals',
   next.totals.costUsd!.value = 17
   next.projects = []
   setData(next)
-  fireEvent.change(screen.getByRole('combobox', { name: 'Tasks created' }), { target: { value: '7d' } })
+  await choose(screen.getByRole('combobox', { name: 'Tasks created' }), '7d')
   expect(await screen.findByText('$17.00')).toBeTruthy()
   expect(screen.queryAllByText('$0.000012')).toHaveLength(0)
 })
@@ -523,7 +545,7 @@ it('keeps the last server visibility policy while a new ranking request is pendi
   await act(() => client.invalidateQueries({ queryKey: workspaceQueryKeys.dashboard }))
   await waitFor(() => expect(screen.queryAllByText('$0.000012')).toHaveLength(0))
   vi.mocked(fetch).mockImplementationOnce(() => new Promise(() => {}))
-  fireEvent.change(screen.getByRole('combobox', { name: 'Sort by' }), { target: { value: 'output' } })
+  await choose(screen.getByRole('combobox', { name: 'Sort by' }), 'output')
   expect(screen.queryAllByText('$0.000012')).toHaveLength(0)
   expect(container.querySelector('[data-dashboard-export]')?.getAttribute('data-dashboard-export')).not.toContain('costUsd')
 })
@@ -533,7 +555,7 @@ it('restores usage project selection, sort, page, scroll and focus for a history
   fireEvent.click(await screen.findByRole('button', { name: /shop/ }))
   const sheet = await screen.findByRole('dialog')
   await within(sheet).findByRole('link', { name: 'Measured task' })
-  fireEvent.change(within(sheet).getByRole('combobox', { name: 'Sort by' }), { target: { value: 'input' } })
+  await choose(within(sheet).getByRole('combobox', { name: 'Sort by' }), 'input')
   await waitFor(() => expect(within(sheet).getByRole('button', { name: 'Show 20 more tasks' })).toHaveProperty('disabled', false))
   fireEvent.click(within(sheet).getByRole('button', { name: 'Show 20 more tasks' }))
   const link = await within(sheet).findByRole('link', { name: 'Second task' })
@@ -543,7 +565,7 @@ it('restores usage project selection, sort, page, scroll and focus for a history
   remount()
   const restored = await screen.findByRole('dialog')
   expect(within(restored).getByText('shop tasks')).toBeTruthy()
-  expect(within(restored).getByRole('combobox', { name: 'Sort by' })).toHaveProperty('value', 'input')
+  expect(chosen(within(restored).getByRole('combobox', { name: 'Sort by' }))).toBe('Input tokens')
   await waitFor(() => expect(document.activeElement).toBe(within(restored).getByRole('link', { name: 'Second task' })))
   expect(restored.scrollTop).toBe(170)
 })
@@ -606,14 +628,14 @@ it.each(['View tasks', 'shop'])('returns focus to the %s trigger after closing a
 it.each([false, true])('keeps revoked ranking policy over older cached sorts (restore=%s) and accepts fresh recovery', async restore => {
   const { client, setData, remount, container } = setup(undefined, fixture(), `ranking-cache-${restore}`)
   await screen.findAllByText('$0.000012')
-  fireEvent.change(screen.getByRole('combobox', { name: 'Sort by' }), { target: { value: 'input' } })
+  await choose(screen.getByRole('combobox', { name: 'Sort by' }), 'input')
   await waitFor(() => expect(client.isFetching()).toBe(0))
   setData({ ...fixture('revoked-ranking'), visibility: { cost: false, tokens: true } })
-  fireEvent.change(screen.getByRole('combobox', { name: 'Sort by' }), { target: { value: 'output' } })
+  await choose(screen.getByRole('combobox', { name: 'Sort by' }), 'output')
   await waitFor(() => expect(screen.queryAllByText('$0.000012')).toHaveLength(0))
   const fetcher = vi.mocked(fetch).getMockImplementation()!
   vi.mocked(fetch).mockImplementation(() => new Promise(() => {}))
-  fireEvent.change(screen.getByRole('combobox', { name: 'Sort by' }), { target: { value: 'input' } })
+  await choose(screen.getByRole('combobox', { name: 'Sort by' }), 'input')
   if (restore) remount()
   expect(screen.queryAllByText('$0.000012')).toHaveLength(0)
   expect(container.querySelector('[data-dashboard-export]')?.getAttribute('data-dashboard-export')).not.toContain('costUsd')
@@ -629,13 +651,13 @@ it('keeps revoked detail policy when returning to cached sorts and restoring the
   fireEvent.click(await screen.findByRole('button', { name: 'View tasks' }))
   const sheet = await screen.findByRole('dialog')
   await within(sheet).findByText('Measured task')
-  fireEvent.change(within(sheet).getByRole('combobox', { name: 'Sort by' }), { target: { value: 'input' } })
+  await choose(within(sheet).getByRole('combobox', { name: 'Sort by' }), 'input')
   await waitFor(() => expect(client.isFetching()).toBe(0))
   hideDetailCost()
-  fireEvent.change(within(sheet).getByRole('combobox', { name: 'Sort by' }), { target: { value: 'output' } })
+  await choose(within(sheet).getByRole('combobox', { name: 'Sort by' }), 'output')
   await waitFor(() => expect(within(sheet).queryAllByLabelText('Reported USD: $0.00')).toHaveLength(0))
   vi.mocked(fetch).mockImplementation(() => new Promise(() => {}))
-  fireEvent.change(within(sheet).getByRole('combobox', { name: 'Sort by' }), { target: { value: 'input' } })
+  await choose(within(sheet).getByRole('combobox', { name: 'Sort by' }), 'input')
   remount()
   const restored = await screen.findByRole('dialog')
   expect(within(restored).queryAllByLabelText('Reported USD: $0.00')).toHaveLength(0)

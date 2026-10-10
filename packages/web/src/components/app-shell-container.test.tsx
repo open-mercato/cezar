@@ -33,7 +33,14 @@ afterEach(() => {
   cleanup()
   fetchMock.mockReset()
   vi.unstubAllGlobals()
+  setViewport(1024)
+  localStorage.clear()
 })
+
+/** A phone is a width: the shell's breakpoint hook reads `innerWidth` (see app-shell.test.tsx). */
+function setViewport(width: number) {
+  ;(window as { innerWidth: number }).innerWidth = width
+}
 
 const HEALTH: HealthResponse = {
   version: '0.1.3',
@@ -149,9 +156,34 @@ function run(overrides: Partial<RunRecord> = {}): RunRecord {
   }
 }
 
-const repoChip = () => document.querySelector('[data-slot="repo-chip"]')
-const versionChip = () => document.querySelector('[data-slot="version-chip"]')
-const navBadge = () => document.querySelector('[data-slot="nav-badge"]')
+const slot = (name: string, scope: ParentNode = document) =>
+  scope.querySelector(`[data-slot="${name}"]`) as HTMLElement | null
+const rail = () => slot('rail') as HTMLElement
+const navBadge = () => slot('nav-badge')
+/** The project tile at the foot of the rail — what the old repo chip became. It names the project
+ *  (registry entry, else the boot repo, else the brand) and carries the branch in its tooltip. */
+const switcher = () => slot('project-switcher', rail()) as HTMLElement
+
+/** `/api/v1/health` has answered and the shell has painted it: the tools status in the top bar
+ *  mounts only then. (The version chip used to be this signal; it lives in a closed menu now.) */
+const healthAnswered = () => waitFor(() => expect(slot('tools-menu-trigger')).not.toBeNull())
+
+/** Radix opens a menu on pointerdown, not click. */
+async function openMenu(trigger: HTMLElement): Promise<HTMLElement> {
+  fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false })
+  return await screen.findByRole('menu')
+}
+/** The cockpit's own menu at the head of the rail — where the version chip lives. */
+const openCockpitMenu = () => openMenu(slot('footer-menu', rail()) as HTMLElement)
+const openSwitcher = () => openMenu(switcher())
+const projectItems = (menu: HTMLElement) =>
+  [...menu.querySelectorAll<HTMLElement>('[data-slot="project-group"]')]
+
+/** What the switcher's tooltip says — `<name> · <branch>`. */
+async function switcherTooltip(): Promise<string | null> {
+  fireEvent.focus(switcher())
+  return (await screen.findByRole('tooltip')).textContent
+}
 
 describe('repoChipOf', () => {
   it.each([
@@ -197,26 +229,40 @@ describe('sidebar wiring', () => {
       '/api/v1/health': { ...HEALTH, capabilities: { ...HEALTH.capabilities, singleProject, followups: false } },
       '/api/v1/projects': { projects: [{ ...PROJECT, tracker: 'linear' }], bootProject: PROJECT.id, projectsDir: '/repos' },
     })
+    setViewport(390)
     renderShell(entry)
 
-    expect(await screen.findByRole('link', { name: 'Linear' })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }))
-    const drawer = await screen.findByRole('dialog', { name: 'Navigation' })
-    expect(within(drawer).getByRole('link', { name: 'Linear' })).toBeTruthy()
-    fireEvent.click(within(drawer).getByRole('button', { name: 'Close menu' }))
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Navigation' })).toBeNull())
+    // The rail (in the tree at every width) offers the boot project's tracker from a page that
+    // belongs to no project…
+    const onRail = await screen.findByRole('link', { name: 'Linear' })
+    expect(rail().contains(onRail)).toBe(true)
+    expect(onRail.getAttribute('href')).toBe('/p/cezar/tracker')
+    // …and so does the phone's sheet.
+    fireEvent.click(within(slot('top-bar') as HTMLElement).getByRole('button', { name: 'Toggle Sidebar' }))
+    const drawer = await screen.findByRole('dialog', { name: 'Sidebar' })
+    expect(within(drawer).getByRole('link', { name: 'Linear' }).getAttribute('href')).toBe('/p/cezar/tracker')
+    // Radix arms its outside-pointer listener a tick after opening; then a whole backdrop tap.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const overlay = slot('sheet-overlay') as HTMLElement
+    fireEvent.pointerDown(overlay)
+    fireEvent.click(overlay)
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Sidebar' })).toBeNull())
     fireEvent.keyDown(window, { key: 'k', metaKey: true })
     await waitFor(() => expect(document.querySelector('[data-nav-to="/tracker"]')?.textContent).toContain('Linear'))
   })
 
-  it('renders the repo and version chips from /api/v1/health', async () => {
-    serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [] })
+  it('renders the repo and the version from /api/v1/health', async () => {
+    const root = '/home/me/Projects/storefront'
+    serve({ '/api/v1/health': { ...HEALTH, repoRoot: root, repo: { ...HEALTH.repo, root } }, '/api/v1/todos': [] })
     renderShell()
 
-    await waitFor(() => expect(repoChip()).not.toBeNull())
-    // Basename of the root, then the branch — not the whole path.
-    expect(repoChip()?.textContent).toBe('cezar / feat/cockpit')
-    expect(versionChip()?.textContent).toBe('v0.1.3')
+    await healthAnswered()
+    // Basename of the root — not the whole path — and the branch beside it in the tooltip.
+    expect(switcher().getAttribute('aria-label')).toBe('Project: storefront. Switch project')
+    expect(slot('repo-chip', switcher())?.textContent).toBe('s')
+    expect(await switcherTooltip()).toBe('storefront · feat/cockpit')
+    const menu = await openCockpitMenu()
+    expect(slot('version-chip', menu)?.textContent).toBe('v0.1.3')
   })
 
   it('renders the inbox badge from /api/v1/todos', async () => {
@@ -236,12 +282,13 @@ describe('sidebar wiring', () => {
     })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await healthAnswered()
     expect(screen.queryByRole('link', { name: /Inbox/ })).toBeNull()
     expect(navBadge()).toBeNull()
     // Every other view is untouched — the gate owns exactly one item.
-    expect(screen.getByRole('link', { name: /Tasks/ })).toBeTruthy()
-    expect(screen.getByRole('link', { name: /Settings/ })).toBeTruthy()
+    const nav = screen.getByRole('navigation', { name: 'Main' })
+    expect(within(nav).getByRole('link', { name: 'Tasks' })).toBeTruthy()
+    expect(within(nav).getByRole('link', { name: 'Project settings' })).toBeTruthy()
   })
 
   it('never asks for todos on a server with the inbox off', async () => {
@@ -251,7 +298,7 @@ describe('sidebar wiring', () => {
     })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await healthAnswered()
     // The badge query is keyed on the capability, so it never runs — unlike the /inbox route,
     // nothing here needs the list before health has spoken.
     const asked = fetchMock.mock.calls.map((call) => String(call[0]))
@@ -267,7 +314,7 @@ describe('sidebar wiring', () => {
     serve({ '/api/v1/health': WITH_FORGE, '/api/v1/todos': [] })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await healthAnswered()
     expect(screen.queryByRole('link', { name: /Automations/ })).toBeNull()
     // The gate owns exactly one item — GitHub is forge-gated, not automations-gated.
     expect(screen.getByRole('link', { name: /GitHub/ })).toBeTruthy()
@@ -280,7 +327,7 @@ describe('sidebar wiring', () => {
     })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await healthAnswered()
     expect(screen.getByRole('link', { name: /Automations/ })).toBeTruthy()
   })
 
@@ -288,23 +335,32 @@ describe('sidebar wiring', () => {
     serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [] })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await healthAnswered()
     // Zero follow-ups is not "0 follow-ups" — a badge reading 0 is noise the spec's chrome
     // rules do not want.
     expect(navBadge()).toBeNull()
   })
 
-  it('shows no chips at all while health has not answered', () => {
+  it('claims nothing while health has not answered', async () => {
     // A never-resolving fetch: the pending state, held.
     fetchMock.mockImplementation(() => new Promise<Response>(() => {}))
     renderShell()
 
-    expect(repoChip()).toBeNull()
-    expect(versionChip()).toBeNull()
+    // No project is known, so the switcher names the brand — it does not make one up, and it
+    // has no branch to show.
+    expect(switcher().getAttribute('aria-label')).toBe('Project: cezar. Switch project')
     expect(navBadge()).toBeNull()
-    // …and the app itself is up. The chips being empty is not a loading screen.
+    expect(slot('tools-menu-trigger')).toBeNull()
+    // Health-gated areas wait for the server's word; the ungated ones are already there.
+    expect(screen.queryByRole('link', { name: 'Inbox' })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'GitHub' })).toBeNull()
+    expect(screen.getByRole('link', { name: 'Git' })).toBeTruthy()
+    // …and the app itself is up. The chrome being quiet is not a loading screen.
     expect(screen.getByText('route content')).toBeTruthy()
-    expect(document.querySelector('[data-slot="sidebar"]')).not.toBeNull()
+    expect(rail()).not.toBeNull()
+    expect(await switcherTooltip()).toBe('cezar')
+    const menu = await openCockpitMenu()
+    expect(slot('version-chip', menu)).toBeNull()
   })
 
   it('shows no chips when the server is unreachable, and still renders the app', async () => {
@@ -314,15 +370,19 @@ describe('sidebar wiring', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalled())
     // The honest empty state: cezar cannot answer what repo it is on, so it says nothing.
     // It does not invent one, and it does not take the whole cockpit down with it.
-    expect(repoChip()).toBeNull()
-    expect(versionChip()).toBeNull()
+    expect(switcher().getAttribute('aria-label')).toBe('Project: cezar. Switch project')
+    expect(slot('tools-menu-trigger')).toBeNull()
     expect(screen.getByText('route content')).toBeTruthy()
+    expect(await switcherTooltip()).toBe('cezar')
+    const menu = await openCockpitMenu()
+    expect(slot('version-chip', menu)).toBeNull()
   })
 
   // CEZ_SINGLE_PROJECT pins this response to the boot row even when the saved registry has more.
-  // The shell must collapse from that ordinary one-row response, not grow a second capability
-  // branch for navigation: flat nav, one quick-list, repo chip, no group headers.
-  it('keeps the sidebar flat when single-project mode pins the registry to the boot project', async () => {
+  // The shell must work from that ordinary one-row response, not grow a second capability
+  // branch for navigation: the same rail, pointed at the one project, and a switcher that
+  // lists exactly that project.
+  it('shows the one project when single-project mode pins the registry to the boot project', async () => {
     serve({
       '/api/v1/health': {
         ...HEALTH,
@@ -334,11 +394,15 @@ describe('sidebar wiring', () => {
     })
     renderShell()
 
-    await waitFor(() => expect(repoChip()).not.toBeNull())
-    expect(document.querySelector('[data-slot="project-groups"]')).toBeNull()
-    expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy()
-    expect(document.querySelector('[data-slot="task-quick-list"]')).not.toBeNull()
-    expect(repoChip()?.textContent).toBe('cezar / feat/cockpit')
+    await healthAnswered()
+    const nav = screen.getByRole('navigation', { name: 'Main' })
+    await waitFor(() =>
+      expect(within(nav).getByRole('link', { name: 'Git' }).getAttribute('href')).toBe('/p/cezar/git'),
+    )
+    // The registry's own branch for the project, not the boot checkout's stale one.
+    expect(await switcherTooltip()).toBe('cezar · main')
+    const menu = await openSwitcher()
+    expect(projectItems(menu).map((item) => item.dataset.project)).toEqual(['cezar'])
   })
 
   it('hides add-project chrome when health reports single-project mode', async () => {
@@ -353,13 +417,35 @@ describe('sidebar wiring', () => {
     })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
-    expect(screen.queryByRole('button', { name: 'Add project' })).toBeNull()
+    await healthAnswered()
     expect(screen.getByRole('link', { name: /New task/ })).toBeTruthy()
     expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy()
+    const menu = await openSwitcher()
+    await waitFor(() => expect(projectItems(menu)).toHaveLength(1))
+    expect(slot('add-project-local', menu)).toBeNull()
+    expect(slot('add-project-clone', menu)).toBeNull()
+    expect(within(menu).queryByRole('menuitem', { name: 'Manage projects' })).toBeNull()
   })
 
-  it('renders one collapsible group per project once the workspace has two', async () => {
+  it('offers add-project chrome when the server is not in single-project mode', async () => {
+    serve({
+      '/api/v1/health': HEALTH,
+      '/api/v1/todos': [],
+      '/api/v1/projects': { projects: [PROJECT], bootProject: 'cezar', projectsDir: '/home/me/cezar/projects' },
+      '/api/v1/runs': [],
+    })
+    renderShell()
+
+    await healthAnswered()
+    const menu = await openSwitcher()
+    expect(slot('add-project-local', menu)).not.toBeNull()
+    expect(slot('add-project-clone', menu)).not.toBeNull()
+    expect(within(menu).getByRole('menuitem', { name: 'Manage projects' })).toBeTruthy()
+  })
+
+  // One project is on screen at a time: a second project adds a row to the switcher, it does
+  // not add a second navigation (the per-project sidebar groups this replaced did).
+  it('lists every project in the switcher once the workspace has two, and keeps one navigation', async () => {
     serve({
       '/api/v1/health': HEALTH,
       '/api/v1/todos': [],
@@ -371,16 +457,18 @@ describe('sidebar wiring', () => {
       '/api/v1/workspace/ui-state': {},
       '/api/v1/p/cezar/runs': [],
     })
-    renderShell()
+    renderShell('/p/shop/')
 
-    await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="project-group"]')).toHaveLength(2),
-    )
-    // The flat nav and the shared quick-list step aside — each group brings its own.
-    expect(screen.queryByRole('navigation', { name: 'Main' })).toBeNull()
-    expect(document.querySelector('[data-slot="task-quick-list"]')).toBeNull()
-    // …and so does the repo chip, which the boot project's own group header now carries.
-    expect(repoChip()).toBeNull()
+    await healthAnswered()
+    await waitFor(() => expect(switcher().getAttribute('aria-label')).toBe('Project: shop. Switch project'))
+    // Exactly one navigation, and it is the project's the URL names.
+    const navs = screen.getAllByRole('navigation', { name: 'Main' })
+    expect(navs).toHaveLength(1)
+    expect(within(navs[0]!).getByRole('link', { name: 'Git' }).getAttribute('href')).toBe('/p/shop/git')
+
+    const menu = await openSwitcher()
+    expect(projectItems(menu).map((item) => item.dataset.project)).toEqual(['cezar', 'shop'])
+    expect(projectItems(menu).map((item) => item.hasAttribute('data-active'))).toEqual([false, true])
   })
 
   it('does not write a non-boot project run list into the boot cache key', async () => {
@@ -412,11 +500,13 @@ describe('sidebar wiring', () => {
     serve({ '/api/v1/health': { ...HEALTH, repo: null }, '/api/v1/todos': [] })
     renderShell()
 
-    // Running cezar outside a repo is supported: no repo chip, but the rest of the chrome is
-    // real and must not vanish with it.
-    await waitFor(() => expect(versionChip()).not.toBeNull())
-    expect(versionChip()?.textContent).toBe('v0.1.3')
-    expect(repoChip()).toBeNull()
+    // Running cezar outside a repo is supported: no repo to name (the switcher falls back to
+    // the brand, with no branch), but the rest of the chrome is real and must not vanish with it.
+    await healthAnswered()
+    expect(switcher().getAttribute('aria-label')).toBe('Project: cezar. Switch project')
+    expect(await switcherTooltip()).toBe('cezar')
+    const menu = await openCockpitMenu()
+    expect(slot('version-chip', menu)?.textContent).toBe('v0.1.3')
   })
 
   it('wires the provider query into the AppShell banner slot', async () => {
@@ -501,6 +591,60 @@ describe('sidebar wiring', () => {
     expect(document.querySelector('[data-slot="app-shell"]')).not.toBeNull()
     expect(screen.queryByRole('status')).toBeNull()
     expect(screen.queryByText(secret)).toBeNull()
+  })
+})
+
+/** The top bar's trail is built here, from the route and the same registry/run data the document
+ *  title reads — the shell only paints it. */
+describe('top bar trail wiring', () => {
+  const trail = () =>
+    [...(slot('top-bar') as HTMLElement).querySelectorAll<HTMLElement>('[data-slot="breadcrumb-item"]')].map(
+      (item) => [item.textContent, item.querySelector('a')?.getAttribute('href') ?? null],
+    )
+  const registry = (projects: unknown[]) => ({ projects, bootProject: 'cezar', projectsDir: '/home/me/cezar/projects' })
+
+  it('leads with the project and ends on the page', async () => {
+    serve({
+      '/api/v1/health': { ...HEALTH, bootProject: 'cezar' },
+      '/api/v1/todos': [],
+      '/api/v1/projects': registry([{ ...PROJECT, id: 'shop', name: 'Storefront' }]),
+      '/api/v1/runs': [],
+    })
+    renderShell('/p/shop/git')
+
+    await waitFor(() => expect(trail()).toEqual([['Storefront', '/p/shop/'], ['Git', null]]))
+  })
+
+  it('puts the Tasks list between the project and an open task, named by its title', async () => {
+    serve({
+      '/api/v1/health': { ...HEALTH, bootProject: 'cezar' },
+      '/api/v1/todos': [],
+      '/api/v1/projects': registry([{ ...PROJECT, id: 'shop', name: 'Storefront' }]),
+      '/api/v1/runs': [],
+      '/api/v1/p/shop/runs': [run()],
+    })
+    renderShell('/p/shop/tasks/run-1')
+
+    await waitFor(() =>
+      expect(trail()).toEqual([
+        ['Storefront', '/p/shop/'],
+        ['Tasks', '/p/shop/'],
+        ['Implement page titles', null],
+      ]),
+    )
+  })
+
+  it('names no project on a page that belongs to none', async () => {
+    serve({
+      '/api/v1/health': { ...HEALTH, bootProject: 'cezar' },
+      '/api/v1/todos': [],
+      '/api/v1/projects': registry([PROJECT]),
+      '/api/v1/runs': [],
+    })
+    renderShell('/settings/global/projects')
+
+    await healthAnswered()
+    expect(trail()).toEqual([['Global settings', null]])
   })
 })
 

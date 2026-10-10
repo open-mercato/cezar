@@ -8,7 +8,7 @@ import type { TerminalSession } from '@open-mercato/cezar-api-client'
  *
  * Two regressions live here, both of which were invisible without a test at this level:
  *
- *  - `Zatrzymaj` CLOSED the tab. §6 is explicit — "Stop interrupts; the tab's X closes… Stop
+ *  - `Stop` CLOSED the tab. §6 is explicit — "Stop interrupts; the tab's X closes… Stop
  *    sends Ctrl-C" — and you stop a build precisely so you can read in that same pane why it was
  *    wrong. The code that did otherwise justified itself by citing a §11 sentence this spec does
  *    not contain.
@@ -116,13 +116,13 @@ describe('TerminalDrawer — opening', () => {
   })
 })
 
-describe('TerminalDrawer — Zatrzymaj', () => {
+describe('TerminalDrawer — Stop', () => {
   it('sends Ctrl-C and KEEPS the tab', async () => {
     getRunTerminal.mockResolvedValue({ available: true, sessions: [session('s-1', { busy: true })] })
     drawer()
     await waitFor(() => expect(screen.queryByTestId('pane')).not.toBeNull())
 
-    fireEvent.click(screen.getByRole('button', { name: /Zatrzymaj/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Stop$/ }))
 
     expect(writeRunTerminal).toHaveBeenCalledWith('r1', 's-1', '\x03')
     // The pane is still there, which is the whole point: you stop a build to read its output.
@@ -143,7 +143,7 @@ describe('TerminalDrawer — choosing a shell', () => {
     await waitFor(() => expect(tabNames()).toHaveLength(1))
 
     fireEvent.pointerDown(
-      screen.getByRole('button', { name: 'Nowa zakładka terminala' }),
+      screen.getByRole('button', { name: 'New terminal tab' }),
       new MouseEvent('pointerdown', { bubbles: true }),
     )
     const bash = await screen.findByText('/bin/bash')
@@ -159,7 +159,7 @@ describe('TerminalDrawer — choosing a shell', () => {
     drawer()
     await waitFor(() => expect(tabNames()).toHaveLength(1))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Nowa zakładka terminala' }))
+    fireEvent.click(screen.getByRole('button', { name: 'New terminal tab' }))
 
     await waitFor(() => expect(createRunTerminal).toHaveBeenCalledWith('r1', {}))
   })
@@ -171,7 +171,7 @@ describe('TerminalDrawer — choosing a shell', () => {
     drawer()
     await waitFor(() => expect(tabNames()).toHaveLength(1))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Nowa zakładka terminala' }))
+    fireEvent.click(screen.getByRole('button', { name: 'New terminal tab' }))
 
     await waitFor(() => expect(createRunTerminal).toHaveBeenCalledWith('r1', {}))
   })
@@ -184,7 +184,7 @@ describe('TerminalDrawer — closing a tab', () => {
     drawer()
     await waitFor(() => expect(tabNames()).toHaveLength(2))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Zamknij Terminal s-1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close Terminal s-1' }))
     expect(stopRunTerminal).toHaveBeenCalledWith('r1', 's-1')
     await waitFor(() => expect(tabNames()).toHaveLength(1))
 
@@ -204,11 +204,11 @@ describe('TerminalDrawer — closing a tab', () => {
     drawer()
     await waitFor(() => expect(tabNames()).toHaveLength(2))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Zamknij npm run build' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close npm run build' }))
     // Nothing is stopped on the strength of the click alone (§6).
     expect(stopRunTerminal).not.toHaveBeenCalled()
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Zamknij mimo to' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Close anyway' }))
     await waitFor(() => expect(stopRunTerminal).toHaveBeenCalledWith('r1', 's-1'))
   })
 
@@ -222,12 +222,12 @@ describe('TerminalDrawer — closing a tab', () => {
     drawer()
     await waitFor(() => expect(tabNames()).toHaveLength(2))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Zamknij Terminal s-1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close Terminal s-1' }))
     expect(stopRunTerminal).not.toHaveBeenCalled()
 
     // And it says so honestly, rather than claiming a process it never saw.
-    expect(await screen.findByText(/nie potrafi sprawdzić/)).not.toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Zamknij mimo to' }))
+    expect(await screen.findByText(/cannot tell whether something is still running/)).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Close anyway' }))
     await waitFor(() => expect(stopRunTerminal).toHaveBeenCalledWith('r1', 's-1'))
   })
 
@@ -237,7 +237,7 @@ describe('TerminalDrawer — closing a tab', () => {
     drawer()
     await waitFor(() => expect(screen.queryByTestId('pane')).not.toBeNull())
 
-    expect(screen.queryByRole('button', { name: /Zatrzymaj/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Stop$/ })).toBeNull()
   })
 
   it('hides the drawer when the last tab goes', async () => {
@@ -246,7 +246,7 @@ describe('TerminalDrawer — closing a tab', () => {
     drawer(onClose)
     await waitFor(() => expect(tabNames()).toHaveLength(1))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Zamknij Terminal s-1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close Terminal s-1' }))
     await waitFor(() => expect(onClose).toHaveBeenCalled())
   })
 })

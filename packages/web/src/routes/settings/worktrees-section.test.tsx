@@ -6,8 +6,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
 import type { ConfigResponse } from '@open-mercato/cezar-api-client'
+import { GlobalSettingsDialog } from '@/components/global-settings-dialog'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
+import { ShellProviders } from '@/test/shell-providers'
 
 /**
  * Project settings → Worktrees: the "Keep last N worktrees" field (#483). Renders the
@@ -76,7 +78,10 @@ function renderAt(entry: string) {
   render(
     <QueryClientProvider client={gateSeededClient()}>
       <MemoryRouter initialEntries={[entry]}>
-        <AppRoutes />
+        {/* What the app shell gives every route: global settings as dialog state, and the sidebar. */}
+        <ShellProviders dialog={<GlobalSettingsDialog />}>
+          <AppRoutes />
+        </ShellProviders>
         <Toaster />
       </MemoryRouter>
     </QueryClientProvider>,

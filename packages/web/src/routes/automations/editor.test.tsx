@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -133,7 +133,9 @@ function renderEditor(props: Partial<Parameters<typeof AutomationEditor>[0]> = {
   return { onBack, onSaved, onLog, client }
 }
 
-const sourcePill = () => screen.getByRole('button', { name: 'Choose a skill or workflow' })
+// Workflow and skill are picked apart, as on New task — one pill each over the same source.
+const workflowPill = () => screen.getByRole('button', { name: 'Choose a workflow' })
+const skillPill = () => screen.getByRole('button', { name: 'Choose a skill' })
 const saveButton = () => screen.getByRole('button', { name: /^Save/ })
 const fillRequired = (name = 'Nightly bump', prompt = 'Bump the deps.') => {
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: name } })
@@ -190,11 +192,14 @@ describe('AutomationEditor — new', () => {
     const sent = stubFetch()
     const { onSaved } = renderEditor()
     fillRequired()
-    await waitFor(() => expect((sourcePill() as HTMLButtonElement).disabled).toBe(false))
-    fireEvent.click(sourcePill())
-    await screen.findByPlaceholderText('search skills & workflows…')
+    await waitFor(() => expect((skillPill() as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(skillPill())
+    await screen.findByPlaceholderText('search skills…')
     fireEvent.click(document.querySelector('[data-source-ref="om-review"]')!)
-    expect(sourcePill().getAttribute('data-source-kind')).toBe('skill')
+    expect(skillPill().getAttribute('data-source-kind')).toBe('skill')
+    expect(skillPill().textContent).toContain('om-review')
+    // The skill runs on its own — the workflow pill names none.
+    expect(workflowPill().textContent).toContain('Workflow')
     fireEvent.click(saveButton())
     await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1))
     const post = sent.find((request) => request.method === 'POST' && request.path === '/api/v1/automations')
@@ -244,7 +249,9 @@ describe('AutomationEditor — new', () => {
     expect(screen.getByRole('switch', { name: 'Dispatch' }).getAttribute('aria-checked')).toBe('true')
     expect(document.querySelector('[data-slot="editor-dispatch-hint"]')?.textContent).toBe('≤ 9 agents')
     // Built-in templates name no workflow, so the cockpit default (no skill = quick-task) stays.
-    expect(sourcePill().getAttribute('data-source-kind')).toBe('none')
+    expect(workflowPill().getAttribute('data-source-kind')).toBe('none')
+    expect(skillPill().getAttribute('data-source-kind')).toBe('none')
+    await waitFor(() => expect(workflowPill().textContent).toContain('quick-task'))
     expect((saveButton() as HTMLButtonElement).disabled).toBe(false)
   })
 
@@ -262,7 +269,7 @@ describe('AutomationEditor — new', () => {
   it('hides the dispatch row when the cockpit has dispatch off', async () => {
     stubFetch({}, { dispatch: false })
     renderEditor()
-    await waitFor(() => expect((sourcePill() as HTMLButtonElement).disabled).toBe(false))
+    await waitFor(() => expect((workflowPill() as HTMLButtonElement).disabled).toBe(false))
     expect(document.querySelector('[data-slot="editor-dispatch"]')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Review open PRs' })).toBeNull()
   })
@@ -313,8 +320,11 @@ describe('AutomationEditor — edit', () => {
       automation: EXISTING,
       actions: { preview: vi.fn(), runNow, toggleEnabled: vi.fn(), duplicate: vi.fn(), remove: vi.fn(), copyCli: vi.fn(), busy: false },
     })
-    expect(screen.getByRole('heading', { name: 'Edit automation' })).not.toBeNull()
-    expect(screen.getByText('enabled').getAttribute('data-slot')).toBe('pill')
+    // The state pill sits in the title, beside the words.
+    const heading = screen.getByRole('heading', { name: /^Edit automation/ })
+    const pill = within(heading).getByText('Enabled')
+    expect(pill.getAttribute('data-slot')).toBe('badge')
+    expect(pill.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
     expect(document.querySelector('[data-slot="template-palette"]')).toBeNull()
     expect(screen.queryByRole('button', { name: /templates/ })).toBeNull()
     expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Nightly dependency bump')
@@ -374,6 +384,8 @@ describe('tracker automation editor', () => {
     stubFetch({ 'GET /api/v1/tracker/automation-options': () => jsonResponse({ available: true, association: { ...association, kind: 'linear' }, events: ['issue.opened'], statuses: [], labels: [], limitations: ['Early changes are not fully recorded.'] }) })
     renderEditor()
     fireEvent.click(screen.getByRole('button', { name: 'When Jira / Linear changes' }))
+    // The provider's limitations are filed under the collapsed "Integration details".
+    fireEvent.click(await screen.findByRole('button', { name: 'Integration details' }))
     await screen.findByText('Early changes are not fully recorded.')
     expect(screen.queryByRole('button', { name: 'issue.status_changed' })).toBeNull()
   })

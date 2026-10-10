@@ -4,6 +4,8 @@ import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import { queryKeys } from '@/api/queries'
+import { ShellProviders } from '@/test/shell-providers'
+import { ShellWithSidebar } from '@/test/shell-with-sidebar'
 import { TrackerRoute } from './tracker'
 
 vi.mock('@/api/ws', () => ({ subscribeTopic: () => () => {} }))
@@ -14,8 +16,28 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.use
 const association = { kind: 'jira' as const, source: { id: 'cloud', webUrl: 'https://acme.atlassian.net' }, externalId: '100', externalName: 'OPS' }
 const item = { kind: 'issue' as const, id: 'OPS-1', title: 'Issue', body: 'Original detail', bodyTruncated: false, unsupportedContent: false, author: 'Ada', labels: [], status: 'Open', createdAt: '2026-09-18T00:00:00Z', updatedAt: '2026-09-18T00:00:00Z', url: 'https://acme.atlassian.net/browse/OPS-1' }
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200 })
-function mount(client: ReturnType<typeof createQueryClient>, path: string) {
-  return render(<MemoryRouter initialEntries={[path]}><QueryClientProvider client={client}><Routes><Route path="/tracker/:id?" element={<TrackerRoute />} /></Routes></QueryClientProvider></MemoryRouter>)
+/** The issue list lives in the shell's contextual sidebar: a column on desktop — hosted here by
+ *  `ShellWithSidebar` — and a sheet on a phone, which is closed until asked for, so `phone` gets
+ *  the shell contexts without a mounted sidebar (and `asPhone()` first, for the width). */
+function mount(client: ReturnType<typeof createQueryClient>, path: string, { phone = false } = {}) {
+  const Shell = phone ? ShellProviders : ShellWithSidebar
+  return render(<MemoryRouter initialEntries={[path]}><QueryClientProvider client={client}><Shell><Routes><Route path="/tracker/:id?" element={<TrackerRoute />} /></Routes></Shell></QueryClientProvider></MemoryRouter>)
+}
+/** A phone: `useSidebar().isMobile` reads the window width behind a `matchMedia` listener. */
+function asPhone() {
+  vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }))
+  vi.stubGlobal('innerWidth', 390)
+}
+/** The hand-off composer is a dialog over the issue, opened from its header. While it is open the
+ *  page behind it is inert (and hidden from role queries), so a test that then acts on the page —
+ *  a Retry in the detail, say — closes it first, exactly as a user has to. */
+async function openHand() {
+  fireEvent.click(await screen.findByRole('button', { name: 'Hand to agent' }))
+  return (await screen.findByLabelText('Custom instruction')) as HTMLTextAreaElement
+}
+async function closeHand() {
+  fireEvent.click(document.querySelector('[data-slot="tracker-hand-dialog"] [data-slot="dialog-close"]')!)
+  await waitFor(() => expect(document.querySelector('[data-slot="tracker-hand-dialog"]')).toBeNull())
 }
 
 describe('tracker snapshot freshness', () => {
@@ -47,15 +69,19 @@ describe('tracker snapshot freshness', () => {
       return new Promise<never>(() => {})
     }))
     mount(client, '/tracker/OPS-1')
-    expect(await screen.findByLabelText('Custom instruction')).toBeTruthy()
+    expect(await screen.findByText('Original detail')).toBeTruthy()
+    // No snapshot-refresh BUTTON gates the hand-off, on the page or in the composer.
     expect(screen.queryByRole('button', { name: 'Refresh issue' })).toBeNull()
-    fireEvent.change(screen.getByLabelText('Custom instruction'), { target: { value: 'Keep through outage' } })
+    fireEvent.change(await openHand(), { target: { value: 'Keep through outage' } })
+    expect(screen.queryByRole('button', { name: 'Refresh issue' })).toBeNull()
     await act(async () => { await client.refetchQueries({ queryKey: queryKeys.tracker.detail(association, item.id) }) })
     expect(await screen.findByText('Temporary outage')).toBeTruthy()
     expect((screen.getByLabelText('Custom instruction') as HTMLTextAreaElement).value).toBe('Keep through outage')
+    // Retry is on the page behind the composer; closing and reopening it must keep the draft too.
+    await closeHand()
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     await waitFor(() => expect(screen.queryByText('Temporary outage')).toBeNull())
-    expect((screen.getByLabelText('Custom instruction') as HTMLTextAreaElement).value).toBe('Keep through outage')
+    expect((await openHand()).value).toBe('Keep through outage')
   })
 
   it.each(['not_found', 'unauthorized', 'transport'])('blocks launch after %s until a successful retry and keeps the draft', async (failureKind) => {
@@ -81,26 +107,31 @@ describe('tracker snapshot freshness', () => {
       return new Promise<never>(() => {})
     }))
     mount(client, '/tracker/OPS-1')
-    const instruction = await screen.findByLabelText('Custom instruction')
+    const runButton = () => screen.getByRole('button', { name: /Run agent/ }) as HTMLButtonElement
+    const instruction = await openHand()
     fireEvent.change(instruction, { target: { value: 'Keep this draft' } })
     await act(async () => { await client.refetchQueries({ queryKey: queryKeys.tracker.detail(association, item.id) }) })
     expect(await screen.findByText(failureKind === 'transport' ? /cannot reach the cezar server/ : 'Detail unavailable')).toBeTruthy()
-    const launch = screen.getByRole('button', { name: /Run agent/ }) as HTMLButtonElement
+    const launch = runButton()
     expect(launch.disabled).toBe(true)
     fireEvent.click(launch)
     fireEvent.keyDown(instruction, { key: 'Enter', ctrlKey: true })
     expect(launches).toEqual([])
+    // Retry is on the page behind the composer: close it, retry, and come back to the same draft.
+    await closeHand()
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     await waitFor(() => expect(calls).toBe(3))
-    expect(launch.disabled).toBe(true)
+    const reopened = await openHand()
+    expect(runButton().disabled).toBe(true)
     await act(async () => finishRetry(json({ available: true, item: { ...item, body: 'Recovered detail' } })))
     expect(await screen.findByText('Recovered detail')).toBeTruthy()
-    expect(launch.disabled).toBe(false)
-    expect((instruction as HTMLTextAreaElement).value).toBe('Keep this draft')
+    expect(runButton().disabled).toBe(false)
+    expect(reopened.value).toBe('Keep this draft')
+    expect(launches).toEqual([])
   })
 
   it('preserves two mobile pages after a minute in detail and remount, applying watch changes only on request', async () => {
-    vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
+    asPhone()
     const client = createQueryClient()
     client.setQueryData(queryKeys.tracker.association(), { association })
     client.setQueryData(queryKeys.health, { capabilities: { localHandoff: true } })
@@ -119,12 +150,14 @@ describe('tracker snapshot freshness', () => {
       }
       return new Promise<never>(() => {})
     }))
-    const view = mount(client, '/tracker')
+    const view = mount(client, '/tracker', { phone: true })
     expect(await screen.findByText('Issue')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Load more' }))
     expect(await screen.findByText('Second page')).toBeTruthy()
     fireEvent.click(screen.getByText('Issue'))
-    expect(await screen.findByLabelText('Custom instruction')).toBeTruthy()
+    // The issue replaces the list on a phone (the composer is a dialog now, so the body is the marker).
+    expect(await screen.findByText('Original detail')).toBeTruthy()
+    expect(screen.queryByText('Second page')).toBeNull()
     changed = true
     const later = Date.now() + 61_000
     vi.spyOn(Date, 'now').mockReturnValue(later)
@@ -134,7 +167,7 @@ describe('tracker snapshot freshness', () => {
     expect(await screen.findByRole('button', { name: 'Show changes' })).toBeTruthy()
     expect(screen.getByText('Second page')).toBeTruthy()
     view.unmount()
-    mount(client, '/tracker')
+    mount(client, '/tracker', { phone: true })
     await act(async () => {})
     expect(listCalls).toEqual(['first', 'next'])
     expect(await screen.findByRole('button', { name: 'Show changes' })).toBeTruthy()
@@ -157,6 +190,7 @@ describe('tracker snapshot freshness', () => {
     }))
     mount(client, '/tracker/OPS-1')
     expect(await screen.findByText(item.body)).toBeTruthy()
+    await openHand()
     expect((screen.getByRole('button', { name: /Run agent/ }) as HTMLButtonElement).disabled).toBe(false)
   })
 
@@ -207,7 +241,7 @@ it('preserves a bound connection draft across transport failure and recovery', a
   return new Promise<never>(()=>{});
  }));
  mount(client,'/tracker/OPS-1');
- fireEvent.change(await screen.findByLabelText('Custom instruction'),{target:{value:'Do not lose my instruction'}});
+ fireEvent.change(await openHand(),{target:{value:'Do not lose my instruction'}});
  fireEvent.click(screen.getByRole('button', { name: 'Choose a workflow' }));
  fireEvent.click(await screen.findByRole('option', { name: 'review-only' }));
  await act(async()=>{await client.refetchQueries({queryKey:queryKeys.tracker.connection()});});
@@ -215,19 +249,21 @@ it('preserves a bound connection draft across transport failure and recovery', a
  expect(screen.queryByRole('button', {name:/Run agent/})).toBeNull();
  failing = false;
  fireEvent.click(screen.getByRole('button', { name: 'Retry connection' }));
- expect((await screen.findByLabelText('Custom instruction') as HTMLTextAreaElement).value).toBe('Do not lose my instruction');
+ // The failed check unmounted the browser, composer included; reopen it on the recovered issue.
+ expect((await openHand()).value).toBe('Do not lose my instruction');
  expect(screen.getByRole('button', { name: 'Choose a workflow' }).textContent).toContain('review-only');
  await act(async()=>{
   const nextId='00000000-0000-4000-8000-000000000002';
   client.setQueryData(queryKeys.tracker.association(), {association:{...bound,connectionId:nextId}});
   client.setQueryData(queryKeys.tracker.connection(), {connection:{...connected.connection,id:nextId},demo:false});
  });
- await waitFor(() => expect((screen.getByLabelText('Custom instruction') as HTMLTextAreaElement).value).toBe(''));
+ // A new connection is a new scope: the browser remounts for it, and its composer starts clean.
+ await waitFor(() => expect(document.querySelector('[data-slot="tracker-hand-dialog"]')).toBeNull());
+ expect((await openHand()).value).toBe('');
  expect(screen.getByRole('button', { name:'Choose a workflow' }).textContent).not.toContain('review-only');
 });
 
 it('retains loaded rows and pagination through fallback refresh and a failed Retry', async () => {
-  vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
   const client = createQueryClient()
   client.setQueryData(queryKeys.tracker.association(), { association })
   const key = queryKeys.tracker.items(association, { state: 'active', labels: [], query: '' })
@@ -260,7 +296,6 @@ it('retains loaded rows and pagination through fallback refresh and a failed Ret
 
 
 it('counts down a rate-limited fallback Retry while retaining loaded pages', async () => {
-  vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
   const client = createQueryClient()
   client.setQueryData(queryKeys.tracker.association(), { association })
   const key = queryKeys.tracker.items(association, { state: 'active', labels: [], query: '' })

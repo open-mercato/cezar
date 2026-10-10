@@ -90,9 +90,8 @@ describe('PlanDock', () => {
     expect(rows[2]!.querySelector('[data-slot="plan-tag"]')).toBeNull()
     // Expanded: the current-item line belongs to the collapsed head only.
     expect(document.querySelector('[data-slot="plan-current"]')).toBeNull()
-    // The decorative edge is slimmer on phones, with its current desktop height restored at md.
-    expect(document.querySelector('[data-slot="grad-edge"]')?.className).toContain('h-0.5')
-    expect(document.querySelector('[data-slot="grad-edge"]')?.className).toContain('md:h-[3px]')
+    // The decorative brand edge was retired by the redesign: the slot stays, but it draws nothing.
+    expect(document.querySelector('[data-slot="grad-edge"]')?.className).toBe('hidden')
   })
 
   // Regression: an opencode `cancelled` todo used to be dropped by the mapper and

@@ -5,9 +5,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import type { ProjectListEntry, RunIndexEntry } from '@open-mercato/cezar-api-client'
+import { useGlobalSettings } from '@/components/global-settings'
 import { ListViewProvider, useListView } from '@/components/list-view'
 import { __clearRememberedStatusesForTests, workspaceQueryKeys } from '@/api/queries'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
+import { ShellWithSidebar } from '@/test/shell-with-sidebar'
 
 import { GlobalTasksRoute } from './global-tasks'
 import { resolveConflictsPrompt } from './task-thread/run-actions'
@@ -24,6 +26,8 @@ afterEach(() => {
   act(() => resetToasts())
   cleanup()
   vi.unstubAllGlobals()
+  // The Display menu's column choice is per-browser; one case's columns must not reach the next.
+  localStorage.clear()
   // Reference statuses are remembered for the LIFETIME OF THE TAB, deliberately (a re-keyed batch
   // must not blank the chips) — which in vitest means one case's statuses would otherwise be
   // remembered by the next one in this file.
@@ -223,13 +227,27 @@ function renderPage(client = createQueryClient(), entry = '/tasks') {
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[entry]}>
-        <ListViewProvider>
-          <GlobalTasksRoute />
-          <Toaster />
-          <LocationProbe />
-        </ListViewProvider>
+        <ShellWithSidebar dialog={<GlobalSettingsProbe />}>
+          <ListViewProvider>
+            <GlobalTasksRoute />
+            <Toaster />
+            <LocationProbe />
+          </ListViewProvider>
+        </ShellWithSidebar>
       </MemoryRouter>
     </QueryClientProvider>,
+  )
+}
+
+/** Stands where the global settings dialog does, and says what it was asked to show. */
+function GlobalSettingsProbe() {
+  const settings = useGlobalSettings()
+  return (
+    <span
+      data-testid="global-settings"
+      data-open={String(settings.isOpen)}
+      data-section={settings.section ?? ''}
+    />
   )
 }
 
@@ -251,6 +269,32 @@ function SharedViewProbe() {
 let seenAt: string | undefined
 
 const unreadMarkers = () => [...document.querySelectorAll('[aria-label="unread"]')]
+
+/** What the page put in its contextual sidebar — on a desktop that is where the list is cut:
+ *  Active | Archived, the grouping, and the facets as tickable rows. (The toolbar keeps a compact
+ *  copy of the same controls for phones; both write the same URL state.) */
+const sidebar = () =>
+  within(document.querySelector('[data-slot="context-sidebar-body"]') as HTMLElement)
+/** One facet row: a checkbox labelled by its row. */
+const facet = (name: RegExp) => sidebar().getByRole('checkbox', { name })
+/** One "Group by" row. The list is a single choice, with None as its own row. */
+const groupByRow = (label: 'None' | 'Project' | 'Tag' | 'Status' | 'Workflow') =>
+  sidebar().getByRole('button', { name: label })
+/** Active | Archived. Radix tabs switch on mousedown, not click. */
+const viewTab = (name: 'Active' | 'Archived') => sidebar().getByRole('tab', { name })
+const pickView = (name: 'Active' | 'Archived') => fireEvent.mouseDown(viewTab(name))
+/** The sidebar's own way back to a plain list — present only while something is applied. */
+const clearEverything = () => sidebar().getByRole('button', { name: 'Clear filters and grouping' })
+/** The removable chips above the table: what is narrowing the list right now. */
+const activeFilters = () =>
+  [...document.querySelectorAll('[data-slot="active-filter"]')].map((chip) => chip.getAttribute('data-filter'))
+/** Cost, CPU and Memory are real columns that stay off until the Display menu switches them on. */
+async function showColumns(...labels: Array<'Cost' | 'CPU' | 'Memory'>) {
+  fireEvent.pointerDown(screen.getByRole('button', { name: 'Display' }))
+  for (const label of labels) fireEvent.click(await screen.findByRole('menuitemcheckbox', { name: label }))
+}
+/** The toast on screen (shadcn Sonner). */
+const toastText = () => document.querySelector('[data-sonner-toast] [data-title]')?.textContent
 
 const rowIds = () =>
   [...document.querySelectorAll('[data-slot="global-task-row"]')].map(
@@ -279,14 +323,16 @@ describe('global tasks page', () => {
     renderPage()
     await screen.findByText('Add checkout endpoint')
 
-    const storefront = screen.getByRole('button', { name: /storefront/ })
-    fireEvent.click(storefront)
+    expect(facet(/storefront/).getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(facet(/storefront/))
     // One tag, two repos — which is the entire point of tagging connected repositories.
     await waitFor(() => expect(rowIds()).toEqual(['a1', 'w1']))
-    expect(storefront.getAttribute('aria-pressed')).toBe('true')
+    expect(facet(/storefront/).getAttribute('aria-checked')).toBe('true')
+    expect(activeFilters()).toEqual(['tag:storefront'])
 
-    fireEvent.click(storefront)
+    fireEvent.click(facet(/storefront/))
     await waitFor(() => expect(rowIds()).toEqual(['a1', 'w1', 'i1']))
+    expect(activeFilters()).toEqual([])
   })
 
   it('finds the repos nobody has tagged yet', async () => {
@@ -294,7 +340,7 @@ describe('global tasks page', () => {
     renderPage()
     await screen.findByText('Add checkout endpoint')
 
-    fireEvent.click(screen.getByRole('button', { name: /Untagged/ }))
+    fireEvent.click(facet(/Untagged/))
     await waitFor(() => expect(rowIds()).toEqual(['i1']))
   })
 
@@ -309,8 +355,8 @@ describe('global tasks page', () => {
     renderPage()
     await screen.findByText('Add checkout endpoint')
 
-    fireEvent.click(screen.getByRole('button', { name: /storefront/ }))
-    fireEvent.click(screen.getByRole('button', { name: /frontend/ }))
+    fireEvent.click(facet(/storefront/))
+    fireEvent.click(facet(/frontend/))
     await waitFor(() => expect(rowIds()).toEqual(['a1', 'w1']))
   })
 
@@ -340,7 +386,7 @@ describe('global tasks page', () => {
     renderPage()
     await screen.findByText('Add checkout endpoint')
 
-    fireEvent.click(within(screen.getByRole('group', { name: 'Group tasks by' })).getByText('Tag'))
+    fireEvent.click(groupByRow('Tag'))
 
     await waitFor(() => {
       const keys = [...document.querySelectorAll('[data-slot="task-group"]')].map((group) =>
@@ -417,14 +463,10 @@ describe('global tasks page', () => {
       await screen.findByText('Add checkout endpoint')
 
       expect(rowIds()).toEqual(['a1'])
-      expect(
-        screen.getByRole('button', { name: /storefront/ }).getAttribute('aria-pressed'),
-      ).toBe('true')
-      expect(
-        within(screen.getByRole('group', { name: 'Group tasks by' }))
-          .getByText('Tag')
-          .getAttribute('aria-pressed'),
-      ).toBe('true')
+      expect(facet(/storefront/).getAttribute('aria-checked')).toBe('true')
+      expect(facet(/Running/).getAttribute('aria-checked')).toBe('true')
+      expect(groupByRow('Tag').getAttribute('aria-pressed')).toBe('true')
+      expect(groupByRow('None').getAttribute('aria-pressed')).toBe('false')
     })
 
     it('writes each facet into the URL as it is picked', async () => {
@@ -433,18 +475,14 @@ describe('global tasks page', () => {
       await screen.findByText('Add checkout endpoint')
       expect(search()).toBe('')
 
-      fireEvent.click(screen.getByRole('button', { name: /storefront/ }))
+      fireEvent.click(facet(/storefront/))
       await waitFor(() => expect(search()).toBe('?tag=storefront'))
 
-      fireEvent.click(
-        within(screen.getByRole('group', { name: 'Group tasks by' })).getByText('Project'),
-      )
+      fireEvent.click(groupByRow('Project'))
       await waitFor(() => expect(search()).toBe('?tag=storefront&group=project'))
 
       // Releasing the grouping drops the key rather than spelling out a default.
-      fireEvent.click(
-        within(screen.getByRole('group', { name: 'Group tasks by' })).getByText('Project'),
-      )
+      fireEvent.click(groupByRow('None'))
       await waitFor(() => expect(search()).toBe('?tag=storefront'))
     })
 
@@ -462,19 +500,28 @@ describe('global tasks page', () => {
       expect(rowIds()).toEqual(['a1', 'w1'])
     })
 
-    it('counts the grouping in the Clear badge, not just the facets', async () => {
+    it('counts the grouping as something applied, not just the facets', async () => {
       stubFetch()
       renderPage()
       await screen.findByText('Add checkout endpoint')
+      // Nothing applied: nothing to clear, in either place.
+      expect(sidebar().queryByRole('button', { name: 'Clear filters and grouping' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Clear all' })).toBeNull()
 
-      fireEvent.click(screen.getByRole('button', { name: /storefront/ }))
-      await waitFor(() => expect(screen.getByRole('button', { name: /^Clear/ }).textContent).toContain('(1)'))
+      fireEvent.click(facet(/storefront/))
+      // Each applied filter is named on its own removable chip (the old "(1)" count, spelled out).
+      await waitFor(() => expect(activeFilters()).toEqual(['tag:storefront']))
+      expect(clearEverything()).not.toBeNull()
 
-      fireEvent.click(
-        within(screen.getByRole('group', { name: 'Group tasks by' })).getByText('Tag'),
-      )
-      // One tag plus a grouping is two things applied — the badge said (1) before.
-      await waitFor(() => expect(screen.getByRole('button', { name: /^Clear/ }).textContent).toContain('(2)'))
+      fireEvent.click(groupByRow('Tag'))
+      await waitFor(() => expect(search()).toBe('?tag=storefront&group=tag'))
+
+      // One tag plus a grouping is two things applied: taking the tag off leaves the grouping,
+      // and the way back to a plain list is still on offer for it.
+      fireEvent.click(screen.getByRole('button', { name: 'Remove tag filter storefront' }))
+      await waitFor(() => expect(search()).toBe('?group=tag'))
+      expect(activeFilters()).toEqual([])
+      expect(clearEverything()).not.toBeNull()
     })
 
     it('clears the grouping too — Clear is the one way back to a plain list', async () => {
@@ -482,14 +529,15 @@ describe('global tasks page', () => {
       renderPage()
       await screen.findByText('Add checkout endpoint')
 
-      const groupBy = () => within(screen.getByRole('group', { name: 'Group tasks by' }))
       // Grouping alone, no filters: the button must still be offered.
-      fireEvent.click(groupBy().getByText('Project'))
+      fireEvent.click(groupByRow('Project'))
       await waitFor(() => expect(search()).toBe('?group=project'))
-      const clear = await screen.findByRole('button', { name: /^Clear/ })
+      const clear = await waitFor(() => clearEverything())
 
       fireEvent.click(clear)
       await waitFor(() => expect(search()).toBe(''))
+      expect(groupByRow('None').getAttribute('aria-pressed')).toBe('true')
+      expect(sidebar().queryByRole('button', { name: 'Clear filters and grouping' })).toBeNull()
       await waitFor(() => {
         const groups = document.querySelectorAll('[data-slot="task-group"]')
         expect(groups).toHaveLength(1)
@@ -502,10 +550,10 @@ describe('global tasks page', () => {
       renderPage()
       await screen.findByText('Add checkout endpoint')
 
-      fireEvent.click(screen.getByRole('button', { name: /storefront/ }))
+      fireEvent.click(facet(/storefront/))
       await waitFor(() => expect(search()).toBe('?tag=storefront'))
 
-      fireEvent.click(screen.getByRole('button', { name: /^Clear/ }))
+      fireEvent.click(clearEverything())
       await waitFor(() => expect(search()).toBe(''))
       expect(rowIds()).toEqual(['a1', 'w1', 'i1'])
     })
@@ -517,11 +565,11 @@ describe('global tasks page', () => {
       // Active is the default, so a normal link carries no key for it.
       expect(search()).toBe('')
 
-      fireEvent.click(screen.getByRole('button', { name: 'Archived' }))
+      pickView('Archived')
       await waitFor(() => expect(search()).toBe('?archived=1'))
       await waitFor(() => expect(rowIds()).toEqual(['i1']))
 
-      fireEvent.click(screen.getByRole('button', { name: 'Active' }))
+      pickView('Active')
       await waitFor(() => expect(search()).toBe(''))
       await waitFor(() => expect(rowIds()).toEqual(['a1', 'w1']))
     })
@@ -532,9 +580,8 @@ describe('global tasks page', () => {
       await screen.findByText('Bump the runner')
 
       expect(rowIds()).toEqual(['i1'])
-      expect(screen.getByRole('button', { name: 'Archived' }).getAttribute('aria-pressed')).toBe(
-        'true',
-      )
+      expect(viewTab('Archived').getAttribute('aria-selected')).toBe('true')
+      expect(viewTab('Active').getAttribute('aria-selected')).toBe('false')
     })
 
     it('keeps the view alongside the filters rather than dropping one for the other', async () => {
@@ -542,14 +589,14 @@ describe('global tasks page', () => {
       renderPage(createQueryClient(), '/tasks?archived=1')
       // The chips come from the registry, so wait for it rather than for the URL, which is
       // already what it will be.
-      const storefront = await screen.findByRole('button', { name: /storefront/ })
+      const storefront = await waitFor(() => facet(/storefront/))
       expect(search()).toBe('?archived=1')
 
       // A filter change re-encodes the whole state; the view must survive it, and vice versa.
       fireEvent.click(storefront)
       await waitFor(() => expect(search()).toBe('?tag=storefront&archived=1'))
 
-      fireEvent.click(screen.getByRole('button', { name: 'Active' }))
+      pickView('Active')
       await waitFor(() => expect(search()).toBe('?tag=storefront'))
     })
 
@@ -560,10 +607,12 @@ describe('global tasks page', () => {
       render(
         <QueryClientProvider client={createQueryClient()}>
           <MemoryRouter initialEntries={['/tasks?archived=1']}>
-            <ListViewProvider>
-              <GlobalTasksRoute />
-              <SharedViewProbe />
-            </ListViewProvider>
+            <ShellWithSidebar>
+              <ListViewProvider>
+                <GlobalTasksRoute />
+                <SharedViewProbe />
+              </ListViewProvider>
+            </ShellWithSidebar>
           </MemoryRouter>
         </QueryClientProvider>,
       )
@@ -576,34 +625,36 @@ describe('global tasks page', () => {
       renderPage()
       await screen.findByText('Add checkout endpoint')
 
-      fireEvent.click(screen.getByRole('button', { name: /Untagged/ }))
+      fireEvent.click(facet(/Untagged/))
       await waitFor(() => expect(search()).toBe('?untagged=1'))
       expect(rowIds()).toEqual(['i1'])
     })
   })
 
-  it('releases the grouping when its button is pressed again', async () => {
+  it('releases the grouping through its None row', async () => {
     stubFetch()
     renderPage()
     await screen.findByText('Add checkout endpoint')
 
-    const groupBy = () => within(screen.getByRole('group', { name: 'Group tasks by' }))
-    // No "None" button to hunt for — the pressed one is the off switch.
-    expect(groupBy().queryByText('None')).toBeNull()
+    // The grouping is one choice out of a list now, and "no grouping" is the row that says so.
+    expect(groupByRow('None').getAttribute('aria-pressed')).toBe('true')
+    expect(groupByRow('Project').getAttribute('aria-pressed')).toBe('false')
 
-    fireEvent.click(groupBy().getByText('Project'))
+    fireEvent.click(groupByRow('Project'))
     await waitFor(() =>
       expect(document.querySelectorAll('[data-slot="task-group"]').length).toBeGreaterThan(1),
     )
-    expect(groupBy().getByText('Project').getAttribute('aria-pressed')).toBe('true')
+    expect(groupByRow('Project').getAttribute('aria-pressed')).toBe('true')
+    expect(groupByRow('None').getAttribute('aria-pressed')).toBe('false')
 
-    fireEvent.click(groupBy().getByText('Project'))
+    fireEvent.click(groupByRow('None'))
     await waitFor(() => {
       const groups = document.querySelectorAll('[data-slot="task-group"]')
       expect(groups).toHaveLength(1)
       expect(groups[0]!.getAttribute('data-group-key')).toBe('all')
     })
-    expect(groupBy().getByText('Project').getAttribute('aria-pressed')).toBe('false')
+    expect(groupByRow('Project').getAttribute('aria-pressed')).toBe('false')
+    expect(groupByRow('None').getAttribute('aria-pressed')).toBe('true')
   })
 
   it('clears every facet at once', async () => {
@@ -611,11 +662,16 @@ describe('global tasks page', () => {
     renderPage()
     await screen.findByText('Add checkout endpoint')
 
-    fireEvent.click(screen.getByRole('button', { name: /storefront/ }))
-    await waitFor(() => expect(rowIds()).toEqual(['a1', 'w1']))
+    fireEvent.click(facet(/storefront/))
+    fireEvent.click(facet(/Running/))
+    await waitFor(() => expect(rowIds()).toEqual(['a1']))
+    expect(activeFilters()).toEqual(['status:running', 'tag:storefront'])
 
-    fireEvent.click(screen.getByRole('button', { name: /^Clear/ }))
+    // The chips' own "Clear all", above the table.
+    fireEvent.click(screen.getByRole('button', { name: 'Clear all' }))
     await waitFor(() => expect(rowIds()).toEqual(['a1', 'w1', 'i1']))
+    expect(activeFilters()).toEqual([])
+    expect(facet(/storefront/).getAttribute('aria-checked')).toBe('false')
   })
 
   it('shows the PR / issue chip each task actually references', async () => {
@@ -898,6 +954,11 @@ describe('global tasks page', () => {
       renderPage()
       await screen.findByText('Add checkout endpoint')
 
+      // Off until asked for: a cross-project list is scanned by title.
+      expect(screen.queryByText('$0.31')).toBeNull()
+      expect(document.querySelector('[data-usage="cpu"]')).toBeNull()
+      await showColumns('Cost', 'CPU', 'Memory')
+
       expect(screen.getByText('$0.31')).toBeTruthy()
       const cpu = document.querySelector('[data-usage="cpu"]')!
       expect(cpu.textContent).toBe('84%')
@@ -913,6 +974,7 @@ describe('global tasks page', () => {
       })
       renderPage()
       await screen.findByText('Bump the runner')
+      await showColumns('CPU', 'Memory')
 
       const mem = document.querySelector('[data-usage="mem"]')!
       expect(mem.textContent).toBe('peak 900 MB')
@@ -935,6 +997,7 @@ describe('global tasks page', () => {
       })
       renderPage()
       await screen.findByText('Bump the runner')
+      await showColumns('CPU')
 
       expect(document.querySelector('[data-usage="cpu"]')!.getAttribute('data-usage-kind')).toBe(
         'none',
@@ -946,6 +1009,10 @@ describe('global tasks page', () => {
       renderPage()
       await screen.findByText('Add checkout endpoint')
 
+      // Not even offered: the host gate decides whether the Display menu may list it.
+      fireEvent.pointerDown(screen.getByRole('button', { name: 'Display' }))
+      expect(await screen.findByRole('menuitemcheckbox', { name: 'CPU' })).not.toBeNull()
+      expect(screen.queryByRole('menuitemcheckbox', { name: 'Cost' })).toBeNull()
       expect(screen.queryByText('Cost')).toBeNull()
       expect(screen.queryByText('$0.31')).toBeNull()
     })
@@ -1034,7 +1101,7 @@ describe('global tasks page', () => {
     renderPage()
     await screen.findByText('Add checkout endpoint')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Archived' }))
+    pickView('Archived')
     await waitFor(() => expect(rowIds()).toEqual(['i1']))
 
     fireEvent.click(document.querySelector<HTMLButtonElement>('[data-action="unarchive-run"]')!)
@@ -1055,7 +1122,7 @@ describe('global tasks page', () => {
         .querySelector<HTMLButtonElement>('[data-action="archive-run"]')!,
     )
 
-    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('still running'))
+    await waitFor(() => expect(toastText()).toContain('still running'))
     // Rolled back: the row is still in the Active list.
     await waitFor(() => expect(rowIds()).toEqual(['a1', 'w1', 'i1']))
   })
@@ -1091,12 +1158,14 @@ describe('global tasks page', () => {
     await screen.findByText('Add checkout endpoint')
 
     expect(document.querySelector('[data-slot="facet-project"]')).toBeNull()
-    expect(screen.getByRole('link', { name: 'API' }).getAttribute('href')).toBe('/p/api/')
+    // No Project facet in the sidebar either — its Projects list is links, with a count each.
+    expect(sidebar().queryByRole('checkbox', { name: /^API/ })).toBeNull()
+    expect(sidebar().getByRole('link', { name: 'API' }).getAttribute('href')).toBe('/p/api/')
+    const table = within(document.querySelector('[data-slot="global-tasks-table"]') as HTMLElement)
+    expect(table.getByRole('link', { name: 'API' }).getAttribute('href')).toBe('/p/api/')
 
     // Grouping by project turns each heading into the same door.
-    fireEvent.click(
-      within(screen.getByRole('group', { name: 'Group tasks by' })).getByText('Project'),
-    )
+    fireEvent.click(groupByRow('Project'))
     await waitFor(() =>
       expect(
         document.querySelector('[data-slot="group-project-link"]')?.getAttribute('href'),
@@ -1117,11 +1186,17 @@ describe('global tasks page', () => {
     stubFetch({ projects: PROJECTS.map((project) => ({ ...project, tags: undefined })) })
     renderPage()
 
-    const hint = await screen.findByText(/Tag connected repositories in/)
-    // …and it is a real door, not a sentence naming a place the reader has to go find.
-    expect(
-      hint.querySelector('a[href="/settings/global/projects"]')?.textContent,
-    ).toBe('Settings → Projects')
+    await screen.findByText('Add checkout endpoint')
+    // No tag rows to tick, so the Tag group says how to get some…
+    expect(sidebar().queryByRole('checkbox', { name: /Untagged/ })).toBeNull()
+    const hint = sidebar().getByRole('button', { name: 'Tag your projects to filter and group by tag' })
+    // …and it is a real door, not a sentence naming a place the reader has to go find: global
+    // settings are a dialog, and this opens it straight on Projects.
+    const probe = () => screen.getByTestId('global-settings')
+    expect(probe().getAttribute('data-open')).toBe('false')
+    fireEvent.click(hint)
+    expect(probe().getAttribute('data-open')).toBe('true')
+    expect(probe().getAttribute('data-section')).toBe('projects')
   })
 
   it('renders the server’s error rather than an empty table', async () => {

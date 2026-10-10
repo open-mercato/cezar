@@ -27,7 +27,7 @@ describe('normalizeAddress', () => {
 
 describe('tabLabel', () => {
   it('names a blank tab', () => {
-    expect(tabLabel('')).toBe('Nowa karta')
+    expect(tabLabel('')).toBe('New tab')
   })
 
   it('uses host and port, which is what distinguishes one dev server from another', () => {

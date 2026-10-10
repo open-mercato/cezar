@@ -21,7 +21,7 @@ describe('Button', () => {
     it.each([
       { variant: 'primary', expected: ['bg-primary', 'text-primary-foreground'] },
       { variant: 'contrast', expected: ['bg-contrast', 'text-contrast-foreground'] },
-      { variant: 'outline', expected: ['border-border', 'bg-card'] },
+      { variant: 'outline', expected: ['border', 'border-input', 'bg-card'] },
       { variant: 'ghost', expected: ['text-muted-foreground'] },
       { variant: 'danger-ghost', expected: ['text-danger'] },
     ] as const)('$variant', ({ variant, expected }) => {
@@ -29,29 +29,38 @@ describe('Button', () => {
       const button = screen.getByRole('button')
 
       expect(button.dataset.variant).toBe(variant)
-      for (const cls of expected) expect(button.className).toContain(cls)
+      for (const cls of expected) expect(button.classList.contains(cls)).toBe(true)
     })
   })
 
   describe('size → class mapping', () => {
     it.each([
       { size: 'default', expected: ['h-9', 'px-3.5'] },
-      { size: 'sm', expected: ['h-[30px]', 'rounded-sm'] },
+      { size: 'sm', expected: ['h-8', 'px-2.5'] },
+      { size: 'xs', expected: ['h-6', 'rounded-sm'] },
       { size: 'icon', expected: ['size-9'] },
-      { size: 'icon-sm', expected: ['size-[30px]', 'rounded-sm'] },
+      { size: 'icon-sm', expected: ['size-8'] },
+      { size: 'icon-xs', expected: ['size-6', 'rounded-sm'] },
     ] as const)('$size', ({ size, expected }) => {
       render(<Button size={size}>Label</Button>)
       const button = screen.getByRole('button')
 
       expect(button.dataset.size).toBe(size)
-      for (const cls of expected) expect(button.className).toContain(cls)
+      for (const cls of expected) expect(button.classList.contains(cls)).toBe(true)
     })
   })
 
-  it('lets the small sizes override the default control radius', () => {
+  it.each(['xs', 'icon-xs'] as const)('lets the %s size override the default control radius', (size) => {
+    render(<Button size={size}>Label</Button>)
+    // `rounded-md` is the base; the extra-small sizes must win the merge rather than coexist.
+    const button = screen.getByRole('button')
+    expect(button.classList.contains('rounded-sm')).toBe(true)
+    expect(button.classList.contains('rounded-md')).toBe(false)
+  })
+
+  it('keeps the control radius on sm — only the extra-small sizes tighten it', () => {
     render(<Button size="sm">Label</Button>)
-    // `rounded-md` is the base; the sm size must win the merge rather than coexist.
-    expect(screen.getByRole('button').className).not.toContain('rounded-md')
+    expect(screen.getByRole('button').classList.contains('rounded-md')).toBe(true)
   })
 
   it('lets a caller className override a variant class', () => {

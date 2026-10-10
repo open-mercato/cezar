@@ -26,9 +26,11 @@ describe('Tracker handoff', () => {
     const rendered = render(view('Old partial description'))
     fireEvent.change(screen.getByLabelText('Custom instruction'), { target: { value: 'Keep this instruction' } })
     fireEvent.click(screen.getByRole('checkbox', { name: /I understand/ }))
+    expect(screen.getByRole('checkbox', { name: /I understand/ }).getAttribute('aria-checked')).toBe('true')
     expect((screen.getByRole('button', { name: /Run agent/ }) as HTMLButtonElement).disabled).toBe(false)
     rendered.rerender(view('Changed partial description'))
-    expect((screen.getByRole('checkbox', { name: /I understand/ }) as HTMLInputElement).checked).toBe(false)
+    // A shadcn Checkbox (a button with `aria-checked`), no longer a native input with `.checked`.
+    expect(screen.getByRole('checkbox', { name: /I understand/ }).getAttribute('aria-checked')).toBe('false')
     expect((screen.getByRole('button', { name: /Run agent/ }) as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByLabelText('Custom instruction') as HTMLTextAreaElement).value).toBe('Keep this instruction')
   })

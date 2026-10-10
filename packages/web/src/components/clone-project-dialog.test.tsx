@@ -1,11 +1,13 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import type { ProjectListEntry } from '@open-mercato/cezar-api-client'
 import { CloneProjectDialog, githubSsoUrl } from '@/components/clone-project-dialog'
+import { useGlobalSettings } from '@/components/global-settings'
+import { ShellProviders } from '@/test/shell-providers'
 
 /**
  * The clone-from-GitHub dialog (multi-project spec, "Add project" option B / step 4.3).
@@ -79,13 +81,23 @@ function LocationProbe() {
   return <span data-testid="location">{useLocation().pathname}</span>
 }
 
+/** Where the global-settings dialog stands: the checkout-root control opens it on Projects. */
+function SettingsProbe() {
+  const settings = useGlobalSettings()
+  return <output data-testid="global-settings" data-open={String(settings.isOpen)} data-section={settings.section ?? ''} />
+}
+const settingsProbe = () => document.querySelector('[data-testid="global-settings"]') as HTMLElement
+
 function renderDialog() {
   const onOpenChange = vi.fn()
   render(
     <QueryClientProvider client={createQueryClient()}>
       <MemoryRouter initialEntries={['/p/cezar/']}>
-        <CloneProjectDialog open onOpenChange={onOpenChange} />
-        <LocationProbe />
+        <ShellProviders>
+          <CloneProjectDialog open onOpenChange={onOpenChange} />
+          <LocationProbe />
+          <SettingsProbe />
+        </ShellProviders>
       </MemoryRouter>
     </QueryClientProvider>,
   )
@@ -96,7 +108,7 @@ const slot = (name: string) => document.querySelector(`[data-slot="${name}"]`) a
 const urlInput = () => slot('clone-url') as HTMLInputElement
 const nameInput = () => slot('clone-name') as HTMLInputElement
 const cloneButton = () => slot('clone-confirm') as HTMLButtonElement
-const rootSettingsControl = () => slot('clone-root-settings') as HTMLAnchorElement | HTMLButtonElement
+const rootSettingsControl = () => slot('clone-root-settings') as HTMLButtonElement
 
 describe('CloneProjectDialog', () => {
   it('previews <projectsDir>/<repo> from the typed url and posts the trimmed reference', async () => {
@@ -107,8 +119,10 @@ describe('CloneProjectDialog', () => {
     fireEvent.change(urlInput(), { target: { value: 'https://github.com/open-mercato/cezar.git' } })
     // The name defaults to the repo half — the same rule the server applies.
     await waitFor(() => expect(slot('clone-target')?.textContent).toBe('~/cezar/projects/cezar'))
-    expect(rootSettingsControl().tagName).toBe('A')
-    expect(rootSettingsControl().getAttribute('href')).toBe('/settings/global/projects')
+    // Global settings are a dialog now, so this is a button that opens it — not a link away.
+    expect(rootSettingsControl().tagName).toBe('BUTTON')
+    expect(rootSettingsControl().disabled).toBe(false)
+    expect(rootSettingsControl().closest('a')).toBeNull()
     expect(rootSettingsControl().getAttribute('aria-label')).toBe('Edit checkout root')
     expect(rootSettingsControl().getAttribute('title')).toBe('Edit checkout root')
 
@@ -122,6 +136,22 @@ describe('CloneProjectDialog', () => {
     // Success closes the dialog and jumps to the new project's scope.
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
     await waitFor(() => expect(document.querySelector('[data-testid="location"]')?.textContent).toBe('/p/cezar-2/'))
+  })
+
+  it('the checkout-root control steps aside for global settings, opened on Projects', async () => {
+    serve()
+    const { onOpenChange } = renderDialog()
+    await waitFor(() => expect(slot('clone-target')).toBeTruthy())
+    expect(settingsProbe().getAttribute('data-open')).toBe('false')
+
+    fireEvent.click(rootSettingsControl())
+
+    // One modal at a time: this dialog closes itself before the settings one opens over it…
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+    expect(settingsProbe().getAttribute('data-open')).toBe('true')
+    expect(settingsProbe().getAttribute('data-section')).toBe('projects')
+    // …and nothing navigated: the user keeps the page they were cloning from.
+    expect(document.querySelector('[data-testid="location"]')?.textContent).toBe('/p/cezar/')
   })
 
   it('an edited folder name is previewed and posted', async () => {
@@ -147,9 +177,10 @@ describe('CloneProjectDialog', () => {
     // A clone cannot be dismissed while pending; the settings affordance follows the same rule
     // and becomes a disabled button rather than an active global navigation link (#561).
     expect(rootSettingsControl().tagName).toBe('BUTTON')
-    expect((rootSettingsControl() as HTMLButtonElement).disabled).toBe(true)
+    expect(rootSettingsControl().disabled).toBe(true)
     expect(rootSettingsControl().getAttribute('aria-label')).toBe('Edit checkout root')
     fireEvent.click(rootSettingsControl())
+    expect(settingsProbe().getAttribute('data-open')).toBe('false')
     expect(document.querySelector('[data-testid="location"]')?.textContent).toBe('/p/cezar/')
 
     const checkoutId = String(posted[0]?.checkoutId)
@@ -220,8 +251,16 @@ describe('CloneProjectDialog', () => {
     expect(link.target).toBe('_blank')
     expect(link.rel).toBe('noreferrer')
     expect(slot('clone-error')?.textContent).toContain('return to this tab to retry')
-    expect(slot('clone-error')?.querySelector('details')?.textContent).toContain(ssoUrl)
-    expect(slot('clone-error')?.querySelector('details')?.open).toBe(false)
+    // The server's own words stay one click away, collapsed until asked for (a shadcn
+    // Collapsible now, where this was a native <details>).
+    const details = within(slot('clone-error') as HTMLElement).getByRole('button', { name: 'Error details' })
+    expect(details.getAttribute('aria-expanded')).toBe('false')
+    expect(slot('clone-error')?.textContent).not.toContain('SAML enforcement')
+    fireEvent.click(details)
+    expect(details.getAttribute('aria-expanded')).toBe('true')
+    expect(slot('clone-error')?.textContent).toContain(`Authorize in your web browser: ${ssoUrl}`)
+    fireEvent.click(details)
+    expect(details.getAttribute('aria-expanded')).toBe('false')
     expect(cloneButton().textContent).toBe('Retry clone')
 
     fireEvent.click(link, { ctrlKey: mode === 'manual' })

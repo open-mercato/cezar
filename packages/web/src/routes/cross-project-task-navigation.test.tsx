@@ -7,16 +7,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import type { ProjectsResponse } from '@open-mercato/cezar-api-client'
 import { AppearanceProvider } from '@/components/appearance-provider'
+import { AppShellContainer } from '@/components/app-shell-container'
 import { ListViewProvider } from '@/components/list-view'
-import { ProjectGroups } from '@/components/project-groups'
 import { ThemeProvider } from '@/components/theme-provider'
+import { ShellProviders } from '@/test/shell-providers'
 import { AppRoutes } from '@/routes'
 
 /**
  * Opening ANOTHER project's task without a reload (#task-detail-404).
  *
- * The rows of the global Tasks page, the sidebar's per-project lists and the ⌘K palette all link
- * into a project that is not the one the app currently stands in. The thread that arrives must ask
+ * The rows of the global Tasks page and the ⌘K palette link into a project that is not the one the
+ * app currently stands in, and the rail's project switcher followed by the Tasks sidebar is the
+ * shell's own way across (it replaced the sidebar's per-project task lists, which linked there directly). The thread that arrives must ask
  * `/api/v1/p/<that project>/runs/:id` — the unscoped spelling reaches the BOOT project, which
  * honestly answers 404 for a run it does not own, and TanStack caches that error under the
  * correctly-scoped key, so the thread stays stuck on "Task not found" until a reload.
@@ -88,6 +90,15 @@ let paths: string[] = []
 beforeEach(() => {
   paths = []
   localStorage.clear()
+  // Radix positions the project switcher's menu with floating-ui, which observes its trigger.
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  )
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
@@ -136,10 +147,12 @@ function renderAt(entry: string) {
         <ThemeProvider>
           <AppearanceProvider>
             <MemoryRouter initialEntries={[entry]}>
-              <ListViewProvider>
-                <AppRoutes />
-                <NavigationProbe />
-              </ListViewProvider>
+              <ShellProviders>
+                <ListViewProvider>
+                  <AppRoutes />
+                  <NavigationProbe />
+                </ListViewProvider>
+              </ShellProviders>
             </MemoryRouter>
           </AppearanceProvider>
         </ThemeProvider>
@@ -148,22 +161,21 @@ function renderAt(entry: string) {
   )
 }
 
-function SidebarHarness() {
+/** The routes inside the real shell, as `app.tsx` mounts them: the rail's project switcher is how
+ *  the shell itself crosses projects, and the Tasks sidebar is where the arriving project's tasks
+ *  are then listed. */
+function ShellHarness() {
   return (
     <>
-      <ProjectGroups
-        projects={REGISTRY.projects}
-        bootProjectId={REGISTRY.bootProject}
-        inboxAvailable={false}
-        automationsAvailable={false}
-      />
-      <AppRoutes />
+      <AppShellContainer>
+        <AppRoutes />
+      </AppShellContainer>
       <NavigationProbe />
     </>
   )
 }
 
-function renderWithSidebarAt(entry: string) {
+function renderInShellAt(entry: string) {
   const client = createQueryClient()
   render(
     <StrictMode>
@@ -171,9 +183,7 @@ function renderWithSidebarAt(entry: string) {
         <ThemeProvider>
           <AppearanceProvider>
             <MemoryRouter initialEntries={[entry]}>
-              <ListViewProvider>
-                <SidebarHarness />
-              </ListViewProvider>
+              <ShellHarness />
             </MemoryRouter>
           </AppearanceProvider>
         </ThemeProvider>
@@ -211,16 +221,34 @@ describe('opening another project’s task without a reload', () => {
     await expectTheRunWasReadFromItsOwnProject()
   })
 
-  it('reads the run from its own project when clicked from a project sidebar group', async () => {
-    renderWithSidebarAt(`/p/${BOOT}/`)
+  // The sidebar no longer lists every project's tasks (one project is on screen at a time), so
+  // the shell's own road to another project's task is two steps: the rail's project switcher,
+  // then that project's row in the Tasks sidebar. Both are soft navigations, and the second one
+  // mounts the thread under a provider that changed scope a moment ago.
+  it('reads the run from its own project after switching project in the rail and opening it from the Tasks sidebar', async () => {
+    renderInShellAt(`/p/${BOOT}/`)
 
-    const otherGroup = await waitFor(() => {
-      const group = document.querySelector('[data-slot="project-group"][data-project="other"]')
-      expect(group).not.toBeNull()
-      return group as HTMLElement
+    // Radix opens a menu on pointerdown, not click.
+    fireEvent.pointerDown(
+      await screen.findByRole('button', { name: /Switch project$/ }),
+      { button: 0, ctrlKey: false },
+    )
+    const other = await waitFor(() => {
+      const item = document.querySelector('[data-slot="project-group"][data-project="other"]')
+      expect(item).not.toBeNull()
+      return item as HTMLElement
     })
-    fireEvent.click(within(otherGroup).getByRole('button', { name: 'Expand other-repo', expanded: false }))
-    const title = await screen.findByText('Do the thing')
+    expect(other.textContent).toContain('other-repo')
+    fireEvent.click(other)
+    await waitFor(() =>
+      expect(document.querySelector('[data-testid="location"]')?.getAttribute('data-pathname')).toBe('/p/other/'),
+    )
+
+    const sidebar = document.querySelector('[data-slot="context-sidebar-body"]') as HTMLElement
+    // A finished, already-seen task files under the one section that starts collapsed.
+    const done = await within(sidebar).findByRole('button', { name: /^Done/, expanded: false })
+    fireEvent.click(done)
+    const title = await within(sidebar).findByText('Do the thing')
     fireEvent.click(title.closest('a')!)
 
     await expectTheRunWasReadFromItsOwnProject()

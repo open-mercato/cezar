@@ -252,7 +252,7 @@ describe('the inbox card list', () => {
     const card = cards()[0]!
     expect(card.querySelector('[data-slot="todo-summary"]')?.textContent).toBe(TODO_FULL.summary)
     expect(card.querySelector('[data-slot="todo-meta"]')?.textContent).toContain('follow-up')
-    expect(card.querySelector('[data-slot="todo-skill"]')?.textContent).toBe('skill: om-fix')
+    expect(card.querySelector('[data-slot="todo-skill"]')?.textContent).toBe('Skill om-fix')
     const pr = card.querySelector<HTMLAnchorElement>('[data-slot="todo-pr"]')
     expect(pr?.getAttribute('href')).toBe(TODO_FULL.prUrl)
     expect(pr?.getAttribute('rel')).toContain('noopener')
@@ -260,7 +260,7 @@ describe('the inbox card list', () => {
     expect(card.querySelector('[data-slot="todo-source"]')?.getAttribute('href')).toBe('/tasks/run-1')
   })
 
-  it('says "source task deleted" when the source run is gone (legacy honesty rule)', async () => {
+  it('says "Source task deleted" when the source run is gone (legacy honesty rule)', async () => {
     stubFetch()
     renderInbox()
 
@@ -268,7 +268,7 @@ describe('the inbox card list', () => {
     const card = cards()[1]!
     expect(card.querySelector('[data-slot="todo-source"]')).toBeNull()
     expect(card.querySelector('[data-slot="todo-source-gone"]')?.textContent).toBe(
-      'source task deleted',
+      'Source task deleted',
     )
   })
 
@@ -690,12 +690,14 @@ describe('Dismiss', () => {
 // ---- empty & error ----------------------------------------------------------------------------
 
 describe('empty and error states', () => {
-  it('an empty inbox renders the shared CenteredState template', async () => {
+  // The shared template is `ListEmpty` now — the list views' empty state (shadcn `Empty`), which
+  // replaced `CenteredState` here.
+  it('an empty inbox renders the shared empty-list template', async () => {
     stubFetch({}, [])
     renderInbox()
 
     const state = await waitFor(() => {
-      const found = document.querySelector('[data-slot="centered-state"]')
+      const found = document.querySelector('[data-route="inbox"] [data-slot="empty"]')
       expect(found).not.toBeNull()
       return found!
     })
@@ -709,7 +711,7 @@ describe('empty and error states', () => {
     renderInbox()
 
     await waitFor(() =>
-      expect(document.querySelector('[data-slot="centered-state"]')).not.toBeNull(),
+      expect(document.querySelector('[data-route="inbox"] [data-slot="empty"]')?.textContent).toContain('Inbox empty'),
     )
     expect(cards()).toHaveLength(0)
   })
@@ -721,10 +723,11 @@ describe('empty and error states', () => {
     renderInbox()
 
     const state = await waitFor(() => {
-      const found = document.querySelector('[data-slot="centered-state"][data-tone="danger"]')
+      const found = document.querySelector('[data-route="inbox"] [data-slot="empty"][data-tone="danger"]')
       expect(found).not.toBeNull()
       return found!
     })
+    expect(state.textContent).toContain('Could not load the inbox')
     expect(state.textContent).toContain('disk exploded')
   })
 })
@@ -917,7 +920,9 @@ describe('the inbox gate (#471)', () => {
     expect(screen.queryByText('Inbox empty')).toBeNull()
     // And it tells the user how to get it back.
     expect(screen.getByText(/CEZ_FOLLOWUPS=1/)).toBeTruthy()
-    const header = document.querySelector('[data-route="inbox"] header')
+    // The page header is the shared `PageHeader` row (a div with a slot, not a <header>).
+    const header = document.querySelector('[data-route="inbox"] [data-slot="page-header"]')
+    expect(header?.querySelector('h1')?.textContent).toBe('Inbox')
     expect(header?.textContent).toContain('Disabled for this server; per-task Notes still run.')
     expect(header?.textContent).not.toContain('Follow-ups agents suggested')
     expect(cards()).toHaveLength(0)

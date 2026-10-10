@@ -25,7 +25,8 @@ describe('ZoomableImage', () => {
     render(<ZoomableImage src="/img.png" alt="pic" />)
     fireEvent.click(screen.getByRole('img'))
     expect(document.querySelector('[data-slot="image-lightbox"]')).not.toBeNull()
-    fireEvent.keyDown(window, { key: 'Escape' })
+    // The lightbox is a Radix Dialog: Escape is heard on the document, from wherever focus is.
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
     expect(document.querySelector('[data-slot="image-lightbox"]')).toBeNull()
   })
 })

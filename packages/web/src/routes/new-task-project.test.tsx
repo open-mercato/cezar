@@ -4,6 +4,7 @@ import { MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
+import { ListViewProvider } from '@/components/list-view'
 import type {
   HealthResponse,
   ProjectsResponse,
@@ -210,7 +211,11 @@ function renderAt(entry: string) {
   return render(
     <QueryClientProvider client={createQueryClient()}>
       <MemoryRouter initialEntries={[entry]}>
-        <AppRoutes />
+        {/* The shell's list filter: the task area's sidebar reads it, and `AppRoutes` is rendered
+            here without the shell that provides it. */}
+        <ListViewProvider>
+          <AppRoutes />
+        </ListViewProvider>
         <LocationProbe />
         <Toaster />
       </MemoryRouter>
@@ -236,13 +241,17 @@ const paste = (target: HTMLTextAreaElement, files: File[]) =>
  *  a `Remove <name>` control, which is the one handle both shapes share. */
 const attachmentChips = () => screen.queryAllByLabelText(/^Remove /)
 const projectPill = () => screen.getByRole('button', { name: 'Project' })
-const sourcePill = () => screen.getByRole('button', { name: 'Choose a skill or workflow' })
+// Workflows are chosen apart from skills — one pill, and one catalog, each.
+const workflowPill = () => screen.getByRole('button', { name: 'Choose a workflow' })
+const skillPill = () => screen.getByRole('button', { name: 'Choose a skill' })
+/** The one transient message on screen (sonner), or null. */
+const toastText = () => document.querySelector('[data-sonner-toast]')?.textContent ?? null
 const pathname = () => screen.getByTestId('location').textContent
 
 /** The composer is only settled once the pickers resolved against the mounted scope. */
-async function composerReady(sourceLabel = 'Skill') {
+async function composerReady(sourceLabel = 'Add skill') {
   await waitFor(() => {
-    expect(sourcePill().textContent).toContain(sourceLabel)
+    expect(skillPill().textContent).toContain(sourceLabel)
     expect(textarea().disabled).toBe(false)
   })
 }
@@ -253,6 +262,18 @@ async function switchProject(projectId: string) {
   await screen.findByPlaceholderText('search projects…')
   fireEvent.click(document.querySelector(`[data-slot="project-option"][data-project-id="${projectId}"]`)!)
 }
+
+/** Open one of the two source pickers, read what it offers, and close it again. */
+async function catalog(pill: () => HTMLElement, placeholder: string) {
+  fireEvent.click(pill())
+  await screen.findByPlaceholderText(placeholder)
+  const refs = sourceRefs()
+  fireEvent.click(pill())
+  await waitFor(() => expect(screen.queryByPlaceholderText(placeholder)).toBeNull())
+  return refs
+}
+const skillCatalog = () => catalog(skillPill, 'search skills…')
+const workflowCatalog = () => catalog(workflowPill, 'search workflows…')
 
 const sourceRefs = () =>
   [...document.querySelectorAll('[data-slot="source-option"]')].map((o) =>
@@ -301,11 +322,10 @@ describe('switching project', () => {
     await composerReady()
 
     // The boot project reads the unscoped legacy surface (step 3.1) …
-    fireEvent.click(sourcePill())
-    await screen.findByPlaceholderText('search skills & workflows…')
-    // A leading `null` is the "No skill" row; the built-in `quick-task` has no row of its own.
-    expect(sourceRefs()).toEqual([null, 'om-fix'])
-    fireEvent.keyDown(document.body, { key: 'Escape' })
+    // A leading `null` is the "No skill" row; the built-in `quick-task` is a row of the
+    // workflow picker, where it is the default.
+    expect(await skillCatalog()).toEqual([null, 'om-fix'])
+    expect(await workflowCatalog()).toEqual(['quick-task'])
 
     await switchProject(OTHER)
     await waitFor(() => expect(pathname()).toBe(`/p/${OTHER}/new`))
@@ -315,11 +335,10 @@ describe('switching project', () => {
     for (const path of ['/skills', '/workflows', '/config', '/repo']) {
       expect(requests.some((r) => r.url === `/api/v1/p/${OTHER}${path}`)).toBe(true)
     }
-    fireEvent.click(sourcePill())
-    await screen.findByPlaceholderText('search skills & workflows…')
-    // Both pills read "Skill" until something is picked, so the catalog — not the label — is
-    // what proves the swap re-resolved.
-    await waitFor(() => expect(sourceRefs()).toEqual([null, 'ship-storefront', 'release-train']))
+    // The skill pill reads "Add skill" in both projects until something is picked, so the
+    // catalog — not the label — is what proves the swap re-resolved.
+    await waitFor(async () => expect(await skillCatalog()).toEqual([null, 'ship-storefront']))
+    expect(await workflowCatalog()).toEqual(['release-train'])
 
     // Config too: the Model pill's preset comes from the project's `defaultModels`.
     await waitFor(() =>
@@ -347,7 +366,7 @@ describe('switching project', () => {
     await switchProject(OTHER)
     await composerReady()
     expect(textarea().value).toBe('fix the cezar flake')
-    expect(document.querySelector('[data-slot="toast"]')).toBeNull()
+    expect(toastText()).toBeNull()
 
     // The boot project keeps the bare legacy key (unscoped invariant); the second project gets
     // the spec's suffixed one — and the text is under exactly one of them.
@@ -374,9 +393,11 @@ describe('switching project', () => {
     await composerReady()
     // Their work in progress wins …
     expect(textarea().value).toBe('ship the storefront')
-    expect(document.querySelector('[data-slot="toast"]')?.textContent).toContain(
-      'Kept your draft in cezar; shop-frontend already has an unsent draft.',
+    await waitFor(() =>
+      expect(toastText()).toContain('Kept your draft in cezar; shop-frontend already has an unsent draft.'),
     )
+    // A declined hand-off is worth the danger tone: the user's text did not go where they sent it.
+    expect(document.querySelector('[data-sonner-toast]')?.getAttribute('data-type')).toBe('error')
 
     // … and nothing was lost: switching back finds the cezar draft exactly where it was typed.
     await switchProject(BOOT)
@@ -408,9 +429,11 @@ describe('switching project', () => {
     // than receiving the departing composition.
     expect(textarea().value).toBe('')
     expect(attachmentChips().map((node) => node.getAttribute('aria-label'))).toEqual(['Remove shop.png'])
-    expect(document.querySelector('[data-slot="toast"]')?.textContent).toContain(
-      'Kept your draft in cezar; shop-frontend already has an unsent draft.',
+    await waitFor(() =>
+      expect(toastText()).toContain('Kept your draft in cezar; shop-frontend already has an unsent draft.'),
     )
+    // A declined hand-off is worth the danger tone: the user's text did not go where they sent it.
+    expect(document.querySelector('[data-sonner-toast]')?.getAttribute('data-type')).toBe('error')
   })
 
   /**

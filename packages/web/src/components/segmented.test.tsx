@@ -26,13 +26,18 @@ describe('Segmented', () => {
     expect(buttons[1]?.querySelector('small')).toBeNull()
   })
 
-  it('uses the kit metrics: 28px buttons in a 3px well', () => {
+  it('uses the kit metrics: a 36px well with a 3px inset, its buttons filling the height', () => {
     render(<Segmented slot="view" label="View" value="list" options={OPTIONS} onChange={() => {}} />)
 
     const group = screen.getByRole('group', { name: 'View' })
-    expect(group.className).toContain('p-[3px]')
-    expect(group.querySelector('button')?.className).toContain('h-7')
-    expect(group.querySelector('button')?.className).toContain('text-[12.5px]')
+    expect(group.classList.contains('h-9')).toBe(true)
+    expect(group.classList.contains('p-[3px]')).toBe(true)
+    // The shadcn TabsList metrics: the well owns the height, a button is whatever the inset leaves.
+    const button = group.querySelector('button')!
+    expect(button.classList.contains('h-full')).toBe(true)
+    expect(button.classList.contains('text-[13px]')).toBe(true)
+    // …and none of the Toggle primitive's own heights survives the merge to fight it.
+    expect([...button.classList].filter((c) => /^(?:min-)?h-/.test(c))).toEqual(['h-full'])
   })
 
   it('reports a pick and ignores a re-click of the pressed option', () => {

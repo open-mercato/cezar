@@ -139,7 +139,13 @@ const awaitRows = async (count: number) => {
   await waitFor(() => expect(rows()).toHaveLength(count))
   return rows()
 }
-const pillTone = (el: HTMLElement) => el.querySelector('[data-slot="pill"] [data-slot="status-dot"]')?.getAttribute('data-tone')
+const pillTone = (el: HTMLElement) => el.querySelector('[data-slot="badge"] [data-slot="status-dot"]')?.getAttribute('data-tone')
+/** The dispatched children of a log row: the `log-child` table rows that follow it, up to the next entry. */
+const childRows = (el: HTMLElement): HTMLElement[] => {
+  const out: HTMLElement[] = []
+  for (let next = el.nextElementSibling; next instanceof HTMLElement && next.dataset.slot === 'log-child'; next = next.nextElementSibling) out.push(next)
+  return out
+}
 const cell = (el: HTMLElement, index: number) => (el.children[index] as HTMLElement | undefined)?.textContent
 
 /** Open a Radix Select by keyboard (jsdom has no real pointer) and choose an option. */
@@ -152,7 +158,7 @@ async function pick(triggerName: string, option: string) {
 // ---- tests -----------------------------------------------------------------------------------
 
 describe('AutomationLog', () => {
-  it('renders the header: back, name, the log suffix, filters and Edit', async () => {
+  it('renders the header: back, name, the log description, filters and Edit', async () => {
     stubFetch()
     const { onBack } = renderLog()
     await awaitRows(5)
@@ -160,7 +166,7 @@ describe('AutomationLog', () => {
     const screenEl = document.querySelector('[data-slot="automation-log"]')
     expect(screenEl).not.toBeNull()
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Nightly dependency bump')
-    expect(screen.getByText('· execution log')).not.toBeNull()
+    expect(screen.getByText("Execution log — the newest 100 checks, in the scheduler's time zone.")).not.toBeNull()
     expect(screen.getByRole('combobox', { name: 'Filter by result' }).textContent).toContain('All results')
     expect(screen.getByRole('combobox', { name: 'Filter by event' }).textContent).toContain('All events')
     expect(screen.getByRole('button', { name: 'Edit' })).not.toBeNull()
@@ -236,12 +242,14 @@ describe('AutomationLog', () => {
     renderLog()
     const [first, second] = await awaitRows(5)
 
-    const children = Array.from(first!.querySelectorAll<HTMLElement>('[data-slot="log-child"]'))
+    const children = childRows(first!)
     expect(children).toHaveLength(3)
-    expect(second!.querySelectorAll('[data-slot="log-child"]')).toHaveLength(0)
+    expect(childRows(second!)).toHaveLength(0)
+    expect(document.querySelectorAll('[data-slot="log-child"]')).toHaveLength(3)
 
     const [vite, vitest, judge] = children
-    expect(cell(vite!, 0)).toBe('└')
+    // Indented under the entry: the When column stays empty.
+    expect(cell(vite!, 0)).toBe('')
     expect(cell(vite!, 1)).toBe('implement')
     expect(vite!.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
     expect(cell(vite!, 2)).toBe('Bump vite 8.1.4 → 8.2.0')
@@ -285,7 +293,9 @@ describe('AutomationLog', () => {
     renderLog()
     const [stuck] = await awaitRows(1)
     fireEvent.click(within(stuck!).getByRole('button', { name: 'Retry task' }))
-    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('automation polling lease is held by another process'))
+    await waitFor(() => expect(document.querySelector('[data-sonner-toast]')?.textContent).toContain('automation polling lease is held by another process'))
+    // A refusal is a failure — the danger toast.
+    expect(document.querySelector('[data-sonner-toast]')?.getAttribute('data-type')).toBe('error')
   })
 
   it('shows the empty state when no checks have run', async () => {

@@ -1,10 +1,11 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, act } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within, act } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
 import { createQueryClient } from '@/api/query-client'
 import { Overview } from '@/routes/dashboard/overview'
 import { DashboardRoute } from '@/routes/dashboard'
+import { ShellWithSidebar } from '@/test/shell-with-sidebar'
 const at = '2026-09-19T12:00:00.000Z'
 const coverage = { projects: [{ projectId: 'alpha', state: 'complete', omittedRuns: 0 }] }
 const fixture = {
@@ -76,6 +77,9 @@ it('keeps outcome navigation mounted and focuses the loaded page', async () => {
   )
   client.clear()
 })
+/** The dashboard's views live in the contextual sidebar the shell owns. */
+const viewButton = (name: string) =>
+  within(document.querySelector<HTMLElement>('[data-slot="context-sidebar-body"]')!).getByRole('button', { name })
 function setupRoute(error = false, partialOperations = false, partialCosts = false) {
   const calls: string[] = []
   vi.stubGlobal(
@@ -157,7 +161,9 @@ function setupRoute(error = false, partialOperations = false, partialCosts = fal
   render(
     <QueryClientProvider client={client}>
       <MemoryRouter>
-        <DashboardRoute />
+        <ShellWithSidebar>
+          <DashboardRoute />
+        </ShellWithSidebar>
       </MemoryRouter>
     </QueryClientProvider>,
   )
@@ -179,7 +185,7 @@ it('feed filter retains keyboard focus', async () => {
 it('hides irrelevant operational errors on healthy Costs', async () => {
   const { client } = setupRoute(true)
   await screen.findByText(/Could not refresh dashboard/)
-  fireEvent.click(screen.getByRole('link', { name: 'Usage & cost' }))
+  fireEvent.click(viewButton('Usage & cost'))
   await screen.findByText('No retained tasks in this period yet.')
   expect(screen.queryByText(/Could not refresh dashboard/)).toBeNull()
   client.clear()
@@ -188,13 +194,13 @@ it('hides irrelevant operational errors on healthy Costs', async () => {
 it.each([false, true])('scopes operational coverage to demand while retaining cost coverage (%s)', async (partialCosts) => {
   const { client } = setupRoute(false, true, partialCosts)
   await screen.findByText(/0 tasks need you in the available data/)
-  fireEvent.click(screen.getByRole('link', { name: 'Usage & cost' }))
+  fireEvent.click(viewButton('Usage & cost'))
   if (partialCosts) await screen.findByText(/One project has incomplete coverage/)
   else await screen.findByText('No retained tasks in this period yet.')
   expect(screen.queryByText(/tasks need you in the available data/)).toBeNull()
   if (partialCosts) expect(screen.getByText(/One project has incomplete coverage/)).toBeTruthy()
   else expect(screen.queryByText(/One project has incomplete coverage/)).toBeNull()
-  fireEvent.click(screen.getByRole('link', { name: 'Overview' }))
+  fireEvent.click(viewButton('Overview'))
   expect(await screen.findByText(/0 tasks need you in the available data/)).toBeTruthy()
   client.clear()
 })

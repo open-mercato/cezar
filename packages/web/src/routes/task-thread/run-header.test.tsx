@@ -127,7 +127,33 @@ function renderHeader(
   )
 }
 
+/** The button row: the run's ONE primary action, plus Open in… and (beside Continue) Finish. */
 const actionBar = () => within(document.querySelector('[data-slot="run-actions"]') as HTMLElement)
+
+/** "More actions" — every action that is not the run's primary button lives in this one menu,
+ *  at every width (Radix opens on pointerdown). */
+async function openMoreMenu() {
+  fireEvent.pointerDown(screen.getByRole('button', { name: 'More actions' }))
+  return within(await screen.findByRole('menu'))
+}
+const itemNames = (menu: Awaited<ReturnType<typeof openMoreMenu>>) =>
+  menu.getAllByRole('menuitem').map((el) => el.textContent?.trim())
+
+/** The toast on screen (shadcn Sonner): its words, and whether it is the danger one. */
+const toastText = () => document.querySelector('[data-sonner-toast] [data-title]')?.textContent
+const toastTone = () =>
+  document.querySelector('[data-sonner-toast]')?.getAttribute('data-type') === 'error' ? 'danger' : 'default'
+
+/** The "Details" trigger in the meta line — runner, account, model, tokens, cost, take-over. */
+const detailsBadge = () => document.querySelector('[data-slot="agent-badge"]') as HTMLElement
+/** Opens the Details popover and hands back its labelled grid. */
+function openDetails(): HTMLElement {
+  fireEvent.click(detailsBadge())
+  return document.querySelector('[data-slot="run-details"]') as HTMLElement
+}
+/** One row of that grid, by its label: the `<dd>` beside the `<dt>`. */
+const detail = (details: HTMLElement, label: string) =>
+  [...details.querySelectorAll('dt')].find((dt) => dt.textContent === label)?.nextElementSibling ?? null
 
 describe('monitoring schedule', () => {
   it('shows the exact persisted deadline in a time element', () => {
@@ -296,31 +322,39 @@ describe('editable title (#389)', () => {
 describe('action bar visibility per status (the legacy rules, rendered)', () => {
   // Pin (#935) is in every row: unlike every other action here it asks nothing of the engine,
   // so it is offered whatever the run is doing — only archiving takes it away.
-  const matrix: Array<{ status: RunStatus; visible: string[] }> = [
-    { status: 'queued', visible: ['Notes', 'Pin', 'Cancel'] },
-    { status: 'running', visible: ['Notes', 'Pin', 'Cancel'] },
-    { status: 'waiting', visible: ['Finish', 'Notes', 'Pin', 'Cancel'] },
+  //
+  // The same rules, on the redesigned surface: `bar` is the button row — ONE primary action picked
+  // by the run's state (Continue, else Finish, else Stop), with Open in… and a quieter Finish beside
+  // a primary Continue — and `menu` is "More actions", which holds every action at every width (the
+  // strip drops the row whenever it runs out of room). Cancel reads "Stop" now.
+  const closed = ['Continue', 'Resume in terminal', 'Notes', 'Pin', 'Archive', 'Copy take-over command', 'Delete']
+  const matrix: Array<{ status: RunStatus; bar: string[]; menu: string[] }> = [
+    { status: 'queued', bar: ['Stop'], menu: ['Notes', 'Pin', 'Stop'] },
+    { status: 'running', bar: ['Stop'], menu: ['Notes', 'Pin', 'Stop'] },
+    { status: 'waiting', bar: ['Finish'], menu: ['Finish', 'Notes', 'Pin', 'Stop'] },
     // Terminal folded into the Open in… menu — it shows whenever the session can be resumed.
-    { status: 'review', visible: ['Finish', 'Continue', 'Open in…', 'Notes', 'Pin', 'Archive', 'Delete'] },
-    { status: 'done', visible: ['Continue', 'Open in…', 'Notes', 'Pin', 'Archive', 'Delete'] },
-    { status: 'failed', visible: ['Continue', 'Open in…', 'Notes', 'Pin', 'Archive', 'Delete'] },
-    { status: 'cancelled', visible: ['Continue', 'Open in…', 'Notes', 'Pin', 'Archive', 'Delete'] },
+    { status: 'review', bar: ['Open in…', 'Finish', 'Continue'], menu: ['Finish', ...closed] },
+    { status: 'done', bar: ['Open in…', 'Continue'], menu: closed },
+    { status: 'failed', bar: ['Open in…', 'Continue'], menu: closed },
+    { status: 'cancelled', bar: ['Open in…', 'Continue'], menu: closed },
   ]
 
-  it.each(matrix)('$status → $visible', ({ status, visible }) => {
+  it.each(matrix)('$status → bar $bar, menu $menu', async ({ status, bar, menu }) => {
     stubFetch()
     renderHeader(run(status))
-    const names = within(document.querySelector('[data-slot="run-actions"]') as HTMLElement)
+    const names = actionBar()
       .getAllByRole('button')
       .map((el) => el.textContent?.trim())
-    expect(names).toEqual(visible)
+    expect(names).toEqual(bar)
+    expect(itemNames(await openMoreMenu())).toEqual(menu)
   })
 
-  it('an archived run offers Unarchive instead of Archive', () => {
+  it('an archived run offers Unarchive instead of Archive', async () => {
     stubFetch()
     renderHeader(run('done', { archived: true }))
-    expect(actionBar().queryByRole('button', { name: 'Archive' })).toBeNull()
-    expect(actionBar().getByRole('button', { name: 'Unarchive' })).not.toBeNull()
+    const menu = await openMoreMenu()
+    expect(menu.queryByRole('menuitem', { name: 'Archive' })).toBeNull()
+    expect(menu.getByRole('menuitem', { name: 'Unarchive' })).not.toBeNull()
   })
 
   it('VS Code is absent everywhere — the open-in-editor endpoint does not exist yet (R5)', () => {
@@ -329,10 +363,13 @@ describe('action bar visibility per status (the legacy rules, rendered)', () => 
     expect(screen.queryByRole('button', { name: /vs code/i })).toBeNull()
   })
 
-  it('the mobile kebab is there for every status, holding the same actions', () => {
+  it('the More menu is there for every status, holding the same actions', async () => {
     stubFetch()
     renderHeader(run('running'))
-    expect(screen.getByRole('button', { name: 'Run actions' })).not.toBeNull()
+    expect(screen.getByRole('button', { name: 'More actions' })).not.toBeNull()
+    // The bar's primary Stop is repeated in the menu for the widths that drop the bar.
+    const stop = (await openMoreMenu()).getByRole('menuitem', { name: 'Stop' })
+    expect(stop.className).toContain('md:hidden')
   })
 })
 
@@ -343,13 +380,19 @@ describe('Mark unread (#775)', () => {
   const readDone = (extra: Partial<ApiRun> = {}) =>
     run('done', { finishedAt: FINISHED_AT, seenAt: SEEN_AT, ...extra })
 
-  it('offers the control for a read, finished run — next to Archive', () => {
+  it('offers the control for a read, finished run — next to Archive', async () => {
     stubFetch()
     renderHeader(readDone())
-    const names = actionBar()
-      .getAllByRole('button')
-      .map((el) => el.textContent?.trim())
-    expect(names).toEqual(['Continue', 'Open in…', 'Notes', 'Mark unread', 'Pin', 'Archive', 'Delete'])
+    expect(itemNames(await openMoreMenu())).toEqual([
+      'Continue',
+      'Resume in terminal',
+      'Notes',
+      'Mark unread',
+      'Pin',
+      'Archive',
+      'Copy take-over command',
+      'Delete',
+    ])
   })
 
   it.each([
@@ -358,16 +401,19 @@ describe('Mark unread (#775)', () => {
     ['a cancelled run', run('cancelled', { finishedAt: FINISHED_AT, seenAt: SEEN_AT })],
     ['a still-running run', run('running', { seenAt: SEEN_AT })],
     ['a done run caught with no finishedAt', run('done', { seenAt: SEEN_AT })],
-  ] as Array<[string, ApiRun]>)('hides the control for %s', (_name, record) => {
+  ] as Array<[string, ApiRun]>)('hides the control for %s', async (_name, record) => {
     stubFetch()
     renderHeader(record)
-    expect(actionBar().queryByRole('button', { name: 'Mark unread' })).toBeNull()
+    const menu = await openMoreMenu()
+    expect(menu.getByRole('menuitem', { name: 'Notes' })).not.toBeNull() // the menu really is open
+    expect(menu.queryByRole('menuitem', { name: 'Mark unread' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Mark unread' })).toBeNull()
   })
 
   it('Mark unread → POST /unread, bodyless like its read twin', async () => {
     const sent = stubFetch()
     renderHeader(readDone())
-    fireEvent.click(actionBar().getByRole('button', { name: 'Mark unread' }))
+    fireEvent.click((await openMoreMenu()).getByRole('menuitem', { name: 'Mark unread' }))
     await waitFor(() => {
       const request = sent.find((r) => r.path === '/api/v1/runs/r1/unread')
       expect(request?.method).toBe('POST')
@@ -384,7 +430,7 @@ describe('Mark unread (#775)', () => {
       expect(sent.some((r) => r.path === '/api/v1/runs/r1/unread')).toBe(false)
     })
     renderHeader(readDone(), onMarkedUnread)
-    fireEvent.click(actionBar().getByRole('button', { name: 'Mark unread' }))
+    fireEvent.click((await openMoreMenu()).getByRole('menuitem', { name: 'Mark unread' }))
     expect(onMarkedUnread).toHaveBeenCalledTimes(1)
     await waitFor(() => expect(sent.some((r) => r.path === '/api/v1/runs/r1/unread')).toBe(true))
   })
@@ -397,15 +443,16 @@ describe('Mark unread (#775)', () => {
       '/api/v1/runs/r1/unread': () => jsonResponse({ error: 'not found' }, 404),
     })
     renderHeader(readDone())
-    fireEvent.click(actionBar().getByRole('button', { name: 'Mark unread' }))
-    await waitFor(() => expect(screen.getByText('not found')).not.toBeNull())
+    fireEvent.click((await openMoreMenu()).getByRole('menuitem', { name: 'Mark unread' }))
+    await waitFor(() => expect(toastText()).toBe('not found'))
+    expect(toastTone()).toBe('danger')
   })
 
-  it('is in the mobile kebab too, under the same rule', async () => {
+  it('lives in the More menu only — never a button on the bar', async () => {
     stubFetch()
     renderHeader(readDone())
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
-    const menu = within(await screen.findByRole('menu'))
+    expect(actionBar().queryByRole('button', { name: 'Mark unread' })).toBeNull()
+    const menu = await openMoreMenu()
     expect(menu.getByRole('menuitem', { name: 'Mark unread' })).not.toBeNull()
   })
 })
@@ -476,7 +523,7 @@ describe('actions hit their endpoints', () => {
     expect(sent.some((request) => request.path === '/api/v1/runs/r1/continue')).toBe(false)
   })
 
-  it('disables mobile Continue and does not post when its menu item is selected', async () => {
+  it('disables the menu Continue and does not post when its menu item is selected', async () => {
     const sent = stubFetch({
       '/api/v1/providers/status': () =>
         jsonResponse({
@@ -490,8 +537,7 @@ describe('actions hit their endpoints', () => {
     })
     renderHeader(run('done', { runner: 'claude' }))
 
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
-    const item = await screen.findByRole('menuitem', { name: 'Continue' })
+    const item = (await openMoreMenu()).getByRole('menuitem', { name: 'Continue' })
     await waitFor(() => expect(item.getAttribute('data-disabled')).not.toBeNull())
     fireEvent.click(item)
     await act(() => Promise.resolve())
@@ -527,7 +573,7 @@ describe('actions hit their endpoints', () => {
   it('Archive → POST /archive with the flipped flag', async () => {
     const sent = stubFetch()
     renderHeader(run('done', { archived: true }))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Unarchive' }))
+    fireEvent.click((await openMoreMenu()).getByRole('menuitem', { name: 'Unarchive' }))
     await waitFor(() => {
       expect(sent.find((r) => r.path === '/api/v1/runs/r1/archive')?.body).toEqual({ archived: false })
     })
@@ -536,7 +582,10 @@ describe('actions hit their endpoints', () => {
   it('Pin → POST /pin with the flipped flag, and reads Unpin once pinned (#935)', async () => {
     const sent = stubFetch()
     renderHeader(run('done'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Pin' }))
+    const pinItem = (await openMoreMenu()).getByRole('menuitem', { name: 'Pin' })
+    // A toggle announces its state in every spelling.
+    expect(pinItem.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(pinItem)
     await waitFor(() => {
       expect(sent.find((r) => r.path === '/api/v1/runs/r1/pin')?.body).toEqual({ pinned: true })
     })
@@ -544,36 +593,52 @@ describe('actions hit their endpoints', () => {
     cleanup()
     const unpinning = stubFetch()
     renderHeader(run('done', { pinned: true, pinnedAt: '2026-08-29T10:00:00.000Z' }))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Unpin' }))
+    const unpinItem = (await openMoreMenu()).getByRole('menuitem', { name: 'Unpin' })
+    expect(unpinItem.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(unpinItem)
     await waitFor(() => {
       expect(unpinning.find((r) => r.path === '/api/v1/runs/r1/pin')?.body).toEqual({ pinned: false })
     })
   })
 
-  it('an archived run offers no pin at all — archiving retires it (#935)', () => {
+  it('an archived run offers no pin at all — archiving retires it (#935)', async () => {
     stubFetch()
     renderHeader(run('done', { archived: true }))
-    expect(actionBar().queryByRole('button', { name: 'Pin' })).toBeNull()
-    expect(actionBar().queryByRole('button', { name: 'Unpin' })).toBeNull()
+    const menu = await openMoreMenu()
+    expect(menu.getByRole('menuitem', { name: 'Unarchive' })).not.toBeNull() // the menu really is open
+    expect(menu.queryByRole('menuitem', { name: 'Pin' })).toBeNull()
+    expect(menu.queryByRole('menuitem', { name: 'Unpin' })).toBeNull()
   })
 
-  it('Pin is in the mobile kebab too', async () => {
+  it('Pin is offered while the run is still working too', async () => {
     stubFetch()
     renderHeader(run('running'))
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
-    const menu = within(await screen.findByRole('menu'))
+    const menu = await openMoreMenu()
     expect(menu.getByRole('menuitem', { name: 'Pin' })).not.toBeNull()
   })
 
-  it('Cancel asks first — the POST fires only after the confirm dialog', async () => {
+  it('Stop asks first — the POST fires only after the confirm dialog', async () => {
     const sent = stubFetch()
     renderHeader(run('running'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Cancel' }))
+    fireEvent.click(actionBar().getByRole('button', { name: 'Stop' }))
 
     // Nothing sent yet; the AlertDialog (never a native confirm) is up instead.
     expect(sent.some((r) => r.path === '/api/v1/runs/r1/cancel')).toBe(false)
     const dialog = await screen.findByRole('alertdialog')
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel the run' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Stop the run' }))
+    await waitFor(() => {
+      expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/cancel')).toBe(true)
+    })
+  })
+
+  it('Stop from the More menu asks the same question (a run whose primary action is not Stop)', async () => {
+    const sent = stubFetch()
+    renderHeader(run('waiting'))
+    fireEvent.click((await openMoreMenu()).getByRole('menuitem', { name: 'Stop' }))
+
+    expect(sent.some((r) => r.path === '/api/v1/runs/r1/cancel')).toBe(false)
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Stop the run' }))
     await waitFor(() => {
       expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/cancel')).toBe(true)
     })
@@ -582,7 +647,7 @@ describe('actions hit their endpoints', () => {
   it('Delete confirms, DELETEs, and navigates home', async () => {
     const sent = stubFetch()
     renderHeader(run('failed'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Delete' }))
+    fireEvent.click((await openMoreMenu()).getByRole('menuitem', { name: 'Delete' }))
 
     expect(sent.some((r) => r.method === 'DELETE')).toBe(false)
     const dialog = await screen.findByRole('alertdialog')
@@ -599,7 +664,7 @@ describe('actions hit their endpoints', () => {
   it('the delete confirm button stays "Delete" even for a long task name, which appears in the description instead (#403)', async () => {
     const longTitle = 'create a github issue for saving unsuccessfully finished tasks automatically'
     renderHeader(run('failed', { titleSummary: longTitle }))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Delete' }))
+    fireEvent.click((await openMoreMenu()).getByRole('menuitem', { name: 'Delete' }))
 
     const dialog = await screen.findByRole('alertdialog')
     expect(within(dialog).getByRole('button', { name: 'Delete' })).not.toBeNull()
@@ -609,7 +674,7 @@ describe('actions hit their endpoints', () => {
   it('dismissing the confirm keeps the run', async () => {
     const sent = stubFetch()
     renderHeader(run('done'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Delete' }))
+    fireEvent.click((await openMoreMenu()).getByRole('menuitem', { name: 'Delete' }))
     const dialog = await screen.findByRole('alertdialog')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Keep it' }))
     await waitFor(() => {
@@ -626,9 +691,8 @@ describe('actions hit their endpoints', () => {
     const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
     await waitFor(() => expect(button.disabled).toBe(false))
     fireEvent.click(button)
-    const item = await screen.findByRole('status')
-    expect(item.textContent).toBe('no agent session to resume')
-    expect(item.getAttribute('data-tone')).toBe('danger')
+    await waitFor(() => expect(toastText()).toBe('no agent session to resume'))
+    expect(toastTone()).toBe('danger')
   })
 })
 
@@ -654,9 +718,8 @@ describe('Terminal — the copy-command 409 fallback', () => {
     await clickTerminalResume()
 
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(command))
-    expect((await screen.findByRole('status')).textContent).toBe(
-      'No terminal found — command copied to clipboard.',
-    )
+    await waitFor(() => expect(toastText()).toBe('No terminal found — command copied to clipboard.'))
+    expect(toastTone()).toBe('default')
   })
 
   it('with no clipboard access the toast carries the command itself', async () => {
@@ -670,7 +733,7 @@ describe('Terminal — the copy-command 409 fallback', () => {
     renderHeader(run('done'))
     await clickTerminalResume()
 
-    expect((await screen.findByRole('status')).textContent).toBe(`Run manually: ${command}`)
+    await waitFor(() => expect(toastText()).toBe(`Run manually: ${command}`))
   })
 
   it('a 409 without a command is an ordinary error toast', async () => {
@@ -679,7 +742,17 @@ describe('Terminal — the copy-command 409 fallback', () => {
     })
     renderHeader(run('done'))
     await clickTerminalResume()
-    expect((await screen.findByRole('status')).textContent).toBe('no agent session to resume')
+    await waitFor(() => expect(toastText()).toBe('no agent session to resume'))
+    expect(toastTone()).toBe('danger')
+  })
+
+  it('the More menu offers the same resume, through the same endpoint', async () => {
+    const sent = stubFetch()
+    renderHeader(run('done'))
+    fireEvent.click((await openMoreMenu()).getByRole('menuitem', { name: 'Resume in terminal' }))
+    await waitFor(() => {
+      expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/open-in-cli')).toBe(true)
+    })
   })
 })
 
@@ -810,7 +883,7 @@ describe('Open in… menu per-target icons (#361)', () => {
 
 describe('notes panel', () => {
   it('toggles open, fetches the handoff and renders it as markdown', async () => {
-    stubFetch({
+    const sent = stubFetch({
       '/api/v1/runs/r1/handoff': () =>
         new Response('# Handoff notes\n\nStill **todo**: the composer.', {
           status: 200,
@@ -818,17 +891,21 @@ describe('notes panel', () => {
         }),
     })
     renderHeader(run('done'))
+    // Fetched only while open — a closed sheet costs no request.
+    expect(sent.some((r) => r.path === '/api/v1/runs/r1/handoff')).toBe(false)
 
-    fireEvent.click(actionBar().getByRole('button', { name: 'Notes' }))
+    fireEvent.click((await openMoreMenu()).getByRole('menuitem', { name: 'Notes' }))
+    // A side sheet now, not an inline panel under the header.
+    const sheet = await screen.findByRole('dialog', { name: 'Notes' })
     await waitFor(() => {
-      expect(document.querySelector('[data-slot="notes-panel"]')).not.toBeNull()
+      expect(sheet.querySelector('[data-slot="notes-panel"]')).not.toBeNull()
     })
     await screen.findByText('Handoff notes')
     // Rendered markdown, not echoed source.
     expect(document.querySelector('[data-slot="notes-panel"]')?.textContent).not.toContain('#')
 
-    fireEvent.click(actionBar().getByRole('button', { name: 'Notes' }))
-    expect(document.querySelector('[data-slot="notes-panel"]')).toBeNull()
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Close' }))
+    await waitFor(() => expect(document.querySelector('[data-slot="notes-panel"]')).toBeNull())
   })
 
   it('an unseeded handoff file reads as an honest empty state', async () => {
@@ -836,19 +913,18 @@ describe('notes panel', () => {
       '/api/v1/runs/r1/handoff': () => new Response('', { status: 200 }),
     })
     renderHeader(run('running'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Notes' }))
+    fireEvent.click((await openMoreMenu()).getByRole('menuitem', { name: 'Notes' }))
     await screen.findByText('No notes yet — the handoff file is seeded when the task starts.')
   })
 })
 
-/** A run id no other test has touched. The expand memory is a module-level map keyed by run id
- *  (the same shape `WorkflowSteps` keeps), so a test that toggles it must not poison the shared
+/** A run id no other test has touched, so nothing one of these tests opens can reach the shared
  *  `r1` fixture every other test in this file renders. */
 let detailsRunSeq = 0
 const freshRunId = () => `details-r${++detailsRunSeq}`
 
 describe('dense run details (#765)', () => {
-  it('collapses the meta row at phone width, and leaves the desktop header as it was', () => {
+  it('keeps the HOW of a run behind one Details trigger, at every width', () => {
     stubFetch()
     renderHeader(
       run('done', {
@@ -859,41 +935,26 @@ describe('dense run details (#765)', () => {
       }),
     )
 
-    const details = document.querySelector('[data-slot="run-details"]') as HTMLElement
-    const toggle = screen.getByRole('button', { name: 'Show run details' })
-    expect(details.className).toContain('hidden')
-    // The point of the fix: `md:block` means a desktop reader still sees branch, diff, tokens and
-    // cost at a glance, and the control that would ask them to click for it is `md:hidden`.
-    expect(details.className).toContain('md:block')
-    expect(toggle.className).toContain('md:hidden')
+    // Closed: the grid is not in the document at all, and the trigger says so.
+    expect(document.querySelector('[data-slot="run-details"]')).toBeNull()
+    const trigger = detailsBadge()
+    expect(trigger.tagName).toBe('BUTTON')
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    // What a reader wants at a glance stays on the line itself, unopened.
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    expect(meta.contains(trigger)).toBe(true)
+    expect(meta.querySelector('[data-slot="branch-chip"]')?.textContent).toContain('cez/r1')
+    expect(meta.querySelector('[data-slot="diff-stat"]')?.textContent).toBe('+42 −7')
+
+    const details = openDetails()
+
     // A real disclosure relationship, not a visual-only one.
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
     expect(details.id).not.toBe('')
-    expect(toggle.getAttribute('aria-controls')).toBe(details.id)
-    expect(toggle.getAttribute('aria-expanded')).toBe('false')
-
-    fireEvent.click(toggle)
-
-    expect(details.className).not.toContain('hidden')
-    expect(screen.getByRole('button', { name: 'Hide run details' }).getAttribute('aria-expanded')).toBe('true')
-    expect(details.textContent).toContain('cez/r1')
-    expect(details.textContent).toContain('IN 24.6k · OUT 2.4k')
-  })
-
-  it('remembers the expand for that run across a tab switch, and does not leak it to another run', () => {
-    stubFetch()
-    const id = freshRunId()
-    const first = renderHeader(run('done', { id }))
-    fireEvent.click(screen.getByRole('button', { name: 'Show run details' }))
-    first.unmount()
-
-    // Same run, remounted by another task route's header: still expanded, because re-opening it on
-    // every Session → Changes hop is the chore this map exists to avoid.
-    const second = renderHeader(run('done', { id }))
-    expect(screen.queryByRole('button', { name: 'Hide run details' })).not.toBeNull()
-    second.unmount()
-
-    renderHeader(run('done', { id: freshRunId() }))
-    expect(screen.queryByRole('button', { name: 'Show run details' })).not.toBeNull()
+    expect(trigger.getAttribute('aria-controls')).toBe(details.id)
+    expect(detail(details, 'Branch')?.textContent).toBe('cez/r1')
+    expect(detail(details, 'Tokens')?.textContent).toBe('IN 24.6k · OUT 2.4k')
+    expect(detail(details, 'Cost')?.textContent).toBe('$0.04')
   })
 
   it('keeps the monitoring schedule out of the disclosure — a self-resuming run is status', () => {
@@ -906,9 +967,13 @@ describe('dense run details (#765)', () => {
       }),
     )
 
+    // On the page before anything is opened…
     const schedule = document.querySelector('[data-slot="monitoring-schedule"]')
-    const details = document.querySelector('[data-slot="run-details"]') as HTMLElement
     expect(schedule).not.toBeNull()
+    expect(document.querySelector('[data-slot="run-details"]')).toBeNull()
+    // …and still outside the details once they are.
+    const details = openDetails()
+    expect(details).not.toBeNull()
     expect(details.contains(schedule)).toBe(false)
   })
 
@@ -935,8 +1000,8 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(classes).not.toContain('top-0')
     expect(classes).toContain('md:sticky')
     expect(classes).toContain('md:top-0')
-    expect(classes).toContain('px-3')
-    expect(classes).toContain('md:px-6')
+    expect(classes).toContain('px-4')
+    expect(classes).toContain('sm:px-6')
   })
 
   // The plan mirror hides on phones so the title row keeps its space for the status pill and
@@ -966,7 +1031,7 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(classes).not.toContain('sm:inline')
   })
 
-  it('meta shows workflow · branch chip · ± · input/output · cost, with the agent summary in the badge', () => {
+  it('meta shows workflow · branch chip · ±, with the agent on the Details badge and input/output · cost behind it', () => {
     stubFetch()
     renderHeader(
       run('done', {
@@ -980,23 +1045,31 @@ describe('meta line, tabs, pill and resume hint', () => {
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
     expect(meta.textContent).toContain('quick-task')
     // #416 pulled runner/model out of the loose dot-list to cut noise, and that still holds — they
-    // are not separate chips beside the workflow. But an icon ALONE made "which agent, account and
-    // model produced this?" unanswerable without knowing to click it, which is the one question the
-    // badge exists for. So they read as one quiet string ON the badge, and the menu keeps the
-    // labelled breakdown.
-    const badge = within(meta).getByRole('button', { name: /Agent: codex, model gpt-5.2-codex/ })
-    expect(badge.querySelector('[data-slot="agent-badge-summary"]')?.textContent)
-      .toBe('codex · gpt-5.2-codex')
+    // are not separate chips beside the workflow. But an icon ALONE made "which agent produced
+    // this?" unanswerable without knowing to click it, so the runner is named ON the badge; the
+    // whole runner · account · model string is its tooltip and accessible name, and the popover
+    // keeps the labelled breakdown.
+    const badge = within(meta).getByRole('button', { name: /agent: codex, model gpt-5.2-codex/ })
+    expect(badge.querySelector('[data-slot="agent-badge-summary"]')?.textContent).toBe('codex')
+    expect(badge.getAttribute('title')).toBe('codex · gpt-5.2-codex')
     // Still not loose text: everything runner/model-shaped is inside the badge, nowhere else.
     expect(meta.textContent?.replace(badge.textContent ?? '', '')).not.toContain('codex')
-    expect(within(meta).getByText('cez/r1').getAttribute('data-slot')).toBe('branch-chip')
+    expect(within(meta).getByText('cez/r1').closest('[data-slot="branch-chip"]')).not.toBeNull()
     expect(meta.querySelector('[data-slot="diff-stat"]')?.textContent).toBe('+42 −7')
-    expect(meta.textContent).toContain('IN 24.6k · OUT 2.4k')
-    expect(meta.textContent).toContain('$0.04')
+    // Tokens and cost left the line: they are rows of the Details grid now.
+    expect(meta.textContent).not.toContain('IN 24.6k')
+    expect(meta.textContent).not.toContain('$0.04')
     // No context gauge: RunRecord carries no context-window data to draw one from.
     expect(meta.querySelector('[data-slot="context-gauge"]')).toBeNull()
 
     expect(badge.getAttribute('data-slot')).toBe('agent-badge')
+
+    const details = openDetails()
+    expect(detail(details, 'Workflow')?.textContent).toBe('quick-task')
+    expect(detail(details, 'Runner')?.textContent).toBe('codex')
+    expect(detail(details, 'Model')?.textContent).toBe('gpt-5.2-codex')
+    expect(detail(details, 'Tokens')?.textContent).toBe('IN 24.6k · OUT 2.4k')
+    expect(detail(details, 'Cost')?.textContent).toBe('$0.04')
   })
 
   // #801: automation provenance is history — a run launched while automations were on keeps it
@@ -1064,11 +1137,16 @@ describe('meta line, tabs, pill and resume hint', () => {
     renderHeader(run('done', { costUsd: 0.04 }))
 
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    const details = openDetails()
     await waitFor(() => {
-      expect(meta.textContent).not.toContain('IN 24.6k')
-      expect(meta.textContent).not.toContain('$0.04')
+      expect(detail(details, 'Tokens')).toBeNull()
+      expect(detail(details, 'Cost')).toBeNull()
     })
-    expect(within(meta).getByRole('button', { name: /Agent:/ })).not.toBeNull()
+    expect(details.textContent).not.toContain('IN 24.6k')
+    expect(details.textContent).not.toContain('$0.04')
+    // The rest of the grid is untouched — only the metered rows go.
+    expect(detail(details, 'Runner')).not.toBeNull()
+    expect(within(meta).getByRole('button', { name: /agent:/ })).not.toBeNull()
   })
 
   it.each([
@@ -1107,7 +1185,8 @@ describe('meta line, tabs, pill and resume hint', () => {
     if (prChip) {
       expect(prChip.getAttribute('href')).toBe('https://github.com/open-mercato/cezar/pull/534')
       expect(prChip.textContent).toContain('#534')
-      expect(branch?.nextElementSibling?.nextElementSibling).toBe(prChip)
+      // Right beside the branch: the line no longer puts a separator between its parts.
+      expect(branch?.nextElementSibling).toBe(prChip)
     }
     if (issueChip) {
       expect(issueChip.getAttribute('href')).toBe('https://github.com/open-mercato/cezar/issues/544')
@@ -1236,10 +1315,10 @@ describe('meta line, tabs, pill and resume hint', () => {
     stubFetch()
     renderHeader(run('done', { runner: 'opencode' }))
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    fireEvent.pointerDown(within(meta).getByRole('button', { name: /Agent: opencode/ }))
-    const menu = await screen.findByRole('menu')
-    expect(within(menu).getByText('runner: opencode')).not.toBeNull()
-    expect(within(menu).getByText('model: auto')).not.toBeNull()
+    expect(within(meta).getByRole('button', { name: /agent: opencode/ })).toBe(detailsBadge())
+    const details = openDetails()
+    expect(detail(details, 'Runner')?.textContent).toBe('opencode')
+    expect(detail(details, 'Model')?.textContent).toBe('auto')
   })
 
   it('offers the next-continuation engine picker inside the existing agent badge', async () => {
@@ -1252,19 +1331,22 @@ describe('meta line, tabs, pill and resume hint', () => {
     )
 
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    fireEvent.pointerDown(within(meta).getByRole('button', { name: /Agent: claude/ }))
-    const menu = await screen.findByRole('menu')
-    expect(within(menu).getByText('Next continuation')).not.toBeNull()
-    expect(within(menu).getByRole('button', { name: 'Model' }).textContent).toBe('sonnet')
+    expect(within(meta).getByRole('button', { name: /agent: claude/ })).toBe(detailsBadge())
+    const details = openDetails()
+    expect(within(details).getByText('Next continuation')).not.toBeNull()
+    const picker = details.querySelector('[data-slot="agent-badge-engine-picker"]') as HTMLElement
+    expect(within(picker).getByRole('button', { name: 'Model' }).textContent).toBe('sonnet')
   })
 
   it('keeps the historical badge read-only when no continuation picker is owned by the view', async () => {
     stubFetch()
     renderHeader(run('running', { runner: 'claude', model: 'sonnet' }))
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    fireEvent.pointerDown(within(meta).getByRole('button', { name: /Agent: claude/ }))
-    const menu = await screen.findByRole('menu')
-    expect(within(menu).queryByText('Next continuation')).toBeNull()
+    expect(within(meta).getByRole('button', { name: /agent: claude/ })).toBe(detailsBadge())
+    const details = openDetails()
+    expect(detail(details, 'Model')?.textContent).toBe('sonnet') // the grid really is open
+    expect(within(details).queryByText('Next continuation')).toBeNull()
+    expect(details.querySelector('[data-slot="agent-badge-engine-picker"]')).toBeNull()
   })
 
   // #416: the record persists only the runner the caller ASKED for (`src/runs/store.ts`), while
@@ -1279,8 +1361,9 @@ describe('meta line, tabs, pill and resume hint', () => {
     })
     renderHeader(run('done', { runner: undefined }))
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    const badge = await within(meta).findByRole('button', { name: /Agent: codex, model auto/ })
+    const badge = await within(meta).findByRole('button', { name: /agent: codex, model auto/ })
     expect(badge.getAttribute('data-slot')).toBe('agent-badge')
+    expect(badge.querySelector('[data-slot="agent-badge-summary"]')?.textContent).toBe('codex')
   })
 
   /**
@@ -1304,7 +1387,7 @@ describe('meta line, tabs, pill and resume hint', () => {
       ...extra,
     })
 
-    it('names the account the step recorded, by its label — visibly, not only on click', async () => {
+    it('names the account the step recorded, by its label — on the badge itself and in its grid', async () => {
       withAccounts()
       renderHeader(run('done', {
         runner: 'claude',
@@ -1312,12 +1395,15 @@ describe('meta line, tabs, pill and resume hint', () => {
         steps: [step({ sessionId: 'sess-1', profileId: 'klaudiusz' })],
       }))
       const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-      const badge = await within(meta).findByRole('button', { name: /Agent: claude, account Klaudiusz, model opus/ })
+      const badge = await within(meta).findByRole('button', { name: /agent: claude, account Klaudiusz, model opus/ })
       // The regression this guards: it read as a bare bot icon, so the answer was there but nobody
-      // could find it without knowing to open a menu.
-      await waitFor(() => expect(
-        badge.querySelector('[data-slot="agent-badge-summary"]')?.textContent,
-      ).toBe('claude · Klaudiusz · opus'))
+      // could find it without knowing to open a menu. The badge now names the runner in words, and
+      // carries the whole runner · account · model string as its tooltip.
+      expect(badge.querySelector('[data-slot="agent-badge-summary"]')?.textContent).toBe('claude')
+      await waitFor(() => expect(badge.getAttribute('title')).toBe('claude · Klaudiusz · opus'))
+      const details = openDetails()
+      expect(detail(details, 'Account')?.textContent).toBe('Klaudiusz')
+      expect(detail(details, 'Account')?.getAttribute('data-slot')).toBe('agent-badge-account')
     })
 
     it('prefers what RAN over what the composer asked for', async () => {
@@ -1338,8 +1424,12 @@ describe('meta line, tabs, pill and resume hint', () => {
       withAccounts()
       renderHeader(run('done', { runner: 'claude', steps: [step({ sessionId: 'sess-1' })] }))
       const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-      await within(meta).findByRole('button', { name: /Agent: claude, model auto/ })
-      expect(meta.querySelector('[data-slot="agent-badge-account"]')).toBeNull()
+      const badge = await within(meta).findByRole('button', { name: /agent: claude, model auto/ })
+      expect(badge.getAttribute('title')).toBe('claude · auto')
+      const details = openDetails()
+      expect(detail(details, 'Runner')?.textContent).toBe('claude') // the grid really is open
+      expect(detail(details, 'Account')).toBeNull()
+      expect(document.querySelector('[data-slot="agent-badge-account"]')).toBeNull()
     })
 
     it('still names an account that has since been removed', async () => {
@@ -1355,13 +1445,13 @@ describe('meta line, tabs, pill and resume hint', () => {
   })
 
   describe('the canonical model identity (#546)', () => {
-    /** Opens the agent badge's menu — `DropdownMenuContent` is not in the DOM until it does. */
+    /** Opens the Details popover — its grid is not in the DOM until it does. */
     const openAgentMenu = async () => {
       const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-      const badge = within(meta).getByRole('button', { name: /^Agent:/ })
-      fireEvent.pointerDown(badge, { button: 0, ctrlKey: false, pointerType: 'mouse' })
-      await waitFor(() => expect(document.querySelector('[role="menu"]')).not.toBeNull())
-      return document.querySelector('[role="menu"]') as HTMLElement
+      expect(within(meta).getByRole('button', { name: /agent:/ })).toBe(detailsBadge())
+      const details = openDetails()
+      await waitFor(() => expect(detail(details, 'Model')).not.toBeNull())
+      return details
     }
 
     it('shows the provider/model the run actually resolved to', async () => {
@@ -1375,10 +1465,11 @@ describe('meta line, tabs, pill and resume hint', () => {
       }))
       const menu = await openAgentMenu()
       expect(menu.querySelector('[data-slot="agent-badge-identity"]')?.textContent)
-        .toBe('identity: anthropic/claude-opus-4-8')
+        .toBe('anthropic/claude-opus-4-8')
+      expect(detail(menu, 'Identity')).toBe(menu.querySelector('[data-slot="agent-badge-identity"]'))
       // It ADDS to the asked-for model rather than replacing it — `model` is still the free-text
       // the caller typed, and losing that would make the badge answer a different question.
-      expect(menu.textContent).toContain('model: opus')
+      expect(detail(menu, 'Model')?.textContent).toBe('opus')
     })
 
     it('says nothing for a run from before the identity was recorded', async () => {
@@ -1401,7 +1492,8 @@ describe('meta line, tabs, pill and resume hint', () => {
       }))
       const menu = await openAgentMenu()
       expect(menu.querySelector('[data-slot="agent-badge-identity"]')).toBeNull()
-      expect(menu.textContent).toContain('model: anthropic/claude-opus-4-8')
+      expect(detail(menu, 'Identity')).toBeNull()
+      expect(detail(menu, 'Model')?.textContent).toBe('anthropic/claude-opus-4-8')
     })
   })
 
@@ -1409,17 +1501,20 @@ describe('meta line, tabs, pill and resume hint', () => {
     stubFetch()
     renderHeader(run('done', { runner: 'claude' }))
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    const badge = within(meta).getByRole('button', { name: /Agent: claude, model auto/ })
+    const badge = within(meta).getByRole('button', { name: /agent: claude, model auto/ })
     // Named on the badge like any other agent — claude being the default is not a reason to leave
     // "what produced this?" unanswered.
-    expect(badge.querySelector('[data-slot="agent-badge-summary"]')?.textContent).toBe('claude · auto')
+    expect(badge.querySelector('[data-slot="agent-badge-summary"]')?.textContent).toBe('claude')
+    expect(badge.getAttribute('title')).toBe('claude · auto')
   })
 
-  it('tabs: Session is current; Changes and Files link to the routed surfaces', () => {
+  it('tabs: Chat (the session) is current; Changes, Commits and Files link to the routed surfaces', () => {
     stubFetch()
     renderHeader(run('done'))
     const tabs = within(document.querySelector('[data-slot="run-tabs"]') as HTMLElement)
-    expect(tabs.getByRole('link', { name: 'Session' }).getAttribute('aria-current')).toBe('page')
+    expect(tabs.getByRole('link', { name: 'Chat' }).getAttribute('aria-current')).toBe('page')
+    expect(tabs.getByRole('link', { name: 'Chat' }).getAttribute('href')).toBe('/tasks/r1')
+    expect(tabs.getByRole('link', { name: 'Commits' }).getAttribute('href')).toBe('/tasks/r1/commits')
     expect(tabs.getByRole('link', { name: 'Changes' }).getAttribute('href')).toBe('/tasks/r1/changes')
     expect(tabs.getByRole('link', { name: 'Files' }).getAttribute('href')).toBe('/tasks/r1/files')
   })
@@ -1517,7 +1612,7 @@ describe('meta line, tabs, pill and resume hint', () => {
     })
     renderHeader(run('queued'))
     await waitFor(() => {
-      expect(document.querySelector('[data-slot="pill"]')?.textContent).toBe('queued #2')
+      expect(document.querySelector('[data-slot="run-status"]')?.textContent).toBe('queued #2')
     })
   })
 
@@ -1527,18 +1622,38 @@ describe('meta line, tabs, pill and resume hint', () => {
     vi.stubGlobal('navigator', { clipboard: { writeText } })
     renderHeader(run('failed', { runner: 'opencode', worktreePath: '/tmp/wt' }))
 
-    const hint = document.querySelector('[data-slot="resume-hint"]') as HTMLElement
-    expect(hint.textContent).toContain('cd /tmp/wt && opencode --session sess-1')
+    // It is a row of the Details grid now: the command, and a copy button beside it.
+    const details = openDetails()
+    expect(detail(details, 'Take over')?.textContent).toContain('cd /tmp/wt && opencode --session sess-1')
+    const hint = details.querySelector('[data-slot="resume-hint"]') as HTMLElement
+    expect(hint.getAttribute('aria-label')).toBe('Copy the take-over command')
     fireEvent.click(hint)
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith('cd /tmp/wt && opencode --session sess-1')
+    })
+    await waitFor(() => expect(toastText()).toBe('Command copied to clipboard.'))
+  })
+
+  it('the More menu copies the same take-over command', async () => {
+    stubFetch()
+    const writeText = vi.fn(() => Promise.resolve())
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    renderHeader(run('failed', { runner: 'opencode', worktreePath: '/tmp/wt' }))
+
+    fireEvent.click((await openMoreMenu()).getByRole('menuitem', { name: 'Copy take-over command' }))
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith('cd /tmp/wt && opencode --session sess-1')
     })
   })
 
-  it('an active run has no resume hint — the engine still owns the session', () => {
+  it('an active run has no resume hint — the engine still owns the session', async () => {
     stubFetch()
     renderHeader(run('running'))
+    const details = openDetails()
+    expect(detail(details, 'Runner')).not.toBeNull() // the grid really is open
+    expect(detail(details, 'Take over')).toBeNull()
     expect(document.querySelector('[data-slot="resume-hint"]')).toBeNull()
+    expect((await openMoreMenu()).queryByRole('menuitem', { name: 'Copy take-over command' })).toBeNull()
   })
 })
 

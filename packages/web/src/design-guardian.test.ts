@@ -71,9 +71,13 @@ const RULES: Rule[] = [
     pattern: /\b(?:bg|text)-(?:white|black)\b/g,
     applies: styleSources,
     // The shadcn overlay scrims (dialog, sheet) and the image lightbox scrim are deliberately
-    // bg-black/xx in both themes — a dark backdrop is theme-agnostic by design.
+    // bg-black/xx in both themes — a dark backdrop is theme-agnostic by design. So is Settings →
+    // Appearance's `WindowPreview`: a miniature of the LIGHT cockpit has to stay light while the
+    // app is dark, so its fixed zinc/white palette is the point rather than a bypass.
     allowed: (rel) =>
-      rel.startsWith('src/components/ui/') || rel === 'src/components/zoomable-image.tsx',
+      rel.startsWith('src/components/ui/') ||
+      rel === 'src/components/zoomable-image.tsx' ||
+      rel === 'src/routes/settings/appearance.tsx',
   },
   {
     name: 'no-native-dialogs',
@@ -86,14 +90,6 @@ const RULES: Rule[] = [
     // where the cockpit's toaster does not exist — alert() is its only honest surface. The
     // cockpit's own code in that file never calls a native dialog.
     allowed: (rel) => rel === 'src/lib/bookmarklet.ts',
-  },
-  {
-    name: 'no-dark-variant',
-    why: 'theming keys off the [data-theme] tokens, not prefers-color-scheme dark: variants',
-    // `dark:` immediately followed by a utility (letter, `[`, `!`, `-`, `/`) — an object
-    // literal's `dark: value` key has whitespace after the colon and stays legal.
-    pattern: /\bdark:(?=[a-z![/-])/g,
-    applies: styleSources,
   },
   {
     name: 'fixture-serve-must-pin-cez-home',
@@ -297,6 +293,20 @@ describe('design guardian', () => {
     })
   }
 
+  // `dark:` utilities used to be banned outright (`no-dark-variant`), because Tailwind's stock
+  // `dark:` follows the OS (`prefers-color-scheme`) and would disagree with the cockpit's own
+  // theme toggle. The shadcn redesign made them legal by REDEFINING the variant in the token
+  // sheet — stock shadcn components ship `dark:` utilities, and call sites need `dark:` to
+  // override them. What still has to hold is the thing the ban protected: `dark:` must never
+  // mean "the OS is dark". Lose that one line and every `dark:` silently becomes a media query.
+  it('dark-variant-follows-the-cockpit-theme: `dark:` is redefined off the root theme class, never prefers-color-scheme', () => {
+    const sheet = sources.find((f) => f.rel === 'src/styles/index.css')
+    const variant = /@custom-variant\s+dark\s*\(([^;]*)\);/.exec(sheet?.lines.join('\n') ?? '')
+    expect(variant, 'src/styles/index.css no longer redefines the `dark` variant').not.toBeNull()
+    expect(variant![1]).toContain(':root:not(.light)')
+    expect(variant![1]).not.toContain('prefers-color-scheme')
+  })
+
   // Not a RULES entry: the others are line-level forbidden-token regexes, and this one asks
   // whether a multi-line JSX opening tag CONTAINS something.
   it(`native-select-focus-ring: a native <select> wears ${SELECT_FOCUS_MARKER}, not the browser's blue outline`, () => {
@@ -312,7 +322,13 @@ describe('design guardian', () => {
         violations.push(`packages/web/${file.rel}:${line}`)
       }
     }
-    expect(scanned, 'the <select> scan found nothing — the walker or the matcher broke').toBeGreaterThan(10)
+    // The shadcn redesign replaced the dozen hand-written selects with ONE — the primitive in
+    // `components/ui/native-select.tsx` — so the walker guard is "it found that one", not a count.
+    expect(scanned, 'the <select> scan found nothing — the walker or the matcher broke').toBeGreaterThan(0)
+    expect(
+      sources.some((f) => f.rel === 'src/components/ui/native-select.tsx' && f.lines.join('\n').includes('<select')),
+      'components/ui/native-select.tsx no longer holds the native <select> — re-point this guard',
+    ).toBe(true)
     expect(
       violations,
       `native-select-focus-ring — add "outline-none focus-visible:border-ring focus-visible:ring-[3px] ${SELECT_FOCUS_MARKER}"`,

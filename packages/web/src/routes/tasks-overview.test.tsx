@@ -9,7 +9,8 @@ import { queryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
 import type { ProcessUsage, RunRecord } from '@open-mercato/cezar-api-client'
 import { ListViewProvider } from '@/components/list-view'
-import { TaskQuickListContainer } from '@/components/task-quick-list'
+import { TasksSidebar } from '@/components/tasks-sidebar'
+import { ShellWithSidebar } from '@/test/shell-with-sidebar'
 import { TasksOverview, TasksOverviewRoute } from '@/routes/tasks-overview'
 
 const NOW = Date.parse('2026-07-14T12:00:00.000Z')
@@ -77,39 +78,82 @@ const tableRow = (id: string) => document.querySelector(`[data-slot="task-table-
 const card = (id: string) => document.querySelector(`[data-slot="task-card"][data-run-id="${id}"]`)
 const cellsOf = (id: string): string[] => [...(tableRow(id)?.querySelectorAll('td') ?? [])].map((td) => td.textContent ?? '')
 
+/** One cell of a row, by the column it belongs to. */
+const cellOf = (id: string, column: string) =>
+  tableRow(id)?.querySelector(`td[data-column-id="${column}"]`)?.textContent ?? null
+/** The task's quiet second line: workflow · branch · queue place, then the PR / issue chip. */
+const detailsOf = (id: string) => tableRow(id)?.querySelector('[data-slot="task-details"]') ?? null
+const headers = () =>
+  [...document.querySelectorAll('[data-slot="tasks-table"] th')].map((cell) => cell.textContent)
+/** Every optional column on — what the table shows once Display has been asked for all of it. */
+const EVERYTHING = { branch: true, tokens: true, cost: true, cpu: true, memory: true } as const
+
+/** The Display menu — what the list shows is chosen here, not on the column headers (Radix opens
+ *  on pointerdown). Each choice is a checkbox item that leaves the menu open. */
+async function openDisplay() {
+  fireEvent.pointerDown(screen.getByRole('button', { name: 'Display' }))
+  return within(await screen.findByRole('menu'))
+}
+const displayState = (menu: Awaited<ReturnType<typeof openDisplay>>) =>
+  menu.getAllByRole('menuitemcheckbox').map((item) => [item.textContent, item.getAttribute('aria-checked')])
+/** The header's "List actions" menu: the two sweeps over the whole list. */
+async function openListActions() {
+  fireEvent.pointerDown(screen.getByRole('button', { name: 'List actions' }))
+  return within(await screen.findByRole('menu'))
+}
+
 afterEach(cleanup)
 
 describe('TasksOverview — the table', () => {
-  it('starts with Branch folded while keeping fixed columns and an in-place restore control', () => {
+  it('starts calm when nothing is stored: fixed columns, the details under the title, the rest in Display', async () => {
     const onToggleColumn = vi.fn()
     renderOverview({
       expandedColumns: {},
       onToggleColumn,
-      runs: [run({ id: 'fresh', branch: 'feat/fresh-workspace' })],
+      runs: [run({ id: 'fresh', branch: 'feat/fresh-workspace', costUsd: 0.31 })],
     })
 
-    const branchHeader = document.querySelector<HTMLElement>('th[data-column-id="branch"]')
-    expect(branchHeader?.getAttribute('data-folded')).toBe('true')
-    const restore = within(branchHeader as HTMLElement).getByRole('button', {
-      name: 'Expand Branch column',
-      pressed: false,
-    })
-    expect(restore.tagName).toBe('BUTTON')
-    fireEvent.click(restore)
-    expect(onToggleColumn).toHaveBeenCalledWith('branch')
-    expect(location()).toBe('/')
-
-    expect(tableRow('fresh')?.querySelector('td[data-column-id="branch"]')?.textContent).toBe('')
-    expect(tableRow('fresh')?.querySelector('td[data-column-id="branch"]')?.getAttribute('aria-hidden')).toBe(
-      'true',
-    )
-    expect(document.querySelector('col[data-column-id="branch"]')?.getAttribute('style')).toContain('42px')
-    expect(document.querySelector('th[data-column-id="status"] button')).toBeNull()
-    expect(document.querySelector('th[data-column-id="task"] button')).toBeNull()
+    // Status, the task, how big the change is and how old it is. Spend and live usage are a
+    // click away, not columns a fresh workspace has to read past.
+    expect(headers()).toEqual(['Status', 'Task', 'Changes', 'Started', 'Actions'])
+    // Workflow and branch are not columns at all any more: they are the title's second line.
+    expect(document.querySelector('th[data-column-id="branch"]')).toBeNull()
+    expect(detailsOf('fresh')?.textContent).toBe('default·feat/fresh-workspace')
+    expect(tableRow('fresh')?.textContent).not.toContain('$0.31')
+    // The headers are labels; nothing on them folds, and the fixed two never could.
+    expect(document.querySelectorAll('[data-slot="tasks-table"] thead button')).toHaveLength(0)
     expect(document.querySelector('[data-slot="tasks-table"] table')?.className).not.toContain('min-w-[1040px]')
+
+    const menu = await openDisplay()
+    expect(displayState(menu)).toEqual([
+      ['Workflow', 'true'],
+      ['Branch', 'true'],
+      ['Issue or pull request', 'true'],
+      ['Changes', 'true'],
+      ['Tokens in / out', 'false'],
+      ['Cost', 'false'],
+      ['CPU', 'false'],
+      ['Memory', 'false'],
+      ['Started', 'true'],
+    ])
+    // Status and Task are not choices.
+    expect(menu.queryByRole('menuitemcheckbox', { name: 'Status' })).toBeNull()
+    expect(menu.queryByRole('menuitemcheckbox', { name: 'Task' })).toBeNull()
+
+    // Where the calm default and the stored model's own default agree, one click is one toggle.
+    fireEvent.click(menu.getByRole('menuitemcheckbox', { name: 'Changes' }))
+    expect(onToggleColumn.mock.calls).toEqual([['diff']])
+    // Where they disagree about an id nobody has written yet (the model says Cost is on, the calm
+    // look says off), the first toggle only makes the current look explicit and the second flips it.
+    onToggleColumn.mockClear()
+    fireEvent.click(menu.getByRole('menuitemcheckbox', { name: 'Cost' }))
+    expect(onToggleColumn.mock.calls).toEqual([['cost'], ['cost']])
+    // Choosing what to show is not navigating, and several ticks in a row keep the menu open.
+    expect(location()).toBe('/')
+    expect(screen.queryByRole('menu')).not.toBeNull()
   })
 
-  it('disables optional headers while workspace column state is loading', () => {
+  it('disables the Display choices while workspace column state is loading', async () => {
     const onToggleColumn = vi.fn()
     renderOverview({
       columnsPending: true,
@@ -117,9 +161,11 @@ describe('TasksOverview — the table', () => {
       runs: [run({ id: 'pending-columns' })],
     })
 
-    const branch = screen.getByRole('button', { name: 'Fold Branch column', pressed: true })
-    expect((branch as HTMLButtonElement).disabled).toBe(true)
-    fireEvent.click(branch)
+    const menu = await openDisplay()
+    const items = menu.getAllByRole('menuitemcheckbox')
+    expect(items).toHaveLength(9)
+    for (const item of items) expect(item.getAttribute('aria-disabled')).toBe('true')
+    fireEvent.click(menu.getByRole('menuitemcheckbox', { name: 'Branch' }))
     expect(onToggleColumn).not.toHaveBeenCalled()
   })
 
@@ -147,10 +193,12 @@ describe('TasksOverview — the table', () => {
       ],
     })
     const pillOf = (id: string) => tableRow(id)?.querySelector('[data-slot="pill"]')
-    expect(pillOf('w')?.textContent).toBe('needs you')
-    expect(pillOf('v')?.textContent).toBe('needs review')
-    expect(pillOf('d')?.textContent).toBe('done')
-    expect(pillOf('f')?.textContent).toBe('failed')
+    expect(pillOf('w')?.textContent).toBe('Needs you')
+    expect(pillOf('v')?.textContent).toBe('Needs review')
+    expect(pillOf('d')?.textContent).toBe('Done')
+    expect(pillOf('f')?.textContent).toBe('Failed')
+    // The bucket rides along for anything that wants the state without the wording.
+    expect(pillOf('w')?.getAttribute('data-bucket')).toBe('waiting')
     expect(pillOf('w')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
     expect(pillOf('d')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
   })
@@ -166,12 +214,12 @@ describe('TasksOverview — the table', () => {
       ],
     })
     const pillOf = (id: string) => tableRow(id)?.querySelector('[data-slot="pill"]')
-    expect(pillOf('sched')?.textContent).toContain('scheduled')
+    expect(pillOf('sched')?.textContent).toContain('Scheduled')
     // The time itself, locale-formatted — assert it is there rather than its spelling.
     expect(pillOf('sched')?.querySelector('.tabular-nums')?.textContent).toMatch(/\d{1,2}[:.]\d{2}/)
     expect(pillOf('sched')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
     // …and an ordinary failure is untouched.
-    expect(pillOf('broke')?.textContent).toBe('failed')
+    expect(pillOf('broke')?.textContent).toBe('Failed')
     expect(pillOf('broke')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('danger')
   })
 
@@ -193,6 +241,7 @@ describe('TasksOverview — the table', () => {
 
   it('fills the columns with the run facts, and honest dashes where no fact exists', () => {
     renderOverview({
+      expandedColumns: EVERYTHING,
       runs: [
         run({
           id: 'full',
@@ -213,14 +262,26 @@ describe('TasksOverview — the table', () => {
       ],
     })
 
-    // Status | Task | Workflow | Branch | ± | PR | IN/OUT | Cost | CPU | Mem | Started
-    expect(cellsOf('full')).toEqual([
-      'needs review',
-      'Structured changes endpoint',
-      'feat',
-      'cez/8f31ab02',
+    // Status | Task (title, then workflow · branch · PR beneath it) | Changes | Tokens | Cost |
+    // CPU | Memory | Started | actions
+    expect(headers()).toEqual([
+      'Status',
+      'Task',
+      'Changes',
+      'Tokens in / out',
+      'Cost',
+      'CPU',
+      'Memory',
+      'Started',
+      'Actions',
+    ])
+    expect(cellOf('full', 'status')).toBe('Needs review')
+    expect(within(tableRow('full') as HTMLElement).getByRole('link', { name: 'Structured changes endpoint' })).not.toBeNull()
+    // Workflow, branch and the PR are the task's second line now, not columns of their own.
+    expect(detailsOf('full')?.textContent).toBe('feat·cez/8f31ab02#402')
+    expect(detailsOf('full')?.querySelector('[data-slot="pr-chip"]')?.textContent).toBe('#402')
+    expect(cellsOf('full').slice(2, 8)).toEqual([
       '+128 −14', // the ± column (R2 #389) — adds and dels, the mockup's pair
-      '#402',
       '184.7k / 2.4k',
       '$0.31',
       '—', // no live sample, CPU has no persisted peak
@@ -229,8 +290,10 @@ describe('TasksOverview — the table', () => {
     ])
     // No branch, no PR, no diff recorded, no cost yet — dashes, not zeros (a pre-R2 record has
     // no diffStat, and `+0 −0` would claim a measurement that never happened). Started falls
-    // back to createdAt.
-    expect(cellsOf('bare')).toEqual(['needs you', 'Bare minimum', 'default', '—', '—', '—', '— / —', '—', '—', '—', '26m'])
+    // back to createdAt. The second line simply carries less: no dash stands in for a branch.
+    expect(cellOf('bare', 'status')).toBe('Needs you')
+    expect(detailsOf('bare')?.textContent).toBe('default')
+    expect(cellsOf('bare').slice(2, 8)).toEqual(['—', '— / —', '—', '—', '—', '26m'])
     // The pair is two colored halves, not one string — green adds, red dels (design tokens).
     const diff = tableRow('full')?.querySelector('[data-slot="diff-stat"]')
     expect(diff?.querySelector('.text-success')?.textContent).toBe('+128')
@@ -263,40 +326,41 @@ describe('TasksOverview — the table', () => {
     )
   })
 
-  it('removes token/cost headers and cells while preserving table and queue semantics', () => {
+  it('removes token/cost headers and cells while preserving table and queue semantics', async () => {
     renderOverview({
       showTokens: false,
       showCost: false,
+      // Asked for, and still withheld: the host gate beats the Display choice.
+      expandedColumns: EVERYTHING,
       runs: [
-        run({ id: 'hidden', title: 'Hidden metrics', tokensUsed: 184_700, costUsd: 0.31 }),
-        run({ id: 'queued-hidden', status: 'queued', tokensUsed: 12_000, costUsd: 0.02 }),
+        run({ id: 'hidden', title: 'Hidden metrics', tokensUsed: 184_700, inputTokens: 184_700, costUsd: 0.31 }),
+        run({ id: 'queued-hidden', status: 'queued', tokensUsed: 12_000, inputTokens: 12_000, costUsd: 0.02 }),
       ],
     })
 
-    const headers = [...document.querySelectorAll('[data-slot="tasks-table"] th')].map(
-      (cell) => cell.textContent,
-    )
-    expect(headers).toEqual(['Status', 'Task', 'Workflow', 'Branch', '±', 'Ref', 'CPU', 'Mem', 'Started'])
-    expect(cellsOf('hidden')).toEqual([
-      'done',
-      'Hidden metrics',
-      'default',
-      '—',
-      '—',
-      '—',
-      '—',
-      '—',
-      '1m',
-    ])
+    expect(headers()).toEqual(['Status', 'Task', 'Changes', 'CPU', 'Memory', 'Started', 'Actions'])
+    expect(cellOf('hidden', 'status')).toBe('Done')
+    expect(detailsOf('hidden')?.textContent).toBe('default')
+    expect(cellsOf('hidden').slice(2, 6)).toEqual(['—', '—', '—', '1m'])
+    expect(tableRow('hidden')?.textContent).not.toContain('184.7k')
+    expect(tableRow('hidden')?.textContent).not.toContain('$0.31')
 
+    // A queued row is a row like any other — same cells under the same headers — and carries its
+    // place in the queue on its second line.
     const queued = tableRow('queued-hidden') as HTMLElement
-    expect(queued.querySelectorAll('td')).toHaveLength(8)
-    expect(queued.querySelector('[data-slot="queue-note"]')?.getAttribute('colspan')).toBe('2')
+    expect(queued.querySelectorAll('td')).toHaveLength(headers().length)
+    expect(queued.querySelector('[data-slot="queue-note"]')?.textContent).toBe('#1 in queue')
     expect(queued.textContent).not.toContain('12.0k')
     expect(queued.textContent).not.toContain('$0.02')
+
+    // …and the menu does not offer what the host has switched off.
+    const menu = await openDisplay()
+    expect(menu.queryByRole('menuitemcheckbox', { name: 'Tokens in / out' })).toBeNull()
+    expect(menu.queryByRole('menuitemcheckbox', { name: 'Cost' })).toBeNull()
+    expect(menu.getByRole('menuitemcheckbox', { name: 'CPU' })).not.toBeNull()
   })
 
-  it('keeps headers and normal/queued rows logically aligned when several columns are folded', () => {
+  it('keeps headers and normal/queued rows aligned when several pieces are switched off', () => {
     renderOverview({
       expandedColumns: { branch: false, workflow: false, cpu: false, memory: false },
       runs: [
@@ -309,32 +373,45 @@ describe('TasksOverview — the table', () => {
       header.getAttribute('data-column-id'),
     )
     const logicalRowIds = (id: string) =>
-      [...(tableRow(id)?.querySelectorAll('td') ?? [])].flatMap((cell) =>
-        cell.getAttribute('data-column-id') === 'cpu-memory'
-          ? ['cpu', 'memory']
-          : [cell.getAttribute('data-column-id')],
-      )
+      [...(tableRow(id)?.querySelectorAll('td') ?? [])].map((cell) => cell.getAttribute('data-column-id'))
 
+    // A switched-off column is simply absent — from the header and from every row alike.
+    expect(headerIds).toEqual(['status', 'task', 'diff', 'started', null])
     expect(logicalRowIds('aligned')).toEqual(headerIds)
     expect(logicalRowIds('aligned-queue')).toEqual(headerIds)
-    // Both live columns folded, so the queued row folds with everyone else — no spanning note.
-    expect(tableRow('aligned-queue')?.querySelector('[data-slot="queue-note"]')).toBeNull()
-    expect(document.querySelector('th[data-column-id="cpu"]')?.getAttribute('data-folded')).toBe('true')
-    expect(document.querySelector('th[data-column-id="memory"]')?.getAttribute('data-folded')).toBe('true')
+    // Workflow and branch are off, so the plain row has no second line at all…
+    expect(detailsOf('aligned')).toBeNull()
+    // …and the queued one keeps only its place in the queue: that note lives under the title, so
+    // no column choice can take it away.
+    expect(detailsOf('aligned-queue')?.textContent).toBe('#1 in queue')
   })
 
-  it('uses action-oriented names and pressed state on every optional header', () => {
+  it('names every optional piece in the Display menu and says whether it is on', async () => {
     renderOverview({
-      expandedColumns: { workflow: false, branch: true },
+      expandedColumns: { workflow: false, branch: true, cpu: true },
       runs: [run({ id: 'accessible' })],
     })
 
-    expect(screen.getByRole('button', { name: 'Expand Workflow column', pressed: false })).not.toBeNull()
-    expect(screen.getByRole('button', { name: 'Fold Branch column', pressed: true })).not.toBeNull()
-    expect(screen.getByRole('button', { name: 'Fold CPU column', pressed: true })).not.toBeNull()
-    expect(document.querySelectorAll('[data-slot="tasks-table"] thead button')).toHaveLength(9)
+    const menu = await openDisplay()
+    expect(menu.getByRole('menuitemcheckbox', { name: 'Workflow', checked: false })).not.toBeNull()
+    expect(menu.getByRole('menuitemcheckbox', { name: 'Branch', checked: true })).not.toBeNull()
+    expect(menu.getByRole('menuitemcheckbox', { name: 'CPU', checked: true })).not.toBeNull()
+    // Nine optional pieces, each addressed by its stable column id rather than by its label.
+    expect(menu.getAllByRole('menuitemcheckbox').map((item) => item.getAttribute('data-column-id'))).toEqual([
+      'workflow',
+      'branch',
+      'reference',
+      'diff',
+      'tokens',
+      'cost',
+      'cpu',
+      'memory',
+      'started',
+    ])
+    expect(document.querySelectorAll('[data-slot="tasks-table"] thead button')).toHaveLength(0)
     expect(document.querySelector('th[data-column-id="status"]')?.textContent).toBe('Status')
     expect(document.querySelector('th[data-column-id="task"]')?.textContent).toBe('Task')
+    expect(document.querySelector('th[data-column-id="cpu"]')?.textContent).toBe('CPU')
   })
 
   it('does not render capability-hidden columns or disturb their saved choices', () => {
@@ -353,29 +430,37 @@ describe('TasksOverview — the table', () => {
     expect(expandedColumns).toEqual({ tokens: false, cost: false, branch: true })
   })
 
-  it('reuses the same folded state for archived rows and filtered results', () => {
+  it('reuses the same Display choices for archived rows and filtered results', async () => {
     renderOverview({
       view: 'archived',
-      expandedColumns: { workflow: false, branch: false },
-      runs: [run({ id: 'archived-folded', archived: true, title: 'Needle task', workflow: 'autofix' })],
+      expandedColumns: { workflow: false, branch: false, started: false },
+      runs: [
+        run({ id: 'archived-folded', archived: true, title: 'Needle task', workflow: 'autofix', branch: 'feat/needle' }),
+      ],
     })
 
-    expect(screen.getByRole('button', { name: 'Expand Workflow column', pressed: false })).not.toBeNull()
-    expect(tableRow('archived-folded')?.querySelector('td[data-column-id="workflow"]')?.textContent).toBe('')
+    expect(headers()).toEqual(['Status', 'Task', 'Changes', 'Actions'])
+    expect(tableRow('archived-folded')?.textContent).not.toContain('autofix')
+    expect(tableRow('archived-folded')?.textContent).not.toContain('feat/needle')
     fireEvent.change(screen.getByRole('textbox', { name: 'Search tasks' }), { target: { value: 'needle' } })
     expect(tableRow('archived-folded')).not.toBeNull()
-    expect(screen.getByRole('button', { name: 'Expand Workflow column', pressed: false })).not.toBeNull()
+    expect(headers()).toEqual(['Status', 'Task', 'Changes', 'Actions'])
+    expect(tableRow('archived-folded')?.textContent).not.toContain('autofix')
+    const menu = await openDisplay()
+    expect(menu.getByRole('menuitemcheckbox', { name: 'Workflow', checked: false })).not.toBeNull()
+    expect(menu.getByRole('menuitemcheckbox', { name: 'Started', checked: false })).not.toBeNull()
   })
 
   it.each([
-    { name: 'both visible', showTokens: true, showCost: true, headers: ['IN / OUT', 'Cost'], tokens: true, cost: true },
-    { name: 'tokens only', showTokens: true, showCost: false, headers: ['IN / OUT'], tokens: true, cost: false },
+    { name: 'both visible', showTokens: true, showCost: true, headers: ['Tokens in / out', 'Cost'], tokens: true, cost: true },
+    { name: 'tokens only', showTokens: true, showCost: false, headers: ['Tokens in / out'], tokens: true, cost: false },
     { name: 'cost only', showTokens: false, showCost: true, headers: ['Cost'], tokens: false, cost: true },
     { name: 'both hidden', showTokens: false, showCost: false, headers: [], tokens: false, cost: false },
   ])('keeps desktop and mobile metrics independent when $name', ({ showTokens, showCost, headers, tokens, cost }) => {
     renderOverview({
       showTokens,
       showCost,
+      expandedColumns: EVERYTHING,
       runs: [
         run({
           id: 'visibility',
@@ -390,13 +475,25 @@ describe('TasksOverview — the table', () => {
     const allHeaders = [...document.querySelectorAll('[data-slot="tasks-table"] th')].map(
       (cell) => cell.textContent,
     )
-    expect(allHeaders.filter((header) => header === 'IN / OUT' || header === 'Cost')).toEqual(headers)
+    expect(allHeaders.filter((header) => header === 'Tokens in / out' || header === 'Cost')).toEqual(headers)
     const rowText = tableRow('visibility')?.textContent ?? ''
     const cardText = card('visibility')?.textContent ?? ''
     expect(rowText.includes('184.7k / 2.4k')).toBe(tokens)
     expect(cardText.includes('IN 184.7k · OUT 2.4k')).toBe(tokens)
     expect(rowText.includes('$0.31')).toBe(cost)
     expect(cardText.includes('$0.31')).toBe(cost)
+  })
+
+  it('keeps spend off the desktop row until Display asks for it, while the card always carries it', () => {
+    renderOverview({
+      expandedColumns: {},
+      runs: [run({ id: 'calm', inputTokens: 184_700, outputTokens: 2_400, costUsd: 0.31 })],
+    })
+    // The Display choice is the TABLE's: the phone card has no menu, so it keeps its meta row.
+    expect(tableRow('calm')?.textContent).not.toContain('184.7k')
+    expect(tableRow('calm')?.textContent).not.toContain('$0.31')
+    expect(card('calm')?.textContent).toContain('IN 184.7k · OUT 2.4k')
+    expect(card('calm')?.textContent).toContain('$0.31')
   })
 
   it('shows the auto-summary title once a turn produced one, falling back to the raw title', () => {
@@ -451,7 +548,7 @@ describe('TasksOverview — the table', () => {
     ).toBe('/tasks/k1')
   })
 
-  it('shows a queued run its place in the queue, spanning the live columns', () => {
+  it('shows a queued run its place in the queue, on the task’s second line', () => {
     renderOverview({
       runs: [
         run({ id: 'q1', status: 'queued', createdAt: ago(120_000) }),
@@ -460,35 +557,28 @@ describe('TasksOverview — the table', () => {
     })
     const note = tableRow('q2')?.querySelector('[data-slot="queue-note"]')
     expect(note?.textContent).toBe('#2 in queue')
-    expect(note?.getAttribute('colspan')).toBe('2')
-    // The note replaces the CPU/Mem cells — a queued run has no process to measure.
-    expect(tableRow('q2')?.querySelectorAll('[data-usage]')).toHaveLength(0)
+    // Beside the workflow, under the title — not a cell spanning the usage columns any more.
+    expect(note?.tagName).toBe('SPAN')
+    expect(detailsOf('q2')?.contains(note ?? null)).toBe(true)
+    expect(detailsOf('q2')?.textContent).toBe('default·#2 in queue')
     expect(tableRow('q1')?.querySelector('[data-slot="queue-note"]')?.textContent).toBe('#1 in queue')
   })
 
-  it('lets the fold win over the queue note when both live columns are folded', () => {
-    renderOverview({
-      expandedColumns: { cpu: false, memory: false },
-      runs: [run({ id: 'q1', status: 'queued' })],
-    })
-
-    const row = tableRow('q1') as HTMLElement
-    // The note's nowrap text would prise both 42px columns back open on an auto-layout table.
-    expect(row.querySelector('[data-slot="queue-note"]')).toBeNull()
-    expect(row.querySelector('td[data-column-id="cpu"]')?.getAttribute('data-folded')).toBe('true')
-    expect(row.querySelector('td[data-column-id="memory"]')?.getAttribute('data-folded')).toBe('true')
-    expect(row.textContent).not.toContain('in queue')
-  })
-
+  // The note used to live IN the CPU/Mem cells, so folding both took it away. It no longer
+  // depends on any column: whichever of them is on, the queued row still says where it stands.
   it.each([
-    ['CPU', { cpu: true, memory: false }],
-    ['Mem', { cpu: false, memory: true }],
-  ])('still shows the queue note while %s is expanded to carry it', (_label, expandedColumns) => {
+    ['neither CPU nor Memory', { cpu: false, memory: false }, 0],
+    ['CPU', { cpu: true, memory: false }, 1],
+    ['Memory', { cpu: false, memory: true }, 1],
+  ])('shows the queue note with %s switched on', (_label, expandedColumns, usageCells) => {
     renderOverview({ expandedColumns, runs: [run({ id: 'q1', status: 'queued' })] })
 
-    const note = tableRow('q1')?.querySelector('[data-slot="queue-note"]')
-    expect(note?.textContent).toBe('#1 in queue')
-    expect(note?.getAttribute('colspan')).toBe('2')
+    const row = tableRow('q1') as HTMLElement
+    expect(row.querySelector('[data-slot="queue-note"]')?.textContent).toBe('#1 in queue')
+    // A queued run has no process to measure: whatever usage cells there are say nothing.
+    const usage = [...row.querySelectorAll('[data-usage]')]
+    expect(usage).toHaveLength(usageCells)
+    for (const cell of usage) expect(cell.getAttribute('data-usage-kind')).toBe('none')
   })
 
   it('keeps queue numbers stable under search — the engine does not care what you typed', () => {
@@ -696,6 +786,8 @@ describe('TasksOverview — usage cells', () => {
               onMarkAllRead={vi.fn()}
               onRename={vi.fn()}
               now={NOW}
+              // CPU and Memory are off until Display switches them on.
+              expandedColumns={{ cpu: true, memory: true }}
             />
           </MemoryRouter>
         </GlobalEventsProvider>
@@ -738,32 +830,47 @@ describe('TasksOverview — header', () => {
     const { onViewChange } = renderOverview({
       runs: [run({ status: 'running' }), run({ status: 'done' }), run({ status: 'done', archived: true })],
     })
-    const active = screen.getByRole('button', { name: /^Active/ })
-    const archived = screen.getByRole('button', { name: /^Archived/ })
+    const active = screen.getByRole('tab', { name: /^Active/ })
+    const archived = screen.getByRole('tab', { name: /^Archived/ })
     expect(active.textContent).toBe('Active2')
     expect(archived.textContent).toBe('Archived1')
     expect(active.getAttribute('aria-pressed')).toBe('true')
+    expect(active.getAttribute('aria-selected')).toBe('true')
+    expect(archived.getAttribute('aria-pressed')).toBe('false')
 
-    fireEvent.click(archived)
+    // Radix tabs switch on mousedown, not click.
+    fireEvent.mouseDown(archived)
     expect(onViewChange).toHaveBeenCalledWith('archived')
   })
 
-  it('offers Archive finished only while finished runs exist, and only on the Active tab', () => {
-    const { onArchiveFinished, unmount } = renderOverview({
+  it('offers Archive finished only while finished runs exist, and only on the Active tab', async () => {
+    const first = renderOverview({
       runs: [run({ status: 'done' }), run({ status: 'running' })],
     })
-    fireEvent.click(screen.getByRole('button', { name: /Archive finished/ }))
-    expect(onArchiveFinished).toHaveBeenCalledTimes(1)
-    unmount()
+    // In the header's "List actions" menu, wearing the number of runs it would sweep.
+    const sweep = (await openListActions()).getByRole('menuitem', { name: /Archive finished/ })
+    expect(sweep.textContent).toBe('Archive finished1')
+    expect(sweep.getAttribute('aria-disabled')).toBeNull()
+    fireEvent.click(sweep)
+    expect(first.onArchiveFinished).toHaveBeenCalledTimes(1)
+    first.unmount()
 
-    // Nothing finished → no broom.
-    renderOverview({ runs: [run({ status: 'running' }), run({ status: 'waiting' })] })
-    expect(screen.queryByRole('button', { name: /Archive finished/ })).toBeNull()
+    // Nothing finished → the item stays, so the menu always says what it can do, but it is
+    // disabled, counts nothing and does nothing.
+    const second = renderOverview({ runs: [run({ status: 'running' }), run({ status: 'waiting' })] })
+    const idle = (await openListActions()).getByRole('menuitem', { name: /Archive finished/ })
+    expect(idle.getAttribute('aria-disabled')).toBe('true')
+    expect(idle.textContent).toBe('Archive finished')
+    fireEvent.click(idle)
+    expect(second.onArchiveFinished).not.toHaveBeenCalled()
     cleanup()
 
     // Archived view → the sweep acts on the other tab; offering it here would be misleading.
-    renderOverview({ runs: [run({ status: 'done' })], view: 'archived' })
-    expect(screen.queryByRole('button', { name: /Archive finished/ })).toBeNull()
+    const third = renderOverview({ runs: [run({ status: 'done' })], view: 'archived' })
+    const elsewhere = (await openListActions()).getByRole('menuitem', { name: /Archive finished/ })
+    expect(elsewhere.getAttribute('aria-disabled')).toBe('true')
+    fireEvent.click(elsewhere)
+    expect(third.onArchiveFinished).not.toHaveBeenCalled()
   })
 
   // Read/unread (#unread-done-items). The rule itself is table-tested in lib/read-state.test.ts;
@@ -790,20 +897,26 @@ describe('TasksOverview — header', () => {
     expect(unreadDot('cancelled')).toBeNull()
   })
 
-  it('offers Mark all read only while something is unread, and calls back on click', () => {
+  it('offers Mark all read only while something is unread, and calls back on click', async () => {
     const FINISHED = ago(60_000)
-    const { onMarkAllRead, unmount } = renderOverview({
+    const first = renderOverview({
       runs: [run({ status: 'done', finishedAt: FINISHED })],
     })
-    fireEvent.click(screen.getByRole('button', { name: /Mark all read/ }))
-    expect(onMarkAllRead).toHaveBeenCalledTimes(1)
-    unmount()
+    const sweep = (await openListActions()).getByRole('menuitem', { name: /Mark all read/ })
+    expect(sweep.textContent).toBe('Mark all read1')
+    fireEvent.click(sweep)
+    expect(first.onMarkAllRead).toHaveBeenCalledTimes(1)
+    first.unmount()
 
-    // Everything already seen → nothing left to sweep, so no control.
-    renderOverview({
+    // Everything already seen → nothing left to sweep: the item is disabled and inert.
+    const second = renderOverview({
       runs: [run({ status: 'done', finishedAt: FINISHED, seenAt: ago(30_000) })],
     })
-    expect(screen.queryByRole('button', { name: /Mark all read/ })).toBeNull()
+    const idle = (await openListActions()).getByRole('menuitem', { name: /Mark all read/ })
+    expect(idle.getAttribute('aria-disabled')).toBe('true')
+    expect(idle.textContent).toBe('Mark all read')
+    fireEvent.click(idle)
+    expect(second.onMarkAllRead).not.toHaveBeenCalled()
   })
 
   it('filters by title, branch and workflow through the search box', () => {
@@ -837,55 +950,57 @@ describe('TasksOverview — empty and loading states', () => {
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Tasks')
   })
 
-  it('celebrates no-tasks-yet: primary tone, the twinkle backdrop, a New-task action', () => {
+  it('celebrates no-tasks-yet: primary tone and a New-task action', () => {
     renderOverview({ runs: [] })
     const empty = document.querySelector<HTMLElement>('[data-slot="tasks-empty"]')
     if (!empty) throw new Error('no empty state rendered')
 
     expect(empty.getAttribute('data-empty-kind')).toBe('no-tasks')
-    expect(empty.querySelector('[data-slot="centered-state"]')?.getAttribute('data-tone')).toBe('primary')
-    expect(within(empty).getByRole('heading', { name: 'No tasks yet' })).not.toBeNull()
-    expect(within(empty).getByText('Describe a task to get started.')).not.toBeNull()
+    expect(empty.querySelector('[data-slot="empty"]')?.getAttribute('data-tone')).toBe('primary')
+    expect(empty.querySelector('[data-slot="empty-title"]')?.textContent).toBe('No tasks yet')
+    expect(
+      within(empty).getByText('Describe a task and an agent picks it up in its own worktree.'),
+    ).not.toBeNull()
     // Scoped inside the state — the mobile FAB is also a link named "New task".
     expect(within(empty).getByRole('link', { name: 'New task' }).getAttribute('href')).toBe('/new')
-    // The hero moment: this is the one overview state that gets the decorative backdrop.
-    expect(empty.querySelector('[data-slot="twinkle-backdrop"]')).not.toBeNull()
+    // The one empty state with a way forward; the other two are a sentence and nothing to press.
   })
 
-  it('says the archive is empty, plainly — neutral, no backdrop', () => {
+  it('says the archive is empty, plainly — neutral, no call to action', () => {
     renderOverview({ runs: [run({ status: 'done' })], view: 'archived' })
     const empty = document.querySelector<HTMLElement>('[data-slot="tasks-empty"]')
     if (!empty) throw new Error('no empty state rendered')
 
     expect(empty.getAttribute('data-empty-kind')).toBe('archive')
-    expect(empty.querySelector('[data-slot="centered-state"]')?.getAttribute('data-tone')).toBe('neutral')
-    expect(within(empty).getByRole('heading', { name: 'Nothing archived yet' })).not.toBeNull()
-    expect(empty.querySelector('[data-slot="twinkle-backdrop"]')).toBeNull()
+    expect(empty.querySelector('[data-slot="empty"]')?.getAttribute('data-tone')).toBe('neutral')
+    expect(empty.querySelector('[data-slot="empty-title"]')?.textContent).toBe('Nothing archived yet')
+    expect(within(empty).queryByRole('link')).toBeNull()
   })
 
-  it('says what the search missed, quoting it, with no backdrop', () => {
+  it('says what the search missed, quoting it, with no call to action', () => {
     renderOverview({ runs: [run({ title: 'Something' })] })
     fireEvent.change(screen.getByRole('textbox', { name: 'Search tasks' }), { target: { value: 'quaternion' } })
     const empty = document.querySelector<HTMLElement>('[data-slot="tasks-empty"]')
     if (!empty) throw new Error('no empty state rendered')
 
     expect(empty.getAttribute('data-empty-kind')).toBe('search-miss')
-    expect(empty.querySelector('[data-slot="centered-state"]')?.getAttribute('data-tone')).toBe('neutral')
+    expect(empty.querySelector('[data-slot="empty"]')?.getAttribute('data-tone')).toBe('neutral')
     expect(screen.getByText('No tasks match “quaternion”.')).not.toBeNull()
-    // A missed search is not a hero surface.
-    expect(empty.querySelector('[data-slot="twinkle-backdrop"]')).toBeNull()
+    // A missed search is not a hero surface: no call to action.
+    expect(within(empty).queryByRole('link')).toBeNull()
   })
 })
 
 describe('TasksOverview — mobile cards and FAB', () => {
-  it('keeps mobile metadata unchanged when its desktop columns are folded', () => {
+  it('keeps mobile metadata unchanged when Display switches it off on the desktop', () => {
     renderOverview({
       expandedColumns: { workflow: false, branch: false },
       runs: [run({ id: 'folded-mobile', workflow: 'autofix', branch: 'feat/mobile-stays' })],
     })
 
-    expect(tableRow('folded-mobile')?.querySelector('td[data-column-id="workflow"]')?.textContent).toBe('')
-    expect(tableRow('folded-mobile')?.querySelector('td[data-column-id="branch"]')?.textContent).toBe('')
+    expect(detailsOf('folded-mobile')).toBeNull()
+    expect(tableRow('folded-mobile')?.textContent).not.toContain('autofix')
+    expect(tableRow('folded-mobile')?.textContent).not.toContain('feat/mobile-stays')
     expect(card('folded-mobile')?.textContent).toContain('autofix')
     expect(card('folded-mobile')?.textContent).toContain('feat/mobile-stays')
   })
@@ -929,7 +1044,7 @@ describe('TasksOverview — mobile cards and FAB', () => {
       ],
     })
     const c = card('c1') as HTMLElement
-    expect(c.querySelector('[data-slot="pill"]')?.textContent).toBe('needs review')
+    expect(c.querySelector('[data-slot="pill"]')?.textContent).toBe('Needs review')
     // The card names the run by the summary too — every surface reads through runTitle.
     expect(within(c).getByRole('link', { name: 'Structured changes endpoint' }).getAttribute('href')).toBe(
       '/tasks/c1'
@@ -1040,11 +1155,13 @@ describe('TasksOverviewRoute — wired to the app', () => {
     return render(
       <QueryClientProvider client={createQueryClient()}>
         <MemoryRouter>
-          <ListViewProvider>
-            {/* The sidebar and the overview together, under ONE provider — the point under test. */}
-            <TaskQuickListContainer />
-            <TasksOverviewRoute />
-          </ListViewProvider>
+          <ShellWithSidebar>
+            <ListViewProvider>
+              {/* The sidebar and the overview together, under ONE provider — the point under test. */}
+              <TasksSidebar />
+              <TasksOverviewRoute />
+            </ListViewProvider>
+          </ShellWithSidebar>
         </MemoryRouter>
       </QueryClientProvider>
     )
@@ -1068,17 +1185,20 @@ describe('TasksOverviewRoute — wired to the app', () => {
     await waitFor(() => expect(tableRow('act')).not.toBeNull())
     expect(sidebarRow('act')).not.toBeNull()
 
-    // Flip in the table header → the sidebar follows.
-    fireEvent.click(overviewTab('archived'))
-    expect(sidebarTab('archived').getAttribute('aria-pressed')).toBe('true')
+    // Flip in the table header → the sidebar follows. (Radix tabs switch on mousedown.)
+    expect(sidebarTab('active').getAttribute('aria-selected')).toBe('true')
+    fireEvent.mouseDown(overviewTab('archived'))
+    expect(sidebarTab('archived').getAttribute('aria-selected')).toBe('true')
+    expect(sidebarTab('active').getAttribute('aria-selected')).toBe('false')
     expect(tableRow('arc')).not.toBeNull()
     expect(tableRow('act')).toBeNull()
     expect(sidebarRow('arc')).not.toBeNull()
     expect(sidebarRow('act')).toBeNull()
 
     // Flip back in the sidebar → the table follows.
-    fireEvent.click(sidebarTab('active'))
+    fireEvent.mouseDown(sidebarTab('active'))
     expect(overviewTab('active').getAttribute('aria-pressed')).toBe('true')
+    expect(overviewTab('archived').getAttribute('aria-pressed')).toBe('false')
     expect(tableRow('act')).not.toBeNull()
     expect(tableRow('arc')).toBeNull()
   })
@@ -1111,11 +1231,24 @@ describe('TasksOverviewRoute — wired to the app', () => {
         </MemoryRouter>
       </QueryClientProvider>,
     )
-    const restore = await screen.findByRole('button', { name: 'Expand Branch column', pressed: false })
-    restore.focus()
+    // Adopted: the stored choice beats the calm default, so the branch is not under the title.
+    await waitFor(() => expect(tableRow('persisted')).not.toBeNull())
+    await waitFor(() => expect(tableRow('persisted')?.textContent).not.toContain('feat/persisted'))
+    // The choices stay disabled until the authoritative workspace state has landed.
+    const branchItem = async () => {
+      const item = (await openDisplay()).getByRole('menuitemcheckbox', { name: 'Branch' })
+      if (item.getAttribute('aria-disabled') === 'true') throw new Error('columns still pending')
+      return item
+    }
+    const restore = await waitFor(branchItem)
+    expect(restore.getAttribute('aria-checked')).toBe('false')
     fireEvent.click(restore)
-    const fold = await screen.findByRole('button', { name: 'Fold Branch column', pressed: true })
-    expect(document.activeElement).toBe(fold)
+    // Optimistic: ticked, and on the row, before the server has answered — and the menu is still
+    // open on the item that was pressed.
+    await waitFor(() =>
+      expect(screen.getByRole('menuitemcheckbox', { name: 'Branch' }).getAttribute('aria-checked')).toBe('true'),
+    )
+    expect(detailsOf('persisted')?.textContent).toContain('feat/persisted')
     const put = await waitFor(() => {
       const call = fetchMock.mock.calls.find(
         ([path, options]) => String(path) === '/api/v1/workspace/ui-state' && options?.method === 'PUT',
@@ -1141,12 +1274,15 @@ describe('TasksOverviewRoute — wired to the app', () => {
         </MemoryRouter>
       </QueryClientProvider>,
     )
-    expect(await screen.findByRole('button', { name: 'Fold Branch column', pressed: true })).not.toBeNull()
+    // Reloaded from the server's answer, not from anything this page remembered.
+    await waitFor(() => expect(detailsOf('persisted')?.textContent).toContain('feat/persisted'))
+    expect((await waitFor(branchItem)).getAttribute('aria-checked')).toBe('true')
   })
 
   it('posts to /api/v1/runs/archive-finished and refetches the authoritative list', async () => {
     renderApp([run({ id: 'd1', status: 'done' })])
-    fireEvent.click(await screen.findByRole('button', { name: /Archive finished/ }))
+    await waitFor(() => expect(tableRow('d1')).not.toBeNull())
+    fireEvent.click((await openListActions()).getByRole('menuitem', { name: /Archive finished/ }))
 
     await waitFor(() => {
       const posted = fetchMock.mock.calls.find(([path]) => String(path) === '/api/v1/runs/archive-finished')

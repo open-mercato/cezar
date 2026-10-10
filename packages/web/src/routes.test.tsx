@@ -7,11 +7,13 @@ import { createQueryClient } from './api/query-client'
 import { queryKeys, workspaceQueryKeys } from './api/queries'
 import type { ProjectsResponse, WorkspaceUiState } from '@open-mercato/cezar-api-client'
 import { AppearanceProvider } from './components/appearance-provider'
+import { GlobalSettingsDialog } from './components/global-settings-dialog'
 import { ListViewProvider } from './components/list-view'
 import { ThemeProvider } from './components/theme-provider'
 import { LAST_LOCATION_STORAGE_KEY } from './lib/last-location'
 import { AppRoutes, pageTitleContext } from './routes'
 import { resetDraft } from './routes/new-task-draft'
+import { ShellProviders } from './test/shell-providers'
 
 // The `/` overview fetches `/api/v1/runs` on mount. A never-answering fetch keeps every route
 // honestly in its loading state — this file is about the URL map, not about data.
@@ -132,10 +134,12 @@ function renderAt(
       <ThemeProvider>
         <AppearanceProvider>
           <MemoryRouter initialEntries={[entry]}>
-            <ListViewProvider>
-              <AppRoutes />
-              <LocationProbe />
-            </ListViewProvider>
+            <ShellProviders dialog={<GlobalSettingsDialog />}>
+              <ListViewProvider>
+                <AppRoutes />
+                <LocationProbe />
+              </ListViewProvider>
+            </ShellProviders>
           </MemoryRouter>
         </AppearanceProvider>
       </ThemeProvider>
@@ -146,6 +150,20 @@ function renderAt(
 
 function routeName(): string | null {
   return document.querySelector('[data-route]')?.getAttribute('data-route') ?? null
+}
+
+/** What a skeleton route says while it loads. The redesign's loading states are skeletons shaped
+ *  like the page they stand in for, so there is no heading to read — the route is busy, and names
+ *  itself either as its own accessible label or in a line only a screen reader gets. */
+function loadingAnnouncement(): string | null {
+  const route = document.querySelector('[data-route][aria-busy="true"]')
+  if (!route) return null
+  return route.getAttribute('aria-label') ?? route.querySelector('.sr-only')?.textContent ?? null
+}
+
+/** Global settings are a dialog over the app, not a route of their own. */
+function globalSettingsDialog(): HTMLElement | null {
+  return document.querySelector('[data-slot="global-settings-dialog"]')
 }
 
 function currentPathname(): string | null {
@@ -194,7 +212,7 @@ describe('pageTitleContext', () => {
 /** The URL contract from the spec's "Routing — every surface is a URL" section, now under the
  *  `/p/:projectId` prefix (multi-project spec, step 3.2). These paths are pasteable links;
  *  changing one breaks a teammate's bookmark, so the map is asserted URL-by-URL. */
-const ROUTE_CASES: Array<[url: string, route: string, title: string]> = [
+const ROUTE_CASES: Array<[url: string, route: string, title: string | { loading: string }]> = [
   ['/', 'tasks', 'Tasks'],
   // The real full-screen composer (R4 Step 1.1): the hero title is the page heading.
   ['/new', 'new', 'What should the agent work on?'],
@@ -204,28 +222,29 @@ const ROUTE_CASES: Array<[url: string, route: string, title: string]> = [
   ['/tasks/abc123/changes', 'task-changes', 'Loading changes…'],
   ['/tasks/abc123/files', 'task-files', 'Loading files…'],
   // The real compare view (Step R3 2.3): with fetch never answering it is honestly loading.
-  ['/compare/grp-1', 'compare', 'Loading variants…'],
+  ['/compare/grp-1', 'compare', { loading: 'Loading variants…' }],
   // The real repo view (R5 Step 1.7): with fetch never answering it is honestly loading —
   // and every segment is its own URL, commit deep links included.
-  ['/git', 'repo-git', 'Loading repository…'],
-  ['/git/commits', 'repo-git', 'Loading repository…'],
-  ['/git/commits/abc1234', 'repo-git', 'Loading repository…'],
-  ['/git/branches', 'repo-git', 'Loading repository…'],
+  ['/git', 'repo-git', { loading: 'Loading repository…' }],
+  ['/git/commits', 'repo-git', { loading: 'Loading repository…' }],
+  ['/git/commits/abc1234', 'repo-git', { loading: 'Loading repository…' }],
+  ['/git/branches', 'repo-git', { loading: 'Loading repository…' }],
   // The real GitHub tab (R6 Step 1.1): with fetch never answering every github URL is
   // honestly loading — lists and item deep links included.
-  ['/github', 'github', 'Loading GitHub…'],
-  ['/github/prs', 'github', 'Loading GitHub…'],
-  ['/github/issues/42', 'github', 'Loading GitHub…'],
-  ['/github/prs/7', 'github', 'Loading GitHub…'],
+  ['/github', 'github', { loading: 'Loading GitHub…' }],
+  ['/github/prs', 'github', { loading: 'Loading GitHub…' }],
+  ['/github/issues/42', 'github', { loading: 'Loading GitHub…' }],
+  ['/github/prs/7', 'github', { loading: 'Loading GitHub…' }],
   ['/inbox', 'inbox', 'Inbox'],
   // The real workflow builder (R6 Step 1.6): with fetch never answering both the list URL
   // and a named deep link are honestly loading.
-  ['/workflows', 'workflows', 'Loading workflows…'],
-  ['/workflows/ship-it', 'workflows', 'Loading workflows…'],
+  ['/workflows', 'workflows', { loading: 'Loading workflows…' }],
+  ['/workflows/ship-it', 'workflows', { loading: 'Loading workflows…' }],
   ['/skills', 'skills', 'Skills'],
   // Project settings only (step 3.5) — appearance/notifications/resources/projects moved to
-  // the unscoped `/settings/global/*` area, covered in its own describe below.
-  ['/settings', 'settings', 'Settings'],
+  // the global settings dialog, covered in its own describe below. The area's index is the
+  // project's "General" page.
+  ['/settings', 'settings', 'General'],
   ['/settings/agents', 'settings-agents', 'Agents'],
   ['/settings/agent-config', 'settings-agent-config', 'Agent config'],
   ['/settings/worktrees', 'settings-worktrees', 'Worktrees'],
@@ -238,7 +257,11 @@ describe('scoped route map (/p/:projectId)', () => {
     it(`/p/${BOOT}${url} → ${route}`, () => {
       renderAt(`/p/${BOOT}${url}`)
       expect(routeName()).toBe(route)
-      expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(title)
+      if (typeof title === 'string') {
+        expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(title)
+      } else {
+        expect(loadingAnnouncement()).toBe(title.loading)
+      }
     })
   }
 
@@ -266,12 +289,12 @@ describe('scoped route map (/p/:projectId)', () => {
     })
   }
 
-  // Step 4.1: the 404 is a CenteredState with a way home, not a bare stub — and its way home
+  // Step 4.1: the 404 is an empty state with a way home, not a bare stub — and its way home
   // stays inside the active project (the scope-aware Link).
-  it('the 404 renders a CenteredState with a back-to-tasks action scoped to the project', () => {
+  it('the 404 renders an empty state with a back-to-tasks action scoped to the project', () => {
     renderAt(`/p/${BOOT}/definitely-not-a-route`)
     expect(routeName()).toBe('not-found')
-    expect(document.querySelector('[data-route="not-found"] [data-slot="centered-state"]')).not.toBeNull()
+    expect(document.querySelector('[data-route="not-found"] [data-slot="empty"][role="alert"]')).not.toBeNull()
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Page not found')
     expect(screen.getByRole('link', { name: 'Back to tasks' }).getAttribute('href')).toBe(`/p/${BOOT}/`)
   })
@@ -326,9 +349,10 @@ describe('scoped route map (/p/:projectId)', () => {
 })
 
 /**
- * Global settings (step 3.5) — the one area OUTSIDE `/p/:projectId`. Two things must hold: the
- * URLs render without any project scope, and the sections that MOVED there keep their old
- * project-scoped URLs alive as redirects, so pre-split bookmarks still land.
+ * Global settings (step 3.5) — the one area OUTSIDE `/p/:projectId`, and since the redesign a
+ * DIALOG rather than a page. Two things must hold: the `/settings/global/*` URLs still open the
+ * section they name (as deep links into the dialog), and the sections that MOVED there keep
+ * their old project-scoped URLs alive, so pre-split bookmarks still land.
  */
 describe('the global settings area (/settings/global)', () => {
   // These assertions cover routing and the capability gate, not Vite's cold module transform.
@@ -337,21 +361,27 @@ describe('the global settings area (/settings/global)', () => {
     await import('./routes/automations/automations-route')
   }, 30_000)
 
-  const GLOBAL_CASES: Array<[string, string, string]> = [
-    ['/settings/global', 'settings-global', 'Global settings'],
-    ['/settings/global/appearance', 'settings-global-appearance', 'Appearance'],
-    ['/settings/global/notifications', 'settings-global-notifications', 'Notifications'],
-    ['/settings/global/resources', 'settings-global-resources', 'Resources'],
-    ['/settings/global/skills', 'settings-global-skills', 'Skills'],
-    ['/settings/global/projects', 'settings-global-projects', 'Projects'],
+  // The bare URL names no section, so the dialog opens on its first one.
+  const GLOBAL_CASES: Array<[url: string, section: string, title: string]> = [
+    ['/settings/global', 'appearance', 'Appearance'],
+    ['/settings/global/appearance', 'appearance', 'Appearance'],
+    ['/settings/global/notifications', 'notifications', 'Notifications'],
+    ['/settings/global/resources', 'resources', 'Resources'],
+    ['/settings/global/skills', 'skills', 'Skills'],
+    ['/settings/global/projects', 'projects', 'Projects'],
   ]
-  for (const [url, route, title] of GLOBAL_CASES) {
-    it(`${url} → ${route}, unscoped`, () => {
+  for (const [url, section, title] of GLOBAL_CASES) {
+    it(`${url} → the global settings dialog on ${section}, over the project home`, async () => {
       renderAt(url)
-      expect(routeName()).toBe(route)
-      // Never redirected into a project: the pathname is the one that was asked for.
-      expect(currentPathname()).toBe(url)
-      expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(title)
+      await waitFor(() => expect(globalSettingsDialog()?.getAttribute('data-section')).toBe(section))
+      expect(screen.getByRole('dialog', { name: 'Global settings' })).toBe(globalSettingsDialog())
+      // The dialog names the section it is on: the header trail and the marked nav entry.
+      expect(globalSettingsDialog()?.querySelector('[data-slot="breadcrumb-page"]')?.textContent).toBe(title)
+      expect(globalSettingsDialog()?.querySelector('[aria-current="page"]')?.getAttribute('data-section')).toBe(section)
+      // A deep link is not a page: the URL is handed to the bare root, which lands on the boot
+      // project — never on a `/p/<id>/settings/global/…` path, which would be a 404.
+      expect(currentPathname()).toBe(`/p/${BOOT}/`)
+      expect(routeName()).toBe('tasks')
     })
   }
 
@@ -383,38 +413,52 @@ describe('the global settings area (/settings/global)', () => {
     renderAt('/settings/global/projects', {
       health: { ...HEALTH, capabilities: { ...HEALTH.capabilities, singleProject: true } },
     })
-    expect(routeName()).not.toBe('settings-global-projects')
-    expect(screen.queryByRole('heading', { level: 1, name: 'Projects' })).toBeNull()
+    // Not a deep link in this mode, so it is an ordinary unknown path: no dialog, an honest 404.
+    expect(globalSettingsDialog()).toBeNull()
+    expect(routeName()).toBe('not-found')
+    cleanup()
+
+    // …and the dialog itself, opened by a section that IS routed, offers no Projects entry.
+    renderAt('/settings/global/resources', {
+      health: { ...HEALTH, capabilities: { ...HEALTH.capabilities, singleProject: true } },
+    })
+    expect(globalSettingsDialog()?.querySelector('button[data-section="resources"]')).not.toBeNull()
+    expect(globalSettingsDialog()?.querySelector('button[data-section="projects"]')).toBeNull()
   })
 
   // A moved section's old URL, in both spellings a bookmark can have it.
   for (const id of ['appearance', 'notifications', 'resources']) {
-    it(`/p/${BOOT}/settings/${id} redirects to the global twin`, () => {
+    // The global twin is the dialog now: the old URL opens it on that section, over the
+    // project's own settings (the page the URL used to be a part of).
+    it(`/p/${BOOT}/settings/${id} opens the global twin over the project settings`, async () => {
       renderAt(`/p/${BOOT}/settings/${id}`)
-      expect(currentPathname()).toBe(`/settings/global/${id}`)
-      expect(routeName()).toBe(`settings-global-${id}`)
+      await waitFor(() => expect(globalSettingsDialog()?.getAttribute('data-section')).toBe(id))
+      expect(currentPathname()).toBe(`/p/${BOOT}/settings`)
+      expect(routeName()).toBe('settings')
     })
 
-    it(`the legacy flat /settings/${id} lands on the global twin too`, () => {
+    it(`the legacy flat /settings/${id} lands on the global twin too`, async () => {
       renderAt(`/settings/${id}`)
-      expect(currentPathname()).toBe(`/settings/global/${id}`)
+      await waitFor(() => expect(globalSettingsDialog()?.getAttribute('data-section')).toBe(id))
+      expect(currentPathname()).toBe(`/p/${BOOT}/settings`)
     })
 
-    it(`/settings/${id} carries query AND hash through BOTH redirect hops`, () => {
-      // The legacy flat URL takes two hops — `LegacyPathRedirect` into the boot project, then
-      // the moved-section redirect out to the global twin. `settingsSectionPath` returns a bare
-      // pathname, so the second hop is exactly where a bookmark's `?…#…` used to disappear.
+    // A bookmark's `?…#…` has no page to arrive at any more — the section is dialog state, not
+    // a URL — so what is pinned is that it never stops the bookmark from landing, on either
+    // spelling: two hops (`LegacyPathRedirect` into the boot project, then the moved-section
+    // redirect) or one.
+    it(`/settings/${id} still lands with a query AND hash, through BOTH redirect hops`, async () => {
       renderAt(`/settings/${id}?tab=x&y=a%2Fb#anchor`)
-      expect(currentPathname()).toBe(`/settings/global/${id}`)
-      expect(currentSearch()).toBe('?tab=x&y=a%2Fb')
-      expect(currentHash()).toBe('#anchor')
+      await waitFor(() => expect(globalSettingsDialog()?.getAttribute('data-section')).toBe(id))
+      expect(currentPathname()).toBe(`/p/${BOOT}/settings`)
+      expect(routeName()).toBe('settings')
     })
 
-    it(`/p/${BOOT}/settings/${id} carries query AND hash on the single hop`, () => {
+    it(`/p/${BOOT}/settings/${id} still lands with a query AND hash on the single hop`, async () => {
       renderAt(`/p/${BOOT}/settings/${id}?tab=x#anchor`)
-      expect(currentPathname()).toBe(`/settings/global/${id}`)
-      expect(currentSearch()).toBe('?tab=x')
-      expect(currentHash()).toBe('#anchor')
+      await waitFor(() => expect(globalSettingsDialog()?.getAttribute('data-section')).toBe(id))
+      expect(currentPathname()).toBe(`/p/${BOOT}/settings`)
+      expect(routeName()).toBe('settings')
     })
   }
 })

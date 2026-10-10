@@ -37,7 +37,9 @@ describe('DayView', () => {
     renderDay()
 
     expect(title()).toBe('Wed 16 Sep')
-    expect(screen.getByText('today').closest('[data-slot="pill"]')).not.toBeNull()
+    expect(screen.getByText('Today').closest('[data-slot="badge"]')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
+    // Already on today — there is nowhere to jump back to.
+    expect(screen.queryByRole('button', { name: 'Today' })).toBeNull()
     expect(screen.getByText('6 scheduled runs · 2 GitHub polls')).toBeTruthy()
     expect(document.querySelector('[data-slot="day-column"]')?.getAttribute('data-today')).toBe('true')
   })
@@ -65,13 +67,14 @@ describe('DayView', () => {
     expect(rows.map((r) => r.dataset.past)).toEqual(['true', 'true', 'true', 'true', 'false', 'false'])
 
     const past = rows[3] as HTMLElement // CI sweep at 07:30 — it failed
-    expect(past.querySelector('span')?.className).toContain('text-soft-foreground')
+    expect(past.querySelector('span')?.className).toContain('text-muted-foreground')
     expect(past.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('danger')
     expect(past.textContent).toContain('Weekday morning CI sweep')
     expect(past.textContent).toContain('List workflows that failed on main since yesterday 07:30.')
 
     const future = rows[4] as HTMLElement // Stale PR nudge at 12:00
     expect(future.querySelector('span')?.className).toContain('text-foreground')
+    expect(future.querySelector('span')?.className).not.toContain('text-muted-foreground')
     expect(future.querySelector('span')?.textContent).toBe('12:00')
     expect(future.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('neutral')
   })
@@ -81,7 +84,7 @@ describe('DayView', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Previous day' }))
     expect(title()).toBe('Tue 15 Sep')
-    expect(screen.queryByText('today')).toBeNull()
+    expect(screen.getByText('Today').closest('[data-slot="badge"]')).toBeNull()
     expect(document.querySelector('[data-slot="now-line"]')).toBeNull()
     // Tuesday carries the paused Flaky test hunt at 02:00, at half opacity, and every row is past.
     const flaky = blocks().find((b) => b.dataset.automation === 'a6')

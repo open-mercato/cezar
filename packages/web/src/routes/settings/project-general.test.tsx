@@ -6,8 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ProjectListEntry } from '@open-mercato/cezar-api-client'
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
+import { AppearanceProvider } from '@/components/appearance-provider'
+import { GlobalSettingsDialog } from '@/components/global-settings-dialog'
+import { ThemeProvider } from '@/components/theme-provider'
 import { ListViewProvider } from '@/components/list-view'
 import { AppRoutes } from '@/routes'
+import { ShellProviders } from '@/test/shell-providers'
 
 /**
  * Project settings → General (project-general.tsx): the dashboard the settings index became.
@@ -119,7 +123,15 @@ function renderAt(entry: string, seed?: Parameters<typeof seededClient>[0]) {
           which reads it. */}
       <ListViewProvider>
         <MemoryRouter initialEntries={[entry]}>
-          <AppRoutes />
+          {/* What the app shell gives every route: global settings as a dialog (whose first
+              section, Appearance, reads the theme), and the sidebar. */}
+          <ThemeProvider>
+            <AppearanceProvider>
+              <ShellProviders dialog={<GlobalSettingsDialog />}>
+                <AppRoutes />
+              </ShellProviders>
+            </AppearanceProvider>
+          </ThemeProvider>
         </MemoryRouter>
       </ListViewProvider>
     </QueryClientProvider>,
@@ -232,9 +244,10 @@ describe('the General page', () => {
   })
 
   it('is the project area only — global settings has no project to describe', async () => {
+    // Global settings are a dialog over whatever you were on; the deep link opens it.
     renderAt('/settings/global')
     await waitFor(() => {
-      expect(document.querySelector('[data-slot="settings-index"]')).not.toBeNull()
+      expect(document.querySelector('[data-slot="global-settings-dialog"]')).not.toBeNull()
     })
     expect(general()).toBeNull()
   })
@@ -281,7 +294,8 @@ describe('the General page', () => {
       return el!
     })
     expect(status.textContent).toContain('folder not found')
-    expect(status.textContent).toContain('restore the folder at the path above')
+    // The folder field sits directly under the status row now, so the hint points down at it.
+    expect(status.textContent).toContain('restore the folder at the path below')
     expect(status.textContent).not.toContain('remove it below')
   })
 })

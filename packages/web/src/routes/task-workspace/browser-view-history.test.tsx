@@ -45,16 +45,16 @@ afterEach(() => {
 })
 
 function navigateTo(url: string) {
-  const input = screen.getByPlaceholderText(/Wpisz adres/)
+  const input = screen.getByPlaceholderText(/Enter an address/)
   fireEvent.change(input, { target: { value: url } })
   fireEvent.submit(input.closest('form')!)
   fireFrameLoad()
 }
 
-const back = () => screen.getByRole('button', { name: 'Wstecz' })
-const forward = () => screen.getByRole('button', { name: 'Dalej' })
+const back = () => screen.getByRole('button', { name: 'Back' })
+const forward = () => screen.getByRole('button', { name: 'Forward' })
 const framedUrl = () => document.querySelector('iframe')?.getAttribute('src')
-const addressBar = () => (screen.getByPlaceholderText(/Wpisz adres/) as HTMLInputElement).value
+const addressBar = () => (screen.getByPlaceholderText(/Enter an address/) as HTMLInputElement).value
 
 describe('BrowserView — Back and Forward', () => {
   it('starts with both disabled on a blank tab', () => {
@@ -117,7 +117,7 @@ describe('BrowserView — Back and Forward', () => {
     navigateTo('http://localhost:3000/first')
     navigateTo('http://localhost:3000/second')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Nowa karta' }))
+    fireEvent.click(screen.getByRole('button', { name: 'New tab' }))
     // A fresh tab has been nowhere, whatever the tab beside it has visited.
     expect(back().hasAttribute('disabled')).toBe(true)
 

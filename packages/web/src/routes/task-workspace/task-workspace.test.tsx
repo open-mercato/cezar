@@ -1,14 +1,16 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import type { ReactNode } from 'react'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
+import { ShellProviders } from '@/test/shell-providers'
 import type { ApiRun, HealthResponse } from '@open-mercato/cezar-api-client'
 
 import { reviveState, type ViewId, type WorkspaceState } from './layout-state'
 
-// The Graf column lazily pulls `@xyflow/react` and its layout engine. This suite is about the
+// The Graph column lazily pulls `@xyflow/react` and its layout engine. This suite is about the
 // LAYOUT, so the view stands in — what matters here is that the column mounts and says which
 // run it was handed.
 vi.mock('../workflow-graph/task-graph', () => ({
@@ -22,10 +24,15 @@ const { TaskWorkspaceRoute } = await import('./task-workspace')
 beforeEach(() => {
   localStorage.clear()
   hostLayouts = {}
+  // The strip MEASURES how many cards fit and folds the rest into its `…` menu. jsdom lays nothing
+  // out — every width is 0 — so without a row to measure the strip would fold every card but the
+  // active one. Give it a wide one: this suite is about the cards, not about the fold.
+  vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(2000)
 })
 
 afterEach(() => {
   cleanup()
+  vi.restoreAllMocks()
   vi.unstubAllGlobals()
   localStorage.clear()
   hostLayouts = {}
@@ -122,17 +129,27 @@ function stubFetch(overrides: Record<string, () => Response> = {}) {
   )
 }
 
+/** What the app shell gives the route: the query cache, and the shell's own contexts — the split
+ *  button's tooltip needs the provider the sidebar mounts. */
+function Providers({ children }: { children: ReactNode }) {
+  return (
+    <QueryClientProvider client={createQueryClient()}>
+      <ShellProviders>{children}</ShellProviders>
+    </QueryClientProvider>
+  )
+}
+
 function renderWorkspace(view?: ViewId) {
   const path = view === undefined ? '/tasks/:id' : `/tasks/:id/${view}`
   const entry = view === undefined ? '/tasks/r1' : `/tasks/r1/${view}`
   return render(
-    <QueryClientProvider client={createQueryClient()}>
+    <Providers>
       <MemoryRouter initialEntries={[entry]}>
         <Routes>
           <Route path={path} element={<TaskWorkspaceRoute view={view} />} />
         </Routes>
       </MemoryRouter>
-    </QueryClientProvider>,
+    </Providers>,
   )
 }
 
@@ -142,62 +159,109 @@ function HistoryProbe() {
   return (
     <>
       <button type="button" aria-label="go-changes" onClick={() => void navigate('/tasks/r1/changes')} />
+      <button type="button" aria-label="go-r2" onClick={() => void navigate('/tasks/r2')} />
       <button type="button" aria-label="back" onClick={() => void navigate(-1)} />
       <button type="button" aria-label="forward" onClick={() => void navigate(1)} />
     </>
   )
 }
 
+/** The fixed cards of a task with no workflow graph, left to right: one per view, always there. */
+const FIXED = ['Chat', 'Changes', 'Commits', 'Files', 'Browser']
+/** The saved layouts a task is born with — one plain card per view, each drawn as its fixed card. */
+const BORN = ['Chat', 'Changes', 'Commits', 'Files', 'Browser', 'Graph']
+
 const cards = () => Array.from(document.querySelectorAll('[data-slot="layout-card"]'))
 const cardNames = () => cards().map((card) => card.textContent?.replace(/\s+/g, ' ').trim())
+/** The cards of layouts the user built — the ones that can be renamed and closed. */
+const builtCards = () => cards().filter((card) => !card.hasAttribute('data-fixed'))
+const activeCard = () =>
+  document.querySelector('[data-slot="layout-card"][data-active]')?.textContent?.replace(/\s+/g, ' ').trim()
 const columns = () => Array.from(document.querySelectorAll('[data-slot="workspace-column"]'))
 const columnViews = () => columns().map((column) => column.getAttribute('data-view'))
 const dividers = () => Array.from(document.querySelectorAll('[data-slot="column-divider"]'))
+const stage = () => document.querySelector('[data-slot="workspace-stage"]')
+const savedNames = (runId: string) => savedLayouts(runId).layouts.map((layout) => layout.name)
+const savedViews = (runId: string, name: string) =>
+  savedLayouts(runId).layouts.find((layout) => layout.name === name)?.columns.map((column) => column.view)
 
-/** The workspace is painted once the run resolves. */
+/** The workspace is painted once the run resolves, and usable once the host has answered with
+ *  this task's layouts — which is when a card first wears the active mark. */
 async function ready() {
   await waitFor(() => expect(document.querySelector('[data-route="task-workspace"]')).not.toBeNull())
+  await waitFor(() => expect(activeCard()).toBeDefined())
 }
 
-/** Radix menus open on `pointerdown`, which is the house pattern (run-header.test.tsx). */
-async function openColumnMenu(index = 0) {
-  const menus = screen.getAllByRole('button', { name: /^Menu kolumny/ })
-  fireEvent.pointerDown(menus[index]!)
-  await waitFor(() => expect(screen.queryByText('Zmień widok')).not.toBeNull())
+/** The strip's `+`: a new, EMPTY layout, whose stage is the tile picker for its first view. */
+async function newLayout() {
+  fireEvent.click(screen.getByRole('button', { name: 'New layout' }))
+  await waitFor(() => expect(document.querySelector('[data-slot="view-tiles-stage"]')).not.toBeNull())
 }
 
-/** The view items appear twice in a column menu — under `Zmień widok` and under `Dodaj kolumnę`.
- *  `which` picks the group, since the labels are what distinguish two identical lists. */
-function pickView(label: string, which: 'change' | 'add') {
-  const items = screen.getAllByRole('menuitem', { name: label })
-  fireEvent.click(which === 'change' ? items[0]! : items[items.length - 1]!)
+/** Pick a view's tile — in an empty layout, or in a window that was just split off. Found by the
+ *  view id, which is the hook a copy change cannot move. */
+async function pickTile(view: ViewId) {
+  const tile = () => document.querySelector<HTMLElement>(`[data-slot="view-tiles-stage"] [data-view="${view}"]`)
+  await waitFor(() => expect(tile()).not.toBeNull())
+  fireEvent.click(tile()!)
+}
+
+/** Build a two-window layout the way a user does: `+`, a tile, split, another tile. */
+async function buildPair(first: ViewId, second: ViewId) {
+  await newLayout()
+  await pickTile(first)
+  await waitFor(() => expect(columnViews()).toEqual([first]))
+  fireEvent.click(screen.getByRole('button', { name: 'Split view' }))
+  await pickTile(second)
+  await waitFor(() => expect(columnViews()).toEqual([first, second]))
 }
 
 describe('the task workspace', () => {
-  it('opens a clean visit on one full-width Czat column, under the run header', async () => {
+  it('opens a clean visit on Chat, under the run header', async () => {
     stubFetch()
     renderWorkspace()
     await ready()
 
     // The familiar anchor is still there…
     expect(document.querySelector('[data-slot="run-header"]')).not.toBeNull()
-    // …with the layout strip in place of the four route tabs, and never both (spec §2).
-    expect(cardNames()).toEqual(['Czat'])
+    // …with the layout strip in place of the four route tabs, and never both (spec §2): one fixed
+    // card per view, Chat first and showing.
+    expect(cardNames()).toEqual(FIXED)
+    expect(activeCard()).toBe('Chat')
+    expect(screen.getByRole('button', { name: 'Chat', pressed: true })).not.toBeNull()
     expect(screen.queryByRole('link', { name: 'Changes' })).toBeNull()
-    expect(columnViews()).toEqual(['session'])
-    // One column means no divider to drag.
+    // A fixed card is a standing surface, not a saved layout: nothing to close or rename.
+    expect(builtCards()).toHaveLength(0)
+    expect(screen.queryByRole('button', { name: /^Close layout/ })).toBeNull()
+    // Chat is the task's home: the conversation fills the stage in its own scroller, with no
+    // column chrome around it and so no divider to drag.
+    expect(stage()!.querySelector('[data-slot="main"]')).not.toBeNull()
+    expect(columns()).toHaveLength(0)
     expect(dividers()).toHaveLength(0)
   })
 
-  it('adds a second column from the column menu and gives it a divider', async () => {
+  it('shows the view of the fixed card that was picked, without minting a layout', async () => {
     stubFetch()
     renderWorkspace()
     await ready()
 
-    await openColumnMenu()
-    pickView('Zmiany', 'add')
+    fireEvent.click(screen.getByRole('button', { name: 'Files' }))
+    await waitFor(() => expect(columnViews()).toEqual(['files']))
+    expect(activeCard()).toBe('Files')
+    expect(cardNames()).toEqual(FIXED)
+    // A fixed card stays the one view it stands for: its window has no header to edit it by.
+    expect(document.querySelector('[data-slot="workspace-column-header"]')).toBeNull()
+    await waitFor(() => expect(savedLayouts('r1').active).toBe('Files'))
+    expect(savedNames('r1')).toEqual(BORN)
+  })
 
-    await waitFor(() => expect(columnViews()).toEqual(['session', 'changes']))
+  it('splits a window of a built layout and gives the pair a divider', async () => {
+    stubFetch()
+    renderWorkspace()
+    await ready()
+
+    await buildPair('session', 'changes')
+
     expect(dividers()).toHaveLength(1)
     // Two columns start at half width each (spec §5.2).
     expect(columns().map((column) => (column as HTMLElement).style.width)).toEqual(['50%', '50%'])
@@ -206,8 +270,8 @@ describe('the task workspace', () => {
   it('resizes the pair either side of a divider with the keyboard', async () => {
     stubFetch()
     seedLayouts('r1', {
-        layouts: [{ name: 'Czat', columns: [{ view: 'session', width: 50 }, { view: 'files', width: 50 }] }],
-        active: 'Czat',
+        layouts: [{ name: 'Pair', columns: [{ view: 'session', width: 50 }, { view: 'files', width: 50 }] }],
+        active: 'Pair',
       })
     renderWorkspace()
     await ready()
@@ -235,7 +299,7 @@ describe('the task workspace', () => {
     seedLayouts('r1', {
         layouts: [
           {
-            name: 'Czat',
+            name: 'Trio',
             columns: [
               { view: 'session', width: 60 },
               { view: 'files', width: 20 },
@@ -243,94 +307,103 @@ describe('the task workspace', () => {
             ],
           },
         ],
-        active: 'Czat',
+        active: 'Trio',
       })
     renderWorkspace()
     await ready()
     await waitFor(() => expect(columnViews()).toHaveLength(3))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Zamknij kolumnę Pliki' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close Files' }))
     await waitFor(() => expect(columnViews()).toEqual(['session', 'commits']))
     expect(columns().map((column) => (column as HTMLElement).style.width)).toEqual(['50%', '50%'])
   })
 
-  it('empties the card when the last column goes, and offers the + to refill it', async () => {
-    // Spec §5.2: "Closing the last column leaves the layout card IN PLACE with an empty area and
-    // the `+` control to add another view", and §10: "A saved layout may intentionally have no
-    // columns". Closing the CARD is the separate act, with its own X.
+  it('empties the card when the last column goes, and offers the tiles to refill it', async () => {
+    // Spec §5.2: "Closing the last column leaves the layout card IN PLACE with an empty area" to
+    // add another view from, and §10: "A saved layout may intentionally have no columns". Closing
+    // the CARD is the separate act, with its own X.
     stubFetch()
+    seedLayouts('r1', { layouts: [{ name: 'Solo', columns: [{ view: 'files', width: 100 }] }], active: 'Solo' })
     renderWorkspace()
     await ready()
+    await waitFor(() => expect(columnViews()).toEqual(['files']))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Zamknij kolumnę Czat' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close Files' }))
     await waitFor(() => expect(columns()).toHaveLength(0))
-    expect(cards()).toHaveLength(1)
-    expect(screen.queryByText('Brak układów')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Dodaj widok' })).not.toBeNull()
+    expect(cardNames()).toEqual([...FIXED, 'Solo'])
+    expect(activeCard()).toBe('Solo')
+    expect(screen.queryByText('No layouts')).toBeNull()
+    expect(screen.getByRole('heading', { name: 'What should this layout show?' })).not.toBeNull()
+    // And the emptied card is what gets saved — a layout with no columns, not a closed one.
+    await waitFor(() => expect(savedLayouts('r1').layouts).toEqual([{ name: 'Solo', columns: [] }]))
   })
 
-  it('refills an emptied card through the right-edge +', async () => {
+  it('refills an emptied card from its tiles', async () => {
     stubFetch()
+    seedLayouts('r1', { layouts: [{ name: 'Solo', columns: [{ view: 'files', width: 100 }] }], active: 'Solo' })
     renderWorkspace()
     await ready()
+    await waitFor(() => expect(columnViews()).toEqual(['files']))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Zamknij kolumnę Czat' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close Files' }))
     await waitFor(() => expect(columns()).toHaveLength(0))
 
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Dodaj widok' }))
-    await waitFor(() => expect(screen.queryByRole('menuitem', { name: 'Commity' })).not.toBeNull())
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Commity' }))
-    await waitFor(() => expect(columns()).toHaveLength(1))
-    expect(cards()).toHaveLength(1)
+    await pickTile('commits')
+    await waitFor(() => expect(columnViews()).toEqual(['commits']))
+    expect(cardNames()).toEqual([...FIXED, 'Solo'])
   })
 
-  it('creates a card from Nowy układ and keeps the layout names unique', async () => {
+  it('creates a card from New layout and keeps the layout names unique', async () => {
     stubFetch()
     renderWorkspace()
     await ready()
 
-    for (const expected of [2, 3]) {
-      fireEvent.pointerDown(screen.getByRole('button', { name: /Nowy układ/ }))
-      await waitFor(() => expect(screen.queryByRole('menuitem', { name: 'Commity' })).not.toBeNull())
-      fireEvent.click(screen.getByRole('menuitem', { name: 'Commity' }))
-      await waitFor(() => expect(cards()).toHaveLength(expected))
+    for (const expected of [1, 2]) {
+      await newLayout()
+      await waitFor(() => expect(builtCards()).toHaveLength(expected))
     }
 
-    expect(cardNames()).toEqual(['Czat', 'Układ 2', 'Układ 3'])
+    // Numbered by position among the task's layouts, the six it was born with included.
+    expect(cardNames()).toEqual([...FIXED, 'Layout 7', 'Layout 8'])
+    expect(activeCard()).toBe('Layout 8')
   })
 
   it('renames a card from its context menu', async () => {
     stubFetch()
+    seedLayouts('r1', { layouts: [{ name: 'Notes', columns: [{ view: 'files', width: 100 }] }], active: 'Notes' })
     renderWorkspace()
     await ready()
+    await waitFor(() => expect(builtCards()).toHaveLength(1))
 
-    fireEvent.contextMenu(cards()[0]!)
-    await waitFor(() => expect(screen.queryByRole('menuitem', { name: 'Zmień nazwę' })).not.toBeNull())
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Zmień nazwę' }))
+    fireEvent.contextMenu(builtCards()[0]!)
+    await waitFor(() => expect(screen.queryByRole('menuitem', { name: 'Rename layout' })).not.toBeNull())
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename layout' }))
 
-    const field = await screen.findByLabelText('Nazwa układu Czat')
+    const field = await screen.findByLabelText('Layout name Notes')
     fireEvent.change(field, { target: { value: 'Debug' } })
     fireEvent.keyDown(field, { key: 'Enter' })
 
-    await waitFor(() => expect(cardNames()).toEqual(['Debug']))
+    await waitFor(() => expect(cardNames()).toEqual([...FIXED, 'Debug']))
     // …and it survives a reload of the very same task.
-    await waitFor(() => expect(savedLayouts('r1').layouts.map((layout) => layout.name)).toEqual(['Debug']))
+    await waitFor(() => expect(savedNames('r1')).toEqual(['Debug']))
   })
 
   it('renames a card on a double-click, which is the gesture the spec names', async () => {
     // Spec §5.2: "Double-click a card to rename it." The context menu keeps the same action for
     // discoverability, but the double-click is the requirement.
     stubFetch()
+    seedLayouts('r1', { layouts: [{ name: 'Notes', columns: [{ view: 'files', width: 100 }] }], active: 'Notes' })
     renderWorkspace()
     await ready()
+    await waitFor(() => expect(builtCards()).toHaveLength(1))
 
-    fireEvent.doubleClick(screen.getByRole('button', { name: 'Czat', current: 'page' }))
+    fireEvent.doubleClick(screen.getByRole('button', { name: 'Notes', current: 'page' }))
 
-    const field = await screen.findByLabelText('Nazwa układu Czat')
+    const field = await screen.findByLabelText('Layout name Notes')
     fireEvent.change(field, { target: { value: 'Debug' } })
     fireEvent.keyDown(field, { key: 'Enter' })
 
-    await waitFor(() => expect(cardNames()).toEqual(['Debug']))
+    await waitFor(() => expect(cardNames()).toEqual([...FIXED, 'Debug']))
   })
 
   it('persists a built workspace for the next visit', async () => {
@@ -338,27 +411,32 @@ describe('the task workspace', () => {
     renderWorkspace()
     await ready()
 
-    await openColumnMenu()
-    pickView('Pliki', 'add')
-    await waitFor(() => expect(columnViews()).toEqual(['session', 'files']))
+    await buildPair('session', 'files')
 
     // The save is debounced (spec §5.3 — a divider drag must not be one write per pointermove),
     // so this waits for it rather than sampling the instant after the click.
-    await waitFor(() =>
-      expect(savedLayouts('r1').layouts[0]!.columns.map((column) => column.view)).toEqual([
-        'session',
-        'files',
-      ]),
-    )
+    await waitFor(() => expect(savedViews('r1', 'Layout 7')).toEqual(['session', 'files']))
+    expect(savedNames('r1')).toEqual([...BORN, 'Layout 7'])
+    expect(savedLayouts('r1').active).toBe('Layout 7')
   })
 
   it('does not mint a card for every Back-and-Forward across a deep link', async () => {
-    // Six presses used to leave `Zmiany 2, 3, 4` behind, saved on the host: Back cleared the hop,
+    // Six presses used to leave `Changes 2, 3, 4` behind, saved on the host: Back cleared the hop,
     // so the Forward looked like a fresh arrival. §5.3 — "existing saved layouts remain
     // unchanged" — and §10's browser-history clause.
+    //
+    // The user split their Changes card, so the link has no plain card of that view to select and
+    // must MINT one — which is the only case where a second arrival could mint another.
     stubFetch()
+    seedLayouts('r1', {
+      layouts: [
+        { name: 'Chat', columns: [{ view: 'session', width: 100 }] },
+        { name: 'Changes', columns: [{ view: 'changes', width: 50 }, { view: 'files', width: 50 }] },
+      ],
+      active: 'Chat',
+    })
     render(
-      <QueryClientProvider client={createQueryClient()}>
+      <Providers>
         <MemoryRouter initialEntries={['/tasks/r1']}>
           <Routes>
             <Route path="/tasks/:id" element={<TaskWorkspaceRoute />} />
@@ -366,24 +444,64 @@ describe('the task workspace', () => {
           </Routes>
           <HistoryProbe />
         </MemoryRouter>
-      </QueryClientProvider>,
+      </Providers>,
     )
     await ready()
-    await waitFor(() => expect(cards()).toHaveLength(1))
+    await waitFor(() => expect(cardNames()).toEqual([...FIXED, 'Changes']))
+    expect(activeCard()).toBe('Chat')
 
     fireEvent.click(screen.getByRole('button', { name: 'go-changes' }))
-    await waitFor(() => expect(cards()).toHaveLength(2))
+    await waitFor(() => expect(cardNames()).toEqual([...FIXED, 'Changes', 'Changes 2']))
+    await waitFor(() => expect(columnViews()).toEqual(['changes']))
 
     for (let round = 0; round < 3; round += 1) {
       fireEvent.click(screen.getByRole('button', { name: 'back' }))
-      await waitFor(() => expect(columnViews()).toEqual(['session']))
+      // Back gives the selection up again: the canonical URL shows what was there before the hop.
+      await waitFor(() => expect(activeCard()).toBe('Chat'))
+      expect(columns()).toHaveLength(0)
       fireEvent.click(screen.getByRole('button', { name: 'forward' }))
       await waitFor(() => expect(columnViews()).toEqual(['changes']))
+      expect(activeCard()).toBe('Changes 2')
     }
 
     // Still the one card the first hop made.
-    expect(cards()).toHaveLength(2)
-    expect(cardNames()).toEqual(['Czat', 'Zmiany'])
+    expect(cardNames()).toEqual([...FIXED, 'Changes', 'Changes 2'])
+    await waitFor(() => expect(savedLayouts('r1').active).toBe('Changes 2'))
+    expect(savedNames('r1')).toEqual(['Chat', 'Changes', 'Changes 2'])
+  })
+
+  it('does not mint a card when a deep link is crossed back and forth on a fresh task', async () => {
+    // The everyday case: the task still has the plain Changes card it was born with, so the link
+    // selects it — there is nothing to mint, however many times the entry is revisited.
+    stubFetch()
+    render(
+      <Providers>
+        <MemoryRouter initialEntries={['/tasks/r1']}>
+          <Routes>
+            <Route path="/tasks/:id" element={<TaskWorkspaceRoute />} />
+            <Route path="/tasks/:id/changes" element={<TaskWorkspaceRoute view="changes" />} />
+          </Routes>
+          <HistoryProbe />
+        </MemoryRouter>
+      </Providers>,
+    )
+    await ready()
+    expect(activeCard()).toBe('Chat')
+
+    fireEvent.click(screen.getByRole('button', { name: 'go-changes' }))
+    await waitFor(() => expect(columnViews()).toEqual(['changes']))
+    expect(activeCard()).toBe('Changes')
+
+    for (let round = 0; round < 3; round += 1) {
+      fireEvent.click(screen.getByRole('button', { name: 'back' }))
+      await waitFor(() => expect(activeCard()).toBe('Chat'))
+      fireEvent.click(screen.getByRole('button', { name: 'forward' }))
+      await waitFor(() => expect(activeCard()).toBe('Changes'))
+    }
+
+    expect(cardNames()).toEqual(FIXED)
+    await waitFor(() => expect(savedLayouts('r1').active).toBe('Changes'))
+    expect(savedNames('r1')).toEqual(BORN)
   })
 
   it('coalesces a divider drag into one save', async () => {
@@ -405,20 +523,20 @@ describe('the task workspace', () => {
     renderWorkspace()
     await ready()
 
-    await openColumnMenu()
-    pickView('Zmiany', 'add')
-    await waitFor(() => expect(columnViews()).toEqual(['session', 'changes']))
-    await waitFor(() => expect(puts.length).toBeGreaterThan(0))
-    const afterAdd = puts.length
+    await buildPair('session', 'changes')
+    await waitFor(() => expect(savedViews('r1', 'Layout 7')).toEqual(['session', 'changes']))
+    const afterBuild = puts.length
 
     const divider = dividers()[0]!
     for (let step = 0; step < 12; step += 1) {
       fireEvent.keyDown(divider, { key: 'ArrowRight' })
     }
-    await waitFor(() => expect(savedLayouts('r1').layouts[0]!.columns[0]!.width).toBeGreaterThan(50))
+    await waitFor(() =>
+      expect(savedLayouts('r1').layouts.find((layout) => layout.name === 'Layout 7')!.columns[0]!.width).toBe(74),
+    )
 
     // Twelve moves, one save — not twelve.
-    expect(puts.length - afterAdd).toBe(1)
+    expect(puts.length - afterBuild).toBe(1)
   })
 
   it('saves the last change even when you leave the task straight away', async () => {
@@ -430,52 +548,52 @@ describe('the task workspace', () => {
     const view = renderWorkspace()
     await ready()
 
-    await openColumnMenu()
-    pickView('Pliki', 'add')
-    await waitFor(() => expect(columnViews()).toEqual(['session', 'files']))
+    await buildPair('session', 'files')
 
     // Leave well inside the debounce window.
     view.unmount()
 
-    await waitFor(() =>
-      expect(savedLayouts('r1').layouts[0]!.columns.map((column) => column.view)).toEqual([
-        'session',
-        'files',
-      ]),
-    )
+    await waitFor(() => expect(savedViews('r1', 'Layout 7')).toEqual(['session', 'files']))
   })
 
-  it('opens a deep link as its own card and leaves the saved layouts alone', async () => {
+  it('opens a deep link on the card of its view and leaves the saved layouts alone', async () => {
     stubFetch()
     seedLayouts('r1', {
-        layouts: [{ name: 'Czat', columns: [{ view: 'session', width: 100 }] }],
-        active: 'Czat',
+        layouts: [{ name: 'Chat', columns: [{ view: 'session', width: 100 }] }],
+        active: 'Chat',
       })
     renderWorkspace('changes')
     await ready()
 
-    // Named after the view the URL asked for (spec §5.3, §11), not the `Układ N` counter.
-    await waitFor(() => expect(cardNames()).toEqual(['Czat', 'Zmiany']))
-    expect(columnViews()).toEqual(['changes'])
-    // The layout that was already there is untouched (spec §5.3).
-    await waitFor(() => expect(savedLayouts('r1').layouts[0]!.columns).toEqual([{ view: 'session', width: 100 }]))
+    await waitFor(() => expect(columnViews()).toEqual(['changes']))
+    // The view the URL asked for is one of the fixed cards, so that is the card that lights up —
+    // not a second, closable `Changes` drawn beside it.
+    expect(activeCard()).toBe('Changes')
+    expect(cardNames()).toEqual(FIXED)
+    // Named after the view the URL asked for (spec §5.3, §11), not the `Layout N` counter…
+    await waitFor(() => expect(savedNames('r1')).toEqual(['Chat', 'Changes']))
+    expect(savedViews('r1', 'Changes')).toEqual(['changes'])
+    // …and the layout that was already there is untouched (spec §5.3).
+    expect(savedLayouts('r1').layouts[0]!.columns).toEqual([{ view: 'session', width: 100 }])
   })
 
-  it('recovers a malformed saved workspace to the one-column default without an error', async () => {
+  it('recovers a malformed saved workspace to the default cards without an error', async () => {
     stubFetch()
     seedLayouts('r1', '{ not json at all')
     renderWorkspace()
     await ready()
 
-    expect(cardNames()).toEqual(['Czat'])
-    expect(columnViews()).toEqual(['session'])
+    expect(cardNames()).toEqual(FIXED)
+    expect(activeCard()).toBe('Chat')
+    expect(stage()!.querySelector('[data-slot="main"]')).not.toBeNull()
+    expect(columns()).toHaveLength(0)
   })
 
   it('gives each column its own scroller, so the embedded views scroll inside it', async () => {
     stubFetch()
     seedLayouts('r1', {
-        layouts: [{ name: 'Czat', columns: [{ view: 'files', width: 50 }, { view: 'commits', width: 50 }] }],
-        active: 'Czat',
+        layouts: [{ name: 'Pair', columns: [{ view: 'files', width: 50 }, { view: 'commits', width: 50 }] }],
+        active: 'Pair',
       })
     renderWorkspace()
     await ready()
@@ -504,8 +622,8 @@ describe('the task workspace', () => {
       }),
     )
     seedLayouts('r1', {
-      layouts: [{ name: 'Czat', columns: [{ view: 'files', width: 100 }] }],
-      active: 'Czat',
+      layouts: [{ name: 'Solo', columns: [{ view: 'files', width: 100 }] }],
+      active: 'Solo',
     })
     renderWorkspace()
     await ready()
@@ -514,25 +632,31 @@ describe('the task workspace', () => {
     expect(queries).toContain('(min-width: 1024px)')
   })
 
-  it('offers the add-view + on a narrow viewport too', async () => {
-    // §5.2 asks for a `+` at "the right edge of the view area". On a narrow viewport that edge is
-    // the end of the tab row — a vertical strip would take width from the one column showing.
+  it('offers the split on a narrow viewport too', async () => {
+    // A narrow screen shows one window at a time, with the SAME controls a window has on a wide
+    // one — so a layout can still grow there, and the split lands you on the new window's tiles.
     stubFetch()
     vi.stubGlobal(
       'matchMedia',
       vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
     )
     seedLayouts('r1', {
-      layouts: [{ name: 'Czat', columns: [{ view: 'files', width: 100 }] }],
-      active: 'Czat',
+      layouts: [{ name: 'Solo', columns: [{ view: 'files', width: 100 }] }],
+      active: 'Solo',
     })
     renderWorkspace()
     await ready()
     await waitFor(() => expect(document.querySelector('[data-narrow]')).not.toBeNull())
 
-    const add = document.querySelector('[data-narrow] [data-action="add-column"]')
-    expect(add).not.toBeNull()
-    expect((add as HTMLButtonElement).disabled).toBe(false)
+    const split = document.querySelector('[data-narrow] [data-action="split-view"]')
+    expect(split).not.toBeNull()
+    expect((split as HTMLButtonElement).disabled).toBe(false)
+
+    fireEvent.click(split!)
+    await waitFor(() => expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Files', 'New window']))
+    expect(screen.getAllByRole('tab')[1]!.getAttribute('aria-selected')).toBe('true')
+    await pickTile('commits')
+    await waitFor(() => expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Files', 'Commits']))
   })
 
   it('shows one column at a time on a narrow viewport', async () => {
@@ -543,8 +667,8 @@ describe('the task workspace', () => {
       vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
     )
     seedLayouts('r1', {
-        layouts: [{ name: 'Czat', columns: [{ view: 'files', width: 50 }, { view: 'commits', width: 50 }] }],
-        active: 'Czat',
+        layouts: [{ name: 'Pair', columns: [{ view: 'files', width: 50 }, { view: 'commits', width: 50 }] }],
+        active: 'Pair',
       })
     renderWorkspace()
     await ready()
@@ -552,11 +676,15 @@ describe('the task workspace', () => {
     await waitFor(() => expect(document.querySelector('[data-narrow]')).not.toBeNull())
     // Both columns are reachable as tabs, but only one is painted.
     const tabs = screen.getAllByRole('tab')
-    expect(tabs.map((tab) => tab.textContent)).toEqual(['Pliki', 'Commity'])
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['Files', 'Commits'])
     expect(tabs[0]!.getAttribute('aria-selected')).toBe('true')
+    expect(document.querySelectorAll('[data-narrow] [data-slot="main"]')).toHaveLength(1)
 
-    fireEvent.click(tabs[1]!)
+    // The switcher is the shared Tabs primitive, which selects on the press rather than the click.
+    fireEvent.mouseDown(tabs[1]!, { button: 0 })
     await waitFor(() => expect(screen.getAllByRole('tab')[1]!.getAttribute('aria-selected')).toBe('true'))
+    expect(screen.getAllByRole('tab')[0]!.getAttribute('aria-selected')).toBe('false')
+    expect(screen.getByRole('button', { name: 'Commits — change view' })).not.toBeNull()
   })
 
   it('reports the range a divider actually has, not the row-wide one', async () => {
@@ -591,7 +719,8 @@ describe('the task workspace', () => {
   it('does not make the column header itself the drag grip', async () => {
     // An HTML5 drag starts from the nearest draggable ancestor, so a draggable HEADER swallowed
     // presses on its own menu trigger and close X — the X became unreliable on any two- or
-    // three-column layout. The TITLE is the grip instead.
+    // three-column layout. The grip and the empty stretch of the bar drag the window instead;
+    // the buttons never do.
     stubFetch()
     seedLayouts('r1', {
       layouts: [
@@ -611,61 +740,92 @@ describe('the task workspace', () => {
 
     const header = document.querySelector('[data-slot="workspace-column-header"]')!
     expect(header.getAttribute('draggable')).toBeNull()
-    expect(header.querySelector('[draggable="true"]')?.textContent).toBe('Czat')
+    const grips = Array.from(header.querySelectorAll('[draggable="true"]'))
+    expect(grips.length).toBeGreaterThan(0)
+    expect(grips.some((grip) => grip.getAttribute('title') === 'Drag to reorder')).toBe(true)
+    for (const grip of grips) {
+      // No button is a grip, and no button sits inside one.
+      expect(grip.closest('button')).toBeNull()
+      expect(grip.querySelector('button')).toBeNull()
+    }
+    for (const button of Array.from(header.querySelectorAll('button'))) {
+      expect(button.closest('[draggable="true"]')).toBeNull()
+    }
 
     // And the close X still closes, which is the behaviour the grip was costing.
-    fireEvent.click(screen.getByRole('button', { name: 'Zamknij kolumnę Czat' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close Chat' }))
     await waitFor(() => expect(columnViews()).toEqual(['changes']))
   })
 
-  it('offers Graf as a view and mounts it embedded in a column', async () => {
+  it('offers Graph as a view and mounts it embedded in a column', async () => {
     // Spec §5.1 (amended): the task's live workflow graph is a workspace view, so a layout can
     // hold it beside the conversation instead of it being a page of its own.
     stubFetch()
-    seedLayouts('r1', {
-      layouts: [{ name: 'Czat', columns: [{ view: 'session', width: 100 }] }],
-      active: 'Czat',
-    })
     renderWorkspace()
     await ready()
-    await waitFor(() => expect(columnViews()).toEqual(['session']))
 
-    await openColumnMenu(0)
-    pickView('Graf', 'add')
+    await buildPair('session', 'graph')
 
-    await waitFor(() => expect(columnViews()).toEqual(['session', 'graph']))
     const graph = await screen.findByTestId('graph-view')
     // Embedded, so it drops its own RunHeader — the workspace already has one.
     expect(graph.getAttribute('data-embedded')).toBe('')
     expect(graph.getAttribute('data-run')).toBe('r1')
   })
 
-  it('opens /tasks/:id/graph as its own Graf card, like every other task URL', async () => {
+  it('opens /tasks/:id/graph on its Graph card, like every other task URL', async () => {
     // Before this, the graph was a page of its own with the legacy tab strip, and nothing in the
     // workspace could reach it (§5.3 now covers all five task URLs).
-    stubFetch()
+    const withWorkflow = {
+      ...RUN,
+      workflowDef: { name: 'quick-task', steps: [], source: 'built-in' },
+    }
+    stubFetch({ 'GET /api/v1/runs/r1': () => jsonResponse(withWorkflow) })
     seedLayouts('r1', {
-      layouts: [{ name: 'Czat', columns: [{ view: 'session', width: 100 }] }],
-      active: 'Czat',
+      layouts: [{ name: 'Chat', columns: [{ view: 'session', width: 100 }] }],
+      active: 'Chat',
     })
     renderWorkspace('graph')
     await ready()
 
-    await waitFor(() => expect(cardNames()).toEqual(['Czat', 'Graf']))
-    expect(columnViews()).toEqual(['graph'])
+    await waitFor(() => expect(columnViews()).toEqual(['graph']))
+    // A task with a workflow has a Graph card, right after Chat, and the link lights it.
+    expect(cardNames()).toEqual(['Chat', 'Graph', 'Changes', 'Commits', 'Files', 'Browser'])
+    expect(activeCard()).toBe('Graph')
+    const graph = await screen.findByTestId('graph-view')
+    expect(graph.getAttribute('data-embedded')).toBe('')
+    await waitFor(() => expect(savedNames('r1')).toEqual(['Chat', 'Graph']))
   })
 
   it('keeps two tasks apart when the route swaps run ids without remounting', async () => {
-    stubFetch()
+    stubFetch({ 'GET /api/v1/runs/r2': () => jsonResponse({ ...RUN, id: 'r2' }) })
     seedLayouts('r1', {
         layouts: [{ name: 'Tylko r1', columns: [{ view: 'files', width: 100 }] }],
         active: 'Tylko r1',
       })
-    renderWorkspace()
+    render(
+      <Providers>
+        <MemoryRouter initialEntries={['/tasks/r1']}>
+          <Routes>
+            <Route path="/tasks/:id" element={<TaskWorkspaceRoute />} />
+          </Routes>
+          <HistoryProbe />
+        </MemoryRouter>
+      </Providers>,
+    )
     await ready()
-    await waitFor(() => expect(cardNames()).toEqual(['Tylko r1']))
+    await waitFor(() => expect(cardNames()).toEqual([...FIXED, 'Tylko r1']))
+    expect(activeCard()).toBe('Tylko r1')
 
-    // r2 has nothing saved, so it must open on its own default — never r1's card (spec §5.3).
-    await waitFor(() => expect(savedLayouts('r2').layouts.map((layout) => layout.name)).toEqual(['Czat']))
+    // Same route element, another task: r2 has nothing saved, so it must open on its own default —
+    // never r1's card (spec §5.3).
+    fireEvent.click(screen.getByRole('button', { name: 'go-r2' }))
+    await waitFor(() =>
+      expect(document.querySelector('[data-route="task-workspace"]')?.getAttribute('data-run-id')).toBe('r2'),
+    )
+    await waitFor(() => expect(activeCard()).toBe('Chat'))
+    expect(cardNames()).toEqual(FIXED)
+    expect(savedNames('r2')).toEqual(BORN)
+    // …and r1 still has what it had.
+    expect(savedNames('r1')).toEqual(['Tylko r1'])
   })
 })

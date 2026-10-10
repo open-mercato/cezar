@@ -17,6 +17,7 @@ import type {
 } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { githubTaskRef } from '@/lib/github-task'
+import { ShellWithSidebar } from '@/test/shell-with-sidebar'
 
 import { GithubRoute, groupCommitRuns, type ThreadRow } from './github'
 import { readFollowupPrompt, readFollowupSelection, writeFollowupSelection } from './hand-to-agent-draft'
@@ -264,6 +265,8 @@ function renderAt(entry: string) {
   render(
     <QueryClientProvider client={createQueryClient()}>
       <MemoryRouter initialEntries={[entry]}>
+        {/* The list, its tabs and its filters live in the shell's contextual sidebar now. */}
+        <ShellWithSidebar>
         <Routes>
           <Route path="/github" element={<GithubRoute view="issues" index />} />
           <Route path="/github/prs" element={<GithubRoute view="prs" />} />
@@ -276,6 +279,7 @@ function renderAt(entry: string) {
           <Route path="/p/:projectId/github/prs/:n" element={<GithubRoute view="prs" />} />
           <Route path="/p/:projectId/github/prs/:n/changes" element={<GithubRoute view="prs" changes />} />
         </Routes>
+        </ShellWithSidebar>
         <Toaster />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -288,11 +292,26 @@ const promptField = () =>
   document.querySelector<HTMLTextAreaElement>('[data-slot="gh-custom-prompt"]')!
 const promptValue = () => promptField().value
 
+/** Open the list's "List options" menu (sort order, the automations shortcut, the repo link). The
+ *  sidebar header has no room for those as buttons, so they sit behind one trigger. Radix opens a
+ *  menu on pointerDown. */
+async function openListMenu() {
+  fireEvent.pointerDown(document.querySelector<HTMLElement>('[data-slot="gh-list-menu"]')!)
+  return screen.findByRole('menu')
+}
+
+/** Dismiss whichever Radix menu or dialog is open, the way a user does. */
+async function pressEscape(role: 'menu' | 'dialog') {
+  fireEvent.keyDown(screen.getByRole(role), { key: 'Escape' })
+  await waitFor(() => expect(screen.queryByRole(role)).toBeNull())
+}
+
 it('/github/prs/:n/changes renders PR-only file review navigation and completeness', async () => {
   stubFetch()
   renderAt('/github/prs/137/changes')
   expect(await screen.findByText('2 changed files')).not.toBeNull()
-  expect(screen.getByRole('navigation', { name: 'Pull request detail' }).textContent).toContain('ConversationChanges')
+  // The Conversation | Changes switch is a shadcn tab list now, not a <nav>.
+  expect(screen.getByRole('tablist', { name: 'Pull request detail' }).textContent).toContain('ConversationChanges')
   expect(screen.getByRole('status').textContent).toContain('One patch was omitted.')
   expect(screen.getByLabelText('Next file').hasAttribute('disabled')).toBe(false)
 })
@@ -307,12 +326,15 @@ const baseWith = (extra: string) => `${BASE}\n\n${extra}`
 // ---- lists + detail ---------------------------------------------------------------------------
 
 describe('the GitHub tab lists', () => {
-  it('/github renders the header, both count tabs, the issue rows, and the first issue’s detail', async () => {
+  it('/github renders the header, both count tabs and the issue rows, and asks for a pick', async () => {
     stubFetch()
     renderAt('/github')
 
     await waitFor(() => expect(document.querySelector('[data-slot="gh-header"]')).not.toBeNull())
-    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('GitHub')
+    // The list's chrome is the contextual sidebar's header, so its title is a section heading.
+    const sidebar = document.querySelector<HTMLElement>('[data-slot="context-sidebar-body"]')!
+    expect(within(sidebar).getByRole('heading', { level: 2 }).textContent).toBe('GitHub')
+    expect(sidebar.querySelector('[data-slot="gh-header"]')).not.toBeNull()
     expect(document.querySelector('[data-slot="gh-repo"]')?.textContent).toBe('acme/demo')
 
     const tabs = [...document.querySelectorAll('[data-slot="gh-tabs"] a')].map((a) => ({
@@ -321,8 +343,8 @@ describe('the GitHub tab lists', () => {
       current: a.getAttribute('aria-current'),
     }))
     expect(tabs).toEqual([
-      { text: 'Issues · 2', href: '/github', current: 'page' },
-      { text: 'Pull requests · 1', href: '/github/prs', current: null },
+      { text: 'Issues2', href: '/github', current: 'page' },
+      { text: 'Pull requests1', href: '/github/prs', current: null },
     ])
 
     await waitFor(() => expect(rows()).toHaveLength(2))
@@ -330,9 +352,14 @@ describe('the GitHub tab lists', () => {
     // Rows are deep links, not click handlers.
     expect(rows()[0]?.getAttribute('href')).toBe('/github/issues/142')
 
-    // No URL selection → the first item's detail renders (legacy parity), marked current.
-    expect(rows()[0]?.getAttribute('aria-current')).toBe('page')
-    await waitFor(() => expect(detail()?.textContent).toContain('Login form drops session'))
+    // No URL selection → nothing is selected: the list sits in the sidebar and main asks the
+    // user to pick. (The legacy tab opened the first item here; the redesign dropped that.)
+    expect(sidebar.contains(rows()[0]!)).toBe(true)
+    expect(rows().some((row) => row.getAttribute('aria-current') === 'page')).toBe(false)
+    expect(detail()).toBeNull()
+    expect(document.querySelector('[data-slot="gh-pick"]')?.textContent).toContain(
+      'Pick an issue or pull request',
+    )
   })
 
   // #801: the tab's only cross-link into automations follows the capability — advertising
@@ -341,7 +368,10 @@ describe('the GitHub tab lists', () => {
     stubFetch()
     renderAt('/github')
     await waitFor(() => expect(document.querySelector('[data-slot="gh-header"]')).not.toBeNull())
-    expect(screen.queryByRole('link', { name: 'Set up automations' })).toBeNull()
+    // The shortcut is an entry of the list menu; open it, so "absent" is not just "menu closed".
+    await openListMenu()
+    expect(screen.getByRole('menuitemradio', { name: 'Newest first' })).toBeTruthy()
+    expect(screen.queryByRole('menuitem', { name: 'Set up automations' })).toBeNull()
 
     cleanup()
     stubFetch({
@@ -351,7 +381,11 @@ describe('the GitHub tab lists', () => {
       }),
     })
     renderAt('/github')
-    expect(await screen.findByRole('link', { name: 'Set up automations' })).not.toBeNull()
+    await waitFor(() => expect(document.querySelector('[data-slot="gh-header"]')).not.toBeNull())
+    // Health resolves after the list, so the entry can arrive a beat after the menu opens.
+    await openListMenu()
+    const shortcut = await screen.findByRole('menuitem', { name: 'Set up automations' })
+    expect(shortcut.getAttribute('href')).toBe('/automations/new')
   })
 
   it('/github/prs lists pull requests', async () => {
@@ -410,7 +444,7 @@ describe('the GitHub tab lists', () => {
       return (origFetch as typeof fetch)(input, init as RequestInit)
     })
 
-    renderAt('/github') // issues view; the first issue's thread loads for the detail pane
+    renderAt('/github/issues/142') // issues view; the open issue's thread loads for the detail pane
     await waitFor(() => expect(rows().length).toBeGreaterThan(0))
     await waitFor(() => expect(threadRequests.length).toBeGreaterThan(0))
     expect(threadRequests.some((p) => p === '/api/v1/github/comments/issue/139')).toBe(false)
@@ -451,7 +485,7 @@ describe('the GitHub tab lists', () => {
 
     await waitFor(() => expect(document.querySelector('[data-slot="gh-tabs"]')).not.toBeNull())
     await waitFor(() =>
-      expect(document.querySelector('[data-slot="gh-tabs"] a')?.textContent).toBe('Issues · 45'),
+      expect(document.querySelector('[data-slot="gh-tabs"] a')?.textContent).toBe('Issues45'),
     )
   })
 
@@ -462,20 +496,24 @@ describe('the GitHub tab lists', () => {
     await waitFor(() => expect(detail()?.textContent).toContain('Add --json flag'))
     expect(document.querySelector('[data-slot="gh-row"][data-number="139"]')?.getAttribute('aria-current')).toBe('page')
     // A blank body renders the honest placeholder, not an empty markdown shell.
-    expect(document.querySelector('[data-slot="gh-body"]')?.textContent).toContain('(no description)')
+    expect(document.querySelector('[data-slot="gh-body"]')?.textContent).toContain('No description.')
   })
 
   it('an unknown number renders the honest not-found state, not a crash', async () => {
     stubFetch()
     renderAt('/github/issues/9999')
 
-    await waitFor(() =>
-      expect(screen.getByRole('heading', { level: 2, name: 'Not found' })).toBeTruthy(),
-    )
+    const notFound = await waitFor(() => {
+      const state = document.querySelector('[data-slot="centered-state"]')
+      expect(state?.querySelector('[data-slot="empty-title"]')?.textContent).toBe('Not found')
+      return state!
+    })
     // Since #730 the advice is actionable — a closed or merged item IS reachable through the
-    // search box — so the copy must point there rather than shrug "it may be closed".
-    expect(document.querySelector('[data-slot="gh-detail"]')?.textContent).toContain(
-      'Search for 9999 above',
+    // search box — so the copy must point there rather than shrug "it may be closed". The box
+    // is in the list (the sidebar) now, not above the detail.
+    expect(notFound.textContent).toContain('Search for 9999 in the list')
+    expect(within(notFound as HTMLElement).getByRole('link', { name: 'Back to the list' }).getAttribute('href')).toBe(
+      '/github',
     )
   })
 
@@ -500,7 +538,7 @@ describe('remembering the last-selected tab (#417)', () => {
     renderAt('/github')
     await waitFor(() => expect(rows()).toHaveLength(2))
 
-    fireEvent.click(screen.getByRole('link', { name: /Pull requests/ }))
+    fireEvent.click(screen.getByRole('tab', { name: /Pull requests/ }))
 
     await waitFor(() =>
       expect(sent.some((request) => request.method === 'PUT' && request.path === '/api/v1/ui-state')).toBe(
@@ -535,7 +573,7 @@ describe('remembering the last-selected tab (#417)', () => {
     renderAt('/github/prs')
     await waitFor(() => expect(rows()).toHaveLength(1))
 
-    fireEvent.click(screen.getByRole('link', { name: /^Issues/ }))
+    fireEvent.click(screen.getByRole('tab', { name: /^Issues/ }))
 
     await waitFor(() => expect(rows()).toHaveLength(2))
     expect(rows().map((row) => row.dataset.number)).toEqual(['142', '139'])
@@ -549,8 +587,30 @@ describe('remembering the last-selected tab (#417)', () => {
  * and, like the sub-tab beside it, survives a reload.
  */
 describe('sorting the list newest or oldest first', () => {
-  const sortButton = (name: 'Newest' | 'Oldest') =>
-    within(screen.getByRole('group', { name: 'Sort order' })).getByRole('button', { name })
+  // The order is a radio pair inside the list menu now (it was a two-button group in the header).
+  const sortOption = (name: 'Newest' | 'Oldest') =>
+    screen.getByRole('menuitemradio', { name: `${name} first` })
+
+  /** Which order the control says is in force: opens the menu, reads the radio pair, closes it. */
+  async function shownSort() {
+    await openListMenu()
+    expect(screen.getByText('Sort order')).toBeTruthy()
+    const checked = (['Newest', 'Oldest'] as const).filter(
+      (name) => sortOption(name).getAttribute('aria-checked') === 'true',
+    )
+    await pressEscape('menu')
+    return checked
+  }
+
+  /** Pick an order from the menu; selecting an item closes it. */
+  async function chooseSort(name: 'Newest' | 'Oldest') {
+    await openListMenu()
+    fireEvent.click(sortOption(name))
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+  }
+
+  /** The header only spends a button on the order while it is the non-default one. */
+  const oldestFlag = () => screen.queryByRole('button', { name: 'Sorted oldest first. Switch to newest first' })
 
   /**
    * `stubFetch`, with a ui-state route that behaves like the real one: `PUT` merges the body
@@ -587,8 +647,8 @@ describe('sorting the list newest or oldest first', () => {
 
     await waitFor(() => expect(rows()).toHaveLength(2))
     expect(rows().map((row) => row.dataset.number)).toEqual(['142', '139'])
-    expect(sortButton('Newest').getAttribute('aria-pressed')).toBe('true')
-    expect(sortButton('Oldest').getAttribute('aria-pressed')).toBe('false')
+    expect(await shownSort()).toEqual(['Newest'])
+    expect(oldestFlag()).toBeNull()
   })
 
   it('clicking Oldest reverses the rows and persists the choice', async () => {
@@ -596,11 +656,11 @@ describe('sorting the list newest or oldest first', () => {
     renderAt('/github')
     await waitFor(() => expect(rows()).toHaveLength(2))
 
-    fireEvent.click(sortButton('Oldest'))
+    await chooseSort('Oldest')
 
     // Reordered from the cache the tab already holds — no refetch, so no second list request.
     await waitFor(() => expect(rows().map((row) => row.dataset.number)).toEqual(['139', '142']))
-    expect(sortButton('Oldest').getAttribute('aria-pressed')).toBe('true')
+    expect(await shownSort()).toEqual(['Oldest'])
     const put = sent.find((request) => request.method === 'PUT' && request.path === '/api/v1/ui-state')
     expect(put?.body).toEqual({ githubSort: 'oldest' })
     expect(sent.filter((r) => r.method === 'GET' && r.path.startsWith('/api/v1/github?'))).toHaveLength(1)
@@ -611,7 +671,11 @@ describe('sorting the list newest or oldest first', () => {
     renderAt('/github')
 
     await waitFor(() => expect(rows().map((row) => row.dataset.number)).toEqual(['139', '142']))
-    expect(sortButton('Oldest').getAttribute('aria-pressed')).toBe('true')
+    expect(await shownSort()).toEqual(['Oldest'])
+    // A non-default order is flagged in the header, and the flag is the one-click way back.
+    fireEvent.click(oldestFlag()!)
+    await waitFor(() => expect(rows().map((row) => row.dataset.number)).toEqual(['142', '139']))
+    expect(oldestFlag()).toBeNull()
   })
 
   it('an unknown stored order falls back to newest rather than rendering nothing', async () => {
@@ -621,7 +685,7 @@ describe('sorting the list newest or oldest first', () => {
     renderAt('/github')
 
     await waitFor(() => expect(rows().map((row) => row.dataset.number)).toEqual(['142', '139']))
-    expect(sortButton('Newest').getAttribute('aria-pressed')).toBe('true')
+    expect(await shownSort()).toEqual(['Newest'])
   })
 
   it('the order survives switching sub-tabs, and applies to PRs too', async () => {
@@ -639,12 +703,12 @@ describe('sorting the list newest or oldest first', () => {
     renderAt('/github')
     await waitFor(() => expect(rows()).toHaveLength(2))
 
-    fireEvent.click(sortButton('Oldest'))
+    await chooseSort('Oldest')
     await waitFor(() => expect(rows().map((row) => row.dataset.number)).toEqual(['139', '142']))
 
-    fireEvent.click(screen.getByRole('link', { name: /Pull requests/ }))
+    fireEvent.click(screen.getByRole('tab', { name: /Pull requests/ }))
     await waitFor(() => expect(rows().map((row) => row.dataset.number)).toEqual(['120', '137']))
-    expect(sortButton('Oldest').getAttribute('aria-pressed')).toBe('true')
+    expect(await shownSort()).toEqual(['Oldest'])
   })
 
   it('reorders the cross-state search hits by the same control (#730)', async () => {
@@ -683,7 +747,7 @@ describe('sorting the list newest or oldest first', () => {
       )
     await waitFor(() => expect(hitNumbers()).toEqual(['91', '90']))
 
-    fireEvent.click(sortButton('Oldest'))
+    await chooseSort('Oldest')
     await waitFor(() => expect(hitNumbers()).toEqual(['90', '91']))
   })
 })
@@ -694,21 +758,35 @@ describe('the GitHub detail pane', () => {
     renderAt('/github/prs/137')
 
     await waitFor(() => expect(detail()).not.toBeNull())
-    const meta = document.querySelector('[data-slot="gh-meta"]')?.textContent ?? ''
-    expect(meta).toContain('#137')
-    expect(meta).toContain('pull request')
-    expect(meta).toContain('opened by grace')
+    // The one-line "#137 · pull request · opened by grace" became a header line plus a
+    // definition list — the same facts, each under its own term.
+    const header = detail()?.querySelector('header')?.textContent ?? ''
+    expect(header).toContain('Pull request #137')
+    expect(header).toContain(PR_137.title)
+    expect(document.querySelector('[data-slot="gh-state"]')?.textContent).toBe('Open')
+    const meta = [...document.querySelectorAll('[data-slot="gh-meta"] dt')].map((term) => [
+      term.textContent,
+      term.nextElementSibling?.textContent,
+    ])
+    expect(meta[0]).toEqual(['Author', 'grace'])
+    expect(meta.map(([term]) => term)).toEqual(['Author', 'Opened', 'Comments', 'Changes', 'Checks', 'Labels'])
     // The comment count renders as an icon+count badge (#499), labelled for screen readers.
     const detailCount = document.querySelector('[data-slot="gh-meta"] [data-slot="gh-comment-count"]')
     expect(detailCount?.getAttribute('data-count')).toBe('1')
     expect(detailCount?.getAttribute('aria-label')).toBe('1 comment')
     expect(document.querySelector('[data-slot="gh-diffstat"]')?.textContent).toBe('+120 −30')
-    expect(document.querySelector('[data-slot="gh-open-link"]')?.getAttribute('href')).toBe(PR_137.url)
-
-    expect(document.querySelector('[data-slot="gh-label"]')?.textContent).toBe('perf')
+    expect(detail()?.querySelector('[data-slot="gh-label"]')?.textContent).toBe('perf')
     const checks = document.querySelector('[data-slot="gh-checks"]')
     expect(checks?.getAttribute('data-checks')).toBe('failing')
-    expect(checks?.textContent).toContain('checks failing')
+    expect(checks?.textContent).toContain('Checks failing')
+
+    // "Open on GitHub" moved into the detail's overflow menu.
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'More actions for this pull request' }))
+    await screen.findByRole('menu')
+    const open = document.querySelector('[data-slot="gh-open-link"]')
+    expect(open?.textContent).toBe('Open on GitHub')
+    expect(open?.getAttribute('href')).toBe(PR_137.url)
+    expect(open?.getAttribute('target')).toBe('_blank')
   })
 
   it('the checks badge links to the PR checks tab on GitHub, open in a new tab (#415)', async () => {
@@ -952,16 +1030,16 @@ describe('the comment thread', () => {
   const threadSection = () => document.querySelector('[data-slot="gh-thread"]')
   const entries = () => [...document.querySelectorAll<HTMLElement>('[data-slot="gh-thread-entry"]')]
 
-  it('renders an "Activity · N comments" section with each body through the markdown pipeline', async () => {
+  it('renders an "Activity, N comments" section with each body through the markdown pipeline', async () => {
     stubFetch(thread('issue', 142, { available: true, comments: [COMMENT_TEXT, COMMENT_IMAGE] }))
     renderAt('/github/issues/142')
 
     await waitFor(() => expect(threadSection()).not.toBeNull())
     // Retitled by #525: heading a twenty-row list `Comments · 2` would be incoherent once events
     // render, so the section is "Activity" and the comment count becomes a secondary.
-    expect(document.querySelector('[data-slot="gh-thread-header"]')?.textContent).toBe(
-      'Activity · 2 comments',
-    )
+    // The count is its own muted span beside the title now (no "·" separator).
+    expect(document.querySelector('[data-slot="gh-thread-header"]')?.firstChild?.textContent).toBe('Activity')
+    expect(document.querySelector('[data-slot="gh-thread-header"] span')?.textContent).toBe('2 comments')
     expect(entries()).toHaveLength(2)
     expect(entries()[0]?.textContent).toContain('maya')
     expect(entries()[0]?.querySelector('[data-slot="gh-thread-body"]')?.textContent).toContain(
@@ -1005,7 +1083,7 @@ describe('the comment thread', () => {
     const review = document.querySelector('[data-slot="gh-thread-entry"][data-kind="review"]')
     const chip = review?.querySelector('[data-slot="gh-review-chip"]')
     expect(chip?.getAttribute('data-review-state')).toBe('changes_requested')
-    expect(chip?.textContent).toBe('changes requested')
+    expect(chip?.textContent).toBe('Changes requested')
     expect(chip?.className).toContain('text-danger')
   })
 
@@ -1081,9 +1159,8 @@ describe('the comment thread', () => {
     await waitFor(() => expect(threadSection()).not.toBeNull())
     expect(events()).toHaveLength(2)
     expect(entries()).toHaveLength(0)
-    expect(document.querySelector('[data-slot="gh-thread-header"]')?.textContent).toBe(
-      'Activity · 0 comments',
-    )
+    expect(document.querySelector('[data-slot="gh-thread-header"]')?.firstChild?.textContent).toBe('Activity')
+    expect(document.querySelector('[data-slot="gh-thread-header"] span')?.textContent).toBe('0 comments')
   })
 
   it('interleaves comments and events chronologically', async () => {
@@ -1106,12 +1183,13 @@ describe('the comment thread', () => {
     ])
   })
 
-  it('sends refresh=1 on the BARE /github route too, where no :n is in the URL', async () => {
-    // The regression the first fix batch shipped: keying the open thread off the `:n` route param
-    // left the DEFAULT landing pages refreshing nothing, because with no `:n` the tab still shows
-    // a thread — `selected` falls back to items[0]. The refresh must follow what is rendered.
+  it('refreshes only the list on the BARE /github route, where no thread is on screen', async () => {
+    // The refresh must follow what is RENDERED, not the `:n` route param. The legacy tab showed
+    // items[0]'s thread on the bare route, so a refresh there had to carry refresh=1 for it. The
+    // redesign selects nothing without a `:n` — the list is in the sidebar and main asks for a
+    // pick — so the same rule now reads the other way: no thread is fetched, before or after.
     const threadRequests: string[] = []
-    stubFetch({ 'GET /api/v1/github?refresh=1': () => jsonResponse(GITHUB) })
+    const sent = stubFetch()
     const origFetch = globalThis.fetch
     vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input)
@@ -1120,11 +1198,16 @@ describe('the comment thread', () => {
     })
 
     renderAt('/github') // no :n at all
-    await waitFor(() => expect(threadRequests.length).toBe(1))
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    expect(document.querySelector('[data-slot="gh-pick"]')).not.toBeNull()
 
     fireEvent.click(document.querySelector<HTMLElement>('[data-slot="gh-refresh"]')!)
 
-    await waitFor(() => expect(threadRequests.some((p) => p.includes('refresh=1'))).toBe(true))
+    await waitFor(() =>
+      expect(sent.some((request) => request.path === '/api/v1/github?limit=1000&refresh=1')).toBe(true),
+    )
+    await act(() => Promise.resolve())
+    expect(threadRequests).toEqual([])
   })
 
   it('does not blank the open thread while refreshing it', async () => {
@@ -1322,7 +1405,7 @@ describe('the comment thread', () => {
 
     await waitFor(() => expect(threadSection()).not.toBeNull())
     const trunc = document.querySelector('[data-slot="gh-thread-truncated"]')
-    expect(trunc?.textContent).toContain('thread truncated')
+    expect(trunc?.textContent).toContain('Thread truncated')
     expect(trunc?.getAttribute('href')).toBe(ISSUE_142.url)
   })
 })
@@ -1339,8 +1422,18 @@ describe('the unavailable forge state', () => {
     renderAt('/github')
 
     await waitFor(() =>
-      expect(screen.getByRole('heading', { level: 1, name: 'GitHub is unavailable here' })).toBeTruthy(),
+      expect(document.querySelector('[data-slot="centered-state"] [data-slot="empty-title"]')?.textContent).toBe(
+        'GitHub is unavailable here',
+      ),
     )
+    // The sidebar keeps its title even with no list to show.
+    expect(
+      within(document.querySelector<HTMLElement>('[data-slot="context-sidebar-body"]')!).getByRole('heading', {
+        level: 2,
+        name: 'GitHub',
+      }),
+    ).toBeTruthy()
+    expect(document.querySelector('[data-slot="centered-state"]')?.textContent).toContain('gh auth login')
     expect(screen.getByText('gh not installed')).toBeTruthy()
     // One fast fetch now (#664): the single limit=1000 load is what proved the forge unreachable.
     expect(sent.some((request) => request.path === '/api/v1/github?limit=1000')).toBe(true)
@@ -1354,9 +1447,18 @@ describe('the unavailable forge state', () => {
 
 // ---- hand to agent ----------------------------------------------------------------------------
 
+/** Open the hand-off composer for the item on screen. It is a dialog over the detail now, opened
+ *  from the detail header's "Hand to agent" button, so the composer is not in the document until
+ *  that button is pressed. */
+async function openHand() {
+  await waitFor(() => expect(document.querySelector('[data-action="gh-hand-open"]')).not.toBeNull())
+  fireEvent.click(document.querySelector<HTMLElement>('[data-action="gh-hand-open"]')!)
+  await waitFor(() => expect(document.querySelector('[data-slot="gh-hand"]')).not.toBeNull())
+}
+
 async function openDetail(entry = '/github/issues/142') {
   renderAt(entry)
-  await waitFor(() => expect(document.querySelector('[data-slot="gh-hand"]')).not.toBeNull())
+  await openHand()
 }
 
 /** A typed health fixture — `HealthResponse`, so tsc catches the drift an `unknown` body hides
@@ -1491,11 +1593,13 @@ describe('the hand-to-agent backend pills (#401)', () => {
     await waitFor(() => expect(document.querySelector('[data-slot="runner-pill"]')).not.toBeNull())
     await pickPill('runner-pill', 'codex')
 
-    // Hop to the other issue — HandToAgent remounts (key={item.url}), the pick must not.
+    // Hop to the other issue — HandToAgent remounts (key={item.url}), the pick must not. The
+    // composer is a modal dialog, so the hop is: close it, pick the row, open it on the new item.
+    await pressEscape('dialog')
     fireEvent.click(rows().find((row) => row.dataset.number === '139')!)
-    await waitFor(() =>
-      expect(document.querySelector('[data-slot="gh-hand"]')).not.toBeNull(),
-    )
+    await waitFor(() => expect(detail()?.textContent).toContain('Add --json flag'))
+    expect(document.querySelector('[data-slot="gh-hand"]')).toBeNull()
+    await openHand()
     expect(document.querySelector('[data-slot="runner-pill"]')?.textContent).toContain('codex')
 
     fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
@@ -1625,7 +1729,10 @@ describe('the hand-to-agent backend pills (#401)', () => {
 
     fireEvent.change(promptField(), { target: { value: 'Keep this editable.' } })
     expect(promptValue()).toBe('Keep this editable.')
+    await pressEscape('dialog')
     fireEvent.click(rows().find((row) => row.dataset.number === '139')!)
+    await waitFor(() => expect(detail()?.textContent).toContain('Add --json flag'))
+    await openHand()
     await waitFor(() => expect(promptField().value).toContain('#139'))
 
     // Force both entry points past their visual disabled state; neither may reach createRun.
@@ -2055,8 +2162,11 @@ describe('the hand-to-agent run (legacy three-way body)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
 
-    await waitFor(() => expect(screen.getByText('Added to the queue — issue #142')).toBeTruthy())
-    expect(document.querySelector('[data-slot="toast"]')?.getAttribute('data-tone')).toBe('default')
+    const confirmation = await screen.findByText('Added to the queue — issue #142')
+    // The everyday toast, not the danger one: sonner marks only the latter with a type.
+    const toastEl = confirmation.closest('[data-sonner-toast]')
+    expect(toastEl).not.toBeNull()
+    expect(toastEl?.getAttribute('data-type')).not.toBe('error')
   })
 
   it('a custom prompt is handed over WITH the item reference, not instead of it (#524)', async () => {
@@ -2340,17 +2450,27 @@ describe('the follow-up prompt draft (#408 item 4)', () => {
     await waitFor(() => expect(promptValue()).toBe('Also add a test.'))
 
     // Switch to a different item — HandToAgent remounts (key={item.url}); its OWN draft is empty.
+    // The composer is a modal dialog, so each hop is: close it, pick the row, open it again.
+    await pressEscape('dialog')
     fireEvent.click(document.querySelector('[data-slot="gh-row"][data-number="139"]')!)
     await waitFor(() =>
       expect(document.querySelector('[data-slot="gh-detail-inner"]')?.textContent).toContain(
         'Add --json flag',
       ),
     )
+    await openHand()
     // Untouched means its OWN pre-filled reference (#524), never issue 142's text.
     expect(promptValue()).toBe(githubTaskRef(ISSUE_139))
 
     // Switch back — the first item's draft is restored.
+    await pressEscape('dialog')
     fireEvent.click(document.querySelector('[data-slot="gh-row"][data-number="142"]')!)
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="gh-detail-inner"]')?.textContent).toContain(
+        'Login form drops session',
+      ),
+    )
+    await openHand()
     await waitFor(() => expect(promptValue()).toBe('Also add a test.'))
   })
 
@@ -2390,7 +2510,7 @@ describe('the follow-up prompt draft (#408 item 4)', () => {
     expect(promptValue()).toBe(BASE)
   })
 
-  it('spending the draft clears the textarea THERE AND THEN, not only on the next mount', async () => {
+  it('spending the draft clears the box THERE AND THEN, not only on the next page load', async () => {
     stubFetch()
     await openDetail()
     fireEvent.change(promptField(), { target: { value: 'spend me' } })
@@ -2399,9 +2519,13 @@ describe('the follow-up prompt draft (#408 item 4)', () => {
     fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
     await waitFor(() => expect(document.querySelector('[data-slot="gh-queued"]')).not.toBeNull())
 
-    // Storage and UI must agree without a remount: leaving the text on screen while the entry is
-    // gone from storage means it silently vanishes the next time you come back.
-    await waitFor(() => expect(promptValue()).toBe(BASE))
+    // Storage and UI must agree without a reload: text that outlives its storage entry silently
+    // vanishes the next time you come back. A successful hand-off closes the composer now, so
+    // "there and then" is the same route instance, reopened — no cleanup, no second page load.
+    expect(readFollowupPrompt(ISSUE_142.url)).toBe('')
+    await waitFor(() => expect(document.querySelector('[data-slot="gh-hand"]')).toBeNull())
+    await openHand()
+    expect(promptValue()).toBe(BASE)
     expect(readFollowupPrompt(ISSUE_142.url)).toBe('')
   })
 })

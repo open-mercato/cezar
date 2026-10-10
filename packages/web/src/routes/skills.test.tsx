@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -8,6 +8,7 @@ import { createQueryClient } from '@/api/query-client'
 import type { Skill, SkillsUpdateState, WorkflowsResponse } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
+import { ShellWithSidebar } from '@/test/shell-with-sidebar'
 
 /**
  * `/skills` (R6 Step 1.4): the catalog + detail against fixture payloads, the #377
@@ -122,7 +123,11 @@ function renderAt(entry: string) {
   render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[entry]}>
-        <AppRoutes />
+        {/* `AppRoutes` is the route table without the shell. The catalog (filter, rows, the two
+            pinned panels) is this screen's contextual sidebar, so the test supplies that host. */}
+        <ShellWithSidebar>
+          <AppRoutes />
+        </ShellWithSidebar>
         <Toaster />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -154,6 +159,8 @@ describe('the catalog list', () => {
 
     await waitFor(() => expect(rowNames()).toEqual(['om-fix', 'om-review', 'zebra-global']))
     const rows = [...document.querySelectorAll('[data-slot="skill-row"]')]
+    // The catalog is the screen's contextual sidebar; the page beside it is the selected skill.
+    expect(document.querySelector('[data-slot="context-sidebar-body"] [data-slot="skill-rows"]')?.contains(rows[0]!)).toBe(true)
     expect(rows[0]?.getAttribute('data-project')).toBe('true')
     expect(rows[1]?.getAttribute('data-project')).toBe('true')
     expect(rows[2]?.hasAttribute('data-project')).toBe(false)
@@ -438,13 +445,14 @@ describe('the Manage skills panel (opt-out OM skills)', () => {
     renderAt('/skills?skill=__import')
     await waitFor(() => expect(importRows()).toEqual(['pr-create', 'code-review']))
 
+    // A shadcn Checkbox: a button carrying `aria-checked`, not a native input with `.checked`.
     const toggleOf = (name: string) =>
-      document.querySelector<HTMLInputElement>(
+      document.querySelector<HTMLElement>(
         `[data-slot="import-row"][data-skill="${name}"] [data-slot="import-toggle"]`,
       )!
     // Opt-out default: nothing is curated yet, so both start checked.
-    expect(toggleOf('pr-create').checked).toBe(true)
-    expect(toggleOf('code-review').checked).toBe(true)
+    expect(toggleOf('pr-create').getAttribute('aria-checked')).toBe('true')
+    expect(toggleOf('code-review').getAttribute('aria-checked')).toBe('true')
 
     fireEvent.click(toggleOf('pr-create'))
 
@@ -459,6 +467,8 @@ describe('the Manage skills panel (opt-out OM skills)', () => {
     expect(
       document.querySelector('[data-slot="import-row"][data-skill="code-review"]')?.getAttribute('data-imported'),
     ).toBe('true')
+    expect(toggleOf('pr-create').getAttribute('aria-checked')).toBe('false')
+    expect(toggleOf('code-review').getAttribute('aria-checked')).toBe('true')
   })
 
   it('honors an existing curated selection, and re-checking a skill adds it back', async () => {
@@ -661,10 +671,9 @@ describe('the bookmarklet panel (spec 011)', () => {
     await waitFor(() => expect(document.querySelector('[data-slot="bm-generic"] [data-slot="bm-link"]')).not.toBeNull())
 
     fireEvent.click(document.querySelector('[data-slot="bm-generic"] [data-slot="bm-link"]')!)
-    await waitFor(() =>
-      expect(document.querySelector('[data-slot="toaster"]')?.textContent).toContain(
-        'Drag me to your bookmarks bar',
-      ),
-    )
+    // The explanation arrives as a toast (sonner now), and the click went nowhere.
+    const hint = await screen.findByText(/Drag me to your bookmarks bar/)
+    expect(hint.closest('[data-sonner-toast]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="bookmarklet-panel"]')).not.toBeNull()
   })
 })

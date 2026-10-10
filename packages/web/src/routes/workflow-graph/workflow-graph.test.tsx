@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import type { WorkflowDef, WorkflowsResponse } from '@open-mercato/cezar-api-client'
+import { ThemeProvider } from '@/components/theme-provider'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 
 import { WorkflowGraphRoute } from './workflow-graph'
@@ -102,20 +104,45 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
 
 function renderAt(entry: string) {
   render(
-    <QueryClientProvider client={createQueryClient()}>
-      <MemoryRouter initialEntries={[entry]}>
-        <Routes>
-          <Route path="/workflows" element={<WorkflowGraphRoute />} />
-          <Route path="/workflows/:name" element={<WorkflowGraphRoute />} />
-        </Routes>
-        <Toaster />
-      </MemoryRouter>
-    </QueryClientProvider>,
+    // What the app root gives every route: the theme the canvas follows (`useTheme`) and the
+    // provider its toolbar tooltips need.
+    <ThemeProvider>
+      <TooltipProvider>
+        <QueryClientProvider client={createQueryClient()}>
+          <MemoryRouter initialEntries={[entry]}>
+            <Routes>
+              <Route path="/workflows" element={<WorkflowGraphRoute />} />
+              <Route path="/workflows/:name" element={<WorkflowGraphRoute />} />
+            </Routes>
+            <Toaster />
+          </MemoryRouter>
+        </QueryClientProvider>
+      </TooltipProvider>
+    </ThemeProvider>,
   )
 }
 
 const nameField = () => screen.findByLabelText<HTMLInputElement>('Workflow name')
 const sentTo = (sent: SentRequest[], method: string, path: string) => sent.filter((r) => r.method === method && r.path === path)
+
+/** The toolbar's `…` menu, where settings, export and delete live. Radix menus open on
+ *  `pointerdown`, which is the house pattern (run-header.test.tsx). */
+async function openMore() {
+  fireEvent.pointerDown(screen.getByRole('button', { name: 'More workflow actions' }), { button: 0 })
+  await screen.findByRole('menu')
+}
+
+/** The workflow's own panel — details, YAML and the planner, one tab each. */
+async function openSettings() {
+  await openMore()
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Workflow settings' }))
+  await screen.findByRole('tab', { name: /^Details/ })
+}
+
+/** The panel's tabs are the shared Tabs primitive, which selects on the press, not the click. */
+function openTab(name: string) {
+  fireEvent.mouseDown(screen.getByRole('tab', { name }), { button: 0 })
+}
 
 /** Save is disabled until the debounced validate round-trip for the current graph settles. */
 async function clickSave() {
@@ -185,8 +212,11 @@ describe('WorkflowGraphRoute', () => {
     const sent = stubFetch({ 'DELETE /api/v1/workflows/ship-it': () => jsonResponse({ ok: true }) })
     renderAt('/workflows/ship-it')
     await nameField()
-    fireEvent.click(screen.getByRole('button', { name: 'Workflow settings' }))
-    fireEvent.click(screen.getByRole('button', { name: /Delete workflow/ }))
+    // Offered in the `…` menu as well as at the foot of the panel.
+    await openMore()
+    expect(screen.getByRole('menuitem', { name: /Delete workflow/ })).toBeTruthy()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Workflow settings' }))
+    fireEvent.click(await screen.findByRole('button', { name: /Delete workflow/ }))
     // Nothing is sent until the confirm.
     expect(sentTo(sent, 'DELETE', '/api/v1/workflows/ship-it')).toHaveLength(0)
     fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
@@ -197,7 +227,10 @@ describe('WorkflowGraphRoute', () => {
     cleanup()
     renderAt('/workflows/quick-task')
     await nameField()
-    fireEvent.click(screen.getByRole('button', { name: 'Workflow settings' }))
+    await openMore()
+    expect(screen.queryByRole('menuitem', { name: /Delete workflow/ })).toBeNull()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Workflow settings' }))
+    await screen.findByRole('tab', { name: /^Details/ })
     expect(screen.queryByRole('button', { name: /Delete workflow/ })).toBeNull()
   })
 
@@ -216,13 +249,15 @@ describe('WorkflowGraphRoute', () => {
     })
     renderAt('/workflows')
     await nameField()
-    fireEvent.click(screen.getByRole('button', { name: 'Workflow settings' }))
-    fireEvent.change(screen.getByPlaceholderText(/implement, run the tests/), { target: { value: 'fix it and test' } })
+    await openSettings()
+    openTab('Generate')
+    fireEvent.change(await screen.findByPlaceholderText(/implement, run the tests/), { target: { value: 'fix it and test' } })
     fireEvent.click(screen.getByRole('button', { name: 'Build workflow' }))
     await waitFor(async () => expect((await nameField()).value).toBe('fix-and-test'))
     expect(sentTo(sent, 'POST', '/api/v1/plan')[0]?.body).toEqual({ task: 'fix it and test' })
     // The planned chain is on the canvas: the YAML preview shows it as a graph.
-    expect(document.querySelector('pre')?.textContent).toContain('command: npm test')
+    openTab('YAML')
+    await waitFor(() => expect(document.querySelector('pre')?.textContent).toContain('command: npm test'))
   })
 
   it('exports the canvas as <slug>.yaml, in the form Save writes', async () => {
@@ -235,7 +270,8 @@ describe('WorkflowGraphRoute', () => {
     })
     renderAt('/workflows/ship-it')
     await nameField()
-    fireEvent.click(screen.getByRole('button', { name: 'Export YAML' }))
+    await openMore()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Export YAML' }))
     expect(downloads).toEqual(['ship-it.yaml'])
     expect(await blobs[0]?.text()).toBe('name: ship-it\ndescription: Fix then review.\nskills:\n  - om-fix\n  - om-review\n')
   })

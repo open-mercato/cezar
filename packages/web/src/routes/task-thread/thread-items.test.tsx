@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { MemoryRouter } from 'react-router'
@@ -77,6 +77,11 @@ const asRunEvents = (events: object[]): RunEvent[] =>
 
 const card = () => document.querySelector('[data-slot="tool-card"]')!
 const trigger = (name: RegExp) => screen.getByRole('button', { name })
+/** The rendered rows of one kind on the shared `<Diff>` surface (gutters + marker + text). */
+const diffLines = (root: Element, kind: 'add' | 'del') =>
+  [...root.querySelectorAll('[data-slot="diff-line"]')]
+    .filter((line) => line.getAttribute('data-line') === kind)
+    .map((line) => line.textContent ?? '')
 
 describe('ToolCard — states', () => {
   it('running without output: shimmering verb, spinner, locked (disabled trigger, no chevron)', () => {
@@ -115,9 +120,10 @@ describe('ToolCard — states', () => {
     const item = goldenItem(failedAndDenied, 'toolu_fail_01', 'failed')
     render(<ToolCard item={item} />)
     expect(card().getAttribute('data-status')).toBe('failed')
-    // A faint danger tint still identifies it, but the loud outline and auto-open are gone.
-    expect(card().className).toContain('border-danger')
-    expect(screen.getByText('failed')).toBeTruthy()
+    // A quiet row, not a box: no outline at all — the danger-toned icon and `failed` label carry it.
+    expect(card().className).not.toContain('border')
+    expect(trigger(/failed/).querySelector('svg')?.getAttribute('class')).toContain('text-danger')
+    expect(screen.getByText('failed').className).toContain('text-danger')
     // Calm by default: the red error body only appears once the reader opens the card.
     expect(document.querySelector('[data-slot="tool-error"]')).toBeNull()
     fireEvent.click(trigger(/failed/))
@@ -134,23 +140,32 @@ describe('ToolCard — states', () => {
     expect((screen.getByRole('button', { name: /declined/ }) as HTMLButtonElement).disabled).toBe(true)
   })
 
-  it('edit with diffs: old/new render as a tinted unified block inside InlineDiffPreview', () => {
+  it('edit with diffs: old/new render on the shared Diff surface inside InlineDiffPreview', async () => {
     const item = goldenItem(thinkingEditWriteTodo, 'toolu_01AB', 'completed')
     render(<ToolCard item={item} />)
+    // The size of the edit reads off the collapsed row.
+    expect(document.querySelector('[data-slot="tool-diff-stat"]')?.textContent).toBe('+1 −1')
     fireEvent.click(trigger(/Edit.*\/repo\/src\/middleware\.ts/))
     const preview = document.querySelector('[data-slot="diff-preview"]')!
+    // The diff engine is a lazy chunk — settle on the rendered file card.
+    await waitFor(() => expect(preview.querySelector('[data-slot="diff-file"]')).not.toBeNull())
     expect(preview.textContent).toContain('/repo/src/middleware.ts')
-    expect(preview.textContent).toContain("- return redirect('/login')")
-    expect(preview.textContent).toContain("+ return redirect('/login', { preserveSession: true })")
+    const dels = diffLines(preview, 'del')
+    const adds = diffLines(preview, 'add')
+    expect(dels).toHaveLength(1)
+    expect(dels[0]).toContain("return redirect('/login')")
+    expect(adds).toHaveLength(1)
+    expect(adds[0]).toContain("return redirect('/login', { preserveSession: true })")
   })
 
-  it('a new file (oldText null, the golden Write) renders only added lines', () => {
+  it('a new file (oldText null, the golden Write) renders only added lines', async () => {
     const item = goldenItem(thinkingEditWriteTodo, 'toolu_01CD', 'completed')
     render(<ToolCard item={item} />)
     fireEvent.click(trigger(/Write.*\/repo\/src\/middleware\.test\.ts/))
     const preview = document.querySelector('[data-slot="diff-preview"]')!
-    expect(preview.textContent).toContain("+ import { test } from 'vitest'")
-    expect(preview.textContent).not.toContain('- ')
+    await waitFor(() => expect(preview.querySelector('[data-slot="diff-file"]')).not.toBeNull())
+    expect(diffLines(preview, 'add').join('\n')).toContain("import { test } from 'vitest'")
+    expect(diffLines(preview, 'del')).toEqual([])
   })
 })
 
@@ -160,15 +175,17 @@ describe('ToolCard — exit-code pill (execute kind)', () => {
     expect(item.exitCode).toBe(0)
     render(<ToolCard item={item} />)
     const pill = document.querySelector('[data-slot="tool-exit"]')!
-    expect(pill.textContent).toBe('0')
-    expect(pill.className).toContain('text-success')
+    expect(pill.textContent).toBe('exit 0')
+    // A clean exit is quiet; only a failure is toned.
+    expect(pill.className).toContain('text-soft-foreground')
+    expect(pill.className).not.toContain('text-danger')
   })
 
   it('a non-zero exit → danger pill', () => {
     const item = goldenItem(opencodeToolLifecycle, 'prt_01J8ZE21TOOL', 'completed')
     render(<ToolCard item={{ ...item, exitCode: 2 }} />)
     const pill = document.querySelector('[data-slot="tool-exit"]')!
-    expect(pill.textContent).toBe('2')
+    expect(pill.textContent).toBe('exit 2')
     expect(pill.className).toContain('text-danger')
   })
 

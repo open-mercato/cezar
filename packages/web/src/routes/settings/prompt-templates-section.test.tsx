@@ -346,6 +346,6 @@ describe('assigning a template to a skill', () => {
     await waitFor(() => expect(rows()).toHaveLength(DEFAULT_PROMPT_TEMPLATES.length))
 
     await waitFor(() => expect(trigger(rows()[0]!).disabled).toBe(true))
-    expect(trigger(rows()[0]!).textContent).toContain('no skills found')
+    expect(trigger(rows()[0]!).textContent).toContain('No skills found')
   })
 })

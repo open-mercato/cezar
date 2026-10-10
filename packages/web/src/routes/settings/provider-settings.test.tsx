@@ -172,7 +172,7 @@ describe('ProviderSettings', () => {
     expect(screen.getByRole('switch', { name: 'Use Claude Code' })).toBeTruthy()
 
     expect(within(card('codex')).getByText('Credentials found').previousElementSibling?.getAttribute('data-tone')).toBe('success')
-    expect(within(card('codex')).getByText('Disabled')).toBeTruthy()
+    expect(within(card('codex')).getByText('· Disabled')).toBeTruthy()
     expect(screen.getByRole('switch', { name: 'Use Codex' })).toBeTruthy()
 
     expect(within(card('opencode')).getByRole('button', { name: 'Connect' })).toBeTruthy()
@@ -213,7 +213,7 @@ describe('ProviderSettings', () => {
     fireEvent.click(connect)
 
     await waitFor(() =>
-      expect(document.querySelector('[data-slot="toast"]')?.textContent).toContain(
+      expect(document.querySelector('[data-sonner-toast]')?.textContent).toContain(
         'Finish signing in in the terminal, then check again.',
       ),
     )
@@ -317,7 +317,7 @@ describe('ProviderSettings', () => {
     expect(within(codexCard).queryByText('Connected')).toBeNull()
     expect(within(codexCard).getByRole('button', { name: 'Connect' })).toBeTruthy()
     const failure = await screen.findByText('Provider refresh failed.')
-    expect(failure.closest('[data-slot="toast"]')?.getAttribute('data-tone')).toBe('danger')
+    expect(failure.closest('[data-sonner-toast]')?.getAttribute('data-type')).toBe('error')
   })
 
   it('updates enablement immediately and restores the confirmed state when a write fails', async () => {
@@ -328,7 +328,7 @@ describe('ProviderSettings', () => {
     const toggle = await screen.findByRole('switch', { name: 'Use Claude Code' })
     await within(card('claude')).findByText('Credentials found')
     fireEvent.click(toggle)
-    expect(await within(card('claude')).findByText('Disabled')).toBeTruthy()
+    expect(await within(card('claude')).findByText('· Disabled')).toBeTruthy()
     expect(requests).toContainEqual({
       method: 'PUT',
       url: '/api/v1/providers/claude/enabled',
@@ -336,7 +336,7 @@ describe('ProviderSettings', () => {
     })
 
     await act(() => failure.resolve(json({ error: 'Provider preference could not be saved.' }, 500)))
-    await waitFor(() => expect(within(card('claude')).queryByText('Disabled')).toBeNull())
+    await waitFor(() => expect(within(card('claude')).queryByText('· Disabled')).toBeNull())
     expect(await screen.findByText('Provider preference could not be saved.')).toBeTruthy()
   })
 
@@ -349,7 +349,7 @@ describe('ProviderSettings', () => {
     const toggle = await screen.findByRole('switch', { name: 'Use Claude Code' })
     await within(card('claude')).findByText('Credentials found')
     fireEvent.click(toggle)
-    await within(card('claude')).findByText('Disabled')
+    await within(card('claude')).findByText('· Disabled')
     fireEvent.click(toggle)
     await waitFor(() => expect(requests.filter((request) => request.url.endsWith('/enabled'))).toHaveLength(1))
 
@@ -378,13 +378,13 @@ describe('ProviderSettings', () => {
     const toggle = await screen.findByRole('switch', { name: 'Use Claude Code' })
     await within(card('claude')).findByText('Credentials found')
     fireEvent.click(toggle)
-    await within(card('claude')).findByText('Disabled')
+    await within(card('claude')).findByText('· Disabled')
     fireEvent.click(toggle)
     await act(() => first.resolve(json({ error: 'first write failed' }, 500)))
     await waitFor(() => expect(requests.filter((request) => request.url.endsWith('/enabled'))).toHaveLength(2))
     await act(() => second.resolve(json(ALL_STATUSES)))
 
-    await waitFor(() => expect(within(card('claude')).queryByText('Disabled')).toBeNull())
+    await waitFor(() => expect(within(card('claude')).queryByText('· Disabled')).toBeNull())
     expect(screen.queryByText('first write failed')).toBeNull()
   })
 
@@ -410,7 +410,7 @@ describe('ProviderSettings', () => {
         { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
     })))
-    await within(card('codex')).findByText('Disabled')
+    await within(card('codex')).findByText('· Disabled')
   })
 
   it('serializes cross-provider writes and retains both confirmed preferences', async () => {
@@ -445,8 +445,8 @@ describe('ProviderSettings', () => {
         { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
     })))
-    await within(card('claude')).findByText('Disabled')
-    await within(card('codex')).findByText('Disabled')
+    await within(card('claude')).findByText('· Disabled')
+    await within(card('codex')).findByText('· Disabled')
   })
 
   it('preserves a successful retry when a pending enablement write fails', async () => {
@@ -481,13 +481,13 @@ describe('ProviderSettings', () => {
 
     const toggle = await screen.findByRole('switch', { name: 'Use Claude Code' })
     fireEvent.click(toggle)
-    await within(card('claude')).findByText('Disabled')
+    await within(card('claude')).findByText('· Disabled')
     fireEvent.click(within(card('claude')).getByRole('button', { name: 'Try again' }))
     await within(card('claude')).findByText('Credentials found')
 
     await act(() => failure.resolve(json({ error: 'Provider preference could not be saved.' }, 500)))
     await within(card('claude')).findByText('Credentials found')
-    expect(within(card('claude')).queryByText('Disabled')).toBeNull()
+    expect(within(card('claude')).queryByText('· Disabled')).toBeNull()
     expect(within(card('claude')).queryByRole('button', { name: 'Try again' })).toBeNull()
   })
 
@@ -499,7 +499,7 @@ describe('ProviderSettings', () => {
     const toggle = await screen.findByRole('switch', { name: 'Use Claude Code' })
     await within(card('claude')).findByText('Credentials found')
     fireEvent.click(toggle)
-    await within(card('claude')).findByText('Disabled')
+    await within(card('claude')).findByText('· Disabled')
     act(() => {
       client.setQueryData<ProviderStatusResponse>(workspaceQueryKeys.providerStatus, (current) =>
         applyProviderStatusRow(current, {
@@ -515,7 +515,7 @@ describe('ProviderSettings', () => {
     await act(() => failure.resolve(json({ error: 'Provider preference could not be saved.' }, 500)))
     await within(card('claude')).findByText('Not connected')
     expect(within(card('claude')).getByText(/Reconnect, then try again/)).toBeTruthy()
-    expect(within(card('claude')).queryByText('Disabled')).toBeNull()
+    expect(within(card('claude')).queryByText('· Disabled')).toBeNull()
     expect(client.getQueryData<ProviderStatusResponse>(workspaceQueryKeys.providerStatus)?.providers[0]).toMatchObject({
       enabled: true,
       authFailureId: 'incident-2',
@@ -553,7 +553,7 @@ describe('ProviderSettings', () => {
       }),
     )
     expect(await within(card('opencode')).findByText('Credentials found')).toBeTruthy()
-    expect(within(card('opencode')).getByText('Disabled')).toBeTruthy()
+    expect(within(card('opencode')).getByText('· Disabled')).toBeTruthy()
   })
 
   it('keeps a stale retry incident visible and reports the server error', async () => {

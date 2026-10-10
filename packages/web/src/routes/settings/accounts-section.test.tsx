@@ -6,8 +6,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
 import type { AgentProfile, AgentProfilesResponse } from '@open-mercato/cezar-api-client'
+import { GlobalSettingsDialog } from '@/components/global-settings-dialog'
+import { ListViewProvider } from '@/components/list-view'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
+import { ShellProviders } from '@/test/shell-providers'
 
 /**
  * Global settings → Agent accounts (spec `.ai/specs/2026-07-29-agent-profiles.md`).
@@ -174,7 +177,13 @@ function renderAccounts() {
   render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={['/settings/global/accounts']}>
-        <AppRoutes />
+        {/* What the app shell gives every route: global settings as a dialog (the global sections
+            render inside it), the sidebar, and the list view the project home reads. */}
+        <ShellProviders dialog={<GlobalSettingsDialog />}>
+          <ListViewProvider>
+            <AppRoutes />
+          </ListViewProvider>
+        </ShellProviders>
         <Toaster />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -482,7 +491,7 @@ describe('the agent accounts section', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Remove' }))
 
     await waitFor(() =>
-      expect(document.querySelector('[data-slot="toast"]')?.textContent).toContain(
+      expect(document.querySelector('[data-sonner-toast]')?.textContent).toContain(
         'a task is still running on this account',
       ),
     )
@@ -684,7 +693,7 @@ describe('the agent accounts section', () => {
 
       await pickFrom(fileMenus()[1]!, 'system')
       await waitFor(() =>
-        expect(document.querySelector('[data-slot="toast"]')?.textContent).toContain(
+        expect(document.querySelector('[data-sonner-toast]')?.textContent).toContain(
           'no CLAUDE.md yet',
         ),
       )
@@ -890,7 +899,8 @@ describe('the add-account dialog', () => {
     renderAccounts()
     await openDialog('codex')
 
-    expect(screen.getByLabelText<HTMLSelectElement>('Agent').value).toBe('codex')
+    // A shadcn Select: the trigger shows the picked agent (the options are labelled by id).
+    expect(screen.getByRole('combobox', { name: 'Agent' }).textContent).toBe('codex')
     // The placeholder follows too, so the example folder is not the wrong agent's. It stays a
     // GENERIC name — this string ships to every cezar user, so it must not carry one person's.
     expect(dirField().placeholder).toBe('~/.codex-second')

@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
@@ -94,10 +94,16 @@ describe('Settings → Resources: worktrees panel (#483)', () => {
     serve(sample)
     renderPanel()
     await waitFor(() => expect(rows()).toHaveLength(2))
-    fireEvent.click(document.querySelector('[data-action="worktree-delete"]')!)
+    // Delete sits in the row's actions menu now (Radix opens a menu on pointerdown).
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Actions for fix the login bug' }), {
+      button: 0,
+      ctrlKey: false,
+    })
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Delete the worktree for fix the login bug' }))
     await waitFor(() => expect(confirmButton()).not.toBeNull())
     fireEvent.click(confirmButton()!)
     await waitFor(() => expect(posts(/\/remove-worktree$/)).toHaveLength(1))
+    expect(posts(/\/remove-worktree$/)[0]?.url).toBe(`/api/v1/runs/${sample.worktrees[0]!.runId}/remove-worktree`)
   })
 
   it('Reclaim now calls the reclaim route (after confirming the dialog)', async () => {

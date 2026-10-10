@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import { dashboardKeys } from '@/api/dashboard'
 import { dashboardLive } from '@/api/dashboard-live'
+import { ShellWithSidebar } from '@/test/shell-with-sidebar'
 import { DashboardRoute } from './index'
 import type { DashboardTaskRow, DashboardSnapshot } from '@open-mercato/cezar-api-client'
 let entrySequence = 0
@@ -30,6 +31,11 @@ const snapshot = (): DashboardSnapshot => ({
 function Location() {
   return <output data-testid="location">{useLocation().search}</output>
 }
+/** The queue's heading, count included — the count is its own tinted span inside the heading. */
+const needsYouHeading = 'Needs you · 2'
+/** The dashboard's views live in the contextual sidebar the shell owns. */
+const viewButton = (name: string) =>
+  within(document.querySelector<HTMLElement>('[data-slot="context-sidebar-body"]')!).queryByRole('button', { name })
 function Back() {
   const navigate = useNavigate()
   return <button onClick={() => navigate(-1)}>Back</button>
@@ -129,11 +135,13 @@ function setup(options: {
   render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[{ pathname: '/dashboard', search: options.search ?? '?view=operations', key: `entry-${++entrySequence}` }]}>
-        <Routes>
-          <Route path="/dashboard" element={<DashboardRoute />} />
-          <Route path="*" element={<Back />} />
-        </Routes>
-        <Location />
+        <ShellWithSidebar>
+          <Routes>
+            <Route path="/dashboard" element={<DashboardRoute />} />
+            <Route path="*" element={<Back />} />
+          </Routes>
+          <Location />
+        </ShellWithSidebar>
       </MemoryRouter>
     </QueryClientProvider>,
   )
@@ -146,7 +154,7 @@ afterEach(() => {
 describe('dashboard decisions', () => {
   it('groups questions and reviews with correct project links and opens the visible queue in a Sheet', async () => {
     setup()
-    await screen.findByText('Needs you · 2')
+    await screen.findByRole('heading', { name: needsYouHeading })
     expect(screen.getByRole('link', { name: 'Task question' }).getAttribute('href')).toBe(
       '/p/shop/tasks/question',
     )
@@ -162,7 +170,7 @@ describe('dashboard decisions', () => {
   it('opens a hidden queue in a Sheet without changing shared preferences', async () => {
     const { calls } = setup({ hidden: true })
     await screen.findByRole('button', { name: 'Needs you: 2' })
-    await waitFor(() => expect(screen.queryByText('Needs you · 2')).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('heading', { name: needsYouHeading })).toBeNull())
     fireEvent.click(screen.getByRole('button', { name: 'Needs you: 2' }))
     expect(await screen.findByRole('dialog')).toBeTruthy()
     expect(await screen.findByRole('link', { name: 'Task question' })).toBeTruthy()
@@ -179,11 +187,15 @@ describe('dashboard decisions', () => {
   })
   it('keeps a failed preference save local and offers retry', async () => {
     const { calls } = setup({ saveError: true })
-    await screen.findByText('Needs you · 2')
+    await screen.findByRole('heading', { name: needsYouHeading })
     fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Needs you' }))
+    const toggle = await screen.findByRole('switch', { name: 'Needs you' })
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(toggle)
     expect(await screen.findByText(/Layout changed for this session/)).toBeTruthy()
-    expect(screen.queryByText('Needs you · 2')).toBeNull()
+    expect(screen.queryByRole('heading', { name: needsYouHeading })).toBeNull()
+    expect(screen.getByRole('switch', { name: 'Needs you' }).getAttribute('aria-checked')).toBe('false')
+    expect(screen.getByRole('button', { name: 'Retry saving' })).toBeTruthy()
     const body = calls.find((c) => c.body)?.body
     expect(JSON.parse(body!).dashboard).toEqual({
       order: [
@@ -255,7 +267,7 @@ it('renders usage alone when action and feed tiles are hidden, then unmounts on 
   expect(await screen.findByRole('heading', { name: 'Usage & cost' })).toBeTruthy()
   expect(screen.queryByRole('heading', { name: 'Queue & scheduling' })).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
-  fireEvent.click(screen.getByRole('checkbox', { name: 'Usage & cost' }))
+  fireEvent.click(await screen.findByRole('switch', { name: 'Usage & cost' }))
   expect(screen.queryByRole('heading', { name: 'Usage & cost' })).toBeNull()
   expect(await screen.findByText('Optional modules in this view are hidden.')).toBeTruthy()
   expect(calls.some((url) => url.includes('/dashboard/costs'))).toBe(true)
@@ -265,8 +277,9 @@ it('restores all modules and closes Customize', async () => {
   const { calls } = setup({ hidden: true })
   await screen.findByRole('button', { name: 'Needs you: 2' })
   fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
+  expect((await screen.findAllByRole('switch')).length).toBeGreaterThan(0)
   fireEvent.click(screen.getByRole('button', { name: 'Show all in Overview' }))
-  await waitFor(() => expect(screen.queryByRole('checkbox')).toBeNull())
+  await waitFor(() => expect(screen.queryByRole('switch')).toBeNull())
   await waitFor(() => expect(calls.some((c) => c.body)).toBe(true))
   expect(JSON.parse(calls.find((c) => c.body)!.body!).dashboard.tiles).toEqual({
     automations: true,
@@ -297,14 +310,19 @@ it('exports queue counts without duplicating overview attention counts', async (
 it('keeps legacy Operations links on Overview and only reads telemetry when expanded', async () => {
   const { calls } = setup()
   await screen.findByRole('heading', { name: 'Queue & scheduling' })
+  // No view is called Operations any more — in the sidebar or in the phone header's tabs.
+  expect(viewButton('Operations')).toBeNull()
+  expect(screen.queryByRole('tab', { name: 'Operations' })).toBeNull()
   expect(screen.queryByRole('link', { name: 'Operations' })).toBeNull()
-  expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('aria-current')).toBe(
-    'page',
-  )
+  expect(viewButton('Overview')!.getAttribute('aria-current')).toBe('page')
+  expect(viewButton('Usage & cost')!.getAttribute('aria-current')).toBeNull()
+  expect(screen.getByRole('tab', { name: 'Overview' }).getAttribute('aria-selected')).toBe('true')
   expect(calls.some((c) => c.url.includes('/dashboard/telemetry'))).toBe(false)
-  const details = screen.getByText('Technical details').closest('details')!
-  details.open = true
-  fireEvent(details, new Event('toggle'))
+  // The heading is there from the module's skeleton on; the disclosure arrives with the data.
+  const details = await screen.findByRole('button', { name: 'Technical details' })
+  expect(details.getAttribute('aria-expanded')).toBe('false')
+  fireEvent.click(details)
+  expect(details.getAttribute('aria-expanded')).toBe('true')
   await waitFor(() =>
     expect(calls.some((c) => c.url.includes('/dashboard/telemetry'))).toBe(true),
   )
@@ -312,14 +330,20 @@ it('keeps legacy Operations links on Overview and only reads telemetry when expa
 
 it('restores dashboard scroll after replacing the outcomes period and returning from a task', async () => {
   setup()
-  await screen.findByText('Needs you · 2')
+  await screen.findByRole('heading', { name: needsYouHeading })
   const root = document.querySelector<HTMLElement>('[data-route="dashboard"]')!
   root.scrollTop = 321
   fireEvent.scroll(root)
-  fireEvent.change(screen.getByRole('combobox', { name: 'Outcomes period' }), { target: { value: '30d' } })
+  // The period control is the header's Select: opened by keyboard (jsdom has no real pointer).
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() })
+  fireEvent.keyDown(screen.getByRole('combobox', { name: 'Outcomes period' }), { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('option', { name: 'Last 30 days' }))
+  // A REPLACE on the same history entry, which is what lets Back land on it again.
+  await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('?view=operations&period=30d'))
   fireEvent.click(screen.getByRole('link', { name: 'Task question' }))
   fireEvent.click(await screen.findByRole('button', { name: 'Back' }))
-  await screen.findByText('Needs you · 2')
+  await screen.findByRole('heading', { name: needsYouHeading })
+  expect(screen.getByTestId('location').textContent).toBe('?view=operations&period=30d')
   await waitFor(() => expect(document.querySelector<HTMLElement>('[data-route="dashboard"]')!.scrollTop).toBe(321))
 })
 

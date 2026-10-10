@@ -6,9 +6,13 @@ import { DirectionalUsage, directionalUsageText } from './directional-usage'
 describe('DirectionalUsage', () => {
   it('uses the same compact direction order and an expanded accessible label', () => {
     render(<DirectionalUsage inputTokens={184_700} outputTokens={2_400} />)
-    expect(screen.getByText('IN 184.7k · OUT 2.4k').getAttribute('aria-label')).toBe(
-      'Input tokens: 184,700; output tokens: 2,400',
-    )
+    // The expanded numbers are grouped for the READER's locale (`new Intl.NumberFormat()`), so
+    // the separator is whatever this machine uses — `184,700` in en-US, `184 700` in pl-PL.
+    const full = (value: number) => new Intl.NumberFormat().format(value)
+    const label = screen.getByText('IN 184.7k · OUT 2.4k').getAttribute('aria-label')
+    expect(label).toBe(`Input tokens: ${full(184_700)}; output tokens: ${full(2_400)}`)
+    // …and expanded, never the compact spelling the visible text uses.
+    expect(label?.replace(/\D/g, '')).toBe('1847002400')
   })
 
   it('shows one known side honestly and omits an entirely unknown compact value', () => {

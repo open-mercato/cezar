@@ -105,11 +105,15 @@ describe('formatElapsed', () => {
 })
 
 describe('the dictation overlay (paseo pattern)', () => {
-  it('the mic renders labeled "Dictation" when the API exists, left of send', () => {
+  it('the mic renders as an icon button named for dictation when the API exists, left of send', () => {
     stubSpeech()
     renderComposer()
     const mic = screen.getByLabelText('Start dictation')
-    expect(mic.textContent).toContain('Dictation')
+    // An icon button now — the visible word went, so the name and the tooltip carry it.
+    expect(mic.tagName).toBe('BUTTON')
+    expect(mic.textContent).toBe('')
+    expect(mic.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true')
+    expect(mic.getAttribute('title')).toBe('Dictate instead of typing')
     const bar = mic.parentElement!
     const children = [...bar.children]
     expect(children.indexOf(mic)).toBeLessThan(children.indexOf(screen.getByLabelText('Send')))

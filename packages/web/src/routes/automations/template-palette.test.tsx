@@ -38,6 +38,11 @@ function renderPalette(onPick = vi.fn()) {
   return onPick
 }
 
+/** Radix tabs activate on mousedown, not click. */
+function openOtherProjects(): void {
+  fireEvent.mouseDown(screen.getByRole('tab', { name: 'From your other projects' }), { button: 0 })
+}
+
 describe('TemplatePalette', () => {
   it('lists the six built-ins and hands the picked one over', () => {
     const paths = stubTemplates({ templates: [] })
@@ -58,7 +63,7 @@ describe('TemplatePalette', () => {
   it('loads the other projects lazily and shows the empty state', async () => {
     const paths = stubTemplates({ templates: [] })
     renderPalette()
-    fireEvent.click(screen.getByRole('tab', { name: 'From your other projects' }))
+    openOtherProjects()
     await waitFor(() => expect(screen.getByText('No automations in your other projects yet.')).not.toBeNull())
     expect(paths).toContain('/api/v1/workspace/automation-templates')
     expect(screen.getByText('Registered in ~/.cezar/config.json')).not.toBeNull()
@@ -77,7 +82,7 @@ describe('TemplatePalette', () => {
       }],
     })
     const onPick = renderPalette()
-    fireEvent.click(screen.getByRole('tab', { name: 'From your other projects' }))
+    openOtherProjects()
     await waitFor(() => expect(screen.getByText('Sweep failed CI')).not.toBeNull())
     expect(screen.getByText('shop').getAttribute('data-slot')).toBe('branch-chip')
     expect(screen.getByText('on pull_request.opened · every 10 min')).not.toBeNull()

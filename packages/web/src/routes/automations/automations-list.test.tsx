@@ -3,8 +3,9 @@ import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { AutomationsList } from './automations-list'
-import { NOW, mockActions, response, stubResizeObserver } from './automations-list.fixtures'
+import { AUTOMATIONS, NOW, TIME_ZONE, mockActions, response, stubResizeObserver } from './automations-list.fixtures'
 import type { AutomationsView } from './automations-route'
+import { nextRuns } from './next-runs-rail'
 
 beforeEach(() => {
   stubResizeObserver()
@@ -19,12 +20,23 @@ afterEach(() => {
 
 function renderList(props: Partial<Parameters<typeof AutomationsList>[0]> = {}) {
   const onViewChange = vi.fn<(view: AutomationsView) => void>()
+  const onNextRuns = vi.fn()
   render(
     <MemoryRouter initialEntries={['/automations']}>
-      <AutomationsList data={response()} actions={mockActions()} view="list" onViewChange={onViewChange} {...props} />
+      <AutomationsList
+        data={response()}
+        actions={mockActions()}
+        view="list"
+        onViewChange={onViewChange}
+        // The route computes these once — it also owns the sheet the button opens.
+        upcoming={nextRuns(AUTOMATIONS, NOW, TIME_ZONE, 12)}
+        pollCount={2}
+        onNextRuns={onNextRuns}
+        {...props}
+      />
     </MemoryRouter>,
   )
-  return { onViewChange }
+  return { onViewChange, onNextRuns }
 }
 
 const status = () => document.querySelector('[data-slot="automations-status"]')
@@ -48,7 +60,7 @@ describe('AutomationsList', () => {
   it('offers to create the first automation when there are none', () => {
     renderList({ data: response({ automations: [] }) })
 
-    expect(screen.getByRole('heading', { level: 2 }).textContent).toBe('No automations yet')
+    expect(document.querySelector('[data-slot="centered-state"] [data-slot="empty-title"]')?.textContent).toBe('No automations yet')
     expect(screen.getByText('Create one paused, preview it, then enable it.')).toBeTruthy()
     const links = screen.getAllByRole('link', { name: /New automation/ })
     expect(links).toHaveLength(2)
@@ -60,12 +72,14 @@ describe('AutomationsList', () => {
 
     expect(status()?.textContent).toBe('Scheduler running·GitHub available·UTC')
     expect(status()?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
-    expect(status()?.className).toContain('max-[1280px]:hidden')
+    expect(status()?.className).toContain('max-lg:hidden')
 
-    const group = screen.getByRole('group', { name: 'View' })
-    const list = within(group).getByRole('button', { name: /List/ })
+    const group = screen.getByRole('radiogroup', { name: 'View' })
+    const list = within(group).getByRole('radio', { name: /List/ })
     expect(list.textContent).toBe('List7')
-    expect(list.getAttribute('aria-pressed')).toBe('true')
+    expect(list.getAttribute('aria-checked')).toBe('true')
+    // The contextual sidebar carries the switch from `md` up; this copy is for the closed sheet below it.
+    expect(group.className).toContain('md:hidden')
     expect(screen.getByRole('link', { name: /New automation/ }).getAttribute('href')).toBe('/automations/new')
   })
 
@@ -79,9 +93,9 @@ describe('AutomationsList', () => {
   it('switches views through the segmented control', () => {
     const { onViewChange } = renderList()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Week' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Week' }))
     expect(onViewChange).toHaveBeenCalledWith('week')
-    fireEvent.click(screen.getByRole('button', { name: 'Day' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Day' }))
     expect(onViewChange).toHaveBeenCalledWith('day')
   })
 
@@ -94,14 +108,24 @@ describe('AutomationsList', () => {
     expect(document.querySelector('[data-slot="week-view"]')).toBeNull()
   })
 
-  it('opens the Next runs rail from the strip', () => {
-    renderList()
+  it('asks the route for the Next runs rail from the counted toolbar button', () => {
+    const { onNextRuns } = renderList()
+    const button = screen.getByRole('button', { name: /Next runs/ })
 
-    fireEvent.click(screen.getByRole('button', { name: /Next runs/ }))
-    // Synchronous: the sheet mounts with the state change, and fake timers would stall `findBy`.
-    const rail = screen.getByRole('dialog')
-    expect(rail.getAttribute('data-slot')).toBe('next-runs-rail')
-    expect(within(rail).getAllByRole('button').filter((b) => b.dataset.slot === 'next-run-row')).toHaveLength(12)
+    expect(button.textContent).toBe('Next runs12')
+    fireEvent.click(button)
+    expect(onNextRuns).toHaveBeenCalledTimes(1)
+    // The sheet belongs to the route (the sidebar opens it too) — the list renders none of its own.
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('offers Next runs on the list view only', () => {
+    renderList({ view: 'week' })
+    expect(screen.queryByRole('button', { name: /Next runs/ })).toBeNull()
+
+    cleanup()
+    renderList({ data: response({ automations: [] }), upcoming: [] })
+    expect(screen.queryByRole('button', { name: /Next runs/ })).toBeNull()
   })
 
   it('renders the week and day calendars for their views', () => {

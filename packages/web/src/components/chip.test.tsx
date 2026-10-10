@@ -13,14 +13,14 @@ function chipOf(ui: React.ReactElement) {
 }
 
 describe('Chip', () => {
-  it('is a 26px bordered pill button by default', () => {
+  it('is a 28px bordered, rounded button by default', () => {
     const chip = chipOf(<Chip>quick-task</Chip>)
 
     expect(chip.tagName).toBe('BUTTON')
     expect(chip.type).toBe('button')
-    expect(chip.className).toContain('h-[26px]')
-    expect(chip.className).toContain('rounded-full')
-    expect(chip.className).toContain('border-border')
+    expect(chip.classList.contains('h-7')).toBe(true)
+    expect(chip.classList.contains('rounded-md')).toBe(true)
+    expect(chip.classList.contains('border-border')).toBe(true)
     expect(chip.getAttribute('data-active')).toBeNull()
   })
 
@@ -69,7 +69,9 @@ describe('Chip', () => {
 
   // The composer's PickerPill shares this exact string — one chip grammar, one place to change it.
   it('exposes the shared class string', () => {
-    expect(chipClass).toContain('h-[26px]')
-    expect(chipOf(<Chip>x</Chip>).className.startsWith(chipClass)).toBe(true)
+    expect(chipClass.split(' ')).toContain('h-7')
+    // The chip is a shadcn Button now, so the Button's own classes come first; what has to hold
+    // is that the WHOLE shared string survives the merge, intact and in one piece.
+    expect(chipOf(<Chip>x</Chip>).className).toContain(chipClass)
   })
 })

@@ -5,7 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
+import { AppearanceProvider } from '@/components/appearance-provider'
+import { ContextSidebarContext } from '@/components/context-sidebar'
+import { GlobalSettingsDialog } from '@/components/global-settings-dialog'
+import { ListViewProvider } from '@/components/list-view'
+import { ThemeProvider } from '@/components/theme-provider'
 import { AppRoutes } from '@/routes'
+import { ShellProviders } from '@/test/shell-providers'
 
 /**
  * Project settings shows WHERE the project is (project-location.tsx): the registry's absolute
@@ -69,11 +75,29 @@ function seededClient() {
   return client
 }
 
+const NO_REGISTRATION = () => () => {}
+
+/** What the app shell gives every route: global settings as a dialog (the global sections render
+ *  inside it, and its first one reads the theme), the list view the project home reads, and a
+ *  mounted contextual sidebar — the settings nav and its folder footer are portalled into it. */
 function renderAt(entry: string) {
+  const sidebar = document.createElement('div')
+  sidebar.setAttribute('data-slot', 'test-context-sidebar')
+  document.body.appendChild(sidebar)
   render(
     <QueryClientProvider client={seededClient()}>
       <MemoryRouter initialEntries={[entry]}>
-        <AppRoutes />
+        <ThemeProvider>
+          <AppearanceProvider>
+            <ShellProviders dialog={<GlobalSettingsDialog />}>
+              <ContextSidebarContext.Provider value={{ node: sidebar, register: NO_REGISTRATION }}>
+                <ListViewProvider>
+                  <AppRoutes />
+                </ListViewProvider>
+              </ContextSidebarContext.Provider>
+            </ShellProviders>
+          </AppearanceProvider>
+        </ThemeProvider>
       </MemoryRouter>
     </QueryClientProvider>,
   )
@@ -98,6 +122,7 @@ async function openWithMenu(): Promise<string[]> {
 
 afterEach(() => {
   cleanup()
+  document.querySelectorAll('[data-slot="test-context-sidebar"]').forEach((node) => node.remove())
   vi.unstubAllGlobals()
 })
 
@@ -116,7 +141,10 @@ describe('the project folder in settings', () => {
   it('every project section keeps the root in the nav footer', async () => {
     renderAt('/settings/worktrees')
     const nav = await waitFor(() => {
-      const el = document.querySelector('[data-slot="settings-nav"] [data-slot="project-location"]')
+      // The footer of the contextual sidebar the section nav lives in.
+      const el = document.querySelector(
+        '[data-slot="test-context-sidebar"] [data-slot="sidebar-footer"] [data-slot="project-location"]',
+      )
       expect(el).not.toBeNull()
       return el!
     })
@@ -167,9 +195,11 @@ describe('the project folder in settings', () => {
   })
 
   it('global settings shows no project folder — it describes no project', async () => {
+    // Global settings are a dialog now; the deep link opens it, and nothing in it (or in the
+    // sidebar of the screen behind it) names a project folder.
     renderAt('/settings/global')
     await waitFor(() => {
-      expect(document.querySelector('[data-slot="settings-index"]')).not.toBeNull()
+      expect(document.querySelector('[data-slot="global-settings-dialog"]')).not.toBeNull()
     })
     expect(document.querySelector('[data-slot="project-location"]')).toBeNull()
   })

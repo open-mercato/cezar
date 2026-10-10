@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -30,6 +30,10 @@ import { NewTaskRoute } from './new-task'
 beforeAll(() => {
   // cmdk scrolls the selected item into view; jsdom has no scrollIntoView.
   Element.prototype.scrollIntoView = vi.fn()
+  // Radix Select (the Dispatch limits) asks for pointer capture, which jsdom does not implement.
+  Element.prototype.hasPointerCapture = vi.fn(() => false)
+  Element.prototype.setPointerCapture = vi.fn()
+  Element.prototype.releasePointerCapture = vi.fn()
 })
 
 beforeEach(() => {
@@ -320,7 +324,11 @@ const paste = (target: HTMLTextAreaElement, files: File[]) =>
   })
 
 const attachmentChips = () => screen.queryAllByLabelText(/^Remove /)
-const sourcePill = () => screen.getByRole('button', { name: 'Choose a skill or workflow' })
+// Workflows are chosen apart from skills: one pill each over the SAME source (a task runs a
+// workflow or a skill, never both), so either pill's `data-source-kind` is the whole source's.
+const workflowPill = () => screen.getByRole('button', { name: 'Choose a workflow' })
+const skillPill = () => screen.getByRole('button', { name: 'Choose a skill' })
+const sourceLabels = () => `${workflowPill().textContent} | ${skillPill().textContent}`
 const location = () => screen.getByTestId('location').textContent
 
 /** Seed the composer draft with a picked source — the ONLY thing that preselects one now.
@@ -329,13 +337,48 @@ const location = () => screen.getByTestId('location').textContent
 const draftSource = (source: { source: 'skill' | 'workflow'; ref: string }) =>
   writeDraft({ ...readDraft(), source })
 
-/** The pickers resolve once workflows+skills+ui-state answered — wait for the real label.
- *  The default is the EMPTY source pill: `/new` opens with no skill and no workflow picked. */
-async function pillReady(label = 'Skill') {
+/** The pickers resolve once workflows+skills+ui-state answered — wait for the real label, on
+ *  whichever of the two pills holds it. The default is the EMPTY source: `/new` opens with no
+ *  skill picked ("Add skill") and the workflow pill naming the plain `quick-task` it will run. */
+async function pillReady(label = 'Add skill') {
   await waitFor(() => {
-    expect(sourcePill().textContent).toContain(label)
+    expect(sourceLabels()).toContain(label)
     expect(textarea().disabled).toBe(false)
   })
+}
+
+const sourceOption = (kind: string, ref?: string) =>
+  document.querySelector<HTMLElement>(
+    ref === undefined
+      ? `[data-slot="source-option"][data-source-kind="${kind}"]`
+      : `[data-slot="source-option"][data-source-kind="${kind}"][data-source-ref="${ref}"]`,
+  )
+const sourceOptions = () => [...document.querySelectorAll('[data-slot="source-option"]')]
+const SKILL_SEARCH = 'search skills…'
+const WORKFLOW_SEARCH = 'search workflows…'
+const openSkillMenu = async () => {
+  fireEvent.click(skillPill())
+  return await screen.findByPlaceholderText(SKILL_SEARCH)
+}
+const openWorkflowMenu = async () => {
+  fireEvent.click(workflowPill())
+  return await screen.findByPlaceholderText(WORKFLOW_SEARCH)
+}
+const pickSkill = async (ref: string) => {
+  await openSkillMenu()
+  fireEvent.click(sourceOption('skill', ref)!)
+}
+const pickWorkflow = async (ref: string) => {
+  await openWorkflowMenu()
+  fireEvent.click(sourceOption('workflow', ref)!)
+}
+
+/** Variants, worktree, autonomy, follow-ups, dispatch and the base branch live one click away,
+ *  in the composer's "Options" popover — nothing in there exists in the DOM until it is open. */
+async function openRunOptions() {
+  if (document.querySelector('[data-slot="run-options"]')) return
+  fireEvent.click(screen.getByRole('button', { name: 'Run options' }))
+  await waitFor(() => expect(document.querySelector('[data-slot="run-options"]')).not.toBeNull())
 }
 
 const startTask = async () => {
@@ -357,12 +400,14 @@ describe('the hero surface', () => {
     expect(screen.queryByRole('radiogroup', { name: 'Run mode' })).toBeNull()
   })
 
-  it('renders the mockup hero: title, subtitle, twinkles, and focus lands in the textarea', async () => {
+  it('renders the hero: title, subtitle, the glow, and focus lands in the textarea', async () => {
     serve()
     renderNewTask()
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('What should the agent work on?')
     expect(screen.getByText('Runs in an isolated worktree — review everything before it lands.')).toBeTruthy()
-    expect(document.querySelector('[data-route="new"] [data-slot="twinkle-backdrop"]')).not.toBeNull()
+    // The hero's only decoration is the soft wash from the top edge — the twinkle scatter is gone.
+    expect(document.querySelector('[data-route="new"] [data-slot="hero-glow"]')).not.toBeNull()
+    expect(document.querySelector('[data-route="new"] [data-slot="twinkle-backdrop"]')).toBeNull()
     // Asserted here for the DEFAULT run mode only. #793: this line used to be printed
     // unconditionally, so it also claimed isolation for runs that had opted out of it — the
     // per-state cases live in "the run-mode note" below.
@@ -522,9 +567,10 @@ describe('picker data flows', () => {
       await pillReady()
       expect(note()).toBe('Runs in an isolated worktree — review everything before it lands.')
 
-      // Unchecking the chip changes where the work lands, so it has to change what the header
+      // Switching it off changes where the work lands, so it has to change what the header
       // says. This is the regression: the line was printed unconditionally, so it kept promising
       // isolation for a run that was about to edit the user's checkout directly.
+      await openRunOptions()
       fireEvent.click(document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement)
       await waitFor(() => expect(note())
         .toBe('Runs in the repo working tree — your checkout is modified directly.'))
@@ -556,14 +602,22 @@ describe('picker data flows', () => {
     })
   })
 
-  it('gates variants on git: no repo → pill disabled with the honest reason, base pill gone', async () => {
+  const variantChoices = () =>
+    within(document.querySelector('[data-slot="variants-pill"]') as HTMLElement).getAllByRole('radio') as HTMLButtonElement[]
+
+  it('gates variants on git: no repo → choices disabled with the honest reason, base pill gone', async () => {
     serve({ health: HEALTH_NO_GIT, repo: REPO_NO_GIT })
     renderNewTask()
     await pillReady()
-    const pill = document.querySelector('[data-slot="variants-pill"]') as HTMLButtonElement
-    expect(pill.disabled).toBe(true)
-    expect(pill.title).toContain('need a git repository')
+    await openRunOptions()
+    expect(variantChoices().map((choice) => choice.disabled)).toEqual([true, true, true])
+    expect(document.querySelector('[data-slot="variants-option"]')?.textContent)
+      .toContain('Needs a git repository — each variant runs in its own worktree.')
     expect(document.querySelector('[data-slot="base-pill"]')).toBeNull()
+    // No worktree to opt into either — the switch is not offered.
+    expect(document.querySelector('[data-slot="worktree-toggle"]')).toBeNull()
+    // The rows that need no git are still there, so the absences above are the gate's doing.
+    expect(document.querySelector('[data-slot="autonomous-toggle"]')).not.toBeNull()
   })
 
   // #791: health is bound to the boot folder, so a cezar booted outside a git repo answered
@@ -573,8 +627,10 @@ describe('picker data flows', () => {
     serve({ health: HEALTH_NO_GIT, repo: REPO })
     renderNewTask()
     await pillReady()
-    const pill = document.querySelector('[data-slot="variants-pill"]') as HTMLButtonElement
-    expect(pill.disabled).toBe(false)
+    await openRunOptions()
+    expect(variantChoices().map((choice) => choice.disabled)).toEqual([false, false, false])
+    expect(document.querySelector('[data-slot="variants-option"]')?.textContent)
+      .toContain('Run it several times in parallel and keep the diff you like.')
     expect(document.querySelector('[data-slot="worktree-toggle"]')).not.toBeNull()
     fireEvent.change(textarea(), { target: { value: 'Fix the composer git detection' } })
     await startTask()
@@ -587,9 +643,12 @@ describe('picker data flows', () => {
     serve({ repo: { ...REPO, baseBranch: 'develop' } })
     renderNewTask()
     await pillReady()
+    await openRunOptions()
     const basePill = () => document.querySelector('[data-slot="base-pill"]') as HTMLElement
     await waitFor(() => expect(basePill()).not.toBeNull())
-    expect(basePill().textContent).toContain('base: develop')
+    // The row's own title says "Base branch"; the pill is just the branch.
+    expect(basePill().textContent).toBe('develop')
+    expect(basePill().getAttribute('aria-label')).toBe('Base branch')
 
     fireEvent.pointerDown(basePill())
     const options = await screen.findAllByRole('menuitemradio')
@@ -612,6 +671,7 @@ describe('picker data flows', () => {
     serve({ repo: { ...REPO, branches: ['main', 'develop', 'feature/searchable-base'] } })
     renderNewTask()
     await pillReady()
+    await openRunOptions()
 
     fireEvent.pointerDown(document.querySelector('[data-slot="base-pill"]') as HTMLElement)
     const search = await screen.findByRole('searchbox', { name: 'Search branches…' })
@@ -641,8 +701,8 @@ describe('picker data flows', () => {
     serve({ uiState: { lastTask: { source: 'skill', ref: 'om-fix' } } })
     renderNewTask()
     await pillReady()
-    expect(sourcePill().getAttribute('data-source-kind')).toBe('none')
-    expect(sourcePill().textContent).not.toContain('om-fix')
+    expect(skillPill().getAttribute('data-source-kind')).toBe('none')
+    expect(skillPill().textContent).not.toContain('om-fix')
   })
 
   it('preselects the draft pick, and drops it when the catalog no longer has it', async () => {
@@ -657,42 +717,76 @@ describe('picker data flows', () => {
     serve()
     renderNewTask()
     await pillReady()
-    expect(sourcePill().getAttribute('data-source-kind')).toBe('none')
+    expect(skillPill().getAttribute('data-source-kind')).toBe('none')
   })
 
-  it('the source menu groups: Project skills (bold), Workflows, Global last', async () => {
+  it('the skill menu groups: No skill first, Project skills (bold), Global last — and no workflows', async () => {
     serve()
     renderNewTask()
     await pillReady()
-    fireEvent.click(sourcePill())
-    await screen.findByPlaceholderText('search skills & workflows…')
+    await openSkillMenu()
 
-    const options = [...document.querySelectorAll('[data-slot="source-option"]')]
-    // "No skill" leads, heading-less; `quick-task` is NOT a row of its own — that row is it.
-    expect(options.map((o) => o.getAttribute('data-source-kind'))).toEqual([
-      'none', 'skill', 'workflow', 'skill',
-    ])
-    expect(options.map((o) => o.getAttribute('data-source-ref'))).toEqual([
-      null, 'om-fix', 'fix-and-verify', 'deploy',
-    ])
+    const options = sourceOptions()
+    // "No skill" leads, heading-less. Workflows are chosen apart, in their own picker.
+    expect(options.map((o) => o.getAttribute('data-source-kind'))).toEqual(['none', 'skill', 'skill'])
+    expect(options.map((o) => o.getAttribute('data-source-ref'))).toEqual([null, 'om-fix', 'deploy'])
     expect(options[0]!.textContent).toContain('No skill')
     const headings = [...document.querySelectorAll('[cmdk-group-heading]')].map((h) => h.textContent)
-    expect(headings).toEqual(['Project skills', 'Workflows', 'Global'])
+    expect(headings).toEqual(['Project skills', 'Global'])
+    // Project skills read bold, global ones plain.
+    expect(sourceOption('skill', 'om-fix')!.querySelector('span')?.className).toContain('font-semibold')
+    expect(sourceOption('skill', 'deploy')!.querySelector('span')?.className).not.toContain('font-semibold')
+  })
+
+  it('the workflow menu lists every workflow, the default quick-task leading — and no skills', async () => {
+    serve()
+    renderNewTask()
+    await pillReady()
+    // Never empty: with nothing picked the task runs the plain built-in, and the pill says so.
+    expect(workflowPill().textContent).toContain('quick-task')
+    await openWorkflowMenu()
+
+    const options = sourceOptions()
+    expect(options.map((o) => o.getAttribute('data-source-kind'))).toEqual(['workflow', 'workflow'])
+    expect(options.map((o) => o.getAttribute('data-source-ref'))).toEqual(['quick-task', 'fix-and-verify'])
+    expect(options[0]!.textContent).toContain('default')
+    const headings = [...document.querySelectorAll('[cmdk-group-heading]')].map((h) => h.textContent)
+    expect(headings).toEqual(['Workflows'])
+  })
+
+  it('a task runs a workflow OR a skill: picking in one pill replaces the pick in the other', async () => {
+    serve()
+    renderNewTask()
+    await pillReady()
+
+    await pickWorkflow('fix-and-verify')
+    await waitFor(() => expect(workflowPill().textContent).toContain('fix-and-verify'))
+    expect(skillPill().textContent).toContain('Add skill')
+    expect(readDraft().source).toEqual({ source: 'workflow', ref: 'fix-and-verify' })
+
+    await pickSkill('om-fix')
+    await waitFor(() => expect(skillPill().textContent).toContain('om-fix'))
+    // The skill runs on its own — the workflow pill names none, not even the default.
+    expect(workflowPill().textContent).not.toContain('fix-and-verify')
+    expect(workflowPill().textContent).not.toContain('quick-task')
+    expect(readDraft().source).toEqual({ source: 'skill', ref: 'om-fix' })
+
+    await pickWorkflow('fix-and-verify')
+    await waitFor(() => expect(skillPill().textContent).toContain('Add skill'))
+    expect(readDraft().source).toEqual({ source: 'workflow', ref: 'fix-and-verify' })
   })
 
   it('multi-keyword search: "fix issue" matches om-fix via hyphen-split keywords (#411)', async () => {
     serve()
     renderNewTask()
     await pillReady()
-    fireEvent.click(sourcePill())
-    const input = await screen.findByPlaceholderText('search skills & workflows…')
+    const input = await openSkillMenu()
 
     // "fix issue" should match "om-fix" because both "fix" and "issue" appear in the
     // combined value+keywords text (name splits: "om","fix" + description "Fix an issue end to end").
     fireEvent.change(input, { target: { value: 'fix issue' } })
     await waitFor(() => {
-      const visible = [...document.querySelectorAll('[data-slot="source-option"]')]
-      expect(visible.some((o) => o.getAttribute('data-source-ref') === 'om-fix')).toBe(true)
+      expect(sourceOptions().map((o) => o.getAttribute('data-source-ref'))).toEqual(['om-fix'])
     })
   })
 
@@ -700,15 +794,14 @@ describe('picker data flows', () => {
     serve()
     renderNewTask()
     await pillReady()
-    fireEvent.click(sourcePill())
-    const input = await screen.findByPlaceholderText('search skills & workflows…')
+    const input = await openSkillMenu()
 
     fireEvent.change(input, { target: { value: 'deploy fix' } })
     await waitFor(() => {
       // "deploy" does not have "fix" in its name/description, and "om-fix" does not have "deploy"
-      const visible = [...document.querySelectorAll('[data-slot="source-option"]')]
-      expect(visible).toHaveLength(0)
+      expect(sourceOptions()).toHaveLength(0)
     })
+    expect(screen.getByText('Nothing matches.')).toBeTruthy()
   })
 })
 
@@ -716,16 +809,6 @@ describe('picker data flows', () => {
 
 describe('clearing the picked skill or workflow', () => {
   const clearButton = () => document.querySelector<HTMLButtonElement>('[data-slot="source-pill-clear"]')
-  const openMenu = async () => {
-    fireEvent.click(sourcePill())
-    await screen.findByPlaceholderText('search skills & workflows…')
-  }
-  const option = (kind: string, ref?: string) =>
-    document.querySelector<HTMLElement>(
-      ref === undefined
-        ? `[data-slot="source-option"][data-source-kind="${kind}"]`
-        : `[data-slot="source-option"][data-source-kind="${kind}"][data-source-ref="${ref}"]`,
-    )
 
   it('the ✕ clears in one click, without opening the menu', async () => {
     draftSource({ source: 'skill', ref: 'om-fix' })
@@ -736,9 +819,11 @@ describe('clearing the picked skill or workflow', () => {
     expect(clearButton()?.getAttribute('aria-label')).toBe('Clear the skill om-fix')
     fireEvent.click(clearButton()!)
 
-    await waitFor(() => expect(sourcePill().getAttribute('data-source-kind')).toBe('none'))
+    await waitFor(() => expect(skillPill().getAttribute('data-source-kind')).toBe('none'))
     // No menu was ever opened — the whole point of the affordance.
-    expect(screen.queryByPlaceholderText('search skills & workflows…')).toBeNull()
+    expect(screen.queryByPlaceholderText(SKILL_SEARCH)).toBeNull()
+    expect(screen.queryByPlaceholderText(WORKFLOW_SEARCH)).toBeNull()
+    expect(clearButton()).toBeNull()
     // And the run really does go out as the plain built-in.
     fireEvent.change(textarea(), { target: { value: 'Ship it plain' } })
     await startTask()
@@ -758,8 +843,10 @@ describe('clearing the picked skill or workflow', () => {
     renderNewTask()
     await pillReady('fix-and-verify')
 
-    fireEvent.keyDown(sourcePill(), { key: 'Backspace' })
-    await waitFor(() => expect(sourcePill().getAttribute('data-source-kind')).toBe('none'))
+    fireEvent.keyDown(workflowPill(), { key: 'Backspace' })
+    await waitFor(() => expect(workflowPill().getAttribute('data-source-kind')).toBe('none'))
+    // Back to the plain built-in, which is what an empty source runs.
+    expect(workflowPill().textContent).toContain('quick-task')
   })
 
   it('leaves the pill alone on ⌘/Ctrl+Backspace — that is a text gesture, not a picker one', async () => {
@@ -768,8 +855,8 @@ describe('clearing the picked skill or workflow', () => {
     renderNewTask()
     await pillReady('om-fix')
 
-    fireEvent.keyDown(sourcePill(), { key: 'Backspace', metaKey: true })
-    expect(sourcePill().getAttribute('data-source-kind')).toBe('skill')
+    fireEvent.keyDown(skillPill(), { key: 'Backspace', metaKey: true })
+    expect(skillPill().getAttribute('data-source-kind')).toBe('skill')
   })
 
   it('picking the SELECTED row again clears it — for a skill and for a workflow', async () => {
@@ -778,16 +865,14 @@ describe('clearing the picked skill or workflow', () => {
     renderNewTask()
     await pillReady('om-fix')
 
-    await openMenu()
-    fireEvent.click(option('skill', 'om-fix')!)
-    await waitFor(() => expect(sourcePill().getAttribute('data-source-kind')).toBe('none'))
+    await pickSkill('om-fix')
+    await waitFor(() => expect(skillPill().getAttribute('data-source-kind')).toBe('none'))
 
-    await openMenu()
-    fireEvent.click(option('workflow', 'fix-and-verify')!)
-    await waitFor(() => expect(sourcePill().textContent).toContain('fix-and-verify'))
-    await openMenu()
-    fireEvent.click(option('workflow', 'fix-and-verify')!)
-    await waitFor(() => expect(sourcePill().getAttribute('data-source-kind')).toBe('none'))
+    await pickWorkflow('fix-and-verify')
+    await waitFor(() => expect(workflowPill().textContent).toContain('fix-and-verify'))
+    await pickWorkflow('fix-and-verify')
+    await waitFor(() => expect(workflowPill().getAttribute('data-source-kind')).toBe('none'))
+    expect(workflowPill().textContent).toContain('quick-task')
   })
 
   it('the "No skill" row clears the picker, and answers to a search for quick-task', async () => {
@@ -796,17 +881,33 @@ describe('clearing the picked skill or workflow', () => {
     renderNewTask()
     await pillReady('om-fix')
 
-    await openMenu()
-    const input = screen.getByPlaceholderText('search skills & workflows…')
-    // The built-in has no row of its own any more — typing its name finds the row that runs it.
+    const input = await openSkillMenu()
+    // The built-in has no row among the skills — typing its name finds the row that runs it.
     fireEvent.change(input, { target: { value: 'quick' } })
     await waitFor(() => {
-      const visible = [...document.querySelectorAll('[data-slot="source-option"]')]
-      expect(visible.map((o) => o.getAttribute('data-source-kind'))).toEqual(['none'])
+      expect(sourceOptions().map((o) => o.getAttribute('data-source-kind'))).toEqual(['none'])
     })
 
-    fireEvent.click(option('none')!)
-    await waitFor(() => expect(sourcePill().getAttribute('data-source-kind')).toBe('none'))
+    fireEvent.click(sourceOption('none')!)
+    await waitFor(() => expect(skillPill().getAttribute('data-source-kind')).toBe('none'))
+  })
+
+  it('in its own picker quick-task IS a row, and picking it over another workflow goes back to plain', async () => {
+    draftSource({ source: 'workflow', ref: 'fix-and-verify' })
+    serve()
+    renderNewTask()
+    await pillReady('fix-and-verify')
+    expect(clearButton()?.getAttribute('aria-label')).toBe('Clear the workflow fix-and-verify')
+
+    const input = await openWorkflowMenu()
+    fireEvent.change(input, { target: { value: 'quick' } })
+    await waitFor(() => {
+      expect(sourceOptions().map((o) => o.getAttribute('data-source-ref'))).toEqual(['quick-task'])
+    })
+    fireEvent.click(sourceOption('workflow', 'quick-task')!)
+    await waitFor(() => expect(workflowPill().getAttribute('data-source-kind')).toBe('none'))
+    expect(workflowPill().textContent).toContain('quick-task')
+    expect(readDraft().source).toBeNull()
   })
 
   it('a cleared pill stays cleared for the NEXT task, and the started one is not remembered', async () => {
@@ -823,7 +924,7 @@ describe('clearing the picked skill or workflow', () => {
     serve()
     renderNewTask()
     await pillReady()
-    expect(sourcePill().getAttribute('data-source-kind')).toBe('none')
+    expect(skillPill().getAttribute('data-source-kind')).toBe('none')
   })
 })
 
@@ -840,7 +941,7 @@ describe('provider authentication gate', () => {
     })
     renderNewTask()
 
-    await waitFor(() => expect(sourcePill().textContent).toContain('Skill'))
+    await waitFor(() => expect(skillPill().textContent).toContain('Add skill'))
     expect(textarea().disabled).toBe(true)
     expect(textarea().placeholder).toBe('Checking agent providers…')
     expect(screen.queryByRole('link', { name: 'Configure providers' })).toBeNull()
@@ -1064,7 +1165,7 @@ describe('submit', () => {
       expected: Record<string, unknown>
     }> = [
       {
-        label: 'Skill',
+        label: 'Add skill',
         overrides: {},
         expected: { workflow: 'quick-task' },
       },
@@ -1097,6 +1198,7 @@ describe('submit', () => {
       serve(testCase.overrides)
       renderNewTask()
       await pillReady(testCase.label)
+      await openRunOptions()
       const worktree = document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
       fireEvent.click(worktree)
       expect(worktree.getAttribute('aria-checked')).toBe('false')
@@ -1118,6 +1220,7 @@ describe('submit', () => {
     })
     renderNewTask()
     await pillReady()
+    await openRunOptions()
     const worktree = document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
     expect(worktree.getAttribute('aria-checked')).toBe('false')
     fireEvent.change(textarea(), { target: { value: 'Use the environment seed' } })
@@ -1131,16 +1234,21 @@ describe('submit', () => {
     await pillReady()
 
     fireEvent.pointerDown(document.querySelector('[data-slot="model-pill"]') as HTMLElement)
-    let options = await screen.findAllByRole('menuitemradio')
+    const options = await screen.findAllByRole('menuitemradio')
     fireEvent.click(options.find((o) => o.textContent?.includes('sonnet')) as HTMLElement)
     await waitFor(() => expect(screen.queryAllByRole('menuitemradio')).toHaveLength(0))
 
-    fireEvent.pointerDown(document.querySelector('[data-slot="variants-pill"]') as HTMLElement)
-    options = await screen.findAllByRole('menuitemradio')
-    fireEvent.click(options.find((o) => o.textContent?.includes('×2')) as HTMLElement)
-    await waitFor(() =>
-      expect((document.querySelector('[data-slot="variants-pill"]') as HTMLElement).textContent).toContain('×2'),
-    )
+    await openRunOptions()
+    const variants = within(document.querySelector('[data-slot="variants-pill"]') as HTMLElement)
+    expect(variants.getByRole('radio', { name: 'One run' }).getAttribute('aria-checked')).toBe('true')
+    // Nothing on the closed Options button until a choice in there changes what the run costs.
+    const optionsButton = screen.getByRole('button', { name: 'Run options' })
+    expect(optionsButton.querySelector('.bg-primary')).toBeNull()
+    const two = variants.getByRole('radio', { name: '2 competing runs' })
+    expect(two.textContent).toBe('×2')
+    fireEvent.click(two)
+    await waitFor(() => expect(two.getAttribute('aria-checked')).toBe('true'))
+    expect(optionsButton.querySelector('.bg-primary')).not.toBeNull()
 
     fireEvent.change(textarea(), { target: { value: 'Race two attempts' } })
     await startTask()
@@ -1170,7 +1278,10 @@ describe('submit', () => {
     expect(modelPill.textContent).toContain('native-sonnet')
     expect(modelPill.textContent).not.toContain('opus')
     expect(modelPill.tagName).toBe('SPAN')
-    expect(modelPill.querySelector('svg')).toBeNull()
+    // Not a selector: no chevron — the one a pill that CAN be changed carries.
+    expect(modelPill.querySelector('.lucide-chevron-down')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Runner' }).querySelector('.lucide-chevron-down')).not.toBeNull()
+    expect(modelPill.title).toBe('Model selection is locked to native coding-agent settings.')
     expect(screen.queryByRole('button', { name: 'Model' })).toBeNull()
 
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Runner' }))
@@ -1225,6 +1336,7 @@ describe('submit', () => {
     serve()
     renderNewTask()
     await pillReady()
+    await openRunOptions()
     const toggle = document.querySelector(
       '[data-slot="generate-followups-toggle"]',
     ) as HTMLButtonElement
@@ -1247,6 +1359,7 @@ describe('submit', () => {
     serve({ uiState: { lastGenerateFollowups: false } })
     renderNewTask()
     await pillReady()
+    await openRunOptions()
     expect(
       document
         .querySelector('[data-slot="generate-followups-toggle"]')
@@ -1261,6 +1374,7 @@ describe('submit', () => {
     serve({ skills: [{ ...SKILLS[0]!, interactive: true }, SKILLS[1]!] })
     renderNewTask()
     await pillReady('om-fix')
+    await openRunOptions()
 
     const autonomous = document.querySelector(
       '[data-slot="autonomous-toggle"]',
@@ -1296,6 +1410,7 @@ describe('submit', () => {
     })
     renderNewTask()
     await pillReady('fix-and-verify')
+    await openRunOptions()
 
     const worktree = document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
     expect(worktree.disabled).toBe(false)
@@ -1318,6 +1433,7 @@ describe('submit', () => {
     serve({ health: inboxOffHealth })
     renderNewTask()
     await pillReady()
+    await openRunOptions()
     await waitFor(() => expect(followupsToggle()).toBeNull())
     // The neighbouring toggles are untouched — the gate owns exactly one control.
     expect(document.querySelector('[data-slot="autonomous-toggle"]')).not.toBeNull()
@@ -1327,6 +1443,7 @@ describe('submit', () => {
     serve({ health: inboxOffHealth })
     renderNewTask()
     await pillReady()
+    await openRunOptions()
     await waitFor(() => expect(followupsToggle()).toBeNull())
 
     fireEvent.change(textarea(), { target: { value: 'No inbox on this server' } })
@@ -1341,6 +1458,7 @@ describe('submit', () => {
     serve({ health: inboxOffHealth, uiState: { lastGenerateFollowups: true } })
     renderNewTask()
     await pillReady()
+    await openRunOptions()
     await waitFor(() => expect(followupsToggle()).toBeNull())
 
     fireEvent.change(textarea(), { target: { value: 'Leave my preference alone' } })
@@ -1365,9 +1483,7 @@ describe('drafts and prefill', () => {
     const first = renderNewTask()
     await pillReady()
     fireEvent.change(textarea(), { target: { value: 'half-written thought' } })
-    fireEvent.click(sourcePill())
-    await screen.findByPlaceholderText('search skills & workflows…')
-    fireEvent.click(document.querySelector('[data-source-ref="fix-and-verify"]') as HTMLElement)
+    await pickWorkflow('fix-and-verify')
     await pillReady('fix-and-verify')
     first.unmount()
 
@@ -1417,6 +1533,7 @@ describe('drafts and prefill', () => {
     serve()
     renderNewTask('/new?skill=deploy&ref=ship%20it&todo=t1')
     await pillReady('deploy')
+    await openRunOptions()
     fireEvent.click(
       document.querySelector('[data-slot="generate-followups-toggle"]') as HTMLElement,
     )
@@ -1677,7 +1794,7 @@ describe('bookmarklet auto-start', () => {
     expect(textarea().value).toBe('Use the "ghost" skill on: hello')
     // "quick-task" IS the empty picker now — the prefill lands on it by picking nothing.
     await pillReady()
-    expect(sourcePill().getAttribute('data-source-kind')).toBe('none')
+    expect(skillPill().getAttribute('data-source-kind')).toBe('none')
     expect(runsPosted()).toHaveLength(0)
   })
 
@@ -1715,12 +1832,6 @@ describe('prompt templates on the new-task composer', () => {
   const option = (id: string) =>
     document.querySelector<HTMLElement>(`[data-slot="prompt-template-option"][data-template="${id}"]`)
 
-  const pickSource = async (ref: string) => {
-    fireEvent.click(sourcePill())
-    await screen.findByPlaceholderText('search skills & workflows…')
-    fireEvent.click(document.querySelector(`[data-slot="source-option"][data-source-ref="${ref}"]`)!)
-  }
-
   it('the trigger is icon-only here — the footer pill row is already full', async () => {
     serve()
     renderNewTask()
@@ -1751,7 +1862,7 @@ describe('prompt templates on the new-task composer', () => {
     renderNewTask()
     await pillReady()
 
-    await pickSource('om-fix')
+    await pickSkill('om-fix')
     await waitFor(() => expect(textarea().value).toBe('Follow the fix rules.'))
   })
 
@@ -1760,10 +1871,10 @@ describe('prompt templates on the new-task composer', () => {
     renderNewTask()
     await pillReady()
 
-    await pickSource('om-fix')
+    await pickSkill('om-fix')
     await waitFor(() => expect(textarea().value).toBe('Follow the fix rules.'))
 
-    await pickSource('deploy')
+    await pickSkill('deploy')
     await waitFor(() => expect(textarea().value).toBe(''))
   })
 
@@ -1773,9 +1884,9 @@ describe('prompt templates on the new-task composer', () => {
     await pillReady()
 
     fireEvent.change(textarea(), { target: { value: 'my own words' } })
-    await pickSource('om-fix')
+    await pickSkill('om-fix')
 
-    await waitFor(() => expect(sourcePill().textContent).toContain('om-fix'))
+    await waitFor(() => expect(skillPill().textContent).toContain('om-fix'))
     expect(textarea().value).toBe('my own words')
   })
 
@@ -1784,8 +1895,8 @@ describe('prompt templates on the new-task composer', () => {
     renderNewTask()
     await pillReady()
 
-    await pickSource('fix-and-verify')
-    await waitFor(() => expect(sourcePill().textContent).toContain('fix-and-verify'))
+    await pickWorkflow('fix-and-verify')
+    await waitFor(() => expect(workflowPill().textContent).toContain('fix-and-verify'))
     expect(textarea().value).toBe('')
   })
 
@@ -1794,7 +1905,7 @@ describe('prompt templates on the new-task composer', () => {
     renderNewTask()
     await pillReady()
 
-    await pickSource('om-fix')
+    await pickSkill('om-fix')
     await waitFor(() => expect(textarea().value).toBe('Follow the fix rules.'))
 
     await startTask()
@@ -2007,39 +2118,49 @@ describe('the Dispatch toggle', () => {
   const note = () => document.querySelector('[data-slot="run-mode-note"]')?.textContent
   const hint = () => document.querySelector('[data-slot="dispatch-hint"]')
   const settings = () => document.querySelector('[data-slot="dispatch-settings"]')
-  /** The desktop split pill's chevron — the settings route a mouse actually has. */
+  /** The row's "Limits" button — the way into the settings, on every screen size. */
   const settingsTrigger = () =>
     document.querySelector('[data-slot="dispatch-settings-trigger"]') as HTMLButtonElement | null
+  /** The explanation each Options row prints under its title. */
+  const rowText = (control: HTMLElement) => control.closest('[data-slot="run-option"]')?.textContent
 
-  /** Render with dispatch on the server and wait for the icon to be there. */
+  /** Render with dispatch on the server, open Options and wait for the switch to be there. */
   async function readyWithDispatch(overrides: Parameters<typeof serve>[0] = {}) {
     serve({ health: HEALTH_DISPATCH, ...overrides })
     renderNewTask()
     await pillReady()
+    await openRunOptions()
     await waitFor(() => expect(dispatchToggle()).not.toBeNull())
     return dispatchToggle()!
   }
 
-  /** Hold the icon past the long-press delay. Fake timers only for the hold itself — the
-   *  rest of the harness (`waitFor`, react-query) runs on real ones. */
-  function longPress(target: HTMLElement) {
-    vi.useFakeTimers()
-    try {
-      fireEvent.pointerDown(target, { button: 0, clientX: 5, clientY: 5 })
-      act(() => vi.advanceTimersByTime(500))
-    } finally {
-      vi.useRealTimers()
-    }
-    // What the browser sends after the hold — the click must be swallowed, not toggle.
-    fireEvent.pointerUp(target)
-    fireEvent.click(target)
+  /** The limits are Radix Selects. jsdom has no real pointer, so open by keyboard. */
+  const limit = (label: string) => screen.getByRole('combobox', { name: label })
+  async function openLimit(label: string): Promise<HTMLElement[]> {
+    fireEvent.keyDown(limit(label), { key: 'ArrowDown' })
+    return await screen.findAllByRole('option')
+  }
+  async function chooseLimit(label: string, option: string) {
+    const options = await openLimit(label)
+    fireEvent.click(options.find((item) => item.textContent === option)!)
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull())
+  }
+  /** What a limit offers, in order. Closes by re-picking the current choice, which changes nothing. */
+  async function limitChoices(label: string): Promise<(string | null)[]> {
+    const options = await openLimit(label)
+    const texts = options.map((item) => item.textContent)
+    fireEvent.click(options.find((item) => item.getAttribute('data-state') === 'checked')!)
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull())
+    return texts
   }
 
   it('is hidden while the server has dispatch off, and sends nothing', async () => {
     serve()
     renderNewTask()
     await pillReady()
+    await openRunOptions()
     expect(dispatchToggle()).toBeNull()
+    expect(settingsTrigger()).toBeNull()
     fireEvent.change(textarea(), { target: { value: 'Plain run' } })
     await startTask()
     expect(postedBody()).not.toHaveProperty('dispatch')
@@ -2063,13 +2184,13 @@ describe('the Dispatch toggle', () => {
 
     // The hint line under the composer, and the header's one-liner, both say what changed.
     expect(hint()?.textContent).toContain('Dispatch is on.')
-    expect(hint()?.textContent).toContain('Long-press the icon for limits.')
+    expect(hint()?.textContent).toContain('Set limits under Options.')
     expect(note()).toBe('Runs on its own and fans work out to subtasks — it will not pause for you.')
 
     // Subtasks fork off this task's commits, so the worktree is no longer the user's call.
     expect(worktreeToggle().disabled).toBe(true)
     expect(worktreeToggle().getAttribute('aria-checked')).toBe('true')
-    expect(worktreeToggle().title).toBe("Dispatch forks this task's commits — subtasks need a worktree")
+    expect(rowText(worktreeToggle())).toContain("Dispatch forks this task's commits — subtasks need a worktree.")
     expect(autonomousToggle().getAttribute('aria-checked')).toBe('true')
 
     fireEvent.change(textarea(), { target: { value: 'Review every open PR' } })
@@ -2087,24 +2208,27 @@ describe('the Dispatch toggle', () => {
     expect(autonomousToggle().getAttribute('aria-checked')).toBe('false')
     expect(note()).toBe('Fans work out to subtasks in isolated worktrees.')
 
-    // Off again: the ordinary note and an enabled worktree chip come back.
+    // Off again: the ordinary note and an enabled worktree switch come back.
     fireEvent.click(toggle)
     expect(toggle.getAttribute('aria-checked')).toBe('false')
     expect(hint()).toBeNull()
     expect(worktreeToggle().disabled).toBe(false)
+    expect(rowText(worktreeToggle())).toContain('Works on its own branch, in its own folder.')
     expect(note()).toBe('Runs in an isolated worktree — review everything before it lands.')
   })
 
-  it('on desktop the chevron opens the settings without toggling; limits set there turn it on and ride the body', async () => {
+  it('the Limits button opens the settings without toggling; limits set there turn it on and ride the body', async () => {
     const toggle = await readyWithDispatch()
-    // A mouse has no natural hold: the split pill's chevron is the route to the settings.
+    expect(settingsTrigger()?.textContent).toBe('Limits')
+    expect(settingsTrigger()?.getAttribute('aria-expanded')).toBe('false')
     fireEvent.click(settingsTrigger()!)
     await waitFor(() => expect(settings()).not.toBeNull())
-    // The chevron is the secondary action — it did not flip the switch.
+    expect(settingsTrigger()?.getAttribute('aria-expanded')).toBe('true')
+    // The button is the secondary action — it did not flip the switch.
     expect(toggle.getAttribute('aria-checked')).toBe('false')
 
-    fireEvent.change(screen.getByLabelText('Max subtasks'), { target: { value: '10' } })
-    fireEvent.change(screen.getByLabelText('In flight at once'), { target: { value: '2' } })
+    await chooseLimit('Max subtasks', '10')
+    await chooseLimit('In flight at once', '2')
     // A limit is a statement about a dispatch that will happen: setting one turns it on.
     expect(toggle.getAttribute('aria-checked')).toBe('true')
     expect(hint()).not.toBeNull()
@@ -2120,31 +2244,30 @@ describe('the Dispatch toggle', () => {
     fireEvent.click(settingsTrigger()!)
     await waitFor(() => expect(settings()).not.toBeNull())
 
-    const runner = screen.getByLabelText('Subtask runner') as HTMLSelectElement
-    expect(Array.from(runner.options).map((o) => o.value)).toEqual(['', 'claude', 'codex'])
+    expect(await limitChoices('Subtask runner')).toEqual(['same as parent', 'claude', 'codex'])
     // "same as parent" resolves against the parent's (claude) catalog — the live one.
-    const model = () => screen.getByLabelText('Subtask model') as HTMLSelectElement
-    await waitFor(() => expect(Array.from(model().options).map((o) => o.value)).toEqual(['', 'opus', 'sonnet']))
+    await waitFor(async () => expect(await limitChoices('Subtask model')).toEqual(['same as parent', 'opus', 'sonnet']))
 
     // Picking a model, then another runner: the model pin is dropped with it (presets are
     // per-runner), and the list becomes CODEX's — its own discovered catalog, not the parent's
     // and not the `auto`-only static presets discovery replaced (#784/#794).
-    fireEvent.change(model(), { target: { value: 'sonnet' } })
+    await chooseLimit('Subtask model', 'sonnet')
     expect(readDraft().dispatch).toEqual({ model: 'sonnet' })
-    fireEvent.change(runner, { target: { value: 'codex' } })
+    await chooseLimit('Subtask runner', 'codex')
     expect(readDraft().dispatch).toEqual({ runner: 'codex' })
-    await waitFor(() => expect(Array.from(model().options).map((o) => o.value)).toEqual(['', 'gpt-future']))
-    fireEvent.change(model(), { target: { value: 'gpt-future' } })
+    await waitFor(() => expect(requests.some((r) => r.url === '/api/v1/models?runner=codex')).toBe(true))
+    await waitFor(async () => expect(await limitChoices('Subtask model')).toEqual(['same as parent', 'gpt-future']))
+    await chooseLimit('Subtask model', 'gpt-future')
     expect(readDraft().dispatch).toEqual({ runner: 'codex', model: 'gpt-future' })
     fireEvent.change(screen.getByLabelText('Budget per subtask'), { target: { value: '2.5' } })
     expect(readDraft().dispatch).toEqual({ runner: 'codex', model: 'gpt-future', budgetUsd: 2.5 })
 
     // Back to the parent's runner: the pin is dropped again and the parent's catalog returns.
-    fireEvent.change(runner, { target: { value: '' } })
+    await chooseLimit('Subtask runner', 'same as parent')
     expect(readDraft().dispatch).toEqual({ budgetUsd: 2.5 })
-    await waitFor(() => expect(Array.from(model().options).map((o) => o.value)).toEqual(['', 'opus', 'sonnet']))
+    expect(await limitChoices('Subtask model')).toEqual(['same as parent', 'opus', 'sonnet'])
 
-    // The header switch is the same on/off as the pill.
+    // The header switch is the same on/off as the row's.
     fireEvent.click(document.querySelector('[data-slot="dispatch-settings-switch"]')!)
     expect(toggle.getAttribute('aria-checked')).toBe('false')
     expect(readDraft().dispatch).toBeNull()
@@ -2156,10 +2279,9 @@ describe('the Dispatch toggle', () => {
     await waitFor(() => expect(settings()).not.toBeNull())
 
     // The composer itself stays on claude — only the SUBTASKS run as codex.
-    fireEvent.change(screen.getByLabelText('Subtask runner'), { target: { value: 'codex' } })
-    const model = () => screen.getByLabelText('Subtask model') as HTMLSelectElement
-    await waitFor(() => expect(Array.from(model().options).map((o) => o.value)).toEqual(['', 'gpt-future']))
-    fireEvent.change(model(), { target: { value: 'gpt-future' } })
+    await chooseLimit('Subtask runner', 'codex')
+    await waitFor(async () => expect(await limitChoices('Subtask model')).toEqual(['same as parent', 'gpt-future']))
+    await chooseLimit('Subtask model', 'gpt-future')
 
     fireEvent.change(textarea(), { target: { value: 'Fan this out to codex' } })
     await startTask()
@@ -2167,13 +2289,6 @@ describe('the Dispatch toggle', () => {
     expect(body.dispatch).toEqual({ runner: 'codex', model: 'gpt-future' })
     // The parent's own engine is untouched by the subtask pick.
     expect(body).not.toHaveProperty('model')
-  })
-
-  it('the keyboard reaches the settings with ArrowDown', async () => {
-    const toggle = await readyWithDispatch()
-    fireEvent.keyDown(toggle, { key: 'ArrowDown' })
-    await waitFor(() => expect(settings()).not.toBeNull())
-    expect(toggle.getAttribute('aria-checked')).toBe('false')
   })
 
   it('on a phone the settings are a bottom sheet, not a popover', async () => {
@@ -2187,13 +2302,14 @@ describe('the Dispatch toggle', () => {
       })),
     )
     const toggle = await readyWithDispatch()
-    // No chevron on a phone — the hold is the route there, and the pill stays a single icon.
-    expect(settingsTrigger()).toBeNull()
-    longPress(toggle)
+    // The same Limits button as on desktop — it opens a sheet here instead.
+    fireEvent.click(settingsTrigger()!)
     await waitFor(() => expect(settings()).not.toBeNull())
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
     expect(settings()?.getAttribute('data-slot')).toBe('dispatch-settings')
     expect(document.querySelector('[data-slot="sheet-overlay"]')).not.toBeNull()
-    expect(document.querySelector('[data-slot="popover-content"]')).toBeNull()
+    expect(settings()?.closest('[data-slot="popover-content"]')).toBeNull()
+    expect(settings()?.getAttribute('role')).toBe('dialog')
 
     // The sheet's close button is absolutely positioned over the top-right corner, which is where
     // the settings header keeps its on/off switch — without the reserved strip the X swallows it.
@@ -2206,10 +2322,11 @@ describe('the Dispatch toggle', () => {
     expect(readDraft().dispatch).toEqual({})
     cleanup()
 
-    // Same draft, dispatch turned off server-side: no icon, and the stored intent is not sent.
+    // Same draft, dispatch turned off server-side: no switch, and the stored intent is not sent.
     serve()
     renderNewTask()
     await pillReady()
+    await openRunOptions()
     expect(dispatchToggle()).toBeNull()
     expect(worktreeToggle().disabled).toBe(false)
     fireEvent.change(textarea(), { target: { value: 'Server says no' } })

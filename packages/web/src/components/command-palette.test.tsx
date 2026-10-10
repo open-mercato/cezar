@@ -19,7 +19,9 @@ import {
   paletteScore,
 } from '@/components/command-palette'
 import { orderSkills } from '@/lib/skills'
+import { useGlobalSettings } from '@/components/global-settings'
 import { ThemeProvider } from '@/components/theme-provider'
+import { ShellProviders } from '@/test/shell-providers'
 import { THEME_STORAGE_KEY, type Theme } from '@/lib/theme'
 
 afterEach(cleanup)
@@ -129,6 +131,11 @@ function LocationProbe() {
   return <output data-testid="location">{location.pathname + location.search}</output>
 }
 
+/** Whether the global-settings dialog was asked for — the palette opens it rather than navigating. */
+function SettingsProbe() {
+  return <output data-testid="global-settings" data-open={String(useGlobalSettings().isOpen)} />
+}
+
 function renderPalette({
   runs = [] as RunRecord[],
   skills = [] as Skill[],
@@ -168,9 +175,12 @@ function renderPalette({
     <QueryClientProvider client={createQueryClient()}>
       <ThemeProvider>
         <MemoryRouter initialEntries={[entry]}>
-          <CommandPalette />
-          <LocationProbe />
-          <input data-testid="outside-input" aria-label="outside" />
+          <ShellProviders>
+            <CommandPalette />
+            <LocationProbe />
+            <SettingsProbe />
+            <input data-testid="outside-input" aria-label="outside" />
+          </ShellProviders>
         </MemoryRouter>
       </ThemeProvider>
     </QueryClientProvider>,
@@ -846,6 +856,21 @@ describe('Actions group', () => {
     fireEvent.click(document.querySelector('[data-nav-to="/new"]') as HTMLElement)
 
     expect(location()).toBe('/new')
+    await waitFor(() => expect(dialog()).toBeNull())
+  })
+
+  // Global settings are a dialog over whatever is on screen, so the palette's row OPENS it —
+  // it must not navigate, or it would cost the user the page they searched from.
+  it('Global settings opens the settings dialog in place, without navigating, and closes', async () => {
+    renderPalette({ entry: '/git' })
+    expect(screen.getByTestId('global-settings').getAttribute('data-open')).toBe('false')
+    openWith({ metaKey: true })
+    await screen.findByRole('dialog')
+
+    fireEvent.click(document.querySelector('[data-action="global-settings"]') as HTMLElement)
+
+    expect(screen.getByTestId('global-settings').getAttribute('data-open')).toBe('true')
+    expect(location()).toBe('/git')
     await waitFor(() => expect(dialog()).toBeNull())
   })
 })
