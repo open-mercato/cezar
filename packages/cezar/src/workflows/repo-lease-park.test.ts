@@ -104,12 +104,21 @@ describe('a parked in-place run releases the working-tree lease', () => {
 
     // The wake-up is accepted at once, but reaches the session only once the tree is ours again.
     expect(manager.sendMessage(parked.id, [{ type: 'text', text: 'your child reported' }])).toBe(true);
+    // Acceptance is durable and visible immediately, even while another task still owns the
+    // repository. Previously this event appeared only after `second` finished, making the UI look
+    // as though the user's message had been lost.
+    expect(
+      store.readEvents(parked.id).filter((event) => event.type === 'user-message' && event.text === 'your child reported'),
+    ).toHaveLength(1);
     expect(store.getRun(parked.id)?.activity).toBe('monitoring');
     expect(notes(parked.id)).toContain('resuming — waiting for exclusive access to the repository working tree');
     await waitFor(second.id, (r) => r?.status === 'done');
     await waitFor(parked.id, (r) => r?.activity === undefined);
     // The resumed turn parks again (the mock answers plainly) and gives the lease back again.
     await waitFor(parked.id, (r) => r?.status === 'waiting');
+    expect(
+      store.readEvents(parked.id).filter((event) => event.type === 'user-message' && event.text === 'your child reported'),
+    ).toHaveLength(1);
     expect(notes(parked.id).filter((m) => m.startsWith('parked — released')).length).toBe(2);
     // Somebody else held the tree meanwhile, so the session is told its view of it may be stale
     // rather than left to clobber the other task's work.
