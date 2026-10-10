@@ -30,3 +30,13 @@ skills-lock.json
 
 # mock-agent output from dry-run e2e (scripts/mock-claude.mjs appends here)
 /notes.md
+.e2e/results/
+.e2e/cache/
+.e2e/sessions/
+.e2e/report.json
+.e2e/ai-trace.json
+.e2e/junit.xml
+.e2e/summary.md
+.e2e/logs/
+.e2e/videos/
+.e2e/cez-home/
