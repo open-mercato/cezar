@@ -1,3 +1,5 @@
+import { worktreeLifecycleInvalidationSchema } from '@open-mercato/cezar-api-client'
+import { lifecycleQueryKeys } from './worktree-lifecycle'
 import { dashboardProjectTransition, dashboardTransition } from './dashboard-truth'
 import { dashboardWorkspaceUsageSchema } from '@open-mercato/cezar-api-client'
 import { dashboardLive } from './dashboard-live'
@@ -326,6 +328,7 @@ async function reconcile(queryClient: QueryClient): Promise<void> {
     queryKeys.health,
     // The worktree panel's list/total (#483) — a run finishing or a reclaim changes it.
     queryKeys.worktrees,
+    lifecycleQueryKeys.all(),
     workspaceQueryKeys.providerStatus,
     // Host totals (spec 2026-09-20-host-resource-telemetry): a remote cockpit's only refresh is
     // this reconcile, so the Machine card must be in the list — the local cockpit ignores it
@@ -345,6 +348,7 @@ async function reconcile(queryClient: QueryClient): Promise<void> {
         queryClient.invalidateQueries({ queryKey: ['tracker'], predicate: q => q.queryKey[2] !== 'items' || q.getObserversCount() === 0 }),
         queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
       ])),
+      queryClient.invalidateQueries({queryKey: ['worktree-lifecycle'], refetchType: 'none'}),
       ...cachedProjectScopes(queryClient)
         .filter((scope) => scope !== activeScope)
         .flatMap((scope) => eventQueryKeys(scope).map((queryKey) =>
@@ -451,6 +455,20 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     if (typeof Source !== 'function') return
 
     let source: EventSource | null = null
+    let lifecycleTimer: ReturnType<typeof setTimeout> | undefined
+    let lifecycleMaxTimer: ReturnType<typeof setTimeout> | undefined
+    const lifecycleScopes = new Set<string>()
+    const refreshLifecycle = () => {
+      clearTimeout(lifecycleTimer); clearTimeout(lifecycleMaxTimer)
+      lifecycleTimer = undefined; lifecycleMaxTimer = undefined
+      const active = activeProject(queryClient)
+      for (const project of lifecycleScopes) {
+        const scope = project === active ? queryScope() : project
+        void queryClient.invalidateQueries({queryKey: lifecycleQueryKeys.all(scope), refetchType: project === active ? 'active' : 'none'})
+        if (project === active) void queryClient.invalidateQueries({queryKey: queryKeys.worktrees})
+      }
+      lifecycleScopes.clear()
+    }
     let dashboardTimer: ReturnType<typeof setTimeout> | undefined
     let dashboardMax: ReturnType<typeof setTimeout> | undefined
     const refreshDashboard = () => {
@@ -635,6 +653,19 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
         })
       }
 
+      current.addEventListener('worktree-lifecycle', (event) => {
+        if (disposed || source !== current) return
+        lastFrameAt = Date.now()
+        let payload: unknown
+        try { payload = JSON.parse((event as MessageEvent<string>).data) } catch { return }
+        const parsed = worktreeLifecycleInvalidationSchema.safeParse(payload)
+        if (!parsed.success) return
+        lifecycleScopes.add(parsed.data.projectId)
+        clearTimeout(lifecycleTimer)
+        lifecycleTimer = setTimeout(refreshLifecycle, 100)
+        lifecycleMaxTimer ??= setTimeout(refreshLifecycle, 1000)
+      })
+
       for (const name of WORKSPACE_EVENT_NAMES) {
         current.addEventListener(name, (event) => {
           if (disposed || source !== current) return
@@ -763,6 +794,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       clearInterval(livenessTimer)
       dashboardLive.connected(false)
       clearTimeout(dashboardTimer); clearTimeout(dashboardMax)
+      clearTimeout(lifecycleTimer); clearTimeout(lifecycleMaxTimer); lifecycleScopes.clear()
       runsIndexRefresher.cancel()
       inactiveProjectRefresher.cancel()
       runEventBatcher.cancel()

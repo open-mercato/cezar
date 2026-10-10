@@ -1,9 +1,10 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router'
 
 import { createQueryClient } from '@/api/query-client'
-import type { WorktreesResponse } from '@open-mercato/cezar-api-client'
+import type { WorktreesResponse, WorktreeLifecycleSummary } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { WorktreesPanel } from './worktrees-panel'
 
@@ -15,7 +16,7 @@ import { WorktreesPanel } from './worktrees-panel'
 
 let requests: Array<{ method: string; url: string }> = []
 
-function serve(data: WorktreesResponse) {
+function serve(data: WorktreesResponse, managed: WorktreeLifecycleSummary[] = []) {
   requests = []
   const json = (payload: unknown, status = 200) =>
     new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } })
@@ -26,6 +27,8 @@ function serve(data: WorktreesResponse) {
       const method = init?.method ?? 'GET'
       requests.push({ method, url })
       if (url === '/api/v1/worktrees' && method === 'GET') return json(data)
+      if (url.startsWith('/api/v1/worktree-lifecycle?')) return json({worktrees: managed})
+      if (url === '/api/v1/worktree-lifecycle/operations' && method === 'POST') return json({operation: {id: 'cccccccc-3333-4333-8333-cccccccccccc', state: 'queued'}})
       if (url === '/api/v1/worktrees/reclaim' && method === 'POST') return json({ reclaimed: ['r1'] })
       if (/\/api\/v1\/runs\/.+\/remove-worktree$/.test(url) && method === 'POST') return json({ removed: true })
       return new Promise<never>(() => {})
@@ -36,8 +39,7 @@ function serve(data: WorktreesResponse) {
 function renderPanel() {
   render(
     <QueryClientProvider client={createQueryClient()}>
-      <WorktreesPanel />
-      <Toaster />
+      <MemoryRouter><WorktreesPanel /><Toaster /></MemoryRouter>
     </QueryClientProvider>,
   )
 }
@@ -127,5 +129,34 @@ describe('Settings → Resources: worktrees panel (#483)', () => {
     renderPanel()
     await waitFor(() => expect(document.querySelector('[data-slot="worktrees-empty"]')).not.toBeNull())
     expect(document.querySelector('[data-slot="worktrees-footer"]')?.textContent).toContain('unlimited')
+  })
+})
+
+
+describe('Worktrees lifecycle management', () => {
+  const managed: WorktreeLifecycleSummary = {
+    worktreeId: 'dddddddd-4444-4444-8444-dddddddddddd', runId: sample.worktrees[0]!.runId,
+    task: {id: sample.worktrees[0]!.runId, title: 'fix the login bug'}, worktreePath: '/project/.ai/cezar/worktrees/task',
+    generation: 1, onDisk: true, prepared: true, needsAttention: false, autoCleanupSuppressed: false,
+  }
+  it('uses the operation API for a managed worktree and does not claim it is removed when queued', async () => {
+    serve(sample, [managed]); renderPanel()
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    fireEvent.click(document.querySelector('[data-action="worktree-delete"]')!)
+    fireEvent.click(confirmButton()!)
+    await waitFor(() => expect(posts(/worktree-lifecycle\/operations$/)).toHaveLength(1))
+    expect(posts(/remove-worktree$/)).toHaveLength(0)
+    expect(document.body.textContent).not.toContain('Worktree removed')
+    expect(document.body.textContent).toContain('Cleanup requested')
+  })
+  it('retains independent orphan attention and suppression explanations without a task page', async () => {
+    serve({worktrees: [], totalBytes: 0, keep: 10}, [{...managed, task: null, needsAttention: true, autoCleanupSuppressed: true, error: 'Lifecycle metadata is invalid; directory retained'}])
+    renderPanel()
+    await waitFor(() => expect(document.querySelector('[data-slot="lifecycle-worktree-row"]')).not.toBeNull())
+    expect(document.body.textContent).toContain('Orphan worktree')
+    expect(document.body.textContent).toContain('Cleanup needs attention')
+    expect(document.body.textContent).toContain('Automatic cleanup is suppressed')
+    expect(document.body.textContent).toContain('Lifecycle metadata is invalid')
+    expect(document.body.textContent).not.toContain('Remove orphan worktree') // Unknown context has no force shortcut.
   })
 })

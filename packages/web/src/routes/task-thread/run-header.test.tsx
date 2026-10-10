@@ -1670,3 +1670,27 @@ describe('dispatch lines', () => {
     expect(document.querySelector('[data-slot="unit-role"]')).toBeNull()
   })
 })
+
+describe('lifecycle-aware task deletion', () => {
+  const operation = {id:'11111111-1111-4111-8111-111111111111',worktreeId:'22222222-2222-4222-8222-222222222222',generation:1,phase:'teardown',intent:'delete-task',state:'queued',revision:0,createdAt:'now',updatedAt:'now',history:[],entries:[],allowedActions:['stop']}
+  it.each([true, false])('requests cleanup and keeps the task page for a %s managed projection', async managed => {
+    const sent = stubFetch({
+      '/api/v1/config': () => jsonResponse({worktreeLifecycle:{afterCreate:[],beforeRemove:[{id:'33333333-3333-4333-8333-333333333333',command:'echo cleanup'}]}}),
+      '/api/v1/worktree-lifecycle/operations': () => jsonResponse({operation}, 202),
+    })
+    renderHeader(run('done', {worktreePath:'/project/.ai/cezar/worktrees/r1', ...(managed ? {worktreeLifecycle:{worktreeId:operation.worktreeId,generation:1,needsAttention:false}} : {})}))
+    fireEvent.click(actionBar().getByRole('button',{name:'Delete'}))
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button',{name:'Delete'}))
+    await waitFor(() => expect(sent.some(request => request.path === '/api/v1/worktree-lifecycle/operations' && request.method === 'POST')).toBe(true))
+    expect(sent.some(request => request.method === 'DELETE')).toBe(false)
+    expect(sent.find(request => request.path === '/api/v1/worktree-lifecycle/operations')?.body).toMatchObject({runId:'r1',intent:'delete-task',requestId:expect.any(String)})
+    await screen.findByText('Cleanup requested. The task is kept until cleanup completes.')
+    expect(document.querySelector('[data-slot="home-probe"]')).toBeNull()
+  })
+  it('hides ordinary task actions while lifecycle recovery owns the worktree', () => {
+    stubFetch()
+    renderHeader(run('waiting',{worktreeLifecycle:{worktreeId:operation.worktreeId,generation:1,activeOperationId:operation.id,phase:'setup',state:'needs_attention',needsAttention:true}}))
+    for (const name of ['Finish','Cancel','Continue','Delete']) expect(actionBar().queryByRole('button',{name})).toBeNull()
+  })
+})

@@ -245,3 +245,14 @@ describe('tone vocabulary', () => {
     expect([...tones].sort()).toEqual(['danger', 'neutral', 'pending', 'success', 'violet'])
   })
 })
+
+describe('lifecycle attention', () => {
+  it('keeps finished tasks visible when cleanup needs action', () => {
+    const record = run({status:'done',worktreeLifecycle:{worktreeId:'worktree',generation:1,activeOperationId:'operation',phase:'teardown',state:'needs_attention',needsAttention:true}})
+    expect(deriveAttention(record)).toEqual({bucket:'waiting',tone:'pending',pulse:false,label:'cleanup needs attention'})
+    expect(wantsAttention(record)).toBe(true)
+  })
+  it('identifies setup independently of agent activity', () => {
+    expect(deriveAttention(run({worktreeLifecycle:{worktreeId:'worktree',generation:1,activeOperationId:'operation',phase:'setup',state:'running',needsAttention:false}})).label).toBe('preparing worktree')
+  })
+})

@@ -20,7 +20,7 @@ import {
 import { Fragment, memo, useEffect, useId, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
 
-import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
+import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, getConfig, startLifecycleRemoval, openRunIn, openRunInCli } from '@/api/client'
 import {
   queryKeys,
   useAgentProfiles,
@@ -37,6 +37,7 @@ import {
   useRuns,
 } from '@/api/queries'
 import { DEFAULT_AGENT_ACCOUNT_ID, type ApiRun, type OpenTarget } from '@open-mercato/cezar-api-client'
+import { lifecycleQueryKeys } from '@/api/worktree-lifecycle'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor, type TitleEditor } from '@/components/editable-title'
 import { Pill } from '@/components/pill'
@@ -410,7 +411,7 @@ function OpenInMenuForRun({
     ? (targets.data?.targets ?? [])
         .filter((target) => {
           const runner = cliTargetRunner(target.id)
-          return runner === undefined || agentAvailable(runner)
+          return runner === undefined || (!run.worktreeLifecycle?.activeOperationId && agentAvailable(runner))
         })
         // Agent-CLI targets (#402): the one matching this run's own runner resumes THIS run's
         // session when one exists — label that explicitly so it reads as different from just
@@ -469,6 +470,9 @@ function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [confirming, setConfirming] = useState<'cancel' | 'delete' | null>(null)
+  const config = useConfig()
+  const configured = config.data?.worktreeLifecycle
+  const lifecycleDelete = !!run.worktreeLifecycle || (!!run.worktreePath && !!((configured?.afterCreate.length ?? 0) + (configured?.beforeRemove.length ?? 0)))
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
   const onError = (error: Error) => {
@@ -524,10 +528,33 @@ function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
   }
   const cancel = useMutation({ mutationFn: () => cancelRun(run.id), onSuccess: invalidate, onError })
   const deleteMutation = useMutation({
-    mutationFn: () => deleteRun(run.id),
-    onSuccess: () => {
-      invalidate()
-      // The run is gone — so is this page. Home is the only honest destination.
+    mutationFn: async () => {
+      // The projection covers existing managed generations. A fresh config read also
+      // protects a legacy worktree when scripts were configured after its creation.
+      const current = run.worktreePath && !run.worktreeLifecycle ? await getConfig() : undefined
+      const scripts = current?.worktreeLifecycle
+      if (run.worktreeLifecycle || (run.worktreePath && ((scripts?.afterCreate.length ?? 0) + (scripts?.beforeRemove.length ?? 0) > 0))) {
+        const response = await startLifecycleRemoval({requestId: crypto.randomUUID(), runId: run.id, intent: 'delete-task'})
+        return {kind: 'lifecycle' as const, operation: response.operation}
+      }
+      await deleteRun(run.id)
+      return {kind: 'deleted' as const}
+    },
+    onSuccess: result => {
+      void invalidate()
+      if (result.kind === 'lifecycle') {
+        const operation = result.operation
+        queryClient.setQueryData(lifecycleQueryKeys.operation(operation.id), {operation})
+        queryClient.setQueryData<ApiRun>(queryKeys.runs.detail(run.id), previous => previous ? {...previous, worktreeLifecycle: {
+          worktreeId: operation.worktreeId, generation: operation.generation, activeOperationId: operation.id,
+          phase: operation.phase, state: operation.state, needsAttention: operation.state === 'needs_attention' || operation.state === 'interrupted',
+        }} : previous)
+        void queryClient.invalidateQueries({queryKey: lifecycleQueryKeys.all()})
+        toast('Cleanup requested. The task is kept until cleanup completes.')
+        void navigate(`/tasks/${run.id}`)
+        return
+      }
+      // Only the legacy endpoint's completed deletion means the page is gone.
       void navigate('/')
     },
     onError,
@@ -554,6 +581,7 @@ function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
     markUnread,
     cancel,
     delete: deleteMutation,
+    lifecycleDelete,
     terminal,
     confirming,
     setConfirming,
@@ -1275,8 +1303,9 @@ function ConfirmDialog({ run, actions }: { run: ApiRun; actions: RunActions }) {
           <AlertDialogDescription>
             {confirming === 'delete' ? (
               <>
-                This removes the run, its transcript, its worktree and its branch. There is no
-                undo.
+                {actions.lifecycleDelete
+                  ? 'Cleanup runs before the task, transcript, worktree, and branch are removed. If cleanup needs attention, the task and worktree are retained for your decision.'
+                  : 'This removes the run, its transcript, its worktree and its branch. There is no undo.'}
                 <span className="mt-1 block truncate font-medium text-foreground" title={runTitle(run)}>
                   {runTitle(run)}
                 </span>
