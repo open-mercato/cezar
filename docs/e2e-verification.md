@@ -216,24 +216,33 @@ for follow-ups.
 ## What cezar gives the check, and what it does not
 
 - **cwd** is the task's worktree, and the command runs under `bash -lc`.
-- **Environment** is the cezar server's own `process.env` plus the project's
-  **check credentials** (below). There is no per-step `env:` — workflow files
-  are committed, and a secret does not belong in them. Tests with no agent step
-  need no model at all.
-- **Model credentials go in `cezar check-env`, not in your shell.** Store the
+- **Environment** is the cezar server's own `process.env` plus the **secrets**
+  the step may read (below). There is no per-step `env:` — workflow files are
+  committed, and a secret's value does not belong in them; a step names the
+  secrets it needs instead. Tests with no agent step need no model at all.
+- **Model credentials go in `cezar secrets`, not in your shell.** Store the
   key your provider reads once per project:
 
   ```bash
-  printf %s "$MY_GATEWAY_KEY" | cezar check-env set AI_GATEWAY_API_KEY
-  cezar check-env list            # names only — a value never comes back out
-  cezar check-env unset AI_GATEWAY_API_KEY
+  printf %s "$MY_GATEWAY_KEY" | cezar secrets set AI_GATEWAY_API_KEY
+  cezar secrets list              # names and audiences — a value never comes back out
+  cezar secrets unset AI_GATEWAY_API_KEY
   ```
 
-  (or Settings → *Check credentials* in the cockpit). `set` reads the value
-  from stdin — run it bare to type it at a hidden prompt — so it never lands
-  in shell history or `ps`. The values are handed to this project's **check
-  steps only** and live in `~/.cezar/check-env/<project>.env` (`0600`, outside
-  the repo).
+  (or Settings → *Secrets* in the cockpit; `--workspace` / Settings → Global →
+  *Secrets* for a key every project shares). `set` reads the value from stdin —
+  run it bare to type it at a hidden prompt — so it never lands in shell history
+  or `ps`. The values are handed to this project's **check steps only** and live
+  encrypted under `~/.cezar/secrets/`, with the data key in your OS keychain
+  when one is available (see [reference](reference.md#workflows) for the file
+  fallback). A check step gets every secret stored for check steps by default,
+  or exactly the ones it binds:
+
+  ```yaml
+  - id: e2e
+    command: npx e2e run
+    secrets: [AI_GATEWAY_API_KEY]
+  ```
 
   A stored value of **12 characters or more** is also redacted from the check's
   output and from the failing output fed back to the agent — the same floor
@@ -248,8 +257,8 @@ for follow-ups.
   cezar passes provider-prefixed variables (`ANTHROPIC_*`, `OPENAI_*`, …) to
   the agents it starts. A key exported for e2e would reach every Claude Code or
   Codex session too, and switch it from the subscription account you chose in
-  Agent accounts to API billing — silently. A check credential never reaches
-  an agent.
+  Agent accounts to API billing — silently. A secret never reaches an agent:
+  agents are not an audience a secret can have.
 - **Use an API key or a service-account key**, not a subscription login: a
   check runs unattended, and `npx e2e login`-style sessions are not supported
   there.
@@ -342,8 +351,8 @@ top of the usual run context, the PR shows as the task's referenced pull
 request, and diffs measure only what the run changed on top of the PR. The
 ref is deleted with the last run that needs it.
 
-**Fork heads are untrusted code.** An admitted fork's checks run **without the
-project's check credentials** — the same rule GitHub Actions applies to fork
+**Fork heads are untrusted code.** An admitted fork's checks run **without
+any secrets** — the same rule GitHub Actions applies to fork
 PRs, and the one e2e's own security model asks for. A fork check therefore has
 no model key; agent-driven tests in it will fail on the missing credential
 (exit 2) rather than run a stranger's code with your key.

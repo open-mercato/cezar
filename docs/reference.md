@@ -259,14 +259,41 @@ known token shapes redacted — is appended to the retried agent's prompt so the
 next attempt can see what broke.
 
 A check step runs `bash -lc <command>` in the task's worktree with the server's
-environment plus the project's **check credentials**, which no agent step ever
-receives. Manage them with `cezar check-env list | set <NAME> | unset <NAME>`
+environment plus the **secrets** it may read, which no agent step ever
+receives. A secret has a scope — the project (Settings → *Secrets*,
+`cezar secrets …`) or the whole workspace (Settings → Global → *Secrets*,
+`cezar secrets … --workspace`) — and audiences: `checks` (check steps) and/or
+`cezar` (cezar's own features). By default a check step gets every
+`checks`-audience secret of the workspace and the project, the project's
+winning on a shared name; a step can bind exactly the ones it needs instead:
+
+```yaml
+- id: e2e
+  command: npx e2e run
+  secrets:
+    - E2E_GATEWAY_KEY                        # as itself
+    - { name: STAGING_LOGIN, as: APP_PASSWORD }   # renamed on the way in
+```
+
+A bound name that is not stored, or that `checks` may not read, is said on the
+step as a note; `secrets:` on an agent step is a load-time error. Manage secrets
+with `cezar secrets list | set <NAME> [--audience checks,cezar] | unset <NAME>`
 (`set` reads the value from stdin; nothing is taken from argv or printed back)
-or in Settings → *Check credentials*. Names are `[A-Z_][A-Z0-9_]*`; `CEZ_*`,
-`DYLD_*` and shell/loader variables (`PATH`, `HOME`, `NODE_OPTIONS`,
-`LD_PRELOAD`, …) are refused. This is where an e2e runner's model key belongs:
-an exported `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` also reaches the agents and
-switches them to API billing.
+or in Settings. Names are `[A-Z_][A-Z0-9_]*`; `CEZ_*`, `DYLD_*` and shell/loader
+variables (`PATH`, `HOME`, `NODE_OPTIONS`, `LD_PRELOAD`, …) are refused. This is
+where an e2e runner's model key belongs: an exported `ANTHROPIC_API_KEY` or
+`OPENAI_API_KEY` also reaches the agents and switches them to API billing.
+
+Values are stored encrypted (AES-256-GCM) under `~/.cezar/secrets/`, with one
+per-machine data key in the OS keychain (macOS Keychain, Linux Secret Service,
+Windows Credential Manager) through the optional `@napi-rs/keyring` package.
+Without a usable keychain — a server, a container, an install that skipped
+optional packages, or `CEZ_SECRETS_KEYCHAIN=0` — the data key is a `0600` file
+beside the secrets, which makes the store exactly as strong as a private
+plaintext file; Settings and `cezar secrets list` say which one is in use. A
+secret is written for one machine: a reset keychain or a deleted key file
+leaves the store unreadable (reported on the run as a note) until the secrets
+are stored again.
 
 cezar also tells a check step about the run it is verifying. These are set by
 cezar, not settings — a variable the run does not have is absent (never empty),
@@ -291,7 +318,7 @@ and a value inherited from the server's own environment is replaced:
 own project replaces it; a headless `cezar run` that does not leaves whatever
 you exported alone, so a check step can still reach the cockpit you named.
 
-A GitHub automation whose events are all `pull_request.*` can set `"checkout": "pr-head"` in its `task`: each launched run forks its worktree from the matched PR's head (fetched into `refs/cezar/pr/<n>`) instead of the base branch, so its check steps verify the PR itself. A closed PR or a fork head launches nothing (`skipped` in the execution log) unless `"allowForkHeads": true` admits forks — whose checks then run without check credentials. Such a run cannot open a draft PR (`409`). See [Verify a pull request](e2e-verification.md#verify-a-pull-request).
+A GitHub automation whose events are all `pull_request.*` can set `"checkout": "pr-head"` in its `task`: each launched run forks its worktree from the matched PR's head (fetched into `refs/cezar/pr/<n>`) instead of the base branch, so its check steps verify the PR itself. A closed PR or a fork head launches nothing (`skipped` in the execution log) unless `"allowForkHeads": true` admits forks — whose checks then run without secrets. Such a run cannot open a draft PR (`409`). See [Verify a pull request](e2e-verification.md#verify-a-pull-request).
 
 `onFail.retryOn` narrows the loop to the exit codes that mean *the work is
 wrong*. Omitted, any non-zero code loops back — right for `npm test`, which

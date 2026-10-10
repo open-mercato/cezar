@@ -291,7 +291,7 @@ export const runRecordSchema = z.object({
     .optional()
     .catch(undefined),
   /** The PR head came from a fork the automation admitted (`allowForkHeads`): untrusted code, so
-   *  its check steps never receive the project's check credentials. */
+   *  its check steps never receive any secrets. */
   untrustedHead: z.boolean().optional().catch(undefined),
   /**
    * Exact deadline at which a run stopped by a provider USAGE LIMIT resumes itself

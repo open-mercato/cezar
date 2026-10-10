@@ -125,7 +125,7 @@ import { reviewGateEnabled } from '../runs/review-gate.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
 import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
 import { WorkspaceSemaphore, type AccountHolds } from '../workspace/semaphore.ts';
-import { CheckEnv } from '../workspace/check-env.ts';
+import { SecretStore } from '../workspace/secrets.ts';
 import { PROJECT_ID_RE } from '../workspace/config.ts';
 import { prunePrHeadRefs } from '../automations/pr-head.ts';
 import { MIN_SECRET_LEN } from '../core/secret-redaction.ts';
@@ -1153,7 +1153,7 @@ export class RunManager {
   private readonly projectId: string | undefined;
 
   /** See the constructor option of the same name. */
-  private readonly checkEnv: CheckEnv;
+  private readonly secrets: SecretStore;
 
   /** See the constructor option of the same name. */
   private readonly resolveTrackerEnv: ((root: string, expected: TrackerAssociation | undefined) => Promise<Record<string, string>>) | undefined;
@@ -1170,14 +1170,15 @@ export class RunManager {
        * reach an agent. Secrets are registered with RunStore before any output arrives.
        */
       resolveTrackerEnv?: (root: string, expected: TrackerAssociation | undefined) => Promise<Record<string, string>>;
-      /** The project's check credentials store (spec 2026-10-06-agentic-e2e-checks). */
-      checkEnv?: CheckEnv;
+      /** The project/workspace secret store (spec 2026-10-10-project-secrets-vault-options);
+       *  check steps read it with the `checks` audience. */
+      secrets?: SecretStore;
     } = {},
   ) {
     this.dataDir = join(repoRoot, '.ai/cezar');
     this.projectId = options.projectId;
     this.resolveTrackerEnv = options.resolveTrackerEnv;
-    this.checkEnv = options.checkEnv ?? new CheckEnv();
+    this.secrets = options.secrets ?? new SecretStore();
     this.semaphore = options.semaphore ?? new WorkspaceSemaphore();
     this.offSemaphore = this.semaphore.register({
       busySlots: () => this.busySlots(),
@@ -6823,11 +6824,13 @@ export class RunManager {
   }
 
   /**
-   * The environment a check step runs with: the server's own, plus the project's check
-   * credentials (spec 2026-10-06-agentic-e2e-checks). Read fresh for every check execution, so
-   * an edit applies to the next check, never one mid-command. The values are registered as run
-   * secrets BEFORE the spawn, so the first byte of output is already scrubbed; values shorter
-   * than the host-secret floor are not, or a flag like `=1` would redact every `1` in the log.
+   * The environment a check step runs with: the server's own, plus the secrets the step may
+   * read (spec 2026-10-10-project-secrets-vault-options) — the project's and the workspace's
+   * with the `checks` audience, or exactly the step's `secrets:` bindings. Read fresh for every
+   * check execution, so an edit applies to the next check, never one mid-command. The values
+   * are registered as run secrets BEFORE the spawn, so the first byte of output is already
+   * scrubbed; values shorter than the host-secret floor are not, or a flag like `=1` would
+   * redact every `1` in the log.
    */
   private async checkStepEnv(
     runId: string,
@@ -6838,18 +6841,20 @@ export class RunManager {
     // A fork's head is untrusted code (Phase 3): like GitHub Actions withholding secrets from fork
     // PRs, its checks get the server env only — the credentials are neither read nor handed over.
     const untrusted = this.store.getRun(runId)?.untrustedHead === true;
-    const read = this.projectId && !untrusted
-      ? await this.checkEnv.read(this.projectId, this.repoRoot)
-      : { values: {} as Record<string, string> };
-    // A store that exists and was not used is the one case the user cannot diagnose on their
-    // own: the value is write-only, so `check-env list` and Settings show the same empty list
-    // whether nothing was stored or this run ignored it. Say which, once, on the step.
-    if (read.skipped) {
-      emit({ type: 'note', stepId: step.id, message: `check credentials skipped — ${read.skipped}` });
-    }
+    const resolved = untrusted
+      ? { values: {} as Record<string, string>, notes: [] as string[] }
+      : await this.secrets.resolve(
+          this.projectId ? { projectId: this.projectId, root: this.repoRoot } : undefined,
+          'checks',
+          step.secrets,
+        );
+    // A store that exists and was not used, or a bound name that is not there, is what the user
+    // cannot diagnose alone: the value is write-only, so `cezar secrets list` and Settings show
+    // the same list whether this run read it or ignored it. Say which, once each, on the step.
+    for (const note of resolved.notes) emit({ type: 'note', stepId: step.id, message: note });
     this.store.registerRunSecrets(
       runId,
-      Object.values(read.values).filter((value) => value.length >= MIN_SECRET_LEN),
+      Object.values(resolved.values).filter((value) => value.length >= MIN_SECRET_LEN),
     );
     // The run context wins last (Phase 2). Its names are first removed from what the server
     // inherited — a cezar started inside another cezar task carries that task's `CEZ_*` — so a
@@ -6866,7 +6871,7 @@ export class RunManager {
       if (name === 'CEZ_PROJECT_ID' && !this.projectId) continue;
       delete base[name];
     }
-    return { ...base, ...read.values, ...(await this.checkContextEnv(runId, state, step.id)) };
+    return { ...base, ...resolved.values, ...(await this.checkContextEnv(runId, state, step.id)) };
   }
 
   /**
@@ -7013,8 +7018,8 @@ export function parseGithubItemUrl(url: string): { repo: string; number: number 
  * unregister-only — so `docs/e2e-verification.md` says how to reclaim the space.
  *
  * `projectId` is re-validated here even though every caller's id is already slug-shaped, for the
- * same reason `workspace/check-env.ts` re-validates before building
- * `~/.cezar/check-env/<projectId>.env`: this is where the value becomes a path, and a
+ * same reason `workspace/secrets.ts` re-validates before building
+ * `~/.cezar/secrets/<projectId>.json`: this is where the value becomes a path, and a
  * `recursive` mkdir is the wrong place to find out the guard moved upstream.
  */
 async function sharedCheckCacheDir(projectId: string): Promise<string | undefined> {

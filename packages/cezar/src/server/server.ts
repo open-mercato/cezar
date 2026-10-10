@@ -2,9 +2,9 @@ import {
   trackerWatchInputSchema, trackerWatchParamsSchema, trackerWatchQuerySchema,
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
   trackerCredentialsSchema, trackerItemParamsSchema, trackerAssociationInputSchema, type TrackerChangedEvent,
-  checkEnvParamsSchema, checkEnvValueInputSchema, type CheckEnvNames,
+  secretParamsSchema, secretValueInputSchema, type SecretsList,
 } from '@open-mercato/cezar-contract';
-import { CheckEnv, CheckEnvError } from '../workspace/check-env.ts';
+import { SecretStore, SecretsError, type SecretScopeRef } from '../workspace/secrets.ts';
 import { createTrackerService } from './tracker/index.ts';
 import { TrackerWatches } from './tracker/watch.ts';
 import { readTrackerAssociation, writeTrackerAssociation, clearTrackerAssociation } from '../tracker-association.ts';
@@ -322,6 +322,9 @@ export interface ServerDeps {
   /** Process-wide Open Mercato skills update detector. Injected in tests and
    * shared by every workspace route/project; createApp owns the default. */
   skillsUpdate?: SkillsUpdateService;
+  /** The project/workspace secret store (spec 2026-10-10-project-secrets-vault-options). Tests
+   *  inject one with a fake keychain; the default reads the OS keychain or a key file. */
+  secrets?: SecretStore;
   /** The cockpit's own updater (`/api/v1/workspace/self-update`, src/self-update/). Built by
    *  the CLI, which knows the entry file, the port and how to restart; absent in tests and for
    *  bare `createApp` callers, where the family answers a read-only "not available" status. */
@@ -5692,46 +5695,71 @@ export function createApp(deps: ServerDeps) {
     };
     workspaceEvents.emit('tracker-changed', payload);
   };
-  // ---- chained family: project check credentials ---------------------------
-  // Spec 2026-10-06-agentic-e2e-checks Phase 1. Write-only values for CHECK steps: GET answers
-  // names and never a value, masked or not. The write gate is the one `/tracker/connection`
+  // ---- chained family: project secrets ------------------------------------
+  // Spec 2026-10-10-project-secrets-vault-options. Write-only values: GET answers names and
+  // metadata and never a value, masked or not. The write gate is the one `/tracker/connection`
   // has — the global request-origin guard (#426), no per-route capability — and the file is
   // keyed by the same project id the run manager reads with, so the reserved boot alias of an
-  // unregistered boot project is refused rather than written somewhere nothing reads.
-  const checkEnvStore = new CheckEnv();
-  const unregisteredCheckEnv = { error: 'this project is not registered; check credentials need a project id' };
-  const checkEnvRoutes = new Hono<ProjectApiEnv>()
-    .get('/check-env', async (c) => {
+  // unregistered boot project is refused rather than written somewhere nothing reads. The
+  // workspace scope has its own single-mount family below (`workspaceSecretsRoutes`), the same
+  // three handlers over the `workspace` scope.
+  const secretStore = deps.secrets ?? new SecretStore();
+  const unregisteredSecrets = { error: 'this project is not registered; project secrets need a project id' };
+  const secretsList = async (scope: SecretScopeRef): Promise<SecretsList> => {
+    const [listed, keyBackend] = await Promise.all([secretStore.list(scope), secretStore.keyBackend()]);
+    return { secrets: listed.secrets, keyBackend };
+  };
+  const putSecret = async (scope: SecretScopeRef, name: string, input: { value: string; audiences?: readonly ('checks' | 'cezar')[] }) => {
+    try {
+      await secretStore.set(scope, name, input.value, input.audiences);
+    } catch (error) {
+      if (error instanceof SecretsError) return { status: 400 as const, error: error.message };
+      return { status: 409 as const, error: 'Could not save the secret. Check local storage permissions.' };
+    }
+    return null;
+  };
+  const deleteSecret = async (scope: SecretScopeRef, name: string) => {
+    let removed: boolean;
+    try {
+      removed = await secretStore.unset(scope, name);
+    } catch {
+      return { status: 409 as const, error: 'Could not remove the secret. Check local storage permissions.' };
+    }
+    return removed ? null : { status: 404 as const, error: 'no secret with that name' };
+  };
+  const secretsRoutes = new Hono<ProjectApiEnv>()
+    .get('/secrets', async (c) => {
       const project = c.get('project');
-      const body: CheckEnvNames = { names: await checkEnvStore.names(project.id, project.root) };
-      return c.json(body, 200);
+      return c.json(await secretsList({ kind: 'project', projectId: project.id, root: project.root }), 200);
     })
-    .put(
-      '/check-env/:name',
-      paramZodValidator(checkEnvParamsSchema),
-      jsonZodValidator(checkEnvValueInputSchema),
-      async (c) => {
-        const project = c.get('project');
-        if (project.id === 'default') return c.json(unregisteredCheckEnv, 409);
-        try {
-          await checkEnvStore.set(project.id, project.root, c.req.valid('param').name, c.req.valid('json').value);
-        } catch (error) {
-          if (error instanceof CheckEnvError) return c.json({ error: error.message }, 400);
-          return c.json({ error: 'Could not save the check credential. Check local storage permissions.' }, 409);
-        }
-        return c.body(null, 204);
-      },
-    )
-    .delete('/check-env/:name', paramZodValidator(checkEnvParamsSchema), async (c) => {
+    .put('/secrets/:name', paramZodValidator(secretParamsSchema), jsonZodValidator(secretValueInputSchema), async (c) => {
       const project = c.get('project');
-      if (project.id === 'default') return c.json(unregisteredCheckEnv, 409);
-      let removed: boolean;
-      try {
-        removed = await checkEnvStore.unset(project.id, project.root, c.req.valid('param').name);
-      } catch {
-        return c.json({ error: 'Could not remove the check credential. Check local storage permissions.' }, 409);
-      }
-      if (!removed) return c.json({ error: 'no check credential with that name' }, 404);
+      if (project.id === 'default') return c.json(unregisteredSecrets, 409);
+      const failed = await putSecret({ kind: 'project', projectId: project.id, root: project.root }, c.req.valid('param').name, c.req.valid('json'));
+      if (failed) return c.json({ error: failed.error }, failed.status);
+      return c.body(null, 204);
+    })
+    .delete('/secrets/:name', paramZodValidator(secretParamsSchema), async (c) => {
+      const project = c.get('project');
+      if (project.id === 'default') return c.json(unregisteredSecrets, 409);
+      const failed = await deleteSecret({ kind: 'project', projectId: project.id, root: project.root }, c.req.valid('param').name);
+      if (failed) return c.json({ error: failed.error }, failed.status);
+      return c.body(null, 204);
+    });
+
+  // ---- chained family: workspace secrets (workspace-level) ------------------
+  // The user's own secrets, shared by every project — an LLM key for cezar's own features, a
+  // token every project's checks need. Single-mount like every workspace family.
+  const workspaceSecretsRoutes = new Hono()
+    .get('/workspace/secrets', async (c) => c.json(await secretsList({ kind: 'workspace' }), 200))
+    .put('/workspace/secrets/:name', paramZodValidator(secretParamsSchema), jsonZodValidator(secretValueInputSchema), async (c) => {
+      const failed = await putSecret({ kind: 'workspace' }, c.req.valid('param').name, c.req.valid('json'));
+      if (failed) return c.json({ error: failed.error }, failed.status);
+      return c.body(null, 204);
+    })
+    .delete('/workspace/secrets/:name', paramZodValidator(secretParamsSchema), async (c) => {
+      const failed = await deleteSecret({ kind: 'workspace' }, c.req.valid('param').name);
+      if (failed) return c.json({ error: failed.error }, failed.status);
       return c.body(null, 204);
     });
 
@@ -6497,7 +6525,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', sseRoutes)
     .route('/', githubRoutes)
     .route('/', trackerRoutes)
-    .route('/', checkEnvRoutes)
+    .route('/', secretsRoutes)
     .route('/', repoRoutes)
     .route('/', configRoutes)
     .route('/', agentConfigRoutes);
@@ -6710,6 +6738,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', selfUpdateRoutes)
     .route('/', starCountRoutes)
     .route('/', workspaceConfigRoutes)
+    .route('/', workspaceSecretsRoutes)
     .route('/', fsBrowseRoutes)
     .route('/', automationChecksRoutes)
     .route('/', runsIndexRoutes)

@@ -26,4 +26,4 @@ export * from './host.ts';
 export * from './tracker.ts';
 export * from './self-update.ts';
 export * from './star-count.ts';
-export * from './check-env.ts';
+export * from './secrets.ts';

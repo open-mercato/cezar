@@ -1,6 +1,6 @@
 # Project secrets: from `check-env` to a generic secret store — options analysis
 
-Status: analysis (decision pending) · Base: `main` @ `59ba4ea7` (2026-10-10) · Subject: PR #1291
+Status: decided 2026-10-10 (owner: backend D with A as fallback, reworked on PR #1291's branch, workspace scope included) · Base: `main` @ `59ba4ea7` (2026-10-10) · Subject: PR #1291
 (`feat/check-env`, head `715cda88`) · Related: `.ai/specs/2026-10-06-agentic-e2e-checks.md`,
 `.ai/specs/2026-09-18-jira-linear-tracker-browsing.md` (§ Managed project credential storage),
 `.ai/specs/2026-07-29-agent-profiles.md`
@@ -243,9 +243,19 @@ features without touching the agents' subscription login.
 | `@napi-rs/keyring` platform package absent | — | file backend, CLI boots |
 | Agent step with `secrets:` in YAML | — | load-time `stepsIssue`, never a silent drop |
 
-## Open questions (owner decisions)
+## Decision (2026-10-10) and what shipped
 
-1. Backend: D+A (recommended), B+A, or A only for this PR with D later?
-2. Rework PR #1291 in place (its branch, one more review) or merge it as-is after the `run.ts`
-   conflict is resolved and ship the generic store as a follow-up that renames it?
-3. Should `workspace`-scope secrets be in this PR or follow with the first `cezar`-audience consumer?
+1. **Backend D with A as the automatic fallback.** `workspace/secrets.ts` encrypts each value with
+   AES-256-GCM under one per-machine data key; `workspace/secret-keyring.ts` keeps that key in the
+   OS keychain through `@napi-rs/keyring` (an `optionalDependency`; Linux pinned to Secret Service,
+   because the library's default falls back to the kernel keyutils store, which does not survive a
+   reboot) and `~/.cezar/secrets/.key` (`0600`) holds it otherwise. `GET …/secrets` and
+   `cezar secrets list` report `keyBackend`. `CEZ_SECRETS_KEYCHAIN=0` forces the file.
+2. **Reworked on PR #1291's branch**, before it merges: `check-env` → `secrets` everywhere (store,
+   routes, CLI, cockpit, docs), JSON records with `audiences`, the step-level `secrets:` binding
+   (refused on agent steps at load time), fork-head runs still get nothing.
+3. **Workspace scope in the same PR**: `~/.cezar/secrets/workspace.json`, single-mount
+   `/api/v1/workspace/secrets`, `cezar secrets … --workspace`, Settings → Global → Secrets.
+   Audiences shipped: `checks` and `cezar` (the latter reserved: no consumer reads it yet; the
+   first one resolves through `SecretStore.resolve(project, 'cezar')`). `tracker` is deferred with
+   the tracker-store migration. Backend E (`op://`, `env://` references) is a follow-up.

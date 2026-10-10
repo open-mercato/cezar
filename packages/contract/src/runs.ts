@@ -275,7 +275,7 @@ export const runRecordSchema = z.object({
       ref: z.string(),
     })
     .optional(),
-  /** The PR head came from a fork: its check steps run without the project's check credentials. */
+  /** The PR head came from a fork: its check steps run without the project's or workspace's secrets. */
   untrustedHead: z.boolean().optional(),
   createdAt: z.string(),
   startedAt: z.string().optional(),

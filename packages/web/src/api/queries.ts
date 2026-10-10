@@ -53,7 +53,7 @@ import {
   getSkills,
   getSkillsWhenReady,
   getTodos,
-  getTrackerAssociation, getTrackerConnection, getCheckEnvNames,
+  getTrackerAssociation, getTrackerConnection, getProjectSecrets, getWorkspaceSecrets,
   getTrackerCandidates,
   getTrackerItem,
   getTrackerItems,
@@ -142,9 +142,9 @@ import { subscribeTopic } from './ws'
  * ever reach A's data. Call sites are unchanged — they keep writing `queryKeys.runs.list()`.
  */
 export const queryKeys = {
-  checkEnv: {
-    allFor: (projectId: string) => ['check-env', projectId] as const,
-    names: () => ['check-env', queryScope()] as const,
+  secrets: {
+    allFor: (projectId: string) => ['secrets', projectId] as const,
+    list: () => ['secrets', queryScope()] as const,
   },
   tracker: {
     allFor: (projectId: string) => ['tracker', projectId] as const,
@@ -273,8 +273,12 @@ export const queryKeys = {
 
 export const TRACKER_STALE_TIME = 60_000
 
-export function useCheckEnvNames() {
-  return useQuery({ queryKey: queryKeys.checkEnv.names(), queryFn: ({ signal }) => getCheckEnvNames({ signal }) })
+export function useProjectSecrets() {
+  return useQuery({ queryKey: queryKeys.secrets.list(), queryFn: ({ signal }) => getProjectSecrets({ signal }) })
+}
+/** The user's own secrets (spec 2026-10-10-project-secrets-vault-options). Not scope-led: one machine, one set. */
+export function useWorkspaceSecrets() {
+  return useQuery({ queryKey: workspaceQueryKeys.secrets, queryFn: ({ signal }) => getWorkspaceSecrets({ signal }) })
 }
 
 export function useTrackerConnection() {
@@ -391,6 +395,8 @@ export const workspaceQueryKeys = {
   /** The cross-project task index behind ⌘K. Workspace-led for the same reason the registry is:
    *  it answers for every project at once, so no scope owns it. */
   runsIndex: ['workspace', 'runs-index'] as const,
+  /** `~/.cezar/secrets/workspace.json` via `GET /api/v1/workspace/secrets` — metadata only. */
+  secrets: ['workspace', 'secrets'] as const,
   /** `~/.cezar/ui-state.json` via `GET/PUT /api/workspace/ui-state` (step 2.7) — cross-project
    *  GUI prefs, e.g. the sidebar's per-project collapse map (step 3.3), and — since step 3.5 —
    *  appearance + notifications, which describe the user rather than a repo. */

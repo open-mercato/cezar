@@ -67,6 +67,12 @@ All references are to `main` @ `05471fd`.
 
 ### Phase 1: project check credentials (`check-env`)
 
+> **Superseded before shipping** by `2026-10-10-project-secrets-vault-options.md`: the store is
+> `~/.cezar/secrets/` (encrypted, project and workspace scope, audiences), the routes are
+> `/secrets` and `/workspace/secrets`, the CLI is `cezar secrets`, and a check step may bind
+> exactly the secrets it needs with `secrets:`. The injection, redaction and fork-head rules
+> below still hold as written.
+
 **Storage.** New store `CheckEnv` in `packages/cezar/src/workspace/check-env.ts`, one file per project at
 `~/.cezar/check-env/<projectId>.env`. Same write discipline as `TrackerConnections`: directory `0700` with a
 `*` `.gitignore`, files `0600`, `O_NOFOLLOW` reads, atomic tmp/rename writes, `assertCezarHomeWriteIsSandboxed`,

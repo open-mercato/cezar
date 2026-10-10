@@ -7,15 +7,16 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildChildEnv } from '../core/agent-env.ts';
 import { RunStore } from '../runs/store.ts';
-import { CheckEnv } from '../workspace/check-env.ts';
+import { SecretStore } from '../workspace/secrets.ts';
 import { CHECK_CONTEXT_VARS, RunManager } from './run.ts';
-import type { WorkflowDef } from './types.ts';
+import { workflowStepSchema, type WorkflowDef } from './types.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
 
 /**
- * Project check credentials reach CHECK steps only (spec 2026-10-06-agentic-e2e-checks Phase 1).
+ * Project and workspace secrets reach CHECK steps only (spec 2026-10-10-project-secrets-vault-options,
+ * superseding the `check-env` half of 2026-10-06-agentic-e2e-checks Phase 1).
  *
  * The old advice — export the e2e model key before starting cezar — put the key in
  * `process.env`, where `buildChildEnv`'s prefix matching handed `ANTHROPIC_API_KEY` to every
@@ -23,20 +24,23 @@ const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
  * the check sees the value, no agent env can, and a failing check's output is scrubbed before it
  * becomes the next agent prompt.
  */
-describe('project check credentials in check steps', () => {
+describe('project and workspace secrets in check steps', () => {
   let repoRoot: string;
   let store: RunStore;
   let manager: RunManager;
-  let checkEnv: CheckEnv;
+  let secrets: SecretStore;
   let stdinLog: string;
   /** Per test, so each case starts with no store of its own — `CEZ_HOME` is one sandbox for the
    *  whole vitest worker, and a shared id would let one case read the previous one's file. */
   let project: string;
+  let scope: { kind: 'project'; projectId: string; root: string };
+  const workspace = { kind: 'workspace' } as const;
   const savedEnv: Record<string, string | undefined> = {};
 
   beforeEach(async () => {
-    repoRoot = mkdtempSync(join(tmpdir(), 'cez-check-env-'));
-    project = `check-env-${randomUUID()}`;
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-secrets-'));
+    project = `secrets-${randomUUID()}`;
+    scope = { kind: 'project', projectId: project, root: repoRoot };
     for (const key of ['CEZ_DRY_RUN', 'CEZ_MOCK_STDIN_FILE']) savedEnv[key] = process.env[key];
     process.env.CEZ_DRY_RUN = '1';
     stdinLog = join(repoRoot, '.mock-stdin.ndjson');
@@ -46,12 +50,14 @@ describe('project check credentials in check steps', () => {
     await run('git', ['add', '-A'], { cwd: repoRoot });
     await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
-    checkEnv = new CheckEnv();
-    manager = new RunManager(store, repoRoot, { projectId: project, checkEnv });
+    secrets = new SecretStore(process.env, { keychain: async () => null });
+    manager = new RunManager(store, repoRoot, { projectId: project, secrets });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     manager.dispose();
+    // The workspace file is shared by every case in this worker: leave it as found.
+    for (const name of Object.keys((await secrets.read(workspace)).values)) await secrets.unset(workspace, name);
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -85,17 +91,17 @@ describe('project check credentials in check steps', () => {
       .filter((event) => event.type === 'note')
       .map((event) => event.message ?? '');
 
-  const checkOnly = (command: string): WorkflowDef => ({
+  const checkOnly = (command: string, extra: Partial<WorkflowDef['steps'][number]> = {}): WorkflowDef => ({
     name: 'implement-and-check',
     source: 'file',
     steps: [
       { id: 'implement', name: 'Implement', prompt: '{{task}}' },
-      { id: 'verify', name: 'Verify', command },
+      { id: 'verify', name: 'Verify', command, ...extra },
     ],
   });
 
-  it('hands a stored value to the check step', async () => {
-    await checkEnv.set(project, repoRoot, 'E2E_FLAG', 'on');
+  it('hands a stored project secret to the check step', async () => {
+    await secrets.set(scope, 'E2E_FLAG', 'on');
     const record = manager.startRun(checkOnly('echo "flag=$E2E_FLAG"'), { task: 'mock:done go', worktree: false });
     await settle(record.id);
 
@@ -103,10 +109,51 @@ describe('project check credentials in check steps', () => {
     expect(checkOutputs(record.id)).toEqual(['flag=on']);
   }, 30_000);
 
-  it('never puts a check credential where an agent env can see it', async () => {
+  it('hands a workspace secret too, the project\'s winning on a shared name, and withholds other audiences', async () => {
+    // Short values on purpose: anything at or above `MIN_SECRET_LEN` is redacted from the transcript
+    // this test reads back (pinned below, in the scrubbing case).
+    await secrets.set(workspace, 'SHARED', 'from-ws');
+    await secrets.set(workspace, 'WS_ONLY', 'ws-only');
+    await secrets.set(workspace, 'LLM_KEY', 'cezar-only-key-value', ['cezar']);
+    await secrets.set(scope, 'SHARED', 'from-proj');
+    const record = manager.startRun(checkOnly('echo "$SHARED/$WS_ONLY/${LLM_KEY:-unset}"'), { task: 'mock:done go', worktree: false });
+    await settle(record.id);
+
+    expect(checkOutputs(record.id)).toEqual(['from-proj/ws-only/unset']);
+  }, 30_000);
+
+  it('honours the step\'s secrets: binding — exactly those, renamed on request, the rest said on the step', async () => {
+    await secrets.set(scope, 'E2E_KEY', 'bound-key');
+    await secrets.set(scope, 'OTHER', 'not-bound-value');
+    await secrets.set(scope, 'LLM_KEY', 'cezar-only-key-value', ['cezar']);
+    const record = manager.startRun(
+      checkOnly('echo "${AI_GATEWAY_API_KEY:-unset}/${E2E_KEY:-unset}/${OTHER:-unset}/${LLM_KEY:-unset}"', {
+        secrets: [{ name: 'E2E_KEY', as: 'AI_GATEWAY_API_KEY' }, 'LLM_KEY', 'MISSING'],
+      }),
+      { task: 'mock:done go', worktree: false },
+    );
+    await settle(record.id);
+
+    expect(checkOutputs(record.id)).toEqual(['bound-key/unset/unset/unset']);
+    expect(notes(record.id)).toEqual(expect.arrayContaining([
+      'secret LLM_KEY is not available to checks (audiences: cezar)',
+      'secret MISSING is not stored for this project or workspace',
+    ]));
+  }, 30_000);
+
+  it('refuses secrets: on an agent step at load time — YAML cannot route a secret to a backend', () => {
+    expect(workflowStepSchema.safeParse({ id: 'verify', command: 'true', secrets: ['E2E_KEY'] }).success).toBe(true);
+    const refused = workflowStepSchema.safeParse({ id: 'implement', prompt: '{{task}}', secrets: ['E2E_KEY'] });
+    expect(refused.success).toBe(false);
+    expect(JSON.stringify(refused.error?.issues)).toContain('check steps only');
+    expect(workflowStepSchema.safeParse({ id: 'verify', command: 'true', secrets: ['PATH'] }).success).toBe(false);
+    expect(workflowStepSchema.safeParse({ id: 'verify', command: 'true', secrets: [] }).success).toBe(false);
+  });
+
+  it('never puts a secret where an agent env can see it', async () => {
     const key = 'sk-ant-api03-checkonlycheckonlycheckonly';
-    await checkEnv.set(project, repoRoot, 'ANTHROPIC_API_KEY', key);
-    await checkEnv.set(project, repoRoot, 'FOO', 'check-only-value');
+    await secrets.set(scope, 'ANTHROPIC_API_KEY', key);
+    await secrets.set(scope, 'FOO', 'check-only-value');
     const record = manager.startRun(checkOnly('test "$FOO" = check-only-value'), {
       task: 'mock:done go',
       worktree: false,
@@ -129,7 +176,7 @@ describe('project check credentials in check steps', () => {
   it('scrubs a failing check\'s output before it becomes the next agent prompt', async () => {
     const credential = 'e2e-credential-value-0123456789';
     const token = 'sk-ant-api03-leakedleakedleakedleaked';
-    await checkEnv.set(project, repoRoot, 'E2E_GATEWAY_KEY', credential);
+    await secrets.set(scope, 'E2E_GATEWAY_KEY', credential);
     const workflow: WorkflowDef = {
       name: 'implement-and-check',
       source: 'file',
@@ -157,10 +204,10 @@ describe('project check credentials in check steps', () => {
     expect(retried).not.toContain(token);
   }, 40_000);
 
-  it('without a check-env file the check runs with the server env, unchanged', async () => {
-    process.env.CEZ_CHECK_ENV_GUARD_PROBE = 'server-value';
+  it('without a secret store the check runs with the server env, unchanged', async () => {
+    process.env.CEZ_GUARD_PROBE_FOR_CHECKS = 'server-value';
     try {
-      const record = manager.startRun(checkOnly('echo "$CEZ_CHECK_ENV_GUARD_PROBE"'), {
+      const record = manager.startRun(checkOnly('echo "$CEZ_GUARD_PROBE_FOR_CHECKS"'), {
         task: 'mock:done go',
         worktree: false,
       });
@@ -168,25 +215,25 @@ describe('project check credentials in check steps', () => {
       expect(store.getRun(record.id)?.status).toBe('done');
       expect(checkOutputs(record.id)).toEqual(['server-value']);
       // Nothing stored is the ordinary case: it degrades silently, with no note to explain.
-      expect(notes(record.id).filter((note) => note.includes('check credentials'))).toEqual([]);
+      expect(notes(record.id).filter((note) => note.includes('secret'))).toEqual([]);
     } finally {
-      delete process.env.CEZ_CHECK_ENV_GUARD_PROBE;
+      delete process.env.CEZ_GUARD_PROBE_FOR_CHECKS;
     }
   }, 30_000);
 
   it('says so on the step when it found a store it could not use', async () => {
     // A store written for a DIFFERENT project root — a moved checkout, a changed symlink. It
     // reads as empty by design, and the value is write-only, so without this note the user sees
-    // an empty `check-env list` and cannot tell "never stored" from "stored but ignored".
-    const elsewhere = mkdtempSync(join(tmpdir(), 'cez-check-env-elsewhere-'));
+    // an empty `secrets list` and cannot tell "never stored" from "stored but ignored".
+    const elsewhere = mkdtempSync(join(tmpdir(), 'cez-secrets-elsewhere-'));
     try {
-      await checkEnv.set(project, elsewhere, 'E2E_FLAG', 'on');
+      await secrets.set({ ...scope, root: elsewhere }, 'E2E_FLAG', 'on');
       const record = manager.startRun(checkOnly('echo "flag=$E2E_FLAG"'), { task: 'mock:done go', worktree: false });
       await settle(record.id);
 
       expect(store.getRun(record.id)?.status).toBe('done');
       expect(checkOutputs(record.id)).toEqual(['flag=']);
-      expect(notes(record.id).some((note) => /check credentials skipped — the store belongs to another project root/.test(note))).toBe(true);
+      expect(notes(record.id).some((note) => /project secrets skipped — the store belongs to another project root/.test(note))).toBe(true);
     } finally {
       rmSync(elsewhere, { recursive: true, force: true });
     }
@@ -316,7 +363,7 @@ describe('run context for check steps', () => {
 
   /**
    * The id becomes a path segment, so it is re-validated where that happens — the same guard
-   * `workspace/check-env.ts` applies before building `~/.cezar/check-env/<projectId>.env`. No
+   * `workspace/secrets.ts` applies before building `~/.cezar/secrets/<projectId>.json`. No
    * caller can produce this id today (the workspace schema drops it, `allocateProjectSlug`
    * cannot emit it); the point is that a `recursive` mkdir is not where we want to find out.
    */

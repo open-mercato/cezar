@@ -134,7 +134,7 @@ export const automationTaskSchema = createRunInputBaseSchema
      *  omitted/`'base'` = the configured base; `'pr-head'` = the matched pull request's head.
      *  GitHub automations whose events are all `pull_request.*` only. */
     checkout: z.enum(['base', 'pr-head']).optional(),
-    /** With `checkout: 'pr-head'`: admit a head from a fork (untrusted; no check credentials). */
+    /** With `checkout: 'pr-head'`: admit a head from a fork (untrusted; no secrets). */
     allowForkHeads: z.boolean().optional(),
   });
 export type AutomationTask = z.infer<typeof automationTaskSchema>;

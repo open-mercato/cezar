@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore } from '../runs/store.ts';
 import { RunManager } from '../workflows/run.ts';
-import { CheckEnv } from '../workspace/check-env.ts';
+import { SecretStore } from '../workspace/secrets.ts';
 import { launchEventCandidate } from './event-poll-cycle.ts';
 import { prunePrHeadRefs, resolvePrHead, runCommand, type CommandRunner } from './pr-head.ts';
 import { AutomationStore } from './store.ts';
@@ -170,13 +170,13 @@ describe('a pr-head automation launch', () => {
   let repo: { root: string; base: string; head: string };
   let store: RunStore;
   let manager: RunManager;
-  let checkEnv: CheckEnv;
+  let secrets: SecretStore;
 
   beforeEach(async () => {
     repo = await gitRepo('cez-pr-launch-');
     store = RunStore.open(join(repo.root, '.ai/cezar'));
-    checkEnv = new CheckEnv();
-    manager = new RunManager(store, repo.root, { projectId: PROJECT, checkEnv });
+    secrets = new SecretStore();
+    manager = new RunManager(store, repo.root, { projectId: PROJECT, secrets });
   });
   afterEach(() => {
     manager.dispose();
@@ -215,7 +215,7 @@ describe('a pr-head automation launch', () => {
   };
 
   it('forks the worktree from the PR head, records it, references the PR and refuses to publish', async () => {
-    await checkEnv.set(PROJECT, repo.root, 'E2E_KEY', 'trusted-key');
+    await secrets.set({ kind: 'project', projectId: PROJECT, root: repo.root }, 'E2E_KEY', 'trusted-key');
     const { runner } = fakeGithub(pull(repo.head), { fetchSha: repo.head });
     const { runId } = await launchAutomationRun({ root: repo.root, manager, store, definition: definition(), candidate, receiptId: 'r1', runCommand: runner });
     await settle(runId);
@@ -233,7 +233,7 @@ describe('a pr-head automation launch', () => {
   }, 40_000);
 
   it('runs an admitted fork head without the project\'s check credentials', async () => {
-    await checkEnv.set(PROJECT, repo.root, 'E2E_KEY', 'trusted-key');
+    await secrets.set({ kind: 'project', projectId: PROJECT, root: repo.root }, 'E2E_KEY', 'trusted-key');
     const fork = pull(repo.head, { head: { sha: repo.head, ref: 'patch-1', repo: { full_name: 'stranger/shop' } } });
     const { runner } = fakeGithub(fork, { fetchSha: repo.head });
     const { runId } = await launchAutomationRun({
