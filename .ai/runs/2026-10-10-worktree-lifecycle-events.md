@@ -61,10 +61,10 @@ Arbitrary local commands require durable intent and bounded supervised execution
 
 ### Phase 2: Complete integration
 
-- [ ] 2.1 Gate initial creation and rematerialization.
-- [ ] 2.2 Route every removal intent through coordinator.
-- [ ] 2.3 Implement parking/recovery and resource accounting.
-- [ ] 2.4 Expose chained operation/preview/read/action APIs and live invalidations.
+- [x] 2.1 Gate initial creation and rematerialization. — 97457e20
+- [x] 2.2 Route every removal intent through coordinator. — 97457e20
+- [x] 2.3 Implement parking/recovery and resource accounting. — 97457e20
+- [x] 2.4 Expose chained operation/preview/read/action APIs and live invalidations. — 97457e20
 
 ### Phase 3: Cockpit flow
 
