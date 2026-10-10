@@ -1,6 +1,6 @@
 {
   "name": "@open-mercato/cezar-web",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "The cezar cockpit SPA — one client of the cezar API service.",
   "license": "MIT",
   "private": true,
@@ -17,7 +17,7 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
-    "@open-mercato/cezar-api-client": "^0.14.0",
+    "@open-mercato/cezar-api-client": "^0.15.0",
     "@tanstack/react-query": "^5.101.2",
     "@xyflow/react": "^12.12.0",
     "class-variance-authority": "^0.7.1",
@@ -36,7 +36,7 @@
     "virtua": "^0.49.3"
   },
   "devDependencies": {
-    "@open-mercato/cezar": "^0.14.0",
+    "@open-mercato/cezar": "^0.15.0",
     "@tailwindcss/vite": "^4.3.2",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^20.14.0",
