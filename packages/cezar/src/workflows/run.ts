@@ -1143,6 +1143,8 @@ export class RunManager {
   /** A pump that arrived while one was in flight — replayed by `pump()`'s own
    *  loop so a slot freed mid-sweep is never a lost wakeup. */
   private pumpAgain = false;
+  /** Executions launched without an awaiting caller (`pump`, `continueRun`); see `settled()`. */
+  private readonly launched = new Set<Promise<void>>();
   /**
    * Runs normally isolate in worktrees and may execute in parallel. When that
    * isolation is unavailable (or explicitly disabled), access to `repoRoot` is
@@ -1727,7 +1729,7 @@ export class RunManager {
           if (continuation) {
             const hydrated = this.hydrateQueuedContinuation(runId, continuation);
             const ownerToken = Symbol('run-owner');
-            void this.runContinuation(
+            this.track(this.runContinuation(
               runId,
               hydrated.stepId,
               hydrated.sessionId,
@@ -1741,7 +1743,7 @@ export class RunManager {
               const message = err instanceof Error ? err.message : String(err);
               this.failOwnedContinuation(runId, ownerToken, message);
               this.starting.delete(runId);
-            });
+            }));
             continue;
           }
           if (!job) continue;
@@ -1754,7 +1756,7 @@ export class RunManager {
           // it is now, exactly as a run started now would be.
           const workflow = catalog ? this.refreshQueuedWorkflow(runId, job.workflow, catalog) : job.workflow;
           const ownerToken = Symbol('run-owner');
-          void this.execute(runId, workflow, input, ownerToken).catch((err: unknown) => {
+          this.track(this.execute(runId, workflow, input, ownerToken).catch((err: unknown) => {
             const message = err instanceof Error ? err.message : String(err);
             const state = this.active.get(runId);
             if (!state || state.ownerToken !== ownerToken || state.cancelled) return;
@@ -1767,7 +1769,7 @@ export class RunManager {
             this.clearAutosaveTimer(state);
             this.starting.delete(runId);
             if (state && !state.cancelled) this.dropActive(runId, state);
-          });
+          }));
         }
       } while (this.pumpAgain);
     } finally {
@@ -3216,6 +3218,20 @@ export class RunManager {
   }
 
   /**
+   * Resolves once every execution this manager launched has returned. `cancel` frees a run before
+   * its `execute` does (a worktree may still be being created), so whoever deletes the project
+   * directory afterwards waits here first.
+   */
+  async settled(): Promise<void> {
+    while (this.launched.size > 0) await Promise.allSettled([...this.launched]);
+  }
+
+  private track(work: Promise<void>): void {
+    this.launched.add(work);
+    void work.finally(() => this.launched.delete(work));
+  }
+
+  /**
    * Fold a queued run's persisted prompt — `run.task` plus everything stacked
    * onto it (#472) — into the job input that is about to execute.
    *
@@ -3795,7 +3811,7 @@ export class RunManager {
       return { ok: true };
     }
     const ownerToken = Symbol('run-owner');
-    void this.runContinuation(
+    this.track(this.runContinuation(
       runId,
       stepId,
       resume ? sessionStep.sessionId : undefined,
@@ -3810,7 +3826,7 @@ export class RunManager {
         const message = err instanceof Error ? err.message : String(err);
         this.failOwnedContinuation(runId, ownerToken, message);
       },
-    );
+    ));
     return { ok: true };
   }
 
