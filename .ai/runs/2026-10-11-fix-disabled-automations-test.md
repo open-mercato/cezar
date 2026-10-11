@@ -26,5 +26,5 @@ The test-only preload must not replace the production lazy boundary or weaken th
 
 ### Phase 1: Regression test fix
 
-- [ ] 1.1 Establish a red reproduction by removing the lazy-module preload and running the focused test under contention.
-- [ ] 1.2 Preload the real automations route module before the assertions and verify the focused test remains strict about both placeholder texts.
+- [x] 1.1 Establish a red reproduction by removing the lazy-module preload and running the focused test under contention. — evidence from issue #1017; additionally verified a missing placeholder fails with exit 1.
+- [x] 1.2 Preload the real automations route module before the assertions and verify the focused test remains strict about both placeholder texts. — b55a51c4
