@@ -32,6 +32,10 @@ Phase 2: parent reads every diff and reruns named tests, then dispatches ONE fin
 
 #1368 is closed as no-action-needed: child confirmed preloading was introduced in d22659e8, ancestor of main, and both unchanged-base and proposed timeout-removal variants pass 4 focused tests. Child corrected body/comments and returned reject, not approve. No branch deleted and no source change accepted. The original #1017 issue remains open for tracker housekeeping outside this run.
 
+## Current dispatch and evidence
+
+Seven of eight child slots used; #1194 dispatched as d2316b99 with exclusive shared transcript copy-control scope. Reserve task eight for ONE final independent review. #1369 final head20eb53a6 changes only plan status from verified code a000caf1; PR is ready, parent91/91 tests, full CI38101698905 passed. #1370 at be162f9a has browser screenshots for palette/local-dialog only; parent requested missing first-use preview boundaries in BOTH entry points, real same-base/primary-only/final measurements, broader interaction tests/browser evidence and inline screenshots. Do not accept historic incomparable byte counts as improvement proof. #1367 is still refining cleanup to store events; await final head.
+
 ## Risks
 Live injected cockpit URL resolves to the wrong process; verified parent tree at http://172.17.0.1:4321, use per-command CEZ_API_URL override. Live model catalog confirms gpt-5.6-luna. Some issues may already be fixed or contain scope questions; children must report evidence and use safe defaults rather than inventing work. Full gate failures remain blockers unless proven baseline. UI changes need browser evidence.
 
@@ -42,10 +46,12 @@ Live injected cockpit URL resolves to the wrong process; verified parent tree at
 ### Phase 1: Independent solutions
 
 - [ ] 1.1 Resolve issue 1359
-- [ ] 1.2 Resolve issue 1080
-- [ ] 1.3 Resolve issue 1017
-- [ ] 1.4 Resolve issue 1217
+- [x] 1.2 Resolve issue 1080 — no duplicate change: merged partial fix fd99a9d2 verified, 46 CLI tests pass; cancel/relaunch remain open
+- [x] 1.3 Resolve issue 1017 — existing preload d22659e8 verified, 4 tests pass; duplicate PR1368 closed
+- [x] 1.4 Resolve issue 1217 — 20eb53a6; PR1369 ready, 91 parent tests and full CI pass
 - [ ] 1.5 Resolve issue 1219
+- [ ] 1.6 Resolve replacement issue 575
+- [ ] 1.7 Resolve replacement issue 1194
 
 ### Phase 2: Verification
 
