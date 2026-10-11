@@ -68,6 +68,13 @@ jobs:
       - name: Build application
         run: npm run build
 
+      # Public releases report telemetry under the real service; every other build uses the
+      # development id hard-coded in packages/cezar/src/telemetry.ts.
+      - name: Stamp telemetry service
+        env:
+          CEZ_TELEMETRY_SERVICE: ${{ secrets.CEZ_TELEMETRY_SERVICE }}
+        run: node packages/cezar/scripts/stamp-telemetry-service.mjs
+
       - name: Publish release
         id: release
         env:

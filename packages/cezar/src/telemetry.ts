@@ -16,14 +16,29 @@
  * the user's home directory is scrubbed from every error message and stack.
  */
 import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { cezarHomeDir } from './paths.ts';
 import { detectInstallKind } from './self-update/layout.ts';
 import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from './workspace/config.ts';
 
-// TEMPORARY (local ingest testing): restore 'https://telemetry-ingest.patzick.workers.dev' before shipping.
-export const DEFAULT_TELEMETRY_URL = 'http://localhost:8787';
-const SERVICE = 'cezar';
+export const DEFAULT_TELEMETRY_URL = 'https://stats.openmercato.cloud';
+/** Development builds (local, worktrees, PR previews) report under this service. */
+export const DEV_TELEMETRY_SERVICE = '01a12ad9-3297-793f-b9e5-81d4df2d1216';
+/** Public releases ship `dist/telemetry-service.json`, written at release time by
+ *  scripts/stamp-telemetry-service.mjs; anything without the stamp is a development build. */
+const SERVICE = stampedTelemetryService() ?? DEV_TELEMETRY_SERVICE;
+
+export function stampedTelemetryService(file = join(dirname(fileURLToPath(import.meta.url)), 'telemetry-service.json')): string | undefined {
+  try {
+    const { service } = JSON.parse(readFileSync(file, 'utf8')) as { service?: unknown };
+    return typeof service === 'string' && /^[\w.:@/+-]{1,64}$/.test(service) ? service : undefined;
+  } catch {
+    return undefined;
+  }
+}
 const TIMEOUT_MS = 3_000;
 /** At most one report per minute for the same error (the worker's "don't flood" rule). */
 const ERROR_THROTTLE_MS = 60_000;

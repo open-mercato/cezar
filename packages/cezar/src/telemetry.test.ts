@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { deviceSid, flushTelemetry, registerTelemetryContext, reportError, sendDailyPing, telemetryEnabled, telemetryRuntime, telemetryVersion, track, uuidv7 } from './telemetry.ts';
+import { DEV_TELEMETRY_SERVICE, deviceSid, flushTelemetry, stampedTelemetryService, registerTelemetryContext, reportError, sendDailyPing, telemetryEnabled, telemetryRuntime, telemetryVersion, track, uuidv7 } from './telemetry.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 
 describe('telemetry', () => {
@@ -66,6 +66,23 @@ describe('telemetry', () => {
     expect(telemetryVersion('0.14.0', true)).toBe('0.14.0-dev');
     expect(telemetryVersion('0.14.0-rc.1')).toBe('0.14.0-dev');
     expect(telemetryVersion('garbage')).toBe('unknown');
+  });
+
+  it('uses the release stamp when present, otherwise the development service', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-stamp-'));
+    const file = join(dir, 'telemetry-service.json');
+    expect(stampedTelemetryService(file)).toBeUndefined(); // no stamp: a dev build
+    writeFileSync(file, JSON.stringify({ service: 'cezar' }));
+    expect(stampedTelemetryService(file)).toBe('cezar');
+    writeFileSync(file, JSON.stringify({ service: 'has spaces!' }));
+    expect(stampedTelemetryService(file)).toBeUndefined();
+    // This test run is unstamped, so what goes out is the development service.
+    vi.stubEnv('CEZ_TELEMETRY', '1');
+    vi.stubEnv('CEZ_HOME', mkdtempSync(join(tmpdir(), 'cez-svc-')));
+    track('app_start');
+    await flushTelemetry();
+    const body = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body));
+    expect(body.service).toBe(DEV_TELEMETRY_SERVICE);
   });
 
   it('makes time-ordered v7 ids', () => {
