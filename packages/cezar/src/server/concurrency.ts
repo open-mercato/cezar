@@ -1,7 +1,7 @@
 /**
  * Apply an async operation with bounded parallelism while retaining input order.
- * Callers own per-item error handling; a rejection stops the whole mapping just
- * like Promise.all would, without leaving workers running new items.
+ * Callers own per-item error handling; a rejection rejects the mapping just like
+ * Promise.all would.
  */
 export async function mapWithConcurrency<T, R>(items: readonly T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
   if (items.length === 0) return [];
