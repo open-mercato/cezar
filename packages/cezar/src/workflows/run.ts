@@ -1066,6 +1066,23 @@ export class RunManager {
   private readonly checkArtifactSnapshots = new Map<string, Map<string, string>>();
   /** A failed checkpoint remains unsafe when a parked run is continued. */
   private readonly autosaveCheckpointBlockedRuns = new Set<string>();
+
+  /** Release check ownership only when the record has no continuation session left to reuse it. */
+  private releaseCheckStateIfUncontinuable(runId: string): void {
+    const run = this.store.getRun(runId);
+    const canContinue = run?.steps.some((step) => Boolean(step.sessionId)) ?? false;
+    if (!canContinue || run?.archived) {
+      this.checkArtifactSnapshots.delete(runId);
+      this.autosaveCheckpointBlockedRuns.delete(runId);
+    }
+  }
+
+  /** Retire transient check ownership when archive/delete makes continuation impossible. */
+  releaseCheckState(runId: string): void {
+    this.checkArtifactSnapshots.delete(runId);
+    this.autosaveCheckpointBlockedRuns.delete(runId);
+  }
+
   // Queue + `starting` set (spec 006, janitor's pump() pattern): `starting`
   // covers the window between shifting a run off the queue and the run
   // registering in `active`, so parallel-slot counting is never racy.
@@ -1140,6 +1157,10 @@ export class RunManager {
    *  by dispose() so a torn-down manager stops receiving sampler ticks. */
   private readonly offUsage: () => void;
 
+  /** Release transient check ownership at the store lifecycle boundary so routes, bulk archive,
+   * variant cleanup, and future callers cannot forget the second half of a mutation. */
+  private readonly offStoreLifecycle: () => void;
+
   /** The stalled-queue watchdog (see `rescueStalledQueue`). */
   private readonly queueWatchdog: ReturnType<typeof setInterval>;
 
@@ -1200,6 +1221,16 @@ export class RunManager {
     // Memory guard (#memory-guard): the shared process-tree sampler already ticks ~every 2 s for
     // the runs table; piggyback on it to enforce the per-task memory ceiling.
     this.offUsage = onUsage((snapshot) => void this.enforceMemoryLimit(snapshot));
+    const onRun = (run: RunRecord): void => {
+      if (run.archived) this.releaseCheckState(run.id);
+    };
+    const onDeleted = (runId: string): void => this.releaseCheckState(runId);
+    this.store.on('run', onRun);
+    this.store.on('deleted', onDeleted);
+    this.offStoreLifecycle = () => {
+      this.store.off('run', onRun);
+      this.store.off('deleted', onDeleted);
+    };
     this.queueWatchdog = setInterval(() => void this.rescueStalledQueue(), QUEUE_WATCHDOG_MS);
     this.queueWatchdog.unref?.();
   }
@@ -1216,6 +1247,7 @@ export class RunManager {
    */
   dispose(): void {
     this.offUsage();
+    this.offStoreLifecycle();
     this.offSemaphore();
     clearInterval(this.queueWatchdog);
     for (const [runId, state] of this.active) {
@@ -2024,6 +2056,7 @@ export class RunManager {
     this.leaveMonitoring(runId);
     if (state) this.clearMonitoringWakeTimer(state, runId);
     this.active.delete(runId);
+    this.releaseCheckStateIfUncontinuable(runId);
     // Session result has settled and its sink has flushed before terminal cleanup.
     this.store.clearRunSecrets(runId);
     this.memoryPausing.delete(runId);
@@ -5179,7 +5212,11 @@ export class RunManager {
         return child && childSucceeded(child.status) ? 'done' : 'failed';
       }
       case 'git.commit': {
-        const res = await commitAll(state.cwd, render(node.message));
+        const res = await commitAll(
+          state.cwd,
+          render(node.message),
+          await currentCheckExclusions(state.cwd, state.autosaveExcludedPaths),
+        );
         if (res.result === 'committed') {
           outputs.set(node.id, { sha: res.sha });
           note(`committed ${res.sha.slice(0, 8)}`);

@@ -200,23 +200,28 @@ describe('graph system nodes', () => {
     const graph: WorkflowGraph = {
       nodes: [
         { id: 'start', type: 'start' },
+        { id: 'artifact', type: 'check', command: 'echo verification-residue > check-output.txt' },
         { id: 'work', type: 'agent', prompt: '{{task}}' },
         { id: 'commit', type: 'git.commit', message: 'feat: {{task}}' },
         { id: 'again', type: 'git.commit', message: 'nothing left' },
         { id: 'log', type: 'check', command: 'echo "{{nodes.commit.sha}}" > sha.txt' },
       ],
       edges: [
-        { from: 'start', to: 'work' },
+        { from: 'start', to: 'artifact' },
+        { from: 'artifact', to: 'work' },
         { from: 'work', to: 'commit' },
         { from: 'commit.done', to: 'again' },
         { from: 'again.nothing', to: 'log' },
       ],
     };
-    const id = manager.startRun(def(graph), { task: 'add notes', worktree: false }).id;
+    const id = manager.startRun(def(graph), { task: 'add notes mock:done', worktree: true }).id;
     const final = await until(id, terminal);
     expect(final.status).not.toBe('failed');
-    const { stdout } = await run('git', ['log', '-1', '--format=%H %s'], { cwd: repoRoot });
-    expect(stdout.trim()).toBe(`${readFileSync(join(repoRoot, 'sha.txt'), 'utf8').trim()} feat: add notes`);
+    const { stdout } = await run('git', ['log', '-1', '--format=%H %s'], { cwd: final.worktreePath });
+    expect(stdout.trim()).toBe(`${readFileSync(join(final.worktreePath!, 'sha.txt'), 'utf8').trim()} feat: add notes mock:done`);
+    expect(readFileSync(join(final.worktreePath!, 'check-output.txt'), 'utf8')).toBe('verification-residue\n');
+    const { stdout: committedFiles } = await run('git', ['show', '--format=', '--name-only', 'HEAD'], { cwd: final.worktreePath });
+    expect(committedFiles).not.toContain('check-output.txt');
   }, 30_000);
 
   it('draft PR → PR comment → wait for CI, faked under CEZ_DRY_RUN', async () => {

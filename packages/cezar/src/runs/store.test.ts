@@ -2287,4 +2287,17 @@ describe('RunStore — a save never drops another process’s runs', () => {
     store.flush();
     expect(idsOnDisk()).toEqual([kept]);
   });
+
+  it('emits one deletion event when retention prunes a run', () => {
+    const store = RunStore.open(dataDir);
+    const deleted: string[] = [];
+    store.on('deleted', (id: string) => deleted.push(id));
+    const oldest = newRun(store, 'oldest');
+    store.getRun(oldest)!.createdAt = '2000-01-01T00:00:00.000Z';
+
+    for (let index = 0; index < 301; index++) newRun(store, `retained-${index}`);
+
+    expect(store.getRun(oldest)).toBeUndefined();
+    expect(deleted.filter((id) => id === oldest)).toEqual([oldest]);
+  });
 });
