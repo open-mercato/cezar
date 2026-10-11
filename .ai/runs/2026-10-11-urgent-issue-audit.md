@@ -20,6 +20,10 @@ Phase 2: parent reads every diff and reruns named tests, then dispatches ONE fin
 
 #1080 is partly resolved by merged #1133 (fd99a9d2), present in this checkout. Parent independently reran four CLI suites: 46/46 pass. Cancel/relaunch remain deliberately unresolved, so do not call the entire issue fixed. Child created no duplicate PR. #1219 dispatched as c51ed698; five child slots consumed, four currently active. Select one independent replacement after confirming it remains actionable; reserve final review.
 
+## Review checkpoint
+
+#1017 child opened #1368 at ae65fae5 but parent did NOT accept completion: the only test diff removes two timeout overrides, while lazy preloading was already in base. Full gate is red without demonstrated baseline comparisons. Parent sent corrections to child: restore draft/in-progress, prove remaining defect or close duplicate, execute installed review skill as instructions. #575 is the replacement sixth implementation dispatch (fb989476), scoped to capabilities IPv4-mapped IPv6 parsing/tests. Seven tasks including reserved final review; one spare remains. No changes merged.
+
 ## Risks
 Live injected cockpit URL resolves to the wrong process; verified parent tree at http://172.17.0.1:4321, use per-command CEZ_API_URL override. Live model catalog confirms gpt-5.6-luna. Some issues may already be fixed or contain scope questions; children must report evidence and use safe defaults rather than inventing work. Full gate failures remain blockers unless proven baseline. UI changes need browser evidence.
 
