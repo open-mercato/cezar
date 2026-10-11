@@ -29,17 +29,19 @@ Concurrent filesystem reads must not alter observable ordering or turn rejected/
 
 ## Progress
 
+PR: #1369
+
 > Convention: `- [ ]` pending, `- [x]` done. Append — <commit sha> when a step lands. Do not rename step titles.
 
 ### Phase 1: baseline and helper
 
-- [ ] 1.1 Record the focused baseline and add the issue-specific execution plan.
-- [ ] 1.2 Add a small order-preserving worker-pool helper with a fixed concurrency limit and unit coverage.
+- [x] 1.1 Record the focused baseline and add the issue-specific execution plan. — 4583b655
+- [x] 1.2 Add a small order-preserving worker-pool helper with a fixed concurrency limit and unit coverage. — 202a23fa
 
 ### Phase 2: listing refactors
 
-- [ ] 2.1 Refactor folder-picker entry resolution to the helper after slicing candidates, preserving dependent check order and omission behavior.
-- [ ] 2.2 Refactor Files-tab file-size probes to the helper while retaining directory-first sorting and omitted sizes on stat failure.
+- [x] 2.1 Refactor folder-picker entry resolution to the helper after slicing candidates, preserving dependent check order and omission behavior. — 202a23fa
+- [x] 2.2 Refactor Files-tab file-size probes to the helper while retaining directory-first sorting and omitted sizes on stat failure. — 202a23fa
 
 ### Phase 3: verification and handoff
 
