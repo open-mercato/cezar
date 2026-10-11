@@ -1,6 +1,6 @@
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { afterAll, afterEach, beforeEach } from 'vitest'
 
 // Nothing in this suite may write to the developer's own `~/.cezar`. Most cases pin
@@ -22,6 +22,15 @@ if (!process.env.GIT_CONFIG_COUNT) {
   process.env.GIT_CONFIG_COUNT = '1'
   process.env.GIT_CONFIG_KEY_0 = 'commit.gpgsign'
   process.env.GIT_CONFIG_VALUE_0 = 'false'
+}
+
+// A cezar task runs with its TMPDIR inside the checkout (#785), so a fixture made under
+// `tmpdir()` would discover THAT repository and its remotes. Git stops at the temp dir instead.
+{
+  const temp = tmpdir()
+  // `.native` also expands a Windows 8.3 short name (`RUNNER~1`), the spelling git compares.
+  const ceilings = [process.env.GIT_CEILING_DIRECTORIES, temp, realpathSync(temp), realpathSync.native(temp)].filter(Boolean)
+  process.env.GIT_CEILING_DIRECTORIES = [...new Set(ceilings)].join(delimiter)
 }
 
 // LLM task naming is on by default (`autoNamingActive`), so any case that starts a run on
