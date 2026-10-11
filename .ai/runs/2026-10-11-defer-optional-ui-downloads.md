@@ -31,8 +31,14 @@ Resolve #1219 by removing the eager Markdown/Streamdown dependency from skill pr
 
 ### Phase 3: Verify and ship
 
-- [ ] 3.1 Measure before/after entry and deduplicated entry-plus-preload raw/gzip sizes for each change independently. (Blocked: `npm run build:web` fails before emission on pre-existing missing API-client exports.)
-- [ ] 3.2 Run focused tests, red-green regression proof, browser evidence, full validation gate, review, and finalize the PR.
+- [x] 3.1 Measure before/after entry and deduplicated entry-plus-preload raw/gzip sizes for each change independently. — 9bc16731
+- [ ] 3.2 Run focused tests, red-green regression proof, browser evidence, full validation gate, review, and finalize the PR. (Focused suites and most gate commands pass; full npm test has 16 unrelated baseline failures and browser provider was unavailable.)
+
+## Measurement notes
+
+- Issue baseline on `main` @ `3eb8e3ff`: entry `441.51 kB / 123.35 kB gzip`; entry plus 44 modulepreloads `1548.2 kB / 470.0 kB gzip`.
+- Final build on this branch: entry `460,174 B / 127,574 B gzip`; deduplicated entry plus 54 modulepreloads `1,184,067 B / 362,212 B gzip`.
+- The repository's base moved substantially between those builds, so these are reported as raw artifacts rather than an attributed delta. The final graph contains separate `command-palette-body`, `add-project-dialog`, `clone-project-dialog`, and `skill-detail` chunks; Markdown is no longer statically imported by `skill-detail`.
 
 ## Risks
 
