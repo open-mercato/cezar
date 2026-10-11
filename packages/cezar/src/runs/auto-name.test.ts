@@ -140,15 +140,15 @@ describe('liveTitleUpdatesEnabled', () => {
     else process.env.CEZ_TITLE_UPDATES = saved;
   });
 
-  it('defaults ON (owner decision, PR #479)', () => {
+  it('defaults OFF: no per-turn namer call unless asked for', () => {
     delete process.env.CEZ_TITLE_UPDATES;
-    expect(liveTitleUpdatesEnabled({})).toBe(true);
+    expect(liveTitleUpdatesEnabled({})).toBe(false);
   });
 
-  it('the env default turns it off with exactly "0"', () => {
-    expect(liveTitleUpdatesEnabled({}, { CEZ_TITLE_UPDATES: '0' })).toBe(false);
+  it('the env default turns it on with exactly "1"', () => {
     expect(liveTitleUpdatesEnabled({}, { CEZ_TITLE_UPDATES: '1' })).toBe(true);
-    expect(liveTitleUpdatesEnabled({}, { CEZ_TITLE_UPDATES: 'off' })).toBe(true);
+    expect(liveTitleUpdatesEnabled({}, { CEZ_TITLE_UPDATES: '0' })).toBe(false);
+    expect(liveTitleUpdatesEnabled({}, { CEZ_TITLE_UPDATES: 'on' })).toBe(false);
   });
 
   it('the Settings toggle (config) wins over the env in both directions', () => {
