@@ -210,4 +210,31 @@ describe('periodic autosave gate (#471)', () => {
     expect(seam.checkArtifactSnapshots.has(deleted.id)).toBe(false);
     expect(seam.autosaveCheckpointBlockedRuns.has(deleted.id)).toBe(false);
   });
+
+  it('releases state when retention prunes archived and unarchived runs', () => {
+    const seam = manager;
+    const unarchived = store.createRun({ title: 'old unarchived', workflow: 'quick-task', task: 'old', steps: [] });
+    store.getRun(unarchived.id)!.createdAt = '2000-01-01T00:00:00.000Z';
+    seam.checkArtifactSnapshots.set(unarchived.id, new Map([['check-output.txt', 'snapshot']]));
+    seam.autosaveCheckpointBlockedRuns.add(unarchived.id);
+    for (let index = 0; index < 301; index++) {
+      store.createRun({ title: `unarchived-${index}`, workflow: 'quick-task', task: 'new', steps: [] });
+    }
+    expect(store.getRun(unarchived.id)).toBeUndefined();
+    expect(seam.checkArtifactSnapshots.has(unarchived.id)).toBe(false);
+    expect(seam.autosaveCheckpointBlockedRuns.has(unarchived.id)).toBe(false);
+
+    const archived = store.createRun({ title: 'old archived', workflow: 'quick-task', task: 'old', steps: [] });
+    store.getRun(archived.id)!.createdAt = '2000-01-01T00:00:00.000Z';
+    store.setArchived(archived.id, true);
+    seam.checkArtifactSnapshots.set(archived.id, new Map([['check-output.txt', 'snapshot']]));
+    seam.autosaveCheckpointBlockedRuns.add(archived.id);
+    for (let index = 0; index < 501; index++) {
+      const record = store.createRun({ title: `archived-${index}`, workflow: 'quick-task', task: 'old', steps: [] });
+      store.setArchived(record.id, true);
+    }
+    expect(store.getRun(archived.id)).toBeUndefined();
+    expect(seam.checkArtifactSnapshots.has(archived.id)).toBe(false);
+    expect(seam.autosaveCheckpointBlockedRuns.has(archived.id)).toBe(false);
+  });
 });

@@ -4181,11 +4181,7 @@ export function createApp(deps: ServerDeps) {
 
     // Registered before the `/:id/...` routes so "archive-finished" and "read-all"
     // never match as a run id.
-    .post('/runs/archive-finished', (c) => {
-      const project = c.get('project');
-      const archived = project.store.archiveFinished();
-      return c.json({ archived });
-    })
+    .post('/runs/archive-finished', (c) => c.json({ archived: c.get('project').store.archiveFinished() }))
 
     // The read-receipt sweep (#unread-done-items) — the mark-read twin of the archive
     // sweep above, and under the same registration-order guard.
