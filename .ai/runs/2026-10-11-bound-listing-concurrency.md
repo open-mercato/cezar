@@ -20,7 +20,7 @@ Non-goals: changing API shapes, symlink policy, privacy handling, candidate orde
 
 ### Phase 3: verification and handoff
 
-- [ ] 3.1 Add equivalence, cap-before-resolution, symlink/privacy, omission, ordering, empty-input, overlap, and max-16 regression coverage.
+- [x] 3.1 Add equivalence, cap-before-resolution, symlink/privacy, omission, ordering, empty-input, overlap, and max-16 regression coverage. — 9fb136a3
 - [ ] 3.2 Run the configured validation gate, review the PR, and finalize the handoff.
 
 ## Risks
