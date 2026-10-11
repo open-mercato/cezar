@@ -330,6 +330,7 @@ describe('SessionTranscript', () => {
         <SessionTranscript runId="r1" viewId={mode} sections={sections} mode={mode} />,
       )
       expect(document.querySelector('[data-slot="assistant-message"]')?.textContent).toContain('Shared prose')
+      expect(document.querySelectorAll('button[aria-label="Copy message"]')).toHaveLength(1)
       expect(document.querySelector('[data-slot="reasoning"]')?.textContent).toContain('Shared reasoning')
       expect(document.querySelector('[data-slot="tool-card"]')?.textContent).toContain('npm test')
       expect(document.querySelector('[data-slot="note-line"]')?.textContent).toContain('Lifecycle note')
