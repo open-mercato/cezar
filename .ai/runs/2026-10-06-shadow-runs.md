@@ -98,3 +98,4 @@ PR: #1314
 - [x] 5.4 A shadow check step sees the run context and the shadow overrides - f6c61eb8
 - [x] 5.5 The gate in the review environment: git discovery stops at the temp dir for the whole suite (10 tests red on main there) - 79ca81cb
 - [x] 5.6 Second review pass: open-in CLI handoff, protected base branches, gh promotion's working directory, unrunnable scripts, atomic state, loopback API stated - 03cf364e
+- [x] 5.7 The gate's last random red: a cancelled run's execution can be awaited (`RunManager.settled()`), so the auto-resume teardown stops racing its worktree (8/32 red on main under load, 0/32 here) - ff36d98b
