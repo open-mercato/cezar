@@ -363,8 +363,8 @@ describe('the global settings area (/settings/global)', () => {
       renderAt(`/p/${BOOT}/${path}`)
       expect(currentPathname()).toBe(`/p/${BOOT}/${path}`)
       expect(routeName()).toBe('automations')
-      expect(await screen.findByText('Automations are off', {}, { timeout: 5_000 })).not.toBeNull()
-      expect(await screen.findByText(/CEZ_AUTOMATIONS=0/, {}, { timeout: 5_000 })).not.toBeNull()
+      expect(await screen.findByText('Automations are off')).not.toBeNull()
+      expect(await screen.findByText(/CEZ_AUTOMATIONS=0/)).not.toBeNull()
     })
   }
 
