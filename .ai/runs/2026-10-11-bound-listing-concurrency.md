@@ -45,5 +45,5 @@ PR: #1369
 
 ### Phase 3: verification and handoff
 
-- [ ] 3.1 Add equivalence, cap-before-resolution, symlink/privacy, omission, ordering, empty-input, overlap, and max-16 regression coverage.
-- [ ] 3.2 Run the configured validation gate, review the PR, and finalize the handoff.
+- [x] 3.1 Add equivalence, cap-before-resolution, symlink/privacy, omission, ordering, empty-input, overlap, and max-16 regression coverage. — 57230670
+- [ ] 3.2 Run the configured validation gate, review the PR, and finalize the handoff. — blocked by the unrelated baseline web failure and GitHub self-review restriction
