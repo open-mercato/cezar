@@ -235,26 +235,26 @@ export function UserBubble({
           {onEdit || onRemove ? (
             <span className="flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
               {onEdit ? (
-            <button
-              type="button"
-              aria-label={editLabel}
-              onClick={startEditing}
-              disabled={busy}
-              className="rounded-sm p-1 text-soft-foreground hover:bg-background hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-            >
-              <SquarePenIcon className="size-3.5" />
-            </button>
+                <button
+                  type="button"
+                  aria-label={editLabel}
+                  onClick={startEditing}
+                  disabled={busy}
+                  className="rounded-sm p-1 text-soft-foreground hover:bg-background hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+                >
+                  <SquarePenIcon className="size-3.5" />
+                </button>
               ) : null}
               {onRemove ? (
-            <button
-              type="button"
-              aria-label={removeLabel}
-              onClick={() => void remove()}
-              disabled={busy}
-              className="rounded-sm p-1 text-soft-foreground hover:bg-background hover:text-danger focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-            >
-              <Trash2Icon className="size-3.5" />
-            </button>
+                <button
+                  type="button"
+                  aria-label={removeLabel}
+                  onClick={() => void remove()}
+                  disabled={busy}
+                  className="rounded-sm p-1 text-soft-foreground hover:bg-background hover:text-danger focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+                >
+                  <Trash2Icon className="size-3.5" />
+                </button>
               ) : null}
             </span>
           ) : null}
@@ -324,7 +324,9 @@ function UserText({ text }: { text: string }) {
 export function AssistantMessage({ text }: { text: string }) {
   return (
     <div data-slot="assistant-message" className="group min-w-0 text-[15px] leading-[1.65]">
-      {text.trim() !== '' ? <div className="mb-1 flex justify-end"><CopyMessageButton text={text} /></div> : null}
+      {text.trim() !== '' ? (
+        <div className="mb-1 flex justify-end"><CopyMessageButton text={text} /></div>
+      ) : null}
       <Markdown>{text}</Markdown>
     </div>
   )
@@ -357,7 +359,8 @@ export function CopyMessageButton({ text }: { text: string }) {
     timer.current = setTimeout(() => setFeedback('idle'), 2200)
   }
 
-  const label = feedback === 'success' ? 'Message copied' : feedback === 'failure' ? 'Could not copy message' : 'Copy message'
+  const label =
+    feedback === 'success' ? 'Message copied' : feedback === 'failure' ? 'Could not copy message' : 'Copy message'
   return (
     <span className="inline-flex items-center gap-1">
       <button
@@ -366,7 +369,11 @@ export function CopyMessageButton({ text }: { text: string }) {
         onClick={() => void copy()}
         className="rounded-sm p-1 text-soft-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
       >
-        {feedback === 'success' ? <CheckIcon aria-hidden className="size-3.5" /> : <ClipboardIcon aria-hidden className="size-3.5" />}
+        {feedback === 'success' ? (
+          <CheckIcon aria-hidden className="size-3.5" />
+        ) : (
+          <ClipboardIcon aria-hidden className="size-3.5" />
+        )}
       </button>
       {feedback !== 'idle' ? (
         <span role="status" aria-live="polite" aria-label={label} className="text-[11px] text-soft-foreground">
