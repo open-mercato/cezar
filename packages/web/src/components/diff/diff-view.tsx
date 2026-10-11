@@ -56,6 +56,7 @@ import type {
   DiffProps,
   DiffRevealTarget,
 } from './types'
+import { diffScroller, scrollWithin } from './scroll-within'
 import { overlaySegments } from './word-diff'
 
 /**
@@ -335,6 +336,7 @@ export function DiffView({
   const scrollElRef = useRef<HTMLElement | null>(null)
   const virtualizerRef = useRef<VirtualizerHandle | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const endRoom = useEndRoom(viewRef !== undefined, rootRef, scrollElRef, scrollerEpoch)
 
   useImperativeHandle(
     viewRef,
@@ -344,12 +346,16 @@ export function DiffView({
         if (index === -1) return
         const handle = virtualizerRef.current
         // Virtualized: the target may not be mounted, so the scroll goes through the index.
-        // Reserve the sticky chrome above the file in both modes. Flat jumps must be
-        // immediate: lazy content measurement can invalidate a smooth-scroll destination.
+        // Reserve the sticky chrome above the file in both modes. Flat moves only the diff's
+        // own scroller — `scrollWithin` says why that is not `scrollIntoView`.
         const root = rootRef.current
         const offset = root ? Number.parseFloat(getComputedStyle(root).scrollMarginTop) || 0 : 0
         if (handle) handle.scrollToIndex(index, { align: 'start', offset: -offset })
-        else findFileElement(root, path)?.scrollIntoView?.({ block: 'start', behavior: 'instant' })
+        else {
+          const element = findFileElement(root, path)
+          const scroller = scrollElRef.current
+          if (element && scroller) scrollWithin(scroller, element, offset)
+        }
       }
       return {
         scrollToPath: (path: string) => scrollToPath(path),
@@ -380,10 +386,10 @@ export function DiffView({
                 const margin = Number.parseFloat(getComputedStyle(element).scrollMarginBottom) || 0
                 handle.scrollTo(scroller.scrollTop + box.top - scroller.getBoundingClientRect().top
                   - (scroller.clientHeight - margin - box.height) / 2)
-              } else {
+              } else if (scroller) {
                 // An immediate jump lets content-visibility finish measuring before the next
                 // paint; a smooth jump can stop at the off-screen placeholder's old position.
-                element.scrollIntoView?.({ block: 'center', behavior: 'instant' })
+                scrollWithin(scroller, element, (scroller.clientHeight - element.getBoundingClientRect().height) / 2)
               }
               flash(element)
               return
@@ -440,10 +446,17 @@ export function DiffView({
         <DiffStatLabel stat={stat} />
       </p>
       {renderMode === 'virtual' ? (
-        <VirtualFiles key={scrollerEpoch} files={files} handleRef={virtualizerRef} scrollElRef={scrollElRef} card={card} />
+        <VirtualFiles
+          key={scrollerEpoch}
+          files={files}
+          handleRef={virtualizerRef}
+          scrollElRef={scrollElRef}
+          card={card}
+          endRoom={endRoom}
+        />
       ) : (
         <div data-slot="diff-files" data-virtualized="false">
-          {files.map((file) => (
+          {files.map((file, index) => (
             // content-visibility skips style/layout/paint for off-screen cards; the
             // intrinsic-size hint keeps the scrollbar stable before a skipped card is first
             // measured. The card spacing that used to be the column's `gap` is this wrapper's
@@ -451,7 +464,10 @@ export function DiffView({
             <div
               key={fileKey(file)}
               data-slot="diff-file-slot"
-              style={{ containIntrinsicBlockSize: `auto ${estimateFileHeight(file)}px` }}
+              style={{
+                containIntrinsicBlockSize: `auto ${estimateFileHeight(file)}px`,
+                ...(index === files.length - 1 && endRoom ? { minHeight: endRoom } : {}),
+              }}
               className="pb-3 [content-visibility:auto]"
             >
               {card(file)}
@@ -464,13 +480,33 @@ export function DiffView({
   )
 }
 
-/**
- * The element the diff scrolls in: a view's own column when it declares one (`data-diff-scroller`
- * — the split Changes layouts, where the tree and the diff scroll independently), else the app
- * shell's `main`. A view sets the marker only where that column really scrolls (md and up).
- */
-function diffScroller(el: HTMLElement): HTMLElement | null {
-  return el.closest<HTMLElement>('[data-diff-scroller], [data-slot="main"]')
+/** Last slot's min-height, so a file jump can park even the last file under the header. Only
+ *  for consumers that jump (`viewRef`); elsewhere it would be blank space after a short diff. */
+function useEndRoom(
+  enabled: boolean,
+  rootRef: React.RefObject<HTMLElement | null>,
+  scrollElRef: React.RefObject<HTMLElement | null>,
+  scrollerEpoch: number,
+) {
+  const [room, setRoom] = useState(0)
+  useLayoutEffect(() => {
+    const root = rootRef.current
+    const scroller = scrollElRef.current
+    if (!enabled || !root || !scroller) {
+      setRoom(0)
+      return
+    }
+    const measure = () => {
+      const offset = Number.parseFloat(getComputedStyle(root).scrollMarginTop) || 0
+      setRoom(Math.max(0, Math.round(scroller.clientHeight - offset)))
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(scroller)
+    return () => observer.disconnect()
+  }, [enabled, rootRef, scrollElRef, scrollerEpoch])
+  return room
 }
 
 /**
@@ -487,11 +523,13 @@ function VirtualFiles({
   handleRef,
   scrollElRef,
   card,
+  endRoom,
 }: {
   files: DiffFileChange[]
   handleRef: React.RefObject<VirtualizerHandle | null>
   scrollElRef: React.RefObject<HTMLElement | null>
   card: (file: DiffFileChange) => React.ReactNode
+  endRoom: number
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
 
@@ -534,8 +572,13 @@ function VirtualFiles({
       data-virtualized="true"
     >
       <Virtualizer ref={handleRef} scrollRef={scrollElRef} startMargin={startMargin}>
-        {files.map((file) => (
-          <div key={fileKey(file)} data-slot="diff-file-slot" className="pb-3">
+        {files.map((file, index) => (
+          <div
+            key={fileKey(file)}
+            data-slot="diff-file-slot"
+            style={index === files.length - 1 && endRoom ? { minHeight: endRoom } : undefined}
+            className="pb-3"
+          >
             {card(file)}
           </div>
         ))}

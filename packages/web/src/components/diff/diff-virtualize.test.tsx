@@ -166,13 +166,67 @@ describe('per-file state survives the unmount virtualization performs', () => {
 })
 
 describe('the reveal handle (the Changes tab file tree)', () => {
-  it('scrolls to the file element while flat', async () => {
+  it('scrolls only the diff column while flat, never the shell around it', async () => {
     const ref: { current: DiffHandle | null } = { current: null }
-    await renderDiff(<Diff files={[file('a.ts', 3), file('b.ts', 3)]} viewRef={ref} />, 'a.ts')
+    await renderDiff(
+      <main data-slot="main">
+        <div data-diff-scroller="">
+          <Diff files={[file('a.ts', 3), file('b.ts', 3)]} viewRef={ref} />
+        </div>
+      </main>,
+      'a.ts',
+    )
+    const main = document.querySelector<HTMLElement>('main')!
+    const column = document.querySelector<HTMLElement>('[data-diff-scroller]')!
+    const card = document.querySelectorAll<HTMLElement>('[data-slot="diff-file"]')[1]!
+    column.scrollTop = 100
+    vi.spyOn(column, 'getBoundingClientRect').mockReturnValue({ top: 50 } as DOMRect)
+    vi.spyOn(card, 'getBoundingClientRect').mockReturnValue({ top: 700 } as DOMRect)
 
     ref.current!.scrollToPath('b.ts')
 
-    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'start', behavior: 'instant' })
+    // 100 already scrolled + (700 − 50) to the card; the sticky offset (scroll-margin) is 0 here.
+    expect(column.scrollTop).toBe(750)
+    // `scrollIntoView` would hand an at-its-end column's remainder to every ancestor and shove
+    // the whole shell up the window — the bug this pins.
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled()
+    expect(main.scrollTop).toBe(0)
+  })
+
+  it('gives the last file a viewport of room, so a short diff can still park it under the header', async () => {
+    // jsdom has no layout: every element reports this scroller height.
+    const clientHeight = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600)
+    try {
+      const ref: { current: DiffHandle | null } = { current: null }
+      await renderDiff(
+        <main data-slot="main">
+          <Diff files={[file('a.ts', 3), file('b.ts', 3)]} viewRef={ref} />
+        </main>,
+        'a.ts',
+      )
+      const slots = document.querySelectorAll<HTMLElement>('[data-slot="diff-file-slot"]')
+      expect(slots[0]!.style.minHeight).toBe('')
+      expect(slots[1]!.style.minHeight).toBe('600px')
+    } finally {
+      clientHeight.mockRestore()
+    }
+  })
+
+  it('adds no end room where nothing jumps (commit and PR diffs pass no viewRef)', async () => {
+    const clientHeight = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600)
+    try {
+      await renderDiff(
+        <main data-slot="main">
+          <Diff files={[file('a.ts', 3), file('b.ts', 3)]} />
+        </main>,
+        'a.ts',
+      )
+      for (const slot of document.querySelectorAll<HTMLElement>('[data-slot="diff-file-slot"]')) {
+        expect(slot.style.minHeight).toBe('')
+      }
+    } finally {
+      clientHeight.mockRestore()
+    }
   })
 
   it('is a no-op for a path the changeset no longer carries', async () => {

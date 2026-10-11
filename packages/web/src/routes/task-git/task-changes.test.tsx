@@ -791,10 +791,12 @@ describe('the Changes tab composer dock', () => {
     const main = document.createElement('main')
     main.dataset.slot = 'main'
     document.body.append(main)
-    let resize: (() => void) | undefined
+    // Every observer fires: the dock's is not the only one on the page (the diff's end room too).
+    const callbacks: Array<() => void> = []
+    const resize = () => callbacks.forEach((callback) => callback())
     let height = 150
     vi.stubGlobal('ResizeObserver', class {
-      constructor(callback: () => void) { resize = callback }
+      constructor(callback: () => void) { callbacks.push(callback) }
       observe(element: HTMLElement) {
         Object.defineProperty(element, 'offsetHeight', { get: () => height })
       }
@@ -807,7 +809,7 @@ describe('the Changes tab composer dock', () => {
       })
       renderChangesRoute()
       await screen.findByText('notes.md +1')
-      act(() => resize?.())
+      act(() => resize())
       const pane = document.querySelector<HTMLElement>('[data-slot="changes-tree-pane"]')!
       expect(pane.parentElement?.style.getPropertyValue('--changes-dock')).toBe('150px')
       expect(main.style.scrollPaddingBottom).toBe('')
@@ -827,7 +829,7 @@ describe('the Changes tab composer dock', () => {
       const composer = document.querySelector<HTMLTextAreaElement>('[data-slot="thread-dock"] textarea')!
       fireEvent.change(composer, { target: { value: 'first line\nsecond line' } })
       height = 220
-      act(() => resize?.())
+      act(() => resize())
       expect(pane.parentElement?.style.getPropertyValue('--changes-dock')).toBe('220px')
       expect(main.style.scrollPaddingBottom).toBe('')
     } finally {
@@ -969,17 +971,12 @@ describe('the Changes tab composer dock', () => {
     })
     renderChangesRoute()
     await screen.findByText('notes.md +1')
-    // jsdom has no scrolling; record the jump instead.
-    const scrolled = vi.fn()
-    const original = Element.prototype.scrollIntoView
-    Element.prototype.scrollIntoView = scrolled
-    try {
-      fireEvent.click(screen.getByRole('button', { name: 'Show comment on notes.md line 1' }))
-      expect(document.querySelector('[data-slot="tree-file"][data-path="notes.md"]')?.getAttribute('aria-current')).toBe('true')
-      expect(scrolled).toHaveBeenCalled()
-    } finally {
-      Element.prototype.scrollIntoView = original
-    }
+    fireEvent.click(screen.getByRole('button', { name: 'Show comment on notes.md line 1' }))
+    expect(document.querySelector('[data-slot="tree-file"][data-path="notes.md"]')?.getAttribute('aria-current')).toBe('true')
+    // jsdom has no layout to scroll; the reveal landing on the comment is the jump's proof.
+    await waitFor(() =>
+      expect(document.querySelector<HTMLElement>('[data-flash="true"]')?.closest<HTMLElement>('[data-slot="diff-file"]')?.dataset.path).toBe('notes.md'),
+    )
   })
 })
 
