@@ -169,18 +169,6 @@ async function respond(userText, imageCount) {
   // soon as you know" and names only DONE/MONITORING as coming last, so an agent that declares
   // its issue in the turn it asks emits exactly this shape. It used to bury the marker — no
   // card, and in a dispatched task an inbox message could answer the Guard instead of the human.
-  const askMarker = userText.includes('mock:ask-many')
-    ? '\n\nCEZ:ASK ' +
-      JSON.stringify({
-        questions: Array.from({ length: 6 }, (_, index) => ({
-          header: `Area ${index}`,
-          question: `Decision ${index} — which way?`,
-          options: Array.from({ length: index === 0 ? 6 : 2 }, (_, option) => ({
-            label: `Option ${index}.${option}`,
-          })),
-        })),
-      })
-    : userText.includes('mock:ask-bad')
   // `mock:ask-many` → six distinct questions, one of them with six options:
   // over the old 4/4 caps, which refused the whole payload and showed the user
   // raw JSON. It must now render as exactly one card, and a dispatched child
