@@ -112,6 +112,13 @@ export interface DiffProps {
   /** Soft-wrap long lines instead of horizontal scrolling. Default `false`. */
   wrap?: boolean
   /**
+   * Render Markdown files (`isMarkdownPath`) as formatted documents instead of patch rows.
+   * Only their new side is shown — the full text through `loadFileText` when wired, else what
+   * the patch carries. Other files keep `mode`. Relative images load through `imageSrc`.
+   * Default `false`. The fallback renderer ignores it (diffs only), as it ignores `split`.
+   */
+  preview?: boolean
+  /**
    * Expandable context needs file bytes the patch doesn't carry: given a path, resolve the
    * file's current (new-side) text — the Changes tab wires `/api/runs/:id/files` here (1.5).
    * Resolve `null` when unavailable (binary, deleted, too large); the gap stays collapsed.

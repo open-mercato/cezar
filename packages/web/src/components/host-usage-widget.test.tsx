@@ -38,12 +38,15 @@ function sample(over: Partial<HostUsage> = {}): HostUsage {
 
 class FakeSocket {
   static instances: FakeSocket[] = []
+  /** Never reset: the app-wide socket outlives a test whose cleanup lands inside its idle grace. */
+  static all: FakeSocket[] = []
   readyState = 0
   sent: string[] = []
   private handlers = new Map<string, Set<(event: unknown) => void>>()
 
   constructor(_url: string) {
     FakeSocket.instances.push(this)
+    FakeSocket.all.push(this)
   }
 
   addEventListener(name: string, handler: (event: unknown) => void): void {
@@ -63,6 +66,13 @@ class FakeSocket {
   open(): void {
     this.readyState = 1
     this.fire('open', {})
+  }
+
+  /** The hub's refusal for a topic this origin is not trusted for: an error frame, then silence. */
+  refuse(topic: string): void {
+    this.fire('message', {
+      data: JSON.stringify({ type: 'error', topic, error: 'forbidden topic' }),
+    })
   }
 
   private fire(name: string, event: unknown): void {
@@ -111,12 +121,15 @@ function stubViewport(desktop: boolean): void {
 const json = (payload: unknown): Response =>
   new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } })
 
-function serve(health = HEALTH_LOCAL): void {
+function serve(health = HEALTH_LOCAL, hostSample?: () => HostUsage): void {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.includes('/api/v1/health')) return json(health)
+      if (hostSample !== undefined && url.includes('/api/v1/workspace/host-usage')) {
+        return json(hostSample())
+      }
       throw new Error(`unexpected fetch: ${url}`)
     }),
   )
@@ -256,6 +269,32 @@ describe('HostUsageWidget', () => {
       await vi.advanceTimersByTimeAsync(0)
     })
     expect(screen.getByText('33%')).toBeTruthy()
+    expect(screen.queryByText('stale')).toBeNull()
+  })
+
+  it('keeps updating from the route when the hub refuses the host topic (#1363)', async () => {
+    // The dev-proxy case: before the fix the glance sat on `sampling…`, or on one route answer the
+    // Machine card had fetched, which then turned `stale` and never moved again.
+    let reads = 0
+    serve(HEALTH_LOCAL, () => {
+      reads += 1
+      return sample({ cpuPct: 20 + reads, sampledAt: new Date(Date.UTC(2026, 8, 20, 0, 0, reads * 2)).toISOString() })
+    })
+    render(<HostUsageWidget />, { wrapper: wrapper() }) // the provider mounts the root writer
+
+    // Refuse until the writer has subscribed (health has to answer first) and polling begins.
+    await waitFor(() => {
+      act(() => {
+        for (const socket of FakeSocket.all) {
+          if (socket.readyState === 0) socket.open()
+          socket.refuse('host') // only the live shared socket's handlers still act on it
+        }
+      })
+      expect(reads).toBeGreaterThan(0)
+    })
+
+    await waitFor(() => expect(screen.getByText('21%')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('22%')).toBeTruthy(), { timeout: 4_000 })
     expect(screen.queryByText('stale')).toBeNull()
   })
 

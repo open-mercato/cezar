@@ -101,6 +101,17 @@ describe('fromDefinition / toBody', () => {
     })
   })
 
+  it('keeps a PR-head verifier verifying the PR head when it is saved from the editor', () => {
+    const verifier = {
+      ...GITHUB_DEF,
+      events: ['pull_request.opened' as const],
+      task: { ...GITHUB_DEF.task, checkout: 'pr-head' as const, allowForkHeads: true },
+    }
+    expect(toBody(fromDefinition(verifier)).task).toMatchObject({ checkout: 'pr-head', allowForkHeads: true })
+    // And a definition without them gains neither.
+    expect(toBody(fromDefinition(GITHUB_DEF)).task).not.toHaveProperty('checkout')
+  })
+
   it('sends only the active kind — a schedule body carries no events or filters', () => {
     const draft = { ...fromDefinition(GITHUB_DEF), kind: 'schedule' as const }
     const body = toBody(draft)

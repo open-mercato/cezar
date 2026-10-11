@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { stepSecretsSchema } from '@open-mercato/cezar-contract';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { workflowGraphSchema } from './graph.ts';
 
@@ -57,9 +58,17 @@ export const workflowStepSchema = z
         retryOn: z.array(z.number().int().positive()).optional(),
       })
       .optional(),
+    /** Check steps only (spec 2026-10-10-project-secrets-vault-options): which project or
+     *  workspace secrets reach this command, by name, each optionally renamed with `as`.
+     *  Omitted means every secret whose audiences include `checks`. Refused on an agent step at
+     *  load time — the one place YAML could try to route a secret to a backend. */
+    secrets: stepSecretsSchema.optional(),
   })
   .refine((s) => Boolean(s.command) !== Boolean(s.prompt ?? s.skill), {
     message: 'a step is either an agent step (prompt/skill) or a check step (command), not both',
+  })
+  .refine((s) => !s.secrets || Boolean(s.command), {
+    message: 'secrets: is for check steps only — an agent step never receives a secret',
   });
 
 /**

@@ -17,6 +17,9 @@
   English | <a href="README.zh-CN.md">简体中文</a> | <a href="README.zh-TW.md">繁體中文</a>
 </p>
 
+> Compatibility note: GitHub list rows may omit `body` in the next minor release. Consumers should
+> hydrate full text from `/api/v1/github/comments/:kind/:number` (`detail.body`) now.
+
 <div align="center">
   <h2>
     One control center for Claude Code, Codex, OpenCode and other coding agents.<br />
@@ -203,6 +206,7 @@ The [reference](docs/reference.md) covers everything else:
 [environment variables](docs/reference.md#how-it-runs-agents),
 [agent backends](docs/reference.md#coding-agent-backends),
 [multiple projects](docs/reference.md#multiple-projects-one-cockpit),
+[the CLI and HTTP API](docs/reference.md#talking-to-a-running-cockpit),
 [remote access](docs/reference.md#remote-access-host-cezar-on-a-server) and
 [local development](docs/reference.md#local-development).
 

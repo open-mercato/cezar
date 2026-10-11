@@ -100,6 +100,9 @@ export const stepStateSchema = z.object({
    *  that created it, so resume and Continue read this rather than the project's current
    *  selection. Absent on records written before accounts existed. */
   profileId: z.string().optional(),
+  /** Canonical provider/model identity resolved for this step; absent for auto-model steps and
+   *  records written before per-step attribution existed. */
+  modelIdentity: z.string().optional(),
   costUsd: z.number().optional(),
 });
 export type StepState = z.infer<typeof stepStateSchema>;
@@ -262,6 +265,21 @@ export const runRecordSchema = z.object({
    *  question was still unanswered. Present only on a `failed` run; the cockpit keeps such a run
    *  under "needs you" until the answer reopens it. Absent on records written before it existed. */
   awaitingAnswerSince: z.string().optional(),
+  /** A run a `checkout: 'pr-head'` automation launched on a pull request's head (spec
+   *  2026-10-06-agentic-e2e-checks Phase 3): the fetched head it tested. Absent on every other run. */
+  prHead: z
+    .object({
+      number: z.number(),
+      repo: z.string(),
+      headRepo: z.string(),
+      headRef: z.string(),
+      headSha: z.string(),
+      baseRef: z.string(),
+      ref: z.string(),
+    })
+    .optional(),
+  /** The PR head came from a fork: its check steps run without the project's or workspace's secrets. */
+  untrustedHead: z.boolean().optional(),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),

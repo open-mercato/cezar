@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { runnerSchema } from './health.ts';
+import { stepSecretsSchema } from './secrets.ts';
 
 /**
  * The WORKFLOWS family: the chain catalog, the save/parse routes, and the planner.
@@ -41,9 +42,15 @@ export const workflowStepDefSchema = z
         retryOn: z.array(z.number().int().positive()).optional(),
       })
       .optional(),
+    /** Check steps only: which project/workspace secrets reach this command (by name, optionally
+     *  renamed). Omitted means every secret whose audiences include `checks`. */
+    secrets: stepSecretsSchema.optional(),
   })
   .refine((s) => Boolean(s.command) !== Boolean(s.prompt ?? s.skill), {
     message: 'a step is either an agent step (prompt/skill) or a check step (command), not both',
+  })
+  .refine((s) => !s.secrets || Boolean(s.command), {
+    message: 'secrets: is for check steps only — an agent step never receives a secret',
   });
 export type WorkflowStepDef = z.infer<typeof workflowStepDefSchema>;
 
@@ -106,6 +113,7 @@ export const workflowGraphNodeSchema = z.discriminatedUnion('type', [
     type: z.literal('check'),
     command: z.string().min(1),
     retryOn: z.array(z.number().int().positive()).optional(),
+    secrets: stepSecretsSchema.optional(),
   }),
   z.object({ ...graphNodeBase, type: z.literal('gate.human'), message: z.string().min(1), timeoutMs: waitMs.optional() }),
   z.object({

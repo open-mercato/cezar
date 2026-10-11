@@ -8,7 +8,7 @@ import { RunStore, type RunRecord } from '../runs/store.ts';
 import { graphIssues, graphRailSteps, graphToSteps, type WorkflowGraph } from './graph.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunManager } from './run.ts';
-import type { WorkflowDef } from './types.ts';
+import { QUICK_TASK_WORKFLOW, type WorkflowDef } from './types.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -133,8 +133,10 @@ describe('graph system nodes', () => {
     manager = new RunManager(store, repoRoot, { semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 1 } }) });
     const gated = manager.startRun(def(GATE), { task: 'x', worktree: true }).id;
     await until(gated, parkedAt('gate'));
-    const quick: WorkflowDef = { name: 'quick-task', source: 'built-in', steps: [{ id: 'task', prompt: '{{task}} mock:done' }] };
-    const other = manager.startRun(quick, { task: 'meanwhile', worktree: true }).id;
+    // The mock marker rides in the TASK, not a custom prompt: a `quick-task` snapshot that differs
+    // from the catalog's is swapped for the built-in at dequeue (#1078), which dropped a
+    // `{{task}} mock:done` prompt and left this run parked `waiting` instead of done.
+    const other = manager.startRun(QUICK_TASK_WORKFLOW, { task: 'meanwhile mock:done', worktree: true }).id;
     expect(terminal(await until(other, terminal))).toBe(true);
     expect(store.getRun(gated)?.status).toBe('waiting');
     manager.cancel(gated);

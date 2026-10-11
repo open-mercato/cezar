@@ -53,7 +53,7 @@ import {
   getSkills,
   getSkillsWhenReady,
   getTodos,
-  getTrackerAssociation, getTrackerConnection,
+  getTrackerAssociation, getTrackerConnection, getProjectSecrets, getWorkspaceSecrets, getE2eStatus,
   getTrackerCandidates,
   getTrackerItem,
   getTrackerItems,
@@ -142,6 +142,14 @@ import { subscribeTopic } from './ws'
  * ever reach A's data. Call sites are unchanged — they keep writing `queryKeys.runs.list()`.
  */
 export const queryKeys = {
+  secrets: {
+    allFor: (projectId: string) => ['secrets', projectId] as const,
+    list: () => ['secrets', queryScope()] as const,
+  },
+  e2e: {
+    allFor: (projectId: string) => ['e2e', projectId] as const,
+    status: () => ['e2e', queryScope()] as const,
+  },
   tracker: {
     allFor: (projectId: string) => ['tracker', projectId] as const,
     all: () => ['tracker', queryScope()] as const,
@@ -240,6 +248,7 @@ export const queryKeys = {
     return [queryScope(), 'worktrees'] as const
   },
   github: (params: { limit?: number } = {}) => [queryScope(), 'github', params.limit ?? null] as const,
+  githubPages: (limit = 50) => [queryScope(), 'github', 'pages', limit] as const,
   /** Lazy PR checks glyphs (`GET /api/github/checks`, #664), keyed by the sorted PR numbers so the
    *  same visible window de-dupes to one cache entry. */
   githubChecks: (prNumbers: readonly number[]) =>
@@ -268,6 +277,20 @@ export const queryKeys = {
 }
 
 export const TRACKER_STALE_TIME = 60_000
+
+export function useProjectSecrets() {
+  return useQuery({ queryKey: queryKeys.secrets.list(), queryFn: ({ signal }) => getProjectSecrets({ signal }) })
+}
+/** The user's own secrets (spec 2026-10-10-project-secrets-vault-options). Not scope-led: one machine, one set. */
+export function useWorkspaceSecrets() {
+  return useQuery({ queryKey: workspaceQueryKeys.secrets, queryFn: ({ signal }) => getWorkspaceSecrets({ signal }) })
+}
+
+/** `GET /e2e` (spec 2026-10-10-e2e-one-click-setup). The setup run's live status comes from
+ *  `useRun`, which the global event stream keeps current — no poll here. */
+export function useE2eStatus() {
+  return useQuery({ queryKey: queryKeys.e2e.status(), queryFn: ({ signal }) => getE2eStatus({ signal }) })
+}
 
 export function useTrackerConnection() {
   return useQuery({ queryKey: queryKeys.tracker.connection(), queryFn: ({ signal }) => getTrackerConnection({ signal }) })
@@ -383,6 +406,8 @@ export const workspaceQueryKeys = {
   /** The cross-project task index behind ⌘K. Workspace-led for the same reason the registry is:
    *  it answers for every project at once, so no scope owns it. */
   runsIndex: ['workspace', 'runs-index'] as const,
+  /** `~/.cezar/secrets/workspace.json` via `GET /api/v1/workspace/secrets` — metadata only. */
+  secrets: ['workspace', 'secrets'] as const,
   /** `~/.cezar/ui-state.json` via `GET/PUT /api/workspace/ui-state` (step 2.7) — cross-project
    *  GUI prefs, e.g. the sidebar's per-project collapse map (step 3.3), and — since step 3.5 —
    *  appearance + notifications, which describe the user rather than a repo. */
@@ -1796,6 +1821,25 @@ export function useGithub(params: { limit?: number } = {}, enabled = true) {
     queryKey: queryKeys.github(params),
     queryFn: ({ signal }) => getGithub({ limit: params.limit }, { signal }),
     enabled,
+  })
+}
+
+/** Cursor-paged GitHub list. Both cursors advance together because the server asks GitHub for
+ * one issue page and one PR page per round trip. React Query retains earlier pages when a later
+ * page is appended, so loading more never refetches rows already on screen. */
+export function useGithubInfinite(limit = 50, enabled = true) {
+  return useInfiniteQuery({
+    queryKey: queryKeys.githubPages(limit),
+    queryFn: ({ pageParam, signal }) =>
+      getGithub({ limit, issuesCursor: pageParam.issuesCursor, prsCursor: pageParam.prsCursor }, { signal }),
+    initialPageParam: { issuesCursor: undefined as string | undefined, prsCursor: undefined as string | undefined },
+    getNextPageParam: (last) => {
+      const issuesCursor = last.issuesNextCursor ?? undefined
+      const prsCursor = last.prsNextCursor ?? undefined
+      return issuesCursor || prsCursor ? { issuesCursor, prsCursor } : undefined
+    },
+    enabled,
+    staleTime: 60_000,
   })
 }
 

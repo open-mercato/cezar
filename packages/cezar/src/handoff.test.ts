@@ -1,7 +1,142 @@
-import { describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { HANDOFF_INSTRUCTIONS } from './handoff.ts';
+import { appendHandoffHeartbeat, HANDOFF_INSTRUCTIONS, handoffPath } from './handoff.ts';
 import { todoSchema } from './todos.ts';
+
+const RUN_ID = 'run-1215';
+
+function journal(dataDir: string, progress: string, resume = 'keep this') {
+  const file = handoffPath(dataDir, RUN_ID);
+  mkdirSync(join(dataDir, 'runs'), { recursive: true });
+  writeFileSync(
+    file,
+    `# Handoff\n\n## Goal\n\nGoal\n\n## Progress log\n\n${progress}\n## Resume notes\n\n${resume}\n`,
+  );
+  return file;
+}
+
+describe('appendHandoffHeartbeat bounded progress log', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cezar-handoff-'));
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('coalesces adjacent same-note heartbeats and extends an existing count', () => {
+    journal(
+      dataDir,
+      '- 2026-10-08T00:00:00Z — turn complete — status=running (×2)\n' +
+        '- 2026-10-07T23:00Z — turn complete — status=running\n' +
+        '- 2026-10-07T22:00:00.000Z — step "build" complete — status=done',
+    );
+    vi.setSystemTime(new Date('2026-10-08T01:00:00.000Z'));
+
+    appendHandoffHeartbeat(dataDir, RUN_ID, 'turn complete — status=running');
+
+    const text = readFileSync(handoffPath(dataDir, RUN_ID), 'utf8');
+    expect(text).toContain('- 2026-10-08T01:00:00.000Z — turn complete — status=running (×4)');
+    expect(text).toContain('- 2026-10-07T22:00:00.000Z — step "build" complete — status=done');
+    expect(text).not.toContain('2026-10-07T23:00Z');
+  });
+
+  it('does not coalesce across agent lines, note changes, blanks, or section boundaries', () => {
+    journal(
+      dataDir,
+      '- 2026-10-08T00:00:00Z — turn complete — status=running\n' +
+        '- 2026-10-07T23:00:00Z — agent copied this timestamped note\n' +
+        '- 2026-10-07T22:00:00Z — turn complete — status=running\n' +
+        '\n' +
+        '- 2026-10-07T21:00:00Z — turn complete — status=running',
+    );
+    vi.setSystemTime(new Date('2026-10-08T01:00:00.000Z'));
+
+    appendHandoffHeartbeat(dataDir, RUN_ID, 'turn complete — status=running');
+
+    const text = readFileSync(handoffPath(dataDir, RUN_ID), 'utf8');
+    expect(text.match(/turn complete — status=running/g)).toHaveLength(3);
+    expect(text).toContain('- 2026-10-07T23:00:00Z — agent copied this timestamped note');
+    expect(text).toContain('\n\n- 2026-10-07T21:00:00Z');
+  });
+
+  it('caps distinct eligible heartbeat entries while retaining newest entries and other content', () => {
+    const oldEntries = Array.from(
+      { length: 101 },
+      (_, index) =>
+        `- 2026-10-07T${String(Math.floor(index / 60)).padStart(2, '0')}:${String(index % 60).padStart(2, '0')}:00Z — turn complete — status=${100 - index}`,
+    ).join('\n');
+    journal(dataDir, `${oldEntries}\n- 2026-10-07T00:00:00Z — agent milestone`);
+    vi.setSystemTime(new Date('2026-10-08T01:00:00.000Z'));
+
+    appendHandoffHeartbeat(dataDir, RUN_ID, 'step "new" complete — status=done');
+
+    const text = readFileSync(handoffPath(dataDir, RUN_ID), 'utf8');
+    const progress = text.slice(text.indexOf('## Progress log'), text.indexOf('## Resume notes'));
+    expect(progress.match(/^- .* — (?:turn complete|step ")/gm)).toHaveLength(100);
+    expect(progress).toContain('step "new" complete — status=done');
+    expect(progress).not.toContain('status=0');
+    expect(progress).toContain('- 2026-10-07T00:00:00Z — agent milestone');
+    expect(text).toContain('## Goal\n\nGoal');
+    expect(text).toContain('## Resume notes\n\nkeep this');
+  });
+
+  it('accepts minute-precision and legacy bare timestamps, but leaves non-engine lines intact', () => {
+    journal(
+      dataDir,
+      '2026-10-08T00:00Z — turn complete — status=running\n' +
+        '2026-10-07T23:00:58.028Z — turn complete — status=running\n' +
+        '- 2026-10-07T22:00:58Z — user milestone',
+    );
+    vi.setSystemTime(new Date('2026-10-08T01:00:00.000Z'));
+
+    appendHandoffHeartbeat(dataDir, RUN_ID, 'turn complete — status=running');
+
+    const text = readFileSync(handoffPath(dataDir, RUN_ID), 'utf8');
+    expect(text).toContain('- 2026-10-08T01:00:00.000Z — turn complete — status=running (×3)');
+    expect(text).toContain('- 2026-10-07T22:00:58Z — user milestone');
+  });
+
+  it('preserves impossible timestamps and avoids unsafe count summation', () => {
+    journal(
+      dataDir,
+      '- 2026-99-08T00:00:00Z — turn complete — status=bad\n' +
+        '- 2026-10-08T00:00:00Z — turn complete — status=running (×9007199254740991)',
+    );
+    vi.setSystemTime(new Date('2026-10-08T01:00:00.000Z'));
+
+    appendHandoffHeartbeat(dataDir, RUN_ID, 'turn complete — status=running');
+
+    const text = readFileSync(handoffPath(dataDir, RUN_ID), 'utf8');
+    expect(text).toContain('- 2026-99-08T00:00:00Z — turn complete — status=bad');
+    expect(text).toContain(
+      '- 2026-10-08T00:00:00Z — turn complete — status=running (×9007199254740991)',
+    );
+    expect(text).toContain('- 2026-10-08T01:00:00.000Z — turn complete — status=running');
+    expect(text).not.toContain('(×9007199254740992)');
+  });
+
+  it('keeps header-less append and missing-file no-op behavior', () => {
+    const file = handoffPath(dataDir, RUN_ID);
+    mkdirSync(join(dataDir, 'runs'), { recursive: true });
+    writeFileSync(file, '# Handoff without the progress marker');
+    vi.setSystemTime(new Date('2026-10-08T01:00:00.000Z'));
+
+    appendHandoffHeartbeat(dataDir, RUN_ID, 'picked from variant-a');
+    expect(readFileSync(file, 'utf8')).toBe(
+      '# Handoff without the progress marker\n- 2026-10-08T01:00:00.000Z — picked from variant-a\n',
+    );
+
+    appendHandoffHeartbeat(dataDir, 'missing-run', 'turn complete — status=running');
+    expect(readFileSync(file, 'utf8')).toContain('picked from variant-a');
+  });
+});
 
 /**
  * HANDOFF_INSTRUCTIONS is the only thing that tells an agent what to append to todos.json,

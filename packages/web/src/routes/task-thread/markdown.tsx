@@ -4,6 +4,7 @@ import {
   defaultRemarkPlugins,
   type CodeHighlighterPlugin,
   type LinkSafetyConfig,
+  type UrlTransform,
 } from 'streamdown'
 
 import { SYN_THEME, highlight, highlightSync, supportedLanguages } from '@/lib/highlighter'
@@ -192,19 +193,35 @@ const LINK_SAFETY: LinkSafetyConfig = {
  *
  * `breaks` opts into hard line breaks — set it for user-authored text, leave it off for the
  * assistant's (see `remarkHardBreaks`).
+ *
+ * `variant="document"` switches chat-scale typography for reading-scale (`.markdown-document` in
+ * index.css) — the diff's Markdown preview, where the text is a whole file, not a reply.
+ *
+ * `urlTransform` rewrites every link/image URL — the diff's Markdown preview resolves a file's
+ * relative links against its own directory. Pass a stable function: the memo compares by identity.
  */
 export const Markdown = memo(function Markdown({
   children,
   breaks = false,
   inline = false,
+  variant = 'chat',
+  urlTransform,
 }: {
   children: string
   breaks?: boolean
   inline?: boolean
+  variant?: 'chat' | 'document'
+  urlTransform?: UrlTransform
 }) {
   return (
     <Streamdown
-      className={inline ? 'thread-markdown thread-markdown-inline' : 'thread-markdown'}
+      className={
+        inline
+          ? 'thread-markdown thread-markdown-inline'
+          : variant === 'document'
+            ? 'thread-markdown markdown-document'
+            : 'thread-markdown'
+      }
       plugins={{ code: shikiPlugin }}
       shikiTheme={[SYN_THEME, SYN_THEME]}
       remarkPlugins={breaks ? HARD_BREAKS : undefined}
@@ -213,6 +230,9 @@ export const Markdown = memo(function Markdown({
       components={inline ? INLINE_COMPONENTS : MARKDOWN_COMPONENTS}
       urlTransform={transcriptUrlTransform}
       linkSafety={LINK_SAFETY}
+      // Spread, not `urlTransform={undefined}`: an explicit undefined could displace
+      // Streamdown's own sanitizing default for every other caller.
+      {...(urlTransform ? { urlTransform } : {})}
       // Copy + language chip on every fence (the deliverable); download is file-manager noise
       // in a chat, and table export dropdowns are R5-territory chrome.
       controls={{

@@ -92,6 +92,9 @@ const stepStateSchema = z.object({
    *  a PAIR. Without it, changing the project's account would silently make Continue resume
    *  against the wrong account's session store. Absent = the discovered default. */
   profileId: z.string().optional(),
+  /** Canonical provider/model identity resolved for this step. Optional so older runs.json files
+   *  remain readable and auto-model steps can retain an absent identity. */
+  modelIdentity: z.string().optional(),
   /** Dollar cost reported by the claude CLI for this step's turns. */
   costUsd: z.number().optional(),
 });
@@ -272,6 +275,27 @@ export const runRecordSchema = z.object({
    * so a Continue, a Finish or a cancel clears it without the caller's help.
    */
   awaitingAnswerSince: z.string().datetime().optional().catch(undefined),
+  /**
+   * A run a `checkout: 'pr-head'` automation launched on a pull request's head (spec
+   * 2026-10-06-agentic-e2e-checks Phase 3). `headSha` is what was fetched and tested — also the
+   * run's `baseBranch` — and `ref` the namespaced `refs/cezar/pr/<n>` holding it. Its presence
+   * is what refuses `POST /runs/:id/pr`: the branch would contain the whole foreign PR.
+   */
+  prHead: z
+    .object({
+      number: z.number().int().positive(),
+      repo: z.string(),
+      headRepo: z.string(),
+      headRef: z.string(),
+      headSha: z.string(),
+      baseRef: z.string(),
+      ref: z.string(),
+    })
+    .optional()
+    .catch(undefined),
+  /** The PR head came from a fork the automation admitted (`allowForkHeads`): untrusted code, so
+   *  its check steps never receive any secrets. */
+  untrustedHead: z.boolean().optional().catch(undefined),
   /**
    * Exact deadline at which a run stopped by a provider USAGE LIMIT resumes itself
    * (spec 2026-08-03-auto-resume-after-usage-limit) — the reset instant the provider named plus a
