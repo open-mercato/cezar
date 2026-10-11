@@ -4756,7 +4756,6 @@ export function createApp(deps: ServerDeps) {
       const { store } = c.get('project');
       const open = store.listRuns().filter((run) => !run.archived).map((run) => run.id);
       const archived = store.archiveFinished();
-      c.get('project').manager.releaseArchivedCheckState?.();
       // The sweep is an archive like any other: each task it took loses its terminals (spec §6).
       if (archived > 0) for (const id of open) if (store.getRun(id)?.archived) stopTaskProcesses(id);
       // One event for the sweep, `value` = how many it archived (summed on the dashboard).
@@ -4780,7 +4779,6 @@ export function createApp(deps: ServerDeps) {
       const retiresQuestion = parsed.data.archived !== false && store.getRun(id)?.awaitingAnswerSince !== undefined;
       const run = store.setArchived(id, parsed.data.archived !== false);
       if (run && parsed.data.archived !== false) stopTaskProcesses(id);
-      if (run && parsed.data.archived !== false) manager.releaseCheckState?.(id);
       if (run && retiresQuestion) manager.notifyQuestionRetired?.(id);
       // Labelled with the button that did it.
       if (run) track(parsed.data.archived !== false ? 'task_archived' : 'task_unarchived', { label: parsed.data.surface ?? 'api' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
@@ -5777,7 +5775,6 @@ export function createApp(deps: ServerDeps) {
           deleteRunLayouts(dataDir, id);
           if (run.worktreePath) await removeWorktree(repoRoot, run.worktreePath, run.branch);
           const deleted = store.deleteRun(id);
-          if (deleted) manager.releaseCheckState?.(id);
           // The run's `refs/cezar/pr/<n>` goes with the last run that needed it (Phase 3).
           if (deleted && run.prHead) await manager.sweepPrHeadRefs();
           if (!deleted) return c.json({ error: 'not found' }, 404);

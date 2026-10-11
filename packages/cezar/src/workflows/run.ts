@@ -1289,13 +1289,6 @@ export class RunManager {
     this.autosaveCheckpointBlockedRuns.delete(runId);
   }
 
-  /** Bulk archive has no per-run callback, so reconcile archived entries in one pass. */
-  releaseArchivedCheckState(): void {
-    for (const runId of new Set([...this.checkArtifactSnapshots.keys(), ...this.autosaveCheckpointBlockedRuns])) {
-      const run = this.store.getRun(runId);
-      if (!run || run.archived) this.releaseCheckState(runId);
-    }
-  }
   // Queue + `starting` set (spec 006, janitor's pump() pattern): `starting`
   // covers the window between shifting a run off the queue and the run
   // registering in `active`, so parallel-slot counting is never racy.
@@ -1376,6 +1369,10 @@ export class RunManager {
   /** Unsubscribe handle for the constructor's `onUsage` subscription — released
    *  by dispose() so a torn-down manager stops receiving sampler ticks. */
   private readonly offUsage: () => void;
+
+  /** Release transient check ownership at the store lifecycle boundary so routes, bulk archive,
+   * variant cleanup, and future callers cannot forget the second half of a mutation. */
+  private readonly offStoreLifecycle: () => void;
 
   /** The stalled-queue watchdog (see `rescueStalledQueue`). */
   private readonly queueWatchdog: ReturnType<typeof setInterval>;
@@ -1476,6 +1473,16 @@ export class RunManager {
     // Memory guard (#memory-guard): the shared process-tree sampler already ticks ~every 2 s for
     // the runs table; piggyback on it to enforce the per-task memory ceiling.
     this.offUsage = onUsage((snapshot) => void this.enforceMemoryLimit(snapshot));
+    const onRun = (run: RunRecord): void => {
+      if (run.archived) this.releaseCheckState(run.id);
+    };
+    const onDeleted = (runId: string): void => this.releaseCheckState(runId);
+    this.store.on('run', onRun);
+    this.store.on('deleted', onDeleted);
+    this.offStoreLifecycle = () => {
+      this.store.off('run', onRun);
+      this.store.off('deleted', onDeleted);
+    };
     this.queueWatchdog = setInterval(() => void this.rescueStalledQueue(), QUEUE_WATCHDOG_MS);
     this.queueWatchdog.unref?.();
   }
@@ -1496,6 +1503,7 @@ export class RunManager {
     this.store.off('deleted', this.onRunDeletedHolds);
     this.lifecycle.dispose();
     this.offUsage();
+    this.offStoreLifecycle();
     this.offSemaphore();
     clearInterval(this.queueWatchdog);
     for (const [runId, state] of this.active) {
