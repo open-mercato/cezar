@@ -8,13 +8,13 @@ Scope: `packages/cezar/src/server/capabilities.ts` and its focused tests only. N
 
 ### Phase 1: Parse and classify mapped loopback authorities
 
-- [ ] 1.1 Add strict dotted-quad IPv4-tail expansion to IPv6 canonicalization.
-- [ ] 1.2 Recognize only canonical IPv4-mapped addresses whose mapped IPv4 value is in 127.0.0.0/8.
+- [x] 1.1 Add strict dotted-quad IPv4-tail expansion to IPv6 canonicalization. — 536f51f8
+- [x] 1.2 Recognize only canonical IPv4-mapped addresses whose mapped IPv4 value is in 127.0.0.0/8. — 536f51f8
 
 ### Phase 2: Regression and security coverage
 
-- [ ] 2.1 Add valid bracketed/bare/ported and canonical-equivalent cases.
-- [ ] 2.2 Add malformed, invalid-octet, non-loopback, spoofing, and authority ambiguity cases.
+- [x] 2.1 Add valid bracketed/bare/ported and canonical-equivalent cases. — 536f51f8
+- [x] 2.2 Add malformed, invalid-octet, non-loopback, spoofing, and authority ambiguity cases. — 536f51f8
 - [ ] 2.3 Run focused tests, full validation gate, and review the final diff.
 
 ## Risks
@@ -28,11 +28,11 @@ Scope: `packages/cezar/src/server/capabilities.ts` and its focused tests only. N
 
 ### Phase 1: Parse and classify mapped loopback authorities
 
-- [ ] 1.1 Add strict dotted-quad IPv4-tail expansion to IPv6 canonicalization.
-- [ ] 1.2 Recognize only canonical IPv4-mapped addresses whose mapped IPv4 value is in 127.0.0.0/8.
+- [x] 1.1 Add strict dotted-quad IPv4-tail expansion to IPv6 canonicalization. — 536f51f8
+- [x] 1.2 Recognize only canonical IPv4-mapped addresses whose mapped IPv4 value is in 127.0.0.0/8. — 536f51f8
 
 ### Phase 2: Regression and security coverage
 
-- [ ] 2.1 Add valid bracketed/bare/ported and canonical-equivalent cases.
-- [ ] 2.2 Add malformed, invalid-octet, non-loopback, spoofing, and authority ambiguity cases.
+- [x] 2.1 Add valid bracketed/bare/ported and canonical-equivalent cases. — 536f51f8
+- [x] 2.2 Add malformed, invalid-octet, non-loopback, spoofing, and authority ambiguity cases. — 536f51f8
 - [ ] 2.3 Run focused tests, full validation gate, and review the final diff.
