@@ -19,7 +19,18 @@ vi.mock('@/components/skill-detail', () => ({
 const skill: Skill = { name: 'review', source: 'builtin', path: '/skills/review.md', body: '# Review' }
 
 describe('SourcePill skill preview', () => {
-  beforeEach(() => previewRendered.mockClear())
+  beforeEach(() => {
+    previewRendered.mockClear()
+    Element.prototype.scrollIntoView = vi.fn()
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    )
+  })
 
   it('keeps the preview wrapper mounted and opens the selected skill without picking it', async () => {
     const onPick = vi.fn()
@@ -33,7 +44,7 @@ describe('SourcePill skill preview', () => {
     expect(previewRendered).toHaveBeenCalledWith(null)
     fireEvent.click(screen.getByRole('button', { name: 'Choose a skill or workflow' }))
     fireEvent.click(await screen.findByRole('button', { name: 'View skill review' }))
-    await waitFor(() => expect(screen.getByRole('dialog').textContent).toContain('review'))
+    await waitFor(() => expect(screen.getAllByRole('dialog')[0]?.textContent).toContain('review'))
     expect(onPick).not.toHaveBeenCalled()
   })
 })
