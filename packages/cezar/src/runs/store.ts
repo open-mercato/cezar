@@ -1,6 +1,18 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { StreamRedaction } from './stream-redaction.ts';
@@ -389,6 +401,9 @@ export const runRecordSchema = z.object({
    *  runs, on every run not yet opened, and on one `setUnread` put back to unread
    *  (#775) — the unread rule treats all three alike. */
   seenAt: z.string().optional(),
+  /** Highest `seq` handed out for this run, ephemeral frames included, so a restart resumes the
+   *  counter without parsing the transcript. Absent on older records, which fall back to that parse. */
+  lastSeq: z.number().int().nonnegative().optional(),
   currentStepId: z.string().optional(),
   error: z.string().optional(),
   steps: z.array(stepStateSchema),
@@ -444,6 +459,8 @@ export interface RunEvent {
 }
 
 const MAX_RUNS_KEPT = 300;
+/** Every save rewrites the whole index, and a live run touches its record at event rate. */
+const SAVE_DEBOUNCE_MS = 1_000;
 const MAX_ARCHIVED_KEPT = 500;
 
 const PR_URL_RE = /https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
@@ -457,6 +474,8 @@ const CREATED_PR_RE =
 /** Referenced-tier working-set cap (spec 2026-07-16-pr-autodiscovery): past
  *  this many distinct PRs the conversation is a survey, not a subject. */
 const MAX_PR_CANDIDATES = 8;
+/** Enough for any command line or path; a longer tool input is file content, not a reference. */
+const MAX_TOOL_INPUT_HAYSTACK_CHARS = 8_192;
 
 /** The repository a project IS, as `resolveRepoHandle` reports it. `null`/absent means "unknown",
  *  which is a real and common state (no `gh`, no remote, a non-git root) — never an error. */
@@ -544,6 +563,16 @@ function clearPin(run: RunRecord): void {
   delete run.pinnedAt;
 }
 
+function parseSeq(line: string): number | undefined {
+  if (line.trim() === '') return undefined;
+  try {
+    const seq = (JSON.parse(line) as { seq?: unknown }).seq;
+    return typeof seq === 'number' ? seq : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function eventTextFragments(event: Record<string, unknown>): string[] {
   const fragments: string[] = [];
   for (const key of ['text', 'result', 'message'] as const) {
@@ -561,7 +590,7 @@ function eventTextFragments(event: Record<string, unknown>): string[] {
       fragments.push(it.input);
     } else if (it.input !== undefined) {
       try {
-        fragments.push(JSON.stringify(it.input));
+        fragments.push(JSON.stringify(it.input).slice(0, MAX_TOOL_INPUT_HAYSTACK_CHARS));
       } catch {
         // circular input — skip it
       }
@@ -1345,6 +1374,7 @@ export class RunStore extends EventEmitter {
     // appends at agent-event rates are effectively free.
     appendFileSync(this.eventsPath(runId), `${JSON.stringify(full)}\n`, 'utf8');
     this.emit('event', { runId, event: full });
+    if (this.janitorSettled(run)) return full;
 
     // The janitor trick: agents print the PR URL after `gh pr create` — the
     // first one spotted in the transcript becomes the run's PR link. Scans v1
@@ -1395,6 +1425,19 @@ export class RunStore extends EventEmitter {
       if (changed) this.touch(run);
     }
     return full;
+  }
+
+  /**
+   * True when no event can change the janitor's answer any more: the created PR is adopted, and the
+   * issue working set is capped so `trackReferencedIssues` could only re-derive what it already
+   * stored — except seeding `issueNumber`, which stays open while that field is empty.
+   */
+  private janitorSettled(run: RunRecord): boolean {
+    return (
+      run.pullRequestUrl !== undefined &&
+      (run.referencedIssueCandidates?.length ?? 0) >= MAX_PR_CANDIDATES &&
+      !(run.markerRefs?.issue === undefined && run.referencedIssueUrl && run.issueNumber === undefined)
+    );
   }
 
   /**
@@ -1635,13 +1678,15 @@ export class RunStore extends EventEmitter {
     return existed;
   }
 
-  /** Write the index out now (used on shutdown). */
-  flush(options: { throwOnError?: boolean } = {}): void {
+  /** Write the index out now. `flush()` is also a mid-run checkpoint (usage, automation launches),
+   *  so indentation is opt-in: only a real shutdown passes `pretty`, leaving the hand-editable file
+   *  the README promises behind a clean exit while every in-run save stays compact. */
+  flush(options: { throwOnError?: boolean; pretty?: boolean } = {}): void {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
-    this.saveNow(options.throwOnError);
+    this.saveNow(options.throwOnError, options.pretty ?? false);
   }
 
   // ---- internals -----------------------------------------------------------
@@ -1651,6 +1696,12 @@ export class RunStore extends EventEmitter {
   private nextSeq(runId: string): number {
     const next = (this.seqs.get(runId) ?? this.rehydrateSeq(runId)) + 1;
     this.seqs.set(runId, next);
+    // The high-water mark rides whatever index save happens next — a status flip, a usage update,
+    // the shutdown flush — rather than scheduling one per seq. An ephemeral `item.delta` stream
+    // touches nothing else, so scheduling here would rewrite the whole index once a second for a
+    // run whose transcript never changed; `rehydrateSeq` recovers the tail from disk on its own.
+    const run = this.runs.get(runId);
+    if (run) run.lastSeq = next;
     return next;
   }
 
@@ -1660,11 +1711,45 @@ export class RunStore extends EventEmitter {
    *  resumed event, even across a reload (the frozen-transcript symptom class
    *  of #424). One file read on the first post-restart append per run. */
   private rehydrateSeq(runId: string): number {
+    const persisted = this.runs.get(runId)?.lastSeq;
+    if (persisted !== undefined) return Math.max(persisted, this.tailSeq(runId));
     let max = 0;
     for (const event of this.readEvents(runId)) {
       if (typeof event.seq === 'number' && event.seq > max) max = event.seq;
     }
     return max;
+  }
+
+  /** The `seq` of the last parseable line. Only trusted next to a persisted `lastSeq`: files from
+   *  before it may carry a counter that restarted mid-file, so their maximum is not their tail. */
+  private tailSeq(runId: string): number {
+    let fd: number | undefined;
+    try {
+      fd = openSync(this.eventsPath(runId), 'r');
+      let position = fstatSync(fd).size;
+      let tail: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+      while (position > 0) {
+        const length = Math.min(64 * 1024, position);
+        position -= length;
+        const chunk = Buffer.allocUnsafe(length);
+        const bytesRead = readSync(fd, chunk, 0, length, position);
+        const combined = Buffer.concat([chunk.subarray(0, bytesRead), tail]);
+        let end = combined.length;
+        while (end > 0) {
+          const newline = combined.lastIndexOf(0x0a, end - 1);
+          if (newline === -1 && position > 0) break;
+          const seq = parseSeq(combined.subarray(newline + 1, end).toString('utf8'));
+          if (seq !== undefined) return seq;
+          end = Math.max(newline, 0);
+        }
+        tail = Buffer.from(combined.subarray(0, end));
+      }
+      return 0;
+    } catch {
+      return 0;
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+    }
   }
 
   private eventsPath(runId: string): string {
@@ -1722,15 +1807,15 @@ export class RunStore extends EventEmitter {
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
       this.saveNow();
-    }, 300);
+    }, SAVE_DEBOUNCE_MS);
     this.saveTimer.unref?.();
   }
 
-  private saveNow(throwOnError = false): void {
+  private saveNow(throwOnError = false, pretty = false): void {
     const indexPath = join(this.dataDir, 'runs.json');
     const tmpPath = `${indexPath}.tmp`;
     try {
-      writeFileSync(tmpPath, JSON.stringify(this.mergeWithIndexOnDisk(indexPath), null, 2), 'utf8');
+      writeFileSync(tmpPath, JSON.stringify(this.mergeWithIndexOnDisk(indexPath), null, pretty ? 2 : undefined), 'utf8');
       renameSync(tmpPath, indexPath);
     } catch (err) {
       if (throwOnError) throw new Error('Could not persist automation run provenance; the launch was not confirmed.');
@@ -1775,8 +1860,8 @@ export class RunStore extends EventEmitter {
    * over rather than overwrite.
    *
    * Validated one record at a time, and only for the ids we are actually adopting, which is the
-   * difference between this and `open()`'s whole-array parse. `saveNow` runs on a 300 ms debounce
-   * for as long as an agent is streaming, so this runs several times a second on the main thread of
+   * difference between this and `open()`'s whole-array parse. `saveNow` runs on a 1 s debounce
+   * for as long as an agent is streaming, so this runs about once a second on the main thread of
    * the process also serving the cockpit's SSE, while retention lets the index reach
    * `MAX_RUNS_KEPT + MAX_ARCHIVED_KEPT` records — and in the ordinary single-process case every one
    * of them is ours, so a `z.array(...)` parse would spend all of its time validating records the

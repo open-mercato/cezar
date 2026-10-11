@@ -252,6 +252,6 @@ export class ProjectContexts {
 /** Shared teardown for built and half-built contexts. */
 function teardown(ctx: { store: RunStore; manager: RunManager }): void {
   ctx.manager.dispose();
-  ctx.store.flush();
+  ctx.store.flush({ pretty: true });
   ctx.store.removeAllListeners();
 }
