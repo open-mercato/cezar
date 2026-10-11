@@ -74,6 +74,7 @@ const LazyPaletteBody = React.lazy(async () => import('@/components/command-pale
 
 export function CommandPalette() {
   const [open, setOpen] = React.useState(false)
+  const [hasOpened, setHasOpened] = React.useState(false)
   const navigate = useNavigate()
   useCommandShortcut('k', () => setOpen((current) => !current))
   const newTask = React.useCallback(() => {
@@ -82,6 +83,9 @@ export function CommandPalette() {
   }, [navigate])
   useCommandShortcut('n', newTask)
   useKeyShortcut('c', newTask)
+  React.useEffect(() => {
+    if (open) setHasOpened(true)
+  }, [open])
   React.useEffect(() => {
     const onOpen = () => setOpen(true)
     window.addEventListener(OPEN_COMMAND_PALETTE_EVENT, onOpen)
@@ -97,7 +101,7 @@ export function CommandPalette() {
       filter={paletteScore}
       className="top-[10vh] translate-y-0 sm:max-w-2xl lg:max-w-3xl xl:max-w-4xl"
     >
-      {open ? <React.Suspense fallback={null}><LazyPaletteBody close={() => setOpen(false)} /></React.Suspense> : null}
+      {hasOpened ? <React.Suspense fallback={null}><LazyPaletteBody close={() => setOpen(false)} /></React.Suspense> : null}
     </CommandDialog>
   )
 }

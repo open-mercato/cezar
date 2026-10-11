@@ -907,6 +907,8 @@ function GlobalSettingsLink({
 function AddProjectMenu() {
   const [browsing, setBrowsing] = React.useState(false)
   const [cloning, setCloning] = React.useState(false)
+  const [browsingMounted, setBrowsingMounted] = React.useState(false)
+  const [cloningMounted, setCloningMounted] = React.useState(false)
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -923,18 +925,18 @@ function AddProjectMenu() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56">
         <DropdownMenuLabel className="text-xs text-soft-foreground">Add project</DropdownMenuLabel>
-        <DropdownMenuItem data-slot="add-project-local" onSelect={() => setBrowsing(true)}>
+        <DropdownMenuItem data-slot="add-project-local" onSelect={() => { setBrowsingMounted(true); setBrowsing(true) }}>
           <FolderIcon aria-hidden="true" />
           Open local folder…
         </DropdownMenuItem>
-        <DropdownMenuItem data-slot="add-project-clone" onSelect={() => setCloning(true)}>
+        <DropdownMenuItem data-slot="add-project-clone" onSelect={() => { setCloningMounted(true); setCloning(true) }}>
           <GithubIcon aria-hidden="true" />
           Clone from GitHub…
         </DropdownMenuItem>
       </DropdownMenuContent>
       <React.Suspense fallback={null}>
-        {browsing ? <LazyAddProjectDialog open onOpenChange={setBrowsing} /> : null}
-        {cloning ? <LazyCloneProjectDialog open onOpenChange={setCloning} /> : null}
+        {browsingMounted ? <LazyAddProjectDialog open={browsing} onOpenChange={setBrowsing} /> : null}
+        {cloningMounted ? <LazyCloneProjectDialog open={cloning} onOpenChange={setCloning} /> : null}
       </React.Suspense>
     </DropdownMenu>
   )
