@@ -28,6 +28,10 @@ Phase 2: parent reads every diff and reruns named tests, then dispatches ONE fin
 
 #1367 at 0ca8230d and #1369 at e9f0d580 inspected. Parent requested source-lifecycle proof for archive/forget cleanup in #1367; existing helper-only test does not prove later archival triggers cleanup. Both children must rerun gate with TMPDIR=/tmp because injected repo-local TMPDIR invalidates non-repository fixtures. #1369 additionally needs callsite concurrency proof rather than only helper tests. Continued existing children via documented POST /runs/:id/continue (same run and requested model; no new subtasks), including #1017 to close duplicate #1368 after ancestry d22659e8 confirms existing preload. Five actual deliverables still intended: #1359, #1217, #1219, #575, and next replacement #1194 (accessible transcript copy, medium priority, no existing claim/PR); dispatch #1194 when slot frees as task 7, final independent review as task 8. No spare beyond these.
 
+## Duplicate correction
+
+#1368 is closed as no-action-needed: child confirmed preloading was introduced in d22659e8, ancestor of main, and both unchanged-base and proposed timeout-removal variants pass 4 focused tests. Child corrected body/comments and returned reject, not approve. No branch deleted and no source change accepted. The original #1017 issue remains open for tracker housekeeping outside this run.
+
 ## Risks
 Live injected cockpit URL resolves to the wrong process; verified parent tree at http://172.17.0.1:4321, use per-command CEZ_API_URL override. Live model catalog confirms gpt-5.6-luna. Some issues may already be fixed or contain scope questions; children must report evidence and use safe defaults rather than inventing work. Full gate failures remain blockers unless proven baseline. UI changes need browser evidence.
 
