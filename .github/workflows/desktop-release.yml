@@ -153,9 +153,11 @@ jobs:
         env:
           HAS_APPLE: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_ID != '' }}
           HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          HAS_SIGNPATH: ${{ secrets.SIGNPATH_API_TOKEN != '' && secrets.SIGNPATH_ORGANIZATION_ID != '' }}
         run: |
           echo "apple=$HAS_APPLE" >> "$GITHUB_OUTPUT"
           echo "updater=$HAS_UPDATER_KEY" >> "$GITHUB_OUTPUT"
+          echo "signpath=$HAS_SIGNPATH" >> "$GITHUB_OUTPUT"
 
       # Only when the secrets exist. An APPLE_CERTIFICATE that is present but EMPTY is not "no
       # signing" to the bundler: it tries to import the empty certificate and the build fails.
@@ -208,6 +210,76 @@ jobs:
           args: >-
             ${{ matrix.args }}
             --config '{"bundle":{"targets":${{ runner.os == 'macOS' && '["app","dmg"]' || runner.os == 'Windows' && '["nsis"]' || '["appimage","deb"]' }},"createUpdaterArtifacts":${{ steps.signing.outputs.updater == 'true' }}${{ runner.os == 'macOS' && steps.signing.outputs.apple != 'true' && ',"macOS":{"signingIdentity":"-"}' || '' }}}}'
+
+      # ---- Windows code signing (SignPath) ------------------------------------------------------
+      # Skipped until SIGNPATH_API_TOKEN and SIGNPATH_ORGANIZATION_ID exist. SignPath signs only
+      # what it can trace to a build, so the installer goes to it as a run artifact, never as a
+      # file from disk. Signing changes the file, and the updater's own signature covers the
+      # file: it is made again afterwards, and the publish job writes it into the manifest.
+      - name: Locate the Windows installer
+        id: installer
+        if: runner.os == 'Windows' && steps.signing.outputs.signpath == 'true'
+        shell: bash
+        working-directory: ${{ env.DESKTOP_DIR }}
+        env:
+          GLOB: ${{ matrix.glob }}
+        run: |
+          shopt -s nullglob
+          files=( $GLOB )
+          if [ ${#files[@]} -eq 0 ]; then echo "::error::no bundle matched $GLOB"; exit 1; fi
+          echo "path=${files[0]}" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "${files[0]}")" >> "$GITHUB_OUTPUT"
+
+      - name: Hand the unsigned installer to SignPath
+        id: unsigned
+        if: runner.os == 'Windows' && steps.signing.outputs.signpath == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-installer-unsigned
+          path: ${{ env.DESKTOP_DIR }}/${{ steps.installer.outputs.path }}
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Sign the installer with SignPath
+        if: runner.os == 'Windows' && steps.signing.outputs.signpath == 'true'
+        uses: signpath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627 # v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'cezar' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: ${{ env.DESKTOP_DIR }}/signed
+
+      - name: Put the signed installer in place
+        if: runner.os == 'Windows' && steps.signing.outputs.signpath == 'true'
+        shell: bash
+        working-directory: ${{ env.DESKTOP_DIR }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          INSTALLER: ${{ steps.installer.outputs.path }}
+          NAME: ${{ steps.installer.outputs.name }}
+          HAS_UPDATER_KEY: ${{ steps.signing.outputs.updater }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          test -f "signed/$NAME" || { echo "::error::SignPath returned no $NAME"; ls -R signed; exit 1; }
+          cp "signed/$NAME" "$INSTALLER"
+          # Proof, not trust: the file must carry an Authenticode signature now.
+          powershell -NoProfile -Command "\$s = Get-AuthenticodeSignature '$INSTALLER'; \$s | Format-List Status, SignerCertificate; if (\$s.Status -ne 'Valid') { exit 1 }"
+          if [ "$HAS_UPDATER_KEY" = "true" ]; then
+            rm -f "$INSTALLER.sig"
+            npx tauri signer sign "$INSTALLER"
+            test -f "$INSTALLER.sig"
+          fi
+          if [ "$DRY_RUN" != "true" ]; then
+            gh release upload "$TAG" "$INSTALLER" --clobber
+            if [ -f "$INSTALLER.sig" ]; then gh release upload "$TAG" "$INSTALLER.sig" --clobber; fi
+          fi
 
       # Stable, versionless copies: the landing page's Download button and the package-manager
       # manifests link these, so shipping a version never means editing a link.
@@ -391,6 +463,22 @@ jobs:
           # tauri-action uploads `latest.json`; the shells poll `desktop-latest.json` so the name
           # can never collide with a future cezar (CLI) manifest on the same release page.
           if gh release download "$TAG" --repo "$REPO" --pattern latest.json --output desktop-latest.json 2>/dev/null; then
+            # An installer signed AFTER the build has a new updater signature beside it; the
+            # manifest still carries the one made for the unsigned file. Every platform entry
+            # takes the signature of the `.sig` asset that belongs to its own download.
+            mkdir sigs && gh release download "$TAG" --repo "$REPO" --pattern '*.sig' --dir sigs
+            node -e '
+              const fs = require("fs"), path = require("path");
+              const manifest = JSON.parse(fs.readFileSync("desktop-latest.json", "utf8"));
+              for (const [platform, entry] of Object.entries(manifest.platforms ?? {})) {
+                const file = path.join("sigs", decodeURIComponent(path.basename(new URL(entry.url).pathname)) + ".sig");
+                if (!fs.existsSync(file)) continue;
+                const signature = fs.readFileSync(file, "utf8").trim();
+                if (signature !== entry.signature) console.log("updater signature refreshed for " + platform);
+                entry.signature = signature;
+              }
+              fs.writeFileSync("desktop-latest.json", JSON.stringify(manifest, null, 2) + "\n");
+            '
             gh release upload "$TAG" desktop-latest.json --clobber --repo "$REPO"
             gh release delete-asset "$TAG" latest.json --yes --repo "$REPO" || true
             echo "updater manifest published"
@@ -447,6 +535,7 @@ jobs:
           REPO: ${{ github.repository }}
           HAS_APPLE: ${{ secrets.APPLE_CERTIFICATE != '' }}
           HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          HAS_SIGNPATH: ${{ secrets.SIGNPATH_API_TOKEN != '' && secrets.SIGNPATH_ORGANIZATION_ID != '' }}
         run: |
           {
             echo "## 🖥 cezar desktop v${VERSION}"
@@ -460,5 +549,6 @@ jobs:
             done
             echo ""
             [ "$HAS_APPLE" = "true" ] || echo "⚠️ macOS builds are UNSIGNED (no APPLE_* secrets) — Gatekeeper will refuse them. Not fit for a landing page."
+            [ "$HAS_SIGNPATH" = "true" ] || echo "⚠️ The Windows installer is UNSIGNED (no SIGNPATH_* secrets) — SmartScreen will warn on install."
             [ "$HAS_UPDATER_KEY" = "true" ] || echo "⚠️ No updater manifest (no TAURI_SIGNING_PRIVATE_KEY) — installed shells will not auto-update to this version."
           } >> "$GITHUB_STEP_SUMMARY"

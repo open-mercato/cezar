@@ -225,6 +225,8 @@ npm run dev
 
 **MIT** © Patryk Lewczuk. Full text in [LICENSE](LICENSE).
 
+Windows installers are covered by the [code signing policy](docs/code-signing-policy.md).
+
 ## Jira and Linear
 
 Connect a project issue tracker in Settings to browse issues, launch workflows and configure event automations. See [setup, permissions and recovery](docs/issue-trackers.md).
