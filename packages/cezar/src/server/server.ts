@@ -4184,7 +4184,6 @@ export function createApp(deps: ServerDeps) {
     .post('/runs/archive-finished', (c) => {
       const project = c.get('project');
       const archived = project.store.archiveFinished();
-      project.manager.releaseArchivedCheckState?.();
       return c.json({ archived });
     })
 
@@ -4203,7 +4202,6 @@ export function createApp(deps: ServerDeps) {
       const parsed = { data: c.req.valid('json') };
       const retiresQuestion = parsed.data.archived !== false && store.getRun(id)?.awaitingAnswerSince !== undefined;
       const run = store.setArchived(id, parsed.data.archived !== false);
-      if (run && parsed.data.archived !== false) manager.releaseCheckState?.(id);
       if (run && retiresQuestion) manager.notifyQuestionRetired?.(id);
       return run ? c.json(run) : c.json({ error: 'not found' }, 404);
     })
@@ -4994,7 +4992,6 @@ export function createApp(deps: ServerDeps) {
       // Delete cleans up after itself: worktree + branch go with the run (spec 006).
       if (run.worktreePath) await removeWorktree(repoRoot, run.worktreePath, run.branch);
       const deleted = store.deleteRun(id);
-      if (deleted) manager.releaseCheckState?.(id);
       // The run's `refs/cezar/pr/<n>` goes with the last run that needed it (Phase 3).
       if (deleted && run.prHead) await manager.sweepPrHeadRefs();
       return deleted ? c.json({ deleted: true }) : c.json({ error: 'not found' }, 404);

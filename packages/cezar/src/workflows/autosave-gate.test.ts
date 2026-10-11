@@ -25,8 +25,6 @@ interface TimerSeam {
   active: Map<string, unknown>;
   checkArtifactSnapshots: Map<string, Map<string, string>>;
   autosaveCheckpointBlockedRuns: Set<string>;
-  releaseCheckState(runId: string): void;
-  releaseArchivedCheckState(): void;
   dispose(): void;
 }
 
@@ -199,11 +197,9 @@ describe('periodic autosave gate (#471)', () => {
       id: 'agent', name: 'agent', kind: 'agent', status: 'done', iterations: 1,
       tokensUsed: 0, sessionId: 'session-1',
     });
-    seam.releaseArchivedCheckState();
     expect(seam.checkArtifactSnapshots.has(runId)).toBe(true);
     expect(seam.autosaveCheckpointBlockedRuns.has(runId)).toBe(true);
     store.setArchived(runId, true);
-    seam.releaseArchivedCheckState();
     expect(seam.checkArtifactSnapshots.has(runId)).toBe(false);
     expect(seam.autosaveCheckpointBlockedRuns.has(runId)).toBe(false);
 
@@ -211,7 +207,6 @@ describe('periodic autosave gate (#471)', () => {
     seam.checkArtifactSnapshots.set(deleted.id, new Map([['check-output.txt', 'snapshot']]));
     seam.autosaveCheckpointBlockedRuns.add(deleted.id);
     expect(store.deleteRun(deleted.id)).toBe(true);
-    seam.releaseCheckState(deleted.id);
     expect(seam.checkArtifactSnapshots.has(deleted.id)).toBe(false);
     expect(seam.autosaveCheckpointBlockedRuns.has(deleted.id)).toBe(false);
   });
