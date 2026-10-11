@@ -226,14 +226,15 @@ export function UserBubble({
       data-slot="user-bubble"
       className="group max-w-[78%] min-w-0 self-end rounded-2xl rounded-br-md bg-muted px-[15px] py-2.5 text-[13.5px] leading-[1.55] md:max-w-[70%]"
     >
-      <span
-        data-slot="bubble-actions"
-        className="mb-1 flex justify-end gap-0.5"
-      >
-        <CopyMessageButton text={text} />
-        {onEdit || onRemove ? (
-          <span className="flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-            {onEdit ? (
+      {text.trim() !== '' || onEdit || onRemove ? (
+        <span
+          data-slot="bubble-actions"
+          className="mb-1 flex justify-end gap-0.5"
+        >
+          {text.trim() !== '' ? <CopyMessageButton text={text} /> : null}
+          {onEdit || onRemove ? (
+            <span className="flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+              {onEdit ? (
             <button
               type="button"
               aria-label={editLabel}
@@ -243,8 +244,8 @@ export function UserBubble({
             >
               <SquarePenIcon className="size-3.5" />
             </button>
-            ) : null}
-            {onRemove ? (
+              ) : null}
+              {onRemove ? (
             <button
               type="button"
               aria-label={removeLabel}
@@ -254,10 +255,11 @@ export function UserBubble({
             >
               <Trash2Icon className="size-3.5" />
             </button>
-            ) : null}
-          </span>
-        ) : null}
-      </span>
+              ) : null}
+            </span>
+          ) : null}
+        </span>
+      ) : null}
       {actionError ? <p role="alert" className="mb-1 text-xs text-danger">{actionError}</p> : null}
       <UserText text={text} />
       {images.length > 0 ? (
@@ -322,9 +324,7 @@ function UserText({ text }: { text: string }) {
 export function AssistantMessage({ text }: { text: string }) {
   return (
     <div data-slot="assistant-message" className="group min-w-0 text-[15px] leading-[1.65]">
-      <div className="mb-1 flex justify-end">
-        <CopyMessageButton text={text} />
-      </div>
+      {text.trim() !== '' ? <div className="mb-1 flex justify-end"><CopyMessageButton text={text} /></div> : null}
       <Markdown>{text}</Markdown>
     </div>
   )

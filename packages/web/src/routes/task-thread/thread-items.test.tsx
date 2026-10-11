@@ -358,6 +358,15 @@ describe('UserBubble attachments', () => {
     expect(screen.getByText('pasted-1.md')).toBeTruthy()
     expect(screen.getByText('pasted-2.txt')).toBeTruthy()
   })
+
+  it('does not offer copy for an attachment-only user bubble', () => {
+    render(withQueries(
+      <MemoryRouter>
+        <UserBubble text="" imageCount={1} images={['/api/v1/runs/r1/images/pasted-1.png']} />
+      </MemoryRouter>,
+    ))
+    expect(screen.queryByRole('button', { name: 'Copy message' })).toBeNull()
+  })
 })
 
 describe('message copy controls', () => {
@@ -388,7 +397,9 @@ describe('message copy controls', () => {
     expect(buttons).toHaveLength(2)
     expect(buttons.every((button) => button.getAttribute('tabindex') !== '-1')).toBe(true)
     fireEvent.click(buttons[0]!)
+    buttons[1]!.focus()
     fireEvent.keyDown(buttons[1]!, { key: 'Enter' })
+    fireEvent.keyUp(buttons[1]!, { key: 'Enter' })
     fireEvent.click(buttons[1]!)
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2))
     expect(writeText).toHaveBeenNthCalledWith(1, source)
