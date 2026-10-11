@@ -16,6 +16,7 @@ Scope: `packages/cezar/src/server/capabilities.ts` and its focused tests only. N
 - [x] 2.1 Add valid bracketed/bare/ported and canonical-equivalent cases. — 536f51f8
 - [x] 2.2 Add malformed, invalid-octet, non-loopback, spoofing, and authority ambiguity cases. — 536f51f8
 - [x] 2.3 Run focused tests, full validation gate, and review the final diff. — pending baseline-gate follow-up
+- [x] 2.4 Reject ambiguous leading-zero mapped IPv4 tails and cover dotted/hex same-origin authorities. — 77e21849
 
 ## Risks
 
@@ -36,3 +37,4 @@ Scope: `packages/cezar/src/server/capabilities.ts` and its focused tests only. N
 - [x] 2.1 Add valid bracketed/bare/ported and canonical-equivalent cases. — 536f51f8
 - [x] 2.2 Add malformed, invalid-octet, non-loopback, spoofing, and authority ambiguity cases. — 536f51f8
 - [x] 2.3 Run focused tests, full validation gate, and review the final diff. — pending baseline-gate follow-up
+- [x] 2.4 Reject ambiguous leading-zero mapped IPv4 tails and cover dotted/hex same-origin authorities. — 77e21849
