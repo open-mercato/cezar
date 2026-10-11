@@ -11,6 +11,28 @@ import record from './fixtures/thread-run.record.json'
 const artifactsDir = resolve(import.meta.dirname, '../../../.ai/qa/artifacts_e2e')
 const RUN_ID = `e2e-transcript-copy-${process.pid}`
 const SOURCE = '## Copy this source\n\n```ts\nconst answer = true\n```'
+const ASSISTANT_SOURCE = `## Markdown fixture
+This paragraph is soft-wrapped
+across two source lines.
+
+| Column | Align | Result |
+|:-------|:-----:|-------:|
+| left \`code\` | *center* | **42** |
+| ~~old~~ new | mid | $1.50 |
+
+- top item with *emphasis*
+  - nested child with \`code\`
+    - [x] deep done task
+  - [ ] nested todo
+- second top
+
+> quoted intro
+> - quoted list item
+
+\`\`\`ts
+const answer: number = 42;
+\`\`\`
+Literal guards: snake_case_name, 2*3 and <script>alert(1)</script>.`
 
 function freePort(): Promise<number> {
   return new Promise((done, fail) => {
@@ -78,7 +100,7 @@ beforeAll(async () => {
 afterAll(() => {
   browser?.close()
   server?.kill()
-  if (dataRoot) rmSync(dataRoot, { recursive: true, force: true })
+  if (dataRoot) rmSync(dataRoot, { maxRetries: 5, recursive: true, force: true, retryDelay: 100 })
 })
 
 describe('transcript message copy', () => {
@@ -92,22 +114,43 @@ describe('transcript message copy', () => {
       document.querySelector('button[aria-label="Copy message"]').focus()
     })()`)
     browser.press('Enter')
-    // Chromium's clipboard permission is environment-dependent; the component-level suite pins
-    // the exact payload and success state. This real-browser step proves native keyboard
-    // activation does not navigate or crash the transcript.
+    browser.waitForFunction(`window.__copied === ${JSON.stringify(SOURCE)}`)
+  browser.waitForFunction(
+      `document.querySelector('[role="status"][aria-label="Message copied"]') !== null`,
+    )
+
+    browser.evaluate(`(() => {
+      const message = [...document.querySelectorAll('[data-slot="assistant-message"]')]
+        .find((node) => node.textContent?.includes('Markdown fixture'))
+      const button = message?.querySelector('button[aria-label="Copy message"]')
+      button?.scrollIntoView({ block: 'center' })
+      button?.focus()
+      window.__copied = ''
+    })()`)
+    browser.press('Enter')
+    browser.waitForFunction(`window.__copied === ${JSON.stringify(ASSISTANT_SOURCE)}`)
+    browser.waitForFunction(
+      `document.querySelector('[role="status"][aria-label="Message copied"]') !== null`,
+    )
     expect(browser.count('button[aria-label="Copy message"]')).toBeGreaterThan(0)
-    expect(browser.count('[role="status"]')).toBeGreaterThan(0)
     browser.screenshot(join(artifactsDir, 'transcript-copy-desktop.png'), { viewport: true })
   })
 
   it('keeps the copy action tappable on a mobile viewport', () => {
     browser.setViewport(390, 844)
     browser.waitForFunction(`document.querySelector('button[aria-label="Copy message"]') !== null`)
-    browser.evaluate(`Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: { writeText: async () => {} },
-    })`)
+    browser.evaluate(`(() => {
+      window.__copied = ''
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText: async (text) => { window.__copied = text } },
+      })
+    })()`)
     browser.click('button[aria-label="Copy message"]')
+    browser.waitForFunction(`window.__copied === ${JSON.stringify(SOURCE)}`)
+    browser.waitForFunction(
+      `document.querySelector('[role="status"][aria-label="Message copied"]') !== null`,
+    )
     expect(browser.count('button[aria-label="Copy message"]')).toBeGreaterThan(0)
     browser.screenshot(join(artifactsDir, 'transcript-copy-mobile.png'), { viewport: true })
     browser.setViewport(1440, 900)
