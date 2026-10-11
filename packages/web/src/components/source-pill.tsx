@@ -7,11 +7,10 @@ import {
   WorkflowIcon,
   XIcon,
 } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { lazy, Suspense, useRef, useState } from 'react'
 
 import type { Skill, WorkflowDef } from '@open-mercato/cezar-api-client'
 import { chevron, chipClass } from '@/components/picker-pill'
-import { SkillPreviewDialog } from '@/components/skill-detail'
 import {
   Command,
   CommandEmpty,
@@ -31,6 +30,8 @@ import {
 } from '@/lib/skills'
 import { cn } from '@/lib/utils'
 import { QUICK_TASK, type TaskSource } from '@/lib/task-source'
+
+const LazySkillPreviewDialog = lazy(async () => import('@/components/skill-detail').then((module) => ({ default: module.SkillPreviewDialog })))
 
 /**
  * The workflow/skill picker (#385's searchable cmdk dropdown, #519's tier ordering): ONE pill
@@ -70,6 +71,7 @@ export function SourcePill({
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [preview, setPreview] = useState<Skill | null>(null)
+  const [previewStarted, setPreviewStarted] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
   // #484: rank in JS (cmdk's own score-sort does not re-order reliably here), then split the
   // ranked matches into the #519 display tiers so each group stays match-ordered.
@@ -128,6 +130,7 @@ export function SourcePill({
           onClick={(event) => {
             event.preventDefault()
             event.stopPropagation()
+            setPreviewStarted(true)
             setPreview(skill)
           }}
           className="ml-auto shrink-0 rounded-sm p-0.5 text-soft-foreground transition-colors hover:text-foreground"
@@ -182,7 +185,11 @@ export function SourcePill({
 
   return (
     <>
-      <SkillPreviewDialog skill={preview} onClose={() => setPreview(null)} />
+      {previewStarted ? (
+        <Suspense fallback={null}>
+          <LazySkillPreviewDialog skill={preview} onClose={() => setPreview(null)} />
+        </Suspense>
+      ) : null}
       <Popover
         open={open}
         onOpenChange={(next) => {

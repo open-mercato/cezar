@@ -2009,6 +2009,7 @@ describe('the hand-to-agent pickers (#385)', () => {
     // The Settings catalog's detail component, as a dialog — name, source tag, path.
     await waitFor(() =>
       expect(document.querySelector('[data-slot="skill-preview"] [data-slot="skill-detail"]')).not.toBeNull(),
+      { timeout: 5000 },
     )
     const preview = document.querySelector('[data-slot="skill-preview"]')!
     expect(preview.textContent).toContain('om-fix')
