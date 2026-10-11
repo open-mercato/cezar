@@ -29,6 +29,8 @@ import {
   getTodos,
   getUiState,
   getWorkspaceConfig,
+  uploadWorkspaceBrandingLogo,
+  deleteWorkspaceBrandingLogo,
   getWorkflows,
   openRunInCli,
   patchRun,
@@ -42,7 +44,7 @@ import {
   startTodo,
   retryProviderAuth,
 } from './client'
-import { setApiScope } from '@open-mercato/cezar-api-client'
+import { setApiBaseUrl, setApiScope } from '@open-mercato/cezar-api-client'
 
 /** The one seam under test: every call must go through `fetch` and nothing else. */
 const fetchMock = vi.fn<typeof fetch>()
@@ -54,6 +56,8 @@ beforeEach(() => {
 afterEach(() => {
   fetchMock.mockReset()
   vi.unstubAllGlobals()
+  setApiBaseUrl('')
+  setApiScope(null)
 })
 
 function reply(body: unknown, init: ResponseInit = {}): void {
@@ -164,6 +168,12 @@ describe('request shapes', () => {
       name: 'getGithub (limit + refresh)',
       call: () => getGithub({ limit: 5, refresh: true }),
       path: '/api/v1/github?limit=5&refresh=1',
+      method: 'GET',
+    },
+    {
+      name: 'getGithub (cursor page)',
+      call: () => getGithub({ limit: 50, issuesCursor: 'i-cursor', prsCursor: 'p-cursor' }),
+      path: '/api/v1/github?limit=50&issuesCursor=i-cursor&prsCursor=p-cursor',
       method: 'GET',
     },
     // `refresh: false` must not become `refresh=0` — the server tests `=== '1'`, but sending a
@@ -341,6 +351,48 @@ describe('request shapes', () => {
   })
 })
 
+describe('workspace branding logo client', () => {
+  it('uploads through the configured API base with credentials and resolves the returned asset URL', async () => {
+    setApiBaseUrl('https://api.example.test/gateway')
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ logoUrl: '/api/v1/workspace/branding-logo?v=abc' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }))
+
+    const file = new File(['logo'], 'logo.png', { type: 'image/png' })
+    const logoUrl = await uploadWorkspaceBrandingLogo(file)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://api.example.test/gateway/api/v1/workspace/branding-logo')
+    expect(init.credentials).toBe('include')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBeInstanceOf(FormData)
+    expect(logoUrl).toBe('https://api.example.test/gateway/api/v1/workspace/branding-logo?v=abc')
+  })
+
+  it('deletes through the configured API base and includes credentials', async () => {
+    setApiBaseUrl('https://api.example.test/gateway')
+    reply({ logoUrl: null })
+    await deleteWorkspaceBrandingLogo()
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://api.example.test/gateway/api/v1/workspace/branding-logo')
+    expect(init).toMatchObject({ method: 'DELETE', credentials: 'include' })
+  })
+
+  it('normalizes logo URLs in workspace configuration', async () => {
+    setApiBaseUrl('https://api.example.test/gateway')
+    reply({
+      branding: { name: 'Acme', logoUrl: '/api/v1/workspace/branding-logo?v=abc' },
+      browseRoot: '~/source', projectsDir: '~/projects', skillsAutoUpdate: null,
+      effectiveSkillsAutoUpdate: true,
+      composerDefaults: { autonomous: null, worktree: null, inheritedAutonomous: 'source-dependent', inheritedWorktree: true },
+      resources: { maxParallel: 2, maxMonitoringSessions: 2, idleTimeoutMinutes: 15, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10 },
+      agentDefaults: {},
+    })
+    const config = await getWorkspaceConfig()
+    expect(config.branding.logoUrl).toBe('https://api.example.test/gateway/api/v1/workspace/branding-logo?v=abc')
+  })
+})
+
 describe('project scope (multi-project spec, step 3.1)', () => {
   // NB the WHOLE unscoped table above is this feature's other half: the critical assertion is
   // that with no scope set, every path stays byte-identical — those cases prove it by never
@@ -379,6 +431,7 @@ describe('project scope (multi-project spec, step 3.1)', () => {
 
 describe('response parsing', () => {
   const workspaceConfig = (resources: Record<string, unknown>) => ({
+    branding: { name: 'cezar', logoUrl: null },
     browseRoot: '~/',
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,

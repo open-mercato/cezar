@@ -24,6 +24,21 @@ if (!process.env.GIT_CONFIG_COUNT) {
   process.env.GIT_CONFIG_VALUE_0 = 'false'
 }
 
+// LLM task naming is on by default (`autoNamingActive`), so any case that starts a run on
+// a real backend spawned `claude -p "[cez-namer] Name this task."` on the developer's own
+// subscription — the same canned tasks, every run. Off for the whole suite; a test that
+// exercises the namer sets `CEZ_AUTONAME=1` itself (against mock-claude). Forced at load so
+// a shell's own value cannot leak in, and re-pinned around every case like `CEZ_HOME`, so a
+// case that deletes it cannot hand the next case the default-on namer.
+process.env.CEZ_AUTONAME = '0'
+
+const pinAutonameOff = (): void => {
+  if (process.env.CEZ_AUTONAME === undefined) process.env.CEZ_AUTONAME = '0'
+}
+
+beforeEach(pinAutonameOff)
+afterEach(pinAutonameOff)
+
 const sandboxHome = mkdtempSync(join(realpathSync(tmpdir()), 'cez-vitest-home-'))
 
 const pinSandboxHome = (): void => {

@@ -6,6 +6,7 @@ import { loadConfig } from './config.ts';
 import { discoverSkills, type Skill } from './skills.ts';
 import { resolveProfileEnvForRoot } from './workspace/agent-profiles.ts';
 import { workflowStepSchema, type WorkflowStepDef } from './workflows/types.ts';
+import { E2E_CONFIG_FILES } from './e2e-setup.ts';
 
 /**
  * Chain-from-prompt (spec 008): one cheap `claude` call turns the user's task
@@ -124,8 +125,6 @@ function buildPlannerPrompt(task: string, skills: Skill[], verifyCommands: strin
   ].join('\n');
 }
 
-/** Config files that mean the repo has an agentic browser/device suite (`e2e`). */
-const E2E_CONFIG_FILES = ['e2e.config.ts', 'e2e.config.mts', 'e2e.config.js', 'e2e.config.mjs'];
 
 /**
  * Detect verification commands the planner may propose as `check` steps:

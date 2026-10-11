@@ -360,6 +360,9 @@ export interface UiAskRequestedEvent {
   type: 'ask.requested';
   requestId: string;
   questions: UiAskQuestion[];
+  /** Who asks: absent = the agent (a `CEZ:ASK` marker); `'workflow'` = a graph gate or
+   *  question node (spec 2026-09-30-workflow-node-editor) — the card says so. */
+  source?: 'workflow';
 }
 
 /**

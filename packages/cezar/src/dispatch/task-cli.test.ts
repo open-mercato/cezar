@@ -78,9 +78,15 @@ describe('cez task', () => {
     await runTaskCommand(['report', '--status', 'done', '--result', 'r'], { CEZ_API_URL: 'http://127.0.0.1:1', CEZ_TASK_ID: 'r1' }, h.io);
     expect(h.calls[0]?.url).toBe('http://127.0.0.1:1/api/v1/runs/r1/report');
     const none = harness({ status: 200, body: {} });
-    expect(await runTaskCommand(['create', 'x'], {}, none.io)).toBe(2);
+    expect(await runTaskCommand(['create', 'x'], { CEZ_TASK_ID: 'r1' }, none.io)).toBe(2);
     expect(none.err[0]).toContain('CEZ_API_URL is not set');
+    expect(none.err[0]).toContain('stop and report that dispatch is unavailable');
     expect(none.calls).toHaveLength(0);
+    const shell = harness({ status: 200, body: {} });
+    expect(await runTaskCommand(['tree', 'r1'], {}, shell.io)).toBe(2);
+    expect(shell.err[0]).toContain('CEZ_API_URL=http://127.0.0.1:4321 cez task tree <run id>');
+    expect(shell.err[0]).not.toContain('only works inside a task');
+    expect(shell.calls).toHaveLength(0);
   });
 
   it('answers --help on a subcommand instead of refusing it as an unknown option', async () => {

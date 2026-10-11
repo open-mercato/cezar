@@ -26,6 +26,7 @@ import { taskIssueUrl, taskPrUrl } from '@/lib/tasks-table'
 import { cn, isHttpUrl } from '@/lib/utils'
 
 import { AutoResumeHint } from './auto-resume-hint'
+import { E2eSetupVerdict } from './e2e-setup-verdict'
 import { useDraft } from './thread-draft'
 import { useDiffComments } from './diff-comments'
 import { TaskComposer, TaskDock } from './task-composer'
@@ -360,6 +361,8 @@ export function ThreadView({
         {run.status === 'running' ? (
           <WorkingIndicator since={liveTurnStart(run, currentThread)} lastActivityAt={currentThread.lastEventAt} />
         ) : null}
+
+        <E2eSetupVerdict run={run} />
 
         {/* Closed states read as the body's last line; the WAITING state lives in the dock
             (mockup `.paused-hint`), right above the composer it is asking the user to use. */}

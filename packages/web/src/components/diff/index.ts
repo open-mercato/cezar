@@ -4,6 +4,7 @@
  * modules are internal; they are exported nowhere on purpose.
  */
 export { Diff } from './diff'
+export { canPreviewMarkdown, isMarkdownPath } from './markdown'
 export { COMMENT_MAX } from './types'
 export { describeLines } from './line-label'
 export type {

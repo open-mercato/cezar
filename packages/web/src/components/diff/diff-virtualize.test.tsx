@@ -112,6 +112,27 @@ describe('the virtualized tier (large changesets)', () => {
 
     expect(document.querySelector('[data-slot="diff-files"]')!.getAttribute('data-virtualized')).toBe('true')
   })
+
+  // virtua reads its scroll element once, at mount. When the consumer swaps it (the Changes tab's
+  // own column from md up, the app shell's `main` below), the LIST must be rebuilt on the new one,
+  // while the view around it, holding the comment editor and collapse state, stays mounted.
+  it('rebinds only the virtualized list when its scroller changes', async () => {
+    const files = [file('a.ts', 900), file('b.ts', 900)]
+    const view = await renderVirtualDiff(
+      <main data-slot="main"><div data-diff-scroller=""><Diff files={files} /></div></main>,
+    )
+    const diff = document.querySelector('[data-slot="diff"]')
+    const list = document.querySelector('[data-slot="diff-files"]')
+
+    // Same scroller on a re-render: nothing is rebuilt.
+    view.rerender(<main data-slot="main"><div data-diff-scroller=""><Diff files={files} /></div></main>)
+    expect(document.querySelector('[data-slot="diff-files"]')).toBe(list)
+
+    // The column stops being the scroller (below md): the list rebinds to `main`, the view stays.
+    view.rerender(<main data-slot="main"><div><Diff files={files} /></div></main>)
+    await waitFor(() => expect(document.querySelector('[data-slot="diff-files"]')).not.toBe(list))
+    expect(document.querySelector('[data-slot="diff"]')).toBe(diff)
+  })
 })
 
 describe('per-file state survives the unmount virtualization performs', () => {

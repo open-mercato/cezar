@@ -74,6 +74,32 @@ describe('redactSecrets', () => {
     expect(redactSecrets('the quick brown fox', [])).toBe('the quick brown fox');
   });
 
+  /** A word ending in "sk" is not a key: `task-…` used to come out as `ta[REDACTED]`. */
+  it('leaves hyphenated words that merely end in "sk" alone', () => {
+    const line = [
+      'fix task-scheduling-and-priority-queue',
+      'refactor desk-booking-calendar-widget-v2',
+      'risk-assessment-matrix-for-payments',
+      'e2e fixture task-columns-workflow-folded',
+      'task-ant-colony-optimisation-heuristics',
+    ].join('\n');
+    expect(redactSecrets(line, [])).toBe(line);
+  });
+
+  it('still redacts OpenAI and Anthropic key shapes wherever a key can stand', () => {
+    const keys = [
+      `sk-${'A1b2C3d4'.repeat(6)}`, // legacy: sk- + 48
+      `sk-proj-${'Ab3_Cd4-'.repeat(8)}`,
+      `sk-svcacct-${'Zz9Yy8Xx'.repeat(4)}`,
+      `sk-ant-api03-${'Q7r_S8t-'.repeat(6)}AA`,
+    ];
+    for (const key of keys) {
+      for (const text of [key, `OPENAI_API_KEY=${key}`, `{"key":"${key}"}`, `Authorization: Bearer ${key}`, `x-api-key:${key}`, `--key=${key}`]) {
+        expect(redactSecrets(text, [])).toBe(text.replace(key, REDACTED));
+      }
+    }
+  });
+
   /**
    * #427 review: the old 8-char floor mangled ordinary output — a dev box with
    * `POSTGRES_PASSWORD=postgres` turned `apt install postgresql-16` into

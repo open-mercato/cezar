@@ -1,8 +1,9 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router'
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { queryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
 import type { ApiRun, ChangesPayload, HealthResponse, RepoResponse } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
@@ -133,6 +134,74 @@ const toolbarAction = (id: string) =>
 // ---- the route -------------------------------------------------------------------------------
 
 describe('the Changes tab route', () => {
+  it('a Markdown file offers the preview toggle, which renders the full worktree text', async () => {
+    const sent = stubFetch({
+      'GET /api/v1/runs/r1/files?path=notes.md': () =>
+        jsonResponse({ type: 'file', path: 'notes.md', size: 40, binary: false, tooLarge: false, content: '# From the worktree\n\nWhole file' }),
+    })
+    renderChangesRoute()
+    const toggle = await waitFor(() => {
+      const element = document.querySelector('[data-slot="git-toolbar"] [data-slot="markdown-preview-toggle"]')
+      expect(element).not.toBeNull()
+      return element!
+    })
+    expect(document.querySelector('[data-slot="diff-markdown-preview"]')).toBeNull()
+
+    fireEvent.click(toggle)
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="diff-markdown-preview"] h1')?.textContent).toBe('From the worktree'),
+    )
+    expect(sent.some((request) => request.path === '/api/v1/runs/r1/files?path=notes.md')).toBe(true)
+    // The TypeScript file stays a diff.
+    expect(document.querySelector('[data-slot="diff-file"][data-path="src/util/a.ts"] [data-slot="diff-file-body"]')).not.toBeNull()
+  })
+
+  it('no Markdown in the diff, no preview toggle', async () => {
+    stubFetch({
+      'GET /api/v1/runs/r1/changes': () => jsonResponse({ files: CHANGES.files.slice(1), stat: { adds: 3, dels: 1, files: 1 } }),
+    })
+    renderChangesRoute()
+    await waitFor(() => expect(document.querySelectorAll('[data-slot="diff-file"]')).toHaveLength(1))
+    expect(document.querySelector('[data-slot="markdown-preview-toggle"]')).toBeNull()
+  })
+
+  // The tree and the diff scroll in columns of their own, which the shell's per-pathname reset of
+  // `main` never touches. With both tasks already cached nothing unmounts on the way from one to
+  // the other, so only the view's `key` guarantees a fresh pair of columns at the top.
+  it('starts another task with fresh scroll columns, even when its data is cached', async () => {
+    const R2 = { ...RUN, id: 'r2', title: 'the other task' }
+    stubFetch({
+      'GET /api/v1/runs/r2': () => jsonResponse(R2),
+      'GET /api/v1/runs/r2/changes': () => jsonResponse(CHANGES),
+    })
+    const client = createQueryClient()
+    client.setQueryData(queryKeys.runs.detail('r2'), R2)
+    client.setQueryData(queryKeys.runs.changes('r2'), CHANGES)
+    function GoToR2() {
+      const navigate = useNavigate()
+      return <button type="button" data-testid="go-r2" onClick={() => navigate('/tasks/r2/changes')} />
+    }
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/tasks/r1/changes']}>
+          <Routes>
+            <Route path="/tasks/:id/changes" element={<TaskChangesRoute />} />
+          </Routes>
+          <GoToR2 />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    await waitFor(() => expect(document.querySelector('[data-slot="diff-pane"]')).not.toBeNull())
+    const before = {
+      diff: document.querySelector('[data-slot="diff-pane"]'),
+      tree: document.querySelector('[data-slot="changes-tree-pane"]'),
+    }
+
+    fireEvent.click(screen.getByTestId('go-r2'))
+    await waitFor(() => expect(document.querySelector('[data-slot="diff-pane"]')).not.toBe(before.diff))
+    expect(document.querySelector('[data-slot="changes-tree-pane"]')).not.toBe(before.tree)
+  })
+
   it('renders the run header with the Changes tab active and all tabs deep-linkable', async () => {
     stubFetch()
     renderChangesRoute()
@@ -175,30 +244,35 @@ describe('the Changes tab route', () => {
     expect(document.querySelectorAll('[data-slot="tree-file"]')).toHaveLength(1)
   })
 
-  // The tree column is its OWN scroller. Sticky alone left a tree taller than the viewport
-  // growing the PAGE, so reaching its last file meant dragging the shared `main` scroller — and
-  // the diff with it — all the way down. jsdom lays nothing out, so the classes are all this can
-  // check; the real-layout proof (the pane overflows, and scrolling it leaves `main` where it
-  // was) lives in `e2e/diff-scroll.e2e.ts`.
+  // The tree and the diff are two scrollers of their own (the md-and-up split layout). A tree
+  // sharing the page's scroller grew the PAGE, and every attempt to size it from the header's
+  // height (a `calc` cap, a hard-coded sticky offset) was wrong for some header. jsdom lays nothing
+  // out, so the classes are all this can check; the real-layout proof lives in
+  // `e2e/diff-scroll.e2e.ts`.
   it('gives the tree column its own bounded scroller, not the page’s', async () => {
     stubFetch()
     renderChangesRoute()
 
     await waitFor(() => expect(document.querySelector('[data-slot="changes-tree-pane"]')).not.toBeNull())
     const pane = document.querySelector('[data-slot="changes-tree-pane"]') as HTMLElement
-    // Bounded by the room left under the sticky chrome — an unbounded pane cannot scroll at all.
-    expect(pane.className).toContain('max-h-[calc(100dvh_-_var(--diff-sticky-top)_-_1rem)]')
-    // The floating composer dock sits OVER the pane, so the list pads its end by the dock's height
-    // (0 while no dock shows) — its last files can still be scrolled up above the box.
-    expect(pane.className).toContain('pb-[var(--changes-dock,0px)]')
+    // Bounded by the body it stretches to fill, which is bounded by the route filling `main`.
+    expect(document.querySelector('[data-route="task-changes"]')?.className).toContain('md:h-full')
+    expect(pane.parentElement?.className).toContain('min-h-0 flex-1')
+    // The floating composer dock sits over the bottom of the body, which pads its end by the
+    // dock's height (0 while no dock shows), so both columns end above the box.
     expect(pane.parentElement?.style.getPropertyValue('--changes-dock')).toBe('0px')
     expect(pane.className).toContain('overflow-y-auto')
     // …and a wheel that bottoms out inside the tree must not chain into the diff.
     expect(pane.className).toContain('overscroll-contain')
-    // The cap is measured from the offset the pane is actually pinned at (`top-40` = 10rem).
-    expect(pane.className).toContain('sticky top-40')
-    expect(pane.parentElement?.className).toContain('[--diff-sticky-top:0px]')
-    expect(pane.parentElement?.className).toContain('md:[--diff-sticky-top:10rem]')
+    // Nothing is sized from the header any more: no sticky pin, no viewport arithmetic (the only
+    // `calc` left is the floating dock's clearance at the column's end).
+    expect(pane.className).not.toContain('sticky')
+    expect(pane.className).not.toContain('max-h-')
+    expect(pane.className).not.toContain('100dvh')
+    // The diff scrolls in its own column, which it finds through the marker (desktop: jsdom).
+    const diffPane = document.querySelector('[data-slot="diff-pane"]') as HTMLElement
+    expect(diffPane.hasAttribute('data-diff-scroller')).toBe(true)
+    expect(diffPane.className).toContain('md:overflow-y-auto')
   })
 
   it('shows the empty state when the worktree is clean', async () => {
@@ -325,7 +399,7 @@ describe('the Changes tab route', () => {
       'GET /api/v1/runs/r1': () => jsonResponse(record),
     })
     renderChangesRoute()
-    await waitFor(() => expect(toolbarAction('create-pr')?.disabled).toBe(false))
+    await waitFor(() => expect(toolbarAction('create-pr')?.disabled).toBe(false), { timeout: 5_000 })
 
     fireEvent.click(toolbarAction('create-pr')!)
     await waitFor(() =>
@@ -458,6 +532,64 @@ describe('GitToolbar renders policy fixtures verbatim', () => {
     fireEvent.click(document.querySelector('[data-slot="wrap-toggle"]')!)
     expect(onWrapChange).toHaveBeenCalledWith(true)
   })
+
+  it('the Markdown preview toggle appears only when the caller wires it', () => {
+    const bar: GitActionBar = { primary: { id: 'commit', label: 'Commit', enabled: true }, secondary: [], menu: [] }
+    const { rerender } = render(
+      <GitToolbar bar={bar} mode="unified" wrap={false} onModeChange={noop} onWrapChange={noop} onAction={noop} />,
+    )
+    expect(document.querySelector('[data-slot="markdown-preview-toggle"]')).toBeNull()
+
+    const onPreviewChange = vi.fn()
+    rerender(
+      <GitToolbar
+        bar={bar}
+        mode="unified"
+        wrap={false}
+        preview={false}
+        onModeChange={noop}
+        onWrapChange={noop}
+        onPreviewChange={onPreviewChange}
+        onAction={noop}
+      />,
+    )
+    const toggle = document.querySelector('[data-slot="markdown-preview-toggle"]')!
+    expect(toggle.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(toggle)
+    expect(onPreviewChange).toHaveBeenCalledWith(true)
+  })
+
+  it('the Markdown preview toggle explains itself in a tooltip that follows its state', async () => {
+    // Radix's tooltip arrow measures itself with a ResizeObserver; jsdom has none.
+    vi.stubGlobal('ResizeObserver', class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    })
+    const bar: GitActionBar = { primary: { id: 'commit', label: 'Commit', enabled: true }, secondary: [], menu: [] }
+    const renderWith = (preview: boolean) => (
+      <GitToolbar
+        bar={bar}
+        mode="unified"
+        wrap={false}
+        preview={preview}
+        onModeChange={noop}
+        onWrapChange={noop}
+        onPreviewChange={noop}
+        onAction={noop}
+      />
+    )
+    const { rerender } = render(renderWith(false))
+    const toggle = document.querySelector('[data-slot="markdown-preview-toggle"]') as HTMLElement
+    // The styled tooltip replaces the native one — never both.
+    expect(toggle.getAttribute('title')).toBeNull()
+
+    fireEvent.focus(toggle)
+    expect((await screen.findByRole('tooltip')).textContent).toBe('Preview Markdown')
+
+    rerender(renderWith(true))
+    await waitFor(() => expect(screen.getByRole('tooltip').textContent).toBe('Show Markdown as a diff'))
+  })
 })
 
 // ---- line comments (self-review) ------------------------------------------------------------
@@ -471,6 +603,40 @@ const diffCommentsDraft = (stored: unknown[]) =>
   })
 
 describe('the Changes tab line comments', () => {
+  // Crossing md swaps the diff's scroller (its own column ↔ `main`). That must not remount the
+  // Diff: its open comment editor and the unsent text live in it, and rotating a tablet, docking
+  // devtools or resizing the desktop app window would silently drop a half-written note.
+  it('keeps a half-written comment when the window crosses the md breakpoint', async () => {
+    const listeners = new Set<(event: MediaQueryListEvent) => void>()
+    let wide = true
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      get matches() { return query === '(min-width: 768px)' ? wide : false },
+      media: query,
+      addEventListener: (_: string, listener: (event: MediaQueryListEvent) => void) => {
+        if (query === '(min-width: 768px)') listeners.add(listener)
+      },
+      removeEventListener: (_: string, listener: (event: MediaQueryListEvent) => void) => listeners.delete(listener),
+      addListener: () => {},
+      removeListener: () => {},
+      onchange: null,
+      dispatchEvent: () => false,
+    }))
+    stubFetch({ 'GET /api/v1/runs/r1/drafts': () => diffCommentsDraft([]) })
+    renderChangesRoute()
+    await waitFor(() => expect(document.querySelector('[aria-label="Comment on notes.md line 1"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="diff-pane"]')?.hasAttribute('data-diff-scroller')).toBe(true)
+    fireEvent.click(document.querySelector('[aria-label="Comment on notes.md line 1"]')!)
+    fireEvent.change(screen.getByPlaceholderText('Add a comment for the AI'), { target: { value: 'half-written' } })
+    const diff = document.querySelector('[data-slot="diff"]')
+
+    // To a phone width: the column stops being the scroller.
+    wide = false
+    act(() => listeners.forEach((listener) => listener({ matches: false } as MediaQueryListEvent)))
+    await waitFor(() => expect(document.querySelector('[data-slot="diff-pane"]')?.hasAttribute('data-diff-scroller')).toBe(false))
+    expect(document.querySelector('[data-slot="diff"]')).toBe(diff)
+    expect((screen.getByPlaceholderText('Add a comment for the AI') as HTMLTextAreaElement).value).toBe('half-written')
+  })
+
   /**
    * The draft hook seeds only a PRISTINE input, so a comment added before the stored list arrived
    * would mark it dirty, skip the seed, and write a one-item list over every stored comment.
@@ -647,6 +813,17 @@ describe('the Changes tab composer dock', () => {
       expect(main.style.scrollPaddingBottom).toBe('')
       const diff = document.querySelector<HTMLElement>('[data-slot="diff"]')!
       expect(diff.className).toContain('[&_[data-slot=diff-comment-editor]]:scroll-mb-[var(--changes-dock,0px)]')
+      // The dock is transparent and floats over BOTH columns, so on desktop they must run under it:
+      // the clearance is padding inside each scroller, never on the body (which would stop the
+      // columns above the dock and leave it sitting on an empty band of page background).
+      const body = pane.parentElement!
+      expect(body.style.paddingBottom).toBe('')
+      expect(body.className).not.toMatch(/(^|\s)(md:)?pb-/)
+      expect(body.className).toContain('max-md:pb-[calc(1rem_+_var(--changes-dock,0px))]')
+      expect(pane.className).toContain('pb-[calc(1rem_+_var(--changes-dock,0px))]')
+      expect(diff.className).toContain('md:pb-[calc(1rem_+_var(--changes-dock,0px))]')
+      // …and reveals clear the dock on desktop too, now that the column runs beneath it.
+      expect(diff.className).not.toContain('max-md:[&_[data-slot=diff-line]]')
       const composer = document.querySelector<HTMLTextAreaElement>('[data-slot="thread-dock"] textarea')!
       fireEvent.change(composer, { target: { value: 'first line\nsecond line' } })
       height = 220

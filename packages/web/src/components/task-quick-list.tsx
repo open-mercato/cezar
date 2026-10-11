@@ -10,6 +10,7 @@ import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
 import { toast } from '@/components/ui/toaster'
+import { UnreadMarker } from '@/components/unread-marker'
 import { deriveAttention } from '@/lib/attention'
 import { shortAge } from '@/lib/format'
 import { isReadDoneItem, isUnread } from '@/lib/read-state'
@@ -24,6 +25,8 @@ import {
   type QuickListBucket,
   type QuickListRow,
 } from '@/lib/task-groups'
+import { filterRunsByOrigin } from '@/lib/task-filters'
+import { useTaskOrigin } from '@/lib/task-origin'
 import { dispatchKindLabel, subtaskLabel, taskTreeRows } from '@/lib/task-tree'
 import { formatCost, taskReference, taskReferences } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
@@ -365,13 +368,22 @@ function Row({
  *    thumb is not a target. See the variant's definition in `styles/index.css`.
  *  - `data-[pinned=true]` — an already-pinned row, where the pin is a fact about the row rather
  *    than an offer, and hiding it would leave `Pinned` unexplained.
+ *
+ * Spacing: the Link's own `pr-0.5` plus the row's `gap-2` is the 10px right inset at rest —
+ * matching the row's `pl-2.5` — because the zero-width pin still takes a flex gap. Revealed, the
+ * pin's `-ml-1` pulls it into that gap, so the icon sits ~10px from the age, not ~22px.
  */
 const ROW_PIN_CLASS =
   'w-0 overflow-hidden opacity-0' +
-  ' group-hover/task-row:mr-1 group-hover/task-row:w-5 group-hover/task-row:opacity-100' +
-  ' group-focus-within/task-row:mr-1 group-focus-within/task-row:w-5 group-focus-within/task-row:opacity-100' +
-  ' no-hover:mr-1 no-hover:size-7 no-hover:opacity-100' +
-  ' data-[pinned=true]:mr-1 data-[pinned=true]:w-5 data-[pinned=true]:opacity-100'
+  ' group-hover/task-row:-ml-1 group-hover/task-row:mr-1 group-hover/task-row:w-5 group-hover/task-row:opacity-100' +
+  ' group-focus-within/task-row:-ml-1 group-focus-within/task-row:mr-1 group-focus-within/task-row:w-5 group-focus-within/task-row:opacity-100' +
+  ' no-hover:-ml-1 no-hover:mr-1 no-hover:size-7 no-hover:opacity-100' +
+  ' data-[pinned=true]:-ml-1 data-[pinned=true]:mr-1 data-[pinned=true]:w-5 data-[pinned=true]:opacity-100'
+
+/** The dispatch-kind chip's half of the same swap: hidden exactly when `ROW_PIN_CLASS` reveals
+ *  the pin, so the pin takes the chip's width instead of pushing the row past the column. */
+const DISPATCH_KIND_YIELD_CLASS =
+  'group-hover/task-row:hidden group-focus-within/task-row:hidden no-hover:hidden'
 
 const RunRow = React.memo(function RunRow({
   run,
@@ -414,9 +426,9 @@ const RunRow = React.memo(function RunRow({
   // Only when the two numbers are the same number — see `refPrefixMatches`. A run opened on issue
   // #788 that shipped as PR #790 keeps its prefix, because the chip is no longer saying it.
   const displayTitle = refPrefixMatches(title, reference?.number) ? splitRefPrefix(title).rest : title
-  // Read/unread (#unread-done-items, "Option B"): an unread done item is promoted (bright +
-  // semibold) and wears a trailing violet dot; a read one dims so the history steps back. Both
-  // are orthogonal to the leading status dot, which keeps saying done/failed.
+  // Read/unread (#unread-done-items): an unread done item is promoted (bright +
+  // semibold); a read one dims so the history steps back. Both are orthogonal to the leading
+  // status dot, which keeps saying done/failed. (No trailing dot — see `UnreadMarker`.)
   const unread = isUnread(run)
   const readDone = isReadDoneItem(run)
   // A variant row spends its width on what distinguishes the variants (runner and spend) rather
@@ -471,7 +483,9 @@ const RunRow = React.memo(function RunRow({
         // visible text drop — so hover always gives back everything the column could not show.
         title={title}
         aria-current={isActive ? 'page' : undefined}
-        className="flex min-w-0 flex-1 items-center gap-2 py-[7px] pr-2.5"
+        // `pr-0.5` when a pin follows: the row's `gap-2` before the (zero-width) pin supplies the
+        // rest of the right inset — see `ROW_PIN_CLASS`. No pin (archived), no gap: `pr-2.5`.
+        className={cn('flex min-w-0 flex-1 items-center gap-2 py-[7px]', onTogglePin ? 'pr-0.5' : 'pr-2.5')}
       >
         {variant ? (
           <span className="inline-flex size-[15px] shrink-0 items-center justify-center rounded-full bg-violet/15 font-mono text-[9.5px] font-semibold text-violet">
@@ -489,13 +503,21 @@ const RunRow = React.memo(function RunRow({
         >
           {variant ? variantLabel(run, showTokens, showCost) : displayTitle}
         </span>
-        {/* What a DISPATCHED row is for — `review` or `implement`. NOT droppable metadata like
-            the pair below: it is the one thing that tells a child from a task a person typed, so
-            it stays at every width, in the sidebar's smaller chip size. Null on every root. */}
+        {/* What a DISPATCHED row is for — `review` or `implement`. NOT width-droppable like the
+            pair below: it is the one thing that tells a child from a task a person typed, so it
+            stays at every width, in the sidebar's smaller chip size. Null on every root.
+
+            It does give its slot to the PIN whenever the pin shows — the row hovered or focused,
+            a device that cannot hover, or a PINNED row, where the pin is permanent: a nested row
+            at 264px has no room for both. The kind is still on the Tasks table, and back the
+            moment the pin goes. */}
         {dispatchKind ? (
           <span
             data-slot="dispatch-kind"
-            className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground"
+            className={cn(
+              'shrink-0 rounded-full bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground',
+              onTogglePin && (run.pinned ? 'hidden' : DISPATCH_KIND_YIELD_CLASS),
+            )}
           >
             {dispatchKind}
           </span>
@@ -509,7 +531,10 @@ const RunRow = React.memo(function RunRow({
 
             23rem is not the width at which the pair merely *fits* — it is the width at which it
             fits AND the name is still at least as long as it was in the default 264px column
-            (measured: 146px of title at 23rem vs 132px at 264px). Anything narrower buys the
+            (measured: 146px of title at 23rem vs 132px at 264px — taken while the row still
+            carried a trailing unread dot and an 18px right inset; both widths have since gained
+            the same room, so the comparison holds, but re-measure before moving the threshold).
+            Anything narrower buys the
             numbers back by making the task names shorter than they were before the drag, which
             is precisely the bargain this issue exists to stop making. */}
         {run.diffStat ? (
@@ -539,20 +564,25 @@ const RunRow = React.memo(function RunRow({
             exactly the kind that has an issue reference and no PR yet — so keying this on "has a
             reference" alone would have silently deleted the queue position from every
             issue-driven queued row. */}
+        {/* On a NESTED dispatched row the age is droppable metadata below 19rem: indent + title
+            floor + kind chip already fill the default 264px column, and a child started moments
+            after the parent standing right above it. `depth > 0`, not just "dispatched": a child
+            filed in another bucket than its parent is a top-level row with no indent to pay for
+            and no parent above it to date it. A queue position is never dropped — it is carried
+            nowhere else. */}
         {age && (queuePosition !== null || !reference) ? (
-          <span className="shrink-0 text-[11px] text-soft-foreground tabular-nums">{age}</span>
+          <span
+            data-slot="task-row-age"
+            className={cn(
+              'shrink-0 text-[11px] text-soft-foreground tabular-nums',
+              dispatchKind && depth > 0 && queuePosition === null && 'hidden @min-[19rem]/sidebar:inline',
+            )}
+          >
+            {age}
+          </span>
         ) : null}
-        {/* The unread marker (#unread-done-items): a trailing violet dot, opposite end and
-            different hue from the leading status dot, so the two read as two signals. */}
-        {unread ? (
-          <StatusDot
-            tone="violet"
-            role="img"
-            aria-label="unread"
-            title="Unread — not opened since it finished"
-            className="ml-0.5 shrink-0"
-          />
-        ) : null}
+        {/* Unread is the title's weight; this only says it to a screen reader. */}
+        {unread ? <UnreadMarker /> : null}
       </Link>
       {/* The pin (#935), a SIBLING of the Link for the same reason the status dot and the
           reference chip are: a button inside an anchor is invalid, and this one has its own
@@ -592,6 +622,13 @@ export function TaskQuickListContainer() {
   const pinMutation = usePinRun()
   const visibility = usageMetricVisibility(health.data)
   const [view, setView] = useListView()
+  // The remembered Regular | Automations | All split the Tasks tables set — the sidebar shows the
+  // same list they do. Memoized so the chip-status request below keys off a stable list.
+  const [origin] = useTaskOrigin()
+  const shown = React.useMemo(
+    () => (runs.data ? filterRunsByOrigin(runs.data, origin) : undefined),
+    [runs.data, origin],
+  )
   // Project-prefix-agnostic matches (step 3.2): `/p/<id>/tasks/:id` must light its row too.
   const match = useProjectMatch('/tasks/:id/*')
   const exact = useProjectMatch('/tasks/:id')
@@ -611,24 +648,24 @@ export function TaskQuickListContainer() {
     () =>
       projectId === undefined
         ? []
-        : (runs.data ?? []).flatMap((run) =>
+        : (shown ?? []).flatMap((run) =>
             taskReferences(run).map((reference) => ({
               projectId,
               kind: reference.kind,
               number: reference.number,
             })),
           ),
-    [runs.data, projectId],
+    [shown, projectId],
   )
 
   // Nothing at all until the list has answered: a skeleton here would be inventing rows, and an
   // empty state would claim "No tasks yet" before we know whether there are any.
-  if (!runs.data) return null
+  if (!shown) return null
 
   return (
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
       <TaskQuickList
-        runs={runs.data}
+        runs={shown}
         view={view}
         onViewChange={setView}
         // Both matches: `/tasks/:id` and its `/changes` and `/files` children all keep the row lit.

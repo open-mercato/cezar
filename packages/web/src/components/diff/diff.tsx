@@ -65,8 +65,8 @@ export function Diff(props: DiffProps) {
 /**
  * The zero-dependency fallback: same props, raw patch text with `+`/`-` line tints from the
  * theme tokens. No parser, no highlighter, no lazy import — nothing here can fail the way
- * the engine chunk can. Split mode degrades to unified; that is documented degradation, not
- * a bug.
+ * the engine chunk can. Split mode degrades to unified and Markdown `preview` to the plain
+ * patch; that is documented degradation, not a bug.
  */
 export function DiffFallback({ files, wrap = false, imageSrc, onOpenInApp, viewRef, className }: DiffProps) {
   const stat: DiffStat = {

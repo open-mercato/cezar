@@ -257,8 +257,8 @@ describe('the Changes tab against a live dry run', () => {
       ),
     ).toBe(true)
     // The tabs remain a tappable segment row and the page does not overflow sideways.
-    // Session / Changes / Commits / Files — the whole row survives the phone framing.
-    expect(browser.count('[data-slot="run-tabs"] a')).toBe(4)
+    // Session / Changes / Commits / Files / Graph — the whole row survives the phone framing.
+    expect(browser.count('[data-slot="run-tabs"] a')).toBe(5)
     expect(browser.evaluate(`document.documentElement.scrollWidth <= window.innerWidth`)).toBe(true)
 
     browser.screenshot(`${artifactsDir}/changes-mobile.png`)

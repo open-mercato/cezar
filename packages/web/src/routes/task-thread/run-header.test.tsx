@@ -1424,6 +1424,25 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(tabs.getByRole('link', { name: 'Files' }).getAttribute('href')).toBe('/tasks/r1/files')
   })
 
+  it('tabs: Graph appears for a run with a workflow definition (a step list opens as its graph)', () => {
+    stubFetch()
+    const { unmount } = renderHeader(run('done'))
+    expect(within(document.querySelector('[data-slot="run-tabs"]') as HTMLElement).queryByRole('link', { name: 'Graph' })).toBeNull()
+    unmount()
+    renderHeader(
+      run('running', {
+        workflowDef: {
+          name: 'g',
+          source: 'file',
+          steps: [],
+          graph: { nodes: [{ id: 'start', type: 'start' }], edges: [] },
+        },
+      }),
+    )
+    const tabs = within(document.querySelector('[data-slot="run-tabs"]') as HTMLElement)
+    expect(tabs.getByRole('link', { name: 'Graph' }).getAttribute('href')).toBe('/tasks/r1/graph')
+  })
+
   it('copies the branch name from its header chip and confirms it in the tooltip', async () => {
     stubFetch()
     const writeText = vi.fn(() => Promise.resolve())
@@ -1576,6 +1595,71 @@ describe('dispatch lines', () => {
     await waitFor(() => expect(childLinks()).toHaveLength(2))
     expect(childrenLine()?.textContent).toContain('Subtasks')
     expect(childLinks().map((a) => a.getAttribute('href'))).toEqual(['/tasks/k1', '/tasks/k2'])
+  })
+
+  /**
+   * A gauntlet parent dispatches a hundred children and the wrapped list owned the whole
+   * viewport. Each id below is its own parent run, because the open/closed choice lives in a
+   * module-level map keyed by run id (same shape as the phone meta disclosure) and would
+   * otherwise leak from one test into the next.
+   */
+  const toggle = () => document.querySelector('[data-slot="dispatch-children-toggle"]') as HTMLElement
+  const childList = () => document.querySelector('[data-slot="dispatch-children-list"]')
+  const kids = (parentId: string, count: number, status: RunStatus = 'running') =>
+    Array.from({ length: count }, (_, index) =>
+      run(status, {
+        id: `${parentId}-k${index}`,
+        titleSummary: `Subtask ${index}`,
+        dispatch: { rootRunId: parentId, parentRunId: parentId },
+      }),
+    )
+
+  it('keeps a handful of subtasks open, in a bounded scroller rather than an unbounded list', async () => {
+    stubFetch({ '/api/v1/runs': () => jsonResponse(kids('few', 3)) })
+    renderHeader(run('running', { id: 'few', dispatch: { rootRunId: 'few' } }))
+    await waitFor(() => expect(childLinks()).toHaveLength(3))
+    expect(toggle().getAttribute('aria-expanded')).toBe('true')
+    // The cap is what stops any list — opened by default or by hand — from pushing the transcript.
+    expect(childList()?.className).toContain('max-h-28')
+    expect(childList()?.className).toContain('overflow-y-auto')
+  })
+
+  it('starts a large fan-out collapsed, and says how it is going without opening it', async () => {
+    stubFetch({
+      '/api/v1/runs': () =>
+        jsonResponse([
+          ...kids('many', 8, 'done'),
+          ...kids('many-run', 2), // a different parent: not this run's children, not in the tally
+          run('waiting', { id: 'many-ask', titleSummary: 'Asks', dispatch: { rootRunId: 'many', parentRunId: 'many' } }),
+        ]),
+    })
+    renderHeader(run('running', { id: 'many', dispatch: { rootRunId: 'many' } }))
+    await waitFor(() => expect(toggle()).not.toBeNull())
+    // Collapsed: the links are OUT of the DOM, not merely invisible — no ghosts in the tab order.
+    expect(toggle().getAttribute('aria-expanded')).toBe('false')
+    expect(childLinks()).toHaveLength(0)
+    expect(childList()).toBeNull()
+    const summary = toggle().textContent ?? ''
+    expect(summary).toContain('9')
+    // Attention order: the child that stopped to ask is read before the done pile.
+    expect(summary.indexOf('needs you')).toBeGreaterThan(-1)
+    expect(summary.indexOf('needs you')).toBeLessThan(summary.indexOf('done'))
+    expect(summary).toContain('8')
+  })
+
+  it('opens a collapsed fan-out on click, and closes it again', async () => {
+    stubFetch({ '/api/v1/runs': () => jsonResponse(kids('big', 6)) })
+    renderHeader(run('running', { id: 'big', dispatch: { rootRunId: 'big' } }))
+    await waitFor(() => expect(toggle()).not.toBeNull())
+    expect(childLinks()).toHaveLength(0)
+
+    fireEvent.click(toggle())
+    await waitFor(() => expect(childLinks()).toHaveLength(6))
+    expect(toggle().getAttribute('aria-expanded')).toBe('true')
+    expect(toggle().getAttribute('aria-controls')).toBe(childList()?.getAttribute('id'))
+
+    fireEvent.click(toggle())
+    await waitFor(() => expect(childLinks()).toHaveLength(0))
   })
 
   // The role chip is gone with the ranks it named — nothing in the header may reintroduce it.

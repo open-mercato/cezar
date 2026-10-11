@@ -64,6 +64,8 @@ export interface ThreadAsk {
   questions: UiAskQuestion[]
   resolved: boolean
   answer?: string
+  /** A workflow gate/question rather than the agent (spec 2026-09-30-workflow-node-editor). */
+  fromWorkflow?: boolean
 }
 
 /** A persisted, cezar-owned recovery marker for a provider's runtime authentication failure. */
@@ -676,7 +678,13 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
           ? rawQuestions as UiAskQuestion[]
           : rawQuestions.filter(isAskQuestion)
         if (questions.length === 0) break
-        const ask: ThreadAsk = { kind: 'ask', id: requestId, questions, resolved: false }
+        const ask: ThreadAsk = {
+          kind: 'ask',
+          id: requestId,
+          questions,
+          resolved: false,
+          ...(event.source === 'workflow' ? { fromWorkflow: true } : {}),
+        }
         currentTurn().entries.push({ origin: 'meta', entry: ask })
         pendingAsk = ask
         break

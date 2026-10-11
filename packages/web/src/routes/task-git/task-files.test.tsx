@@ -135,13 +135,20 @@ describe('the Files tab route', () => {
     // Below md the columns stack and the page IS the pane, so none of it applies there.
     await waitFor(() => expect(document.querySelector('[data-slot="files-tree-pane"]')).not.toBeNull())
     const pane = document.querySelector('[data-slot="files-tree-pane"]') as HTMLElement
-    // Pin and cap both read the one var the parent declares, so they cannot drift apart.
-    expect(pane.parentElement?.className).toContain('[--diff-sticky-top:7rem]')
-    expect(pane.className).toContain('md:top-[var(--diff-sticky-top)]')
-    expect(pane.className).toContain('md:max-h-[calc(100dvh_-_var(--diff-sticky-top)_-_1rem)]')
+    // Sized by the split layout, not from the header: no sticky pin, no viewport arithmetic.
+    expect(document.querySelector('[data-route="task-files"]')?.className).toContain('md:h-full')
+    expect(pane.className).not.toContain('sticky')
+    expect(pane.className).not.toContain('calc(')
     expect(pane.className).toContain('md:overflow-y-auto')
     expect(pane.className).toContain('md:overscroll-contain')
     expect(pane.className.split(' ')).not.toContain('overflow-y-auto')
+    // The preview scrolls on its own too, and a text preview holds nothing focusable: without a
+    // tab stop WebKit (the desktop app) leaves a keyboard user no way to scroll a long file.
+    const preview = document.querySelector('[data-slot="file-preview-pane"]') as HTMLElement
+    expect(preview.className).toContain('md:overflow-y-auto')
+    expect(preview.tabIndex).toBe(0)
+    expect(preview.getAttribute('role')).toBe('region')
+    expect(preview.getAttribute('aria-label')).toBe('File preview')
   })
 
   it('directories are lazy: closed by default, fetched only on first expand', async () => {
@@ -185,6 +192,31 @@ describe('the Files tab route', () => {
       },
       { timeout: 5000 },
     )
+  })
+
+  // The same grammar as the Changes tab's diff: scrolling a long file keeps its name pinned at the
+  // top of the preview column. jsdom lays nothing out, so these are the conditions sticky needs:
+  // the header is sticky and opaque, the card does not become a scroll container of its own
+  // (`overflow-hidden` would pin the header to the card), and the column carries no top padding
+  // that would park the stuck header below its edge.
+  it('pins the preview header to the top of the column while the file scrolls', async () => {
+    stubFetch()
+    renderFilesRoute()
+    await openFile('hello.ts')
+
+    const head = (await waitFor(() => {
+      const el = document.querySelector('[data-slot="file-preview-head"]')
+      expect(el).not.toBeNull()
+      return el
+    })) as HTMLElement
+    expect(head.className).toContain('sticky top-0')
+    expect(head.className).toContain('bg-[color-mix(in_oklab,var(--muted)_40%,var(--card))]')
+    expect(head.className).not.toContain('bg-muted/40')
+    const card = document.querySelector('[data-slot="file-preview"]') as HTMLElement
+    expect(card.className).toContain('overflow-clip')
+    expect(card.className).not.toContain('overflow-hidden')
+    const column = document.querySelector('[data-slot="file-preview-pane"]') as HTMLElement
+    expect(column.className).not.toMatch(/(^|\s)(md:)?py-/)
   })
 
   it('an image renders inline through the raw URL (binary flag notwithstanding)', async () => {
