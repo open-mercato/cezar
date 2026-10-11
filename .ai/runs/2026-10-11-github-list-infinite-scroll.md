@@ -38,8 +38,10 @@ did not catch it because test mode bypasses the virtualizer.
 
 ## Progress
 
+PR: #1374
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Fix and replace paging control
 
-- [ ] 1.1 Virtualize against the list pane and auto-load the next page on scroll
+- [x] 1.1 Virtualize against the list pane and auto-load the next page on scroll — a3541e48, 454e5e33
