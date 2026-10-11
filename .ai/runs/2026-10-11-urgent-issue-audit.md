@@ -24,6 +24,10 @@ Phase 2: parent reads every diff and reruns named tests, then dispatches ONE fin
 
 #1017 child opened #1368 at ae65fae5 but parent did NOT accept completion: the only test diff removes two timeout overrides, while lazy preloading was already in base. Full gate is red without demonstrated baseline comparisons. Parent sent corrections to child: restore draft/in-progress, prove remaining defect or close duplicate, execute installed review skill as instructions. #575 is the replacement sixth implementation dispatch (fb989476), scoped to capabilities IPv4-mapped IPv6 parsing/tests. Seven tasks including reserved final review; one spare remains. No changes merged.
 
+## Validation follow-ups
+
+#1367 at 0ca8230d and #1369 at e9f0d580 inspected. Parent requested source-lifecycle proof for archive/forget cleanup in #1367; existing helper-only test does not prove later archival triggers cleanup. Both children must rerun gate with TMPDIR=/tmp because injected repo-local TMPDIR invalidates non-repository fixtures. #1369 additionally needs callsite concurrency proof rather than only helper tests. Continued existing children via documented POST /runs/:id/continue (same run and requested model; no new subtasks), including #1017 to close duplicate #1368 after ancestry d22659e8 confirms existing preload. Five actual deliverables still intended: #1359, #1217, #1219, #575, and next replacement #1194 (accessible transcript copy, medium priority, no existing claim/PR); dispatch #1194 when slot frees as task 7, final independent review as task 8. No spare beyond these.
+
 ## Risks
 Live injected cockpit URL resolves to the wrong process; verified parent tree at http://172.17.0.1:4321, use per-command CEZ_API_URL override. Live model catalog confirms gpt-5.6-luna. Some issues may already be fixed or contain scope questions; children must report evidence and use safe defaults rather than inventing work. Full gate failures remain blockers unless proven baseline. UI changes need browser evidence.
 
