@@ -25,6 +25,9 @@ const REAL_LOOPBACK = [
   '::1',
   '[::1]',
   '0:0:0:0:0:0:0:1',
+  '::ffff:127.0.0.1',
+  '[::ffff:127.1.2.3]:4321',
+  '0:0:0:0:0:ffff:7f00:1',
 ];
 
 // Every one of these is registrable by an attacker and resolvable to 127.0.0.1.
@@ -51,6 +54,16 @@ const NOT_LOOPBACK = [
   'example.com',
   '::2',
   '::1:1',
+  '::ffff:192.168.1.1',
+  '::ffff:127.0.0.256',
+  '::ffff:127.0.0',
+  '::ffff:127.0.0.1.evil.com',
+  '::ffff:127.0.0.1:80',
+  '[::ffff:127.0.0.1]evil.com',
+  '::ffff:127.00.0.1',
+  '::ffff:127.0.0.01',
+  '[::ffff:127.00.0.1]',
+  '[::ffff:127.0.0.01]',
 ];
 
 describe('normalizeHostname', () => {
@@ -62,6 +75,9 @@ describe('normalizeHostname', () => {
     ['[0:0:0:0:0:0:0:1]:4321', '0:0:0:0:0:0:0:1'],
     ['[0000:0000:0000:0000:0000:0000:0000:0001]', '0:0:0:0:0:0:0:1'],
     ['::1', '0:0:0:0:0:0:0:1'], // bare IPv6 literal: >1 colon, so never `name:port`
+    ['[::ffff:127.0.0.1]:4321', '0:0:0:0:0:ffff:7f00:1'],
+    ['::ffff:127.1.2.3', '0:0:0:0:0:ffff:7f01:203'],
+    ['::ffff:7f00:1', '0:0:0:0:0:ffff:7f00:1'],
     ['LocalHost.:4321', 'localhost'], // lowercased, trailing FQDN dot dropped
     ['fe80::1%eth0', 'fe80:0:0:0:0:0:0:1'], // IPv6 zone id stripped
     ['[::1%25eth0]:4321', '0:0:0:0:0:0:0:1'], // bracketed, zone id + port
@@ -74,6 +90,13 @@ describe('normalizeHostname', () => {
     '[::1]evil.com',
     '127.0.0.1:evil.com', // port that is not digits
     'evil.com:80:127.0.0.1',
+    '::ffff:127.0.0.1:80',
+    '[::ffff:127.0.0.1]evil.com',
+    '[::ffff:127.0.0.256]',
+    '::ffff:127.00.0.1',
+    '::ffff:127.0.0.01',
+    '[::ffff:127.00.0.1]',
+    '[::ffff:127.0.0.01]',
   ])('returns "" for the unparseable authority %s', (input) => {
     expect(normalizeHostname(input)).toBe('');
   });
