@@ -14,8 +14,6 @@ import type { ReactNode } from 'react'
 import { Link as RouterLink, NavLink, matchPath, useLocation } from 'react-router'
 
 import { TRACKER_PROVIDERS } from '@/lib/tracker-providers'
-import { AddProjectDialog } from '@/components/add-project-dialog'
-import { CloneProjectDialog } from '@/components/clone-project-dialog'
 import { openCommandPalette } from '@/components/command-palette'
 import { GithubIcon } from '@/components/icons'
 import { commandShortcutHint } from '@/lib/use-command-shortcut'
@@ -45,6 +43,9 @@ import {
   readStoredSidebarWidth,
   writeStoredSidebarWidth,
 } from '@/lib/sidebar-width'
+
+const LazyAddProjectDialog = React.lazy(async () => import('@/components/add-project-dialog').then((module) => ({ default: module.AddProjectDialog })))
+const LazyCloneProjectDialog = React.lazy(async () => import('@/components/clone-project-dialog').then((module) => ({ default: module.CloneProjectDialog })))
 import { cn } from '@/lib/utils'
 /** Tailwind's `md`. The drawer is the `<md` affordance, so this must stay in step with the
  *  `md:hidden` / `md:flex` classes below — they are the same breakpoint expressed twice, once
@@ -906,6 +907,8 @@ function GlobalSettingsLink({
 function AddProjectMenu() {
   const [browsing, setBrowsing] = React.useState(false)
   const [cloning, setCloning] = React.useState(false)
+  const [browsingMounted, setBrowsingMounted] = React.useState(false)
+  const [cloningMounted, setCloningMounted] = React.useState(false)
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -922,17 +925,19 @@ function AddProjectMenu() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56">
         <DropdownMenuLabel className="text-xs text-soft-foreground">Add project</DropdownMenuLabel>
-        <DropdownMenuItem data-slot="add-project-local" onSelect={() => setBrowsing(true)}>
+        <DropdownMenuItem data-slot="add-project-local" onSelect={() => { setBrowsingMounted(true); setBrowsing(true) }}>
           <FolderIcon aria-hidden="true" />
           Open local folder…
         </DropdownMenuItem>
-        <DropdownMenuItem data-slot="add-project-clone" onSelect={() => setCloning(true)}>
+        <DropdownMenuItem data-slot="add-project-clone" onSelect={() => { setCloningMounted(true); setCloning(true) }}>
           <GithubIcon aria-hidden="true" />
           Clone from GitHub…
         </DropdownMenuItem>
       </DropdownMenuContent>
-      {browsing ? <AddProjectDialog open onOpenChange={setBrowsing} /> : null}
-      {cloning ? <CloneProjectDialog open onOpenChange={setCloning} /> : null}
+      <React.Suspense fallback={null}>
+        {browsingMounted ? <LazyAddProjectDialog open={browsing} onOpenChange={setBrowsing} /> : null}
+        {cloningMounted ? <LazyCloneProjectDialog open={cloning} onOpenChange={setCloning} /> : null}
+      </React.Suspense>
     </DropdownMenu>
   )
 }
