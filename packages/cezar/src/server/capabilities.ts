@@ -100,7 +100,11 @@ function expandIpv6(h: string): string | null {
 /** Convert a strict dotted-quad IPv4 tail to the two IPv6 groups it occupies. */
 function expandIpv4(value: string): [string, string] | null {
   const octets = value.split('.');
-  if (octets.length !== 4 || !octets.every((octet) => /^\d{1,3}$/.test(octet))) return null;
+  // Keep the dotted form unambiguous. WHATWG URL and node:net reject
+  // multi-digit leading-zero octets, so accepting them here would let a
+  // malformed Host authority through a security boundary that rejects the
+  // equivalent URL spelling.
+  if (octets.length !== 4 || !octets.every((octet) => /^(?:0|[1-9]\d{0,2})$/.test(octet))) return null;
   const numbers = octets.map(Number);
   if (numbers.some((octet) => octet > 255)) return null;
   return [((numbers[0]! << 8) | numbers[1]!).toString(16), ((numbers[2]! << 8) | numbers[3]!).toString(16)];

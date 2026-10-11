@@ -60,6 +60,10 @@ const NOT_LOOPBACK = [
   '::ffff:127.0.0.1.evil.com',
   '::ffff:127.0.0.1:80',
   '[::ffff:127.0.0.1]evil.com',
+  '::ffff:127.00.0.1',
+  '::ffff:127.0.0.01',
+  '[::ffff:127.00.0.1]',
+  '[::ffff:127.0.0.01]',
 ];
 
 describe('normalizeHostname', () => {
@@ -89,6 +93,10 @@ describe('normalizeHostname', () => {
     '::ffff:127.0.0.1:80',
     '[::ffff:127.0.0.1]evil.com',
     '[::ffff:127.0.0.256]',
+    '::ffff:127.00.0.1',
+    '::ffff:127.0.0.01',
+    '[::ffff:127.00.0.1]',
+    '[::ffff:127.0.0.01]',
   ])('returns "" for the unparseable authority %s', (input) => {
     expect(normalizeHostname(input)).toBe('');
   });

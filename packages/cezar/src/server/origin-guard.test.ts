@@ -252,6 +252,15 @@ describe('request-origin guard (#426)', () => {
     expect(store.listRuns()).toHaveLength(1);
   });
 
+  it.each([
+    ['[::ffff:127.0.0.1]:4321', 'http://[::ffff:7f00:1]:4321'],
+    ['[::ffff:7f00:1]:4321', 'http://[::ffff:127.0.0.1]:4321'],
+  ])('allows equivalent dotted/hex mapped IPv6 authorities (%s ↔ %s) → 201', async (host, origin) => {
+    const res = await postRuns({ host, origin });
+    expect(res.status).toBe(201);
+    expect(store.listRuns()).toHaveLength(1);
+  });
+
   // ---- reads and the SSE / health surfaces stay unaffected ----------------
 
   it('leaves loopback reads unaffected (GET /api/v1/runs) → 200', async () => {
