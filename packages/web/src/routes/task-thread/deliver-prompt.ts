@@ -6,6 +6,7 @@ import { runQueryOptions, useSendMessage } from '@/api/queries'
 import type { ApiRun, AttachmentInput, RunStatus } from '@open-mercato/cezar-api-client'
 
 import type { ContinueAction } from './follow-up-engine'
+import { isIdleTeardownRefusal } from './ask-answer'
 import { lastSessionId } from './run-actions'
 
 /**
@@ -26,12 +27,16 @@ import { lastSessionId } from './run-actions'
  * has healed the cache every other view reads, so the thread stops lying in the same beat.
  *
  * What it deliberately does NOT do:
- *  - retry when the fresh record agrees with the path already tried. That 409 is the server's
- *    considered answer (a disconnected provider, a locked model, a session with nothing to
- *    resume), and re-posting it would only turn one honest error into two;
+ *  - retry when the fresh record agrees with the path already tried — with one exception. That
+ *    409 is normally the server's considered answer (a disconnected provider, a locked model, a
+ *    session with nothing to resume), and re-posting it would only turn one honest error into
+ *    two. The exception is the exact `run is still active` refusal on the Continue path: a fresh
+ *    record that still reads closed is what PROVES a teardown race rather than a stale route, so
+ *    that one refusal is handed to ContinueAction's bounded retry (ask-answer.ts) instead;
  *  - reopen a session for an EMPTY draft. Submitting nothing is the one-click Continue, and a
  *    run that turns out to be live has nothing to continue — there is no message to deliver;
- *  - retry more than once. The second answer is reported as it comes.
+ *  - re-route more than once. One refetch picks the path, and the answer that path gives is
+ *    reported as it comes.
  */
 
 /** Which endpoint a record's status calls for. `queued` is `live`: the message is folded into
@@ -54,8 +59,10 @@ export function useDeliverPrompt(run: ApiRun, continueAction: ContinueAction): D
 
   return useCallback(
     async (text: string, images: AttachmentInput[]) => {
-      const deliver = (path: DeliveryPath) =>
-        path === 'live' ? sendMessageAsync({ text, images }) : continueWith(text, images)
+      const deliver = (path: DeliveryPath, retryTeardown = false) =>
+        path === 'live'
+          ? sendMessageAsync({ text, images })
+          : continueWith(text, images, { retryTeardown })
       const attempted = deliveryPath(run.status)
       try {
         return await deliver(attempted)
@@ -70,7 +77,13 @@ export function useDeliverPrompt(run: ApiRun, continueAction: ContinueAction): D
           throw error
         }
         const path = deliveryPath(fresh.status)
-        if (path === attempted) throw error
+        // The first Continue was intentionally single-shot so this refetch could distinguish a
+        // stale route from a real teardown race. If the fresh record still agrees, hand the exact
+        // refusal back to ContinueAction's bounded retry rather than retrying a different route.
+        if (path === attempted) {
+          if (path === 'continue' && isIdleTeardownRefusal(error)) return await deliver(path, true)
+          throw error
+        }
         // Nothing to say and the run is already live: the empty submit was "reopen the session",
         // and it is open. The 409 says exactly that, and the refetch above has already put the
         // truth in the cache.
@@ -80,7 +93,7 @@ export function useDeliverPrompt(run: ApiRun, continueAction: ContinueAction): D
         // Judged on the FRESH record: `continueAction.available` was computed from the stale one,
         // which in this direction is precisely the record that says the run is still live.
         if (path === 'continue' && lastSessionId(fresh) === undefined) throw error
-        return await deliver(path)
+        return await deliver(path, path === 'continue')
       }
     },
     [continueWith, queryClient, run.id, run.status, sendMessageAsync],
