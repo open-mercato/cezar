@@ -21,7 +21,7 @@ Non-goals: changing API shapes, symlink policy, privacy handling, candidate orde
 ### Phase 3: verification and handoff
 
 - [x] 3.1 Add equivalence, cap-before-resolution, symlink/privacy, omission, ordering, empty-input, overlap, and max-16 regression coverage. — 9fb136a3
-- [ ] 3.2 Run the configured validation gate, review the PR, and finalize the handoff. — blocked by baseline gate failures and GitHub self-review restriction
+- [x] 3.2 Run the configured validation gate, review the PR, and finalize the handoff. — exact-head GitHub CI run 38101698905 passed all five configured commands; PR marked ready for independent review (self-approval remains unavailable).
 
 ## Risks
 
@@ -46,4 +46,4 @@ PR: #1369
 ### Phase 3: verification and handoff
 
 - [x] 3.1 Add equivalence, cap-before-resolution, symlink/privacy, omission, ordering, empty-input, overlap, and max-16 regression coverage. — 57230670
-- [ ] 3.2 Run the configured validation gate, review the PR, and finalize the handoff. — blocked by the unrelated baseline web failure and GitHub self-review restriction
+- [x] 3.2 Run the configured validation gate, review the PR, and finalize the handoff. — exact-head GitHub CI run 38101698905 passed all five configured commands; PR marked ready for independent review (self-approval remains unavailable).
