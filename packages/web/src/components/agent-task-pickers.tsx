@@ -1,10 +1,13 @@
 import { CheckIcon, ChevronDownIcon, EyeIcon, SparklesIcon, WorkflowIcon } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { lazy, Suspense, useRef, useState } from 'react'
 import type { Skill, WorkflowDef } from '@open-mercato/cezar-api-client'
 import { chipClass } from '@/components/picker-pill'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { SkillPreviewDialog } from '@/components/skill-detail'
+const LazySkillPreviewDialog = lazy(async () => {
+  const module = await import('@/components/skill-detail')
+  return { default: module.SkillPreviewDialog }
+})
 import { isProjectSkill, partitionSkillsForDisplay, searchSkills, searchWorkflows, skillKeywords } from '@/lib/skills'
 import { cn } from '@/lib/utils'
 
@@ -117,6 +120,7 @@ export function SkillsPicker({
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [preview, setPreview] = useState<Skill | null>(null)
+  const [previewReady, setPreviewReady] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
   // #484: rank matches in JS, then split into the #519 tiers (cmdk's own sort is unreliable here).
   const matched = searchSkills(skills, search, skillUsage)
@@ -150,6 +154,7 @@ export function SkillsPicker({
             event.preventDefault()
             event.stopPropagation()
             setPreview(skill)
+            setPreviewReady(true)
           }}
           className="ml-auto shrink-0 rounded-sm p-0.5 text-soft-foreground transition-colors hover:text-foreground"
         >
@@ -163,7 +168,11 @@ export function SkillsPicker({
   if (skills.length === 0) return null
   return (
     <>
-      <SkillPreviewDialog skill={preview} onClose={() => setPreview(null)} />
+      {previewReady ? (
+        <Suspense fallback={null}>
+          <LazySkillPreviewDialog skill={preview} onClose={() => setPreview(null)} />
+        </Suspense>
+      ) : null}
       <Popover
         open={open}
         onOpenChange={(next) => {
