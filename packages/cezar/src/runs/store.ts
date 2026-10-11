@@ -187,6 +187,11 @@ export const runRecordSchema = z.object({
    *  group-pick winner-park read it). Additive-safe: absent = falsy = not
    *  autonomous. Set at creation from `WorkflowInput.autonomous`. */
   autonomous: z.boolean().optional(),
+  /** Shadow run (spec 2026-10-06-shadow-runs): pushes and `gh` writes are captured as intents
+   *  under `.ai/cezar/shadow/<runId>/` for a human to promote, never executed by the agent. Set
+   *  at creation and never changed - a run that started shadowed ends shadowed. Additive-safe:
+   *  absent = an ordinary run. */
+  shadow: z.literal(true).optional(),
   /** Optional provenance for tasks launched by a project GitHub automation. */
   automation: z
     .object({
@@ -1007,6 +1012,8 @@ export class RunStore extends EventEmitter {
     agentProfile?: string;
     generateFollowups?: boolean;
     autonomous?: boolean;
+    /** Shadow run (spec 2026-10-06-shadow-runs). */
+    shadow?: true;
     worktree?: false;
     groupId?: string;
     variant?: string;
@@ -1028,6 +1035,7 @@ export class RunStore extends EventEmitter {
       agentProfile: input.agentProfile,
       generateFollowups: input.generateFollowups,
       autonomous: input.autonomous,
+      shadow: input.shadow,
       worktree: input.worktree,
       groupId: input.groupId,
       variant: input.variant,

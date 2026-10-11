@@ -587,4 +587,59 @@ describe('graph system nodes', () => {
       else process.env.CEZ_WORKFLOW_WEBHOOKS = saved;
     }
   }, 40_000);
+
+  it('a shadow run refuses every node that acts on the world, and still runs the local ones', async () => {
+    // Webhooks on, so the webhook below is refused by shadow mode rather than by its own opt-in.
+    const saved = process.env.CEZ_WORKFLOW_WEBHOOKS;
+    process.env.CEZ_WORKFLOW_WEBHOOKS = '1';
+    try {
+      const graph: WorkflowGraph = {
+        nodes: [
+          { id: 'start', type: 'start' },
+          // Both halves of a check env reach a shadow check: the run context every check gets and
+          // the shadow overrides on top of it.
+          { id: 'edit', type: 'check', command: 'test "$CEZ_SHADOW" = 1 && test -n "$CEZ_RUN_ID" && echo two >> a.txt' },
+          { id: 'commit', type: 'git.commit', message: 'shadow work' },
+          { id: 'push', type: 'git.push' },
+          { id: 'pr', type: 'github.draft-pr' },
+          { id: 'update', type: 'github.pr-update', ready: true },
+          { id: 'comment', type: 'github.pr-comment', body: 'done' },
+          { id: 'issue', type: 'github.issue-comment', issue: 7, body: 'done' },
+          { id: 'hook', type: 'notify.webhook', url: 'https://example.invalid/hook', body: 'x' },
+          { id: 'end', type: 'end', status: 'failed' },
+        ],
+        edges: [
+          { from: 'start', to: 'edit' },
+          { from: 'edit.pass', to: 'commit' },
+          { from: 'commit.done', to: 'push' },
+          { from: 'push.failed', to: 'pr' },
+          { from: 'pr.failed', to: 'update' },
+          { from: 'update.failed', to: 'comment' },
+          { from: 'comment.failed', to: 'issue' },
+          { from: 'issue.failed', to: 'hook' },
+          { from: 'hook.failed', to: 'end' },
+        ],
+      };
+      const id = manager.startRun(def(graph), { task: 'x', worktree: true, shadow: true }).id;
+      const final = await until(id, terminal, 30_000);
+      expect(final.steps.map((st) => [st.id, st.status])).toEqual([
+        ['edit', 'done'],
+        ['commit', 'done'],
+        ['push', 'failed'],
+        ['pr', 'failed'],
+        ['update', 'failed'],
+        ['comment', 'failed'],
+        ['issue', 'failed'],
+        ['hook', 'failed'],
+      ]);
+      const refused = store
+        .readEvents(id)
+        .flatMap((event) => (event.type === 'note' && String(event.message).startsWith('shadow run:') ? [event.stepId] : []));
+      expect(refused).toEqual(['push', 'pr', 'update', 'comment', 'issue', 'hook']);
+      expect(final.pullRequestUrl).toBeUndefined();
+    } finally {
+      if (saved === undefined) delete process.env.CEZ_WORKFLOW_WEBHOOKS;
+      else process.env.CEZ_WORKFLOW_WEBHOOKS = saved;
+    }
+  }, 40_000);
 });

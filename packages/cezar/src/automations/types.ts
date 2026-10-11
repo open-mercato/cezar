@@ -54,6 +54,9 @@ export const automationTaskSchema = z
     worktree: z.boolean().optional(),
     generateFollowups: z.boolean().optional(),
     autonomous: z.boolean().optional(),
+    /** Launch every run as a shadow run (spec 2026-10-06-shadow-runs) - the safe way to trial an
+     *  automation on a real repository before letting it push or comment. */
+    shadow: z.boolean().optional(),
     systemPrompt: z.string().max(100_000).optional(),
     /**
      * Where the launched run's worktree forks from (spec 2026-10-06-agentic-e2e-checks Phase 3):
@@ -146,6 +149,16 @@ export const automationDefinitionObjectSchema = z
       return;
     }
     if (definition.kind === 'tracker') {
+      // A tracker task must read its issue with the tracker credentials, which a shadow run is
+      // never given (spec 2026-10-06-shadow-runs): accepting the pair would launch runs that stop
+      // at their first step. Refused rather than silently unshadowed.
+      if (definition.task.shadow === true) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['task', 'shadow'],
+          message: 'shadow runs are not available for tracker automations yet: they need tracker credentials a shadow run never gets',
+        });
+      }
       if (definition.intervalSeconds === undefined) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['intervalSeconds'], message: 'a tracker automation needs a poll interval' });
       }

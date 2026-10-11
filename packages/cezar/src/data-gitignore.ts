@@ -28,6 +28,7 @@ export const DATA_GITIGNORE_ENTRIES = [
   'worktrees/',
   'tmp/', // per-run agent temp directories (#785)
   'drafts/', // unsent composer text + pasted screenshots (#939) — never in git history
+  'shadow/', // shadow runs' intent ledgers, shim and shadow remotes (spec 2026-10-06-shadow-runs)
   'todos.json',
   'todos.json.tmp',
   // Private, per-project MCP servers (spec 2026-10-07-private-project-mcp) — personal tokens.

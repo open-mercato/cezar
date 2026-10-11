@@ -90,6 +90,8 @@ import { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
 import { currentUsage, currentTimedUsage, onUsage } from '../core/process-usage.ts';
 import { DashboardReader } from '../workspace/dashboard.ts';
 import { dashboardRoutes } from './dashboard.ts';
+import { shadowRoutes } from '../shadow/routes.ts';
+import { removeShadowState } from '../shadow/setup.ts';
 import { WORKFLOWS_DIR, loadWorkflows } from '../workflows/load.ts';
 import {
   NODE_CATALOG,
@@ -641,6 +643,11 @@ const streamSSENoBuffer: typeof streamSSE = (c, cb, onError) => {
   return res;
 };
 
+/** Why the run-level push and draft-PR actions refuse a shadow run: its outward actions go out
+ *  one reviewed intent at a time, through `/runs/:id/shadow/intents/:intentId/promote`. */
+const SHADOW_RUN_REFUSAL =
+  'this is a shadow run: its pushes and pull requests are recorded intents - review and promote them from the Shadow panel';
+
 // A run starts from a named workflow OR an inline chain of steps (spec 008 —
 // the approved plan is posted as-is, never written to a file).
 const startRunSchema = z
@@ -668,6 +675,10 @@ const startRunSchema = z
     // Autonomous mode (#autonomous): the run never parks at `waiting` — it
     // auto-continues until the agent signals done. No "needs you" is raised.
     autonomous: z.boolean().optional(),
+    // Shadow mode (spec 2026-10-06-shadow-runs): pushes and `gh` writes are recorded as intents
+    // for a human to promote instead of executed. Narrows exposure, so it needs no capability
+    // flag - it is a property of the task, like `autonomous`.
+    shadow: z.boolean().optional(),
     // Generate follow-up inbox entries (spec 007, #444). Honoured only while
     // the `followups` capability is on (#471) — off, the server pins it to
     // false whatever the client asked for. Omitted still means "enabled" for
@@ -4294,6 +4305,7 @@ export function createApp(deps: ServerDeps) {
         systemPrompt: parsed.data.systemPrompt,
         worktree: parsed.data.worktree,
         autonomous: parsed.data.autonomous,
+        shadow: parsed.data.shadow,
         // Opt-in inbox (#471): the capability is the ceiling, so a client asking
         // for follow-ups on a server that has them off gets a plain `false`
         // rather than an error — the run is still perfectly valid without them.
@@ -4566,6 +4578,9 @@ export function createApp(deps: ServerDeps) {
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
+      // The terminal would resume the agent's session with the user's own environment - no shim,
+      // no push redirect - and the session would carry on as if it were still shadowed.
+      if (run.shadow === true) return c.json({ error: SHADOW_RUN_REFUSAL }, 409);
       // Hosted mode: there is no "my machine" to open a terminal on. The UI
       // hides the button when localHandoff is false — this is defense in depth.
       if (!capabilities().localHandoff) {
@@ -4682,6 +4697,8 @@ export function createApp(deps: ServerDeps) {
       // and what the client's cliTargetResumes now labels. Resume-after-finish is untouched.
       const cliRunner = agentCliRunner(target);
       if (cliRunner) {
+        // The same unshadowed-session door `/open-in-cli` closes for a shadow run (Q6).
+        if (run.shadow === true) return c.json({ error: SHADOW_RUN_REFUSAL }, 409);
         const blocked = await providerActionError([cliRunner]);
         if (blocked) return c.json({ error: blocked }, 409);
         const engineOwnsSession = run.status === 'running' || run.status === 'queued' || run.status === 'waiting';
@@ -4895,6 +4912,8 @@ export function createApp(deps: ServerDeps) {
       const { root: repoRoot, store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
+      // A shadow run has exactly one door out, and it is per intent (spec 2026-10-06-shadow-runs).
+      if (run.shadow === true) return c.json({ error: SHADOW_RUN_REFUSAL }, 409);
       const worktree = worktreeOf(run);
       if (!worktree) return c.json({ error: NO_WORKTREE }, 409);
       const result = await pushCurrentBranch(worktree);
@@ -4923,6 +4942,7 @@ export function createApp(deps: ServerDeps) {
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
       if (manager.isActive(id)) return c.json({ error: 'run is still active — wait for the review gate' }, 409);
+      if (run.shadow === true) return c.json({ error: SHADOW_RUN_REFUSAL }, 409);
       // A pull-request head run's branch holds the whole foreign PR under this run's changes: a
       // draft PR from it into the default base would re-propose that PR (spec
       // 2026-10-06-agentic-e2e-checks Phase 3). Refused until publishing back is designed.
@@ -4980,13 +5000,15 @@ export function createApp(deps: ServerDeps) {
     })
 
     .delete('/runs/:id', async (c) => {
-      const { root: repoRoot, store, manager } = c.get('project');
+      const { root: repoRoot, dataDir, store, manager } = c.get('project');
       const id = c.req.param('id');
       if (manager.isActive(id)) return c.json({ error: 'run is active — cancel it first' }, 409);
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
       // Delete cleans up after itself: worktree + branch go with the run (spec 006).
       if (run.worktreePath) await removeWorktree(repoRoot, run.worktreePath, run.branch);
+      // ...and a shadow run's ledger, shadow remotes and commit pins (spec 2026-10-06-shadow-runs).
+      if (run.shadow === true) await removeShadowState(dataDir, id, repoRoot);
       const deleted = store.deleteRun(id);
       // The run's `refs/cezar/pr/<n>` goes with the last run that needed it (Phase 3).
       if (deleted && run.prHead) await manager.sweepPrHeadRefs();
@@ -6577,6 +6599,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', automationsRoutes)
     .route('/', dispatchRoutes)
     .route('/', runsRoutes)
+    .route('/', shadowRoutes())
     .route('/', draftRoutes)
     .route('/', groupsRoutes)
     .route('/', openTargetsRoutes)
