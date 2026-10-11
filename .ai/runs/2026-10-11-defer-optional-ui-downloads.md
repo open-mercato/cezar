@@ -20,8 +20,8 @@ Resolve #1219 by removing the eager Markdown/Streamdown dependency from skill pr
 
 ### Phase 1: Remove the Markdown leak
 
-- [x] 1.1 Lazy-load skill preview dialogs at first interaction in both source pickers, preserving close/reopen behavior. — 4e014ed7
-- [x] 1.2 Add focused regression coverage for preview opening and dismissal. — 4e014ed7
+- [x] 1.1 Lazy-load skill preview dialogs at first interaction in both source pickers, preserving close/reopen behavior. — dc17e0b2
+- [x] 1.2 Add focused regression coverage for preview opening and dismissal. — dc17e0b2
 
 ### Phase 2: Defer optional shell surfaces
 
@@ -31,14 +31,17 @@ Resolve #1219 by removing the eager Markdown/Streamdown dependency from skill pr
 
 ### Phase 3: Verify and ship
 
-- [x] 3.1 Measure before/after entry and deduplicated entry-plus-preload raw/gzip sizes for each change independently. — 9bc16731
+- [x] 3.1 Measure before/after entry and deduplicated entry-plus-preload raw/gzip sizes for each change independently. — dc17e0b2
 - [ ] 3.2 Run focused tests, red-green regression proof, browser evidence, full validation gate, review, and finalize the PR. (Focused suites pass; `npm run typecheck`, `npm run build`, `npm run test:unit`, and `npm run test:package` pass. Full `npm test` has 16 unrelated baseline failures; browser provider unavailable; review handoff remains.)
 
 ## Measurement notes
 
 - Issue baseline on `main` @ `3eb8e3ff`: entry `441.51 kB / 123.35 kB gzip`; entry plus 44 modulepreloads `1548.2 kB / 470.0 kB gzip`.
-- Final build on this branch: entry `460,174 B / 127,574 B gzip`; deduplicated entry plus 54 modulepreloads `1,184,067 B / 362,212 B gzip`.
-- The repository's base moved substantially between those builds, so these are reported as raw artifacts rather than an attributed delta. The final graph contains separate `command-palette-body`, `add-project-dialog`, `clone-project-dialog`, and `skill-detail` chunks; Markdown is no longer statically imported by `skill-detail`.
+- Same-base measurements (all built with the checked-in lockfile and the same measurement script):
+  - `9d21d6f1` base: entry `421,608 B / 115,375 B gzip`; entry plus 34 modulepreloads, deduplicated `1,648,133 B / 488,971 B gzip`.
+  - Primary-only preview boundary: entry `417,425 B / 114,370 B gzip`; entry plus 46 modulepreloads, deduplicated `1,193,703 B / 352,292 B gzip`.
+  - Combined final: entry `460,383 B / 127,678 B gzip`; entry plus 55 modulepreloads, deduplicated `1,184,590 B / 347,703 B gzip`.
+  The primary-only graph emits a deferred `skill-detail` chunk and both picker modules no longer statically import it. The combined graph also emits separate `command-palette-body`, `add-project-dialog`, and `clone-project-dialog` chunks.
 
 ## Risks
 
@@ -51,8 +54,8 @@ Resolve #1219 by removing the eager Markdown/Streamdown dependency from skill pr
 
 ### Phase 1: Remove the Markdown leak
 
-- [ ] 1.1 Lazy-load skill preview dialogs at first interaction in both source pickers, preserving close/reopen behavior.
-- [ ] 1.2 Add focused regression coverage for preview opening and dismissal.
+- [x] 1.1 Lazy-load skill preview dialogs at first interaction in both source pickers, preserving close/reopen behavior. — dc17e0b2
+- [x] 1.2 Add focused regression coverage for preview opening and dismissal. — dc17e0b2
 
 ### Phase 2: Defer optional shell surfaces
 
@@ -62,5 +65,5 @@ Resolve #1219 by removing the eager Markdown/Streamdown dependency from skill pr
 
 ### Phase 3: Verify and ship
 
-- [ ] 3.1 Measure before/after entry and deduplicated entry-plus-preload raw/gzip sizes for each change independently.
+- [x] 3.1 Measure before/after entry and deduplicated entry-plus-preload raw/gzip sizes for each change independently. — dc17e0b2
 - [ ] 3.2 Run focused tests, red-green regression proof, browser evidence, full validation gate, review, and finalize the PR.
