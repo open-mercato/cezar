@@ -472,6 +472,7 @@ export async function worktreeChangedPaths(dir: string): Promise<string[]> {
 export async function commitAll(
   dir: string,
   message: string,
+  excludedPaths: readonly string[] = [],
 ): Promise<{ result: 'committed'; sha: string } | { result: 'nothing' } | { result: 'failed'; error: string }> {
   const status = await git(dir, ['status', '--porcelain']);
   if (!status.ok) return { result: 'failed', error: 'git status failed' };
@@ -479,6 +480,17 @@ export async function commitAll(
   const unresolved = await unresolvedConflicts(dir, status.stdout);
   if (unresolved) return { result: 'failed', error: `refusing to commit: ${unresolved}` };
   await git(dir, ['add', '-A']);
+  let exclusionResetFailed = false;
+  for (const path of excludedPaths) {
+    const reset = await git(dir, ['reset', '--quiet', '--', path]);
+    if (!reset.ok) exclusionResetFailed = true;
+  }
+  if (exclusionResetFailed) {
+    await git(dir, ['reset', '--quiet']);
+    return { result: 'failed', error: 'unable to preserve excluded check paths' };
+  }
+  const staged = await git(dir, ['diff', '--cached', '--quiet']);
+  if (staged.ok) return { result: 'nothing' };
   const identityArgs = (await gitHasIdentity(dir)) ? [] : ['-c', 'user.name=cezar', '-c', 'user.email=cezar@local'];
   const commit = await git(dir, [...identityArgs, 'commit', '--no-verify', '-m', message]);
   if (!commit.ok) return { result: 'failed', error: (commit.stderr || commit.stdout).trim().split('\n')[0] || 'git commit failed' };

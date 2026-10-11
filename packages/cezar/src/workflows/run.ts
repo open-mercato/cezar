@@ -1066,6 +1066,16 @@ export class RunManager {
   private readonly checkArtifactSnapshots = new Map<string, Map<string, string>>();
   /** A failed checkpoint remains unsafe when a parked run is continued. */
   private readonly autosaveCheckpointBlockedRuns = new Set<string>();
+
+  /** Release check ownership only when the record has no continuation session left to reuse it. */
+  private releaseCheckStateIfUncontinuable(runId: string): void {
+    const run = this.store.getRun(runId);
+    const canContinue = run?.steps.some((step) => Boolean(step.sessionId)) ?? false;
+    if (!canContinue || run?.archived) {
+      this.checkArtifactSnapshots.delete(runId);
+      this.autosaveCheckpointBlockedRuns.delete(runId);
+    }
+  }
   // Queue + `starting` set (spec 006, janitor's pump() pattern): `starting`
   // covers the window between shifting a run off the queue and the run
   // registering in `active`, so parallel-slot counting is never racy.
@@ -2024,6 +2034,7 @@ export class RunManager {
     this.leaveMonitoring(runId);
     if (state) this.clearMonitoringWakeTimer(state, runId);
     this.active.delete(runId);
+    this.releaseCheckStateIfUncontinuable(runId);
     // Session result has settled and its sink has flushed before terminal cleanup.
     this.store.clearRunSecrets(runId);
     this.memoryPausing.delete(runId);
@@ -5179,7 +5190,11 @@ export class RunManager {
         return child && childSucceeded(child.status) ? 'done' : 'failed';
       }
       case 'git.commit': {
-        const res = await commitAll(state.cwd, render(node.message));
+        const res = await commitAll(
+          state.cwd,
+          render(node.message),
+          await currentCheckExclusions(state.cwd, state.autosaveExcludedPaths),
+        );
         if (res.result === 'committed') {
           outputs.set(node.id, { sha: res.sha });
           note(`committed ${res.sha.slice(0, 8)}`);

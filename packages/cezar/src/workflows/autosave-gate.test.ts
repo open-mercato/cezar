@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { autosaveCommit, createWorktree } from '../git-worktree.ts';
+import { autosaveCommit, commitAll, createWorktree } from '../git-worktree.ts';
 import { RunStore } from '../runs/store.ts';
 import { AUTOSAVE_INTERVAL_MS, periodicAutosaveEnabled, RunManager } from './run.ts';
 
@@ -23,6 +23,10 @@ interface TimerSeam {
   armAutosave(runId: string, state: TimerState): void;
   clearAutosaveTimer(state: TimerState): void;
   active: Map<string, unknown>;
+  checkArtifactSnapshots: Map<string, Map<string, string>>;
+  autosaveCheckpointBlockedRuns: Set<string>;
+  releaseCheckStateIfUncontinuable(runId: string): void;
+  dispose(): void;
 }
 
 /**
@@ -131,6 +135,18 @@ describe('periodic autosave gate (#471)', () => {
     expect(status.trim()).toBe('?? check-output.txt');
   });
 
+  it('keeps unchanged check artifacts out of an explicit graph commit', async () => {
+    writeFileSync(join(worktreePath, 'work.txt'), 'agent progress for explicit commit\n');
+    writeFileSync(join(worktreePath, 'check-output.txt'), 'verification residue\n');
+
+    expect(await commitAll(worktreePath, 'explicit commit', ['check-output.txt'])).toMatchObject({ result: 'committed' });
+    const { stdout: files } = await run('git', ['show', '--format=', '--name-only', 'HEAD'], { cwd: worktreePath });
+    expect(files.trim().split('\n')).toEqual(['work.txt']);
+    expect(readFileSync(join(worktreePath, 'check-output.txt'), 'utf8')).toBe('verification residue\n');
+    const { stdout: status } = await run('git', ['status', '--porcelain'], { cwd: worktreePath });
+    expect(status.trim()).toBe('?? check-output.txt');
+  });
+
   it('refuses a checkpoint when an excluded path cannot be reset, without losing work', async () => {
     rmSync(join(worktreePath, 'check-output.txt'), { force: true });
     writeFileSync(join(worktreePath, 'unsafe-work.txt'), 'keep this dirty\n');
@@ -139,5 +155,29 @@ describe('periodic autosave gate (#471)', () => {
     expect(readFileSync(join(worktreePath, 'unsafe-work.txt'), 'utf8')).toBe('keep this dirty\n');
     const { stdout: status } = await run('git', ['status', '--porcelain'], { cwd: worktreePath });
     expect(status.trim()).toBe('?? unsafe-work.txt');
+  });
+
+  it('releases check state only when a run cannot be continued', () => {
+    const seam = manager;
+    seam.checkArtifactSnapshots.set(runId, new Map([['check-output.txt', 'snapshot']]));
+    seam.autosaveCheckpointBlockedRuns.add(runId);
+    seam.releaseCheckStateIfUncontinuable(runId);
+    expect(seam.checkArtifactSnapshots.has(runId)).toBe(false);
+    expect(seam.autosaveCheckpointBlockedRuns.has(runId)).toBe(false);
+
+    seam.checkArtifactSnapshots.set(runId, new Map([['check-output.txt', 'snapshot']]));
+    seam.autosaveCheckpointBlockedRuns.add(runId);
+    const record = store.getRun(runId)!;
+    record.steps.push({
+      id: 'agent', name: 'agent', kind: 'agent', status: 'done', iterations: 1,
+      tokensUsed: 0, sessionId: 'session-1',
+    });
+    seam.releaseCheckStateIfUncontinuable(runId);
+    expect(seam.checkArtifactSnapshots.has(runId)).toBe(true);
+    expect(seam.autosaveCheckpointBlockedRuns.has(runId)).toBe(true);
+    record.archived = true;
+    seam.releaseCheckStateIfUncontinuable(runId);
+    expect(seam.checkArtifactSnapshots.has(runId)).toBe(false);
+    expect(seam.autosaveCheckpointBlockedRuns.has(runId)).toBe(false);
   });
 });
