@@ -1,109 +1,11 @@
-# Unreleased — weekly draft (2026-10-09)
-
-Merged into `main` from 2026-10-02 16:00 UTC through 2026-10-09 16:00 UTC.
+# 0.15.0 (2026-10-11)
 
 ## Highlights
-<!-- TODO: Highlights — maintainer editorial review before release. -->
-
-## ✨ Features
-- ✨ Comment on diff lines or ranges and send the drafts to the agent as a review with the next message. (#1283) *(@martaradziszewska)*
-- ✨ Filter check-step retries by exit code, so infrastructure failures need not trigger another agent repair attempt. (#1265) *(@pat-lewczuk)*
-- ✨ Configure private per-project MCP servers in Settings; supported runners receive them at session launch. (#1324) *(@patzick)*
-- ✨ Build and run graph workflows with a node editor, YAML import/export, simulation and a live task graph. (#1322) *(@kinelm)*
-- ✨ Customize the cockpit display name and logo in Appearance settings. (#1327) *(@kinelm)*
-- ✨ Browse repository files from the Git tab with a tree, path filter, syntax highlighting and Markdown preview (fixes #1279). (#1299) *(@pat-lewczuk)*
-- ✨ Browse, activate and preview skills in one catalog, with activation choices scoped to each project. (#1082) *(@Igloczek)*
-- ✨ Filter task lists by Regular, Automations or All; default to Regular and add task status/workflow/automation facets. (#1336) *(@pat-lewczuk)*
-
-## 🔒 Security
-- 🔒 Gate Bedrock and Vertex credential forwarding by explicit Claude backend identity (fixes #850). (#1228) *(@pat-lewczuk)*
-
-## 🐛 Fixes
-- 🐛 Remember runner/model choices on GitHub and Inbox hand-offs, including an explicit auto model choice (fixes #906). (#907) *(@sapersky)*
-- 🐛 Preserve attachment-only destination drafts when switching projects and explain declined draft transfers (fixes #1095). (#1255) *(@pat-lewczuk)*
-- 🐛 Offer the selected subtask runner’s discovered models in Dispatch settings. (#1269) *(@pat-lewczuk)*
-- 🐛 Clear stale workflow pauses when a later turn finishes, allowing subsequent steps to run. (#1282) *(@pat-lewczuk)*
-- 🐛 Keep unanswered task questions under Needs you after idle closure, crashes and restarts. (#1290) *(@pat-lewczuk)*
-- 🐛 Derive dispatch and automation runner help from the supported runner registry (fixes #1236). (#1278) *(@pat-lewczuk)*
-- 🐛 Explain unsupported identity readers separately for Pi, Junie and Copilot (fixes #1233). (#1258) *(@pat-lewczuk)*
-- 🐛 Discover staged browser libraries and preserve the effective environment for rootless Linux browser checks (fixes #890). (#1294) *(@pat-lewczuk)*
-- 🐛 Wrap long model-picker descriptions within the available width (fixes #870). (#1298) *(@pat-lewczuk)*
-- 🐛 Enlarge the mobile workflow step-rail disclosure touch target (fixes #958). (#1244) *(@pat-lewczuk)*
-- 🐛 Persist the waiting-session idle timeout setting, including null to disable it (fixes #1232). (#1242) *(@pat-lewczuk)*
-- 🐛 Deduplicate legacy or imported automation receipts using automation and event identity. (#1127) *(@pat-lewczuk)*
-- 🐛 Suppress late Codex follow-up failure delivery after session teardown (fixes #1105). (#1230) *(@pat-lewczuk)*
-- 🐛 Keep bookmark-prefilled tasks open when their runner is unavailable, allowing a replacement to be selected (fixes #874). (#1210) *(@pat-lewczuk)*
-- 🐛 Parse supported YAML skill frontmatter and flush/clean staging files for atomic workspace writes (fixes #1218). (#1231) *(@pat-lewczuk)*
-- 🐛 Guide Claude tasks through headless permission denials and the existing interactive session handoff (fixes #1248). (#1256) *(@pat-lewczuk)*
-- 🐛 Render CEZ:ASK payloads with up to 20 questions and 10 options per question. (#1312) *(@pat-lewczuk)*
-- 🐛 Recognize OpenCode 2.x credential rows while preserving legacy auth parsing (fixes #1270). (#1271) *(@pat-lewczuk)*
-- 🐛 Reject executable directories when resolving agent launchers (fixes #1066). (#1153) *(@pat-lewczuk)*
-- 🐛 Preserve adjacent Pi text bytes across content parts so task-control markers remain intact (fixes #902, #903). (#1208) *(@pat-lewczuk)*
-- 🐛 Allow reusable prompt templates up to 20,000 characters (fixes #908). (#1273) *(@pat-lewczuk)*
-- 🐛 Fail macOS ngrok redeploys when launchd cannot restart the cockpit or tunnel (fixes #1011). (#1149) *(@pat-lewczuk)*
-- 🐛 Report explicit nginx configuration parse errors as terminal Ubuntu SSL installation failures (fixes #1001). (#1174) *(@pat-lewczuk)*
-- 🐛 Jump to the latest task messages without reloading the thread or restoring an older scroll position. (#1313) *(@martaradziszewska)*
-- 🐛 Probe loopback ports machine-wide during server installation to prevent cross-user proxy misrouting (fixes #913). (#1003) *(@pat-lewczuk)*
-- 🐛 Scroll Changes trees and diffs independently on desktop, keeping file headers visible. (#1305) *(@martaradziszewska)*
-- 🐛 Fit nested tasks within narrow sidebars and distinguish unread tasks with bold titles and accessible labels. (#1311) *(@martaradziszewska)*
-- 🐛 Refresh queued runs from the current workflow definition at dequeue, retaining snapshots when unavailable. (#1134) *(@KamilMichalski0)*
-- 🐛 Collapse large Subtasks panels by default and bound their expanded height with scrolling (fixes #1050). (#1051) *(@piotrchabros)*
-- 🐛 Avoid shared Git config locks when creating task worktrees by disabling upstream tracking writes (fixes #1301). (#1318) *(@pat-lewczuk)*
-
-## 🛠️ Improvements
-- 🛠️ Start tasks directly from the composer; removing Plan first supersedes the earlier discarded-plan attachment fix (fixes #1094). (#1328, #1229) *(@pat-lewczuk)*
-
-## 🧪 Testing
-- 🧪 Cover screenshots queued before task startup through persistence, dequeue and delivery to the agent. (#1246) *(@pat-lewczuk)*
-- 🧪 Wait for auto-resume teardown and prompt-template transitions to prevent test races (fixes #804). (#1297) *(@pat-lewczuk)*
-- 🧪 Update browser assertions for message timestamps, collapsed step rails and directional token counts. (#1339) *(@kinelm)*
-- 🧪 Disable automatic task naming by default in tests to avoid unintended real-model calls. (#1254) *(@matgren)*
-
-## 📝 Specs & Documentation
-- 📝 Document the repository file-browser design subsequently implemented in #1299. (#1280) *(@pat-lewczuk)*
-
-## 👥 Contributors
-
-- @martaradziszewska
-- @pat-lewczuk
-- @patzick
-- @kinelm
-- @Igloczek
-- @sapersky
-- @KamilMichalski0
-- @piotrchabros
-- @matgren
-
-# Unreleased
-
-## ⚠️ Breaking
-- ⚠️ GitHub list rows no longer require `body`; it is optional during the deprecation window and comes from the detail payload. (#1362) *(@pat-lewczuk)*
-
-## ✨ Features
-- ✨ Encrypted project and workspace secrets (OS keychain, `0600` key file fallback) for check steps, never for agents; Settings → Secrets and `cezar secrets`. (#1291) *(@pat-lewczuk)*
-
-## ⚡ Performance
-- ⚡ The GitHub tab loads faster: cursor-paged lists that load more on scroll, real open totals and background detail hydration (fixes #1261). (#1362, #1366, #1374) *(@pat-lewczuk)*
-
-## 🐛 Fixes
-- 🐛 Autosave commits leave out artifacts written by failed checks (fixes #1079). (#1126) *(@pat-lewczuk)*
-- 🐛 macOS RAM matches Activity Monitor, swap shows on macOS, and the host glance keeps updating. (#1363) *(@pat-lewczuk)*
-- 🐛 Each workflow step keeps the model it actually ran on after a model change or auto-continue (fixes #545). (#1353) *(@pat-lewczuk)*
-- 🐛 A follow-up sent to a parked task shows up at once, even while another task holds the repository without worktrees. (#1357) *(@matgren)*
-- 🐛 The Agents dock collapses once every sub-agent has settled (fixes #1237). (#1350) *(@pat-lewczuk)*
-- 🐛 A brief stall no longer makes a live automation lease look compromised (fixes #1106). (#1355) *(@pat-lewczuk)*
-- 🐛 Secret redaction no longer eats words ending in "sk", such as `task-…`. (#1373) *(@zawstudio)*
-
-## 🧪 Testing
-- 🧪 Browser e2e smoke tests (TesterArmy). (#1364) *(@pat-lewczuk)*
-
-# 0.15.0 (2026-10-10)
-
-## Highlights
-Workflows become graphs: a node editor with loops, gates, fan-out/join and a live graph view on every run, while v1 YAML workflows keep working. The Git tab gains a repository file browser, the Changes tab takes line comments that go to the agent as a review plus a Markdown preview, and each project can keep private MCP servers for every agent. The cockpit can carry your own name and logo, and tasks started by automations no longer bury the ones you started. Plan mode is gone from the composer. The rest is fixes, mostly to runs, git and the runners.
+Workflows become graphs: a node editor with loops, gates, fan-out/join and a live graph view on every run, while v1 YAML workflows keep working. The Git tab gains a repository file browser, the Changes tab takes line comments that go to the agent as a review plus a Markdown preview, each project can keep private MCP servers for every agent, and check steps get encrypted secrets that agents never see. The GitHub tab loads faster, page by page. The cockpit can carry your own name and logo, and tasks started by automations no longer bury the ones you started. Plan mode is gone from the composer. The rest is fixes, mostly to runs, git and the runners.
 
 ## ⚠️ Breaking
 - ⚠️ The composer's Start | Plan first switch and the plan review overlay are removed; Start always creates a run. (#1328) *(@pat-lewczuk)*
+- ⚠️ GitHub list rows no longer require `body`; it is optional during the deprecation window and comes from the detail payload. (#1362) *(@pat-lewczuk)*
 
 ## ✨ Features
 - ✨ Workflow node editor and graph engine — loops, gates, dispatch/fork/join, composition, git and GitHub nodes, YAML import/export, simulation and a live graph on task runs; v1 workflows still run. (#1322) *(@kinelm)*
@@ -118,12 +20,14 @@ Workflows become graphs: a node editor with loops, gates, fan-out/join and a liv
 - ✨ Check steps get run context: run, branch, attempt, shared cache and GitHub provenance. (#1292) *(@pat-lewczuk)*
 - ✨ Automations can verify a pull request's head with `checkout: 'pr-head'`. (#1293) *(@pat-lewczuk)*
 - ✨ `cez runs list`, a human message for a missing `CEZ_API_URL`, and docs for the `/api/v1` API. (#1133) *(@KamilMichalski0)*
+- ✨ Encrypted project and workspace secrets for check steps and cezar, never for agents — Settings → Secrets and `cezar secrets`. (#1291) *(@pat-lewczuk)*
 
 ## ⚡ Performance
 - ⚡ Per-run SSE connections share one store listener per project (fixes #1222). (#1342) *(@pat-lewczuk)*
 - ⚡ Runner model catalogs refresh in the background instead of blocking the picker (fixes #1220). (#1343) *(@pat-lewczuk)*
 - ⚡ The process sampler builds its PID indexes once per sample (fixes #1214). (#1333) *(@pat-lewczuk)*
 - ⚡ Repeated handoff heartbeats are coalesced and capped (fixes #1215). (#1332) *(@pat-lewczuk)*
+- ⚡ The GitHub tab loads faster: cursor-paged lists that load more on scroll and background detail hydration (fixes #1261). (#1362, #1366, #1374) *(@pat-lewczuk)*
 
 ## 🔒 Security
 - 🔒 Cloud credentials are forwarded by backend identity, not by an env-prefix match (fixes #850). (#1228) *(@pat-lewczuk)*
@@ -165,6 +69,14 @@ Workflows become graphs: a node editor with loops, gates, fan-out/join and a liv
 - 🐛 The Subtasks panel collapses and scrolls instead of growing the header (fixes #1050). (#1051) *(@piotrchabros)*
 - 🐛 Long model-picker descriptions wrap (fixes #870). (#1298) *(@pat-lewczuk)*
 - 🐛 The mobile step-rail has a usable touch target (fixes #958). (#1244) *(@pat-lewczuk)*
+- 🐛 Each workflow step keeps the model it actually ran on (fixes #545). (#1353) *(@pat-lewczuk)*
+- 🐛 A follow-up to a parked task shows up at once, even without worktrees. (#1357) *(@matgren)*
+- 🐛 A brief stall no longer makes a live automation lease look compromised (fixes #1106). (#1355) *(@pat-lewczuk)*
+- 🐛 Autosave commits leave out artifacts written by failed checks (fixes #1079). (#1126) *(@pat-lewczuk)*
+- 🐛 Secret redaction no longer eats words like `task-…`. (#1373) *(@zawstudio)*
+- 🐛 Windows absolute paths are accepted in the project registry, checkout and workspace settings. (#1334) *(@matwiatrzyk)*
+- 🐛 macOS RAM matches Activity Monitor, and the host glance keeps updating. (#1363) *(@pat-lewczuk)*
+- 🐛 The Agents dock collapses once every sub-agent has settled (fixes #1237). (#1350) *(@pat-lewczuk)*
 
 ## 🧪 Testing
 - 🧪 The test suite no longer calls a real model to name tasks. (#1254) *(@matgren)*
@@ -172,6 +84,10 @@ Workflows become graphs: a node editor with loops, gates, fan-out/join and a liv
 - 🧪 The parked-gate `maxParallel` test carries `mock:done` again. (#1348) *(@martaradziszewska)*
 - 🧪 Four stale e2e assertions repaired. (#1339) *(@kinelm)*
 - 🧪 Screenshots queued before task startup are covered. (#1246) *(@pat-lewczuk)*
+- 🧪 Browser e2e smoke tests. (#1364) *(@pat-lewczuk)*
+
+## 📝 Specs & Documentation
+- 📝 AGENTS.md asks for short comments, PR bodies and changelog entries. (#1361) *(@pat-lewczuk)*
 
 ## 👥 Contributors
 
@@ -185,6 +101,8 @@ Workflows become graphs: a node editor with loops, gates, fan-out/join and a liv
 - @lbajsarowicz
 - @piotrchabros
 - @sapersky
+- @zawstudio
+- @matwiatrzyk
 
 # 0.14.0 (2026-10-02)
 
