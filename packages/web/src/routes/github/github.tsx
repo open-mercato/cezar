@@ -365,9 +365,10 @@ export function GithubRoute({
   const filtering = query.trim() !== '' || labelFilter.length > 0
   const listScrollRef = useRef<HTMLElement | null>(null)
   // No paging under a filter: a narrowed list would keep the sentinel in view and crawl every page,
-  // and anything past the open list is the forge search's job (#730).
+  // and anything past the open list is the forge search's job (#730). A failed page stops the
+  // observer too — otherwise the still-visible sentinel would retry it in a tight loop.
   const loadMoreRef = useLoadMoreSentinel(
-    list.hasNextPage && !list.isFetchingNextPage && !filtering,
+    list.hasNextPage && !list.isFetchingNextPage && !list.isFetchNextPageError && !filtering,
     () => void list.fetchNextPage(),
   )
 
@@ -700,6 +701,18 @@ export function GithubRoute({
               <>
                 <LoaderCircleIcon aria-hidden="true" className="size-3.5 motion-safe:animate-spin" />
                 Loading more…
+              </>
+            ) : list.isFetchNextPageError ? (
+              <>
+                Could not load more.
+                <button
+                  type="button"
+                  data-slot="gh-load-more-retry"
+                  onClick={() => void list.fetchNextPage()}
+                  className="font-medium text-primary hover:underline"
+                >
+                  Retry
+                </button>
               </>
             ) : null}
           </div>
