@@ -16,10 +16,6 @@ Snapshot: 123 open issues, 110 open PRs in open-mercato/cezar. Prioritize commit
 Phase 1: dispatch first four to runner codex/model gpt-5.6-luna; fifth when a slot frees. Every child follows installed om-auto-create-pr, checks claims/competing PRs, reproduces before fixing, proves regression tests red/green, runs configured gate and owns PR creation/review/evidence. Do not launch further descendants. Each child uses its own plan path. No invented fixes for already-resolved reports.
 Phase 2: parent reads every diff and reruns named tests, then dispatches ONE final review against parent branch and all child heads. Separate child PRs need no aggregation merge. Limit eight total tasks, planned six.
 
-## Audit update
-
-#1080 is partly resolved by merged #1133 (fd99a9d2), present in this checkout. Parent independently reran four CLI suites: 46/46 pass. Cancel/relaunch remain deliberately unresolved, so do not call the entire issue fixed. Child created no duplicate PR. #1219 dispatched as c51ed698; five child slots consumed, four currently active. Select one independent replacement after confirming it remains actionable; reserve final review.
-
 ## Risks
 Live injected cockpit URL resolves to the wrong process; verified parent tree at http://172.17.0.1:4321, use per-command CEZ_API_URL override. Live model catalog confirms gpt-5.6-luna. Some issues may already be fixed or contain scope questions; children must report evidence and use safe defaults rather than inventing work. Full gate failures remain blockers unless proven baseline. UI changes need browser evidence.
 
