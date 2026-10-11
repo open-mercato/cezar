@@ -50,7 +50,11 @@ and refs, because the ledger is written by processes the agent controls.
   re-asserts the shim after login profiles run.
 - **The validation gate cannot go green on the author's machine.** Windows 11: `npm test` reds
   ~106 files and `npm run test:unit` fails on `/bin/sh` - identically on the untouched merge base
-  (stash comparison below), so CI on Linux is the gate of record for this PR.
+  (stash comparison below), so CI on Linux is the gate of record for this PR. Fork CI does not
+  run (account billing), so 5.5 and 5.6 were gated in a `node:24-bookworm` container (`--init`,
+  non-root, TMPDIR inside the checkout as in the review run): typecheck, `npm test` (9454 passed;
+  one of three full runs hit the `auto-resume` teardown flake that main shows at the same rate),
+  `test:unit` (42), `build` and `test:package` green.
 - **No live agent run.** The boundary sits below the agent (git and PATH), so the backend should
   not matter; it was exercised with real git, real hooks and the real shim entry, not with a live
   Claude or Codex session.
@@ -84,4 +88,13 @@ PR: #1314
 - [x] 4.1 om-code-review pass: 1 blocker, 4 majors, 8 minors and nits, all addressed before the first push - 822a45ec
 - [x] 4.2 Two regression tests proved red without their fix (hook accepting pushes; skip-the-flag argv reading) - 822a45ec
 - [x] 4.3 Validation gate: typecheck green; 158 shadow and guard tests green; full suites compared against the untouched merge base - 822a45ec
-- [ ] 4.4 Draft PR, proposed labels, CLA signed by the author, review loop
+- [x] 4.4 Draft PR, proposed labels, CLA signed by the author, review loop - 822a45ec
+
+### Phase 5: Review loop
+
+- [x] 5.1 Review blocker: the no-repository case stays outside every repository, wherever the temp dir is - f47bd87d
+- [x] 5.2 Ledger paths built from the stored run id, not the URL param - d19bc0f1
+- [x] 5.3 Graph system nodes that act on the world are refused in a shadow run - 22910e40
+- [x] 5.4 A shadow check step sees the run context and the shadow overrides - f6c61eb8
+- [x] 5.5 The gate in the review environment: git discovery stops at the temp dir for the whole suite (10 tests red on main there) - 79ca81cb
+- [x] 5.6 Second review pass: open-in CLI handoff, protected base branches, gh promotion's working directory, unrunnable scripts, atomic state, loopback API stated - 03cf364e
