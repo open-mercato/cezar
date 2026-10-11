@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { runIdParamSchema, shadowIntentParamSchema } from '@open-mercato/cezar-contract';
+import type { RunRecord } from '../runs/store.ts';
 import type { ProjectContext } from '../server/project-context.ts';
 import { paramZodValidator } from '../server/validators.ts';
 import { discardShadowIntent, promoteShadowIntent, type PromoteContext } from './promote.ts';
@@ -22,13 +23,17 @@ export interface ShadowRouteDeps {
 }
 
 export function shadowRoutes(deps: ShadowRouteDeps = {}) {
-  const contextFor = (project: ProjectContext, runId: string, worktreePath: string | undefined): PromoteContext => ({
-    dataDir: project.dataDir,
-    runId,
-    repoRoot: project.root,
-    ...(worktreePath ? { worktreePath } : {}),
-    ...deps.promote,
-  });
+  const contextFor = (project: ProjectContext, run: RunRecord): PromoteContext => {
+    // An in-place run worked in the checkout itself; a worktree run's directory may since be gone.
+    const workdir = run.worktree === false ? project.root : run.worktreePath;
+    return {
+      dataDir: project.dataDir,
+      runId: run.id,
+      repoRoot: project.root,
+      ...(workdir ? { workdir } : {}),
+      ...deps.promote,
+    };
+  };
 
   return new Hono<ShadowRoutesEnv>()
     .get('/runs/:id/shadow', paramZodValidator(runIdParamSchema), async (c) => {
@@ -36,7 +41,7 @@ export function shadowRoutes(deps: ShadowRouteDeps = {}) {
       const { id } = c.req.valid('param');
       const run = project.store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
-      return c.json(await buildShadowLedger(contextFor(project, run.id, run.worktreePath), run.shadow === true));
+      return c.json(await buildShadowLedger(contextFor(project, run), run.shadow === true));
     })
 
     .post('/runs/:id/shadow/intents/:intentId/promote', paramZodValidator(shadowIntentParamSchema), async (c) => {
@@ -45,7 +50,7 @@ export function shadowRoutes(deps: ShadowRouteDeps = {}) {
       const run = project.store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
       if (run.shadow !== true) return c.json({ error: 'not a shadow run' }, 409);
-      const outcome = await promoteShadowIntent(contextFor(project, run.id, run.worktreePath), intentId);
+      const outcome = await promoteShadowIntent(contextFor(project, run), intentId);
       if (!outcome.ok) {
         return c.json({ error: outcome.error, ...(outcome.manual !== undefined ? { manual: outcome.manual } : {}) }, outcome.status);
       }
@@ -59,7 +64,7 @@ export function shadowRoutes(deps: ShadowRouteDeps = {}) {
       const run = project.store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
       if (run.shadow !== true) return c.json({ error: 'not a shadow run' }, 409);
-      const outcome = await discardShadowIntent(contextFor(project, run.id, run.worktreePath), intentId);
+      const outcome = await discardShadowIntent(contextFor(project, run), intentId);
       if (!outcome.ok) return c.json({ error: outcome.error }, outcome.status);
       project.store.appendEvent(id, { type: 'note', message: `shadow: discarded ${outcome.intent.summary}` });
       return c.json({ discarded: true as const, intent: outcome.intent });

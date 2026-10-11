@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
@@ -100,6 +100,26 @@ describe('/api/v1/runs/:id/shadow', () => {
     expect(push.status).toBe(409);
     expect(pr.status).toBe(409);
     expect(((await pr.json()) as { error: string }).error).toMatch(/shadow run/);
+  });
+
+  it('refuses every terminal handoff of a shadow run: the session would resume unshadowed', async () => {
+    const cli = await post(`/api/v1/runs/${shadowed.id}/open-in-cli`);
+    const openIn = await apiRequest(app, `/api/v1/runs/${shadowed.id}/open-in`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ target: 'cli:claude' }),
+    });
+    expect(cli.status).toBe(409);
+    expect(openIn.status).toBe(409);
+    expect(((await openIn.json()) as { error: string }).error).toMatch(/shadow run/);
+  });
+
+  it('takes the ledger with it when a shadow run is deleted', async () => {
+    recordComment();
+    expect(existsSync(shadowDir(dataDir, shadowed.id))).toBe(true);
+    const res = await apiRequest(app, `/api/v1/runs/${shadowed.id}`, { method: 'DELETE' });
+    expect(res.status).toBe(200);
+    expect(existsSync(shadowDir(dataDir, shadowed.id))).toBe(false);
   });
 
   it('answers 404 for an unknown run on every route', async () => {

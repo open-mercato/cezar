@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { ShadowIntent } from '@open-mercato/cezar-contract';
 import { classifyGh, ghFileReferences } from './gh-policy.ts';
 import { defaultGit, type GitResult } from './git-redirect.ts';
@@ -22,7 +22,9 @@ import { loadShadowIntents, type LoadedIntent, type ShadowViewContext } from './
  *  - a captured body file must still sit exactly where the recorded argv says it does, or the
  *    intent is refused rather than reassembled;
  *  - `gh pr create` waits for the run's pending branch push, so a PR is never opened against a
- *    branch the remote does not have.
+ *    branch the remote does not have;
+ *  - `gh` runs in the run's own working directory, never in a checkout whose branch it would
+ *    mistake for the run's.
  */
 
 export type DecisionOutcome =
@@ -30,8 +32,9 @@ export type DecisionOutcome =
   | { ok: false; status: 404 | 409; error: string; manual?: string };
 
 export interface PromoteContext extends ShadowViewContext {
-  /** The run's worktree, when it still exists: the directory gh resolves its repository from. */
-  worktreePath?: string;
+  /** Where the run's agent worked - its worktree, or the checkout for an in-place run - and so the
+   *  directory gh resolves its repository and branch from. Absent or gone, gh is not run. */
+  workdir?: string;
   /** Runs the promoted command. Injected by tests; the default is `execFile` without a shell. */
   exec?: (bin: string, args: string[], cwd: string) => Promise<GitResult>;
   /** Where `gh` is. Defaults to the server's own PATH. */
@@ -76,6 +79,20 @@ function serialized<T>(key: string, task: () => Promise<T>): Promise<T> {
 
 const firstLine = (text: string) => text.trim().split('\n')[0] ?? '';
 
+/** Real paths where they exist: macOS `/var` vs `/private/var`, Windows 8.3 short names. */
+const canonical = (path: string) => {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return resolve(path);
+  }
+};
+
+function isInside(dir: string, path: string): boolean {
+  const rel = relative(canonical(dir), canonical(path));
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
 type Execution = { ok: boolean; detail: string } | { refused: string };
 
 async function promotePush(context: PromoteContext, line: PushIntentLine): Promise<Execution> {
@@ -113,6 +130,11 @@ async function promoteForge(context: PromoteContext, line: ForgeIntentLine, entr
       ),
     );
   if (!agrees) return { refused: 'the recorded command and its captured files disagree' };
+  // gh reads the repository AND the current branch from its cwd: run anywhere else, a `pr create`
+  // without `--head` would open a PR from whatever branch that checkout has out.
+  const workdir = context.workdir && existsSync(context.workdir) ? context.workdir : null;
+  if (!workdir) return { refused: "the run's working directory is gone, and gh would resolve another branch anywhere else" };
+  if (!isInside(workdir, line.cwd)) return { refused: `it ran in ${line.cwd}, outside the run's working directory` };
   const gh = (context.findGh ?? defaultFindGh)();
   if (!gh) return { refused: 'gh is not installed on the machine cezar runs on' };
 
@@ -127,8 +149,7 @@ async function promoteForge(context: PromoteContext, line: ForgeIntentLine, entr
         argv[file.index] = file.inline ? `${file.flag}=${path}` : path;
       });
     }
-    const cwd = context.worktreePath && existsSync(context.worktreePath) ? context.worktreePath : context.repoRoot;
-    const ran = await (context.exec ?? defaultExec)(gh, argv, cwd);
+    const ran = await (context.exec ?? defaultExec)(gh, argv, workdir);
     return { ok: ran.ok, detail: (ran.ok ? ran.stdout : ran.stderr || ran.stdout).trim() };
   } finally {
     if (scratch) rmSync(scratch, { recursive: true, force: true });

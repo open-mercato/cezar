@@ -86,6 +86,22 @@ describe('RunManager - shadow wiring (spec 2026-10-06-shadow-runs)', { timeout: 
     expect(announced).toHaveLength(1);
   });
 
+  it('withholds tracker credentials: a Jira or Linear write would leave through a door the shim does not watch', async () => {
+    manager = new RunManager(store, repoRoot, {
+      resolveTrackerEnv: async () => {
+        throw new Error('a shadow run must not resolve tracker credentials');
+      },
+    });
+    const run = newRun(true);
+    const association = { kind: 'jira' as const, source: { id: 'source', webUrl: 'https://example.com' }, externalId: 'SAM', externalName: 'Sam' };
+    store.updateRun(run.id, {
+      automationTracker: { automationId: 'a', automationRevision: 1, receiptId: 'r', provider: 'jira', key: 'SAM-1', url: 'https://example.com', association },
+    });
+    const { env } = await seam().agentEnvForStep(run.id, 'claude');
+    expect(env.CEZ_SHADOW).toBe('1');
+    expect(env.JIRA_API_TOKEN).toBeUndefined();
+  });
+
   it('fails closed: a shadow run whose redirect cannot be proven never gets an environment', async () => {
     git('remote', 'set-url', '--push', 'origin', 'https://github.com/acme/widget.git');
     const run = newRun(true);

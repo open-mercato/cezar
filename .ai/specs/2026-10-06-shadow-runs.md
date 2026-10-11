@@ -113,7 +113,10 @@ catch:
 - other publishing CLIs (`glab`, `hub`, `npm publish`, `docker push`, `terraform apply`, `kubectl`);
 - pushes through an ssh host alias that no configured remote uses (`gh:o/r` with `Host gh` in
   `~/.ssh/config`), and a `git remote set-url --push` made mid-turn, until the next spawn re-arms;
-- an agent that already knows `cez automation` and creates an ordinary automation (Q11).
+- an agent that already knows `cez automation` and creates an ordinary automation (Q11);
+- an agent that calls cezar's own loopback API to promote or discard its intents: a run gets
+  `CEZ_API_URL` for dispatch, and nothing tells a human's request from a local process's.
+  `SHADOW_INSTRUCTIONS` forbids it; telling the two apart is a Phase 2 item with the cockpit.
 
 Each is either deliberate, closed by Q4 in Phase 3, or a Phase 2 item.
 
@@ -158,7 +161,8 @@ flowchart LR
 ```
 
 **Takeaway:** the only process that can publish anything is the cezar server, one intent at a
-time, after a human click; everything inside the run can only ever append to a ledger.
+time, through the promote route; everything inside the run can only ever append to a ledger.
+That route is meant for a human, and Phase 1 does not prove the caller is one ("Not captured").
 
 ### New modules (`packages/cezar/src/shadow/`)
 
@@ -223,7 +227,11 @@ spawn:
    `GIT_CONFIG_COUNT`) is caught.
 5. Resolve the real `gh` on PATH (skipping the shim dir; a directory named `gh` is not a binary,
    #1066; on Windows only `.exe`/`.com`, never a shell-requiring `.cmd`), write `shadow.json`,
-   `bin/gh` (sh) and `bin/gh.cmd`.
+   `bin/gh` (sh) and `bin/gh.cmd` - each only when its content changed, through tmp + rename, so
+   a shim of an earlier spawn never reads half a file. Outside Windows, `bin/gh` and every
+   `pre-receive` must be executable (`access X_OK`): on a noexec mount git would skip the hook and
+   accept the push unrecorded, and a shell would run the real `gh`, so the run does not start.
+   Any other failure while arming (a disk error) is a `ShadowSetupError` too.
 6. Return `{ env: { GIT_CONFIG_*, PATH: <bin>:<host PATH>, CEZ_SHADOW: '1' }, remotes, realGh }`.
 
 ### The push boundary (`git-redirect.ts`)
@@ -316,8 +324,10 @@ One intent per call, serialized per run (two clicks never run a command twice):
   push first"); which argv tokens carry a body file is re-derived from the argv itself
   (`ghFileReferences`), and the ledger's own `index`/`flag` must agree with it one for one, or the
   intent is refused; the bodies are written to a scratch dir and swapped into argv; `execFile(gh, argv)` - an array,
-  no shell - from the run's worktree (or the repo root when it is gone), 120 s timeout, prompts
-  disabled.
+  no shell - from the run's working directory (its worktree, or the checkout for an in-place run),
+  120 s timeout, prompts disabled. gh reads the repository and the current branch from its cwd, so
+  a gh intent is refused (and handed back as a command) when that directory is gone or when the
+  agent ran gh outside it.
 - The outcome becomes a decision line; a failure is `failed` (retryable) and a 409 carrying the
   manual command.
 
@@ -430,7 +440,7 @@ directions.
 | A gh body longer than the 16 000-character preview | Manual-only: a click never posts unseen text. |
 | A gh command with combined or attached short flags (`-dF x`, `-tTitle`) | Manual-only; written out in full, the same command is promotable. |
 | Agent pushes, sees the rejection, retries with `--force` | Recorded again as a second intent; the view marks it `diverged` and `manual`. |
-| Agent pushes to the default branch | Recorded; `manual` ("work lands there through review"). |
+| Agent pushes to the default branch | Recorded; `manual` ("work lands there through review"). Protected: `<remote>/HEAD` when this clone knows it, the project's `baseBranch`, and `main`/`master` always - a clone made with `git remote add` has no `<remote>/HEAD`. |
 | Agent adds a new remote at runtime and pushes to it | A URL with a scheme, `git@` or a known remote host matches a catch-all: the push fails, nothing is recorded. An ssh host alias no remote uses is not caught ("Not captured"). |
 | Push from a separate clone in TMPDIR | Recorded if its URL matches a remote; the pin fails (objects not in the repo); `manual`. |
 | `gh` not installed | Reads exit 127 with a clear message; writes are still recorded; promotion of gh intents answers 409. |
@@ -439,7 +449,7 @@ directions.
 | A forged ledger line (the agent writes the file itself) | Same power as calling gh: re-classified on read; a fabricated `click` intent is still a human click away from running, with its full command and body visible. |
 | Two promote clicks race | Serialized per run; the second sees `promoted` and answers 409. |
 | Continue on a shadow run, restart recovery | Re-armed and re-verified on that spawn (Q7). |
-| The worktree was reclaimed (#483) | Intents and pins are untouched; gh promotion runs from the repo root. |
+| The worktree was reclaimed (#483) | Intents and pins are untouched; pushes still promote (pinned shas, from the repo root); gh intents are refused and handed back as commands, because from the main checkout gh would resolve the user's branch. |
 | Run deleted | `removeShadowState` deletes the directory and every `refs/cezar/shadow/<runId>/*` pin. |
 | `CEZ_DRY_RUN=1` | Works unchanged: the mock agents never push, the arming still runs. |
 | Global `core.hooksPath` (husky, scanners) | The shadow remote's own config pins its hooks; the user's repository is not touched. |

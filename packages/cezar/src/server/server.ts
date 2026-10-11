@@ -4697,6 +4697,8 @@ export function createApp(deps: ServerDeps) {
       // and what the client's cliTargetResumes now labels. Resume-after-finish is untouched.
       const cliRunner = agentCliRunner(target);
       if (cliRunner) {
+        // The same unshadowed-session door `/open-in-cli` closes for a shadow run (Q6).
+        if (run.shadow === true) return c.json({ error: SHADOW_RUN_REFUSAL }, 409);
         const blocked = await providerActionError([cliRunner]);
         if (blocked) return c.json({ error: blocked }, 409);
         const engineOwnsSession = run.status === 'running' || run.status === 'queued' || run.status === 'waiting';

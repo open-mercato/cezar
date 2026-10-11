@@ -10,7 +10,7 @@ import {
   verifyPushRedirect,
   type Git,
 } from './git-redirect.ts';
-import { LEDGER_VERSION, shadowDir, shadowPaths, writeShadowConfig } from './ledger.ts';
+import { LEDGER_VERSION, shadowDir, shadowPaths, writeFileAtomic, writeShadowConfig } from './ledger.ts';
 
 /**
  * Arming a shadow run (spec `2026-10-06-shadow-runs` § Arming). Idempotent: every spawn of the run
@@ -112,11 +112,24 @@ const shPath = (value: string, platform: NodeJS.Platform) => (platform === 'win3
 const cmdQuote = (value: string) => `"${value.replace(/%/g, '%%')}"`;
 
 function writeScript(path: string, content: string): void {
-  writeFileSync(path, content, 'utf8');
+  writeFileAtomic(path, content);
   try {
     chmodSync(path, 0o755);
   } catch {
-    // Windows has no exec bit; git for Windows and cmd do not need one.
+    // Windows has no exec bit; git for Windows and cmd do not need one. Elsewhere `assertRunnable` decides.
+  }
+}
+
+/**
+ * A script the OS will not run is skipped, not refused: git accepts the push unrecorded, and a
+ * shell runs the next `gh` on PATH - the real one. A noexec mount must stop the run instead.
+ */
+export function assertRunnable(path: string, platform: NodeJS.Platform = process.platform): void {
+  if (platform === 'win32') return;
+  try {
+    accessSync(path, constants.X_OK);
+  } catch {
+    throw new ShadowSetupError(`${path} cannot be executed here (a noexec mount?)`);
   }
 }
 
@@ -138,6 +151,16 @@ export interface PrepareShadowOptions {
 }
 
 export async function prepareShadowRun(options: PrepareShadowOptions): Promise<ShadowEnvironment> {
+  try {
+    return await armShadowRun(options);
+  } catch (error) {
+    // Every caller fails the step cleanly on this one type; a disk error must not escape as another.
+    if (error instanceof ShadowSetupError) throw error;
+    throw new ShadowSetupError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function armShadowRun(options: PrepareShadowOptions): Promise<ShadowEnvironment> {
   const platform = options.platform ?? process.platform;
   const git = options.git ?? defaultGit;
   const hostEnv = options.hostEnv ?? process.env;
@@ -173,10 +196,12 @@ export async function prepareShadowRun(options: PrepareShadowOptions): Promise<S
     // the latter.
     const pinned = await git(paths.dir, [`--git-dir=${target}`, 'config', 'core.hooksPath', shPath(hooks, platform)]);
     if (!pinned.ok) throw new ShadowSetupError(`could not configure the shadow remote for "${remote.name}"`);
+    const hook = join(hooks, 'pre-receive');
     writeScript(
-      join(hooks, 'pre-receive'),
+      hook,
       `#!/bin/sh\n# ${GENERATED}\nexec ${shCommand(invocation, platform)} pre-receive ${shQuote(shPath(paths.dir, platform))} ${shQuote(remote.name)}\n`,
     );
+    assertRunnable(hook, platform);
   }
 
   const planned = planPushRedirect(remotes, { remoteTarget: targetOf, blockedBase: paths.blocked });
@@ -199,6 +224,7 @@ export async function prepareShadowRun(options: PrepareShadowOptions): Promise<S
     join(paths.bin, 'gh'),
     `#!/bin/sh\n# ${GENERATED}\nexec ${shCommand(invocation, platform)} gh ${shQuote(shPath(paths.dir, platform))} "$@"\n`,
   );
+  assertRunnable(join(paths.bin, 'gh'), platform);
   writeScript(
     join(paths.bin, 'gh.cmd'),
     `@echo off\r\nrem ${GENERATED}\r\n${[invocation.node, ...invocation.args].map(cmdQuote).join(' ')} gh ${cmdQuote(paths.dir)} %*\r\nexit /b %ERRORLEVEL%\r\n`,
@@ -263,8 +289,9 @@ instead of running. Read-only \`gh\` commands work normally. A human reviews the
 in the cockpit and decides which ones to carry out.
 
 Do not retry, force or reroute a recorded action (another remote, another URL, the GitHub API
-directly), and do not treat the rejection as an error to fix. In your final message, list every
-action that was recorded rather than executed.`;
+directly), never promote or discard one yourself through cezar's own API (\`CEZ_API_URL\`), and do
+not treat the rejection as an error to fix. In your final message, list every action that was
+recorded rather than executed.`;
 
 /**
  * A deleted run takes its shadow state with it: the directory, and the refs that pinned its

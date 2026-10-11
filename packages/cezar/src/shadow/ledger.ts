@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -64,9 +64,24 @@ export interface ShadowConfig {
   realGh: string | null;
 }
 
+/**
+ * Every spawn rewrites the run's state while a shim of an earlier spawn may be reading it: same
+ * content is left alone, and changed content lands whole (tmp + rename), never half-written.
+ */
+export function writeFileAtomic(path: string, content: string): void {
+  try {
+    if (readFileSync(path, 'utf8') === content) return;
+  } catch {
+    // absent: write it
+  }
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, content, 'utf8');
+  renameSync(tmp, path);
+}
+
 export function writeShadowConfig(dir: string, config: ShadowConfig): void {
   mkdirSync(dir, { recursive: true });
-  writeFileSync(shadowPaths(dir).config, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+  writeFileAtomic(shadowPaths(dir).config, `${JSON.stringify(config, null, 2)}\n`);
 }
 
 export function readShadowConfig(dir: string): ShadowConfig | null {

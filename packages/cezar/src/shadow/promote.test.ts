@@ -57,11 +57,11 @@ describe('promoting shadow intents (real git)', { timeout: 30_000 }, () => {
   }
 
   /** The shim with in-memory IO, so a `gh` write is recorded exactly as an agent's would be. */
-  function recordGh(args: string[], files: Record<string, string> = {}): string {
+  function recordGh(args: string[], files: Record<string, string> = {}, cwd: string = repo): string {
     const out: string[] = [];
     const io: ShimIo = {
       argv: ['gh', shadowDir(dataDir, RUN), ...args],
-      cwd: repo,
+      cwd,
       stdout: (text) => out.push(text),
       stderr: (text) => out.push(text),
       readStdin: () => Buffer.alloc(0),
@@ -81,7 +81,7 @@ describe('promoting shadow intents (real git)', { timeout: 30_000 }, () => {
     return out.join('');
   }
 
-  const context = (extra: Partial<PromoteContext> = {}): PromoteContext => ({ dataDir, runId: RUN, repoRoot: repo, ...extra });
+  const context = (extra: Partial<PromoteContext> = {}): PromoteContext => ({ dataDir, runId: RUN, repoRoot: repo, workdir: repo, ...extra });
   const intents = async () => (await loadShadowIntents(context())).entries.map((entry) => entry.view);
 
   it('promotes a new branch with a plain push, records the decision, and never runs it twice', async () => {
@@ -106,6 +106,43 @@ describe('promoting shadow intents (real git)', { timeout: 30_000 }, () => {
     expect(outcome).toMatchObject({ ok: false, status: 409 });
     expect(outcome.ok ? '' : outcome.manual).toMatch(/^git push origin [0-9a-f]{40}:refs\/heads\/main$/);
     expect(git(origin, 'rev-parse', 'refs/heads/main').trim()).not.toBe(git(repo, 'rev-parse', 'HEAD').trim());
+  });
+
+  it('keeps main and the project base branch manual whatever the remote calls its HEAD', async () => {
+    // A clone made with `git remote add` has no origin/HEAD; here it even names another branch.
+    git(repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk');
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ baseBranch: 'origin/develop' }));
+    await shadowPush('refs/heads/main');
+    await shadowPush('refs/heads/develop');
+    const [main, develop] = await intents();
+    expect(main).toMatchObject({ promotable: 'manual', push: { relation: 'fast-forward' } });
+    expect(develop).toMatchObject({ promotable: 'manual', push: { relation: 'new' } });
+    expect(develop?.reason).toMatch(/default or base branch/);
+  });
+
+  it('runs gh only in the run\'s own working directory, never in a checkout it would misread', async () => {
+    await prepareShadowRun({ dataDir, runId: RUN, repoRoot: repo });
+    recordGh(['pr', 'comment', '--body', 'ack']);
+    const elsewhere = join(root, 'other-clone');
+    mkdirSync(elsewhere);
+    recordGh(['issue', 'comment', '3', '--body', 'ack'], {}, elsewhere);
+    const [comment, outside] = await intents();
+    const ran: string[] = [];
+    const exec = async (_bin: string, _args: string[], cwd: string) => {
+      ran.push(cwd);
+      return { ok: true, stdout: '', stderr: '' };
+    };
+    const ghAt = (workdir: string = repo) => context({ findGh: () => '/opt/gh/bin/gh', exec, workdir });
+
+    // The worktree was reclaimed: from the repo root gh would comment on the USER's branch's PR.
+    const gone = await promoteShadowIntent(ghAt(join(root, 'reclaimed-worktree')), comment?.id as string);
+    expect(gone).toMatchObject({ ok: false, status: 409, manual: 'gh pr comment --body ack' });
+    expect((await promoteShadowIntent(ghAt(), outside?.id as string))).toMatchObject({ ok: false, status: 409 });
+    expect(ran).toEqual([]);
+
+    expect(await promoteShadowIntent(ghAt(repo), comment?.id as string)).toMatchObject({ ok: true });
+    expect(ran).toEqual([repo]);
   });
 
   it('opens a recorded PR only after its branch push, with the captured body and no shell', async () => {

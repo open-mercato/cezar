@@ -6,6 +6,7 @@ import type {
   ShadowPromotable,
   ShadowPushRelation,
 } from '@open-mercato/cezar-contract';
+import { loadConfig } from '../config.ts';
 import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
 import { classifyGh, ghTargetRepo } from './gh-policy.ts';
 import { defaultGit, type Git } from './git-redirect.ts';
@@ -27,6 +28,8 @@ export interface ShadowViewContext {
   runId: string;
   repoRoot: string;
   git?: Git;
+  /** The project's configured base branch; read from `config.json` when absent. */
+  baseBranch?: string | null;
 }
 
 export interface LoadedIntent {
@@ -61,23 +64,30 @@ function decided(decision: DecisionLine | undefined, redact: (text: string) => s
 const shortRef = (ref: string) => ref.replace(/^refs\/(heads|tags)\//, '');
 
 interface PushFacts {
-  defaultBranch(remote: string): Promise<string | null>;
+  isProtected(remote: string, branch: string): Promise<boolean>;
   relation(line: PushIntentLine): Promise<ShadowPushRelation>;
 }
 
 /** Local git facts about pushes, memoized per read and bounded by RELATION_BUDGET. */
-function pushFacts(repoRoot: string, git: Git): PushFacts {
+function pushFacts(repoRoot: string, git: Git, baseBranch: string | null): PushFacts {
   const defaults = new Map<string, string | null>();
   let budget = RELATION_BUDGET;
+  const defaultBranch = async (remote: string): Promise<string | null> => {
+    if (defaults.has(remote)) return defaults.get(remote) ?? null;
+    const head = await git(repoRoot, ['symbolic-ref', '--quiet', `refs/remotes/${remote}/HEAD`]);
+    const prefix = `refs/remotes/${remote}/`;
+    const target = head.stdout.trim();
+    const branch = head.ok && target.startsWith(prefix) ? target.slice(prefix.length) : null;
+    defaults.set(remote, branch);
+    return branch;
+  };
   return {
-    async defaultBranch(remote) {
-      if (defaults.has(remote)) return defaults.get(remote) ?? null;
-      const head = await git(repoRoot, ['symbolic-ref', '--quiet', `refs/remotes/${remote}/HEAD`]);
-      const prefix = `refs/remotes/${remote}/`;
-      const target = head.stdout.trim();
-      const branch = head.ok && target.startsWith(prefix) ? target.slice(prefix.length) : null;
-      defaults.set(remote, branch);
-      return branch;
+    // `<remote>/HEAD` is unset in a clone made with `git remote add` + fetch, so the project's base
+    // branch and main/master count too: a wrong guess here costs a manual step, not a published push.
+    async isProtected(remote, branch) {
+      if (branch === 'main' || branch === 'master') return true;
+      if (baseBranch !== null && [branch, `${remote}/${branch}`, `refs/heads/${branch}`].includes(baseBranch)) return true;
+      return branch === (await defaultBranch(remote));
     },
     async relation(line) {
       if (ZERO_SHA.test(line.sha)) return 'delete';
@@ -103,15 +113,14 @@ async function pushView(
 ): Promise<ShadowIntent> {
   const relation = await facts.relation(line);
   const branch = line.ref.startsWith('refs/heads/') ? shortRef(line.ref) : null;
-  const defaultBranch = await facts.defaultBranch(line.remote);
-  const isDefault = branch !== null && (defaultBranch !== null ? branch === defaultBranch : branch === 'main' || branch === 'master');
+  const isDefault = branch !== null && (await facts.isProtected(line.remote, branch));
 
   let promotable: ShadowPromotable = 'manual';
   let reason: string;
   if (relation === 'delete') reason = 'deletes a branch or tag on the remote: run it by hand';
   else if (branch === null) reason = 'pushes a tag or a ref that is not a branch: run it by hand';
   else if (!line.pinned) reason = 'the commit is not in this repository (it was pushed from another clone)';
-  else if (isDefault) reason = `targets ${branch}, the default branch: work lands there through review`;
+  else if (isDefault) reason = `targets ${branch}, a default or base branch: work lands there through review`;
   else if (relation === 'diverged') reason = 'not a fast-forward: promoting it would need a force push';
   else if (relation === 'unknown') reason = 'its relation to the remote could not be determined';
   else {
@@ -212,7 +221,8 @@ function forgeView(line: ForgeIntentLine, decision: DecisionLine | undefined, re
 
 export async function loadShadowIntents(context: ShadowViewContext): Promise<{ entries: LoadedIntent[]; truncated: boolean }> {
   const snapshot = readLedger(shadowDir(context.dataDir, context.runId));
-  const facts = pushFacts(context.repoRoot, context.git ?? defaultGit);
+  const baseBranch = context.baseBranch !== undefined ? context.baseBranch : ((await loadConfig(context.repoRoot)).baseBranch ?? null);
+  const facts = pushFacts(context.repoRoot, context.git ?? defaultGit, baseBranch);
   const secrets = collectSecretValues();
   const redact = (text: string) => redactSecrets(text, secrets);
   const entries: LoadedIntent[] = [];

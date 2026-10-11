@@ -7,6 +7,7 @@ import { shadowDir, shadowPaths } from './ledger.ts';
 import {
   SHADOW_CHECK_WRAPPER,
   ShadowSetupError,
+  assertRunnable,
   findExecutable,
   prepareShadowRun,
   shimInvocation,
@@ -159,6 +160,23 @@ describe('prepareShadowRun (real git)', { timeout: 30_000 }, () => {
     expect(out.status).toBe(0);
     expect(out.stdout.trim().endsWith('/bin/gh')).toBe(true);
     expect(out.stdout).toContain(`shadow/${RUN}/bin/gh`);
+  });
+
+  it('refuses to arm when a script it wrote cannot run: git and the shell would skip it silently', () => {
+    const script = join(root, 'pre-receive');
+    writeFileSync(script, '#!/bin/sh\nexit 1\n', { mode: 0o644 });
+    if (process.platform === 'win32') {
+      expect(() => assertRunnable(script)).not.toThrow(); // no exec bit to check
+      return;
+    }
+    expect(() => assertRunnable(script)).toThrow(ShadowSetupError);
+    expect(() => assertRunnable(script, 'win32')).not.toThrow();
+  });
+
+  it('turns a disk error while arming into the one error every caller handles', async () => {
+    const blocked = join(root, 'not-a-dir');
+    writeFileSync(blocked, 'a file where the data dir should be');
+    await expect(prepareShadowRun({ dataDir: blocked, runId: RUN, repoRoot: repo })).rejects.toBeInstanceOf(ShadowSetupError);
   });
 
   it('puts the gh shim first on PATH and works in a repository with no remote', async () => {
