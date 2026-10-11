@@ -18,6 +18,7 @@
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { cezarHomeDir } from './paths.ts';
+import { detectInstallKind } from './self-update/layout.ts';
 import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from './workspace/config.ts';
 
 // TEMPORARY (local ingest testing): restore 'https://telemetry-ingest.patzick.workers.dev' before shipping.
@@ -28,6 +29,8 @@ const TIMEOUT_MS = 3_000;
 const ERROR_THROTTLE_MS = 60_000;
 
 let version = '0.0.0';
+/** The exact build (`0.14.0-nightly.20261007.63`): context on error reports only. */
+let fullVersion = '0.0.0';
 /** One lookup per `~/.cezar` (keyed, so a `CEZ_HOME` switch never reuses another home's id). */
 const cezarIds = new Map<string, Promise<string>>();
 const pending = new Set<Promise<unknown>>();
@@ -60,9 +63,33 @@ export function telemetryRuntime(): 'app' | 'cli' {
   return process.env.CEZ_DESKTOP === '1' ? 'app' : 'cli';
 }
 
-/** Set once at boot; every event carries it. */
+/**
+ * The `version` every event carries: the release plus its channel, never the exact build. Nightly
+ * and PR builds stamp a new version per build (`0.14.0-nightly.20261007.63`,
+ * `0.14.0-pr1322.2590`); sent as-is, every build would be its own row in version charts and
+ * every new nightly would reopen resolved errors as "regressed". So:
+ *
+ *   0.14.0                       → 0.14.0          (stable)
+ *   0.14.0-nightly.20261007.63   → 0.14.0-nightly
+ *   0.14.0-pr1322.2590           → 0.14.0-pr
+ *   0.13.0+cez-207a3912, a checkout, anything else → 0.13.0-dev
+ */
+export function telemetryVersion(raw: string, checkout = false): string {
+  const match = /^(\d+\.\d+\.\d+)(?:-([0-9A-Za-z.-]+))?(?:\+.*)?$/.exec(raw.trim());
+  if (!match) return 'unknown';
+  const [, base, pre] = match;
+  if (checkout || raw.includes('+')) return `${base}-dev`;
+  if (!pre) return base!;
+  if (/^nightly(\.|$)/.test(pre)) return `${base}-nightly`;
+  if (/^pr\d+/.test(pre)) return `${base}-pr`;
+  return `${base}-dev`;
+}
+
+/** Set once at boot; every event carries it. A source checkout (`npm run dev`, a worktree) is a
+ *  dev build whatever its package.json says. */
 export function initTelemetry(opts: { version: string }): void {
-  version = opts.version;
+  fullVersion = opts.version;
+  version = telemetryVersion(opts.version, detectInstallKind(process.argv[1] ?? '') === 'checkout');
 }
 
 /** RFC 9562 UUIDv7: 48-bit Unix-ms timestamp, then random bits — sortable by creation time. */
@@ -211,6 +238,7 @@ function baseContext(): Context {
     'process.uptime_s': Math.round(process.uptime()),
     'process.rss_mb': Math.round(mem.rss / 1_048_576),
     'process.heap_used_mb': Math.round(mem.heapUsed / 1_048_576),
+    'build.version_full': fullVersion,
     'runtime.node': process.versions.node,
     'runtime.arch': process.arch,
   };

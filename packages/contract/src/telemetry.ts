@@ -20,7 +20,7 @@ export const TELEMETRY_ROUTE_SEGMENTS: readonly string[] = [
   'github', 'prs', 'issues', 'tracker', 'skills', 'inbox', 'workflows', 'automations',
   'dashboard', 'settings', 'global', 'agents', 'agent-config', 'worktrees', 'bookmarklets',
   'prompt-templates', 'appearance', 'notifications', 'resources', 'accounts', 'projects',
-  'keyboard',
+  'keyboard', 'graph', 'integrations', 'secrets', 'workflows-new', 'workspace-secrets',
 ];
 
 export const telemetryRouteSchema = z
@@ -72,7 +72,6 @@ export type TelemetryErrorInput = z.infer<typeof telemetryErrorInputSchema>;
  *  dashboard's breakdown has exactly these rows. `cli` is sent by the server for `cezar run`. */
 export const MESSAGE_SURFACES = [
   'new_task',
-  'planned_task',
   'bookmarklet',
   'existing_session',
   'ask_answer',

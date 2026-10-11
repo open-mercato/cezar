@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { deviceSid, flushTelemetry, registerTelemetryContext, reportError, sendDailyPing, telemetryEnabled, telemetryRuntime, track, uuidv7 } from './telemetry.ts';
+import { deviceSid, flushTelemetry, registerTelemetryContext, reportError, sendDailyPing, telemetryEnabled, telemetryRuntime, telemetryVersion, track, uuidv7 } from './telemetry.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 
 describe('telemetry', () => {
@@ -55,6 +55,17 @@ describe('telemetry', () => {
     expect(Object.keys(body.context).length).toBeLessThanOrEqual(50);
     expect(body.featureFlags).toMatchObject({ dispatch: true });
     expect(body.runtime).toBe('cli');
+  });
+
+  it('sends the release and channel, never the exact build', () => {
+    expect(telemetryVersion('0.14.0')).toBe('0.14.0');
+    expect(telemetryVersion('0.14.0-nightly.20261007.63')).toBe('0.14.0-nightly');
+    expect(telemetryVersion('0.14.0-pr1322.2590')).toBe('0.14.0-pr');
+    expect(telemetryVersion('0.9.2-pr743.1156.2')).toBe('0.9.2-pr');
+    expect(telemetryVersion('0.13.0+cez-207a3912')).toBe('0.13.0-dev');
+    expect(telemetryVersion('0.14.0', true)).toBe('0.14.0-dev');
+    expect(telemetryVersion('0.14.0-rc.1')).toBe('0.14.0-dev');
+    expect(telemetryVersion('garbage')).toBe('unknown');
   });
 
   it('makes time-ordered v7 ids', () => {
