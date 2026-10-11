@@ -159,6 +159,8 @@ describe('telemetry', () => {
       expect(printed).toHaveBeenCalled();
       exit.mockRestore();
       printed.mockRestore();
+      expect(process.exitCode).toBe(1);
+      process.exitCode = undefined; // the handler set it on THIS test process
     });
   });
 

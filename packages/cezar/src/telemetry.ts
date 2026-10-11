@@ -123,6 +123,7 @@ export function installCrashReporter(): void {
     } catch {
       // the exit below must happen whatever reporting does
     }
+    process.exitCode = 1; // a crash never exits 0, even if the loop drains before the flush
     void flushTelemetry(1_000).finally(() => process.exit(1));
   });
 }
@@ -249,13 +250,22 @@ function refreshProjectRoots(): void {
     .catch(() => undefined);
 }
 
+/** `process.cwd()` throws once the directory is deleted; a report must survive that. */
+function safeCwd(): string {
+  try {
+    return process.cwd();
+  } catch {
+    return '';
+  }
+}
+
 /** Replace every path that names the user or their work: project roots and the working directory
  *  become `<repo>`, the temp dir `<tmp>`, the home directory `~` — longest first, so a repo under
  *  home is `<repo>`, not `~/code/<name>`. */
 export function scrub(text: string): string {
   const pairs: Array<[string, string]> = [
     ...projectRoots.map((root): [string, string] => [root, '<repo>']),
-    [process.cwd(), '<repo>'],
+    [safeCwd(), '<repo>'],
     [tmpdir(), '<tmp>'],
     [homedir(), '~'],
   ];
