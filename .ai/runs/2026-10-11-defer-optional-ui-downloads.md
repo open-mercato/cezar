@@ -20,18 +20,18 @@ Resolve #1219 by removing the eager Markdown/Streamdown dependency from skill pr
 
 ### Phase 1: Remove the Markdown leak
 
-- [ ] 1.1 Lazy-load skill preview dialogs at first interaction in both source pickers, preserving close/reopen behavior.
-- [ ] 1.2 Add focused regression coverage for preview opening and dismissal.
+- [x] 1.1 Lazy-load skill preview dialogs at first interaction in both source pickers, preserving close/reopen behavior. — 4e014ed7
+- [x] 1.2 Add focused regression coverage for preview opening and dismissal. — 4e014ed7
 
 ### Phase 2: Defer optional shell surfaces
 
-- [ ] 2.1 Split the command-palette body from its eager opener and shortcut/event registrations.
-- [ ] 2.2 Lazy-load Add Project and Clone Project dialogs without changing their opener behavior or close animations.
-- [ ] 2.3 Add/update palette E2E coverage for first open, reopen, Cmd/Ctrl+K, N/c, and catalog links.
+- [x] 2.1 Split the command-palette body from its eager opener and shortcut/event registrations. — 9c1a5248
+- [x] 2.2 Lazy-load Add Project and Clone Project dialogs without changing their opener behavior or close animations. — 9c1a5248
+- [x] 2.3 Add/update palette E2E coverage for first open, reopen, Cmd/Ctrl+K, N/c, and catalog links. — 9c1a5248
 
 ### Phase 3: Verify and ship
 
-- [ ] 3.1 Measure before/after entry and deduplicated entry-plus-preload raw/gzip sizes for each change independently.
+- [ ] 3.1 Measure before/after entry and deduplicated entry-plus-preload raw/gzip sizes for each change independently. (Blocked: `npm run build:web` fails before emission on pre-existing missing API-client exports.)
 - [ ] 3.2 Run focused tests, red-green regression proof, browser evidence, full validation gate, review, and finalize the PR.
 
 ## Risks
