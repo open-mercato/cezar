@@ -316,9 +316,8 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
       // route, which unmounts this hook first.
       const params = new URLSearchParams()
       if (cursor !== undefined) params.set('cursor', cursor)
-      if (cursor !== undefined || afterSeq > 0) {
-        params.set('afterSeq', String(Math.max(pageHighWaterRef.current, maxSeqRef.current)))
-      }
+      const highWater = Math.max(pageHighWaterRef.current, maxSeqRef.current)
+      if (cursor !== undefined || highWater > 0) params.set('afterSeq', String(highWater))
       const query = params.size > 0 ? `?${params.toString()}` : ''
       const current = new Source(apiPath(`/runs/${encodeURIComponent(runId)}/events${query}`), {
         withCredentials: true,

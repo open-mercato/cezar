@@ -33,7 +33,7 @@ describe('NextRunsPreview', () => {
   it('describes the poll for a github kind', () => {
     render(<NextRunsPreview kind="github" schedule={{ type: 'daily' }} intervalSeconds={600} timeZone="Europe/Warsaw" now={NOW} />)
     expect(screen.getByText('How it polls')).not.toBeNull()
-    expect(screen.getByText(/Checks GitHub every 10 min while cezar is open/)).not.toBeNull()
+    expect(screen.getByText(/Checks GitHub every 10 min while this cockpit is open/)).not.toBeNull()
   })
 })
 

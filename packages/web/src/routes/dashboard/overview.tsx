@@ -19,7 +19,7 @@ import {
 } from '@/components/ui/sheet'
 import { useProjects } from '@/api/queries'
 import { shortAge } from '@/lib/format'
-import { deriveAttention } from '@/lib/attention'
+import { deriveAttention, isNeedsYouStatus } from '@/lib/attention'
 import { StatusDot } from '@/components/status-dot'
 import { Coverage } from './rows'
 import { ExportRows } from './export-rows'
@@ -455,7 +455,7 @@ function OutcomeTask({
   const removed = truth === null
   const obsolete = current && (row.archived || (group === 'running'
     ? row.status !== 'running'
-    : !['waiting', 'review'].includes(row.status)))
+    : !isNeedsYouStatus(row)))
   const inactive = removed || obsolete
   const attention = deriveAttention(row)
   const label = current && removed

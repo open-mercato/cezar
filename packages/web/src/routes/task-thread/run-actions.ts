@@ -35,13 +35,16 @@ const SAFE_SESSION_ID = /^[A-Za-z0-9._][A-Za-z0-9._-]{0,199}$/
  *  `Record<Runner, string>` rather than a `switch`/`default`: the previous shape silently
  *  mislabelled an unhandled runner as Claude instead of failing to compile, which is exactly
  *  how the cursor gap here stayed invisible through two reviews and a full green gate (#807) —
- *  adding a fifth backend without a row here is now a type error, not a silent wrong command. */
+ *  adding a backend without a row here is now a type error, not a silent wrong command. */
 const RESUME_COMMAND_PREFIX: Record<Runner, string> = {
   claude: 'claude --resume',
   codex: 'codex resume',
   opencode: 'opencode --session',
   cursor: 'agent --resume',
+  // Junie names the session by flag, not positionally — handled in resumeCommand.
+  junie: 'junie --resume',
   pi: 'pi --session',
+  copilot: 'copilot --resume',
 }
 
 /** The per-backend take-over command. Records without a runner recorded predate the runner
@@ -54,6 +57,7 @@ const RESUME_COMMAND_PREFIX: Record<Runner, string> = {
  *  either. Fails closed: no hint beats a hint that runs `rm -rf ~` on paste. */
 export function resumeCommand(runner: Runner | undefined, sessionId: string): string | undefined {
   if (!SAFE_SESSION_ID.test(sessionId)) return undefined
+  if (runner === 'junie') return `${RESUME_COMMAND_PREFIX.junie} --session-id=${sessionId}`
   return `${RESUME_COMMAND_PREFIX[runner ?? 'claude']} ${sessionId}`
 }
 
@@ -109,6 +113,9 @@ export interface RunActionFlags {
    *  read. Both halves come from `lib/read-state.ts` so the header can never offer an action
    *  whose result the marker rule would ignore. */
   markUnread: boolean
+  /** The inverse: an unread, finished task can be marked read without opening it again —
+   *  offered exactly where `markUnread` is not, so the control flips instead of vanishing. */
+  markRead: boolean
   /** Stop an active run. Mutually exclusive with delete, by construction below. */
   cancel: boolean
   /** Remove the run, its transcript, worktree and branch. Terminal runs only. */
@@ -126,6 +133,7 @@ export function runActionFlags(run: RunRecord): RunActionFlags {
     archive: !active,
     pin: !run.archived,
     markUnread: canBeUnread(run) && !isUnread(run),
+    markRead: canBeUnread(run) && isUnread(run),
     cancel: active,
     deleteRun: !active,
   }
@@ -149,6 +157,21 @@ export function resolveConflictsPrompt(prNumber?: number): string {
   // the task's own, and it has exactly one such PR.
   const where = prNumber ? `PR number ${prNumber}` : 'this pull request'
   return `Merge head branch and resolve conflicts in ${where}`
+}
+
+/** The prompt behind "Fix errors" — the words the agent receives, like
+ *  `resolveConflictsPrompt`: where to look, and that the fix must reach the PR. */
+export function fixChecksPrompt(prNumber?: number): string {
+  const where = prNumber ? `PR number ${prNumber}` : 'this pull request'
+  return `The CI checks on ${where} are failing. Look at the failing checks (gh pr checks, then gh run view --log-failed), fix the cause, then commit and push`
+}
+
+/** The prompt behind "Update branch": bring the task's branch up to date with its base, the way a
+ *  person would — fetch, merge, resolve, verify, publish. `base` is the run's base branch. */
+export function updateBranchPrompt(base?: string): string {
+  const name = base?.replace(/^origin\//, '')
+  const target = name && !/^[0-9a-f]{7,40}$/i.test(name) ? `origin/${name}` : 'the base branch'
+  return `Update this branch with the latest ${target}: fetch, merge ${target} into it, resolve any conflicts, make sure it still builds and the tests pass, then commit and push`
 }
 
 /** The Finish button's tooltip — review-gate accept reads differently from closing a session. */

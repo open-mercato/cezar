@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { resolveTaskDiffBase, type RepointedHead } from '../git-diff-base.ts';
 import { isSafeGitRef } from '../git-refs.ts';
+import { gitHasIdentity, unresolvedConflicts } from '../git-worktree.ts';
 
 /**
  * Session git plumbing for the cockpit's Changes & Files tabs (redesign spec
@@ -444,6 +445,88 @@ export async function collectCommitChanges(
   return { ok: true, commit: { sha: fullSha, subject, author, when, ...payload } };
 }
 
+// ---- repository path index ----------------------------------------------------
+
+/**
+ * Max paths `GET /repo/tree` will return. This repository is ~1,900 paths, so the cap is ~10×
+ * headroom; past it the answer is `truncated: true` and the Files tab says so, because presenting
+ * a partial repository as the whole one is the one failure mode a flat index has.
+ */
+export const REPO_TREE_CAP = 20_000;
+
+/**
+ * Hard byte bound on the captured `git ls-files` output — the cap for unusually long paths, which
+ * the entry count alone cannot bound. Deliberately well under `git()`'s 32 MB `maxBuffer`, so the
+ * limit that fires is this explicit one with its own message rather than an opaque subprocess
+ * failure. Exceeding it is a failure, NEVER a partial successful tree.
+ */
+export const REPO_TREE_BYTES_CAP = 8 * 1024 * 1024;
+
+export type RepoPathsResult =
+  | { ok: true; paths: string[]; truncated: boolean }
+  | { ok: false; error: string };
+
+/**
+ * The project repository's own path index, for `GET /repo/tree` (spec
+ * `.ai/specs/2026-10-05-repo-file-browser.md`, #1279): tracked files plus untracked-but-not-ignored
+ * ones, sorted, capped.
+ *
+ * `git ls-files` rather than a filesystem walk: one bounded subprocess instead of a recursive
+ * descent, and it respects `.gitignore` for free — a walk of a monorepo spends its whole budget
+ * inside `node_modules` before reaching any source. The set it returns is also what makes the
+ * content route safe to point at the user's REAL checkout: `readWorktreePath` knows nothing about
+ * `.gitignore`, so membership in this index is the only thing standing between
+ * `GET /repo/files?path=.env` and the file.
+ *
+ * `-z` because a path may contain anything but NUL (git would otherwise quote it and we would be
+ * un-quoting git's C escapes by hand). Never throws — `{ ok: false, error }` with git's own first
+ * stderr line, which the route turns into a 409.
+ */
+export async function listRepoPaths(
+  root: string,
+  cap = REPO_TREE_CAP,
+  bytesCap = REPO_TREE_BYTES_CAP,
+): Promise<RepoPathsResult> {
+  const res = await git(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard']);
+  if (!res.ok) return { ok: false, error: gitReason(res, 'git ls-files failed') };
+  // Byte-length, not `.length`: the cap bounds the WIRE, and a UTF-8 path costs more bytes than
+  // it has JS code units.
+  const bytes = Buffer.byteLength(res.stdout, 'utf8');
+  if (bytes > bytesCap) {
+    return {
+      ok: false,
+      error: `repository path index is too large to serve (${bytes} bytes, cap ${bytesCap})`,
+    };
+  }
+  // `-z` terminates every entry, so the split leaves one trailing empty string; an empty repo
+  // produces nothing at all. Filtering empties covers both without a special case.
+  const all = res.stdout.split('\0').filter((p) => p !== '');
+  // Code-unit order, NOT `localeCompare`: the ordering is part of the wire contract, and a
+  // locale-sensitive collation would make it depend on the server's environment.
+  all.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return { ok: true, paths: all.slice(0, cap), truncated: all.length > cap };
+}
+
+/**
+ * The Q5 guard for `GET /repo/files`: is `relPath` one of the paths the repository index lists?
+ *
+ * Derived from `listRepoPaths` with the ENTRY cap lifted on purpose. `REPO_TREE_CAP` exists to
+ * bound a *response*; applying it here would make a tracked file past the 20,000th path
+ * unreadable — a cap on what the viewer may open, which nobody asked for. The byte cap still
+ * bounds the subprocess, so this stays bounded.
+ *
+ * Answers the membership question only. Traversal, `.git` and symlink refusals remain
+ * `readWorktreePath`'s job, and both guards run.
+ */
+export async function repoIndexContains(
+  root: string,
+  relPath: string,
+): Promise<{ ok: true; indexed: boolean } | { ok: false; error: string }> {
+  const index = await listRepoPaths(root, Number.MAX_SAFE_INTEGER);
+  if (!index.ok) return index;
+  return { ok: true, indexed: new Set(index.paths).has(relPath) };
+}
+
 // ---- worktree file browsing ---------------------------------------------------
 
 /** Max file content served to the Files tab — past this the GUI shows an
@@ -656,19 +739,73 @@ export async function createOrSwitchBranch(
 export type CommitResult = { ok: true; sha: string } | { ok: false; error: string };
 
 /** `git add -A && git commit -m <message>` in `dir`. A clean tree, a failing
- *  hook or missing identity all come back as `{ ok:false, error }`. */
+ *  hook or missing identity all come back as `{ ok:false, error }`.
+ *
+ *  Refuses a worktree that is mid-merge or still carries conflict markers —
+ *  same guard as the graph `git.commit` node's `commitAll` (git-worktree.ts),
+ *  so a blind `git add -A` through this manual route cannot commit a
+ *  half-resolved merge either (see the #471 incident behind `autosaveCommit`). */
 export async function commitAll(dir: string, message: string): Promise<CommitResult> {
   const status = await git(dir, ['status', '--porcelain']);
   if (!status.ok) return { ok: false, error: gitReason(status, 'git status failed') };
   if (!status.stdout.trim()) {
     return { ok: false, error: 'nothing to commit — the working tree is clean' };
   }
+  const unresolved = await unresolvedConflicts(dir, status.stdout);
+  if (unresolved) return { ok: false, error: `refusing to commit: ${unresolved}` };
   const add = await git(dir, ['add', '-A']);
   if (!add.ok) return { ok: false, error: gitReason(add, 'git add failed') };
-  const commit = await git(dir, ['commit', '-m', message]);
+  const identityArgs = (await gitHasIdentity(dir)) ? [] : ['-c', 'user.name=cezar', '-c', 'user.email=cezar@local'];
+  const commit = await git(dir, [...identityArgs, 'commit', '-m', message]);
   if (!commit.ok) return { ok: false, error: gitReason(commit, 'git commit failed') };
   const head = await git(dir, ['rev-parse', 'HEAD']);
   return { ok: true, sha: head.ok ? head.stdout.trim() : '' };
+}
+
+export type GitStatusResult =
+  | { ok: true; uncommitted: number; unpushed: number | null; behind: number | null }
+  | { ok: false; error: string };
+
+/** What has not left the worktree yet: the files `commitAll` would commit, and the commits the
+ *  upstream has not seen (`null` with no upstream — the branch was never pushed). Plus what has
+ *  not ARRIVED: commits on the task's base branch that the branch does not have yet (`behind`,
+ *  `null` when the base cannot be resolved). Read-only, and offline on purpose: the base is read
+ *  from the remote-tracking ref as last fetched, never fetched here — this is polled. */
+export async function worktreeGitStatus(dir: string, baseBranch?: string): Promise<GitStatusResult> {
+  const status = await git(dir, ['status', '--porcelain', '-z']);
+  if (!status.ok) return { ok: false, error: gitReason(status, 'git status failed') };
+  // `-z` ends every entry with NUL, and a rename or copy — in EITHER column of the `XY` code (a
+  // worktree-side rename shows in Y once the tree has intent-to-add entries) — carries its old
+  // path as one extra NUL field that is not an entry of its own.
+  const entries = status.stdout.split('\0').filter(Boolean);
+  let uncommitted = 0;
+  for (let i = 0; i < entries.length; i++) {
+    uncommitted++;
+    if (/^(?:[RC].|.[RC])/.test(entries[i] as string)) i++;
+  }
+  const behind = await commitsBehindBase(dir, baseBranch);
+  const upstream = await git(dir, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+  if (!upstream.ok) return { ok: true, uncommitted, unpushed: null, behind };
+  const ahead = await git(dir, ['rev-list', '--count', '@{u}..HEAD']);
+  const unpushed = ahead.ok ? Number.parseInt(ahead.stdout.trim(), 10) : Number.NaN;
+  return { ok: true, uncommitted, unpushed: Number.isFinite(unpushed) ? unpushed : null, behind };
+}
+
+/** Commits on the base branch the worktree's HEAD does not contain — the freshest base ref
+ *  first (`origin/<base>`, then the local `<base>`; agents fetch, they never pull — the same
+ *  reasoning as `resolveTaskDiffBase`). `null` when there is no named base: none recorded, a raw
+ *  sha (a detached-HEAD fork point has no "latest" to be behind), or a ref this repo lacks. */
+async function commitsBehindBase(dir: string, baseBranch: string | undefined): Promise<number | null> {
+  if (!baseBranch || !isSafeGitRef(baseBranch) || /^[0-9a-f]{7,40}$/i.test(baseBranch)) return null;
+  const name = baseBranch.replace(/^origin\//, '');
+  for (const ref of [`origin/${name}`, name]) {
+    const exists = await git(dir, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
+    if (!exists.ok) continue;
+    const count = await git(dir, ['rev-list', '--count', `HEAD..${ref}`]);
+    const behind = count.ok ? Number.parseInt(count.stdout.trim(), 10) : Number.NaN;
+    return Number.isFinite(behind) ? behind : null;
+  }
+  return null;
 }
 
 export type PushResult =

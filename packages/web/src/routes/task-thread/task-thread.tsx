@@ -17,19 +17,22 @@ import {
 import { useRunHistory, type RunHistoryState } from '@/api/run-history'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
-import { Composer } from '@/components/composer/composer'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
+import { toast } from '@/components/ui/toaster'
 import { useKeyboardInsetVar } from '@/lib/keyboard-inset'
-import { budgetStop } from '@/lib/attention'
+import { budgetStop, isAwaitingAnswer } from '@/lib/attention'
 import { isUnread } from '@/lib/read-state'
 import { taskIssueUrl, taskPrUrl } from '@/lib/tasks-table'
 import { cn, isHttpUrl } from '@/lib/utils'
 
 import { AutoResumeHint } from './auto-resume-hint'
+import { useFinishRun } from './use-finish-run'
+import { E2eSetupVerdict } from './e2e-setup-verdict'
 import { useDraft } from './thread-draft'
+import { useDiffComments } from './diff-comments'
+import { TaskComposer, TaskDock } from './task-composer'
 import { WorkingIndicator } from './thread-items'
-import { useDeliverPrompt } from './deliver-prompt'
 import { useContinueAction } from './follow-up-engine'
 import { AgentsDock } from './agents-dock'
 import { PlanDock, planCounts } from './plan-dock'
@@ -41,7 +44,6 @@ import { queuePosition } from './run-actions'
 import { RunHeader } from './run-header'
 import { AskCard } from './ask-card'
 import { useRunRecordReconcile } from './run-reconcile'
-import { useActiveProviderAvailability } from './active-provider'
 import { ThreadLoading } from './thread-loading'
 import { threadRenderMode } from './thread-scroll'
 import { JumpToLatestPill, useThreadScroll } from './thread-scroller'
@@ -95,11 +97,18 @@ export function TaskThreadRoute() {
   // The one exception is "Mark unread" from this very thread (#775): clearing the receipt makes
   // `isUnread` true again, which without a guard this effect would immediately undo — the action
   // would look broken in exactly the place a user reaches for it. `suppressAutoRead` is that
-  // guard, and it holds the run id rather than a bare boolean so the reset is implicit: it only
-  // suppresses the run it was set for, and the FIRST render of a later visit (a fresh mount, or
-  // navigating to another task and back) starts from an empty ref and auto-reads normally. That
-  // is the email grammar this is modelled on — reopening the mail marks it read again.
+  // guard, and it holds the run id rather than a bare boolean: it only suppresses the run it was
+  // set for, for as long as that run stays on screen. Leaving it ends the visit — and that has to
+  // be cleared EXPLICITLY, because /tasks/A → /tasks/B → /tasks/A reuses this route element
+  // (React reconciles it, it does not remount), so a ref that only reset on mount survived the
+  // round trip and the task stayed unread however often it was reopened. That is the email
+  // grammar this is modelled on — reopening the mail marks it read again.
   const suppressAutoRead = useRef<string | undefined>(undefined)
+  // Declared BEFORE the receipt effect below on purpose: effects run in order, so arriving on a
+  // run clears another run's suppression before the receipt decides whether to fire.
+  useEffect(() => {
+    if (suppressAutoRead.current !== id) suppressAutoRead.current = undefined
+  }, [id])
   const suppressAutoReadFor = useCallback((runId: string) => {
     suppressAutoRead.current = runId
   }, [])
@@ -117,6 +126,9 @@ export function TaskThreadRoute() {
     // `isUnread` reads `archived` too, so it belongs here: un-archiving an open thread makes the
     // run unread again, and without this dep the effect would never fire to clear it.
     run.data?.archived,
+    // The route's id, not just the record's: coming back to a run whose cached record is
+    // unchanged must still re-run the receipt once the suppression above has been lifted.
+    id,
   ])
   // The two feeds can drift: a record update lost on the workspace stream leaves the thread
   // showing Working… over a "run finished" transcript. The transcript is live here, so it
@@ -179,7 +191,7 @@ export function ThreadView({
    *  header's other three tabs, have no such effect to suppress. */
   onMarkedUnread?: (runId: string) => void
 }) {
-  const footer = threadFooter(run.status, run.error)
+  const footer = threadFooter(run.status, run.error, isAwaitingAnswer(run))
   const markedUnread = useCallback(() => onMarkedUnread?.(run.id), [onMarkedUnread, run.id])
   // The dock's data: the latest plan snapshot across turns (full replacement — an emptied
   // plan hides the dock and the header mirror alike).
@@ -245,21 +257,10 @@ export function ThreadView({
     () => (openAgentId === undefined ? [] : subagentChildren(currentThread.turns, openAgentId)),
     [currentThread.turns, openAgentId],
   )
-  // One delivery path for both modes, because the record that picks between them can be stale:
-  // a 409 refetches it and, when the truth names the other endpoint, delivers there instead
-  // (deliver-prompt.ts). Without that, a lost record update meant every send bounced until the
-  // page was reloaded.
-  const deliverPrompt = useDeliverPrompt(run, continueAction)
   // The reply composer's unsent content (#939) — server-side, per run, restored on return.
   const draft = useDraft(run.id, 'composer')
-  const activeProvider = useActiveProviderAvailability(run)
-  // A queued send only amends the persisted prompt; it invokes no provider and therefore
-  // remains available even when provider discovery cannot authorize a live session. Once the
-  // session is open, mirror the server's active-backend gate as before.
-  const activeProviderBlocked = sessionOpen && !activeProvider.usable
-  const continuationProviderBlocked = hasContinuation && !continueAction.canContinue
-  const providerBlocked = activeProviderBlocked || continuationProviderBlocked
-  const providerReason = activeProviderBlocked ? activeProvider.reason : continueAction.reason
+  // Line comments left on the Changes tab — draft items that ride the next message (self-review).
+  const diffComments = useDiffComments(run.id)
 
   // The queued-run affordances (#472), passed only while the run is queued — so the bubbles
   // go read-only on the next `run` SSE frame once it starts. The bubbles await these promises
@@ -373,6 +374,8 @@ export function ThreadView({
           <WorkingIndicator since={liveTurnStart(run, currentThread)} lastActivityAt={currentThread.lastEventAt} />
         ) : null}
 
+        <E2eSetupVerdict run={run} />
+
         {/* Closed states read as the body's last line; the WAITING state lives in the dock
             (mockup `.paused-hint`), right above the composer it is asking the user to use. */}
         {footer && footer.state === 'closed' ? (
@@ -384,7 +387,20 @@ export function ThreadView({
               footer.tone === 'danger' ? 'text-danger' : 'text-soft-foreground',
             )}
           >
-            {footer.label}
+            <FooterLabel
+              label={footer.label}
+              // Offered whenever there is a session to reopen — not only once the provider check
+              // has passed: while it loads (or the provider is disconnected) the button is there,
+              // greyed, saying why, instead of the advice silently degrading to plain text.
+              onContinue={hasContinuation ? () => continueAction.continueWith('', []) : undefined}
+              blockedReason={
+                continuable
+                  ? undefined
+                  : continueAction.providerPending
+                    ? 'Checking the agent provider…'
+                    : (continueAction.reason ?? 'Connect an agent provider to continue.')
+              }
+            />
             {/* href protocol guard (#431): link only for http(s) URLs. */}
             {isHttpUrl(taskPrUrl(run)) ? (
               // The run shipped as a PR (review-gate Draft PR, or agent-opened), or worked on
@@ -417,7 +433,8 @@ export function ThreadView({
 
         {/* The review gate (spec 009): a finished run with changes parks here — nothing
             auto-merges. The panel exists exactly while the run rests at `review`. */}
-        {run.status === 'review' ? <ReviewPanel run={run} /> : null}
+        {/* Send back carries the drafted line comments, like the composer does. */}
+        {run.status === 'review' ? <ReviewPanel run={run} diffComments={diffComments} /> : null}
       </div>
 
       <AcceptCelebration status={run.status} />
@@ -436,111 +453,147 @@ export function ThreadView({
       {/* The dock region (mockup `.dock`): plan dock, paused hint, then the composer.
           `bottom: var(--kb)` is the iOS keyboard lift — 0 until the visualViewport watcher
           publishes an inset. */}
-      <div
-        data-slot="thread-dock"
-        className="sticky bottom-[var(--kb,0px)] z-10 bg-background px-3 pt-1 pb-2 max-md:border-t max-md:border-border md:px-6 md:pt-1.5 md:pb-4"
+      <TaskDock
+        // The jump pill floats over the thread, just above the dock, centered.
+        overlay={
+          scroll.pillVisible ? (
+            <div className="pointer-events-none absolute inset-x-0 -top-12 flex justify-center">
+              <JumpToLatestPill onJump={scroll.jumpToLatest} />
+            </div>
+          ) : null
+        }
       >
-        {/* The jump pill floats over the thread, just above the dock, centered. */}
-        {scroll.pillVisible ? (
-          <div className="pointer-events-none absolute inset-x-0 -top-12 flex justify-center">
-            <JumpToLatestPill onJump={scroll.jumpToLatest} />
+        {/* Agents above the plan: the fan-out is the more urgent "what is happening now",
+            and it is transient — the plan outlives it. Keyed by run id like the plan dock. */}
+        <AgentsDock key={`agents:${run.id}`} runId={run.id} agents={agents} onSelect={setOpenAgentId} />
+
+        {/* Below the agents: a skill is standing context for the whole run, not the volatile
+            "what is happening now" the fan-out reports (#1202). */}
+        <SkillsDock skills={skills} />
+
+        {plan !== undefined && plan.length > 0 ? (
+          // Keyed by run id: the collapse default re-derives per task (see PlanDock). Settled
+          // on the same rule as the Agents dock: a closed session never advances the plan.
+          <PlanDock key={run.id} runId={run.id} entries={plan} settled={runIsTerminal} />
+        ) : null}
+
+        {/* A usage-limit stop is the one `failed` state that is still going somewhere — the
+            dock says so before the composer offers a Continue nobody needs to press. */}
+        <AutoResumeHint run={run} />
+
+        {budget ? (
+          <div
+            data-slot="budget-hint"
+            className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
+          >
+            <StatusDot tone="pending" pulse />
+            Budget reached — spent ${budget.spent.toFixed(2)} of ${budget.ceiling.toFixed(2)}; send a message to continue.
+            {run.status === 'waiting' ? (
+              <>
+                <span aria-hidden="true">·</span>
+                <EndSessionButton runId={run.id} />
+              </>
+            ) : null}
+          </div>
+        ) : run.status === 'waiting' ? (
+          <div
+            data-slot="paused-hint"
+            className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
+          >
+            <StatusDot tone="pending" pulse />
+            The agent is paused, waiting for your reply
+            {/* The other answer to "your turn": not replying at all. It sits beside the hint
+                because that is the moment the choice is made — reply below, or end it here. */}
+            <span aria-hidden="true">·</span>
+            <EndSessionButton runId={run.id} />
           </div>
         ) : null}
-        <div className="mx-auto flex w-full max-w-[var(--measure)] flex-col gap-1.5 md:gap-2.5">
-          {/* Agents above the plan: the fan-out is the more urgent "what is happening now",
-              and it is transient — the plan outlives it. Keyed by run id like the plan dock. */}
-          <AgentsDock key={`agents:${run.id}`} runId={run.id} agents={agents} onSelect={setOpenAgentId} />
 
-          {/* Below the agents: a skill is standing context for the whole run, not the volatile
-              "what is happening now" the fan-out reports (#1202). */}
-          <SkillsDock skills={skills} />
+        {queued ? (
+          <div
+            data-slot="queued-hint"
+            className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
+          >
+            <StatusDot tone="pending" />
+            Messages you add now are folded into the prompt before the run starts.
+          </div>
+        ) : null}
 
-          {plan !== undefined && plan.length > 0 ? (
-            // Keyed by run id: the collapse default re-derives per task (see PlanDock). Settled
-            // on the same rule as the Agents dock: a closed session never advances the plan.
-            <PlanDock key={run.id} runId={run.id} entries={plan} settled={runIsTerminal} />
-          ) : null}
-
-          {/* A usage-limit stop is the one `failed` state that is still going somewhere — the
-              dock says so before the composer offers a Continue nobody needs to press. */}
-          <AutoResumeHint run={run} />
-
-          {budget ? (
-            <div
-              data-slot="budget-hint"
-              className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
-            >
-              <StatusDot tone="pending" pulse />
-              Budget reached — spent ${budget.spent.toFixed(2)} of ${budget.ceiling.toFixed(2)}; send a message to continue.
-            </div>
-          ) : run.status === 'waiting' ? (
-            <div
-              data-slot="paused-hint"
-              className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
-            >
-              <StatusDot tone="pending" pulse />
-              The agent is paused, waiting for your reply
-            </div>
-          ) : null}
-
-          {queued ? (
-            <div
-              data-slot="queued-hint"
-              className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
-            >
-              <StatusDot tone="pending" />
-              Messages you add now are folded into the prompt before the run starts.
-            </div>
-          ) : null}
-
-          <Composer
-            // The draft store's first host (#939). The composer is controlled on BOTH seams here
-            // — text and attachments — so leaving the task mid-sentence and coming back restores
-            // the message exactly as it was left, screenshots included. `draft.submit` wraps the
-            // real send: the optimistic clear only becomes a cleared draft once the message has
-            // actually landed, and a rejection leaves the draft (and its blobs) intact.
-            value={draft.text}
-            onValueChange={draft.setText}
-            images={draft.images}
-            onImagesChange={draft.setImages}
-            // The send itself is `deliverPrompt`, not a branch on `continuable`: the record that
-            // would pick the endpoint can be stale, so the re-route on a 409 decides it from the
-            // truth instead. The two compose exactly as they read — the draft stays open until
-            // the message has actually landed, wherever it turned out to land.
-            onSubmit={(text, images) => draft.submit<unknown>(() => deliverPrompt(text, images))}
-            disabled={providerBlocked || (!sessionOpen && !queued && !continuable)}
-            // Only reachable now by a closed run with NO session to resume — which is exactly
-            // the one case where Continue is not on offer either. Left honest rather than
-            // rewritten: "closed" is all such a run can be told.
-            disabledReason={providerBlocked ? providerReason : 'Session closed — no session to resume.'}
-            // The engine pills ride the enabled footer, so the picked runner/model and the
-            // typed prompt reach `POST /continue` in one request.
-            footerEnd={
-              providerBlocked && !continueAction.providerPending ? (
-                <Link
-                  to="/settings/agents#providers"
-                  className="text-xs font-medium text-foreground underline underline-offset-4"
-                >
-                  Configure providers
-                </Link>
-              ) : continuable ? continueAction.pills : undefined
-            }
-            // Continuing with nothing typed is the legacy one-click Continue.
-            allowEmptySubmit={continuable}
-            sendAriaLabel={continuable ? 'Continue' : 'Send'}
-            placeholder={
-              queued ? 'Add to the prompt — sent when the run starts…'
-              : continuable ? 'Continue — add a prompt, or send to just reopen the session…'
-              : run.status === 'waiting' ? 'Reply — / for skills, @ for files…'
-              : 'Message the agent — / for skills, @ for files…'
-            }
-            autocompleteSkills
-            quickReplies
-            getMentionCandidates={() => threadFilePaths(thread)}
-          />
-        </div>
-      </div>
+        <TaskComposer
+          run={run}
+          draft={draft}
+          diffComments={diffComments}
+          continueAction={continueAction}
+          getMentionCandidates={() => threadFilePaths(thread)}
+        />
+      </TaskDock>
     </div>
+  )
+}
+
+/** The server's own advice — "… — continue to resume it" — names an action, so where that
+ *  action is on offer the word IS the action: the same one-click Continue as an empty send. */
+const CONTINUE_ADVICE = /— continue to /i
+
+function FooterLabel({
+  label,
+  onContinue,
+  blockedReason,
+}: {
+  label: string
+  /** Absent when there is no session to reopen at all — the advice then stays plain text. */
+  onContinue?: () => Promise<unknown>
+  /** Why it cannot run yet (provider loading or disconnected): the button shows, disabled. */
+  blockedReason?: string
+}) {
+  const [pending, setPending] = useState(false)
+  const match = onContinue ? CONTINUE_ADVICE.exec(label) : null
+  if (!onContinue || !match) return <span>{label}</span>
+  const before = label.slice(0, match.index)
+  const after = label.slice(match.index + match[0].length)
+  return (
+    <span>
+      {before}—{' '}
+      <button
+        type="button"
+        data-slot="footer-continue"
+        disabled={pending || blockedReason !== undefined}
+        title={blockedReason ?? 'Reopen the session and pick up where it stopped'}
+        onClick={() => {
+          setPending(true)
+          onContinue()
+            .catch((error: unknown) =>
+              toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }),
+            )
+            .finally(() => setPending(false))
+        }}
+        // A text button in the message's own red: it is part of the sentence it completes, so it
+        // keeps that sentence's colour; the weight and underline are what mark it as the action.
+        className="rounded-sm font-semibold underline underline-offset-2 hover:brightness-125 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-not-allowed disabled:no-underline disabled:opacity-60"
+      >
+        Continue
+      </button>{' '}
+      to {after}
+    </span>
+  )
+}
+
+/** Ends a waiting session (`POST /finish`): the run completes as done, or parks at review when
+ *  the worktree holds changes. A text button, like the footer's Continue — part of the hint line
+ *  it answers, not a toolbar control. */
+function EndSessionButton({ runId }: { runId: string }) {
+  const finish = useFinishRun(runId)
+  return (
+    <button
+      type="button"
+      data-slot="end-session"
+      title="Close the session — the task finishes (or goes to review if it changed files)"
+      disabled={finish.isPending}
+      onClick={() => finish.mutate()}
+      className="rounded-sm font-medium text-foreground underline-offset-2 hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60"
+    >
+      End session
+    </button>
   )
 }
 

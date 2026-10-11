@@ -1,7 +1,7 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunStore } from './store.ts';
 
 import type { RunRecord } from './store.ts';
@@ -1808,6 +1808,103 @@ describe('RunStore — read receipts (#unread-done-items)', () => {
   });
 });
 
+/**
+ * `awaitingAnswerSince`: a `failed` run whose session closed on an unanswered `CEZ:ASK`. The
+ * cockpit keeps it under "needs you", so the store owns the invariant that only a `failed` run
+ * carries it — a Continue, a Finish, a cancel, an archive and a reload all retire it on their own.
+ */
+describe('RunStore — awaitingAnswerSince', () => {
+  let dataDir: string;
+  const AT = '2026-10-05T10:00:00.000Z';
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-awaiting-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const awaiting = (store: RunStore): string => {
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    store.updateRun(run.id, { status: 'failed', finishedAt: AT, awaitingAnswerSince: AT });
+    return run.id;
+  };
+
+  it('survives a failed-to-failed write and a reload', () => {
+    const store = RunStore.open(dataDir);
+    const id = awaiting(store);
+    store.updateRun(id, { status: 'failed', error: 'still unanswered' });
+    expect(store.getRun(id)?.awaitingAnswerSince).toBe(AT);
+    store.flush();
+    expect(RunStore.open(dataDir, { keepLive: true }).getRun(id)?.awaitingAnswerSince).toBe(AT);
+  });
+
+  it.each(['running', 'queued', 'waiting', 'done', 'review', 'cancelled'] as const)(
+    'is retired when the run moves to %s',
+    (status) => {
+      const store = RunStore.open(dataDir);
+      const id = awaiting(store);
+      store.updateRun(id, { status });
+      expect(store.getRun(id)?.awaitingAnswerSince).toBeUndefined();
+    },
+  );
+
+  it('is retired by archiving that one run', () => {
+    const store = RunStore.open(dataDir);
+    const one = awaiting(store);
+    store.setArchived(one, true);
+    expect(store.getRun(one)?.awaitingAnswerSince).toBeUndefined();
+  });
+
+  it('is a gate the "Archive finished" sweep leaves alone, like review', () => {
+    const store = RunStore.open(dataDir);
+    const open = awaiting(store);
+    const outcome = store.createRun({ title: 'o', workflow: 'quick-task', task: 'o', steps: [] });
+    store.updateRun(outcome.id, { status: 'failed', finishedAt: AT });
+    expect(store.archiveFinished()).toBe(1);
+    expect(store.getRun(outcome.id)?.archived).toBe(true);
+    expect(store.getRun(open)?.archived).toBe(false);
+    expect(store.getRun(open)?.awaitingAnswerSince).toBe(AT);
+  });
+
+  it('markAllRead leaves an awaiting run alone, exactly as the cockpit rule does', () => {
+    const store = RunStore.open(dataDir);
+    const id = awaiting(store);
+    expect(store.markAllRead()).toBe(0);
+    expect(store.getRun(id)?.seenAt).toBeUndefined();
+  });
+
+  it('a reader that does not recover turns a waiting ASK park into an awaiting failure', () => {
+    const store = RunStore.open(dataDir);
+    const parked = store.createRun({ title: 'p', workflow: 'quick-task', task: 'p', steps: [] });
+    store.updateRun(parked.id, { status: 'waiting', askParked: true });
+    const plain = store.createRun({ title: 'w', workflow: 'quick-task', task: 'w', steps: [] });
+    store.updateRun(plain.id, { status: 'waiting' });
+    store.flush();
+
+    const reopened = RunStore.open(dataDir);
+    expect(reopened.getRun(parked.id)?.status).toBe('failed');
+    // Stamped from `finishedAt`, so repeated cold reads agree on the instant.
+    expect(reopened.getRun(parked.id)?.awaitingAnswerSince).toBe(reopened.getRun(parked.id)?.finishedAt);
+    expect(reopened.getRun(parked.id)?.askParked).toBeUndefined();
+    expect(reopened.getRun(plain.id)?.status).toBe('failed');
+    expect(reopened.getRun(plain.id)?.awaitingAnswerSince).toBeUndefined();
+  });
+
+  it('drops a stray value from a non-failed record on load', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    store.updateRun(run.id, { status: 'done', finishedAt: AT });
+    store.flush();
+    const path = join(dataDir, 'runs.json');
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as Array<Record<string, unknown>>;
+    raw.find((r) => r.id === run.id)!.awaitingAnswerSince = AT;
+    writeFileSync(path, JSON.stringify(raw));
+    expect(RunStore.open(dataDir).getRun(run.id)?.awaitingAnswerSince).toBeUndefined();
+  });
+});
+
 describe('RunStore — the legacy `claude-cli` runner id (#547)', () => {
   let dataDir: string;
 
@@ -2189,5 +2286,204 @@ describe('RunStore — a save never drops another process’s runs', () => {
     store.updateRun(kept, { status: 'running' });
     store.flush();
     expect(idsOnDisk()).toEqual([kept]);
+  });
+});
+
+const SAVE_DEBOUNCE_WINDOW_MS = 1_000;
+
+describe('RunStore — seq rehydration from the persisted high-water mark', () => {
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-lastseq-'));
+  });
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A run whose creation save already landed, so a later explicit save is the only thing left. */
+  function savedRun(store: RunStore): RunRecord {
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_WINDOW_MS);
+    return run;
+  }
+
+  it('numbers above an ephemeral frame a client already saw, which the transcript never recorded', () => {
+    vi.useFakeTimers();
+    const store = RunStore.open(dataDir);
+    const run = savedRun(store);
+    store.appendEvent(run.id, { type: 'note', message: 'one' });
+    const delta = store.emitEphemeral(run.id, { type: 'item.delta', delta: 'x' });
+    store.flush();
+
+    const reopened = RunStore.open(dataDir, { keepLive: true });
+    expect(reopened.appendEvent(run.id, { type: 'note', message: 'after restart' }).seq).toBe(delta.seq + 1);
+  });
+
+  it('does not schedule an index save for a stream that dirties nothing else', () => {
+    vi.useFakeTimers();
+    const store = RunStore.open(dataDir);
+    const run = savedRun(store);
+    const saveNow = vi.spyOn(store as unknown as { saveNow: (...args: unknown[]) => void }, 'saveNow');
+
+    for (let index = 0; index < 60; index += 1) {
+      store.appendEvent(run.id, { type: 'note', message: `n${index}` });
+      store.emitEphemeral(run.id, { type: 'item.delta', delta: 'x' });
+    }
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_WINDOW_MS * 6);
+
+    expect(saveNow).not.toHaveBeenCalled();
+    store.flush();
+    expect(saveNow).toHaveBeenCalledTimes(1);
+  });
+
+  it('resumes from the record and the transcript tail without re-reading the whole transcript', () => {
+    vi.useFakeTimers();
+    const store = RunStore.open(dataDir);
+    const run = savedRun(store);
+    for (let index = 0; index < 50; index += 1) store.appendEvent(run.id, { type: 'note', message: `n${index}` });
+    store.flush();
+
+    const reopened = RunStore.open(dataDir, { keepLive: true });
+    const readEvents = vi.spyOn(reopened, 'readEvents');
+    expect(reopened.appendEvent(run.id, { type: 'note', message: 'after restart' }).seq).toBe(51);
+    expect(readEvents).not.toHaveBeenCalled();
+  });
+
+  it('trusts the transcript tail over a record saved before the last appends', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+    store.appendEvent(run.id, { type: 'note', message: 'one' });
+    store.flush();
+    const events = join(dataDir, 'runs', `${run.id}.ndjson`);
+    for (let seq = 2; seq <= 5; seq += 1) {
+      appendFileSync(events, `${JSON.stringify({ seq, ts: 'x', type: 'note', message: String(seq) })}\n`);
+    }
+    appendFileSync(events, '{"seq":6,"ty');
+
+    const reopened = RunStore.open(dataDir, { keepLive: true });
+    expect(reopened.getRun(run.id)?.lastSeq).toBe(1);
+    expect(reopened.appendEvent(run.id, { type: 'note', message: 'after crash' }).seq).toBe(6);
+  });
+
+  it('falls back to the full transcript maximum for a record written before lastSeq existed', () => {
+    const lines = [9, 4].map((seq) => JSON.stringify({ seq, ts: 'x', type: 'note', message: String(seq) }));
+    writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([LEGACY_RUN]));
+    mkdirSync(join(dataDir, 'runs'), { recursive: true });
+    writeFileSync(join(dataDir, 'runs', `${LEGACY_RUN.id}.ndjson`), `${lines.join('\n')}\n`);
+
+    const store = RunStore.open(dataDir);
+    expect(store.appendEvent(LEGACY_RUN.id, { type: 'note', message: 'next' }).seq).toBe(10);
+  });
+});
+
+describe('RunStore — runs.json encoding', () => {
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-encoding-'));
+  });
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('writes compact by default, both on the debounce and on a plain flush', () => {
+    vi.useFakeTimers();
+    try {
+      const store = RunStore.open(dataDir);
+      store.createRun({ title: 't', workflow: 'w', task: 't', steps: [{ id: 's1', name: 'Agent', kind: 'agent' }] });
+      vi.advanceTimersByTime(SAVE_DEBOUNCE_WINDOW_MS);
+
+      const indexPath = join(dataDir, 'runs.json');
+      expect(readFileSync(indexPath, 'utf8')).not.toContain('\n');
+
+      store.flush();
+      const plainFlush = readFileSync(indexPath, 'utf8');
+      expect(plainFlush).not.toContain('\n');
+      expect(JSON.parse(plainFlush)).toEqual(JSON.parse(JSON.stringify(store.listRuns())));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('writes indented only when the shutdown flush asks for it', () => {
+    const store = RunStore.open(dataDir);
+    store.createRun({ title: 't', workflow: 'w', task: 't', steps: [{ id: 's1', name: 'Agent', kind: 'agent' }] });
+    store.flush({ pretty: true });
+
+    const indexPath = join(dataDir, 'runs.json');
+    const flushed = readFileSync(indexPath, 'utf8');
+    expect(flushed).toContain('\n  ');
+    expect(JSON.parse(flushed)).toEqual(JSON.parse(JSON.stringify(store.listRuns())));
+  });
+});
+
+describe('RunStore — janitor cost once its answer is settled (#540)', () => {
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-janitor-'));
+  });
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const issue = (n: number) => `https://github.com/o/r/issues/${n}`;
+
+  function settledRun(task = 'task') {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task, steps: [] });
+    store.updateRun(run.id, { pullRequestUrl: 'https://github.com/o/r/pull/1' });
+    for (let n = 1; n <= 8; n += 1) store.appendEvent(run.id, { type: 'note', message: `see ${issue(n)}` });
+    return { store, run };
+  }
+
+  it('skips the haystack once the PR is adopted and the issue working set is capped', () => {
+    const { store, run } = settledRun();
+    const before = structuredClone(store.getRun(run.id));
+    const track = vi.spyOn(store as unknown as { trackReferencedIssues: () => boolean }, 'trackReferencedIssues');
+
+    store.appendEvent(run.id, { type: 'text', text: `now ${issue(9)}` });
+
+    expect(track).not.toHaveBeenCalled();
+    expect({ ...store.getRun(run.id), lastSeq: before?.lastSeq }).toEqual(before);
+  });
+
+  it('keeps seeding issueNumber while a resolved issue has none, even at the cap', () => {
+    const { store, run } = settledRun('fix #3');
+    expect(store.getRun(run.id)?.referencedIssueUrl).toBe(issue(3));
+    store.updateRun(run.id, { issueNumber: undefined });
+
+    store.appendEvent(run.id, { type: 'text', text: `working on ${issue(3)}` });
+
+    expect(store.getRun(run.id)?.issueNumber).toBe(3);
+  });
+
+  it('keeps a repo handle that lands after settling in force for later events', () => {
+    const { store, run } = settledRun('fix #3');
+    store.appendEvent(run.id, { type: 'text', text: `working on ${issue(3)}` });
+    expect(store.getRun(run.id)).toMatchObject({ referencedIssueUrl: issue(3), issueNumber: 3 });
+
+    store.setRepoHandle({ owner: 'open-mercato', name: 'cezar' });
+    store.appendEvent(run.id, { type: 'text', text: `still on ${issue(3)}` });
+
+    expect(store.getRun(run.id)?.referencedIssueUrl).toBeUndefined();
+    expect(store.getRun(run.id)?.issueNumber).toBeUndefined();
+  });
+
+  it('bounds how much of a tool input it searches for references', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+    store.appendEvent(run.id, {
+      type: 'item.completed',
+      item: { kind: 'tool', id: 'w1', status: 'completed', input: { content: `${'x'.repeat(10_000)} ${issue(7)}` } },
+    });
+    store.appendEvent(run.id, {
+      type: 'item.completed',
+      item: { kind: 'tool', id: 'w2', status: 'completed', input: { command: `gh issue view ${issue(8)}` } },
+    });
+
+    expect(store.getRun(run.id)?.referencedIssueCandidates).toEqual([issue(8)]);
   });
 });

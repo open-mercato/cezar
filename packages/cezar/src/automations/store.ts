@@ -34,8 +34,15 @@ const LOG = 'automation-log.ndjson';
 const POLL_LOCK = 'automation-poll.lock';
 const MUTATION_LOCK = 'automation-mutation.lock';
 const GUARD_SUFFIX = '.guard';
-/** proper-lockfile enforces a 2s minimum; this bounds crash recovery without stealing live owners. */
-const GUARD_STALE_MS = 2_000;
+/**
+ * Keep a contending process from reclaiming a live guard while its owner's event loop is stalled.
+ *
+ * The 2s proper-lockfile minimum is too short for a busy cockpit: a contender can replace the
+ * guard during a stall, then the live-pid check rejects that contender and leaves the owner
+ * compromised. Fifteen seconds is a deliberate bounded trade-off: it covers the multi-second
+ * stall we protect against, while keeping SIGKILL recovery finite and tested below.
+ */
+const GUARD_STALE_MS = 15_000;
 const RETENTION_MS = 90 * 24 * 60 * 60 * 1_000;
 
 type DefinitionsFile = ReturnType<typeof automationDefinitionsFileSchema.parse>;
@@ -192,7 +199,10 @@ export class AutomationStore {
 
   latestReceipts(): Map<string, AutomationReceipt> {
     const latest = new Map<string, AutomationReceipt>();
-    for (const row of this.receipts()) latest.set(row.receiptKey, row);
+    // receiptKey is redundant with the durable identity.  Normalize from the identity rather
+    // than trusting the persisted spelling so imported or otherwise legacy rows cannot split
+    // deduplication across equivalent event identities.
+    for (const row of this.receipts()) latest.set(receiptKeyFor(row.automationId, row.eventId), row);
     return latest;
   }
 
@@ -209,7 +219,7 @@ export class AutomationStore {
     /** schedule kind: the occurrence being reserved. */
     occurrenceAt?: string;
   }): AutomationReceipt | undefined {
-    const receiptKey = `${input.automationId}:${input.eventId}`;
+    const receiptKey = receiptKeyFor(input.automationId, input.eventId);
     if (this.latestReceipts().has(receiptKey)) return undefined;
     const now = this.now().toISOString();
     const receipt = automationReceiptSchema.parse({
@@ -304,6 +314,10 @@ export class AutomationStore {
       lockfilePath: `${path}${GUARD_SUFFIX}`,
       realpath: false,
       stale: GUARD_STALE_MS,
+      // Keep compromise detection responsive even though stale recovery is deliberately longer:
+      // proper-lockfile otherwise defaults heartbeat checks to stale / 2 (7.5s here), which lets
+      // a deleted guard go unnoticed through an entire poll await.
+      update: 1_000,
       // proper-lockfile's default throws from its heartbeat timer. Never take the
       // cockpit down for a lost guard; callers check validity before launching or
       // publishing after an asynchronous compromise notification.
@@ -450,6 +464,10 @@ export class AutomationStore {
     this.warned.add(key);
     this.options.warn?.(message);
   }
+}
+
+function receiptKeyFor(automationId: string, eventId: string): string {
+  return `${automationId}:${eventId}`;
 }
 
 /**

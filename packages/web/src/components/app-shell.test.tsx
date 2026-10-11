@@ -82,6 +82,14 @@ describe('AppShell', () => {
     expect(name!.className).toContain('tracking-normal')
   })
 
+  it('renders a workspace name and uploaded logo when supplied', () => {
+    renderShell('/', { brandName: 'Acme Studio', brandLogoUrl: '/api/v1/workspace/branding-logo?v=abc' })
+    const lockup = sidebar().querySelector('[data-slot="brand-lockup"]') as HTMLElement
+    expect(lockup.querySelector('[data-slot="brand-name"]')?.textContent).toBe('Acme Studio')
+    expect(lockup.querySelector('[data-slot="brand-logo"]')?.getAttribute('src')).toBe('/api/v1/workspace/branding-logo?v=abc')
+    expect(lockup.querySelector('[data-slot="brand-mark"]')).toBeNull()
+  })
+
   it('resets the main scroller to the top on navigation (#mobile-scroll-top)', () => {
     renderShell('/')
     const main = screen.getByRole('main')

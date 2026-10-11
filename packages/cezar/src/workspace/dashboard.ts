@@ -64,6 +64,10 @@ const order = (a: DashboardTaskRow, b: DashboardTaskRow) =>
   createdTime(a) - createdTime(b) ||
   a.id.localeCompare(b.id) ||
   a.projectId.localeCompare(b.projectId);
+/** A `waiting` run, or a `failed` one whose session closed on an unanswered `CEZ:ASK` — both are
+ *  a question for the user, which is how the cockpit's attention layer reads them too. */
+const isQuestion = (r: DashboardTaskRow) =>
+  r.status === 'waiting' || (r.status === 'failed' && Boolean(r.awaitingAnswerSince));
 function group(rows: DashboardTaskRow[], name: DashboardGroup): DashboardTaskRow[] {
   const selected = rows
     .filter((r) => {
@@ -71,14 +75,14 @@ function group(rows: DashboardTaskRow[], name: DashboardGroup): DashboardTaskRow
       if (name === 'running') return r.status === 'running';
       if (name === 'queued') return r.status === 'queued';
       if (name === 'scheduled') return r.status === 'failed' && Boolean(r.autoResumeAt);
-      if (name === 'questions') return r.status === 'waiting';
+      if (name === 'questions') return isQuestion(r);
       if (name === 'reviews') return r.status === 'review';
-      return r.status === 'waiting' || r.status === 'review';
+      return isQuestion(r) || r.status === 'review';
     })
     .sort(order);
   return name === 'needs-you'
     ? selected
-        .filter((r) => r.status === 'waiting')
+        .filter(isQuestion)
         .concat(selected.filter((r) => r.status === 'review'))
     : selected;
 }
@@ -433,6 +437,7 @@ export class DashboardReader {
         if (
           (run.status !== 'done' && run.status !== 'failed') ||
           run.autoResumeAt ||
+          run.awaitingAnswerSince ||
           !run.finishedAt
         )
           continue;

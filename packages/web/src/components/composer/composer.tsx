@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowUpIcon, CheckIcon, MicIcon, PaperclipIcon, XIcon } from 'lucide-react'
+import { ArrowUpIcon, CheckIcon, MicIcon, PaperclipIcon, SquareIcon, XIcon } from 'lucide-react'
 import {
   useCallback,
   useEffect,
@@ -19,6 +19,7 @@ import { putUiState } from '@/api/client'
 import { queryKeys, useSkills, useUiState } from '@/api/queries'
 import type { AttachmentInput } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Command, CommandItem, CommandList } from '@/components/ui/command'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { toast } from '@/components/ui/toaster'
@@ -54,7 +55,7 @@ import { formatElapsed, useDictation } from './dictation'
 export interface ComposerProps {
   /** Deliver the message. Rejection = the message did NOT land: the composer toasts the error
    *  and restores the draft (nothing the user typed is ever lost). */
-  onSubmit: (text: string, attachments: AttachmentInput[]) => Promise<unknown>
+  onSubmit: (text: string, attachments: AttachmentInput[], meta?: ComposerSubmitMeta) => Promise<unknown>
   /**
    * Controlled text (pass BOTH or neither): the /new host owns the draft so it survives
    * navigation (spec: "Queued form state survives navigation"). Every internal edit — typing,
@@ -75,12 +76,25 @@ export interface ComposerProps {
   onImagesChange?: (images: PendingAttachment[], reason: AttachmentsChangeReason) => void
   /** Focus the textarea on mount — the /new hero, where typing is the whole point of arriving. */
   autoFocus?: boolean
+  /**
+   * Draft items the host holds beside the message, rendered in the attachment row ahead of the
+   * thumbnails — the thread's diff-comment chips. The composer knows nothing about them: the host
+   * owns their content, folds them into what it sends, and decides via `allowEmptySubmit` whether
+   * they alone make the message sendable.
+   */
+  draftItems?: ReactNode
   /** Rendered in the footer bar after the paperclip — the /new picker pill row. */
   footerStart?: ReactNode
   /** Rendered between Dictation and the send button — the /new mode segment + kbd hint. */
   footerEnd?: ReactNode
   /** The send button's accessible name. */
   sendAriaLabel?: string
+  /**
+   * While the host's work is running, a Stop button sits where send does. With an empty box it is
+   * the only button (an empty box over a working agent offers to stop it); once there is something
+   * to send, Send appears beside it — a message to a busy agent still queues.
+   */
+  stop?: { label: string; onStop: () => void; pending?: boolean }
   disabled?: boolean
   /** Shown as the placeholder while disabled — e.g. the legacy "Session closed — Continue to
    *  reopen." */
@@ -109,6 +123,13 @@ export interface ComposerProps {
   ref?: Ref<ComposerHandle>
 }
 
+/** How a message was sent. `quickReply` marks the Alt+A / Alt+C canned replies: they are fired
+ *  from anywhere on the page, so a host must not fold its own draft items (the thread's diff
+ *  comments) into them — the user never saw those leave. */
+export interface ComposerSubmitMeta {
+  quickReply?: boolean
+}
+
 /** The imperative seam a host needs when it wants to write INTO the draft the composer owns —
  *  today only the /new prompt-template menu (#413 follow-up), which must land a snippet at the
  *  caret the same way the GitHub/Inbox composers do with their own textarea refs. */
@@ -127,9 +148,11 @@ export function Composer({
   images: controlledImages,
   onImagesChange,
   autoFocus = false,
+  draftItems,
   footerStart,
   footerEnd,
   sendAriaLabel = 'Send',
+  stop,
   disabled = false,
   disabledReason = 'Session closed — Continue to reopen.',
   allowEmptySubmit = false,
@@ -355,13 +378,20 @@ export function Composer({
   // ---- submit --------------------------------------------------------------------------------
 
   const send = useCallback(
-    async (messageText: string, messageImages: PendingAttachment[], restoreOnError: boolean) => {
+    async (
+      messageText: string,
+      messageImages: PendingAttachment[],
+      restoreOnError: boolean,
+      meta?: ComposerSubmitMeta,
+    ) => {
       const body = messageText.trim()
       if (disabled || busy) return
       if (body === '' && messageImages.length === 0 && !allowEmptySubmit) return
       setBusy(true)
       try {
-        await onSubmit(body, messageImages.map(toAttachmentInput))
+        // `meta` only when there is something to say, so an ordinary send keeps its two-argument call.
+        const attachments = messageImages.map(toAttachmentInput)
+        await (meta ? onSubmit(body, attachments, meta) : onSubmit(body, attachments))
       } catch (error) {
         toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
         if (restoreOnError) {
@@ -449,7 +479,7 @@ export function Composer({
       if (reply === undefined) return
       event.preventDefault()
       // Canned replies bypass the draft entirely — nothing to restore on failure.
-      void send(reply, [], false)
+      void send(reply, [], false, { quickReply: true })
     }
     window.addEventListener('keydown', onWindowKeyDown)
     return () => window.removeEventListener('keydown', onWindowKeyDown)
@@ -489,8 +519,9 @@ export function Composer({
             disabled && 'opacity-80',
           )}
         >
-          {images.length > 0 ? (
+          {images.length > 0 || draftItems ? (
             <div data-slot="composer-thumbs" className="flex flex-wrap items-center gap-2 px-4 pt-3">
+              {draftItems}
               {images.map((attachment, index) => (
                 <button
                   key={`${attachment.name}-${index}`}
@@ -586,18 +617,40 @@ export function Composer({
                     {footerEnd}
                   </div>
                 ) : null}
-                <Button
-                  type="button"
-                  size="icon-sm"
-                  aria-label={sendAriaLabel}
-                  disabled={
-                    disabled || busy || (text.trim() === '' && images.length === 0 && !allowEmptySubmit)
-                  }
-                  className="size-8"
-                  onClick={submitDraft}
-                >
-                  <ArrowUpIcon aria-hidden="true" />
-                </Button>
+                {stop ? (
+                  // Stop stays on screen for as long as the agent works — typing a message adds Send
+                  // beside it rather than replacing it, so stopping never means clearing the draft.
+                  <IconTooltip label={stop.label} side="top">
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="contrast"
+                      data-slot="composer-stop"
+                      aria-label={stop.label}
+                      disabled={stop.pending}
+                      className="size-8"
+                      onClick={stop.onStop}
+                    >
+                      <SquareIcon aria-hidden="true" className="size-3 fill-current" />
+                    </Button>
+                  </IconTooltip>
+                ) : null}
+                {/* With Stop showing, Send appears only once there is something to send: an empty box
+                    over a working agent offers exactly one action. */}
+                {!stop || text.trim() !== '' || images.length > 0 || allowEmptySubmit ? (
+                  <Button
+                    type="button"
+                    size="icon-sm"
+                    aria-label={sendAriaLabel}
+                    disabled={
+                      disabled || busy || (text.trim() === '' && images.length === 0 && !allowEmptySubmit)
+                    }
+                    className="size-8"
+                    onClick={submitDraft}
+                  >
+                    <ArrowUpIcon aria-hidden="true" />
+                  </Button>
+                ) : null}
               </div>
             </div>
           )}

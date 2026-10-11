@@ -21,7 +21,7 @@ type Health = {
 
 /** The agent CLIs among `checks[]` — `gh` and `git` are rows too, but neither runs a task. Kept in
  *  step with the contract's runner enum (`packages/contract/src/health.ts`). */
-const RUNNERS = new Set(['claude', 'codex', 'opencode', 'pi'])
+const RUNNERS = new Set(['claude', 'codex', 'junie', 'opencode', 'pi', 'copilot'])
 
 /** What (if anything) keeps the aggregate dot from green, derived from the live health answer the
  *  same way `toolsBlocker()` derives it: the dot is amber only when cez cannot start a task at all,

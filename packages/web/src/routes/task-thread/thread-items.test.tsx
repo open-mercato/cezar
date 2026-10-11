@@ -104,6 +104,73 @@ describe('ToolCard — states', () => {
     expect(document.querySelector('[data-slot="tool-output"]')).toBeNull()
   })
 
+  it('expanding grows the header to the FULL command from the raw input, shown once', () => {
+    const item = goldenItem(bashAndScreenshot, 'toolu_mock_1', 'completed')
+    const long = `for f in a b c; do\n  echo ${'x'.repeat(300)} "$f"\ndone`
+    const capped = `${long.slice(0, 119)}…`
+    render(<ToolCard item={{ ...item, title: `Ran ${capped}`, input: { command: long } }} />)
+    const codeTexts = () => [...card().querySelectorAll('code')].map((code) => code.textContent)
+    expect(codeTexts()).toEqual([capped]) // collapsed: the one-line capped title
+    fireEvent.click(trigger(/Ran/))
+    const commands = document.querySelectorAll('[data-slot="tool-command"]')
+    expect(commands).toHaveLength(1)
+    expect(commands[0]?.textContent).toBe(long)
+    expect(codeTexts()).toEqual([long]) // printed once, never alongside the capped title
+    expect(screen.getByRole('button', { name: 'Copy command' })).toBeTruthy()
+  })
+
+  it('a running command too long for the header is expandable before any output arrives', () => {
+    const running = goldenItem(bashAndScreenshot, 'toolu_mock_1', 'running')
+    const long = `npm test -- ${'packages/web/src/routes/task-thread '.repeat(5)}`
+    render(<ToolCard item={{ ...running, title: `Ran ${long.slice(0, 119)}…`, input: { command: long } }} />)
+    const button = trigger(/Ran/) as HTMLButtonElement
+    expect(button.disabled).toBe(false)
+    fireEvent.click(button)
+    expect(document.querySelector('[data-slot="tool-command"]')?.textContent).toBe(long)
+  })
+
+  it('a short command that fits the header shows no copy button when expanded', () => {
+    const item = goldenItem(bashAndScreenshot, 'toolu_mock_1', 'completed')
+    render(<ToolCard item={item} />)
+    fireEvent.click(trigger(/Ran.*git status --short/))
+    expect(document.querySelector('[data-slot="tool-command"]')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Copy command' })).toBeNull()
+  })
+
+  it('falls back to the title when the raw input carries no command', () => {
+    const item = goldenItem(bashAndScreenshot, 'toolu_mock_1', 'completed')
+    const long = `echo ${'y'.repeat(100)}`
+    render(<ToolCard item={{ ...item, title: `Ran ${long}`, input: undefined }} />)
+    fireEvent.click(trigger(/Ran/))
+    expect(document.querySelector('[data-slot="tool-command"]')?.textContent).toBe(long)
+  })
+
+  it('copy writes the full command and leaves the card open', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    try {
+      const item = goldenItem(bashAndScreenshot, 'toolu_mock_1', 'completed')
+      const long = `for f in a b; do\n  echo ${'z'.repeat(120)} "$f"\ndone`
+      render(<ToolCard item={{ ...item, input: { command: long } }} />)
+      fireEvent.click(trigger(/Ran/))
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Copy command' }))
+      })
+      expect(writeText).toHaveBeenCalledWith(long)
+      expect(card().getAttribute('data-state')).toBe('open')
+      expect(screen.getByRole('button', { name: 'Copied' })).toBeTruthy()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('joins an argv-array command (Codex shape)', () => {
+    const item = goldenItem(bashAndScreenshot, 'toolu_mock_1', 'completed')
+    render(<ToolCard item={{ ...item, input: { command: ['bash', '-lc', 'npm test'] } }} />)
+    fireEvent.click(trigger(/Ran/))
+    expect(document.querySelector('[data-slot="tool-command"]')?.textContent).toBe('bash -lc npm test')
+  })
+
   it('running execute WITH output: open by default — the live tail is visible while streaming', () => {
     const running = goldenItem(bashAndScreenshot, 'toolu_mock_1', 'running')
     // What the reducer holds mid-stream: the running golden item + accumulated `item.delta{output}`.
@@ -131,6 +198,12 @@ describe('ToolCard — states', () => {
     render(<ToolCard item={item} />)
     expect(card().getAttribute('data-status')).toBe('declined')
     expect(screen.getByText('declined')).toBeTruthy()
+    expect((screen.getByRole('button', { name: /declined/ }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('a non-execute tool with no detail stays locked', () => {
+    const item = goldenItem(failedAndDenied, 'toolu_denied_01', 'declined')
+    render(<ToolCard item={{ ...item, toolKind: 'read', input: undefined }} />)
     expect((screen.getByRole('button', { name: /declined/ }) as HTMLButtonElement).disabled).toBe(true)
   })
 

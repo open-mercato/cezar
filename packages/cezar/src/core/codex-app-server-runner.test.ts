@@ -1,11 +1,15 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.js';
 import { KILL_GRACE_MS } from './claude-cli-runner.js';
 import { CodexAppServerRunner } from './codex-app-server-runner.js';
+import { RunStore } from '../runs/store.ts';
 
 /** Only the escalation tests below swap the child out; every other test in this
  *  file keeps spawning the real mock app-server through the untouched `spawn`. */
@@ -74,6 +78,77 @@ describe('a teardown cezar initiated (codex app-server)', () => {
 
     expect(events).toContainEqual({ type: 'error', message: 'model unavailable' });
     expect(events).toContainEqual({ type: 'turn-end' });
+  }, 15_000);
+});
+
+describe('late Codex teardown events (#1105)', () => {
+  const mockBin = fileURLToPath(
+    new URL('./__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url),
+  );
+
+  it('does not route a teardown follow-up failure into a removed run store', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-1105-'));
+    const store = RunStore.open(join(dir, '.ai/cezar'));
+    const run = store.createRun({
+      title: 't', workflow: 'quick-task', task: 'check the working tree', runner: 'codex', worktree: false,
+      steps: [{ id: 'task', name: 'Task', kind: 'agent' }],
+    });
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown) => unhandled.push(error);
+    process.on('unhandledRejection', onUnhandled);
+    let session: ReturnType<CodexAppServerRunner['startSession']> | undefined;
+    try {
+      const events: AgentEvent[] = [];
+      session = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 }).startSession(
+        { userPrompt: 'mock:steer-silent keep going', cwd: dir },
+        (event) => {
+          events.push(event);
+          // A late event would synchronously reproduce the removed-store failure
+          // from the issue, including through the floating follow-up catch path.
+          store.appendEvent(run.id, { ...event, stepId: 'task' });
+        },
+      );
+
+      await expect.poll(() => events.some((event) => event.type === 'text'), { timeout: 10_000 }).toBe(true);
+      expect(session.sendMessage([{ type: 'text', text: 'Continue' }])).toBe(true);
+      session.interrupt();
+      store.flush();
+      rmSync(dir, { recursive: true, force: true });
+
+      const resultError = await session.result.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(resultError).toBeInstanceOf(Error);
+      expect((resultError as NodeJS.ErrnoException).code).toBe('ENOENT');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+      if (session?.open) session.interrupt();
+      if (session) {
+        await session.result.then(
+          () => undefined,
+          (error: unknown) => {
+            // The removed fixture intentionally makes the late `done` append fail;
+            // the assertion above already verifies that exact, expected ENOENT.
+            if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          },
+        );
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it('still rejects the live session when its event callback fails', async () => {
+    const session = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 }).startSession(
+      { userPrompt: 'check the working tree', cwd: process.cwd() },
+      (event) => {
+        if (event.type === 'session') throw new Error('active store corruption');
+      },
+    );
+
+    await expect(session.result).rejects.toThrow('active store corruption');
   }, 15_000);
 });
 

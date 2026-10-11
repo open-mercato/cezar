@@ -11,14 +11,14 @@ import {
   TURN_IDLE_GRACE_MS,
 } from './opencode-server-runner.ts';
 
-const spawnHook = vi.hoisted(() => ({ override: null as null | (() => unknown) }));
+const spawnHook = vi.hoisted(() => ({ override: null as null | ((...args: unknown[]) => unknown) }));
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   return {
     ...actual,
     spawn: (...args: Parameters<typeof actual.spawn>) =>
-      spawnHook.override ? spawnHook.override() : actual.spawn(...args),
+      spawnHook.override ? spawnHook.override(...args) : actual.spawn(...args),
   };
 });
 
@@ -147,6 +147,61 @@ describe('SIGTERM→SIGKILL escalation for an opencode server that survives SIGT
       vi.advanceTimersByTime(KILL_GRACE_MS);
       expect(fake.signals).toEqual([]);
     });
+  });
+});
+
+describe('opencode serve startup', () => {
+  function silentChild(): ChildProcessWithoutNullStreams {
+    return Object.assign(new EventEmitter(), {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      exitCode: null,
+      signalCode: null,
+      killed: false,
+      pid: 5151,
+      kill: () => true,
+    }) as unknown as ChildProcessWithoutNullStreams;
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    spawnHook.override = null;
+  });
+
+  it.each([0, 0.5, 0.99999])('passes a random port in 40000–59999 and exposes the PID synchronously (random=%s)', (random) => {
+    let argv: unknown;
+    spawnHook.override = (_bin, args) => {
+      argv = args;
+      return silentChild();
+    };
+    vi.useFakeTimers();
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(random);
+    try {
+      const session = new OpencodeServerRunner({ bin: 'opencode', timeoutMs: 0 }).startSession({ userPrompt: 'do it', cwd: process.cwd() });
+      void session.result.catch(() => undefined);
+      const port = 40000 + Math.floor(random * 20000);
+      expect(argv).toEqual(['serve', '--hostname', '127.0.0.1', '--port', String(port)]);
+      expect(Number.isInteger(port)).toBe(true);
+      expect(port).toBeGreaterThanOrEqual(40000);
+      expect(port).toBeLessThan(60000);
+      expect(session.pid).toBe(5151);
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it('fails the session when the server never reports a listening URL', async () => {
+    spawnHook.override = () => silentChild();
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: 'opencode', timeoutMs: 0 }).startSession(
+      { userPrompt: 'do it', cwd: process.cwd() },
+      (event) => events.push(event),
+    );
+    void session.result.catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(events).toContainEqual({ type: 'error', message: 'opencode: opencode serve did not report a listening URL within 30s' });
   });
 });
 

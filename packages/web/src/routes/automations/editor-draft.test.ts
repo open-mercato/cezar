@@ -101,6 +101,17 @@ describe('fromDefinition / toBody', () => {
     })
   })
 
+  it('keeps a PR-head verifier verifying the PR head when it is saved from the editor', () => {
+    const verifier = {
+      ...GITHUB_DEF,
+      events: ['pull_request.opened' as const],
+      task: { ...GITHUB_DEF.task, checkout: 'pr-head' as const, allowForkHeads: true },
+    }
+    expect(toBody(fromDefinition(verifier)).task).toMatchObject({ checkout: 'pr-head', allowForkHeads: true })
+    // And a definition without them gains neither.
+    expect(toBody(fromDefinition(GITHUB_DEF)).task).not.toHaveProperty('checkout')
+  })
+
   it('sends only the active kind — a schedule body carries no events or filters', () => {
     const draft = { ...fromDefinition(GITHUB_DEF), kind: 'schedule' as const }
     const body = toBody(draft)
@@ -140,6 +151,10 @@ describe('fromDefinition / toBody', () => {
     const template = { name: 'Sweep', kind: 'schedule' as const, prompt: 'sweep' }
     expect(applyTemplate(picked, { ...template, runner: 'codex' }).account).toBeNull()
     expect(applyTemplate(picked, template).account).toBe('work')
+    // junie is a runner too: a template naming it must take the runner and drop the account,
+    // not fall back to the draft's — the un-widened guard this used to have did exactly that.
+    expect(applyTemplate(picked, { ...template, runner: 'junie' }).runner).toBe('junie')
+    expect(applyTemplate(picked, { ...template, runner: 'junie' }).account).toBeNull()
   })
 
   it('clamps lookback and max records into the server bounds', () => {

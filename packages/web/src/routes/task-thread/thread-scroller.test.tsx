@@ -129,6 +129,48 @@ describe('useThreadScroll — outside a shell scroller (jsdom, tests, storybook-
     })
     expect(onLoadOlder).toHaveBeenCalledTimes(2)
   })
+
+  it('a jump to the tail while an older page loads is not undone when that load settles', async () => {
+    let settleOlder!: () => void
+    const onLoadOlder = vi.fn(() => new Promise<void>((resolve) => {
+      settleOlder = resolve
+    }))
+    const Harness = () => {
+      const controls = useThreadScroll('r-jump', { onLoadOlder })
+      return <main data-slot="main"><div ref={controls.attachContent} /><button onClick={controls.jumpToLatest} /></main>
+    }
+    render(<Harness />)
+    const scroller = document.querySelector<HTMLElement>('[data-slot="main"]')!
+    let scrollHeight = 1_000
+    Object.defineProperties(scroller, {
+      scrollTop: { value: 0, writable: true },
+      clientHeight: { value: 400 },
+      scrollHeight: { get: () => scrollHeight },
+    })
+    scroller.scrollTo = ((options: ScrollToOptions) => {
+      scroller.scrollTop = options.top ?? scroller.scrollTop
+    }) as typeof scroller.scrollTo
+
+    await act(async () => {
+      fireEvent.wheel(scroller, { deltaY: -120 })
+      await Promise.resolve()
+    })
+    expect(onLoadOlder).toHaveBeenCalledTimes(1)
+
+    scrollHeight = 1_500
+    await act(async () => {
+      fireEvent.click(document.querySelector('button')!)
+      await Promise.resolve()
+    })
+    expect(scroller.scrollTop).toBe(1_100)
+
+    // The cancelled load settles: its anchor restore must not pull the reader back up.
+    await act(async () => {
+      settleOlder()
+      await Promise.resolve()
+    })
+    expect(scroller.scrollTop).toBe(1_100)
+  })
 })
 
 /**

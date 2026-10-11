@@ -12,6 +12,7 @@ import { Diff, type DiffMode } from '@/components/diff'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { Button } from '@/components/ui/button'
 import { useIsDesktop } from '@/lib/use-desktop'
+import { cn } from '@/lib/utils'
 
 import { isRunActive } from '../task-thread/run-actions'
 import { RunHeader } from '../task-thread/run-header'
@@ -38,10 +39,14 @@ function CommitsView({ run }: { run: ApiRun }) {
   const commits = useRunCommits(run.id, isRunActive(run.status))
 
   return (
-    <div data-route="task-commits" className="flex min-h-full flex-col">
+    // One commit's diff fills `main` from md up so the diff scrolls in its own column (see
+    // `CommitDiffView`); the commit LIST scrolls with the page.
+    <div data-route="task-commits" className={cn('flex min-h-full flex-col', sha && 'md:h-full')}>
       <RunHeader run={run} tab="commits" />
       {sha ? (
-        <CommitDiffView runId={run.id} sha={sha} />
+        // Keyed on the commit: its diff column scrolls on its own, outside the shell's
+        // per-pathname reset of `main`, so another commit must start at the top.
+        <CommitDiffView key={sha} runId={run.id} sha={sha} />
       ) : commits.isPending ? (
         <p data-slot="commits-loading" className="px-4 py-6 text-center text-xs text-soft-foreground md:px-6">
           Loading commits…
@@ -136,8 +141,21 @@ function CommitDiffView({ runId, sha }: { runId: string; sha: string }) {
               subtitle="This commit carries no diff of its own — a merge commit's changes live on the commits it merged."
             />
           ) : (
-            <div className="px-4 py-4 [--diff-sticky-top:10rem] md:px-6">
-              <Diff files={commit.data.files} mode={effectiveMode} wrap={effectiveWrap} className="min-w-0" />
+            // The diff's own scroller from md up: its file headers stick to ITS top, so a run
+            // header of any height never covers them; below md the diff scrolls in `main` again,
+            // and the Diff rebinds its virtualized list across that swap itself. Vertical padding
+            // sits on the Diff, not here, so a stuck header meets the column's top edge.
+            <div
+              data-slot="diff-pane"
+              data-diff-scroller={desktop ? '' : undefined}
+              className="px-4 md:min-h-0 md:flex-1 md:overflow-y-auto md:overscroll-contain md:px-6"
+            >
+              <Diff
+                files={commit.data.files}
+                mode={effectiveMode}
+                wrap={effectiveWrap}
+                className="min-w-0 py-4"
+              />
             </div>
           )}
         </>

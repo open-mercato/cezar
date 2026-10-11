@@ -325,6 +325,28 @@ describe('usableRunners', () => {
     expect(usableRunners({ providers: [] })).toEqual([])
   })
 
+  it('allows enabled Junie when auth status is unknown because Junie has no auth-status command', () => {
+    const status: ProviderStatusResponse = {
+      providers: [
+        { provider: 'claude', status: 'unknown', enabled: true },
+        { provider: 'junie', status: 'unknown', enabled: true },
+      ],
+    }
+
+    expect(usableRunners(status)).toEqual(['junie'])
+  })
+
+  it('still excludes disabled or not-installed Junie', () => {
+    const status: ProviderStatusResponse = {
+      providers: [
+        { provider: 'junie', status: 'unknown', enabled: false },
+        { provider: 'pi', status: 'not-installed', enabled: true },
+      ],
+    }
+
+    expect(usableRunners(status)).toEqual([])
+  })
+
   it('excludes disconnected, not-installed, and unknown rows', () => {
     const status: ProviderStatusResponse = {
       providers: [

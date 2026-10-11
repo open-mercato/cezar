@@ -24,10 +24,14 @@ import {
   usePatchRun,
   usePutAgentConfigFile,
   useRun,
+  useRepoFile,
+  useRepoTree,
   useRunChanges,
   useRuns,
   useSkills,
   useSkillsUpdate,
+  useStarCount,
+  STAR_COUNT_REFRESH_MS,
   workspaceQueryKeys,
 } from './queries'
 
@@ -128,6 +132,7 @@ describe('useRunnerModels', () => {
     ['codex', 'gpt-future'],
     ['claude', 'opus[1m]'],
     ['opencode', 'openai/gpt-5.4'],
+    ['junie', 'v1:model:junie:sonnet'],
   ] as const)('loads the workspace %s catalog from its own cache entry', async (runner, id) => {
     fetchMock.mockResolvedValue(json({ runner, models: [{ id, label: 'Future', description: '' }], source: 'live', stale: false }))
     const { result } = renderHook(() => useRunnerModels(runner), { wrapper: wrapper() })
@@ -534,6 +539,34 @@ describe('useSkills', () => {
       expect(result.current.data?.map((skill) => skill.name)).toEqual(['local', 'om-fix']),
     )
     expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(['/api/v1/skills', '/api/v1/skills?wait=1'])
+  })
+})
+
+describe('useStarCount', () => {
+  it('re-reads the count every ten seconds so the chip tracks the live number', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      let count = 100
+      fetchMock.mockImplementation(async () =>
+        json({ available: true, count: count++, url: 'https://github.com/open-mercato/cezar' }),
+      )
+      const client = createQueryClient()
+      const { result } = renderHook(() => useStarCount(), {
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <QueryClientProvider client={client}>{children}</QueryClientProvider>
+        ),
+      })
+      await waitFor(() => expect(result.current.data?.count).toBe(100))
+      expect(STAR_COUNT_REFRESH_MS).toBe(10_000)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(STAR_COUNT_REFRESH_MS)
+      })
+      await waitFor(() => expect(result.current.data?.count).toBe(101))
+      expect(fetchMock.mock.calls.every(([path]) => path === '/api/v1/star-count')).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
@@ -1146,5 +1179,68 @@ describe('refStatusRecheckAfter', () => {
     // Still loading, or errored out — `retry` owns the immediate attempt; this is the backstop
     // that keeps the query from going silent forever.
     expect(refStatusRecheckAfter(undefined)).toBeGreaterThan(0)
+  })
+})
+
+/**
+ * The Git tab's Files sub-tab (#1279). `/repo/*` is not on the SSE stream, so these two queries
+ * deliberately opt out of the client-wide "the stream says when something changed" default — the
+ * data is a working tree an agent edits while the tab is in the background.
+ */
+describe('useRepoTree / useRepoFile', () => {
+  const TREE = { paths: ['a.ts'], truncated: false }
+
+  it('does not retry a 409 — it is the server’s answer, not an outage', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: 'not a git repository' }), {
+        status: 409,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    const { result } = renderHook(() => useRepoTree(), { wrapper: wrapper() })
+
+    await waitFor(() => expect(result.current.isError).toBe(true))
+    expect(result.current.error).toBeInstanceOf(ApiError)
+    expect((result.current.error as ApiError).status).toBe(409)
+    // Exactly one attempt: a retry cannot turn "not a git repository" into a repository.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-reads the index on focus, which the shared 5-minute staleTime would otherwise swallow', async () => {
+    fetchMock.mockResolvedValue(json(TREE))
+    const client = createQueryClient()
+    const { result } = renderHook(() => useRepoTree(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const query = client.getQueryCache().find({ queryKey: queryKeys.repoTree })
+    if (!query) throw new Error('repo tree query was not created')
+    // `staleTime: 0` is the load-bearing half: without it this freshly-fetched entry would still
+    // be fresh and the focus event would do nothing.
+    expect(query.observers[0]?.options.staleTime).toBe(0)
+    expect(query.observers[0]?.options.refetchInterval).toBe(false)
+    window.dispatchEvent(new Event('visibilitychange'))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+  })
+
+  it('does not fetch a file until one is selected, and keys the cache per path', async () => {
+    fetchMock.mockResolvedValue(json({ type: 'file', path: 'a.ts', size: 1, binary: false, tooLarge: false, content: 'x' }))
+    const client = createQueryClient()
+    const wrap = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+
+    const idle = renderHook(() => useRepoFile(undefined), { wrapper: wrap })
+    expect(idle.result.current.fetchStatus).toBe('idle')
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    const { result } = renderHook(() => useRepoFile('a.ts'), { wrapper: wrap })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(client.getQueryCache().find({ queryKey: queryKeys.repoFile('a.ts') })).toBeDefined()
+    expect(client.getQueryCache().find({ queryKey: queryKeys.repoFile('b.ts') })).toBeUndefined()
   })
 })

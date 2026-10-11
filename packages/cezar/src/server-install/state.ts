@@ -8,6 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { createServer } from 'node:net';
 import { basename, dirname } from 'node:path';
 import {
   DEFAULT_SERVER_INSTANCE,
@@ -69,16 +70,95 @@ export function listServerInstances(): Array<{ instance: string; state: ServerSt
 }
 
 /**
- * The next free loopback port for a NEW instance, scanning from `startAt`
- * (4321, the default cockpit port) upward past every port already recorded by
- * another instance. Deterministic (recorded-state only, no network probe) so it
- * stays unit-testable; the operator can always override it with `--port`.
+ * Can THIS process bind `host:port` right now? The authority for whether a
+ * loopback port is available, because it is the only question that sees the
+ * WHOLE machine — `~/.cezar` is per-user, the port is not (#913). Bind and
+ * release immediately; a free port is never held open by the probe.
+ *
+ * Only "somebody already has it" answers false. Any other bind failure (a
+ * `--bind-host` address that is not on this machine, a sandbox with no
+ * sockets) is not evidence about the port, and blocking an install on it would
+ * trade one silent misconfiguration for a louder one — so it fails open.
  */
-export function nextFreeInstancePort(startAt = 4321): number {
-  const used = new Set(listServerInstances().map((i) => i.state.primaryPort));
-  let port = startAt;
-  while (used.has(port)) port++;
-  return port;
+export function canBindPort(port: number, host = '127.0.0.1'): Promise<boolean> {
+  return new Promise((resolve) => {
+    const probe = createServer();
+    probe.once('error', (err: NodeJS.ErrnoException) => {
+      resolve(err.code !== 'EADDRINUSE' && err.code !== 'EACCES');
+    });
+    probe.once('listening', () => probe.close(() => resolve(true)));
+    probe.listen(port, host);
+  });
+}
+
+/** Injectable form of `canBindPort` so the allocator's tests need no sockets. */
+export type PortProbe = (port: number, host?: string) => Promise<boolean>;
+
+/** How many candidate ports an allocation scan will try before giving up. */
+export const INSTANCE_PORT_SCAN_WINDOW = 50;
+
+/**
+ * The next free loopback port for a NEW instance, scanning from `startAt`
+ * (4321, the default cockpit port) upward.
+ *
+ * Two authorities, in this order: the recorded state of every instance THIS
+ * user owns (cheap, and it reserves a port for an instance whose service is
+ * currently stopped), then an actual bind probe. The probe is not an
+ * optimization — it is the fix for #913. Recorded state is per-user while a
+ * loopback port is machine-wide, so on a host with a second unix account the
+ * scan used to start and stop at 4321 while the first account's cezar held it,
+ * and the vhost we then rendered proxied one user into the other's cockpit.
+ *
+ * Exhausting the window throws rather than returning an unverified port: a
+ * number we could not prove we can bind is exactly what caused the bug.
+ * `--port` always overrides the pick.
+ */
+export async function nextFreeInstancePort(
+  startAt = 4321,
+  opts: { probe?: PortProbe; host?: string } = {},
+): Promise<number> {
+  const probe = opts.probe ?? canBindPort;
+  const recorded = new Set(listServerInstances().map((i) => i.state.primaryPort));
+  for (let port = startAt; port < startAt + INSTANCE_PORT_SCAN_WINDOW; port++) {
+    if (recorded.has(port)) continue;
+    if (await probe(port, opts.host ?? '127.0.0.1')) return port;
+  }
+  throw new Error(
+    `no free loopback port between ${startAt} and ${startAt + INSTANCE_PORT_SCAN_WINDOW - 1} — ` +
+      'every one is recorded by another instance or already bound on this host. ' +
+      'Free one up, or pick the port yourself with --port <port>.',
+  );
+}
+
+/**
+ * Why `port` cannot be this instance's loopback port, phrased for the operator,
+ * or `null` when it is free to use.
+ *
+ * The installer renders this number into the nginx `proxy_pass` AND the systemd
+ * unit's `--port`, so a port it cannot own is a vhost aimed at somebody else's
+ * process (#913). Surfacing the collision is the point: the previous behavior —
+ * proceed, and let the service quietly drift to the next port — is what made a
+ * cross-user exposure look like a clean install.
+ */
+export async function instancePortConflict(
+  port: number,
+  opts: { instance?: string; probe?: PortProbe; host?: string } = {},
+): Promise<string | null> {
+  const host = opts.host ?? '127.0.0.1';
+  const probe = opts.probe ?? canBindPort;
+  const owner = listServerInstances().find(
+    (i) => i.state.primaryPort === port && i.instance !== (opts.instance ?? DEFAULT_SERVER_INSTANCE),
+  );
+  if (owner) {
+    return `port ${port} is already recorded as instance "${owner.instance}"'s loopback port on this host`;
+  }
+  if (!(await probe(port, host))) {
+    return (
+      `port ${port} is already in use on ${host} by a process this install does not own ` +
+      '(another unix user\'s cezar can hold it — ~/.cezar is per-user, the port is machine-wide)'
+    );
+  }
+  return null;
 }
 
 /** Atomically persist state as `0600`, creating its dir (`0700`) if needed. */

@@ -23,6 +23,7 @@ import {
   DEFAULT_PROMPT_TEMPLATES,
   makeTemplateId,
   normalizePromptTemplates,
+  PROMPT_TEMPLATE_TEXT_LIMIT,
   type PromptTemplate,
 } from '@/lib/prompt-templates'
 import { isProjectSkill, partitionSkillsForDisplay, searchSkills, skillKeywords } from '@/lib/skills'
@@ -166,7 +167,7 @@ function PromptTemplatesForm({ initial }: { initial: PromptTemplate[] }) {
                   aria-label={`Text for ${template.label || 'this template'}`}
                   data-slot="prompt-template-text-input"
                   value={template.text}
-                  maxLength={2000}
+                  maxLength={PROMPT_TEMPLATE_TEXT_LIMIT}
                   onChange={(event) => updateTemplate(template.id, { text: event.target.value })}
                   className="min-h-14 text-[13px]"
                 />
@@ -217,7 +218,7 @@ function PromptTemplatesForm({ initial }: { initial: PromptTemplate[] }) {
             data-slot="prompt-template-new-text"
             placeholder="The instructions to insert…"
             value={newText}
-            maxLength={2000}
+            maxLength={PROMPT_TEMPLATE_TEXT_LIMIT}
             onChange={(event) => setNewText(event.target.value)}
             className="min-h-14 text-[13px]"
           />

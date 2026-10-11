@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -117,5 +117,27 @@ describe('periodic autosave gate (#471)', () => {
       const { stdout } = await run('git', ['log', '-1', '--format=%s'], { cwd: worktreePath });
       expect(stdout.trim()).toBe(`cezar autosave (${reason})`);
     }
+  });
+
+  it('can checkpoint agent work without committing excluded check artifacts', async () => {
+    writeFileSync(join(worktreePath, 'work.txt'), 'agent progress\n');
+    writeFileSync(join(worktreePath, 'check-output.txt'), 'verification residue\n');
+
+    expect(await autosaveCommit(worktreePath, 'turn end', ['check-output.txt'])).toBe('committed');
+    const { stdout: files } = await run('git', ['show', '--format=', '--name-only', 'HEAD'], { cwd: worktreePath });
+    expect(files.trim().split('\n')).toEqual(['work.txt']);
+    expect(readFileSync(join(worktreePath, 'check-output.txt'), 'utf8')).toBe('verification residue\n');
+    const { stdout: status } = await run('git', ['status', '--porcelain'], { cwd: worktreePath });
+    expect(status.trim()).toBe('?? check-output.txt');
+  });
+
+  it('refuses a checkpoint when an excluded path cannot be reset, without losing work', async () => {
+    rmSync(join(worktreePath, 'check-output.txt'), { force: true });
+    writeFileSync(join(worktreePath, 'unsafe-work.txt'), 'keep this dirty\n');
+
+    expect(await autosaveCommit(worktreePath, 'turn end', ['../outside-worktree.txt'])).toBe('failed');
+    expect(readFileSync(join(worktreePath, 'unsafe-work.txt'), 'utf8')).toBe('keep this dirty\n');
+    const { stdout: status } = await run('git', ['status', '--porcelain'], { cwd: worktreePath });
+    expect(status.trim()).toBe('?? unsafe-work.txt');
   });
 });

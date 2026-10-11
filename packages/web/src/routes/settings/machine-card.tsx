@@ -55,9 +55,8 @@ export function MachineCard() {
   const view = sample === undefined ? undefined : effectiveHostView(sample)
   const cpuPct = view?.cpuPct
   const local = transport === 'local'
-  // `live` is the transport AND the hub's answer: a refused `host` subscription is not live, it is
-  // a fallback route read, and the header has to say so.
-  const live = local && !topicUnavailable
+  // A refused `host` topic is still live: the writer polls the route at the sampler's cadence.
+  const live = local
   const memTotal = view?.memTotalBytes ?? 0
   const usedPct =
     view?.memUsedBytes !== undefined && memTotal > 0
@@ -131,8 +130,8 @@ export function MachineCard() {
 
       {topicUnavailable ? (
         <p data-slot="machine-card-transport" className="mt-2 text-[11.5px] text-soft-foreground">
-          Live updates unavailable - the server refused this origin's host topic, so the card reads
-          the authenticated route instead.
+          The server refused this origin's host topic, so live values are polled from the
+          authenticated route instead.
         </p>
       ) : null}
 

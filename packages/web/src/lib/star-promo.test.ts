@@ -3,14 +3,18 @@ import { describe, expect, it } from 'vitest'
 import type { RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
 import {
   CEZAR_REPO_URL,
-  STAR_TOAST_MESSAGE,
-  STAR_TOAST_MESSAGE_NO_PR,
+  STAR_ASK_KEY,
+  STAR_ASK_MAX_ASKS,
+  STAR_ASK_PRESENCE_MS,
+  STAR_ASK_SNOOZE_MS,
   STAR_TOAST_SEEN_KEY,
+  countSuccesses,
   diffSuccessTransition,
   formatStarCount,
-  hasSeenStarToast,
-  markStarToastSeen,
-  starToastMessage,
+  isUserPresent,
+  mayAskForStar,
+  readStarAsk,
+  writeStarAsk,
 } from './star-promo'
 
 const run = (id: string, status: RunStatus): RunRecord => ({ id, status }) as RunRecord
@@ -47,7 +51,7 @@ describe('formatStarCount', () => {
   })
 })
 
-describe('the one-time flag', () => {
+describe('the ask record', () => {
   const store = (initial: Record<string, string> = {}) => {
     const map = new Map(Object.entries(initial))
     return {
@@ -57,44 +61,109 @@ describe('the one-time flag', () => {
     }
   }
 
-  it('reports unseen on a fresh store, and seen once marked', () => {
+  it('starts at zero asks on a fresh store and round-trips what it writes', () => {
     const s = store()
-    expect(hasSeenStarToast(s)).toBe(false)
-    markStarToastSeen(s)
-    expect(hasSeenStarToast(s)).toBe(true)
-    expect(s.map.has(STAR_TOAST_SEEN_KEY)).toBe(true)
+    expect(readStarAsk(s)).toEqual({ asks: 0 })
+    writeStarAsk({ asks: 2, lastAskedAt: '2026-10-01T10:00:00.000Z', outcome: 'never' }, s)
+    expect(JSON.parse(s.map.get(STAR_ASK_KEY)!)).toEqual({
+      asks: 2,
+      lastAskedAt: '2026-10-01T10:00:00.000Z',
+      outcome: 'never',
+    })
+    expect(readStarAsk(s)).toEqual({ asks: 2, lastAskedAt: '2026-10-01T10:00:00.000Z', outcome: 'never' })
   })
 
-  it('fails CLOSED: no storage at all reads as already seen', () => {
-    // The asymmetry is the point. "Seen" costs one user the ask; "not seen" makes a single
-    // request repeat on every successful run forever.
-    expect(hasSeenStarToast(null)).toBe(true)
+  it('counts a browser that saw the retired toast as one ask spent', () => {
+    expect(readStarAsk(store({ [STAR_TOAST_SEEN_KEY]: '2026-10-01T10:00:00.000Z' }))).toEqual({
+      asks: 1,
+      lastAskedAt: '2026-10-01T10:00:00.000Z',
+    })
   })
 
-  it('takes null — not undefined — as "no storage", so a default cannot swallow the signal', () => {
-    // `undefined` would re-trigger the default parameter and hand back the real localStorage,
-    // turning the fail-closed branch into dead code without a single test going red.
-    expect(() => markStarToastSeen(null)).not.toThrow()
-  })
-
-  it('fails CLOSED: a store that throws on read reads as already seen', () => {
+  it('fails CLOSED: no storage, a throwing read, or a corrupt record never asks', () => {
+    // The asymmetry is the point: closed costs one user the ask; open makes it repeat forever.
+    expect(readStarAsk(null)).toBeNull()
     expect(
-      hasSeenStarToast({
+      readStarAsk({
         getItem: () => {
           throw new Error('SecurityError')
         },
       }),
-    ).toBe(true)
+    ).toBeNull()
+    expect(readStarAsk(store({ [STAR_ASK_KEY]: '{not json' }))).toBeNull()
+    expect(mayAskForStar(readStarAsk(store({ [STAR_ASK_KEY]: '{"asks":"x"}' })), 0)).toBe(false)
   })
 
   it('never throws when the write fails — a full quota must not take the cockpit down', () => {
+    expect(() => writeStarAsk({ asks: 1 }, null)).not.toThrow()
     expect(() =>
-      markStarToastSeen({
-        setItem: () => {
-          throw new Error('QuotaExceededError')
+      writeStarAsk(
+        { asks: 1 },
+        {
+          setItem: () => {
+            throw new Error('QuotaExceededError')
+          },
         },
-      }),
+      ),
     ).not.toThrow()
+  })
+})
+
+describe('mayAskForStar', () => {
+  const now = Date.parse('2026-10-20T12:00:00.000Z')
+  const ago = (ms: number) => new Date(now - ms).toISOString()
+
+  it('asks a browser never asked before', () => {
+    expect(mayAskForStar({ asks: 0 }, now)).toBe(true)
+  })
+
+  it('honours "Maybe later" for the whole snooze, then asks again', () => {
+    expect(mayAskForStar({ asks: 1, lastAskedAt: ago(STAR_ASK_SNOOZE_MS - 1) }, now)).toBe(false)
+    expect(mayAskForStar({ asks: 1, lastAskedAt: ago(STAR_ASK_SNOOZE_MS) }, now)).toBe(true)
+  })
+
+  it('stops for good after a star, a "Don\'t ask again", or the last allowed ask', () => {
+    expect(mayAskForStar({ asks: 1, outcome: 'starred' }, now)).toBe(false)
+    expect(mayAskForStar({ asks: 1, outcome: 'never' }, now)).toBe(false)
+    expect(mayAskForStar({ asks: STAR_ASK_MAX_ASKS, lastAskedAt: ago(10 * STAR_ASK_SNOOZE_MS) }, now)).toBe(false)
+  })
+
+  it('never asks when the record could not be read', () => {
+    expect(mayAskForStar(null, now)).toBe(false)
+  })
+})
+
+describe('the "really uses cezar" and "watching the screen" gates', () => {
+  it('counts only runs that ended well', () => {
+    expect(countSuccesses(undefined)).toBe(0)
+    expect(
+      countSuccesses([run('a', 'done'), run('b', 'review'), run('c', 'failed'), run('d', 'running')]),
+    ).toBe(2)
+  })
+
+  const present = {
+    now: 100_000,
+    visible: true,
+    focused: true,
+    lastInteractionAt: 90_000,
+    typing: false,
+    dialogOpen: false,
+  }
+  it('is present when visible, focused, recently touched and idle', () => {
+    expect(isUserPresent(present)).toBe(true)
+  })
+  it('is away in a background tab or an unfocused window', () => {
+    expect(isUserPresent({ ...present, visible: false })).toBe(false)
+    expect(isUserPresent({ ...present, focused: false })).toBe(false)
+  })
+  it('is away when nothing moved for longer than the presence window', () => {
+    expect(isUserPresent({ ...present, lastInteractionAt: present.now - STAR_ASK_PRESENCE_MS })).toBe(true)
+    expect(isUserPresent({ ...present, lastInteractionAt: present.now - STAR_ASK_PRESENCE_MS - 1 })).toBe(false)
+    expect(isUserPresent({ ...present, lastInteractionAt: 0, now: STAR_ASK_PRESENCE_MS * 5 })).toBe(false)
+  })
+  it('never interrupts typing or another dialog', () => {
+    expect(isUserPresent({ ...present, typing: true })).toBe(false)
+    expect(isUserPresent({ ...present, dialogOpen: true })).toBe(false)
   })
 })
 
@@ -176,32 +245,7 @@ describe('diffSuccessTransition', () => {
   })
 })
 
-describe('the copy', () => {
-  it('says the thing the brief asked it to say', () => {
-    expect(STAR_TOAST_MESSAGE).toContain('🎉')
-    expect(STAR_TOAST_MESSAGE).toMatch(/star/i)
-    expect(STAR_TOAST_MESSAGE).toMatch(/find it/i)
-  })
-
-  it('only claims a PR when there is one — most first runs never open one', () => {
-    expect(starToastMessage(true)).toBe(STAR_TOAST_MESSAGE)
-    expect(starToastMessage(true)).toMatch(/PR/)
-    expect(starToastMessage(false)).toBe(STAR_TOAST_MESSAGE_NO_PR)
-    expect(starToastMessage(false)).not.toMatch(/\bPR\b/)
-  })
-
-  it('keeps the ask itself word-for-word identical — only the opening clause moves', () => {
-    const ask = 'If cezar saved you time, a star helps others find it'
-    expect(STAR_TOAST_MESSAGE).toContain(ask)
-    expect(STAR_TOAST_MESSAGE_NO_PR).toContain(ask)
-  })
-
-  it('promises nothing in return — a request, not a transaction', () => {
-    for (const copy of [STAR_TOAST_MESSAGE, STAR_TOAST_MESSAGE_NO_PR]) {
-      expect(copy).not.toMatch(/\b(unlock|reward|free|upgrade|pro|premium|trial)\b/i)
-    }
-  })
-
+describe('the link', () => {
   it('points at cezar, over https', () => {
     expect(CEZAR_REPO_URL).toBe('https://github.com/open-mercato/cezar')
   })

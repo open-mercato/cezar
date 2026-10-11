@@ -30,6 +30,9 @@ export const DATA_GITIGNORE_ENTRIES = [
   'drafts/', // unsent composer text + pasted screenshots (#939) — never in git history
   'todos.json',
   'todos.json.tmp',
+  // Private, per-project MCP servers (spec 2026-10-07-private-project-mcp) — personal tokens.
+  'mcp.local.json',
+  'mcp.local.json.cez-tmp-*',
   'tracker.json',
   'tracker.json.tmp',
   'tracker.json.*.tmp',

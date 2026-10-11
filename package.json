@@ -40,9 +40,14 @@
     "typecheck:contract": "npm run typecheck -w @open-mercato/cezar-contract"
   },
   "devDependencies": {
+    "@ai-sdk/openai": "^4.0.91",
+    "@e2e-dev/web": "^0.14.0",
+    "ai": "^7.0.0",
+    "e2e": "^0.19.0",
     "tsx": "^4.19.0",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "zod": "^4.1.8"
   },
   "repository": {
     "type": "git",

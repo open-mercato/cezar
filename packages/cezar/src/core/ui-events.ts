@@ -25,7 +25,7 @@
 /** The backend that produced a session — mirrors `RunnerId` in
  *  `agent-runner.ts` (kept structurally identical; a type-level test
  *  guards against drift so this module stays dependency-free). */
-export type UiBackend = 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi';
+export type UiBackend = 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'junie' | 'copilot';
 
 /**
  * Tool lifecycle status (ACP: pending/in_progress/completed/failed).
@@ -360,6 +360,9 @@ export interface UiAskRequestedEvent {
   type: 'ask.requested';
   requestId: string;
   questions: UiAskQuestion[];
+  /** Who asks: absent = the agent (a `CEZ:ASK` marker); `'workflow'` = a graph gate or
+   *  question node (spec 2026-09-30-workflow-node-editor) — the card says so. */
+  source?: 'workflow';
 }
 
 /**

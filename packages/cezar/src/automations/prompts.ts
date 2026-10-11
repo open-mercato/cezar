@@ -1,3 +1,5 @@
+import { RUNNER_IDS } from '../core/agent-runner.ts';
+
 /**
  * What a task is told about GitHub automations, and the playbook the built-in
  * `create-cezar-automation` skill runs under (spec `.ai/specs/2026-09-13-automations-from-prompt.md`).
@@ -46,7 +48,7 @@ A GitHub poll:
     "prompt": "Review pull request #{{github.number}} ({{github.title}}) at {{github.url}}: read the diff, run the tests, and post your findings as a review.",
     "workflow": "quick-task",                        // a workflow name — OR inline "steps", never both
     "steps": [{ "id": "task", "skill": "om-auto-review-pr", "prompt": "{{task}}" }],  // to run a skill: one agent step naming it
-    "runner": "claude",                              // optional: claude | codex | opencode | pi
+    "runner": "claude",                              // optional: ${RUNNER_IDS.join(' | ')}
     "agentProfile": "work",                          // optional: an agent account id of that runner; omitted = the project's selection at launch
     "model": "sonnet",                               // optional
     "variants": 1,                                   // 1 | 2 | 3 competing runs per match
@@ -54,7 +56,9 @@ A GitHub poll:
     "autonomous": true,                              // never park to ask — an automation has no one watching (recommended)
     "generateFollowups": false,
     "systemPrompt": "Extra guidance for every launched run",  // optional
-    "dispatch": { "maxSubtasks": 4, "reviewChild": true }     // optional: let each run dispatch up to N subtasks, and ask it to dispatch a final review task
+    "dispatch": { "maxSubtasks": 4, "reviewChild": true },    // optional: let each run dispatch up to N subtasks, and ask it to dispatch a final review task
+    "checkout": "pr-head",                           // optional, pull_request.* events only: fork the run's worktree from the PR's head instead of the base branch (its check steps then verify the PR itself; the run cannot publish a PR)
+    "allowForkHeads": false                          // optional, with checkout "pr-head": admit heads from forks — untrusted code, run without check credentials
   }
 }
 

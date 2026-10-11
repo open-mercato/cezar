@@ -27,6 +27,7 @@ import {
   type OpencodeUiMapperState,
   type OpencodeUiMapping,
 } from './opencode-ui-mapper.ts';
+import { opencodeConfigContent } from './private-mcp.ts';
 
 export interface OpencodeRunnerOptions {
   /** Override the binary name/path; defaults to `opencode` on PATH. */
@@ -170,6 +171,11 @@ class OpencodeSession implements AgentSession {
     const port = 40000 + Math.floor(Math.random() * 20000);
     try {
       const env = buildChildEnv({ backend: 'opencode', extraEnv: spec.env });
+      // Private MCP servers (spec 2026-10-07-private-project-mcp): OpenCode loads
+      // OPENCODE_CONFIG_CONTENT after the project config, so these are added and win on a clash.
+      if (spec.mcpServers?.length) {
+        env.OPENCODE_CONFIG_CONTENT = opencodeConfigContent(spec.mcpServers, env.OPENCODE_CONFIG_CONTENT);
+      }
       const [file, argv] = disclaimedCommand(bin, ['serve', '--hostname', '127.0.0.1', '--port', String(port)], env);
       this.child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
     } catch (err) {
@@ -200,7 +206,7 @@ class OpencodeSession implements AgentSession {
     this.child.stderr.on('data', (chunk: string) => stderrChunks.push(chunk));
 
     // The server prints its URL on stdout once listening.
-    const urlReady = this.waitForServerUrl(port);
+    const urlReady = this.waitForServerUrl();
 
     const limitMs = spec.timeoutMs ?? timeoutMs;
     let deadline: NodeJS.Timeout | undefined;
@@ -336,13 +342,12 @@ class OpencodeSession implements AgentSession {
 
   // ---- server lifecycle ---------------------------------------------------
 
-  private waitForServerUrl(fallbackPort: number): Promise<string> {
+  private waitForServerUrl(): Promise<string> {
     return new Promise((resolve, reject) => {
       let buffer = '';
       const timer = setTimeout(() => {
         cleanup();
-        // Nothing parsed — try the port we asked for.
-        resolve(`http://127.0.0.1:${fallbackPort}`);
+        reject(new Error(`opencode serve did not report a listening URL within ${SERVER_START_TIMEOUT_MS / 1000}s`));
       }, SERVER_START_TIMEOUT_MS);
       timer.unref?.();
       const onData = (chunk: string) => {

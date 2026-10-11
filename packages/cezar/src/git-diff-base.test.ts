@@ -1,3 +1,7 @@
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { resolveTaskDiffBase, type GitRunner } from './git-diff-base.ts';
 
@@ -20,12 +24,44 @@ function stubGit(answers: Record<string, { ok: boolean; stdout: string }>): {
   return { run, calls };
 }
 
+function realGitFixture() {
+  const dir = mkdtempSync(join(tmpdir(), 'cez-diff-base-'));
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.name', 'Cezar test');
+  git('config', 'user.email', 'cezar-test@example.invalid');
+  writeFileSync(join(dir, 'base.txt'), 'base\n');
+  git('add', '.');
+  git('commit', '-q', '-m', 'base');
+  const pinned = git('rev-parse', 'HEAD');
+  git('checkout', '-q', '-b', 'upstream');
+  writeFileSync(join(dir, 'upstream.txt'), 'upstream\n'.repeat(100));
+  git('add', '.');
+  git('commit', '-q', '-m', 'upstream');
+  const upstream = git('rev-parse', 'HEAD');
+  git('update-ref', 'refs/remotes/origin/main', upstream);
+  git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+  git('checkout', '-q', '-b', 'cez/task', 'origin/main');
+  writeFileSync(join(dir, 'task.txt'), 'task\n');
+  git('add', '.');
+  git('commit', '-q', '-m', 'task');
+  const runGit: GitRunner = async (args) => {
+    try {
+      return { ok: true, stdout: execFileSync('git', args, { cwd: dir, encoding: 'utf8' }) };
+    } catch {
+      return { ok: false, stdout: '' };
+    }
+  };
+  return { dir, git, pinned, upstream, runGit };
+}
+
 const STARTED_AT = '2026-08-04T05:00:08.919Z';
 const HEAD_BRANCH = 'rev-parse --abbrev-ref HEAD';
 const MERGE_BASE = 'merge-base main HEAD';
 const MERGE_BASE_REMOTE = 'merge-base origin/main HEAD';
 const HAS_REMOTE = 'rev-parse --verify --quiet origin/main^{commit}';
 const LOCAL_CURRENT = 'merge-base --is-ancestor origin/main main';
+const ORIGIN_HEAD = 'symbolic-ref --quiet --short refs/remotes/origin/HEAD';
 const BASELINE = `rev-parse --verify --quiet review/pr-694@{${STARTED_AT}}^{commit}`;
 const NO_REMOTE = { [HAS_REMOTE]: { ok: false, stdout: '' } };
 
@@ -108,6 +144,64 @@ describe('resolveTaskDiffBase — the freshest base ref', () => {
     expect(await resolveTaskDiffBase(run, 'origin/develop')).toEqual({ base: 'abc123abc123' });
     // No `origin/origin/develop` probe — the ref is already the remote's answer.
     expect(calls).toEqual([['merge-base', 'origin/develop', 'HEAD']]);
+  });
+
+  it('refreshes a SHA-pinned base through origin/HEAD when the SHA is upstream', async () => {
+    // In-place runs persist their starting commit rather than a branch name. Once
+    // origin/main advances, treating that SHA as immutable re-attributes upstream
+    // work to the task (#1325).
+    const baseSha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const { run, calls } = stubGit({
+      [ORIGIN_HEAD]: { ok: true, stdout: 'origin/main\n' },
+      [`merge-base --is-ancestor ${baseSha} origin/main`]: { ok: true, stdout: '' },
+      'merge-base origin/main HEAD': { ok: true, stdout: 'forkpointforkpoint\n' },
+    });
+
+    expect(await resolveTaskDiffBase(run, baseSha)).toEqual({ base: 'forkpointforkpoint' });
+    expect(calls).toContainEqual(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']);
+    expect(calls).toContainEqual(['merge-base', '--is-ancestor', baseSha, 'origin/main']);
+  });
+
+  it('anchors a real SHA-pinned checkout at the remote fork and keeps task commits', async () => {
+    const fixture = realGitFixture();
+    try {
+      const resolved = await resolveTaskDiffBase(fixture.runGit, fixture.pinned);
+      expect(resolved).toEqual({ base: fixture.upstream });
+      expect(fixture.git('diff', '--shortstat', resolved.base)).toContain('1 file changed, 1 insertion(+)');
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a pinned SHA when origin/HEAD is absent or unrelated', async () => {
+    const fixture = realGitFixture();
+    try {
+      fixture.git('symbolic-ref', '--delete', 'refs/remotes/origin/HEAD');
+      await expect(resolveTaskDiffBase(fixture.runGit, fixture.pinned)).resolves.toEqual({ base: fixture.pinned });
+
+      fixture.git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+      fixture.git('checkout', '-q', '--orphan', 'unrelated');
+      fixture.git('rm', '-q', '-rf', '.');
+      writeFileSync(join(fixture.dir, 'unrelated.txt'), 'unrelated\n');
+      fixture.git('add', '.');
+      fixture.git('commit', '-q', '-m', 'unrelated');
+      const unrelated = fixture.git('rev-parse', 'HEAD');
+      await expect(resolveTaskDiffBase(fixture.runGit, unrelated)).resolves.toEqual({ base: unrelated });
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('follows a non-main origin default branch for a pinned base', async () => {
+    const fixture = realGitFixture();
+    try {
+      fixture.git('update-ref', 'refs/remotes/origin/develop', fixture.upstream);
+      fixture.git('update-ref', '-d', 'refs/remotes/origin/main');
+      fixture.git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/develop');
+      await expect(resolveTaskDiffBase(fixture.runGit, fixture.pinned)).resolves.toEqual({ base: fixture.upstream });
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
   });
 
   it('falls back to the base branch name when the merge-base cannot be resolved', async () => {

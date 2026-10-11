@@ -232,6 +232,6 @@ const server = createServer((req, res) => {
 
 server.listen(port, hostname, () => {
   // The runner reads the bound URL back from stdout, like the real server.
-  console.log(`opencode server listening on http://${hostname}:${port}`);
+  console.log(`opencode server listening on http://${hostname}:${server.address().port}`);
 });
 process.on('SIGTERM', () => process.exit(0));

@@ -6,6 +6,8 @@ const HOME: AgentHomePaths = {
   codex: '/home/u/.codex',
   opencodeConfig: '/home/u/.config/opencode',
   cursor: '/home/u/.cursor',
+  copilot: '/home/u/.copilot',
+  junie: '/home/u/.junie',
 };
 
 describe('agent-config catalog', () => {
@@ -22,10 +24,10 @@ describe('agent-config catalog', () => {
     }
   });
 
-  it('<repo>/AGENTS.md is ONE entry read by two runners', () => {
+  it('<repo>/AGENTS.md is ONE entry read by every runner that reads it', () => {
     const agents = CONFIG_FILES.filter((f) => f.label === 'AGENTS.md' && f.scope === 'project');
     expect(agents).toHaveLength(1);
-    expect(agents[0]!.runners).toEqual(['codex', 'opencode']);
+    expect(agents[0]!.runners).toEqual(['codex', 'opencode', 'copilot']);
   });
 
   it('resolves repo-relative paths under the repo root', () => {
@@ -64,9 +66,13 @@ describe('agent-config catalog', () => {
   it('holdsMcp is set exactly where MCP servers actually live', () => {
     const mcp = CONFIG_FILES.filter((f) => f.holdsMcp).map((f) => f.id).sort();
     expect(mcp).toEqual([
+      // cezar's own private, per-project servers (spec 2026-10-07-private-project-mcp).
+      'cezar.private.mcp',
       'claude.project.mcp',
       'codex.project.config',
       'codex.user.config',
+      // Copilot keeps MCP in its own file rather than inside its settings, like Claude.
+      'copilot.user.mcp',
       'cursor.project.mcp',
       'cursor.user.mcp',
       'opencode.project.config',

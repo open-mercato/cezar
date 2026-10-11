@@ -37,9 +37,11 @@ export function SelfUpdateDialog({
   open,
   onOpenChange,
   autoApply,
+  brandName = 'cezar',
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
+  brandName?: string
   /** Start installing this version as soon as the status confirms it can (the title strip's
    *  "Update cezar" button): the dialog then only shows progress. Fires once per mount, and
    *  ONLY when no task is running — a restart interrupts running tasks, so with any in flight
@@ -89,10 +91,10 @@ export function SelfUpdateDialog({
       >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <span>cezar {data ? `v${data.version}` : ''}</span>
+            <span>{brandName} {data ? `v${data.version}` : ''}</span>
             <ActiveBadge data={data} />
           </DialogTitle>
-          <DialogDescription className="sr-only">Update cezar, pick a release channel or switch versions.</DialogDescription>
+          <DialogDescription className="sr-only">Update {brandName}, pick a release channel or switch versions.</DialogDescription>
         </DialogHeader>
 
         {data ? (
@@ -131,7 +133,7 @@ export function SelfUpdateDialog({
             {data.activeRuns > 0 && data.canSelfUpdate ? (
               <p className="rounded-md border border-pending/50 bg-pending/10 px-3 py-2 text-[12.5px] text-foreground">
                 {data.activeRuns} task{data.activeRuns === 1 ? ' is' : 's are'} running. A restart interrupts
-                them; cezar re-queues or resumes them on the way back up.
+                them; {brandName} re-queues or resumes them on the way back up.
               </p>
             ) : null}
 
@@ -141,7 +143,7 @@ export function SelfUpdateDialog({
                 {/* The cockpit is read from disk on every request, the server only at boot: a rebuilt
                     worktree can show a channel its still-running server has never heard of. */}
                 {setChannel.variables === 'development'
-                  ? ' The running cezar server predates the Development channel — restart cezar to load it.'
+                  ? ` The running ${brandName} server predates the Development channel — restart ${brandName} to load it.`
                   : null}
               </p>
             ) : null}

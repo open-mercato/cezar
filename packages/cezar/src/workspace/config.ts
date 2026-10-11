@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { chmodSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
@@ -8,7 +8,7 @@ import { z } from 'zod';
 // are imported rather than repeated.
 import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH } from '@open-mercato/cezar-contract';
 import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
-import { assertCezarHomeWriteIsSandboxed, workspaceConfigPath } from '../paths.ts';
+import { assertCezarHomeWriteIsSandboxed, isAbsolutePath, workspaceConfigPath } from '../paths.ts';
 
 /**
  * `~/.cezar/config.json` — the per-user workspace config + project registry
@@ -44,8 +44,9 @@ const workspaceProjectSchema = z
     /** Unique slug — URL segment, sidebar key, worktree namespace. */
     id: z.string().regex(PROJECT_ID_RE),
     /** Absolute, realpath-normalized repo root (normalization is the writer's
-     *  job — `registerProject` in step 1.3; the schema only demands absolute). */
-    root: z.string().min(1).max(4096).refine((p) => p.startsWith('/'), 'root must be absolute'),
+     *  job — `registerProject` in step 1.3; the schema only demands absolute,
+     *  on THIS platform: `C:\repo` on Windows — see `isAbsolutePath`). */
+    root: z.string().min(1).max(4096).refine((p) => isAbsolutePath(p), 'root must be absolute'),
     /** Display name (basename by default). `''` = caller derives a fallback. */
     name: z.string().max(200).catch(''),
     addedAt: z.string().max(64).catch(''),
@@ -157,6 +158,8 @@ const agentDefaultsSchema = z
         opencode: z.string().trim().min(1).max(200).optional().catch(undefined),
         cursor: z.string().trim().min(1).max(200).optional().catch(undefined),
         pi: z.string().trim().min(1).max(200).optional().catch(undefined),
+        junie: z.string().trim().min(1).max(200).optional().catch(undefined),
+        copilot: z.string().trim().min(1).max(200).optional().catch(undefined),
       })
       .passthrough()
       .optional()
@@ -186,6 +189,10 @@ const disabledProvidersSchema = z
 
 const workspaceConfigSchema = z
   .object({
+    /** Optional instance name shown in the cockpit; absent keeps the product default. */
+    branding: z.object({
+      name: z.string().trim().min(1).max(80).optional().catch(undefined),
+    }).passthrough().default(() => ({})).catch(() => ({})),
     /** Migration cursor (src/workspace/migrations.ts). Absent/bad → 0, which
      *  means "run every migration" — each one is idempotent, so that is safe. */
     schemaVersion: z.number().int().min(0).default(0).catch(0),
@@ -367,8 +374,29 @@ export function atomicWriteJsonSync(path: string, value: unknown): void {
   assertCezarHomeWriteIsSandboxed(path);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const tmp = atomicTmpPath(path);
-  writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-  renameSync(tmp, path);
+  let fd = -1;
+  try {
+    fd = openSync(tmp, 'w', 0o600);
+    writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8' });
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = -1;
+    renameSync(tmp, path);
+  } catch (error) {
+    if (fd !== -1) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Preserve the original write/fsync/rename error.
+      }
+    }
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      // Preserve the original write/fsync/rename error.
+    }
+    throw error;
+  }
   try {
     chmodSync(path, 0o600); // best-effort — ignored on some filesystems
   } catch {

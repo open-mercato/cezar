@@ -18,6 +18,7 @@ import type {
   repoBranchResponseSchema,
   repoCommitPayloadSchema,
   repoResponseSchema,
+  repoTreeSchema,
   worktreeEntrySchema,
   worktreesResponseSchema,
 } from '@open-mercato/cezar-contract';
@@ -97,6 +98,14 @@ describe('src/contract github + repo schemas match the routes exactly', () => {
     ArrayBuffer
   >;
 
+  // The repository file browser (#1279). `/repo/tree` is plain JSON; `/repo/files` carries the
+  // same `?raw=1` bytes branch as `/runs/:id/files` and is excluded on the same terms.
+  type RepoTree200 = InferResponseType<typeof client.api.v1.repo.tree.$get, 200>;
+  type RepoFiles200 = Exclude<
+    InferResponseType<typeof client.api.v1.repo.files.$get, 200>,
+    ArrayBuffer
+  >;
+
   type Worktrees200 = InferResponseType<typeof client.api.v1.worktrees.$get, 200>;
   type ReclaimWorktrees200 = InferResponseType<typeof client.api.v1.worktrees.reclaim.$post, 200>;
 
@@ -116,6 +125,14 @@ describe('src/contract github + repo schemas match the routes exactly', () => {
     Assert<Exact<z.infer<typeof repoCommitPayloadSchema>, RepoCommit200>>,
     Assert<Exact<z.infer<typeof repoCommitPayloadSchema>, RunCommit200>>,
     Assert<Exact<z.infer<typeof worktreeEntrySchema>, RunFiles200>>,
+    Assert<Exact<z.infer<typeof repoTreeSchema>, RepoTree200>>,
+    /**
+     * `/repo/files` reuses `worktreeEntrySchema` but only its `file` member is REACHABLE: every
+     * indexed path is a file, and the one case that resolves to a directory (a submodule) is a 409
+     * rather than a listing. Comparing against the whole union would be schema-is-wider — the
+     * cockpit would narrow a `dir` case this route never sends.
+     */
+    Assert<Exact<Extract<z.infer<typeof worktreeEntrySchema>, { type: 'file' }>, RepoFiles200>>,
     Assert<Exact<z.infer<typeof worktreesResponseSchema>, Worktrees200>>,
     Assert<Exact<z.infer<typeof reclaimWorktreesResponseSchema>, ReclaimWorktrees200>>,
   ];

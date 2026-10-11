@@ -48,6 +48,7 @@ import {
   normalizeReviews,
   normalizeMergeState,
   parseCountsPage,
+  parseGithubListPage,
   parseOwnerName,
   rollupToChecks,
   THREAD_ENTRY_CAP,
@@ -438,6 +439,10 @@ const ghByCwd = () =>
     const who = opts?.cwd?.includes('proj-b') ? 'b' : 'a';
     let stdout = '';
     if (argv[0] === 'repo') stdout = `owner/${who}\n`;
+    else if (argv[0] === 'api' && argv[1] === 'graphql') stdout = JSON.stringify({ data: { repository: {
+      issues: { totalCount: 1, nodes: [{ number: 1, title: `${who}-issue`, author: { login: who }, createdAt: '2026-07-01T00:00:00Z', labels: [], url: `https://github.com/owner/${who}/issues/1` }], pageInfo: { hasNextPage: false, endCursor: null } },
+      pullRequests: { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+    } } });
     else if (argv[0] === 'issue')
       stdout = JSON.stringify([
         {
@@ -462,7 +467,7 @@ const ghByCwd = () =>
         },
       ]);
     else if (argv[1]?.includes('/reviews')) stdout = '[]';
-    else stdout = '{}'; // graphql counts — malformed page degrades to empty maps
+    else stdout = '{}';
     cb(null, { stdout, stderr: '' });
   });
 
@@ -1531,37 +1536,82 @@ describe('fetchGithub omits statusCheckRollup from the list call (#664)', () => 
   });
 
   it('does not request the rollup field and leaves list PR checks null', async () => {
-    let prJsonArg = '';
+    let graphqlQuery = '';
     execFileMock.mockImplementation((...args: unknown[]) => {
       const argv = args[1] as string[];
       const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
       let stdout = '{}';
       if (argv[0] === 'repo') stdout = 'owner/n\n';
-      else if (argv[0] === 'issue') stdout = '[]';
-      else if (argv[0] === 'pr') {
-        prJsonArg = argv[argv.indexOf('--json') + 1] ?? '';
-        stdout = JSON.stringify([
-          {
-            number: 7,
-            title: 'a pr',
-            author: { login: 'x' },
-            createdAt: '2026-07-01T00:00:00Z',
-            labels: [],
-            body: 'b',
-            url: 'https://github.com/owner/n/pull/7',
-            isDraft: false,
-            additions: 1,
-            deletions: 2,
-          },
-        ]);
+      else if (argv[0] === 'api' && argv[1] === 'graphql') {
+        graphqlQuery = argv[argv.indexOf('-f') + 1] ?? '';
+        stdout = JSON.stringify({ data: { repository: {
+          issues: { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+          pullRequests: { totalCount: 9, nodes: [{ number: 7, title: 'a pr', author: { login: 'x' }, createdAt: '2026-07-01T00:00:00Z', labels: [], url: 'https://github.com/owner/n/pull/7', comments: { totalCount: 4 }, isDraft: false, additions: 1, deletions: 2 }], pageInfo: { hasNextPage: true, endCursor: 'next-pr' } },
+        } } });
       }
       cb(null, { stdout, stderr: '' });
     });
 
     const data = await fetchGithub('/repo/no-rollup-664');
-    expect(prJsonArg).not.toContain('statusCheckRollup');
-    expect(prJsonArg).toContain('isDraft');
+    expect(graphqlQuery).not.toContain('statusCheckRollup');
+    expect(graphqlQuery).toContain('isDraft');
+    expect(graphqlQuery).toContain('comments { totalCount }');
     expect(data.prs[0]?.checks).toBeNull();
+    expect(data.prs[0]?.comments).toBe(4);
+    expect(data.prsTotal).toBe(9);
+    expect(data.prsNextCursor).toBe('next-pr');
+  });
+
+  it('sends page sizes typed and splits a limit above 100 into exact pages', async () => {
+    // `-f limit=30` reached GitHub as a String and failed the whole tab ("Could not coerce value to Int").
+    const calls: string[][] = [];
+    const node = (n: number) => ({ number: n, title: `#${n}`, author: { login: 'x' }, createdAt: '2026-07-01T00:00:00Z', labels: { nodes: [{ name: 'bug', color: 'd73a4a' }] }, url: `https://github.com/owner/n/issues/${n}`, comments: { totalCount: 0 } });
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      let stdout = '{}';
+      if (argv[0] === 'repo') stdout = 'owner/n\n';
+      else if (argv[0] === 'api' && argv[1] === 'graphql') {
+        calls.push(argv);
+        const value = (key: string) => argv.find((a) => a.startsWith(`${key}=`))?.slice(key.length + 1);
+        const issuesSize = Number(value('issuesLimit'));
+        const start = value('issuesCursor') ? Number(value('issuesCursor')) : 0;
+        const nodes = Array.from({ length: issuesSize }, (_, i) => node(start + i + 1));
+        stdout = JSON.stringify({ data: { repository: {
+          issues: { totalCount: 500, nodes, pageInfo: { hasNextPage: true, endCursor: issuesSize ? String(start + issuesSize) : null } },
+          pullRequests: { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+        } } });
+      }
+      cb(null, { stdout, stderr: '' });
+    });
+
+    const data = await fetchGithub('/repo/typed-limit', false, 150);
+    expect(calls.length).toBe(2);
+    for (const argv of calls) {
+      for (const key of ['issuesLimit', 'prsLimit']) {
+        const at = argv.findIndex((a) => a.startsWith(`${key}=`));
+        expect(argv[at - 1]).toBe('-F');
+      }
+      expect(Number(argv.find((a) => a.startsWith('issuesLimit='))?.split('=')[1])).toBeLessThanOrEqual(100);
+    }
+    expect(data.issues.map((i) => i.number)).toEqual(Array.from({ length: 150 }, (_, i) => i + 1));
+    expect(data.issuesNextCursor).toBe('150');
+    expect(data.issuesTotal).toBe(500);
+    expect(data.issues[0]?.labels).toEqual(['bug']); // GraphQL labels arrive as a connection
+    expect(data.labelColors).toEqual({ bug: 'd73a4a' });
+  });
+
+  it('reports gh stderr, not a line of the multi-line query argv', async () => {
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      if (argv[0] === 'repo') return cb(null, { stdout: 'owner/n\n', stderr: '' });
+      const err = Object.assign(new Error(`Command failed: gh ${argv.join(' ')}`), { stderr: "gh: Field 'name' doesn't exist on type 'LabelConnection'\n" });
+      cb(err, null);
+    });
+    const data = await fetchGithub('/repo/stderr-reason', true);
+    expect(data.available).toBe(false);
+    expect(data.reason).toBe("gh: Field 'name' doesn't exist on type 'LabelConnection'");
   });
 });
 
@@ -1660,6 +1710,34 @@ describe('searchGithubItems (#730)', () => {
 
     const res = await searchGithubItems('/repo/search-hash', 'issue', '#4507');
     expect(res.items.map((i) => i.number)).toEqual([4507]);
+  });
+
+  it('does not misidentify a PR returned by the numeric issue lookup', async () => {
+    const argvs = ghSpy((argv) => {
+      if (argv[0] === 'issue' && argv[1] === 'view') {
+        return JSON.stringify({
+          number: 4507,
+          title: 'a pull request sharing the issue number',
+          author: { login: 'someone' },
+          createdAt: '2026-07-25T07:08:17Z',
+          labels: [],
+          body: '',
+          url: 'https://github.com/owner/n/pull/4507',
+        });
+      }
+      if (argv[0] === 'repo') return 'owner/n\n';
+      if (argv[0] === 'search') {
+        return JSON.stringify([searchHit({ title: 'a genuine issue mentioning 4507', url: 'https://github.com/owner/n/issues/12' })]);
+      }
+      return '';
+    });
+
+    const res = await searchGithubItems('/repo/search-issue-kind', 'issue', '4507');
+
+    expect(res.available).toBe(true);
+    expect(res.items[0]?.kind).toBe('issue');
+    expect(res.items[0]?.title).toBe('a genuine issue mentioning 4507');
+    expect(argvs.some((a) => a[0] === 'search' && a[1] === 'issues')).toBe(true);
   });
 
   it('searches text with NO --state flag, so closed and merged hits are included', async () => {

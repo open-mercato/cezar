@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -295,5 +295,42 @@ describe('launchPathFor (#361 WSL support)', () => {
 
   it('never translates when not running under WSL, even for a .exe name', () => {
     expect(launchPathFor('idea.exe', '/home/pat/project', false)).toBe('/home/pat/project');
+  });
+});
+
+describe('resolveOnPath (#1066 executable regular files)', () => {
+  let root = '';
+
+  afterEach(() => {
+    if (root) rmSync(root, { recursive: true, force: true });
+    root = '';
+  });
+
+  it('ignores directories but resolves executable files and symlinks', () => {
+    root = mkdtempSync(join(tmpdir(), 'cez-open-in-app-'));
+    mkdirSync(join(root, 'directory-launcher'));
+    const executable = join(root, 'file-launcher');
+    writeFileSync(executable, '#!/bin/sh\n');
+    chmodSync(executable, 0o755);
+    symlinkSync(executable, join(root, 'symlink-launcher'));
+
+    expect(resolveOnPath('directory-launcher', 'linux', false, root)).toBeNull();
+    expect(resolveOnPath('file-launcher', 'linux', false, root)).toBe('file-launcher');
+    expect(resolveOnPath('symlink-launcher', 'linux', false, root)).toBe('symlink-launcher');
+  });
+
+  it('keeps Windows direct-spawn suffix rules while rejecting directories', () => {
+    root = mkdtempSync(join(tmpdir(), 'cez-open-in-app-win-'));
+    mkdirSync(join(root, 'code'));
+    const executable = join(root, 'editor.exe');
+    writeFileSync(executable, 'binary');
+    chmodSync(executable, 0o755);
+    const shellOnly = join(root, 'shell-only.cmd');
+    writeFileSync(shellOnly, 'echo editor');
+    chmodSync(shellOnly, 0o755);
+
+    expect(resolveOnPath('code', 'win32', false, root)).toBeNull();
+    expect(resolveOnPath('editor', 'win32', false, root)).toBe('editor.exe');
+    expect(resolveOnPath('shell-only', 'win32', false, root)).toBeNull();
   });
 });

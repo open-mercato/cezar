@@ -112,6 +112,8 @@ export type AppShellProps = {
    *  still loading, or unreachable — the shell renders the single-project sidebar it always
    *  did, which is the honest degradation, not a special case. */
   projectGroups?: ReactNode
+  brandName?: string
+  brandLogoUrl?: string | null
 }
 
 /**
@@ -190,6 +192,8 @@ export const AppShell = React.memo(function AppShell({
   singleProject = false,
   banner,
   projectGroups,
+  brandName = 'cezar',
+  brandLogoUrl = null,
 }: AppShellProps) {
   const { pathname } = useLocation()
   // The nav's area rules reason about the flat route map — strip any `/p/:projectId` prefix
@@ -269,6 +273,8 @@ export const AppShell = React.memo(function AppShell({
     toolsMenu,
     projectGroups,
     singleProject,
+    brandName,
+    brandLogoUrl,
   }
 
   const desktop = useDesktopShell()
@@ -293,7 +299,7 @@ export const AppShell = React.memo(function AppShell({
           className="fixed inset-x-0 top-0 z-[60] flex h-[28px] select-none items-center pl-[80px]"
         >
           {version && latestVersion && latestVersion !== version ? (
-            <TitlebarUpdateButton latestVersion={latestVersion} />
+            <TitlebarUpdateButton latestVersion={latestVersion} brandName={brandName} />
           ) : null}
         </div>
       ) : null}
@@ -307,7 +313,7 @@ export const AppShell = React.memo(function AppShell({
         {/* The Sheet root renders no DOM of its own. Keep only the mobile controls inside its
             context so a sidebar update cannot propagate through the routed view. */}
         <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
-          <MobileTopBar title={current?.label ?? 'cezar'} />
+          <MobileTopBar title={current?.label ?? brandName} />
           {/* The drawer keeps its fixed 264px: it is a full-height overlay on a phone, where
               there is no second column to trade width with and no pointer to drag a border. */}
           <MobileNavDrawer {...nav} onNavigate={closeMenu} />
@@ -339,7 +345,7 @@ export const AppShell = React.memo(function AppShell({
  * the dialog shows the install log and the restart. With tasks in flight the dialog opens to its
  * warning instead and waits for "Update & restart": a restart interrupts them.
  */
-function TitlebarUpdateButton({ latestVersion }: { latestVersion: string }) {
+function TitlebarUpdateButton({ latestVersion, brandName }: { latestVersion: string; brandName: string }) {
   const [open, setOpen] = React.useState(false)
   return (
     <>
@@ -347,14 +353,14 @@ function TitlebarUpdateButton({ latestVersion }: { latestVersion: string }) {
         type="button"
         data-slot="titlebar-update"
         onClick={() => setOpen(true)}
-        title={`Update cezar to v${latestVersion} and restart`}
+        title={`Update ${brandName} to v${latestVersion} and restart`}
         className="inline-flex h-[18px] items-center gap-1 rounded-full border border-primary/40 bg-primary/15 px-2 text-[11px] font-semibold text-foreground transition-colors hover:bg-primary/30"
       >
         <StatusDot tone="pending" pulse className="size-[5px] shrink-0" />
-        Update cezar
+        Update {brandName}
         <span className="font-mono font-medium text-muted-foreground">v{latestVersion}</span>
       </button>
-      {open ? <SelfUpdateDialog open={open} onOpenChange={setOpen} autoApply={latestVersion} /> : null}
+      {open ? <SelfUpdateDialog open={open} onOpenChange={setOpen} autoApply={latestVersion} brandName={brandName} /> : null}
     </>
   )
 }
@@ -384,6 +390,8 @@ type NavProps = {
   hostWidget?: ReactNode
   toolsMenu?: ReactNode
   projectGroups?: ReactNode
+  brandName: string
+  brandLogoUrl: string | null
   singleProject: boolean
 }
 
@@ -578,10 +586,14 @@ function SidebarContent({
   toolsMenu,
   projectGroups,
   singleProject,
+  brandName,
+  brandLogoUrl,
   onNavigate,
   headerAction,
   compactHeader = false,
 }: NavProps & {
+  brandName: string
+  brandLogoUrl: string | null
   /** Fires on any in-drawer navigation. The route-change effect already closes the drawer for
    *  every *changed* route; this also covers re-clicking the active item (per the spec, Tasks
    *  navigates home even when already active), which changes no pathname at all. */
@@ -603,7 +615,7 @@ function SidebarContent({
       className="@container/sidebar flex min-h-0 flex-1 flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
     >
       <div className={cn('flex items-center gap-[9px] px-3.5 pb-2.5', compactHeader ? 'pt-1.5' : 'pt-3.5')}>
-        <BrandLockup />
+        <BrandLockup name={brandName} logoUrl={brandLogoUrl} />
         {/* With project groups mounted the boot repo/branch is one group header among many —
             a chip repeating it up here would just be the first group's header said twice. */}
         {repo && !projectGroups ? (
@@ -754,7 +766,7 @@ function SidebarContent({
           <div data-slot="tools-menu" className="shrink-0">
             {toolsMenu}
           </div>
-          {version ? <VersionChip version={version} latestVersion={latestVersion} /> : null}
+          {version ? <VersionChip version={version} latestVersion={latestVersion} brandName={brandName} /> : null}
           {starCount === null ? null : <StarChip count={starCount} />}
           <GlobalSettingsLink onNavigate={onNavigate} className="ml-auto" />
           <ThemeToggle />
@@ -975,7 +987,7 @@ function CommandPaletteHint() {
  * the semver, and the `title` keeps the whole string — which is why the tooltip is now there
  * even with no update to announce.
  */
-function VersionChip({ version, latestVersion }: { version: string; latestVersion: string | null }) {
+function VersionChip({ version, latestVersion, brandName }: { version: string; latestVersion: string | null; brandName: string }) {
   const updateAvailable = Boolean(latestVersion && latestVersion !== version)
   // The chip opens the self-update dialog (PoC): channel, latest, and a version picker.
   const [open, setOpen] = React.useState(false)
@@ -986,14 +998,14 @@ function VersionChip({ version, latestVersion }: { version: string; latestVersio
         data-slot="version-chip"
         data-update-available={updateAvailable ? 'true' : undefined}
         title={updateAvailable ? `v${version} — update available: v${latestVersion}` : `v${version}`}
-        aria-label={updateAvailable ? `cezar v${version}, update to v${latestVersion} available — open updater` : `cezar v${version} — open updater`}
+        aria-label={updateAvailable ? `${brandName} v${version}, update to v${latestVersion} available — open updater` : `${brandName} v${version} — open updater`}
         onClick={() => setOpen(true)}
         className="flex min-w-0 cursor-pointer items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-[10px] font-medium text-soft-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
       >
         {updateAvailable ? <StatusDot tone="pending" pulse className="size-[5px] shrink-0" /> : null}
         <span className="truncate">v{version}</span>
       </button>
-      {open ? <SelfUpdateDialog open={open} onOpenChange={setOpen} /> : null}
+      {open ? <SelfUpdateDialog open={open} onOpenChange={setOpen} brandName={brandName} /> : null}
     </>
   )
 }

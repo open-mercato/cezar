@@ -370,7 +370,7 @@ describe('the GitHub tab lists', () => {
     const p203: GithubItem = { ...PR_137, number: 203, url: 'u203', checks: null }
     const pr137: GithubItem = { ...PR_137, checks: null }
     stubFetch({
-      'GET /api/v1/github?limit=1000': () => jsonResponse({ ...GITHUB, prs: [pr137, p201, p202, p203] }),
+      'GET /api/v1/github?limit=50': () => jsonResponse({ ...GITHUB, prs: [pr137, p201, p202, p203] }),
       // The window follows the RENDERED order, not the payload order (#gh-sort), so it is the
       // sort's answer for these four — all copies of PR_137, hence one `createdAt` and the
       // number tiebreak, newest-first — that names the request.
@@ -439,13 +439,13 @@ describe('the GitHub tab lists', () => {
 
   it('shows the exact open count from the single fast load — no 30+ guesswork (#664)', async () => {
     // The two-shot is gone: one fast fetch (limit 1000, no rollup) returns the whole open set, so
-    // the tab reports the real count instead of the old fast-batch "30+" placeholder.
+    // the tab reports the server's exact total when the page is smaller than the open set.
     const many: GithubData = {
       ...GITHUB,
       issues: Array.from({ length: 45 }, (_, i) => ({ ...ISSUE_142, number: i + 1, url: `u${i}` })),
     }
     stubFetch({
-      'GET /api/v1/github?limit=1000': () => jsonResponse(many),
+      'GET /api/v1/github?limit=50': () => jsonResponse({ ...many, issuesTotal: 45 }),
     })
     renderAt('/github')
 
@@ -491,6 +491,118 @@ describe('the GitHub tab lists', () => {
       expect.stringContaining('Fix GitHub issue #142: Login form drops session on refresh'),
     )
     expect(setData.mock.calls[0]?.[1]).toContain(ISSUE_142.url)
+  })
+})
+
+describe('scroll-driven paging', () => {
+  /** jsdom has no IntersectionObserver; this one lets a test say "the sentinel scrolled into view". */
+  let observers: { target: Element | null; root: Element | null; fire: (visible: boolean) => void }[]
+  beforeEach(() => {
+    observers = []
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(cb: (entries: { isIntersecting: boolean }[]) => void, opts: { root?: Element | null }) {
+          const record = { target: null as Element | null, root: opts.root ?? null, fire: (v: boolean) => cb([{ isIntersecting: v }]) }
+          observers.push(record)
+          this.observe = (el: Element) => { record.target = el }
+          this.disconnect = () => { record.target = null }
+        }
+        observe: (el: Element) => void
+        disconnect: () => void
+        unobserve() {}
+      },
+    )
+  })
+
+  const ISSUE_120: GithubItem = { ...ISSUE_139, number: 120, title: 'Older issue', url: 'https://github.com/acme/demo/issues/120' }
+  const listPage = (path: string) => path === '/api/v1/github' || path.startsWith('/api/v1/github?')
+  const sentinel = () => document.querySelector('[data-slot="gh-load-more"]')
+  const live = () => observers.filter((o) => o.target !== null)
+
+  /** First list page carries a cursor; the cursored page carries ISSUE_120 and ends the list. */
+  function stubPaged(): SentRequest[] {
+    const sent = stubFetch()
+    const base = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const path = String(input)
+      if ((init?.method ?? 'GET') === 'GET' && listPage(path)) {
+        sent.push({ path, method: 'GET', body: undefined })
+        return path.includes('issuesCursor=')
+          ? jsonResponse({ ...GITHUB, issues: [ISSUE_120], prs: [], issuesNextCursor: null, prsNextCursor: null })
+          : jsonResponse({ ...GITHUB, issuesNextCursor: 'c1', prsNextCursor: null })
+      }
+      return base(input, init)
+    })
+    return sent
+  }
+
+  it('fetches the next page when the sentinel scrolls into view, with no button', async () => {
+    const sent = stubPaged()
+    renderAt('/github')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    expect(screen.queryByRole('button', { name: /load more/i })).toBeNull()
+    await waitFor(() => expect(live()).toHaveLength(1))
+    // Observed against the list pane — the element that actually scrolls — not the viewport.
+    expect(live()[0]!.root?.getAttribute('data-slot')).toBe('gh-list')
+    expect(live()[0]!.target).toBe(sentinel())
+
+    act(() => live()[0]!.fire(true))
+    await waitFor(() => expect(rows().map((row) => row.dataset.number)).toEqual(['142', '139', '120']))
+    expect(sent.filter((r) => listPage(r.path) && r.path.includes('issuesCursor=c1'))).toHaveLength(1)
+    // The last page is in: no sentinel, no observer, nothing left to offer.
+    expect(sentinel()).toBeNull()
+    expect(live()).toHaveLength(0)
+  })
+
+  it('does not fetch while the sentinel stays out of view', async () => {
+    const sent = stubPaged()
+    renderAt('/github')
+    await waitFor(() => expect(live()).toHaveLength(1))
+    act(() => live()[0]!.fire(false))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(sent.filter((r) => r.path.includes('issuesCursor='))).toHaveLength(0)
+    expect(rows()).toHaveLength(2)
+  })
+
+  it('a failed page stops auto-paging and offers a retry instead of looping', async () => {
+    const sent = stubPaged()
+    const paged = vi.mocked(fetch).getMockImplementation()!
+    let failNext = true
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).includes('issuesCursor=') && failNext) {
+        failNext = false
+        sent.push({ path: String(input), method: 'GET', body: undefined })
+        return jsonResponse({ error: 'boom' }, 400)
+      }
+      return paged(input, init)
+    })
+    renderAt('/github')
+    await waitFor(() => expect(live()).toHaveLength(1))
+    act(() => live()[0]!.fire(true))
+    const retry = await screen.findByRole('button', { name: 'Retry' })
+    expect(live()).toHaveLength(0)
+    expect(sent.filter((r) => r.path.includes('issuesCursor='))).toHaveLength(1)
+
+    fireEvent.click(retry)
+    await waitFor(() => expect(rows().map((row) => row.dataset.number)).toEqual(['142', '139', '120']))
+  })
+
+  it('offers no paging while a search narrows the list', async () => {
+    stubPaged()
+    renderAt('/github')
+    await waitFor(() => expect(sentinel()).not.toBeNull())
+    fireEvent.change(document.querySelector('[data-slot="gh-search"]')!, { target: { value: '142' } })
+    await waitFor(() => expect(rows()).toHaveLength(1))
+    expect(sentinel()).toBeNull()
+    expect(live()).toHaveLength(0)
+  })
+
+  it('renders no paging affordance when the first page is the whole list', async () => {
+    stubFetch()
+    renderAt('/github')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    expect(sentinel()).toBeNull()
   })
 })
 
@@ -632,7 +744,7 @@ describe('sorting the list newest or oldest first', () => {
       createdAt: '2026-06-01T08:00:00.000Z',
     }
     stubUiStateFetch({
-      'GET /api/v1/github?limit=1000': () => jsonResponse({ ...GITHUB, prs: [PR_137, olderPr] }),
+      'GET /api/v1/github?limit=50': () => jsonResponse({ ...GITHUB, prs: [PR_137, olderPr] }),
       'GET /api/v1/github/checks?prs=137%2C120': () => jsonResponse({ available: true, checks: {} }),
       'GET /api/v1/github/checks?prs=120%2C137': () => jsonResponse({ available: true, checks: {} }),
     })
@@ -721,6 +833,19 @@ describe('the GitHub detail pane', () => {
     expect(checks?.getAttribute('href')).toBe(`${PR_137.url}/checks`)
     expect(checks?.getAttribute('target')).toBe('_blank')
     expect(checks?.getAttribute('rel')).toBe('noopener noreferrer')
+  })
+
+  it('hydrates the selected PR body and diffstat without changing the list row', async () => {
+    stubFetch({
+      'GET /api/v1/github/comments/pr/137': () => jsonResponse({
+        ...THREAD,
+        detail: { body: 'Hydrated PR description', additions: 240, deletions: 12 },
+      }),
+    })
+    renderAt('/github/prs/137')
+
+    await waitFor(() => expect(document.querySelector('[data-slot="gh-body"]')?.textContent).toContain('Hydrated PR description'))
+    expect(document.querySelector('[data-slot="gh-diffstat"]')?.textContent).toBe('+240 −12')
   })
 
   it('renders the issue body through the markdown pipeline', async () => {
@@ -1333,8 +1458,8 @@ describe('the unavailable forge state', () => {
   it('renders the server reason and the gh hint, and Try again refetches with refresh=1', async () => {
     const unavailable: GithubData = { available: false, reason: 'gh not installed', issues: [], prs: [] }
     const sent = stubFetch({
-      'GET /api/v1/github?limit=1000': () => jsonResponse(unavailable),
-      'GET /api/v1/github?limit=1000&refresh=1': () => jsonResponse(unavailable),
+      'GET /api/v1/github?limit=50': () => jsonResponse(unavailable),
+      'GET /api/v1/github?limit=50&refresh=1': () => jsonResponse(unavailable),
     })
     renderAt('/github')
 
@@ -1342,12 +1467,12 @@ describe('the unavailable forge state', () => {
       expect(screen.getByRole('heading', { level: 1, name: 'GitHub is unavailable here' })).toBeTruthy(),
     )
     expect(screen.getByText('gh not installed')).toBeTruthy()
-    // One fast fetch now (#664): the single limit=1000 load is what proved the forge unreachable.
-    expect(sent.some((request) => request.path === '/api/v1/github?limit=1000')).toBe(true)
+    // The first cursor page is the request that proved the forge unreachable.
+    expect(sent.some((request) => request.path === '/api/v1/github?limit=50')).toBe(true)
 
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
     await waitFor(() =>
-      expect(sent.some((request) => request.path === '/api/v1/github?limit=1000&refresh=1')).toBe(true),
+      expect(sent.some((request) => request.path === '/api/v1/github?limit=50&refresh=1')).toBe(true),
     )
   })
 })
@@ -1501,6 +1626,109 @@ describe('the hand-to-agent backend pills (#401)', () => {
     fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
     await waitFor(() => expect(postedRun(sent)).toBeDefined())
     expect(postedRun(sent)).toMatchObject({ runner: 'codex' })
+  })
+
+  /**
+   * The #906 regression. `defaultModels` is seeded server-side from the coding agent's OWN
+   * settings file, so "never touched" is not a neutral state — it hands the choice to
+   * `~/.claude/settings.json`. Before the fix the pick was plain route state, reset on every
+   * mount, and an explicit `auto` therefore survived exactly until the next navigation: the user
+   * re-picked auto forever and every run still went out pinned to the native model.
+   */
+  it('an explicitly picked auto survives a remount instead of reverting to the native default (#906)', async () => {
+    const nativeDefault = () =>
+      jsonResponse({ defaultRunner: 'claude', defaultModels: { claude: 'opus' } })
+    stubFetch({ 'GET /api/v1/config': nativeDefault })
+    await openDetail()
+
+    // The starting state the issue describes: untouched, so the native default shows through.
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="model-pill"]')?.textContent).toContain('opus'),
+    )
+    await pickPill('model-pill', 'auto')
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="model-pill"]')?.textContent).toContain('auto'),
+    )
+
+    // A full cold mount — the reload / tab hop that used to discard the pick.
+    cleanup()
+    const sent = stubFetch({ 'GET /api/v1/config': nativeDefault })
+    await openDetail()
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="model-pill"]')?.textContent).toContain('auto'),
+    )
+
+    // And the pick is real, not cosmetic: auto stays implicit, so no model rides the request.
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).not.toHaveProperty('model')
+  })
+
+  /**
+   * Remembering gave the pick a lifetime beyond the host that justified it — the same problem
+   * `github.tsx` already solves for a workflow the server no longer knows. It is not theoretical:
+   * cockpits for different repos share one `localhost:<port>` origin and therefore this
+   * localStorage key, so a pick can arrive from a repo where it was perfectly valid.
+   */
+  it('drops a remembered runner this host cannot honour instead of posting it (#906)', async () => {
+    // Remembered from elsewhere: a backend that is not connected on this host.
+    localStorage.setItem('cez-followup-selection', '{"runner":"codex","model":null}')
+    const sent = stubFetch({
+      'GET /api/v1/health': SINGLE_BACKEND,
+      'GET /api/v1/config': () => jsonResponse({ defaultRunner: 'claude', defaultModels: {} }),
+    })
+    await openDetail()
+
+    // A single-backend host hides the runner pill entirely, so a dead pick could not even be
+    // seen, let alone corrected — it must be dropped rather than ride the request as an
+    // explicit override of the server's own default.
+    await waitFor(() => expect(document.querySelector('[data-slot="model-pill"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="runner-pill"]')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).not.toHaveProperty('runner')
+    // And it is cleared from the store, so it stops haunting every later hand-off.
+    await waitFor(() => expect(readFollowupSelection().runner).toBeNull())
+  })
+
+  it('drops a remembered model that belongs to a different backend (#906)', async () => {
+    // `opus` is a claude preset; the remembered runner is codex. Both are valid somewhere, which
+    // is exactly how this arrives — one localStorage key is shared across repos.
+    localStorage.setItem('cez-followup-selection', '{"runner":"codex","model":"opus"}')
+    stubFetch({
+      'GET /api/v1/health': MULTI_BACKEND,
+      'GET /api/v1/providers/status': () => jsonResponse(PROVIDERS_MULTI),
+    })
+    await openDetail()
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="runner-pill"]')?.textContent).toContain('codex'),
+    )
+    await waitFor(() => expect(readFollowupSelection()).toMatchObject({ runner: 'codex', model: null }))
+  })
+
+  /**
+   * The other half of that sweep, and the more dangerous one: "no backend is connected" and
+   * "provider status has not answered yet" look identical from inside the hook, so a sweep that
+   * treats an empty runner list as evidence would clear the pick on every single mount — and,
+   * because this surface persists, write the `null` straight back to the store. That destroys the
+   * remembered choice permanently and quietly reintroduces #906. An unreachable agent CLI is a
+   * degradation path, not a licence to discard user state.
+   */
+  it('keeps the remembered pick when no provider has answered — absence of status is not absence of a backend (#906)', async () => {
+    localStorage.setItem('cez-followup-selection', '{"runner":"codex","model":"opus"}')
+    stubFetch({ 'GET /api/v1/providers/status': () => jsonResponse(PROVIDERS_NONE) })
+    await openDetail()
+
+    // The disabled Run button proves the "nothing connected" answer really did land, so this is
+    // not merely passing on a render that happened before any query resolved.
+    await waitFor(() =>
+      expect(
+        screen.getByRole<HTMLButtonElement>('button', { name: /Run agent on this issue/ }).disabled,
+      ).toBe(true),
+    )
+    expect(readFollowupSelection()).toMatchObject({ runner: 'codex', model: 'opus' })
   })
 
   it('disables click and shortcut starts with no connected provider while browsing and editing stay live', async () => {
@@ -2410,6 +2638,9 @@ describe('the follow-up prompt template menu (#413)', () => {
       if (!option(id)) throw new Error(`template option "${id}" not mounted yet`)
     })
     await selectOption(id)
+    // Menu closure proves the click landed, but React may commit the prompt state in the next
+    // render. Wait for this selection's value transition before the caller checks its exact text.
+    await waitFor(() => expect(textarea().value).not.toBe(before))
   }
 
   it('an untouched ui-state shows the built-in templates, and inserting one fills the custom prompt', async () => {
@@ -2886,7 +3117,7 @@ describe('cross-state search fallback (#730)', () => {
     const MERGED_STREAM: GithubItem = { ...MERGED_PR, title: 'Stream reconcile' }
 
     const sent = stubFetch({
-      'GET /api/v1/github?limit=1000': () => jsonResponse({ ...GITHUB, prs: [PR_137, PR_200] }),
+      'GET /api/v1/github?limit=50': () => jsonResponse({ ...GITHUB, prs: [PR_137, PR_200] }),
       // A real `gh search prs Stream` answers with the OPEN #137 alongside the merged one — which
       // is what made the stale payload render #137 a second time.
       'GET /api/v1/github/search?kind=pr&q=Stream': () =>
@@ -2989,7 +3220,7 @@ describe('cross-state search fallback (#730)', () => {
       checks: null,
     }
     const sent = stubFetch({
-      'GET /api/v1/github?limit=1000': () => jsonResponse({ ...GITHUB, prs: [PR_137, PR_200] }),
+      'GET /api/v1/github?limit=50': () => jsonResponse({ ...GITHUB, prs: [PR_137, PR_200] }),
     })
     renderAt('/github/prs')
     await waitFor(() => expect(rows()).toHaveLength(2))

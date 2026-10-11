@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { trackerAssociationSchema, trackerFailureSchema } from './tracker.ts';
+import { trackerAssociationSchema, trackerAutomationEventSchema, trackerFailureSchema } from './tracker.ts';
 // An automation launches an ORDINARY cezar task, so the task it carries is the composer's own
 // run-creation input minus the keys an automation supplies itself. Consumed rather than
 // redeclared — the same one-way direction `./runs.ts` takes towards `./workflows.ts`.
@@ -40,8 +40,6 @@ export const automationEventSchema = z.enum([
 ]);
 export type AutomationEvent = z.infer<typeof automationEventSchema>;
 
-export const trackerAutomationEventSchema = z.enum(['issue.opened', 'issue.status_changed', 'issue.labeled', 'issue.unlabeled']);
-export type TrackerAutomationEvent = z.infer<typeof trackerAutomationEventSchema>;
 export const trackerTriggerSchema = z.object({
   events: z.array(trackerAutomationEventSchema).min(1).max(4),
   targetStatusIds: z.array(z.string().min(1)).max(100).optional(),
@@ -132,6 +130,12 @@ export const automationTaskSchema = createRunInputBaseSchema
     variants: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
     systemPrompt: z.string().optional(),
     dispatch: automationDispatchSchema.optional(),
+    /** Where the launched run's worktree forks from (spec 2026-10-06-agentic-e2e-checks Phase 3):
+     *  omitted/`'base'` = the configured base; `'pr-head'` = the matched pull request's head.
+     *  GitHub automations whose events are all `pull_request.*` only. */
+    checkout: z.enum(['base', 'pr-head']).optional(),
+    /** With `checkout: 'pr-head'`: admit a head from a fork (untrusted; no secrets). */
+    allowForkHeads: z.boolean().optional(),
   });
 export type AutomationTask = z.infer<typeof automationTaskSchema>;
 

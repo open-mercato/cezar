@@ -26,16 +26,18 @@ import type { ProjectListEntry, RunIndexEntry, RunsIndexResponse } from '@open-m
 import { dispatchKindLabel, subtaskLabel, taskTreeRows, type TaskTreeInput } from '@/lib/task-tree'
 import { CenteredState } from '@/components/centered-state'
 import { FacetFilter, SegmentedControl, ToggleChip } from '@/components/facet-filter'
+import { Segmented } from '@/components/segmented'
 import { useListView } from '@/components/list-view'
 import { Pill } from '@/components/pill'
 import { ReferenceChip } from '@/components/reference-chip'
+import { ReferenceOverflow } from '@/components/reference-overflow'
 import { ResolveConflictsForRun } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
-import { StatusDot } from '@/components/status-dot'
 import { SubtaskToggle } from '@/components/subtask-toggle'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { UnreadMarker } from '@/components/unread-marker'
 import { deriveAttention } from '@/lib/attention'
 import { shortAge } from '@/lib/format'
 import {
@@ -54,6 +56,8 @@ import {
   allWorkflows,
   facetCounts,
   filterGlobalTasks,
+  filterGlobalTasksByOrigin,
+  globalAutomationIndex,
   urlStateFromSearchParams,
   urlStateToSearchParams,
   groupGlobalTasks,
@@ -75,6 +79,7 @@ import { scopeTo } from '@/lib/project-router'
 import { allProjectTags } from '@/lib/project-tags'
 import { canBeUnread, isReadDoneItem, isUnread } from '@/lib/read-state'
 import { runTitle, type ListView } from '@/lib/task-groups'
+import { TASK_ORIGIN_OPTIONS, useTaskOrigin, type TaskOrigin } from '@/lib/task-origin'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
@@ -125,10 +130,6 @@ const QUERY_DEBOUNCE_MS = 250
  *  second one is a pointer-move away rather than a click. The strongest reference — the PR a task
  *  created, else the one it is about, else its issue — is the one worth the row's own space. */
 const MAX_VISIBLE_REFERENCES = 1
-
-/** How long the `+N` list survives the pointer leaving it. The trigger and the list are separate
- *  elements with a gap between them, so closing instantly would make the list unreachable. */
-const HOVER_CLOSE_DELAY_MS = 220
 
 /** What "finished" means for the archive affordance — outcomes, not gates. A `review` run still
  *  wants a human, so it is not swept away, exactly as the per-project broom decides it. */
@@ -321,10 +322,25 @@ export function GlobalTasksRoute() {
     if (indexedStatuses) rememberReferenceStatuses(indexedStatuses)
   }, [indexedStatuses])
   const registry = React.useMemo(() => projects.data?.projects ?? [], [projects.data])
-  const tasks = React.useMemo(
+  const allTasks = React.useMemo(
     () => toGlobalTasks(index.data?.runs ?? [], registry),
     [index.data, registry],
   )
+  // Who started each row (a person, or an automation) — the remembered origin split narrows the
+  // list before any facet does, so the facet counts are counts of the list actually on screen.
+  // It lives in localStorage rather than the URL: it is a standing preference shared with the
+  // per-project table, not a narrowing worth pasting into a colleague's chat.
+  const [origin, setOrigin] = useTaskOrigin()
+  const automations = React.useMemo(() => globalAutomationIndex(allTasks), [allTasks])
+  const tasks = React.useMemo(
+    () => filterGlobalTasksByOrigin(allTasks, origin, automations),
+    [allTasks, origin, automations],
+  )
+  const originCounts = React.useMemo(() => {
+    const count = (value: TaskOrigin) =>
+      filterGlobalTasks(filterGlobalTasksByOrigin(allTasks, value, automations), filters, view).length
+    return { regular: count('regular'), automation: count('automation'), all: count('all') }
+  }, [allTasks, automations, filters, view])
   const visible = React.useMemo(
     () => filterGlobalTasks(tasks, filters, view),
     [tasks, filters, view],
@@ -402,7 +418,7 @@ export function GlobalTasksRoute() {
         </div>
         <div className="flex-1" />
         <span data-slot="global-tasks-count" className="text-[12.5px] text-soft-foreground tabular-nums">
-          {visible.length} of {tasks.length}
+          {visible.length} of {allTasks.length}
         </span>
         {search}
       </header>
@@ -425,6 +441,9 @@ export function GlobalTasksRoute() {
           projects={registry}
           tasks={tasks}
           view={view}
+          origin={origin}
+          onOriginChange={setOrigin}
+          originCounts={originCounts}
         />
 
         {truncated.length > 0 ? (
@@ -435,7 +454,13 @@ export function GlobalTasksRoute() {
         ) : null}
 
         {index.data === undefined ? null : visible.length === 0 ? (
-          <GlobalTasksEmptyState view={view} filtered={hasActiveFilters(filters)} />
+          <GlobalTasksEmptyState
+            view={view}
+            filtered={hasActiveFilters(filters)}
+            origin={origin}
+            hiddenByOrigin={origin !== 'all' && originCounts.all > 0}
+            onShowAll={() => setOrigin('all')}
+          />
         ) : (
           // No `projectId` on the provider, uniquely on this page: every chip under it names its
           // own, because the rows next to each other belong to different repositories.
@@ -542,6 +567,9 @@ function FilterBar({
   projects,
   tasks,
   view,
+  origin,
+  onOriginChange,
+  originCounts,
 }: {
   filters: GlobalTaskFilters
   onToggle: (facet: FacetId, value: string) => void
@@ -552,6 +580,10 @@ function FilterBar({
   projects: readonly ProjectListEntry[]
   tasks: readonly GlobalTask[]
   view: ListView
+  origin: TaskOrigin
+  onOriginChange: (origin: TaskOrigin) => void
+  /** Rows each origin would show under the current facets and view. */
+  originCounts: Record<TaskOrigin, number>
 }) {
   const tags = React.useMemo(() => allProjectTags(projects), [projects])
 
@@ -578,6 +610,14 @@ function FilterBar({
       className="flex flex-col gap-2 rounded-lg border border-border bg-card p-2.5 shadow-xs"
     >
       <div className="flex flex-wrap items-center gap-1.5">
+        <Segmented
+          slot="task-origin"
+          label="Show tasks started by"
+          value={origin}
+          options={TASK_ORIGIN_OPTIONS.map((option) => ({ ...option, count: originCounts[option.value] }))}
+          onChange={onOriginChange}
+        />
+        <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
         {/* No project facet, deliberately — see the note in `lib/global-tasks.ts`. Narrowing to
             one project is that project's own Tasks page, which every project name here links to. */}
         <FacetFilter
@@ -881,6 +921,7 @@ function TaskRow({
             )}
           >
             {runTitle(run)}
+            {unread ? <UnreadMarker /> : null}
           </Link>
           {/* What a DISPATCHED row is for — `review` or `implement`. Null on every root. */}
           {dispatchKindLabel(run) ? (
@@ -898,15 +939,6 @@ function TaskRow({
               label={subtasks}
               expanded={subtasksExpanded}
               onToggle={() => onToggleSubtasks(run.id)}
-            />
-          ) : null}
-          {unread ? (
-            <StatusDot
-              tone="violet"
-              role="img"
-              aria-label="unread"
-              title="Unread — not opened since it finished"
-              className="shrink-0"
             />
           ) : null}
         </span>
@@ -967,14 +999,14 @@ function TaskRow({
 /**
  * Mark one row read or unread — an open eye to stamp the receipt, a closed one to take it back.
  *
- * Offered only where a read state EXISTS: `canBeUnread` is the same decider behind the unread dot
- * itself, so the button appears on exactly the rows that can wear one — finished, not archived,
+ * Offered only where a read state EXISTS: `canBeUnread` is the same decider behind the unread
+ * weight itself, so the button appears on exactly the rows that can be unread — finished, not archived,
  * not a task merely waiting out a usage limit. A running task has nothing to have read yet, and a
  * button that did nothing would say otherwise.
  *
  * The icon shows the ACTION, not the state: unread rows offer the open eye ("mark read"), read
  * ones the closed eye ("mark unread"). The state is already visible a few columns left, as the
- * violet dot beside the title.
+ * title's weight.
  */
 function ReadToggle({
   task,
@@ -1114,113 +1146,6 @@ function ReferenceChips({
 }
 
 /**
- * The `+N`, opened.
- *
- * A tooltip listing the hidden references told you they existed and then refused to let you go
- * to them — which is worse than not mentioning them. This is a popover of real links instead.
- *
- * It opens on HOVER where hovering exists and on click everywhere — including touch, which has no
- * hover, and the keyboard, where the trigger is a real button. Radix's HoverCard would have given
- * the first for free but not the other two: it is explicitly not a touch affordance. So this is a
- * Popover (click-and-keyboard by construction) with hover layered on, which is the combination
- * that leaves no input method without a way in.
- *
- * It lists EVERY reference, not only the hidden ones: at the moment you open it you are asking
- * "what does this task point at?", and answering with the leftovers would make you reassemble
- * the set from two places. The rows are `ReferenceChip`s, so the http-only guard, the accessible
- * names and the `target`/`rel` handling are the same ones every other reference link uses rather
- * than a second, subtly different implementation.
- */
-function ReferenceOverflow({
-  references,
-  taskTitle,
-  hidden,
-  projectId,
-}: {
-  references: readonly TaskReference[]
-  taskTitle: string
-  hidden: number
-  projectId: string
-}) {
-  const [open, setOpen] = React.useState(false)
-  // How it was opened decides whether focus moves into the list. A CLICK should hand the keyboard
-  // the links; a hover must not yank focus out of whatever the reader was doing.
-  const openedByHover = React.useRef(false)
-  const closeTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  React.useEffect(() => () => clearTimeout(closeTimer.current), [])
-
-  // Touch has no hover: a tap fires `pointerenter` first, so without this guard the list would
-  // open under the finger and then be toggled shut again by the click that follows. Excluded
-  // rather than allow-listing `mouse`, so a pen (which does hover) and any device that reports
-  // nothing still get the hover behaviour.
-  const isHover = (event: React.PointerEvent) => event.pointerType !== 'touch'
-  const cancelClose = () => clearTimeout(closeTimer.current)
-  const onPointerEnter = (event: React.PointerEvent) => {
-    if (!isHover(event)) return
-    cancelClose()
-    openedByHover.current = true
-    setOpen(true)
-  }
-  // On a DELAY, and the same handler on the trigger and the content: the two are separate
-  // elements with a 4px gap between them, so an instant close would make the list impossible to
-  // reach with the pointer.
-  const onPointerLeave = (event: React.PointerEvent) => {
-    if (!isHover(event)) return
-    cancelClose()
-    closeTimer.current = setTimeout(() => setOpen(false), HOVER_CLOSE_DELAY_MS)
-  }
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          data-slot="reference-overflow"
-          aria-label={`Show all ${references.length} references for ${taskTitle}`}
-          onPointerEnter={onPointerEnter}
-          onPointerLeave={onPointerLeave}
-          // A real press — mouse, tap or keyboard — is not a hover, whatever happened before it.
-          onPointerDown={() => {
-            openedByHover.current = false
-          }}
-          onClick={() => {
-            openedByHover.current = false
-          }}
-          className="shrink-0 rounded-full px-1 text-[11px] font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-        >
-          +{hidden}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        className="w-auto min-w-40 p-1.5"
-        data-slot="reference-overflow-list"
-        onPointerEnter={onPointerEnter}
-        onPointerLeave={onPointerLeave}
-        onOpenAutoFocus={(event) => {
-          if (openedByHover.current) event.preventDefault()
-        }}
-        onCloseAutoFocus={(event) => {
-          if (openedByHover.current) event.preventDefault()
-        }}
-      >
-        <p className="px-1 pb-1.5 text-[10.5px] text-soft-foreground">References</p>
-        <span className="flex flex-col items-start gap-1">
-          {references.map((reference) => (
-            <ReferenceChip
-              key={`${reference.kind}#${reference.number}`}
-              reference={reference}
-              taskTitle={taskTitle}
-              projectId={projectId}
-            />
-          ))}
-        </span>
-      </PopoverContent>
-    </Popover>
-  )
-}
-
-/**
  * A project's tag, in a table cell.
  *
  * Deliberately QUIET — muted, like the branch chip beside it. Tags repeat on every row of a
@@ -1272,7 +1197,42 @@ function Dash() {
 }
 
 /** What an empty global list honestly means, given how it got empty. */
-function GlobalTasksEmptyState({ view, filtered }: { view: ListView; filtered: boolean }) {
+function GlobalTasksEmptyState({
+  view,
+  filtered,
+  origin = 'all',
+  hiddenByOrigin = false,
+  onShowAll = () => undefined,
+}: {
+  view: ListView
+  filtered: boolean
+  origin?: TaskOrigin
+  /** The origin split is what emptied this view: switching to All would show rows. */
+  hiddenByOrigin?: boolean
+  onShowAll?: () => void
+}) {
+  if (hiddenByOrigin) {
+    return (
+      <div data-slot="global-tasks-empty" data-empty-kind="origin-hidden">
+        <CenteredState
+          heading="h2"
+          icon={<LayersIcon />}
+          tone="neutral"
+          title={origin === 'regular' ? 'No regular tasks here' : 'No automation tasks here'}
+          subtitle={
+            origin === 'regular'
+              ? 'Tasks started by automations are hidden.'
+              : 'Only tasks started by automations are shown.'
+          }
+          actions={
+            <Button type="button" variant="outline" onClick={onShowAll}>
+              Show all tasks
+            </Button>
+          }
+        />
+      </div>
+    )
+  }
   if (filtered) {
     return (
       <CenteredState

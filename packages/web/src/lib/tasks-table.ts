@@ -5,6 +5,7 @@ import type {
   RunStatus,
 } from '@open-mercato/cezar-api-client'
 import { groupTitle, runTitle, type ListView } from '@/lib/task-groups'
+import { isAwaitingAnswer } from '@/lib/attention'
 
 /**
  * The pure half of the Tasks table (the `/` overview): search, the header's archive count, the
@@ -108,7 +109,8 @@ export function filterRuns(runs: readonly RunRecord[], query: string): RunRecord
 /** How many active runs "Archive finished" would sweep. The button only exists when this is
  *  nonzero — a broom over an empty floor is noise (legacy showed the same count-gated button). */
 export function finishedRunCount(runs: readonly RunRecord[]): number {
-  return runs.filter((run) => !run.archived && FINISHED_STATUSES.has(run.status)).length
+  // An unanswered question is a gate like `review`; the server's sweep skips it, so the count does.
+  return runs.filter((run) => !run.archived && FINISHED_STATUSES.has(run.status) && !isAwaitingAnswer(run)).length
 }
 
 /** A git remote as a GitHub web root (`https://github.com/owner/repo`) — the caller passes the
@@ -141,6 +143,25 @@ export interface TaskPrRef {
   number: number
   url?: string
   origin: 'created' | 'marker' | 'legacy' | 'derived'
+}
+
+/**
+ * The PR this task OWNS — the one it created, or the one it declared as its subject (`CEZ:PR`) —
+ * and never one merely scraped from its transcript (`referencedPullRequestUrl`, the `legacy` and
+ * `derived` origins). This is the one to ACT on: the run header's git button offers Create PR,
+ * Commit, Push, Resolve conflicts or Fix errors against it, so a link the agent only read
+ * (a file, a log) must not stand in for it. A declaration known only by number (no link scraped
+ * yet) still counts — it carries `number` and no `url`.
+ */
+export function ownedTaskPr(run: TaskReferenceInput): { number?: number; url?: string } | undefined {
+  if (run.pullRequestUrl) {
+    const number = Number(prNumber(run.pullRequestUrl))
+    return { url: run.pullRequestUrl, ...(number > 0 ? { number } : {}) }
+  }
+  const owned = run.prRefs?.find((ref) => ref.origin === 'created' || ref.origin === 'marker')
+  if (owned) return { number: owned.number, ...(owned.url ? { url: owned.url } : {}) }
+  const declared = run.markerRefs?.pr
+  return declared === undefined ? undefined : { number: declared }
 }
 
 export function taskPrUrl(run: TaskReferenceInput): string | undefined {

@@ -15,8 +15,9 @@ import {
   DEFAULT_RUN_TIMEOUT_MS,
   KILL_GRACE_MS,
 } from './claude-cli-runner.ts';
-import { parseAskRequest, type AskQuestion } from './ask.ts';
+import { ASK_MAX_QUESTIONS, parseAskRequest, type AskQuestion } from './ask.ts';
 import { readNdjson } from './ndjson.ts';
+import { skippedServersNote, toCodexConfigOverrides } from './private-mcp.ts';
 import { V1TextCoalescer } from './v1-text-coalescer.ts';
 import {
   CodexAppServerRpc,
@@ -100,6 +101,11 @@ class CodexSession implements AgentSession {
   private readonly child!: ChildProcessWithoutNullStreams;
   private readonly rpc!: CodexAppServerRpc;
   private stdinOpen = true;
+  /** Teardown rejects follow-up RPCs after the owning run may have gone away.
+   * Do not route that self-inflicted rejection through the discarded floating
+   * promise, while keeping the normal cancellation lifecycle (`done`) intact
+   * for existing session consumers (#1105). */
+  private followUpDeliveryOpen = true;
   private threadId: string | undefined;
   private activeTurnId: string | undefined;
   private pendingUserInput: PendingUserInput | undefined;
@@ -306,7 +312,9 @@ class CodexSession implements AgentSession {
     void this.ready
       .then(() => this.startOrSteerTurn(text))
       .catch((err: unknown) => {
-        this.emit(this.asyncTurnFailure(err instanceof Error ? err.message : String(err)));
+        if (this.followUpDeliveryOpen) {
+          this.emit(this.asyncTurnFailure(err instanceof Error ? err.message : String(err)));
+        }
       });
     return true;
   }
@@ -353,6 +361,7 @@ class CodexSession implements AgentSession {
     if (!this.stdinOpen) return;
     this.rejectPendingUserInput('session ended');
     this.stdinOpen = false;
+    this.followUpDeliveryOpen = false;
     try {
       endCodexAppServer(
         this.child,
@@ -371,6 +380,7 @@ class CodexSession implements AgentSession {
 
   interrupt(): void {
     this.stdinOpen = false;
+    this.followUpDeliveryOpen = false;
     this.rejectPendingUserInput('turn interrupted');
     // Best-effort graceful cancel of the in-flight turn, then hard stop.
     if (this.threadId && this.activeTurnId) {
@@ -409,6 +419,9 @@ class CodexSession implements AgentSession {
       // CEZ_CODEX_NETWORK=0 remains the backwards-compatible explicit sandbox opt-out.
       sandbox: process.env.CEZ_CODEX_NETWORK === '0' ? 'workspace-write' : 'danger-full-access',
       approvalPolicy: 'never',
+      // Private MCP servers (spec 2026-10-07-private-project-mcp) ride in as per-server dotted
+      // config overrides, so the user's own [mcp_servers] table is extended, never replaced.
+      config: this.privateMcpConfig(),
     };
     if (this.spec.resume && this.spec.sessionId) {
       await this.rpc.request('thread/resume', { threadId: this.spec.sessionId, ...clean(overrides) });
@@ -597,6 +610,15 @@ class CodexSession implements AgentSession {
     }
   }
 
+  private privateMcpConfig(): Record<string, unknown> | undefined {
+    if (!this.spec.mcpServers?.length) return undefined;
+    const { config, skipped } = toCodexConfigOverrides(this.spec.mcpServers);
+    if (skipped.length) {
+      this.emit({ type: 'note', message: skippedServersNote('codex', skipped, 'Codex supports stdio and streamable HTTP MCP servers, not SSE') });
+    }
+    return Object.keys(config).length ? config : undefined;
+  }
+
   private emit(event: AgentEvent): void {
     this.onEvent?.(event);
   }
@@ -618,8 +640,17 @@ class CodexSession implements AgentSession {
 
 // ---- helpers --------------------------------------------------------------
 
+/**
+ * Map Codex's native `requestUserInput` questions onto the portable ask shape.
+ * `parseAskRequest` at the end is what decides validity; the length guard here
+ * only keeps the mapping work bounded, so a frame claiming a hundred thousand
+ * questions is refused before each one is walked and allocated. It reads the
+ * shared `ASK_MAX_QUESTIONS` rather than its own number — the line used to say
+ * `value.length > 4`, which is exactly the kind of copy that stays behind when
+ * the schema moves. The low end stays with the schema (`min(1)`).
+ */
 function codexAskQuestions(value: unknown): AskQuestion[] | null {
-  if (!Array.isArray(value) || value.length < 1 || value.length > 4) return null;
+  if (!Array.isArray(value) || value.length > ASK_MAX_QUESTIONS) return null;
   const questions: unknown[] = [];
   for (const raw of value) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
