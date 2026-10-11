@@ -32,7 +32,7 @@ Resolve #1219 by removing the eager Markdown/Streamdown dependency from skill pr
 ### Phase 3: Verify and ship
 
 - [x] 3.1 Measure before/after entry and deduplicated entry-plus-preload raw/gzip sizes for each change independently. — dc17e0b2
-- [ ] 3.2 Run focused tests, red-green regression proof, browser evidence, full validation gate, review, and finalize the PR. (Focused suites pass 287/287; removing the new boundaries makes both new tests fail, then restoring them passes. `npm run build` passes. Browser QA passes with palette keyboard/programmatic open, Control+N/c, sidebar Skills, both picker previews, and both project dialogs; screenshots are in `.ai/qa/artifacts_1219`. Full `npm test` and authoritative review remain.)
+- [ ] 3.2 Run focused tests, red-green regression proof, browser evidence, full validation gate, review, and finalize the PR. (Focused suites pass 287/287; removing the new boundaries makes both new tests fail, then restoring them passes. Isolated final gate: typecheck, unit 42/42, build/check-pack, and package 17/17 pass; full `npm test` runs 557 files / 9,334 tests with 9,330 passed, 3 skipped, and one unrelated `agent-profile-wiring` baseline failure from inherited `CEZ_API_URL`/`CEZ_BIN`. Browser QA passes with palette keyboard/programmatic open, Control+N/c, sidebar Skills, both picker previews, and both project dialogs; screenshots are inline on the PR. Authoritative review remains.)
 
 ## Measurement notes
 
@@ -66,4 +66,4 @@ Resolve #1219 by removing the eager Markdown/Streamdown dependency from skill pr
 ### Phase 3: Verify and ship
 
 - [x] 3.1 Measure before/after entry and deduplicated entry-plus-preload raw/gzip sizes for each change independently. — dc17e0b2
-- [ ] 3.2 Run focused tests, red-green regression proof, browser evidence, full validation gate, review, and finalize the PR. (Focused 287/287, red-green proven, browser QA passed; full gate/review remain.)
+- [ ] 3.2 Run focused tests, red-green regression proof, browser evidence, full validation gate, review, and finalize the PR. (Focused 287/287, red-green proven, browser QA passed, isolated gate completed with one unrelated baseline failure; authoritative review remains.)
