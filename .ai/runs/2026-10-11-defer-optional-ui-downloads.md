@@ -32,7 +32,7 @@ Resolve #1219 by removing the eager Markdown/Streamdown dependency from skill pr
 ### Phase 3: Verify and ship
 
 - [x] 3.1 Measure before/after entry and deduplicated entry-plus-preload raw/gzip sizes for each change independently. — dc17e0b2
-- [ ] 3.2 Run focused tests, red-green regression proof, browser evidence, full validation gate, review, and finalize the PR. (Focused suites pass; `npm run typecheck`, `npm run build`, `npm run test:unit`, and `npm run test:package` pass. Full `npm test` has 16 unrelated baseline failures; browser provider unavailable; review handoff remains.)
+- [ ] 3.2 Run focused tests, red-green regression proof, browser evidence, full validation gate, review, and finalize the PR. (Focused suites pass 287/287; removing the new boundaries makes both new tests fail, then restoring them passes. `npm run build` passes. Browser QA passes with palette keyboard/programmatic open, Control+N/c, sidebar Skills, both picker previews, and both project dialogs; screenshots are in `.ai/qa/artifacts_1219`. Full `npm test` and authoritative review remain.)
 
 ## Measurement notes
 
@@ -66,4 +66,4 @@ Resolve #1219 by removing the eager Markdown/Streamdown dependency from skill pr
 ### Phase 3: Verify and ship
 
 - [x] 3.1 Measure before/after entry and deduplicated entry-plus-preload raw/gzip sizes for each change independently. — dc17e0b2
-- [ ] 3.2 Run focused tests, red-green regression proof, browser evidence, full validation gate, review, and finalize the PR.
+- [ ] 3.2 Run focused tests, red-green regression proof, browser evidence, full validation gate, review, and finalize the PR. (Focused 287/287, red-green proven, browser QA passed; full gate/review remain.)
