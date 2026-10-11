@@ -7,11 +7,16 @@
 - ✨ Encrypted project and workspace secrets (OS keychain, `0600` key file fallback) for check steps, never for agents; Settings → Secrets and `cezar secrets`. (#1291) *(@pat-lewczuk)*
 
 ## ⚡ Performance
-- ⚡ The GitHub tab loads faster: cursor-paged lists, real open totals and background detail hydration (fixes #1261). (#1362) *(@pat-lewczuk)*
+- ⚡ The GitHub tab loads faster: cursor-paged lists that load more on scroll, real open totals and background detail hydration (fixes #1261). (#1362, #1366, #1374) *(@pat-lewczuk)*
 
 ## 🐛 Fixes
 - 🐛 Autosave commits leave out artifacts written by failed checks (fixes #1079). (#1126) *(@pat-lewczuk)*
 - 🐛 macOS RAM matches Activity Monitor, swap shows on macOS, and the host glance keeps updating. (#1363) *(@pat-lewczuk)*
+- 🐛 Each workflow step keeps the model it actually ran on after a model change or auto-continue (fixes #545). (#1353) *(@pat-lewczuk)*
+- 🐛 A follow-up sent to a parked task shows up at once, even while another task holds the repository without worktrees. (#1357) *(@matgren)*
+- 🐛 The Agents dock collapses once every sub-agent has settled (fixes #1237). (#1350) *(@pat-lewczuk)*
+- 🐛 A brief stall no longer makes a live automation lease look compromised (fixes #1106). (#1355) *(@pat-lewczuk)*
+- 🐛 Secret redaction no longer eats words ending in "sk", such as `task-…`. (#1373) *(@zawstudio)*
 
 ## 🧪 Testing
 - 🧪 Browser e2e smoke tests (TesterArmy). (#1364) *(@pat-lewczuk)*
