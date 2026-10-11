@@ -4596,7 +4596,6 @@ export function createApp(deps: ServerDeps) {
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
-      track('open_in', { label: 'resume_in_terminal' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       // Hosted mode: there is no "my machine" to open a terminal on. The UI
       // hides the button when localHandoff is false — this is defense in depth.
       if (!capabilities().localHandoff) {
@@ -4630,6 +4629,7 @@ export function createApp(deps: ServerDeps) {
       if (!opened) {
         return c.json({ error: 'no terminal emulator found', command: fallback }, 409);
       }
+      track('open_in', { label: 'resume_in_terminal' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return c.json({ opened: true, command });
     })
 
@@ -4651,9 +4651,9 @@ export function createApp(deps: ServerDeps) {
       // injection guard, this just validates the shape.
       const parsedBody = { data: c.req.valid('json') };
       const { target, path: relPath } = parsedBody.data;
-      // The option the user picked; ids are the server's own target ids (`vscode`, `finder`,
-      // `cli:claude`, `default`), so the label set is bounded.
-      track('open_in', { label: target }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
+      // Telemetry counts an `open_in` only once it opened: `target` is free client text until
+      // `openApp`/`agentCliRunner` matched it, and labels must stay a closed set.
+      const trackOpened = (label: string) => track('open_in', { label }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       const dir = run.worktreePath && existsSync(run.worktreePath) ? run.worktreePath : repoRoot;
 
       // Diff pane "open in OS default app" (#365): one worktree file, opened with the platform's
@@ -4699,6 +4699,7 @@ export function createApp(deps: ServerDeps) {
         const filePath = join(run.worktreePath, result.path);
         const opened = await openFile(filePath);
         if (!opened) return c.json({ error: `could not open ${result.path}`, path: filePath }, 409);
+        trackOpened('default');
         return c.json({ opened: true, path: filePath });
       }
 
@@ -4744,11 +4745,13 @@ export function createApp(deps: ServerDeps) {
         if (!opened) {
           return c.json({ error: 'no terminal emulator found', command: fallback }, 409);
         }
+        trackOpened(`cli:${cliRunner}`);
         return c.json({ opened: true, path: dir, command });
       }
 
       const opened = await openApp(target, dir);
       if (!opened) return c.json({ error: `could not open ${target}`, path: dir }, 409);
+      trackOpened(target);
       return c.json({ opened: true, path: dir });
     })
 
@@ -5248,7 +5251,6 @@ export function createApp(deps: ServerDeps) {
         );
       }
       const { target } = c.req.valid('json');
-      track('open_in', { label: `project:${target}` }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       // Refused here rather than left to the menu, on the same principle as the accounts route:
       // a `cli:<runner>` handoff would START AN AGENT in the checkout everything else runs in a
       // worktree to protect. Which app APPLIES is a property of the route, not of one client.
@@ -5260,6 +5262,8 @@ export function createApp(deps: ServerDeps) {
       }
       const opened = await openApp(target, root);
       if (!opened) return c.json({ error: `could not open ${target}`, path: root }, 409);
+      // After the allowlist and the open: a closed label set (see the run route above).
+      track('open_in', { label: `project:${target}` }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return c.json({ opened: true as const, path: root });
     });
 

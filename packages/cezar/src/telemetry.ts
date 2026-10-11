@@ -19,7 +19,7 @@ import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { cezarHomeDir } from './paths.ts';
 import { detectInstallKind } from './self-update/layout.ts';
 import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from './workspace/config.ts';
@@ -105,6 +105,26 @@ export function telemetryVersion(raw: string, checkout = false): string {
 export function initTelemetry(opts: { version: string }): void {
   fullVersion = opts.version;
   version = telemetryVersion(opts.version, detectInstallKind(process.argv[1] ?? '') === 'checkout');
+  refreshProjectRoots();
+}
+
+/** Crash reporting. Node exits synchronously after an uncaught exception, before an async send
+ *  can start, so the report needs a real handler: print as Node would, report, flush (bounded),
+ *  exit 1. Off when telemetry is off, leaving Node's own crash path untouched. */
+export function installCrashReporter(): void {
+  if (!telemetryEnabled()) return;
+  let crashing = false;
+  process.on('uncaughtException', (err, origin) => {
+    if (crashing) process.exit(1);
+    crashing = true;
+    try {
+      console.error(err);
+      reportError(err, { source: 'process', handler: origin }, { code: 'uncaught_exception' });
+    } catch {
+      // the exit below must happen whatever reporting does
+    }
+    void flushTelemetry(1_000).finally(() => process.exit(1));
+  });
 }
 
 /** RFC 9562 UUIDv7: 48-bit Unix-ms timestamp, then random bits — sortable by creation time. */
@@ -219,10 +239,30 @@ export function startDailyPing(): void {
   setInterval(() => void sendDailyPing(), 60 * 60 * 1000).unref();
 }
 
-/** Replace the home directory (it carries the OS username) with `~`. */
-function scrub(text: string): string {
-  const home = homedir();
-  return home ? text.split(home).join('~') : text;
+/** Registered project roots, refreshed off the hot path: `reportError` is synchronous. */
+let projectRoots: string[] = [];
+function refreshProjectRoots(): void {
+  void loadWorkspaceConfig()
+    .then((config) => {
+      projectRoots = (config.projects ?? []).map((p) => p.root).filter((root): root is string => typeof root === 'string');
+    })
+    .catch(() => undefined);
+}
+
+/** Replace every path that names the user or their work: project roots and the working directory
+ *  become `<repo>`, the temp dir `<tmp>`, the home directory `~` — longest first, so a repo under
+ *  home is `<repo>`, not `~/code/<name>`. */
+export function scrub(text: string): string {
+  const pairs: Array<[string, string]> = [
+    ...projectRoots.map((root): [string, string] => [root, '<repo>']),
+    [process.cwd(), '<repo>'],
+    [tmpdir(), '<tmp>'],
+    [homedir(), '~'],
+  ];
+  return pairs
+    .filter(([path]) => path.length > 1)
+    .sort((a, b) => b[0].length - a[0].length)
+    .reduce((out, [path, mask]) => out.split(path).join(mask), text);
 }
 
 export type ContextValue = string | number | boolean | null;
@@ -286,6 +326,7 @@ export function reportError(
     const now = Date.now();
     if (now - (lastReported.get(key) ?? 0) < ERROR_THROTTLE_MS) return;
     lastReported.set(key, now);
+    refreshProjectRoots(); // a project added since boot is masked from the next report on
 
     const errCode = (err as { code?: unknown }).code;
     const code = opts.code ?? (typeof errCode === 'string' ? errCode : undefined);

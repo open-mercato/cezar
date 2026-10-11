@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DEV_TELEMETRY_SERVICE, deviceSid, flushTelemetry, stampedTelemetryService, registerTelemetryContext, reportError, sendDailyPing, telemetryEnabled, telemetryRuntime, telemetryVersion, track, uuidv7 } from './telemetry.ts';
+import { DEV_TELEMETRY_SERVICE, deviceSid, flushTelemetry, initTelemetry, installCrashReporter, scrub, stampedTelemetryService, registerTelemetryContext, reportError, sendDailyPing, telemetryEnabled, telemetryRuntime, telemetryVersion, track, uuidv7 } from './telemetry.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 
 describe('telemetry', () => {
@@ -115,6 +115,53 @@ describe('telemetry', () => {
     expect(deviceSid(undefined)).toBeUndefined();
   });
 
+  it('scrubs the working directory, the temp dir and the home directory, longest first', () => {
+    const text = `ENOENT '${join(process.cwd(), 'src/a.ts')}' '${join(tmpdir(), 'x')}' '${join(homedir(), 'notes')}'`;
+    const out = scrub(text);
+    expect(out).toContain(`'${join('<repo>', 'src/a.ts')}'`);
+    expect(out).toContain(`'${join('<tmp>', 'x')}'`);
+    expect(out).toContain(`'${join('~', 'notes')}'`);
+    expect(out).not.toContain(homedir());
+  });
+
+  it('masks a registered project root outside the home directory', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'cez-roots-'));
+    vi.stubEnv('CEZ_HOME', home);
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ projects: [{ id: 'w', root: '/srv/work/acme-shop', name: 'acme', addedAt: '2026-10-11T00:00:00Z', lastOpenedAt: '2026-10-11T00:00:00Z', source: 'local' }] }));
+    initTelemetry({ version: '0.0.0' });
+    await vi.waitFor(() => expect(scrub('at /srv/work/acme-shop/x.ts')).toBe('at <repo>/x.ts'));
+  });
+
+  describe('crash reporter', () => {
+    const before = process.listeners('uncaughtException');
+    afterEach(() => {
+      for (const l of process.listeners('uncaughtException')) if (!before.includes(l)) process.off('uncaughtException', l);
+    });
+
+    it('leaves Node’s own crash path alone when telemetry is off', () => {
+      vi.stubEnv('CEZ_TELEMETRY', '0');
+      installCrashReporter();
+      expect(process.listeners('uncaughtException')).toEqual(before);
+    });
+
+    it('reports an uncaught exception before exiting 1', async () => {
+      vi.stubEnv('CEZ_TELEMETRY', '1');
+      vi.stubEnv('CEZ_HOME', mkdtempSync(join(tmpdir(), 'cez-crash-')));
+      const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      const printed = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      installCrashReporter();
+      const handler = process.listeners('uncaughtException').find((l) => !before.includes(l))!;
+      handler(new Error('crash for the reporter'), 'uncaughtException');
+      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1));
+      const [url, init] = fetchMock.mock.calls.at(-1) as unknown as [string, RequestInit];
+      expect(url).toMatch(/\/track\/error$/);
+      expect(JSON.parse(String(init.body)).error.code).toBe('uncaught_exception');
+      expect(printed).toHaveBeenCalled();
+      exit.mockRestore();
+      printed.mockRestore();
+    });
+  });
+
   describe('daily ping', () => {
     const sent = () => fetchMock.mock.calls.map((c) => {
       const [url, init] = c as unknown as [string, RequestInit];
@@ -123,7 +170,10 @@ describe('telemetry', () => {
 
     beforeEach(() => {
       vi.stubEnv('CEZ_HOME', mkdtempSync(join(tmpdir(), 'cez-daily-')));
-      vi.stubEnv('VITEST', ''); // behave like a real install
+      // Behave like a real install — Actions sets CI, node:test sets NODE_TEST_CONTEXT.
+      vi.stubEnv('VITEST', '');
+      vi.stubEnv('CI', '');
+      vi.stubEnv('NODE_TEST_CONTEXT', '');
     });
 
     it('sends cezar_run once a day and remembers the day', async () => {

@@ -40,7 +40,7 @@ import { initWorkspace } from './workspace/boot.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 import { runProjectsCommand } from './workspace/projects-cli.ts';
 import { WorkspaceSemaphore } from './workspace/semaphore.ts';
-import { flushTelemetry, initTelemetry, registerTelemetryContext, reportError, startDailyPing, track } from './telemetry.ts';
+import { flushTelemetry, initTelemetry, installCrashReporter, registerTelemetryContext, startDailyPing, track } from './telemetry.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
 import { runRunsCommand } from './runs/runs-cli.ts';
@@ -265,12 +265,9 @@ async function serveCommand(
     workspaceEvents.emit('provider-status', status);
   });
   const version = readOwnVersion();
-  // Anonymous telemetry, opt-out (CEZ_TELEMETRY=0). The monitor listener
-  // observes a crash without changing Node's exit behavior.
+  // Anonymous telemetry, opt-out (CEZ_TELEMETRY=0).
   initTelemetry({ version });
-  process.on('uncaughtExceptionMonitor', (err, origin) =>
-    reportError(err, { source: 'process', handler: origin }, { code: 'uncaught_exception' }),
-  );
+  installCrashReporter();
   track('app_start');
   startDailyPing();
 

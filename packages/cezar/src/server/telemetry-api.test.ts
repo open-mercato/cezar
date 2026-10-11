@@ -1,0 +1,108 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { createApp, type ServerDeps } from './server.ts';
+
+/**
+ * The telemetry relay (`POST /api/v1/telemetry/{page,event,error}`) and `open_in`: the server is
+ * what keeps every label a closed set, so these pin the enforcement at the route, not the schema.
+ */
+vi.mock('../telemetry.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../telemetry.ts')>();
+  return { ...actual, track: vi.fn(), reportError: vi.fn() };
+});
+vi.mock('./open-in-app.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./open-in-app.ts')>();
+  return {
+    ...actual,
+    detectOpenTargets: vi.fn(() => [{ id: 'finder', label: 'Finder', icon: 'folder' }]),
+    openInApp: vi.fn(async (target: string) => target === 'finder'),
+  };
+});
+
+import { reportError, track } from '../telemetry.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+
+describe('telemetry routes', () => {
+  let repoRoot: string;
+  let store: RunStore;
+  const savedRemote = process.env.CEZ_REMOTE;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-telemetry-api-'));
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    delete process.env.CEZ_REMOTE;
+  });
+
+  afterEach(() => {
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+    if (savedRemote === undefined) delete process.env.CEZ_REMOTE;
+    else process.env.CEZ_REMOTE = savedRemote;
+  });
+
+  const post = (path: string, body: unknown, over: Partial<ServerDeps> = {}) =>
+    apiRequest(createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test', ...over }), path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  it('forwards a route shape as page_viewed and refuses a raw path', async () => {
+    expect((await post('/api/v1/telemetry/page', { route: '/p/:param/tasks/:param/changes' })).status).toBe(204);
+    expect(track).toHaveBeenCalledWith('page_viewed', { label: '/p/:param/tasks/:param/changes' }, { sid: undefined });
+
+    vi.mocked(track).mockClear();
+    expect((await post('/api/v1/telemetry/page', { route: '/p/acme-shop/tasks' })).status).toBe(400);
+    expect(track).not.toHaveBeenCalled();
+  });
+
+  it('relays only the closed event labels', async () => {
+    expect((await post('/api/v1/telemetry/event', { event: 'message_sent', label: 'github' })).status).toBe(204);
+    expect(track).toHaveBeenCalledWith('message_sent', { label: 'github' }, { sid: undefined });
+
+    vi.mocked(track).mockClear();
+    expect((await post('/api/v1/telemetry/event', { event: 'message_sent', label: 'fix the login bug' })).status).toBe(400);
+    expect((await post('/api/v1/telemetry/event', { event: 'message_sent', label: 'cli' })).status).toBe(400);
+    expect(track).not.toHaveBeenCalled();
+  });
+
+  it('relays a cockpit error and rejects an oversized context', async () => {
+    const res = await post('/api/v1/telemetry/error', { type: 'TypeError', message: 'boom', context: { 'page.route': '/tasks' } });
+    expect(res.status).toBe(204);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(reportError).mock.calls[0]![1]).toMatchObject({ source: 'cockpit', 'page.route': '/tasks' });
+
+    const context = Object.fromEntries(Array.from({ length: 33 }, (_, i) => [`k${i}`, i]));
+    expect((await post('/api/v1/telemetry/error', { type: 'Error', message: 'x', context })).status).toBe(400);
+    expect(reportError).toHaveBeenCalledTimes(1);
+  });
+
+  describe('open_in', () => {
+    const openInCalls = () => vi.mocked(track).mock.calls.filter(([event]) => event === 'open_in');
+
+    it('counts a run open-in only once an allowlisted app opened', async () => {
+      const runId = store.createRun({ title: 't', workflow: 'quick-task', task: 'do it', steps: [] }).id;
+      expect((await post(`/api/v1/runs/${runId}/open-in`, { target: 'my secret project name' })).status).toBe(409);
+      expect(openInCalls()).toEqual([]);
+
+      expect((await post(`/api/v1/runs/${runId}/open-in`, { target: 'finder' })).status).toBe(200);
+      expect(openInCalls().map(([, extra]) => extra)).toEqual([{ label: 'finder' }]);
+    });
+
+    it('never counts a refused project open-in', async () => {
+      expect((await post('/api/v1/open-in', { target: 'free text here' })).status).toBe(400);
+      process.env.CEZ_REMOTE = '1';
+      expect((await post('/api/v1/open-in', { target: 'finder' })).status).toBe(409);
+      expect(openInCalls()).toEqual([]);
+
+      delete process.env.CEZ_REMOTE;
+      expect((await post('/api/v1/open-in', { target: 'finder' })).status).toBe(200);
+      expect(openInCalls().map(([, extra]) => extra)).toEqual([{ label: 'project:finder' }]);
+    });
+  });
+});
