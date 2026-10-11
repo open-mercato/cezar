@@ -16,9 +16,11 @@ executable, the prose is not.
 
 The protocol has **two layers that ship together**:
 
-- **v1 `AgentEvent`** — the original flat stream. Persisted in old NDJSON
-  recordings and still consumed by `cezar run`'s console renderer. Never
-  removed; old recordings must keep replaying forever.
+- **v1 `AgentEvent`** — the original flat stream. Every runner still emits it
+  on the live bus, and `cezar run`'s console renderer consumes it there. On disk
+  it is partly persisted: `tool-call` and `tool-result` are live-only because
+  their v2 tool item is persisted instead (§8). Never removed; old recordings
+  must keep replaying forever.
 - **v2 `UiEvent`** — the normalized, item-lifecycle protocol the redesigned
   cockpit renders. Emitted **alongside** v1, never replacing it. A mixed NDJSON
   file (v1 + v2 lines) is valid by design.
@@ -143,9 +145,14 @@ can be written to the claude CLI's stdin verbatim.
 
 ## 2. v1 `AgentEvent` — the flat stream
 
-The original normalized stream. Still emitted by every runner, still persisted,
-still rendered by `cezar run`. **Do not remove or rename a variant** — v1 event
-`type` strings are part of the on-disk NDJSON format.
+The original normalized stream. Still emitted by every runner and still rendered
+by `cezar run`. Persisted except for `tool-call` and `tool-result`, which the
+RunManager fans out live only (`EPHEMERAL_V1_TYPES` in `workflows/run.ts`)
+because the v2 tool item lifecycle carries the same call; see §8 for how to read
+them back. `text` stays persisted: a message item that never completes has its
+text only in live deltas. **Do not remove or rename a variant** — v1 event `type` strings are
+part of the on-disk NDJSON format, and every recording made before that split
+carries all of them.
 
 ```ts
 type AgentEvent =
@@ -429,7 +436,21 @@ these events get persisted as NDJSON), and asserts `toStrictEqual` against the
 - **NDJSON** — one append-only `runs/<id>.ndjson` per run, one JSON object per
   line (`seq`, `ts`, `type`, free extra keys). Never rewrite, reorder or
   re-number; readers skip bad lines. Both v1 and v2 events live here; a mixed
-  file is valid. Cezar-owned task events are additive too: for example,
+  file is valid. Since persist-v2-only (spec `2026-09-30-persist-v2-only`) a new
+  transcript carries no v1 `tool-call` or `tool-result` lines — the v2 tool
+  item snapshots are their only on-disk copy — while every other v1 type
+  (`text`, `session`, `token-usage`, `cost`, `turn-end`, `done`, `error`,
+  `note`, `image`) is still written. A reader that wants the v1 tool lines calls
+  `deriveV1Events` (`runs/derive-v1.ts`): it rebuilds them from the v2 tool
+  items, per session window, and leaves a window that already carries them
+  untouched, so old and mixed files come back unchanged. The rebuilt values are
+  the normalized v2 ones (item `name`, `input`, `output`/`error`); where a
+  runner's live v1 line carries raw wire JSON (codex, cursor, opencode) the
+  bytes differ, and `core/v1-derive-parity.test.ts` pins, per golden fixture,
+  where the two agree and where they do not. Derived events reuse their source
+  line's `seq`, so they are never fed into a seq-keyed replay. The live seq counter also stamps events that never
+  reach disk; after a restart it resumes well above the file's highest `seq`, so
+  a live client never sees a seq twice. Cezar-owned task events are additive too: for example,
   `provider-auth-required` records only `{ provider, authFailureId, stepId? }`
   when a runtime rejection needs user authorization; it never carries vendor
   error text or credentials.

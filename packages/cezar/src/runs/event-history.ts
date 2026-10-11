@@ -540,6 +540,8 @@ export async function deriveRunContextEvents(filePath: string): Promise<RunHisto
       const event = parseLine(line);
       if (!event) continue;
       asOfSeq = Math.max(asOfSeq, event.seq);
+      // Only legacy transcripts carry a TodoWrite `tool-call`; new ones persist no v1 tool calls
+      // and get the same plan from the `plan.updated` the mapper emits for that frame.
       if (event.type === 'plan.updated' || (event.type === 'tool-call' && stringField(event, 'tool') === 'TodoWrite')) {
         latestPlan = event;
         continue;

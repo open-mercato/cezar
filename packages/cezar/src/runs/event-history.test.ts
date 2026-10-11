@@ -64,6 +64,25 @@ describe('canonicalSessionItems', () => {
       'v1-text:1:5',
     ]);
   });
+
+  it('renders a transcript without v1 tool twins identically to its legacy mixed twin', () => {
+    const legacy = [
+      { seq: 1, ts: 'x', type: 'turn.started', turnId: 't1' },
+      { seq: 2, ts: 'x', type: 'tool-call', id: 'tool-1', tool: 'Bash' },
+      { seq: 3, ts: 'x', type: 'item.started', item: { kind: 'tool', id: 'tool-1' } },
+      { seq: 4, ts: 'x', type: 'item.completed', item: { kind: 'tool', id: 'tool-1', status: 'completed' } },
+      { seq: 5, ts: 'x', type: 'tool-result', toolCallId: 'tool-1', result: 'ok' },
+      { seq: 6, ts: 'x', type: 'item.completed', item: { kind: 'message', id: 'm1', role: 'assistant', text: 'done' } },
+      { seq: 7, ts: 'x', type: 'text', text: 'done' },
+      { seq: 8, ts: 'x', type: 'note', message: 'kept' },
+    ] satisfies RunEvent[];
+    const v2Only = legacy.filter((event) => !['tool-call', 'tool-result'].includes(event.type));
+
+    expect(v2Only).toHaveLength(6);
+    expect(canonicalSessionItems(v2Only).map(({ key }) => key)).toEqual(
+      canonicalSessionItems(legacy).map(({ key }) => key),
+    );
+  });
 });
 
 describe('readRunHistoryPage', () => {
