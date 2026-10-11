@@ -1,7 +1,9 @@
 import {
   BotIcon,
   BrainIcon,
+  CheckIcon,
   ChevronRightIcon,
+  ClipboardIcon,
   FileTextIcon,
   FolderInputIcon,
   GlobeIcon,
@@ -224,12 +226,14 @@ export function UserBubble({
       data-slot="user-bubble"
       className="group max-w-[78%] min-w-0 self-end rounded-2xl rounded-br-md bg-muted px-[15px] py-2.5 text-[13.5px] leading-[1.55] md:max-w-[70%]"
     >
-      {onEdit || onRemove ? (
-        <span
-          data-slot="bubble-actions"
-          className="mb-1 flex justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
-        >
-          {onEdit ? (
+      <span
+        data-slot="bubble-actions"
+        className="mb-1 flex justify-end gap-0.5"
+      >
+        <CopyMessageButton text={text} />
+        {onEdit || onRemove ? (
+          <span className="flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+            {onEdit ? (
             <button
               type="button"
               aria-label={editLabel}
@@ -239,8 +243,8 @@ export function UserBubble({
             >
               <SquarePenIcon className="size-3.5" />
             </button>
-          ) : null}
-          {onRemove ? (
+            ) : null}
+            {onRemove ? (
             <button
               type="button"
               aria-label={removeLabel}
@@ -250,9 +254,10 @@ export function UserBubble({
             >
               <Trash2Icon className="size-3.5" />
             </button>
-          ) : null}
-        </span>
-      ) : null}
+            ) : null}
+          </span>
+        ) : null}
+      </span>
       {actionError ? <p role="alert" className="mb-1 text-xs text-danger">{actionError}</p> : null}
       <UserText text={text} />
       {images.length > 0 ? (
@@ -316,9 +321,59 @@ function UserText({ text }: { text: string }) {
 /** An assistant message item, as markdown. */
 export function AssistantMessage({ text }: { text: string }) {
   return (
-    <div data-slot="assistant-message" className="min-w-0 text-[15px] leading-[1.65]">
+    <div data-slot="assistant-message" className="group min-w-0 text-[15px] leading-[1.65]">
+      <div className="mb-1 flex justify-end">
+        <CopyMessageButton text={text} />
+      </div>
       <Markdown>{text}</Markdown>
     </div>
+  )
+}
+
+/**
+ * Copies the original message source, rather than the rendered Markdown. The control is always
+ * in the tab order (including touch and keyboard use); only edit/remove remain hover-revealed.
+ * Clipboard support is optional in local/embedded browsers, so every access is guarded and
+ * rejected writes become honest, non-throwing feedback.
+ */
+export function CopyMessageButton({ text }: { text: string }) {
+  const [feedback, setFeedback] = useState<'idle' | 'success' | 'failure'>('idle')
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+  useEffect(() => () => {
+    if (timer.current !== undefined) clearTimeout(timer.current)
+  }, [])
+
+  const copy = async () => {
+    if (timer.current !== undefined) clearTimeout(timer.current)
+    try {
+      const writeText = typeof navigator !== 'undefined' ? navigator.clipboard?.writeText : undefined
+      if (typeof writeText !== 'function') throw new Error('Clipboard unavailable')
+      await writeText.call(navigator.clipboard, text)
+      setFeedback('success')
+    } catch {
+      setFeedback('failure')
+    }
+    timer.current = setTimeout(() => setFeedback('idle'), 2200)
+  }
+
+  const label = feedback === 'success' ? 'Message copied' : feedback === 'failure' ? 'Could not copy message' : 'Copy message'
+  return (
+    <span className="inline-flex items-center gap-1">
+      <button
+        type="button"
+        aria-label="Copy message"
+        onClick={() => void copy()}
+        className="rounded-sm p-1 text-soft-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+      >
+        {feedback === 'success' ? <CheckIcon aria-hidden className="size-3.5" /> : <ClipboardIcon aria-hidden className="size-3.5" />}
+      </button>
+      {feedback !== 'idle' ? (
+        <span role="status" aria-live="polite" aria-label={label} className="text-[11px] text-soft-foreground">
+          {label}
+        </span>
+      ) : null}
+    </span>
   )
 }
 
