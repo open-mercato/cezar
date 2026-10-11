@@ -56,7 +56,8 @@ export function App() {
             <AppearanceProvider>
               <BrowserRouter>
                 <LastLocationController />
-                {/* Anonymous, opt-out page views + error hooks (CEZ_TELEMETRY=0). Renders nothing. */}
+                {/* Page views + error hooks; the server forwards them only after the user opted in
+                    (docs/telemetry.md). Renders nothing. */}
                 <Telemetry />
                 {/* At the root for the same reason the event stream is: the sidebar, the task table
                     and an open run header all paint PR/issue chips, often the SAME ones, and each

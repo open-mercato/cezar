@@ -100,6 +100,8 @@ import type {
   RunRecord,
   RunsIndexResponse,
   StarCountPayload,
+  SetTelemetryConsentInput,
+  TelemetryConsentPayload,
   WorktreeEntry,
   SaveWorkflowInput,
   SaveWorkflowResponse,
@@ -440,6 +442,16 @@ export async function getHealth(opts?: ReadOptions): Promise<HealthResponse> {
  *  answer and the chip renders nothing for it. */
 export async function getStarCount(opts?: ReadOptions): Promise<StarCountPayload> {
   return unwrap(await cez.api.v1['star-count'].$get({}, init(opts)), '/star-count')
+}
+
+/** The opt-in telemetry answer (`~/.cezar/config.json`), behind the consent bar and
+ *  Settings → Privacy. */
+export async function getTelemetryConsent(opts?: ReadOptions): Promise<TelemetryConsentPayload> {
+  return unwrap(await cez.api.v1.telemetry.consent.$get({}, init(opts)), '/telemetry/consent')
+}
+
+export async function putTelemetryConsent(input: SetTelemetryConsentInput): Promise<TelemetryConsentPayload> {
+  return unwrap(await cez.api.v1.telemetry.consent.$put({ json: input }), '/telemetry/consent')
 }
 
 /** Host-local catalog for one discovery runner (`claude`, `codex`, `opencode`, `cursor` — #794, #784).

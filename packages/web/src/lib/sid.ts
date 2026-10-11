@@ -32,3 +32,14 @@ export function sid(): string {
 
 /** The request header the server reads it from. */
 export const SID_HEADER = 'x-cezar-sid'
+
+/** Forget this browser's device id — telemetry consent was withdrawn, so a later yes starts
+ *  as a new device rather than reconnecting to the old one. */
+export function resetSid(): void {
+  memorySid = undefined
+  try {
+    localStorage.removeItem(SID_KEY)
+  } catch {
+    // nothing stored, nothing to forget
+  }
+}

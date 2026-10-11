@@ -1,10 +1,27 @@
 import { z } from 'zod';
 
 /**
- * Anonymous cockpit telemetry (`/api/v1/telemetry/*`). The telemetry worker sends no CORS
- * headers, so the browser reports through the local server, which forwards only when telemetry
- * is on (opt-out, `CEZ_TELEMETRY=0`). Both routes answer `204` with no body.
+ * Cockpit telemetry (`/api/v1/telemetry/*`). The telemetry worker sends no CORS headers, so the
+ * browser reports through the local server, which forwards only once the user opted in (see
+ * `/telemetry/consent` below). The relay routes answer `204` with no body.
  */
+
+/**
+ * `GET`/`PUT /api/v1/telemetry/consent` — the opt-in answer, stored in `~/.cezar/config.json`.
+ * `unknown` (never asked, or asked about an older `policyVersion`) and `denied` send nothing.
+ * `blockedBy`: `env` — `CEZ_TELEMETRY=0`/`DO_NOT_TRACK=1` override any answer; `automation` —
+ * CI, test runners, `CEZ_DRY_RUN=1`, where the cockpit never asks.
+ */
+export const telemetryConsentSchema = z.object({
+  consent: z.enum(['unknown', 'granted', 'denied']),
+  policyVersion: z.number().int(),
+  blockedBy: z.enum(['env', 'automation']).nullable(),
+  endpoint: z.string(),
+});
+export type TelemetryConsentPayload = z.infer<typeof telemetryConsentSchema>;
+
+export const setTelemetryConsentInputSchema = z.object({ consent: z.enum(['granted', 'denied']) });
+export type SetTelemetryConsentInput = z.infer<typeof setTelemetryConsentInputSchema>;
 
 /**
  * A route SHAPE, never a real path: static segments stay, every user value (project slug, run
@@ -20,7 +37,7 @@ export const TELEMETRY_ROUTE_SEGMENTS: readonly string[] = [
   'github', 'prs', 'issues', 'tracker', 'skills', 'inbox', 'workflows', 'automations',
   'dashboard', 'settings', 'global', 'agents', 'agent-config', 'worktrees', 'bookmarklets',
   'prompt-templates', 'appearance', 'notifications', 'resources', 'accounts', 'projects',
-  'keyboard', 'graph', 'integrations', 'secrets', 'workflows-new', 'workspace-secrets',
+  'keyboard', 'graph', 'integrations', 'secrets', 'workflows-new', 'workspace-secrets', 'privacy',
 ];
 
 export const telemetryRouteSchema = z

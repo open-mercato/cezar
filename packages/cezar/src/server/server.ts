@@ -238,8 +238,23 @@ import {
   withResolvedClaudeBin,
 } from './open-in-app.ts';
 import { createDraftPr } from './pr.ts';
-import { deviceSid, reportError, track } from '../telemetry.ts';
-import { telemetryErrorInputSchema, telemetryEventInputSchema, telemetryPageInputSchema } from '@open-mercato/cezar-contract';
+import {
+  DEFAULT_TELEMETRY_URL,
+  TELEMETRY_POLICY_VERSION,
+  deviceSid,
+  loadTelemetryConsent,
+  reportError,
+  setTelemetryConsent,
+  telemetryBlockedBy,
+  track,
+} from '../telemetry.ts';
+import {
+  setTelemetryConsentInputSchema,
+  telemetryErrorInputSchema,
+  telemetryEventInputSchema,
+  telemetryPageInputSchema,
+  type TelemetryConsentPayload,
+} from '@open-mercato/cezar-contract';
 import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.ts';
 import {
   providerForActiveRun,
@@ -1448,7 +1463,7 @@ export function createApp(deps: ServerDeps) {
 
   const app = new Hono();
 
-  // Hono's default 500, plus an anonymous report (a no-op when telemetry is off).
+  // Hono's default 500, plus an error report (a no-op until the user opted in).
   app.onError((err, c) => {
     if (err instanceof HTTPException) return err.getResponse();
     console.error(err);
@@ -6843,10 +6858,25 @@ export function createApp(deps: ServerDeps) {
     return ctx;
   };
 
-  // Anonymous cockpit telemetry (opt-out, CEZ_TELEMETRY=0). The telemetry worker sends no CORS
-  // headers, so the browser reports through here; both answer 204 whether or not telemetry is
-  // on, and only a closed set of page names is forwarded.
+  // Cockpit telemetry (opt-in, docs/telemetry.md). The telemetry worker sends no CORS headers, so
+  // the browser reports through here; the relays answer 204 whether or not the user opted in, and
+  // only a closed set of page names is forwarded.
+  const telemetryConsentBody = (consent: TelemetryConsentPayload['consent']): TelemetryConsentPayload => ({
+    consent,
+    policyVersion: TELEMETRY_POLICY_VERSION,
+    blockedBy: telemetryBlockedBy(),
+    endpoint: (process.env.CEZ_TELEMETRY_URL || DEFAULT_TELEMETRY_URL).replace(/\/+$/, ''),
+  });
   const telemetryRoutes = new Hono()
+    .get('/telemetry/consent', async (c) => c.json(telemetryConsentBody(await loadTelemetryConsent())))
+    .put(
+      '/telemetry/consent',
+      jsonZodValidator(setTelemetryConsentInputSchema, { message: 'consent must be granted or denied' }),
+      async (c) => {
+        const consent = await setTelemetryConsent(c.req.valid('json').consent);
+        return c.json(telemetryConsentBody(consent));
+      },
+    )
     .post(
       '/telemetry/page',
       jsonZodValidator(telemetryPageInputSchema, { message: 'invalid route' }),

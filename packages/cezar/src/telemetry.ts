@@ -1,8 +1,10 @@
 /**
- * Anonymous usage telemetry — the ONE module that talks to the telemetry worker.
+ * Usage telemetry — the ONE module that talks to the telemetry worker.
  *
- * Opt-out: on by default, off with `CEZ_TELEMETRY=0` or `DO_NOT_TRACK=1` (see
- * `telemetryEnabled`). Everything here is
+ * Opt-in: nothing leaves the machine until the user said yes (the cockpit's consent bar,
+ * Settings → Privacy, or `cezar telemetry enable`), recorded as `telemetry` in
+ * `~/.cezar/config.json`. `CEZ_TELEMETRY=0` / `DO_NOT_TRACK=1` block it even then; no env var
+ * can grant it. See docs/telemetry.md. Everything here is
  * fire-and-forget — a 3 s timeout, no retries, never throws, never awaited on a path
  * the user waits for (the one exception is `app_stop`, which `flushTelemetry` bounds).
  *
@@ -11,9 +13,9 @@
  * (`baseContext`), whatever the boot registered (`registerTelemetryContext`: run counts, install
  * kind…) and the caller's specifics — so a report is debuggable without a second search.
  *
- * Anonymous: the only identity is `cezarId`, a random UUIDv7 in `~/.cezar/config.json`
- * (written, never required — a read-only home falls back to a per-process id), and
- * the user's home directory is scrubbed from every error message and stack.
+ * The only identity is `cezarId`, a random UUIDv7 in `~/.cezar/config.json` (written on the
+ * first send after consent, deleted when it is withdrawn), and the user's home directory is
+ * scrubbed from every error message and stack.
  */
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -25,6 +27,8 @@ import { detectInstallKind } from './self-update/layout.ts';
 import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from './workspace/config.ts';
 
 export const DEFAULT_TELEMETRY_URL = 'https://stats.openmercato.cloud';
+/** Bump when what is collected changes: a `granted` for an older version counts as never asked. */
+export const TELEMETRY_POLICY_VERSION = 1;
 /** Development builds (local, worktrees, PR previews) report under this service. */
 export const DEV_TELEMETRY_SERVICE = '01a12ad9-3297-793f-b9e5-81d4df2d1216';
 /** Public releases ship `dist/telemetry-service.json`, written at release time by
@@ -51,13 +55,70 @@ const cezarIds = new Map<string, Promise<string>>();
 const pending = new Set<Promise<unknown>>();
 const lastReported = new Map<string, number>();
 
-/** On by default; `CEZ_TELEMETRY=0` or the `DO_NOT_TRACK=1` convention opts out. Test runners,
- *  CI and `CEZ_DRY_RUN=1` (the e2e suite, demos) don't send unless forced with `CEZ_TELEMETRY=1`. */
-export function telemetryEnabled(): boolean {
+export type TelemetryConsent = 'unknown' | 'granted' | 'denied';
+
+/** The answer as last read from (or written to) `~/.cezar/config.json`. */
+let consent: TelemetryConsent = 'unknown';
+
+/** What stops sending whatever the user answered: `env` — `CEZ_TELEMETRY=0` or `DO_NOT_TRACK=1`;
+ *  `automation` — test runners, CI, `CEZ_DRY_RUN=1`, where nobody could have answered (lifted by
+ *  `CEZ_TELEMETRY=1`, which still needs consent). */
+export function telemetryBlockedBy(): 'env' | 'automation' | null {
   const env = process.env;
-  if (env.CEZ_TELEMETRY === '0' || env.DO_NOT_TRACK === '1') return false;
-  if (env.CEZ_TELEMETRY === '1') return true;
-  return !(env.VITEST || env.NODE_TEST_CONTEXT || env.CI || env.CEZ_DRY_RUN === '1');
+  if (env.CEZ_TELEMETRY === '0' || env.DO_NOT_TRACK === '1') return 'env';
+  if (env.CEZ_TELEMETRY === '1') return null;
+  return env.VITEST || env.NODE_TEST_CONTEXT || env.CI || env.CEZ_DRY_RUN === '1' ? 'automation' : null;
+}
+
+export function telemetryEnabled(): boolean {
+  return consent === 'granted' && telemetryBlockedBy() === null;
+}
+
+export function telemetryConsent(): TelemetryConsent {
+  return consent;
+}
+
+function consentOf(config: { telemetry?: { consent: 'granted' | 'denied'; policyVersion: number } }): TelemetryConsent {
+  const answer = config.telemetry;
+  if (!answer) return 'unknown';
+  if (answer.consent === 'denied') return 'denied';
+  return answer.policyVersion === TELEMETRY_POLICY_VERSION ? 'granted' : 'unknown';
+}
+
+/** Re-read the answer — another process (`cezar telemetry disable`) may have changed it. */
+export async function loadTelemetryConsent(): Promise<TelemetryConsent> {
+  try {
+    consent = consentOf(await loadWorkspaceConfig());
+  } catch {
+    consent = 'unknown';
+  }
+  syncCrashReporter();
+  return consent;
+}
+
+/** Record the user's answer. Withdrawing deletes the install id and the daily-ping marker, so a
+ *  later yes starts as a new installation. */
+export async function setTelemetryConsent(answer: 'granted' | 'denied'): Promise<TelemetryConsent> {
+  const written = await mergeWriteWorkspaceConfig((config) => {
+    config.telemetry = { consent: answer, policyVersion: TELEMETRY_POLICY_VERSION, decidedAt: new Date().toISOString() };
+    if (answer === 'denied') {
+      delete config.cezarId;
+      delete config.lastActiveOn;
+    }
+  });
+  if (answer === 'denied') {
+    cezarIds.clear();
+    lastReported.clear();
+  }
+  consent = consentOf(written);
+  syncCrashReporter();
+  return consent;
+}
+
+/** Sends are queued behind an id lookup; this re-checks the file first, so a withdrawal made by
+ *  another process stops the very next send rather than the next restart. */
+async function stillGranted(): Promise<boolean> {
+  return (await loadTelemetryConsent()) === 'granted' && telemetryBlockedBy() === null;
 }
 
 function telemetryUrl(): string {
@@ -101,31 +162,44 @@ export function telemetryVersion(raw: string, checkout = false): string {
 }
 
 /** Set once at boot; every event carries it. A source checkout (`npm run dev`, a worktree) is a
- *  dev build whatever its package.json says. */
-export function initTelemetry(opts: { version: string }): void {
+ *  dev build whatever its package.json says. Resolves once the stored answer is known. */
+export async function initTelemetry(opts: { version: string }): Promise<void> {
   fullVersion = opts.version;
   version = telemetryVersion(opts.version, detectInstallKind(process.argv[1] ?? '') === 'checkout');
   refreshProjectRoots();
+  await loadTelemetryConsent();
+}
+
+let crashReporterWanted = false;
+let crashing = false;
+function onUncaught(err: Error, origin: string): void {
+  if (crashing) process.exit(1);
+  crashing = true;
+  try {
+    console.error(err);
+    reportError(err, { source: 'process', handler: origin }, { code: 'uncaught_exception' });
+  } catch {
+    // the exit below must happen whatever reporting does
+  }
+  process.exitCode = 1; // a crash never exits 0, even if the loop drains before the flush
+  void flushTelemetry(1_000).finally(() => process.exit(1));
+}
+
+/** Attach or detach the handler to match the current answer — a no-op until `installCrashReporter`. */
+function syncCrashReporter(): void {
+  const attached = process.listeners('uncaughtException').includes(onUncaught);
+  const want = crashReporterWanted && telemetryEnabled();
+  if (want && !attached) process.on('uncaughtException', onUncaught);
+  if (!want && attached) process.off('uncaughtException', onUncaught);
 }
 
 /** Crash reporting. Node exits synchronously after an uncaught exception, before an async send
  *  can start, so the report needs a real handler: print as Node would, report, flush (bounded),
- *  exit 1. Off when telemetry is off, leaving Node's own crash path untouched. */
+ *  exit 1. Attached only while telemetry is on, leaving Node's own crash path untouched
+ *  otherwise; it follows consent given or withdrawn later in the process's life. */
 export function installCrashReporter(): void {
-  if (!telemetryEnabled()) return;
-  let crashing = false;
-  process.on('uncaughtException', (err, origin) => {
-    if (crashing) process.exit(1);
-    crashing = true;
-    try {
-      console.error(err);
-      reportError(err, { source: 'process', handler: origin }, { code: 'uncaught_exception' });
-    } catch {
-      // the exit below must happen whatever reporting does
-    }
-    process.exitCode = 1; // a crash never exits 0, even if the loop drains before the flush
-    void flushTelemetry(1_000).finally(() => process.exit(1));
-  });
+  crashReporterWanted = true;
+  syncCrashReporter();
 }
 
 /** RFC 9562 UUIDv7: 48-bit Unix-ms timestamp, then random bits — sortable by creation time. */
@@ -212,21 +286,33 @@ export function track(
   const body: Record<string, unknown> = { service: SERVICE, version, platform: platform(), runtime: telemetryRuntime(), ...extra };
   // The worker's `label` charset; anything else (a model's `[1m]`) would 400 the event.
   if (typeof body.label === 'string') body.label = body.label.replace(/[^\w .:@/+-]/g, '_').slice(0, 64);
-  inFlight(cezarId().then((id) => post(`/track/${event}`, { ...body, indexKey: statsKey(id, opts.sid) })));
+  inFlight(
+    stillGranted().then((ok) =>
+      ok ? cezarId().then((id) => post(`/track/${event}`, { ...body, indexKey: statsKey(id, opts.sid) })) : false,
+    ),
+  );
 }
 
-/** Once per UTC day: `cezar_run`, or `telemetry_opt_out` (no id) when opted out. */
+/** The fields every event carries, for `cezar telemetry inspect` — the same object `track` builds. */
+export function telemetryEnvelope(): Record<string, string> {
+  return { service: SERVICE, version, platform: platform(), runtime: telemetryRuntime() };
+}
+
+/** What is sent, by name: kept beside the senders so `inspect` and docs/telemetry.md can't drift
+ *  far from them. */
+export const TELEMETRY_EVENTS = [
+  'cezar_run', 'app_start', 'app_stop', 'task_start', 'page_viewed', 'message_sent', 'open_in',
+  'project_added', 'diff_comment_added', 'task_archived', 'task_unarchived', 'task_pinned',
+  'task_unpinned', 'task_deleted', 'error',
+] as const;
+
+/** Once per UTC day while telemetry is on: `cezar_run`. Without consent: nothing at all. */
 export async function sendDailyPing(): Promise<void> {
-  const env = process.env;
-  const optedOut = env.CEZ_TELEMETRY === '0' || env.DO_NOT_TRACK === '1';
-  const quiet = env.CEZ_TELEMETRY !== '1' && Boolean(env.VITEST || env.NODE_TEST_CONTEXT || env.CI || env.CEZ_DRY_RUN === '1');
-  if (quiet) return;
+  if (!(await stillGranted())) return;
   const today = new Date().toISOString().slice(0, 10);
   if ((await loadWorkspaceConfig()).lastActiveOn === today) return;
   const base = { service: SERVICE, version, platform: platform(), runtime: telemetryRuntime() };
-  const ok = optedOut
-    ? await post('/track/telemetry_opt_out', base)
-    : await post('/track/cezar_run', { ...base, indexKey: await cezarId() });
+  const ok = await post('/track/cezar_run', { ...base, indexKey: await cezarId() });
   if (ok) {
     await mergeWriteWorkspaceConfig((config) => {
       config.lastActiveOn = today;
@@ -234,7 +320,8 @@ export async function sendDailyPing(): Promise<void> {
   }
 }
 
-/** The daily ping at boot, then hourly so a cockpit left running crosses midnight. */
+/** The daily ping at boot, then hourly so a cockpit left running crosses midnight — and picks
+ *  up a consent given meanwhile by another process. */
 export function startDailyPing(): void {
   void sendDailyPing();
   setInterval(() => void sendDailyPing(), 60 * 60 * 1000).unref();
@@ -359,7 +446,7 @@ export function reportError(
       }
     }
     const occurredAt = new Date().toISOString();
-    inFlight(cezarId().then((id) => post('/track/error', {
+    inFlight(stillGranted().then((ok) => ok && cezarId().then((id) => post('/track/error', {
       service: SERVICE,
       version,
       platform: platform(),
@@ -375,7 +462,7 @@ export function reportError(
       featureFlags: featureFlags(),
       context: flat,
       ...(opts.fingerprint ? { fingerprint: opts.fingerprint.slice(0, 128) } : {}),
-    })));
+    }))));
   } catch {
     // reporting must never throw
   }

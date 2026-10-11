@@ -43,6 +43,7 @@ import { WorkspaceSemaphore } from './workspace/semaphore.ts';
 import { flushTelemetry, initTelemetry, installCrashReporter, registerTelemetryContext, startDailyPing, track } from './telemetry.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
+import { runTelemetryCommand } from './telemetry-cli.ts';
 import { runRunsCommand } from './runs/runs-cli.ts';
 
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
@@ -62,6 +63,7 @@ Usage:
   cezar tracker-connections <list|remove ID>  inspect or delete local project credentials
   cezar secrets <list|set NAME|unset NAME>  this project's secrets (--workspace: the user's)
                             (set reads the value from stdin; agents never receive them)
+  cezar telemetry [status|enable|disable|inspect]  opt-in usage data (off until you enable it)
   cezar server-install      interactive wizard to host cezar on a server
   cezar server-deploy       redeploy a new version (reload the service) + verify
   cezar server-uninstall    reverse a server-install
@@ -123,6 +125,11 @@ async function main(): Promise<void> {
   // `cez automation …` (spec 2026-09-13-automations-from-prompt): same shape, same reason.
   if (process.argv[2] === 'automation') {
     process.exitCode = await runAutomationCommand(process.argv.slice(3));
+    return;
+  }
+  // Opt-in telemetry's terminal switch (docs/telemetry.md): no server, no repo needed.
+  if (process.argv[2] === 'telemetry') {
+    process.exitCode = await runTelemetryCommand(process.argv.slice(3));
     return;
   }
   // `cez runs …` (#1080): the read-only twin for a person at a shell, same addressing.
@@ -191,7 +198,7 @@ async function main(): Promise<void> {
       const bootProjectId = process.env.CEZ_SINGLE_PROJECT === '1' && isList
         ? await initWorkspace(repoRoot)
         : undefined;
-      initTelemetry({ version: readOwnVersion() });
+      await initTelemetry({ version: readOwnVersion() });
       process.exitCode = await runProjectsCommand(projectArgs, { defaultRoot: repoRoot, bootProjectId });
       await flushTelemetry(); // `projects add` reports a new project
       return;
@@ -265,8 +272,8 @@ async function serveCommand(
     workspaceEvents.emit('provider-status', status);
   });
   const version = readOwnVersion();
-  // Anonymous telemetry, opt-out (CEZ_TELEMETRY=0).
-  initTelemetry({ version });
+  // Opt-in telemetry: every send below is a no-op until the user agreed (docs/telemetry.md).
+  await initTelemetry({ version });
   installCrashReporter();
   track('app_start');
   startDailyPing();
@@ -569,7 +576,7 @@ async function runCommand(
     }
   });
 
-  initTelemetry({ version: readOwnVersion() });
+  await initTelemetry({ version: readOwnVersion() });
   const run = manager.startRun(workflow, { task, model });
   // No cockpit device here: the CLI's message counts under the installation's own id.
   track('message_sent', { label: 'cli' });

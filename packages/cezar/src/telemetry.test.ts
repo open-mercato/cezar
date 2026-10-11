@@ -1,14 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DEV_TELEMETRY_SERVICE, deviceSid, flushTelemetry, initTelemetry, installCrashReporter, scrub, stampedTelemetryService, registerTelemetryContext, reportError, sendDailyPing, telemetryEnabled, telemetryRuntime, telemetryVersion, track, uuidv7 } from './telemetry.ts';
+import { DEV_TELEMETRY_SERVICE, TELEMETRY_POLICY_VERSION, deviceSid, flushTelemetry, initTelemetry, installCrashReporter, loadTelemetryConsent, scrub, setTelemetryConsent, stampedTelemetryService, registerTelemetryContext, reportError, sendDailyPing, telemetryBlockedBy, telemetryEnabled, telemetryRuntime, telemetryVersion, track, uuidv7 } from './telemetry.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 
 describe('telemetry', () => {
   const fetchMock = vi.fn(() => Promise.resolve(new Response(null, { status: 202 })));
+  /** A fresh home whose user said yes, with the test-runner block lifted. */
+  const optIn = async (prefix = 'cez-optin-') => {
+    vi.stubEnv('CEZ_TELEMETRY', '1');
+    vi.stubEnv('CEZ_HOME', mkdtempSync(join(tmpdir(), prefix)));
+    await setTelemetryConsent('granted');
+  };
 
   beforeEach(() => {
     vi.stubGlobal('fetch', fetchMock);
@@ -33,7 +39,7 @@ describe('telemetry', () => {
   });
 
   it('sends one wide event: caller context first, then providers, then the process', async () => {
-    vi.stubEnv('CEZ_TELEMETRY', '1');
+    await optIn();
     registerTelemetryContext(() => ({ 'runs.running': 2, source: 'provider-must-not-win' }));
     registerTelemetryContext(() => {
       throw new Error('a broken provider costs only its own slice');
@@ -77,8 +83,7 @@ describe('telemetry', () => {
     writeFileSync(file, JSON.stringify({ service: 'has spaces!' }));
     expect(stampedTelemetryService(file)).toBeUndefined();
     // This test run is unstamped, so what goes out is the development service.
-    vi.stubEnv('CEZ_TELEMETRY', '1');
-    vi.stubEnv('CEZ_HOME', mkdtempSync(join(tmpdir(), 'cez-svc-')));
+    await optIn('cez-svc-');
     track('app_start');
     await flushTelemetry();
     const body = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body));
@@ -93,8 +98,7 @@ describe('telemetry', () => {
   });
 
   it('keys a device as <cezarId>:<sid>, the process as the bare cezarId', async () => {
-    vi.stubEnv('CEZ_TELEMETRY', '1');
-    vi.stubEnv('CEZ_HOME', mkdtempSync(join(tmpdir(), 'cez-sid-')));
+    await optIn('cez-sid-');
     const sid = uuidv7();
     track('settings_view', {}, { sid: deviceSid(sid) });
     track('app_start');
@@ -128,7 +132,7 @@ describe('telemetry', () => {
     const home = mkdtempSync(join(tmpdir(), 'cez-roots-'));
     vi.stubEnv('CEZ_HOME', home);
     writeFileSync(join(home, 'config.json'), JSON.stringify({ projects: [{ id: 'w', root: '/srv/work/acme-shop', name: 'acme', addedAt: '2026-10-11T00:00:00Z', lastOpenedAt: '2026-10-11T00:00:00Z', source: 'local' }] }));
-    initTelemetry({ version: '0.0.0' });
+    await initTelemetry({ version: '0.0.0' });
     await vi.waitFor(() => expect(scrub('at /srv/work/acme-shop/x.ts')).toBe('at <repo>/x.ts'));
   });
 
@@ -144,9 +148,20 @@ describe('telemetry', () => {
       expect(process.listeners('uncaughtException')).toEqual(before);
     });
 
-    it('reports an uncaught exception before exiting 1', async () => {
+    it('attaches only once the user opted in, and detaches when they withdraw', async () => {
       vi.stubEnv('CEZ_TELEMETRY', '1');
-      vi.stubEnv('CEZ_HOME', mkdtempSync(join(tmpdir(), 'cez-crash-')));
+      vi.stubEnv('CEZ_HOME', mkdtempSync(join(tmpdir(), 'cez-crash-consent-')));
+      await loadTelemetryConsent();
+      installCrashReporter();
+      expect(process.listeners('uncaughtException')).toEqual(before);
+      await setTelemetryConsent('granted');
+      expect(process.listeners('uncaughtException').length).toBe(before.length + 1);
+      await setTelemetryConsent('denied');
+      expect(process.listeners('uncaughtException')).toEqual(before);
+    });
+
+    it('reports an uncaught exception before exiting 1', async () => {
+      await optIn('cez-crash-');
       const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
       const printed = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       installCrashReporter();
@@ -170,15 +185,34 @@ describe('telemetry', () => {
       return { event: url.split('/').pop(), body: JSON.parse(String(init.body)) };
     });
 
-    beforeEach(() => {
+    beforeEach(async () => {
       vi.stubEnv('CEZ_HOME', mkdtempSync(join(tmpdir(), 'cez-daily-')));
       // Behave like a real install — Actions sets CI, node:test sets NODE_TEST_CONTEXT.
       vi.stubEnv('VITEST', '');
       vi.stubEnv('CI', '');
       vi.stubEnv('NODE_TEST_CONTEXT', '');
+      vi.stubEnv('CEZ_DRY_RUN', '');
+    });
+
+    it('sends nothing at all, and writes no id, until the user answers', async () => {
+      await sendDailyPing();
+      track('app_start');
+      reportError(new Error('before consent'));
+      await flushTelemetry();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect((await loadWorkspaceConfig()).cezarId).toBeUndefined();
+    });
+
+    it('sends nothing after a no — not even an opt-out ping', async () => {
+      await setTelemetryConsent('denied');
+      await sendDailyPing();
+      track('app_start');
+      await flushTelemetry();
+      expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it('sends cezar_run once a day and remembers the day', async () => {
+      await setTelemetryConsent('granted');
       await sendDailyPing();
       await sendDailyPing();
       expect(sent().map((s) => s.event)).toEqual(['cezar_run']);
@@ -187,22 +221,69 @@ describe('telemetry', () => {
       expect(config.lastActiveOn).toBe(new Date().toISOString().slice(0, 10));
     });
 
-    it('sends telemetry_opt_out without an install id when opted out', async () => {
+    it('lets CEZ_TELEMETRY=0 and DO_NOT_TRACK=1 override a yes', async () => {
+      await setTelemetryConsent('granted');
       vi.stubEnv('CEZ_TELEMETRY', '0');
       await sendDailyPing();
-      expect(sent().map((s) => s.event)).toEqual(['telemetry_opt_out']);
-      expect(sent()[0]!.body.indexKey).toBeUndefined();
-      expect((await loadWorkspaceConfig()).cezarId).toBeUndefined();
+      vi.stubEnv('CEZ_TELEMETRY', '');
+      vi.stubEnv('DO_NOT_TRACK', '1');
+      await sendDailyPing();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(telemetryBlockedBy()).toBe('env');
+    });
+
+    it('never lets CEZ_TELEMETRY=1 stand in for consent', async () => {
+      vi.stubEnv('CEZ_TELEMETRY', '1');
+      await loadTelemetryConsent();
+      expect(telemetryEnabled()).toBe(false);
+      await sendDailyPing();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('withdrawing deletes the install id and stops the next send', async () => {
+      await setTelemetryConsent('granted');
+      await sendDailyPing();
+      expect((await loadWorkspaceConfig()).cezarId).toBeDefined();
+      await setTelemetryConsent('denied');
+      const config = await loadWorkspaceConfig();
+      expect(config.cezarId).toBeUndefined();
+      expect(config.lastActiveOn).toBeUndefined();
+      fetchMock.mockClear();
+      track('app_start');
+      await flushTelemetry();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('sees a withdrawal made by another process before the next send', async () => {
+      await setTelemetryConsent('granted');
+      const config = JSON.parse(readFileSync(join(process.env.CEZ_HOME!, 'config.json'), 'utf8'));
+      config.telemetry.consent = 'denied';
+      writeFileSync(join(process.env.CEZ_HOME!, 'config.json'), JSON.stringify(config));
+      track('app_start'); // the in-memory answer still says yes
+      await flushTelemetry();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('asks again when the policy changed since the yes', async () => {
+      writeFileSync(
+        join(process.env.CEZ_HOME!, 'config.json'),
+        JSON.stringify({ telemetry: { consent: 'granted', policyVersion: TELEMETRY_POLICY_VERSION - 1, decidedAt: '2026-01-01T00:00:00Z' } }),
+      );
+      expect(await loadTelemetryConsent()).toBe('unknown');
+      await sendDailyPing();
+      expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it('retries a failed send on the next check', async () => {
+      await setTelemetryConsent('granted');
       fetchMock.mockImplementationOnce(() => Promise.resolve(new Response(null, { status: 500 })));
       await sendDailyPing();
       await sendDailyPing();
       expect(sent().map((s) => s.event)).toEqual(['cezar_run', 'cezar_run']);
     });
 
-    it('stays silent under CI or a dry run', async () => {
+    it('stays silent under CI or a dry run, even after a yes', async () => {
+      await setTelemetryConsent('granted');
       vi.stubEnv('CI', '1');
       await sendDailyPing();
       expect(fetchMock).not.toHaveBeenCalled();

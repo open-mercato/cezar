@@ -7,7 +7,7 @@ import type { RunManager } from '../workflows/run.ts';
 import { createApp, type ServerDeps } from './server.ts';
 
 /**
- * The telemetry relay (`POST /api/v1/telemetry/{page,event,error}`) and `open_in`: the server is
+ * The telemetry relay (`POST /api/v1/telemetry/{page,event,error}`), the consent routes and `open_in`: the server is
  * what keeps every label a closed set, so these pin the enforcement at the route, not the schema.
  */
 vi.mock('../telemetry.ts', async (importOriginal) => {
@@ -23,7 +23,9 @@ vi.mock('./open-in-app.ts', async (importOriginal) => {
   };
 });
 
-import { reportError, track } from '../telemetry.ts';
+import { TELEMETRY_POLICY_VERSION, reportError, track } from '../telemetry.ts';
+import { loadWorkspaceConfig } from '../workspace/config.ts';
+import { telemetryConsentSchema } from '@open-mercato/cezar-contract';
 import { apiRequest } from './loopback-request.testkit.ts';
 
 describe('telemetry routes', () => {
@@ -80,6 +82,42 @@ describe('telemetry routes', () => {
     const context = Object.fromEntries(Array.from({ length: 33 }, (_, i) => [`k${i}`, i]));
     expect((await post('/api/v1/telemetry/error', { type: 'Error', message: 'x', context })).status).toBe(400);
     expect(reportError).toHaveBeenCalledTimes(1);
+  });
+
+  describe('consent', () => {
+    const app = () => createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test' });
+    const consentOf = async (res: Response) => telemetryConsentSchema.parse(await res.json());
+    const put = (body: unknown) =>
+      apiRequest(app(), '/api/v1/telemetry/consent', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    beforeEach(() => {
+      vi.stubEnv('CEZ_HOME', mkdtempSync(join(tmpdir(), 'cez-consent-api-')));
+    });
+    afterEach(() => vi.unstubAllEnvs());
+
+    it('starts unanswered, and says when the server could never send', async () => {
+      const body = telemetryConsentSchema.parse(await (await apiRequest(app(), '/api/v1/telemetry/consent')).json());
+      expect(body).toMatchObject({ consent: 'unknown', policyVersion: TELEMETRY_POLICY_VERSION, blockedBy: 'automation' });
+      vi.stubEnv('DO_NOT_TRACK', '1');
+      expect((await consentOf(await apiRequest(app(), '/api/v1/telemetry/consent'))).blockedBy).toBe('env');
+    });
+
+    it('records a yes and a no in the workspace config', async () => {
+      expect((await consentOf(await put({ consent: 'granted' }))).consent).toBe('granted');
+      expect((await loadWorkspaceConfig()).telemetry?.consent).toBe('granted');
+      expect((await consentOf(await put({ consent: 'denied' }))).consent).toBe('denied');
+      expect((await consentOf(await apiRequest(app(), '/api/v1/telemetry/consent'))).consent).toBe('denied');
+    });
+
+    it('refuses anything but an explicit answer', async () => {
+      expect((await put({ consent: 'unknown' })).status).toBe(400);
+      expect((await put({})).status).toBe(400);
+      expect((await loadWorkspaceConfig()).telemetry).toBeUndefined();
+    });
   });
 
   describe('open_in', () => {
