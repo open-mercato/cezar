@@ -58,8 +58,9 @@ export const MIN_SECRET_LEN = 12;
 const TOKEN_PATTERNS: readonly RegExp[] = [
   /gh[pousr]_[A-Za-z0-9]{20,}/g, // GitHub PAT / OAuth / server / user / refresh
   /github_pat_[A-Za-z0-9_]{20,}/g, // GitHub fine-grained PAT
-  /sk-ant-[A-Za-z0-9-_]{20,}/g, // Anthropic
-  /sk-[A-Za-z0-9-_]{20,}/g, // OpenAI & compatible
+  // A key never follows a letter or digit; `task-scheduling-…` ends in "sk-" and is a word.
+  /(?<![A-Za-z0-9])sk-ant-[A-Za-z0-9-_]{20,}/g, // Anthropic
+  /(?<![A-Za-z0-9])sk-[A-Za-z0-9-_]{20,}/g, // OpenAI & compatible
   /AKIA[0-9A-Z]{16}/g, // AWS access key id
   /ASIA[0-9A-Z]{16}/g, // AWS temporary access key id
   /AIza[0-9A-Za-z_-]{35}/g, // Google API key
