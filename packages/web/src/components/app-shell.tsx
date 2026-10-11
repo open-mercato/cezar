@@ -14,8 +14,6 @@ import type { ReactNode } from 'react'
 import { Link as RouterLink, NavLink, matchPath, useLocation } from 'react-router'
 
 import { TRACKER_PROVIDERS } from '@/lib/tracker-providers'
-import { AddProjectDialog } from '@/components/add-project-dialog'
-import { CloneProjectDialog } from '@/components/clone-project-dialog'
 import { openCommandPalette } from '@/components/command-palette'
 import { GithubIcon } from '@/components/icons'
 import { commandShortcutHint } from '@/lib/use-command-shortcut'
@@ -45,6 +43,9 @@ import {
   readStoredSidebarWidth,
   writeStoredSidebarWidth,
 } from '@/lib/sidebar-width'
+
+const LazyAddProjectDialog = React.lazy(async () => import('@/components/add-project-dialog').then((module) => ({ default: module.AddProjectDialog })))
+const LazyCloneProjectDialog = React.lazy(async () => import('@/components/clone-project-dialog').then((module) => ({ default: module.CloneProjectDialog })))
 import { cn } from '@/lib/utils'
 /** Tailwind's `md`. The drawer is the `<md` affordance, so this must stay in step with the
  *  `md:hidden` / `md:flex` classes below — they are the same breakpoint expressed twice, once
@@ -931,8 +932,10 @@ function AddProjectMenu() {
           Clone from GitHub…
         </DropdownMenuItem>
       </DropdownMenuContent>
-      {browsing ? <AddProjectDialog open onOpenChange={setBrowsing} /> : null}
-      {cloning ? <CloneProjectDialog open onOpenChange={setCloning} /> : null}
+      <React.Suspense fallback={null}>
+        {browsing ? <LazyAddProjectDialog open onOpenChange={setBrowsing} /> : null}
+        {cloning ? <LazyCloneProjectDialog open onOpenChange={setCloning} /> : null}
+      </React.Suspense>
     </DropdownMenu>
   )
 }
