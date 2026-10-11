@@ -7,14 +7,11 @@ import {
   WorkflowIcon,
   XIcon,
 } from 'lucide-react'
-import { lazy, Suspense, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 
 import type { Skill, WorkflowDef } from '@open-mercato/cezar-api-client'
 import { chevron, chipClass } from '@/components/picker-pill'
-const LazySkillPreviewDialog = lazy(async () => {
-  const module = await import('@/components/skill-detail')
-  return { default: module.SkillPreviewDialog }
-})
+import { SkillPreviewDialog } from '@/components/skill-detail'
 import {
   Command,
   CommandEmpty,
@@ -73,7 +70,6 @@ export function SourcePill({
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [preview, setPreview] = useState<Skill | null>(null)
-  const [previewReady, setPreviewReady] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
   // #484: rank in JS (cmdk's own score-sort does not re-order reliably here), then split the
   // ranked matches into the #519 display tiers so each group stays match-ordered.
@@ -133,7 +129,6 @@ export function SourcePill({
             event.preventDefault()
             event.stopPropagation()
             setPreview(skill)
-            setPreviewReady(true)
           }}
           className="ml-auto shrink-0 rounded-sm p-0.5 text-soft-foreground transition-colors hover:text-foreground"
         >
@@ -187,11 +182,7 @@ export function SourcePill({
 
   return (
     <>
-      {previewReady ? (
-        <Suspense fallback={null}>
-          <LazySkillPreviewDialog skill={preview} onClose={() => setPreview(null)} />
-        </Suspense>
-      ) : null}
+      <SkillPreviewDialog skill={preview} onClose={() => setPreview(null)} />
       <Popover
         open={open}
         onOpenChange={(next) => {

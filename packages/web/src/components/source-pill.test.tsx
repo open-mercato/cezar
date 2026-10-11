@@ -7,55 +7,33 @@ import type { Skill } from '@open-mercato/cezar-api-client'
 import { createQueryClient } from '@/api/query-client'
 import { SourcePill } from '@/components/source-pill'
 
-const { previewLoaded } = vi.hoisted(() => ({ previewLoaded: vi.fn() }))
+const { previewRendered } = vi.hoisted(() => ({ previewRendered: vi.fn() }))
 
 vi.mock('@/components/skill-detail', () => ({
   SkillPreviewDialog: ({ skill }: { skill: Skill | null }) => {
-    previewLoaded()
+    previewRendered(skill)
     return skill ? <div role="dialog">{skill.name}</div> : null
   },
 }))
 
-const skill: Skill = {
-  name: 'review',
-  source: 'builtin',
-  path: '/skills/review.md',
-  body: '# Review',
-  description: 'Review changes',
-}
-
-function renderPill() {
-  return render(
-    <QueryClientProvider client={createQueryClient()}>
-      <MemoryRouter>
-        <SourcePill source={null} ready skills={[skill]} skillUsage={undefined} workflows={[]} onPick={vi.fn()} />
-      </MemoryRouter>
-    </QueryClientProvider>,
-  )
-}
+const skill: Skill = { name: 'review', source: 'builtin', path: '/skills/review.md', body: '# Review' }
 
 describe('SourcePill skill preview', () => {
-  beforeEach(() => {
-    previewLoaded.mockClear()
-    Element.prototype.scrollIntoView = vi.fn()
-    vi.stubGlobal(
-      'ResizeObserver',
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
+  beforeEach(() => previewRendered.mockClear())
+
+  it('keeps the preview wrapper mounted and opens the selected skill without picking it', async () => {
+    const onPick = vi.fn()
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter>
+          <SourcePill source={null} ready skills={[skill]} skillUsage={undefined} workflows={[]} onPick={onPick} />
+        </MemoryRouter>
+      </QueryClientProvider>,
     )
-  })
-
-  it('does not load the preview module until View skill is clicked', async () => {
-    renderPill()
-    expect(previewLoaded).not.toHaveBeenCalled()
-
+    expect(previewRendered).toHaveBeenCalledWith(null)
     fireEvent.click(screen.getByRole('button', { name: 'Choose a skill or workflow' }))
     fireEvent.click(await screen.findByRole('button', { name: 'View skill review' }))
-
-    await waitFor(() => expect(previewLoaded).toHaveBeenCalled())
-    expect(screen.getByRole('dialog').textContent).toContain('review')
+    await waitFor(() => expect(screen.getByRole('dialog').textContent).toContain('review'))
+    expect(onPick).not.toHaveBeenCalled()
   })
 })

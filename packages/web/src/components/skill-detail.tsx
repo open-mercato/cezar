@@ -1,5 +1,5 @@
 import { ArrowRightIcon } from 'lucide-react'
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { Link } from '@/lib/project-router'
 
 import { useHealth, useLaunchKey, useProjects } from '@/api/queries'
@@ -14,7 +14,7 @@ import { isProjectSkill } from '@/lib/skills'
 import { useActiveProjectId } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 
-import { Markdown } from '@/routes/task-thread/markdown'
+const LazyMarkdown = lazy(async () => import('@/routes/task-thread/markdown').then((module) => ({ default: module.Markdown })))
 
 /**
  * The ONE skill detail rendering (R6 Step 1.4, spec §"Skills, Workflows, Inbox"): the
@@ -156,7 +156,9 @@ export function SkillDetailBody({
       <section data-slot="skill-content" className="mt-6 min-w-0 border-t border-border pt-5">
         <h3 className="text-[11px] font-semibold tracking-[.04em] text-soft-foreground uppercase">Content</h3>
         <div data-slot="skill-body" className="mt-3 text-sm">
-          <Markdown>{skill.body}</Markdown>
+          <Suspense fallback={null}>
+            <LazyMarkdown>{skill.body}</LazyMarkdown>
+          </Suspense>
         </div>
       </section>
     </div>
