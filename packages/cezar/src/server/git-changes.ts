@@ -6,6 +6,7 @@ import { join, resolve, sep } from 'node:path';
 import { resolveTaskDiffBase, type RepointedHead } from '../git-diff-base.ts';
 import { isSafeGitRef } from '../git-refs.ts';
 import { gitHasIdentity, unresolvedConflicts } from '../git-worktree.ts';
+import { FILESYSTEM_LISTING_CONCURRENCY, mapWithConcurrency } from './concurrency.ts';
 
 /**
  * Session git plumbing for the cockpit's Changes & Files tabs (redesign spec
@@ -55,7 +56,6 @@ function gitReason(res: GitResult, fallback: string): string {
 
 /** Per-file patch cap — the GUI shows a "truncated" note past this. */
 const PATCH_CAP = 200_000;
-
 export interface ChangedFile {
   path: string;
   /** Rename/copy source — present only when `status` is renamed/copied. */
@@ -661,19 +661,19 @@ export async function readWorktreePath(
 
   if (info.isDirectory()) {
     const dirents = await readdir(target, { withFileTypes: true });
-    const entries: DirEntry[] = [];
-    for (const d of dirents) {
-      if (d.name === '.git') continue;
+    const entries = (await mapWithConcurrency(dirents, FILESYSTEM_LISTING_CONCURRENCY, async (d): Promise<DirEntry | null> => {
+      if (d.name === '.git') return null;
       if (d.isDirectory()) {
-        entries.push({ name: d.name, type: 'dir' });
+        return { name: d.name, type: 'dir' };
       } else if (d.isFile()) {
         const size = await stat(join(target, d.name))
           .then((s) => s.size)
           .catch(() => undefined);
-        entries.push({ name: d.name, type: 'file', ...(size !== undefined ? { size } : {}) });
+        return { name: d.name, type: 'file', ...(size !== undefined ? { size } : {}) };
       }
       // Symlinks, sockets, … deliberately omitted from the listing.
-    }
+      return null;
+    })).filter((entry): entry is DirEntry => entry !== null);
     entries.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1));
     return { kind: 'dir', path: display, entries };
   }

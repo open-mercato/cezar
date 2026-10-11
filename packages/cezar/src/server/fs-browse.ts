@@ -1,6 +1,7 @@
 import { readdir, realpath, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { expandTilde } from '../paths.ts';
+import { FILESYSTEM_LISTING_CONCURRENCY, mapWithConcurrency } from './concurrency.ts';
 
 /**
  * `GET /api/fs/browse` — the directory picker behind "Add project → open local
@@ -68,7 +69,6 @@ export type BrowseResult =
  * resolution) on e.g. a node_modules parent.
  */
 const MAX_ENTRIES = 1000;
-
 /**
  * Home folders macOS guards with a privacy prompt (Files & Folders, Media & Apple Music,
  * Photos, Full Disk Access). Opening the picker at `~` must not LOOK INSIDE them: the `.git`
@@ -234,28 +234,29 @@ export async function browseDirectory(opts: {
   const truncated = candidates.length > MAX_ENTRIES;
   const inHome = real === (await realpathOrNull(expandTilde('~')));
 
-  const dirs: FsBrowseDir[] = [];
-  for (const entry of candidates.slice(0, MAX_ENTRIES)) {
-    const childPath = join(real, entry.name);
-    if (entry.isSymbolicLink()) {
-      const childReal = await realpathOrNull(childPath);
-      // A symlink is listed only when it resolves to a directory that is
-      // ITSELF inside the root. Listing an escaping link and rejecting it on
-      // click would leak the same fact one step later — that a path outside
-      // the root exists.
-      if (childReal === null || !contains(root, childReal)) continue;
-      const childInfo = await stat(childReal).catch(() => null);
-      if (!childInfo?.isDirectory()) continue;
-    }
-    dirs.push({
-      name: entry.name,
-      // The link's own path, not its target: the breadcrumb should read the
-      // way the operator's filesystem reads, and navigating into it re-runs
-      // the containment check from scratch.
-      path: childPath,
-      isRepo: inHome && PRIVACY_PROTECTED_HOME_DIRS.has(entry.name) ? false : await exists(join(childPath, '.git')),
-    });
-  }
+  const dirs = (
+    await mapWithConcurrency(candidates.slice(0, MAX_ENTRIES), FILESYSTEM_LISTING_CONCURRENCY, async (entry): Promise<FsBrowseDir | null> => {
+      const childPath = join(real, entry.name);
+      if (entry.isSymbolicLink()) {
+        const childReal = await realpathOrNull(childPath);
+        // A symlink is listed only when it resolves to a directory that is
+        // ITSELF inside the root. Listing an escaping link and rejecting it on
+        // click would leak the same fact one step later — that a path outside
+        // the root exists.
+        if (childReal === null || !contains(root, childReal)) return null;
+        const childInfo = await stat(childReal).catch(() => null);
+        if (!childInfo?.isDirectory()) return null;
+      }
+      return {
+        name: entry.name,
+        // The link's own path, not its target: the breadcrumb should read the
+        // way the operator's filesystem reads, and navigating into it re-runs
+        // the containment check from scratch.
+        path: childPath,
+        isRepo: inHome && PRIVACY_PROTECTED_HOME_DIRS.has(entry.name) ? false : await exists(join(childPath, '.git')),
+      };
+    })
+  ).filter((dir): dir is FsBrowseDir => dir !== null);
 
   return {
     ok: true,
