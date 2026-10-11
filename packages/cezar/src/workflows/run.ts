@@ -1076,6 +1076,20 @@ export class RunManager {
       this.autosaveCheckpointBlockedRuns.delete(runId);
     }
   }
+
+  /** Retire transient check ownership when archive/delete makes continuation impossible. */
+  releaseCheckState(runId: string): void {
+    this.checkArtifactSnapshots.delete(runId);
+    this.autosaveCheckpointBlockedRuns.delete(runId);
+  }
+
+  /** Bulk archive has no per-run callback, so reconcile archived entries in one pass. */
+  releaseArchivedCheckState(): void {
+    for (const runId of new Set([...this.checkArtifactSnapshots.keys(), ...this.autosaveCheckpointBlockedRuns])) {
+      const run = this.store.getRun(runId);
+      if (!run || run.archived) this.releaseCheckState(runId);
+    }
+  }
   // Queue + `starting` set (spec 006, janitor's pump() pattern): `starting`
   // covers the window between shifting a run off the queue and the run
   // registering in `active`, so parallel-slot counting is never racy.

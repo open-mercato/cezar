@@ -25,7 +25,8 @@ interface TimerSeam {
   active: Map<string, unknown>;
   checkArtifactSnapshots: Map<string, Map<string, string>>;
   autosaveCheckpointBlockedRuns: Set<string>;
-  releaseCheckStateIfUncontinuable(runId: string): void;
+  releaseCheckState(runId: string): void;
+  releaseArchivedCheckState(): void;
   dispose(): void;
 }
 
@@ -147,24 +148,50 @@ describe('periodic autosave gate (#471)', () => {
     expect(status.trim()).toBe('?? check-output.txt');
   });
 
+  it('preserves tracked and untracked check residue, then reclaims a path after agent edits', async () => {
+    for (const path of ['check-output.txt', 'untracked-check.txt', 'tracked-check.txt', 'agent-edit.txt']) {
+      rmSync(join(worktreePath, path), { force: true });
+    }
+    await run('git', ['restore', '--', 'tracked-check.txt'], { cwd: worktreePath }).catch(() => undefined);
+    writeFileSync(join(worktreePath, 'tracked-check.txt'), 'check baseline\n');
+    await run('git', ['add', 'tracked-check.txt'], { cwd: worktreePath });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'check baseline'], { cwd: worktreePath });
+    writeFileSync(join(worktreePath, 'tracked-check.txt'), 'check residue\n');
+    writeFileSync(join(worktreePath, 'untracked-check.txt'), 'check residue\n');
+    writeFileSync(join(worktreePath, 'agent-edit.txt'), 'agent work\n');
+
+    expect(await commitAll(worktreePath, 'explicit check commit', ['tracked-check.txt', 'untracked-check.txt'])).toMatchObject({ result: 'committed' });
+    const { stdout: files } = await run('git', ['show', '--format=', '--name-only', 'HEAD'], { cwd: worktreePath });
+    expect(files.trim().split('\n')).toEqual(['agent-edit.txt']);
+    const { stdout: status } = await run('git', ['status', '--porcelain'], { cwd: worktreePath });
+    expect(status).toContain(' M tracked-check.txt');
+    expect(status).toContain('?? untracked-check.txt');
+
+    writeFileSync(join(worktreePath, 'tracked-check.txt'), 'agent reclaimed this path\n');
+    expect(await commitAll(worktreePath, 'commit reclaimed edit', ['untracked-check.txt'])).toMatchObject({ result: 'committed' });
+    const { stdout: reclaimed } = await run('git', ['show', '--format=', '--name-only', 'HEAD'], { cwd: worktreePath });
+    expect(reclaimed.trim().split('\n')).toEqual(['tracked-check.txt']);
+  });
+
   it('refuses a checkpoint when an excluded path cannot be reset, without losing work', async () => {
-    rmSync(join(worktreePath, 'check-output.txt'), { force: true });
+    for (const path of ['check-output.txt', 'untracked-check.txt', 'tracked-check.txt', 'agent-edit.txt']) {
+      rmSync(join(worktreePath, path), { force: true });
+    }
+    await run('git', ['restore', '--', 'agent-edit.txt', 'tracked-check.txt'], { cwd: worktreePath }).catch(() => undefined);
     writeFileSync(join(worktreePath, 'unsafe-work.txt'), 'keep this dirty\n');
 
     expect(await autosaveCommit(worktreePath, 'turn end', ['../outside-worktree.txt'])).toBe('failed');
     expect(readFileSync(join(worktreePath, 'unsafe-work.txt'), 'utf8')).toBe('keep this dirty\n');
     const { stdout: status } = await run('git', ['status', '--porcelain'], { cwd: worktreePath });
     expect(status.trim()).toBe('?? unsafe-work.txt');
+
+    writeFileSync(join(worktreePath, 'unsafe-explicit.txt'), 'keep this too\n');
+    expect(await commitAll(worktreePath, 'explicit unsafe', ['../outside-worktree.txt'])).toMatchObject({ result: 'failed' });
+    expect(readFileSync(join(worktreePath, 'unsafe-explicit.txt'), 'utf8')).toBe('keep this too\n');
   });
 
-  it('releases check state only when a run cannot be continued', () => {
+  it('retains continuation state until archive/delete makes it disposable', () => {
     const seam = manager;
-    seam.checkArtifactSnapshots.set(runId, new Map([['check-output.txt', 'snapshot']]));
-    seam.autosaveCheckpointBlockedRuns.add(runId);
-    seam.releaseCheckStateIfUncontinuable(runId);
-    expect(seam.checkArtifactSnapshots.has(runId)).toBe(false);
-    expect(seam.autosaveCheckpointBlockedRuns.has(runId)).toBe(false);
-
     seam.checkArtifactSnapshots.set(runId, new Map([['check-output.txt', 'snapshot']]));
     seam.autosaveCheckpointBlockedRuns.add(runId);
     const record = store.getRun(runId)!;
@@ -172,12 +199,20 @@ describe('periodic autosave gate (#471)', () => {
       id: 'agent', name: 'agent', kind: 'agent', status: 'done', iterations: 1,
       tokensUsed: 0, sessionId: 'session-1',
     });
-    seam.releaseCheckStateIfUncontinuable(runId);
+    seam.releaseArchivedCheckState();
     expect(seam.checkArtifactSnapshots.has(runId)).toBe(true);
     expect(seam.autosaveCheckpointBlockedRuns.has(runId)).toBe(true);
-    record.archived = true;
-    seam.releaseCheckStateIfUncontinuable(runId);
+    store.setArchived(runId, true);
+    seam.releaseArchivedCheckState();
     expect(seam.checkArtifactSnapshots.has(runId)).toBe(false);
     expect(seam.autosaveCheckpointBlockedRuns.has(runId)).toBe(false);
+
+    const deleted = store.createRun({ title: 'deleted', workflow: 'quick-task', task: 'deleted', steps: [] });
+    seam.checkArtifactSnapshots.set(deleted.id, new Map([['check-output.txt', 'snapshot']]));
+    seam.autosaveCheckpointBlockedRuns.add(deleted.id);
+    expect(store.deleteRun(deleted.id)).toBe(true);
+    seam.releaseCheckState(deleted.id);
+    expect(seam.checkArtifactSnapshots.has(deleted.id)).toBe(false);
+    expect(seam.autosaveCheckpointBlockedRuns.has(deleted.id)).toBe(false);
   });
 });
