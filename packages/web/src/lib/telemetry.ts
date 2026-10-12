@@ -7,7 +7,7 @@ import {
   type TelemetryErrorInput,
 } from '@open-mercato/cezar-api-client'
 
-import { useHealth } from '@/api/queries'
+import { useHealth, useProjects } from '@/api/queries'
 import { onDangerToast } from '@/components/ui/toaster'
 import { recentFailedRequest, type FailedRequest } from '@/lib/failed-request'
 import { SID_HEADER, sid } from '@/lib/sid'
@@ -257,11 +257,37 @@ export function errorToastReport(
   }
 }
 
+/** The user's project names and ids, kept current by `Telemetry` for `scrubToastMessage`. */
+let knownProjects: string[] = []
+
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** A toast's text without the user's data it interpolates (docs/telemetry.md, "What is never
+ *  sent"): quoted values, API URLs (as their route shape), slash-bearing tokens — paths,
+ *  branches, `owner/repo` — and the names and ids of the user's projects. */
+export function scrubToastMessage(message: string, projects: readonly string[] = knownProjects): string {
+  let out = message
+    .replace(/“[^”]*”|"[^"]*"|`[^`]*`|(?<!\w)'[^'\n]+'(?!\w)/g, '<value>')
+    .replace(/[^\s()[\]{}<>,;]*\/[^\s()[\]{}<>,;]*/g, (token) => {
+      if (!/^(https?:\/\/[^/\s]+)?\/api\//.test(token)) return '<path>'
+      try {
+        return apiRouteShape(new URL(token, 'http://localhost').pathname)
+      } catch {
+        return '<path>'
+      }
+    })
+  // Longest first, so `acme-shop` is masked whole before `acme` could match inside it.
+  for (const name of [...new Set(projects)].filter((p) => p.length >= 3).sort((a, b) => b.length - a.length)) {
+    out = out.replace(new RegExp(`(?<![\\w-])${escapeRegExp(name)}(?![\\w-])`, 'g'), '<project>')
+  }
+  return out
+}
+
 /** Every red toast the user saw — "session closed", "cannot reach the cezar server" — is a
  *  failure they hit, so it is reported like an uncaught one, with the call that caused it. */
 function reportErrorToast(message: string): void {
   const { type, context } = errorToastReport(recentFailedRequest())
-  reportClientError(message, 'toast', { type, context })
+  reportClientError(scrubToastMessage(message), 'toast', { type, context })
 }
 
 /** `React.lazy` that says WHICH page failed when its bundle can't load. Engines word the failure
@@ -292,6 +318,11 @@ let handlersInstalled = false
 export function Telemetry() {
   const { pathname } = useLocation()
   const health = useHealth()
+  const projects = useProjects()
+
+  useEffect(() => {
+    knownProjects = (projects.data?.projects ?? []).flatMap((p) => [p.name, p.id])
+  }, [projects.data])
 
   useEffect(() => {
     // The version the page was loaded against: set once, so a later restart shows up as a skew

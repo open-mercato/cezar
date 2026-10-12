@@ -9,6 +9,7 @@ import {
   isBenignError,
   isCanonicalRoute,
   routeShape,
+  scrubToastMessage,
 } from './telemetry'
 
 describe('routeShape', () => {
@@ -98,5 +99,37 @@ describe('error toast reports', () => {
 
   it('reports a toast with no failed request as a client-side error toast', () => {
     expect(errorToastReport(null)).toEqual({ type: 'ErrorToast', context: {} })
+  })
+})
+
+describe('scrubToastMessage', () => {
+  it('reduces an API URL to its route shape, slug and query included', () => {
+    expect(scrubToastMessage('cannot reach the cezar server (/api/v1/p/acme-shop/runs/abc/messages?x=1)', [])).toBe(
+      'cannot reach the cezar server (/api/v1/p/:param/runs/:param/messages)',
+    )
+    expect(scrubToastMessage('failed: http://127.0.0.1:4000/api/v1/workflows/secret-flow', [])).toBe(
+      'failed: /api/v1/workflows/:param',
+    )
+  })
+
+  it('masks quoted values, branches, repositories and paths', () => {
+    expect(scrubToastMessage('No workflow named “client-deploy” — starting a new one.', [])).toBe(
+      'No workflow named <value> — starting a new one.',
+    )
+    expect(scrubToastMessage("branch 'feature/login' already exists", [])).toBe('branch <value> already exists')
+    expect(scrubToastMessage('cannot push cez/1a2b3c4d to acme/shop', [])).toBe('cannot push <path> to <path>')
+    expect(scrubToastMessage("can't open /Users/me/code/shop/README.md", [])).toBe("can't open <path>")
+  })
+
+  it('masks the names and ids of known projects, longest first and whole words only', () => {
+    expect(scrubToastMessage('Acme Shop already has the maximum of 8 tags', ['Acme Shop', 'acme-shop'])).toBe(
+      '<project> already has the maximum of 8 tags',
+    )
+    expect(scrubToastMessage('project acme-shop not found', ['acme', 'acme-shop'])).toBe('project <project> not found')
+    expect(scrubToastMessage('session closed', ['ses', 'x'])).toBe('session closed')
+  })
+
+  it('leaves a message without user data alone', () => {
+    expect(scrubToastMessage('session closed', [])).toBe('session closed')
   })
 })
