@@ -38,3 +38,8 @@ Read every child diff and rerun targeted tests. Dispatch exactly one final revie
 ### Phase 2: Validate
 - [ ] 2.1 Verify child diffs and tests
 - [ ] 2.2 Obtain final dispatched review
+
+## Audit findings
+
+- #1077: no new proven defect; merged #1127 hardened receipt identity. Remains unresolved pending historical evidence. No duplicate PR.
+- #1237: header already fixed by #1051. Child draft #1385 preserves manual Agents-dock expansion, pending independent review of scope and behavior; full validation not established.
