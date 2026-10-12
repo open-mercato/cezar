@@ -10,7 +10,7 @@ Non-goals: dispatch indexing methods or tests, UI/API changes, schema migrations
 
 ### Phase 1: Baseline and regression coverage
 
-- [x] 1.1 Confirm the current reference janitor behavior and add failing regression tests for marker precedence, candidate persistence/legacy records, and the issue cap. — bf2f3d30 + implementation commit
+- [x] 1.1 Confirm the current reference janitor behavior and add failing regression tests for isolated legacy `PR_NUMBER`/`PR_URL` precedence in both orders, fenced marker parsing, candidate persistence/legacy records, and the issue cap. — bf2f3d30 + implementation commit
 - [x] 1.2 Prove the focused cap regression fails with the source optimization absent. — red: old guard called `trackReferencedPrs` after both caps
 
 ### Phase 2: Bounded reference tracking
@@ -26,7 +26,7 @@ Risks: the janitor must continue scanning until marker-driven resolution and iss
 
 ### Phase 1: Baseline and regression coverage
 
-- [x] 1.1 Confirm the current reference janitor behavior and add failing regression tests for marker precedence, candidate persistence/legacy records, and the issue cap. — bf2f3d30 + 287ab4ef
+- [x] 1.1 Confirm the current reference janitor behavior and add failing regression tests for isolated legacy `PR_NUMBER`/`PR_URL` precedence in both orders, fenced marker parsing, candidate persistence/legacy records, and the issue cap. — bf2f3d30 + 287ab4ef
 - [x] 1.2 Prove the focused cap regression fails with the source optimization absent. — red: old guard called `trackReferencedPrs` after both caps
 
 ### Phase 2: Bounded reference tracking
