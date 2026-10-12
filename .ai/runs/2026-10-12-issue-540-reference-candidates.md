@@ -16,7 +16,7 @@ Non-goals: dispatch indexing methods or tests, UI/API changes, schema migrations
 ### Phase 2: Bounded reference tracking
 
 - [x] 2.1 Add the minimal settled-state guard for capped PR/issue candidate tracking and preserve the issue-number seed exception. — implementation commit
-- [ ] 2.2 Run focused tests, the configured validation gate, and review the final diff for scope.
+- [x] 2.2 Run focused tests, the configured validation gate, and review the final diff for scope. — focused 172/172; typecheck/unit/build/package green; full npm test has 13 unrelated failures
 
 Risks: the janitor must continue scanning until marker-driven resolution and issue-number seeding are no longer possible; an over-broad early return could lose a later authoritative marker or seed.
 
