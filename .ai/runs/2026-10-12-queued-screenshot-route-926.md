@@ -2,12 +2,12 @@
 
 ## Goal
 
-Keep issue #926 covered at the actual `POST /runs/:id/messages` boundary so a screenshot added to a queued task is retained as an attachment and reaches the queued-message response.
+Keep issue #926 covered at the actual `POST /runs/:id/messages` boundary so a screenshot added to a queued task is retained as attachment content and reaches the queued-message response.
 
 ## Scope
 
 - Add focused server-route regression coverage for queued attachment delivery.
-- Preserve the already-shipped workflow/dequeue behavior and original attachment metadata.
+- Preserve the already-shipped workflow/dequeue behavior; filename persistence is covered by the existing workflow tests.
 
 ## Non-goals
 
@@ -24,7 +24,7 @@ Keep issue #926 covered at the actual `POST /runs/:id/messages` boundary so a sc
 ### Phase 2: Validate and review
 
 - [x] 2.1 Prove the new assertion detects a route regression, run focused tests, and inspect scope. — red 1 failed with route mapping removed; green 26 passed after restoration — 8fe10ce0
-- [x] 2.2 Run the configured full validation gate and authoritative PR review. — focused/partial gate evidence posted; self-approval unavailable, awaiting independent reviewer
+- [ ] 2.2 Run the configured full validation gate and authoritative PR review. — CI gate passed; independent review remains pending
 
 ## Risks
 
@@ -42,4 +42,4 @@ This is intentionally test-only because the queued attachment persistence/dequeu
 ### Phase 2: Validate and review
 
 - [x] 2.1 Prove the new assertion detects a route regression, run focused tests, and inspect scope. — 8fe10ce0
-- [x] 2.2 Run the configured full validation gate and authoritative PR review. — 5ae5de94; independent approval unavailable to PR author
+- [ ] 2.2 Run the configured full validation gate and authoritative PR review. — CI passed; independent approval unavailable to PR author
