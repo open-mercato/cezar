@@ -441,10 +441,12 @@ mod tests {
         builder.into_inner().unwrap().finish().unwrap()
     }
 
+    #[cfg(unix)]
     fn sha_hex(bytes: &[u8]) -> String {
         Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
     }
 
+    #[cfg(unix)]
     fn mac() -> Asset {
         platform_asset("macos", "aarch64").unwrap()
     }
