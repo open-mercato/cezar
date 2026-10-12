@@ -1056,18 +1056,76 @@ fn tool_command(program: &str, args: &[&str]) -> Command {
     }
     #[cfg(not(windows))]
     {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| if cfg!(target_os = "macos") { "/bin/zsh".into() } else { "/bin/bash".into() });
-        let mut command = Command::new(shell);
-        command.args(["-lc", &posix_script(program, args)]);
+        let mut command = Command::new(user_shell());
+        command.args(["-lc", &posix_script(interactive_path().as_deref(), program, args)]);
         command
     }
 }
 
-/// `exec 'program' 'arg' …` — every word single-quoted, so a path with a space or a quote in it
-/// stays one argument.
+#[cfg(not(windows))]
+fn user_shell() -> String {
+    std::env::var("SHELL").ok().filter(|v| !v.is_empty()).unwrap_or_else(|| if cfg!(target_os = "macos") { "/bin/zsh".into() } else { "/bin/bash".into() })
+}
+
 #[cfg(any(not(windows), test))]
-fn posix_script(program: &str, args: &[&str]) -> String {
-    let mut script = format!("exec {}", shell_quote(program));
+const PATH_MARKER: &str = "__CEZ_DESKTOP_PATH__";
+
+/// The PATH an interactive login shell ends up with, resolved once. A login shell alone skips
+/// `~/.zshrc`/`~/.bashrc`, which is where nvm, fnm and most version managers put Node — the
+/// reason a Node that `npx` finds in the terminal was "not found" here. `None` keeps the plain
+/// login-shell PATH: a hung or noisy rc file degrades to the old behaviour, never blocks boot.
+#[cfg(not(windows))]
+fn interactive_path() -> Option<String> {
+    static PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| resolve_interactive_path(&user_shell(), Duration::from_secs(10))).clone()
+}
+
+#[cfg(not(windows))]
+fn resolve_interactive_path(shell: &str, timeout: Duration) -> Option<String> {
+    let script = format!("echo; echo {PATH_MARKER}; printenv PATH; echo {PATH_MARKER}");
+    let mut child = Command::new(shell)
+        .args(["-ilc", &script])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut out = String::new();
+        let _ = stdout.read_to_string(&mut out);
+        out
+    });
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    parse_marked_path(&reader.join().ok()?)
+}
+
+/// The line between the two markers — whatever an rc file printed around it is ignored.
+#[cfg(any(not(windows), test))]
+fn parse_marked_path(output: &str) -> Option<String> {
+    let mut lines = output.lines().map(str::trim);
+    lines.find(|line| *line == PATH_MARKER)?;
+    let path = lines.next()?;
+    (lines.next()? == PATH_MARKER && !path.is_empty()).then(|| path.to_string())
+}
+
+/// `[export PATH='…'; ]exec 'program' 'arg' …` — every word single-quoted, so a path with a
+/// space or a quote in it stays one argument. The export runs after the profile, so it wins.
+#[cfg(any(not(windows), test))]
+fn posix_script(path: Option<&str>, program: &str, args: &[&str]) -> String {
+    let mut script = path.map(|path| format!("export PATH={}; ", shell_quote(path))).unwrap_or_default();
+    script.push_str(&format!("exec {}", shell_quote(program)));
     for arg in args {
         script.push(' ');
         script.push_str(&shell_quote(arg));
@@ -1744,9 +1802,54 @@ mod tests {
     #[test]
     fn a_posix_command_keeps_every_argument_whole() {
         assert_eq!(
-            posix_script("node", &["/Users/o'neil/my app/index.js", "serve", "--port", "4321"]),
+            posix_script(None, "node", &["/Users/o'neil/my app/index.js", "serve", "--port", "4321"]),
             r#"exec 'node' '/Users/o'\''neil/my app/index.js' 'serve' '--port' '4321'"#
         );
+        assert_eq!(
+            posix_script(Some("/Users/o'neil/.nvm/bin:/usr/bin"), "node", &["-v"]),
+            r#"export PATH='/Users/o'\''neil/.nvm/bin:/usr/bin'; exec 'node' '-v'"#
+        );
+    }
+
+    #[test]
+    fn the_interactive_path_ignores_whatever_rc_files_print() {
+        let noisy = format!("Welcome!\n\n{PATH_MARKER}\n/a/.nvm/bin:/usr/bin\n{PATH_MARKER}\nbye\n");
+        assert_eq!(parse_marked_path(&noisy).as_deref(), Some("/a/.nvm/bin:/usr/bin"));
+        assert_eq!(parse_marked_path("no markers here"), None);
+        assert_eq!(parse_marked_path(&format!("{PATH_MARKER}\n/usr/bin\n")), None, "truncated output");
+        assert_eq!(parse_marked_path(&format!("{PATH_MARKER}\n\n{PATH_MARKER}\n")), None, "empty PATH");
+    }
+
+    /// The Intel report: nvm lives in ~/.zshrc, which a login-only shell never reads.
+    #[cfg(not(windows))]
+    #[test]
+    fn the_interactive_path_sees_what_only_an_rc_file_adds() {
+        let home = std::env::temp_dir().join(format!("cez-desktop-rc-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join(".zshrc"), "echo noise; export PATH=\"/from/zshrc:$PATH\"\n").unwrap();
+        let script = format!("ZDOTDIR={} exec /bin/zsh \"$@\"", shell_quote(&home.to_string_lossy()));
+        let shim = home.join("shell");
+        std::fs::write(&shim, format!("#!/bin/sh\n{script}\n")).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if Path::new("/bin/zsh").exists() {
+            let path = resolve_interactive_path(&shim.to_string_lossy(), Duration::from_secs(10)).expect("a PATH");
+            assert!(path.starts_with("/from/zshrc:"), "{path}");
+        }
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_hung_rc_file_degrades_instead_of_blocking() {
+        use std::os::unix::fs::PermissionsExt;
+        let shim = std::env::temp_dir().join(format!("cez-desktop-hung-{}", std::process::id()));
+        std::fs::write(&shim, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let started = Instant::now();
+        assert_eq!(resolve_interactive_path(&shim.to_string_lossy(), Duration::from_millis(200)), None);
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let _ = std::fs::remove_file(&shim);
     }
 
     // ---- against the real tools (CI runs these with `--ignored`; they need Node on PATH) ------
