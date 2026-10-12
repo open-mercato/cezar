@@ -18,12 +18,12 @@ Keep issue #926 covered at the actual `POST /runs/:id/messages` boundary so a sc
 
 ### Phase 1: Confirm and cover
 
-- [ ] 1.1 Verify issue #926 and existing claims/PRs; document that production behavior is already fixed.
-- [ ] 1.2 Add an HTTP regression test proving a queued screenshot is passed through and returned with its original filename.
+- [x] 1.1 Verify issue #926 and existing claims/PRs; document that production behavior is already fixed. — 5630521f
+- [x] 1.2 Add an HTTP regression test proving a queued screenshot is passed through and returned with its original filename. — 8fe10ce0
 
 ### Phase 2: Validate and review
 
-- [ ] 2.1 Prove the new assertion detects a route regression, run focused tests, and inspect scope.
+- [x] 2.1 Prove the new assertion detects a route regression, run focused tests, and inspect scope. — red 1 failed with route mapping removed; green 26 passed after restoration — 8fe10ce0
 - [ ] 2.2 Run the configured full validation gate and authoritative PR review.
 
 ## Risks
@@ -37,9 +37,9 @@ This is intentionally test-only because the queued attachment persistence/dequeu
 ### Phase 1: Confirm and cover
 
 - [x] 1.1 Verify issue #926 and existing claims/PRs; document that production behavior is already fixed.
-- [ ] 1.2 Add an HTTP regression test proving a queued screenshot is passed through and returned with its original filename.
+- [x] 1.2 Add an HTTP regression test proving a queued screenshot is passed through and returned with its original filename. — 8fe10ce0
 
 ### Phase 2: Validate and review
 
-- [ ] 2.1 Prove the new assertion detects a route regression, run focused tests, and inspect scope.
+- [x] 2.1 Prove the new assertion detects a route regression, run focused tests, and inspect scope. — 8fe10ce0
 - [ ] 2.2 Run the configured full validation gate and authoritative PR review.
