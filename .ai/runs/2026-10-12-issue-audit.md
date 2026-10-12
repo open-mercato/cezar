@@ -43,3 +43,7 @@ Read every child diff and rerun targeted tests. Dispatch exactly one final revie
 
 - #1077: no new proven defect; merged #1127 hardened receipt identity. Remains unresolved pending historical evidence. No duplicate PR.
 - #1237: header already fixed by #1051. Child draft #1385 preserves manual Agents-dock expansion, pending independent review of scope and behavior; full validation not established.
+
+- #926: production fixed in #1246; draft #1386 adds route coverage. Parent rerun 26/26 pass.
+- #1216: draft #1387 head 3533fc27 adds indexes; full test gate has failures and source-off proof missing. Final review required.
+- Parent independent checks: #1385 UI 189/189; #1077 automation 39/39 in built child worktree.
