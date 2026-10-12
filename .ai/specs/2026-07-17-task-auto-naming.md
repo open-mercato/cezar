@@ -90,16 +90,19 @@ progresses** — but through the namer, never through raw turn text.
   text + current `diffStat`. Same strict-JSON contract, same post-validation, same
   cross-checked `pr`/`issue` numbers.
 - **Precedence:** a user rename always wins and permanently stops auto-updates for that run
-  (the existing `titleSummary`-set-by-PATCH rule). Otherwise the freshest namer result may
-  replace an earlier one — a run that started as `469: /om-auto-review-pr` becomes
-  `469: fixing sse watchdog races` once the work has a shape.
+  (the existing `titleSummary`-set-by-PATCH rule). Otherwise the first turn's namer result
+  replaces the creation-time title — a run that started as `469: /om-auto-review-pr` becomes
+  `469: fixing sse watchdog races` once the work has a shape — and then the title settles
+  (`titleSettled`). Amended 2026-10-03 after owner feedback: refreshing on EVERY turn kept
+  renaming long multi-topic sessions, and the user could no longer find their tasks. The
+  same applies to `CEZ:TITLE`: the first declared title sticks.
 - **The switch (settings-based, env default, default ON):** new `config.json` key
   **`liveTitleUpdates: boolean`**, surfaced in Settings → Agents next to `plannerModel`/
   `namerModel`. When the key is absent, the default comes from the env:
   **`CEZ_TITLE_UPDATES`** (`'0'` → off, anything else/unset → **ON**). Config wins over env;
   env wins over the built-in ON. Default-ON is an explicit owner decision recorded here — it
   deviates from the "cost widens ⇒ opt-in" house rule; the cost is bounded below.
-- **Cost bounding:** one cheap-model call per turn end, skipped when the toggle is off, when
+- **Cost bounding:** at most one cheap-model call per task (the first turn end), skipped when the toggle is off, when
   a user rename exists, when the run is `CEZ_DRY_RUN`-mocked (canned answer), or when the
   namer inputs haven't changed since the last call (no new turn text and unchanged diffStat).
   Off (`liveTitleUpdates: false` / `CEZ_TITLE_UPDATES=0`) the title is set once at creation
