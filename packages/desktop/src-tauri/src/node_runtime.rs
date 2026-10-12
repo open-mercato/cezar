@@ -309,7 +309,7 @@ fn unpack_zip(archive: &Path, out: &Path) -> Result<(), String> {
 
 // ---- nodejs.org ----------------------------------------------------------------------------
 
-fn client() -> Result<reqwest::Client, String> {
+pub(crate) fn client() -> Result<reqwest::Client, String> {
     if rustls::crypto::CryptoProvider::get_default().is_none() {
         let _ = rustls::crypto::ring::default_provider().install_default();
     }

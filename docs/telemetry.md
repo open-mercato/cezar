@@ -37,6 +37,17 @@ plus technical context: build, uptime, memory, route shape, browser engine, enab
 
 `cezar telemetry inspect` prints the envelope an event would carry, without sending it.
 
+### The desktop shell
+
+The desktop app's native shell reports its own failures — Node.js could not be downloaded,
+cezar could not be installed, the cockpit process never answered or exited — under runtime
+`app-shell` with the shell's version. It reads the same answer: with a yes, a failure is reported
+on its own (code, message, cezar and shell version, architecture, how Node was found) and the
+failure page says so. Without one, nothing is sent; the failure page offers a **Send error
+report** button instead, which sends that one report — the error and the log the page shows, paths
+masked as above, no install id — and only when clicked. `CEZ_TELEMETRY=0` / `DO_NOT_TRACK=1` hide
+the button too.
+
 ## What is never sent
 
 Prompts, messages, code, file contents or diffs; file paths; repository, branch or project

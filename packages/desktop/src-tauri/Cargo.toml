@@ -1,6 +1,6 @@
 [package]
 name = "cezar-desktop"
-version = "0.1.5"
+version = "0.1.6"
 description = "Desktop shell for cezar (PoC)"
 edition = "2021"
 publish = false

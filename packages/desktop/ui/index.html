@@ -151,6 +151,18 @@
       .button:hover {
         filter: brightness(0.96);
       }
+      .report {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+      }
+      .report-note {
+        margin: 0;
+        font-size: 11.5px;
+        opacity: 0.7;
+        max-width: 360px;
+      }
       .hidden {
         display: none;
       }
@@ -170,6 +182,12 @@
         <div id="actions" class="actions hidden">
           <a class="button primary" href="https://nodejs.org/en/download" target="_blank" rel="noreferrer">Download Node.js</a>
           <button id="retry" class="button" type="button">Try again</button>
+        </div>
+        <div id="report" class="report hidden">
+          <button id="send-report" class="button" type="button">Send error report</button>
+          <p id="report-note" class="report-note">
+            Sends the error shown here, and its log if there is one, to the cezar team, with your home folder and project paths masked. Nothing else.
+          </p>
         </div>
         <p id="hint" class="hidden"></p>
       </div>
@@ -198,6 +216,35 @@
           pre.textContent += (pre.textContent ? '\n' : '') + line
           pre.scrollTop = pre.scrollHeight
         },
+        // The failure page's error report: `sent` (the user opted in, it went on its own) or
+        // `offer` (a button that sends this one report — the shell's `send_error_report`).
+        report(mode) {
+          const box = document.getElementById('report')
+          const button = document.getElementById('send-report')
+          const note = document.getElementById('report-note')
+          if (mode === 'sent') {
+            box.classList.remove('hidden')
+            button.classList.add('hidden')
+            note.textContent = 'An error report was sent to the cezar team, as you allowed in Settings → Privacy.'
+          } else if (mode === 'offer') {
+            box.classList.remove('hidden')
+            button.onclick = function () {
+              this.disabled = true
+              this.textContent = 'Sending…'
+              if (window.__TAURI_INTERNALS__) window.__TAURI_INTERNALS__.invoke('send_error_report')
+            }
+          }
+        },
+        reportSent(ok) {
+          const button = document.getElementById('send-report')
+          if (ok) {
+            button.classList.add('hidden')
+            document.getElementById('report-note').textContent = 'Error report sent. Thank you!'
+          } else {
+            button.disabled = false
+            button.textContent = 'Could not send. Try again'
+          }
+        },
         // A download running in the shell (the managed Node runtime): `fraction` 0..1, or
         // negative when the size is unknown (the bar then stays put and only the text moves).
         progress(fraction, text) {
@@ -210,6 +257,7 @@
         },
       }
       const params = new URLSearchParams(location.search)
+      if (params.get('report')) window.cezarSplash.report(params.get('report'))
       if (params.get('needs_node')) {
         window.cezarSplash.fail(params.get('title') || 'cezar needs Node.js', params.get('error') || '', '')
         const actions = document.getElementById('actions')
