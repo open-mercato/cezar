@@ -155,13 +155,48 @@
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: 6px;
+        gap: 10px;
+        width: 100%;
+        max-width: 420px;
+        margin-top: 4px;
+        padding: 16px 18px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: var(--card);
+      }
+      .report-title {
+        margin: 0;
+        font: 600 14px/1.3 var(--sans);
+        color: var(--foreground);
       }
       .report-note {
         margin: 0;
         font-size: 11.5px;
         opacity: 0.7;
         max-width: 360px;
+      }
+      .button.send {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        height: 40px;
+        min-width: 220px;
+        padding: 0 20px;
+        border-radius: 8px;
+        font: 600 14px/1 var(--sans);
+        box-shadow: 0 4px 16px color-mix(in srgb, var(--accent) 30%, transparent);
+        transition: transform 0.1s ease, box-shadow 0.15s ease;
+      }
+      .button.send:hover:not(:disabled) {
+        filter: none;
+        transform: translateY(-1px);
+        box-shadow: 0 6px 20px color-mix(in srgb, var(--accent) 45%, transparent);
+      }
+      .button.send:disabled {
+        opacity: 0.7;
+        cursor: default;
+        box-shadow: none;
       }
       .report-done {
         display: flex;
@@ -214,7 +249,11 @@
           <button id="retry" class="button" type="button">Try again</button>
         </div>
         <div id="report" class="report hidden">
-          <button id="send-report" class="button" type="button">Send error report</button>
+          <p class="report-title">Help us fix this</p>
+          <button id="send-report" class="button primary send" type="button">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>
+            <span id="send-report-label">Send error report</span>
+          </button>
           <p id="report-note" class="report-note">
             Sends the error shown here, and its log if there is one, to the cezar team, with your home folder and project paths masked. Nothing else.
           </p>
@@ -264,7 +303,7 @@
             box.classList.remove('hidden')
             button.onclick = function () {
               this.disabled = true
-              this.textContent = 'Sending…'
+              document.getElementById('send-report-label').textContent = 'Sending…'
               if (window.__TAURI_INTERNALS__) window.__TAURI_INTERNALS__.invoke('send_error_report')
             }
           }
@@ -281,7 +320,7 @@
             this.reportDone()
           } else {
             button.disabled = false
-            button.textContent = 'Could not send. Try again'
+            document.getElementById('send-report-label').textContent = 'Could not send. Try again'
           }
         },
         // A download running in the shell (the managed Node runtime): `fraction` 0..1, or
