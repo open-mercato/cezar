@@ -14,6 +14,8 @@
  * `claude` to `versions/2.1.295`, so it asked as "2.1.295". A Mach-O whose file name is not the
  * agent's runs from an APFS clone named after it (`~/.cache/cez/agent-exec/`) — no extra disk,
  * same code signature, so a grant still follows the agent's identity. No clone, no rename.
+ * A Node script (an npm install) would ask as "node", so it runs on a clone of its `node` named
+ * after the agent; a bash launcher stays as it is unless its runner unwraps it (`cursor-agent`).
  *
  * Anywhere else — no desktop shell, not macOS, a program that does not resolve — the command is
  * returned untouched, so a missing binary still fails the spawn with the usual ENOENT and hint.
@@ -45,6 +47,14 @@ export interface DisclaimOptions {
   hostEnv?: NodeJS.ProcessEnv;
   /** Where agent-named clones live; defaults to `~/.cache/cez/agent-exec`. */
   cloneDir?: string;
+  /** The name a privacy prompt should show; defaults to `program`'s file name. */
+  name?: string;
+}
+
+/** Whether `disclaimedCommand` reroutes at all: the desktop shell on macOS. */
+export function disclaimActive(opts: DisclaimOptions = {}): boolean {
+  const trampoline = (opts.hostEnv ?? process.env).CEZ_DISCLAIM_EXEC;
+  return (opts.platform ?? process.platform) === 'darwin' && !!trampoline && isExecutable(trampoline);
 }
 
 /** `[file, args]` to spawn so `program` runs as its own responsible process when it can. */
@@ -54,13 +64,35 @@ export function disclaimedCommand(
   childEnv: NodeJS.ProcessEnv | undefined,
   opts: DisclaimOptions = {},
 ): [string, string[]] {
-  const platform = opts.platform ?? process.platform;
-  const trampoline = (opts.hostEnv ?? process.env).CEZ_DISCLAIM_EXEC;
-  if (platform !== 'darwin' || !trampoline || !isExecutable(trampoline)) return [program, [...args]];
-  const resolved = resolveProgram(program, childEnv?.PATH ?? process.env.PATH);
+  if (!disclaimActive(opts)) return [program, [...args]];
+  const trampoline = (opts.hostEnv ?? process.env).CEZ_DISCLAIM_EXEC!;
+  const path = childEnv?.PATH ?? process.env.PATH;
+  const resolved = resolveProgram(program, path);
   if (!resolved) return [program, [...args]];
-  const named = namedAfterAgent(resolved, basename(program), opts.cloneDir ?? join(homedir(), '.cache', 'cez', 'agent-exec'));
-  return [trampoline, [DISCLAIM_EXEC_FLAG, named, ...args]];
+  const name = opts.name ?? basename(program);
+  const cloneDir = opts.cloneDir ?? join(homedir(), '.cache', 'cez', 'agent-exec');
+  const shebang = nodeShebang(resolved);
+  const node = shebang && resolveProgram(shebang[0]!, path);
+  if (shebang && node) {
+    return [trampoline, [DISCLAIM_EXEC_FLAG, namedAfterAgent(node, name, cloneDir), ...shebang.slice(1), resolved, ...args]];
+  }
+  return [trampoline, [DISCLAIM_EXEC_FLAG, namedAfterAgent(resolved, name, cloneDir), ...args]];
+}
+
+/** `[node, …flags]` from a `#!/usr/bin/env node` (or `-S node …`, or `/path/node`) script, else null. */
+function nodeShebang(path: string): string[] | null {
+  try {
+    const head = readHead(path, 256).toString('utf8');
+    if (!head.startsWith('#!')) return null;
+    let [interpreter, ...rest] = head.slice(2).split('\n')[0]!.trim().split(/\s+/);
+    if (interpreter && basename(interpreter) === 'env') {
+      if (rest[0] === '-S') rest = rest.slice(1);
+      [interpreter, ...rest] = rest;
+    }
+    return interpreter && basename(interpreter) === 'node' ? [interpreter, ...rest] : null;
+  } catch {
+    return null;
+  }
 }
 
 /** `resolved`, or a clone of its real file named `name`; any failure keeps `resolved`. */
@@ -95,16 +127,22 @@ function namedAfterAgent(resolved: string, name: string, cloneDir: string): stri
 const MACHO_MAGIC = new Set([0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca]);
 
 function isMachO(path: string): boolean {
+  const head = readHead(path, 4);
+  return head.length === 4 && MACHO_MAGIC.has(head.readUInt32BE(0));
+}
+
+function readHead(path: string, bytes: number): Buffer {
   const fd = openSync(path, 'r');
   try {
-    const head = Buffer.alloc(4);
-    return readSync(fd, head, 0, 4, 0) === 4 && MACHO_MAGIC.has(head.readUInt32BE(0));
+    const head = Buffer.alloc(bytes);
+    return head.subarray(0, readSync(fd, head, 0, bytes, 0));
   } finally {
     closeSync(fd);
   }
 }
 
-function resolveProgram(program: string, path: string | undefined): string | null {
+/** `program` as an absolute executable path: itself when absolute, else the first hit on `path`. */
+export function resolveProgram(program: string, path: string | undefined): string | null {
   if (program.includes('/')) return isAbsolute(program) && isExecutable(program) ? program : null;
   for (const dir of (path ?? '').split(delimiter)) {
     if (!dir) continue;

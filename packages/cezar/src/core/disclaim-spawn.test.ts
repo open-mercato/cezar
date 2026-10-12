@@ -60,4 +60,24 @@ describe('disclaimedCommand', () => {
     expect(disclaimedCommand('cursor-agent', [], { PATH: join(dir, 'sbin') }, darwin)).toEqual([trampoline, [DISCLAIM_EXEC_FLAG, link]]);
     expect(existsSync(cloneDir) && readdirSync(cloneDir).some((e) => e.startsWith('cursor-agent'))).toBe(false);
   });
+
+  it('runs a Node script on its node, so the prompt does not say "node"', () => {
+    mkdirSync(join(dir, 'npm'));
+    const node = exe('npm/node', Buffer.from([0xcf, 0xfa, 0xed, 0xfe]));
+    const pi = exe('npm/pi', '#!/usr/bin/env node\nconsole.log(1)\n');
+    const flagged = exe('npm/flagged', `#!/usr/bin/env -S node --no-warnings\n`);
+    const [, argv] = disclaimedCommand('pi', ['--mode', 'rpc'], { PATH: join(dir, 'npm') }, darwin);
+    expect(argv.slice(2)).toEqual([pi, '--mode', 'rpc']);
+    if (process.platform === 'darwin') expect(argv[1]).toMatch(/\/clones\/pi-[0-9a-f]{16}\/pi$/);
+    else expect(argv[1]).toBe(node);
+    expect(disclaimedCommand(flagged, [], { PATH: join(dir, 'npm') }, darwin)[1].slice(2)).toEqual(['--no-warnings', flagged]);
+  });
+
+  it('leaves a script whose node cannot be found, and a bash launcher, as they are', () => {
+    mkdirSync(join(dir, 'lone'));
+    const lone = exe('lone/tool', '#!/usr/bin/env node\n');
+    expect(disclaimedCommand(lone, [], { PATH: join(dir, 'lone') }, darwin)).toEqual([trampoline, [DISCLAIM_EXEC_FLAG, lone]]);
+    const bash = exe('lone/launcher', '#!/usr/bin/env bash\nexec node x\n');
+    expect(disclaimedCommand(bash, [], { PATH: join(dir, 'npm') }, darwin)).toEqual([trampoline, [DISCLAIM_EXEC_FLAG, bash]]);
+  });
 });
