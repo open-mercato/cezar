@@ -1289,6 +1289,24 @@ describe('RunStore — referenced-issue discovery (spec 2026-07-21-report-ref-di
     expect(loaded?.issueNumber).toBe(7);
   });
 
+  it('round-trips issue candidates and still loads a record written before those fields existed', () => {
+    const { store, run } = freshRun();
+    store.appendEvent(run.id, {
+      type: 'result',
+      result:
+        'See https://github.com/open-mercato/cezar/issues/1 and https://github.com/open-mercato/cezar/issues/2',
+    });
+    store.flush();
+    const reopened = RunStore.open(dataDir);
+    expect(reopened.getRun(run.id)?.referencedIssueCandidates).toEqual([
+      'https://github.com/open-mercato/cezar/issues/1',
+      'https://github.com/open-mercato/cezar/issues/2',
+    ]);
+
+    writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([LEGACY_RUN]), 'utf8');
+    expect(RunStore.open(dataDir).getRun('legacy-1')?.referencedIssueCandidates).toBeUndefined();
+  });
+
   it('ambiguity clears the chip and takes back the number the janitor seeded', () => {
     const { store: firstStore, run } = freshRun();
     firstStore.appendEvent(run.id, {
