@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -59,7 +60,7 @@ describe('createProject', () => {
     expect(calls.every((c) => c.cwd === join(root, 'fresh'))).toBe(true);
   });
 
-  it('GitHub: creates a PRIVATE repo from the local source and pushes', async () => {
+  it('GitHub: creates a PRIVATE repo, wires an HTTPS origin with the gh credential helper, then pushes (#968)', async () => {
     const { run, calls } = recordingRunner();
     const events: string[] = [];
     const result = await createProject({
@@ -71,10 +72,13 @@ describe('createProject', () => {
       run,
     });
     expect(result).toMatchObject({ ok: true, slug: 'acme/fresh', kind: 'github' });
-    expect(calls.at(-1)).toMatchObject({
-      cmd: 'gh',
-      args: ['repo', 'create', 'acme/fresh', '--private', '--source', join(root, 'fresh'), '--remote', 'origin', '--push'],
-    });
+    expect(calls.slice(2).map((c) => [c.cmd, ...c.args])).toEqual([
+      ['gh', 'repo', 'create', 'acme/fresh', '--private'],
+      ['git', 'remote', 'add', 'origin', 'https://github.com/acme/fresh.git'],
+      ['git', 'config', '--local', '--replace-all', 'credential.https://github.com.helper', ''],
+      ['git', 'config', '--local', '--add', 'credential.https://github.com.helper', '!gh auth git-credential'],
+      ['git', 'push', '-u', 'origin', 'main'],
+    ]);
     expect(events.at(-1)).toBe('done');
   });
 
@@ -84,8 +88,17 @@ describe('createProject', () => {
     );
     const result = await createProject({ name: 'fresh', github: { owner: 'acme' }, projectsDir: root, onProgress: () => {}, run });
     expect(result.ok).toBe(true);
-    expect(calls.at(-1)?.args).not.toContain('--push');
-    expect(calls.at(-1)?.args).toContain('--private');
+    expect(calls.some((c) => c.args[0] === 'push')).toBe(false);
+    expect(calls.find((c) => c.cmd === 'gh')?.args).toContain('--private');
+    expect(calls.at(-1)?.args).toContain('!gh auth git-credential');
+  });
+
+  it('a failed push after the remote was created cleans up and says the remote exists', async () => {
+    const { run } = recordingRunner((c) => (c.args[0] === 'push' ? { ok: false, error: 'Authentication failed' } : undefined));
+    const result = await createProject({ name: 'fresh', github: { owner: 'acme' }, projectsDir: root, onProgress: () => {}, run });
+    expect(result).toMatchObject({ ok: false, status: 500, stage: 'github_create' });
+    expect(!result.ok && result.error).toContain('acme/fresh was created on GitHub');
+    expect(readdirSync(root)).toEqual([]);
   });
 
   it('template: creates a private repo from the template, waits for it, then clones', async () => {
@@ -105,8 +118,14 @@ describe('createProject', () => {
     expect(result).toMatchObject({ ok: true, slug: 'acme/fresh', kind: 'template' });
     expect(calls[0]?.args).toEqual(['repo', 'create', 'acme/fresh', '--private', '--template', 'acme/starter']);
     expect(probes).toBe(3);
-    expect(calls.at(-1)?.args.slice(0, 4)).toEqual(['repo', 'clone', 'acme/fresh', join(root, 'fresh')]);
-    expect(calls.some((c) => c.cmd === 'git')).toBe(false);
+    const clone = calls.findIndex((c) => c.args[1] === 'clone');
+    expect(calls[clone]?.args.slice(0, 4)).toEqual(['repo', 'clone', 'https://github.com/acme/fresh.git', join(root, 'fresh')]);
+    // Only the #968 credential helper runs through git, after the clone — no init, no commit.
+    expect(calls.slice(clone + 1).map((c) => [c.cmd, c.args[0]])).toEqual([
+      ['git', 'config'],
+      ['git', 'config'],
+    ]);
+    expect(calls.slice(0, clone).some((c) => c.cmd === 'git')).toBe(false);
   });
 
   it('refuses bad names, owners and templates without touching the disk or running anything', async () => {
@@ -309,6 +328,23 @@ describe('POST /api/v1/projects/create', () => {
       ['project_create_failed', { label: 'folder_exists' }, { sid: undefined }],
       ['project_create_failed', { label: 'github_create' }, { sid: undefined }],
     ]);
+  });
+
+  it('a dry-run GitHub project is a real repo with an HTTPS origin and the gh credential helper (#968)', async () => {
+    for (const [name, github] of [
+      ['gh-empty', { owner: 'acme' }],
+      ['gh-tpl', { owner: 'acme', template: 'acme/starter' }],
+    ] as const) {
+      const { status } = await post({ name, github });
+      expect(status).toBe(200);
+      const dir = join(checkoutRoot, name);
+      const config = (args: string[]) => execFileSync('git', ['-C', dir, 'config', '--local', ...args], { encoding: 'utf8' }).trim();
+      // `--local` reads THIS repo's config: the fake clone is a real `git init`, not a bare `.git` folder.
+      expect(execFileSync('git', ['-C', dir, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim()).toBe(dir);
+      if (name === 'gh-empty') expect(config(['--get', 'remote.origin.url'])).toBe('https://github.com/acme/gh-empty.git');
+      const helpers = execFileSync('git', ['-C', dir, 'config', '--local', '--get-all', 'credential.https://github.com.helper'], { encoding: 'utf8' });
+      expect(helpers.split('\n').slice(0, -1)).toEqual(['', '!gh auth git-credential']);
+    }
   });
 
   it('400s a malformed body and an invalid name', async () => {

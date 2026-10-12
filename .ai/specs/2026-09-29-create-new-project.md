@@ -38,11 +38,18 @@ ownership-token `mkdir`, and its guarded `cleanupCheckout`). Progress is emitted
 1. **Local only:** `git init -b main` and `git commit --allow-empty -m "Initial commit"`,
    so task worktrees have a base commit. Without a git identity the commit is skipped
    (reported as a progress line) and the repo stays usable.
-2. **GitHub, empty:** as (1), then `gh repo create <owner>/<name> --private --source <dir>
-   --remote origin --push` (no `--push` when there is no commit).
+2. **GitHub, empty:** as (1), then `gh repo create <owner>/<name> --private`,
+   `git remote add origin https://github.com/<owner>/<name>.git` and `git push -u origin main`
+   (no push when there is no commit).
 3. **GitHub, template:** `gh repo create <owner>/<name> --private --template <tmpl>`, poll
    `gh api repos/<slug>/commits` until the generated commit appears (≈30 s max), then
-   `gh repo clone` into the target.
+   `gh repo clone https://github.com/<owner>/<name>.git` into the target.
+
+Both GitHub paths use the HTTPS remote and persist the `gh` credential helper exactly as
+"Clone from GitHub" does (#968, `GH_CREDENTIAL_HELPER_CONFIG` in `checkout.ts`): `gh` injects
+credentials only into its own commands, so without the helper a task worktree's later raw
+`git push` would fail to authenticate, and a bare `owner/repo` lets `gh` pick an SSH key an
+organisation's SAML policy may reject.
 
 A failure cleans up the local folder only. If the GitHub repository was already created,
 the error says so; cezar never deletes remote repositories.

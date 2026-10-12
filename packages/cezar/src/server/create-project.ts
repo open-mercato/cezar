@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { GITHUB_REPO_NAME_PATTERN, type GithubOwner, type GithubOwnersResponse } from '@open-mercato/cezar-contract';
-import { cleanupCheckout, isValidCheckoutName, parseRepoRef, type CheckoutProgressEvent } from './checkout.ts';
+import { GH_CREDENTIAL_HELPER_CONFIG, cleanupCheckout, isValidCheckoutName, parseRepoRef, type CheckoutProgressEvent } from './checkout.ts';
 
 /**
  * `POST /api/v1/projects/create` — the "Add project → New project" flow
@@ -14,10 +14,14 @@ import { cleanupCheckout, isValidCheckoutName, parseRepoRef, type CheckoutProgre
  *
  * 1. **Local only** — `git init -b main` plus an empty initial commit, so the
  *    new project has a base commit a task worktree can branch from.
- * 2. **GitHub, empty** — the same local repo, then
- *    `gh repo create <owner>/<name> --private --source <dir> --remote origin --push`.
+ * 2. **GitHub, empty** — the same local repo, then `gh repo create <owner>/<name>
+ *    --private`, an HTTPS `origin`, and a plain `git push`.
  * 3. **GitHub, from a template** — `gh repo create <owner>/<name> --private
- *    --template <tmpl>`, wait for GitHub to finish generating it, then clone.
+ *    --template <tmpl>`, wait for GitHub to finish generating it, then clone
+ *    its HTTPS URL.
+ *
+ * Both GitHub paths persist the `gh` credential helper a clone gets (#968), so
+ * a task worktree's later raw `git push` authenticates the same way.
  *
  * The repository is ALWAYS private: `--private` is a constant here, not a
  * parameter, and nothing in the request can reach it. Visibility is one click
@@ -107,10 +111,16 @@ export const spawnCommandRunner: CommandRunner = (cmd, args, opts) =>
 
 /**
  * `CEZ_DRY_RUN=1` — real `git` (it is local and required anyway), fake `gh`.
- * The fake clone writes only inside the directory the caller created, with a
- * `.git` directory so the project probes as a repo the way a real clone would.
+ * The fake clone writes only inside the directory the caller created, as a real
+ * (`git init`) repo: the `git config --local` that follows must find THIS repo,
+ * never walk up past a bare `.git` folder into an enclosing one. `git push`
+ * would need a real remote, so it is faked like `gh`.
  */
 export const dryRunCommandRunner: CommandRunner = async (cmd, args, opts) => {
+  if (cmd === 'git' && args[0] === 'push') {
+    opts.onLine?.(`(CEZ_DRY_RUN=1) git ${args.join(' ')}`);
+    return { ok: true, stdout: '' };
+  }
   if (cmd === 'git') {
     // An empty commit needs an identity; a dry run must not depend on the
     // host's git config, so it lends one for that single call.
@@ -121,7 +131,8 @@ export const dryRunCommandRunner: CommandRunner = async (cmd, args, opts) => {
   opts.onLine?.(`(CEZ_DRY_RUN=1) gh ${args.join(' ')}`);
   if (args[0] === 'repo' && args[1] === 'clone') {
     const dir = args[3] ?? opts.cwd;
-    await mkdir(join(dir, '.git'), { recursive: true });
+    const init = await spawnCommandRunner('git', ['init', '-b', INITIAL_BRANCH], { ...opts, cwd: dir });
+    if (!init.ok) return init;
     await writeFile(join(dir, 'README.md'), `# ${args[2] ?? 'repo'}\n\n(CEZ_DRY_RUN=1 fake template clone)\n`, 'utf8');
   }
   if (args[0] === 'api') return { ok: true, stdout: '1\n' };
@@ -236,6 +247,15 @@ export async function createProject(opts: CreateProjectOptions): Promise<CreateP
     }
   };
 
+  /** PR #968: route this repo's github.com HTTPS credentials through `gh`, as `checkout.ts` does. */
+  const persistCredentialHelper = async (): Promise<CommandResult> => {
+    for (const args of GH_CREDENTIAL_HELPER_CONFIG) {
+      const result = await exec('git', ['config', '--local', ...args]);
+      if (!result.ok) return { ok: false, error: `could not configure GitHub credentials: ${result.error}` };
+    }
+    return { ok: true, stdout: '' };
+  };
+
   /** Clean up the local folder and answer with a failure. */
   const fail = async (
     outcome: { error: string; notFound?: boolean },
@@ -266,8 +286,10 @@ export async function createProject(opts: CreateProjectOptions): Promise<CreateP
       if (attempt === 0) say('Waiting for GitHub to generate the repository…');
       await sleep(TEMPLATE_WAIT_MS);
     }
-    const cloned = await exec('gh', ['repo', 'clone', slug, target, '--', '--progress']);
+    const cloned = await exec('gh', ['repo', 'clone', remoteUrl(slug), target, '--', '--progress']);
     if (!cloned.ok) return fail(cloned, true, 'template_clone');
+    const helper = await persistCredentialHelper();
+    if (!helper.ok) return fail(helper, true, 'template_clone');
     emit({ phase: 'done' });
     return { ok: true, target, name, slug, kind: 'template' };
   }
@@ -286,10 +308,19 @@ export async function createProject(opts: CreateProjectOptions): Promise<CreateP
 
   if (slug) {
     say(`Creating private repository ${slug}…`);
-    const args = ['repo', 'create', slug, '--private', '--source', target, '--remote', 'origin'];
-    if (commit.ok) args.push('--push');
-    const created = await exec('gh', args);
+    const created = await exec('gh', ['repo', 'create', slug, '--private']);
     if (!created.ok) return fail(created, false, 'github_create');
+    // HTTPS remote + gh credential helper, exactly as a clone gets (#968); the
+    // push then goes through plain git, proving the setup a task push relies on.
+    const remote = await exec('git', ['remote', 'add', 'origin', remoteUrl(slug)]);
+    if (!remote.ok) return fail(remote, true, 'github_create');
+    const helper = await persistCredentialHelper();
+    if (!helper.ok) return fail(helper, true, 'github_create');
+    if (commit.ok) {
+      say(`Pushing ${INITIAL_BRANCH} to ${slug}…`);
+      const pushed = await exec('git', ['push', '-u', 'origin', INITIAL_BRANCH]);
+      if (!pushed.ok) return fail(pushed, true, 'github_create');
+    }
   }
 
   emit({ phase: 'done' });
@@ -353,6 +384,12 @@ function parseOwnerLine(line: string, personal: boolean): GithubOwner | null {
     ...(avatar.trim().startsWith('https://') ? { avatarUrl: avatar.trim() } : {}),
     ...(description !== '' ? { description: description.slice(0, 200) } : {}),
   };
+}
+
+/** The HTTPS remote, never the bare slug: `gh` would pick SSH from its own config, and an SSH key
+ *  is what an organisation's SAML policy may reject (#968, `RepoRef.cloneUrl`). */
+function remoteUrl(slug: string): string {
+  return `https://github.com/${slug}.git`;
 }
 
 function errText(err: unknown): string {
