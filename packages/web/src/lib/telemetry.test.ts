@@ -87,7 +87,6 @@ describe('error toast reports', () => {
     const report = errorToastReport({ method: 'POST', path: '/api/v1/p/acme/runs/abc/messages', status: 409, at: 1000 }, 1250)
     expect(report).toEqual({
       type: 'ApiError',
-      code: 'http_409',
       context: {
         'request.method': 'POST',
         'request.route': '/api/v1/p/:param/runs/:param/messages',
@@ -98,6 +97,6 @@ describe('error toast reports', () => {
   })
 
   it('reports a toast with no failed request as a client-side error toast', () => {
-    expect(errorToastReport(null)).toEqual({ type: 'ErrorToast', code: 'error_toast', context: {} })
+    expect(errorToastReport(null)).toEqual({ type: 'ErrorToast', context: {} })
   })
 })

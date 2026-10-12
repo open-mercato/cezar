@@ -242,11 +242,12 @@ export function apiRouteShape(pathname: string): string {
 export function errorToastReport(
   failure: FailedRequest | null,
   now = Date.now(),
-): { type: string; code: string; context: Context } {
-  if (!failure) return { type: 'ErrorToast', code: 'error_toast', context: {} }
+): { type: string; context: Context } {
+  // No `code`: the panel groups by type + code when one is set, which would merge every 409
+  // into one group. Without it a group is the (normalised) message — "session closed".
+  if (!failure) return { type: 'ErrorToast', context: {} }
   return {
     type: 'ApiError',
-    code: `http_${failure.status}`,
     context: {
       'request.method': failure.method,
       'request.route': apiRouteShape(failure.path),
@@ -259,8 +260,8 @@ export function errorToastReport(
 /** Every red toast the user saw — "session closed", "cannot reach the cezar server" — is a
  *  failure they hit, so it is reported like an uncaught one, with the call that caused it. */
 function reportErrorToast(message: string): void {
-  const { type, code, context } = errorToastReport(recentFailedRequest())
-  reportClientError(message, 'toast', { type, code, context })
+  const { type, context } = errorToastReport(recentFailedRequest())
+  reportClientError(message, 'toast', { type, context })
 }
 
 /** `React.lazy` that says WHICH page failed when its bundle can't load. Engines word the failure
