@@ -137,19 +137,34 @@ one from before Node was installed; that PATH resolved again (after "Try again")
 folders installers and version managers use (nvm, fnm, volta, mise, asdf, nodenv, n, nodebrew,
 pnpm, Homebrew incl. keg-only `node@NN`, MacPorts, nix, snap; scoop, chocolatey, nvs,
 nvm-windows), each `node` asked directly, newest 20+ first. A folder found that way goes FIRST
-on every tool command's PATH, so npm and the sidecar run the same Node. Node 20+ is the ONE
-thing the installer cannot provide today, and it is
-checked first: without it — or with an older one — the splash shows "cezar needs Node.js 20 or
-newer" with the reason, a **Download Node.js** button (opens nodejs.org in the browser) and
-**Try again** (re-runs the check and boots without relaunching the app). Nothing else runs
+on every tool command's PATH, so npm and the sidecar run the same Node. Node 20+ is
+checked first; without it the shell installs its own (below), and only when THAT fails does
+the splash show "cezar could not set up Node.js" with the reason — the same failure page as
+every other: the error report card (#1406) and **Restart cezar**, which first installs a newer
+shell and a newer cezar on the channel when there is one, then relaunches the app. There is no
+"Download Node.js" button: the user is never asked to install anything. Nothing else runs
 until Node is there: no npm, no sidecar, no update check. `CEZ_DESKTOP_NODE=<path>` overrides
 which node the shell uses (also how the page is tested).
 
-Next step, so the app has NO prerequisite: a managed Node runtime. The shell downloads the
-official Node tarball for the platform into `~/.cezar/node/<version>/` (verified against
-`SHASUMS256.txt`), and runs the sidecar with it when the login shell has none. The agent CLIs
-are unaffected — `claude`'s native installer bundles its own runtime and `codex` is a binary —
-so this closes the last gap between "download the app" and "it works".
+**The managed Node runtime (#1403, shell 0.1.5)** — so the app has NO prerequisite. When none
+of those passes finds Node 20+ (and `CEZ_DESKTOP_NODE` is unset), the shell downloads the
+official release for the platform (`darwin-arm64`/`darwin-x64`/`linux-x64`/`linux-arm64`
+`.tar.gz`, `win-x64`/`win-arm64` `.zip`) from nodejs.org — the newest LTS in `index.json` —
+with a progress bar on the splash (`node_runtime.rs`). The archive is hashed against the
+release's `SHASUMS256.txt` before it is unpacked; it is unpacked into a `.staging-*` folder under
+`~/.cezar/node/`, its `node` must RUN (a wrong architecture or libc fails here), and only then
+does it get its `.cezar-node.json` manifest and its rename to `~/.cezar/node/<version>/`. A
+folder without the manifest is never used, every failure removes its staging folder, and a
+checksum mismatch, being offline or a full disk lands on the "needs Node" page with the reason.
+Later launches find it as the fourth pass of `check_node` — after the user's own Node, always —
+and, while it is the one in use, a background thread installs the newest release of the SAME
+major line for the next launch and prunes every other version (manifest first) except the newest
+and the running one. Its folder goes first on the tool PATH like any other found Node, so npm
+and the sidecar use it; the agents' own `npx` calls (MCP servers) still use the user's Node. The
+agent CLIs are unaffected — `claude`'s native installer bundles its own runtime and `codex` is a
+binary. Downloaded rather than bundled: the app stays ~45 MB smaller per architecture, a
+downloaded Node needs no extra signing entitlements, and Node security patches ship without an
+app release.
 
 ## Replacing the icon (or any rebrand)
 

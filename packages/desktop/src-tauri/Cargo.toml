@@ -1,6 +1,6 @@
 [package]
 name = "cezar-desktop"
-version = "0.1.4"
+version = "0.1.6"
 description = "Desktop shell for cezar (PoC)"
 edition = "2021"
 publish = false
@@ -19,6 +19,13 @@ serde_json = "1"
 url = "2"
 tauri-plugin-updater = "2"
 ctrlc = { version = "3", features = ["termination"] }
+# The managed Node runtime (`node_runtime.rs`): the same crates the updater plugin already links.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "system-proxy"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"
+zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
 
 # The macOS agent trampoline (`disclaim.rs`) calls posix_spawn directly.
 [target.'cfg(target_os = "macos")'.dependencies]

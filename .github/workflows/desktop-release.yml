@@ -186,6 +186,9 @@ jobs:
           # a build without it still ships installers, just none an installed shell will adopt.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Compiled into the shell (telemetry.rs) so its error reports land in the product's
+          # service; without it they go to the development service, as any local build's do.
+          CEZ_TELEMETRY_SERVICE: ${{ secrets.CEZ_TELEMETRY_SERVICE }}
           # The APPLE_* variables arrive through "Hand over the Apple credentials" above, and
           # only when they exist.
         with:

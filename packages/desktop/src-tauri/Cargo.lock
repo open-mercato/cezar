@@ -299,17 +299,23 @@ checksum = "6d43a04d8753f35258c91f8ec639f792891f748a1edbd759cf1dcea3382ad83c"
 
 [[package]]
 name = "cezar-desktop"
-version = "0.1.4"
+version = "0.1.6"
 dependencies = [
  "ctrlc",
+ "flate2",
  "junction",
  "libc",
+ "reqwest",
+ "rustls",
  "serde",
  "serde_json",
+ "sha2",
+ "tar",
  "tauri",
  "tauri-build",
  "tauri-plugin-updater",
  "url",
+ "zip",
 ]
 
 [[package]]
@@ -5080,6 +5086,7 @@ checksum = "caa8cd6af31c3b31c6631b8f483848b91589021b28fffe50adada48d4f4d2ed1"
 dependencies = [
  "arbitrary",
  "crc32fast",
+ "flate2",
  "indexmap 2.14.2",
  "memchr",
 ]
