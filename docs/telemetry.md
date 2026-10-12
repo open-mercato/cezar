@@ -27,7 +27,10 @@ Every event carries `service`, `version` (release and channel, e.g. `0.15.0-nigh
 
 Events: `cezar_run` (at most once a day), `app_start`, `app_stop`, `task_start` (agent and model),
 `page_viewed` (the route's shape, e.g. `/p/:param/tasks/:param/changes`), `message_sent` (where
-from), `open_in` (which app), `project_added` (`local` or `github`), `diff_comment_added`,
+from), `open_in` (which app), `add_project_opened` (which Add project dialog: `new`, `clone`,
+`folder`), `project_added` (`local`, `github`, `cli`, or for a new project `new_local`,
+`new_github`, `new_template`), `project_create_failed` (the step that failed, e.g.
+`folder_exists`, `github_create` — never the error text), `diff_comment_added`,
 `task_archived` / `task_unarchived` / `task_pinned` / `task_unpinned` / `task_deleted` (with the
 task's status). Every label comes from a closed set the server enforces.
 

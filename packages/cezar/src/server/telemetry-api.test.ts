@@ -73,6 +73,16 @@ describe('telemetry routes', () => {
     expect(track).not.toHaveBeenCalled();
   });
 
+  it('relays add_project_opened with its closed dialog labels only', async () => {
+    for (const label of ['new', 'clone', 'folder']) {
+      expect((await post('/api/v1/telemetry/event', { event: 'add_project_opened', label })).status).toBe(204);
+      expect(track).toHaveBeenCalledWith('add_project_opened', { label }, { sid: undefined });
+    }
+    vi.mocked(track).mockClear();
+    expect((await post('/api/v1/telemetry/event', { event: 'add_project_opened', label: 'my-secret-repo' })).status).toBe(400);
+    expect(track).not.toHaveBeenCalled();
+  });
+
   it('relays a cockpit error and rejects an oversized context', async () => {
     const res = await post('/api/v1/telemetry/error', { type: 'TypeError', message: 'boom', context: { 'page.route': '/tasks' } });
     expect(res.status).toBe(204);

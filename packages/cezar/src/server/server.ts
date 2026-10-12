@@ -2896,7 +2896,10 @@ export function createApp(deps: ServerDeps) {
         signal: c.req.raw.signal,
         ...(deps.projectCommandRunner ? { run: deps.projectCommandRunner } : {}),
       });
+      const sid = deviceSid(c.req.header('x-cezar-sid'));
       if (!result.ok) {
+        // The stage, never the error text: that can carry paths and repository names.
+        track('project_create_failed', { label: result.stage }, { sid });
         return c.json(
           'reason' in result ? { error: result.error, reason: result.reason } : { error: result.error },
           result.status,
@@ -2908,8 +2911,11 @@ export function createApp(deps: ServerDeps) {
       if (registered.status !== 200) {
         const { body } = registered;
         const error = 'error' in body && body.error ? body.error : 'could not register the new project';
+        track('project_create_failed', { label: 'register' }, { sid });
         return c.json({ error: `${error} (the project is at ${result.target})` }, registered.status);
       }
+      // `new_local` / `new_github` / `new_template`, beside the folder and clone flows' labels.
+      track('project_added', { label: `new_${result.kind}` }, { sid });
       return c.json(registered.body, 200);
     });
 

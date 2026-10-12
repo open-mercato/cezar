@@ -62,6 +62,15 @@ the personal account selected by default; it links nowhere else.
 A failed org listing degrades to the personal account. `CEZ_DRY_RUN=1` fakes every `gh`
 call and runs real `git`.
 
+## Telemetry (opt-in, docs/telemetry.md)
+
+- `add_project_opened` — label `new` / `clone` / `folder`: which Add project dialog was opened
+  (cockpit relay, closed set in `packages/contract/src/telemetry.ts`).
+- `project_added` — label `new_local` / `new_github` / `new_template` for a created project,
+  beside the folder and clone flows' `local` / `github`.
+- `project_create_failed` — label is the failed step (`CreateProjectFailureStage` plus
+  `register`), never the error text, which can carry paths and repository names.
+
 ## Compatibility
 
 Additive: two new workspace-level routes (listed in BACKWARD_COMPATIBILITY.md §2), no

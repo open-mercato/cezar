@@ -2,13 +2,19 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync }
 import { mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('../telemetry.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../telemetry.ts')>();
+  return { ...actual, track: vi.fn() };
+});
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { mergeWriteWorkspaceConfig } from '../workspace/config.ts';
 import { clearProjectProbeCache } from '../workspace/projects.ts';
 import { createProject, listGithubOwners, type CommandRunner } from './create-project.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
+import { track } from '../telemetry.ts';
 import { WorkspaceEventBus, createApp, type RegisterProjectResponse, type ServerDeps } from './server.ts';
 
 /**
@@ -45,7 +51,7 @@ describe('createProject', () => {
   it('local only: git init + empty initial commit, no gh at all', async () => {
     const { run, calls } = recordingRunner();
     const result = await createProject({ name: 'fresh', projectsDir: root, onProgress: () => {}, run });
-    expect(result).toEqual({ ok: true, target: join(root, 'fresh'), name: 'fresh' });
+    expect(result).toEqual({ ok: true, target: join(root, 'fresh'), name: 'fresh', kind: 'local' });
     expect(calls.map((c) => [c.cmd, ...c.args])).toEqual([
       ['git', 'init', '-b', 'main'],
       ['git', 'commit', '--allow-empty', '-m', 'Initial commit'],
@@ -64,7 +70,7 @@ describe('createProject', () => {
       checkoutId: 'c1',
       run,
     });
-    expect(result).toMatchObject({ ok: true, slug: 'acme/fresh' });
+    expect(result).toMatchObject({ ok: true, slug: 'acme/fresh', kind: 'github' });
     expect(calls.at(-1)).toMatchObject({
       cmd: 'gh',
       args: ['repo', 'create', 'acme/fresh', '--private', '--source', join(root, 'fresh'), '--remote', 'origin', '--push'],
@@ -96,7 +102,7 @@ describe('createProject', () => {
       run,
       sleep: async () => {},
     });
-    expect(result).toMatchObject({ ok: true, slug: 'acme/fresh' });
+    expect(result).toMatchObject({ ok: true, slug: 'acme/fresh', kind: 'template' });
     expect(calls[0]?.args).toEqual(['repo', 'create', 'acme/fresh', '--private', '--template', 'acme/starter']);
     expect(probes).toBe(3);
     expect(calls.at(-1)?.args.slice(0, 4)).toEqual(['repo', 'clone', 'acme/fresh', join(root, 'fresh')]);
@@ -116,7 +122,7 @@ describe('createProject', () => {
       { name: 'ok', github: { owner: 'acme', template: 'https://gitlab.com/a/b' } },
     ]) {
       const result = await createProject({ ...opts, projectsDir: root, onProgress: () => {}, run });
-      expect(result).toMatchObject({ ok: false, status: 400 });
+      expect(result).toMatchObject({ ok: false, status: 400, stage: 'invalid_input' });
     }
     expect(calls).toEqual([]);
     expect(existsSync(root)).toBe(false);
@@ -126,7 +132,7 @@ describe('createProject', () => {
     mkdirSync(join(root, 'taken'), { recursive: true });
     const { run, calls } = recordingRunner();
     const result = await createProject({ name: 'taken', projectsDir: root, onProgress: () => {}, run });
-    expect(result).toMatchObject({ ok: false, status: 409 });
+    expect(result).toMatchObject({ ok: false, status: 409, stage: 'folder_exists' });
     expect(calls).toEqual([]);
     expect(existsSync(join(root, 'taken'))).toBe(true);
   });
@@ -136,7 +142,12 @@ describe('createProject', () => {
       c.cmd === 'gh' ? { ok: false, error: 'GraphQL: Name already exists on this account' } : undefined,
     );
     const result = await createProject({ name: 'fresh', github: { owner: 'acme' }, projectsDir: root, onProgress: () => {}, run });
-    expect(result).toMatchObject({ ok: false, status: 500, error: 'GraphQL: Name already exists on this account' });
+    expect(result).toMatchObject({
+      ok: false,
+      status: 500,
+      stage: 'github_create',
+      error: 'GraphQL: Name already exists on this account',
+    });
     expect(readdirSync(root)).toEqual([]);
   });
 
@@ -152,13 +163,14 @@ describe('createProject', () => {
     });
     expect(result.ok).toBe(false);
     expect(!result.ok && result.error).toContain('acme/fresh was created on GitHub');
+    expect(result).toMatchObject({ stage: 'template_clone' });
     expect(readdirSync(root)).toEqual([]);
   });
 
   it('degrades with 503 { reason } when gh is not installed', async () => {
     const { run } = recordingRunner((c) => (c.cmd === 'gh' ? { ok: false, error: 'spawn gh ENOENT', notFound: true } : undefined));
     const result = await createProject({ name: 'fresh', github: { owner: 'acme' }, projectsDir: root, onProgress: () => {}, run });
-    expect(result).toMatchObject({ ok: false, status: 503 });
+    expect(result).toMatchObject({ ok: false, status: 503, stage: 'gh_missing' });
     expect(!result.ok && 'reason' in result && result.reason).toContain('gh CLI not found');
   });
 });
@@ -277,6 +289,26 @@ describe('POST /api/v1/projects/create', () => {
     expect(create?.args).toContain('--private');
     expect(create?.args).not.toContain('--public');
     expect(create?.args).not.toContain('--internal');
+  });
+
+  it('counts a created project as project_added new_<kind>, and a failure by its stage only', async () => {
+    vi.mocked(track).mockClear();
+    expect((await post({ name: 'loc' })).status).toBe(200);
+    const tpl = recordingRunner((c) => (c.args[0] === 'api' ? { ok: true, stdout: '1\n' } : undefined));
+    expect((await post({ name: 'tpl', github: { owner: 'acme', template: 'acme/starter' } }, { projectCommandRunner: tpl.run })).status).toBe(200);
+    expect(vi.mocked(track).mock.calls.map(([event, extra]) => [event, extra?.label])).toEqual([
+      ['project_added', 'new_local'],
+      ['project_added', 'new_template'],
+    ]);
+
+    vi.mocked(track).mockClear();
+    expect((await post({ name: 'loc' })).status).toBe(409);
+    const ghDown = recordingRunner((c) => (c.cmd === 'gh' ? { ok: false, error: 'HTTP 502 for acme/secret-name' } : undefined));
+    expect((await post({ name: 'gh-fail', github: { owner: 'acme' } }, { projectCommandRunner: ghDown.run })).status).toBe(500);
+    expect(vi.mocked(track).mock.calls).toEqual([
+      ['project_create_failed', { label: 'folder_exists' }, { sid: undefined }],
+      ['project_create_failed', { label: 'github_create' }, { sid: undefined }],
+    ]);
   });
 
   it('400s a malformed body and an invalid name', async () => {

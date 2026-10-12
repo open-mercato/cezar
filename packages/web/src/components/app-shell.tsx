@@ -19,6 +19,7 @@ import { AddProjectDialog } from '@/components/add-project-dialog'
 import { CloneProjectDialog } from '@/components/clone-project-dialog'
 import { CreateProjectDialog } from '@/components/create-project-dialog'
 import { DialogErrorBoundary } from '@/components/dialog-error-boundary'
+import { trackAddProjectOpened } from '@/lib/telemetry'
 import { openCommandPalette } from '@/components/command-palette'
 import { GithubIcon } from '@/components/icons'
 import { commandShortcutHint } from '@/lib/use-command-shortcut'
@@ -933,15 +934,33 @@ function AddProjectMenu() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56">
         <DropdownMenuLabel className="text-xs text-soft-foreground">Add project</DropdownMenuLabel>
-        <DropdownMenuItem data-slot="add-project-local" onSelect={() => setBrowsing(true)}>
+        <DropdownMenuItem
+          data-slot="add-project-local"
+          onSelect={() => {
+            setBrowsing(true)
+            trackAddProjectOpened('folder')
+          }}
+        >
           <FolderIcon aria-hidden="true" />
           Open local folder…
         </DropdownMenuItem>
-        <DropdownMenuItem data-slot="add-project-clone" onSelect={() => setCloning(true)}>
+        <DropdownMenuItem
+          data-slot="add-project-clone"
+          onSelect={() => {
+            setCloning(true)
+            trackAddProjectOpened('clone')
+          }}
+        >
           <GithubIcon aria-hidden="true" />
           Clone from GitHub…
         </DropdownMenuItem>
-        <DropdownMenuItem data-slot="add-project-create" onSelect={() => setCreating(true)}>
+        <DropdownMenuItem
+          data-slot="add-project-create"
+          onSelect={() => {
+            setCreating(true)
+            trackAddProjectOpened('new')
+          }}
+        >
           <FolderPlusIcon aria-hidden="true" />
           New project…
         </DropdownMenuItem>

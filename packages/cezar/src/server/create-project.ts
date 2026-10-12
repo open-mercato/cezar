@@ -128,11 +128,30 @@ export const dryRunCommandRunner: CommandRunner = async (cmd, args, opts) => {
   return { ok: true, stdout: '' };
 };
 
-export type CreateProjectFailure =
-  | { ok: false; status: 400 | 409 | 500; error: string }
-  | { ok: false; status: 503; error: string; reason: string };
+/**
+ * Where creation stopped — `project_create_failed`'s telemetry label, so a closed set (the route
+ * adds `register` for a project that was created but could not be registered). Never the error
+ * text: that can carry paths and repository names.
+ */
+export type CreateProjectFailureStage =
+  | 'invalid_input'
+  | 'checkout_root'
+  | 'folder_exists'
+  | 'gh_missing'
+  | 'cancelled'
+  | 'git_init'
+  | 'github_create'
+  | 'template_clone';
 
-export type CreateProjectResult = { ok: true; target: string; name: string; slug?: string } | CreateProjectFailure;
+export type CreateProjectFailure =
+  | { ok: false; status: 400 | 409 | 500; error: string; stage: CreateProjectFailureStage }
+  | { ok: false; status: 503; error: string; reason: string; stage: CreateProjectFailureStage };
+
+/** `kind` — what was created: a local-only repo, an empty GitHub-backed one, or one from a
+ *  template. `project_added`'s label (`new_<kind>`). */
+export type CreateProjectResult =
+  | { ok: true; target: string; name: string; slug?: string; kind: 'local' | 'github' | 'template' }
+  | CreateProjectFailure;
 
 export interface CreateProjectOptions {
   /** Project name — both the folder name and, with `github`, the repo name. */
@@ -163,6 +182,7 @@ export async function createProject(opts: CreateProjectOptions): Promise<CreateP
     return {
       ok: false,
       status: 400,
+      stage: 'invalid_input',
       error: `not a valid project name: ${name.slice(0, 200)} — use letters, digits, ".", "-" and "_" only, no spaces`,
     };
   }
@@ -171,18 +191,18 @@ export async function createProject(opts: CreateProjectOptions): Promise<CreateP
   if (opts.github) {
     const owner = opts.github.owner.trim();
     if (owner.length > 64 || !OWNER_SEGMENT.test(owner)) {
-      return { ok: false, status: 400, error: `not a valid GitHub owner: ${owner.slice(0, 200)}` };
+      return { ok: false, status: 400, stage: 'invalid_input', error: `not a valid GitHub owner: ${owner.slice(0, 200)}` };
     }
     slug = `${owner}/${name}`;
     const rawTemplate = opts.github.template?.trim() ?? '';
     if (rawTemplate !== '') {
       const ref = parseRepoRef(rawTemplate);
-      if (!ref) return { ok: false, status: 400, error: `not a GitHub template repository: ${rawTemplate.slice(0, 200)}` };
+      if (!ref) return { ok: false, status: 400, stage: 'invalid_input', error: `not a GitHub template repository: ${rawTemplate.slice(0, 200)}` };
       template = ref.slug;
     }
   }
   if (!opts.projectsDir.startsWith('/')) {
-    return { ok: false, status: 500, error: `checkout root is not an absolute path: ${opts.projectsDir}` };
+    return { ok: false, status: 500, stage: 'checkout_root', error: `checkout root is not an absolute path: ${opts.projectsDir}` };
   }
   const root = resolve(opts.projectsDir);
   const target = join(root, name);
@@ -190,7 +210,7 @@ export async function createProject(opts: CreateProjectOptions): Promise<CreateP
   try {
     await mkdir(root, { recursive: true });
   } catch (err) {
-    return { ok: false, status: 500, error: `checkout root is not writable: ${errText(err)}` };
+    return { ok: false, status: 500, stage: 'checkout_root', error: `checkout root is not writable: ${errText(err)}` };
   }
   // The ownership token, exactly as in checkout.ts: non-recursive, so it
   // succeeds only when WE created the directory — which is what licenses the
@@ -199,9 +219,9 @@ export async function createProject(opts: CreateProjectOptions): Promise<CreateP
     await mkdir(target);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
-      return { ok: false, status: 409, error: `folder already exists: ${target}` };
+      return { ok: false, status: 409, stage: 'folder_exists', error: `folder already exists: ${target}` };
     }
-    return { ok: false, status: 500, error: `could not create ${target}: ${errText(err)}` };
+    return { ok: false, status: 500, stage: 'checkout_root', error: `could not create ${target}: ${errText(err)}` };
   }
 
   const emit = (event: Omit<CheckoutProgressEvent, 'name' | 'checkoutId'>): void =>
@@ -217,40 +237,44 @@ export async function createProject(opts: CreateProjectOptions): Promise<CreateP
   };
 
   /** Clean up the local folder and answer with a failure. */
-  const fail = async (outcome: { error: string; notFound?: boolean }, remoteCreated: boolean): Promise<CreateProjectFailure> => {
+  const fail = async (
+    outcome: { error: string; notFound?: boolean },
+    remoteCreated: boolean,
+    step: CreateProjectFailureStage,
+  ): Promise<CreateProjectFailure> => {
     await cleanupCheckout(root, target);
     if (outcome.notFound) {
       emit({ phase: 'error', error: GH_MISSING });
-      return { ok: false, status: 503, error: GH_MISSING, reason: GH_MISSING };
+      return { ok: false, status: 503, error: GH_MISSING, reason: GH_MISSING, stage: 'gh_missing' };
     }
     const error = remoteCreated && slug ? `${outcome.error}\n(the private repository ${slug} was created on GitHub)` : outcome.error;
     emit({ phase: 'error', error });
-    return { ok: false, status: 500, error };
+    return { ok: false, status: 500, error, stage: opts.signal?.aborted ? 'cancelled' : step };
   };
 
   if (slug && template) {
     say(`Creating private repository ${slug} from ${template}…`);
     const created = await exec('gh', ['repo', 'create', slug, '--private', '--template', template]);
-    if (!created.ok) return fail(created, false);
+    if (!created.ok) return fail(created, false, 'github_create');
     // Template generation is asynchronous on GitHub: an immediate clone can
     // land an empty repo. Wait until the first commit is visible.
     const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     for (let attempt = 0; attempt < TEMPLATE_WAIT_ATTEMPTS; attempt++) {
-      if (opts.signal?.aborted) return fail({ error: 'project creation cancelled' }, true);
+      if (opts.signal?.aborted) return fail({ error: 'project creation cancelled' }, true, 'cancelled');
       const probe = await exec('gh', ['api', `repos/${slug}/commits?per_page=1`, '--jq', 'length']);
       if (probe.ok && Number.parseInt(probe.stdout.trim(), 10) > 0) break;
       if (attempt === 0) say('Waiting for GitHub to generate the repository…');
       await sleep(TEMPLATE_WAIT_MS);
     }
     const cloned = await exec('gh', ['repo', 'clone', slug, target, '--', '--progress']);
-    if (!cloned.ok) return fail(cloned, true);
+    if (!cloned.ok) return fail(cloned, true, 'template_clone');
     emit({ phase: 'done' });
-    return { ok: true, target, name, slug };
+    return { ok: true, target, name, slug, kind: 'template' };
   }
 
   say('Initializing a git repository…');
   const init = await exec('git', ['init', '-b', INITIAL_BRANCH]);
-  if (!init.ok) return fail(init, false);
+  if (!init.ok) return fail(init, false, 'git_init');
   // An empty commit gives the project a base commit to branch task worktrees
   // from, without writing any file the user did not ask for.
   const commit = await exec('git', ['commit', '--allow-empty', '-m', 'Initial commit']);
@@ -265,11 +289,11 @@ export async function createProject(opts: CreateProjectOptions): Promise<CreateP
     const args = ['repo', 'create', slug, '--private', '--source', target, '--remote', 'origin'];
     if (commit.ok) args.push('--push');
     const created = await exec('gh', args);
-    if (!created.ok) return fail(created, false);
+    if (!created.ok) return fail(created, false, 'github_create');
   }
 
   emit({ phase: 'done' });
-  return { ok: true, target, name, ...(slug ? { slug } : {}) };
+  return { ok: true, target, name, ...(slug ? { slug } : {}), kind: slug ? 'github' : 'local' };
 }
 
 /** `GET /api/v1/projects/github-owners` — who a new repository may belong to:

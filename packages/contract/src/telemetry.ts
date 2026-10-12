@@ -102,6 +102,11 @@ export const MESSAGE_SURFACES = [
 export const messageSurfaceSchema = z.enum(MESSAGE_SURFACES);
 export type MessageSurface = z.infer<typeof messageSurfaceSchema>;
 
+/** The "Add project" dialogs — `add_project_opened`'s label. */
+export const ADD_PROJECT_DIALOGS = ['new', 'clone', 'folder'] as const;
+export const addProjectDialogSchema = z.enum(ADD_PROJECT_DIALOGS);
+export type AddProjectDialog = z.infer<typeof addProjectDialogSchema>;
+
 /**
  * `POST /api/v1/telemetry/event` — a user action only the cockpit can name. Every event has its
  * own closed label set, so this relay can never carry free text. `204`, like the other two.
@@ -110,5 +115,8 @@ export const telemetryEventInputSchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('message_sent'), label: messageSurfaceSchema.exclude(['cli']) }),
   /** A review comment left on the Changes tab's diff: on one line, or on a selected range. */
   z.object({ event: z.literal('diff_comment_added'), label: z.enum(['single_line', 'multi_line']) }),
+  /** One of the sidebar's "Add project" dialogs was opened: New project, Clone from GitHub, or
+   *  Open local folder. With `project_added`, the funnel of each add flow. */
+  z.object({ event: z.literal('add_project_opened'), label: addProjectDialogSchema }),
 ]);
 export type TelemetryEventInput = z.infer<typeof telemetryEventInputSchema>;
