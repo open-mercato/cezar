@@ -105,12 +105,14 @@ describe('telemetry', () => {
     reportError(new Error('device error'), {}, { sid: deviceSid(sid) });
     await flushTelemetry();
     const { cezarId } = await loadWorkspaceConfig();
-    const keys = fetchMock.mock.calls.map((c) => {
-      const body = JSON.parse(String((c as unknown as [string, RequestInit])[1].body));
-      return body.indexKey ?? body.user.id;
-    });
-    expect(keys).toEqual([`${cezarId}:${sid}`, cezarId, `${cezarId}:${sid}`]);
-    expect(keys[0]!.length).toBeLessThanOrEqual(96);
+    // Sends race each other, so key by what was sent rather than by arrival order.
+    const keys = Object.fromEntries(fetchMock.mock.calls.map((c) => {
+      const [url, init] = c as unknown as [string, RequestInit];
+      const body = JSON.parse(String(init.body));
+      return [url.split('/').pop(), body.indexKey ?? body.user.id];
+    }));
+    expect(keys).toEqual({ settings_view: `${cezarId}:${sid}`, app_start: cezarId, error: `${cezarId}:${sid}` });
+    expect(keys.settings_view.length).toBeLessThanOrEqual(96);
   });
 
   it('ignores a device header that is not a v7 uuid', () => {
