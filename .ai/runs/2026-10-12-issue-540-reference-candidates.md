@@ -10,12 +10,12 @@ Non-goals: dispatch indexing methods or tests, UI/API changes, schema migrations
 
 ### Phase 1: Baseline and regression coverage
 
-- [ ] 1.1 Confirm the current reference janitor behavior and add failing regression tests for marker precedence, candidate persistence/legacy records, and the issue cap.
-- [ ] 1.2 Prove the focused cap regression fails with the source optimization absent.
+- [x] 1.1 Confirm the current reference janitor behavior and add failing regression tests for marker precedence, candidate persistence/legacy records, and the issue cap. — bf2f3d30 + implementation commit
+- [x] 1.2 Prove the focused cap regression fails with the source optimization absent. — red: old guard called `trackReferencedPrs` after both caps
 
 ### Phase 2: Bounded reference tracking
 
-- [ ] 2.1 Add the minimal settled-state guard for capped PR/issue candidate tracking and preserve the issue-number seed exception.
+- [x] 2.1 Add the minimal settled-state guard for capped PR/issue candidate tracking and preserve the issue-number seed exception. — implementation commit
 - [ ] 2.2 Run focused tests, the configured validation gate, and review the final diff for scope.
 
 Risks: the janitor must continue scanning until marker-driven resolution and issue-number seeding are no longer possible; an over-broad early return could lose a later authoritative marker or seed.
