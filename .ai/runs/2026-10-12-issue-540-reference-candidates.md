@@ -32,4 +32,4 @@ Risks: the janitor must continue scanning until marker-driven resolution and iss
 ### Phase 2: Bounded reference tracking
 
 - [x] 2.1 Add the minimal settled-state guard for capped PR/issue candidate tracking and preserve the issue-number seed exception. — 287ab4ef
-- [x] 2.2 Run focused tests, the configured validation gate, and review the final diff for scope. — 172/172 focused; typecheck/unit/build/package green; full npm test has 13 unrelated failures
+- [ ] 2.2 Run focused tests, the configured validation gate, and review the final diff for scope. — tests complete; full npm test has 13 unrelated failures; formal self-review blocked by GitHub
