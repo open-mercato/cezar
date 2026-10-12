@@ -37,8 +37,8 @@ plus technical context: build, uptime, memory, route shape, browser engine, enab
 Every red error toast the cockpit shows is reported the same way, with the method, status and
 route shape of the API call that failed just before it (e.g. `POST
 /api/v1/p/:param/runs/:param/messages`, 409). The toast's text is masked first: quoted values,
-URLs and slash-bearing names (paths, branches, `owner/repo`) and your project names become
-placeholders.
+emails, URLs, slash-bearing names (paths, branches, `owner/repo`), your project names and
+anything after a `: ` become placeholders.
 
 `cezar telemetry inspect` prints the envelope an event would carry, without sending it.
 

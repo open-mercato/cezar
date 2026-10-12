@@ -107,8 +107,8 @@ describe('scrubToastMessage', () => {
     expect(scrubToastMessage('cannot reach the cezar server (/api/v1/p/acme-shop/runs/abc/messages?x=1)', [])).toBe(
       'cannot reach the cezar server (/api/v1/p/:param/runs/:param/messages)',
     )
-    expect(scrubToastMessage('failed: http://127.0.0.1:4000/api/v1/workflows/secret-flow', [])).toBe(
-      'failed: /api/v1/workflows/:param',
+    expect(scrubToastMessage('http://127.0.0.1:4000/api/v1/workflows/secret-flow failed', [])).toBe(
+      '/api/v1/workflows/:param failed',
     )
   })
 
@@ -127,6 +127,17 @@ describe('scrubToastMessage', () => {
     )
     expect(scrubToastMessage('project acme-shop not found', ['acme', 'acme-shop'])).toBe('project <project> not found')
     expect(scrubToastMessage('session closed', ['ses', 'x'])).toBe('session closed')
+  })
+
+  it('masks label: value tails, emails, curly single quotes and any-case project names', () => {
+    expect(scrubToastMessage('invalid branch name: feature-login', [])).toBe('invalid branch name: <detail>')
+    expect(scrubToastMessage('unknown account: work-account', [])).toBe('unknown account: <detail>')
+    expect(scrubToastMessage('push rejected for jane@acme.com', [])).toBe('push rejected for <email>')
+    expect(scrubToastMessage('plan ‘secret-plan’ is missing', [])).toBe('plan <value> is missing')
+    expect(scrubToastMessage('ACME-SHOP is busy', ['acme-shop'])).toBe('<project> is busy')
+    expect(scrubToastMessage('cannot reach the cezar server (/api/v1/health)', [])).toBe(
+      'cannot reach the cezar server (/api/v1/health)',
+    )
   })
 
   it('leaves a message without user data alone', () => {

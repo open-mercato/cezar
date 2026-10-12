@@ -175,7 +175,8 @@ function assetFile(url: string | undefined): string | null {
 
 /** Errors already reported, so the window hooks don't report a chunk failure a second time. */
 const reported = new WeakSet<object>()
-let lastErrorAt = 0
+/** Last report per throttle slot: toasts get their own, so a repeated toast never hides a crash. */
+const lastErrorAt = { error: 0, toast: 0 }
 
 function reportClientError(
   error: unknown,
@@ -189,8 +190,9 @@ function reportClientError(
   session.errors += 1
   // Don't flood: at most one cockpit error report per 10 s (the server throttles per error too).
   const now = Date.now()
-  if (now - lastErrorAt < 10_000) return
-  lastErrorAt = now
+  const slot = handler === 'toast' ? 'toast' : 'error'
+  if (now - lastErrorAt[slot] < 10_000) return
+  lastErrorAt[slot] = now
   // A thrown non-Error (a string, a bare `window.error` message) has no stack of its own. Never
   // fabricate one: `new Error()` here would record THIS reporter's frame, and every such report
   // would group on the reporter instead of on its message.
@@ -263,11 +265,12 @@ let knownProjects: string[] = []
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /** A toast's text without the user's data it interpolates (docs/telemetry.md, "What is never
- *  sent"): quoted values, API URLs (as their route shape), slash-bearing tokens — paths,
- *  branches, `owner/repo` — and the names and ids of the user's projects. */
+ *  sent"): quoted values, emails, API URLs (as their route shape), slash-bearing tokens — paths,
+ *  branches, `owner/repo` —, the names and ids of the user's projects, and anything after `: `. */
 export function scrubToastMessage(message: string, projects: readonly string[] = knownProjects): string {
   let out = message
-    .replace(/“[^”]*”|"[^"]*"|`[^`]*`|(?<!\w)'[^'\n]+'(?!\w)/g, '<value>')
+    .replace(/“[^”]*”|‘[^’]*’|"[^"]*"|`[^`]*`|(?<!\w)'[^'\n]+'(?!\w)/g, '<value>')
+    .replace(/[^\s()[\]{}<>,;]+@[^\s()[\]{}<>,;]+\.\w+/g, '<email>')
     .replace(/[^\s()[\]{}<>,;]*\/[^\s()[\]{}<>,;]*/g, (token) => {
       if (!/^(https?:\/\/[^/\s]+)?\/api\//.test(token)) return '<path>'
       try {
@@ -278,9 +281,10 @@ export function scrubToastMessage(message: string, projects: readonly string[] =
     })
   // Longest first, so `acme-shop` is masked whole before `acme` could match inside it.
   for (const name of [...new Set(projects)].filter((p) => p.length >= 3).sort((a, b) => b.length - a.length)) {
-    out = out.replace(new RegExp(`(?<![\\w-])${escapeRegExp(name)}(?![\\w-])`, 'g'), '<project>')
+    out = out.replace(new RegExp(`(?<![\\w-])${escapeRegExp(name)}(?![\\w-])`, 'gi'), '<project>')
   }
-  return out
+  // `label: value` tails — "invalid branch name: x", git/gh stderr — name what the user typed.
+  return out.replace(/:\s+\S.*$/s, ': <detail>')
 }
 
 /** Every red toast the user saw — "session closed", "cannot reach the cezar server" — is a
