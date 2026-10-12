@@ -130,7 +130,9 @@ describe('queued prompt stack routes (#472)', () => {
 
   /** #926 — the browser posts screenshots through this route while the run waits for a slot.
    * Keep this at the HTTP boundary: a route that accidentally strips image blocks would still
-   * pass the text-only queued-stack test and the UI would only report the generic Load failed. */
+   * pass the text-only queued-stack test and the UI would only report the generic Load failed.
+   * The original filename is metadata for attachment-library persistence; it is intentionally
+   * not part of the vendor image block delivered to the queued manager. */
   it('passes a queued screenshot through the message route', async () => {
     const res = await post({
       text: 'inspect this screenshot',
