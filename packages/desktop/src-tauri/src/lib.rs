@@ -859,20 +859,85 @@ fn npm_program() -> &'static str {
     }
 }
 
-/// Node 20+ reachable on the user's PATH? Returns its version, or the reason it is not.
+/// Node 20+ reachable? Returns its version, or the reason it is not. Also decides the PATH every
+/// later `tool_command` gets, so npm and the sidecar run the same Node this check found:
+/// 1. the PATH the user's shell reports (cached from the first call);
+/// 2. that PATH resolved AGAIN — Node may have been installed since (the splash's "Try again");
+/// 3. the folders installers and version managers use, each `node` asked directly — a lazy nvm,
+///    an rc file a login shell skips, an old system Node shadowing a new one.
 fn check_node() -> Result<String, String> {
-    let mut command = tool_command(&node_program(), &["-p", "process.versions.node"]);
-    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
-    let output = command.output().map_err(|_| "Node.js was not found on your PATH.".to_string())?;
-    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if !output.status.success() || version.is_empty() {
-        return Err("Node.js was not found on your PATH.".into());
+    let first = node_version(tool_command(&node_program(), &["-p", "process.versions.node"]));
+    if first.is_ok() || std::env::var_os("CEZ_DESKTOP_NODE").is_some_and(|v| !v.is_empty()) {
+        return first;
+    }
+    set_tool_path(ToolPath { node_dir: None, base: resolve_base_path() });
+    if let Ok(version) = node_version(tool_command(&node_program(), &["-p", "process.versions.node"])) {
+        return Ok(version);
+    }
+    let env = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+    match find_node_in(&candidate_node_dirs(&env)) {
+        Some((dir, version)) => {
+            let base = tool_path().base;
+            set_tool_path(ToolPath { node_dir: Some(dir), base });
+            Ok(version)
+        }
+        None => first,
+    }
+}
+
+/// Runs `node -p process.versions.node` and judges the answer.
+fn node_version(mut command: Command) -> Result<String, String> {
+    let not_found = || "Node.js was not found on your PATH.".to_string();
+    let (success, stdout) = output_with_timeout(command.stdin(Stdio::null()), Duration::from_secs(30)).ok_or_else(not_found)?;
+    let version = stdout.trim().to_string();
+    if !success || version.is_empty() {
+        return Err(not_found());
     }
     let major = version.split('.').next().and_then(|m| m.parse::<u32>().ok()).unwrap_or(0);
     if major < 20 {
         return Err(format!("Node.js {version} is installed, but cezar needs 20 or newer."));
     }
     Ok(version)
+}
+
+/// The first folder whose own `node` is 20+, asked directly rather than through any PATH.
+fn find_node_in(dirs: &[PathBuf]) -> Option<(PathBuf, String)> {
+    dirs.iter().find_map(|dir| {
+        let mut command = Command::new(dir.join(NODE_EXE));
+        command.arg("-p").arg("process.versions.node");
+        hide_console(&mut command);
+        node_version(command).ok().map(|version| (dir.clone(), version))
+    })
+}
+
+const NODE_EXE: &str = if cfg!(windows) { "node.exe" } else { "node" };
+
+/// Waits at most `timeout` for `command`; `(exit success, stdout)`, or `None` when it could not
+/// start or ran out of time (then it is killed). Stderr is discarded.
+fn output_with_timeout(command: &mut Command, timeout: Duration) -> Option<(bool, String)> {
+    let mut child = command.stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let mut stdout = child.stdout.take()?;
+    let (sender, output) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut out = String::new();
+        let _ = stdout.read_to_string(&mut out);
+        let _ = sender.send(out);
+    });
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    // A background job the child started can hold stdout open past its exit.
+    let out = output.recv_timeout(deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(500))).ok()?;
+    Some((status.success(), out))
 }
 
 /// The splash's "Try again" (after installing Node) lands here: start a supervisor when none
@@ -1044,22 +1109,107 @@ fn spawn_sidecar(entry: &Path, port: u16, cwd: &Path, log: Arc<Mutex<VecDeque<St
 /// Windows: directly. There is no login shell, the PATH a GUI process gets is the user's own
 /// (installers write it to the registry), and `cmd` understands none of POSIX quoting — so
 /// nothing here is ever a script on Windows, only a program and its arguments.
+/// Either way the PATH is the one `check_node` settled on (`ToolPath`).
 fn tool_command(program: &str, args: &[&str]) -> Command {
+    let path = tool_path();
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
-        /// No console window flashing up behind the app for every node and npm call.
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let mut command = Command::new(program);
-        command.args(args).creation_flags(CREATE_NO_WINDOW);
+        command.args(args);
+        hide_console(&mut command);
+        if path.node_dir.is_some() || path.base.is_some() {
+            let base = path.base.map(std::ffi::OsString::from).or_else(|| std::env::var_os("PATH")).unwrap_or_default();
+            if let Ok(joined) = std::env::join_paths(path.node_dir.into_iter().chain(std::env::split_paths(&base))) {
+                command.env("PATH", joined);
+            }
+        }
         command
     }
     #[cfg(not(windows))]
     {
+        let node_dir = path.node_dir.map(|dir| dir.to_string_lossy().into_owned());
         let mut command = Command::new(user_shell());
-        command.args(["-lc", &posix_script(interactive_path().as_deref(), program, args)]);
+        command.args(["-lc", &posix_script(node_dir.as_deref(), path.base.as_deref(), program, args)]);
         command
     }
+}
+
+/// No console window flashing up behind the app for every node and npm call.
+fn hide_console(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    let _ = command;
+}
+
+/// The PATH every tool command runs with.
+#[derive(Clone, Default)]
+struct ToolPath {
+    /// A Node 20+ folder found outside the PATH, put FIRST so npm and the sidecar use it too.
+    node_dir: Option<PathBuf>,
+    /// The PATH to use instead of the inherited one: an interactive login shell's (macOS, Linux)
+    /// or the registry's (Windows). `None` keeps the profile's / the process's own.
+    base: Option<String>,
+}
+
+static TOOL_PATH: Mutex<Option<ToolPath>> = Mutex::new(None);
+
+/// Resolved on first use, then kept — a shell start per npm call would be slow.
+fn tool_path() -> ToolPath {
+    let mut guard = TOOL_PATH.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard
+        .get_or_insert_with(|| ToolPath { node_dir: None, base: if cfg!(windows) { None } else { resolve_base_path() } })
+        .clone()
+}
+
+fn set_tool_path(path: ToolPath) {
+    *TOOL_PATH.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(path);
+}
+
+/// The user's PATH as of NOW. macOS/Linux: an interactive login shell's — a login shell alone
+/// skips `~/.zshrc`/`~/.bashrc`, where nvm, fnm and most version managers put Node. Windows: the
+/// registry's machine + user PATH, because a GUI process keeps the PATH Explorer had when the
+/// user logged in, from before Node was installed. `None` when it cannot be read: a hung or
+/// noisy rc file degrades to the inherited PATH, never blocks boot.
+fn resolve_base_path() -> Option<String> {
+    #[cfg(windows)]
+    {
+        let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        let powershell = Path::new(&system_root).join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+        let mut command = Command::new(if powershell.is_file() { powershell } else { PathBuf::from("powershell.exe") });
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')",
+        ]);
+        command.stdin(Stdio::null());
+        hide_console(&mut command);
+        let (success, stdout) = output_with_timeout(&mut command, Duration::from_secs(10))?;
+        let inherited = std::env::var("PATH").unwrap_or_default();
+        (success && !stdout.trim().trim_matches(';').is_empty()).then(|| merge_paths(stdout.trim(), &inherited, ';'))
+    }
+    #[cfg(not(windows))]
+    {
+        resolve_interactive_path(&user_shell(), Duration::from_secs(10))
+    }
+}
+
+/// `first`'s entries, then `second`'s that `first` lacks — order kept, empties dropped.
+#[cfg(any(windows, test))]
+fn merge_paths(first: &str, second: &str, separator: char) -> String {
+    let mut seen = std::collections::HashSet::new();
+    first
+        .split(separator)
+        .chain(second.split(separator))
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty() && seen.insert(entry.to_ascii_lowercase()))
+        .collect::<Vec<_>>()
+        .join(&separator.to_string())
 }
 
 #[cfg(not(windows))]
@@ -1070,45 +1220,12 @@ fn user_shell() -> String {
 #[cfg(any(not(windows), test))]
 const PATH_MARKER: &str = "__CEZ_DESKTOP_PATH__";
 
-/// The PATH an interactive login shell ends up with, resolved once. A login shell alone skips
-/// `~/.zshrc`/`~/.bashrc`, which is where nvm, fnm and most version managers put Node — the
-/// reason a Node that `npx` finds in the terminal was "not found" here. `None` keeps the plain
-/// login-shell PATH: a hung or noisy rc file degrades to the old behaviour, never blocks boot.
-#[cfg(not(windows))]
-fn interactive_path() -> Option<String> {
-    static PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    PATH.get_or_init(|| resolve_interactive_path(&user_shell(), Duration::from_secs(10))).clone()
-}
-
 #[cfg(not(windows))]
 fn resolve_interactive_path(shell: &str, timeout: Duration) -> Option<String> {
     let script = format!("echo; echo {PATH_MARKER}; printenv PATH; echo {PATH_MARKER}");
-    let mut child = Command::new(shell)
-        .args(["-ilc", &script])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let mut stdout = child.stdout.take()?;
-    let reader = std::thread::spawn(move || {
-        let mut out = String::new();
-        let _ = stdout.read_to_string(&mut out);
-        out
-    });
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-        }
-    }
-    parse_marked_path(&reader.join().ok()?)
+    let mut command = Command::new(shell);
+    command.args(["-ilc", &script]).stdin(Stdio::null());
+    parse_marked_path(&output_with_timeout(&mut command, timeout)?.1)
 }
 
 /// The line between the two markers — whatever an rc file printed around it is ignored.
@@ -1120,11 +1237,133 @@ fn parse_marked_path(output: &str) -> Option<String> {
     (lines.next()? == PATH_MARKER && !path.is_empty()).then(|| path.to_string())
 }
 
-/// `[export PATH='…'; ]exec 'program' 'arg' …` — every word single-quoted, so a path with a
-/// space or a quote in it stays one argument. The export runs after the profile, so it wins.
+/// Every folder an installer or version manager puts a `node` in, most deliberate first: the
+/// version managers (newest 20+ install first), then package managers, then the system. Only
+/// folders that hold a `node` survive. `check_node` asks each one in turn.
+fn candidate_node_dirs(env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let dir_of = |name: &str| env(name).map(PathBuf::from);
+    if cfg!(windows) {
+        let local = dir_of("LOCALAPPDATA");
+        let roaming = dir_of("APPDATA");
+        let profile = dir_of("USERPROFILE");
+        let program_data = dir_of("ProgramData").unwrap_or_else(|| r"C:\ProgramData".into());
+        // nvm-windows: the active version's symlink, then every install (`v22.11.0\node.exe`).
+        dirs.extend(dir_of("NVM_SYMLINK"));
+        for nvm in [dir_of("NVM_HOME"), roaming.as_ref().map(|r| r.join("nvm"))].into_iter().flatten() {
+            dirs.extend(node_versions(&nvm, None));
+        }
+        for fnm in [dir_of("FNM_DIR"), roaming.as_ref().map(|r| r.join("fnm")), local.as_ref().map(|l| l.join("fnm"))].into_iter().flatten() {
+            dirs.push(fnm.join("aliases").join("default"));
+            dirs.extend(node_versions(&fnm.join("node-versions"), Some("installation")));
+        }
+        for volta in [dir_of("VOLTA_HOME").map(|v| v.join("bin")), local.as_ref().map(|l| l.join(r"Volta\bin"))].into_iter().flatten() {
+            dirs.push(volta);
+        }
+        for nvs in [dir_of("NVS_HOME"), local.as_ref().map(|l| l.join("nvs"))].into_iter().flatten() {
+            dirs.push(nvs.join("default"));
+        }
+        if let Some(local) = &local {
+            dirs.push(local.join(r"mise\shims"));
+            dirs.extend(node_versions(&local.join(r"mise\installs\node"), None));
+            dirs.push(local.join("pnpm"));
+        }
+        dirs.extend(dir_of("PNPM_HOME"));
+        for scoop in [dir_of("SCOOP"), profile.as_ref().map(|p| p.join("scoop")), dir_of("SCOOP_GLOBAL"), Some(program_data.join("scoop"))].into_iter().flatten() {
+            dirs.push(scoop.join(r"apps\nodejs\current"));
+            dirs.push(scoop.join(r"apps\nodejs-lts\current"));
+            dirs.push(scoop.join("shims"));
+        }
+        dirs.push(dir_of("ChocolateyInstall").unwrap_or_else(|| program_data.join("chocolatey")).join("bin"));
+        for files in [dir_of("ProgramFiles"), dir_of("ProgramW6432"), dir_of("ProgramFiles(x86)")].into_iter().flatten() {
+            dirs.push(files.join("nodejs"));
+            dirs.push(files.join("Volta"));
+        }
+    } else {
+        let home = dir_of("HOME");
+        let at_home = |rel: &str| home.as_ref().map(|h| h.join(rel));
+        let xdg_config = dir_of("XDG_CONFIG_HOME").or_else(|| at_home(".config"));
+        let xdg_data = dir_of("XDG_DATA_HOME").or_else(|| at_home(".local/share"));
+        for nvm in [dir_of("NVM_DIR"), at_home(".nvm"), xdg_config.as_ref().map(|c| c.join("nvm"))].into_iter().flatten() {
+            dirs.extend(node_versions(&nvm.join("versions").join("node"), Some("bin")));
+        }
+        for fnm in [dir_of("FNM_DIR"), xdg_data.as_ref().map(|d| d.join("fnm")), at_home("Library/Application Support/fnm"), at_home(".fnm")].into_iter().flatten() {
+            dirs.push(fnm.join("aliases/default/bin"));
+            dirs.extend(node_versions(&fnm.join("node-versions"), Some("installation/bin")));
+        }
+        dirs.extend(dir_of("VOLTA_HOME").map(|v| v.join("bin")).into_iter().chain(at_home(".volta/bin")));
+        for mise in [dir_of("MISE_DATA_DIR"), xdg_data.as_ref().map(|d| d.join("mise"))].into_iter().flatten() {
+            dirs.push(mise.join("shims"));
+            dirs.extend(node_versions(&mise.join("installs/node"), Some("bin")));
+        }
+        for asdf in [dir_of("ASDF_DATA_DIR"), at_home(".asdf")].into_iter().flatten() {
+            dirs.push(asdf.join("shims"));
+            dirs.extend(node_versions(&asdf.join("installs/nodejs"), Some("bin")));
+        }
+        if let Some(nodenv) = dir_of("NODENV_ROOT").or_else(|| at_home(".nodenv")) {
+            dirs.push(nodenv.join("shims"));
+            dirs.extend(node_versions(&nodenv.join("versions"), Some("bin")));
+        }
+        // n: its prefix, then the versions it keeps.
+        for prefix in [dir_of("N_PREFIX"), at_home("n"), Some("/usr/local".into())].into_iter().flatten() {
+            dirs.push(prefix.join("bin"));
+            dirs.extend(node_versions(&prefix.join("n/versions/node"), Some("bin")));
+        }
+        dirs.extend(at_home(".nodebrew/current/bin"));
+        dirs.extend(dir_of("PNPM_HOME").into_iter().chain(at_home("Library/pnpm")).chain(xdg_data.as_ref().map(|d| d.join("pnpm"))));
+        dirs.extend(at_home(".vite-plus/bin"));
+        // Homebrew, including the keg-only `node@22` a `brew install node@22` never links.
+        for brew in ["/opt/homebrew", "/usr/local", "/home/linuxbrew/.linuxbrew"].map(PathBuf::from).into_iter().chain(at_home(".linuxbrew")) {
+            dirs.push(brew.join("bin"));
+            dirs.extend(node_versions(&brew.join("opt"), Some("bin")));
+        }
+        dirs.push("/opt/local/bin".into()); // MacPorts
+        dirs.extend(at_home(".nix-profile/bin"));
+        dirs.extend(dir_of("USER").map(|user| PathBuf::from("/etc/profiles/per-user").join(user).join("bin")));
+        dirs.extend(["/nix/var/nix/profiles/default/bin", "/run/current-system/sw/bin", "/snap/bin", "/usr/bin"].map(PathBuf::from));
+        dirs.extend(at_home(".local/bin"));
+    }
+    let mut seen = std::collections::HashSet::new();
+    dirs.retain(|dir| dir.join(NODE_EXE).is_file() && seen.insert(dir.clone()));
+    dirs
+}
+
+/// Node 20+ installs under `parent` — `v22.11.0`, `22.11.0` or Homebrew's `node@22` — newest
+/// first, each joined with `sub` (`bin`, `installation/bin`, …).
+fn node_versions(parent: &Path, sub: Option<&str>) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(parent) else { return Vec::new() };
+    let mut found: Vec<((u32, u32, u32), PathBuf)> = entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let version = parse_node_version(&entry.file_name().to_string_lossy())?;
+            let dir = sub.map_or_else(|| entry.path(), |sub| entry.path().join(sub));
+            (version.0 >= 20).then_some((version, dir))
+        })
+        .collect();
+    found.sort_by_key(|(version, _)| std::cmp::Reverse(*version));
+    found.into_iter().map(|(_, dir)| dir).collect()
+}
+
+fn parse_node_version(name: &str) -> Option<(u32, u32, u32)> {
+    if let Some(major) = name.strip_prefix("node@") {
+        return Some((major.parse().ok()?, 0, 0));
+    }
+    let mut parts = name.strip_prefix('v').unwrap_or(name).split('.').map(|part| part.parse::<u32>().ok());
+    let version = (parts.next()??, parts.next()??, parts.next()??);
+    parts.next().is_none().then_some(version)
+}
+
+/// `[export PATH=…; ]exec 'program' 'arg' …` — every word single-quoted, so a path with a space
+/// or a quote in it stays one argument. The export runs after the profile, so it wins; `node_dir`
+/// goes first, ahead of `base` or, without one, the profile's own `$PATH`.
 #[cfg(any(not(windows), test))]
-fn posix_script(path: Option<&str>, program: &str, args: &[&str]) -> String {
-    let mut script = path.map(|path| format!("export PATH={}; ", shell_quote(path))).unwrap_or_default();
+fn posix_script(node_dir: Option<&str>, base: Option<&str>, program: &str, args: &[&str]) -> String {
+    let mut script = match (node_dir, base) {
+        (Some(dir), Some(base)) => format!("export PATH={}; ", shell_quote(&format!("{dir}:{base}"))),
+        (Some(dir), None) => format!("export PATH={}:\"$PATH\"; ", shell_quote(dir)),
+        (None, Some(base)) => format!("export PATH={}; ", shell_quote(base)),
+        (None, None) => String::new(),
+    };
     script.push_str(&format!("exec {}", shell_quote(program)));
     for arg in args {
         script.push(' ');
@@ -1802,13 +2041,106 @@ mod tests {
     #[test]
     fn a_posix_command_keeps_every_argument_whole() {
         assert_eq!(
-            posix_script(None, "node", &["/Users/o'neil/my app/index.js", "serve", "--port", "4321"]),
+            posix_script(None, None, "node", &["/Users/o'neil/my app/index.js", "serve", "--port", "4321"]),
             r#"exec 'node' '/Users/o'\''neil/my app/index.js' 'serve' '--port' '4321'"#
         );
         assert_eq!(
-            posix_script(Some("/Users/o'neil/.nvm/bin:/usr/bin"), "node", &["-v"]),
+            posix_script(None, Some("/Users/o'neil/.nvm/bin:/usr/bin"), "node", &["-v"]),
             r#"export PATH='/Users/o'\''neil/.nvm/bin:/usr/bin'; exec 'node' '-v'"#
         );
+        assert_eq!(posix_script(Some("/h/.nvm/v22/bin"), Some("/usr/bin"), "npm", &["-v"]), r#"export PATH='/h/.nvm/v22/bin:/usr/bin'; exec 'npm' '-v'"#);
+        assert_eq!(posix_script(Some("/h/.nvm/v22/bin"), None, "node", &[]), r#"export PATH='/h/.nvm/v22/bin':"$PATH"; exec 'node'"#);
+    }
+
+    #[cfg(unix)]
+    fn fake_node(dir: &Path, prints: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(dir).unwrap();
+        let node = dir.join("node");
+        std::fs::write(&node, format!("#!/bin/sh\necho {prints}\n")).unwrap();
+        std::fs::set_permissions(&node, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// Lazy-loaded nvm and friends: `node` is on no PATH a shell reports, but it is installed.
+    #[cfg(unix)]
+    #[test]
+    fn known_install_folders_are_listed_newest_manager_install_first() {
+        let home = std::env::temp_dir().join(format!("cez-desktop-dirs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        for dir in [
+            ".nvm/versions/node/v18.20.0/bin",
+            ".nvm/versions/node/v20.9.0/bin",
+            ".nvm/versions/node/v22.11.0/bin",
+            ".local/share/fnm/aliases/default/bin",
+            ".local/share/mise/installs/node/22.1.0/bin",
+            ".asdf/installs/nodejs/21.0.0/bin",
+            "n/bin",
+        ] {
+            fake_node(&home.join(dir), "x");
+        }
+        std::fs::create_dir_all(home.join(".volta/bin")).unwrap(); // no node in it
+        let home_str = home.to_string_lossy().into_owned();
+        let dirs = candidate_node_dirs(&|name| (name == "HOME").then(|| home_str.clone()));
+        let ours = dirs.into_iter().filter(|dir| dir.starts_with(&home)).collect::<Vec<_>>();
+        assert_eq!(
+            ours,
+            [
+                ".nvm/versions/node/v22.11.0/bin",
+                ".nvm/versions/node/v20.9.0/bin",
+                ".local/share/fnm/aliases/default/bin",
+                ".local/share/mise/installs/node/22.1.0/bin",
+                ".asdf/installs/nodejs/21.0.0/bin",
+                "n/bin",
+            ]
+            .map(|dir| home.join(dir))
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn install_folder_names_read_as_versions() {
+        assert_eq!(parse_node_version("v22.11.0"), Some((22, 11, 0)));
+        assert_eq!(parse_node_version("20.9.1"), Some((20, 9, 1)));
+        assert_eq!(parse_node_version("node@22"), Some((22, 0, 0)));
+        for junk in ["lts", "22", "node", "v22.1", "v22.1.0.1", "node@", ".DS_Store"] {
+            assert_eq!(parse_node_version(junk), None, "{junk}");
+        }
+    }
+
+    /// An old Node first on PATH must not hide a newer one a version manager installed.
+    #[cfg(unix)]
+    #[test]
+    fn the_first_install_folder_with_node_20_wins() {
+        let root = std::env::temp_dir().join(format!("cez-desktop-find-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        fake_node(&root.join("old"), "18.19.0");
+        fake_node(&root.join("broken"), "");
+        fake_node(&root.join("good"), "22.11.0");
+        fake_node(&root.join("later"), "24.0.0");
+        let dirs = ["missing", "old", "broken", "good", "later"].map(|name| root.join(name));
+        assert_eq!(find_node_in(&dirs), Some((root.join("good"), "22.11.0".to_string())));
+        assert_eq!(find_node_in(&dirs[..3]), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// npm and the sidecar run the Node `check_node` found, not an older one later on PATH.
+    #[cfg(unix)]
+    #[test]
+    fn the_found_node_folder_goes_first_on_path() {
+        let root = std::env::temp_dir().join(format!("cez-desktop-prefix-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        fake_node(&root.join("system"), "old");
+        fake_node(&root.join("nvm"), "new");
+        let base = format!("{}:/usr/bin:/bin", root.join("system").display());
+        let script = posix_script(Some(&root.join("nvm").to_string_lossy()), Some(&base), "node", &[]);
+        let output = Command::new("/bin/sh").args(["-c", &script]).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "new");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_fresh_registry_path_keeps_what_the_process_added() {
+        assert_eq!(merge_paths(r"C:\nodejs;;C:\Windows", r"c:\windows;C:\Tools;", ';'), r"C:\nodejs;C:\Windows;C:\Tools");
     }
 
     #[test]

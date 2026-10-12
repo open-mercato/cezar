@@ -130,8 +130,15 @@ old app. `~/.cezar` (versions, settings, window geometry) is untouched by that.
 
 ## The Node.js prerequisite
 
-The shell runs cezar with the user's own Node (through the login shell, so nvm/volta/homebrew
-installs resolve). Node 20+ is the ONE thing the installer cannot provide today, and it is
+The shell runs cezar with the user's own Node, found in three passes (`check_node`): the PATH
+of an INTERACTIVE login shell (a login shell alone skips `~/.zshrc`, where nvm usually lives —
+the Intel report, 2026-10-12) — on Windows the registry's fresh PATH, since Explorer keeps the
+one from before Node was installed; that PATH resolved again (after "Try again"); then the
+folders installers and version managers use (nvm, fnm, volta, mise, asdf, nodenv, n, nodebrew,
+pnpm, Homebrew incl. keg-only `node@NN`, MacPorts, nix, snap; scoop, chocolatey, nvs,
+nvm-windows), each `node` asked directly, newest 20+ first. A folder found that way goes FIRST
+on every tool command's PATH, so npm and the sidecar run the same Node. Node 20+ is the ONE
+thing the installer cannot provide today, and it is
 checked first: without it — or with an older one — the splash shows "cezar needs Node.js 20 or
 newer" with the reason, a **Download Node.js** button (opens nodejs.org in the browser) and
 **Try again** (re-runs the check and boots without relaunching the app). Nothing else runs
