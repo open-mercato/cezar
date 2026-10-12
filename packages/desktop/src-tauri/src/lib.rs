@@ -18,7 +18,8 @@
 //! `show_versions_menu` — beside window dragging. The capability has to name loopback with a
 //! port wildcard (the cockpit's port is picked at launch), so the narrowing happens HERE: every
 //! command refuses a caller that is not the splash or the cockpit on the port this shell
-//! spawned (`caller_is_trusted`), and the window itself never navigates to another local server
+//! spawned (`caller_is_trusted`) — the failure page's `restart_app` and `send_error_report` the
+//! splash alone (`caller_is_splash`) — and the window itself never navigates to another local server
 //! (`is_own_origin`). A dev server on `localhost:3000` is somebody else's page.
 
 use std::collections::VecDeque;
@@ -500,9 +501,8 @@ fn check_cezar_update(app: &AppHandle, shell: &Shell) {
 /// What the channel's dist-tag points at, through npm (so registry config and auth apply).
 fn channel_latest(tag: &str) -> Option<String> {
     let mut command = tool_command(npm_program(), &["view", &format!("{PACKAGE}@{tag}"), "version", "--json"]);
-    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
-    let output = command.output().ok()?;
-    let raw = String::from_utf8_lossy(&output.stdout);
+    command.stdin(Stdio::null());
+    let (_, raw) = output_with_timeout(&mut command, RESTART_CHECK_TIMEOUT)?;
     serde_json::from_str::<serde_json::Value>(raw.trim()).ok().and_then(|value| match value {
         serde_json::Value::String(v) => Some(v),
         serde_json::Value::Array(items) => items.into_iter().filter_map(|v| v.as_str().map(str::to_owned)).last(),
@@ -962,7 +962,7 @@ fn output_with_timeout(command: &mut Command, timeout: Duration) -> Option<(bool
 /// that fails or finds nothing just moves on; the restart always happens.
 #[tauri::command]
 fn restart_app(app: AppHandle, window: WebviewWindow, shell: tauri::State<'_, Arc<Shell>>) {
-    if !caller_is_trusted(&window, &shell) || shell.restarting.swap(true, Ordering::SeqCst) {
+    if !caller_is_splash(&window) || shell.restarting.swap(true, Ordering::SeqCst) {
         return;
     }
     let shell = shell.inner().clone();
@@ -987,12 +987,19 @@ fn install_shell_update_now(app: &AppHandle, window: &WebviewWindow) {
         return;
     }
     let Ok(updater) = app.updater() else { return };
-    tauri::async_runtime::block_on(async {
-        let Ok(Some(update)) = updater.check().await else { return };
-        splash_reset(window, "Updating the app…", &format!("cezar desktop {}", update.version));
-        let _ = update.download_and_install(|_, _| {}, || {}).await;
+    // Bounded: an unreachable update server must not keep the restart from happening. The
+    // download itself is not — it shows on the splash and the update is worth having.
+    let (found, check) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = found.send(tauri::async_runtime::block_on(updater.check()).ok().flatten());
     });
+    let Ok(Some(update)) = check.recv_timeout(RESTART_CHECK_TIMEOUT) else { return };
+    splash_reset(window, "Updating the app…", &format!("cezar desktop {}", update.version));
+    let _ = tauri::async_runtime::block_on(update.download_and_install(|_, _| {}, || {}));
 }
+
+/// How long each update check on the way to a restart may take.
+const RESTART_CHECK_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// A newer cezar on the update channel than the active install: put it in place before the
 /// restart. Nothing installed yet is the supervisor's job on the way back up.
@@ -1670,6 +1677,12 @@ fn caller_is_trusted(window: &WebviewWindow, shell: &Shell) -> bool {
     window.url().map(|url| is_own_origin(&url, shell.port.load(Ordering::SeqCst))).unwrap_or(false)
 }
 
+/// The failure page's commands (`restart_app`, `send_error_report`): the splash only, never the
+/// cockpit — port 0 trusts nothing on loopback.
+fn caller_is_splash(window: &WebviewWindow) -> bool {
+    window.url().is_ok_and(|url| is_own_origin(&url, 0))
+}
+
 /// The same page on `localhost`, for the browser: only the HOST changes, never a `127.0.0.1`
 /// that happens to sit in the path or the query.
 fn browser_url(mut url: url::Url) -> String {
@@ -1949,7 +1962,8 @@ fn fail(window: &WebviewWindow, title: &str, detail: &str, log: &str, failure: O
     }
 }
 
-
+/// The page's `report` mode, after adding what only the shell knows: the active cezar and where
+/// Node came from.
 fn report_param(failure: Option<Failure>, log: &str) -> &'static str {
     let Some(failure) = failure else { return telemetry::Reported::Off.as_param() };
     let node = match tool_path().node_dir {
@@ -1965,7 +1979,7 @@ fn report_param(failure: Option<Failure>, log: &str) -> &'static str {
 /// has its own reporting. The send runs off the main thread; the page hears back through `eval`.
 #[tauri::command]
 fn send_error_report(window: WebviewWindow) {
-    if !window.url().is_ok_and(|url| is_own_origin(&url, 0)) {
+    if !caller_is_splash(&window) {
         return;
     }
     std::thread::spawn(move || {
@@ -2038,6 +2052,20 @@ mod tests {
         assert!(is_own_origin(&url("http://tauri.localhost/"), 4321));
         assert!(is_own_origin(&url("http://127.0.0.1:4321/p/x/tasks"), 4321));
         assert!(is_own_origin(&url("http://localhost:4321/"), 4321));
+    }
+
+    /// The splash's script runs only inside the app, so nothing else would notice a syntax error
+    /// that leaves every failure page without its message, report card and Restart button.
+    #[test]
+    #[ignore = "needs node"]
+    fn the_splash_script_parses() {
+        let html = include_str!("../../ui/index.html");
+        let script = html.split("<script>").nth(1).and_then(|rest| rest.split("</script>").next()).expect("an inline script");
+        let file = std::env::temp_dir().join(format!("cezar-splash-{}.js", std::process::id()));
+        std::fs::write(&file, script).unwrap();
+        let output = Command::new("node").arg("--check").arg(&file).output().expect("node on PATH");
+        let _ = std::fs::remove_file(&file);
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     }
 
     #[test]
