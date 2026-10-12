@@ -42,6 +42,8 @@ import { runProjectsCommand } from './workspace/projects-cli.ts';
 import { WorkspaceSemaphore } from './workspace/semaphore.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
+import { apiOrigin } from './api-origin.ts';
+import { pickStartupPort } from './startup-port.ts';
 import { runRunsCommand } from './runs/runs-cli.ts';
 
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
@@ -294,7 +296,7 @@ async function serveCommand(
   );
   if (recovered > 0) console.log(`  recovered ${recovered} run(s) from the previous session`);
 
-  const port = await pickPort(preferredPort);
+  const port = await pickStartupPort(preferredPort, process.env.CEZ_REMOTE === '1', bindHost);
 
   // Update discovery (#368) through the self-update service (PoC): the channel's newest
   // version lands on /api/v1/health as `latestVersion` for the chip, and the dialog behind the
@@ -331,7 +333,7 @@ async function serveCommand(
   }
   // Where a dispatched agent's `cez task` CLI reaches this cockpit (spec 2026-09-10-dispatch).
   // Set before the first run can start, read by every manager's `agentEnv` while dispatch is on.
-  process.env.CEZ_API_URL = `http://127.0.0.1:${port}`;
+  process.env.CEZ_API_URL = apiOrigin(bindHost, port);
   process.env.CEZ_BIN = resolve(process.argv[1] ?? fileURLToPath(import.meta.url));
   httpServer = startServer({
     repoRoot,
