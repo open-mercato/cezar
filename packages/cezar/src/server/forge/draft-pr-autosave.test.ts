@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -101,5 +101,62 @@ describe('createDraftPr pre-PR autosave (#471 follow-up)', () => {
     const outcome = await createDraftPr(input());
     expect(outcome.ok).toBe(true);
     expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+/** The `draft` flag reaches `gh pr create`: absent keeps the draft every caller had before it
+ *  existed (the review gate's Draft PR); `false` opens a ready-for-review PR (the run header). */
+describe('createDraftPr draft flag', () => {
+  let repo: string;
+  let remote: string;
+  let bin: string;
+  const git = (args: string[]) => run('git', args, { cwd: repo });
+
+  beforeEach(async () => {
+    repo = mkdtempSync(join(tmpdir(), 'cez-pr-draft-'));
+    remote = mkdtempSync(join(tmpdir(), 'cez-pr-draft-remote-'));
+    bin = mkdtempSync(join(tmpdir(), 'cez-pr-draft-bin-'));
+    await run('git', ['init', '--bare', '-q', remote]);
+    await git(['init', '-q', '-b', 'main']);
+    writeFileSync(join(repo, 'a.txt'), 'base\n');
+    await git(['add', '-A']);
+    await git([...GIT_ID, 'commit', '-q', '-m', 'base']);
+    await git(['remote', 'add', 'origin', remote]);
+    await git(['checkout', '-q', '-b', 'cez/abc123']);
+    // A stand-in `gh` that records its argv and answers like `gh pr create` does.
+    writeFileSync(
+      join(bin, 'gh'),
+      `#!/bin/sh\nprintf '%s\\n' "$@" > "${bin}/argv"\necho https://github.com/acme/demo/pull/9\n`,
+      { mode: 0o755 },
+    );
+    vi.stubEnv('CEZ_DRY_RUN', '0');
+    vi.stubEnv('PATH', `${bin}:${process.env.PATH ?? ''}`);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    for (const dir of [repo, remote, bin]) rmSync(dir, { recursive: true, force: true });
+  });
+
+  const input = (draft?: boolean) => ({
+    repoRoot: repo,
+    handoffText: '# Goal\n\nship it\n',
+    run: { worktreePath: repo, branch: 'cez/abc123', task: 'do the thing', title: 't' } as RunRecord,
+    ...(draft === undefined ? {} : { draft }),
+  });
+  const argv = () => readFileSync(join(bin, 'argv'), 'utf8').split('\n');
+
+  it('opens a draft by default', async () => {
+    const outcome = await createDraftPr(input());
+    expect(outcome.ok).toBe(true);
+    expect(argv()).toContain('--draft');
+  });
+
+  it('opens a ready-for-review PR with draft: false', async () => {
+    const outcome = await createDraftPr(input(false));
+    expect(outcome.ok).toBe(true);
+    expect(argv()).not.toContain('--draft');
   });
 });

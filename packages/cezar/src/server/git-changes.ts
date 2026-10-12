@@ -762,6 +762,52 @@ export async function commitAll(dir: string, message: string): Promise<CommitRes
   return { ok: true, sha: head.ok ? head.stdout.trim() : '' };
 }
 
+export type GitStatusResult =
+  | { ok: true; uncommitted: number; unpushed: number | null; behind: number | null }
+  | { ok: false; error: string };
+
+/** What has not left the worktree yet: the files `commitAll` would commit, and the commits the
+ *  upstream has not seen (`null` with no upstream — the branch was never pushed). Plus what has
+ *  not ARRIVED: commits on the task's base branch that the branch does not have yet (`behind`,
+ *  `null` when the base cannot be resolved). Read-only, and offline on purpose: the base is read
+ *  from the remote-tracking ref as last fetched, never fetched here — this is polled. */
+export async function worktreeGitStatus(dir: string, baseBranch?: string): Promise<GitStatusResult> {
+  const status = await git(dir, ['status', '--porcelain', '-z']);
+  if (!status.ok) return { ok: false, error: gitReason(status, 'git status failed') };
+  // `-z` ends every entry with NUL, and a rename or copy — in EITHER column of the `XY` code (a
+  // worktree-side rename shows in Y once the tree has intent-to-add entries) — carries its old
+  // path as one extra NUL field that is not an entry of its own.
+  const entries = status.stdout.split('\0').filter(Boolean);
+  let uncommitted = 0;
+  for (let i = 0; i < entries.length; i++) {
+    uncommitted++;
+    if (/^(?:[RC].|.[RC])/.test(entries[i] as string)) i++;
+  }
+  const behind = await commitsBehindBase(dir, baseBranch);
+  const upstream = await git(dir, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+  if (!upstream.ok) return { ok: true, uncommitted, unpushed: null, behind };
+  const ahead = await git(dir, ['rev-list', '--count', '@{u}..HEAD']);
+  const unpushed = ahead.ok ? Number.parseInt(ahead.stdout.trim(), 10) : Number.NaN;
+  return { ok: true, uncommitted, unpushed: Number.isFinite(unpushed) ? unpushed : null, behind };
+}
+
+/** Commits on the base branch the worktree's HEAD does not contain — the freshest base ref
+ *  first (`origin/<base>`, then the local `<base>`; agents fetch, they never pull — the same
+ *  reasoning as `resolveTaskDiffBase`). `null` when there is no named base: none recorded, a raw
+ *  sha (a detached-HEAD fork point has no "latest" to be behind), or a ref this repo lacks. */
+async function commitsBehindBase(dir: string, baseBranch: string | undefined): Promise<number | null> {
+  if (!baseBranch || !isSafeGitRef(baseBranch) || /^[0-9a-f]{7,40}$/i.test(baseBranch)) return null;
+  const name = baseBranch.replace(/^origin\//, '');
+  for (const ref of [`origin/${name}`, name]) {
+    const exists = await git(dir, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
+    if (!exists.ok) continue;
+    const count = await git(dir, ['rev-list', '--count', `HEAD..${ref}`]);
+    const behind = count.ok ? Number.parseInt(count.stdout.trim(), 10) : Number.NaN;
+    return Number.isFinite(behind) ? behind : null;
+  }
+  return null;
+}
+
 export type PushResult =
   | { ok: true; branch: string; remote: string; upstreamSet: boolean }
   | { ok: false; error: string };

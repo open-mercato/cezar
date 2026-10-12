@@ -1,7 +1,9 @@
 import {
   BotIcon,
   BrainIcon,
+  CheckIcon,
   ChevronRightIcon,
+  CopyIcon,
   FileTextIcon,
   FolderInputIcon,
   GlobeIcon,
@@ -593,6 +595,45 @@ function DiffLine({ text }: { text: string }) {
   )
 }
 
+/**
+ * The full command an execute tool ran. The title the header shows is capped server-side (~120
+ * chars, `tool-display.ts`), so the expanded header reads the raw input instead: a string
+ * `command` (Claude Bash, ACP) or an argv array (Codex), falling back to the title's detail.
+ */
+export function toolCommand(item: UiToolItem): string | undefined {
+  if (item.toolKind !== 'execute') return undefined
+  const input = item.input
+  const raw =
+    typeof input === 'object' && input !== null && 'command' in input ? (input as { command: unknown }).command : undefined
+  const command =
+    typeof raw === 'string'
+      ? raw
+      : Array.isArray(raw) && raw.every((part) => typeof part === 'string')
+        ? raw.join(' ')
+        : splitToolTitle(item.title).detail
+  return command !== undefined && command.trim() !== '' ? command : undefined
+}
+
+/** Copy for an expanded command — a sibling of the header trigger, since a button cannot nest one. */
+function CopyCommandButton({ command }: { command: string }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <button
+      type="button"
+      aria-label={copied ? 'Copied' : 'Copy command'}
+      onClick={() => {
+        void navigator.clipboard?.writeText(command).then(() => {
+          setCopied(true)
+          setTimeout(() => setCopied(false), 1500)
+        })
+      }}
+      className="mt-[3px] mr-1.5 shrink-0 rounded p-1 text-soft-foreground hover:bg-muted hover:text-foreground"
+    >
+      {copied ? <CheckIcon aria-hidden className="size-3.5" /> : <CopyIcon aria-hidden className="size-3.5" />}
+    </button>
+  )
+}
+
 /** Default-open policy: a running command opens to show its live tail; everything else —
  *  including edits, finished commands AND failures — starts closed but prominent. A failed step
  *  no longer springs its red error body open on its own (it reads as calmer that way, and a
@@ -631,13 +672,19 @@ export function ToolCard({
     setUserOpenState(open)
   }
   const busy = item.status === 'running' || item.status === 'pending'
+  const command = toolCommand(item)
+  const { verb, detail } = splitToolTitle(item.title)
+  // The command alone opens a card only when the one-line header cannot show it whole.
+  const commandHidden = command !== undefined && (command !== detail || command.includes('\n') || command.length > 80)
+  const showCommand = command !== undefined && commandHidden
   const hasDetail =
+    commandHidden ||
     (item.output !== undefined && item.output !== '') ||
     (item.error !== undefined && item.error !== '') ||
     (item.diffs !== undefined && item.diffs.length > 0) ||
     nested.length > 0
   const open = hasDetail && (userOpen ?? defaultOpen(item))
-  const { verb, detail } = splitToolTitle(item.title)
+  const expandedCommand = open && showCommand ? command : undefined
 
   const Icon = TOOL_ICONS[item.toolKind] ?? WrenchIcon
   return (
@@ -654,9 +701,14 @@ export function ToolCard({
         item.status === 'failed' ? 'border-danger/25' : 'border-border',
       )}
     >
+      <div className="flex min-w-0 items-start">
       <CollapsibleTrigger
         disabled={!hasDetail}
-        className="group flex min-h-[28px] w-full items-center gap-1.5 px-2.5 py-0.5 text-left text-[13px] enabled:hover:bg-muted"
+        className={cn(
+          'group flex min-h-[28px] w-full min-w-0 gap-1.5 px-2.5 py-0.5 text-left text-[13px] enabled:hover:bg-muted',
+          // A wrapped multi-line command pins the chevron, verb and chips to its first line.
+          expandedCommand !== undefined ? 'items-start [&>svg]:mt-[7px] [&>span]:mt-[2px]' : 'items-center',
+        )}
       >
         <ChevronRightIcon
           aria-hidden
@@ -675,7 +727,17 @@ export function ToolCard({
         >
           {verb}
         </span>
-        {detail !== undefined ? (
+        {expandedCommand !== undefined ? (
+          // Expanded, the header itself grows to the FULL command (from the raw input — the
+          // title is capped server-side) instead of repeating it in the body.
+          <code
+            data-slot="tool-command"
+            // Capped at ~10 lines with its own scroll, so a giant heredoc cannot take over the thread.
+            className="max-h-48 min-w-0 overflow-y-auto py-1 font-mono text-xs leading-[1.6] whitespace-pre-wrap break-all text-muted-foreground"
+          >
+            {expandedCommand}
+          </code>
+        ) : detail !== undefined ? (
           <code className="min-w-0 truncate font-mono text-xs text-muted-foreground">{detail}</code>
         ) : null}
         <span className="ml-auto flex shrink-0 items-center gap-2 pl-2">
@@ -697,8 +759,10 @@ export function ToolCard({
           ) : null}
         </span>
       </CollapsibleTrigger>
+      {expandedCommand !== undefined ? <CopyCommandButton command={expandedCommand} /> : null}
+      </div>
       <CollapsibleContent>
-        <div className="border-t border-border bg-card-2">
+        <div className="border-t border-border bg-card-2 empty:hidden">
           {item.error !== undefined && item.error !== '' ? (
             <div data-slot="tool-error" className="px-4 py-3 font-mono text-xs leading-[1.7] whitespace-pre-wrap text-danger">
               {item.error}

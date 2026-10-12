@@ -18,6 +18,8 @@ import {
   type DiffComments,
 } from './diff-comments'
 import type { ContinueAction } from './follow-up-engine'
+import { useStopRun } from './run-confirm-dialog'
+import { RunEnginePills } from './run-engine'
 import type { Draft } from './thread-draft'
 
 /**
@@ -83,73 +85,89 @@ export function TaskComposer({
   const providerBlocked = activeProviderBlocked || continuationProviderBlocked
   const providerReason = activeProviderBlocked ? activeProvider.reason : continueAction.reason
 
+  // The chat box always names its engine: the editable pills when a Continue can choose one,
+  // the same chips read-only otherwise (a live session cannot switch mid-turn).
+  const footerStatus = continuable ? continueAction.pills : (
+    <>
+      {providerBlocked && !continueAction.providerPending ? (
+        <Link to="/settings/agents#providers" className="text-xs font-medium text-foreground underline underline-offset-4">
+          Configure providers
+        </Link>
+      ) : null}
+      <RunEnginePills run={run} />
+    </>
+  )
+  // While the agent is working, the empty box's send button is ■ Stop — where the reader is
+  // looking when they decide the agent is going the wrong way. `waiting` is not "working": the
+  // agent is waiting on the reader, so there the button stays a reply (Finish closes the session).
+  const stopRun = useStopRun(run)
+  const stoppable = run.status === 'running' || run.status === 'queued'
+
   return (
-    <Composer
-      // The draft store's first host (#939). Controlled on BOTH seams — text and attachments — so
-      // leaving the task mid-sentence and coming back restores the message exactly as it was left.
-      // `draft.submit` wraps the real send: the optimistic clear only becomes a cleared draft once
-      // the message has actually landed, and a rejection leaves the draft (and its blobs) intact.
-      value={draft.text}
-      onValueChange={draft.setText}
-      images={draft.images}
-      onImagesChange={draft.setImages}
-      // The diff comments are folded in at send time and dropped only once the message has
-      // landed. A quick reply (Alt+A / Alt+C, fired from anywhere on the page) never carries them:
-      // the user did not see the review leave.
-      onSubmit={async (text, images, meta) => {
-        // A quick reply never touches the draft: it is not what the box holds, so its success
-        // must not clear whatever the user had typed there.
-        if (meta?.quickReply) return deliverPrompt(text, images)
-        onSendingChange?.(true)
-        try {
-          return await draft.submit<unknown>(() => {
-            if (hasDiffComments && !commentsRideWith(text, skillNames)) {
-              toast(`Diff comments kept — /${slashCommandOf(text)} is a command, so they go with your next message.`)
-              return deliverPrompt(text, images)
-            }
-            return diffComments.submit(async (held) => deliverPrompt(messageWithReview(text, held), images))
-          })
-        } finally {
-          onSendingChange?.(false)
+    <>
+      <Composer
+        // The draft store's first host (#939). Controlled on BOTH seams — text and attachments — so
+        // leaving the task mid-sentence and coming back restores the message exactly as it was left.
+        // `draft.submit` wraps the real send: the optimistic clear only becomes a cleared draft once
+        // the message has actually landed, and a rejection leaves the draft (and its blobs) intact.
+        value={draft.text}
+        onValueChange={draft.setText}
+        images={draft.images}
+        onImagesChange={draft.setImages}
+        // The diff comments are folded in at send time and dropped only once the message has
+        // landed. A quick reply (Alt+A / Alt+C, fired from anywhere on the page) never carries them:
+        // the user did not see the review leave.
+        onSubmit={async (text, images, meta) => {
+          // A quick reply never touches the draft: it is not what the box holds, so its success
+          // must not clear whatever the user had typed there.
+          if (meta?.quickReply) return deliverPrompt(text, images)
+          onSendingChange?.(true)
+          try {
+            return await draft.submit<unknown>(() => {
+              if (hasDiffComments && !commentsRideWith(text, skillNames)) {
+                toast(`Diff comments kept — /${slashCommandOf(text)} is a command, so they go with your next message.`)
+                return deliverPrompt(text, images)
+              }
+              return diffComments.submit(async (held) => deliverPrompt(messageWithReview(text, held), images))
+            })
+          } finally {
+            onSendingChange?.(false)
+          }
+        }}
+        draftItems={
+          hasDiffComments ?
+            <DiffCommentChips
+              runId={run.id}
+              comments={diffComments.comments}
+              onRemove={diffComments.remove}
+              onOpen={onOpenComment}
+            />
+          : undefined
         }
-      }}
-      draftItems={
-        hasDiffComments ?
-          <DiffCommentChips
-            runId={run.id}
-            comments={diffComments.comments}
-            onRemove={diffComments.remove}
-            onOpen={onOpenComment}
-          />
-        : undefined
-      }
-      disabled={providerBlocked || (!sessionOpen && !queued && !continuable)}
-      // Only reachable now by a closed run with NO session to resume — which is exactly the one
-      // case where Continue is not on offer either.
-      disabledReason={providerBlocked ? providerReason : 'Session closed — no session to resume.'}
-      // The engine pills ride the enabled footer, so the picked runner/model and the typed prompt
-      // reach `POST /continue` in one request.
-      footerEnd={
-        providerBlocked && !continueAction.providerPending ? (
-          <Link to="/settings/agents#providers" className="text-xs font-medium text-foreground underline underline-offset-4">
-            Configure providers
-          </Link>
-        ) : continuable ? continueAction.pills : undefined
-      }
-      // Continuing with nothing typed is the legacy one-click Continue, and pending diff comments
-      // are a message on their own.
-      allowEmptySubmit={continuable || hasDiffComments}
-      sendAriaLabel={continuable ? 'Continue' : 'Send'}
-      placeholder={
-        queued ? 'Add to the prompt — sent when the run starts…'
-        : continuable ? 'Continue — add a prompt, or send to just reopen the session…'
-        : run.status === 'waiting' ? 'Reply — / for skills, @ for files…'
-        : 'Message the agent — / for skills, @ for files…'
-      }
-      autocompleteSkills
-      quickReplies
-      getMentionCandidates={getMentionCandidates}
-    />
+        disabled={providerBlocked || (!sessionOpen && !queued && !continuable)}
+        // Only reachable now by a closed run with NO session to resume — which is exactly the one
+        // case where Continue is not on offer either.
+        disabledReason={providerBlocked ? providerReason : 'Session closed — no session to resume.'}
+        // The engine pills ride the enabled footer, so the picked runner/model and the typed prompt
+        // reach `POST /continue` in one request.
+        footerEnd={footerStatus}
+        // Continuing with nothing typed is the legacy one-click Continue, and pending diff comments
+        // are a message on their own.
+        allowEmptySubmit={continuable || hasDiffComments}
+        sendAriaLabel={continuable ? 'Continue' : 'Send'}
+        stop={stoppable ? { label: 'Stop the run', onStop: stopRun.request, pending: stopRun.pending } : undefined}
+        placeholder={
+          queued ? 'Add to the prompt — sent when the run starts…'
+          : continuable ? 'Continue — add a prompt, or send to just reopen the session…'
+          : run.status === 'waiting' ? 'Reply — / for skills, @ for files…'
+          : 'Message the agent — / for skills, @ for files…'
+        }
+        autocompleteSkills
+        quickReplies
+        getMentionCandidates={getMentionCandidates}
+      />
+      {stopRun.dialog}
+    </>
   )
 }
 

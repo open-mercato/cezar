@@ -8,8 +8,8 @@ import { createQueryClient } from '@/api/query-client'
 import type { ApiRun, RunStatus, StepState } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 
-import { RunHeader } from './run-header'
-import { resolveConflictsPrompt } from './run-actions'
+import { RunHeader, type RunTab } from './run-header'
+import { fixChecksPrompt, resolveConflictsPrompt, updateBranchPrompt } from './run-actions'
 
 beforeEach(() => {
   // Radix's tooltip arrow measures itself with a ResizeObserver; jsdom has no layout observer.
@@ -103,6 +103,7 @@ function renderHeader(
   onMarkedUnread?: () => void,
   planTally?: { done: number; total: number },
   continuationEngine?: ReactNode,
+  tab?: RunTab,
 ) {
   return render(
     <QueryClientProvider client={createQueryClient()}>
@@ -116,6 +117,7 @@ function renderHeader(
                 onMarkedUnread={onMarkedUnread}
                 planTally={planTally}
                 continuationEngine={continuationEngine}
+                tab={tab}
               />
             }
           />
@@ -128,6 +130,30 @@ function renderHeader(
 }
 
 const actionBar = () => within(document.querySelector('[data-slot="run-actions"]') as HTMLElement)
+/** The title row's task-management icons (Pin · Archive · Delete · ⋯). */
+const itemActions = () => within(document.querySelector('[data-slot="task-item-actions"]') as HTMLElement)
+const buttonNames = (scope: ReturnType<typeof within>) =>
+  scope.queryAllByRole('button').map((el: HTMLElement) => el.getAttribute('aria-label') ?? el.textContent?.trim())
+/** The header as a tab with no composer renders it — Continue and Stop live in the header there. */
+const renderGitTab = (record: ApiRun) => renderHeader(record, undefined, undefined, undefined, 'changes')
+/** An icon-only button's tooltip text — shown on keyboard focus as well as hover. */
+async function tooltipOf(trigger: HTMLElement): Promise<string | null> {
+  fireEvent.focus(trigger)
+  return (await screen.findByRole('tooltip')).textContent
+}
+function cleanupTooltip(trigger: HTMLElement): void {
+  fireEvent.blur(trigger)
+}
+/** Open the PR `+N` and return the chips it lists — every PR, the visible one included. */
+async function overflowChips(): Promise<Element[]> {
+  fireEvent.click(document.querySelector('[data-slot="run-meta"] [data-slot="reference-overflow"]')!)
+  const list = await screen.findByText('References')
+  return [...(list.parentElement as HTMLElement).querySelectorAll('[data-slot="pr-chip"]')]
+}
+async function openMore(): Promise<ReturnType<typeof within>> {
+  fireEvent.pointerDown(itemActions().getByRole('button', { name: 'More actions' }))
+  return within(await screen.findByRole('menu'))
+}
 
 describe('monitoring schedule', () => {
   it('shows the exact persisted deadline in a time element', () => {
@@ -294,33 +320,291 @@ describe('editable title (#389)', () => {
 })
 
 describe('action bar visibility per status (the legacy rules, rendered)', () => {
-  // Pin (#935) is in every row: unlike every other action here it asks nothing of the engine,
-  // so it is offered whatever the run is doing — only archiving takes it away.
-  const matrix: Array<{ status: RunStatus; visible: string[] }> = [
-    { status: 'queued', visible: ['Notes', 'Pin', 'Cancel'] },
-    { status: 'running', visible: ['Notes', 'Pin', 'Cancel'] },
-    { status: 'waiting', visible: ['Finish', 'Notes', 'Pin', 'Cancel'] },
-    // Terminal folded into the Open in… menu — it shows whenever the session can be resumed.
-    { status: 'review', visible: ['Finish', 'Continue', 'Open in…', 'Notes', 'Pin', 'Archive', 'Delete'] },
-    { status: 'done', visible: ['Continue', 'Open in…', 'Notes', 'Pin', 'Archive', 'Delete'] },
-    { status: 'failed', visible: ['Continue', 'Open in…', 'Notes', 'Pin', 'Archive', 'Delete'] },
-    { status: 'cancelled', visible: ['Continue', 'Open in…', 'Notes', 'Pin', 'Archive', 'Delete'] },
+  // On the Session tab the composer owns Continue (its send button) and Stop. The icons are always
+  // there; Terminal folded into the Open in… menu, which shows whenever the session can be resumed.
+  const icons = ['Pin', 'Archive', 'Delete']
+  const sessionMatrix: Array<{ status: RunStatus; visible: string[] }> = [
+    { status: 'queued', visible: icons },
+    { status: 'running', visible: icons },
+    // No Finish in the header: the waiting hint over the composer carries End session, and a
+    // review is accepted from the review panel.
+    { status: 'waiting', visible: icons },
+    { status: 'review', visible: [...icons, 'Open in…'] },
+    { status: 'done', visible: [...icons, 'Open in…'] },
+    { status: 'failed', visible: [...icons, 'Open in…'] },
+    { status: 'cancelled', visible: [...icons, 'Open in…'] },
   ]
 
-  it.each(matrix)('$status → $visible', ({ status, visible }) => {
+  it.each(sessionMatrix)('session tab: $status → $visible', ({ status, visible }) => {
     stubFetch()
     renderHeader(run(status))
-    const names = within(document.querySelector('[data-slot="run-actions"]') as HTMLElement)
-      .getAllByRole('button')
-      .map((el) => el.textContent?.trim())
-    expect(names).toEqual(visible)
+    expect(buttonNames(actionBar())).toEqual(visible)
+  })
+
+  it.each<RunTab>(['session', 'changes', 'commits', 'files', 'notes'])(
+    'the %s tab offers no header Continue — the chat box’s send is Continue',
+    async (tab) => {
+      stubFetch()
+      renderHeader(run('done'), undefined, undefined, undefined, tab)
+      expect(actionBar().queryByRole('button', { name: 'Continue' })).toBeNull()
+      // …nor in the phone kebab.
+      fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
+      const menu = within(await screen.findByRole('menu'))
+      expect(menu.queryByRole('menuitem', { name: 'Continue' })).toBeNull()
+    },
+  )
+
+  it('the action icons sit next to the tabs, after the labelled Open in…; the title row has none', () => {
+    stubFetch()
+    renderHeader(run('done'))
+    const openIn = actionBar().getByRole('button', { name: 'Open in…' })
+    expect(openIn.textContent).toContain('Open in…')
+    expect(actionBar().getByRole('button', { name: 'Pin' })).not.toBeNull()
+    const titleRow = document.querySelector('[data-slot="run-identity"]')?.parentElement as HTMLElement
+    expect(titleRow.querySelector('[data-slot="task-item-actions"]')).toBeNull()
+  })
+
+  // The action icons: the same three in the same places for every status — unavailable ones
+  // are greyed with their reason, never removed, so the row never shifts under the pointer.
+  it.each(['queued', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled'] as RunStatus[])(
+    'icons for %s: Pin · Archive · Delete, always in place',
+    (status) => {
+      stubFetch()
+      renderHeader(run(status))
+      expect(buttonNames(itemActions()).slice(0, 3)).toEqual(['Pin', 'Archive', 'Delete'])
+    },
+  )
+
+  it.each(['queued', 'running', 'waiting'] as RunStatus[])(
+    'a live (%s) run greys Archive and Delete out, saying why',
+    async (status) => {
+      stubFetch()
+      renderHeader(run(status))
+      for (const name of ['Archive', 'Delete']) {
+        const button = itemActions().getByRole('button', { name })
+        expect(button.getAttribute('aria-disabled')).toBe('true')
+        expect(await tooltipOf(button)).toBe('Stop the task first')
+        cleanupTooltip(button)
+      }
+      expect(itemActions().getByRole('button', { name: 'Pin' }).getAttribute('aria-disabled')).toBeNull()
+    },
+  )
+
+  it('a greyed-out Archive sends nothing when clicked', async () => {
+    const sent = stubFetch()
+    renderHeader(run('running'))
+    fireEvent.click(itemActions().getByRole('button', { name: 'Archive' }))
+    fireEvent.click(itemActions().getByRole('button', { name: 'Delete' }))
+    await act(() => Promise.resolve())
+    expect(sent.some((r) => r.path === '/api/v1/runs/r1/archive')).toBe(false)
+    expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 
   it('an archived run offers Unarchive instead of Archive', () => {
     stubFetch()
     renderHeader(run('done', { archived: true }))
-    expect(actionBar().queryByRole('button', { name: 'Archive' })).toBeNull()
-    expect(actionBar().getByRole('button', { name: 'Unarchive' })).not.toBeNull()
+    expect(itemActions().queryByRole('button', { name: 'Archive' })).toBeNull()
+    expect(itemActions().getByRole('button', { name: 'Unarchive' })).not.toBeNull()
+  })
+
+  it('the status sits top right, just before the git button; progress follows the title', async () => {
+    stubFetch({
+      '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 2, unpushed: null }),
+      '/api/v1/health': () => jsonResponse({ forge: { kind: 'github', available: true } }),
+    })
+    renderHeader(run('done', { worktreePath: '/tmp/wt/r1', branch: 'cez/r1' }), undefined, { done: 1, total: 3 })
+    const identity = document.querySelector('[data-slot="run-identity"]') as HTMLElement
+    expect(identity.querySelector('[data-slot="pill"]')).toBeNull()
+    expect(identity.lastElementChild?.getAttribute('data-slot')).toBe('plan-mirror')
+    const pills = document.querySelectorAll('[data-slot="pill"]')
+    expect(pills).toHaveLength(1)
+    const pill = pills[0] as HTMLElement
+    expect(pill.parentElement?.className).toContain('ml-auto')
+    const gitButton = await waitFor(() => {
+      const el = document.querySelector('[data-slot="git-button"]')
+      expect(el).not.toBeNull()
+      return el as HTMLElement
+    })
+    expect(pill.compareDocumentPosition(gitButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('the details row reads workflow · branch · diff · PR', () => {
+    stubFetch()
+    renderHeader(
+      run('done', {
+        branch: 'cez/r1',
+        diffStat: { adds: 0, dels: 0, files: 0 },
+        pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/1311',
+      }),
+    )
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    const diff = meta.querySelector('[data-slot="diff-stat"]') as HTMLElement
+    const pr = meta.querySelector('[data-slot="pr-chip"]') as HTMLElement
+    expect(diff.compareDocumentPosition(pr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('tokens, cost and the agent badge sit on the tabs line on desktop', () => {
+    stubFetch()
+    renderHeader(run('done', { costUsd: 12, inputTokens: 152, outputTokens: 37_300 }))
+    const desktop = document.querySelector('[data-slot="run-tabs"] [data-slot="run-usage"]') as HTMLElement
+    expect(desktop.className).toContain('hidden')
+    expect(desktop.className).toContain('md:flex')
+    expect(desktop.textContent).toContain('$12')
+    expect(desktop.querySelector('[data-slot="agent-badge"]')).not.toBeNull()
+    // Phones read it in the collapsible details row instead.
+    const phone = document.querySelector('[data-slot="run-meta"] [data-slot="run-usage"]') as HTMLElement
+    expect(phone.className).toContain('md:hidden')
+  })
+
+  it('the git button sits top right; the other actions close the details row', async () => {
+    stubFetch({
+      '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 0, unpushed: 1 }),
+      '/api/v1/health': () => jsonResponse({ forge: { kind: 'github', available: true } }),
+      '/api/v1/repo': () => jsonResponse({ info: { remote: 'git@github.com:open-mercato/cezar.git' } }),
+    })
+    renderHeader(
+      run('done', {
+        worktreePath: '/tmp/wt/r1',
+        branch: 'cez/r1',
+        pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/1311',
+      }),
+    )
+    const bar = document.querySelector('[data-slot="run-actions"]') as HTMLElement
+    expect(bar.closest('[data-slot="run-meta"]')).not.toBeNull()
+    expect(bar.querySelector('[data-slot="git-button"]')).toBeNull()
+    // A PR behind its branch: the one git step is Push.
+    const button = await waitFor(() => {
+      const el = document.querySelector('[data-slot="git-button"]')
+      expect(el).not.toBeNull()
+      expect(el!.querySelector('[data-action="push"]')).not.toBeNull()
+      return el as HTMLElement
+    })
+    expect(button.closest('[data-slot="run-meta"]')).toBeNull()
+    expect(button.closest('[data-slot="run-identity"]')).toBeNull()
+  })
+
+  it.each([
+    ['conflicting', { prs: { 1311: 'ready' }, conflicts: [1311] }, 'Resolve conflicts', resolveConflictsPrompt(1311)],
+    ['failing CI', { prs: { 1311: 'checks-failing' }, conflicts: [] }, 'Fix errors', fixChecksPrompt(1311)],
+  ] as const)('a %s PR turns the git button into its fix, sent to the task’s own agent', async (_name, forge, label, prompt) => {
+    const sent = stubFetch({
+      '/api/v1/health': () => jsonResponse({ bootProject: 'acme', forge: { kind: 'github', available: true } }),
+      '/api/v1/p/acme/github/ref-status?prs=1311': () =>
+        jsonResponse({ available: true, issues: {}, recheckAfterMs: null, ...forge }),
+      '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 0, unpushed: 0 }),
+    })
+    renderHeader(
+      run('running', {
+        worktreePath: '/tmp/wt/r1',
+        branch: 'cez/r1',
+        pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/1311',
+      }),
+    )
+    const button = await waitFor(() => {
+      const el = document.querySelector('[data-slot="git-button"] button') as HTMLButtonElement | null
+      expect(el?.textContent).toBe(label)
+      return el!
+    })
+    fireEvent.click(button)
+    const message = await waitFor(() => {
+      const found = sent.find((r) => r.method === 'POST' && r.path.endsWith('/messages'))
+      if (!found) throw new Error('nothing was sent')
+      return found
+    })
+    expect(message.body).toMatchObject({ text: prompt })
+  })
+
+  it('a branch behind its base offers Update branch instead of Create PR, sent to the task’s agent', async () => {
+    const sent = stubFetch({
+      '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 0, unpushed: null, behind: 4 }),
+      '/api/v1/health': () => jsonResponse({ forge: { kind: 'github', available: true } }),
+    })
+    renderHeader(run('running', { worktreePath: '/tmp/wt/r1', branch: 'cez/r1', baseBranch: 'origin/main' }))
+    const button = await waitFor(() => {
+      const el = document.querySelector('[data-slot="git-button"] button') as HTMLButtonElement | null
+      expect(el?.textContent).toBe('Update branch')
+      return el!
+    })
+    expect(document.querySelector('[data-action="create-pr"]')).toBeNull()
+    fireEvent.click(button)
+    const message = await waitFor(() => {
+      const found = sent.find((r) => r.method === 'POST' && r.path.endsWith('/messages'))
+      if (!found) throw new Error('nothing was sent')
+      return found
+    })
+    expect(message.body).toMatchObject({ text: updateBranchPrompt('origin/main') })
+    expect((message.body as { text: string }).text).toContain('origin/main')
+  })
+
+  it('a merged PR leaves nothing to commit or push — the git button goes, the PR chip stays', async () => {
+    stubFetch({
+      '/api/v1/health': () => jsonResponse({ bootProject: 'acme', forge: { kind: 'github', available: true } }),
+      '/api/v1/p/acme/github/ref-status?prs=1283': () =>
+        jsonResponse({ available: true, prs: { 1283: 'merged' }, issues: {}, conflicts: [], recheckAfterMs: null }),
+      '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 1, unpushed: 1 }),
+    })
+    renderHeader(
+      run('done', {
+        worktreePath: '/tmp/wt/r1',
+        branch: 'cez/r1',
+        pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/1283',
+      }),
+    )
+    await waitFor(() => expect(document.querySelector('[data-slot="run-meta"] [data-slot="pr-chip"]')).not.toBeNull())
+    await waitFor(() => expect(document.querySelector('[data-slot="git-button"]')).toBeNull())
+  })
+
+  it('a task working on a declared PR is never offered Create PR', async () => {
+    stubFetch({
+      '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 2, unpushed: 0 }),
+      '/api/v1/health': () => jsonResponse({ forge: { kind: 'github', available: true } }),
+    })
+    renderHeader(
+      run('done', {
+        worktreePath: '/tmp/wt/r1',
+        branch: 'cez/r1',
+        // Declared by the agent (`CEZ:PR`) — the task's own subject.
+        markerRefs: { pr: 534 },
+        prRefs: [{ number: 534, origin: 'marker', at: '2026-07-14T12:00:00.000Z' }],
+      }),
+    )
+    await waitFor(() => expect(document.querySelector('[data-slot="git-button"] [data-action="commit"]')).not.toBeNull())
+    expect(document.querySelector('[data-action="create-pr"]')).toBeNull()
+  })
+
+  it('a PR only scraped from the transcript is not the task’s PR — Create PR is still offered', async () => {
+    // A link the agent merely READ (a file, a log) must never stand in for the task's own PR:
+    // that hid Create PR, and offered "Resolve conflicts" against somebody else's pull request.
+    stubFetch({
+      '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 2, unpushed: null }),
+      '/api/v1/health': () => jsonResponse({ forge: { kind: 'github', available: true } }),
+    })
+    renderHeader(
+      run('done', {
+        worktreePath: '/tmp/wt/r1',
+        branch: 'cez/r1',
+        referencedPullRequestUrl: 'https://github.com/open-mercato/cezar/pull/534',
+        prRefs: [
+          { number: 534, url: 'https://github.com/open-mercato/cezar/pull/534', origin: 'legacy', at: '2026-07-14T12:00:00.000Z' },
+        ],
+      }),
+    )
+    await waitFor(() => expect(document.querySelector('[data-slot="git-button"] [data-action="create-pr"]')).not.toBeNull())
+  })
+
+  it('the title row reserves the git button’s height, so the header does not jump without it', () => {
+    stubFetch()
+    renderHeader(run('done'))
+    expect(document.querySelector('[data-slot="git-button"]')).toBeNull()
+    const row = document.querySelector('[data-slot="run-title-row"]') as HTMLElement
+    // The same 30px as the button (`size="sm"`) — present with or without the button.
+    expect(row.className).toContain('min-h-[30px]')
+  })
+
+  it('a run with no worktree shows no git button at all', () => {
+    stubFetch()
+    renderHeader(run('done'))
+    expect(document.querySelector('[data-slot="git-button"]')).toBeNull()
   })
 
   it('VS Code is absent everywhere — the open-in-editor endpoint does not exist yet (R5)', () => {
@@ -343,13 +627,15 @@ describe('Mark unread (#775)', () => {
   const readDone = (extra: Partial<ApiRun> = {}) =>
     run('done', { finishedAt: FINISHED_AT, seenAt: SEEN_AT, ...extra })
 
-  it('offers the control for a read, finished run — next to Archive', () => {
+  it('offers the control for a read, finished run — an icon of its own, ahead of Pin', async () => {
     stubFetch()
     renderHeader(readDone())
-    const names = actionBar()
-      .getAllByRole('button')
-      .map((el) => el.textContent?.trim())
-    expect(names).toEqual(['Continue', 'Open in…', 'Notes', 'Mark unread', 'Pin', 'Archive', 'Delete'])
+    // Leftmost: it comes and goes, and in a right-aligned row that moves nothing to its right.
+    expect(buttonNames(itemActions())).toEqual(['Mark unread', 'Pin', 'Archive', 'Delete'])
+    const button = itemActions().getByRole('button', { name: 'Mark unread' })
+    // It explains itself on hover — no badge dot, which read as a notification.
+    expect(button.querySelector('.bg-violet')).toBeNull()
+    expect(await tooltipOf(button)).toBe('Mark unread — put it back in your unread list')
   })
 
   it.each([
@@ -361,13 +647,13 @@ describe('Mark unread (#775)', () => {
   ] as Array<[string, ApiRun]>)('hides the control for %s', (_name, record) => {
     stubFetch()
     renderHeader(record)
-    expect(actionBar().queryByRole('button', { name: 'Mark unread' })).toBeNull()
+    expect(itemActions().queryByRole('button', { name: 'Mark unread' })).toBeNull()
   })
 
   it('Mark unread → POST /unread, bodyless like its read twin', async () => {
     const sent = stubFetch()
     renderHeader(readDone())
-    fireEvent.click(actionBar().getByRole('button', { name: 'Mark unread' }))
+    fireEvent.click(itemActions().getByRole('button', { name: 'Mark unread' }))
     await waitFor(() => {
       const request = sent.find((r) => r.path === '/api/v1/runs/r1/unread')
       expect(request?.method).toBe('POST')
@@ -384,7 +670,7 @@ describe('Mark unread (#775)', () => {
       expect(sent.some((r) => r.path === '/api/v1/runs/r1/unread')).toBe(false)
     })
     renderHeader(readDone(), onMarkedUnread)
-    fireEvent.click(actionBar().getByRole('button', { name: 'Mark unread' }))
+    fireEvent.click(itemActions().getByRole('button', { name: 'Mark unread' }))
     expect(onMarkedUnread).toHaveBeenCalledTimes(1)
     await waitFor(() => expect(sent.some((r) => r.path === '/api/v1/runs/r1/unread')).toBe(true))
   })
@@ -397,7 +683,7 @@ describe('Mark unread (#775)', () => {
       '/api/v1/runs/r1/unread': () => jsonResponse({ error: 'not found' }, 404),
     })
     renderHeader(readDone())
-    fireEvent.click(actionBar().getByRole('button', { name: 'Mark unread' }))
+    fireEvent.click(itemActions().getByRole('button', { name: 'Mark unread' }))
     await waitFor(() => expect(screen.getByText('not found')).not.toBeNull())
   })
 
@@ -410,124 +696,111 @@ describe('Mark unread (#775)', () => {
   })
 })
 
+describe('the state toggles share one ON pattern (violet, filled, aria-pressed)', () => {
+  const FINISHED_AT = '2026-07-14T13:00:00.000Z'
+  const isOn = (button: HTMLElement) =>
+    button.getAttribute('aria-pressed') === 'true' &&
+    button.className.includes('text-violet') &&
+    button.className.includes('[&_svg]:fill-violet/25')
+
+  it.each([
+    ['pinned', { pinned: true, pinnedAt: FINISHED_AT }, 'Unpin'],
+    ['archived', { archived: true }, 'Unarchive'],
+    ['unread', { finishedAt: FINISHED_AT }, 'Mark read'],
+  ] as const)('%s → its toggle is ON', (_state, extra, name) => {
+    stubFetch()
+    renderHeader(run('done', extra))
+    expect(isOn(itemActions().getByRole('button', { name }))).toBe(true)
+  })
+
+  it.each([
+    ['Pin', {}],
+    ['Archive', {}],
+    ['Mark unread', { finishedAt: FINISHED_AT, seenAt: '2026-07-14T13:05:00.000Z' }],
+  ] as const)('%s off → no ON styling, aria-pressed false', (name, extra) => {
+    stubFetch()
+    renderHeader(run('done', extra))
+    const button = itemActions().getByRole('button', { name })
+    expect(button.getAttribute('aria-pressed')).toBe('false')
+    expect(button.className).not.toContain('text-violet')
+  })
+
+  it('read/unread is ONE envelope that flips state, not two different icons', () => {
+    stubFetch()
+    renderHeader(run('done', { finishedAt: FINISHED_AT }))
+    expect(itemActions().queryByRole('button', { name: 'Mark unread' })).toBeNull()
+    expect(document.querySelectorAll('[data-slot="unread-toggle"]')).toHaveLength(1)
+  })
+})
+
+describe('the phone action menu mirrors the desktop rows', () => {
+  const openKebab = async () => {
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
+    return screen.findByRole('menu')
+  }
+
+  it('leads with the git step — Create PR and its draft alternative', async () => {
+    stubFetch({
+      '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 2, unpushed: null }),
+      '/api/v1/health': () => jsonResponse({ forge: { kind: 'github', available: true } }),
+    })
+    renderHeader(run('done', { worktreePath: '/tmp/wt/r1', branch: 'cez/r1' }))
+    // Wait for the step to resolve (the desktop button paints it too) before opening the menu.
+    await waitFor(() => expect(document.querySelector('[data-slot="git-button"]')).not.toBeNull())
+    const menu = await openKebab()
+    const items = [...menu.querySelectorAll('[role="menuitem"]')]
+    expect(items[0]?.getAttribute('data-action')).toBe('create-pr')
+    expect(items[1]?.getAttribute('data-action')).toBe('create-draft-pr')
+  })
+
+  it('the state toggles keep one icon each and turn violet when ON', async () => {
+    stubFetch()
+    renderHeader(run('done', { pinned: true, pinnedAt: '2026-08-29T10:00:00.000Z', finishedAt: '2026-07-14T13:00:00.000Z' }))
+    const menu = within(await openKebab())
+    const unread = menu.getByRole('menuitem', { name: 'Mark read' })
+    expect(unread.getAttribute('aria-pressed')).toBe('true')
+    expect(unread.querySelector('svg')?.getAttribute('class')).toContain('fill-violet/25')
+    const pin = menu.getByRole('menuitem', { name: 'Unpin' })
+    expect(pin.querySelector('svg')?.getAttribute('class')).toContain('text-violet')
+    expect(menu.getByRole('menuitem', { name: 'Archive' }).querySelector('svg')?.getAttribute('class')).not.toContain('text-violet')
+  })
+
+  it('leaves Stop to the composer on the Session tab, and offers it elsewhere', async () => {
+    stubFetch()
+    renderHeader(run('running'))
+    expect(within(await openKebab()).queryByRole('menuitem', { name: 'Stop' })).toBeNull()
+
+    cleanup()
+    stubFetch()
+    renderGitTab(run('running'))
+    expect(within(await openKebab()).getByRole('menuitem', { name: 'Stop' })).not.toBeNull()
+  })
+})
+
 describe('actions hit their endpoints', () => {
-  it('Finish → POST /finish', async () => {
+  it('End session (a waiting run, off the Session tab) → POST /finish, from the ⋯ menu', async () => {
     const sent = stubFetch()
-    renderHeader(run('waiting'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Finish' }))
+    renderGitTab(run('waiting'))
+    fireEvent.click((await openMore()).getByRole('menuitem', { name: 'End session' }))
     await waitFor(() => {
       expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/finish')).toBe(true)
     })
   })
 
-  it('Continue → POST /continue', async () => {
-    const sent = stubFetch()
-    renderHeader(run('done'))
-    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
-    await waitFor(() => expect(button.disabled).toBe(false))
-    fireEvent.click(button)
-    await waitFor(() => {
-      expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/continue')).toBe(true)
-    })
-  })
-
-  it('a refused Continue refetches the record it was drawn from', async () => {
-    // The drift case: the record says `done`, the run is running again (a lost workspace-stream
-    // frame — run-reconcile.ts). Nothing else refetches a run record here, so without this the bar
-    // would keep offering a Continue the server keeps refusing.
-    const sent = stubFetch({
-      '/api/v1/runs/r1/continue': () => jsonResponse({ error: 'run is still active' }, 409),
-    })
-    renderHeader(run('done'))
-    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
-    await waitFor(() => expect(button.disabled).toBe(false))
-    const listReadsBefore = sent.filter((r) => r.method === 'GET' && r.path === '/api/v1/runs').length
-
-    fireEvent.click(button)
-
-    await waitFor(() => expect(screen.getByText('run is still active')).not.toBeNull())
-    await waitFor(() =>
-      expect(sent.filter((r) => r.method === 'GET' && r.path === '/api/v1/runs').length).toBeGreaterThan(
-        listReadsBefore,
-      ),
-    )
-  })
-
-  it('disables desktop Continue and its mutation guard blocks a forced click without a provider', async () => {
-    const sent = stubFetch({
-      '/api/v1/providers/status': () =>
-        jsonResponse({
-          providers: [
-            { provider: 'claude', status: 'disconnected', enabled: true },
-            { provider: 'codex', status: 'unknown', enabled: true },
-            { provider: 'opencode', status: 'not-installed', enabled: true },
-          { provider: 'cursor', status: 'not-installed', enabled: true },
-          ],
-        }),
-    })
-    renderHeader(run('done', { runner: 'claude' }))
-
-    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
-    await waitFor(() => expect(button.disabled).toBe(true))
-    button.removeAttribute('disabled')
-    fireEvent.click(button)
-    await act(() => Promise.resolve())
-
-    expect(sent.some((request) => request.path === '/api/v1/runs/r1/continue')).toBe(false)
-  })
-
-  it('disables mobile Continue and does not post when its menu item is selected', async () => {
-    const sent = stubFetch({
-      '/api/v1/providers/status': () =>
-        jsonResponse({
-          providers: [
-            { provider: 'claude', status: 'disconnected', enabled: true },
-            { provider: 'codex', status: 'unknown', enabled: true },
-            { provider: 'opencode', status: 'not-installed', enabled: true },
-          { provider: 'cursor', status: 'not-installed', enabled: true },
-          ],
-        }),
-    })
-    renderHeader(run('done', { runner: 'claude' }))
-
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
-    const item = await screen.findByRole('menuitem', { name: 'Continue' })
-    await waitFor(() => expect(item.getAttribute('data-disabled')).not.toBeNull())
-    fireEvent.click(item)
-    await act(() => Promise.resolve())
-
-    expect(sent.some((request) => request.path === '/api/v1/runs/r1/continue')).toBe(false)
-  })
-
-  it('sends a connected fallback runner when the run provider is disconnected', async () => {
-    const sent = stubFetch({
-      '/api/v1/providers/status': () =>
-        jsonResponse({
-          providers: [
-            { provider: 'claude', status: 'disconnected', enabled: true },
-            { provider: 'codex', status: 'connected', enabled: true },
-            { provider: 'opencode', status: 'not-installed', enabled: true },
-          { provider: 'cursor', status: 'not-installed', enabled: true },
-          ],
-        }),
-    })
-    renderHeader(run('done', { runner: 'claude' }))
-
-    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
-    await waitFor(() => expect(button.disabled).toBe(false))
-    fireEvent.click(button)
-
-    await waitFor(() =>
-      expect(sent.find((request) => request.path === '/api/v1/runs/r1/continue')?.body).toEqual({
-        runner: 'codex',
-      }),
-    )
+  it('the Session tab leaves End session to the hint over the composer; a review offers none', async () => {
+    stubFetch()
+    renderHeader(run('waiting'))
+    expect(itemActions().queryByRole('button', { name: 'More actions' })).toBeNull()
+    cleanup()
+    stubFetch()
+    renderGitTab(run('review'))
+    expect(itemActions().queryByRole('button', { name: 'More actions' })).toBeNull()
   })
 
   it('Archive → POST /archive with the flipped flag', async () => {
     const sent = stubFetch()
     renderHeader(run('done', { archived: true }))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Unarchive' }))
+    fireEvent.click(itemActions().getByRole('button', { name: 'Unarchive' }))
     await waitFor(() => {
       expect(sent.find((r) => r.path === '/api/v1/runs/r1/archive')?.body).toEqual({ archived: false })
     })
@@ -536,7 +809,7 @@ describe('actions hit their endpoints', () => {
   it('Pin → POST /pin with the flipped flag, and reads Unpin once pinned (#935)', async () => {
     const sent = stubFetch()
     renderHeader(run('done'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Pin' }))
+    fireEvent.click(itemActions().getByRole('button', { name: 'Pin' }))
     await waitFor(() => {
       expect(sent.find((r) => r.path === '/api/v1/runs/r1/pin')?.body).toEqual({ pinned: true })
     })
@@ -544,17 +817,23 @@ describe('actions hit their endpoints', () => {
     cleanup()
     const unpinning = stubFetch()
     renderHeader(run('done', { pinned: true, pinnedAt: '2026-08-29T10:00:00.000Z' }))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Unpin' }))
+    const unpin = itemActions().getByRole('button', { name: 'Unpin' })
+    expect(unpin.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(unpin)
     await waitFor(() => {
       expect(unpinning.find((r) => r.path === '/api/v1/runs/r1/pin')?.body).toEqual({ pinned: false })
     })
   })
 
-  it('an archived run offers no pin at all — archiving retires it (#935)', () => {
-    stubFetch()
+  it('an archived run cannot be pinned — archiving retires it (#935)', async () => {
+    const sent = stubFetch()
     renderHeader(run('done', { archived: true }))
-    expect(actionBar().queryByRole('button', { name: 'Pin' })).toBeNull()
-    expect(actionBar().queryByRole('button', { name: 'Unpin' })).toBeNull()
+    const pin = itemActions().getByRole('button', { name: 'Pin' })
+    expect(pin.getAttribute('aria-disabled')).toBe('true')
+    expect(await tooltipOf(pin)).toBe('Archived tasks can’t be pinned')
+    fireEvent.click(pin)
+    await act(() => Promise.resolve())
+    expect(sent.some((r) => r.path === '/api/v1/runs/r1/pin')).toBe(false)
   })
 
   it('Pin is in the mobile kebab too', async () => {
@@ -565,15 +844,27 @@ describe('actions hit their endpoints', () => {
     expect(menu.getByRole('menuitem', { name: 'Pin' })).not.toBeNull()
   })
 
-  it('Cancel asks first — the POST fires only after the confirm dialog', async () => {
-    const sent = stubFetch()
+  it('the Session tab leaves Stop to the composer; other tabs offer it in ⋯', async () => {
+    stubFetch()
     renderHeader(run('running'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Cancel' }))
+    expect(itemActions().queryByRole('button', { name: 'More actions' })).toBeNull()
+
+    cleanup()
+    stubFetch()
+    renderGitTab(run('running'))
+    const menu = await openMore()
+    expect(menu.getByRole('menuitem', { name: 'Stop' })).not.toBeNull()
+  })
+
+  it('Stop asks first — the POST fires only after the confirm dialog', async () => {
+    const sent = stubFetch()
+    renderGitTab(run('running'))
+    fireEvent.click((await openMore()).getByRole('menuitem', { name: 'Stop' }))
 
     // Nothing sent yet; the AlertDialog (never a native confirm) is up instead.
     expect(sent.some((r) => r.path === '/api/v1/runs/r1/cancel')).toBe(false)
     const dialog = await screen.findByRole('alertdialog')
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel the run' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Stop the run' }))
     await waitFor(() => {
       expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/cancel')).toBe(true)
     })
@@ -582,7 +873,7 @@ describe('actions hit their endpoints', () => {
   it('Delete confirms, DELETEs, and navigates home', async () => {
     const sent = stubFetch()
     renderHeader(run('failed'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Delete' }))
+    fireEvent.click(itemActions().getByRole('button', { name: 'Delete' }))
 
     expect(sent.some((r) => r.method === 'DELETE')).toBe(false)
     const dialog = await screen.findByRole('alertdialog')
@@ -599,7 +890,7 @@ describe('actions hit their endpoints', () => {
   it('the delete confirm button stays "Delete" even for a long task name, which appears in the description instead (#403)', async () => {
     const longTitle = 'create a github issue for saving unsuccessfully finished tasks automatically'
     renderHeader(run('failed', { titleSummary: longTitle }))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Delete' }))
+    fireEvent.click(itemActions().getByRole('button', { name: 'Delete' }))
 
     const dialog = await screen.findByRole('alertdialog')
     expect(within(dialog).getByRole('button', { name: 'Delete' })).not.toBeNull()
@@ -609,7 +900,7 @@ describe('actions hit their endpoints', () => {
   it('dismissing the confirm keeps the run', async () => {
     const sent = stubFetch()
     renderHeader(run('done'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Delete' }))
+    fireEvent.click(itemActions().getByRole('button', { name: 'Delete' }))
     const dialog = await screen.findByRole('alertdialog')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Keep it' }))
     await waitFor(() => {
@@ -618,24 +909,28 @@ describe('actions hit their endpoints', () => {
     expect(sent.some((r) => r.method === 'DELETE')).toBe(false)
   })
 
-  it('a mutation failure surfaces the server message as a danger toast', async () => {
-    stubFetch({
-      '/api/v1/runs/r1/continue': () => jsonResponse({ error: 'no agent session to resume' }, 409),
+  it('a refused action surfaces the server message as a danger toast and refetches the record', async () => {
+    // Every 409 here means the record the bar was drawn from is not the run the server has, so
+    // the header refetches it instead of offering the same refused action again.
+    const sent = stubFetch({
+      '/api/v1/runs/r1/archive': () => jsonResponse({ error: 'run is still active' }, 409),
     })
     renderHeader(run('done'))
-    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
-    await waitFor(() => expect(button.disabled).toBe(false))
-    fireEvent.click(button)
+    const listReadsBefore = sent.filter((r) => r.method === 'GET' && r.path === '/api/v1/runs').length
+    fireEvent.click(itemActions().getByRole('button', { name: 'Archive' }))
     const item = await screen.findByRole('status')
-    expect(item.textContent).toBe('no agent session to resume')
+    expect(item.textContent).toBe('run is still active')
     expect(item.getAttribute('data-tone')).toBe('danger')
+    await waitFor(() =>
+      expect(sent.filter((r) => r.method === 'GET' && r.path === '/api/v1/runs').length).toBeGreaterThan(
+        listReadsBefore,
+      ),
+    )
   })
 })
 
-/** Terminal now lives inside the Open in… menu: open it (Radix opens on pointerdown) and click
- *  the resume item. */
 async function clickTerminalResume(): Promise<void> {
-  fireEvent.pointerDown(actionBar().getByRole('button', { name: 'Open in…' }))
+  fireEvent.pointerDown(screen.getByRole('button', { name: 'Open in…' }))
   const menu = await screen.findByRole('menu')
   fireEvent.click(within(menu).getByRole('menuitem', { name: /Terminal \(resume session\)/ }))
 }
@@ -696,7 +991,7 @@ describe('Open in… menu — agent CLI resume labeling (#402)', () => {
   async function openMenu(): Promise<HTMLElement> {
     // Without a resumable Terminal item, the button itself only appears once the async
     // worktreeTargets query resolves (empty-until-loaded) — findByRole waits it in.
-    const trigger = await actionBar().findByRole('button', { name: 'Open in…' })
+    const trigger = await screen.findByRole('button', { name: 'Open in…' })
     fireEvent.pointerDown(trigger)
     return screen.findByRole('menu')
   }
@@ -791,7 +1086,7 @@ describe('Open in… menu per-target icons (#361)', () => {
         }),
     })
     renderHeader(run('done', { worktreePath: '/tmp/wt' }))
-    fireEvent.pointerDown(actionBar().getByRole('button', { name: 'Open in…' }))
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Open in…' }))
     const menu = await screen.findByRole('menu')
 
     // The menu opens immediately; the worktree targets only appear once useOpenTargets resolves.
@@ -808,36 +1103,13 @@ describe('Open in… menu per-target icons (#361)', () => {
   })
 })
 
-describe('notes panel', () => {
-  it('toggles open, fetches the handoff and renders it as markdown', async () => {
-    stubFetch({
-      '/api/v1/runs/r1/handoff': () =>
-        new Response('# Handoff notes\n\nStill **todo**: the composer.', {
-          status: 200,
-          headers: { 'content-type': 'text/markdown; charset=utf-8' },
-        }),
-    })
+describe('notes tab', () => {
+  it('Notes is a tab, deep-linkable like the others — no longer a toggle in the action row', () => {
+    stubFetch()
     renderHeader(run('done'))
-
-    fireEvent.click(actionBar().getByRole('button', { name: 'Notes' }))
-    await waitFor(() => {
-      expect(document.querySelector('[data-slot="notes-panel"]')).not.toBeNull()
-    })
-    await screen.findByText('Handoff notes')
-    // Rendered markdown, not echoed source.
-    expect(document.querySelector('[data-slot="notes-panel"]')?.textContent).not.toContain('#')
-
-    fireEvent.click(actionBar().getByRole('button', { name: 'Notes' }))
-    expect(document.querySelector('[data-slot="notes-panel"]')).toBeNull()
-  })
-
-  it('an unseeded handoff file reads as an honest empty state', async () => {
-    stubFetch({
-      '/api/v1/runs/r1/handoff': () => new Response('', { status: 200 }),
-    })
-    renderHeader(run('running'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Notes' }))
-    await screen.findByText('No notes yet — the handoff file is seeded when the task starts.')
+    const tabs = within(document.querySelector('[data-slot="run-tabs"]') as HTMLElement)
+    expect(tabs.getByRole('link', { name: 'Notes' }).getAttribute('href')).toBe('/tasks/r1/notes')
+    expect(actionBar().queryByRole('button', { name: 'Notes' })).toBeNull()
   })
 })
 
@@ -968,7 +1240,8 @@ describe('meta line, tabs, pill and resume hint', () => {
 
   it('meta shows workflow · branch chip · ± · input/output · cost, with the agent summary in the badge', () => {
     stubFetch()
-    renderHeader(
+    // A tab with no chat box — on the Session tab the composer's pills carry the summary instead.
+    renderGitTab(
       run('done', {
         runner: 'codex',
         model: 'gpt-5.2-codex',
@@ -985,8 +1258,8 @@ describe('meta line, tabs, pill and resume hint', () => {
     // badge exists for. So they read as one quiet string ON the badge, and the menu keeps the
     // labelled breakdown.
     const badge = within(meta).getByRole('button', { name: /Agent: codex, model gpt-5.2-codex/ })
-    expect(badge.querySelector('[data-slot="agent-badge-summary"]')?.textContent)
-      .toBe('codex · gpt-5.2-codex')
+    // Icon only — the chat box's engine pills carry the words.
+    expect(badge.textContent).toBe('')
     // Still not loose text: everything runner/model-shaped is inside the badge, nowhere else.
     expect(meta.textContent?.replace(badge.textContent ?? '', '')).not.toContain('codex')
     expect(within(meta).getByText('cez/r1').getAttribute('data-slot')).toBe('branch-chip')
@@ -1107,7 +1380,7 @@ describe('meta line, tabs, pill and resume hint', () => {
     if (prChip) {
       expect(prChip.getAttribute('href')).toBe('https://github.com/open-mercato/cezar/pull/534')
       expect(prChip.textContent).toContain('#534')
-      expect(branch?.nextElementSibling?.nextElementSibling).toBe(prChip)
+      expect(branch?.nextElementSibling?.nextElementSibling).toBe(prChip.closest('[data-slot="run-pr-refs"]'))
     }
     if (issueChip) {
       expect(issueChip.getAttribute('href')).toBe('https://github.com/open-mercato/cezar/issues/544')
@@ -1152,7 +1425,7 @@ describe('meta line, tabs, pill and resume hint', () => {
   // and its own page is the last place that should have to pick one. Order is `taskReferences`
   // order — the PR it created, then the PR it is about — the same order the global Tasks table
   // paints.
-  it('shows every PR the task points at, not only the strongest one', () => {
+  it('shows every PR the task points at — the strongest on the row, all of them behind +N', async () => {
     stubFetch()
     renderHeader(
       run('done', {
@@ -1163,14 +1436,14 @@ describe('meta line, tabs, pill and resume hint', () => {
       }),
     )
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    const chips = [...meta.querySelectorAll('[data-slot="pr-chip"]')]
+    // The strongest PR on the row, the rest behind a `+N` — the All tasks table's cell.
+    const visible = [...meta.querySelectorAll('[data-slot="run-pr-refs"] > [data-slot="pr-chip"]')]
+    expect(visible.map((chip) => chip.getAttribute('href'))).toEqual(['https://github.com/open-mercato/cezar/pull/5366'])
+    expect(meta.querySelector('[data-slot="reference-overflow"]')?.textContent).toBe('+1')
+    const chips = await overflowChips()
     expect(chips.map((chip) => chip.getAttribute('href'))).toEqual([
       'https://github.com/open-mercato/cezar/pull/5366',
       'https://github.com/open-mercato/cezar/pull/4326',
-    ])
-    expect(chips.map((chip) => chip.textContent)).toEqual([
-      expect.stringContaining('#5366'),
-      expect.stringContaining('#4326'),
     ])
   })
 
@@ -1187,9 +1460,8 @@ describe('meta line, tabs, pill and resume hint', () => {
         }),
     })
     renderHeader(run('done', { branch: 'cez/r1', prNumber: 901, markerRefs: { pr: 901 } }))
-    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
     await waitFor(() => {
-      const chip = meta.querySelector('[data-slot="pr-chip"]')
+      const chip = document.querySelector('[data-slot="run-meta"] [data-slot="pr-chip"]')
       expect(chip?.getAttribute('href')).toBe('https://github.com/open-mercato/cezar/pull/901')
     })
   })
@@ -1197,7 +1469,7 @@ describe('meta line, tabs, pill and resume hint', () => {
   // A PR URL whose last segment is not a number never becomes a `taskReferences` entry, so it is
   // painted from `taskPrUrl` — and must still be painted when a number-only chip exists beside it
   // (#847: a forge whose PR URLs are not `…/pull/N`).
-  it('keeps a non-numeric PR link beside a chip known only by number', () => {
+  it('keeps a non-numeric PR link beside a chip known only by number', async () => {
     stubFetch({ '/api/v1/health': () => jsonResponse({ repo: {} }) })
     renderHeader(
       run('done', {
@@ -1206,15 +1478,14 @@ describe('meta line, tabs, pill and resume hint', () => {
         prNumber: 42,
       }),
     )
-    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    const chips = [...meta.querySelectorAll('[data-slot="pr-chip"]')]
+    const chips = await overflowChips()
     expect(chips).toHaveLength(2)
     expect(chips.map((chip) => chip.getAttribute('href'))).toContain(
       'https://forge.example.com/o/r/merge_requests/spec-fix',
     )
   })
 
-  it('shows a PR known only by number, with no repository to link it to', () => {
+  it('shows a PR known only by number, with no repository to link it to', async () => {
     stubFetch({ '/api/v1/health': () => jsonResponse({ repo: {} }) })
     renderHeader(
       run('done', {
@@ -1223,8 +1494,7 @@ describe('meta line, tabs, pill and resume hint', () => {
         prNumber: 901,
       }),
     )
-    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    const chips = [...meta.querySelectorAll('[data-slot="pr-chip"]')]
+    const chips = await overflowChips()
     expect(chips.map((chip) => chip.textContent)).toEqual([
       expect.stringContaining('#5366'),
       expect.stringContaining('#901'),
@@ -1306,18 +1576,15 @@ describe('meta line, tabs, pill and resume hint', () => {
 
     it('names the account the step recorded, by its label — visibly, not only on click', async () => {
       withAccounts()
-      renderHeader(run('done', {
+      renderGitTab(run('done', {
         runner: 'claude',
         model: 'opus',
         steps: [step({ sessionId: 'sess-1', profileId: 'klaudiusz' })],
       }))
       const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
       const badge = await within(meta).findByRole('button', { name: /Agent: claude, account Klaudiusz, model opus/ })
-      // The regression this guards: it read as a bare bot icon, so the answer was there but nobody
-      // could find it without knowing to open a menu.
-      await waitFor(() => expect(
-        badge.querySelector('[data-slot="agent-badge-summary"]')?.textContent,
-      ).toBe('claude · Klaudiusz · opus'))
+      // Icon only; the tooltip still names it in full.
+      expect(await tooltipOf(badge)).toBe('claude · Klaudiusz · opus')
     })
 
     it('prefers what RAN over what the composer asked for', async () => {
@@ -1405,14 +1672,26 @@ describe('meta line, tabs, pill and resume hint', () => {
     })
   })
 
+  it.each(['session', 'changes', 'notes'] as RunTab[])(
+    'the %s tab shows the badge as an icon, with the engine in its tooltip',
+    async (tab) => {
+      stubFetch()
+      renderHeader(run('running', { runner: 'claude', model: 'opus' }), undefined, undefined, undefined, tab)
+      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+      const badge = within(meta).getByRole('button', { name: /Agent: claude, model opus/ })
+      expect(badge.textContent).toBe('')
+      expect(await tooltipOf(badge)).toBe('claude · opus')
+    },
+  )
+
   it('a claude run still gets an agent badge — Claude is the default, not a hidden runner', () => {
     stubFetch()
-    renderHeader(run('done', { runner: 'claude' }))
+    renderGitTab(run('done', { runner: 'claude' }))
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
     const badge = within(meta).getByRole('button', { name: /Agent: claude, model auto/ })
-    // Named on the badge like any other agent — claude being the default is not a reason to leave
-    // "what produced this?" unanswered.
-    expect(badge.querySelector('[data-slot="agent-badge-summary"]')?.textContent).toBe('claude · auto')
+    // Named like any other agent — claude being the default is not a reason to leave "what
+    // produced this?" unanswered.
+    expect(badge.getAttribute('aria-label')).toBe('Agent: claude, model auto')
   })
 
   it('tabs: Session is current; Changes and Files link to the routed surfaces', () => {

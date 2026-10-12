@@ -345,6 +345,8 @@ export const runRecordSchema = z.object({
    *  runs, on any run not yet opened, and on one deliberately put back to unread via
    *  `POST /runs/:id/unread` (#775) — all three count as unread. */
   seenAt: z.string().optional(),
+  /** Highest event `seq` handed out for this run (ephemeral frames included). Absent on older runs. */
+  lastSeq: z.number().int().nonnegative().optional(),
   currentStepId: z.string().optional(),
   error: z.string().optional(),
   steps: z.array(stepStateSchema),
@@ -645,6 +647,19 @@ export const gitPushResponseSchema = z.object({
   upstreamSet: z.boolean(),
 });
 export type GitPushResponse = z.infer<typeof gitPushResponseSchema>;
+
+/** `GET /runs/:id/git/status` — what the run's worktree holds that has not left it yet: files
+ *  `git add -A` would commit, and commits its upstream has not seen. `unpushed` is null while the
+ *  branch has no upstream (never pushed) — "not pushed at all" is a different answer from "0".
+ *  `behind` counts the other direction: what the base has that the branch lacks. */
+export const gitStatusResponseSchema = z.object({
+  uncommitted: z.number(),
+  unpushed: z.number().nullable(),
+  /** Commits on the task's base branch (as last fetched) the branch does not have; null when the
+   *  base cannot be resolved (none recorded, a raw sha, or a ref the repo lacks). */
+  behind: z.number().nullable(),
+});
+export type GitStatusResponse = z.infer<typeof gitStatusResponseSchema>;
 
 /** A commit a run made on its worktree branch. */
 export const runCommitSchema = z.object({

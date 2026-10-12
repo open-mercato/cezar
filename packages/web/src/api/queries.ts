@@ -42,6 +42,7 @@ import {
   getRepoTree,
   getRun,
   getRunChanges,
+  getRunGitStatus,
   getRunDiff,
   getRunDrafts,
   getRunFile,
@@ -181,6 +182,7 @@ export const queryKeys = {
     detail: (id: string) => [queryScope(), 'runs', 'detail', id] as const,
     diff: (id: string) => [queryScope(), 'runs', 'diff', id] as const,
     changes: (id: string) => [queryScope(), 'runs', 'changes', id] as const,
+    gitStatus: (id: string) => [queryScope(), 'runs', 'git-status', id] as const,
     file: (id: string, path: string) => [queryScope(), 'runs', 'files', id, path] as const,
     handoff: (id: string) => [queryScope(), 'runs', 'handoff', id] as const,
     /** Unsent drafts for one task (#939). Read once per visit and never refetched in the
@@ -1118,6 +1120,21 @@ export function useRunChanges(id: string | undefined, live = false) {
   })
 }
 
+/** What the run's worktree has not published yet — the header's one git button reads it on
+ *  every tab, so it is the cheap `git status` answer rather than `/changes` and its patches.
+ *  Polled while the agent may still be writing; refetched on focus, like `useRunChanges`. */
+export function useRunGitStatus(id: string, enabled: boolean, live = false) {
+  return useQuery({
+    queryKey: queryKeys.runs.gitStatus(id),
+    queryFn: ({ signal }) => getRunGitStatus(id, { signal }),
+    enabled,
+    retry: false,
+    refetchInterval: live ? 10_000 : false,
+    refetchOnWindowFocus: true,
+    staleTime: 0,
+  })
+}
+
 /** One worktree path for the Files tab (R5): the root/dir listings the tree lazy-loads and
  *  the file entries the preview renders. `path` is '' for the worktree root and `undefined`
  *  while nothing is selected. Like /changes, a 409 ("no worktree — …") is an answer retries
@@ -1452,20 +1469,22 @@ export function useAgentProfiles() {
   })
 }
 
+/** The chip's refresh cadence — matches the server's `STAR_CACHE_TTL_MS`, which also paces
+ *  itself to GitHub's rate limit, so a poll never costs more than one cached read. */
+export const STAR_COUNT_REFRESH_MS = 10_000
+
 /**
- * cezar's own star count, for the sidebar's ⭐ ask.
- *
- * `staleTime: Infinity` and no retry, both deliberate. The server already caches the number for
- * six hours and answers `{ available: false }` for every failure, so refetching it costs a round
- * trip that cannot produce a different answer — and a decorative count is the last thing in the
- * cockpit that should retry, poll, or hold the query client's attention. One read per session.
+ * cezar's own star count, for the sidebar's ⭐ ask — refreshed every ten seconds while the tab is
+ * visible (TanStack pauses `refetchInterval` in the background). No retry: the server answers
+ * `{ available: false }` for every failure, and the next tick is the retry.
  */
 export function useStarCount(enabled = true) {
   return useQuery({
     queryKey: workspaceQueryKeys.starCount,
     queryFn: ({ signal }) => getStarCount({ signal }),
     enabled,
-    staleTime: Infinity,
+    staleTime: STAR_COUNT_REFRESH_MS,
+    refetchInterval: STAR_COUNT_REFRESH_MS,
     retry: false,
     refetchOnMount: false,
   })

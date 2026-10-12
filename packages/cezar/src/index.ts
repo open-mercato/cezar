@@ -323,12 +323,13 @@ async function serveCommand(
     // mode through `resolveCapabilities`, and the two must never disagree (they did, on 127.0.0.2).
     trimPaths: () => !resolveCapabilities(process.env, bindHost).localHandoff,
     restart: () => {
-      store.flush();
+      store.flush({ pretty: true });
       // The old process stops here, so it reports its own stop before handing over (bounded).
       track('app_stop', { reason: 'restart' });
       void flushTelemetry(1_000).finally(() =>
         restartProcess({ server: httpServer, args: process.argv.slice(2), port, supervised: isSupervised() }),
       );
+      restartProcess({ server: httpServer, args: process.argv.slice(2), port, supervised: isSupervised() });
     },
   });
   void selfUpdate.updateAvailable().then((latest) => {
@@ -398,7 +399,7 @@ async function serveCommand(
   const shutdown = () => {
     if (stopping) process.exit(0); // a second Ctrl-C never waits on telemetry
     stopping = true;
-    store.flush();
+    store.flush({ pretty: true });
     track('app_stop', { reason: 'signal' });
     void flushTelemetry().finally(() => process.exit(0));
   };
@@ -445,7 +446,7 @@ async function serveCommand(
       if (!gone) return;
       try {
         process.stderr.write('  supervisor is gone — shutting down\n');
-        store.flush();
+        store.flush({ pretty: true });
         track('app_stop', { reason: 'supervisor_gone' });
       } catch {
         // Nothing left to save that is worth staying alive for.
@@ -587,7 +588,7 @@ async function runCommand(
       if (r.id === run.id && ['done', 'review', 'failed', 'cancelled'].includes(r.status)) resolveStatus(r.status);
     });
   });
-  store.flush();
+  store.flush({ pretty: true });
   const record = store.getRun(run.id);
   if (final === 'review') {
     console.log(`\n  changes ready for review on branch ${record?.branch ?? '?'} — inspect them in the cockpit: npx cezar`);
