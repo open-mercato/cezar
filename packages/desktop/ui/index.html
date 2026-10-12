@@ -307,7 +307,7 @@
           const box = document.getElementById('report')
           const button = document.getElementById('send-report')
           if (mode === 'sent') {
-            this.reportDone('The problem was reported automatically, as you allowed in Settings → Privacy. We will look into it shortly; a fix reaches you as an update, which the app installs on its own.')
+            this.reportDone('The problem was reported. We will look into it shortly; a fix reaches you as an update, which the app installs on its own.')
           } else if (mode === 'offer') {
             box.classList.remove('hidden')
             button.onclick = function () {
