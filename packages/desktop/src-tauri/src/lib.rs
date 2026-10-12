@@ -14,7 +14,7 @@
 //! updater is never a dead end. That is `npm install --prefix` into the same layout the
 //! cockpit's updater uses — no cezar code needed, any version recoverable.
 //!
-//! Three commands are exposed over Tauri IPC — `update_cezar_command`, `retry_start` and
+//! Commands exposed over Tauri IPC — `update_cezar_command`, `restart_app`, `send_error_report` and
 //! `show_versions_menu` — beside window dragging. The capability has to name loopback with a
 //! port wildcard (the cockpit's port is picked at launch), so the narrowing happens HERE: every
 //! command refuses a caller that is not the splash or the cockpit on the port this shell
@@ -66,8 +66,10 @@ struct Shell {
     /// what the title strip's "Update cezar" button (legacy cockpits) is driven by.
     running_version: Mutex<Option<String>>,
     update_available: Mutex<Option<String>>,
-    /// True while a supervisor thread is alive; the splash's "Try again" starts one when none is.
+    /// True while a supervisor thread is alive.
     supervising: AtomicBool,
+    /// Set once the failure page's "Restart cezar" is under way; a second click does nothing.
+    restarting: AtomicBool,
 }
 
 /// Runs at document start on EVERY page the window loads — the splash and, after navigation,
@@ -487,23 +489,25 @@ fn check_cezar_update(app: &AppHandle, shell: &Shell) {
     let running = shell.running_version.lock().unwrap().clone();
     let Some(running) = running else { return };
     let Some(tag) = release_tag() else { return };
-    let mut command = tool_command(npm_program(), &["view", &format!("{PACKAGE}@{tag}"), "version", "--json"]);
-    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
-    let Ok(output) = command.output() else { return };
-    let raw = String::from_utf8_lossy(&output.stdout);
-    let latest = serde_json::from_str::<serde_json::Value>(raw.trim())
-        .ok()
-        .and_then(|value| match value {
-            serde_json::Value::String(v) => Some(v),
-            serde_json::Value::Array(items) => items.into_iter().filter_map(|v| v.as_str().map(str::to_owned)).last(),
-            _ => None,
-        });
-    let Some(latest) = latest else { return };
+    let Some(latest) = channel_latest(tag) else { return };
     let newer = version_newer(&latest, &running).then_some(latest);
     *shell.update_available.lock().unwrap() = newer.clone();
     if let (Some(version), Some(window)) = (newer, app.get_webview_window("main")) {
         offer_update(&window, &version);
     }
+}
+
+/// What the channel's dist-tag points at, through npm (so registry config and auth apply).
+fn channel_latest(tag: &str) -> Option<String> {
+    let mut command = tool_command(npm_program(), &["view", &format!("{PACKAGE}@{tag}"), "version", "--json"]);
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    let output = command.output().ok()?;
+    let raw = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<serde_json::Value>(raw.trim()).ok().and_then(|value| match value {
+        serde_json::Value::String(v) => Some(v),
+        serde_json::Value::Array(items) => items.into_iter().filter_map(|v| v.as_str().map(str::to_owned)).last(),
+        _ => None,
+    })
 }
 
 /// Whether the legacy strip's version chip has anything to offer.
@@ -558,6 +562,7 @@ pub fn run() {
         running_version: Mutex::new(None),
         update_available: Mutex::new(None),
         supervising: AtomicBool::new(false),
+        restarting: AtomicBool::new(false),
     });
     let shell_for_setup = shell.clone();
     let shell_for_menu = shell.clone();
@@ -578,7 +583,7 @@ pub fn run() {
     let shell_for_state = shell.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![update_cezar_command, retry_start, show_versions_menu, send_error_report])
+        .invoke_handler(tauri::generate_handler![update_cezar_command, restart_app, show_versions_menu, send_error_report])
         .setup(move |app| {
             app.manage(shell_for_state.clone());
             let handle = app.handle().clone();
@@ -952,16 +957,54 @@ fn output_with_timeout(command: &mut Command, timeout: Duration) -> Option<(bool
     Some((status.success(), out))
 }
 
-/// The splash's "Try again" (after installing Node) lands here: start a supervisor when none
-/// is running. Idempotent — a click while one is alive does nothing.
+/// The failure page's "Restart cezar": first whatever might already fix it — a newer shell, a
+/// newer cezar on the channel — then the whole app again, from a fresh process. Each update step
+/// that fails or finds nothing just moves on; the restart always happens.
 #[tauri::command]
-fn retry_start(app: AppHandle, window: WebviewWindow, shell: tauri::State<'_, Arc<Shell>>) {
-    if !caller_is_trusted(&window, &shell) || shell.supervising.load(Ordering::SeqCst) {
+fn restart_app(app: AppHandle, window: WebviewWindow, shell: tauri::State<'_, Arc<Shell>>) {
+    if !caller_is_trusted(&window, &shell) || shell.restarting.swap(true, Ordering::SeqCst) {
         return;
     }
-    let app = app.clone();
     let shell = shell.inner().clone();
-    std::thread::spawn(move || supervise(app, shell));
+    std::thread::spawn(move || {
+        splash_reset(&window, "Checking for updates…", "A newer version may already fix this.");
+        install_shell_update_now(&app, &window);
+        update_cezar_if_newer(&app, &shell);
+        splash_reset(&window, "Restarting cezar…", "");
+        if let Some(mut child) = shell.child.lock().unwrap().take() {
+            stop_sidecar(&mut child);
+            let _ = child.wait();
+        }
+        app.restart();
+    });
+}
+
+/// The shell's own update, installed now rather than on the next launch — the restart that
+/// follows starts it. Skipped where the background check is (`CEZ_DESKTOP_NO_UPDATE`, debug).
+fn install_shell_update_now(app: &AppHandle, window: &WebviewWindow) {
+    use tauri_plugin_updater::UpdaterExt;
+    if std::env::var_os("CEZ_DESKTOP_NO_UPDATE").is_some() || cfg!(debug_assertions) {
+        return;
+    }
+    let Ok(updater) = app.updater() else { return };
+    tauri::async_runtime::block_on(async {
+        let Ok(Some(update)) = updater.check().await else { return };
+        splash_reset(window, "Updating the app…", &format!("cezar desktop {}", update.version));
+        let _ = update.download_and_install(|_, _| {}, || {}).await;
+    });
+}
+
+/// A newer cezar on the update channel than the active install: put it in place before the
+/// restart. Nothing installed yet is the supervisor's job on the way back up.
+fn update_cezar_if_newer(app: &AppHandle, shell: &Shell) {
+    let Some(tag) = release_tag() else { return };
+    let Some(active) = active_id(&cezar_home().join("versions")) else { return };
+    if check_node().is_err() {
+        return;
+    }
+    if channel_latest(tag).is_some_and(|latest| version_newer(&latest, &active)) {
+        update_cezar(app, shell, "Updating cezar…");
+    }
 }
 
 /// Install from the shell needs Node too: check first; with none anywhere, download the managed
@@ -976,7 +1019,7 @@ fn require_node(window: &WebviewWindow) -> bool {
         Err(reason) => reason,
     };
     if std::env::var_os("CEZ_DESKTOP_NODE").is_some_and(|v| !v.is_empty()) {
-        fail_needs_node(window, &reason, None);
+        fail(window, "cezar could not start Node.js", &reason, "", None);
         return false;
     }
     match install_managed_node(window) {
@@ -987,7 +1030,7 @@ fn require_node(window: &WebviewWindow) -> bool {
         }
         Err(error) => {
             let failure = Failure::new("managed_node_install_failed", &error).retriable().with("node.reason", reason.as_str());
-            fail_needs_node(window, &format!("{reason} cezar could not download its own Node.js either: {error}"), Some(failure));
+            fail(window, "cezar could not set up Node.js", &format!("cezar runs on Node.js and could not download it: {error}"), "", Some(failure));
             false
         }
     }
@@ -1906,19 +1949,6 @@ fn fail(window: &WebviewWindow, title: &str, detail: &str, log: &str, failure: O
     }
 }
 
-/// The missing-Node page: the reason, a download link (opens in the browser through the
-/// navigation handler) and a "Try again" button (the `retry_start` command).
-fn fail_needs_node(window: &WebviewWindow, reason: &str, failure: Option<Failure>) {
-    let report = report_param(failure, "");
-    if let Ok(url) = url::Url::parse(&format!(
-        "{}?needs_node=1&error={}&title={}&report={report}",
-        app_origin(),
-        urlencode(reason),
-        urlencode("cezar needs Node.js 20 or newer")
-    )) {
-        let _ = window.navigate(url);
-    }
-}
 
 fn report_param(failure: Option<Failure>, log: &str) -> &'static str {
     let Some(failure) = failure else { return telemetry::Reported::Off.as_param() };

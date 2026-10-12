@@ -175,6 +175,13 @@
         opacity: 0.7;
         max-width: 360px;
       }
+      .button.restart {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 34px;
+        padding: 0 14px;
+      }
       .button.send {
         display: inline-flex;
         align-items: center;
@@ -244,10 +251,6 @@
         <div id="progress" class="progress hidden"><div></div></div>
         <p id="progress-text" class="progress-text hidden"></p>
         <pre id="log" class="hidden"></pre>
-        <div id="actions" class="actions hidden">
-          <a class="button primary" href="https://nodejs.org/en/download" target="_blank" rel="noreferrer">Download Node.js</a>
-          <button id="retry" class="button" type="button">Try again</button>
-        </div>
         <div id="report" class="report hidden">
           <p class="report-title">Help us fix this</p>
           <button id="send-report" class="button primary send" type="button">
@@ -264,6 +267,12 @@
             <strong>Thanks, the cezar team has your report</strong>
             <span id="report-done-detail">We will look into it shortly. A fix reaches you as an update, which the app installs on its own.</span>
           </div>
+        </div>
+        <div id="actions" class="actions hidden">
+          <button id="retry" class="button restart" type="button">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+            <span id="retry-label">Restart cezar</span>
+          </button>
         </div>
         <p id="hint" class="hidden"></p>
       </div>
@@ -336,18 +345,17 @@
       }
       const params = new URLSearchParams(location.search)
       if (params.get('report')) window.cezarSplash.report(params.get('report'))
-      if (params.get('needs_node')) {
-        window.cezarSplash.fail(params.get('title') || 'cezar needs Node.js', params.get('error') || '', '')
-        const actions = document.getElementById('actions')
-        actions.classList.remove('hidden')
-        document.getElementById('retry').onclick = function () {
-          this.disabled = true
-          this.textContent = 'Checking…'
-          if (window.__TAURI_INTERNALS__) window.__TAURI_INTERNALS__.invoke('retry_start')
-          setTimeout(() => { this.disabled = false; this.textContent = 'Try again' }, 4000)
-        }
-      } else if (params.get('error')) {
+      // Every failure page: the error, its log, the report card and "Restart cezar" — which checks
+      // for updates and restarts the app (`restart_app`).
+      if (params.get('error')) {
         window.cezarSplash.fail(params.get('title') || 'cezar stopped', params.get('error'), params.get('log') || '')
+        document.getElementById('actions').classList.remove('hidden')
+        document.getElementById('retry').onclick = function () {
+          const label = document.getElementById('retry-label')
+          this.disabled = true
+          label.textContent = 'Restarting…'
+          if (window.__TAURI_INTERNALS__) window.__TAURI_INTERNALS__.invoke('restart_app')
+        }
       } else if (params.get('title')) {
         window.cezarSplash.set(params.get('title'), params.get('detail') || '')
       }

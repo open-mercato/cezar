@@ -139,8 +139,10 @@ pnpm, Homebrew incl. keg-only `node@NN`, MacPorts, nix, snap; scoop, chocolatey,
 nvm-windows), each `node` asked directly, newest 20+ first. A folder found that way goes FIRST
 on every tool command's PATH, so npm and the sidecar run the same Node. Node 20+ is
 checked first; without it the shell installs its own (below), and only when THAT fails does
-the splash show "cezar needs Node.js 20 or newer" with the reason, a **Download Node.js** button (opens nodejs.org in the browser) and
-**Try again** (re-runs the check and boots without relaunching the app). Nothing else runs
+the splash show "cezar could not set up Node.js" with the reason — the same failure page as
+every other: the error report card (#1406) and **Restart cezar**, which first installs a newer
+shell and a newer cezar on the channel when there is one, then relaunches the app. There is no
+"Download Node.js" button: the user is never asked to install anything. Nothing else runs
 until Node is there: no npm, no sidecar, no update check. `CEZ_DESKTOP_NODE=<path>` overrides
 which node the shell uses (also how the page is tested).
 
