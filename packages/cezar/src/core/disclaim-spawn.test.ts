@@ -1,13 +1,13 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { DISCLAIM_EXEC_FLAG, disclaimedCommand } from './disclaim-spawn.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'cez-disclaim-'));
-const exe = (name: string) => {
+const exe = (name: string, body: string | Buffer = '#!/bin/sh\n') => {
   const path = join(dir, name);
-  writeFileSync(path, '#!/bin/sh\n');
+  writeFileSync(path, body);
   chmodSync(path, 0o755);
   return path;
 };
@@ -15,7 +15,8 @@ const trampoline = exe('Cezar');
 const claude = exe('claude');
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-const darwin = { platform: 'darwin' as const, hostEnv: { CEZ_DISCLAIM_EXEC: trampoline } };
+const cloneDir = join(dir, 'clones');
+const darwin = { platform: 'darwin' as const, hostEnv: { CEZ_DISCLAIM_EXEC: trampoline }, cloneDir };
 
 describe('disclaimedCommand', () => {
   it('routes an agent through the desktop trampoline, resolved on the child PATH', () => {
@@ -34,5 +35,29 @@ describe('disclaimedCommand', () => {
   it('keeps a missing program a plain spawn, so ENOENT and its install hint survive', () => {
     expect(disclaimedCommand('codex', ['app-server'], { PATH: dir }, darwin)).toEqual(['codex', ['app-server']]);
     expect(disclaimedCommand('./claude', [], { PATH: dir }, darwin)).toEqual(['./claude', []]);
+  });
+
+  it.skipIf(process.platform !== 'darwin')('runs a version-named Mach-O from a clone named after the agent', () => {
+    mkdirSync(join(dir, 'versions'));
+    mkdirSync(join(dir, 'bin'));
+    const real = exe('versions/2.1.295', Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 1, 2, 3]));
+    symlinkSync(real, join(dir, 'bin', 'claude'));
+    const [file, argv] = disclaimedCommand('claude', ['-p'], { PATH: join(dir, 'bin') }, darwin);
+    expect(file).toBe(trampoline);
+    expect(argv[1]).toMatch(/\/clones\/claude-[0-9a-f]{16}\/claude$/);
+    expect(readFileSync(argv[1]!)).toEqual(readFileSync(real));
+    expect(argv.slice(2)).toEqual(['-p']);
+    // Stable across spawns: the second call reuses the first clone.
+    expect(disclaimedCommand('claude', ['-p'], { PATH: join(dir, 'bin') }, darwin)[1][1]).toBe(argv[1]);
+  });
+
+  it('never moves a script, which may find its siblings by its own path', () => {
+    mkdirSync(join(dir, 'pkg'));
+    const script = exe('pkg/index.sh');
+    mkdirSync(join(dir, 'sbin'));
+    symlinkSync(script, join(dir, 'sbin', 'cursor-agent'));
+    const link = join(dir, 'sbin', 'cursor-agent');
+    expect(disclaimedCommand('cursor-agent', [], { PATH: join(dir, 'sbin') }, darwin)).toEqual([trampoline, [DISCLAIM_EXEC_FLAG, link]]);
+    expect(existsSync(cloneDir) && readdirSync(cloneDir).some((e) => e.startsWith('cursor-agent'))).toBe(false);
   });
 });
