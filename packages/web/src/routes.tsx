@@ -1,4 +1,4 @@
-import { memo, Suspense } from 'react'
+import { lazy, memo, Suspense } from 'react'
 import {
   matchPath,
   Navigate,
