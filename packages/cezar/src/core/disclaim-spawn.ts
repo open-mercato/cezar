@@ -73,7 +73,7 @@ export function disclaimedCommand(
   const cloneDir = opts.cloneDir ?? join(homedir(), '.cache', 'cez', 'agent-exec');
   const shebang = nodeShebang(resolved);
   const node = shebang && resolveProgram(shebang[0]!, path);
-  if (shebang && node) {
+  if (shebang && node && isRealNode(node)) {
     return [trampoline, [DISCLAIM_EXEC_FLAG, namedAfterAgent(node, name, cloneDir), ...shebang.slice(1), resolved, ...args]];
   }
   return [trampoline, [DISCLAIM_EXEC_FLAG, namedAfterAgent(resolved, name, cloneDir), ...args]];
@@ -92,6 +92,15 @@ function nodeShebang(path: string): string[] | null {
     return interpreter && basename(interpreter) === 'node' ? [interpreter, ...rest] : null;
   } catch {
     return null;
+  }
+}
+
+/** A Volta or mise `node` is a multicall shim that picks its tool by its own name; never rename one. */
+function isRealNode(path: string): boolean {
+  try {
+    return basename(realpathSync(path)) === 'node';
+  } catch {
+    return false;
   }
 }
 
@@ -131,7 +140,8 @@ function isMachO(path: string): boolean {
   return head.length === 4 && MACHO_MAGIC.has(head.readUInt32BE(0));
 }
 
-function readHead(path: string, bytes: number): Buffer {
+/** Up to the first `bytes` bytes of `path`, read through one descriptor. */
+export function readHead(path: string, bytes: number): Buffer {
   const fd = openSync(path, 'r');
   try {
     const head = Buffer.alloc(bytes);

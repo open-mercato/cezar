@@ -73,6 +73,14 @@ describe('disclaimedCommand', () => {
     expect(disclaimedCommand(flagged, [], { PATH: join(dir, 'npm') }, darwin)[1].slice(2)).toEqual(['--no-warnings', flagged]);
   });
 
+  it('never renames a node that is really a Volta or mise shim', () => {
+    mkdirSync(join(dir, 'volta'));
+    const shim = exe('volta/volta-shim', Buffer.from([0xcf, 0xfa, 0xed, 0xfe]));
+    symlinkSync(shim, join(dir, 'volta', 'node'));
+    const tool = exe('volta/tool', '#!/usr/bin/env node\n');
+    expect(disclaimedCommand(tool, ['-p'], { PATH: join(dir, 'volta') }, darwin)).toEqual([trampoline, [DISCLAIM_EXEC_FLAG, tool, '-p']]);
+  });
+
   it('leaves a script whose node cannot be found, and a bash launcher, as they are', () => {
     mkdirSync(join(dir, 'lone'));
     const lone = exe('lone/tool', '#!/usr/bin/env node\n');

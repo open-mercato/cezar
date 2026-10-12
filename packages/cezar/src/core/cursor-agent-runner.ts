@@ -10,7 +10,7 @@
  */
 
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
@@ -26,7 +26,7 @@ import type {
 } from './agent-runner.ts';
 import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
-import { disclaimActive, disclaimedCommand, resolveProgram, type DisclaimOptions } from './disclaim-spawn.ts';
+import { disclaimActive, disclaimedCommand, readHead, resolveProgram, type DisclaimOptions } from './disclaim-spawn.ts';
 import { readNdjson } from './ndjson.ts';
 import {
   createCursorUiState,
@@ -37,6 +37,7 @@ import {
 
 /** The exact hand-off line of Cursor's bash launcher (`~/.local/share/cursor-agent/versions/<v>/cursor-agent`). */
 const CURSOR_LAUNCHER_EXEC = 'exec -a "$0" "$NODE_BIN" --use-system-ca "$SCRIPT_DIR/index.js" "$@"';
+const LAUNCHER_MAX_BYTES = 64 * 1024;
 
 /**
  * Cursor's launcher is a bash script that execs the `node` beside it, so in the desktop app a macOS
@@ -57,9 +58,10 @@ export function cursorLaunch(
     const dir = dirname(realpathSync(invoked));
     const node = join(dir, 'node');
     const entry = join(dir, 'index.js');
+    if (!existsSync(node) || !existsSync(entry)) return asIs;
     // The launcher is a few hundred bytes; never slurp a binary that merely shares its name.
-    if (!existsSync(node) || !existsSync(entry) || statSync(invoked).size > 64 * 1024) return asIs;
-    if (!readFileSync(invoked, 'utf8').includes(CURSOR_LAUNCHER_EXEC)) return asIs;
+    const head = readHead(invoked, LAUNCHER_MAX_BYTES + 1);
+    if (head.length > LAUNCHER_MAX_BYTES || !head.toString('utf8').includes(CURSOR_LAUNCHER_EXEC)) return asIs;
     return {
       program: node,
       args: ['--use-system-ca', entry, ...args],
