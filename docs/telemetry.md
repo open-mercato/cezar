@@ -34,6 +34,9 @@ task's status). Every label comes from a closed set the server enforces.
 Error reports carry the error type, message and stack with your home directory, working
 directory, temp directory and registered project roots replaced by `~`, `<repo>` and `<tmp>`,
 plus technical context: build, uptime, memory, route shape, browser engine, enabled feature flags.
+Every red error toast the cockpit shows is reported the same way, with the method, status and
+route shape of the API call that failed just before it (e.g. `POST
+/api/v1/p/:param/runs/:param/messages`, 409).
 
 `cezar telemetry inspect` prints the envelope an event would carry, without sending it.
 

@@ -8,6 +8,8 @@ import {
 } from '@open-mercato/cezar-api-client'
 
 import { useHealth } from '@/api/queries'
+import { onDangerToast } from '@/components/ui/toaster'
+import { recentFailedRequest, type FailedRequest } from '@/lib/failed-request'
 import { SID_HEADER, sid } from '@/lib/sid'
 
 /**
@@ -178,7 +180,7 @@ let lastErrorAt = 0
 function reportClientError(
   error: unknown,
   handler: string,
-  opts: { code?: string; fingerprint?: string; context?: Context } = {},
+  opts: { type?: string; code?: string; fingerprint?: string; context?: Context } = {},
 ): void {
   if (typeof error === 'object' && error !== null) {
     if (reported.has(error)) return
@@ -195,7 +197,7 @@ function reportClientError(
   const isError = error instanceof Error
   const err = isError ? error : new Error(String(error))
   const body: TelemetryErrorInput = {
-    type: (err.name || 'Error').slice(0, 128),
+    type: (opts.type ?? (err.name || 'Error')).slice(0, 128),
     message: (err.message || 'unknown error').slice(0, 2048),
     // Stack frames carry the local origin — strip it, the path is enough to group on.
     stack: isError ? err.stack?.split(window.location.origin).join('').slice(0, 16_384) : undefined,
@@ -205,6 +207,60 @@ function reportClientError(
     context: wideContext(opts.context),
   }
   send('/api/v1/telemetry/error', body)
+}
+
+/** Static segments of the server's API routes. Anything else — a project slug, a run id, a
+ *  workflow or provider name — is the user's data and becomes `:param`, as in `routeShape`. */
+const API_SEGMENTS = new Set([
+  'api', 'v1', 'agent-profiles', 'apply', 'archive', 'archive-finished', 'association',
+  'auto-resume', 'automation-checks', 'automation-log', 'automation-options',
+  'automation-templates', 'branch', 'branding-logo', 'cancel', 'candidates', 'channel', 'check',
+  'checkout', 'checks', 'comments', 'commit', 'config', 'connect', 'connection', 'consent',
+  'continue', 'details', 'diff', 'dispatch', 'drafts', 'enable', 'events', 'feed', 'finish',
+  'groups', 'handoff', 'health', 'host-usage', 'images', 'importable', 'launch-key',
+  'merge-state', 'messages', 'models', 'nodes', 'open', 'open-in', 'open-in-cli', 'open-targets',
+  'parse', 'pause', 'pick', 'pin', 'plan', 'pr', 'providers', 'push', 'queued-messages', 'read',
+  'read-all', 'reclaim', 'refresh', 'remove-worktree', 'repo', 'report', 'retry', 'run', 'runs',
+  'runs-index', 'search', 'self-update', 'setup', 'skills-update', 'star-count', 'status',
+  'telemetry', 'todos', 'tree', 'ui-state', 'unread', 'validate', 'watch', 'workspace', 'ws',
+])
+
+/** An API pathname as its route's shape: `/api/v1/p/:param/runs/:param/messages`. */
+export function apiRouteShape(pathname: string): string {
+  const segments = pathname.split('/').filter(Boolean)
+  const shape = segments.map((segment, i) =>
+    // The segment after `p` is always a project id, whatever it happens to be called.
+    segments[i - 1] === 'p' || !(API_SEGMENTS.has(segment) || ROUTE_SEGMENTS.has(segment))
+      ? ':param'
+      : segment,
+  )
+  return `/${shape.join('/')}`.slice(0, 256)
+}
+
+/** What a `danger` toast is reported as: an `ApiError` naming the call it came from when a
+ *  request failed just before it, else a plain `ErrorToast` (a client-side refusal). */
+export function errorToastReport(
+  failure: FailedRequest | null,
+  now = Date.now(),
+): { type: string; code: string; context: Context } {
+  if (!failure) return { type: 'ErrorToast', code: 'error_toast', context: {} }
+  return {
+    type: 'ApiError',
+    code: `http_${failure.status}`,
+    context: {
+      'request.method': failure.method,
+      'request.route': apiRouteShape(failure.path),
+      'request.status': failure.status,
+      'request.age_ms': now - failure.at,
+    },
+  }
+}
+
+/** Every red toast the user saw — "session closed", "cannot reach the cezar server" — is a
+ *  failure they hit, so it is reported like an uncaught one, with the call that caused it. */
+function reportErrorToast(message: string): void {
+  const { type, code, context } = errorToastReport(recentFailedRequest())
+  reportClientError(message, 'toast', { type, code, context })
 }
 
 /** `React.lazy` that says WHICH page failed when its bundle can't load. Engines word the failure
@@ -267,6 +323,7 @@ export function Telemetry() {
         fingerprint: 'cockpit:chunk_load_failed',
       }),
     )
+    onDangerToast(reportErrorToast)
   }, [])
 
   useEffect(() => {

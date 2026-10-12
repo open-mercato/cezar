@@ -155,6 +155,7 @@ import type { ClientResponse } from 'hono/client'
 import type { ResponseFormat } from 'hono/types'
 import type { AppType } from '@open-mercato/cezar/app-type'
 import { SID_HEADER, sid } from '@/lib/sid'
+import { noteFailedRequest } from '@/lib/failed-request'
 
 /**
  * The cockpit's client for its own HTTP API.
@@ -398,9 +399,12 @@ async function fetchOrThrow(url: string, init?: RequestInit): Promise<Response> 
     // task, hit an error) is attributed to it — see lib/sid.ts.
     const headers = new Headers(init?.headers)
     headers.set(SID_HEADER, sid())
-    return await fetch(url, { ...init, headers, credentials: 'include' })
+    const res = await fetch(url, { ...init, headers, credentials: 'include' })
+    if (!res.ok) noteFailedRequest(url, init?.method, res.status)
+    return res
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
+    noteFailedRequest(url, init?.method, 0)
     throw new ApiError(0, `cannot reach the cezar server (${url})`, { cause })
   }
 }
