@@ -76,7 +76,7 @@ export interface EditorDraft {
   allowForkHeads?: boolean
 }
 
-/** The seven events the poller reconstructs (Q6: nothing else is offered). */
+/** The nine events the poller reconstructs (Q6: nothing else is offered). */
 export const GITHUB_EVENTS: readonly AutomationEvent[] = [
   'pull_request.opened',
   'issue.opened',
@@ -85,6 +85,8 @@ export const GITHUB_EVENTS: readonly AutomationEvent[] = [
   'pull_request.reviewed',
   'pull_request.review_requested',
   'pull_request.rereview_requested',
+  'pull_request.closed',
+  'pull_request.merged',
 ]
 
 type TaskSteps = NonNullable<AutomationDefinition['task']['steps']>
