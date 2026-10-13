@@ -69,6 +69,7 @@ import {
   type RunIndexEntry,
   type RunsIndexResponse,
   type StarCountPayload,
+  designProxyRequestSchema,
   type WorkspaceConfigResponse,
   workspaceBrandingLogoResponseSchema,
   githubListQuerySchema,
@@ -148,6 +149,7 @@ import { SkillsUpdateConflictError, SkillsUpdateCoordinator, SkillsUpdateService
 import { selfUpdateApplyRequestSchema, selfUpdateChannelRequestSchema, selfUpdateDevelopmentQuerySchema } from '@open-mercato/cezar-contract';
 import { SelfUpdateBusyError, SelfUpdateService } from '../self-update/service.ts';
 import { StarCountReader } from './star-count.ts';
+import { DesignProxies } from './preview/design-proxy.ts';
 import { getTeamSkillsCached, refreshTeamSkills, waitForTeamSkills } from '../skills-remote.ts';
 import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.ts';
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
@@ -408,6 +410,9 @@ export interface ServerDeps {
    *  Defaults to a reader that asks github.com at most once per ten seconds, paced to GitHub's rate limit, and caches the answer
    *  under `~/.cache/cez/`; tests inject their own so no suite ever reaches the network. */
   starCount?: { read(): Promise<StarCountPayload> };
+  /** The Design Mode proxies behind `POST /api/v1/preview/design-proxy` (src/server/preview/).
+   *  Injected by tests that need to close the listeners they opened. */
+  designProxies?: DesignProxies;
   /** WebSocket subscription hub (`/api/v1/ws`, src/server/ws.ts). `createApp`
    *  only registers topics on it — `startServer` builds one and attaches it
    *  to the HTTP server it binds. Optional so legacy callers/tests change
@@ -3359,6 +3364,23 @@ export function createApp(deps: ServerDeps) {
   // change about it. Never fails — `{ available: false }` is the ordinary offline answer, so the
   // cockpit's chip simply is not there rather than showing an error nobody asked for.
   const starCountRoutes = new Hono().get('/star-count', async (c) => c.json(await starCount.read()));
+
+  // ---- chained family: Design Mode (workspace-level) -----------------------
+  // Spec `.ai/specs/2026-10-09-design-mode.md`. Single-mount: the proxy mirrors a loopback dev
+  // server, which belongs to the machine, not to a project. The request's own `Host` is passed
+  // as forbidden beside the body's cockpit origin (they differ under the Vite dev proxy), so
+  // this server can never be mirrored.
+  const designProxies = deps.designProxies ?? new DesignProxies();
+  deps.onDispose?.(() => designProxies.closeAll());
+  const previewRoutes = new Hono().post('/preview/design-proxy', jsonZodValidator(designProxyRequestSchema), async (c) => {
+    if (!capabilities().designMode) {
+      return c.json({ error: 'Design Mode is not available on this cockpit' }, 409);
+    }
+    const host = c.req.header('host');
+    const opened = await designProxies.open({ ...c.req.valid('json'), forbidden: host ? [`http://${host}`] : [] });
+    if (!opened.ok) return c.json({ error: opened.reason }, 400);
+    return c.json({ origin: opened.origin });
+  });
 
   const selfUpdateRoutes = new Hono()
     .get('/workspace/self-update', async (c) => c.json(await selfUpdate.status()))
@@ -7544,6 +7566,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', skillsUpdateRoutes)
     .route('/', selfUpdateRoutes)
     .route('/', starCountRoutes)
+    .route('/', previewRoutes)
     .route('/', workspaceConfigRoutes)
     .route('/', workspaceSecretsRoutes)
     .route('/', fsBrowseRoutes)

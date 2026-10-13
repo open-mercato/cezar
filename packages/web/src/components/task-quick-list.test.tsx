@@ -21,6 +21,7 @@ const HEALTH: HealthResponse = {
   capabilities: {
     localHandoff: true,
     terminal: false,
+    designMode: false,
     followups: true,
     singleProject: false,
     automations: false,
