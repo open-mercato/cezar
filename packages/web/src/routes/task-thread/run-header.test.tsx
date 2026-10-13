@@ -341,7 +341,7 @@ describe('action bar visibility per status (the legacy rules, rendered)', () => 
     expect(buttonNames(actionBar())).toEqual(visible)
   })
 
-  it.each<RunTab>(['session', 'changes', 'commits', 'files', 'notes'])(
+  it.each<RunTab>(['session', 'changes', 'commits', 'files', 'notes', 'preview'])(
     'the %s tab offers no header Continue — the chat box’s send is Continue',
     async (tab) => {
       stubFetch()
@@ -1146,6 +1146,17 @@ describe('notes tab', () => {
     const tabs = within(document.querySelector('[data-slot="run-tabs"]') as HTMLElement)
     expect(tabs.getByRole('link', { name: 'Notes' }).getAttribute('href')).toBe('/tasks/r1/notes')
     expect(actionBar().queryByRole('button', { name: 'Notes' })).toBeNull()
+  })
+})
+
+describe('preview tab', () => {
+  it('Preview is a deep-linkable tab, after Notes', () => {
+    stubFetch()
+    renderHeader(run('done'))
+    const tabs = within(document.querySelector('[data-slot="run-tabs"]') as HTMLElement)
+    expect(tabs.getByRole('link', { name: 'Preview' }).getAttribute('href')).toBe('/tasks/r1/preview')
+    const names = tabs.getAllByRole('link').map((link) => link.textContent)
+    expect(names.indexOf('Preview')).toBe(names.indexOf('Notes') + 1)
   })
 })
 

@@ -123,6 +123,8 @@ import type {
   RunRecord,
   RunsIndexResponse,
   StarCountPayload,
+  DesignProxyRequest,
+  DesignProxyResponse,
   SetTelemetryConsentInput,
   TelemetryConsentPayload,
   WorktreeEntry,
@@ -470,6 +472,15 @@ export async function getHealth(opts?: ReadOptions): Promise<HealthResponse> {
  *  answer and the chip renders nothing for it. */
 export async function getStarCount(opts?: ReadOptions): Promise<StarCountPayload> {
   return unwrap(await cez.api.v1['star-count'].$get({}, init(opts)), '/star-count')
+}
+
+/**
+ * The Design Mode proxy origin for a loopback dev server (`POST /api/v1/preview/design-proxy`).
+ * Idempotent, so the Preview tab asks before every load instead of tracking whether its proxy is
+ * still alive. Workspace-level — the dev server belongs to the machine, not to the project.
+ */
+export async function openDesignProxy(input: DesignProxyRequest): Promise<DesignProxyResponse> {
+  return unwrap(await cez.api.v1.preview['design-proxy'].$post({ json: input }), '/preview/design-proxy')
 }
 
 /** The opt-in telemetry answer (`~/.cezar/config.json`), behind the consent bar and

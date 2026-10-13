@@ -224,6 +224,7 @@ describe('the Changes tab route', () => {
       { text: 'Commits', href: '/tasks/r1/commits', current: null },
       { text: 'Files', href: '/tasks/r1/files', current: null },
       { text: 'Notes', href: '/tasks/r1/notes', current: null },
+      { text: 'Preview', href: '/tasks/r1/preview', current: null },
     ])
   })
 
