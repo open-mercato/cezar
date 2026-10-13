@@ -13,7 +13,7 @@ import { GITHUB_EVENTS, POLL_MINUTES, clamp, needsChangedLabels, type DraftFilte
 
 /**
  * The "When GitHub changes" half of the When section (spec 2026-09-14-automations-redesign
- * § UI/UX 4.3): the seven event chips (multi-select — the contract is `events[]`), the poll line,
+ * § UI/UX 4.3): the nine event chips (multi-select — the contract is `events[]`), the poll line,
  * and the shipped feature's filters under a Collapsible the export does not draw.
  */
 export function EditorGithubFields({

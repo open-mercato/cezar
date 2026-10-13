@@ -11,6 +11,8 @@ const TIMELINE_PAGE_SIZE = 100;
  *  item just inside it can cost one page more than this. */
 const TIMELINE_MAX_PAGES = 5;
 const GITHUB_COMMAND_TIMEOUT_MS = 30_000;
+/** `/search/issues` serves at most 1000 rows, ten pages of `HARD_CANDIDATE_CAP`. */
+const CLOSED_SEARCH_MAX_PAGES = 10;
 
 const githubItemSchema = z.object({
   id: z.number().int().positive().optional(),
@@ -179,19 +181,32 @@ export class GithubPoller {
         // A review event on a merged or closed PR asks for work nobody can act on any more.
         source.reviews,
       );
-      const args = [
-        'api', '--method', 'GET', '/search/issues',
-        '-f', `q=${query}`,
-        '-f', `per_page=${maxRecords}`,
-        // Search cannot sort by close time; `updated` is the nearest order (closed_at <= updated_at).
-        '-f', `sort=${source.activity === 'closed' ? 'updated' : source.activity}`,
-        '-f', 'order=asc',
-      ];
-      const raw = await this.run('gh', args);
-      const response = searchResponseSchema.parse(JSON.parse(raw));
+      const closedSource = source.activity === 'closed';
+      const search = async (page: number) => {
+        const args = [
+          'api', '--method', 'GET', '/search/issues',
+          '-f', `q=${query}`,
+          '-f', `per_page=${closedSource ? HARD_CANDIDATE_CAP : maxRecords}`,
+          // Search cannot sort by close time; `updated` is the nearest order (closed_at <= updated_at).
+          '-f', `sort=${closedSource ? 'updated' : source.activity}`,
+          '-f', 'order=asc',
+          ...(page > 1 ? ['-f', `page=${page}`] : []),
+        ];
+        return searchResponseSchema.parse(JSON.parse(await this.run('gh', args))).items;
+      };
+      let items = await search(1);
+      if (closedSource) {
+        // Ordered by `updated`, a full page is not the earliest closes: a PR closed first but touched
+        // since sits further on, and a cursor taken from this page would pass it for good. Read the
+        // whole result (search's own 1000-row ceiling) and let the close-time sort pick the prefix.
+        for (let page = 2, last = items; last.length >= HARD_CANDIDATE_CAP && page <= CLOSED_SEARCH_MAX_PAGES; page += 1) {
+          last = await search(page);
+          items = [...items, ...last];
+        }
+      }
       const sourceObservations: typeof observations = [];
-      truncated ||= response.items.length >= maxRecords;
-      for (const item of response.items.slice(0, HARD_CANDIDATE_CAP)) {
+      truncated ||= items.length >= maxRecords;
+      for (const item of closedSource ? items : items.slice(0, HARD_CANDIDATE_CAP)) {
         if (item.repository_url.toLowerCase() !== expectedRepoUrl) continue;
         if (source.opened && item.pull_request && definition.events.includes('pull_request.opened')) {
           const candidate = normalizeOpened(owner, repo, item, 'pull_request.opened');
@@ -287,7 +302,7 @@ export class GithubPoller {
             });
           }
         }
-        if (sourceObservations.length >= maxRecords) break;
+        if (!closedSource && sourceObservations.length >= maxRecords) break;
       }
       sourceObservations.sort(compareObservation);
       truncated ||= sourceObservations.length >= maxRecords;
