@@ -122,7 +122,7 @@ prereleases are inert).
 | `packages/cezar/src/release/snapshot.ts` | pure decisions: channel/version/dist-tag, install lines (unit-tested) |
 | `packages/cezar/src/release/manifests.ts` | the shared stamper: which manifests exist, and how each pins the next (unit-tested) |
 | `scripts/release-snapshot.mjs` | orchestrator: stamps manifests, `npm publish --tag <channel> --provenance`, emits result JSON (`--dry-run` supported; e2e-tested) |
-| `ci.yml` → `publish-snapshot` | gate (`needs: verify`), same-repo guard, provenance permissions, sticky PR comment, step summary |
+| `ci.yml` → `publish-snapshot` | gate (`needs: [verify, vitest]`), same-repo guard, provenance permissions, sticky PR comment, step summary |
 | `nightly.yml` | the 03:17 UTC cron + manual dispatch: main-only guard, "did main move?" check, full verify, then the same orchestrator with `CEZ_RELEASE_CHANNEL=nightly` |
 | `npm-preview-cleanup.yml` | dist-tag removal on PR close |
 

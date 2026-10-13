@@ -9,6 +9,11 @@ import { createInterface } from 'node:readline';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// The cosmetic pauses between events exist for the demo cockpit; CEZ_MOCK_PACE scales them
+// (0 = none, the vitest default). `mock:slow`/`mock:pause` are test contracts and never scale.
+const paceEnv = Number(process.env.CEZ_MOCK_PACE);
+const PACE = process.env.CEZ_MOCK_PACE && paceEnv >= 0 ? paceEnv : 1;
+const pace = (ms) => sleep(ms * PACE);
 const write = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
 
 // `--include-partial-messages` → every text/thinking block of an assistant
@@ -122,7 +127,7 @@ function writeHandoffAndTodo() {
 
 async function respond(userText, imageCount) {
   turn += 1;
-  await sleep(250);
+  await pace(250);
   // `mock:done` anywhere in the message → the reply ends with the CEZ:DONE
   // completion marker (#347), so the auto-close path is testable dry. `mock:report` implies it:
   // a unit that has reported is finished, and a report with no done marker would leave the child
@@ -311,7 +316,7 @@ async function respond(userText, imageCount) {
       type: 'assistant',
       message: { role: 'assistant', content: [{ type: 'text', text: md }], usage: { input_tokens: 100, output_tokens: 200 } },
     });
-    await sleep(100);
+    await pace(100);
     emit({ type: 'result', subtype: 'success', result: md, usage: { input_tokens: 100, output_tokens: 200 }, total_cost_usd: 0.001 });
     return;
   }
@@ -366,7 +371,7 @@ async function respond(userText, imageCount) {
         },
         parent_tool_use_id: null,
       });
-      await sleep(200);
+      await pace(200);
     }
 
     // Children, interleaved across agents so the activity lines visibly race.
@@ -391,14 +396,14 @@ async function respond(userText, imageCount) {
             },
             parent_tool_use_id: agent.id,
           });
-          await sleep(250);
+          await pace(250);
           emit({
             type: 'user',
             message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: step.id, content: step.result }] },
             parent_tool_use_id: agent.id,
           });
         }
-        await sleep(250);
+        await pace(250);
       }
     }
 
@@ -409,7 +414,7 @@ async function respond(userText, imageCount) {
         message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: agent.id, content: agent.result }] },
         parent_tool_use_id: null,
       });
-      await sleep(200);
+      await pace(200);
     }
 
     const summary = 'Both sub-agents reported back: the redirect drops the cookie in src/middleware.ts:12, and the store layer is clean. (dry-run mock)';
@@ -418,7 +423,7 @@ async function respond(userText, imageCount) {
       message: { role: 'assistant', content: [{ type: 'text', text: summary }], usage: { input_tokens: 400, output_tokens: 60 } },
       parent_tool_use_id: null,
     });
-    await sleep(150);
+    await pace(150);
     emit({
       type: 'result',
       subtype: 'success',
@@ -450,7 +455,7 @@ async function respond(userText, imageCount) {
         usage: { input_tokens: 200, output_tokens: 30 },
       },
     });
-    await sleep(50);
+    await pace(50);
     emit({
       type: 'result',
       subtype: 'success',
@@ -483,7 +488,7 @@ async function respond(userText, imageCount) {
         usage: { input_tokens: 500, output_tokens: 120 },
       },
     });
-    await sleep(100);
+    await pace(100);
     emit({
       type: 'result',
       subtype: 'success',
@@ -514,7 +519,7 @@ async function respond(userText, imageCount) {
         usage: { input_tokens: 850, output_tokens: 40 },
       },
     });
-    await sleep(300);
+    await pace(300);
     emit({
       type: 'assistant',
       message: {
@@ -523,7 +528,7 @@ async function respond(userText, imageCount) {
         usage: { input_tokens: 120, output_tokens: 55 },
       },
     });
-    await sleep(300);
+    await pace(300);
     emit({
       type: 'user',
       message: {
@@ -531,7 +536,7 @@ async function respond(userText, imageCount) {
         content: [{ type: 'tool_result', tool_use_id: `toolu_mock_${turn}`, content: ' M src/example.ts' }],
       },
     });
-    await sleep(200);
+    await pace(200);
     // Agent screenshot in a tool result — exercises the image pipeline
     // (persist to <id>-images/, serve via /api/runs/:id/images/, zoomable
     // card + lightbox in the transcript).
@@ -543,7 +548,7 @@ async function respond(userText, imageCount) {
         usage: { input_tokens: 80, output_tokens: 30 },
       },
     });
-    await sleep(200);
+    await pace(200);
     emit({
       type: 'user',
       message: {
@@ -560,7 +565,7 @@ async function respond(userText, imageCount) {
         ],
       },
     });
-    await sleep(300);
+    await pace(300);
     emit({
       type: 'assistant',
       message: {
@@ -569,7 +574,7 @@ async function respond(userText, imageCount) {
         usage: { input_tokens: 300, output_tokens: 90 },
       },
     });
-    await sleep(150);
+    await pace(150);
     emit({
       type: 'result',
       subtype: 'success',
@@ -589,7 +594,7 @@ async function respond(userText, imageCount) {
       usage: { input_tokens: 200, output_tokens: 60 },
     },
   });
-  await sleep(150);
+  await pace(150);
   emit({
     type: 'result',
     subtype: 'success',
