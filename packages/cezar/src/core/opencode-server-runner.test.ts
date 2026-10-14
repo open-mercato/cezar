@@ -405,4 +405,20 @@ describe('#897 a turn that outlives its prompt POST', () => {
     expect(types(events).filter((t) => t === 'turn-end')).toHaveLength(1);
     expect(Date.now() - started).toBeLessThan(TURN_IDLE_GRACE_MS);
   }, 30_000);
+
+  it('reopens a requested session with GET before sending the continuation prompt', async () => {
+    const runner = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 });
+    const { events, onEvent } = record();
+    const session = runner.startSession(
+      { userPrompt: 'continue the existing task', cwd: process.cwd(), sessionId: 'ses_mock_1', resume: true },
+      onEvent,
+      { autoEndAfterFirstTurn: true },
+    );
+    const result = await session.result;
+
+    expect(result.sessionId).toBe('ses_mock_1');
+    expect(types(events)).toContain('session');
+    expect(types(events).filter((t) => t === 'turn-end')).toHaveLength(1);
+    expect(result.text).toContain('Checking the working tree.');
+  }, 30_000);
 });
