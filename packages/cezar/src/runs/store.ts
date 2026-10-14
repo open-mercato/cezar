@@ -19,6 +19,8 @@ import { StreamRedaction } from './stream-redaction.ts';
 import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
 // Sibling module, files only — a draft belongs to a run and is deleted with it (#939).
 import { deleteRunDrafts } from './drafts.ts';
+import { failureKind, taskFailedLabel } from './failure-kind.ts';
+import { track } from '../telemetry.ts';
 // Pure, dependency-free reference helpers — the same sanity bound the marker parser applies.
 import { MAX_REF } from './task-refs.ts';
 // Type-only module (zod + nothing else), so this cannot cycle back into the store.
@@ -1120,6 +1122,11 @@ export class RunStore extends EventEmitter {
     // projection often provide the replacement URL/number in the same patch; seeding afterward
     // would make the historical association unrecoverable.
     if (!run.prRefs && !normalized.prRefs) run.prRefs = legacyPrRefs(run);
+    // Counted on the transition only, so a later `error` re-write of a failed run is not a second failure (#1438).
+    if (normalized.status === 'failed' && run.status !== 'failed') {
+      const kind = failureKind(normalized.error ?? run.error, normalized.autoResumeAt ?? run.autoResumeAt);
+      track('task_failed', { label: taskFailedLabel(run.runner, kind) });
+    }
     Object.assign(run, this.redactPatch(normalized, id));
     // Keep legacy writers (including workflow resume/naming paths) in sync without requiring
     // every caller to know about the additive list. The list's provenance still decides the
