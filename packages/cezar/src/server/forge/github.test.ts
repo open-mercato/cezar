@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // below drive `gh repo view` entirely through this mock — no real `gh` on the box. Everything else
 // in this file is pure and never touches child_process, so the default passthrough is harmless.
 const execFileMock = vi.hoisted(() => vi.fn());
+/** `gh` spawns only: `gh()` also asks git for the origin host (GitHub Enterprise pin). */
+const ghSpawns = () => execFileMock.mock.calls.filter((c) => c[0] === 'gh').length;
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   execFileMock.mockImplementation((...args: unknown[]) =>
@@ -564,11 +566,11 @@ describe('detectGithubCached', () => {
     // Cold start: nothing cached yet → null (contract-safe "unknown"), and it fires one probe.
     expect(detectGithubCached(repoRoot)).toBeNull();
     await vi.advanceTimersByTimeAsync(0); // let the fire-and-forget probe settle
-    expect(execFileMock).toHaveBeenCalledTimes(1);
+    expect(ghSpawns()).toBe(1);
 
     // Warm: within the 60 s window the cached result is served with no new probe.
     expect(detectGithubCached(repoRoot)).toEqual({ available: true });
-    expect(execFileMock).toHaveBeenCalledTimes(1);
+    expect(ghSpawns()).toBe(1);
 
     // Cache expires. The bug returned null here (item vanishes); the fix returns the stale value.
     vi.setSystemTime(CACHE_MS + 1);
@@ -576,7 +578,7 @@ describe('detectGithubCached', () => {
 
     // …and a background revalidate was kicked off exactly once for the stale read.
     await vi.advanceTimersByTimeAsync(0);
-    expect(execFileMock).toHaveBeenCalledTimes(2);
+    expect(ghSpawns()).toBe(2);
   });
 
   it('probes once when a cold read is followed by an awaited detect', async () => {
@@ -588,7 +590,7 @@ describe('detectGithubCached', () => {
     const awaited = createGithubDriver(coldRoot, null).detect();
     await vi.advanceTimersByTimeAsync(0);
     expect(await awaited).toEqual({ available: true });
-    expect(execFileMock).toHaveBeenCalledTimes(1);
+    expect(ghSpawns()).toBe(1);
   });
 
   it('keeps one project\'s cached availability when a different project is probed afterward', async () => {
@@ -1377,7 +1379,7 @@ describe('resolveRepoHandle (#525 Phase 2)', () => {
     expect(await resolveRepoHandle('/tmp/a')).toEqual({ owner: 'o', name: 'one' });
     ghReturns('o/two');
     expect(await resolveRepoHandle('/tmp/b')).toEqual({ owner: 'o', name: 'two' });
-    expect(execFileMock).toHaveBeenCalledTimes(2);
+    expect(ghSpawns()).toBe(2);
   });
 });
 
@@ -3387,5 +3389,49 @@ describe('whyLine', () => {
   it('answers something for an empty message', () => {
     expect(whyLine('')).toBe('gh failed');
     expect(whyLine('\n  \n')).toBe('gh failed');
+  });
+});
+
+describe('GH_HOST pinning (GitHub Enterprise)', () => {
+  const answer = (origin: string) =>
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      const stdout = args[0] === 'git' ? `${origin}\n` : '{"nameWithOwner":"acme/widgets"}';
+      cb(null, { stdout, stderr: '' });
+    });
+  const ghEnv = (root: string) =>
+    execFileMock.mock.calls.find((c) => c[0] === 'gh' && (c[2] as { cwd: string }).cwd === root)?.[2] as
+      { env?: Record<string, string> };
+
+  beforeEach(() => {
+    vi.stubEnv('CEZ_DRY_RUN', '');
+    execFileMock.mockReset();
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('pins each repo to its own origin host, with no help from the driver', async () => {
+    answer('git@acme.ghe.com:acme/widgets.git');
+    await resolveRepoHandle('/repo/ghe-pin');
+    expect(ghEnv('/repo/ghe-pin').env?.GH_HOST).toBe('acme.ghe.com');
+    answer('git@github.com:open-mercato/cezar.git');
+    await resolveRepoHandle('/repo/com-pin');
+    expect(ghEnv('/repo/com-pin').env?.GH_HOST).toBeUndefined();
+  });
+
+  it('pins the first remote\'s host when there is no origin, as getRepoInfo does', async () => {
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      const [bin, argv] = args as [string, string[]];
+      if (bin === 'gh') return cb(null, { stdout: 'acme/widgets', stderr: '' });
+      const cmd = argv.join(' ');
+      if (cmd === 'rev-parse --show-toplevel') return cb(null, { stdout: '/repo/no-origin\n', stderr: '' });
+      if (cmd === 'rev-parse --abbrev-ref HEAD') return cb(null, { stdout: 'main\n', stderr: '' });
+      if (cmd === 'remote get-url origin') return cb(new Error('No such remote'), { stdout: '', stderr: '' });
+      if (cmd === 'remote') return cb(null, { stdout: 'ghe\n', stderr: '' });
+      if (cmd === 'remote get-url ghe') return cb(null, { stdout: 'git@acme.ghe.com:acme/widgets.git\n', stderr: '' });
+      return cb(new Error(`unexpected git ${cmd}`), { stdout: '', stderr: '' });
+    });
+    await resolveRepoHandle('/repo/no-origin');
+    expect(ghEnv('/repo/no-origin').env?.GH_HOST).toBe('acme.ghe.com');
   });
 });

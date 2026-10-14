@@ -7,11 +7,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, AgentRunResult, AgentRunSpec } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
 import { RunManager } from './run.ts';
+import { track } from '../telemetry.ts';
+
+vi.mock('../telemetry.ts', async (importOriginal) => ({ ...(await importOriginal<object>()), track: vi.fn() }));
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
 
-const captured = vi.hoisted(() => ({ specs: [] as AgentRunSpec[], resumeError: '' }));
+const captured = vi.hoisted(() => ({ specs: [] as AgentRunSpec[], resumeError: '', freshError: '' }));
 
 // A resume answers the way the real CLI does when its transcript is gone: a result error,
 // then a non-zero exit carrying the stderr line. A fresh session just works.
@@ -30,6 +33,11 @@ vi.mock('../core/runner-factory.ts', () => ({
               onEvent?.({ type: 'turn-end' });
               onEvent?.({ type: 'error', message: exit });
               reject(new Error(exit));
+              return;
+            }
+            if (captured.freshError) {
+              onEvent?.({ type: 'error', message: captured.freshError });
+              reject(new Error(captured.freshError));
               return;
             }
             onEvent?.({ type: 'text', text: 'picked it up' });
@@ -54,6 +62,8 @@ describe('Continue on a Claude session whose transcript is gone', () => {
   beforeEach(async () => {
     captured.specs.length = 0;
     captured.resumeError = 'No conversation found with session ID: old-session';
+    captured.freshError = '';
+    vi.mocked(track).mockClear();
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-missing-session-'));
     await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
     writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
@@ -117,6 +127,19 @@ describe('Continue on a Claude session whose transcript is gone', () => {
     const events = store.readEvents(runId);
     expect(events.filter((e) => e.type === 'error')).toEqual([]);
     expect(events.some((e) => e.type === 'note' && String(e.message).includes('fresh session'))).toBe(true);
+    expect(vi.mocked(track)).toHaveBeenCalledWith('session_resume_fallback', { label: 'recovered' });
+    expect(vi.mocked(track)).not.toHaveBeenCalledWith('task_failed', expect.anything());
+  });
+
+  it('counts a fresh session that fails too, and the task failure it leaves behind (#1438)', async () => {
+    captured.freshError = 'claude CLI exited with code 1 — boom';
+    const runId = terminalRun();
+    expect(manager!.continueRun(runId, { text: 'keep going', runner: 'claude' })).toEqual({ ok: true });
+
+    expect(await settled(runId)).toBe('failed');
+    expect(vi.mocked(track)).toHaveBeenCalledWith('session_resume_fallback', { label: 'fresh_failed' });
+    expect(vi.mocked(track)).toHaveBeenCalledWith('task_failed', { label: 'claude:other' });
+    expect(JSON.stringify(vi.mocked(track).mock.calls)).not.toContain('old-session');
   });
 
   it('still fails, and shows why, when a resume fails for any other reason', async () => {
@@ -131,5 +154,6 @@ describe('Continue on a Claude session whose transcript is gone', () => {
       'claude reported result error (error_during_execution)',
       'claude CLI exited with code 1 — Invalid API key',
     ]);
+    expect(vi.mocked(track)).not.toHaveBeenCalledWith('session_resume_fallback', expect.anything());
   });
 });

@@ -38,7 +38,11 @@ task's status), `provider_login_opened` / `provider_login_not_opened` / `provide
 `skills_provisioned` (whether a task's selected skill and its companions were `installed` into
 its workspace, were `already_present`, or the selected skill was `root_not_found`; the count
 installed — never a skill name), `skill_missing_in_session` (the agent's backend, once per task,
-when its Skill tool still answered "Unknown skill"). Every label
+when its Skill tool still answered "Unknown skill"), `session_resume_fallback` (whether the fresh
+session that replaced a pruned conversation ended without a session error — `recovered` —, or
+`fresh_failed`, or was `cancelled`), `task_failed` (the agent's backend and a kind —
+`missing_session`, `usage_limit`, `auth`, `timeout` or `other` — never the error text; once per
+transition into failed, not for runs a restart interrupted nor for an auto-resume failing again). Every label
 comes from a closed set the server enforces.
 
 Error reports carry the error type, message and stack with your home directory, working
@@ -49,7 +53,8 @@ route shape of the API call that failed just before it (e.g. `POST
 /api/v1/p/:param/runs/:param/messages`, 409). The toast's text is masked first: quoted values,
 emails, URLs, slash-bearing names (paths, branches, `owner/repo`), your project names and
 anything after a `: ` become placeholders. For a provider or agent-account call the report also
-names the agent (`claude`, `codex`, …).
+names the agent (`claude`, `codex`, …). When the call got no answer at all, the report names the
+browser's own transport error (e.g. `TypeError: Load failed`), masked the same way.
 
 When cezar cannot read whether an agent's CLI is signed in, it reports why (timed out, could not
 start, unexpected exit, unrecognised output) with the shape of the answer only: exit code, Node's

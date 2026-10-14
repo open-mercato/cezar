@@ -16,6 +16,15 @@ export interface FailedRequest {
   /** Which agent a `/providers` or `/agent-profiles` call was about — a closed set, from the path
    *  or the JSON body. Its route shape alone hides it (telemetry `abf08514`). */
   provider?: string
+  /** Why a status-0 request got no answer: the browser's own rejection (`TypeError: Load failed`).
+   *  Raw here; telemetry scrubs and bounds it before it leaves the page (#1437). */
+  cause?: { name: string; message: string }
+}
+
+function causeOf(cause: unknown): FailedRequest['cause'] {
+  if (typeof cause !== 'object' || cause === null) return undefined
+  const { name, message } = cause as { name?: unknown; message?: unknown }
+  return { name: typeof name === 'string' ? name : 'unknown', message: typeof message === 'string' ? message : '' }
 }
 
 const PROVIDER_ROUTE = /\/(?:providers|agent-profiles)(?:\/|$)/
@@ -41,11 +50,20 @@ export function noteFailedRequest(
   method: string | undefined,
   status: number,
   body?: unknown,
+  cause?: unknown,
 ): void {
   try {
     const path = new URL(url, window.location.origin).pathname
     const provider = providerOf(path, body)
-    last = { method: (method ?? 'GET').toUpperCase(), path, status, at: Date.now(), ...(provider ? { provider } : {}) }
+    const transport = causeOf(cause)
+    last = {
+      method: (method ?? 'GET').toUpperCase(),
+      path,
+      status,
+      at: Date.now(),
+      ...(provider ? { provider } : {}),
+      ...(transport ? { cause: transport } : {}),
+    }
   } catch {
     // never break a request over bookkeeping
   }

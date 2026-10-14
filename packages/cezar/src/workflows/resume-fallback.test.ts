@@ -1,7 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, AgentSession, ContentBlock } from '../core/agent-runner.ts';
 import type { UiEvent } from '../core/ui-events.ts';
-import { ResumeFallback } from './resume-fallback.ts';
+import { ResumeFallback, trackFallbackOutcome } from './resume-fallback.ts';
+import { track } from '../telemetry.ts';
+
+vi.mock('../telemetry.ts', async (importOriginal) => ({ ...(await importOriginal<object>()), track: vi.fn() }));
 
 const MISSING: AgentEvent = { type: 'error', message: 'claude CLI exited with code 1 — No conversation found with session ID: s-1' };
 const RESULT_ERROR: AgentEvent = { type: 'error', message: 'claude reported result error (error_during_execution)' };
@@ -81,5 +84,37 @@ describe('ResumeFallback', () => {
     const { fallback } = guard(false);
     expect(fallback.holdUi(TURN_STARTED)).toBe(false);
     expect(fallback.hold(MISSING)).toBe(false);
+  });
+});
+
+describe('trackFallbackOutcome — session_resume_fallback (#1438)', () => {
+  beforeEach(() => vi.mocked(track).mockClear());
+  const ended = (cancelled = false, sessionError?: string) => ({ cancelled: () => cancelled, sessionError: () => sessionError });
+
+  it('recovered: the fresh session settled cleanly', async () => {
+    await expect(trackFallbackOutcome(() => Promise.resolve('ok'), ended())).resolves.toBe('ok');
+    expect(vi.mocked(track).mock.calls).toEqual([['session_resume_fallback', { label: 'recovered' }]]);
+  });
+
+  it('fresh_failed: the fresh session threw, or reported a session error — and no error text is sent', async () => {
+    await expect(trackFallbackOutcome(() => Promise.reject(new Error('boom s-1')), ended())).rejects.toThrow('boom');
+    await trackFallbackOutcome(() => Promise.resolve(undefined), ended(false, 'Invalid API key'));
+    expect(vi.mocked(track).mock.calls).toEqual([
+      ['session_resume_fallback', { label: 'fresh_failed' }],
+      ['session_resume_fallback', { label: 'fresh_failed' }],
+    ]);
+  });
+
+  it('fresh_failed when the fresh session cannot even launch', async () => {
+    const launch = () => {
+      throw new Error('spawn ENOENT');
+    };
+    await expect(trackFallbackOutcome(launch, ended())).rejects.toThrow('ENOENT');
+    expect(vi.mocked(track).mock.calls).toEqual([['session_resume_fallback', { label: 'fresh_failed' }]]);
+  });
+
+  it('cancelled wins over how the session ended', async () => {
+    await expect(trackFallbackOutcome(() => Promise.reject(new Error('killed')), ended(true))).rejects.toThrow();
+    expect(vi.mocked(track).mock.calls).toEqual([['session_resume_fallback', { label: 'cancelled' }]]);
   });
 });

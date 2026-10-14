@@ -28,9 +28,9 @@ export function extractTaskRefs(task: string): TaskRefs {
   const text = task ?? '';
 
   // 1. Explicit URLs — the strongest signal.
-  const prUrl = /github\.com\/[\w.-]+\/[\w.-]+\/pull\/(\d+)/i.exec(text);
+  const prUrl = /(?:https?:\/\/)?[\w-]+(?:\.[\w-]+)+(?::\d+)?\/[\w.-]+\/[\w.-]+\/pull\/(\d+)/i.exec(text);
   if (prUrl) refs.prNumber = num(prUrl[1]);
-  const issueUrl = /github\.com\/[\w.-]+\/[\w.-]+\/issues\/(\d+)/i.exec(text);
+  const issueUrl = /(?:https?:\/\/)?[\w-]+(?:\.[\w-]+)+(?::\d+)?\/[\w.-]+\/[\w.-]+\/issues\/(\d+)/i.exec(text);
   if (issueUrl) refs.issueNumber = num(issueUrl[1]);
 
   // 2. Worded references — covers the GitHub-tab templates verbatim
