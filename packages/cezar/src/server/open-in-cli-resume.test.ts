@@ -22,6 +22,10 @@ vi.mock('../core/claude-bin.ts', async (importOriginal) => ({
   resolveClaudeBin: () => process.env.CEZ_CLAUDE_BIN ?? 'claude',
   claudeShellCommand: () => process.env.CEZ_CLAUDE_BIN ?? null,
 }));
+vi.mock('../core/opencode-bin.ts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../core/opencode-bin.ts')>()),
+  resolveOpencodeBin: () => process.env.CEZ_OPENCODE_BIN ?? 'opencode',
+}));
 
 // The terminal launcher actually spawns a process (osascript/cmd/x-terminal-emulator) — mocked
 // so this suite exercises only the command construction, never a real terminal window.

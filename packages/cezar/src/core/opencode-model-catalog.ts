@@ -1,6 +1,7 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { trackChildExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
+import { resolveOpencodeBin, spawnOpencodeProcess } from './opencode-bin.ts';
 import type { ModelOption } from './runner-model-catalog.ts';
 
 export interface OpencodeModelDiscoveryOptions {
@@ -30,7 +31,7 @@ const ANSI_RE = /\u001B\[[0-9;]*[A-Za-z]/g;
 
 /** The host binary, resolved exactly like `OpencodeServerRunner` and the backend probe. */
 export function resolveOpencodeExecutable(bin?: string): string {
-  return bin ?? process.env.CEZ_OPENCODE_BIN ?? 'opencode';
+  return resolveOpencodeBin(bin);
 }
 
 /**
@@ -136,7 +137,7 @@ function spawnOpencode(
   args: readonly string[],
   cwd: string,
 ): ChildProcessWithoutNullStreams {
-  const child = nodeSpawn(bin, [...args], {
+  const child = spawnOpencodeProcess(bin, args, {
     cwd,
     env: buildChildEnv({ backend: 'opencode' }),
   });

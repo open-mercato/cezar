@@ -11,6 +11,7 @@ import type { AgentSession, SessionOptions } from './agent-runner.ts';
 import { prependSystemPrompt, trackChildExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
+import { resolveOpencodeBin, spawnOpencodeProcess } from './opencode-bin.ts';
 import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.ts';
 import { parseModelIdentity } from './model-identity.ts';
 import { V1TextCoalescer } from './v1-text-coalescer.ts';
@@ -76,7 +77,7 @@ export class OpencodeServerRunner implements AgentRunner {
   private lastSession: OpencodeSession | null = null;
 
   constructor(opts: OpencodeRunnerOptions = {}) {
-    this.bin = opts.bin ?? process.env.CEZ_OPENCODE_BIN ?? 'opencode';
+    this.bin = resolveOpencodeBin(opts.bin);
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
   }
 
@@ -177,7 +178,7 @@ class OpencodeSession implements AgentSession {
         env.OPENCODE_CONFIG_CONTENT = opencodeConfigContent(spec.mcpServers, env.OPENCODE_CONFIG_CONTENT);
       }
       const [file, argv] = disclaimedCommand(bin, ['serve', '--hostname', '127.0.0.1', '--port', String(port)], env);
-      this.child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
+      this.child = spawnOpencodeProcess(file, argv, { cwd: spec.cwd, env });
     } catch (err) {
       throw wrapSpawnError(err, bin);
     }

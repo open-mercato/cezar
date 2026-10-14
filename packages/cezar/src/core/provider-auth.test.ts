@@ -15,6 +15,11 @@ vi.mock('./claude-bin.ts', async (importOriginal) => ({
   ...await importOriginal<typeof import('./claude-bin.ts')>(),
   resolveClaudeBin: (env: NodeJS.ProcessEnv = process.env) => env.CEZ_CLAUDE_BIN || 'claude',
 }));
+vi.mock('./opencode-bin.ts', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./opencode-bin.ts')>(),
+  resolveOpencodeBin: (bin?: string, env: NodeJS.ProcessEnv = process.env) =>
+    bin || env.CEZ_OPENCODE_BIN || 'opencode',
+}));
 vi.mock('./junie-auth-probe.ts', () => ({
   probeJunieAuthentication: vi.fn(async () => ({ connected: true })),
 }));
@@ -353,6 +358,22 @@ describe('provider auth parsers', () => {
         '●  Another Provider api',
         '│',
         '└  4 credentials',
+      ].join('\n'),
+    ],
+    [
+      'Windows console box-drawing fallback format with environment variables',
+      [
+        'T  Credentials ~\\.local\\share\\opencode\\auth.json',
+        '|',
+        '•  Google api',
+        '|',
+        '—  5 credentials',
+        '',
+        'T  Environment',
+        '|',
+        '•  Cloudflare Workers AI CLOUDFLARE_ACCOUNT_ID',
+        '|',
+        '—  2 environment variables',
       ].join('\n'),
     ],
   ])('recognizes OpenCode %s as connected', async (_case, stdout) => {

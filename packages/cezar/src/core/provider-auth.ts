@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { AGENT_MODELS_LOCKED_ENV } from './agent-model-policy.ts';
 import { profileEnv } from './agent-profiles.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
+import { resolveOpencodeBin, prepareOpencodeCommand } from './opencode-bin.ts';
 import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
 import { probeJunieAuthentication } from './junie-auth-probe.ts';
 
@@ -249,7 +250,7 @@ function parseOpenCodeStatus(result: ProviderCommandResult): ProviderConnectionS
   const environmentSummaries = lines
     .map((line) => line.match(/^[^a-z0-9]*(\d+)\s+environment\s+variables?$/)?.[1])
     .filter((count): count is string => count !== undefined);
-  const hasEnvironmentBlock = lines.some((line) => /^[^a-z0-9]*environment$/.test(line));
+  const hasEnvironmentBlock = lines.some((line) => /^(?:[^a-z0-9]*|[a-z]\s+)environment$/.test(line));
   if (environmentSummaries.length > 1) return null;
   if (hasEnvironmentBlock !== (environmentSummaries.length === 1)) return null;
   const environmentCount = environmentSummaries.length === 1
@@ -338,7 +339,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
   },
   {
     id: 'opencode',
-    executable: () => process.env.CEZ_OPENCODE_BIN ?? 'opencode',
+    executable: () => resolveOpencodeBin(),
     statusArgs: ['auth', 'list'],
     loginArgs: ['auth', 'login'],
     installHint: 'Install OpenCode, then run `opencode auth login`.',
@@ -411,13 +412,15 @@ function defaultRunProviderCommand(
   stdin?: string,
 ): Promise<ProviderCommandResult> {
   return new Promise((resolve) => {
+    const prepared = prepareOpencodeCommand(executable, args);
     const child = execFile(
-      executable,
-      args,
+      prepared.file,
+      prepared.args,
       {
         timeout: timeoutMs,
         windowsHide: true,
         maxBuffer: 256 * 1024,
+        ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
         // Inherit, then override: an auth probe is a short read-only CLI call, not a spawned
         // agent, so it does not go through `buildChildEnv`'s allowlist — the CLI still needs the
         // host's PATH and HOME to run at all. `env` is only ever a profile's config-dir variable.
@@ -429,11 +432,17 @@ function defaultRunProviderCommand(
           signal?: string | null;
         }) | null;
         const code = commandError?.code;
+        const isNotRecognized = typeof stderr === 'string'
+          && stderr.includes('is not recognized as an internal or external command');
         resolve({
           stdout: String(stdout),
           stderr: String(stderr),
-          exitCode: typeof code === 'number' ? code : error ? null : 0,
-          errorCode: typeof code === 'string' ? code : undefined,
+          exitCode: typeof code === 'number' ? code : error ? (isNotRecognized ? 1 : null) : 0,
+          errorCode: typeof code === 'string'
+            ? code
+            : isNotRecognized
+              ? 'ENOENT'
+              : undefined,
           timedOut: commandError?.code === 'ETIMEDOUT'
             || (commandError?.killed === true && commandError.signal === 'SIGTERM'),
         });

@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolveCursorAgentBin } from './cursor-agent-runner.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
+import { execOpencode, resolveOpencodeBin } from './opencode-bin.ts';
 
 const exec = promisify(execFile);
 
@@ -93,9 +94,12 @@ async function probeCodex(): Promise<BackendCheck> {
 }
 
 async function probeOpencode(): Promise<BackendCheck> {
-  const bin = process.env.CEZ_OPENCODE_BIN ?? 'opencode';
+  if (process.env.CEZ_DRY_RUN === '1') {
+    return { name: 'opencode', available: true, version: 'mock (CEZ_DRY_RUN=1)' };
+  }
+  const bin = resolveOpencodeBin();
   try {
-    const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });
+    const { stdout } = await execOpencode(bin, ['--version'], { timeout: 10_000 });
     return {
       name: 'opencode',
       available: true,
