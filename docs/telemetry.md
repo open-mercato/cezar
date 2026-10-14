@@ -38,7 +38,10 @@ task's status), `provider_login_opened` / `provider_login_not_opened` / `provide
 `skills_provisioned` (whether a task's selected skill and its companions were `installed` into
 its workspace, were `already_present`, or the selected skill was `root_not_found`; the count
 installed — never a skill name), `skill_missing_in_session` (the agent's backend, once per task,
-when its Skill tool still answered "Unknown skill"). Every label
+when its Skill tool still answered "Unknown skill"), `session_resume_fallback` (whether the fresh
+session that replaced a pruned conversation `recovered`, `fresh_failed` or was `cancelled`),
+`task_failed` (the agent's backend and a kind — `missing_session`, `usage_limit`, `auth`,
+`timeout` or `other` — never the error text). Every label
 comes from a closed set the server enforces.
 
 Error reports carry the error type, message and stack with your home directory, working
