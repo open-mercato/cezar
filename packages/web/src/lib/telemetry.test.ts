@@ -10,7 +10,9 @@ import {
   isCanonicalRoute,
   routeShape,
   scrubToastMessage,
+  transportCauseContext,
 } from './telemetry'
+import { noteFailedRequest, recentFailedRequest, resetFailedRequest } from './failed-request'
 
 describe('routeShape', () => {
   it('keeps the route and drops every user value', () => {
@@ -95,6 +97,34 @@ describe('error toast reports', () => {
         'request.age_ms': 250,
       },
     })
+  })
+
+  it('names the transport failure behind a request that got no answer (#1437)', () => {
+    resetFailedRequest()
+    noteFailedRequest('/api/v1/p/acme/runs/abc/continue', 'post', 0, undefined, new TypeError('Load failed'))
+    const failure = recentFailedRequest()
+    expect(errorToastReport(failure, failure!.at).context).toEqual({
+      'request.method': 'POST',
+      'request.route': '/api/v1/p/:param/runs/:param/continue',
+      'request.status': 0,
+      'request.age_ms': 0,
+      'request.cause_name': 'TypeError',
+      'request.cause_message': 'Load failed',
+    })
+    resetFailedRequest()
+  })
+
+  it('scrubs and bounds the transport cause, and adds nothing without one', () => {
+    expect(transportCauseContext(new TypeError('Fetch API cannot load http://127.0.0.1:4000/api/v1/p/acme/runs/x due to access control checks.')))
+      .toEqual({
+        'request.cause_name': 'TypeError',
+        'request.cause_message': 'Fetch API cannot load /api/v1/p/:param/runs/:param due to access control checks.',
+      })
+    const odd = transportCauseContext({ name: 'not a name!', message: 'x'.repeat(5000) })
+    expect(odd['request.cause_name']).toBe('other')
+    expect(odd['request.cause_message']).toHaveLength(256)
+    expect(transportCauseContext(undefined)).toEqual({})
+    expect(errorToastReport({ method: 'GET', path: '/api/v1/health', status: 0, at: 0 }, 0).context).not.toHaveProperty('request.cause_name')
   })
 
   it('reports a toast with no failed request as a client-side error toast', () => {

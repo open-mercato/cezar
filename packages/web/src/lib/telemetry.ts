@@ -184,6 +184,13 @@ const reported = new WeakSet<object>()
 /** Last report per throttle slot: toasts get their own, so a repeated toast never hides a crash. */
 const lastErrorAt = { error: 0, toast: 0 }
 
+/** An uncaught `ApiError(0)` — the server never answered — carries its transport cause too. */
+function unreachableContext(err: Error): Context {
+  return err.name === 'ApiError' && (err as Error & { status?: unknown }).status === 0
+    ? transportCauseContext(err.cause)
+    : {}
+}
+
 function reportClientError(
   error: unknown,
   handler: string,
@@ -212,7 +219,7 @@ function reportClientError(
     handler,
     code: opts.code,
     fingerprint: opts.fingerprint,
-    context: wideContext(opts.context),
+    context: wideContext({ ...unreachableContext(err), ...opts.context }),
   }
   send('/api/v1/telemetry/error', body)
 }
@@ -262,7 +269,20 @@ export function errorToastReport(
       'request.status': failure.status,
       'request.age_ms': now - failure.at,
       ...(failure.provider ? { 'request.provider': failure.provider } : {}),
+      ...transportCauseContext(failure.cause),
     },
+  }
+}
+
+/** Which transport failure a status-0 request hit — `TypeError: Load failed` (WebKit, a closed
+ *  keep-alive socket), `Failed to fetch` (Chromium), an offline or reset connection (#1437). Fixed
+ *  browser strings, still scrubbed and bounded: an engine may quote the URL it could not load. */
+export function transportCauseContext(cause: unknown): Context {
+  if (typeof cause !== 'object' || cause === null) return {}
+  const { name, message } = cause as { name?: unknown; message?: unknown }
+  return {
+    'request.cause_name': typeof name === 'string' && /^[A-Za-z]\w{0,63}$/.test(name) ? name : 'other',
+    'request.cause_message': typeof message === 'string' ? scrubToastMessage(message).slice(0, 256) : '',
   }
 }
 

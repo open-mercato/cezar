@@ -407,7 +407,7 @@ async function fetchOrThrow(url: string, init?: RequestInit): Promise<Response> 
     return res
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
-    noteFailedRequest(url, init?.method, 0, init?.body)
+    noteFailedRequest(url, init?.method, 0, init?.body, cause)
     throw new ApiError(0, `cannot reach the cezar server (${url})`, { cause })
   }
 }
