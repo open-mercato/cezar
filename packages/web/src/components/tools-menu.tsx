@@ -1,7 +1,7 @@
 import { ChevronDownIcon, SettingsIcon } from 'lucide-react'
 import { Link } from '@/lib/project-router'
 
-import type { BackendCheck, HealthResponse, Runner } from '@open-mercato/cezar-api-client'
+import type { BackendCheck, ForgeInfo, HealthResponse, Runner } from '@open-mercato/cezar-api-client'
 import { StatusDot } from '@/components/status-dot'
 import {
   DropdownMenu,
@@ -67,18 +67,23 @@ export function toolsTooltip(health: HealthResponse): string {
 /**
  * Why the GitHub tab is absent (R6 Step 1.1) — the env-chips popover is where the spec's
  * degradation table says the hint lives. Null while the forge works: a working forge needs
- * no explaining. Exported for the tests — the two sentences are a small contract.
+ * no explaining. Takes the ACTIVE project's forge (`activeForgeOf`), never `health.forge`
+ * directly: health describes the boot folder only (#1410). `undefined` = not known yet, no note.
+ * Exported for the tests — the two sentences are a small contract.
  */
-export function forgeNote(health: HealthResponse): string | null {
-  if (health.forge?.available) return null
-  if (!health.forge) {
+export function forgeNote(forge: ForgeInfo | null | undefined): string | null {
+  if (forge === undefined || forge?.available) return null
+  if (!forge) {
     return 'No GitHub remote detected — the GitHub tab is hidden. Every plain-git feature still works.'
   }
-  return `GitHub is unreachable — ${health.forge.reason ?? 'unknown reason'}. The GitHub tab is hidden until it comes back.`
+  // A cold probe (no `available` yet) is not a failure — say nothing until it has answered.
+  if (forge.available === undefined) return null
+  return `GitHub is unreachable — ${forge.reason ?? 'unknown reason'}. The GitHub tab can retry.`
 }
 
-export function ToolsMenu({ health }: { health: HealthResponse | undefined }) {
+export function ToolsMenu({ health, forge }: { health: HealthResponse | undefined; forge: ForgeInfo | null | undefined }) {
   if (!health) return null
+  const note = forgeNote(forge)
 
   // Green when cez can actually work: at least one agent CLI is present and the default runner
   // is among them. `pending` (amber), not `danger`, otherwise — per-row dots are where red lives.
@@ -112,11 +117,11 @@ export function ToolsMenu({ health }: { health: HealthResponse | undefined }) {
         {health.checks.map((check) =>
           check.available ? <AvailableToolRow key={check.name} check={check} /> : <UnavailableToolRow key={check.name} check={check} />
         )}
-        {forgeNote(health) ? (
+        {note ? (
           <>
             <DropdownMenuSeparator />
             <p data-slot="forge-note" className="px-2 py-1.5 text-[11px] leading-snug text-muted-foreground">
-              {forgeNote(health)}
+              {note}
             </p>
           </>
         ) : null}

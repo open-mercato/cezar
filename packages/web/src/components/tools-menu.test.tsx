@@ -84,7 +84,7 @@ const PI_DEFAULT_DOWN: HealthResponse = {
 function renderMenu(health: HealthResponse | undefined) {
   return render(
     <MemoryRouter initialEntries={['/']}>
-      <ToolsMenu health={health} />
+      <ToolsMenu health={health} forge={health?.forge} />
       <LocationProbe />
     </MemoryRouter>
   )
@@ -245,21 +245,27 @@ describe('ToolsMenu', () => {
  *  lives (R6 Step 1.1) — the note must explain the hidden tab, in the server's own words. */
 describe('forgeNote', () => {
   it('is null while the forge works — nothing to explain', () => {
-    expect(forgeNote({ ...HEALTH, forge: { kind: 'github', available: true } })).toBeNull()
+    expect(forgeNote({ kind: 'github', available: true })).toBeNull()
   })
 
   it('a null forge explains the hidden tab as a missing GitHub remote', () => {
-    expect(forgeNote(HEALTH)).toContain('No GitHub remote detected')
-    expect(forgeNote(HEALTH)).toContain('GitHub tab is hidden')
+    expect(forgeNote(null)).toContain('No GitHub remote detected')
+    expect(forgeNote(null)).toContain('GitHub tab is hidden')
+  })
+
+  it('says nothing while the active project\'s forge is still unknown', () => {
+    expect(forgeNote(undefined)).toBeNull()
   })
 
   it('an unavailable driver carries the server reason verbatim', () => {
-    const note = forgeNote({
-      ...HEALTH,
-      forge: { kind: 'github', available: false, reason: 'gh not logged in' },
-    })
+    const note = forgeNote({ kind: 'github', available: false, reason: 'gh not logged in' })
     expect(note).toContain('gh not logged in')
-    expect(note).toContain('GitHub tab is hidden')
+    // The tab stays for a recognized remote (#1412), so the note must not claim it is hidden.
+    expect(note).not.toContain('hidden')
+  })
+
+  it('says nothing while a recognized forge has not been probed yet', () => {
+    expect(forgeNote({ kind: 'github' })).toBeNull()
   })
 
   it('renders in the open menu when the forge is absent, and not when it works', async () => {
@@ -279,7 +285,7 @@ describe('ToolsMenu in the app shell', () => {
     return render(
       <ThemeProvider>
         <MemoryRouter initialEntries={['/']}>
-          <AppShell toolsMenu={<ToolsMenu health={HEALTH} />}>
+          <AppShell toolsMenu={<ToolsMenu health={HEALTH} forge={HEALTH.forge} />}>
             <p>route content</p>
           </AppShell>
         </MemoryRouter>

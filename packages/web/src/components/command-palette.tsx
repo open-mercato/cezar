@@ -3,6 +3,7 @@ import * as React from 'react'
 import { useNavigate as useRouterNavigate } from 'react-router'
 import { useHealth, useProjects, useRunsForProject, useRunsIndex, useSkills, useUiState } from '@/api/queries'
 import { scopeTo, useActiveProjectId, useNavigate } from '@/lib/project-router'
+import { useActiveForge } from '@/lib/active-forge'
 import type { ProjectListEntry, RunIndexEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { visibleNavItems } from '@/components/nav-items'
 import { StatusDot } from '@/components/status-dot'
@@ -313,8 +314,10 @@ function PaletteContent({ close }: { close: () => void }) {
   // shell already holds this cache entry; opening the palette costs no extra request.
   const projects = useProjects()
   // Health is cached by the shell's chips; here it gates the forge-gated Views row (R6 1.1) —
-  // the palette must not offer a GitHub view the sidebar honestly hides.
+  // the same recognized-remote rule as the sidebar (#1412), so the two never disagree.
   const health = useHealth()
+  // The active project's forge, not the boot folder's (#1410).
+  const activeForge = useActiveForge()
   const registry = projects.data
   const bootProjectId = registry?.bootProject ?? health.data?.bootProject ?? null
   // Runs are already cached by the sidebar/shell. The palette also sits above the project route
@@ -453,7 +456,7 @@ function PaletteContent({ close }: { close: () => void }) {
             </CommandItem>
           ) : null}
           {visibleNavItems({
-            forge: health.data?.forge?.available === true,
+            forge: activeForge != null,
             inbox: health.data?.capabilities.followups === true,
             automations: health.data?.capabilities.automations === true,
             tracker: registry?.projects.find((project) => project.id === (activeProjectId ?? registry.bootProject))?.tracker,
