@@ -14,7 +14,7 @@ import {
   type AskRequest,
 } from '../core/ask.ts';
 import { AUTO_END_DELAY_MS, type AgentSession } from '../core/claude-cli-runner.ts';
-import { interruptAfterGrace, MISSING_SESSION_NOTE, ResumeFallback } from './resume-fallback.ts';
+import { interruptAfterGrace, MISSING_SESSION_NOTE, ResumeFallback, trackFallbackOutcome } from './resume-fallback.ts';
 import {
   loadPrivateMcp,
   PRIVATE_MCP_FILE,
@@ -4339,7 +4339,10 @@ export class RunManager {
         );
         session = launch(freshId, false, context);
         for (const content of replay) session.sendMessage(content);
-        await session.result;
+        await trackFallbackOutcome(session.result, {
+          cancelled: () => state.cancelled || this.active.get(runId) !== state,
+          sessionError: () => sessionError,
+        });
         if (sessionError) throw new Error(sessionError);
       }
       sink.sessionEnded(state.cancelled ? 'cancelled' : 'end_turn');
@@ -6349,7 +6352,10 @@ export class RunManager {
         const context = freshContinuationContext(record, this.store.readEvents(runId));
         session = attach(launch(freshId, false, `${context}\n\n---\n\n## New user instruction\n${userPrompt}`), false);
         for (const content of replay) session.sendMessage(content);
-        result = await session.result;
+        result = await trackFallbackOutcome(session.result, {
+          cancelled: () => state.cancelled || this.active.get(runId) !== state,
+          sessionError: () => sessionError,
+        });
         if (sessionError) throw new Error(sessionError);
       }
       // v2 counterpart of v1's `done` (spec: the mappers leave session-close
