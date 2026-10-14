@@ -1,4 +1,4 @@
-import { lstat, mkdir, symlink, writeFile } from 'node:fs/promises';
+import { copyFile, cp, lstat, mkdir, symlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import type { Skill } from './skills.ts';
 import { excludeFromGit, materializeSkillDir } from './skills-remote.ts';
@@ -74,10 +74,13 @@ async function provisionOne(cwd: string, skillsDir: string, skill: Skill): Promi
   await mkdir(dirname(dest), { recursive: true });
   if (onDisk && basename(skill.path) === 'SKILL.md') {
     // Link, not copy: the agent reads the current installed copy, references/ included.
-    await symlink(dirname(skill.path), dest, 'dir');
+    // A junction needs no privilege on Windows; a copy covers a filesystem with no links at all.
+    await symlink(dirname(skill.path), dest, process.platform === 'win32' ? 'junction' : 'dir').catch(() =>
+      cp(dirname(skill.path), dest, { recursive: true, dereference: true }),
+    );
   } else if (onDisk) {
     await mkdir(dest);
-    await symlink(skill.path, join(dest, 'SKILL.md'));
+    await symlink(skill.path, join(dest, 'SKILL.md')).catch(() => copyFile(skill.path, join(dest, 'SKILL.md')));
   } else {
     await mkdir(dest);
     await writeFile(join(dest, 'SKILL.md'), skillMarkdown(skill), 'utf8');
