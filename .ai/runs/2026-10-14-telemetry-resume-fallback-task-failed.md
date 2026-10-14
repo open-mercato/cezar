@@ -19,13 +19,13 @@ Store gains a telemetry import; `track` is fire-and-forget and consent-gated.
 
 ### Phase 1: task_failed
 
-- [ ] 1.1 Failure-kind classifier with unit tests
-- [ ] 1.2 Fire task_failed from RunStore.updateRun on the transition into failed
+- [x] 1.1 Failure-kind classifier with unit tests — 3fc758e3
+- [x] 1.2 Fire task_failed from RunStore.updateRun on the transition into failed — 4e879f98
 
 ### Phase 2: session_resume_fallback
 
-- [ ] 2.1 Track the fallback outcome at both takeFallback sites
+- [x] 2.1 Track the fallback outcome at both takeFallback sites — 4678fdd4
 
 ### Phase 3: Registry and docs
 
-- [ ] 3.1 TELEMETRY_EVENTS, docs/telemetry.md, add_event registration
+- [x] 3.1 TELEMETRY_EVENTS, docs/telemetry.md, add_event registration — d1a3be2d
