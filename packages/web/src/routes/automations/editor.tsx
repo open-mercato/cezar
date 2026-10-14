@@ -254,7 +254,7 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
                   dashed
                   className="h-6 text-[11.5px]"
                   icon={<Settings2Icon aria-hidden="true" className="size-3" />}
-                  onClick={() => navigate(settingsSectionPath('project', 'prompt-templates'))}
+                  onClick={() => navigate(`${settingsSectionPath('project', 'instructions')}#prompt-templates`)}
                 >
                   Manage…
                 </Chip>

@@ -367,6 +367,34 @@ describe('ProjectGroups', () => {
     await waitFor(() => expect(posts).toEqual(['/api/v1/p/cezar/runs/other-project-task/pin']))
   })
 
+  it("archives through the row's OWN project, not the one the URL names", async () => {
+    // The pin's twin: `queryScope()` would archive in whichever project the page is standing in.
+    const posts: { path: string; body: unknown }[] = []
+    fetchMock.mockImplementation(async (input, init: RequestInit = {}) => {
+      const path = String(input)
+      if (init.method === 'POST') {
+        posts.push({ path, body: JSON.parse(String(init.body)) })
+        return json({})
+      }
+      if (path === '/api/v1/p/cezar/runs') return json([run({ id: 'other-project-task', status: 'done' })])
+      if (path === '/api/v1/p/shop/runs') return json([])
+      return json({ error: 'not found' }, 404)
+    })
+    storeCollapsed({ cezar: false })
+    renderGroups(
+      [project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })],
+      '/p/shop/',
+    )
+
+    await waitFor(() => expect(taskLinks('cezar')).toHaveLength(1))
+    fireEvent.click(within(group('cezar')).getByRole('button', { name: 'Archive task' }))
+    await waitFor(() =>
+      expect(posts).toEqual([
+        { path: '/api/v1/p/cezar/runs/other-project-task/archive', body: { archived: true } },
+      ]),
+    )
+  })
+
   it('renders a missing project greyed and inert, with no nav behind it', async () => {
     serve({ '/api/v1/p/cezar/runs': [] })
     renderGroups([project(), project({ id: 'gone', name: 'old-spike', status: 'missing', lastOpenedAt: '2026-07-01T00:00:00.000Z' })])

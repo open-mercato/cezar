@@ -25,6 +25,7 @@ export * from './dashboard-insights.ts';
 export * from './host.ts';
 export * from './tracker.ts';
 export * from './self-update.ts';
+export * from './telemetry.ts';
 export * from './star-count.ts';
 export * from './shadow.ts';
 export * from './secrets.ts';

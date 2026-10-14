@@ -8,6 +8,7 @@ import { CommandPalette } from '@/components/command-palette'
 import { ListViewProvider } from '@/components/list-view'
 import { HostUsageWidget } from '@/components/host-usage-widget'
 import { ProviderBannerContainer } from '@/components/provider-banner-container'
+import { TelemetryConsentBanner } from '@/components/telemetry-consent'
 import { ProjectGroups } from '@/components/project-groups'
 import { TaskQuickListContainer } from '@/components/task-quick-list'
 import { ToolsMenu } from '@/components/tools-menu'
@@ -126,6 +127,8 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
     [health.data?.repo?.root, health.data?.repo?.branch],
   )
   const banner = useMemo(() => <ProviderBannerContainer />, [])
+  // The opt-in ask (docs/telemetry.md): renders nothing once this machine has answered.
+  const footerBanner = useMemo(() => <TelemetryConsentBanner />, [])
   const taskQuickList = useMemo(() => <TaskQuickListContainer />, [])
   // The sidebar glance. Created here, not inside `AppShell`, because the shell stays presentational
   // and QueryClient-free: the widget's own wrapper evaluates the viewport and transport gates and
@@ -190,6 +193,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         automationsAvailable={automationsAvailable}
         tracker={tracker}
         banner={banner}
+        footerBanner={footerBanner}
         singleProject={health.data?.capabilities.singleProject === true}
         taskQuickList={taskQuickList}
         hostWidget={hostWidget}

@@ -9,11 +9,13 @@ import {
   IdCardIcon,
   PackageCheckIcon,
   KeyboardIcon,
-  NotebookPenIcon,
+  ListChecksIcon,
+  MessageSquareTextIcon,
   PaletteIcon,
   KeyRoundIcon,
   BlocksIcon,
   TicketIcon,
+  ShieldCheckIcon,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 
@@ -23,12 +25,14 @@ import { AccountsSection } from './accounts-section'
 import { AgentConfigSection } from './agent-config-section'
 import { AgentsSection } from './agents-section'
 import { AppearanceSection } from './appearance'
+import { InstructionsSection } from './instructions-section'
 import { BookmarkletsSection } from './bookmarklets-section'
 import { NotificationsSection } from './notifications-section'
+import { PrivacySection } from './privacy-section'
 import { ProjectsSection } from './projects-section'
-import { PromptTemplatesSection } from './prompt-templates-section'
 import { ResourcesSection } from './resources-section'
 import { SkillsSection } from './skills-section'
+import { TasksSection } from './tasks-section'
 import { WorktreesSection } from './worktrees-section'
 import { TrackerSection } from './tracker-section'
 import { ProjectSecretsSection, WorkspaceSecretsSection } from './secrets-section'
@@ -42,8 +46,8 @@ import { IntegrationsSection } from './integrations-section'
  * Since the multi-project split (step 3.5, spec §"Settings split") every entry also declares
  * its `scope`, and that single field decides everything downstream — which URL the section
  * lives at (`/p/<id>/settings/<id>` vs `/settings/global/<id>`), which nav lists it, and which
- * store it writes. The rule of thumb: does the setting describe THIS REPO (agents, worktrees,
- * bookmarklets, prompt templates) or the person/machine (appearance, notifications, host
+ * store it writes. The rule of thumb: does the setting describe THIS REPO (agents, instructions,
+ * tasks, worktrees, bookmarklets) or the person/machine (appearance, notifications, host
  * resources, the project registry)?
  *
  * `hidden` sections are declared but not routed and not listed: keyboard remains a later
@@ -56,17 +60,19 @@ export type SettingsSectionId =
   | 'accounts'
   | 'agents'
   | 'agent-config'
+  | 'instructions'
+  | 'tasks'
   | 'resources'
   | 'worktrees'
   | 'projects'
   | 'notifications'
-  | 'prompt-templates'
   | 'keyboard'
   | 'skills'
   | 'tracker'
   | 'secrets'
   | 'integrations'
   | 'workspace-secrets'
+  | 'privacy'
 
 /** Which settings area a section belongs to — and therefore which store it writes. */
 export type SettingsScope = 'project' | 'global'
@@ -128,9 +134,25 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     id: 'agents',
     title: 'Agents',
-    description: 'Default runner, models and system prompt.',
+    description: 'Providers, default runner and models.',
     icon: BotIcon,
     component: AgentsSection,
+    scope: 'project',
+  },
+  {
+    id: 'instructions',
+    title: 'Instructions',
+    description: 'What you write for the models: system prompt, branch naming, prompt templates.',
+    icon: MessageSquareTextIcon,
+    component: InstructionsSection,
+    scope: 'project',
+  },
+  {
+    id: 'tasks',
+    title: 'Tasks',
+    description: 'Base branch, review before finishing, live titles.',
+    icon: ListChecksIcon,
+    component: TasksSection,
     scope: 'project',
   },
   {
@@ -155,14 +177,6 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Launch skills from a GitHub PR or issue.',
     icon: BookmarkIcon,
     component: BookmarkletsSection,
-    scope: 'project',
-  },
-  {
-    id: 'prompt-templates',
-    title: 'Prompt templates',
-    description: 'Reusable snippets for follow-up instructions.',
-    icon: NotebookPenIcon,
-    component: PromptTemplatesSection,
     scope: 'project',
   },
   // ---- global scope (`/settings/global/…`) — the user and the machine, in mockup order -----
@@ -220,6 +234,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'The workspace registry and where GitHub checkouts land.',
     icon: FoldersIcon,
     component: ProjectsSection,
+    scope: 'global',
+  },
+  {
+    id: 'privacy',
+    title: 'Privacy',
+    description: 'Whether cezar shares usage data with its maintainers. Off unless you turn it on.',
+    icon: ShieldCheckIcon,
+    component: PrivacySection,
     scope: 'global',
   },
   {

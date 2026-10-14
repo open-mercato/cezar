@@ -84,6 +84,12 @@ const configSchema = z.object({
    */
   systemPrompt: z.string().trim().min(1).max(20_000).optional().catch(undefined),
   /**
+   * Free-text branch naming instructions (spec 2026-10-11-branch-naming-instructions): the
+   * creation-time namer derives the task branch from the first prompt under these rules.
+   * Absent = `cez/<id8>`. `.catch(undefined)` keeps it additive-safe like `systemPrompt`.
+   */
+  branchNaming: z.string().trim().min(1).max(4_000).optional().catch(undefined),
+  /**
    * Per-runner default model preset (Settings → Agents, redesign R6 1.5): the
    * model id the composer preselects for that runner. Missing = auto (the
    * runner decides). A capability (`model`), never a vendor config format.

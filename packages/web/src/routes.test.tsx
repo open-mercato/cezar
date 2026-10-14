@@ -227,10 +227,11 @@ const ROUTE_CASES: Array<[url: string, route: string, title: string]> = [
   // the unscoped `/settings/global/*` area, covered in its own describe below.
   ['/settings', 'settings', 'Settings'],
   ['/settings/agents', 'settings-agents', 'Agents'],
+  ['/settings/instructions', 'settings-instructions', 'Instructions'],
+  ['/settings/tasks', 'settings-tasks', 'Tasks'],
   ['/settings/agent-config', 'settings-agent-config', 'Agent config'],
   ['/settings/worktrees', 'settings-worktrees', 'Worktrees'],
   ['/settings/bookmarklets', 'settings-bookmarklets', 'Bookmarklets'],
-  ['/settings/prompt-templates', 'settings-prompt-templates', 'Prompt templates'],
 ]
 
 describe('scoped route map (/p/:projectId)', () => {
@@ -385,6 +386,21 @@ describe('the global settings area (/settings/global)', () => {
     })
     expect(routeName()).not.toBe('settings-global-projects')
     expect(screen.queryByRole('heading', { level: 1, name: 'Projects' })).toBeNull()
+  })
+
+  // Prompt templates folded into Instructions (spec 2026-10-11-branch-naming-instructions):
+  // BACKWARD_COMPATIBILITY.md calls dropping a moved section's redirect a break.
+  it(`/p/${BOOT}/settings/prompt-templates lands on the Instructions anchor`, () => {
+    renderAt(`/p/${BOOT}/settings/prompt-templates`)
+    expect(currentPathname()).toBe(`/p/${BOOT}/settings/instructions`)
+    expect(currentHash()).toBe('#prompt-templates')
+    expect(routeName()).toBe('settings-instructions')
+  })
+
+  it('the legacy flat /settings/prompt-templates lands there too', () => {
+    renderAt('/settings/prompt-templates')
+    expect(currentPathname()).toBe(`/p/${BOOT}/settings/instructions`)
+    expect(currentHash()).toBe('#prompt-templates')
   })
 
   // A moved section's old URL, in both spellings a bookmark can have it.

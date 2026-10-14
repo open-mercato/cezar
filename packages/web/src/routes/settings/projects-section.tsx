@@ -132,7 +132,7 @@ function ProjectsPane({
         configKey="projectsDir"
         value={config.projectsDir}
         title="Default checkout folder"
-        hint="Where “Clone from GitHub” puts new projects: <folder>/<project name>."
+        hint="Where “Clone from GitHub” and “New project” put new projects: <folder>/<project name>."
         placeholder="~/cezar/projects"
         slot="checkout"
         savedLabel="Checkout folder"

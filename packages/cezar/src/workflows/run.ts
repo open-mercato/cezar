@@ -68,6 +68,7 @@ import {
   pushBranch,
   resolveBaseRef,
   syncWithBase,
+  uniqueBranchName,
   worktreeChangedFiles,
   worktreeChangedPaths,
   worktreeDiff,
@@ -121,7 +122,7 @@ import {
 } from '../runs/agent-tmpdir.ts';
 import { extractTaskRefs, refineTaskRefs, titleRefNumber } from '../runs/task-refs.ts';
 import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.ts';
-import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, postValidateTitle } from '../runs/auto-name.ts';
+import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, NAMER_TIMEOUT_MS, postValidateTitle } from '../runs/auto-name.ts';
 import { reviewGateEnabled } from '../runs/review-gate.ts';
 import {
   SHADOW_CHECK_WRAPPER,
@@ -138,6 +139,7 @@ import { SecretStore } from '../workspace/secrets.ts';
 import { PROJECT_ID_RE } from '../workspace/config.ts';
 import { prunePrHeadRefs } from '../automations/pr-head.ts';
 import { MIN_SECRET_LEN } from '../core/secret-redaction.ts';
+import { track } from '../telemetry.ts';
 import { UiEventSink } from '../runs/ui-event-sink.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import {
@@ -245,6 +247,11 @@ async function configuredModelProvider(
 }
 /** Maximum time a live provider gets to honor cancellation before its slot is reaped. */
 const CANCEL_GRACE_MS = 1_000;
+/** How long a fork waits for the namer's branch (spec 2026-10-11-branch-naming-instructions).
+ *  On an idle cockpit a task starts the instant it is created, so the wait begins together with
+ *  the namer call — and a cold `claude -p` alone takes more than five seconds (run 269606ac
+ *  forked on `cez/` with "not ready in time"). Sized to the namer's own timeout plus a margin. */
+const BRANCH_NAME_WAIT_MS = NAMER_TIMEOUT_MS + 10_000;
 /**
  * Task-completion marker from the agent contract (HANDOFF_INSTRUCTIONS): a
  * turn whose text ends with `CEZ:DONE` means "goal achieved, nothing to ask" —
@@ -308,6 +315,10 @@ export function turnEndMarkerText(turnText: string): string {
  */
 export function endsWithMonitoringMarker(turnText: string): boolean {
   return MONITORING_MARKER_RE.test(turnEndMarkerText(turnText));
+}
+/** Strict superset of the historical DONE suffix check, accepting trailing task references. */
+export function endsWithDoneMarker(turnText: string): boolean {
+  return DONE_MARKER_RE.test(turnEndMarkerText(turnText));
 }
 /**
  * The follow-up cezar sends when a turn ended on nothing but the backend compacting its own
@@ -415,7 +426,7 @@ type AskTurnOutcome = {
  * is interactive); when false there is no marker to look for. */
 function resolveAskTurn(turnText: string, enabled: boolean): AskTurnOutcome {
   if (!enabled) return { ask: null, notes: [] };
-  const result = parseAskMarkerResult(turnText);
+  const result = parseAskMarkerResult(turnEndMarkerText(turnText));
   const notes: AskTurnOutcome['notes'] = [];
   const rejection = askMarkerRejection(result);
   if (rejection) notes.push({ message: rejection, tone: 'danger' });
@@ -437,7 +448,6 @@ function resolveAskTurn(turnText: string, enabled: boolean): AskTurnOutcome {
  * question the user needs to see, not an invitation to keep going.
  */
 function markerlessTurn(turnText: string): boolean {
-  const trimmed = turnText.trimEnd();
   // Through `turnEndMarkerText` (#933), the same reading the monitoring decision uses: a turn
   // that ends `CEZ:MONITORING` followed by a `CEZ:PR=` line spoke, and must not be continued.
   const markerText = turnEndMarkerText(turnText);
@@ -447,7 +457,7 @@ function markerlessTurn(turnText: string): boolean {
   // see — would read as ordinary prose and authorize a continuation. The parser's looser
   // `none` test is the right question here, and its known over-reach (an earlier PROSE mention
   // of the keyword also counts as spoken) errs towards parking, which is today's behavior.
-  return parseAskMarkerResult(trimmed).kind === 'none';
+  return parseAskMarkerResult(markerText).kind === 'none';
 }
 /** Periodic "cezar autosave" commit in the task worktree (spec 006). */
 export const AUTOSAVE_INTERVAL_MS = 90_000;
@@ -722,6 +732,8 @@ function formatWakeInstant(at: Date): string {
 
 export interface StartRunInput {
   task: string;
+  /** The cockpit device that started this task (telemetry only, `x-cezar-sid`). */
+  deviceSid?: string;
   model?: string;
   /** Agent backend chosen for this task (GUI). Unset = the config default. */
   runner?: RunnerId;
@@ -1072,6 +1084,15 @@ interface PersistedAttachments {
   attachments: PersistedAttachment[];
 }
 
+/** A user-authored live message is made durable before it may wait for the
+ *  repository lease. Reusing this preparation when the lease arrives prevents
+ *  duplicate transcript events and duplicate attachment files. */
+interface PreparedUserMessage {
+  text: string;
+  persisted: PersistedAttachment[];
+  imageLibraryWrites: Array<() => void>;
+}
+
 /**
  * The mini workflow engine: executes a `WorkflowDef` against a repo, one step
  * at a time, persisting every event to the RunStore (which the SSE endpoints
@@ -1122,6 +1143,10 @@ export class RunManager {
    */
   private readonly unitParents = new Set<string>();
   private readonly pendingJobs = new Map<string, { workflow: WorkflowDef; input: StartRunInput }>();
+  /** The creation-time namer's branch answer per queued run (spec
+   *  2026-10-11-branch-naming-instructions) — `execute` awaits it, bounded, before the fork. */
+  private readonly pendingBranchNames = new Map<string, Promise<string | undefined>>();
+  private readonly branchNameWaitMs: number;
   /** Interrupted agent turns recovered after a process restart. Unlike an
    *  explicit user Continue, these are bulk scheduler work and must re-enter
    *  through `pump()` so both workspace and per-project caps are honored. */
@@ -1212,9 +1237,13 @@ export class RunManager {
       /** The project/workspace secret store (spec 2026-10-10-project-secrets-vault-options);
        *  check steps read it with the `checks` audience. */
       secrets?: SecretStore;
+      /** How long a fork waits for the namer's branch (spec 2026-10-11-branch-naming-instructions).
+       *  Tests shorten it; the default is the slow-model budget. */
+      branchNameWaitMs?: number;
     } = {},
   ) {
     this.dataDir = join(repoRoot, '.ai/cezar');
+    this.branchNameWaitMs = options.branchNameWaitMs ?? BRANCH_NAME_WAIT_MS;
     this.projectId = options.projectId;
     this.resolveTrackerEnv = options.resolveTrackerEnv;
     this.secrets = options.secrets ?? new SecretStore();
@@ -1264,6 +1293,7 @@ export class RunManager {
     this.starting.clear();
     this.queue.length = 0;
     this.pendingJobs.clear();
+    this.pendingBranchNames.clear();
     this.pendingContinuations.clear();
     this.memoryPausing.clear();
     this.lastNamerKey.clear();
@@ -1539,8 +1569,16 @@ export class RunManager {
     }
     // Fire-and-forget LLM naming (task auto-naming spec): the heuristic title
     // above shows instantly; the namer's short title replaces it when (and if)
-    // the model answers. Never awaited, never fails the run.
-    void this.autoNameRun(run.id, skillHint, input.task);
+    // the model answers. Never awaited here, never fails the run. The same call
+    // also answers the task branch when instructions are set; `execute` waits
+    // for that part, bounded, before it forks.
+    this.pendingBranchNames.set(run.id, this.autoNameRun(run.id, skillHint, input.task));
+    // `default` = no explicit pick; the runner/CLI chose. Never the prompt itself.
+    track(
+      'task_start',
+      { label: `${input.runner ?? 'default'}/${effectiveInput.model ?? 'default'}` },
+      { sid: input.deviceSid },
+    );
     this.pendingJobs.set(run.id, { workflow, input: effectiveInput });
     this.queue.push(run.id);
     void this.pump();
@@ -2091,6 +2129,7 @@ export class RunManager {
     this.store.clearRunSecrets(runId);
     this.memoryPausing.delete(runId);
     this.lastNamerKey.delete(runId);
+    this.pendingBranchNames.delete(runId);
     this.forceStarted.delete(runId);
     // The run's slot is gone from busySlots() as of the deletes above — hand it
     // to the workspace's oldest queued run, in ANY project. Every terminal path
@@ -2253,10 +2292,16 @@ export class RunManager {
    * working. Delivered into the still-open session so the run is working again, not parking —
    * a task that never parks still hears its parent within one turn. Not on a turn that asked: a
    * run parking on the Guard waits for the human, and a message must not stand in for the answer.
+   *
+   * The ask is read through `turnEndMarkerText` (#997), the same normalization `resolveAskTurn`
+   * uses: this guard runs BEFORE the ask is resolved, and a delivery sets `rePrompted` — which
+   * auto-continues the turn and suppresses the ask card entirely. Reading the raw text here
+   * would let a question with a trailing `CEZ:PR=` line be answered by a sibling's message
+   * instead of by the human, which is exactly what this guard exists to prevent.
    */
   private deliverOwnInbox(runId: string, state: ActiveRun, stepId: string, turnText: string): boolean {
     if (!state.autonomous || state.cancelled || !state.session?.open) return false;
-    if (parseAskMarker(turnText) !== null) return false;
+    if (parseAskMarker(turnEndMarkerText(turnText)) !== null) return false;
     if ((state.autoContinues ?? 0) >= MAX_AUTO_CONTINUES) return false;
     const digest = this.flushInbox(runId);
     if (!digest || !state.session.sendMessage([{ type: 'text', text: digest }])) return false;
@@ -3163,6 +3208,7 @@ export class RunManager {
     if (queuedAt >= 0) {
       this.queue.splice(queuedAt, 1);
       this.pendingJobs.delete(runId);
+      this.pendingBranchNames.delete(runId);
       this.pendingContinuations.delete(runId);
       this.store.updateRun(runId, { status: 'cancelled', finishedAt: new Date().toISOString() });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'cancelled while queued' });
@@ -3546,7 +3592,12 @@ export class RunManager {
 
   /** Shared live-session delivery. Synthetic scheduler prompts reuse lifecycle
    * bookkeeping without masquerading as user-authored transcript messages. */
-  private deliverMessage(runId: string, content: PastedContent[], userAuthored: boolean): boolean {
+  private deliverMessage(
+    runId: string,
+    content: PastedContent[],
+    userAuthored: boolean,
+    preparedUserMessage?: PreparedUserMessage,
+  ): boolean {
     const state = this.active.get(runId);
     // A graph gate/question parked with no session (1c) takes the user's reply as its answer.
     // Only a USER-authored message answers it: a child report or a wake nudge must not approve a gate.
@@ -3563,6 +3614,28 @@ export class RunManager {
       return true;
     }
     if (!state?.session?.open || state.cancelled) return false;
+    // Acceptance and execution are separate when an in-place task has yielded the repository
+    // lease. Persist the user's message at acceptance time so the thread acknowledges it at once,
+    // even if another task holds the tree for minutes. The prepared payload travels through the
+    // asynchronous lease wait and is reused for delivery, so attachments and the transcript row
+    // are still written exactly once.
+    let prepared = preparedUserMessage;
+    if (userAuthored && !prepared) {
+      const text = content
+        .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
+        .map((b) => b.text)
+        .join('\n');
+      const imageLibraryWrites: Array<() => void> = [];
+      const persisted = this.persistPastedAttachments(runId, content, imageLibraryWrites);
+      prepared = { text, persisted, imageLibraryWrites };
+      this.store.appendEvent(runId, {
+        type: 'user-message',
+        stepId: state.currentStepId,
+        text,
+        imageCount: content.filter((b) => b.type === 'image').length,
+        images: persisted.map((saved) => saved.url),
+      });
+    }
     // A parked in-place run gave the working-tree lease back (`parkRepoRoot`). It must own the
     // tree again before its session resumes, and the lease is asynchronous — so the message is
     // ACCEPTED here (the caller's delivery ladder stops, as it would for a sent message) and
@@ -3575,34 +3648,20 @@ export class RunManager {
         // be stale. Delivered as its own engine message, ahead of the one the run woke for, so a
         // user-authored wake-up stays verbatim in the transcript.
         this.deliverMessage(runId, [{ type: 'text', text: REPO_ROOT_RESUMED_NOTE }], false);
-        if (this.deliverMessage(runId, content, userAuthored)) return;
+        if (this.deliverMessage(runId, content, userAuthored, prepared)) return;
         // The session closed while we waited: keep the message the way the ladder would.
         if (!this.enqueueMessage(runId, content)) this.deferMessage(runId, content);
       });
       return true;
     }
 
-    const text = content
-      .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
-      .map((b) => b.text)
-      .join('\n');
     // Persist the attachments so the thread can render them (not just count them) — the same
     // on-disk store + `/images/` route the agent's own screenshots use. `pasted` prefix marks
     // these as user attachments (vs. agent tool screenshots) on disk (#357).
     // The session can still refuse despite reporting open. Commit image library copies
     // only after it accepts; the run-local paths are needed to build the message first.
-    const imageLibraryWrites: Array<() => void> = [];
-    const persisted = userAuthored ? this.persistPastedAttachments(runId, content, imageLibraryWrites) : [];
-    const images = persisted.map((saved) => saved.url);
-    if (userAuthored) {
-      this.store.appendEvent(runId, {
-        type: 'user-message',
-        stepId: state.currentStepId,
-        text,
-        imageCount: content.filter((b) => b.type === 'image').length,
-        images,
-      });
-    }
+    const imageLibraryWrites = prepared?.imageLibraryWrites ?? [];
+    const persisted = prepared?.persisted ?? [];
 
     // Tell the agent where the pasted files live on disk (#357): image blocks still ride along
     // so the model can *view* them, but a real path is what lets it *operate* on them (save,
@@ -4031,7 +4090,7 @@ export class RunManager {
         // working again, so the anti-spin budget is restored. Before the early returns below,
         // because a turn that finished or dispatched is progress too.
         if (!compacted) state.compactionContinues = 0;
-        const done = sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
+        const done = sessionOpen && endsWithDoneMarker(turnText);
         // The dispatch facts of this turn (spec 2026-09-10-dispatch), through the ONE helper both
         // turn-end handlers call. Inert for a run with no `dispatch`.
         const dispatchTurn = this.handleDispatchTurn(runId, turnText, {
@@ -4196,6 +4255,9 @@ export class RunManager {
       this.store.updateRun(runId, {
         modelIdentity: normalized ? formatModelIdentity(normalized.identity) : undefined,
       });
+      if (normalized) {
+        this.store.updateStep(runId, stepId, { modelIdentity: formatModelIdentity(normalized.identity) });
+      }
     } catch (err) {
       if (!(err instanceof ModelIdentityError)) throw err;
       failBeforeSpawn(err.message);
@@ -4462,6 +4524,8 @@ export class RunManager {
       // as their stable lower bound while reading the current working copy.
       const startingCommit = await getHeadCommit(repo.root);
       if (startingCommit) this.store.updateRun(runId, { baseBranch: startingCommit });
+      // In-place runs never fork, so nothing will ever read the namer's branch answer.
+      this.pendingBranchNames.delete(runId);
       emit({ type: 'note', message: 'worktree off — running in the repo working tree' });
     } else if (repo) {
       emit({
@@ -4480,14 +4544,41 @@ export class RunManager {
       // reused as-is, and re-resolving against a since-changed config would
       // silently re-anchor the `merge-base` every diff/shortstat is measured
       // from, shifting "what did this task change" under an existing task.
-      const recorded = this.store.getRun(runId)?.baseBranch;
+      const recordedRun = this.store.getRun(runId);
+      const recorded = recordedRun?.baseBranch;
       const base =
         recorded ??
         (await chooseForkBase(this.repoRoot, repo.branch, config.baseBranch, (message) =>
           emit({ type: 'note', message }),
         ));
       try {
-        const wt = await createWorktree(this.repoRoot, runId, base);
+        // A recorded branch (restart, rematerialize) always wins — a named branch cannot be
+        // recomputed from the id. A fresh run waits, bounded, for the namer's branch instead.
+        const branch =
+          recordedRun?.branch ??
+          (await this.awaitGeneratedBranch(runId, config.branchNaming, (message) =>
+            emit({ type: 'note', message }),
+          ));
+        // The wait can last the namer's whole timeout; a Cancel during it must not fork.
+        if (state.cancelled) {
+          this.dropActive(runId, state);
+          return;
+        }
+        let wt: Awaited<ReturnType<typeof createWorktree>>;
+        try {
+          wt = await createWorktree(this.repoRoot, runId, base, { branch });
+        } catch (err) {
+          // A generated name git still refuses (ref race, an exotic conflict) must degrade to
+          // `cez/<id8>`, never fail the task. A recorded branch is the run's own: no fallback.
+          const generated = branch !== undefined && recordedRun?.branch === undefined;
+          if (!generated || state.cancelled) throw err;
+          const reason = err instanceof Error ? err.message : String(err);
+          emit({
+            type: 'note',
+            message: `generated branch "${branch}" could not be created (${reason}) — using the default cez/ branch`,
+          });
+          wt = await createWorktree(this.repoRoot, runId, base);
+        }
         state.cwd = wt.path;
         this.store.updateRun(runId, {
           worktreePath: wt.path,
@@ -4521,6 +4612,7 @@ export class RunManager {
         return;
       }
     } else {
+      this.pendingBranchNames.delete(runId);
       emit({ type: 'note', message: 'not a git repository — running in place, one task at a time' });
     }
 
@@ -5884,7 +5976,7 @@ export class RunManager {
         const compacted = event.reason === 'context-compaction';
         const markerless = compacted && markerlessTurn(turnText);
         if (!compacted) state.compactionContinues = 0;
-        const done = interactive && sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
+        const done = interactive && sessionOpen && endsWithDoneMarker(turnText);
         // The dispatch facts, through the same ONE helper `runContinuation` calls (spec
         // 2026-09-10-dispatch A5). Not gated on `interactive`: a report and a dispatch
         // are the agent telling cezar what it did, and a chained workflow's non-final step that
@@ -6099,6 +6191,9 @@ export class RunManager {
       this.store.updateRun(runId, {
         modelIdentity: normalized ? formatModelIdentity(normalized.identity) : undefined,
       });
+      if (normalized) {
+        this.store.updateStep(runId, step.id, { modelIdentity: formatModelIdentity(normalized.identity) });
+      }
     } catch (err) {
       if (err instanceof ModelIdentityError) return err.message;
       throw err;
@@ -6356,15 +6451,19 @@ export class RunManager {
    * refresh). A user-owned title (`titleOrigin: 'user'`) is never overwritten;
    * namer-owned titles may be replaced by fresher namer results.
    */
+  /**
+   * Resolves to the namer's branch (spec 2026-10-11-branch-naming-instructions) on the
+   * creation call — undefined whenever naming is off, unconfigured, or the answer was unusable.
+   */
   private async autoNameRun(
     runId: string,
     skillName: string | undefined,
     task: string,
     live?: { turnText?: string; diffStat?: string },
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     // CEZ_AUTONAME=0 kills all LLM naming; dry-run skips it too unless
     // CEZ_AUTONAME=1 forces the mock path — see autoNamingActive.
-    if (!autoNamingActive()) return;
+    if (!autoNamingActive()) return undefined;
     task = this.store.redactRunText(runId, task);
     if (live?.turnText) live = { ...live, turnText: this.store.redactRunText(runId, live.turnText) };
     try {
@@ -6373,13 +6472,14 @@ export class RunManager {
         const skills = await discoverSkills(this.repoRoot).catch(() => [] as Skill[]);
         skillDescription = skills.find((s) => s.name === skillName)?.description;
       }
-      const result = await generateRunName(this.repoRoot, { task, skillName, skillDescription, ...live });
-      if (!result) return;
+      // Only the creation call names the branch: the live refresh must never move it.
+      const result = await generateRunName(this.repoRoot, { task, skillName, skillDescription, ...live, nameBranch: !live });
+      if (!result) return undefined;
       const run = this.store.getRun(runId);
       // Marker-owned state outranks the namer (spec 2026-07-18-task-ref-markers):
       // a declared title blocks the whole apply (this call raced the marker),
       // and a declared pr/issue kind blocks that kind field-by-field.
-      if (!run || run.titleOrigin === 'user' || run.titleOrigin === 'marker') return;
+      if (!run || run.titleOrigin === 'user' || run.titleOrigin === 'marker') return result.branch;
       this.store.updateRun(runId, {
         titleSummary: result.titleSummary,
         titleOrigin: 'auto',
@@ -6390,9 +6490,47 @@ export class RunManager {
           ? { issueNumber: result.issueNumber }
           : {}),
       });
+      return result.branch;
     } catch {
       // Naming is best-effort — nothing here may disturb the run.
+      return undefined;
     }
+  }
+
+  /**
+   * The branch a fresh fork should use (spec 2026-10-11-branch-naming-instructions): the
+   * namer's answer, made unique against existing branches, awaited for at most
+   * `BRANCH_NAME_WAIT_MS` and only when instructions are set — the zero-config fork stays
+   * instant. Undefined means `cez/<id8>`; a late answer is dropped, never applied as a rename.
+   */
+  private async awaitGeneratedBranch(
+    runId: string,
+    branchNaming: string | undefined,
+    note: (message: string) => void,
+  ): Promise<string | undefined> {
+    const pending = this.pendingBranchNames.get(runId);
+    this.pendingBranchNames.delete(runId);
+    if (!pending || !branchNaming) return undefined;
+    const TIMED_OUT = Symbol('timed out');
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
+      timer = setTimeout(() => resolve(TIMED_OUT), this.branchNameWaitMs);
+    });
+    const wanted = await Promise.race([pending, timeout]).finally(() => clearTimeout(timer));
+    if (wanted === TIMED_OUT) {
+      note('branch name not ready in time — using the default cez/ branch');
+      return undefined;
+    }
+    if (!wanted) {
+      note('the namer answered no branch name — using the default cez/ branch');
+      return undefined;
+    }
+    const unique = await uniqueBranchName(this.repoRoot, wanted, runId);
+    if (!unique) {
+      note(`generated branch name "${wanted}" is not usable — using the default cez/ branch`);
+      return undefined;
+    }
+    return unique;
   }
 
   async recordTurnEnd(runId: string, turnText: string, owner?: ActiveRun): Promise<void> {

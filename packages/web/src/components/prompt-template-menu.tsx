@@ -146,7 +146,7 @@ export function PromptTemplateMenu({
                 className="text-[12px] text-muted-foreground"
                 onSelect={() => {
                   setOpen(false)
-                  void navigate('/settings/prompt-templates')
+                  void navigate('/settings/instructions#prompt-templates')
                 }}
               >
                 Edit templates…

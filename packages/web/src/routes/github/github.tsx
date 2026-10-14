@@ -116,6 +116,39 @@ function useDebouncedValue<T>(value: T, delay: number): T {
   return settled
 }
 
+/** How far below the visible list the next page starts loading, so it usually lands before the
+ *  user reaches the end. */
+const LOAD_AHEAD_PX = 600
+
+/**
+ * Scroll-driven paging: calls `loadMore` whenever the returned sentinel ref comes within
+ * `LOAD_AHEAD_PX` of the list pane's visible bottom. The observer is rebuilt every time `enabled`
+ * flips back on (after each page lands), and a fresh observer reports its initial state — so a
+ * sentinel still in view after a short page keeps loading until it scrolls out or pages run out.
+ */
+function useLoadMoreSentinel(enabled: boolean, loadMore: () => void) {
+  const [sentinel, setSentinel] = useState<HTMLElement | null>(null)
+  const loadMoreRef = useRef(loadMore)
+  useEffect(() => {
+    loadMoreRef.current = loadMore
+  })
+  useEffect(() => {
+    if (!enabled || !sentinel || typeof IntersectionObserver === 'undefined') return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) loadMoreRef.current()
+      },
+      {
+        root: sentinel.closest<HTMLElement>('[data-slot="gh-list"]'),
+        rootMargin: `0px 0px ${LOAD_AHEAD_PX}px 0px`,
+      },
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [enabled, sentinel])
+  return setSentinel
+}
+
 export type GithubView = 'issues' | 'prs'
 
 /**
@@ -329,7 +362,15 @@ export function GithubRoute({
   // List filtering (#gh-filter): free-text search (by #id or any text) + a label narrow.
   const [query, setQuery] = useState('')
   const [labelFilter, setLabelFilter] = useState<readonly string[]>([])
+  const filtering = query.trim() !== '' || labelFilter.length > 0
   const listScrollRef = useRef<HTMLElement | null>(null)
+  // No paging under a filter: a narrowed list would keep the sentinel in view and crawl every page,
+  // and anything past the open list is the forge search's job (#730). A failed page stops the
+  // observer too — otherwise the still-visible sentinel would retry it in a tight loop.
+  const loadMoreRef = useLoadMoreSentinel(
+    list.hasNextPage && !list.isFetchingNextPage && !list.isFetchNextPageError && !filtering,
+    () => void list.fetchNextPage(),
+  )
 
   // Cross-state search fallback (#730). The list tier only ever holds OPEN items, so a closed or
   // merged issue/PR is not "past the fetched window" — it was never fetched, and no amount of
@@ -417,7 +458,6 @@ export function GithubRoute({
 
   const allItems = openItems
   const items = filterGithubItems(allItems, { query, labels: labelFilter })
-  const filtering = query.trim() !== '' || labelFilter.length > 0
   // Gated on `searchWanted`, not just on the payload: the query key is (kind, text), so flipping
   // `enabled` off does not evict what a previous run cached under the same text. Reading `data`
   // alone therefore kept the hits on screen after the local narrow started matching again —
@@ -609,8 +649,11 @@ export function GithubRoute({
           )
         ) : (
           <div
+            // The list pane is the scroll owner, not the shell's `main`: pointed at `main` the
+            // virtualizer never saw a scroll and left only the first window of rows mounted. The
+            // sticky header needs no `startMargin` — it covers the rows virtua counts as on top.
             ref={(node) => {
-              listScrollRef.current = node?.closest<HTMLElement>('[data-slot="main"]') ?? null
+              listScrollRef.current = node?.closest<HTMLElement>('[data-slot="gh-list"]') ?? null
             }}
             data-slot="gh-rows"
             data-virtualized="true"
@@ -648,17 +691,30 @@ export function GithubRoute({
           </div>
         )}
 
-        {list.hasNextPage ? (
-          <div className="flex justify-center px-4 pb-3">
-            <button
-              type="button"
-              data-slot="gh-load-more"
-              disabled={list.isFetchingNextPage}
-              onClick={() => void list.fetchNextPage()}
-              className="rounded-md border border-input px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-55"
-            >
-              {list.isFetchingNextPage ? 'Loading more…' : 'Load more'}
-            </button>
+        {list.hasNextPage && !filtering && items.length > 0 ? (
+          <div
+            ref={loadMoreRef}
+            data-slot="gh-load-more"
+            className="flex min-h-6 items-center justify-center gap-1.5 px-4 pb-3 text-xs text-soft-foreground"
+          >
+            {list.isFetchingNextPage ? (
+              <>
+                <LoaderCircleIcon aria-hidden="true" className="size-3.5 motion-safe:animate-spin" />
+                Loading more…
+              </>
+            ) : list.isFetchNextPageError ? (
+              <>
+                Could not load more.
+                <button
+                  type="button"
+                  data-slot="gh-load-more-retry"
+                  onClick={() => void list.fetchNextPage()}
+                  className="font-medium text-primary hover:underline"
+                >
+                  Retry
+                </button>
+              </>
+            ) : null}
           </div>
         ) : null}
 

@@ -210,6 +210,22 @@ const workspaceConfigSchema = z
      *  `development` → none: a worktree or PR preview picked by hand). Absent inherits
      *  `CEZ_UPDATE_CHANNEL`, then stable. */
     updateChannel: z.enum(['stable', 'nightly', 'development']).optional().catch(undefined),
+    /** The telemetry install id (random UUIDv7). Written on the first send after consent;
+     *  removed when consent is withdrawn. */
+    cezarId: z.string().uuid().optional().catch(undefined),
+    /** The user's telemetry answer (opt-in, `src/telemetry.ts`). Absent = never asked = nothing
+     *  sent; a `policyVersion` older than the current one asks again. */
+    telemetry: z
+      .object({
+        consent: z.enum(['granted', 'denied']),
+        policyVersion: z.number().int().min(0),
+        decidedAt: z.string(),
+      })
+      .passthrough()
+      .optional()
+      .catch(undefined),
+    /** Last UTC day (YYYY-MM-DD) cezar checked in — what keeps the daily ping to one a day. */
+    lastActiveOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().catch(undefined),
     /** Global opt-in model policy. The native coding-agent model becomes
      * authoritative while runner choice remains available. */
     modelsLocked: z.boolean().optional().catch(undefined),

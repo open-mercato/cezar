@@ -19,7 +19,7 @@ import { ChevronDownIcon, GripVerticalIcon } from 'lucide-react'
 import * as React from 'react'
 import { useLocation } from 'react-router'
 
-import { useHealth, usePinRun, useProjectRuns } from '@/api/queries'
+import { useArchiveRun, useHealth, usePinRun, useProjectRuns } from '@/api/queries'
 import type { ProjectListEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { useSidebarNavigate } from '@/components/app-shell'
 import { useListView } from '@/components/list-view'
@@ -439,6 +439,15 @@ function ProjectGroup({
       ),
     [pinMutation.mutate],
   )
+  const archiveMutation = useArchiveRun(project.id, boot ? 'default' : project.id)
+  const onToggleArchive = React.useCallback(
+    (run: RunRecord, archived: boolean) =>
+      archiveMutation.mutate(
+        { id: run.id, archived },
+        { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
+      ),
+    [archiveMutation.mutate],
+  )
 
   // The badge counts EVERY run that needs you, automation-started or not — a question nobody sees
   // is the one failure a filter must not cause. The rows follow the remembered origin split.
@@ -709,6 +718,7 @@ function ProjectGroup({
                   ? undefined
                   : onTogglePin
               }
+              onToggleArchive={onToggleArchive}
             />
           </ReferenceStatusProvider>
 

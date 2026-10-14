@@ -113,7 +113,9 @@ jobs:
             stable: cezar-linux-x86_64.AppImage
             glob: 'src-tauri/target/release/bundle/appimage/*.AppImage'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # Apple's notary queue alone has taken 50+ minutes (run 38244130710); 60 left no room for
+    # the build around it, and run 38259957880 died mid-notarization on both macOS legs.
+    timeout-minutes: ${{ startsWith(matrix.os, 'macos') && 150 || 60 }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -186,6 +188,9 @@ jobs:
           # a build without it still ships installers, just none an installed shell will adopt.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Compiled into the shell (telemetry.rs) so its error reports land in the product's
+          # service; without it they go to the development service, as any local build's do.
+          CEZ_TELEMETRY_SERVICE: ${{ secrets.CEZ_TELEMETRY_SERVICE }}
           # The APPLE_* variables arrive through "Hand over the Apple credentials" above, and
           # only when they exist.
         with:

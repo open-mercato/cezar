@@ -34,6 +34,8 @@ import type {
   skillsUpdateStateSchema,
   selfUpdateStatusSchema,
   starCountSchema,
+  setTelemetryConsentInputSchema,
+  telemetryConsentSchema,
   uiStateSchema,
   workspaceConfigResponseSchema,
   workspaceBrandingLogoResponseSchema,
@@ -126,6 +128,11 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
   // ---- the star ask -------------------------------------------------------------------------
   type StarCount200 = InferResponseType<(typeof client.api.v1)['star-count']['$get'], 200>;
 
+  // ---- telemetry consent --------------------------------------------------------------------
+  type TelemetryConsent200 = InferResponseType<typeof client.api.v1.telemetry.consent.$get, 200>;
+  type SetTelemetryConsent200 = InferResponseType<typeof client.api.v1.telemetry.consent.$put, 200>;
+  type SetTelemetryConsentBody = InferRequestType<typeof client.api.v1.telemetry.consent.$put>['json'];
+
   // ---- providers, models, open targets ----------------------------------------------------
   type ProviderStatus200 = InferResponseType<typeof client.api.v1.providers.status.$get, 200>;
   type ProviderEnabled200 = InferResponseType<
@@ -217,6 +224,10 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     Assert<Exact<z.infer<typeof selfUpdateStatusSchema>, SelfUpdateApply200>>,
     // the star ask
     Assert<Exact<z.infer<typeof starCountSchema>, StarCount200>>,
+    // telemetry consent
+    Assert<Exact<z.infer<typeof telemetryConsentSchema>, TelemetryConsent200>>,
+    Assert<Exact<z.infer<typeof telemetryConsentSchema>, SetTelemetryConsent200>>,
+    Assert<Exact<z.input<typeof setTelemetryConsentInputSchema>, SetTelemetryConsentBody>>,
     // providers, models, open targets
     Assert<Exact<z.infer<typeof providerStatusResponseSchema>, ProviderStatus200>>,
     Assert<Exact<z.infer<typeof providerStatusResponseSchema>, ProviderEnabled200>>,

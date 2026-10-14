@@ -192,6 +192,7 @@ function serve({
           baseBranch: null,
           defaultRunner: 'claude',
           systemPrompt: null,
+          branchNaming: null,
           // The Model pill's label is config-driven, so it proves the CONFIG re-resolved too.
           defaultModels: pick({ claude: 'sonnet' }, { claude: 'opus' }),
         })

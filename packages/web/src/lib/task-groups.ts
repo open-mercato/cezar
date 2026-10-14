@@ -191,6 +191,38 @@ export function queuePositions(runs: readonly RunRecord[]): Map<string, number> 
 }
 
 /**
+ * The Tasks table's sections (#935): `Pinned`, then everything else — or one unlabelled section
+ * when nothing is pinned, or in the archived view, where the pin is ignored (see `sortRuns`).
+ * Takes the already-sorted list and keeps its order within each section.
+ *
+ * A run is in `Pinned` when it OR any ancestor in the list is pinned, so a pinned task's subtasks
+ * stay folded under it (#1110) instead of spilling into the other section as loose roots.
+ */
+export function taskSections<T extends Pick<RunRecord, 'id' | 'pinned' | 'dispatch'>>(
+  runs: readonly T[],
+  view: ListView,
+): { key: 'pinned' | 'rest'; label: string | null; runs: T[] }[] {
+  if (view === 'archived') return [{ key: 'rest', label: null, runs: [...runs] }]
+  const byId = new Map(runs.map((run) => [run.id, run]))
+  const inPinned = (run: T): boolean => {
+    // `seen` bounds a malformed parent cycle, which would otherwise never end.
+    const seen = new Set<string>()
+    for (let at: T | undefined = run; at && !seen.has(at.id); at = byId.get(at.dispatch?.parentRunId ?? '')) {
+      if (at.pinned) return true
+      seen.add(at.id)
+    }
+    return false
+  }
+  const pinned = runs.filter(inPinned)
+  if (pinned.length === 0) return [{ key: 'rest', label: null, runs: [...runs] }]
+  const rest = runs.filter((run) => !inPinned(run))
+  return [
+    { key: 'pinned', label: 'Pinned', runs: pinned },
+    ...(rest.length > 0 ? [{ key: 'rest' as const, label: 'All tasks', runs: rest }] : []),
+  ]
+}
+
+/**
  * Runs in the view, ordered: status weight first, then whatever "next" means inside that rank.
  *
  * For most ranks that is recency — newest first, the historical rule. For the two ranks that are

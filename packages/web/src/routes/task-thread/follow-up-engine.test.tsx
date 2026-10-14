@@ -107,6 +107,7 @@ function serve(
           baseBranch: null,
           defaultRunner: 'claude',
           systemPrompt: null,
+          branchNaming: null,
           defaultModels,
           modelsLocked,
           maxParallel: 1,

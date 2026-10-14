@@ -1,15 +1,17 @@
 import { appendFileSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { RunEvent } from '@open-mercato/cezar-contract';
 import {
   HistoryCursorError,
+  __clearContextCacheForTests,
   canonicalSessionItems,
   deriveRunContextEvents,
   readEventsAfterLiveCursor,
   readRunHistoryPage,
+  streamRunEvents,
 } from './event-history.ts';
 
 const dirs: string[] = [];
@@ -330,5 +332,198 @@ describe('live cursor replay and compact context', () => {
     const itemEvents = context.contextEvents.filter(({ type }) => type.startsWith('item.'));
     expect(itemEvents.map(({ seq }) => seq)).toEqual([6, 8]);
     expect(context.contextEvents.at(-1)).toMatchObject({ seq: 9, type: 'plan.updated', entries: [] });
+  });
+});
+
+describe('deriveRunContextEvents — per-file fold cache', () => {
+  beforeEach(() => {
+    __clearContextCacheForTests();
+  });
+
+  afterEach(() => {
+    __clearContextCacheForTests();
+  });
+
+  function line(event: Partial<RunEvent> & Pick<RunEvent, 'seq' | 'type'>): string {
+    return `${JSON.stringify({ ts: '2026-07-30T00:00:00.000Z', ...event })}\n`;
+  }
+
+  /** Two task fan-outs per turn with children, a plan, and turn boundaries — enough to prune. */
+  function transcript(turns: number): string[] {
+    const lines: string[] = [];
+    let seq = 0;
+    const push = (event: Omit<Partial<RunEvent>, 'seq'> & Pick<RunEvent, 'type'>) =>
+      lines.push(line({ seq: ++seq, ...event }));
+    for (let turn = 0; turn < turns; turn += 1) {
+      push({ type: 'turn.started', turnId: `t${turn}` });
+      for (const root of ['a', 'b']) {
+        const id = `task-${turn}-${root}`;
+        push({ type: 'item.started', item: { kind: 'tool', id, toolKind: 'task', status: 'running' } });
+        push({ type: 'item.updated', item: { kind: 'tool', id: `${id}-c`, parentItemId: id, status: 'running' } });
+        if (turn % 3 !== 2) push({ type: 'item.completed', item: { kind: 'tool', id, toolKind: 'task', status: 'completed' } });
+      }
+      push({ type: 'plan.updated', entries: [{ content: `step ${turn}`, status: 'in_progress' }] });
+      push({ type: 'turn.completed' });
+    }
+    return lines;
+  }
+
+  function freshCopy(file: string, body: string): string {
+    const copy = `${file}.fresh-${dirs.length}-${Math.random().toString(36).slice(2)}`;
+    writeFileSync(copy, body);
+    return copy;
+  }
+
+  it('reads nothing to reopen an unchanged transcript and only the appended bytes after growth', async () => {
+    const lines = transcript(6);
+    const file = fixture([]);
+    writeFileSync(file, lines.slice(0, 20).join(''));
+    const reads: number[] = [];
+    const onRead = ({ bytesRead }: { bytesRead: number }) => reads.push(bytesRead);
+
+    await deriveRunContextEvents(file, onRead);
+    await deriveRunContextEvents(file, onRead);
+    const appended = lines.slice(20).join('');
+    appendFileSync(file, appended);
+    const grown = await deriveRunContextEvents(file, onRead);
+
+    const probe = 64;
+    expect(reads).toEqual([
+      Buffer.byteLength(lines.slice(0, 20).join('')) + probe,
+      0,
+      Buffer.byteLength(appended) + probe + probe,
+    ]);
+    expect(grown).toEqual(await deriveRunContextEvents(freshCopy(file, lines.join(''))));
+  });
+
+  it('matches a fresh derivation at every append point', async () => {
+    const lines = transcript(4);
+    const file = fixture([]);
+    writeFileSync(file, '');
+    for (let index = 0; index < lines.length; index += 1) {
+      appendFileSync(file, lines[index]!);
+      const incremental = await deriveRunContextEvents(file);
+      expect(incremental).toEqual(await deriveRunContextEvents(freshCopy(file, lines.slice(0, index + 1).join(''))));
+    }
+  });
+
+  it('folds a record that was still being written once its line completes', async () => {
+    const lines = transcript(2);
+    const last = lines.at(-1)!;
+    const file = fixture([]);
+    writeFileSync(file, lines.slice(0, -1).join('') + last.slice(0, 10));
+
+    const partial = await deriveRunContextEvents(file);
+    appendFileSync(file, last.slice(10));
+    const complete = await deriveRunContextEvents(file);
+
+    expect(partial.asOfSeq).toBe(lines.length - 1);
+    expect(complete).toEqual(await deriveRunContextEvents(freshCopy(file, lines.join(''))));
+  });
+
+  it('re-derives from the start when the transcript was replaced rather than appended to', async () => {
+    const file = fixture([]);
+    const first = transcript(3);
+    writeFileSync(file, first.join(''));
+    await deriveRunContextEvents(file);
+
+    const replacement = [line({ seq: 1, type: 'plan.updated', entries: [] }), ...transcript(5).slice(1)];
+    writeFileSync(file, replacement.join(''));
+
+    expect(await deriveRunContextEvents(file)).toEqual(
+      await deriveRunContextEvents(freshCopy(file, replacement.join(''))),
+    );
+  });
+
+  it('keeps concurrent reads of one growing file consistent', async () => {
+    const lines = transcript(5);
+    const file = fixture([]);
+    writeFileSync(file, lines.slice(0, 8).join(''));
+    await deriveRunContextEvents(file);
+    appendFileSync(file, lines.slice(8).join(''));
+
+    const [left, right] = await Promise.all([deriveRunContextEvents(file), deriveRunContextEvents(file)]);
+    const expected = await deriveRunContextEvents(freshCopy(file, lines.join('')));
+    expect(left).toEqual(expected);
+    expect(right).toEqual(expected);
+  });
+
+  it('hands every caller its own context, so one caller cannot edit what the next one reads', async () => {
+    const file = fixture([]);
+    writeFileSync(file, transcript(3).join(''));
+    const first = await deriveRunContextEvents(file);
+    const expected = structuredClone(first);
+    first.contextEvents.length = 0;
+
+    const second = await deriveRunContextEvents(file);
+    expect(second).toEqual(expected);
+    second.contextEvents.reverse();
+    expect(await deriveRunContextEvents(file)).toEqual(expected);
+  });
+
+  it('degrades a transcript deleted after it was cached to an empty context', async () => {
+    const file = fixture([]);
+    writeFileSync(file, transcript(2).join(''));
+    await deriveRunContextEvents(file);
+    rmSync(file);
+
+    expect(await deriveRunContextEvents(file)).toEqual({ contextEvents: [], asOfSeq: 0 });
+  });
+
+  it('bounds a run with no task fan-out to its current turn', async () => {
+    const lines: string[] = [];
+    let seq = 0;
+    const push = (event: Omit<Partial<RunEvent>, 'seq'> & Pick<RunEvent, 'type'>) =>
+      lines.push(line({ seq: ++seq, ...event }));
+    for (let turn = 0; turn < 50; turn += 1) {
+      push({ type: 'turn.started', turnId: `t${turn}` });
+      push({ type: 'item.completed', item: { kind: 'message', id: `m${turn}`, role: 'assistant', text: String(turn) } });
+      push({ type: 'turn.completed' });
+    }
+    const file = fixture([]);
+    writeFileSync(file, lines.join(''));
+
+    const context = await deriveRunContextEvents(file);
+
+    expect(context.contextEvents.length).toBeLessThanOrEqual(2);
+    expect(context.contextEvents.some(({ seq: eventSeq }) => eventSeq === 1)).toBe(false);
+    expect(context.contextEvents.at(-1)?.seq).toBe(150);
+    expect(context).toEqual(await deriveRunContextEvents(freshCopy(file, lines.join(''))));
+  });
+
+  it('keeps the cache at its LRU bound and re-reads a transcript it evicted', async () => {
+    const files: string[] = [];
+    for (let index = 0; index < 33; index += 1) {
+      const file = fixture([]);
+      writeFileSync(file, transcript(2).join(''));
+      files.push(file);
+    }
+    for (const file of files) await deriveRunContextEvents(file);
+
+    const reads: number[] = [];
+    await deriveRunContextEvents(files[0]!, ({ bytesRead }) => reads.push(bytesRead));
+    await deriveRunContextEvents(files[32]!, ({ bytesRead }) => reads.push(bytesRead));
+
+    expect(reads[0]).toBeGreaterThan(0);
+    expect(reads[1]).toBe(0);
+  });
+});
+
+describe('streamRunEvents', () => {
+  it('yields every parseable line in file order and skips malformed ones', async () => {
+    const file = fixture([
+      { seq: 1, type: 'note', message: 'one' },
+      { seq: 2, type: 'note', message: 'two' },
+    ]);
+    appendFileSync(file, 'not json\n{"seq":3,"type":"note","ts":"x"}');
+    const seqs: number[] = [];
+    for await (const event of streamRunEvents(file)) seqs.push(event.seq);
+    expect(seqs).toEqual([1, 2, 3]);
+  });
+
+  it('yields nothing for a missing transcript', async () => {
+    const seqs: number[] = [];
+    for await (const event of streamRunEvents(join(tmpdir(), 'cez-missing-transcript.ndjson'))) seqs.push(event.seq);
+    expect(seqs).toEqual([]);
   });
 });

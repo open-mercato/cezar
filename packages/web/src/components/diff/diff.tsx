@@ -5,6 +5,7 @@ import { DiffStatLabel } from '@/components/diff-stat'
 import { cn } from '@/lib/utils'
 
 import { ImagePreview, shouldPreviewImage } from './image-preview'
+import { diffScroller, scrollWithin } from './scroll-within'
 import type { DiffFileChange, DiffProps } from './types'
 
 /**
@@ -85,7 +86,8 @@ export function DiffFallback({ files, wrap = false, imageSrc, onOpenInApp, viewR
     scrollToPath: (path: string) => {
       for (const element of root.current?.querySelectorAll<HTMLElement>('[data-slot="diff-file"]') ?? []) {
         if (element.dataset.path === path) {
-          element.scrollIntoView({ block: 'start', behavior: 'smooth' })
+          const scroller = diffScroller(element)
+          if (scroller) scrollWithin(scroller, element, Number.parseFloat(getComputedStyle(element).scrollMarginTop) || 0)
           return
         }
       }
@@ -124,7 +126,11 @@ function FallbackFile({
   onOpenInApp?: (path: string) => void
 }) {
   return (
-    <section data-slot="diff-file" data-path={file.path} className="min-w-0 overflow-clip rounded-md border border-border bg-card">
+    <section
+      data-slot="diff-file"
+      data-path={file.path}
+      className="min-w-0 scroll-mt-[var(--diff-sticky-top,0px)] overflow-clip rounded-md border border-border bg-card"
+    >
       <header className="flex items-center gap-2 border-b border-border/50 px-3 py-2">
         <span data-slot="diff-file-path" className="min-w-0 truncate font-mono text-xs font-medium">
           {file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}

@@ -29,6 +29,12 @@ const sessionId = `e2e-thread-${process.pid}`
  *  assertions cover the edited-title path rather than echoing the raw auto-summary. */
 const RUN = { ...record, titleSummary: 'Explain what cezar does' }
 const RUN_ID: string = RUN.id
+const OVERFLOW_TOKEN = 'X'.repeat(180) + '_END'
+const OVERFLOW_RUN = {
+  ...RUN,
+  id: 'abec1200-0000-4000-8000-000000000001',
+  task: `Overflow fixture\n\n1) Numbered token:\n${OVERFLOW_TOKEN}\n\n2) Box rule:\n┌${'─'.repeat(140)}┐\n\n- Nested token:\n  - ${OVERFLOW_TOKEN}\n\nStandalone token:\n\n${OVERFLOW_TOKEN}\n\n> ${OVERFLOW_TOKEN}`,
+}
 
 function freePort(): Promise<number> {
   return new Promise((done, fail) => {
@@ -67,11 +73,12 @@ const scoped = (path: string) => `/p/${bootProject}${path}`
 beforeAll(async () => {
   dataRoot = mkdtempSync(join(tmpdir(), 'cezar-e2e-thread-'))
   mkdirSync(join(dataRoot, '.ai/cezar/runs'), { recursive: true })
-  writeFileSync(join(dataRoot, '.ai/cezar/runs.json'), JSON.stringify([RUN], null, 2), 'utf8')
+  writeFileSync(join(dataRoot, '.ai/cezar/runs.json'), JSON.stringify([RUN, OVERFLOW_RUN], null, 2), 'utf8')
   copyFileSync(
     resolve(import.meta.dirname, 'fixtures/thread-run.ndjson'),
     join(dataRoot, '.ai/cezar/runs', `${RUN_ID}.ndjson`),
   )
+  writeFileSync(join(dataRoot, '.ai/cezar/runs', `${OVERFLOW_RUN.id}.ndjson`), '')
   // The agent screenshot the transcript's `image` line points at (served by the run itself).
   cpSync(
     resolve(import.meta.dirname, 'fixtures/thread-run-images'),
@@ -384,7 +391,7 @@ describe('task thread', () => {
     ).toBe('cez/fcd519dd')
   })
 
-  it('tabs point at the routed Session/Changes/Files/Graph surfaces; the done run offers the closed-run actions', () => {
+  it('tabs point at the routed Session/Changes/Commits/Files/Graph/Notes surfaces; the done run offers the closed-run actions', () => {
     const tabs = browser.evaluate(`[...document.querySelectorAll('[data-slot="run-tabs"] a')].map((a) => ({
       text: a.textContent,
       href: a.getAttribute('href'),
@@ -396,12 +403,15 @@ describe('task thread', () => {
       { text: 'Commits', href: scoped(`/tasks/${RUN_ID}/commits`), current: null },
       { text: 'Files', href: scoped(`/tasks/${RUN_ID}/files`), current: null },
       { text: 'Graph', href: scoped(`/tasks/${RUN_ID}/graph`), current: null },
+      { text: 'Notes', href: scoped(`/tasks/${RUN_ID}/notes`), current: null },
     ])
 
+    // Read/unread, Pin and Archive are icon toggles now (aria-label, no visible text) — Continue
+    // moved to the composer, Notes to its own tab.
     const actions = browser.evaluate(
-      `[...document.querySelectorAll('[data-slot="run-actions"] button')].map((b) => b.textContent.trim())`,
+      `[...document.querySelectorAll('[data-slot="run-actions"] button')].map((b) => b.textContent.trim() || b.getAttribute('aria-label'))`,
     ) as string[]
-    expect(actions).toEqual(['Continue', 'Open in…', 'Notes', 'Mark unread', 'Pin', 'Archive', 'Delete'])
+    expect(actions).toEqual(['Mark unread', 'Pin', 'Archive', 'Delete', 'Open in…'])
 
     // The take-over hint, per-backend (the fixture's last agent session, in its worktree).
     const hint = browser.evaluate(
@@ -411,19 +421,16 @@ describe('task thread', () => {
     expect(hint).toContain('cd /tmp/cezar-fixture-hg7X')
   })
 
-  it('opens the Notes panel — an unseeded handoff reads as the honest empty state', () => {
-    browser.evaluate(
-      `[...document.querySelectorAll('[data-slot="run-actions"] button')].find((b) => b.textContent.trim() === 'Notes').click()`,
-    )
+  it('opens the Notes tab — an unseeded handoff reads as the honest empty state', () => {
+    // Notes is a routed tab now (was a toggle panel over the thread) — follow the tab link.
+    browser.click(`[data-slot="run-tabs"] a[href="${scoped(`/tasks/${RUN_ID}/notes`)}"]`)
     browser.waitForFunction(`document.querySelector('[data-slot="notes-panel"]') !== null`)
     browser.waitForFunction(
       `document.querySelector('[data-slot="notes-panel"]').textContent.includes('No notes yet')`,
     )
-    // The 1.4 money shot: full header (title, meta, tabs+actions, rail, hint) + open notes.
+    // The 1.4 money shot: full header (title, meta, tabs+actions, rail, hint) + the Notes tab.
     browser.screenshot(`${artifactsDir}/thread-header-desktop.png`)
-    browser.evaluate(
-      `[...document.querySelectorAll('[data-slot="run-actions"] button')].find((b) => b.textContent.trim() === 'Notes').click()`,
-    )
+    browser.click(`[data-slot="run-tabs"] a[href="${scoped(`/tasks/${RUN_ID}`)}"]`)
     browser.waitForFunction(`document.querySelector('[data-slot="notes-panel"]') === null`)
   })
 
@@ -512,4 +519,49 @@ describe('task thread', () => {
     browser.waitForFunction(`document.querySelector('[data-slot="run-header"]') !== null`)
     expect(browser.evaluate(`getComputedStyle(document.querySelector('[data-slot="run-header"]')).position`)).toBe('sticky')
   })
+
+  it('contains long list content and lets it scroll horizontally on desktop and mobile', () => {
+    browser.goto(`${baseUrl}${scoped(`/tasks/${OVERFLOW_RUN.id}`)}`)
+    browser.waitForFunction(`document.querySelector('[data-slot="user-bubble"] li') !== null`)
+    for (const width of [1440, 390]) {
+      browser.setViewport(width, 900)
+      const result = browser.evaluate(`(() => {
+        const bubble = document.querySelector('[data-slot="user-bubble"]')
+        const blocks = [...bubble.querySelectorAll('li')].filter(el => !el.querySelector('li'))
+        return {
+          contained: bubble.scrollWidth <= bubble.clientWidth + 1,
+          blocks: blocks.map(block => {
+            let scroller = block
+            while (scroller && scroller !== bubble) {
+              const style = getComputedStyle(scroller)
+              if (['auto', 'scroll'].includes(style.overflowX) && scroller.scrollWidth > scroller.clientWidth) break
+              scroller = scroller.parentElement
+            }
+            if (!scroller || scroller === bubble) return false
+            scroller.scrollLeft = 200
+            const moved = scroller.scrollLeft > 0
+            scroller.scrollLeft = 0
+            return moved
+          }),
+          markers: [...bubble.querySelectorAll('li')].every(el => getComputedStyle(el).display === 'list-item'),
+          quoteOverflow: getComputedStyle(bubble.querySelector('blockquote')).overflowX,
+          quoteScrolls: (() => {
+            const paragraph = bubble.querySelector('blockquote p')
+            paragraph.scrollLeft = 200
+            const moved = paragraph.scrollLeft > 0
+            paragraph.scrollLeft = 0
+            return moved
+          })(),
+        }
+      })()`) as { contained: boolean; blocks: boolean[]; markers: boolean; quoteOverflow: string; quoteScrolls: boolean }
+      expect(result.contained).toBe(true)
+      expect(result.blocks.length).toBeGreaterThan(2)
+      expect(result.blocks.every(Boolean)).toBe(true)
+      expect(result.markers).toBe(true)
+      expect(result.quoteOverflow).toBe('visible')
+      expect(result.quoteScrolls).toBe(true)
+      browser.screenshot(join(artifactsDir, `thread-overflow-${width}.png`), { viewport: true })
+    }
+  })
+
 })

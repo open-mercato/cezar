@@ -28,7 +28,7 @@ import { automationScheduleSchema } from './automation-schedule.ts';
 
 // ---- the definition ------------------------------------------------------------------------
 
-/** The GitHub activity an automation reacts to. Seven events, all bounded polls — never a webhook. */
+/** The GitHub activity an automation reacts to. Nine events, all bounded polls — never a webhook. */
 export const automationEventSchema = z.enum([
   'pull_request.opened',
   'issue.opened',
@@ -37,6 +37,8 @@ export const automationEventSchema = z.enum([
   'pull_request.reviewed',
   'pull_request.review_requested',
   'pull_request.rereview_requested',
+  'pull_request.closed',
+  'pull_request.merged',
 ]);
 export type AutomationEvent = z.infer<typeof automationEventSchema>;
 

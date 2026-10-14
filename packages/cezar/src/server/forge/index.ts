@@ -1,3 +1,4 @@
+import { parseRemote } from '../../git-remotes.ts';
 import type { RepoInfo } from '../git.ts';
 import { createGithubDriver } from './github.ts';
 import type { ForgeDriver, ForgeKind } from './types.ts';
@@ -10,39 +11,7 @@ import type { ForgeDriver, ForgeKind } from './types.ts';
  * forge means plain-git features only (diffs, commit, push, branches).
  */
 
-export interface ParsedRemote {
-  host: string;
-  owner: string;
-  repo: string;
-}
-
-/**
- * Parse a git remote URL into host/owner/repo. Handles the scheme forms
- * (`https://`, `ssh://`, `git://`, with optional credentials and port) and the
- * scp-like form (`git@host:owner/repo.git`). Null for local paths and anything
- * else that doesn't look like a forge remote.
- */
-export function parseRemote(remote: string): ParsedRemote | null {
-  const r = remote.trim().replace(/\/+$/, '');
-  let host: string | undefined;
-  let path: string | undefined;
-  const url = /^(?:https?|ssh|git|git\+ssh):\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\/(.+)$/.exec(r);
-  if (url) {
-    [, host, path] = url;
-  } else {
-    // scp-like: [user@]host:owner/repo(.git) — a leading '/' (local path)
-    // can't match the host group, so plain directories fall through to null.
-    const scp = /^(?:[^@/:]+@)?([^:/]+):(.+)$/.exec(r);
-    if (!scp) return null;
-    [, host, path] = scp;
-  }
-  if (!host || !path) return null;
-  const parts = path.replace(/\.git$/i, '').split('/').filter(Boolean);
-  const owner = parts[parts.length - 2];
-  const repo = parts[parts.length - 1];
-  if (!owner || !repo) return null;
-  return { host: host.toLowerCase(), owner, repo };
-}
+export { parseRemote, type ParsedRemote } from '../../git-remotes.ts';
 
 /** Remote host → forge kind. The one host table both `resolveForge` and the
  *  registry probe read; GitLab lands here later as one more row. */

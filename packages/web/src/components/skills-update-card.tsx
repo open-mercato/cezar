@@ -18,6 +18,7 @@ import { useNavigate } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 import { startedRunPath } from '@/routes/new-task-form'
 import type { SkillsUpdateState } from '@open-mercato/cezar-api-client'
+import { trackMessageSent } from '@/lib/telemetry'
 
 type UpdateRequest =
   | { action: 'check'; seq: number }
@@ -55,6 +56,7 @@ export function SkillsUpdateCard({
         ],
       }),
     onSuccess: (created) => {
+      trackMessageSent('skills_import')
       setShowUpgradeNotesPrompt(false)
       void navigate(startedRunPath(created))
     },

@@ -256,7 +256,7 @@ describe('AutomationEditor — new', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add tests' }))
     expect((screen.getByLabelText('Prompt') as HTMLInputElement).value).toBe('Bump deps.\n\nAlso add or update tests covering this change.')
     fireEvent.click(screen.getByRole('button', { name: 'Manage…' }))
-    expect(screen.getByTestId('location').textContent).toBe('/settings/prompt-templates')
+    expect(screen.getByTestId('location').textContent).toBe('/settings/instructions')
   })
 
   it('hides the dispatch row when the cockpit has dispatch off', async () => {

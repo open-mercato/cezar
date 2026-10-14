@@ -49,6 +49,14 @@ describe('revealing a comment', () => {
     expect(virtual.scrollToIndex).toHaveBeenCalledWith(0, { align: 'start', offset: -160 })
   })
 
+  it('gives the last virtualized file a viewport of room too', () => {
+    const clientHeight = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600)
+    mount('virtual')
+    const slots = document.querySelectorAll<HTMLElement>('[data-slot="diff-file-slot"]')
+    expect(slots[slots.length - 1]!.style.minHeight).toBe('600px')
+    clientHeight.mockRestore()
+  })
+
   it('uses the virtualizer for the exact jump, replacing its pending file jump', async () => {
     const { ref, main } = mount('virtual')
     const card = document.querySelector<HTMLElement>('[data-comment-id="deep"]')!
@@ -68,15 +76,22 @@ describe('revealing a comment', () => {
     expect(card.dataset.flash).toBe('true')
   })
 
-  it('jumps immediately in flat mode so lazy layout cannot invalidate a smooth destination', async () => {
-    const { ref } = mount('flat')
+  it('centers the comment in flat mode by moving only the diff scroller, immediately', async () => {
+    const { ref, main } = mount('flat')
     const card = document.querySelector<HTMLElement>('[data-comment-id="deep"]')!
+    main.scrollTop = 400
+    Object.defineProperty(main, 'clientHeight', { value: 800 })
+    vi.spyOn(main, 'getBoundingClientRect').mockReturnValue({ top: 50 } as DOMRect)
+    vi.spyOn(card, 'getBoundingClientRect').mockReturnValue({ top: 3000, height: 40 } as DOMRect)
     const domScroll = vi.fn()
     card.scrollIntoView = domScroll
 
     act(() => ref.current!.reveal!({ path: file.path, side: 'new', line: 3, commentId: comment.id }))
 
-    await waitFor(() => expect(domScroll).toHaveBeenCalledWith({ block: 'center', behavior: 'instant' }))
+    // The file jump lands first (jsdom's card sits at 0: 400 − 50 = 350), then the comment's
+    // middle goes to the viewport's middle: 350 + (3000 − 50) − (800 − 40) / 2.
+    await waitFor(() => expect(main.scrollTop).toBe(2920))
+    expect(domScroll).not.toHaveBeenCalled()
     expect(card.dataset.flash).toBe('true')
   })
 })

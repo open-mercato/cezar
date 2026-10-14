@@ -2,7 +2,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import { REFERENCE_STATUS_MAX } from '@open-mercato/cezar-contract';
-import { autosaveCommit } from '../../git-worktree.ts';
+import { autosaveCommit, taskRemotes } from '../../git-worktree.ts';
+import { parseRemote, splitRemoteRef } from '../../git-remotes.ts';
 import type {
   DraftPrInput,
   DraftPrOutcome,
@@ -226,7 +227,11 @@ const ghListNodeSchema = z.object({
   title: z.string(),
   author: ghAuthor,
   createdAt: z.string(),
-  labels: z.array(ghLabel).default([]),
+  // GraphQL `labels` is a connection (`{ nodes }`), not the flat array `gh … --json` returns.
+  labels: z.preprocess(
+    (v) => (v && typeof v === 'object' && 'nodes' in v ? (v as { nodes: unknown }).nodes : v),
+    z.array(ghLabel).default([]),
+  ),
   url: z.string(),
   comments: z.object({ totalCount: z.number().int().nonnegative() }).optional(),
   isDraft: z.boolean().default(false),
@@ -417,22 +422,74 @@ const listCache = new Map<string, { at: number; limit: number; data: GithubData 
 const LIST_CACHE_MAX = 50;
 const CACHE_MS = 60_000;
 export const GH_MAX_LIMIT = 1000;
+/** GitHub GraphQL rejects `first` above 100 (EXCESSIVE_PAGINATION); larger limits page. */
+const GH_GRAPHQL_PAGE_MAX = 100;
 
 const githubListQuery = `
-query ($owner: String!, $name: String!, $limit: Int!, $issuesCursor: String, $prsCursor: String) {
+query ($owner: String!, $name: String!, $issuesLimit: Int!, $prsLimit: Int!, $issuesCursor: String, $prsCursor: String) {
   repository(owner: $owner, name: $name) {
-    issues(first: $limit, after: $issuesCursor, states: OPEN, orderBy: {field: CREATED_AT, direction: DESC}) {
+    issues(first: $issuesLimit, after: $issuesCursor, states: OPEN, orderBy: {field: CREATED_AT, direction: DESC}) {
       totalCount
-      nodes { number title author { login } createdAt labels { name color } url comments { totalCount } }
+      nodes { number title author { login } createdAt labels(first: 20) { nodes { name color } } url comments { totalCount } }
       pageInfo { hasNextPage endCursor }
     }
-    pullRequests(first: $limit, after: $prsCursor, states: OPEN, orderBy: {field: CREATED_AT, direction: DESC}) {
+    pullRequests(first: $prsLimit, after: $prsCursor, states: OPEN, orderBy: {field: CREATED_AT, direction: DESC}) {
       totalCount
-      nodes { number title author { login } createdAt labels { name color } url comments { totalCount } isDraft additions deletions }
+      nodes { number title author { login } createdAt labels(first: 20) { nodes { name color } } url comments { totalCount } isDraft additions deletions }
       pageInfo { hasNextPage endCursor }
     }
   }
 }`;
+
+type GithubListPage = ReturnType<typeof parseGithubListPage>;
+
+/** Walks both open connections up to `limit` rows each, at most `GH_GRAPHQL_PAGE_MAX` per request,
+ *  keeping each side's cursor exact so the returned next cursors resume where the rows stop. */
+export async function fetchGithubListPages(
+  runGraphql: GraphqlRunner,
+  owner: string,
+  name: string,
+  limit: number,
+  cursors: { issuesCursor?: string; prsCursor?: string } = {},
+): Promise<GithubListPage> {
+  let issuesCursor = cursors.issuesCursor;
+  let prsCursor = cursors.prsCursor;
+  let issuesDone = false;
+  let prsDone = false;
+  let result: GithubListPage | null = null;
+  while (!result || !issuesDone || !prsDone) {
+    const issuesSize = issuesDone ? 0 : Math.min(GH_GRAPHQL_PAGE_MAX, limit - (result?.issues.nodes.length ?? 0));
+    const prsSize = prsDone ? 0 : Math.min(GH_GRAPHQL_PAGE_MAX, limit - (result?.pullRequests.nodes.length ?? 0));
+    const variables: Record<string, string> = {
+      owner,
+      name,
+      issuesLimit: String(issuesSize),
+      prsLimit: String(prsSize),
+    };
+    if (issuesCursor) variables.issuesCursor = issuesCursor;
+    if (prsCursor) variables.prsCursor = prsCursor;
+    const page = parseGithubListPage(await runGraphql(githubListQuery, variables));
+    const acc: GithubListPage = result ?? page;
+    if (issuesSize > 0) {
+      if (acc !== page) {
+        acc.issues.nodes.push(...page.issues.nodes);
+        acc.issues.pageInfo = page.issues.pageInfo;
+      }
+      issuesCursor = page.issues.pageInfo.endCursor ?? issuesCursor;
+      issuesDone = !page.issues.pageInfo.hasNextPage || page.issues.nodes.length === 0 || acc.issues.nodes.length >= limit;
+    }
+    if (prsSize > 0) {
+      if (acc !== page) {
+        acc.pullRequests.nodes.push(...page.pullRequests.nodes);
+        acc.pullRequests.pageInfo = page.pullRequests.pageInfo;
+      }
+      prsCursor = page.pullRequests.pageInfo.endCursor ?? prsCursor;
+      prsDone = !page.pullRequests.pageInfo.hasNextPage || page.pullRequests.nodes.length === 0 || acc.pullRequests.nodes.length >= limit;
+    }
+    result = acc;
+  }
+  return result;
+}
 
 export async function fetchGithub(
   repoRoot: string,
@@ -451,15 +508,16 @@ export async function fetchGithub(
     const timeout = capped > 100 ? 30_000 : 15_000;
     const ownerName = await resolveRepoHandle(repoRoot);
     if (!ownerName) return { available: false, reason: 'repository handle unavailable', issues: [], prs: [] };
+    // `-f` sends every value as a String; the page sizes must go typed (`-F`) or GitHub rejects
+    // the whole query with "Could not coerce value to Int".
     const runGraphql: GraphqlRunner = (query, variables) => {
       const args = ['api', 'graphql', '-f', `query=${query}`];
-      for (const [key, value] of Object.entries(variables)) args.push('-f', `${key}=${value}`);
+      for (const [key, value] of Object.entries(variables)) {
+        args.push(key.endsWith('Limit') ? '-F' : '-f', `${key}=${value}`);
+      }
       return gh(repoRoot, args, timeout);
     };
-    const variables: Record<string, string> = { owner: ownerName.owner, name: ownerName.name, limit: String(capped) };
-    if (cursors.issuesCursor) variables.issuesCursor = cursors.issuesCursor;
-    if (cursors.prsCursor) variables.prsCursor = cursors.prsCursor;
-    const page = parseGithubListPage(await runGraphql(githubListQuery, variables));
+    const page = await fetchGithubListPages(runGraphql, ownerName.owner, ownerName.name, capped, cursors);
     // One repo-wide label→color map, filled as we flatten each item's labels.
     const labelColors: Record<string, string> = {};
     const recordColor = (l: { name: string; color: string }) => {
@@ -525,7 +583,7 @@ export async function fetchGithub(
     const message = err instanceof Error ? err.message : String(err);
     const reason = /ENOENT/.test(message)
       ? 'gh CLI not found — install it and run `gh auth login`'
-      : firstLine(message);
+      : whyLine(ghStderr(err) ?? message);
     return { available: false, reason, issues: [], prs: [] };
   }
 }
@@ -542,6 +600,12 @@ function firstLine(s: string): string {
  * which is how "your token cannot read check runs" came out looking like a GitHub outage. This
  * skips that preamble whenever there is something behind it, and falls back to it when there isn't.
  */
+/** gh's own stderr, when present: a multi-line `query=` argv makes the Node message unreadable. */
+function ghStderr(err: unknown): string | undefined {
+  const stderr = (err as { stderr?: unknown } | null)?.stderr;
+  return typeof stderr === 'string' && stderr.trim() ? stderr : undefined;
+}
+
 export function whyLine(s: string): string {
   const lines = s.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
   return lines.find((l) => !/^Command failed:/i.test(l)) ?? lines[0] ?? 'gh failed';
@@ -2544,9 +2608,9 @@ function mockGithubComments(kind: 'issue' | 'pr'): ForgeCommentsData {
 }
 
 // ---- draft-PR creation (review gate, spec 009) ------------------------------
-// Final autosave-commit → `git push -u origin cez/<id8>` → `gh pr create
-// --draft`, all executed in the task worktree (gh picks the repo up from the
-// worktree's remote). Every failure maps to a one-line human error — the GUI
+// Final autosave-commit → `git push -u <push remote> cez/<id8>` → `gh pr create
+// --draft --repo <base repo>`, all executed in the task worktree. Every failure
+// maps to a one-line human error — the GUI
 // shows it as a toast plus the manual `git merge <branch>` fallback. Never throws.
 
 const PR_URL_RE = /https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
@@ -2583,12 +2647,13 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
     return { ok: true, url: 'https://github.com/open-mercato/demo/pull/777', dryRun: true };
   }
 
-  const remote = await execTool(['remote', 'get-url', 'origin'], worktree, 'git');
-  if (!remote.ok || !remote.stdout.trim()) {
+  // Push to the push remote, open the PR on the base remote the task forked from (#1383).
+  const remotes = await taskRemotes(worktree);
+  if (!remotes.push || !remotes.base) {
     return { ok: false, error: 'no git remote — add one (git remote add origin <url>) or merge the branch locally' };
   }
 
-  const push = await execTool(['push', '-u', 'origin', branch], worktree, 'git', PUSH_TIMEOUT_MS);
+  const push = await execTool(['push', '-u', remotes.push, branch], worktree, 'git', PUSH_TIMEOUT_MS);
   if (!push.ok) {
     return { ok: false, error: `git push failed — ${tail(push.stderr) || 'unknown error'}` };
   }
@@ -2596,12 +2661,13 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
   const body = buildPrBody(input.handoffText, run.task);
   // Target the branch the worktree forked from (config `baseBranch`) — without
   // --base, gh aims at the repo default (main) even when work started on
-  // develop. `origin/x` normalizes to `x`; a raw sha (detached-HEAD fork
+  // develop. `<remote>/x` normalizes to `x`; a raw sha (detached-HEAD fork
   // point) can't be a PR base, so gh falls back to the default branch.
-  const prBase = run.baseBranch?.replace(/^origin\//, '');
+  const prBase = run.baseBranch ? splitRemoteRef(run.baseBranch, remotes.names).branch : undefined;
   const baseArgs = prBase && !/^[0-9a-f]{7,40}$/i.test(prBase) ? ['--base', prBase] : [];
+  const repoArgs = await prRepoArgs(worktree, remotes.base, remotes.push, branch);
   const pr = await execTool(
-    ['pr', 'create', '--draft', '--head', branch, ...baseArgs, '--title', run.title, '--body', body],
+    ['pr', 'create', ...(input.draft === false ? [] : ['--draft']), ...repoArgs, ...baseArgs, '--title', run.title, '--body', body],
     worktree,
     'gh',
     PUSH_TIMEOUT_MS,
@@ -2620,6 +2686,25 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
     return { ok: false, error: 'gh pr create returned no PR URL — check `gh pr list` manually' };
   }
   return { ok: true, url: match[0], dryRun: false };
+}
+
+/** `gh pr create` target: `--repo <base repo>`, head owner-qualified when pushed to a fork. */
+export async function prRepoArgs(worktree: string, baseRemote: string, pushRemote: string, branch: string): Promise<string[]> {
+  const url = async (name: string) => {
+    const res = await execTool(['remote', 'get-url', name], worktree, 'git');
+    return res.ok ? parseRemote(res.stdout.trim()) : null;
+  };
+  const target = await url(baseRemote);
+  if (!target) return ['--head', branch];
+  const repoArgs = ['--repo', `${target.host}/${target.owner}/${target.repo}`];
+  if (pushRemote === baseRemote) return [...repoArgs, '--head', branch];
+  const source = await url(pushRemote);
+  const sameRepo =
+    source &&
+    source.host === target.host &&
+    source.owner.toLowerCase() === target.owner.toLowerCase() &&
+    source.repo.toLowerCase() === target.repo.toLowerCase();
+  return [...repoArgs, '--head', source && !sameRepo ? `${source.owner}:${branch}` : branch];
 }
 
 /**

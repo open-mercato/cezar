@@ -56,6 +56,15 @@ function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener)
 }
 
+/** Observers of `danger` toasts — telemetry reports each one (`lib/telemetry.ts`). A hook rather
+ *  than an import so this primitive stays dependency-free. */
+const dangerListeners = new Set<(message: string) => void>()
+
+export function onDangerToast(listener: (message: string) => void): () => void {
+  dangerListeners.add(listener)
+  return () => dangerListeners.delete(listener)
+}
+
 /** `setTimeout` that keeps its handle cancellable until it actually runs. */
 function schedule(fn: () => void, ms: number): void {
   const handle = setTimeout(() => {
@@ -86,6 +95,15 @@ export function toast(
   }
   const lifetime = opts.durationMs ?? TOAST_MS
   publish([...items, item])
+  if (item.tone === 'danger') {
+    for (const listener of dangerListeners) {
+      try {
+        listener(message)
+      } catch {
+        // an observer must never stop the toast
+      }
+    }
+  }
   // Two phases, one clock per toast: mark it exiting so the renderer can animate it out, then
   // remove it once the animation has played.
   schedule(() => {

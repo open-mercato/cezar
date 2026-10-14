@@ -14,11 +14,12 @@
 //! updater is never a dead end. That is `npm install --prefix` into the same layout the
 //! cockpit's updater uses — no cezar code needed, any version recoverable.
 //!
-//! Three commands are exposed over Tauri IPC — `update_cezar_command`, `retry_start` and
+//! Commands exposed over Tauri IPC — `update_cezar_command`, `restart_app`, `send_error_report` and
 //! `show_versions_menu` — beside window dragging. The capability has to name loopback with a
 //! port wildcard (the cockpit's port is picked at launch), so the narrowing happens HERE: every
 //! command refuses a caller that is not the splash or the cockpit on the port this shell
-//! spawned (`caller_is_trusted`), and the window itself never navigates to another local server
+//! spawned (`caller_is_trusted`) — the failure page's `restart_app` and `send_error_report` the
+//! splash alone (`caller_is_splash`) — and the window itself never navigates to another local server
 //! (`is_own_origin`). A dev server on `localhost:3000` is somebody else's page.
 
 use std::collections::VecDeque;
@@ -31,8 +32,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 mod disclaim;
+mod node_runtime;
+mod telemetry;
 pub use disclaim::disclaim_exec_if_asked;
 
+use telemetry::Failure;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
@@ -63,8 +67,10 @@ struct Shell {
     /// what the title strip's "Update cezar" button (legacy cockpits) is driven by.
     running_version: Mutex<Option<String>>,
     update_available: Mutex<Option<String>>,
-    /// True while a supervisor thread is alive; the splash's "Try again" starts one when none is.
+    /// True while a supervisor thread is alive.
     supervising: AtomicBool,
+    /// Set once the failure page's "Restart cezar" is under way; a second click does nothing.
+    restarting: AtomicBool,
 }
 
 /// Runs at document start on EVERY page the window loads — the splash and, after navigation,
@@ -385,6 +391,32 @@ fn refresh_versions_menu(app: &AppHandle, shell: &Shell) {
     }
 }
 
+/// How long a stopping sidecar gets to run its own shutdown before it is killed. cezar's SIGTERM
+/// handler flushes run state and sends its `app_stop` telemetry, bounded at 1.5 s.
+#[cfg(target_os = "macos")]
+const SIDECAR_STOP_GRACE: Duration = Duration::from_secs(2);
+
+/// Stop the sidecar the way Ctrl-C in a terminal would: SIGTERM first, so cezar's own shutdown
+/// runs (`store.flush()`, the `app_stop` event), then SIGKILL if it is still there after
+/// `SIDECAR_STOP_GRACE`. A bare `kill()` is SIGKILL — it skipped all of that. Only macOS links
+/// `libc` (Cargo.toml); elsewhere this keeps the hard kill.
+fn stop_sidecar(child: &mut Child) {
+    #[cfg(target_os = "macos")]
+    {
+        // SAFETY: `kill(2)` on our own child's pid; a pid that already exited is a harmless ESRCH.
+        if unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) } == 0 {
+            let deadline = Instant::now() + SIDECAR_STOP_GRACE;
+            while Instant::now() < deadline {
+                if matches!(child.try_wait(), Ok(Some(_))) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+    let _ = child.kill();
+}
+
 /// Point `current` at an installed id (atomic rename over the old link) and relaunch.
 fn switch_version(shell: &Shell, id: &str) -> bool {
     let dir = cezar_home().join("versions");
@@ -397,7 +429,7 @@ fn switch_version(shell: &Shell, id: &str) -> bool {
     let mut guard = shell.child.lock().unwrap();
     if let Some(child) = guard.as_mut() {
         shell.restart_requested.store(true, Ordering::SeqCst);
-        let _ = child.kill();
+        stop_sidecar(child);
     }
     true
 }
@@ -458,23 +490,24 @@ fn check_cezar_update(app: &AppHandle, shell: &Shell) {
     let running = shell.running_version.lock().unwrap().clone();
     let Some(running) = running else { return };
     let Some(tag) = release_tag() else { return };
-    let mut command = tool_command(npm_program(), &["view", &format!("{PACKAGE}@{tag}"), "version", "--json"]);
-    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
-    let Ok(output) = command.output() else { return };
-    let raw = String::from_utf8_lossy(&output.stdout);
-    let latest = serde_json::from_str::<serde_json::Value>(raw.trim())
-        .ok()
-        .and_then(|value| match value {
-            serde_json::Value::String(v) => Some(v),
-            serde_json::Value::Array(items) => items.into_iter().filter_map(|v| v.as_str().map(str::to_owned)).last(),
-            _ => None,
-        });
-    let Some(latest) = latest else { return };
+    let Some(latest) = channel_latest(tag) else { return };
     let newer = version_newer(&latest, &running).then_some(latest);
     *shell.update_available.lock().unwrap() = newer.clone();
     if let (Some(version), Some(window)) = (newer, app.get_webview_window("main")) {
         offer_update(&window, &version);
     }
+}
+
+/// What the channel's dist-tag points at, through npm (so registry config and auth apply).
+fn channel_latest(tag: &str) -> Option<String> {
+    let mut command = tool_command(npm_program(), &["view", &format!("{PACKAGE}@{tag}"), "version", "--json"]);
+    command.stdin(Stdio::null());
+    let (_, raw) = output_with_timeout(&mut command, RESTART_CHECK_TIMEOUT)?;
+    serde_json::from_str::<serde_json::Value>(raw.trim()).ok().and_then(|value| match value {
+        serde_json::Value::String(v) => Some(v),
+        serde_json::Value::Array(items) => items.into_iter().filter_map(|v| v.as_str().map(str::to_owned)).last(),
+        _ => None,
+    })
 }
 
 /// Whether the legacy strip's version chip has anything to offer.
@@ -517,6 +550,7 @@ fn offer_update(window: &WebviewWindow, version: &str) {
 }
 
 pub fn run() {
+    telemetry::install_panic_hook();
     let shell = Arc::new(Shell {
         child: Mutex::new(None),
         port: AtomicU16::new(0),
@@ -528,6 +562,7 @@ pub fn run() {
         running_version: Mutex::new(None),
         update_available: Mutex::new(None),
         supervising: AtomicBool::new(false),
+        restarting: AtomicBool::new(false),
     });
     let shell_for_setup = shell.clone();
     let shell_for_menu = shell.clone();
@@ -539,7 +574,7 @@ pub fn run() {
     let shell_for_signal = shell.clone();
     let _ = ctrlc::set_handler(move || {
         if let Some(mut child) = shell_for_signal.child.lock().unwrap().take() {
-            let _ = child.kill();
+            stop_sidecar(&mut child);
             let _ = child.wait();
         }
         std::process::exit(0);
@@ -548,7 +583,7 @@ pub fn run() {
     let shell_for_state = shell.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![update_cezar_command, retry_start, show_versions_menu])
+        .invoke_handler(tauri::generate_handler![update_cezar_command, restart_app, show_versions_menu, send_error_report])
         .setup(move |app| {
             app.manage(shell_for_state.clone());
             let handle = app.handle().clone();
@@ -662,7 +697,7 @@ pub fn run() {
                     save_geometry(&window);
                 }
                 if let Some(mut child) = shell_for_run.child.lock().unwrap().take() {
-                    let _ = child.kill();
+                    stop_sidecar(&mut child);
                     let _ = child.wait();
                 }
             }
@@ -738,7 +773,7 @@ fn supervise(app: AppHandle, shell: Arc<Shell>) {
         let mut child = match spawn_sidecar(&entry, port, &cwd, log.clone()) {
             Ok(child) => child,
             Err(error) => {
-                fail(&window, "cezar could not start", &error, "");
+                fail(&window, "cezar could not start", &error, "", Some(Failure::new("sidecar_spawn_failed", &error)));
                 return;
             }
         };
@@ -775,7 +810,12 @@ fn supervise(app: AppHandle, shell: Arc<Shell>) {
             });
         } else {
             let tail = log.lock().unwrap().iter().cloned().collect::<Vec<_>>().join("\n");
-            fail(&window, "cezar did not come up", &format!("No answer on {url} within {}s (pid {pid}).", HEALTH_TIMEOUT.as_secs()), &tail);
+            let failure = match child.try_wait() {
+                Ok(Some(status)) => Failure::new("sidecar_exited_at_start", format!("The cockpit process exited with {status} before answering."))
+                    .with("exit_code", status.code()),
+                _ => Failure::new("sidecar_health_timeout", format!("No answer within {}s.", HEALTH_TIMEOUT.as_secs())),
+            };
+            fail(&window, "cezar did not come up", &format!("No answer on {url} within {}s (pid {pid}).", HEALTH_TIMEOUT.as_secs()), &tail, Some(failure));
             let _ = child.kill();
             return;
         }
@@ -808,7 +848,8 @@ fn supervise(app: AppHandle, shell: Arc<Shell>) {
             }
             Some(code) => {
                 let tail = log.lock().unwrap().iter().cloned().collect::<Vec<_>>().join("\n");
-                fail(&window, "cezar stopped", &format!("The cockpit process exited with status {code}."), &tail);
+                let failure = Failure::new("sidecar_exited", format!("The cockpit process exited with status {code}.")).with("exit_code", code);
+                fail(&window, "cezar stopped", &format!("The cockpit process exited with status {code}."), &tail, Some(failure));
                 return;
             }
             None => return,
@@ -833,14 +874,41 @@ fn npm_program() -> &'static str {
     }
 }
 
-/// Node 20+ reachable on the user's PATH? Returns its version, or the reason it is not.
+/// Node 20+ reachable? Returns its version, or the reason it is not. Also decides the PATH every
+/// later `tool_command` gets, so npm and the sidecar run the same Node this check found:
+/// 1. the PATH the user's shell reports (cached from the first call);
+/// 2. that PATH resolved AGAIN — Node may have been installed since (the splash's "Try again");
+/// 3. the folders installers and version managers use, each `node` asked directly — a lazy nvm,
+///    an rc file a login shell skips, an old system Node shadowing a new one;
+/// 4. the managed runtime a previous launch downloaded (`~/.cezar/node`, #1403).
 fn check_node() -> Result<String, String> {
-    let mut command = tool_command(&node_program(), &["-p", "process.versions.node"]);
-    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
-    let output = command.output().map_err(|_| "Node.js was not found on your PATH.".to_string())?;
-    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if !output.status.success() || version.is_empty() {
-        return Err("Node.js was not found on your PATH.".into());
+    let first = node_version(tool_command(&node_program(), &["-p", "process.versions.node"]));
+    if first.is_ok() || std::env::var_os("CEZ_DESKTOP_NODE").is_some_and(|v| !v.is_empty()) {
+        return first;
+    }
+    set_tool_path(ToolPath { node_dir: None, base: resolve_base_path() });
+    if let Ok(version) = node_version(tool_command(&node_program(), &["-p", "process.versions.node"])) {
+        return Ok(version);
+    }
+    let env = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+    let managed = node_runtime::installed(&managed_node_root()).into_iter().map(|(_, dir)| node_runtime::bin_dir(&dir));
+    match find_node_in(&candidate_node_dirs(&env).into_iter().chain(managed).collect::<Vec<_>>()) {
+        Some((dir, version)) => {
+            let base = tool_path().base;
+            set_tool_path(ToolPath { node_dir: Some(dir), base });
+            Ok(version)
+        }
+        None => first,
+    }
+}
+
+/// Runs `node -p process.versions.node` and judges the answer.
+fn node_version(mut command: Command) -> Result<String, String> {
+    let not_found = || "Node.js was not found on your PATH.".to_string();
+    let (success, stdout) = output_with_timeout(command.stdin(Stdio::null()), Duration::from_secs(30)).ok_or_else(not_found)?;
+    let version = stdout.trim().to_string();
+    if !success || version.is_empty() {
+        return Err(not_found());
     }
     let major = version.split('.').next().and_then(|m| m.parse::<u32>().ok()).unwrap_or(0);
     if major < 20 {
@@ -849,28 +917,197 @@ fn check_node() -> Result<String, String> {
     Ok(version)
 }
 
-/// The splash's "Try again" (after installing Node) lands here: start a supervisor when none
-/// is running. Idempotent — a click while one is alive does nothing.
-#[tauri::command]
-fn retry_start(app: AppHandle, window: WebviewWindow, shell: tauri::State<'_, Arc<Shell>>) {
-    if !caller_is_trusted(&window, &shell) || shell.supervising.load(Ordering::SeqCst) {
-        return;
-    }
-    let app = app.clone();
-    let shell = shell.inner().clone();
-    std::thread::spawn(move || supervise(app, shell));
+/// The first folder whose own `node` is 20+, asked directly rather than through any PATH.
+fn find_node_in(dirs: &[PathBuf]) -> Option<(PathBuf, String)> {
+    dirs.iter().find_map(|dir| {
+        let mut command = Command::new(dir.join(NODE_EXE));
+        command.arg("-p").arg("process.versions.node");
+        hide_console(&mut command);
+        node_version(command).ok().map(|version| (dir.clone(), version))
+    })
 }
 
-/// Install from the shell needs Node too: check first and show the dedicated page instead of
-/// letting npm fail with a shell error.
+const NODE_EXE: &str = if cfg!(windows) { "node.exe" } else { "node" };
+
+/// Waits at most `timeout` for `command`; `(exit success, stdout)`, or `None` when it could not
+/// start or ran out of time (then it is killed). Stderr is discarded.
+fn output_with_timeout(command: &mut Command, timeout: Duration) -> Option<(bool, String)> {
+    let mut child = command.stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let mut stdout = child.stdout.take()?;
+    let (sender, output) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut out = String::new();
+        let _ = stdout.read_to_string(&mut out);
+        let _ = sender.send(out);
+    });
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    // A background job the child started can hold stdout open past its exit.
+    let out = output.recv_timeout(deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(500))).ok()?;
+    Some((status.success(), out))
+}
+
+/// The failure page's "Restart cezar": first whatever might already fix it — a newer shell, a
+/// newer cezar on the channel — then the whole app again, from a fresh process. Each update step
+/// that fails or finds nothing just moves on; the restart always happens.
+#[tauri::command]
+fn restart_app(app: AppHandle, window: WebviewWindow, shell: tauri::State<'_, Arc<Shell>>) {
+    if !caller_is_splash(&window) || shell.restarting.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let shell = shell.inner().clone();
+    std::thread::spawn(move || {
+        splash_reset(&window, "Checking for updates…", "A newer version may already fix this.");
+        install_shell_update_now(&app, &window);
+        update_cezar_if_newer(&app, &shell);
+        splash_reset(&window, "Restarting cezar…", "");
+        if let Some(mut child) = shell.child.lock().unwrap().take() {
+            stop_sidecar(&mut child);
+            let _ = child.wait();
+        }
+        app.restart();
+    });
+}
+
+/// The shell's own update, installed now rather than on the next launch — the restart that
+/// follows starts it. Skipped where the background check is (`CEZ_DESKTOP_NO_UPDATE`, debug).
+fn install_shell_update_now(app: &AppHandle, window: &WebviewWindow) {
+    use tauri_plugin_updater::UpdaterExt;
+    if std::env::var_os("CEZ_DESKTOP_NO_UPDATE").is_some() || cfg!(debug_assertions) {
+        return;
+    }
+    let Ok(updater) = app.updater() else { return };
+    // Bounded: an unreachable update server must not keep the restart from happening. The
+    // download itself is not — it shows on the splash and the update is worth having.
+    let (found, check) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = found.send(tauri::async_runtime::block_on(updater.check()).ok().flatten());
+    });
+    let Ok(Some(update)) = check.recv_timeout(RESTART_CHECK_TIMEOUT) else { return };
+    splash_reset(window, "Updating the app…", &format!("cezar desktop {}", update.version));
+    let _ = tauri::async_runtime::block_on(update.download_and_install(|_, _| {}, || {}));
+}
+
+/// How long each update check on the way to a restart may take.
+const RESTART_CHECK_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// A newer cezar on the update channel than the active install: put it in place before the
+/// restart. Nothing installed yet is the supervisor's job on the way back up.
+fn update_cezar_if_newer(app: &AppHandle, shell: &Shell) {
+    let Some(tag) = release_tag() else { return };
+    let Some(active) = active_id(&cezar_home().join("versions")) else { return };
+    if check_node().is_err() {
+        return;
+    }
+    if channel_latest(tag).is_some_and(|latest| version_newer(&latest, &active)) {
+        update_cezar(app, shell, "Updating cezar…");
+    }
+}
+
+/// Install from the shell needs Node too: check first; with none anywhere, download the managed
+/// runtime; only when that fails too, show the dedicated page instead of letting npm fail with a
+/// shell error. `CEZ_DESKTOP_NODE` names the node to use, so it never triggers a download.
 fn require_node(window: &WebviewWindow) -> bool {
-    match check_node() {
-        Ok(_) => true,
-        Err(reason) => {
-            fail_needs_node(window, &reason);
+    let reason = match check_node() {
+        Ok(_) => {
+            update_managed_node_in_background();
+            return true;
+        }
+        Err(reason) => reason,
+    };
+    if std::env::var_os("CEZ_DESKTOP_NODE").is_some_and(|v| !v.is_empty()) {
+        fail(window, "cezar could not start Node.js", &reason, "", None);
+        return false;
+    }
+    match install_managed_node(window) {
+        Ok(bin) => {
+            let base = tool_path().base;
+            set_tool_path(ToolPath { node_dir: Some(bin), base });
+            true
+        }
+        Err(error) => {
+            let failure = Failure::new("managed_node_install_failed", &error).retriable().with("node.reason", reason.as_str());
+            fail(window, "cezar could not set up Node.js", &format!("cezar runs on Node.js and could not download it: {error}"), "", Some(failure));
             false
         }
     }
+}
+
+fn managed_node_root() -> PathBuf {
+    cezar_home().join("node")
+}
+
+/// First launch without Node: the newest LTS for this platform into `~/.cezar/node`, with the
+/// download's progress on the splash. Returns the folder holding `node`.
+fn install_managed_node(window: &WebviewWindow) -> Result<PathBuf, String> {
+    let asset = node_runtime::current_asset().ok_or("nodejs.org has no build for this platform.")?;
+    let root = managed_node_root();
+    splash_reset(window, "Downloading Node.js…", "cezar runs on Node.js. None was found on this machine, so the app is getting its own.");
+    let (version, sha) = node_runtime::resolve_release(&asset, None)?;
+    splash_progress(window, 0.0, &format!("Node.js v{version} → {}", root.display()));
+    let mut last = Instant::now() - Duration::from_secs(1);
+    let dir = node_runtime::install(
+        &root,
+        &version,
+        &asset,
+        &sha,
+        |file| {
+            node_runtime::fetch_archive(&version, &asset, file, &mut |done, total| {
+                // One splash update every ~100ms, not one per network chunk.
+                if last.elapsed() < Duration::from_millis(100) && total != Some(done) {
+                    return;
+                }
+                last = Instant::now();
+                let mb = |bytes: u64| bytes as f64 / 1_048_576.0;
+                let (fraction, text) = match total {
+                    Some(total) if total > 0 => (done as f64 / total as f64, format!("Node.js v{version}: {:.1} of {:.1} MB", mb(done), mb(total))),
+                    _ => (-1.0, format!("Node.js v{version}: {:.1} MB", mb(done))),
+                };
+                splash_progress(window, fraction, &text);
+            })
+        },
+        |bin| {
+            splash_progress(window, 1.0, &format!("Checking Node.js v{version}…"));
+            find_node_in(&[bin.to_path_buf()]).map(|_| ()).ok_or_else(|| "the downloaded Node.js does not run on this machine.".into())
+        },
+    )?;
+    node_runtime::prune(&root, &dir);
+    Ok(node_runtime::bin_dir(&dir))
+}
+
+/// When the managed runtime is the one in use: install the newest release of its major line for
+/// the NEXT launch, and prune the rest. Silent — offline just means "not this time".
+fn update_managed_node_in_background() {
+    let root = managed_node_root();
+    let Some(in_use) = tool_path().node_dir.filter(|dir| dir.starts_with(&root)) else { return };
+    std::thread::spawn(move || {
+        let installed = node_runtime::installed(&root);
+        let Some((newest, _)) = installed.first() else { return };
+        let (Some(asset), Some(major)) = (node_runtime::current_asset(), parse_node_version(newest).map(|v| v.0)) else { return };
+        if let Ok((version, sha)) = node_runtime::resolve_release(&asset, Some(major)) {
+            if parse_node_version(&version) > parse_node_version(newest) {
+                let _ = node_runtime::install(
+                    &root,
+                    &version,
+                    &asset,
+                    &sha,
+                    |file| node_runtime::fetch_archive(&version, &asset, file, &mut |_, _| {}),
+                    |bin| find_node_in(&[bin.to_path_buf()]).map(|_| ()).ok_or_else(|| "does not run".into()),
+                );
+            }
+        }
+        node_runtime::prune(&root, &in_use);
+    });
 }
 
 // ---- installing / updating cezar from the shell ------------------------------------------
@@ -932,7 +1169,8 @@ fn update_cezar(app: &AppHandle, shell: &Shell, title: &str) -> bool {
             true
         }
         Err(reason) => {
-            fail(&window, "cezar could not be installed", &reason, &lines.join("\n"));
+            let failure = Failure::new("cezar_install_failed", &reason).with("cezar.tag", tag).with("cezar.first_install", resolve_entry().is_none());
+            fail(&window, "cezar could not be installed", &reason, &lines.join("\n"), Some(failure));
             false
         }
     };
@@ -942,7 +1180,7 @@ fn update_cezar(app: &AppHandle, shell: &Shell, title: &str) -> bool {
         let mut guard = shell.child.lock().unwrap();
         if let Some(child) = guard.as_mut() {
             shell.restart_requested.store(true, Ordering::SeqCst);
-            let _ = child.kill();
+            stop_sidecar(child);
         }
     }
     ok
@@ -1018,30 +1256,262 @@ fn spawn_sidecar(entry: &Path, port: u16, cwd: &Path, log: Arc<Mutex<VecDeque<St
 /// Windows: directly. There is no login shell, the PATH a GUI process gets is the user's own
 /// (installers write it to the registry), and `cmd` understands none of POSIX quoting — so
 /// nothing here is ever a script on Windows, only a program and its arguments.
+/// Either way the PATH is the one `check_node` settled on (`ToolPath`).
 fn tool_command(program: &str, args: &[&str]) -> Command {
+    let path = tool_path();
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
-        /// No console window flashing up behind the app for every node and npm call.
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let mut command = Command::new(program);
-        command.args(args).creation_flags(CREATE_NO_WINDOW);
+        command.args(args);
+        hide_console(&mut command);
+        if path.node_dir.is_some() || path.base.is_some() {
+            let base = path.base.map(std::ffi::OsString::from).or_else(|| std::env::var_os("PATH")).unwrap_or_default();
+            if let Ok(joined) = std::env::join_paths(path.node_dir.into_iter().chain(std::env::split_paths(&base))) {
+                command.env("PATH", joined);
+            }
+        }
         command
     }
     #[cfg(not(windows))]
     {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| if cfg!(target_os = "macos") { "/bin/zsh".into() } else { "/bin/bash".into() });
-        let mut command = Command::new(shell);
-        command.args(["-lc", &posix_script(program, args)]);
+        let node_dir = path.node_dir.map(|dir| dir.to_string_lossy().into_owned());
+        let mut command = Command::new(user_shell());
+        command.args(["-lc", &posix_script(node_dir.as_deref(), path.base.as_deref(), program, args)]);
         command
     }
 }
 
-/// `exec 'program' 'arg' …` — every word single-quoted, so a path with a space or a quote in it
-/// stays one argument.
+/// No console window flashing up behind the app for every node and npm call.
+fn hide_console(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    let _ = command;
+}
+
+/// The PATH every tool command runs with.
+#[derive(Clone, Default)]
+struct ToolPath {
+    /// A Node 20+ folder found outside the PATH, put FIRST so npm and the sidecar use it too.
+    node_dir: Option<PathBuf>,
+    /// The PATH to use instead of the inherited one: an interactive login shell's (macOS, Linux)
+    /// or the registry's (Windows). `None` keeps the profile's / the process's own.
+    base: Option<String>,
+}
+
+static TOOL_PATH: Mutex<Option<ToolPath>> = Mutex::new(None);
+
+/// Resolved on first use, then kept — a shell start per npm call would be slow.
+fn tool_path() -> ToolPath {
+    let mut guard = TOOL_PATH.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard
+        .get_or_insert_with(|| ToolPath { node_dir: None, base: if cfg!(windows) { None } else { resolve_base_path() } })
+        .clone()
+}
+
+fn set_tool_path(path: ToolPath) {
+    *TOOL_PATH.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(path);
+}
+
+/// The user's PATH as of NOW. macOS/Linux: an interactive login shell's — a login shell alone
+/// skips `~/.zshrc`/`~/.bashrc`, where nvm, fnm and most version managers put Node. Windows: the
+/// registry's machine + user PATH, because a GUI process keeps the PATH Explorer had when the
+/// user logged in, from before Node was installed. `None` when it cannot be read: a hung or
+/// noisy rc file degrades to the inherited PATH, never blocks boot.
+fn resolve_base_path() -> Option<String> {
+    #[cfg(windows)]
+    {
+        let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        let powershell = Path::new(&system_root).join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+        let mut command = Command::new(if powershell.is_file() { powershell } else { PathBuf::from("powershell.exe") });
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')",
+        ]);
+        command.stdin(Stdio::null());
+        hide_console(&mut command);
+        let (success, stdout) = output_with_timeout(&mut command, Duration::from_secs(10))?;
+        let inherited = std::env::var("PATH").unwrap_or_default();
+        (success && !stdout.trim().trim_matches(';').is_empty()).then(|| merge_paths(stdout.trim(), &inherited, ';'))
+    }
+    #[cfg(not(windows))]
+    {
+        resolve_interactive_path(&user_shell(), Duration::from_secs(10))
+    }
+}
+
+/// `first`'s entries, then `second`'s that `first` lacks — order kept, empties dropped.
+#[cfg(any(windows, test))]
+fn merge_paths(first: &str, second: &str, separator: char) -> String {
+    let mut seen = std::collections::HashSet::new();
+    first
+        .split(separator)
+        .chain(second.split(separator))
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty() && seen.insert(entry.to_ascii_lowercase()))
+        .collect::<Vec<_>>()
+        .join(&separator.to_string())
+}
+
+#[cfg(not(windows))]
+fn user_shell() -> String {
+    std::env::var("SHELL").ok().filter(|v| !v.is_empty()).unwrap_or_else(|| if cfg!(target_os = "macos") { "/bin/zsh".into() } else { "/bin/bash".into() })
+}
+
 #[cfg(any(not(windows), test))]
-fn posix_script(program: &str, args: &[&str]) -> String {
-    let mut script = format!("exec {}", shell_quote(program));
+const PATH_MARKER: &str = "__CEZ_DESKTOP_PATH__";
+
+#[cfg(not(windows))]
+fn resolve_interactive_path(shell: &str, timeout: Duration) -> Option<String> {
+    let script = format!("echo; echo {PATH_MARKER}; printenv PATH; echo {PATH_MARKER}");
+    let mut command = Command::new(shell);
+    command.args(["-ilc", &script]).stdin(Stdio::null());
+    parse_marked_path(&output_with_timeout(&mut command, timeout)?.1)
+}
+
+/// The line between the two markers — whatever an rc file printed around it is ignored.
+#[cfg(any(not(windows), test))]
+fn parse_marked_path(output: &str) -> Option<String> {
+    let mut lines = output.lines().map(str::trim);
+    lines.find(|line| *line == PATH_MARKER)?;
+    let path = lines.next()?;
+    (lines.next()? == PATH_MARKER && !path.is_empty()).then(|| path.to_string())
+}
+
+/// Every folder an installer or version manager puts a `node` in, most deliberate first: the
+/// version managers (newest 20+ install first), then package managers, then the system. Only
+/// folders that hold a `node` survive. `check_node` asks each one in turn.
+fn candidate_node_dirs(env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let dir_of = |name: &str| env(name).map(PathBuf::from);
+    if cfg!(windows) {
+        let local = dir_of("LOCALAPPDATA");
+        let roaming = dir_of("APPDATA");
+        let profile = dir_of("USERPROFILE");
+        let program_data = dir_of("ProgramData").unwrap_or_else(|| r"C:\ProgramData".into());
+        // nvm-windows: the active version's symlink, then every install (`v22.11.0\node.exe`).
+        dirs.extend(dir_of("NVM_SYMLINK"));
+        for nvm in [dir_of("NVM_HOME"), roaming.as_ref().map(|r| r.join("nvm"))].into_iter().flatten() {
+            dirs.extend(node_versions(&nvm, None));
+        }
+        for fnm in [dir_of("FNM_DIR"), roaming.as_ref().map(|r| r.join("fnm")), local.as_ref().map(|l| l.join("fnm"))].into_iter().flatten() {
+            dirs.push(fnm.join("aliases").join("default"));
+            dirs.extend(node_versions(&fnm.join("node-versions"), Some("installation")));
+        }
+        for volta in [dir_of("VOLTA_HOME").map(|v| v.join("bin")), local.as_ref().map(|l| l.join(r"Volta\bin"))].into_iter().flatten() {
+            dirs.push(volta);
+        }
+        for nvs in [dir_of("NVS_HOME"), local.as_ref().map(|l| l.join("nvs"))].into_iter().flatten() {
+            dirs.push(nvs.join("default"));
+        }
+        if let Some(local) = &local {
+            dirs.push(local.join(r"mise\shims"));
+            dirs.extend(node_versions(&local.join(r"mise\installs\node"), None));
+            dirs.push(local.join("pnpm"));
+        }
+        dirs.extend(dir_of("PNPM_HOME"));
+        for scoop in [dir_of("SCOOP"), profile.as_ref().map(|p| p.join("scoop")), dir_of("SCOOP_GLOBAL"), Some(program_data.join("scoop"))].into_iter().flatten() {
+            dirs.push(scoop.join(r"apps\nodejs\current"));
+            dirs.push(scoop.join(r"apps\nodejs-lts\current"));
+            dirs.push(scoop.join("shims"));
+        }
+        dirs.push(dir_of("ChocolateyInstall").unwrap_or_else(|| program_data.join("chocolatey")).join("bin"));
+        for files in [dir_of("ProgramFiles"), dir_of("ProgramW6432"), dir_of("ProgramFiles(x86)")].into_iter().flatten() {
+            dirs.push(files.join("nodejs"));
+            dirs.push(files.join("Volta"));
+        }
+    } else {
+        let home = dir_of("HOME");
+        let at_home = |rel: &str| home.as_ref().map(|h| h.join(rel));
+        let xdg_config = dir_of("XDG_CONFIG_HOME").or_else(|| at_home(".config"));
+        let xdg_data = dir_of("XDG_DATA_HOME").or_else(|| at_home(".local/share"));
+        for nvm in [dir_of("NVM_DIR"), at_home(".nvm"), xdg_config.as_ref().map(|c| c.join("nvm"))].into_iter().flatten() {
+            dirs.extend(node_versions(&nvm.join("versions").join("node"), Some("bin")));
+        }
+        for fnm in [dir_of("FNM_DIR"), xdg_data.as_ref().map(|d| d.join("fnm")), at_home("Library/Application Support/fnm"), at_home(".fnm")].into_iter().flatten() {
+            dirs.push(fnm.join("aliases/default/bin"));
+            dirs.extend(node_versions(&fnm.join("node-versions"), Some("installation/bin")));
+        }
+        dirs.extend(dir_of("VOLTA_HOME").map(|v| v.join("bin")).into_iter().chain(at_home(".volta/bin")));
+        for mise in [dir_of("MISE_DATA_DIR"), xdg_data.as_ref().map(|d| d.join("mise"))].into_iter().flatten() {
+            dirs.push(mise.join("shims"));
+            dirs.extend(node_versions(&mise.join("installs/node"), Some("bin")));
+        }
+        for asdf in [dir_of("ASDF_DATA_DIR"), at_home(".asdf")].into_iter().flatten() {
+            dirs.push(asdf.join("shims"));
+            dirs.extend(node_versions(&asdf.join("installs/nodejs"), Some("bin")));
+        }
+        if let Some(nodenv) = dir_of("NODENV_ROOT").or_else(|| at_home(".nodenv")) {
+            dirs.push(nodenv.join("shims"));
+            dirs.extend(node_versions(&nodenv.join("versions"), Some("bin")));
+        }
+        // n: its prefix, then the versions it keeps.
+        for prefix in [dir_of("N_PREFIX"), at_home("n"), Some("/usr/local".into())].into_iter().flatten() {
+            dirs.push(prefix.join("bin"));
+            dirs.extend(node_versions(&prefix.join("n/versions/node"), Some("bin")));
+        }
+        dirs.extend(at_home(".nodebrew/current/bin"));
+        dirs.extend(dir_of("PNPM_HOME").into_iter().chain(at_home("Library/pnpm")).chain(xdg_data.as_ref().map(|d| d.join("pnpm"))));
+        dirs.extend(at_home(".vite-plus/bin"));
+        // Homebrew, including the keg-only `node@22` a `brew install node@22` never links.
+        for brew in ["/opt/homebrew", "/usr/local", "/home/linuxbrew/.linuxbrew"].map(PathBuf::from).into_iter().chain(at_home(".linuxbrew")) {
+            dirs.push(brew.join("bin"));
+            dirs.extend(node_versions(&brew.join("opt"), Some("bin")));
+        }
+        dirs.push("/opt/local/bin".into()); // MacPorts
+        dirs.extend(at_home(".nix-profile/bin"));
+        dirs.extend(dir_of("USER").map(|user| PathBuf::from("/etc/profiles/per-user").join(user).join("bin")));
+        dirs.extend(["/nix/var/nix/profiles/default/bin", "/run/current-system/sw/bin", "/snap/bin", "/usr/bin"].map(PathBuf::from));
+        dirs.extend(at_home(".local/bin"));
+    }
+    let mut seen = std::collections::HashSet::new();
+    dirs.retain(|dir| dir.join(NODE_EXE).is_file() && seen.insert(dir.clone()));
+    dirs
+}
+
+/// Node 20+ installs under `parent` — `v22.11.0`, `22.11.0` or Homebrew's `node@22` — newest
+/// first, each joined with `sub` (`bin`, `installation/bin`, …).
+fn node_versions(parent: &Path, sub: Option<&str>) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(parent) else { return Vec::new() };
+    let mut found: Vec<((u32, u32, u32), PathBuf)> = entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let version = parse_node_version(&entry.file_name().to_string_lossy())?;
+            let dir = sub.map_or_else(|| entry.path(), |sub| entry.path().join(sub));
+            (version.0 >= 20).then_some((version, dir))
+        })
+        .collect();
+    found.sort_by_key(|(version, _)| std::cmp::Reverse(*version));
+    found.into_iter().map(|(_, dir)| dir).collect()
+}
+
+fn parse_node_version(name: &str) -> Option<(u32, u32, u32)> {
+    if let Some(major) = name.strip_prefix("node@") {
+        return Some((major.parse().ok()?, 0, 0));
+    }
+    let mut parts = name.strip_prefix('v').unwrap_or(name).split('.').map(|part| part.parse::<u32>().ok());
+    let version = (parts.next()??, parts.next()??, parts.next()??);
+    parts.next().is_none().then_some(version)
+}
+
+/// `[export PATH=…; ]exec 'program' 'arg' …` — every word single-quoted, so a path with a space
+/// or a quote in it stays one argument. The export runs after the profile, so it wins; `node_dir`
+/// goes first, ahead of `base` or, without one, the profile's own `$PATH`.
+#[cfg(any(not(windows), test))]
+fn posix_script(node_dir: Option<&str>, base: Option<&str>, program: &str, args: &[&str]) -> String {
+    let mut script = match (node_dir, base) {
+        (Some(dir), Some(base)) => format!("export PATH={}; ", shell_quote(&format!("{dir}:{base}"))),
+        (Some(dir), None) => format!("export PATH={}:\"$PATH\"; ", shell_quote(dir)),
+        (None, Some(base)) => format!("export PATH={}; ", shell_quote(base)),
+        (None, None) => String::new(),
+    };
+    script.push_str(&format!("exec {}", shell_quote(program)));
     for arg in args {
         script.push(' ');
         script.push_str(&shell_quote(arg));
@@ -1205,6 +1675,12 @@ fn is_own_origin(url: &url::Url, port: u16) -> bool {
 /// cannot express this (it grants loopback on any port), so the commands do.
 fn caller_is_trusted(window: &WebviewWindow, shell: &Shell) -> bool {
     window.url().map(|url| is_own_origin(&url, shell.port.load(Ordering::SeqCst))).unwrap_or(false)
+}
+
+/// The failure page's commands (`restart_app`, `send_error_report`): the splash only, never the
+/// cockpit — port 0 trusts nothing on loopback.
+fn caller_is_splash(window: &WebviewWindow) -> bool {
+    window.url().is_ok_and(|url| is_own_origin(&url, 0))
 }
 
 /// The same page on `localhost`, for the browser: only the HOST changes, never a `127.0.0.1`
@@ -1457,6 +1933,11 @@ fn splash_log(window: &WebviewWindow, line: &str) {
     let _ = window.eval(&format!("window.cezarSplash && window.cezarSplash.log({})", js_string(line)));
 }
 
+/// The splash's progress bar: `fraction` 0..=1, or negative when the total is unknown.
+fn splash_progress(window: &WebviewWindow, fraction: f64, text: &str) {
+    let _ = window.eval(&format!("window.cezarSplash && window.cezarSplash.progress && window.cezarSplash.progress({fraction:.4}, {})", js_string(text)));
+}
+
 /// Back to the splash from the cockpit (a different origin), then set the message.
 fn splash_reset(window: &WebviewWindow, title: &str, detail: &str) {
     if let Ok(url) = url::Url::parse(&format!("{}?title={}&detail={}", app_origin(), urlencode(title), urlencode(detail))) {
@@ -1466,9 +1947,12 @@ fn splash_reset(window: &WebviewWindow, title: &str, detail: &str) {
     }
 }
 
-fn fail(window: &WebviewWindow, title: &str, detail: &str, log: &str) {
+/// A failure page. `failure` is what the shell knows went wrong: reported on its own when the user
+/// opted in to error reports, otherwise offered on the page behind "Send error report".
+fn fail(window: &WebviewWindow, title: &str, detail: &str, log: &str, failure: Option<Failure>) {
+    let report = report_param(failure, log);
     if let Ok(url) = url::Url::parse(&format!(
-        "{}?error={}&title={}&log={}",
+        "{}?error={}&title={}&log={}&report={report}",
         app_origin(),
         urlencode(detail),
         urlencode(title),
@@ -1478,17 +1962,30 @@ fn fail(window: &WebviewWindow, title: &str, detail: &str, log: &str) {
     }
 }
 
-/// The missing-Node page: the reason, a download link (opens in the browser through the
-/// navigation handler) and a "Try again" button (the `retry_start` command).
-fn fail_needs_node(window: &WebviewWindow, reason: &str) {
-    if let Ok(url) = url::Url::parse(&format!(
-        "{}?needs_node=1&error={}&title={}",
-        app_origin(),
-        urlencode(reason),
-        urlencode("cezar needs Node.js 20 or newer")
-    )) {
-        let _ = window.navigate(url);
+/// The page's `report` mode, after adding what only the shell knows: the active cezar and where
+/// Node came from.
+fn report_param(failure: Option<Failure>, log: &str) -> &'static str {
+    let Some(failure) = failure else { return telemetry::Reported::Off.as_param() };
+    let node = match tool_path().node_dir {
+        Some(dir) if dir.starts_with(managed_node_root()) => "managed",
+        Some(_) => "install_folder",
+        None => "path",
+    };
+    let failure = failure.with("cezar.version", active_id(&cezar_home().join("versions"))).with("node.source", node);
+    telemetry::report_or_offer(failure, log).as_param()
+}
+
+/// The failure page's "Send error report" button. The splash only — never the cockpit, which
+/// has its own reporting. The send runs off the main thread; the page hears back through `eval`.
+#[tauri::command]
+fn send_error_report(window: WebviewWindow) {
+    if !caller_is_splash(&window) {
+        return;
     }
+    std::thread::spawn(move || {
+        let sent = telemetry::send_offered();
+        let _ = window.eval(&format!("window.cezarSplash && window.cezarSplash.reportSent && window.cezarSplash.reportSent({sent})"));
+    });
 }
 
 fn app_origin() -> &'static str {
@@ -1555,6 +2052,20 @@ mod tests {
         assert!(is_own_origin(&url("http://tauri.localhost/"), 4321));
         assert!(is_own_origin(&url("http://127.0.0.1:4321/p/x/tasks"), 4321));
         assert!(is_own_origin(&url("http://localhost:4321/"), 4321));
+    }
+
+    /// The splash's script runs only inside the app, so nothing else would notice a syntax error
+    /// that leaves every failure page without its message, report card and Restart button.
+    #[test]
+    #[ignore = "needs node"]
+    fn the_splash_script_parses() {
+        let html = include_str!("../../ui/index.html");
+        let script = html.split("<script>").nth(1).and_then(|rest| rest.split("</script>").next()).expect("an inline script");
+        let file = std::env::temp_dir().join(format!("cezar-splash-{}.js", std::process::id()));
+        std::fs::write(&file, script).unwrap();
+        let output = Command::new("node").arg("--check").arg(&file).output().expect("node on PATH");
+        let _ = std::fs::remove_file(&file);
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     }
 
     #[test]
@@ -1718,9 +2229,147 @@ mod tests {
     #[test]
     fn a_posix_command_keeps_every_argument_whole() {
         assert_eq!(
-            posix_script("node", &["/Users/o'neil/my app/index.js", "serve", "--port", "4321"]),
+            posix_script(None, None, "node", &["/Users/o'neil/my app/index.js", "serve", "--port", "4321"]),
             r#"exec 'node' '/Users/o'\''neil/my app/index.js' 'serve' '--port' '4321'"#
         );
+        assert_eq!(
+            posix_script(None, Some("/Users/o'neil/.nvm/bin:/usr/bin"), "node", &["-v"]),
+            r#"export PATH='/Users/o'\''neil/.nvm/bin:/usr/bin'; exec 'node' '-v'"#
+        );
+        assert_eq!(posix_script(Some("/h/.nvm/v22/bin"), Some("/usr/bin"), "npm", &["-v"]), r#"export PATH='/h/.nvm/v22/bin:/usr/bin'; exec 'npm' '-v'"#);
+        assert_eq!(posix_script(Some("/h/.nvm/v22/bin"), None, "node", &[]), r#"export PATH='/h/.nvm/v22/bin':"$PATH"; exec 'node'"#);
+    }
+
+    #[cfg(unix)]
+    fn fake_node(dir: &Path, prints: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(dir).unwrap();
+        let node = dir.join("node");
+        std::fs::write(&node, format!("#!/bin/sh\necho {prints}\n")).unwrap();
+        std::fs::set_permissions(&node, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// Lazy-loaded nvm and friends: `node` is on no PATH a shell reports, but it is installed.
+    #[cfg(unix)]
+    #[test]
+    fn known_install_folders_are_listed_newest_manager_install_first() {
+        let home = std::env::temp_dir().join(format!("cez-desktop-dirs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        for dir in [
+            ".nvm/versions/node/v18.20.0/bin",
+            ".nvm/versions/node/v20.9.0/bin",
+            ".nvm/versions/node/v22.11.0/bin",
+            ".local/share/fnm/aliases/default/bin",
+            ".local/share/mise/installs/node/22.1.0/bin",
+            ".asdf/installs/nodejs/21.0.0/bin",
+            "n/bin",
+        ] {
+            fake_node(&home.join(dir), "x");
+        }
+        std::fs::create_dir_all(home.join(".volta/bin")).unwrap(); // no node in it
+        let home_str = home.to_string_lossy().into_owned();
+        let dirs = candidate_node_dirs(&|name| (name == "HOME").then(|| home_str.clone()));
+        let ours = dirs.into_iter().filter(|dir| dir.starts_with(&home)).collect::<Vec<_>>();
+        assert_eq!(
+            ours,
+            [
+                ".nvm/versions/node/v22.11.0/bin",
+                ".nvm/versions/node/v20.9.0/bin",
+                ".local/share/fnm/aliases/default/bin",
+                ".local/share/mise/installs/node/22.1.0/bin",
+                ".asdf/installs/nodejs/21.0.0/bin",
+                "n/bin",
+            ]
+            .map(|dir| home.join(dir))
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn install_folder_names_read_as_versions() {
+        assert_eq!(parse_node_version("v22.11.0"), Some((22, 11, 0)));
+        assert_eq!(parse_node_version("20.9.1"), Some((20, 9, 1)));
+        assert_eq!(parse_node_version("node@22"), Some((22, 0, 0)));
+        for junk in ["lts", "22", "node", "v22.1", "v22.1.0.1", "node@", ".DS_Store"] {
+            assert_eq!(parse_node_version(junk), None, "{junk}");
+        }
+    }
+
+    /// An old Node first on PATH must not hide a newer one a version manager installed.
+    #[cfg(unix)]
+    #[test]
+    fn the_first_install_folder_with_node_20_wins() {
+        let root = std::env::temp_dir().join(format!("cez-desktop-find-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        fake_node(&root.join("old"), "18.19.0");
+        fake_node(&root.join("broken"), "");
+        fake_node(&root.join("good"), "22.11.0");
+        fake_node(&root.join("later"), "24.0.0");
+        let dirs = ["missing", "old", "broken", "good", "later"].map(|name| root.join(name));
+        assert_eq!(find_node_in(&dirs), Some((root.join("good"), "22.11.0".to_string())));
+        assert_eq!(find_node_in(&dirs[..3]), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// npm and the sidecar run the Node `check_node` found, not an older one later on PATH.
+    #[cfg(unix)]
+    #[test]
+    fn the_found_node_folder_goes_first_on_path() {
+        let root = std::env::temp_dir().join(format!("cez-desktop-prefix-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        fake_node(&root.join("system"), "old");
+        fake_node(&root.join("nvm"), "new");
+        let base = format!("{}:/usr/bin:/bin", root.join("system").display());
+        let script = posix_script(Some(&root.join("nvm").to_string_lossy()), Some(&base), "node", &[]);
+        let output = Command::new("/bin/sh").args(["-c", &script]).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "new");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_fresh_registry_path_keeps_what_the_process_added() {
+        assert_eq!(merge_paths(r"C:\nodejs;;C:\Windows", r"c:\windows;C:\Tools;", ';'), r"C:\nodejs;C:\Windows;C:\Tools");
+    }
+
+    #[test]
+    fn the_interactive_path_ignores_whatever_rc_files_print() {
+        let noisy = format!("Welcome!\n\n{PATH_MARKER}\n/a/.nvm/bin:/usr/bin\n{PATH_MARKER}\nbye\n");
+        assert_eq!(parse_marked_path(&noisy).as_deref(), Some("/a/.nvm/bin:/usr/bin"));
+        assert_eq!(parse_marked_path("no markers here"), None);
+        assert_eq!(parse_marked_path(&format!("{PATH_MARKER}\n/usr/bin\n")), None, "truncated output");
+        assert_eq!(parse_marked_path(&format!("{PATH_MARKER}\n\n{PATH_MARKER}\n")), None, "empty PATH");
+    }
+
+    /// The Intel report: nvm lives in ~/.zshrc, which a login-only shell never reads.
+    #[cfg(not(windows))]
+    #[test]
+    fn the_interactive_path_sees_what_only_an_rc_file_adds() {
+        let home = std::env::temp_dir().join(format!("cez-desktop-rc-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join(".zshrc"), "echo noise; export PATH=\"/from/zshrc:$PATH\"\n").unwrap();
+        let script = format!("ZDOTDIR={} exec /bin/zsh \"$@\"", shell_quote(&home.to_string_lossy()));
+        let shim = home.join("shell");
+        std::fs::write(&shim, format!("#!/bin/sh\n{script}\n")).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if Path::new("/bin/zsh").exists() {
+            let path = resolve_interactive_path(&shim.to_string_lossy(), Duration::from_secs(10)).expect("a PATH");
+            assert!(path.starts_with("/from/zshrc:"), "{path}");
+        }
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_hung_rc_file_degrades_instead_of_blocking() {
+        use std::os::unix::fs::PermissionsExt;
+        let shim = std::env::temp_dir().join(format!("cez-desktop-hung-{}", std::process::id()));
+        std::fs::write(&shim, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let started = Instant::now();
+        assert_eq!(resolve_interactive_path(&shim.to_string_lossy(), Duration::from_millis(200)), None);
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let _ = std::fs::remove_file(&shim);
     }
 
     // ---- against the real tools (CI runs these with `--ignored`; they need Node on PATH) ------

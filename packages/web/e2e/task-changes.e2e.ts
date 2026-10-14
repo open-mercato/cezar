@@ -17,10 +17,15 @@ import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv } from './agent-
  * available without the network) and the git surface is fully lit.
  *
  * What the dry-run backend honestly provides — verified, not assumed:
- *  - the fixture has no PR URL, so the toolbar deterministically offers Create PR. The
- *    create → View PR transition is pinned in task-changes.test.tsx.
+ *  - the fixture has no PR URL, so the run header's one next-step button deterministically
+ *    offers Create PR (the Changes tab's own toolbar carries no git actions anymore — the run
+ *    header owns the single step, title row on desktop). The create → View PR transition is
+ *    pinned in task-changes.test.tsx.
  *  - the settle autosave leaves the worktree clean; the Commit test dirties it again from
- *    the outside (as a user editing in the worktree would) so the commit is REAL.
+ *    the outside (as a user editing in the worktree would) so the commit is REAL. It also drops
+ *    the fixture's `origin` first — with a GitHub remote the policy's next step is always
+ *    Create PR regardless of uncommitted work (deliberately, so a finished task never hides the
+ *    one way to publish it); only once there is no supported forge does the step become Commit.
  *
  * Also not covered here, on purpose: the "No changes yet" empty state (every dry run touches
  * notes.md — unreachable live; unit-tested), and Push (the fake remote would stall on ssh
@@ -61,6 +66,17 @@ async function waitForStatus(url: string, id: string, wanted: string[]): Promise
     await new Promise((r) => setTimeout(r, 500))
   }
   throw new Error(`cezar e2e: run ${id} never reached status "${wanted.join('/')}"`)
+}
+
+/** `health.forge` is recomputed on an interval (server.ts `HEALTH_TTL_MS`), not per request —
+ *  after removing the fixture's remote, wait for the server to have actually noticed. */
+async function waitForNoForge(url: string): Promise<void> {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const health = (await (await fetch(`${url}/api/v1/health`)).json()) as { forge: unknown }
+    if (health.forge === null) return
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  throw new Error(`cezar e2e: health.forge never cleared at ${url}`)
 }
 
 let browser: AgentBrowser
@@ -165,25 +181,28 @@ describe('the Changes tab against a live dry run', () => {
     expect(browser.text('[data-slot="changes-stat"]')).toContain('+1')
   })
 
-  it('the toolbar comes from the policy: Push, Create PR, Commit, and kebab', () => {
-    // Push's enablement rides the /api/v1/health answer (repo.remote), and health probes the
+  it('the one next-step button comes from the policy: Create PR, its draft alternative — and no toolbar actions', () => {
+    // Create PR's enablement rides the /api/v1/health answer (forge), and health probes the
     // real codex/opencode/gh CLIs — slow. Wait for the policy to settle rather than sample.
     browser.waitForFunction(
-      `document.querySelector('[data-slot="git-toolbar"] [data-action="push"]')?.disabled === false`,
+      `document.querySelector('[data-slot="git-button"] [data-action="create-pr"]')?.disabled === false`,
     )
-    const actions = browser.evaluate(`[...document.querySelectorAll('[data-slot="git-toolbar"] [data-action]')]
-      .map((el) => ({ id: el.dataset.action, disabled: el.disabled === true }))`) as Array<{
-      id: string
-      disabled: boolean
-    }>
-    expect(actions).toEqual([
-      { id: 'push', disabled: false },
-      { id: 'create-pr', disabled: false },
-      { id: 'commit', disabled: false },
-    ])
-    // Terminal handoff is capability-gated and covered against both states in component tests;
-    // this fixture pins only the primary policy actions.
-    // The branch chip names the run's real branch.
+    expect(browser.evaluate(`document.querySelector('[data-slot="git-button"] [data-action]').dataset.action`)).toBe(
+      'create-pr',
+    )
+    // The same step said differently, under the chevron — never a second, different step.
+    browser.click('[data-slot="git-button"] [aria-label="More ways to create pr"]')
+    browser.waitForFunction(`document.querySelector('[data-slot="git-button-menu"]') !== null`)
+    expect(
+      browser.evaluate(
+        `document.querySelector('[data-slot="git-button-menu"] [data-action="create-draft-pr"]')?.textContent`,
+      ),
+    ).toBe('Create draft PR')
+    browser.press('Escape')
+
+    // The Changes tab's own toolbar is dumb about git now — the run header carries the one step.
+    expect(browser.count('[data-slot="git-toolbar"] [data-action]')).toBe(0)
+    // The branch chip still names the run's real branch, in the toolbar.
     expect(browser.text('[data-slot="git-toolbar"] [data-slot="branch-chip"]')).toContain('cez/')
 
     browser.screenshot(`${artifactsDir}/changes-desktop.png`)
@@ -196,12 +215,24 @@ describe('the Changes tab against a live dry run', () => {
     expect(browser.count('[data-slot="changes-tree"]')).toBe(1)
   })
 
-  it('Commit: the dialog prefills the auto-summary, commits for real in the worktree', () => {
+  it('Commit: the dialog prefills the auto-summary, commits for real in the worktree', async () => {
+    // With a GitHub remote the policy's next step is always Create PR (above) — plain Commit
+    // only surfaces once there is no supported forge. Drop the fixture's origin so the policy
+    // degrades there instead of risking a real push against it (no remote, no push to stall on).
+    execFileSync('git', ['-C', dataRoot, 'remote', 'remove', 'origin'])
     // The settle autosave left the tree clean — dirty it the way a user editing in the
     // worktree would, so the commit below has something real to commit.
     writeFileSync(join(worktreePath, 'edited-by-e2e.md'), 'a change made outside the agent\n', 'utf8')
+    // `health.forge` is cached server-side for up to HEALTH_TTL_MS — reloading before it has
+    // reread the now-remote-less repo would just hand the browser the same stale "github" answer.
+    // Poll the API (cheap) rather than the page, then reload once there is something new to load.
+    await waitForNoForge(baseUrl)
+    browser.reload()
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="git-button"] [data-action="commit"]')?.disabled === false`,
+    )
 
-    browser.click('[data-slot="git-toolbar"] [data-action="commit"]')
+    browser.click('[data-slot="git-button"] [data-action="commit"]')
     // Radix dialog animates in — wait for the textarea, then check the prefill.
     browser.waitForFunction(`document.querySelector('[data-slot="commit-message"]') !== null`)
     const prefill = browser.evaluate(
@@ -257,8 +288,9 @@ describe('the Changes tab against a live dry run', () => {
       ),
     ).toBe(true)
     // The tabs remain a tappable segment row and the page does not overflow sideways.
-    // Session / Changes / Commits / Files / Graph — the whole row survives the phone framing.
-    expect(browser.count('[data-slot="run-tabs"] a')).toBe(5)
+    // Session / Changes / Commits / Files / Graph / Notes — the whole row survives the phone
+    // framing (it scrolls within itself rather than widening the page).
+    expect(browser.count('[data-slot="run-tabs"] a')).toBe(6)
     expect(browser.evaluate(`document.documentElement.scrollWidth <= window.innerWidth`)).toBe(true)
 
     browser.screenshot(`${artifactsDir}/changes-mobile.png`)
