@@ -1,9 +1,10 @@
 # 0.15.2 (2026-10-14)
 
 ## Highlights
-A fixes release, most of them found through the new error reports. Continue works on tasks whose Claude conversation was pruned, a task's selected skill and its companions are installed into its worktree, runs check the agent account you actually picked, and publishing a PR adopts one that already exists. Sidebar rows get pin and archive actions on hover.
+GitHub Enterprise works on any domain, and sidebar rows get pin and archive actions on hover. The rest is fixes, most of them found through the new error reports: Continue works on tasks whose Claude conversation was pruned, a task's selected skill and its companions are installed into its worktree, runs check the agent account you actually picked, and publishing a PR adopts one that already exists.
 
 ## ✨ Features
+- ✨ GitHub Enterprise works on any domain: the GitHub tab, PRs and automations follow each repo's own host, with no new config. (#1426) *(@hunger-programmer)*
 - ✨ Hovering a sidebar task shows pin and archive actions; the Tasks table groups pinned tasks under their own header. (#1417) *(@martaradziszewska)*
 - ✨ Telemetry counts session-resume fallbacks and task failures per backend, after you opt in. (#1440) *(@patzick)*
 - ✨ "Cannot reach the cezar server" error reports say which transport failure caused them (fixes #1437). (#1441) *(@patzick)*
@@ -23,6 +24,7 @@ A fixes release, most of them found through the new error reports. Continue work
 - @martaradziszewska
 - @wojciechszyjka
 - @lbajsarowicz
+- @hunger-programmer
 
 # 0.15.1 (2026-10-13)
 
