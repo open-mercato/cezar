@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -77,5 +77,12 @@ describe('provisionSkills', () => {
     expect(readFileSync(join(cwd, '.claude/skills/om-x/SKILL.md'), 'utf8')).toBe('mine');
     expect(lstatSync(join(cwd, '.agents/skills/om-x')).isDirectory()).toBe(true);
     expect(names).toEqual(['om-x']);
+  });
+
+  it('skips a skill whose name is not one safe path segment', async () => {
+    const names = await provisionSkills(cwd, [skill('../escape', 'nope')], []);
+    expect(names).toEqual([]);
+    expect(existsSync(join(cwd, '.claude/escape'))).toBe(false);
+    expect(existsSync(join(root, 'escape'))).toBe(false);
   });
 });
