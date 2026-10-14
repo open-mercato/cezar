@@ -645,16 +645,29 @@ describe('workspace provider API', () => {
     expect(openTerminal).not.toHaveBeenCalled();
   });
 
-  it('POST returns 409 plus retry guidance when status is unknown', async () => {
+  it('POST opens the login command when status is unknown, so an unreadable probe is not a dead end', async () => {
     const openTerminal = vi.fn(async () => true);
     const response = await connect(app({
       providerAuth: service({ claude: 'unknown' }),
       openTerminal,
     }), 'claude');
 
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ opened: true, command: "'claude' auth login" });
+    expect(openTerminal).toHaveBeenCalledWith(root, "'claude' auth login");
+  });
+
+  it('POST returns 409 plus command for an unknown status when localHandoff is false', async () => {
+    const openTerminal = vi.fn(async () => true);
+    const response = await connect(app({
+      providerAuth: service({ claude: 'unknown' }),
+      openTerminal,
+      bindHost: '0.0.0.0',
+    }), 'claude');
+
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({
-      error: 'Authentication could not be verified. Try again.',
+      error: 'Run this command on the machine hosting cezar.',
       command: "'claude' auth login",
     });
     expect(openTerminal).not.toHaveBeenCalled();
