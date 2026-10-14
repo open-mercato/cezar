@@ -4,6 +4,8 @@
  * module already imports the client.
  */
 
+import { providerIdSchema } from '@open-mercato/cezar-api-client'
+
 export interface FailedRequest {
   method: string
   /** The URL's pathname only — the query string never leaves this module. */
@@ -11,14 +13,39 @@ export interface FailedRequest {
   /** HTTP status, or 0 when the request never reached the server. */
   status: number
   at: number
+  /** Which agent a `/providers` or `/agent-profiles` call was about — a closed set, from the path
+   *  or the JSON body. Its route shape alone hides it (telemetry `abf08514`). */
+  provider?: string
+}
+
+const PROVIDER_ROUTE = /\/(?:providers|agent-profiles)(?:\/|$)/
+
+function providerOf(path: string, body: unknown): string | undefined {
+  if (!PROVIDER_ROUTE.test(path)) return undefined
+  const segments = path.split('/')
+  const fromPath = segments[segments.indexOf('providers') + 1]
+  if (segments.includes('providers') && providerIdSchema.safeParse(fromPath).success) return fromPath
+  if (typeof body !== 'string') return undefined
+  try {
+    const candidate = (JSON.parse(body) as { provider?: unknown }).provider
+    return providerIdSchema.safeParse(candidate).success ? (candidate as string) : undefined
+  } catch {
+    return undefined
+  }
 }
 
 let last: FailedRequest | null = null
 
-export function noteFailedRequest(url: string, method: string | undefined, status: number): void {
+export function noteFailedRequest(
+  url: string,
+  method: string | undefined,
+  status: number,
+  body?: unknown,
+): void {
   try {
     const path = new URL(url, window.location.origin).pathname
-    last = { method: (method ?? 'GET').toUpperCase(), path, status, at: Date.now() }
+    const provider = providerOf(path, body)
+    last = { method: (method ?? 'GET').toUpperCase(), path, status, at: Date.now(), ...(provider ? { provider } : {}) }
   } catch {
     // never break a request over bookkeeping
   }

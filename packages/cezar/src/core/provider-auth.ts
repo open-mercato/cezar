@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
+import { extname, isAbsolute } from 'node:path';
 import { AGENT_MODELS_LOCKED_ENV } from './agent-model-policy.ts';
 import { profileEnv } from './agent-profiles.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
@@ -88,6 +89,8 @@ interface ProviderDescriptor {
    * spawn entirely removes that race instead of racing to out-guess it.
    */
   precheck?: () => ProviderConnectionState | undefined;
+  /** The `CEZ_*_BIN` override `executable` honours — only so a report can say the binary came from it. */
+  overrideEnv: string;
 }
 
 const COMMAND_TIMEOUT_MS = 10_000;
@@ -322,6 +325,7 @@ function parseCopilotStatus(result: ProviderCommandResult): ProviderConnectionSt
 const DESCRIPTORS: readonly ProviderDescriptor[] = [
   {
     id: 'claude',
+    overrideEnv: 'CEZ_CLAUDE_BIN',
     executable: () => resolveClaudeBin(),
     statusArgs: ['auth', 'status', '--json'],
     loginArgs: ['auth', 'login'],
@@ -330,6 +334,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
   },
   {
     id: 'codex',
+    overrideEnv: 'CEZ_CODEX_BIN',
     executable: () => process.env.CEZ_CODEX_BIN ?? 'codex',
     statusArgs: ['login', 'status'],
     loginArgs: ['login'],
@@ -338,6 +343,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
   },
   {
     id: 'opencode',
+    overrideEnv: 'CEZ_OPENCODE_BIN',
     executable: () => process.env.CEZ_OPENCODE_BIN ?? 'opencode',
     statusArgs: ['auth', 'list'],
     loginArgs: ['auth', 'login'],
@@ -346,6 +352,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
   },
   {
     id: 'cursor',
+    overrideEnv: 'CEZ_CURSOR_AGENT_BIN',
     executable: () => process.env.CEZ_CURSOR_AGENT_BIN ?? 'agent',
     statusArgs: ['status', '--format', 'json'],
     loginArgs: ['login'],
@@ -357,6 +364,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
   },
   {
     id: 'pi',
+    overrideEnv: 'CEZ_PI_BIN',
     executable: () => process.env.CEZ_PI_BIN ?? 'pi',
     statusArgs: ['--list-models'],
     loginArgs: ['/login'],
@@ -365,6 +373,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
   },
   {
     id: 'junie',
+    overrideEnv: 'CEZ_JUNIE_BIN',
     executable: () => process.env.CEZ_JUNIE_BIN ?? 'junie',
     statusArgs: [],
     loginArgs: [],
@@ -373,6 +382,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
   },
   {
     id: 'copilot',
+    overrideEnv: 'CEZ_COPILOT_BIN',
     executable: () => process.env.CEZ_COPILOT_BIN ?? 'copilot',
     statusArgs: ['--acp'],
     loginArgs: ['login'],
@@ -474,12 +484,70 @@ export interface RuntimeAuthFailureReport {
   transitioned: boolean;
 }
 
+/** Why a CLI status probe ended `unknown` — a closed set, so a report can group on it. */
+export type InconclusiveProbeReason =
+  | 'spawn_threw'
+  | 'spawn_error'
+  | 'timeout'
+  | 'unexpected_exit'
+  | 'unrecognized_output';
+
+/**
+ * What an inconclusive probe can tell telemetry without its output: the shape of what came back
+ * and how the binary was found. Never stdout/stderr text or a path — the CLI's output can carry an
+ * account email or a token.
+ */
+export interface InconclusiveProbe {
+  provider: ProviderId;
+  reason: InconclusiveProbeReason;
+  profile: 'default' | 'named';
+  /** `override` (a `CEZ_*_BIN`), `absolute` (a resolved install location) or `path` (a bare name). */
+  binSource: 'override' | 'absolute' | 'path';
+  /** The executable's extension from a closed set: `.exe`, `.cmd`, …, `none` or `other`. */
+  binExt: string;
+  errorCode: string | null;
+  exitCode: number | null;
+  stdoutBytes: number;
+  stdoutJson: boolean;
+  stderrBytes: number;
+  /** The CLI's own `--version`, as a bare semver; one extra spawn, paid only by a caller that
+   *  is going to send the report. */
+  cliVersion: () => Promise<string | null>;
+}
+
+const BIN_EXTENSIONS = new Set(['.exe', '.cmd', '.bat', '.com', '.ps1', '.js', '.mjs', '.cjs', '.sh']);
+const VERSION_TIMEOUT_MS = 5_000;
+
+function binExtension(executable: string): string {
+  const ext = extname(executable).toLowerCase();
+  if (!ext) return 'none';
+  return BIN_EXTENSIONS.has(ext) ? ext : 'other';
+}
+
+function parsesAsJson(text: string): boolean {
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The first semver in a `--version` answer; anything else in it is dropped. */
+export function cliVersionFrom(output: string): string | null {
+  return output.match(/\b\d+\.\d+\.\d+(?:-[0-9A-Za-z.]{1,24})?/)?.[0] ?? null;
+}
+
 export class ProviderAuthService {
   private readonly runCommand: RunProviderCommand;
   private readonly now: () => number;
   private readonly platform: NodeJS.Platform;
   private readonly createAuthFailureId: () => string;
   private readonly probeJunie: () => Promise<{ connected: boolean; hint?: string; notInstalled?: boolean }>;
+  private readonly onInconclusive?: (probe: InconclusiveProbe) => void;
+  /** Once per provider, reason and account kind per process: the background re-check runs every
+   *  minute while a provider is logged out, and one broken install must not become a report a minute. */
+  private readonly reportedInconclusive = new Set<string>();
   private readonly runtimeFailures = new Map<ProviderId, RuntimeAuthFailure>();
   /** One self-check at a time per provider, and not more often than the cooldown. Both guard the
    *  same thing — a CLI spawn per auth-shaped error line — from the two directions it can arrive
@@ -513,7 +581,10 @@ export class ProviderAuthService {
      *  discovery cwd (`server.ts`'s `bootRoot`) instead of silently diverging from it. */
     cwd?: string;
     probeJunie?: () => Promise<{ connected: boolean; hint?: string; notInstalled?: boolean }>;
+    /** Told when a CLI probe ends `unknown`, at most once per provider/reason/account kind. */
+    onInconclusive?: (probe: InconclusiveProbe) => void;
   }) {
+    this.onInconclusive = options?.onInconclusive;
     this.runCommand = options?.runCommand ?? defaultRunProviderCommand;
     this.now = options?.now ?? Date.now;
     this.platform = options?.platform ?? process.platform;
@@ -845,31 +916,75 @@ export class ProviderAuthService {
     // implementation an extra argument it never asked for would be a change in the zero-config
     // path for no gain.
     const env = configDir ? profileEnv(descriptor.id, configDir) : undefined;
+    const executable = descriptor.executable();
+    const inconclusive = (
+      reason: InconclusiveProbeReason,
+      hint: string,
+      outcome?: ProviderCommandResult,
+    ): ProviderStatus => {
+      this.reportInconclusive(descriptor, executable, env, configDir ? 'named' : 'default', reason, outcome);
+      return { provider: descriptor.id, status: 'unknown', hint };
+    };
     try {
       // Never pass a trailing `undefined`: the existing three- and four-argument calls are the
       // zero-config path and the injected test kit asserts them literally, so only a descriptor
       // that actually has a stdin payload reaches the five-argument form.
       const stdin = descriptor.stdin?.();
-      const executable = descriptor.executable();
       result = await (stdin !== undefined
         ? this.runCommand(executable, descriptor.statusArgs, COMMAND_TIMEOUT_MS, env, stdin)
         : env === undefined
           ? this.runCommand(executable, descriptor.statusArgs, COMMAND_TIMEOUT_MS)
           : this.runCommand(executable, descriptor.statusArgs, COMMAND_TIMEOUT_MS, env));
     } catch {
-      return { provider: descriptor.id, status: 'unknown', hint: UNKNOWN_HINT };
+      return inconclusive('spawn_threw', UNKNOWN_HINT);
     }
     if (result.errorCode === 'ENOENT') {
       return { provider: descriptor.id, status: 'not-installed', hint: descriptor.installHint };
     }
-    if (result.timedOut) {
-      return { provider: descriptor.id, status: 'unknown', hint: TIMEOUT_HINT };
-    }
-    if (result.errorCode) {
-      return { provider: descriptor.id, status: 'unknown', hint: UNKNOWN_HINT };
-    }
+    if (result.timedOut) return inconclusive('timeout', TIMEOUT_HINT, result);
+    if (result.errorCode) return inconclusive('spawn_error', UNKNOWN_HINT, result);
     const status = descriptor.parse(result);
     if (status !== null) return { provider: descriptor.id, status };
-    return { provider: descriptor.id, status: 'unknown', hint: UNKNOWN_HINT };
+    // Exit 0 and 1 are the codes vendors answer status with; anything else is the CLI failing.
+    const reason = result.exitCode === 0 || result.exitCode === 1 ? 'unrecognized_output' : 'unexpected_exit';
+    return inconclusive(reason, UNKNOWN_HINT, result);
+  }
+
+  private reportInconclusive(
+    descriptor: ProviderDescriptor,
+    executable: string,
+    env: Record<string, string> | undefined,
+    profile: 'default' | 'named',
+    reason: InconclusiveProbeReason,
+    result?: ProviderCommandResult,
+  ): void {
+    if (!this.onInconclusive) return;
+    const key = `${descriptor.id}\u0000${reason}\u0000${profile}`;
+    if (this.reportedInconclusive.has(key)) return;
+    this.reportedInconclusive.add(key);
+    const errorCode = result?.errorCode;
+    try {
+      this.onInconclusive({
+        provider: descriptor.id,
+        reason,
+        profile,
+        binSource: process.env[descriptor.overrideEnv] ? 'override' : isAbsolute(executable) ? 'absolute' : 'path',
+        binExt: binExtension(executable),
+        // Node's own codes (`EINVAL`, `ERR_CHILD_PROCESS_STDIO_MAXBUFFER`) — anything else is dropped.
+        errorCode: errorCode && /^[A-Z][A-Z0-9_]{1,63}$/.test(errorCode) ? errorCode : null,
+        exitCode: result?.exitCode ?? null,
+        stdoutBytes: result?.stdout.length ?? 0,
+        stdoutJson: result ? parsesAsJson(result.stdout) : false,
+        stderrBytes: result?.stderr.length ?? 0,
+        cliVersion: async () => {
+          const answer = await (env === undefined
+            ? this.runCommand(executable, ['--version'], VERSION_TIMEOUT_MS)
+            : this.runCommand(executable, ['--version'], VERSION_TIMEOUT_MS, env));
+          return cliVersionFrom(answer.stdout) ?? cliVersionFrom(answer.stderr);
+        },
+      });
+    } catch {
+      // a report must never cost the probe its answer
+    }
   }
 }

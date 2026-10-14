@@ -566,6 +566,57 @@ describe('ThreadView', () => {
     expect(button.title.length).toBeGreaterThan(0)
   })
 
+  it('any failure with a session to continue offers Continue after its message', async () => {
+    const MISSING = 'continue failed: claude CLI exited with code 1 — No conversation found with session ID: s-1'
+    renderView(
+      <ThreadView
+        run={run('failed', {
+          error: MISSING,
+          steps: [
+            { id: 'task', name: 'Do the task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0, sessionId: 's-1' },
+          ],
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    const button = await waitFor(() => {
+      const el = document.querySelector('[data-slot="footer-continue"]') as HTMLButtonElement | null
+      expect(el).not.toBeNull()
+      expect(el!.disabled).toBe(false)
+      return el!
+    })
+    expect(document.querySelector('[data-slot="thread-footer"]')?.textContent).toBe(
+      `Session failed — ${MISSING} · Continue`,
+    )
+    fireEvent.click(button)
+    await waitFor(() =>
+      expect(
+        vi.mocked(fetch).mock.calls.some(
+          ([input, init]) => String(input) === '/api/v1/runs/r1/continue' && init?.method === 'POST',
+        ),
+      ).toBe(true),
+    )
+  })
+
+  it('a failure already scheduled to resume itself offers no extra Continue', () => {
+    renderView(
+      <ThreadView
+        run={run('failed', {
+          error: 'Claude AI usage limit reached',
+          autoResumeAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+          steps: [
+            { id: 'task', name: 'Do the task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0, sessionId: 's-1' },
+          ],
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    expect(document.querySelector('[data-slot="thread-footer"]')?.textContent).toBe(
+      'Session failed — Claude AI usage limit reached',
+    )
+    expect(document.querySelector('[data-slot="footer-continue"]')).toBeNull()
+  })
+
   it('the same advice stays plain text when there is no session to continue', () => {
     renderView(
       <ThreadView

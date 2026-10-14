@@ -67,7 +67,9 @@ export function freshContinuationContext(run: RunRecord, events: readonly RunEve
     run.task,
     '',
     '## Cezar task state before this continuation',
-    `Status: ${run.status}`,
+    // A queued/running status is this continuation's own bookkeeping, not where the task stood;
+    // the steps below carry that.
+    ...(run.status === 'queued' || run.status === 'running' ? [] : [`Status: ${run.status}`]),
     ...(run.error ? [`Error: ${run.error}`] : []),
     ...(run.branch ? [`Branch: ${run.branch}`] : []),
     ...(run.worktreePath ? [`Worktree: ${run.worktreePath}`] : []),

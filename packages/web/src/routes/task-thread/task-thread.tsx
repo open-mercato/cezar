@@ -389,6 +389,9 @@ export function ThreadView({
           >
             <FooterLabel
               label={footer.label}
+              // A failure is always worth one click to retry, whatever its wording — unless it is
+              // already scheduled to resume itself (the AutoResumeHint says so in the dock).
+              offerContinue={footer.tone === 'danger' && !run.autoResumeAt}
               // Offered whenever there is a session to reopen — not only once the provider check
               // has passed: while it loads (or the provider is disconnected) the button is there,
               // greyed, saying why, instead of the advice silently degrading to plain text.
@@ -537,44 +540,67 @@ const CONTINUE_ADVICE = /— continue to /i
 
 function FooterLabel({
   label,
+  offerContinue = false,
   onContinue,
   blockedReason,
 }: {
   label: string
+  /** Show Continue after the label even when it carries no "continue to" advice. */
+  offerContinue?: boolean
   /** Absent when there is no session to reopen at all — the advice then stays plain text. */
   onContinue?: () => Promise<unknown>
   /** Why it cannot run yet (provider loading or disconnected): the button shows, disabled. */
   blockedReason?: string
 }) {
-  const [pending, setPending] = useState(false)
   const match = onContinue ? CONTINUE_ADVICE.exec(label) : null
-  if (!onContinue || !match) return <span>{label}</span>
+  if (!onContinue) return <span>{label}</span>
+  if (!match) {
+    if (!offerContinue) return <span>{label}</span>
+    return (
+      <span>
+        {label} <span aria-hidden="true">·</span>{' '}
+        <FooterContinueButton onContinue={onContinue} blockedReason={blockedReason} />
+      </span>
+    )
+  }
   const before = label.slice(0, match.index)
   const after = label.slice(match.index + match[0].length)
   return (
     <span>
       {before}—{' '}
-      <button
-        type="button"
-        data-slot="footer-continue"
-        disabled={pending || blockedReason !== undefined}
-        title={blockedReason ?? 'Reopen the session and pick up where it stopped'}
-        onClick={() => {
-          setPending(true)
-          onContinue()
-            .catch((error: unknown) =>
-              toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }),
-            )
-            .finally(() => setPending(false))
-        }}
-        // A text button in the message's own red: it is part of the sentence it completes, so it
-        // keeps that sentence's colour; the weight and underline are what mark it as the action.
-        className="rounded-sm font-semibold underline underline-offset-2 hover:brightness-125 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-not-allowed disabled:no-underline disabled:opacity-60"
-      >
-        Continue
-      </button>{' '}
-      to {after}
+      <FooterContinueButton onContinue={onContinue} blockedReason={blockedReason} /> to {after}
     </span>
+  )
+}
+
+function FooterContinueButton({
+  onContinue,
+  blockedReason,
+}: {
+  onContinue: () => Promise<unknown>
+  blockedReason?: string
+}) {
+  const [pending, setPending] = useState(false)
+  return (
+    <button
+      type="button"
+      data-slot="footer-continue"
+      disabled={pending || blockedReason !== undefined}
+      title={blockedReason ?? 'Reopen the session and pick up where it stopped'}
+      onClick={() => {
+        setPending(true)
+        onContinue()
+          .catch((error: unknown) =>
+            toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }),
+          )
+          .finally(() => setPending(false))
+      }}
+      // A text button in the message's own red: it is part of the sentence it completes, so it
+      // keeps that sentence's colour; the weight and underline are what mark it as the action.
+      className="rounded-sm font-semibold underline underline-offset-2 hover:brightness-125 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-not-allowed disabled:no-underline disabled:opacity-60"
+    >
+      Continue
+    </button>
   )
 }
 

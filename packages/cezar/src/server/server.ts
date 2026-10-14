@@ -87,6 +87,13 @@ import {
   type ProviderStatusResponse,
 } from '../core/provider-auth.ts';
 import { applyProviderEnablement } from '../core/provider-availability.ts';
+import {
+  LOGIN_WATCH_OFFSETS_MS,
+  reportInconclusiveProbe,
+  trackLoginNotOpened,
+  trackLoginOpened,
+  watchLogin,
+} from './provider-telemetry.ts';
 import { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
 import { currentUsage, currentTimedUsage, onUsage } from '../core/process-usage.ts';
 import { DashboardReader } from '../workspace/dashboard.ts';
@@ -231,6 +238,7 @@ import { readUiState, uiStatePath } from '../ui-state.ts';
 import { agentHomePaths, cezarHomeDir, expandTilde, isAbsolutePath } from '../paths.ts';
 import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
+import { applyKeepAlive } from './keep-alive.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
 import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index.ts';
 import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX } from './github.ts';
@@ -346,6 +354,8 @@ export interface ServerDeps {
   providerRuntimeAuth?: ProviderRuntimeAuthObserver;
   /** Local terminal handoff for provider-owned login. */
   openTerminal?: typeof openInTerminal;
+  /** When Connect re-checks the login it opened (`LOGIN_WATCH_OFFSETS_MS`); tests pass `[]`. */
+  loginWatchOffsetsMs?: readonly number[];
   /** Hand a local FILE (or folder) to the OS default app. Injected so the account-file open route
    *  is testable without actually launching an editor. */
   openFile?: typeof openFileInDefaultApp;
@@ -1276,7 +1286,8 @@ export function createApp(deps: ServerDeps) {
       cursor: { discover: () => discoverCursorModels() },
     },
   });
-  const providerAuth = deps.providerAuth ?? new ProviderAuthService({ cwd: bootRoot });
+  const providerAuth = deps.providerAuth
+    ?? new ProviderAuthService({ cwd: bootRoot, onInconclusive: (probe) => void reportInconclusiveProbe(probe) });
   const workspaceConfig = deps.workspaceConfig ?? {
     load: loadWorkspaceConfig,
     mergeWrite: mergeWriteWorkspaceConfig,
@@ -2015,6 +2026,28 @@ export function createApp(deps: ServerDeps) {
   };
 
   // ---- chained family: agent providers (workspace-level) ----
+  // One watch per account: a second Connect restarts its schedule instead of doubling it.
+  const loginWatches = new Map<string, () => void>();
+  const watchOpenedLogin = (provider: ProviderId, profile: { id: string; isDefault: boolean; path: string | null }, sid?: string) => {
+    const key = `${provider}\u0000${profile.id}`;
+    loginWatches.get(key)?.();
+    const check = async (): Promise<boolean> => {
+      if (profile.isDefault) {
+        const row = (await providerStatus({ refresh: true })).providers.find((candidate) => candidate.provider === provider);
+        // The cockpit does not poll provider status, so the card learns about the login here.
+        if (row?.status === 'connected') workspaceEvents.emit('provider-status', row);
+        return row?.status === 'connected';
+      }
+      providerAuth.forgetProfileStatus(provider, profile.id);
+      return (await providerAuth.profileStatus(provider, { id: profile.id, configDir: profile.path })).status === 'connected';
+    };
+    const cancel = watchLogin(check, () => {
+      loginWatches.delete(key);
+      track('provider_connected', { label: provider }, { sid });
+    }, deps.loginWatchOffsetsMs ?? LOGIN_WATCH_OFFSETS_MS);
+    loginWatches.set(key, cancel);
+  };
+
   const providersRoutes = new Hono<ProjectApiEnv>()
     .get(
       '/providers/status',
@@ -2072,6 +2105,7 @@ export function createApp(deps: ServerDeps) {
 
     .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, opencode, cursor, pi, or copilot' }), async (c) => {
       const body = { data: c.req.valid('json') };
+      const sid = deviceSid(c.req.header('x-cezar-sid'));
 
       const provider = body.data.provider as ProviderId;
       // A NAMED account is refused in hosted mode before anything is resolved, exactly like every
@@ -2097,6 +2131,7 @@ export function createApp(deps: ServerDeps) {
       // safe degradation. Running the bare command would sign the user into a DIFFERENT account
       // than the one they clicked, and nothing in the terminal would say so.
       if (command === null) {
+        trackLoginNotOpened(provider, 'invalid_folder', sid);
         return c.json({ error: `This account's folder cannot be used in a terminal command: ${profile.configDir}` }, 409);
       }
       // BOTH branches must mean "is this account signed in NOW". The default branch refreshes; the
@@ -2116,15 +2151,18 @@ export function createApp(deps: ServerDeps) {
       }
 
       if (row.status === 'connected') {
+        trackLoginNotOpened(provider, 'already_connected', sid);
         return c.json({ opened: false, connected: true, command });
       }
       if (row.status === 'not-installed') {
+        trackLoginNotOpened(provider, 'not_installed', sid);
         return c.json({ error: row.hint ?? providerAuth.installHint(provider), command }, 409);
       }
-      if (row.status === 'unknown') {
-        return c.json({ error: row.hint ?? 'Authentication could not be verified. Try again.', command }, 409);
-      }
+      // `unknown` (inconclusive output, timeout, unexpected exit) falls through to the login like
+      // `disconnected`: the CLI is installed, and its own login is the one surface that can say
+      // what is wrong. Refusing here left Connect a dead end that "Try again" re-probed into.
       if (!capabilities().localHandoff) {
+        trackLoginNotOpened(provider, 'hosted', sid);
         return c.json({ error: 'Run this command on the machine hosting cezar.', command }, 409);
       }
       let opened = false;
@@ -2137,8 +2175,11 @@ export function createApp(deps: ServerDeps) {
         // Terminal handoff is best-effort; the exact command remains the safe fallback.
       }
       if (!opened) {
+        trackLoginNotOpened(provider, 'no_terminal', sid);
         return c.json({ error: 'No terminal emulator could be opened. Run this command manually.', command }, 409);
       }
+      trackLoginOpened(provider, row.status === 'unknown' ? 'unknown' : 'disconnected', sid);
+      watchOpenedLogin(provider, { id: profile.id, isDefault: profile.isDefault, path: profile.isDefault ? null : profile.path }, sid);
       return c.json({ opened: true, command });
     });
 
@@ -7155,6 +7196,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
     port,
     hostname: deps.bindHost ?? '127.0.0.1',
   });
+  applyKeepAlive(server);
   const coordinator = new SkillsUpdateCoordinator(skillsUpdate, async () =>
     effectiveSkillsAutoUpdate(await loadWorkspaceConfig()));
   // Every registered project gets a handle (spec 2026-09-14): `github` only when the remote is
