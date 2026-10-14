@@ -284,6 +284,7 @@ describe('the gate verifies before it refuses', () => {
   let repoRoot: string;
   let store: RunStore;
   let startRun: ReturnType<typeof vi.fn>;
+  const openTerminal = vi.fn(async () => true);
   const savedDryRun = process.env.CEZ_DRY_RUN;
 
   beforeEach(() => {
@@ -291,6 +292,7 @@ describe('the gate verifies before it refuses', () => {
     // be off or these would pass without exercising anything.
     delete process.env.CEZ_DRY_RUN;
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-gate-verify-'));
+    openTerminal.mockClear();
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     startRun = vi.fn((_workflow: WorkflowDef, input: StartRunInput) => store.createRun({
       title: 'Task',
@@ -335,6 +337,7 @@ describe('the gate verifies before it refuses', () => {
       version: 'test',
       providerAuth,
       workspaceConfig: memoryWorkspaceConfig(options.disabled ?? []),
+      openTerminal,
     });
     return { app, providerAuth, state, advance: (ms: number) => { now += ms; } };
   };
@@ -406,6 +409,50 @@ describe('the gate verifies before it refuses', () => {
     });
     expect(response.status).toBe(409);
     expect(startRun).not.toHaveBeenCalled();
+  });
+
+  /** A run whose `work` step owns session `sess-1`, recorded on `profileId` (none = the default login). */
+  const sessionRun = (status: RunRecord['status'], profileId?: string) => {
+    const run = store.createRun({
+      title: 'Task',
+      workflow: 'quick-task',
+      task: 'Task',
+      runner: 'claude',
+      steps: [{ id: 'work', name: 'Work', kind: 'agent' }],
+    });
+    store.updateRun(run.id, { status });
+    store.updateStep(run.id, 'work', { sessionId: 'sess-1', ...(profileId ? { profileId } : {}) });
+    return run;
+  };
+
+  it('gates a resume on the account that owns the session, not the project selection', async () => {
+    const { app, state } = setup();
+    await addWorkAccount();
+    await mergeWriteAgentAccounts((accounts) => { accounts.defaults.claude = 'work'; });
+    state.claudeLoggedIn = true; // the session's (default) login is fine; the project's account is not
+    const run = sessionRun('done');
+
+    const response = await apiRequest(app, `/api/v1/runs/${run.id}/open-in-cli`, { method: 'POST' });
+    expect(response.status).toBe(200);
+    expect(openTerminal).toHaveBeenCalledTimes(1);
+  });
+
+  it('gates a fresh CLI launch on the account it opens, not the one the run recorded', async () => {
+    const { app, state } = setup();
+    await addWorkAccount();
+    state.workLoggedIn = true; // the recorded account is fine; the project's (default) login is not
+    const run = sessionRun('running', 'work');
+
+    const response = await apiRequest(app, `/api/v1/runs/${run.id}/open-in`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ target: 'cli:claude' }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: 'Claude Code credentials are unavailable. Authorize it in Settings → Agents → Providers.',
+    });
+    expect(openTerminal).not.toHaveBeenCalled();
   });
 
   it('cannot be talked out of a rejection it actually observed during a run', async () => {

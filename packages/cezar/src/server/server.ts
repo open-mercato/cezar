@@ -4659,7 +4659,9 @@ export function createApp(deps: ServerDeps) {
       }
       const blocked = await providerActionError([providerForExistingRun(run, parsed.data.runner)], {
         repoRoot,
-        profileFor: (provider) => parsed.data.agentProfile ?? recordedProfileFor(run, provider),
+        // A runner switch drops the run's account (`continueRun`), so only the same runner inherits it.
+        profileFor: (provider) => parsed.data.agentProfile
+          ?? (provider === (run.runner ?? 'claude') ? recordedProfileFor(run, provider) : undefined),
       });
       if (blocked) return c.json({ error: blocked }, 409);
       // The follow-up pill names an account the user just picked, so an id that has been deleted
@@ -4703,9 +4705,10 @@ export function createApp(deps: ServerDeps) {
       const sessionStep = [...run.steps].reverse().find((s) => s.sessionId);
       const sessionId = sessionStep?.sessionId;
       if (!sessionId) return c.json({ error: 'no agent session to resume' }, 409);
+      // Gate the account `handoffEnv` launches on below: the session's own, default when it recorded none.
       const blocked = await providerActionError([providerForExistingRun(run)], {
         repoRoot,
-        profileFor: (provider) => recordedProfileFor(run, provider),
+        profileFor: () => sessionStep?.profileId ?? DEFAULT_AGENT_ACCOUNT_ID,
       });
       if (blocked) return c.json({ error: blocked }, 409);
       const cwd = run.worktreePath && existsSync(run.worktreePath) ? run.worktreePath : repoRoot;
@@ -4813,17 +4816,18 @@ export function createApp(deps: ServerDeps) {
       // and what the client's cliTargetResumes now labels. Resume-after-finish is untouched.
       const cliRunner = agentCliRunner(target);
       if (cliRunner) {
-        const blocked = await providerActionError([cliRunner], {
-          repoRoot,
-          profileFor: (provider) => recordedProfileFor(run, provider),
-        });
-        if (blocked) return c.json({ error: blocked }, 409);
         const engineOwnsSession = run.status === 'running' || run.status === 'queued' || run.status === 'waiting';
         const sessionStep = engineOwnsSession ? undefined : [...run.steps].reverse().find((s) => s.sessionId);
         const sessionId = sessionStep?.sessionId;
         // An id resumeCommand refuses (#431) degrades to a fresh CLI in the worktree,
         // exactly like a run that never recorded a session.
         const resume = sessionId && cliRunner === (run.runner ?? 'claude') ? resumeCommand(cliRunner, sessionId) : null;
+        // Gate the account the terminal opens on below: the session's for a resume, the project's otherwise.
+        const blocked = await providerActionError([cliRunner], {
+          repoRoot,
+          profileFor: () => (resume ? sessionStep?.profileId ?? DEFAULT_AGENT_ACCOUNT_ID : undefined),
+        });
+        if (blocked) return c.json({ error: blocked }, 409);
         // The terminal this opens does not share our PATH (see `withResolvedClaudeBin`), so a
         // claude found off PATH by detection has to be named by absolute path here too —
         // otherwise the menu offers a handoff that opens on `command not found`.
