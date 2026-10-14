@@ -22,6 +22,10 @@ import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { parseTaskMarkers } from '../runs/task-markers.ts';
 import { appendTurnText, endsWithDoneMarker, endsWithMonitoringMarker, RunManager, turnEndMarkerText } from './run.ts';
 import type { WorkflowDef } from './types.ts';
+import { track } from '../telemetry.ts';
+
+// A spy, inert like the real `track` without consent — lets skill provisioning assert its signal.
+vi.mock('../telemetry.ts', async (importOriginal) => ({ ...(await importOriginal<object>()), track: vi.fn() }));
 
 type UsageAccountingHarness = {
   beginUsageInvocation(runId: string, state: Record<string, unknown>, stepId: string): void;
@@ -3558,9 +3562,11 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
       expect(readFileSync(join(wt, dir, 'demo-review/SKILL.md'), 'utf8')).toContain('demo-engine');
       expect(readFileSync(join(wt, dir, 'demo-engine/SKILL.md'), 'utf8')).toContain('Engine.');
     }
+    expect(vi.mocked(track)).toHaveBeenCalledWith('skills_provisioned', { label: 'installed', value: 2 });
   }, 40_000);
 
   it('leaves an unknown slash command untouched so backend-native commands still work', async () => {
+    vi.mocked(track).mockClear();
     const record = manager.startRun(SINGLE_STEP, { task: '/compact please', worktree: false });
     runId = record.id;
     await waitFor(() =>
@@ -3572,5 +3578,7 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
       (e) => e.stepId === 'task' && e.type === 'text' && e.text?.includes('looking into'),
     );
     expect(echoed?.text).toContain('/compact please');
+    // A backend's own command is not a missing skill.
+    expect(vi.mocked(track)).not.toHaveBeenCalledWith('skills_provisioned', expect.anything());
   }, 40_000);
 });

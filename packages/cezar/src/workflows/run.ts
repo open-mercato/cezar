@@ -471,6 +471,10 @@ interface ActiveRun {
   interrupt: () => void;
   /** Where this run's steps execute: the task worktree, or the repo root. */
   cwd: string;
+  /** The live session's backend, from its `session.started` — `skill_missing_in_session`'s label. */
+  sessionBackend?: string;
+  /** `skill_missing_in_session` is counted once per ActiveRun, not per agent retry. */
+  skillMissingReported?: boolean;
   /** Live claude session of the currently running agent step, if any. */
   session?: AgentSession;
   currentStepId?: string;
@@ -3591,7 +3595,7 @@ export class RunManager {
     if (expanded !== blocks) {
       // Delivery is synchronous; the body already rides the message, so the install can trail it.
       const first = blocks.find((block) => block.type === 'text');
-      void this.provisionTaskSkills(state, [first?.type === 'text' ? leadingSlashSkillName(first.text) : undefined]);
+      void this.provisionTaskSkills(state, { slash: first?.type === 'text' ? leadingSlashSkillName(first.text) : undefined });
     }
     const deliverable = persisted.length
       ? [...expanded, pastedAttachmentsNote(persisted, this.attachmentLibraryHint(persisted, state.grantedAttachmentLibrary) ??
@@ -4233,7 +4237,7 @@ export class RunManager {
     // through `deliverMessage`, so it needs the SAME delivery-only `/skill` rewrite the
     // live path applies (#811). Delivery-only: the `user-message` event above already
     // persisted the user's original text, and the transcript must keep showing that.
-    await this.provisionTaskSkills(state, [leadingSlashSkillName(prompt)]);
+    await this.provisionTaskSkills(state, { slash: leadingSlashSkillName(prompt) });
     const expandedPrompt = expandRegistrySlashSkillText(prompt, state.skills ?? []);
     // Reports that arrived while this run had no session (spec Q7) open the continuation, ahead
     // of whatever prompted it — a commander resumed by its own children's reports has to be told
@@ -5735,8 +5739,12 @@ export class RunManager {
    * Waits, bounded, for the team-skill load: a companion often lives only in the team repo.
    * Refreshes `state.skills` so expansion sees the same catalog. Never throws.
    */
-  private async provisionTaskSkills(state: ActiveRun, names: Array<string | undefined>): Promise<string[]> {
-    const wanted = names.filter((name): name is string => Boolean(name?.trim()));
+  private async provisionTaskSkills(
+    state: ActiveRun,
+    wantedSkills: { stepSkill?: string; slash?: string },
+  ): Promise<string[]> {
+    const stepSkill = wantedSkills.stepSkill?.trim() || undefined;
+    const wanted = [stepSkill, wantedSkills.slash].filter((name): name is string => Boolean(name));
     if (!wanted.length) return [];
     try {
       let timer: NodeJS.Timeout | undefined;
@@ -5754,9 +5762,20 @@ export class RunManager {
       const catalog = [...state.skills];
       const seen = new Set(catalog.map((s) => s.name));
       for (const skill of getTeamSkillsCached(this.repoRoot)) if (!seen.has(skill.name)) catalog.push(skill);
-      const roots = wanted.flatMap((name) => catalog.filter((s) => s.name === name.trim()));
-      if (!roots.length) return [];
-      return await provisionSkills(state.cwd, roots, catalog);
+      const roots = wanted.flatMap((name) => catalog.filter((s) => s.name === name));
+      // Only a selected step skill can be missing: a leading `/name` that is no skill is a
+      // backend's own command (`/compact`), not a miss.
+      const stepSkillMissing = Boolean(stepSkill) && !catalog.some((s) => s.name === stepSkill);
+      if (!roots.length) {
+        if (stepSkillMissing) track('skills_provisioned', { label: 'root_not_found', value: 0 });
+        return [];
+      }
+      const installed = await provisionSkills(state.cwd, roots, catalog);
+      track('skills_provisioned', {
+        label: stepSkillMissing ? 'root_not_found' : installed.length ? 'installed' : 'already_present',
+        value: installed.length,
+      });
+      return installed;
     } catch {
       return [];
     }
@@ -5789,7 +5808,7 @@ export class RunManager {
     let systemPrompt: string | undefined;
     const rawPrompt = applyTemplate(step.prompt ?? '{{task}}', input.task);
     // Install the selected skill and its companions where the agent's own skill lookup looks.
-    const installed = await this.provisionTaskSkills(state, [step.skill, leadingSlashSkillName(rawPrompt)]);
+    const installed = await this.provisionTaskSkills(state, { stepSkill: step.skill, slash: leadingSlashSkillName(rawPrompt) });
     if (installed.length) {
       emit({ type: 'note', stepId: step.id, message: `skills installed in the task's workspace: ${installed.join(', ')}` });
     }
@@ -6270,6 +6289,11 @@ export class RunManager {
   private handleRunnerUiEvent(runId: string, state: ActiveRun, sink: UiEventSink, event: UiEvent): void {
     if (state.cancelled || (this.active.has(runId) && this.active.get(runId) !== state)) return;
     this.recordUsageUiEvent(runId, state, event);
+    if (event.type === 'session.started') state.sessionBackend = event.backend;
+    if (!state.skillMissingReported && isUnknownSkillFailure(event)) {
+      state.skillMissingReported = true;
+      track('skill_missing_in_session', { label: state.sessionBackend ?? 'unknown' });
+    }
     sink.handle(event);
     if (event.type !== 'ask.requested' || state.cancelled) return;
     this.clearIdleTimer(state);
@@ -7359,6 +7383,17 @@ export function skillSystemPrompt(
   }
   lines.push('', 'Skill instructions:', skill.body.trim());
   return lines.join('\n');
+}
+
+/**
+ * A tool call the backend refused because the skill it named is not installed — Claude's Skill
+ * tool answers `Unknown skill: <name>`. The symptom `skill_missing_in_session` counts.
+ */
+export function isUnknownSkillFailure(event: UiEvent): boolean {
+  if (event.type !== 'item.completed' || event.item.kind !== 'tool' || event.item.status !== 'failed') return false;
+  // The Skill tool only: a Bash run whose output merely mentions the phrase is not a miss.
+  if (event.item.name.toLowerCase() !== 'skill') return false;
+  return /Unknown skill\b/i.test(`${event.item.error ?? ''}\n${event.item.output ?? ''}`);
 }
 
 /** Bound on waiting for the first team-skill load before installing a task's skills. */

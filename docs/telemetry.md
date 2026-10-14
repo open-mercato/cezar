@@ -32,7 +32,11 @@ from), `open_in` (which app), `add_project_opened` (which Add project dialog: `n
 `new_github`, `new_template`), `project_create_failed` (the step that failed, e.g.
 `folder_exists`, `github_create` — never the error text), `diff_comment_added`,
 `task_archived` / `task_unarchived` / `task_pinned` / `task_unpinned` / `task_deleted` (with the
-task's status). Every label comes from a closed set the server enforces.
+task's status), `skills_provisioned` (whether a task's selected skill and its companions were
+`installed` into its workspace, were `already_present`, or the selected skill was
+`root_not_found`; the count installed — never a skill name), `skill_missing_in_session` (the
+agent's backend, once per task, when its Skill tool still answered "Unknown skill"). Every label
+comes from a closed set the server enforces.
 
 Error reports carry the error type, message and stack with your home directory, working
 directory, temp directory and registered project roots replaced by `~`, `<repo>` and `<tmp>`,

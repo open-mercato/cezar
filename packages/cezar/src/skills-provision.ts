@@ -2,6 +2,7 @@ import { copyFile, cp, lstat, mkdir, symlink, writeFile } from 'node:fs/promises
 import { basename, dirname, join } from 'node:path';
 import type { Skill } from './skills.ts';
 import { excludeFromGit, materializeSkillDir } from './skills-remote.ts';
+import { reportError } from './telemetry.ts';
 
 /**
  * Install a task's selected skill — and every catalog skill it names, transitively — into the
@@ -103,7 +104,17 @@ export async function provisionSkills(
   for (const skill of skillClosure(roots, catalog)) {
     let any = false;
     for (const dir of PROVISION_SKILL_DIRS) {
-      if (await provisionOne(cwd, dir, skill).catch(() => false)) any = true;
+      const ok = await provisionOne(cwd, dir, skill).catch((err: unknown) => {
+        const errno = (err as { code?: unknown }).code;
+        const code = typeof errno === 'string' ? errno : 'unknown';
+        reportError(
+          err,
+          { 'skill.source': skill.source, 'skill.dir': dir.split('/')[0]!.slice(1), 'skill.errno': code },
+          { code: 'skill_provision_failed', fingerprint: `skill_provision_failed:${code}` },
+        );
+        return false;
+      });
+      if (ok) any = true;
     }
     if (any) installed.push(skill.name);
   }

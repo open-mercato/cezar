@@ -2,9 +2,12 @@ import { execFileSync } from 'node:child_process';
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Skill } from './skills.ts';
 import { mentionsSkill, provisionSkills, skillClosure } from './skills-provision.ts';
+import { reportError } from './telemetry.ts';
+
+vi.mock('./telemetry.ts', () => ({ reportError: vi.fn() }));
 
 const skill = (name: string, body: string, extra: Partial<Skill> = {}): Skill => ({
   name,
@@ -77,5 +80,17 @@ describe('provisionSkills', () => {
     expect(readFileSync(join(cwd, '.claude/skills/om-x/SKILL.md'), 'utf8')).toBe('mine');
     expect(lstatSync(join(cwd, '.agents/skills/om-x')).isDirectory()).toBe(true);
     expect(names).toEqual(['om-x']);
+  });
+
+  it('reports a failed install as skill_provision_failed, grouped by errno, and carries on', async () => {
+    // `.claude` is a FILE, so nothing can be created under it: ENOTDIR.
+    writeFileSync(join(cwd, '.claude'), 'not a dir');
+    const names = await provisionSkills(cwd, [skill('om-y', 'body')], []);
+    expect(names).toEqual(['om-y']); // `.agents/skills` still got it
+    expect(vi.mocked(reportError)).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ 'skill.source': 'builtin', 'skill.dir': 'claude' }),
+      expect.objectContaining({ code: 'skill_provision_failed', fingerprint: expect.stringMatching(/^skill_provision_failed:E/) }),
+    );
   });
 });
