@@ -1122,10 +1122,10 @@ export class RunStore extends EventEmitter {
     // projection often provide the replacement URL/number in the same patch; seeding afterward
     // would make the historical association unrecoverable.
     if (!run.prRefs && !normalized.prRefs) run.prRefs = legacyPrRefs(run);
-    // Counted on the transition only, so a later `error` re-write of a failed run is not a second failure (#1438).
-    if (normalized.status === 'failed' && run.status !== 'failed') {
-      const kind = failureKind(normalized.error ?? run.error, normalized.autoResumeAt ?? run.autoResumeAt);
-      track('task_failed', { label: taskFailedLabel(run.runner, kind) });
+    // Counted on the transition only (#1438); an auto-resumed attempt failing again repeats a failure already counted.
+    if (normalized.status === 'failed' && run.status !== 'failed' && run.autoResumeAttempts === undefined) {
+      const kind = failureKind(normalized.error ?? run.error);
+      if (kind) track('task_failed', { label: taskFailedLabel(run.runner, kind) });
     }
     Object.assign(run, this.redactPatch(normalized, id));
     // Keep legacy writers (including workflow resume/naming paths) in sync without requiring

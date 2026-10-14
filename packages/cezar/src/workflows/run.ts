@@ -4337,9 +4337,11 @@ export class RunManager {
           { ...recordBeforeTurn, steps: recordBeforeTurn.steps.filter((step) => step.id !== stepId) },
           this.store.readEvents(runId).filter((event) => event.stepId !== stepId),
         );
-        session = launch(freshId, false, context);
-        for (const content of replay) session.sendMessage(content);
-        await trackFallbackOutcome(session.result, {
+        await trackFallbackOutcome(() => {
+          session = launch(freshId, false, context);
+          for (const content of replay) session.sendMessage(content);
+          return session.result;
+        }, {
           cancelled: () => state.cancelled || this.active.get(runId) !== state,
           sessionError: () => sessionError,
         });
@@ -6350,9 +6352,11 @@ export class RunManager {
         this.store.updateStep(runId, step.id, { sessionId: freshId, backend });
         emit({ type: 'note', stepId: step.id, message: MISSING_SESSION_NOTE });
         const context = freshContinuationContext(record, this.store.readEvents(runId));
-        session = attach(launch(freshId, false, `${context}\n\n---\n\n## New user instruction\n${userPrompt}`), false);
-        for (const content of replay) session.sendMessage(content);
-        result = await trackFallbackOutcome(session.result, {
+        result = await trackFallbackOutcome(() => {
+          session = attach(launch(freshId, false, `${context}\n\n---\n\n## New user instruction\n${userPrompt}`), false);
+          for (const content of replay) session.sendMessage(content);
+          return session.result;
+        }, {
           cancelled: () => state.cancelled || this.active.get(runId) !== state,
           sessionError: () => sessionError,
         });

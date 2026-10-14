@@ -22,8 +22,22 @@ describe('failureKind — task_failed closed set (#1438)', () => {
     expect(failureKind(message)).toBe(kind);
   });
 
-  it('a scheduled auto-resume marks the failure as a usage limit whatever the text says', () => {
-    expect(failureKind('exit code 1', '2026-10-14T12:00:00.000Z')).toBe('usage_limit');
+  it('reads the agent error behind the prefixes run.ts adds', () => {
+    expect(failureKind('continue failed: Invalid API key.')).toBe('auth');
+    expect(failureKind('step "work" failed: Invalid API key.')).toBe('auth');
+  });
+
+  it('a usage limit with no reset instant is still a usage limit', () => {
+    expect(failureKind("You've hit your usage limit.")).toBe('usage_limit');
+  });
+
+  it('ACP request timeouts count as timeouts', () => {
+    expect(failureKind('ACP session/prompt timed out after 30s')).toBe('timeout');
+  });
+
+  it('restart bookkeeping is not counted', () => {
+    expect(failureKind('interrupted — cezar process exited during the run')).toBeUndefined();
+    expect(failureKind('interrupted — workflow definition not recoverable after a restart')).toBeUndefined();
   });
 
   it('labels as <backend>:<kind>, `unknown` without a runner', () => {
@@ -58,6 +72,21 @@ describe('RunStore.updateRun → task_failed', () => {
     expect(calls).toEqual([['task_failed', { label: 'claude:missing_session' }]]);
     expect(JSON.stringify(calls)).not.toContain('0b6c1d2e');
     expect(JSON.stringify(calls)).not.toContain(run.id);
+  });
+
+  it('does not count a restart, nor an auto-resumed attempt failing again', () => {
+    const restarted = store.createRun({ title: 't', workflow: 'w', task: 'x', steps: [], runner: 'claude' });
+    store.updateRun(restarted.id, { status: 'running' });
+    store.updateRun(restarted.id, { status: 'failed', error: 'interrupted — cezar process exited during the run' });
+
+    const limited = store.createRun({ title: 't', workflow: 'w', task: 'x', steps: [], runner: 'claude' });
+    store.updateRun(limited.id, { status: 'running' });
+    store.updateRun(limited.id, { status: 'failed', error: 'Claude AI usage limit reached|1760450400' });
+    store.updateRun(limited.id, { status: 'running', autoResumeAttempts: 1 });
+    store.updateRun(limited.id, { status: 'failed', error: 'Claude AI usage limit reached|1760450400' });
+
+    const calls = vi.mocked(track).mock.calls.filter(([event]) => event === 'task_failed');
+    expect(calls).toEqual([['task_failed', { label: 'claude:usage_limit' }]]);
   });
 
   it('does not fire for other settlements', () => {

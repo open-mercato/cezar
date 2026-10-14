@@ -134,12 +134,13 @@ export const MISSING_SESSION_NOTE =
  * how it ended (#1438). Shared by both resume sites so their outcomes cannot drift.
  */
 export async function trackFallbackOutcome<T>(
-  fresh: Promise<T>,
+  /** Launches the fresh session and returns its result — inside, so a launch that throws still counts. */
+  fresh: () => Promise<T>,
   ended: { cancelled: () => boolean; sessionError: () => string | undefined },
 ): Promise<T> {
   let threw = false;
   try {
-    return await fresh;
+    return await fresh();
   } catch (err) {
     threw = true;
     throw err;
