@@ -19,7 +19,8 @@
 A task's app could only be looked at, not pointed at. To tell the agent "this button is misaligned" the user had
 to describe the button in words and hope the agent found the same one.
 
-Design Mode closes that loop. A toggle in the Preview tab's toolbar turns the cursor into a
+Design Mode closes that loop. A **Design Mode** toggle button in the Preview tab's toolbar — always
+shown, disabled with the reason where it cannot work — turns the cursor into a
 picker; clicking an element of the app opens a note beside it, and sending the note gives the
 agent the user's words followed by the element's selector, the page it is on,
 the component that renders it (when the framework says), its box, text, notable computed styles

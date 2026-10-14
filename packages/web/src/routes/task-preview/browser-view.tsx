@@ -197,7 +197,15 @@ export function BrowserView({
   const [proxy, setProxy] = useState<{ upstream: string; origin: string } | null>(null)
   const [pickerReady, setPickerReady] = useState(false)
   const frameRef = useRef<HTMLIFrameElement>(null)
-  const designAllowed = onPickElement !== undefined && (health.data?.capabilities?.designMode ?? false)
+  // The toggle shows wherever a host takes picks; the server's capability only decides whether it
+  // can be switched on, so an unavailable Design Mode says why instead of vanishing.
+  const designOffered = onPickElement !== undefined
+  const designAllowed = designOffered && (health.data?.capabilities?.designMode ?? false)
+  const designUnavailable = !designAllowed
+    ? health.data?.capabilities?.localHandoff === false
+      ? "Design Mode needs a local cockpit — a hosted one cannot reach the task's local dev server"
+      : 'Design Mode is turned off on this cockpit (CEZ_DESIGN_MODE=0)'
+    : null
   const targetOrigin = designOrigin(target)
   const designActive = designAllowed && design && targetOrigin !== null
   const mirror = proxy !== null && proxy.upstream === targetOrigin ? proxy.origin : null
@@ -564,7 +572,7 @@ export function BrowserView({
             className="h-8 text-[13px] focus-visible:ring-ring/30 md:text-[13px]"
           />
         </form>
-        {designAllowed ? (
+        {designOffered ? (
           // The one control in this toolbar that is not navigation, and the only one a user has
           // to be told exists — so it carries its name, and wears the accent while it is on.
           <Button
@@ -573,11 +581,11 @@ export function BrowserView({
             variant={designActive ? 'primary' : 'outline'}
             size="sm"
             aria-pressed={designActive}
-            disabled={targetOrigin === null}
+            disabled={designUnavailable !== null || targetOrigin === null}
             title={
-              targetOrigin === null ? 'Design Mode works on local http:// addresses'
+              designUnavailable ?? (targetOrigin === null ? 'Design Mode works on local http:// addresses'
               : designActive ? 'Stop selecting elements (Esc)'
-              : 'Click an element of the page to send it to the agent'
+              : 'Click an element of the page to send it to the agent')
             }
             onClick={() => setDesign((on) => !on)}
             className="ml-1 disabled:opacity-40"

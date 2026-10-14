@@ -71,13 +71,27 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('the Design Mode toggle', () => {
-  it('is absent without a host to receive picks, and when the server does not offer it', () => {
+  it('is absent without a host to receive picks', () => {
     render(<BrowserView state={{ tabs: [APP], active: 0 }} onChange={vi.fn()} />)
     expect(screen.queryByRole('button', { name: 'Design Mode' })).toBeNull()
-    cleanup()
+  })
+
+  it('stays visible but disabled, with the reason, when the server does not offer it', () => {
     health.designMode = false
     renderView()
-    expect(screen.queryByRole('button', { name: 'Design Mode' })).toBeNull()
+    expect((toggle() as HTMLButtonElement).disabled).toBe(true)
+    expect(toggle().getAttribute('title')).toMatch(/CEZ_DESIGN_MODE=0/)
+    fireEvent.click(toggle())
+    expect(openDesignProxy).not.toHaveBeenCalled()
+  })
+
+  it('switches on and off from the toggle button', async () => {
+    renderView()
+    fireEvent.click(toggle())
+    expect(toggle().getAttribute('aria-pressed')).toBe('true')
+    await waitFor(() => expect(openDesignProxy).toHaveBeenCalledTimes(1))
+    fireEvent.click(toggle())
+    expect(toggle().getAttribute('aria-pressed')).toBe('false')
   })
 
   it('is disabled, with the reason, for an address that cannot be mirrored', () => {
