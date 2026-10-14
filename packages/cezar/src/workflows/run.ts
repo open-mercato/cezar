@@ -3290,6 +3290,10 @@ export class RunManager {
    * A file is still `stat`-checked here rather than trusted: an attachment the user deleted must
    * drop out of the paths handed to the agent, exactly as a missing image does.
    */
+  private attachmentsDir(runId: string): string {
+    return join(this.dataDir, 'runs', `${runId}-images`);
+  }
+
   private readPersistedAttachments(
     runId: string,
     urls: string[],
@@ -3847,7 +3851,7 @@ export class RunManager {
     // portable context from Cezar's durable record + redacted event stream before this new turn's
     // user-message is appended. This works even when the interrupted agent never wrote HANDOFF.md.
     const portableContext = record && sessionId === undefined
-      ? freshContinuationContext(record, this.store.readEvents(runId))
+      ? freshContinuationContext(record, this.store.readEvents(runId), this.attachmentsDir(runId))
       : undefined;
     // The record is mutated in place below; a missing-session fallback needs it as it was.
     const recordBeforeTurn = record && sessionId !== undefined
@@ -4336,6 +4340,7 @@ export class RunManager {
         const context = freshContinuationContext(
           { ...recordBeforeTurn, steps: recordBeforeTurn.steps.filter((step) => step.id !== stepId) },
           this.store.readEvents(runId).filter((event) => event.stepId !== stepId),
+          this.attachmentsDir(runId),
         );
         await trackFallbackOutcome(() => {
           session = launch(freshId, false, context);
@@ -6351,7 +6356,7 @@ export class RunManager {
         const freshId = randomUUID();
         this.store.updateStep(runId, step.id, { sessionId: freshId, backend });
         emit({ type: 'note', stepId: step.id, message: MISSING_SESSION_NOTE });
-        const context = freshContinuationContext(record, this.store.readEvents(runId));
+        const context = freshContinuationContext(record, this.store.readEvents(runId), this.attachmentsDir(runId));
         result = await trackFallbackOutcome(() => {
           session = attach(launch(freshId, false, `${context}\n\n---\n\n## New user instruction\n${userPrompt}`), false);
           for (const content of replay) session.sendMessage(content);
