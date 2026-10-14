@@ -5,6 +5,7 @@ import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderAuthService, type ProviderId } from '../core/provider-auth.ts';
 import { RunStore, type RunRecord } from '../runs/store.ts';
+import { defaultAgentAccountStore, mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
 import { defaultWorkspaceConfig, type WorkspaceConfig } from '../workspace/config.ts';
 import { RunManager, type StartRunInput } from '../workflows/run.ts';
 import type { WorkflowDef } from '../workflows/types.ts';
@@ -300,9 +301,10 @@ describe('the gate verifies before it refuses', () => {
     }));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     store.flush();
     rmSync(repoRoot, { recursive: true, force: true });
+    await mergeWriteAgentAccounts(() => defaultAgentAccountStore());
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
   });
@@ -310,14 +312,15 @@ describe('the gate verifies before it refuses', () => {
   /** A claude whose login state the test controls, with a clock it can advance. */
   const setup = (options: { disabled?: ProviderId[] } = {}) => {
     let now = 1_000;
-    const state = { claudeLoggedIn: false, probes: 0 };
+    const state = { claudeLoggedIn: false, workLoggedIn: false, probes: 0 };
     const providerAuth = new ProviderAuthService({
       platform: 'linux',
       now: () => now,
-      runCommand: async (executable) => {
+      runCommand: async (executable, _args, _timeout, env) => {
         state.probes += 1;
         if (executable === 'claude') {
-          return state.claudeLoggedIn
+          const loggedIn = env?.CLAUDE_CONFIG_DIR ? state.workLoggedIn : state.claudeLoggedIn;
+          return loggedIn
             ? { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 }
             : { stdout: '{"loggedIn":false}', stderr: '', exitCode: 1 };
         }
@@ -372,6 +375,36 @@ describe('the gate verifies before it refuses', () => {
     expect(await response.json()).toEqual({
       error: 'Claude Code credentials are unavailable. Authorize it in Settings → Agents → Providers.',
     });
+    expect(startRun).not.toHaveBeenCalled();
+  });
+
+  // Telemetry ac53a6ef: the gate probed only the discovered login, never the account the run uses.
+  const addWorkAccount = () => mergeWriteAgentAccounts((accounts) => {
+    accounts.accounts.push({ id: 'work', provider: 'claude', configDir: join(repoRoot, 'claude-work'), label: 'Work', addedAt: '' });
+  });
+
+  it('starts the run on a signed-in selected account even when the default login is signed out', async () => {
+    const { app, state } = setup();
+    await addWorkAccount();
+    await mergeWriteAgentAccounts((accounts) => { accounts.defaults.claude = 'work'; });
+    state.workLoggedIn = true;
+
+    const response = await start(app, 'claude');
+    expect(response.status).toBe(201);
+    expect(startRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a composer-picked account that is signed out, even when the default login is fine', async () => {
+    const { app, state } = setup();
+    await addWorkAccount();
+    state.claudeLoggedIn = true;
+
+    const response = await apiRequest(app, '/api/v1/runs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ task: 'Task', runner: 'claude', agentProfile: 'work', steps: [{ id: 'task', prompt: '{{task}}' }] }),
+    });
+    expect(response.status).toBe(409);
     expect(startRun).not.toHaveBeenCalled();
   });
 
