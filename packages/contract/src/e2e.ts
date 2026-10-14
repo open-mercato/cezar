@@ -15,9 +15,14 @@ export const E2E_SETUP_WORKFLOW_NAME = 'e2e-setup';
  * wire. Stored as a project secret with the `checks` audience, so it reaches the check steps
  * that run `e2e` and never an agent session.
  */
-export const E2E_CREDENTIAL_NAMES = ['AI_GATEWAY_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY'] as const;
+export const E2E_CREDENTIAL_NAMES = ['AI_GATEWAY_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY', 'OLLAMA_API_KEY'] as const;
 export const e2eCredentialNameSchema = z.enum(E2E_CREDENTIAL_NAMES);
 export type E2eCredentialName = z.infer<typeof e2eCredentialNameSchema>;
+
+/** Check-step secret names the setup may store beyond provider API keys (Ollama model name). */
+export const E2E_EXTRA_CHECK_SECRET_NAMES = ['OLLAMA_MODEL'] as const;
+export const e2eCheckSecretNameSchema = z.enum([...E2E_CREDENTIAL_NAMES, ...E2E_EXTRA_CHECK_SECRET_NAMES]);
+export type E2eCheckSecretName = z.infer<typeof e2eCheckSecretNameSchema>;
 
 /**
  * `GET /e2e`: what this project already has. Read from the project's checkout, so a setup whose
@@ -29,8 +34,8 @@ export const e2eStatusSchema = z.object({
   configFile: z.string().nullable(),
   /** `.ai/cezar/workflows/implement-and-e2e.yaml` exists. */
   workflow: z.boolean(),
-  /** Which of `E2E_CREDENTIAL_NAMES` the project's check steps can read (project or workspace secrets). */
-  credentials: z.array(e2eCredentialNameSchema),
+  /** Which e2e-related check secrets the project has (names only, project or workspace). */
+  credentials: z.array(e2eCheckSecretNameSchema),
   /** The most recent setup run, or `null` when none was started. */
   setup: z.object({ runId: z.string(), status: runStatusSchema }).nullable(),
 });
@@ -42,8 +47,23 @@ export type E2eStatus = z.infer<typeof e2eStatusSchema>;
  */
 export const e2eSetupInputSchema = z.object({
   credential: z.object({ name: e2eCredentialNameSchema, value: z.string().min(1) }).strict().optional(),
+  /** When the provider is Ollama (Local): model name from the user's Ollama install — stored as `OLLAMA_MODEL`. */
+  ollama: z.object({ model: z.string().min(1), baseUrl: z.string().url().optional() }).strict().optional(),
 });
 export type E2eSetupInput = z.infer<typeof e2eSetupInputSchema>;
+
+export const e2eOllamaModelsQuerySchema = z.object({
+  baseUrl: z.string().url().optional(),
+});
+export type E2eOllamaModelsQuery = z.infer<typeof e2eOllamaModelsQuerySchema>;
+
+export const e2eOllamaModelsResponseSchema = z.object({
+  available: z.boolean(),
+  baseUrl: z.string(),
+  models: z.array(z.string()),
+  reason: z.string().optional(),
+});
+export type E2eOllamaModelsResponse = z.infer<typeof e2eOllamaModelsResponseSchema>;
 
 export const e2eSetupResponseSchema = z.object({ runId: z.string() });
 export type E2eSetupResponse = z.infer<typeof e2eSetupResponseSchema>;

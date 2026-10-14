@@ -153,6 +153,16 @@ describe('one-click e2e setup API (spec 2026-10-10-e2e-one-click-setup)', () => 
     expect(started).toHaveLength(0);
   });
 
+  it('stores an Ollama model name for check steps when ollama is given', async () => {
+    gitInit();
+    const { instance } = await app();
+    const response = await apiRequest(instance, '/api/v1/e2e/setup', post({ ollama: { model: 'llama3.2' } }));
+    expect(response.status).toBe(201);
+    const names = secretsListSchema.parse(await (await apiRequest(instance, '/api/v1/secrets')).json()).secrets.map((s) => s.name);
+    expect(names).toContain('OLLAMA_MODEL');
+    expect(started[0]!.workflow.steps[0]!.prompt).toContain('@ai-sdk/ollama');
+  });
+
   it('rejects a key name it does not know how to wire', async () => {
     gitInit();
     const { instance } = await app();

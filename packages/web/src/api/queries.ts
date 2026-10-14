@@ -156,6 +156,7 @@ export const queryKeys = {
   e2e: {
     allFor: (projectId: string) => ['e2e', projectId] as const,
     status: () => ['e2e', queryScope()] as const,
+    ollamaModels: (projectId: string) => ['e2e', projectId, 'ollama-models'] as const,
   },
   tracker: {
     allFor: (projectId: string) => ['tracker', projectId] as const,

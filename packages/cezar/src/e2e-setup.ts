@@ -1,6 +1,13 @@
 import { access } from 'node:fs/promises';
 import { join } from 'node:path';
-import { E2E_CREDENTIAL_NAMES, E2E_SETUP_WORKFLOW_NAME, type E2eCredentialName, type E2eStatus } from '@open-mercato/cezar-contract';
+import {
+  E2E_CREDENTIAL_NAMES,
+  E2E_EXTRA_CHECK_SECRET_NAMES,
+  E2E_SETUP_WORKFLOW_NAME,
+  type E2eCheckSecretName,
+  type E2eCredentialName,
+  type E2eStatus,
+} from '@open-mercato/cezar-contract';
 import type { RunRecord } from './runs/store.ts';
 import { compileV1, graphToSteps } from './workflows/graph.ts';
 import type { WorkflowDef, WorkflowStepDef } from './workflows/types.ts';
@@ -40,6 +47,7 @@ const PROVIDER_HINTS: Record<E2eCredentialName, string> = {
   OPENAI_API_KEY: 'OpenAI directly — add `@ai-sdk/openai` as a devDependency and use its `openai(...)` model',
   ANTHROPIC_API_KEY: 'Anthropic directly — add `@ai-sdk/anthropic` as a devDependency and use its `anthropic(...)` model',
   OPENROUTER_API_KEY: 'OpenRouter — add `@openrouter/ai-sdk-provider` as a devDependency and use its `openrouter(...)` model',
+  OLLAMA_API_KEY: 'Ollama (local) — add `@ai-sdk/ollama` as a devDependency and use its `ollama(...)` model with base URL `http://127.0.0.1:11434/v1` and a model name from your installed models (e.g. llama2, llama3, mistral, codellama)',
 };
 
 /**
@@ -92,11 +100,19 @@ steps:
 const TASK_TOKEN = '{{task}}';
 const TASK_PLACEHOLDER = '__CEZAR_TASK_TOKEN__';
 
+/** Which provider the setup agent should wire when Ollama model secrets are stored without an API key. */
+export function resolveE2eSetupProvider(credentials: readonly E2eCheckSecretName[]): E2eCredentialName | undefined {
+  const have = new Set(credentials);
+  if (have.has('OLLAMA_API_KEY') || have.has('OLLAMA_MODEL')) return 'OLLAMA_API_KEY';
+  return credentials.find((name): name is E2eCredentialName => (E2E_CREDENTIAL_NAMES as readonly string[]).includes(name));
+}
+
 /** The setup agent's instructions. `credentials` are NAMES only — the agent never sees a value. */
-export function e2eSetupPrompt(credentials: readonly E2eCredentialName[]): string {
-  const provider = credentials[0];
+export function e2eSetupPrompt(credentials: readonly E2eCheckSecretName[]): string {
+  const provider = resolveE2eSetupProvider(credentials);
+  const storedName = provider === 'OLLAMA_API_KEY' && credentials.includes('OLLAMA_MODEL') ? 'OLLAMA_MODEL' : provider;
   const providerLine = provider
-    ? `The project has \`${provider}\` stored for its check steps, so wire the default agent to ${PROVIDER_HINTS[provider]}. Pick the model the provider's section of \`node_modules/e2e/docs/models.mdx\` recommends. Do not read, print or write the key — it reaches the check steps from cezar's secret store, never the repository.`
+    ? `The project has \`${storedName}\` stored for its check steps, so wire the default agent to ${PROVIDER_HINTS[provider]}. Pick the model the provider's section of \`node_modules/e2e/docs/models.mdx\` recommends. Do not read, print or write the key — it reaches the check steps from cezar's secret store, never the repository.`
     : 'No model key is stored yet. Keep the `gateway(...)` model `e2e init` generated; tests without `agent.*` steps run without a key, and the user can add `AI_GATEWAY_API_KEY` in Settings → External integrations → Test frameworks later.';
   return `You are setting up TesterArmy's \`e2e\` (agentic browser end-to-end testing) in this repository, so the user never has to. Work only on test setup — do NOT change application code.
 
@@ -111,6 +127,20 @@ export function e2eSetupPrompt(credentials: readonly E2eCredentialName[]): strin
    - \`app.command\`: start THIS project's dev server as \`{ executable, args, env }\` (never a shell string) with the \`{port}\` placeholder, bound to 127.0.0.1 — e.g. Vite \`['run','dev','--','--host','127.0.0.1','--port','{port}','--strictPort']\`, Next.js \`['run','dev','--','-H','127.0.0.1','-p','{port}']\` (and add \`allowedDevOrigins: ['127.0.0.1']\` to the Next config, or the page never hydrates). Pass \`PORT: '{port}'\` in \`env\` too. Raise \`startupTimeout\` if the dev server is slow to start. The app process inherits only PATH, HOME and temp variables, so put anything else it needs in \`env\`.
    - Model: ${providerLine}
    - Read \`node_modules/e2e/docs/reference/config.mdx\` for anything not covered here.
+
+${provider === 'OLLAMA_API_KEY' ? `
+   - Add \`@ai-sdk/ollama\` to \`devDependencies\`: \`npm install -D @ai-sdk/ollama\`
+   - Configure the Ollama provider (OpenAI-compatible API at \`http://127.0.0.1:11434/v1\`, no API key):
+     \`\`\`typescript
+     import { ollama } from '@ai-sdk/ollama';
+
+     const model = ollama(process.env.OLLAMA_MODEL ?? 'llama3.2', {
+       baseURL: 'http://127.0.0.1:11434/v1',
+     });
+     \`\`\`
+   - Wire that model as the default agent model in \`e2e.config.ts\`. \`OLLAMA_MODEL\` reaches check steps from cezar's secret store — do not commit a model name.
+   - Run \`ollama list\` if you need to confirm the model is installed locally.
+` : ''}
 
 5. Replace \`tests/example.e2e.ts\` with \`tests/smoke.e2e.ts\`: open \`/\` and assert something visible that this app actually renders (a heading, the main landmark) using locators only — no \`agent.*\` step, so the smoke test passes without a model key. Leave one commented-out \`agent.act\`/\`agent.assert\` example below it.
 
@@ -139,7 +169,7 @@ export const E2E_SETUP_PR_TITLE = 'chore: set up e2e browser tests (TesterArmy e
  * opened — no `gh`, no remote, offline — still ends the run as a success: e2e works either way,
  * the node's note says why there is no PR, and the header's Draft PR button remains.
  */
-export function e2eSetupWorkflow(credentials: readonly E2eCredentialName[]): WorkflowDef {
+export function e2eSetupWorkflow(credentials: readonly E2eCheckSecretName[]): WorkflowDef {
   const steps: WorkflowStepDef[] = [
     { id: 'setup', name: 'Set up e2e', prompt: e2eSetupPrompt(credentials) },
     {
@@ -190,9 +220,10 @@ export async function findE2eConfig(repoRoot: string): Promise<string | null> {
 }
 
 /** Which known model keys are among the secret names a check step can read, in preference order. */
-export function e2eCredentialsAmong(names: Iterable<string>): E2eCredentialName[] {
+export function e2eCredentialsAmong(names: Iterable<string>): E2eCheckSecretName[] {
   const have = new Set(names);
-  return E2E_CREDENTIAL_NAMES.filter((name) => have.has(name));
+  const known = [...E2E_CREDENTIAL_NAMES, ...E2E_EXTRA_CHECK_SECRET_NAMES] as const;
+  return known.filter((name) => have.has(name));
 }
 
 /** The newest setup run in `runs`, or `undefined`. */

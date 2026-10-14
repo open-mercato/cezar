@@ -139,7 +139,7 @@ import type {
   TrackerItemsResponse,
   TrackerKind, TrackerCredentials, TrackerConnectionResponse,
   SecretsList, SecretValueInput,
-  E2eStatus, E2eSetupInput, E2eSetupResponse,
+  E2eStatus, E2eSetupInput, E2eSetupResponse, E2eOllamaModelsResponse,
 } from '@open-mercato/cezar-api-client'
 import { parseProviderStatusResponse } from '@/lib/provider-status'
 import {
@@ -927,6 +927,11 @@ export async function getE2eStatus(opts?: ReadOptions): Promise<E2eStatus> {
 export async function startE2eSetup(input: E2eSetupInput): Promise<E2eSetupResponse> {
   return unwrap(await cez.api.v1.p[':projectId'].e2e.setup.$post(
     { param: { projectId: queryScope() }, json: input }), '/e2e/setup')
+}
+export async function listE2eOllamaModels(baseUrl?: string): Promise<E2eOllamaModelsResponse> {
+  const query = baseUrl ? { baseUrl } : {};
+  return unwrap(await cez.api.v1.p[':projectId'].e2e.ollama.models.$get(
+    { param: { projectId: queryScope() }, query }), '/e2e/ollama/models')
 }
 
 export async function getTrackerAssociation(opts?: ReadOptions): Promise<TrackerAssociationResponse> {

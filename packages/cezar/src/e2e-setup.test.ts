@@ -1,7 +1,7 @@
 import { parse as parseYaml } from 'yaml';
 import { describe, expect, it } from 'vitest';
 import { E2E_CREDENTIAL_NAMES } from '@open-mercato/cezar-contract';
-import { E2E_SETUP_PR_TITLE, E2E_WORKFLOW_TEMPLATE, e2eCredentialsAmong, e2eSetupWorkflow } from './e2e-setup.ts';
+import { E2E_SETUP_PR_TITLE, E2E_WORKFLOW_TEMPLATE, e2eCredentialsAmong, e2eSetupWorkflow, resolveE2eSetupProvider } from './e2e-setup.ts';
 import { graphIssues } from './workflows/graph.ts';
 import { stepsIssue, workflowDefSchema, workflowFileSchema } from './workflows/types.ts';
 
@@ -51,5 +51,10 @@ describe('e2e setup workflow (spec 2026-10-10-e2e-one-click-setup)', () => {
     for (const name of E2E_CREDENTIAL_NAMES) {
       expect(e2eSetupWorkflow([name]).steps[0]!.prompt).toContain(`\`${name}\``);
     }
+  });
+
+  it('treats a stored OLLAMA_MODEL as the Ollama provider', () => {
+    expect(resolveE2eSetupProvider(['OLLAMA_MODEL'])).toBe('OLLAMA_API_KEY');
+    expect(e2eSetupWorkflow(['OLLAMA_MODEL']).steps[0]!.prompt).toContain('@ai-sdk/ollama');
   });
 });

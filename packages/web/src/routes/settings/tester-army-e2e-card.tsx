@@ -1,10 +1,10 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CheckIcon, ExternalLinkIcon, MinusIcon } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 
 import { E2E_CREDENTIAL_NAMES, queryScope, type E2eCredentialName, type RunStatus } from '@open-mercato/cezar-api-client'
-import { startE2eSetup } from '@/api/client'
+import { listE2eOllamaModels, startE2eSetup } from '@/api/client'
 import { queryKeys, useE2eStatus, useRun } from '@/api/queries'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
@@ -14,12 +14,16 @@ import testerArmyLogo from '@/assets/integrations/tester-army.png'
 /** TesterArmy's own repository — where the card sends someone who wants to know what e2e is. */
 export const TESTER_ARMY_REPO = 'https://github.com/tester-army/e2e'
 
+/** OpenAI-compatible Ollama endpoint the setup agent wires (spec: Ollama e2e provider). */
+export const OLLAMA_E2E_BASE_URL = 'http://127.0.0.1:11434/v1'
+
 /** The provider behind each key, as the person picking one knows it. */
 const PROVIDER_LABELS: Record<E2eCredentialName, string> = {
   AI_GATEWAY_API_KEY: 'Vercel AI Gateway',
   OPENAI_API_KEY: 'OpenAI',
   ANTHROPIC_API_KEY: 'Anthropic',
   OPENROUTER_API_KEY: 'OpenRouter',
+  OLLAMA_API_KEY: 'Ollama (Local)',
 }
 
 const IN_FLIGHT: ReadonlySet<RunStatus> = new Set(['queued', 'running', 'waiting'])
@@ -66,6 +70,7 @@ export function TesterArmyE2eCard() {
   // `e2e init`'s own default) — re-running a setup should not quietly switch providers.
   const [chosenProvider, setProvider] = useState<E2eCredentialName | undefined>(undefined)
   const [key, setKey] = useState('')
+  const [ollamaModel, setOllamaModel] = useState('')
   const [error, setError] = useState<string | null>(null)
 
   const setupStatus = setupRun.data?.status ?? status.data?.setup?.status
@@ -73,13 +78,31 @@ export function TesterArmyE2eCard() {
   const prUrl = setupRun.data?.pullRequestUrl && /^https?:\/\//.test(setupRun.data.pullRequestUrl) ? setupRun.data.pullRequestUrl : undefined
   const inFlight = setupStatus !== undefined && IN_FLIGHT.has(setupStatus)
   const credentials = status.data?.credentials ?? []
-  const provider: E2eCredentialName = chosenProvider ?? credentials[0] ?? 'AI_GATEWAY_API_KEY'
+  const storedProvider = credentials.includes('OLLAMA_MODEL')
+    ? 'OLLAMA_API_KEY'
+    : credentials.find((n): n is E2eCredentialName => (E2E_CREDENTIAL_NAMES as readonly string[]).includes(n))
+  const provider: E2eCredentialName = chosenProvider ?? storedProvider ?? 'AI_GATEWAY_API_KEY'
+  const isOllama = provider === 'OLLAMA_API_KEY'
   const installed = Boolean(status.data?.configFile && status.data.workflow)
+
+  const ollamaModels = useQuery({
+    queryKey: queryKeys.e2e.ollamaModels(queryScope() ?? ''),
+    queryFn: () => listE2eOllamaModels(OLLAMA_E2E_BASE_URL.replace(/\/v1$/, '')),
+    enabled: isOllama && Boolean(status.data),
+    staleTime: 30_000,
+  })
 
   const starting = useMutation({
     mutationFn: async () => {
       const projectId = queryScope()
-      const response = await startE2eSetup(key ? { credential: { name: provider, value: key } } : {})
+      const body: Parameters<typeof startE2eSetup>[0] = {}
+      if (isOllama) {
+        if (!ollamaModel.trim()) throw new Error('Choose an Ollama model')
+        body.ollama = { model: ollamaModel.trim(), baseUrl: OLLAMA_E2E_BASE_URL.replace(/\/v1$/, '') }
+      } else if (key) {
+        body.credential = { name: provider, value: key }
+      }
+      const response = await startE2eSetup(body)
       return { projectId, runId: response.runId }
     },
     onSuccess: async ({ projectId, runId }) => {
@@ -97,6 +120,8 @@ export function TesterArmyE2eCard() {
   })
 
   const badge = inFlight ? 'Setting up' : installed ? 'Installed' : 'Not set up'
+  const modelOptions = ollamaModels.data?.available ? ollamaModels.data.models : []
+
   return (
     <div className="flex flex-col gap-4" data-slot="e2e-settings">
       <section className="rounded-lg border border-border bg-card p-4">
@@ -157,17 +182,48 @@ export function TesterArmyE2eCard() {
             ))}
           </select>
         </label>
-        <label className="mt-3 block text-sm">API key <span className="text-muted-foreground">(optional)</span>
-          <input aria-label="API key" type="password" autoComplete="off" value={key} onChange={(event) => setKey(event.target.value)}
-            placeholder={credentials.includes(provider) ? 'stored — leave empty to keep it' : ''}
-            className="mt-1 block w-full rounded border border-border bg-background p-2" />
-        </label>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Stored encrypted as a project secret for check steps only — never handed to an agent session.
-        </p>
+        {isOllama ? (
+          <>
+            <p className="mt-3 text-sm">
+              Base URL: <code className="text-xs">{OLLAMA_E2E_BASE_URL}</code>
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">API key not required — Ollama runs on this machine.</p>
+            <label className="mt-3 block text-sm">Model
+              {ollamaModels.isPending ? <p className="mt-1 text-xs text-muted-foreground">Loading models from Ollama…</p> : null}
+              {ollamaModels.data && !ollamaModels.data.available ? (
+                <p role="status" className="mt-1 text-xs text-muted-foreground">
+                  {ollamaModels.data.reason ?? 'Ollama is not reachable'} — start Ollama, then refresh this page.
+                </p>
+              ) : null}
+              <select
+                aria-label="Ollama model"
+                value={ollamaModel}
+                onChange={(event) => setOllamaModel(event.target.value)}
+                disabled={modelOptions.length === 0}
+                className="mt-1 block w-full rounded border border-border bg-background p-2 outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              >
+                <option value="">{modelOptions.length ? 'Choose a model' : 'No models found'}</option>
+                {modelOptions.map((name) => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
+            </label>
+          </>
+        ) : (
+          <label className="mt-3 block text-sm">API key <span className="text-muted-foreground">(optional)</span>
+            <input aria-label="API key" type="password" autoComplete="off" value={key} onChange={(event) => setKey(event.target.value)}
+              placeholder={credentials.includes(provider) ? 'stored — leave empty to keep it' : ''}
+              className="mt-1 block w-full rounded border border-border bg-background p-2" />
+          </label>
+        )}
+        {!isOllama ? (
+          <p className="mt-1 text-xs text-muted-foreground">
+            Stored encrypted as a project secret for check steps only — never handed to an agent session.
+          </p>
+        ) : null}
         {error ? <p role="alert" className="mt-2 text-sm text-danger">{error}</p> : null}
         <div className="mt-3">
-          <Button type="submit" disabled={starting.isPending || inFlight || !status.data}>
+          <Button type="submit" disabled={starting.isPending || inFlight || !status.data || (isOllama && !ollamaModel && modelOptions.length > 0)}>
             {inFlight ? 'Setup in progress…' : installed ? 'Set up again' : 'Set up e2e'}
           </Button>
         </div>

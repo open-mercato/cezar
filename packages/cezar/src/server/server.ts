@@ -3,9 +3,13 @@ import {
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
   trackerCredentialsSchema, trackerItemParamsSchema, trackerAssociationInputSchema, type TrackerChangedEvent,
   secretParamsSchema, secretValueInputSchema, type SecretsList, type SecretValueInput,
-  e2eSetupInputSchema, type E2eStatus,
+  e2eOllamaModelsQuerySchema,
+  e2eOllamaModelsResponseSchema,
+  e2eSetupInputSchema,
+  type E2eStatus,
 } from '@open-mercato/cezar-contract';
 import { SecretStore, SecretsError, type SecretScopeRef } from '../workspace/secrets.ts';
+import { OLLAMA_DEFAULT_BASE_URL, listOllamaModels } from '../e2e-ollama.ts';
 import { E2E_SETUP_TASK, e2eCredentialsAmong, e2eSetupWorkflow, latestE2eSetupRun, readE2eStatus, setupInFlight } from '../e2e-setup.ts';
 import { createTrackerService } from './tracker/index.ts';
 import { TrackerWatches } from './tracker/watch.ts';
@@ -5975,9 +5979,25 @@ export function createApp(deps: ServerDeps) {
       const status: E2eStatus = await readE2eStatus(project.root, project.store.listRuns(), await checkSecretNames(project));
       return c.json(status, 200);
     })
+    .get('/e2e/ollama/models', queryZodValidator(e2eOllamaModelsQuerySchema), async (c) => {
+      if (!capabilities().localHandoff) {
+        return c.json(e2eOllamaModelsResponseSchema.parse({
+          available: false,
+          baseUrl: OLLAMA_DEFAULT_BASE_URL,
+          models: [],
+          reason: 'Ollama discovery needs a local cezar cockpit',
+        }), 200);
+      }
+      const { baseUrl } = c.req.valid('query');
+      const result = await listOllamaModels(baseUrl ?? OLLAMA_DEFAULT_BASE_URL);
+      const body = result.available
+        ? { available: true, baseUrl: result.baseUrl, models: result.models }
+        : { available: false, baseUrl: result.baseUrl, models: [], reason: result.reason };
+      return c.json(e2eOllamaModelsResponseSchema.parse(body), 200);
+    })
     .post('/e2e/setup', jsonZodValidator(e2eSetupInputSchema), async (c) => {
       const project = c.get('project');
-      const { credential } = c.req.valid('json');
+      const { credential, ollama } = c.req.valid('json');
       const running = latestE2eSetupRun(project.store.listRuns());
       if (running && setupInFlight(running)) {
         return c.json({ error: `an e2e setup is already in progress (task ${running.id.slice(0, 8)})` }, 409);
@@ -5985,12 +6005,20 @@ export function createApp(deps: ServerDeps) {
       if (!(await getRepoInfo(project.root))) {
         return c.json({ error: 'e2e setup needs a git repository — it runs in its own worktree and finishes as a branch you merge' }, 409);
       }
+      if (project.id === 'default' && (credential || ollama)) return c.json(unregisteredSecrets, 409);
       if (credential) {
-        if (project.id === 'default') return c.json(unregisteredSecrets, 409);
         const failed = await putSecret(
           { kind: 'project', projectId: project.id, root: project.root },
           credential.name,
           { value: credential.value, audiences: ['checks'] },
+        );
+        if (failed) return c.json({ error: failed.error }, 409);
+      }
+      if (ollama) {
+        const failed = await putSecret(
+          { kind: 'project', projectId: project.id, root: project.root },
+          'OLLAMA_MODEL',
+          { value: ollama.model, audiences: ['checks'] },
         );
         if (failed) return c.json({ error: failed.error }, 409);
       }
