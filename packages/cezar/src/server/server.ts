@@ -264,7 +264,10 @@ import {
   providerForActiveRun,
   providerForExistingRun,
   providersRequiredByWorkflow,
+  recordedProfileFor,
   unavailableProviderMessage,
+  withSelectedAccounts,
+  type ProviderAccountScope,
 } from './provider-action-gate.ts';
 import {
   ASSET_CACHE_CONTROL,
@@ -1300,8 +1303,16 @@ export function createApp(deps: ServerDeps) {
    */
   const providerActionError = async (
     required: readonly ProviderId[],
+    scope: ProviderAccountScope = {},
   ): Promise<string | null> => {
-    const known = await providerStatus();
+    // Judge the account the action runs on, not only the default login (telemetry ac53a6ef).
+    const judged = async (refresh: boolean): Promise<ProviderStatusResponse> => {
+      const rows = await providerStatus(refresh ? { refresh: true } : undefined);
+      return providerAuthChecksDisabled()
+        ? rows
+        : withSelectedAccounts(rows, required, scope, providerAuth, { refresh });
+    };
+    const known = await judged(false);
     const message = unavailableProviderMessage(required, known);
     if (message === null) return null;
     // A DISABLED provider is a settings fact, not a probe result — re-probing it learns nothing and
@@ -1309,7 +1320,7 @@ export function createApp(deps: ServerDeps) {
     const disabled = required.some((provider) =>
       known.providers.find((row) => row.provider === provider)?.enabled === false);
     if (disabled) return message;
-    return unavailableProviderMessage(required, await providerStatus({ refresh: true }));
+    return unavailableProviderMessage(required, await judged(true));
   };
   const openTerminal = deps.openTerminal ?? openInTerminal;
   const openFile = deps.openFile ?? openFileInDefaultApp;
@@ -3664,7 +3675,7 @@ export function createApp(deps: ServerDeps) {
     .post('/plan', jsonZodValidator(planSchema), async (c) => {
       const { root: repoRoot } = c.get('project');
       const parsed = { data: c.req.valid('json') };
-      const blocked = await providerActionError([(await loadConfig(repoRoot)).defaultRunner]);
+      const blocked = await providerActionError([(await loadConfig(repoRoot)).defaultRunner], { repoRoot });
       if (blocked) return c.json({ error: blocked }, 409);
       return c.json(await planChain(repoRoot, parsed.data.task));
     });
@@ -4362,7 +4373,10 @@ export function createApp(deps: ServerDeps) {
         if (!workflow) return c.json({ error: `unknown workflow: ${parsed.data.workflow}` }, 404);
       }
       const fallback = parsed.data.runner ?? (await loadConfig(repoRoot)).defaultRunner;
-      const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback));
+      const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback), {
+        repoRoot,
+        profileFor: (provider) => (provider === fallback ? parsed.data.agentProfile : undefined),
+      });
       if (blocked) return c.json({ error: blocked }, 409);
       // A composer override names an account the user just picked, so a stale id (deleted since
       // the page loaded) is answered honestly instead of quietly running on the default — the
@@ -4504,7 +4518,7 @@ export function createApp(deps: ServerDeps) {
     // Live-session participation (spec 002): deliver a user message (text +
     // pasted screenshots) into the run's open claude session.
     .post('/runs/:id/messages', jsonZodValidator(messageSchema), async (c) => {
-      const { store, manager } = c.get('project');
+      const { root: repoRoot, store, manager } = c.get('project');
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
@@ -4515,7 +4529,10 @@ export function createApp(deps: ServerDeps) {
       // disconnected (provider-auth spec: disabling never blocks existing-task mutations).
       // In the dequeue race, the ladder below safely turns this into a starting-state buffer.
       if (run.status !== 'queued') {
-        const blocked = await providerActionError([providerForActiveRun(run)]);
+        const blocked = await providerActionError([providerForActiveRun(run)], {
+          repoRoot,
+          profileFor: (provider) => recordedProfileFor(run, provider),
+        });
         if (blocked) return c.json({ error: blocked }, 409);
       }
       const content: PastedContent[] = [
@@ -4640,7 +4657,12 @@ export function createApp(deps: ServerDeps) {
       if (agentModelsLocked(repoRoot) && parsed.data.model?.trim()) {
         return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
       }
-      const blocked = await providerActionError([providerForExistingRun(run, parsed.data.runner)]);
+      const blocked = await providerActionError([providerForExistingRun(run, parsed.data.runner)], {
+        repoRoot,
+        // A runner switch drops the run's account (`continueRun`), so only the same runner inherits it.
+        profileFor: (provider) => parsed.data.agentProfile
+          ?? (provider === (run.runner ?? 'claude') ? recordedProfileFor(run, provider) : undefined),
+      });
       if (blocked) return c.json({ error: blocked }, 409);
       // The follow-up pill names an account the user just picked, so an id that has been deleted
       // since the thread loaded is answered honestly — the same asymmetry `POST /runs` keeps: a
@@ -4683,7 +4705,11 @@ export function createApp(deps: ServerDeps) {
       const sessionStep = [...run.steps].reverse().find((s) => s.sessionId);
       const sessionId = sessionStep?.sessionId;
       if (!sessionId) return c.json({ error: 'no agent session to resume' }, 409);
-      const blocked = await providerActionError([providerForExistingRun(run)]);
+      // Gate the account `handoffEnv` launches on below: the session's own, default when it recorded none.
+      const blocked = await providerActionError([providerForExistingRun(run)], {
+        repoRoot,
+        profileFor: () => sessionStep?.profileId ?? DEFAULT_AGENT_ACCOUNT_ID,
+      });
       if (blocked) return c.json({ error: blocked }, 409);
       const cwd = run.worktreePath && existsSync(run.worktreePath) ? run.worktreePath : repoRoot;
       const command = resumeCommand(run.runner, sessionId);
@@ -4790,14 +4816,18 @@ export function createApp(deps: ServerDeps) {
       // and what the client's cliTargetResumes now labels. Resume-after-finish is untouched.
       const cliRunner = agentCliRunner(target);
       if (cliRunner) {
-        const blocked = await providerActionError([cliRunner]);
-        if (blocked) return c.json({ error: blocked }, 409);
         const engineOwnsSession = run.status === 'running' || run.status === 'queued' || run.status === 'waiting';
         const sessionStep = engineOwnsSession ? undefined : [...run.steps].reverse().find((s) => s.sessionId);
         const sessionId = sessionStep?.sessionId;
         // An id resumeCommand refuses (#431) degrades to a fresh CLI in the worktree,
         // exactly like a run that never recorded a session.
         const resume = sessionId && cliRunner === (run.runner ?? 'claude') ? resumeCommand(cliRunner, sessionId) : null;
+        // Gate the account the terminal opens on below: the session's for a resume, the project's otherwise.
+        const blocked = await providerActionError([cliRunner], {
+          repoRoot,
+          profileFor: () => (resume ? sessionStep?.profileId ?? DEFAULT_AGENT_ACCOUNT_ID : undefined),
+        });
+        if (blocked) return c.json({ error: blocked }, 409);
         // The terminal this opens does not share our PATH (see `withResolvedClaudeBin`), so a
         // claude found off PATH by detection has to be named by absolute path here too —
         // otherwise the menu offers a handoff that opens on `command not found`.
@@ -5528,7 +5558,7 @@ export function createApp(deps: ServerDeps) {
         }
 
         const fallback = parsed.data?.runner ?? (await loadConfig(repoRoot)).defaultRunner;
-        const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback));
+        const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback), { repoRoot });
         if (blocked) return c.json({ error: blocked }, 409);
 
         const run = manager.startRun(workflow, {
@@ -5925,6 +5955,7 @@ export function createApp(deps: ServerDeps) {
       const workflow = e2eSetupWorkflow(e2eCredentialsAmong(await checkSecretNames(project)));
       const blocked = await providerActionError(
         providersRequiredByWorkflow(workflow, (await loadConfig(project.root)).defaultRunner),
+        { repoRoot: project.root },
       );
       if (blocked) return c.json({ error: blocked }, 409);
       // Not autonomous: an autonomous run skips the review gate (`settleSuccess`) a user may have
