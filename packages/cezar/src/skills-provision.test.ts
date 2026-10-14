@@ -94,6 +94,22 @@ describe('provisionSkills', () => {
     );
   });
 
+  it("keeps a linked worktree's installs out of git without hiding those paths in the main checkout", async () => {
+    execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'base'], { cwd });
+    const wt = join(root, 'linked');
+    execFileSync('git', ['worktree', 'add', '-q', '--detach', wt], { cwd });
+
+    expect(await provisionSkills(wt, [skill('om-x', 'cezar copy')], [])).toEqual(['om-x']);
+
+    expect(execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: wt, encoding: 'utf8' })).toBe('');
+    // The same path created in the main checkout must still show up as untracked.
+    mkdirSync(join(cwd, '.agents/skills/om-x'), { recursive: true });
+    writeFileSync(join(cwd, '.agents/skills/om-x/SKILL.md'), 'mine');
+    expect(execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd, encoding: 'utf8' })).toContain(
+      '.agents/skills/om-x/SKILL.md',
+    );
+  });
+
   it('skips a skill whose name is not one safe path segment', async () => {
     const names = await provisionSkills(cwd, [skill('../escape', 'nope')], []);
     expect(names).toEqual([]);

@@ -343,6 +343,8 @@ export async function materializeSkillDir(
   repoRoot: string,
   skill: Skill,
   skillsDir = '.claude/skills',
+  /** Keeps the copy out of git; defaults to the shared `info/exclude`. */
+  ignore: () => Promise<void> = () => excludeFromGit(repoRoot, `${skillsDir}/${skill.name}/`),
 ): Promise<boolean> {
   if (!skill.team?.dir || !skill.team.path.endsWith('SKILL.md')) return false;
   const bareDir = bareDirFor(skill.team.repo);
@@ -367,7 +369,7 @@ export async function materializeSkillDir(
     wrote++;
   }
   if (wrote === 0) return false;
-  await excludeFromGit(repoRoot, `${skillsDir}/${skill.name}/`);
+  await ignore();
   return true;
 }
 

@@ -1,5 +1,5 @@
-import { copyFile, cp, lstat, mkdir, symlink, writeFile } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { copyFile, cp, lstat, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import type { Skill } from './skills.ts';
 import { excludeFromGit, materializeSkillDir } from './skills-remote.ts';
 import { reportError } from './telemetry.ts';
@@ -64,6 +64,28 @@ function skillMarkdown(skill: Skill): string {
   return `---\n${front.join('\n')}\n---\n\n${skill.body.trim()}\n`;
 }
 
+/** First line of the `.gitignore` cezar owns inside a worktree's skills dir. */
+const IGNORE_MARK = '# cezar: skills installed for this task, not part of the repository';
+
+/**
+ * Keep `<skillsDir>/<name>` out of git in THIS worktree only. The shared `info/exclude` would also
+ * hide that path in the user's main checkout, so a self-ignoring `.gitignore` in the skills dir is
+ * used instead — unless the repo has its own there, which is never edited.
+ */
+async function ignoreProvisioned(cwd: string, skillsDir: string, name: string): Promise<void> {
+  const file = join(cwd, skillsDir, '.gitignore');
+  let prev: string | undefined;
+  try {
+    prev = await readFile(file, 'utf8');
+  } catch {
+    // absent: cezar creates and owns it
+  }
+  if (prev !== undefined && !prev.startsWith(IGNORE_MARK)) return excludeFromGit(cwd, `${skillsDir}/${name}`);
+  const lines = prev?.split('\n').filter(Boolean) ?? [IGNORE_MARK, '/.gitignore'];
+  if (lines.includes(`/${name}`)) return;
+  await writeFile(file, [...lines, `/${name}`].join('\n') + '\n', 'utf8');
+}
+
 /** One skill into one skills dir. An existing entry (tracked, or the user's own) is never touched. */
 async function provisionOne(cwd: string, skillsDir: string, skill: Skill): Promise<boolean> {
   // The name is frontmatter verbatim; it becomes a path segment, so it must be exactly one.
@@ -71,11 +93,14 @@ async function provisionOne(cwd: string, skillsDir: string, skill: Skill): Promi
   const dest = join(cwd, skillsDir, skill.name);
   // Team copies are rewritten so a Continue picks up a fetched update; everything else stays put.
   if (skill.source === 'team' && skill.team?.dir) {
-    return materializeSkillDir(cwd, skill, skillsDir).catch(() => false);
+    return materializeSkillDir(cwd, skill, skillsDir, () => ignoreProvisioned(cwd, skillsDir, skill.name)).catch(
+      () => false,
+    );
   }
-  const onDisk = skill.source !== 'team' && skill.source !== 'builtin' && skill.path.startsWith('/');
+  const onDisk = skill.source !== 'team' && skill.source !== 'builtin' && isAbsolute(skill.path);
   // Already part of this checkout (an in-place run): the agent finds it where it is.
-  if (onDisk && skill.path.startsWith(`${cwd}/`)) return false;
+  const inCwd = relative(cwd, skill.path);
+  if (onDisk && inCwd && !inCwd.startsWith('..') && !isAbsolute(inCwd)) return false;
   if (await exists(dest)) return false;
   await mkdir(dirname(dest), { recursive: true });
   if (onDisk && basename(skill.path) === 'SKILL.md') {
@@ -92,7 +117,7 @@ async function provisionOne(cwd: string, skillsDir: string, skill: Skill): Promi
     await writeFile(join(dest, 'SKILL.md'), skillMarkdown(skill), 'utf8');
   }
   // No trailing slash: a symlink is a file to git, and `name/` would not match it.
-  await excludeFromGit(cwd, `${skillsDir}/${skill.name}`);
+  await ignoreProvisioned(cwd, skillsDir, skill.name).catch(() => excludeFromGit(cwd, `${skillsDir}/${skill.name}`));
   return true;
 }
 

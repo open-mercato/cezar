@@ -5736,7 +5736,7 @@ export class RunManager {
 
   /**
    * Install the named skills and every companion they name into the run's cwd (skills-provision.ts).
-   * Waits, bounded, for the team-skill load: a companion often lives only in the team repo.
+   * Once a named skill is known, waits (bounded) for the team-skill load before collecting companions.
    * Refreshes `state.skills` so expansion sees the same catalog. Never throws.
    */
   private async provisionTaskSkills(
@@ -5747,22 +5747,37 @@ export class RunManager {
     const wanted = [stepSkill, wantedSkills.slash].filter((name): name is string => Boolean(name));
     if (!wanted.length) return [];
     try {
-      let timer: NodeJS.Timeout | undefined;
-      await Promise.race([
-        waitForTeamSkills(this.repoRoot).catch(() => []),
-        new Promise((resolve) => {
-          timer = setTimeout(resolve, TEAM_SKILLS_WAIT_MS);
-          timer.unref?.();
-        }),
-      ]);
-      clearTimeout(timer);
-      state.skills = await discoverSkills(this.repoRoot);
       // Companions resolve against the ungated team list too: curating a skill out of the
       // picker must not break a skill that runs it.
-      const catalog = [...state.skills];
-      const seen = new Set(catalog.map((s) => s.name));
-      for (const skill of getTeamSkillsCached(this.repoRoot)) if (!seen.has(skill.name)) catalog.push(skill);
-      const roots = wanted.flatMap((name) => catalog.filter((s) => s.name === name));
+      const catalogOf = (skills: readonly Skill[]): Skill[] => {
+        const catalog = [...skills];
+        const seen = new Set(catalog.map((s) => s.name));
+        for (const skill of getTeamSkillsCached(this.repoRoot)) if (!seen.has(skill.name)) catalog.push(skill);
+        return catalog;
+      };
+      const rootsIn = (catalog: readonly Skill[]) => wanted.flatMap((name) => catalog.filter((s) => s.name === name));
+      state.skills = await discoverSkills(this.repoRoot);
+      let catalog = catalogOf(state.skills);
+      let roots = rootsIn(catalog);
+      // An unknown `/name` is most likely a backend's own command (`/compact`): never stall it.
+      // A selected step skill may still arrive with the team load, so that one waits.
+      if (!roots.length && !stepSkill) return [];
+      const inPlace = resolvePath(state.cwd) === resolvePath(this.repoRoot);
+      if (!inPlace || !roots.length) {
+        // A companion (or the step skill itself) often lives only in the team repo: wait, bounded.
+        let timer: NodeJS.Timeout | undefined;
+        await Promise.race([
+          waitForTeamSkills(this.repoRoot).catch(() => []),
+          new Promise((resolve) => {
+            timer = setTimeout(resolve, TEAM_SKILLS_WAIT_MS);
+            timer.unref?.();
+          }),
+        ]);
+        clearTimeout(timer);
+        state.skills = await discoverSkills(this.repoRoot);
+        catalog = catalogOf(state.skills);
+        roots = rootsIn(catalog);
+      }
       // Only a selected step skill can be missing: a leading `/name` that is no skill is a
       // backend's own command (`/compact`), not a miss.
       const stepSkillMissing = Boolean(stepSkill) && !catalog.some((s) => s.name === stepSkill);
@@ -5771,7 +5786,7 @@ export class RunManager {
         return [];
       }
       let installed: string[];
-      if (resolvePath(state.cwd) === resolvePath(this.repoRoot)) {
+      if (inPlace) {
         // In place, the cwd is the user's checkout: its skill dirs are what `discoverSkills` reads
         // first, so a written-out copy would shadow the real skill for good. Keep the pre-provision
         // behavior there — only the selected team skill, refreshed on every run.
