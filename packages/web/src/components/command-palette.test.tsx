@@ -98,7 +98,7 @@ function project(overrides: Partial<ProjectListEntry> & { id: string }): Project
 }
 
 /** Health with/without a working forge — what gates the Views group's GitHub row (R6 1.1). */
-function health(forgeAvailable: boolean, automations = false): HealthResponse {
+function health(forgeAvailable: boolean | 'cold', automations = false): HealthResponse {
   return {
     version: '0.0.0-test',
     projects: [],
@@ -107,7 +107,7 @@ function health(forgeAvailable: boolean, automations = false): HealthResponse {
     repo: { root: '/repo', branch: 'main' },
     checks: [],
     defaultRunner: 'claude',
-    forge: forgeAvailable ? { kind: 'github', available: true } : null,
+    forge: forgeAvailable === 'cold' ? { kind: 'github' } : forgeAvailable ? { kind: 'github', available: true } : null,
     capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations, dispatch: false },
   }
 }
@@ -148,7 +148,8 @@ function renderPalette({
   indexed?: RunIndexEntry[]
   truncated?: string[]
   theme?: Theme
-  forge?: boolean
+  /** `'cold'` — a recognized remote whose probe has not answered yet (#1412). */
+  forge?: boolean | 'cold'
   /** `capabilities.automations` (#801) — off by default, exactly as a default server reports. */
   automations?: boolean
   uiState?: Record<string, unknown>
@@ -306,6 +307,15 @@ describe('Views group', () => {
     expect(
       document.querySelector('[cmdk-item][aria-selected="true"]')?.getAttribute('data-nav-to'),
     ).toBe('/new')
+  })
+
+  // #1412: a recognized remote whose probe is still cold keeps the view, as the sidebar does.
+  it('keeps the GitHub view while a recognized forge probe is still cold', async () => {
+    renderPalette({ forge: 'cold' })
+    openWith({ metaKey: true })
+    await screen.findByRole('dialog')
+
+    await waitFor(() => expect(document.querySelector('[data-slot="palette-view"][data-nav-to="/github"]')).not.toBeNull())
   })
 
   // R6 Step 1.1: the palette must not offer a GitHub view the sidebar honestly hides.

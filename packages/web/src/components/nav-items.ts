@@ -23,8 +23,8 @@ export type NavItem = {
   match: string[]
   /** Optional trailing status affordance. Rendering/data stay with the shell. */
   badge?: 'inbox-count' | 'skills-update' | 'tasks-unread'
-  /** Forge-gated (R6 Step 1.1): the item exists only while `/api/health` reports the forge
-   *  driver available — see `visibleNavItems`. */
+  /** Forge-gated (R6 Step 1.1): the item exists only while `/api/health` reports a recognized
+   *  forge remote (`forge` non-null, #1412) — see `visibleNavItems`. */
   forge?: boolean
   /** Inbox-gated (#471): the item exists only while `/api/health` reports
    *  `capabilities.followups` — the global inbox is opt-in via `CEZ_FOLLOWUPS=1`.
@@ -59,7 +59,7 @@ export const NAV_ITEMS: NavItem[] = [
 
 /** What `/api/health` says exists. All default to `false` — see `visibleNavItems`. */
 export type NavAvailability = {
-  /** `forge.available` (spec §"GitHub tab (forge tab)"). */
+  /** `forge` non-null — a recognized remote (spec §"GitHub tab (forge tab)", #1412). */
   forge?: boolean
   /** `capabilities.followups` — the opt-in global inbox (#471). */
   inbox?: boolean

@@ -313,7 +313,7 @@ function PaletteContent({ close }: { close: () => void }) {
   // shell already holds this cache entry; opening the palette costs no extra request.
   const projects = useProjects()
   // Health is cached by the shell's chips; here it gates the forge-gated Views row (R6 1.1) —
-  // the palette must not offer a GitHub view the sidebar honestly hides.
+  // the same recognized-remote rule as the sidebar (#1412), so the two never disagree.
   const health = useHealth()
   const registry = projects.data
   const bootProjectId = registry?.bootProject ?? health.data?.bootProject ?? null
@@ -453,7 +453,7 @@ function PaletteContent({ close }: { close: () => void }) {
             </CommandItem>
           ) : null}
           {visibleNavItems({
-            forge: health.data?.forge?.available === true,
+            forge: health.data?.forge != null,
             inbox: health.data?.capabilities.followups === true,
             automations: health.data?.capabilities.automations === true,
             tracker: registry?.projects.find((project) => project.id === (activeProjectId ?? registry.bootProject))?.tracker,
