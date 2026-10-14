@@ -287,6 +287,27 @@ describe('sidebar wiring', () => {
     expect(screen.getByRole('link', { name: /Automations/ })).toBeTruthy()
   })
 
+  // #1412 — a recognized remote keeps its GitHub tab while the probe is cold or failing: remote
+  // mode has no health push, so a tab hidden on that answer stayed hidden until a reload.
+  it.each([
+    ['a cold probe', { kind: 'github' as const }],
+    ['a failed probe', { kind: 'github' as const, available: false, reason: 'gh timed out' }],
+  ])('keeps the GitHub nav item for a recognized remote with %s', async (_label, forge) => {
+    serve({ '/api/v1/health': { ...HEALTH, forge }, '/api/v1/todos': [] })
+    renderShell()
+
+    await waitFor(() => expect(versionChip()).not.toBeNull())
+    expect(screen.getByRole('link', { name: /GitHub/ })).toBeTruthy()
+  })
+
+  it('drops the GitHub nav item when no forge remote is recognized', async () => {
+    serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [] })
+    renderShell()
+
+    await waitFor(() => expect(versionChip()).not.toBeNull())
+    expect(screen.queryByRole('link', { name: /GitHub/ })).toBeNull()
+  })
+
   it('renders no badge for an empty inbox', async () => {
     serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [] })
     renderShell()
