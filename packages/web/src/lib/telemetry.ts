@@ -261,6 +261,7 @@ export function errorToastReport(
       'request.route': apiRouteShape(failure.path),
       'request.status': failure.status,
       'request.age_ms': now - failure.at,
+      ...(failure.provider ? { 'request.provider': failure.provider } : {}),
     },
   }
 }

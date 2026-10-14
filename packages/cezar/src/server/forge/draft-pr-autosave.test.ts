@@ -160,3 +160,84 @@ describe('createDraftPr draft flag', () => {
     expect(argv()).not.toContain('--draft');
   });
 });
+
+/** `gh pr create` failing (telemetry c1929fec, e4fa39ad): publishing must not strand a task
+ *  whose PR already exists, nor give up on GitHub's transient just-pushed-head errors. */
+describe('createDraftPr recovery', () => {
+  let repo: string;
+  let remote: string;
+  let bin: string;
+  const git = (args: string[]) => run('git', args, { cwd: repo });
+
+  /** A stand-in `gh`: `pr create` runs `create`, `pr list` prints `list`; each call is logged. */
+  const fakeGh = (create: string, list: string) =>
+    writeFileSync(
+      join(bin, 'gh'),
+      [
+        '#!/bin/sh',
+        `echo "$1 $2" >> "${bin}/calls"`,
+        `if [ "$2" = create ]; then n=$(cat "${bin}/n" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "${bin}/n"; ${create}; fi`,
+        `if [ "$2" = list ]; then echo '${list}'; fi`,
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+  const calls = () => readFileSync(join(bin, 'calls'), 'utf8').trim().split('\n');
+
+  beforeEach(async () => {
+    repo = mkdtempSync(join(tmpdir(), 'cez-pr-recover-'));
+    remote = mkdtempSync(join(tmpdir(), 'cez-pr-recover-remote-'));
+    bin = mkdtempSync(join(tmpdir(), 'cez-pr-recover-bin-'));
+    await run('git', ['init', '--bare', '-q', remote]);
+    await git(['init', '-q', '-b', 'main']);
+    writeFileSync(join(repo, 'a.txt'), 'base\n');
+    await git(['add', '-A']);
+    await git([...GIT_ID, 'commit', '-q', '-m', 'base']);
+    await git(['remote', 'add', 'origin', remote]);
+    await git(['checkout', '-q', '-b', 'cez/abc123']);
+    vi.stubEnv('CEZ_DRY_RUN', '0');
+    vi.stubEnv('PATH', `${bin}:${process.env.PATH ?? ''}`);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    for (const dir of [repo, remote, bin]) rmSync(dir, { recursive: true, force: true });
+  });
+
+  const input = () => ({
+    repoRoot: repo,
+    handoffText: '# Goal\n\nship it\n',
+    run: { worktreePath: repo, branch: 'cez/abc123', task: 'do the thing', title: 't' } as RunRecord,
+  });
+
+  it('adopts the open PR that already exists for the branch', async () => {
+    fakeGh(
+      `echo 'a pull request for branch "cez/abc123" into branch "main" already exists:' >&2; echo https://github.com/acme/demo/pull/5 >&2; exit 1`,
+      '[{"url":"https://github.com/acme/demo/pull/5","headRepositoryOwner":{"login":"acme"}}]',
+    );
+    const outcome = await createDraftPr(input());
+    expect(outcome).toEqual({ ok: true, url: 'https://github.com/acme/demo/pull/5', dryRun: false });
+  });
+
+  it('retries once when GitHub cannot see the just-pushed head yet', async () => {
+    fakeGh(
+      `if [ $n = 1 ]; then echo "pull request create failed: GraphQL: Head sha can't be blank, Head ref must be a branch (createPullRequest)" >&2; exit 1; fi; echo https://github.com/acme/demo/pull/6`,
+      '[]',
+    );
+    const outcome = await createDraftPr(input());
+    expect(outcome).toEqual({ ok: true, url: 'https://github.com/acme/demo/pull/6', dryRun: false });
+    expect(calls().filter((c) => c === 'pr create')).toHaveLength(2);
+  }, 15_000);
+
+  it('does not retry a permanent failure, and names an empty branch plainly', async () => {
+    fakeGh(
+      `echo "pull request create failed: GraphQL: No commits between main and cez/abc123 (createPullRequest)" >&2; exit 1`,
+      '[]',
+    );
+    const outcome = await createDraftPr(input());
+    expect(outcome.ok).toBe(false);
+    expect(outcome.ok === false && outcome.error).toContain('nothing to propose');
+    expect(calls().filter((c) => c === 'pr create')).toHaveLength(1);
+  });
+});

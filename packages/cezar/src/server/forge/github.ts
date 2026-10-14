@@ -2616,6 +2616,43 @@ function mockGithubComments(kind: 'issue' | 'pr'): ForgeCommentsData {
 const PR_URL_RE = /https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
 const PUSH_TIMEOUT_MS = 60_000;
 const PROGRESS_LINES_MAX = 10;
+const PR_CREATE_ATTEMPTS = 2;
+const PR_CREATE_RETRY_MS = 2_000;
+// GitHub answers these while a just-pushed head is not yet visible to the PR API, or under load.
+const TRANSIENT_PR_CREATE_RE =
+  /head sha can't be blank|head ref must be a branch|not all refs are readable|submitted too quickly|something went wrong|HTTP 5\d\d|timed? ?out|ECONNRESET/i;
+
+const existingPrSchema = z.array(
+  z.object({ url: z.string(), headRepositoryOwner: z.object({ login: z.string() }).nullish() }),
+);
+
+/** URL of the open PR whose head is this `gh pr create` head (`branch` or `owner:branch`), if any. */
+async function existingPrUrl(worktree: string, repoArgs: string[]): Promise<string | null> {
+  const headAt = repoArgs.indexOf('--head');
+  const head = headAt >= 0 ? repoArgs[headAt + 1] : undefined;
+  if (!head) return null;
+  const repoAt = repoArgs.indexOf('--repo');
+  const repo = repoAt >= 0 ? repoArgs[repoAt + 1] : undefined;
+  const colon = head.indexOf(':');
+  // An unqualified head lives in the target repo itself (`host/owner/repo`).
+  const owner = (colon >= 0 ? head.slice(0, colon) : repo?.split('/').at(-2))?.toLowerCase();
+  const branch = colon >= 0 ? head.slice(colon + 1) : head;
+  const res = await execTool(
+    ['pr', 'list', ...(repo ? ['--repo', repo] : []), '--head', branch, '--state', 'open', '--json', 'url,headRepositoryOwner'],
+    worktree,
+    'gh',
+  );
+  if (!res.ok) return null;
+  let parsed: z.infer<typeof existingPrSchema>;
+  try {
+    parsed = existingPrSchema.parse(JSON.parse(res.stdout));
+  } catch {
+    return null;
+  }
+  // `gh pr list --head` matches the branch NAME only; a fork head must also match its owner.
+  const hit = parsed.find((p) => !owner || p.headRepositoryOwner?.login.toLowerCase() === owner);
+  return hit && PR_URL_RE.test(hit.url) ? hit.url : null;
+}
 
 export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome> {
   const { run } = input;
@@ -2666,15 +2703,23 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
   const prBase = run.baseBranch ? splitRemoteRef(run.baseBranch, remotes.names).branch : undefined;
   const baseArgs = prBase && !/^[0-9a-f]{7,40}$/i.test(prBase) ? ['--base', prBase] : [];
   const repoArgs = await prRepoArgs(worktree, remotes.base, remotes.push, branch);
-  const pr = await execTool(
-    ['pr', 'create', ...(input.draft === false ? [] : ['--draft']), ...repoArgs, ...baseArgs, '--title', run.title, '--body', body],
-    worktree,
-    'gh',
-    PUSH_TIMEOUT_MS,
-  );
+  const createArgs = ['pr', 'create', ...(input.draft === false ? [] : ['--draft']), ...repoArgs, ...baseArgs, '--title', run.title, '--body', body];
+  let pr = await execTool(createArgs, worktree, 'gh', PUSH_TIMEOUT_MS);
+  for (let attempt = 1; !pr.ok && !pr.notFound; attempt++) {
+    // The PR may already exist — opened by the agent, an earlier click whose response was
+    // lost, or a create GitHub committed before it errored. Publishing is idempotent: adopt it.
+    const existing = await existingPrUrl(worktree, repoArgs);
+    if (existing) return { ok: true, url: existing, dryRun: false };
+    if (attempt >= PR_CREATE_ATTEMPTS || !TRANSIENT_PR_CREATE_RE.test(pr.stderr)) break;
+    await new Promise((r) => setTimeout(r, PR_CREATE_RETRY_MS));
+    pr = await execTool(createArgs, worktree, 'gh', PUSH_TIMEOUT_MS);
+  }
   if (!pr.ok) {
     if (pr.notFound) {
       return { ok: false, error: 'gh not found — install the GitHub CLI and run `gh auth login`, or merge the branch locally' };
+    }
+    if (/no commits between/i.test(pr.stderr)) {
+      return { ok: false, error: `nothing to propose — ${branch} has no commits that ${prBase ?? 'the base branch'} does not already have` };
     }
     const hint = /auth|log ?in|credential/i.test(pr.stderr) ? ' (try `gh auth login`)' : '';
     return { ok: false, error: `gh pr create failed — ${tail(pr.stderr) || 'unknown error'}${hint}` };

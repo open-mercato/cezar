@@ -1424,3 +1424,63 @@ describe('ProviderAuthService', () => {
     });
   });
 });
+
+describe('inconclusive probe reports', () => {
+  const codexOnly = (result: ProviderCommandResult | (() => never)): RunProviderCommand => async (executable, args) => {
+    if (args[0] === '--version') return { stdout: 'codex-cli 0.46.0\n', stderr: '', exitCode: 0 };
+    if (executable === 'codex') {
+      if (typeof result === 'function') return result();
+      return result;
+    }
+    return { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' };
+  };
+
+  const reasonsFor = async (result: ProviderCommandResult | (() => never)) => {
+    const onInconclusive = vi.fn();
+    const service = new ProviderAuthService({ runCommand: codexOnly(result), onInconclusive });
+    const status = await service.status({ refresh: true });
+    expect(status.providers.find((row) => row.provider === 'codex')?.status).toBe('unknown');
+    return onInconclusive.mock.calls.map(([probe]) => probe);
+  };
+
+  it('names the reason, never the output', async () => {
+    const [probe] = await reasonsFor({ stdout: 'me@example.com is something new', stderr: 'tok', exitCode: 0 });
+    expect(probe).toMatchObject({
+      provider: 'codex',
+      reason: 'unrecognized_output',
+      profile: 'default',
+      binSource: 'path',
+      binExt: 'none',
+      errorCode: null,
+      exitCode: 0,
+      stdoutBytes: 31,
+      stdoutJson: false,
+      stderrBytes: 3,
+    });
+    expect(JSON.stringify(probe)).not.toContain('example.com');
+    expect(await probe.cliVersion()).toBe('0.46.0');
+  });
+
+  it('tells an unexpected exit, a spawn error, a timeout and a throw apart', async () => {
+    expect((await reasonsFor({ stdout: '', stderr: '', exitCode: 3 }))[0]?.reason).toBe('unexpected_exit');
+    expect((await reasonsFor({ stdout: '', stderr: '', exitCode: null, errorCode: 'EINVAL' }))[0])
+      .toMatchObject({ reason: 'spawn_error', errorCode: 'EINVAL' });
+    expect((await reasonsFor({ stdout: '', stderr: '', exitCode: null, errorCode: 'ETIMEDOUT', timedOut: true }))[0]?.reason)
+      .toBe('timeout');
+    expect((await reasonsFor(() => { throw new Error('boom'); }))[0]?.reason).toBe('spawn_threw');
+  });
+
+  it('reports each provider and reason once per process, and nothing for a conclusive answer', async () => {
+    const onInconclusive = vi.fn();
+    let codex: ProviderCommandResult = { stdout: '???', stderr: '', exitCode: 0 };
+    const service = new ProviderAuthService({ runCommand: async (executable, args) => (
+      executable === 'codex' && args[0] !== '--version' ? codex : { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' }
+    ), onInconclusive });
+    await service.status({ refresh: true });
+    await service.status({ refresh: true });
+    expect(onInconclusive).toHaveBeenCalledTimes(1);
+    codex = { stdout: 'Logged in using ChatGPT', stderr: '', exitCode: 0 };
+    await service.status({ refresh: true });
+    expect(onInconclusive).toHaveBeenCalledTimes(1);
+  });
+});

@@ -99,6 +99,8 @@ describe('error toast reports', () => {
 
   it('reports a toast with no failed request as a client-side error toast', () => {
     expect(errorToastReport(null)).toEqual({ type: 'ErrorToast', context: {} })
+    expect(errorToastReport({ method: 'POST', path: '/api/v1/providers/connect', status: 409, at: 1000, provider: 'claude' }, 1000).context)
+      .toMatchObject({ 'request.route': '/api/v1/providers/connect', 'request.provider': 'claude' })
   })
 })
 
