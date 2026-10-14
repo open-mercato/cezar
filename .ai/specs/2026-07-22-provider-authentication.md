@@ -224,7 +224,10 @@ Behavior:
   disconnected provider opens the vendor login command in a real terminal rooted at the boot
   repository. An `unknown` provider (installed, but its status could not be read) opens the login
   too: refusing left Connect a dead end, and the vendor's own login is the surface that can say
-  what is wrong (telemetry `abf08514`, Windows).
+  what is wrong (telemetry `abf08514`, Windows). After opening a login the server re-checks that
+  account 15 s … 15 min later (seven probes at most, `LOGIN_WATCH_OFFSETS_MS`) and stops at the
+  first connected answer, emitting `provider-status` for the default account — the cockpit does
+  not poll provider status, so this is how the card learns the login finished.
 - A successful launch returns 200 with `{ opened: true, command }`.
 - If no terminal emulator can be opened, the route returns 409 with a human error and the exact
   copyable `command`.

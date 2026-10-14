@@ -403,11 +403,11 @@ async function fetchOrThrow(url: string, init?: RequestInit): Promise<Response> 
     const headers = new Headers(init?.headers)
     headers.set(SID_HEADER, sid())
     const res = await fetch(url, { ...init, headers, credentials: 'include' })
-    if (!res.ok) noteFailedRequest(url, init?.method, res.status)
+    if (!res.ok) noteFailedRequest(url, init?.method, res.status, init?.body)
     return res
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
-    noteFailedRequest(url, init?.method, 0)
+    noteFailedRequest(url, init?.method, 0, init?.body)
     throw new ApiError(0, `cannot reach the cezar server (${url})`, { cause })
   }
 }

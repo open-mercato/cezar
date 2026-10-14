@@ -154,6 +154,7 @@ describe('workspace provider API', () => {
     workspaceEvents?: WorkspaceEventBus;
     workspaceConfig?: ReturnType<typeof memoryWorkspaceConfig>;
     contexts?: ProjectContexts;
+    loginWatchOffsetsMs?: readonly number[];
   } = {}) => createApp({
     repoRoot: root,
     store,
@@ -165,6 +166,7 @@ describe('workspace provider API', () => {
     workspaceEvents: options.workspaceEvents,
     workspaceConfig: options.workspaceConfig,
     contexts: options.contexts,
+    loginWatchOffsetsMs: options.loginWatchOffsetsMs ?? [],
   });
 
   const connect = (server: ReturnType<typeof app>, provider: unknown) => apiRequest(
@@ -655,6 +657,29 @@ describe('workspace provider API', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ opened: true, command: "'claude' auth login" });
     expect(openTerminal).toHaveBeenCalledWith(root, "'claude' auth login");
+  });
+
+  it('POST re-checks the login it opened and tells the cockpit once it is connected', async () => {
+    const states: Partial<Record<ProviderId, ProviderConnectionState>> = { codex: 'disconnected' };
+    const workspaceEvents = new WorkspaceEventBus();
+    const events: unknown[] = [];
+    workspaceEvents.on((event, data) => {
+      if (event === 'provider-status') events.push(data);
+    });
+    const server = app({
+      providerAuth: service(states),
+      openTerminal: async () => {
+        states.codex = 'connected';
+        return true;
+      },
+      workspaceEvents,
+      loginWatchOffsetsMs: [0],
+    });
+
+    expect((await connect(server, 'codex')).status).toBe(200);
+    await vi.waitFor(() => expect(events).toEqual([
+      expect.objectContaining({ provider: 'codex', status: 'connected' }),
+    ]));
   });
 
   it('POST returns 409 plus command for an unknown status when localHandoff is false', async () => {

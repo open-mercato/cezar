@@ -32,7 +32,10 @@ from), `open_in` (which app), `add_project_opened` (which Add project dialog: `n
 `new_github`, `new_template`), `project_create_failed` (the step that failed, e.g.
 `folder_exists`, `github_create` — never the error text), `diff_comment_added`,
 `task_archived` / `task_unarchived` / `task_pinned` / `task_unpinned` / `task_deleted` (with the
-task's status). Every label comes from a closed set the server enforces.
+task's status), `provider_login_opened` / `provider_login_not_opened` / `provider_connected`
+(what an agent's **Connect** did — the agent and an outcome such as `unknown`, `no_terminal` or
+`already_connected` — and whether the login it opened finished within 15 minutes). Every label
+comes from a closed set the server enforces.
 
 Error reports carry the error type, message and stack with your home directory, working
 directory, temp directory and registered project roots replaced by `~`, `<repo>` and `<tmp>`,
@@ -41,7 +44,13 @@ Every red error toast the cockpit shows is reported the same way, with the metho
 route shape of the API call that failed just before it (e.g. `POST
 /api/v1/p/:param/runs/:param/messages`, 409). The toast's text is masked first: quoted values,
 emails, URLs, slash-bearing names (paths, branches, `owner/repo`), your project names and
-anything after a `: ` become placeholders.
+anything after a `: ` become placeholders. For a provider or agent-account call the report also
+names the agent (`claude`, `codex`, …).
+
+When cezar cannot read whether an agent's CLI is signed in, it reports why (timed out, could not
+start, unexpected exit, unrecognised output) with the shape of the answer only: exit code, Node's
+error code, output sizes, whether it was JSON, how the binary was found (an override, an absolute
+location or `PATH`, and its extension) and the CLI's `--version`. Never its output.
 
 `cezar telemetry inspect` prints the envelope an event would carry, without sending it.
 
