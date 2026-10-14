@@ -3542,6 +3542,24 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
     expect(echoed?.text).not.toContain('/demo-review look at the diff');
   }, 40_000);
 
+  it("installs the slash skill and the companion it names into the task's worktree", async () => {
+    // The worktree is a fresh checkout: neither skill is in it unless cezar puts it there,
+    // and the agent then answers "Unknown skill" / "companion not installed".
+    writeFileSync(
+      join(repoRoot, '.ai/cezar/skills/demo-review.md'),
+      '---\nname: demo-review\ndescription: Review a diff.\n---\n\nRun the `demo-engine` skill verbatim.\n',
+    );
+    writeFileSync(join(repoRoot, '.ai/cezar/skills/demo-engine.md'), '---\nname: demo-engine\n---\n\nEngine.\n');
+    const record = manager.startRun(SINGLE_STEP, { task: '/demo-review 12', worktree: true });
+    runId = record.id;
+    await waitFor(() => eventsOf(record.id).some((e) => e.stepId === 'task' && e.type === 'text'));
+    const wt = store.getRun(record.id)!.worktreePath!;
+    for (const dir of ['.claude/skills', '.agents/skills']) {
+      expect(readFileSync(join(wt, dir, 'demo-review/SKILL.md'), 'utf8')).toContain('demo-engine');
+      expect(readFileSync(join(wt, dir, 'demo-engine/SKILL.md'), 'utf8')).toContain('Engine.');
+    }
+  }, 40_000);
+
   it('leaves an unknown slash command untouched so backend-native commands still work', async () => {
     const record = manager.startRun(SINGLE_STEP, { task: '/compact please', worktree: false });
     runId = record.id;

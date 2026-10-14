@@ -56,7 +56,8 @@ import type { AgentEvent, ContentBlock } from '../core/agent-runner.ts';
 import { discoverSkills, type Skill } from '../skills.ts';
 import { automationsReachable } from '../automations/builtin-skill.ts';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
-import { materializeSkillDir } from '../skills-remote.ts';
+import { getTeamSkillsCached, waitForTeamSkills } from '../skills-remote.ts';
+import { provisionSkills } from '../skills-provision.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { readAgentModelProvider } from '../agent-config/models.ts';
 import { loadConfig, resolveWorktreeRetention } from '../config.ts';
@@ -3587,6 +3588,11 @@ export class RunManager {
     // here rather than letting one reach a backend that has no idea what it is.
     const blocks = contentBlocksOf(content);
     const expanded = userAuthored ? expandRegistrySlashSkill(blocks, state.skills ?? []) : blocks;
+    if (expanded !== blocks) {
+      // Delivery is synchronous; the body already rides the message, so the install can trail it.
+      const first = blocks.find((block) => block.type === 'text');
+      void this.provisionTaskSkills(state, [first?.type === 'text' ? leadingSlashSkillName(first.text) : undefined]);
+    }
     const deliverable = persisted.length
       ? [...expanded, pastedAttachmentsNote(persisted, this.attachmentLibraryHint(persisted, state.grantedAttachmentLibrary) ??
           (imageLibraryWrites.length ? this.usableAttachmentLibrary(state.grantedAttachmentLibrary) : undefined))]
@@ -4227,6 +4233,7 @@ export class RunManager {
     // through `deliverMessage`, so it needs the SAME delivery-only `/skill` rewrite the
     // live path applies (#811). Delivery-only: the `user-message` event above already
     // persisted the user's original text, and the transcript must keep showing that.
+    await this.provisionTaskSkills(state, [leadingSlashSkillName(prompt)]);
     const expandedPrompt = expandRegistrySlashSkillText(prompt, state.skills ?? []);
     // Reports that arrived while this run had no session (spec Q7) open the continuation, ahead
     // of whatever prompted it — a commander resumed by its own children's reports has to be told
@@ -5723,6 +5730,38 @@ export class RunManager {
     return rec!.sessionId;
   }
 
+  /**
+   * Install the named skills and every companion they name into the run's cwd (skills-provision.ts).
+   * Waits, bounded, for the team-skill load: a companion often lives only in the team repo.
+   * Refreshes `state.skills` so expansion sees the same catalog. Never throws.
+   */
+  private async provisionTaskSkills(state: ActiveRun, names: Array<string | undefined>): Promise<string[]> {
+    const wanted = names.filter((name): name is string => Boolean(name?.trim()));
+    if (!wanted.length) return [];
+    try {
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([
+        waitForTeamSkills(this.repoRoot).catch(() => []),
+        new Promise((resolve) => {
+          timer = setTimeout(resolve, TEAM_SKILLS_WAIT_MS);
+          timer.unref?.();
+        }),
+      ]);
+      clearTimeout(timer);
+      state.skills = await discoverSkills(this.repoRoot);
+      // Companions resolve against the ungated team list too: curating a skill out of the
+      // picker must not break a skill that runs it.
+      const catalog = [...state.skills];
+      const seen = new Set(catalog.map((s) => s.name));
+      for (const skill of getTeamSkillsCached(this.repoRoot)) if (!seen.has(skill.name)) catalog.push(skill);
+      const roots = wanted.flatMap((name) => catalog.filter((s) => s.name === name.trim()));
+      if (!roots.length) return [];
+      return await provisionSkills(state.cwd, roots, catalog);
+    } catch {
+      return [];
+    }
+  }
+
   /** Returns an error message, or null on success. */
   private async runAgentStep(
     runId: string,
@@ -5748,28 +5787,20 @@ export class RunManager {
     graphHooks?: { resumeSessionId?: string; lastTurn?: { text: string } },
   ): Promise<string | null> {
     let systemPrompt: string | undefined;
+    const rawPrompt = applyTemplate(step.prompt ?? '{{task}}', input.task);
+    // Install the selected skill and its companions where the agent's own skill lookup looks.
+    const installed = await this.provisionTaskSkills(state, [step.skill, leadingSlashSkillName(rawPrompt)]);
+    if (installed.length) {
+      emit({ type: 'note', stepId: step.id, message: `skills installed in the task's workspace: ${installed.join(', ')}` });
+    }
     if (step.skill) {
-      const skill = skills.find((s) => s.name === step.skill);
+      const skill = (state.skills ?? skills).find((s) => s.name === step.skill);
       if (skill) {
         // The body alone often does not identify the selected skill. Keep its
         // name and catalog description in the normalized runner payload so a
         // numeric task such as "432" still gives the model enough context to
         // describe the work — and therefore derive a useful title (#432).
         systemPrompt = skillSystemPrompt(skill);
-        // Directory team skills (SKILL.md + references/) get materialized
-        // into <cwd>/.claude/skills/<name>/ — the run's worktree when there
-        // is one — so claude sees the companion files on disk; the shared
-        // info/exclude keeps them out of git (and out of autosave commits).
-        if (skill.source === 'team' && skill.team?.dir) {
-          const seeded = await materializeSkillDir(state.cwd, skill).catch(() => false);
-          if (seeded) {
-            emit({
-              type: 'note',
-              stepId: step.id,
-              message: `team skill "${skill.name}" materialized to .claude/skills/${skill.name}/`,
-            });
-          }
-        }
       } else {
         emit({
           type: 'note',
@@ -5779,7 +5810,7 @@ export class RunManager {
       }
     }
 
-    let userPrompt = applyTemplate(step.prompt ?? '{{task}}', input.task);
+    let userPrompt = rawPrompt;
     // A fresh run's OPENING prompt is delivered straight to `startSession`, never through
     // `deliverMessage`, so — like the continuation seam above (#811) — it needs the same
     // delivery-only `/skill` rewrite. Without it a task STARTED with `/om-...` as its first
@@ -7330,6 +7361,14 @@ export function skillSystemPrompt(
   return lines.join('\n');
 }
 
+/** Bound on waiting for the first team-skill load before installing a task's skills. */
+const TEAM_SKILLS_WAIT_MS = 10_000;
+
+/** The `name` of a prompt's leading `/name` slash command, else undefined. */
+export function leadingSlashSkillName(text: string): string | undefined {
+  return /^\/([A-Za-z0-9][A-Za-z0-9._-]*)(?=\s|$)/.exec(text)?.[1];
+}
+
 /**
  * Expand a registry-backed slash skill in one prompt string before it reaches a
  * backend. Claude otherwise intercepts an unknown leading slash command, and
@@ -7345,12 +7384,12 @@ export function skillSystemPrompt(
  * (#811).
  */
 export function expandRegistrySlashSkillText(text: string, skills: readonly Skill[]): string {
-  const match = /^\/([A-Za-z0-9][A-Za-z0-9._-]*)(?=\s|$)/.exec(text);
-  if (!match) return text;
-  const skill = skills.find((candidate) => candidate.name === match[1]);
+  const name = leadingSlashSkillName(text);
+  if (!name) return text;
+  const skill = skills.find((candidate) => candidate.name === name);
   if (!skill) return text;
 
-  const request = text.slice(match[0].length).trim();
+  const request = text.slice(name.length + 1).trim();
   return request ? `${skillSystemPrompt(skill)}\n\nUser request:\n${request}` : skillSystemPrompt(skill);
 }
 
