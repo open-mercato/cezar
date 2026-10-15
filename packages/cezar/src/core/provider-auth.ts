@@ -550,6 +550,11 @@ function parsesAsJson(text: string): boolean {
   }
 }
 
+function isSilentSuccess(result: ProviderCommandResult): boolean {
+  return result.exitCode === 0 && !result.errorCode && !result.timedOut
+    && result.stdout.trim() === '' && result.stderr.trim() === '';
+}
+
 /** The first semver in a `--version` answer; anything else in it is dropped. */
 export function cliVersionFrom(output: string): string | null {
   // `v` optional: AWS Copilot answers `copilot version: v1.34.1`, which `\b` alone never matched.
@@ -943,16 +948,22 @@ export class ProviderAuthService {
       this.reportInconclusive(descriptor, executable, env, configDir ? 'named' : 'default', reason, outcome);
       return { provider: descriptor.id, status: 'unknown', hint };
     };
-    try {
-      // Never pass a trailing `undefined`: the existing three- and four-argument calls are the
-      // zero-config path and the injected test kit asserts them literally, so only a descriptor
-      // that actually has a stdin payload reaches the five-argument form.
+    // Never pass a trailing `undefined`: the existing three- and four-argument calls are the
+    // zero-config path and the injected test kit asserts them literally, so only a descriptor
+    // that actually has a stdin payload reaches the five-argument form.
+    const run = (): Promise<ProviderCommandResult> => {
       const stdin = descriptor.stdin?.();
-      result = await (stdin !== undefined
+      return stdin !== undefined
         ? this.runCommand(executable, descriptor.statusArgs, COMMAND_TIMEOUT_MS, env, stdin)
         : env === undefined
           ? this.runCommand(executable, descriptor.statusArgs, COMMAND_TIMEOUT_MS)
-          : this.runCommand(executable, descriptor.statusArgs, COMMAND_TIMEOUT_MS, env));
+          : this.runCommand(executable, descriptor.statusArgs, COMMAND_TIMEOUT_MS, env);
+    };
+    try {
+      result = await run();
+      // A CLI that exits 0 having printed nothing at all did not answer — `claude auth status
+      // --json` does this intermittently (telemetry 35838a52). Ask once more before giving up.
+      if (isSilentSuccess(result) && descriptor.parse(result) === null) result = await run();
     } catch (error) {
       const code = (error as NodeJS.ErrnoException | undefined)?.code;
       const thrown: ProviderCommandResult = {

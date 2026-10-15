@@ -1462,6 +1462,38 @@ describe('inconclusive probe reports', () => {
     expect(await probe.cliVersion()).toBe('0.46.0');
   });
 
+  // Telemetry 35838a52: `claude auth status --json` exited 0 with no output at all, once.
+  it('asks again when the CLI exits 0 having said nothing', async () => {
+    const onInconclusive = vi.fn();
+    let claudeCalls = 0;
+    const runCommand: RunProviderCommand = async (executable) => {
+      if (executable !== 'claude') return { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' };
+      claudeCalls += 1;
+      return claudeCalls === 1
+        ? { stdout: '', stderr: '', exitCode: 0 }
+        : { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 };
+    };
+    vi.stubEnv('CEZ_CLAUDE_BIN', 'claude');
+    try {
+      const service = new ProviderAuthService({ runCommand, onInconclusive });
+      const status = await service.status({ refresh: true });
+      expect(status.providers.find((row) => row.provider === 'claude')?.status).toBe('connected');
+      expect(claudeCalls).toBe(2);
+      expect(onInconclusive).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('asks only once more when the CLI stays silent', async () => {
+    const runCommand = vi.fn(codexOnly({ stdout: '', stderr: '', exitCode: 0 }));
+    const onInconclusive = vi.fn();
+    const service = new ProviderAuthService({ runCommand, onInconclusive });
+    await service.status({ refresh: true });
+    expect(runCommand.mock.calls.filter(([executable]) => executable === 'codex')).toHaveLength(2);
+    expect(onInconclusive.mock.calls[0]?.[0]).toMatchObject({ provider: 'codex', reason: 'unrecognized_output' });
+  });
+
   it('tells an unexpected exit, a spawn error, a timeout and a throw apart', async () => {
     expect((await reasonsFor({ stdout: '', stderr: '', exitCode: 3 }))[0]?.reason).toBe('unexpected_exit');
     expect((await reasonsFor({ stdout: '', stderr: '', exitCode: null, errorCode: 'EINVAL' }))[0])
