@@ -312,7 +312,7 @@ export async function launchTrackerAutomationRun(options: {
 }
 
 /** A persisted run wins over a lost launch response, including one recorded as an error. */
-export function reconcileAutomationReceipts(automationStore: import('./store.js').AutomationStore, runStore: RunStore, options: { strict?: boolean } = {}): number {
+export function reconcileAutomationReceipts(automationStore: import('./store.ts').AutomationStore, runStore: RunStore, options: { strict?: boolean } = {}): number {
   let persisted: ReturnType<RunStore['listPersistedRuns']>;
   try { persisted = runStore.listPersistedRuns(); }
   catch (error) {
@@ -352,7 +352,7 @@ function bounded(value: string, max: number): string {
  * definition, forgets the backlog, and says so in the log.
  */
 export function rebaselineIdleAutomations(
-  automationStore: import('./store.js').AutomationStore,
+  automationStore: import('./store.ts').AutomationStore,
   onChange?: (automationId: string, revision: number) => void,
   now = Date.now(),
 ): number {

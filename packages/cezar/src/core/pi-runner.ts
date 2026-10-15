@@ -11,12 +11,12 @@ import type {
   AgentToolCallRecord,
   ContentBlock,
   SessionOptions,
-} from './agent-runner.js';
-import { trackChildExit } from './agent-runner.js';
-import { buildChildEnv } from './agent-env.js';
-import { readNdjson } from './ndjson.js';
-import { createPiUiState, mapPiRpcMessage, piTurnStarted } from './pi-ui-mapper.js';
-import { V1TextCoalescer } from './v1-text-coalescer.js';
+} from './agent-runner.ts';
+import { trackChildExit } from './agent-runner.ts';
+import { buildChildEnv } from './agent-env.ts';
+import { readNdjson } from './ndjson.ts';
+import { createPiUiState, mapPiRpcMessage, piTurnStarted } from './pi-ui-mapper.ts';
+import { V1TextCoalescer } from './v1-text-coalescer.ts';
 
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 const KILL_GRACE_MS = 10_000;

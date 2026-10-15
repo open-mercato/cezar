@@ -25,7 +25,7 @@ vi.mock('../core/claude-bin.ts', async (importOriginal) => ({
 
 // The terminal launcher actually spawns a process (osascript/cmd/x-terminal-emulator) — mocked
 // so this suite exercises only the command construction, never a real terminal window.
-vi.mock('./open-in-terminal.js', () => ({ openInTerminal: vi.fn(async () => true) }));
+vi.mock('./open-in-terminal.ts', () => ({ openInTerminal: vi.fn(async () => true) }));
 
 // Junie has no read-only auth-status command, so `ProviderAuthService` probes it through a real
 // ACP session instead of `runCommand`. Left unmocked, every status probe in this suite spawned a

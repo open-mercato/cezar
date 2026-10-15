@@ -6,9 +6,9 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import type { AgentEvent } from './agent-runner.js';
-import { KILL_GRACE_MS } from './claude-cli-runner.js';
-import { CodexAppServerRunner } from './codex-app-server-runner.js';
+import type { AgentEvent } from './agent-runner.ts';
+import { KILL_GRACE_MS } from './claude-cli-runner.ts';
+import { CodexAppServerRunner } from './codex-app-server-runner.ts';
 import { RunStore } from '../runs/store.ts';
 
 /** Only the escalation tests below swap the child out; every other test in this

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RunStore } from '../runs/store.ts';
 import type { WorkflowDef } from './types.ts';
 
-vi.mock('../git-worktree.js', async (importOriginal) => {
+vi.mock('../git-worktree.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../git-worktree.ts')>();
   return {
     ...actual,
