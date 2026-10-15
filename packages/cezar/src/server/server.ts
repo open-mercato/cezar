@@ -263,7 +263,7 @@ import {
   openInApp,
   withResolvedClaudeBin,
 } from './open-in-app.ts';
-import { createDraftPr } from './pr.ts';
+import { createDraftPr, type DraftPrOutcome } from './pr.ts';
 import {
   DEFAULT_TELEMETRY_URL,
   TELEMETRY_POLICY_VERSION,
@@ -471,6 +471,9 @@ function allocateAgentProfileId(source: string, taken: Iterable<string>): string
   // `^[a-z0-9][a-z0-9-]{0,63}$` shape, so `~/.claude-klaudiusz` slugs to `claude-klaudiusz`.
   return allocateProjectSlug(source, taken);
 }
+
+/** In-flight `POST /runs/:id/pr` publishes, keyed by data dir + run id. */
+const prPublishes = new Map<string, Promise<{ outcome: DraftPrOutcome; branch: string }>>();
 
 const providerParamSchema = z.enum(PROVIDER_IDS);
 const providerEnabledSchema = z.object({ enabled: z.boolean() }).strict();
@@ -5227,29 +5230,39 @@ export function createApp(deps: ServerDeps) {
           400,
         );
       }
-      const outcome = await createDraftPr({
-        repoRoot,
-        run,
-        handoffText: readHandoff(dataDir, id),
-        draft,
-      });
-      if (!outcome.ok) {
-        return c.json({ error: outcome.error, manual: `git merge ${run.branch}` }, 409);
+      // One publish per run at a time: a cockpit re-asking after its response was lost (telemetry
+      // 9119d21a) joins the publish still running instead of racing its autosave commit and push.
+      const key = `${dataDir}\0${id}`;
+      let publish = prPublishes.get(key);
+      if (!publish) {
+        const branch = run.branch;
+        publish = (async () => {
+          const outcome = await createDraftPr({ repoRoot, run, handoffText: readHandoff(dataDir, id), draft });
+          if (!outcome.ok) return outcome;
+          // A number the cockpit asked about BEFORE the pull request existed is cached as "this
+          // repository has no such number" — which is exactly what a `CEZ:PR=901` marker declared
+          // ahead of the push looks like. It exists now.
+          const createdNumber = refNumberFromUrl(outcome.url);
+          if (createdNumber !== null) forgetRefStatus(repoRoot, createdNumber);
+          store.updateRun(id, {
+            pullRequestUrl: outcome.url,
+            status: 'done',
+            finishedAt: run.finishedAt ?? new Date().toISOString(),
+          });
+          store.appendEvent(id, {
+            type: 'note',
+            message: `${draft ? 'draft PR' : 'PR'} created: ${outcome.url}${outcome.dryRun ? ' (dry run — no real PR)' : ''}`,
+          });
+          return outcome;
+        })()
+          .then((outcome) => ({ outcome, branch }))
+          .finally(() => prPublishes.delete(key));
+        prPublishes.set(key, publish);
       }
-      // A number the cockpit asked about BEFORE the pull request existed is cached as "this
-      // repository has no such number" — which is exactly what a `CEZ:PR=901` marker declared
-      // ahead of the push looks like. It exists now.
-      const createdNumber = refNumberFromUrl(outcome.url);
-      if (createdNumber !== null) forgetRefStatus(repoRoot, createdNumber);
-      store.updateRun(id, {
-        pullRequestUrl: outcome.url,
-        status: 'done',
-        finishedAt: run.finishedAt ?? new Date().toISOString(),
-      });
-      store.appendEvent(id, {
-        type: 'note',
-        message: `${draft ? 'draft PR' : 'PR'} created: ${outcome.url}${outcome.dryRun ? ' (dry run — no real PR)' : ''}`,
-      });
+      const { outcome, branch } = await publish;
+      if (!outcome.ok) {
+        return c.json({ error: outcome.error, manual: `git merge ${branch}` }, 409);
+      }
       return c.json({ url: outcome.url, dryRun: outcome.dryRun }, 201);
     })
 

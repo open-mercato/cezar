@@ -1614,18 +1614,37 @@ export async function continueProjectRun(
   )
 }
 
+const PR_RETRY_DELAY_MS = 1_000
+
 /** Open the run's PR (spec 009): push the branch, `gh pr create`; the run completes as done with
  *  the PR badge. Draft unless `draft: false` — the review gate's Draft PR omits it, the run
  *  header's Create PR asks for a ready one. On 409 the ApiError's `manual` carries the
- *  `git merge <branch>` fallback to show copyable. */
+ *  `git merge <branch>` fallback to show copyable.
+ *
+ *  A publish runs push + `gh pr create` for up to minutes, so a lost response (status 0) says
+ *  nothing about the PR: ask once more — the server joins a publish still running and adopts a
+ *  PR the first one opened (telemetry 9119d21a). */
 export async function createRunPr(id: string, opts: { draft?: boolean } = {}): Promise<CreatePrResponse> {
-  return unwrap(
-    await cez.api.v1.p[':projectId'].runs[':id'].pr.$post({
-      param: { projectId: queryScope(), id: encodeURIComponent(id) },
-      json: opts,
-    }),
-    runPath(id, '/pr'),
-  )
+  const projectId = queryScope()
+  const post = async () =>
+    unwrap(
+      await cez.api.v1.p[':projectId'].runs[':id'].pr.$post({
+        param: { projectId, id: encodeURIComponent(id) },
+        json: opts,
+      }),
+      runPath(id, '/pr'),
+    )
+  try {
+    return await post()
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.status !== 0) throw error
+    await new Promise((resolve) => setTimeout(resolve, PR_RETRY_DELAY_MS))
+    try {
+      return await post()
+    } catch (retry) {
+      throw retry instanceof ApiError && retry.status === 0 ? error : retry
+    }
+  }
 }
 
 /** Rename a run (#389): the edit becomes the display title and wins over any auto-summary. */
