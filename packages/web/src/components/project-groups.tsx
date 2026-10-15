@@ -430,7 +430,7 @@ function ProjectGroup({
   // Pinning (#935) from a group that may not be the scoped project: the request is addressed to
   // THIS project, and the cache invalidated is the one `useProjectRuns` above writes — which is
   // `'default'` for the boot project, whose list mounts unscoped.
-  const pinMutation = usePinRun(project.id, boot ? 'default' : project.id)
+  const pinMutation = usePinRun('sidebar', project.id, boot ? 'default' : project.id)
   const onTogglePin = React.useCallback(
     (run: RunRecord, pinned: boolean) =>
       pinMutation.mutate(
@@ -439,7 +439,7 @@ function ProjectGroup({
       ),
     [pinMutation.mutate],
   )
-  const archiveMutation = useArchiveRun(project.id, boot ? 'default' : project.id)
+  const archiveMutation = useArchiveRun('sidebar', project.id, boot ? 'default' : project.id)
   const onToggleArchive = React.useCallback(
     (run: RunRecord, archived: boolean) =>
       archiveMutation.mutate(

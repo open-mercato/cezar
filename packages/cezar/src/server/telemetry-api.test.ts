@@ -63,6 +63,20 @@ describe('telemetry routes', () => {
     expect(track).not.toHaveBeenCalled();
   });
 
+  it('labels archive and pin with the button that sent them, never the task status', async () => {
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+    expect((await post(`/api/v1/runs/${run.id}/pin`, { surface: 'sidebar' })).status).toBe(200);
+    expect(track).toHaveBeenCalledWith('task_pinned', { label: 'sidebar' }, { sid: undefined });
+    expect((await post(`/api/v1/runs/${run.id}/archive`, { archived: true, surface: 'task_view' })).status).toBe(200);
+    expect(track).toHaveBeenCalledWith('task_archived', { label: 'task_view' }, { sid: undefined });
+    expect((await post(`/api/v1/runs/${run.id}/archive`, { archived: false })).status).toBe(200);
+    expect(track).toHaveBeenCalledWith('task_unarchived', { label: 'api' }, { sid: undefined });
+
+    vi.mocked(track).mockClear();
+    expect((await post(`/api/v1/runs/${run.id}/pin`, { surface: 'my-secret-repo' })).status).toBe(400);
+    expect(track).not.toHaveBeenCalled();
+  });
+
   it('relays only the closed event labels', async () => {
     expect((await post('/api/v1/telemetry/event', { event: 'message_sent', label: 'github' })).status).toBe(204);
     expect(track).toHaveBeenCalledWith('message_sent', { label: 'github' }, { sid: undefined });

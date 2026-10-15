@@ -1,5 +1,5 @@
 import { trackerReadScope, resolveApiUrl, workspaceBrandingLogoResponseSchema } from '@open-mercato/cezar-api-client'
-import type { TrackerAutomationOptions } from '@open-mercato/cezar-api-client'
+import type { TaskActionSurface, TrackerAutomationOptions } from '@open-mercato/cezar-api-client'
 import { trackerWatchHandleSchema, trackerWatchSnapshotSchema, type TrackerWatchInput } from "@open-mercato/cezar-api-client"
 import type {
   AgentConfigFileContent,
@@ -1403,22 +1403,22 @@ export async function cancelRun(id: string): Promise<CancelResponse> {
 }
 
 /** Archives by default; pass `false` to bring a run back into the live list. */
-export async function archiveRun(id: string, archived = true): Promise<RunRecord> {
+export async function archiveRun(id: string, archived = true, surface?: TaskActionSurface): Promise<RunRecord> {
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].archive.$post({
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
-      json: { archived },
+      json: { archived, ...(surface ? { surface } : {}) },
     }),
     runPath(id, '/archive'),
   )
 }
 
 /** Pins by default; pass `false` to drop the task back into its ordinary bucket (#935). */
-export async function pinRun(id: string, pinned = true): Promise<RunRecord> {
+export async function pinRun(id: string, pinned = true, surface?: TaskActionSurface): Promise<RunRecord> {
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].pin.$post({
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
-      json: { pinned },
+      json: { pinned, ...(surface ? { surface } : {}) },
     }),
     runPath(id, '/pin'),
   )
@@ -1430,11 +1430,16 @@ export async function pinRun(id: string, pinned = true): Promise<RunRecord> {
  * REGISTERED project, so a pin toggle on another project's row would otherwise be sent with the
  * scope of whichever project the URL happens to name.
  */
-export async function pinProjectRun(projectId: string, id: string, pinned = true): Promise<RunRecord> {
+export async function pinProjectRun(
+  projectId: string,
+  id: string,
+  pinned = true,
+  surface?: TaskActionSurface,
+): Promise<RunRecord> {
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].pin.$post({
       param: { projectId, id: encodeURIComponent(id) },
-      json: { pinned },
+      json: { pinned, ...(surface ? { surface } : {}) },
     }),
     runPath(id, '/pin'),
   )
@@ -1451,11 +1456,12 @@ export async function archiveProjectRun(
   projectId: string,
   id: string,
   archived = true,
+  surface?: TaskActionSurface,
 ): Promise<RunRecord> {
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].archive.$post({
       param: { projectId, id: encodeURIComponent(id) },
-      json: { archived },
+      json: { archived, ...(surface ? { surface } : {}) },
     }),
     runPath(id, '/archive'),
   )

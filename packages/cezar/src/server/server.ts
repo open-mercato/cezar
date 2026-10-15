@@ -3,7 +3,7 @@ import {
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
   trackerCredentialsSchema, trackerItemParamsSchema, trackerAssociationInputSchema, type TrackerChangedEvent,
   secretParamsSchema, secretValueInputSchema, type SecretsList, type SecretValueInput,
-  e2eSetupInputSchema, type E2eStatus,
+  e2eSetupInputSchema, type E2eStatus, taskActionSurfaceSchema,
 } from '@open-mercato/cezar-contract';
 import { SecretStore, SecretsError, type SecretScopeRef } from '../workspace/secrets.ts';
 import { E2E_SETUP_TASK, e2eCredentialsAmong, e2eSetupWorkflow, latestE2eSetupRun, readE2eStatus, setupInFlight } from '../e2e-setup.ts';
@@ -1012,6 +1012,7 @@ type TodoStartEnv = ProjectApiEnv & { Variables: { todo: TodoItem } };
 // un-archives. A tiny schema so the route follows the safeParse convention.
 const archiveSchema = z.object({
   archived: z.boolean().optional(),
+  surface: taskActionSurfaceSchema.optional(),
 });
 
 // `POST /api/v1/runs/:id/pin` (#935) — no body pins; `{pinned:false}` unpins. The archive
@@ -1019,6 +1020,7 @@ const archiveSchema = z.object({
 // "absent means do the thing" would be one more rule for a client to remember.
 const pinSchema = z.object({
   pinned: z.boolean().optional(),
+  surface: taskActionSurfaceSchema.optional(),
 });
 
 // Request-body size guards (#429). A generous global cap keeps a single
@@ -4350,8 +4352,8 @@ export function createApp(deps: ServerDeps) {
       const retiresQuestion = parsed.data.archived !== false && store.getRun(id)?.awaitingAnswerSince !== undefined;
       const run = store.setArchived(id, parsed.data.archived !== false);
       if (run && retiresQuestion) manager.notifyQuestionRetired?.(id);
-      // Labelled with the task's outcome: which results get kept, which get put away.
-      if (run) track(parsed.data.archived !== false ? 'task_archived' : 'task_unarchived', { label: run.status }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
+      // Labelled with the button that did it.
+      if (run) track(parsed.data.archived !== false ? 'task_archived' : 'task_unarchived', { label: parsed.data.surface ?? 'api' },{ sid: deviceSid(c.req.header('x-cezar-sid')) });
       return run ? c.json(run) : c.json({ error: 'not found' }, 404);
     })
 
@@ -4361,9 +4363,10 @@ export function createApp(deps: ServerDeps) {
     // event and no new response shape.
     .post('/runs/:id/pin', jsonZodValidator(pinSchema, { absent: ({}) }), (c) => {
       const { store } = c.get('project');
-      const pinned = c.req.valid('json').pinned !== false;
+      const { pinned: pin, surface } = c.req.valid('json');
+      const pinned = pin !== false;
       const run = store.setPinned(c.req.param('id'), pinned);
-      if (run) track(pinned ? 'task_pinned' : 'task_unpinned', { label: run.status }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
+      if (run) track(pinned ? 'task_pinned' : 'task_unpinned', { label: surface ?? 'api' },{ sid: deviceSid(c.req.header('x-cezar-sid')) });
       return run ? c.json(run) : c.json({ error: 'not found' }, 404);
     })
 

@@ -123,6 +123,7 @@ import type {
   RunRecord,
   SelectAgentProfileInput,
   SetAgentConfigInput,
+  TaskActionSurface,
   UpdateAgentProfileInput,
   UpdateProjectInput,
   TrackerAssociation,
@@ -1799,12 +1800,14 @@ function withoutReceipt(run: RunRecord): RunRecord {
  *    project id: `useProjectRuns` caches the boot project under `'default'`, because that is the
  *    scope it mounts unscoped under, and invalidating `[<bootId>, 'runs']` would leave the
  *    sidebar's boot group showing the pre-pin order.
+ *
+ * `surface` names the button for telemetry (`task_pinned`'s label).
  */
-export function usePinRun(projectId?: string, cacheScope?: string) {
+export function usePinRun(surface: TaskActionSurface, projectId?: string, cacheScope?: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) =>
-      projectId === undefined ? pinRun(id, pinned) : pinProjectRun(projectId, id, pinned),
+      projectId === undefined ? pinRun(id, pinned, surface) : pinProjectRun(projectId, id, pinned, surface),
     // Hierarchical keys: this covers the list AND the open thread's own record.
     onSuccess: () =>
       queryClient.invalidateQueries({
@@ -1815,11 +1818,13 @@ export function usePinRun(projectId?: string, cacheScope?: string) {
 
 /** Archive or restore one run from a list row — `usePinRun`'s twin, same two parameters and the
  *  same invalidate-rather-than-patch rule (the answer moves the row between views). */
-export function useArchiveRun(projectId?: string, cacheScope?: string) {
+export function useArchiveRun(surface: TaskActionSurface, projectId?: string, cacheScope?: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ id, archived }: { id: string; archived: boolean }) =>
-      projectId === undefined ? archiveRun(id, archived) : archiveProjectRun(projectId, id, archived),
+      projectId === undefined
+        ? archiveRun(id, archived, surface)
+        : archiveProjectRun(projectId, id, archived, surface),
     onSuccess: () =>
       queryClient.invalidateQueries({
         queryKey: cacheScope === undefined ? queryKeys.runs.all : ([cacheScope, 'runs'] as const),

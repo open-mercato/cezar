@@ -641,14 +641,14 @@ function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
   // must be ONE implementation, not two buttons that happen to agree today.
   const finish = useFinishRun(run.id)
   const archive = useMutation({
-    mutationFn: () => archiveRun(run.id, !run.archived),
+    mutationFn: () => archiveRun(run.id, !run.archived, 'task_view'),
     onSuccess: invalidate,
     onError,
   })
   // Pin/unpin (#935) — the shared hook rather than a local mutation, because the sidebar and the
   // Tasks table drive the same action and the cache rule belongs in one place. Toggling off the
   // record, exactly like archive above.
-  const pinMutation = usePinRun()
+  const pinMutation = usePinRun('task_view')
   const pin = {
     isPending: pinMutation.isPending,
     mutate: () => pinMutation.mutate({ id: run.id, pinned: !run.pinned }, { onError }),

@@ -107,6 +107,12 @@ export const ADD_PROJECT_DIALOGS = ['new', 'clone', 'folder'] as const;
 export const addProjectDialogSchema = z.enum(ADD_PROJECT_DIALOGS);
 export type AddProjectDialog = z.infer<typeof addProjectDialogSchema>;
 
+/** Which button archived or pinned a task — the label of `task_(un)archived` / `task_(un)pinned`.
+ *  Sent as `surface` in the archive/pin body; absent (a non-cockpit caller) labels as `api`. */
+export const TASK_ACTION_SURFACES = ['sidebar', 'tasks_table', 'all_tasks', 'task_view'] as const;
+export const taskActionSurfaceSchema = z.enum(TASK_ACTION_SURFACES);
+export type TaskActionSurface = z.infer<typeof taskActionSurfaceSchema>;
+
 /**
  * `POST /api/v1/telemetry/event` — a user action only the cockpit can name. Every event has its
  * own closed label set, so this relay can never carry free text. `204`, like the other two.

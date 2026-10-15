@@ -802,7 +802,7 @@ describe('TaskQuickListContainer', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Pin task' }))
     await waitFor(() =>
-      expect(sent).toEqual([{ path: '/api/v1/runs/live/pin', body: { pinned: true } }]),
+      expect(sent).toEqual([{ path: '/api/v1/runs/live/pin', body: { pinned: true, surface: 'sidebar' } }]),
     )
   })
 
