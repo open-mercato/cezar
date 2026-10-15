@@ -14,6 +14,14 @@
  */
 export const DEFAULT_COCKPIT_URL = 'http://127.0.0.1:4321';
 
+/**
+ * The page `serve` opens in the browser: the folder it was started in, via the `default` alias.
+ * A bare `/` would restore this browser's last project or land on the registry's lead row (#1432).
+ */
+export function launchPageUrl(origin: string): string {
+  return `${origin.replace(/\/+$/, '')}/p/default/`;
+}
+
 export interface MissingCockpitMessage {
   /** The command as typed, e.g. `cez automation`. */
   command: string;
