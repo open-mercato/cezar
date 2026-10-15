@@ -14,6 +14,7 @@ import { useHealth, useProjects } from '@/api/queries'
 import { onDangerToast } from '@/components/ui/toaster'
 import { recentFailedRequest, type FailedRequest } from '@/lib/failed-request'
 import { SID_HEADER, sid } from '@/lib/sid'
+import { reloadForStaleBuild } from '@/lib/stale-build'
 
 /**
  * Cockpit half of the opt-in telemetry (`packages/cezar/src/telemetry.ts`, docs/telemetry.md). The
@@ -364,6 +365,8 @@ export function lazyRoute<T extends ComponentType<any>>(
 ): LazyExoticComponent<T> {
   return lazy(() =>
     load().catch((error: unknown) => {
+      // Stale shell after an update: keep the Suspense fallback up while the page reloads.
+      if (reloadForStaleBuild()) return new Promise<never>(() => {})
       reportClientError(error, 'lazy-route', {
         code: 'chunk_load_failed',
         fingerprint: 'cockpit:chunk_load_failed',
@@ -412,12 +415,14 @@ export function Telemetry() {
       reportClientError(e.reason, 'unhandledrejection'),
     )
     // Vite's own signal that a preloaded dependency of a dynamic import failed to load.
-    window.addEventListener('vite:preloadError', (e) =>
+    window.addEventListener('vite:preloadError', (e) => {
+      // A reload is the recovery; preventing the default stops Vite rethrowing into the page.
+      if (reloadForStaleBuild()) return e.preventDefault()
       reportClientError((e as Event & { payload?: unknown }).payload, 'vite:preloadError', {
         code: 'chunk_load_failed',
         fingerprint: 'cockpit:chunk_load_failed',
-      }),
-    )
+      })
+    })
     onDangerToast(reportErrorToast)
   }, [])
 
