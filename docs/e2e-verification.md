@@ -244,9 +244,11 @@ for follow-ups.
 
 ## What cezar gives the check, and what it does not
 
-- **cwd** is the task's worktree, and the command runs under `bash -lc`.
-- **Environment** is the cezar server's own `process.env` plus the **secrets**
-  the step may read (below). There is no per-step `env:` — workflow files are
+- **cwd** is the task's worktree, and the command runs under `bash -c`, without login profiles.
+- **Environment** is the least-privilege set agents get, not the cezar
+  server's own `process.env` (a variable the host has but the check needs is
+  forwarded with `CEZ_ENV_PASSTHROUGH=NAME` when starting cezar), plus the
+  **secrets** the step may read (below). There is no per-step `env:` — workflow files are
   committed, and a secret's value does not belong in them; a step names the
   secrets it needs instead. Tests with no agent step need no model at all.
 - **Model credentials go in `cezar secrets`, not in your shell.** Store the
@@ -324,14 +326,17 @@ for follow-ups.
   `CEZ_BRANCH`, `CEZ_BASE`, `CEZ_STEP_ID` and `CEZ_ATTEMPT`, plus
   `CEZ_GITHUB_REPO`/`CEZ_GITHUB_NUMBER`/`CEZ_GITHUB_EVENT` on a run a GitHub
   automation launched — see the [reference](reference.md#workflow-format).
-- **No timeout.** cezar does not bound a check step; e2e's own startup,
-  test and exploration timeouts are what stop a hung app from holding the
-  task's parallel slot. Keep them configured.
+- **A timeout.** The check's process group is killed after `timeoutMs`
+  (default 30 minutes). A killed check reports exit -1 to the retry gate, so
+  with `retryOn: [1]` a timeout fails the run instead of buying another agent
+  attempt. Keep e2e's own startup, test and exploration timeouts below the
+  bound so a hung app fails as a verdict, with its report, rather than as a
+  kill.
 - **No service orchestration.** e2e starts `app.command` and nothing else. A
   database or a mock stack has to be up before the run, or started by the
   command the config names.
-- **Cancelling a task** sends SIGTERM to the running check, and e2e stops the
-  app process it started.
+- **Cancelling a task** sends SIGTERM to the check's process group, and e2e
+  stops the app process it started.
 
 ## Verify a pull request
 
@@ -382,8 +387,11 @@ ref is deleted with the last run that needs it.
 
 **Fork heads are untrusted code.** An admitted fork's checks run **without
 any secrets** — the same rule GitHub Actions applies to fork
-PRs, and the one e2e's own security model asks for. A fork check therefore has
-no model key; agent-driven tests in it will fail on the missing credential
+PRs, and the one e2e's own security model asks for. No vault secret is read,
+and `GITHUB_TOKEN`, `GH_TOKEN`, `GH_ENTERPRISE_TOKEN` and `GH_CONFIG_DIR` are
+removed from the check's environment even under `CEZ_AGENT_ENV_FULL=1` or
+`CEZ_ENV_PASSTHROUGH` (`GH_HOST` stays). A fork check therefore has
+no model key and no `gh` login; agent-driven tests in it will fail on the missing credential
 (exit 2) rather than run a stranger's code with your key.
 
 **A PR-head run cannot publish.** Its branch holds the whole PR under the

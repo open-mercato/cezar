@@ -254,6 +254,15 @@ const GH_ALLOW_NAMES: ReadonlySet<string> = upperSet([
   'GH_CONFIG_DIR',
 ]);
 
+/** The `GH_ALLOW_NAMES` that authenticate: the tokens, and the config dir whose `hosts.yml` holds one.
+ *  `GH_HOST` only names a host and is not one of them. */
+const GH_CREDENTIAL_NAMES: ReadonlySet<string> = upperSet([
+  'GITHUB_TOKEN',
+  'GH_TOKEN',
+  'GH_ENTERPRISE_TOKEN',
+  'GH_CONFIG_DIR',
+]);
+
 /**
  * Claude Code can be pointed at Bedrock or Vertex instead of the Anthropic API
  * by `CLAUDE_CODE_USE_BEDROCK=1` / `CLAUDE_CODE_USE_VERTEX=1`. Those toggles
@@ -347,12 +356,7 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
   }
 
   const backendPrefixes = BACKEND_ALLOW_PREFIXES[opts.backend] ?? BACKEND_ALLOW_PREFIXES.claude;
-  const passthrough = upperSet(
-    (readVar(source, 'CEZ_ENV_PASSTHROUGH') ?? '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean),
-  );
+  const passthrough = readPassthrough(source);
 
   // Cloud auth is unlocked only for Claude Code backends. Keep this gate tied
   // to backend identity, not to whether an allowlist happens to contain the
@@ -400,4 +404,59 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
     if (matchesPrefix(key, BASE_ALLOW_PREFIXES) && !looksSecret(key)) return true;
     return false;
   }
+}
+
+function readPassthrough(source: NodeJS.ProcessEnv): ReadonlySet<string> {
+  return upperSet(
+    (readVar(source, 'CEZ_ENV_PASSTHROUGH') ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+}
+
+/** CI-convention flags a check command's toolchain reads to pick non-interactive output. */
+const CHECK_ALLOW_NAMES: ReadonlySet<string> = upperSet(['CI']);
+
+/**
+ * The environment a workflow check command runs in: the same least-privilege base an agent's
+ * own shell gets (minus the per-task temp directory), `CEZ_*`, `gh` auth and the
+ * `CEZ_ENV_PASSTHROUGH` / `CEZ_AGENT_ENV_FULL` escape hatches — but no backend's model
+ * credentials, which a shell command has no use for.
+ *
+ * `untrusted` (a fork PR's head) removes the `gh` credentials from whatever the rest of this
+ * function would have produced, the escape hatches included.
+ */
+export function buildCheckEnv(
+  source: NodeJS.ProcessEnv = process.env,
+  options: { untrusted?: boolean } = {},
+): NodeJS.ProcessEnv {
+  const env = buildCheckEnvTrusted(source);
+  if (options.untrusted) {
+    for (const name of Object.keys(env)) {
+      if (GH_CREDENTIAL_NAMES.has(name.toUpperCase())) delete env[name];
+    }
+  }
+  return env;
+}
+
+function buildCheckEnvTrusted(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (isTruthy(readVar(source, 'CEZ_AGENT_ENV_FULL'))) return { ...source };
+  const passthrough = readPassthrough(source);
+  const out: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(source)) {
+    if (value === undefined) continue;
+    const key = name.toUpperCase();
+    if (
+      key.startsWith('CEZ_') ||
+      CHECK_ALLOW_NAMES.has(key) ||
+      GH_ALLOW_NAMES.has(key) ||
+      passthrough.has(key) ||
+      BASE_ALLOW_NAMES.has(key) ||
+      (matchesPrefix(key, BASE_ALLOW_PREFIXES) && !looksSecret(key))
+    ) {
+      out[name] = value;
+    }
+  }
+  return out;
 }

@@ -44,6 +44,8 @@ import { WorkspaceSemaphore } from './workspace/semaphore.ts';
 import { flushTelemetry, initTelemetry, installCrashReporter, registerTelemetryContext, startDailyPing, track } from './telemetry.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
+import { killLiveChecks } from './workflows/check-step.ts';
+import { installRunSignalHandlers } from './run-signals.ts';
 import { runTelemetryCommand } from './telemetry-cli.ts';
 import { reportInconclusiveProbe } from './server/provider-telemetry.ts';
 import { runRunsCommand } from './runs/runs-cli.ts';
@@ -401,12 +403,14 @@ async function serveCommand(
   const shutdown = () => {
     if (stopping) process.exit(0); // a second Ctrl-C never waits on telemetry
     stopping = true;
+    killLiveChecks();
     store.flush({ pretty: true });
     track('app_stop', { reason: 'signal' });
     void flushTelemetry().finally(() => process.exit(0));
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+  process.on('SIGHUP', shutdown);
   // Under the desktop shell a managed install may exist without launchers (the shell installs
   // cezar itself on first launch, spec 2026-09-25-desktop-distribution): write them so
   // `cezar` in a terminal works too. Idempotent; never touches the shell profile.
@@ -556,6 +560,8 @@ async function runCommand(
   const semaphore = new WorkspaceSemaphore();
   await semaphore.refresh();
   const manager = new RunManager(store, repoRoot, { semaphore });
+  // Check steps run in their own process group, out of reach of the terminal's Ctrl-C.
+  installRunSignalHandlers(store);
 
   store.on('event', ({ event }) => {
     switch (event.type) {
