@@ -1004,6 +1004,9 @@ export function contentBlocksOf(content: readonly PastedContent[]): ContentBlock
  * files as files — and the only usable reference on backends (codex,
  * opencode) whose `textOf()` drops image blocks before reaching the model.
  */
+/** The opening prompt of a task given as attachments alone (telemetry 18c930de). */
+export const ATTACHMENT_ONLY_TASK = 'The user attached the files below without a written task — work out what they need from them.';
+
 export function pastedAttachmentsText(attachments: PersistedAttachment[], libraryDir?: string): string {
   const list = attachments.map((a) => `- ${a.path}`).join('\n');
   // The library (#929) is pointed at as a DIRECTORY rather than per-file, deliberately: the paths
@@ -1515,7 +1518,11 @@ export class RunManager {
     // the model answers. Never awaited here, never fails the run. The same call
     // also answers the task branch when instructions are set; `execute` waits
     // for that part, bounded, before it forks.
-    this.pendingBranchNames.set(run.id, this.autoNameRun(run.id, skillHint, input.task));
+    // An attachment-only task gives the namer nothing to read; the turn-end refresh names it instead.
+    this.pendingBranchNames.set(
+      run.id,
+      input.task.trim() ? this.autoNameRun(run.id, skillHint, input.task) : Promise.resolve(undefined),
+    );
     // `default` = no explicit pick; the runner/CLI chose. Never the prompt itself.
     track(
       'task_start',
@@ -5884,7 +5891,10 @@ export class RunManager {
     graphHooks?: { resumeSessionId?: string; lastTurn?: { text: string } },
   ): Promise<string | null> {
     let systemPrompt: string | undefined;
-    const rawPrompt = applyTemplate(step.prompt ?? '{{task}}', input.task);
+    // An attachment-only task (telemetry 18c930de) — the note stands in for the missing text, so a
+    // step template (`Review: {{task}}`) still reads as a sentence.
+    const taskText = input.task.trim() === '' && attachments.length ? ATTACHMENT_ONLY_TASK : input.task;
+    const rawPrompt = applyTemplate(step.prompt ?? '{{task}}', taskText);
     // Install the selected skill and its companions where the agent's own skill lookup looks.
     const installed = await this.provisionTaskSkills(state, { stepSkill: step.skill, slash: leadingSlashSkillName(rawPrompt) });
     if (installed.length) {
@@ -5942,8 +5952,6 @@ export class RunManager {
     // location of.
     state.grantedAttachmentLibrary = this.prepareAttachmentLibrary();
     if (attachments.length) {
-      // An attachment-only task (telemetry 18c930de) — say so, rather than open on an empty prompt.
-      if (input.task.trim() === '') userPrompt += 'The user attached the files below without a written task — work out what they need from them.';
       userPrompt += `\n\n${pastedAttachmentsText(attachments, this.attachmentLibraryHint(attachments, state.grantedAttachmentLibrary))}`;
     }
 
