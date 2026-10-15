@@ -622,7 +622,23 @@ export function Composer({
                 {footerStart}
               </div>
               <div className="ml-auto flex items-center gap-1">
-                {dictation.supported ? (
+                {dictation.supported && dictation.unavailable ? (
+                  // aria-disabled, not disabled: a disabled button never gets the hover/focus
+                  // that opens the tooltip saying why.
+                  <IconTooltip label={dictation.unavailable} side="top">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      aria-disabled="true"
+                      aria-label="Start dictation"
+                      className="h-8 cursor-not-allowed gap-1.5 px-2.5 text-xs font-medium text-muted-foreground opacity-50 hover:bg-transparent"
+                    >
+                      <MicIcon aria-hidden="true" className="size-3.5" />
+                      Dictation
+                    </Button>
+                  </IconTooltip>
+                ) : dictation.supported ? (
                   <Button
                     type="button"
                     variant="ghost"

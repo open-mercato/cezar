@@ -8,6 +8,8 @@ import { reportDictationFailed } from '@/lib/telemetry'
 
 import { Composer } from './composer'
 import {
+  DICTATION_INSECURE,
+  DICTATION_NO_SERVICE,
   dictationNotice,
   foldResults,
   formatElapsed,
@@ -229,23 +231,33 @@ describe('the dictation overlay (paseo pattern)', () => {
     expect(reportDictationFailed).not.toHaveBeenCalled()
   })
 
-  it('a speech service that refuses hides the mic for the session', async () => {
+  it('a speech service that refuses disables the mic for the session, saying why', async () => {
     stubSpeech()
     renderComposer()
     act(() => startDictation().onerror!({ error: 'service-not-allowed' }))
-    expect(await screen.findByText('Dictation is not available in this browser')).toBeTruthy()
-    expect(screen.queryByLabelText('Start dictation')).toBeNull()
+    expect(await screen.findByText(DICTATION_NO_SERVICE)).toBeTruthy()
+    const mic = screen.getByLabelText('Start dictation')
+    expect(mic.getAttribute('aria-disabled')).toBe('true')
+    fireEvent.click(mic)
+    expect(FakeRecognition.instances).toHaveLength(1) // no second attempt
     // A fresh composer (another task, the new-task form) must not offer it again.
     cleanup()
     renderComposer()
-    expect(screen.queryByLabelText('Start dictation')).toBeNull()
+    expect(screen.getByLabelText('Start dictation').getAttribute('aria-disabled')).toBe('true')
   })
 
-  it('no mic in an insecure context — the browser would refuse it with not-allowed', () => {
+  it('in an insecure context the mic is disabled with the reason, never started', async () => {
     stubSpeech()
     vi.stubGlobal('isSecureContext', false)
+    // The reason is a Radix tooltip, positioned by floating-ui; jsdom has no ResizeObserver.
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
     renderComposer()
-    expect(screen.queryByLabelText('Start dictation')).toBeNull()
+    const mic = screen.getByLabelText('Start dictation')
+    expect(mic.getAttribute('aria-disabled')).toBe('true')
+    fireEvent.click(mic)
+    expect(FakeRecognition.instances).toHaveLength(0)
+    act(() => mic.focus())
+    expect((await screen.findAllByText(DICTATION_INSECURE)).length).toBeGreaterThan(0)
   })
 
   it('a mic that will not start (permissions) toasts honestly instead of hanging the overlay', async () => {

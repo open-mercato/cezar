@@ -67,6 +67,9 @@ export interface DictationState {
 export interface Dictation {
   /** undefined ⇒ the API is absent; the mic must not render at all. */
   supported: boolean
+  /** Why the mic is shown but cannot work here (insecure context, refusing speech service);
+   *  null ⇒ it can. `start()` is a no-op while set. */
+  unavailable: string | null
   /** null ⇒ idle. */
   recording: DictationState | null
   start(): void
@@ -93,6 +96,9 @@ export function foldResults(
   return { finalText: finals, interim }
 }
 
+export const DICTATION_INSECURE = 'Dictation needs https or localhost'
+export const DICTATION_NO_SERVICE = 'Dictation is not available in this browser'
+
 /** What the composer tells the user when dictation stops on its own. `failure` is the browser's
  *  error code when it is one worth a red toast and a report; null for a benign stop. */
 export interface DictationNotice {
@@ -114,7 +120,7 @@ export function dictationNotice(code: string | undefined): DictationNotice | nul
         failure: code,
       }
     case 'service-not-allowed':
-      return { message: 'Dictation is not available in this browser', failure: code }
+      return { message: DICTATION_NO_SERVICE, failure: code }
     case 'audio-capture':
       return { message: 'Dictation failed — no microphone was found', failure: code }
     case 'network':
@@ -122,12 +128,6 @@ export function dictationNotice(code: string | undefined): DictationNotice | nul
     default:
       return { message: `Dictation failed${code ? ` — ${code}` : ''}`, failure: code || 'unknown' }
   }
-}
-
-/** Web Speech needs the microphone, and browsers grant it only to a secure context — over plain
- *  http to a non-loopback host (a hosted cockpit) every start ends in `not-allowed`. */
-function dictationAvailable(): boolean {
-  return !serviceRefused && speechRecognitionCtor() !== undefined && window.isSecureContext !== false
 }
 
 /** Module-level, not per hook: a `service-not-allowed` browser refuses every composer, so a
@@ -144,9 +144,14 @@ export function useDictation(onNotice: (notice: DictationNotice) => void): Dicta
   const recognitionRef = React.useRef<SpeechRecognitionLike | null>(null)
   const finalRef = React.useRef('')
   // The mic renders (or not) per browser capability; the ctor itself is re-read on start so a
-  // test stub installed after mount still wins. A browser whose speech service refuses
-  // (`service-not-allowed`) will refuse again, so the mic goes away for the session.
-  const [supported, setSupported] = React.useState(dictationAvailable)
+  // test stub installed after mount still wins.
+  const [supported] = React.useState(() => speechRecognitionCtor() !== undefined)
+  // Web Speech gets the microphone only in a secure context — over plain http to a non-loopback
+  // host (a hosted cockpit) every start ends in `not-allowed`. A refusing speech service
+  // (`service-not-allowed`) refuses again. Either way the mic stays, disabled, saying why.
+  const [unavailable, setUnavailable] = React.useState<string | null>(() =>
+    window.isSecureContext === false ? DICTATION_INSECURE : serviceRefused ? DICTATION_NO_SERVICE : null,
+  )
 
   const teardown = React.useCallback(() => {
     const recognition = recognitionRef.current
@@ -165,7 +170,7 @@ export function useDictation(onNotice: (notice: DictationNotice) => void): Dicta
   React.useEffect(() => teardown, [teardown])
 
   const start = React.useCallback(() => {
-    if (recognitionRef.current) return
+    if (recognitionRef.current || unavailable) return
     const Ctor = speechRecognitionCtor()
     if (!Ctor) return
     let recognition: SpeechRecognitionLike
@@ -184,7 +189,7 @@ export function useDictation(onNotice: (notice: DictationNotice) => void): Dicta
         teardown()
         if (event.error === 'service-not-allowed') {
           serviceRefused = true
-          setSupported(false)
+          setUnavailable(DICTATION_NO_SERVICE)
         }
         const notice = dictationNotice(event.error)
         if (notice) onNotice(notice)
@@ -196,7 +201,7 @@ export function useDictation(onNotice: (notice: DictationNotice) => void): Dicta
       onNotice({ message: 'Dictation failed — the microphone could not be started', failure: 'start-threw' })
       teardown()
     }
-  }, [onNotice, teardown])
+  }, [onNotice, teardown, unavailable])
 
   const cancel = React.useCallback(() => teardown(), [teardown])
 
@@ -218,7 +223,7 @@ export function useDictation(onNotice: (notice: DictationNotice) => void): Dicta
     return onScreen.trim()
   }, [recording])
 
-  return { supported, recording, start, cancel, finish }
+  return { supported, unavailable, recording, start, cancel, finish }
 }
 
 /** mm:ss for the overlay timer. */
