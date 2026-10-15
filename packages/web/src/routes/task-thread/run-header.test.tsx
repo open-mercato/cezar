@@ -978,6 +978,28 @@ describe('Terminal — the copy-command 409 fallback', () => {
   })
 })
 
+describe('Terminal — hosted mode (telemetry f179cc7d)', () => {
+  const hostedHealth = () => jsonResponse({ capabilities: { localHandoff: false } })
+
+  it('a hosted cockpit offers no Terminal resume, so it never POSTs a refused open-in-cli', async () => {
+    const sent = stubFetch({ '/api/v1/health': hostedHealth })
+    renderHeader(run('done'))
+    await waitFor(() => expect(sent.some((r) => r.path === '/api/v1/health')).toBe(true))
+    await waitFor(() => expect(actionBar().queryByRole('button', { name: 'Open in…' })).toBeNull())
+    expect(sent.some((r) => r.path === '/api/v1/runs/r1/open-in-cli')).toBe(false)
+  })
+
+  it('the phone kebab drops Terminal too', async () => {
+    const sent = stubFetch({ '/api/v1/health': hostedHealth })
+    renderHeader(run('done'))
+    await waitFor(() => expect(sent.some((r) => r.path === '/api/v1/health')).toBe(true))
+    await waitFor(() => expect(actionBar().queryByRole('button', { name: 'Open in…' })).toBeNull())
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
+    const menu = within(await screen.findByRole('menu'))
+    expect(menu.queryByRole('menuitem', { name: 'Terminal' })).toBeNull()
+  })
+})
+
 describe('Open in… menu — agent CLI resume labeling (#402)', () => {
   const CLI_LABELS: Record<string, string> = {
     'cli:claude': 'Claude CLI',
