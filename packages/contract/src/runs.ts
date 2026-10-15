@@ -980,7 +980,8 @@ export const createRunInputBaseSchema = z
     /** An inline chain (spec 008 — an approved plan runs as an ad-hoc workflow, never written to
      *  a file). The catalog's own step shape, not a copy of it. */
     steps: z.array(workflowStepDefSchema).min(1).max(8).optional(),
-    task: z.string().min(1).max(100_000, 'must be at most 100000 characters'),
+    /** May be empty when `images` carries the task — `createRunInputSchema` requires one. */
+    task: z.string().max(100_000, 'must be at most 100000 characters'),
     model: z.string().optional(),
     runner: runnerSchema.optional(),
     /** Agent account for this task (spec 2026-07-29-agent-profiles). Omit to follow the
@@ -1017,16 +1018,26 @@ export const createRunInputBaseSchema = z
     dispatch: dispatchIntentSchema.optional(),
   });
 
+/** A task may be attachments alone (a pasted screenshot is a brief), but never nothing at all. */
+export function hasTaskOrAttachments(b: { task: string; images?: readonly unknown[] }): boolean {
+  return b.task.trim() !== '' || (b.images?.length ?? 0) > 0;
+}
+export const TASK_OR_ATTACHMENTS_ISSUE = {
+  message: 'describe the task or attach a file',
+  path: ['task'],
+};
+
 /**
  * `POST /runs`. Exactly one of `workflow` / `steps` — the server rejects both or neither.
  *
  * Every bound here is the server's own (#429): an unbounded body must never reach a spawned
  * process, so a client that validates before sending gets the same answer the route would give.
  */
-export const createRunInputSchema = createRunInputBaseSchema.refine(
-  (b) => Boolean(b.workflow) !== Boolean(b.steps),
-  { message: 'provide either "workflow" or "steps", not both' },
-);
+export const createRunInputSchema = createRunInputBaseSchema
+  .refine((b) => Boolean(b.workflow) !== Boolean(b.steps), {
+    message: 'provide either "workflow" or "steps", not both',
+  })
+  .refine(hasTaskOrAttachments, TASK_OR_ATTACHMENTS_ISSUE);
 export type CreateRunInput = z.input<typeof createRunInputSchema>;
 
 /**

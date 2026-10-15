@@ -69,6 +69,7 @@ import {
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
 import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
+import { hasTaskOrAttachments, TASK_OR_ATTACHMENTS_ISSUE } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { hostUsageSampler, type HostSampler } from '../core/host-usage.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
@@ -690,8 +691,9 @@ const startRunSchema = z
     // The primary agent prompt handed to the spawned runner. Bounded like the
     // other prompt fields (`systemPrompt` 20k, message `text` 100k) so an
     // unbounded body can't be piped into a spawned process (#429). 100k chars
-    // (~25k tokens) is well past any hand-written task.
-    task: z.string().min(1).max(100_000, 'must be at most 100000 characters'),
+    // (~25k tokens) is well past any hand-written task. May be empty when attachments carry the
+    // task (telemetry 18c930de) — the refine below requires one or the other.
+    task: z.string().max(100_000, 'must be at most 100000 characters'),
     model: z.string().optional(),
     // Agent backend for this task (falls back to config `defaultRunner`).
     runner: z.enum(RUNNER_IDS).optional(),
@@ -739,7 +741,8 @@ const startRunSchema = z
   })
   .refine((b) => Boolean(b.workflow) !== Boolean(b.steps), {
     message: 'provide either "workflow" or "steps", not both',
-  });
+  })
+  .refine(hasTaskOrAttachments, TASK_OR_ATTACHMENTS_ISSUE);
 
 const pickSchema = z.object({
   runId: z.string().min(1),

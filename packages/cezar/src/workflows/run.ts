@@ -1440,7 +1440,7 @@ export class RunManager {
       ...(input.forkRef && input.worktree === false ? { worktree: undefined } : {}),
     };
     const run = this.store.createRun({
-      title: makeRunTitle(input.task, workflow) + (group ? ` (${group.variant})` : ''),
+      title: makeRunTitle(input.task, workflow, input.images?.length) + (group ? ` (${group.variant})` : ''),
       workflow: workflow.name,
       task: input.task,
       model: effectiveInput.model,
@@ -5942,6 +5942,8 @@ export class RunManager {
     // location of.
     state.grantedAttachmentLibrary = this.prepareAttachmentLibrary();
     if (attachments.length) {
+      // An attachment-only task (telemetry 18c930de) — say so, rather than open on an empty prompt.
+      if (input.task.trim() === '') userPrompt += 'The user attached the files below without a written task — work out what they need from them.';
       userPrompt += `\n\n${pastedAttachmentsText(attachments, this.attachmentLibraryHint(attachments, state.grantedAttachmentLibrary))}`;
     }
 
@@ -7450,7 +7452,7 @@ function applyTemplate(template: string, task: string): string {
  * when no model is available (#432, spec 2026-07-17-task-auto-naming). When
  * the task references a PR/issue, the number leads: `469: /om-auto-review-pr`.
  */
-export function makeRunTitle(task: string, workflow: WorkflowDef): string {
+export function makeRunTitle(task: string, workflow: WorkflowDef, attachmentCount = 0): string {
   const firstLine = task.trim().split('\n')[0] ?? '';
   const skill = workflow.steps.find((step) => stepKind(step) === 'agent' && step.skill)?.skill?.trim();
   const contextual = skill && !firstLine.startsWith(`/${skill}`)
@@ -7467,7 +7469,11 @@ export function makeRunTitle(task: string, workflow: WorkflowDef): string {
     refNumber !== undefined && !body.trimStart().replace(/^#/, '').startsWith(String(refNumber))
       ? `${refNumber}: ${body}`
       : body;
-  const chars = [...(prefixed || '(untitled task)')];
+  // An attachment-only task has no first line; the namer replaces this once the model answers.
+  const fallback = attachmentCount > 0
+    ? `Task from ${attachmentCount} attachment${attachmentCount > 1 ? 's' : ''}`
+    : '(untitled task)';
+  const chars = [...(prefixed || fallback)];
   return chars.length > 80 ? `${chars.slice(0, 79).join('').trimEnd()}…` : chars.join('');
 }
 
