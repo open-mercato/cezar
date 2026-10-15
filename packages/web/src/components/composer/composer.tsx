@@ -28,6 +28,7 @@ import { isEditableTarget } from '@/lib/use-command-shortcut'
 import { bumpSkillUsage, filterSkills, fuzzyMatch, isProjectSkill } from '@/lib/skills'
 import { useNow } from '@/lib/use-now'
 import { isSubmitShortcut } from '@/lib/use-submit-shortcut'
+import { trackAttachmentsSent } from '@/lib/telemetry'
 import { cn } from '@/lib/utils'
 
 import {
@@ -400,13 +401,23 @@ export function Composer({
           meta ? onSubmit(body, attachments, meta) : onSubmit(body, attachments),
         )
         releaseStaged(messageImages)
+        trackAttachmentsSent(messageImages.length)
       } catch (error) {
         toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
         if (restoreOnError) {
           // The optimistic clear already happened — put the message back, in front of anything
           // typed since, so nothing the user wrote is lost.
           setText((current) => (current === '' ? messageText : `${messageText}\n${current}`))
-          setImages((current) => current.reduce((list, a) => appendAttachment(list, a) ?? list, messageImages))
+          // Outside the updater (StrictMode double-invokes it): what was attached since the send
+          // goes back behind the message's own, within both caps — and a drop is said, not silent.
+          const dropped: PendingAttachment[] = []
+          const restored = imagesRef.current.reduce((list, a) => {
+            const next = appendAttachment(list, a)
+            if (!next) dropped.push(a)
+            return next ?? list
+          }, messageImages)
+          for (const a of dropped) toast(`${a.name} removed — the restored message fills the attachment limit`, { tone: 'danger' })
+          setImages(restored)
         }
       } finally {
         setBusy(false)

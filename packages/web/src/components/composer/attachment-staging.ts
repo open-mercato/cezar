@@ -1,5 +1,5 @@
 import { deleteStagedUpload, stageUpload } from '@/api/client'
-import { reportAttachmentStagingFailed } from '@/lib/telemetry'
+import { reportAttachmentStagingFailed, trackAttachmentsRestaged } from '@/lib/telemetry'
 import { ATTACHMENT_UPLOAD_MISSING, type AttachmentEntry } from '@open-mercato/cezar-api-client'
 
 import { toAttachmentInput, type PendingAttachment } from './composer-attachments'
@@ -76,7 +76,14 @@ export async function sendWithStaged<T>(
   } catch (error) {
     if (!isUploadMissing(error)) throw error
     forgetStaged(attachments)
-    return send(await Promise.all(attachments.map(toWireAttachment)))
+    try {
+      const result = await send(await Promise.all(attachments.map(toWireAttachment)))
+      trackAttachmentsRestaged('recovered')
+      return result
+    } catch (retryError) {
+      trackAttachmentsRestaged('failed')
+      throw retryError
+    }
   }
 }
 

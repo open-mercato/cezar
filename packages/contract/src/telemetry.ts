@@ -107,6 +107,19 @@ export const ADD_PROJECT_DIALOGS = ['new', 'clone', 'folder'] as const;
 export const addProjectDialogSchema = z.enum(ADD_PROJECT_DIALOGS);
 export type AddProjectDialog = z.infer<typeof addProjectDialogSchema>;
 
+/** How many attachments a message carried — `attachments_sent`'s label (telemetry 7054e5f2). */
+export const ATTACHMENT_COUNT_BUCKETS = ['1', '2-4', '5-10', '11-20'] as const;
+export const attachmentCountBucketSchema = z.enum(ATTACHMENT_COUNT_BUCKETS);
+export type AttachmentCountBucket = z.infer<typeof attachmentCountBucketSchema>;
+
+/** The count's bucket; anything past the cap lands in the last one. */
+export function attachmentCountBucket(count: number): AttachmentCountBucket {
+  if (count <= 1) return '1';
+  if (count <= 4) return '2-4';
+  if (count <= 10) return '5-10';
+  return '11-20';
+}
+
 /**
  * `POST /api/v1/telemetry/event` — a user action only the cockpit can name. Every event has its
  * own closed label set, so this relay can never carry free text. `204`, like the other two.
@@ -118,5 +131,9 @@ export const telemetryEventInputSchema = z.discriminatedUnion('event', [
   /** One of the sidebar's "Add project" dialogs was opened: New project, Clone from GitHub, or
    *  Open local folder. With `project_added`, the funnel of each add flow. */
   z.object({ event: z.literal('add_project_opened'), label: addProjectDialogSchema }),
+  /** A sent message carried attachments, bucketed by how many. */
+  z.object({ event: z.literal('attachments_sent'), label: attachmentCountBucketSchema }),
+  /** A send hit an expired staged upload; the composer re-staged and resent once — the outcome. */
+  z.object({ event: z.literal('attachments_restaged'), label: z.enum(['recovered', 'failed']) }),
 ]);
 export type TelemetryEventInput = z.infer<typeof telemetryEventInputSchema>;

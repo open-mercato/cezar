@@ -42,7 +42,10 @@ when its Skill tool still answered "Unknown skill"), `session_resume_fallback` (
 session that replaced a pruned conversation ended without a session error — `recovered` —, or
 `fresh_failed`, or was `cancelled`), `task_failed` (the agent's backend and a kind —
 `missing_session`, `usage_limit`, `auth`, `timeout` or `other` — never the error text; once per
-transition into failed, not for runs a restart interrupted nor for an auto-resume failing again). Every label
+transition into failed, not for runs a restart interrupted nor for an auto-resume failing again), `attachments_sent` (how many attachments a sent message carried, as a bucket —
+`1`, `2-4`, `5-10`, `11-20` — never their names, types or contents), `attachments_restaged`
+(whether the automatic re-upload after an expired staged attachment was `recovered` or
+`failed`). Every label
 comes from a closed set the server enforces.
 
 Error reports carry the error type, message and stack with your home directory, working

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, utimesSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -46,6 +46,17 @@ describe('staged uploads (telemetry 7054e5f2)', () => {
     expect(readUpload(uploadId)).toBeNull();
     stage();
     expect(existsSync(path)).toBe(false);
+  });
+
+  /** The file sits on disk between write and read, so what comes back is validated again. */
+  it('refuses a stored upload that was altered on disk', () => {
+    const { uploadId } = stage();
+    const path = join(uploadsDir(), `${uploadId}.json`);
+    const stored = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+    writeFileSync(path, JSON.stringify({ ...stored, mediaType: 'application/x-sh' }));
+    expect(readUpload(uploadId)).toBeNull();
+    writeFileSync(path, 'not json');
+    expect(readUpload(uploadId)).toBeNull();
   });
 
   it('never reads outside the store for an id that is not one', () => {

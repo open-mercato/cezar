@@ -64,12 +64,13 @@ import {
 // schema this route validates with is the same one the client compiles against.
 import {
   ATTACHMENT_IMAGES_TOO_LARGE,
-  isImageMediaType,
   ATTACHMENT_UPLOAD_MISSING,
   attachmentInputSchema,
   attachmentListSchema,
   type AttachmentEntry,
   deleteUploadResponseSchema,
+  isImageAttachmentName,
+  isImageMediaType,
   MAX_ATTACHMENTS_PER_MESSAGE,
   MAX_ATTACHMENTS_TOTAL_BASE64,
   stagedUploadSchema,
@@ -998,6 +999,29 @@ function resolveAttachments(entries: AttachmentEntry[] | undefined): PastedConte
   if (imageChars > MAX_ATTACHMENTS_TOTAL_BASE64) return ATTACHMENT_IMAGES_TOO_LARGE;
   return out;
 }
+
+/** Base64 size of the images a queued run's OPENING turn will carry: its task images plus every
+ *  stacked message's, read back from disk at dequeue and delivered together (#472). */
+function queuedImageChars(dataDir: string, runId: string, urls: readonly string[]): number {
+  let bytes = 0;
+  for (const url of urls) {
+    const name = url.split('/').pop() ?? '';
+    if (!isImageAttachmentName(name) || name.includes('..')) continue;
+    try {
+      bytes += statSync(join(dataDir, 'runs', `${runId}-images`, name)).size;
+    } catch {
+      // Gone files are dropped at dequeue too.
+    }
+  }
+  return Math.ceil(bytes / 3) * 4;
+}
+
+/** Base64 size of the image blocks among a message's resolved attachments. */
+function imageChars(content: readonly PastedContent[]): number {
+  return content.reduce((n, b) => (b.type === 'image' ? n + b.source.data.length : n), 0);
+}
+
+const QUEUED_IMAGES_TOO_LARGE = 'too many queued images — 20 MB of images across the task and its queued messages';
 
 // "Continue"/"Send back" body (spec 003 / #401): every field optional, so an empty POST reopens
 // the last session on the run's current backend (backward compat). A runner/model/account override
@@ -4606,7 +4630,7 @@ export function createApp(deps: ServerDeps) {
     // Live-session participation (spec 002): deliver a user message (text +
     // pasted screenshots) into the run's open claude session.
     .post('/runs/:id/messages', jsonZodValidator(messageSchema), async (c) => {
-      const { root: repoRoot, store, manager } = c.get('project');
+      const { root: repoRoot, dataDir, store, manager } = c.get('project');
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
@@ -4651,6 +4675,10 @@ export function createApp(deps: ServerDeps) {
         if (stackedImages + parsed.data.images.length > MAX_QUEUED_ATTACHMENTS) {
           return c.json({ error: `too many queued attachments — ${MAX_QUEUED_ATTACHMENTS} attachment limit across the stack` }, 400);
         }
+        const opening = [...(currentRun.taskImages ?? []), ...stack.flatMap((m) => m.images ?? [])];
+        if (queuedImageChars(dataDir, id, opening) + imageChars(attachments) > MAX_ATTACHMENTS_TOTAL_BASE64) {
+          return c.json({ error: QUEUED_IMAGES_TOO_LARGE }, 400);
+        }
         const prospective = foldedLength(currentRun.task, [...stack, { text: parsed.data.text }]);
         if (prospective > MAX_FOLDED_TASK_CHARS) {
           return c.json(
@@ -4671,7 +4699,7 @@ export function createApp(deps: ServerDeps) {
     // Edit / remove a stacked message (#472). Registered before any conflicting
     // `/:id` route so `queued-messages` never matches as a run id.
     .patch('/runs/:id/queued-messages/:msgId', jsonZodValidator(queuedMessagePatchSchema), async (c) => {
-      const { store, manager } = c.get('project');
+      const { dataDir, store, manager } = c.get('project');
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
@@ -4705,6 +4733,12 @@ export function createApp(deps: ServerDeps) {
       if (run.status !== 'queued') return c.json({ error: 'run already started' }, 409);
       const images = resolveAttachments(parsed.data.images);
       if (typeof images === 'string') return c.json({ error: images }, 400);
+      if (images !== undefined) {
+        const opening = [...(run.taskImages ?? []), ...others.flatMap((m) => m.images ?? [])];
+        if (queuedImageChars(dataDir, id, opening) + imageChars(images) > MAX_ATTACHMENTS_TOTAL_BASE64) {
+          return c.json({ error: QUEUED_IMAGES_TOO_LARGE }, 400);
+        }
+      }
       const message = manager.editQueuedMessage(id, msgId, {
         ...(parsed.data.text !== undefined ? { text: parsed.data.text } : {}),
         ...(images !== undefined ? { images } : {}),
