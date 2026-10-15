@@ -997,6 +997,9 @@ export function contentBlocksOf(content: readonly PastedContent[]): ContentBlock
   return content.filter((b): b is ContentBlock => b.type !== 'file');
 }
 
+/** The opening prompt of a task given as attachments alone (telemetry 18c930de). */
+export const ATTACHMENT_ONLY_TASK = 'The user attached the files below without a written task — work out what they need from them.';
+
 /**
  * Plain-text note listing the absolute paths of pasted attachments, appended
  * to the message that carries them (#357). The base64 image blocks stay in
@@ -1004,9 +1007,6 @@ export function contentBlocksOf(content: readonly PastedContent[]): ContentBlock
  * files as files — and the only usable reference on backends (codex,
  * opencode) whose `textOf()` drops image blocks before reaching the model.
  */
-/** The opening prompt of a task given as attachments alone (telemetry 18c930de). */
-export const ATTACHMENT_ONLY_TASK = 'The user attached the files below without a written task — work out what they need from them.';
-
 export function pastedAttachmentsText(attachments: PersistedAttachment[], libraryDir?: string): string {
   const list = attachments.map((a) => `- ${a.path}`).join('\n');
   // The library (#929) is pointed at as a DIRECTORY rather than per-file, deliberately: the paths
@@ -1518,7 +1518,8 @@ export class RunManager {
     // the model answers. Never awaited here, never fails the run. The same call
     // also answers the task branch when instructions are set; `execute` waits
     // for that part, bounded, before it forks.
-    // An attachment-only task gives the namer nothing to read; the turn-end refresh names it instead.
+    // An attachment-only task gives the namer nothing to read; the turn-end refresh names it instead
+    // (under `branchNaming` its branch keeps the default `cez/<id8>`).
     this.pendingBranchNames.set(
       run.id,
       input.task.trim() ? this.autoNameRun(run.id, skillHint, input.task) : Promise.resolve(undefined),
