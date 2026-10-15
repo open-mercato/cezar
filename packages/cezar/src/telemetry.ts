@@ -305,7 +305,7 @@ export const TELEMETRY_EVENTS = [
   'project_added', 'diff_comment_added', 'task_archived', 'task_unarchived', 'task_pinned',
   'task_unpinned', 'task_deleted', 'project_create_failed', 'add_project_opened', 'error',
   'provider_login_opened', 'provider_login_not_opened', 'provider_connected', 'skills_provisioned',
-  'skill_missing_in_session', 'session_resume_fallback', 'task_failed',
+  'skill_missing_in_session', 'session_resume_fallback', 'task_failed', 'skills_update_apply_dropped',
 ] as const;
 
 /** Once per UTC day while telemetry is on: `cezar_run`. Without consent: nothing at all. */

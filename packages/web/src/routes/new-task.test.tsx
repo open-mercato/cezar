@@ -384,6 +384,20 @@ describe('the hero surface', () => {
     expect(requests.some((r) => r.method === 'POST')).toBe(false)
     expect(location()).toBe('/new')
   })
+
+  it('starts an attachment-only task: empty task text, the attachment in images (telemetry 18c930de)', async () => {
+    serve()
+    renderNewTask()
+    await pillReady()
+    paste(textarea(), [pngFile()])
+    await waitFor(() => expect(attachmentChips()).toHaveLength(1))
+
+    await startTask()
+
+    const body = postedBody() as { task: string; images?: unknown[] }
+    expect(body.task).toBe('')
+    expect(body.images).toHaveLength(1)
+  })
 })
 
 // ---- picker data flows ------------------------------------------------------------------------

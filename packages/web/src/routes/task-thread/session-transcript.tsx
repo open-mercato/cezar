@@ -98,7 +98,8 @@ export interface SessionTranscriptProps {
 /** The main run record plus reduced turns, without rendering or backend inspection. */
 export function mainTranscriptSections(run: ApiRun, thread: ThreadState): TranscriptSection[] {
   const sections: TranscriptSection[] = []
-  if (run.task) {
+  // An attachment-only task (empty text) still opens the thread with its attachments.
+  if (run.task || run.taskImages?.length) {
     sections.push({
       id: 'task',
       userMessageKey: 'task',

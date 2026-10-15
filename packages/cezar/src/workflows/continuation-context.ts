@@ -64,7 +64,7 @@ export function freshContinuationContext(run: RunRecord, events: readonly RunEve
     'You are continuing an existing Cezar task in a fresh provider session. The previous provider session cannot be resumed. Use this persisted Cezar state and conversation as the hand-off; inspect the existing worktree before changing anything.',
     '',
     '## Original task',
-    run.task,
+    run.task.trim() || '(given as attachments only)',
     '',
     '## Cezar task state before this continuation',
     // A queued/running status is this continuation's own bookkeeping, not where the task stood;
