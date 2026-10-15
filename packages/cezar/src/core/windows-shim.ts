@@ -7,7 +7,7 @@
  * An npm or pnpm shim only ever runs `node <script> %*`, so this reads the script out of it and
  * spawns node directly: same program, no shell. A `.js` override gets the same treatment.
  */
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, resolve } from 'node:path';
 
 const SHIM_EXTENSIONS = new Set(['.cmd', '.bat']);
@@ -26,8 +26,16 @@ export interface ShimOptions {
 export function shimScript(shimPath: string): string | null {
   let text: string;
   try {
-    if (statSync(shimPath).size > SHIM_MAX_BYTES) return null;
-    text = readFileSync(shimPath, 'utf8');
+    // One descriptor, one bounded read: no stat-then-read gap (CodeQL js/file-system-race).
+    const fd = openSync(shimPath, 'r');
+    try {
+      const buffer = Buffer.alloc(SHIM_MAX_BYTES + 1);
+      const bytes = readSync(fd, buffer, 0, buffer.length, 0);
+      if (bytes > SHIM_MAX_BYTES) return null;
+      text = buffer.toString('utf8', 0, bytes);
+    } finally {
+      closeSync(fd);
+    }
   } catch {
     return null;
   }
