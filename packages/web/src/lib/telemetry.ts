@@ -416,8 +416,9 @@ export function Telemetry() {
     )
     // Vite's own signal that a preloaded dependency of a dynamic import failed to load.
     window.addEventListener('vite:preloadError', (e) => {
-      // A reload is the recovery; preventing the default stops Vite rethrowing into the page.
-      if (reloadForStaleBuild()) return e.preventDefault()
+      // A reload is the recovery. No preventDefault: that makes Vite resolve the import with
+      // `undefined`, and callers expect the rejection (lazyRoute holds its fallback on it).
+      if (reloadForStaleBuild()) return
       reportClientError((e as Event & { payload?: unknown }).payload, 'vite:preloadError', {
         code: 'chunk_load_failed',
         fingerprint: 'cockpit:chunk_load_failed',
