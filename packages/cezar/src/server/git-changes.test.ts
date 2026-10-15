@@ -927,6 +927,23 @@ describe('repo git API routes (R5 Step 1.3 — main working tree)', () => {
       body: JSON.stringify(body),
     });
 
+  it('GET /api/v1/repo marks branches another worktree holds (telemetry da5ca728)', async () => {
+    const other = `${repoRoot}-wt`;
+    g(repoRoot, 'worktree', 'add', '-q', '-b', 'held', other);
+    try {
+      const res = await apiRequest(app, '/api/v1/repo');
+      const body = (await res.json()) as { branches: string[]; checkedOutElsewhere: Record<string, string> };
+      expect(body.branches).toContain('held');
+      expect(Object.keys(body.checkedOutElsewhere)).toEqual(['held']);
+
+      const sw = await branch({ name: 'held' });
+      expect(sw.status).toBe(409);
+      expect(((await sw.json()) as { error: string }).error).toContain('checked out in another worktree');
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+
   it('GET /api/v1/repo/changes reports uncommitted main-tree changes vs HEAD', async () => {
     writeFileSync(join(repoRoot, 'base.txt'), 'base changed\n');
     writeFileSync(join(repoRoot, 'new.txt'), 'brand new\n');
@@ -1182,6 +1199,43 @@ describe('createOrSwitchBranch — dash-guard on both operands (#431)', () => {
   it('still creates an ordinary branch', async () => {
     const res = await createOrSwitchBranch(dir, 'feature', 'main');
     expect(res).toEqual({ ok: true, branch: 'feature', created: true });
+  });
+});
+
+describe('createOrSwitchBranch — a branch another worktree holds (telemetry da5ca728)', () => {
+  let dir: string;
+  let other: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cez-held-'));
+    other = `${dir}-wt`;
+    initRepo(dir);
+    writeFileSync(join(dir, 'a.txt'), 'a\n');
+    g(dir, 'add', '-A');
+    g(dir, 'commit', '-m', 'base');
+    g(dir, 'worktree', 'add', '-q', '-b', 'held', other);
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(other, { recursive: true, force: true });
+  });
+
+  it('names the holding worktree instead of surfacing git’s bare fatal', async () => {
+    const res = await createOrSwitchBranch(dir, 'held');
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).not.toMatch(/^fatal:/);
+      expect(res.error).toContain('checked out in another worktree');
+    }
+    expect(g(dir, 'rev-parse', '--abbrev-ref', 'HEAD').trim()).toBe('main');
+  });
+
+  it('switches once the holding worktree’s directory is gone (stale registration pruned)', async () => {
+    rmSync(other, { recursive: true, force: true });
+    const res = await createOrSwitchBranch(dir, 'held');
+    expect(res).toEqual({ ok: true, branch: 'held', created: false });
+    expect(g(dir, 'rev-parse', '--abbrev-ref', 'HEAD').trim()).toBe('held');
   });
 });
 

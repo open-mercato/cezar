@@ -136,6 +136,7 @@ const REPO: RepoResponse = {
   status: [],
   log: [],
   branches: ['main'],
+  checkedOutElsewhere: {},
   baseBranch: null,
 }
 const OTHER_REPO: RepoResponse = {
@@ -143,6 +144,7 @@ const OTHER_REPO: RepoResponse = {
   status: [],
   log: [],
   branches: ['develop'],
+  checkedOutElsewhere: {},
   baseBranch: null,
 }
 

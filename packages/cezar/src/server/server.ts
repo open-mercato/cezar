@@ -172,7 +172,7 @@ import {
 } from '@open-mercato/cezar-contract';
 import { toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
 import { deleteUpload, readUpload, writeUpload } from '../uploads.ts';
-import { removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
+import { branchesCheckedOutElsewhere, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
 import { isReclaimable, reclaimWorktrees } from '../runs/retention.ts';
 import { getBranches, getCommit, getDiff, getLog, getRepoInfo, getStatus } from './git.ts';
 import {
@@ -6413,14 +6413,16 @@ export function createApp(deps: ServerDeps) {
           status: [],
           log: [],
           branches: [],
+          checkedOutElsewhere: {},
           baseBranch: null,
         });
       // Task branches are never a base: hide the named ones (no `cez/` prefix) by record.
       const taskBranches = new Set(store.listRuns().flatMap((r) => (r.branch ? [r.branch] : [])));
-      const [status, log, branches, config] = await Promise.all([
+      const [status, log, branches, held, config] = await Promise.all([
         getStatus(info.root),
         getLog(info.root),
         getBranches(info.root, taskBranches),
+        branchesCheckedOutElsewhere(info.root),
         loadConfig(repoRoot),
       ]);
       return c.json({
@@ -6428,6 +6430,7 @@ export function createApp(deps: ServerDeps) {
         status,
         log,
         branches,
+        checkedOutElsewhere: Object.fromEntries(branches.flatMap((b) => (held.has(b) ? [[b, held.get(b)!]] : []))),
         baseBranch: config.baseBranch ?? null,
       });
     })

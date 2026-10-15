@@ -139,10 +139,11 @@ const REPO: RepoResponse = {
   status: [],
   log: [],
   branches: ['main', 'develop'],
+  checkedOutElsewhere: {},
   baseBranch: null,
 }
 
-const REPO_NO_GIT: RepoResponse = { info: null, status: [], log: [], branches: [], baseBranch: null }
+const REPO_NO_GIT: RepoResponse = { info: null, status: [], log: [], branches: [], checkedOutElsewhere: {}, baseBranch: null }
 
 const CONFIG: ConfigResponse = {
   baseBranch: null,

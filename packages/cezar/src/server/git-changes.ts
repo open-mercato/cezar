@@ -6,7 +6,7 @@ import { join, resolve, sep } from 'node:path';
 import { resolveTaskDiffBase, type RepointedHead } from '../git-diff-base.ts';
 import { isSafeGitRef } from '../git-refs.ts';
 import { resolveTaskRemotes, splitRemoteRef } from '../git-remotes.ts';
-import { gitHasIdentity, unresolvedConflicts } from '../git-worktree.ts';
+import { branchesCheckedOutElsewhere, gitHasIdentity, unresolvedConflicts } from '../git-worktree.ts';
 
 /**
  * Session git plumbing for the cockpit's Changes & Files tabs (redesign spec
@@ -718,6 +718,16 @@ export async function createOrSwitchBranch(
 
   const exists = await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`]);
   if (exists.ok) {
+    // git refuses a branch another worktree holds; say where it is instead of a bare `fatal:`.
+    const holder = (await branchesCheckedOutElsewhere(dir)).get(name);
+    if (holder) {
+      return {
+        ok: false,
+        error: `${name} is checked out in another worktree (${holder}) — open it there, or remove that worktree first`,
+      };
+    }
+    // A deleted worktree's stale registration still blocks the checkout until pruned.
+    await git(dir, ['worktree', 'prune']);
     const sw = await git(dir, ['checkout', name]);
     if (!sw.ok) return { ok: false, error: gitReason(sw, `git checkout ${name} failed`) };
     return { ok: true, branch: name, created: false };
