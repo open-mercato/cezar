@@ -7,6 +7,8 @@ const api = vi.hoisted(() => ({
   deleteStagedUpload: vi.fn(),
 }))
 vi.mock('@/api/client', () => api)
+const telemetry = vi.hoisted(() => ({ reportAttachmentStagingFailed: vi.fn() }))
+vi.mock('@/lib/telemetry', () => telemetry)
 
 import { releaseStaged, resetStaging, sendWithStaged, stageAttachment, toWireAttachment } from './attachment-staging'
 import type { PendingAttachment } from './composer-attachments'
@@ -30,6 +32,7 @@ describe('attachment staging (telemetry 7054e5f2)', () => {
       bytes: 3,
     }))
     api.deleteStagedUpload.mockReset().mockResolvedValue({ deleted: true })
+    telemetry.reportAttachmentStagingFailed.mockReset()
   })
   afterEach(() => resetStaging())
 
@@ -41,9 +44,12 @@ describe('attachment staging (telemetry 7054e5f2)', () => {
   })
 
   it('falls back to inline bytes when staging fails, and retries on the next send', async () => {
-    api.stageUpload.mockRejectedValueOnce(new Error('offline'))
+    const failure = new Error('offline')
+    api.stageUpload.mockRejectedValueOnce(failure)
     const a = attachment('BBBB')
     expect(await toWireAttachment(a)).toEqual({ mediaType: 'image/png', data: 'BBBB' })
+    // The fallback hides the failure from the user, so it must not hide it from telemetry.
+    expect(telemetry.reportAttachmentStagingFailed).toHaveBeenCalledWith(failure)
     await Promise.resolve()
     expect(await toWireAttachment(a)).toEqual({ uploadId: 'id1' })
   })

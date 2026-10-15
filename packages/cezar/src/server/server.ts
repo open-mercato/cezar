@@ -3493,7 +3493,8 @@ export function createApp(deps: ServerDeps) {
     // request rides the global body limit.
     .post('/workspace/uploads', jsonZodValidator(attachmentInputSchema), (c) => {
       const result = writeUpload(c.req.valid('json'));
-      if (!result.ok) return c.json({ error: result.error }, 500);
+      // The fs error names a path under the user's home; the cockpit reports this answer to telemetry.
+      if (!result.ok) return c.json({ error: 'could not stage the attachment' }, 500);
       return c.json(stagedUploadSchema.parse(result.upload));
     })
     .delete('/workspace/uploads/:uploadId', paramZodValidator(uploadIdParamSchema), (c) => {

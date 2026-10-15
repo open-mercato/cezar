@@ -321,6 +321,17 @@ function reportErrorToast(message: string): void {
   reportClientError(scrubToastMessage(message), 'toast', { type, context })
 }
 
+/** A composer attachment that could not be staged (telemetry 7054e5f2). The send still works —
+ *  the bytes ride inline — which is exactly why nobody would notice a broken uploads store
+ *  without this report. */
+export function reportAttachmentStagingFailed(error: unknown): void {
+  const status = (error as { status?: unknown } | null)?.status
+  reportClientError(error, 'attachment-staging', {
+    code: 'attachment_stage_failed',
+    context: { 'request.route': '/api/v1/workspace/uploads', ...(typeof status === 'number' ? { 'request.status': status } : {}) },
+  })
+}
+
 /** `React.lazy` that says WHICH page failed when its bundle can't load. Engines word the failure
  *  differently (WebKit: "Importing a module script failed.", Chromium: "Failed to fetch
  *  dynamically imported module") and WebKit sends no stack, so these share one code and one

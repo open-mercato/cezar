@@ -1,4 +1,5 @@
 import { deleteStagedUpload, stageUpload } from '@/api/client'
+import { reportAttachmentStagingFailed } from '@/lib/telemetry'
 import { ATTACHMENT_UPLOAD_MISSING, type AttachmentEntry } from '@open-mercato/cezar-api-client'
 
 import { toAttachmentInput, type PendingAttachment } from './composer-attachments'
@@ -20,7 +21,10 @@ export function stageAttachment(attachment: PendingAttachment): Promise<string |
   if (!pending) {
     pending = stageUpload(toAttachmentInput(attachment)).then(
       (upload) => (typeof upload?.uploadId === 'string' ? upload.uploadId : null),
-      () => null,
+      (error: unknown) => {
+        reportAttachmentStagingFailed(error)
+        return null
+      },
     )
     staged.set(attachment.data, pending)
     // A failed upload is not remembered, so the next send tries again.
