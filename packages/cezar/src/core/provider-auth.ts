@@ -7,6 +7,7 @@ import { profileEnv } from './agent-profiles.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
 import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
 import { probeJunieAuthentication } from './junie-auth-probe.ts';
+import { spawnableCommand } from './windows-shim.ts';
 
 export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot'] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
@@ -434,10 +435,12 @@ function defaultRunProviderCommand(
   env?: Record<string, string>,
   stdin?: string,
 ): Promise<ProviderCommandResult> {
+  // A Windows `.cmd` shim runs as `node <script>`: execFile throws EINVAL on the shim (a330744e).
+  const [file, argv] = spawnableCommand(executable, args);
   return new Promise((resolve) => {
     const child = execFile(
-      executable,
-      args,
+      file,
+      argv,
       {
         timeout: timeoutMs,
         windowsHide: true,
@@ -950,8 +953,19 @@ export class ProviderAuthService {
         : env === undefined
           ? this.runCommand(executable, descriptor.statusArgs, COMMAND_TIMEOUT_MS)
           : this.runCommand(executable, descriptor.statusArgs, COMMAND_TIMEOUT_MS, env));
-    } catch {
-      return inconclusive('spawn_threw', UNKNOWN_HINT);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      const thrown: ProviderCommandResult = {
+        stdout: '',
+        stderr: '',
+        exitCode: null,
+        ...(typeof code === 'string' ? { errorCode: code } : {}),
+      };
+      // A shim `spawnableCommand` could not unwrap: say which setting to change, not "try again".
+      const hint = code === 'EINVAL' && /\.(?:cmd|bat)$/i.test(executable)
+        ? `\`${executable}\` is a Windows script shim cezar cannot start without a shell. Point ${descriptor.overrideEnv} at the CLI's .exe or its .js entry point.`
+        : UNKNOWN_HINT;
+      return inconclusive('spawn_threw', hint, thrown);
     }
     if (result.errorCode === 'ENOENT') {
       return { provider: descriptor.id, status: 'not-installed', hint: descriptor.installHint };

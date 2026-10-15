@@ -1471,6 +1471,31 @@ describe('inconclusive probe reports', () => {
     expect((await reasonsFor(() => { throw new Error('boom'); }))[0]?.reason).toBe('spawn_threw');
   });
 
+  // Telemetry a330744e: the thrown error's code reached the report as null.
+  it('keeps the code of a spawn that threw, and names the setting for an unrunnable shim', async () => {
+    const onInconclusive = vi.fn();
+    vi.stubEnv('CEZ_CODEX_BIN', 'C:\\tools\\codex.cmd');
+    try {
+      const service = new ProviderAuthService({
+        runCommand: async (executable) => {
+          if (executable !== 'C:\\tools\\codex.cmd') return { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' };
+          throw Object.assign(new Error('spawn EINVAL'), { code: 'EINVAL' });
+        },
+        onInconclusive,
+      });
+      const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'codex');
+      expect(row).toMatchObject({ status: 'unknown', hint: expect.stringContaining('CEZ_CODEX_BIN') });
+      expect(onInconclusive.mock.calls[0]?.[0]).toMatchObject({
+        reason: 'spawn_threw',
+        errorCode: 'EINVAL',
+        binSource: 'override',
+        binExt: '.cmd',
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   // Telemetry 298c2e1f: exit 0, a short non-JSON answer, and no version cezar could read.
   it('names the fix when `copilot` on PATH never started an ACP server', async () => {
     const onInconclusive = vi.fn();

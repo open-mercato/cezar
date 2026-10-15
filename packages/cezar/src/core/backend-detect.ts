@@ -2,8 +2,12 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolveCursorAgentBin } from './cursor-agent-runner.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
+import { spawnableCommand } from './windows-shim.ts';
 
-const exec = promisify(execFile);
+const execAsync = promisify(execFile);
+/** Every probe goes through `spawnableCommand`, so a Windows `.cmd` override is detected too. */
+const exec = (bin: string, args: readonly string[], opts: { timeout: number }) =>
+  execAsync(...spawnableCommand(bin, args), opts);
 
 export interface BackendCheck {
   name: 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'junie' | 'copilot' | 'gh' | 'git';
