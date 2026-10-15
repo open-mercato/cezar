@@ -24,6 +24,27 @@ if (!process.env.GIT_CONFIG_COUNT) {
   process.env.GIT_CONFIG_VALUE_0 = 'false'
 }
 
+// Fixtures under `tmpdir()` that are deliberately NOT repositories must stay that way when the
+// temp dir itself sits inside a checkout — a cezar task points TMPDIR into the repo's
+// `.ai/cezar/tmp/`, and git would otherwise discover the cezar repo above every fixture.
+process.env.GIT_CEILING_DIRECTORIES = [
+  ...new Set([tmpdir(), realpathSync(tmpdir())]),
+  ...(process.env.GIT_CEILING_DIRECTORIES ? [process.env.GIT_CEILING_DIRECTORIES] : []),
+].join(':')
+
+// The variables a cockpit sets for its own agents and check steps (.env.example). Run inside a
+// cezar task, the suite would inherit them — and the engine forwards CEZ_API_URL/CEZ_BIN to every
+// run it starts — so the env a case asserts would depend on where it ran. A case that needs one
+// sets it itself.
+for (const name of [
+  'CEZ_TASK_ID', 'CEZ_HANDOFF_FILE', 'CEZ_TODOS_FILE', 'CEZ_API_URL', 'CEZ_PROJECT_ID', 'CEZ_BIN',
+  'CEZ_TREE_DIR', 'CEZ_RUN_ID', 'CEZ_WORKTREE', 'CEZ_BRANCH', 'CEZ_BASE', 'CEZ_STEP_ID',
+  'CEZ_ATTEMPT', 'CEZ_SHARED_CACHE_DIR', 'CEZ_GITHUB_REPO', 'CEZ_GITHUB_NUMBER', 'CEZ_GITHUB_EVENT',
+  'CEZ_PR_HEAD_SHA', 'CEZ_PR_HEAD_REF', 'CEZ_PR_BASE_REF',
+]) {
+  delete process.env[name]
+}
+
 // `gh`'s signed-in hosts decide which remotes count as GitHub Enterprise (`src/github-hosts.ts`);
 // a developer's own `hosts.yml` must not change what the suite classifies. A case that wants
 // a host sets `GH_CONFIG_DIR` itself.
