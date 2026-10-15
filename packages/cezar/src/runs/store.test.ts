@@ -2472,6 +2472,27 @@ describe('RunStore — janitor cost once its answer is settled (#540)', () => {
     expect(store.getRun(run.id)?.issueNumber).toBeUndefined();
   });
 
+  it('stops collecting issue candidates at the cap while the janitor still runs', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 'task', steps: [] });
+    for (let n = 1; n <= 9; n += 1) store.appendEvent(run.id, { type: 'note', message: `see ${issue(n)}` });
+
+    const candidates = store.getRun(run.id)?.referencedIssueCandidates;
+    expect(candidates).toHaveLength(8);
+    expect(candidates).toEqual([1, 2, 3, 4, 5, 6, 7, 8].map(issue));
+    expect(candidates).not.toContain(issue(9));
+  });
+
+  it('keeps referencedIssueCandidates across a store reopen', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 'task', steps: [] });
+    store.appendEvent(run.id, { type: 'note', message: `see ${issue(4)} and ${issue(5)}` });
+    store.flush();
+
+    const reopened = RunStore.open(dataDir).getRun(run.id);
+    expect(reopened?.referencedIssueCandidates).toEqual([issue(4), issue(5)]);
+  });
+
   it('bounds how much of a tool input it searches for references', () => {
     const store = RunStore.open(dataDir);
     const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });

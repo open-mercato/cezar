@@ -69,6 +69,16 @@ describe('parseTaskMarkers — report-tier reference lines', () => {
     expect(parseTaskMarkers('ISSUE_NUMBER=12')).toEqual({ issue: 12 });
   });
 
+  it('a CEZ:ISSUE marker outranks a conflicting legacy ISSUE_NUMBER in either order', () => {
+    expect(parseTaskMarkers('ISSUE_NUMBER=12\nCEZ:ISSUE=3')).toEqual({ issue: 3 });
+    expect(parseTaskMarkers('CEZ:ISSUE=3\nISSUE_NUMBER=12')).toEqual({ issue: 3 });
+  });
+
+  it('PR_NUMBER outranks a disagreeing PR_URL regardless of line order', () => {
+    expect(parseTaskMarkers('PR_NUMBER=7\nPR_URL=https://github.com/o/r/pull/9')).toEqual({ pr: 7 });
+    expect(parseTaskMarkers('PR_URL=https://github.com/o/r/pull/9\nPR_NUMBER=7')).toEqual({ pr: 7 });
+  });
+
   it('a report line outranks a legacy marker; the last report line wins', () => {
     expect(parseTaskMarkers('PR_NUMBER=1\nPR: #2 (link: https://github.com/o/r/pull/2)')).toEqual({ pr: 2 });
     expect(
@@ -78,12 +88,19 @@ describe('parseTaskMarkers — report-tier reference lines', () => {
     ).toEqual({ pr: 2 });
   });
 
-  it('is line-anchored and exact-shape — prose, placeholders and decorated lines never parse', () => {
+  it('is line-anchored and exact-shape — inline prose, placeholders and decorated lines never parse', () => {
     expect(parseTaskMarkers('the report ends with PR: #442 (link: https://github.com/o/r/pull/442)')).toEqual({});
     expect(parseTaskMarkers('PR: #<PR number> (link: <full PR URL>)')).toEqual({});
     expect(parseTaskMarkers('- PR: #442 (link: https://github.com/o/r/pull/442)')).toEqual({});
     expect(parseTaskMarkers('PR: #442 (link: https://github.com/o/r/pull/442) — merged')).toEqual({});
     expect(parseTaskMarkers('PR: 442')).toEqual({});
+  });
+
+  it('parses a report line inside a code fence or quoted example — by design, like the CEZ tier', () => {
+    expect(
+      parseTaskMarkers('```\nPR: #442 (link: https://github.com/o/r/pull/442)\n```'),
+    ).toEqual({ pr: 442 });
+    expect(parseTaskMarkers('```\nCEZ:PR=442\n```')).toEqual({ pr: 442 });
   });
 
   it('tolerates trailing whitespace and CRLF', () => {
