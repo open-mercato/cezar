@@ -19,6 +19,7 @@ const LABEL: Record<ProviderId, string> = {
   pi: 'pi',
   junie: 'Junie',
   copilot: 'GitHub Copilot CLI',
+  omp: 'OMP',
 };
 
 export function providersRequiredByWorkflow(
@@ -116,6 +117,9 @@ export function recordedProfileFor(run: RunRecord, provider: ProviderId): string
   return provider === runner ? run.agentProfile : undefined;
 }
 
+/** Providers whose probe answers `unknown` on purpose (no read-only status to ask), not by failure. */
+const DELIBERATELY_UNKNOWN: ReadonlySet<ProviderId> = new Set<ProviderId>(['junie', 'omp']);
+
 export function unavailableProviderMessage(
   required: readonly ProviderId[],
   response: ProviderStatusResponse,
@@ -125,9 +129,10 @@ export function unavailableProviderMessage(
     if (row?.enabled === false) {
       return `${LABEL[provider]} is disabled. Enable it in Settings → Agents → Providers.`;
     }
-    // Junie has no read-only auth-status command: its probe deliberately reports unknown.
-    // Let ACP authenticate at run startup; a real runtime rejection is still latched as disconnected.
-    if (row?.status !== 'connected' && !(provider === 'junie' && row?.status === 'unknown')) {
+    // Junie has no read-only auth-status command, and omp's login can live only in the OS keychain:
+    // both probes deliberately report unknown. Let the CLI authenticate at run startup; a real
+    // runtime rejection is still latched as disconnected.
+    if (row?.status !== 'connected' && !(DELIBERATELY_UNKNOWN.has(provider) && row?.status === 'unknown')) {
       return `${LABEL[provider]} credentials are unavailable. Authorize it in Settings → Agents → Providers.`;
     }
   }

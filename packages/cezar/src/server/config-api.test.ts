@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { createApp } from './server.ts';
@@ -179,6 +180,15 @@ describe('the config API', () => {
     expect(rawFile().defaultModels).toBeUndefined();
   });
 
+  // A runner missing from the PUT schema is stripped silently: the request answers 200 and
+  // nothing is saved.
+  it.each(RUNNER_IDS)('PUT defaultModels persists and clears a %s model', async (runner) => {
+    expect((await put({ defaultModels: { [runner]: 'some-model' } })).status).toBe(200);
+    expect(rawFile().defaultModels).toEqual({ [runner]: 'some-model' });
+    await put({ defaultModels: { [runner]: null } });
+    expect(rawFile().defaultModels).toBeUndefined();
+  });
+
   it('an explicit auto default beats the coding agent\'s own configured model (#906)', async () => {
     mkdirSync(join(homeRoot, '.claude'), { recursive: true });
     mkdirSync(join(homeRoot, '.codex'), { recursive: true });
@@ -212,6 +222,13 @@ describe('the config API', () => {
     await put({ defaultModelsAuto: { claude: null } });
     expect(rawFile().defaultModelsAuto).toBeUndefined();
     expect((await getBody()).defaultModels).toEqual({});
+  });
+
+  it('PUT defaultModelsAuto accepts omp — it reads a native default (`modelRoles.default`) too', async () => {
+    await put({ defaultModelsAuto: { omp: true } });
+    expect(rawFile().defaultModelsAuto).toEqual({ omp: true });
+    await put({ defaultModelsAuto: { omp: null } });
+    expect(rawFile().defaultModelsAuto).toBeUndefined();
   });
 
   it('the fixed-model policy refuses an auto override too (#906)', async () => {

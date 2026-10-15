@@ -3,8 +3,15 @@ import type { ProviderStatus, ProviderStatusResponse, Runner } from '@open-merca
 /** The cockpit's canonical runner order, exported so a surface that renders one row per
  *  provider derives it instead of keeping a fifth hand-written copy — the copy in
  *  `accounts-section.tsx` silently dropped Copilot when #582 added it, and nothing in the
- *  type system noticed, because a `ProviderId[]` literal is under-wide, never wrong. */
-export const RUNNER_ORDER: readonly Runner[] = ['claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot']
+ *  type system noticed, because a `ProviderId[]` literal is under-wide, never wrong. Spelled
+ *  as an exhaustive `Record<Runner, true>` (the `tools-menu.tsx` pattern) for the same reason:
+ *  the server answers one row per contract runner, and a runner missing here made every real
+ *  status response fail to parse — so a runner joining the contract fails the typecheck here
+ *  instead of quietly leaving every provider at "Could not verify". */
+const RUNNER_ORDER_SET: Record<Runner, true> = {
+  claude: true, codex: true, junie: true, opencode: true, cursor: true, pi: true, copilot: true, omp: true,
+}
+export const RUNNER_ORDER: readonly Runner[] = Object.keys(RUNNER_ORDER_SET) as Runner[]
 const PROVIDER_STATES = new Set(['connected', 'disconnected', 'not-installed', 'unknown'])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -153,6 +160,9 @@ function sameProviderStatusRow(left: ProviderStatus, right: ProviderStatus): boo
     && left.authFailureId === right.authFailureId
 }
 
+/** Providers whose probe answers `unknown` on purpose, not by failure (mirrors the server's gate). */
+const DELIBERATELY_UNKNOWN: ReadonlySet<Runner> = new Set<Runner>(['junie', 'omp'])
+
 export function usableRunners(status: ProviderStatusResponse | undefined): Runner[] {
   const rows = completeProviderRows(status)
   if (rows === null) return []
@@ -160,10 +170,11 @@ export function usableRunners(status: ProviderStatusResponse | undefined): Runne
     rows
       .filter((row) => row.enabled && (
         row.status === 'connected'
-        // Junie has no read-only auth-status command. Its probe can confirm the CLI is installed,
-        // but must report auth as unknown rather than guess; allow selection and let ACP surface
-        // any required authentication at run time.
-        || (row.provider === 'junie' && row.status === 'unknown')
+        // Junie has no read-only auth-status command, and omp's login may live only in the OS
+        // keychain. Both probes can confirm the CLI is installed but must report auth as unknown
+        // rather than guess; allow selection and let the CLI surface any required authentication
+        // at run time.
+        || (DELIBERATELY_UNKNOWN.has(row.provider) && row.status === 'unknown')
       ))
       .map((row) => row.provider),
   )

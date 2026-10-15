@@ -17,7 +17,7 @@ import type { RunnerId } from './agent-runner.ts';
  *  - `opencode` — `OPENCODE_CONFIG_CONTENT` (loaded after the project config, so it wins);
  *  - `junie`, `copilot` — ACP `session/new|load` `mcpServers`.
  *
- * `cursor` and `pi` have no launch-time MCP channel; a run on them gets a note instead.
+ * `cursor`, `pi` and `omp` have no launch-time MCP channel; a run on them gets a note instead.
  *
  * Pure apart from `loadPrivateMcp`, which never throws: an absent file is "no servers", a broken
  * one is "no servers" plus a problem string the run surfaces as a note.

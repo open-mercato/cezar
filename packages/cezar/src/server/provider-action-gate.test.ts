@@ -61,6 +61,19 @@ describe('provider action gate', () => {
     },
   );
 
+  it.each(['junie', 'omp'] as const)('lets a %s whose probe deliberately answers unknown run', (provider) => {
+    expect(unavailableProviderMessage([provider], {
+      providers: [{ provider, status: 'unknown', enabled: true }],
+    })).toBeNull();
+    // Only the deliberate `unknown`: a disabled row, or a real disconnect, still refuses.
+    expect(unavailableProviderMessage([provider], {
+      providers: [{ provider, status: 'unknown', enabled: false }],
+    })).toMatch(/is disabled/);
+    expect(unavailableProviderMessage([provider], {
+      providers: [{ provider, status: 'disconnected', enabled: true }],
+    })).toMatch(/credentials are unavailable/);
+  });
+
   it('reports unavailable credentials when the provider status row is missing', () => {
     expect(unavailableProviderMessage(['opencode'], { providers: [] }))
       .toBe('OpenCode credentials are unavailable. Authorize it in Settings → Agents → Providers.');

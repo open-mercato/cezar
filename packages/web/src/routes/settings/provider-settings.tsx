@@ -25,6 +25,10 @@ export const PROVIDERS = [
   { id: 'cursor', label: 'Cursor', login: 'agent login' },
   { id: 'pi', label: 'pi', login: 'pi /login' },
   { id: 'copilot', label: 'GitHub Copilot CLI', login: 'copilot login' },
+  // omp has no auth-status command: its `unknown` means "no credential cezar can see" (the login
+  // lives in omp's own agent.db), and the server's hint — run `omp` once and log in, or export a
+  // provider key — is what the card's hint-first `unknown` rendering below shows.
+  { id: 'omp', label: 'OMP', login: 'omp' },
 ] as const
 
 const providerWriteState = <T,>(value: T): Record<ProviderId, T> => ({
@@ -35,6 +39,7 @@ const providerWriteState = <T,>(value: T): Record<ProviderId, T> => ({
   cursor: value,
   pi: value,
   copilot: value,
+  omp: value,
 })
 
 const STATUS_PRESENTATION = {

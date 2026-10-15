@@ -45,6 +45,16 @@ describe('the definition reference', () => {
     for (const event of new Set(mentioned)) expect([...automationEventSchema.options, ...trackerAutomationEventSchema.options]).toContain(event);
   });
 
+  // The reference is the only place an agent learns which runners `cez automation add --runner`
+  // takes, and the suite's canonical REJECTED value is `gemini` — a list that drifts from
+  // `RUNNER_IDS` sends agents at a runner that does not exist (or hides one that does).
+  it('lists exactly the runners that exist', () => {
+    const line = AUTOMATION_SCHEMA_REFERENCE.split('\n').find((l) => l.includes('"runner":'));
+    expect(line).toBeDefined();
+    expect(line!.slice(line!.indexOf('// optional:'))).toBe(`// optional: ${RUNNER_IDS.join(' | ')}`);
+    expect(line).not.toContain('gemini');
+  });
+
   it('names every top-level, filter and task key of the storage schema', () => {
     const shape = automationDefinitionObjectSchema.shape;
     for (const key of Object.keys(shape)) {

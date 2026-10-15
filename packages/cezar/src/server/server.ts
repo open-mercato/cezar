@@ -72,7 +72,7 @@ import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from 
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { hostUsageSampler, type HostSampler } from '../core/host-usage.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
-import type { ContentBlock } from '../core/agent-runner.ts';
+import type { ContentBlock, RunnerId } from '../core/agent-runner.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import { discoverClaudeModels } from '../core/claude-model-catalog.ts';
 import { discoverCodexModels } from '../core/codex-model-catalog.ts';
@@ -2093,7 +2093,7 @@ export function createApp(deps: ServerDeps) {
       },
     )
 
-    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, opencode, cursor, pi, or copilot' }), async (c) => {
+    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: `provider must be ${PROVIDER_IDS.slice(0, -1).join(', ')}, or ${PROVIDER_IDS[PROVIDER_IDS.length - 1]}` }), async (c) => {
       const body = { data: c.req.valid('json') };
       const sid = deviceSid(c.req.header('x-cezar-sid'));
 
@@ -2199,6 +2199,7 @@ export function createApp(deps: ServerDeps) {
       ...(profile.provider === 'codex' ? { codex: profile.path } : {}),
       ...(profile.provider === 'opencode' ? { opencodeConfig: profile.path } : {}),
       ...(profile.provider === 'cursor' ? { cursor: profile.path } : {}),
+      ...(profile.provider === 'omp' ? { omp: profile.path } : {}),
     };
     const defs = listConfigFiles().filter(
       (def) => def.scope === 'user' && def.runners.includes(profile.provider),
@@ -6671,14 +6672,10 @@ export function createApp(deps: ServerDeps) {
     systemPrompt: z.string().trim().max(20_000, 'must be at most 20000 characters').nullable().optional(),
     // Branch naming instructions (spec 2026-10-11-branch-naming-instructions); null/'' clears.
     branchNaming: z.string().trim().max(4_000, 'must be at most 4000 characters').nullable().optional(),
+    // One key per runner, derived: a runner missing here is stripped by zod silently, so the
+    // request answers 200 and saves nothing (junie and copilot were, until the per-runner test).
     defaultModels: z
-      .object({
-        claude: modelPresetSchema,
-        codex: modelPresetSchema,
-        opencode: modelPresetSchema,
-        cursor: modelPresetSchema,
-        pi: modelPresetSchema,
-      })
+      .object(Object.fromEntries(RUNNER_IDS.map((runner) => [runner, modelPresetSchema])) as Record<RunnerId, typeof modelPresetSchema>)
       .optional(),
     // Per-runner "auto is the default" override (#906). Additive, and necessarily
     // its own key: clearing a preset cannot express an explicit auto, because the
@@ -6690,6 +6687,8 @@ export function createApp(deps: ServerDeps) {
         codex: autoModelSchema,
         opencode: autoModelSchema,
         pi: autoModelSchema,
+        // omp reads a native default too (`modelRoles.default`), so "auto" must be expressible for it.
+        omp: autoModelSchema,
       })
       .optional(),
     // Concurrency + memory guard (Settings → Resources). maxParallel clamps to
@@ -7461,6 +7460,10 @@ export function resumeCommand(runner: string | undefined, sessionId: string): st
     case 'copilot':
       // `--resume <id>` takes a session id, a task id or an id prefix (`copilot --help`, 1.0.88).
       return `copilot --resume ${sessionId}`;
+    case 'omp':
+      // The RPC session id is omp's own session id, which `--resume` accepts
+      // (`omp --mode rpc --resume <id>` spawns the same process resumed).
+      return `omp --resume ${sessionId}`;
     default:
       return `claude --resume ${sessionId}`;
   }

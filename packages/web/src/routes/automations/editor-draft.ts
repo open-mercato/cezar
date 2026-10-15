@@ -7,6 +7,7 @@ import {
   type AutomationTemplate,
   type CreateAutomationInput,
   type Runner,
+  runnerSchema,
   type ScheduleEvery,
 } from '@open-mercato/cezar-api-client'
 
@@ -227,14 +228,8 @@ export function templatePick(template: AutomationTemplate): TemplatePick {
   }
 }
 
-const isRunner = (value: string): value is Runner =>
-  value === 'claude' ||
-  value === 'codex' ||
-  value === 'junie' ||
-  value === 'opencode' ||
-  value === 'cursor' ||
-  value === 'pi' ||
-  value === 'copilot'
+// Derived from the contract's enum, so a runner main adds cannot be dropped here by omission.
+const isRunner = (value: string): value is Runner => runnerSchema.safeParse(value).success
 
 /** "Use this": the template fills name, kind, trigger, prompt and task; everything else stays. */
 export function applyTemplate(draft: EditorDraft, template: TemplatePick): EditorDraft {

@@ -56,6 +56,7 @@ export const RUNNERS: readonly RunnerOption[] = [
   { id: 'cursor', label: 'cursor', desc: 'Cursor Agent CLI' },
   { id: 'pi', label: 'pi', desc: 'pi CLI (provider/model)' },
   { id: 'copilot', label: 'copilot', desc: 'GitHub Copilot CLI (ACP)' },
+  { id: 'omp', label: 'omp', desc: 'OMP (RPC)' },
 ]
 
 export interface ModelPreset {
@@ -107,6 +108,13 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   // stays free text for anything the account is entitled to.
   copilot: [
     { id: '', label: 'auto', desc: 'Let Copilot pick the model' },
+  ],
+  // omp is pi's successor: the same `provider/model` convention, no host catalog in cezar yet.
+  // Presets are answered by the host's configured providers, so anything dated here would be one
+  // release away from a model the user's provider does not serve — the shared `provider/model`
+  // ids are not EXCLUSIVE to omp, exactly like pi's.
+  omp: [
+    { id: '', label: 'auto', desc: 'Use your omp default model' },
   ],
 }
 

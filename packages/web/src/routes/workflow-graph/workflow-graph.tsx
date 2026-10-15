@@ -45,7 +45,7 @@ import {
   validateWorkflowGraph,
 } from '@/api/client'
 import { queryKeys, useSkills, useWorkflowNodes, useWorkflows } from '@/api/queries'
-import type { WorkflowGraph, WorkflowGraphNode } from '@open-mercato/cezar-api-client'
+import { runnerSchema, type WorkflowGraph, type WorkflowGraphNode } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import {
   AlertDialog,
@@ -112,7 +112,8 @@ import { backLanes, CATEGORY_ORDER, edgeStyle, edgeTypes, GraphNodeView, ICONS, 
  * a node without its `measured` size is hidden until React Flow measures it again.
  */
 
-const RUNNERS = ['claude', 'codex', 'opencode', 'cursor', 'pi'] as const
+// Derived from the contract, like the composer: the server's graph schema accepts every runner.
+const RUNNERS = runnerSchema.options
 const DRAG_MIME = 'application/x-cezar-node'
 
 type FlowNodeData = {

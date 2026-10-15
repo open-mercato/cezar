@@ -36,9 +36,11 @@ import type { ProviderId } from './provider-auth.ts';
  * - **cursor** → `CURSOR_CONFIG_DIR` exists and is honoured for the default profile's home
  *   (`paths.ts`), but a second-account carry through it is unverified against a real Cursor
  *   login the way Claude's was. `null` until that is confirmed rather than assumed.
- * - **pi** → nothing documented. pi ships no per-user home variable of its own, so — exactly like
- *   OpenCode — a second account cannot be carried without silently billing the wrong one. `null`
- *   until pi documents a single home variable that moves credentials as well as config.
+ * - **pi** → nothing verified. The `PI_` spelling of omp's variable below is inherited — omp is
+ *   pi's fork and kept the names — but whether the current pi CLI reads `PI_CODING_AGENT_DIR` at
+ *   all, and whether a stored login would travel with it, is untested here. So, exactly like
+ *   OpenCode, a second account cannot be carried without risking a silent bill to the wrong one.
+ *   `null` until one variable is confirmed to move credentials as well as config.
  * - **junie** → nothing documented. Its shim's `JUNIE_DATA` relocates only the installed BINARY
  *   versions directory (`~/.local/share/junie`); the actual per-user state — `secure_credentials.json`,
  *   `config.json`, `sessions/` — lives under `~/.junie` with no override var in `junie --help`
@@ -49,6 +51,14 @@ import type { ProviderId } from './provider-auth.ts';
  *   `GITHUB_TOKEN` ahead of any stored credential regardless. `null` until a test proves one
  *   variable moves both (spec 2026-09-19-runner-seam-native-backends Q14) — being wrong here
  *   bills the wrong account.
+ * - **omp** → `PI_CODING_AGENT_DIR`. OMP owns this variable despite the legacy `PI_` spelling it
+ *   inherited as pi's fork: `omp --help` (verified against the installed 18.4.2) documents it as
+ *   the agent dir, default `~/.omp/agent`, and that dir holds `config.yml` AND the auth store
+ *   (`agent.db`) next to `AGENTS.md` and `mcp.json` — so credentials move with it, which is what
+ *   makes a profile safe here and not for pi. cezar's omp credential probe reads the same dir, so
+ *   the probe agrees with the CLI, and cezar sets the variable per account per omp run only
+ *   (`profileEnv`), never host-wide. A host that exports it for pi therefore also repoints omp's
+ *   base — omp's own behaviour, not cezar's, and the reason the pi entry above stays `null`.
  */
 export const PROFILE_ENV_VAR: Record<ProviderId, string | null> = {
   claude: 'CLAUDE_CONFIG_DIR',
@@ -58,6 +68,7 @@ export const PROFILE_ENV_VAR: Record<ProviderId, string | null> = {
   pi: null,
   junie: null,
   copilot: null,
+  omp: 'PI_CODING_AGENT_DIR',
 };
 
 /** Providers that can carry more than one account — what the UI offers "Add account" for. */
@@ -116,4 +127,6 @@ const PROFILE_DIR_MARKERS: Record<ProviderId, readonly string[]> = {
   junie: [],
   // Same for copilot (`PROFILE_ENV_VAR.copilot === null`).
   copilot: [],
+  // `PI_CODING_AGENT_DIR` moves the whole base; `config.yml` + `agent.db` are its signature files.
+  omp: ['config.yml', 'agent.db'],
 };

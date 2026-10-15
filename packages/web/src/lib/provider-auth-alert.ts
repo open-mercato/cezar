@@ -4,7 +4,11 @@ import type {
   WorkspaceUiState,
 } from '@open-mercato/cezar-api-client'
 
-const PROVIDERS: readonly ProviderId[] = ['claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot']
+import { RUNNER_ORDER } from './provider-status'
+
+// One row per contract runner, in the cockpit's order — `RUNNER_ORDER` is exhaustive over the
+// contract, so an incident for a new runner cannot be silently dropped here.
+const PROVIDERS: readonly ProviderId[] = RUNNER_ORDER
 const LABELS: Record<ProviderId, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
@@ -13,6 +17,7 @@ const LABELS: Record<ProviderId, string> = {
   pi: 'pi',
   junie: 'Junie',
   copilot: 'GitHub Copilot CLI',
+  omp: 'OMP',
 }
 
 export interface ProviderAuthIncident {

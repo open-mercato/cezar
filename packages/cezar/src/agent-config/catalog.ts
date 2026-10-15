@@ -16,7 +16,7 @@ import { PRIVATE_MCP_FILE, PRIVATE_MCP_RUNNERS, privateMcpPath } from '../core/p
  * single maintenance surface. Facts verified against primary docs 2026-07-16.
  */
 
-export type ConfigFormat = 'json' | 'jsonc' | 'toml' | 'markdown';
+export type ConfigFormat = 'json' | 'jsonc' | 'toml' | 'markdown' | 'yaml';
 export type ConfigScope = 'user' | 'project' | 'local';
 /** `settings` = behavior knobs; `memory` = instruction/markdown; `mcp` = a dedicated MCP file. */
 export type ConfigKind = 'settings' | 'memory' | 'mcp';
@@ -40,6 +40,8 @@ export interface AgentHomePaths {
   copilot: string;
   /** `~/.junie` — no relocation var documented (see `PROFILE_ENV_VAR.junie`) */
   junie: string;
+  /** `$PI_CODING_AGENT_DIR` (the whole agent dir) or `~/.omp/agent` */
+  omp: string;
 }
 
 export interface ConfigFileDef {
@@ -89,6 +91,10 @@ const COPILOT_MCP_DOCS = 'https://docs.github.com/en/copilot/how-tos/copilot-cli
 const PRIVATE_MCP_DOCS = 'https://github.com/open-mercato/cezar/blob/main/.ai/specs/2026-10-07-private-project-mcp.md';
 const COPILOT_INSTRUCTIONS_DOCS =
   'https://docs.github.com/en/copilot/customizing-copilot/adding-repository-custom-instructions-for-github-copilot';
+// OMP ships its docs in the CLI; the published copies live on omp.sh (verified 2026-09-28).
+const OMP_CONFIG_DOCS = 'https://omp.sh/docs/settings';
+const OMP_MEMORY_DOCS = 'https://omp.sh/docs/context-files';
+const OMP_MCP_DOCS = 'https://omp.sh/docs/mcp';
 
 /**
  * The table. Order is presentation order: per runner, then user → project →
@@ -438,6 +444,92 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     docsUrl: CURSOR_CLI_CONFIG_DOCS,
   },
 
+  // ---- OMP (pi's successor; cezar's `omp` runner drives its `--mode rpc`) ----
+  {
+    id: 'omp.user.settings',
+    runners: ['omp'],
+    kind: 'settings',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.omp, 'config.yml'),
+    label: '~/.omp/agent/config.yml',
+    format: 'yaml',
+    tracked: 'outside-repo',
+    modelKey: 'modelRoles.default',
+    modelPriority: 1,
+    precedence:
+      'The main persistent settings file. Effective precedence (low → high): built-in defaults, global config, project config, CLI overlays, runtime overrides, setting env var. The legacy settings.json is migrated into config.yml once; MCP servers live in dedicated mcp.json files, not here.',
+    docsUrl: OMP_CONFIG_DOCS,
+  },
+  {
+    id: 'omp.project.settings',
+    runners: ['omp'],
+    kind: 'settings',
+    scope: 'project',
+    resolve: (repo) => join(repo, '.omp', 'config.yml'),
+    label: '.omp/config.yml',
+    format: 'yaml',
+    tracked: 'tracked',
+    modelKey: 'modelRoles.default',
+    modelPriority: 2,
+    precedence:
+      'Loaded when the working directory has a non-empty `.omp/` (no ancestor walk). Deep-merged over the global config; array settings REPLACE the lower layer, they do not append. A legacy .omp/settings.json is still read underneath it. Runs read the committed copy.',
+    docsUrl: OMP_CONFIG_DOCS,
+  },
+  {
+    id: 'omp.user.memory',
+    runners: ['omp'],
+    kind: 'memory',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.omp, 'AGENTS.md'),
+    label: '~/.omp/agent/AGENTS.md',
+    format: 'markdown',
+    tracked: 'outside-repo',
+    precedence:
+      'User-level context for every session unless the `native` discovery provider is disabled. One user context file survives across providers and `~/.omp/agent/AGENTS.md` has the highest priority, shadowing user-level CLAUDE.md / GEMINI.md / opencode AGENTS.md.',
+    docsUrl: OMP_MEMORY_DOCS,
+  },
+  {
+    id: 'omp.project.memory',
+    runners: ['omp'],
+    kind: 'memory',
+    scope: 'project',
+    resolve: (repo) => join(repo, '.omp', 'AGENTS.md'),
+    label: '.omp/AGENTS.md',
+    format: 'markdown',
+    tracked: 'tracked',
+    precedence:
+      'Project context, read only from the NEAREST non-empty `.omp/` directory found walking from cwd toward the repo root; a missing file does not make discovery continue upward. Runs read the committed copy.',
+    docsUrl: OMP_MEMORY_DOCS,
+  },
+  {
+    id: 'omp.user.mcp',
+    runners: ['omp'],
+    kind: 'mcp',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.omp, 'mcp.json'),
+    label: '~/.omp/agent/mcp.json',
+    format: 'json',
+    tracked: 'outside-repo',
+    holdsMcp: true,
+    precedence:
+      'OMP-native user MCP config (the `mcpServers` map). A named profile (`omp --profile <name>`) uses ~/.omp/profiles/<name>/agent/mcp.json instead and never sees this file.',
+    docsUrl: OMP_MCP_DOCS,
+  },
+  {
+    id: 'omp.project.mcp',
+    runners: ['omp'],
+    kind: 'mcp',
+    scope: 'project',
+    resolve: (repo) => join(repo, '.omp', 'mcp.json'),
+    label: '.omp/mcp.json',
+    format: 'json',
+    tracked: 'tracked',
+    holdsMcp: true,
+    precedence:
+      'OMP-native project MCP config, keyed to the working directory and applied under every profile. A server defined only here resolves the active profile\'s own stored credential when one exists.',
+    docsUrl: OMP_MCP_DOCS,
+  },
+
   // ---- Shared: cezar's private, per-project MCP servers (spec 2026-10-07-private-project-mcp) ----
   {
     id: 'cezar.private.mcp',
@@ -451,14 +543,14 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     holdsMcp: true,
     private: true,
     precedence:
-      'Private MCP servers for this project only — same shape as .mcp.json (key: mcpServers). Lives in cezar\'s git-ignored data dir, never in a worktree, so it is never committed. cezar adds these servers to every run of this project at launch (Claude --mcp-config, Codex thread config, OpenCode OPENCODE_CONFIG_CONTENT, Junie/Copilot ACP session); the agent\'s own MCP config still loads, and on a name clash this file wins. Cursor and pi have no launch-time MCP channel.',
+      'Private MCP servers for this project only — same shape as .mcp.json (key: mcpServers). Lives in cezar\'s git-ignored data dir, never in a worktree, so it is never committed. cezar adds these servers to every run of this project at launch (Claude --mcp-config, Codex thread config, OpenCode OPENCODE_CONFIG_CONTENT, Junie/Copilot ACP session); the agent\'s own MCP config still loads, and on a name clash this file wins. Cursor, pi and omp have no launch-time MCP channel.',
     docsUrl: PRIVATE_MCP_DOCS,
   },
 
-  // ---- Shared: <repo>/AGENTS.md is read by Codex, OpenCode AND Copilot ----
+  // ---- Shared: <repo>/AGENTS.md is read by Codex, OpenCode, Copilot AND OMP ----
   {
     id: 'project.agents',
-    runners: ['codex', 'opencode', 'copilot'],
+    runners: ['codex', 'opencode', 'copilot', 'omp'],
     kind: 'memory',
     scope: 'project',
     resolve: (repo) => join(repo, 'AGENTS.md'),
@@ -466,7 +558,7 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     format: 'markdown',
     tracked: 'tracked',
     precedence:
-      'Read by Codex, OpenCode and Copilot CLI (Claude ignores it). Codex concatenates it root-down; OpenCode uses the first match and prefers it over CLAUDE.md; Copilot reads it alongside .github/copilot-instructions.md unless --no-custom-instructions is set. Runs read the committed copy.',
+      'Read by Codex, OpenCode, Copilot CLI and OMP (Claude ignores it). Codex concatenates it root-down; OpenCode uses the first match and prefers it over CLAUDE.md; Copilot reads it alongside .github/copilot-instructions.md unless --no-custom-instructions is set; OMP discovers standalone AGENTS.md files walking up from cwd to the repo root. Runs read the committed copy.',
     docsUrl: OPENCODE_RULES_DOCS,
   },
 ];

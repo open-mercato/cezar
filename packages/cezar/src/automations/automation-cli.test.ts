@@ -220,6 +220,9 @@ describe('cez automation', () => {
     const help = harness([]);
     expect(await runAutomationCommand(['help'], {}, help.io)).toBe(0);
     expect(help.out[0]).toContain('cez automation create');
+    // `--runner` advertises the runners that exist — derived, so it cannot drop a runner the
+    // server accepts or name one it rejects.
+    expect(help.out[0]).toContain(`[--runner ${RUNNER_IDS.join('|')}]`);
     for (const runner of RUNNER_IDS) expect(containsRunnerToken(help.out[0] ?? '', runner)).toBe(true);
     const unknown = harness([]);
     expect(await runAutomationCommand(['frobnicate'], env, unknown.io)).toBe(2);
