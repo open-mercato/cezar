@@ -107,6 +107,12 @@ export const ADD_PROJECT_DIALOGS = ['new', 'clone', 'folder'] as const;
 export const addProjectDialogSchema = z.enum(ADD_PROJECT_DIALOGS);
 export type AddProjectDialog = z.infer<typeof addProjectDialogSchema>;
 
+/** How a skills-update apply whose request got no answer ended — `skills_update_apply_dropped`'s
+ *  label (telemetry edd8c83e). */
+export const SKILLS_UPDATE_DROP_OUTCOMES = ['recovered', 'not_applied', 'unreachable', 'timed_out'] as const;
+export const skillsUpdateDropOutcomeSchema = z.enum(SKILLS_UPDATE_DROP_OUTCOMES);
+export type SkillsUpdateDropOutcome = z.infer<typeof skillsUpdateDropOutcomeSchema>;
+
 /**
  * `POST /api/v1/telemetry/event` — a user action only the cockpit can name. Every event has its
  * own closed label set, so this relay can never carry free text. `204`, like the other two.
@@ -118,5 +124,7 @@ export const telemetryEventInputSchema = z.discriminatedUnion('event', [
   /** One of the sidebar's "Add project" dialogs was opened: New project, Clone from GitHub, or
    *  Open local folder. With `project_added`, the funnel of each add flow. */
   z.object({ event: z.literal('add_project_opened'), label: addProjectDialogSchema }),
+  /** A skills-update apply lost its connection, and how following the server's state ended. */
+  z.object({ event: z.literal('skills_update_apply_dropped'), label: skillsUpdateDropOutcomeSchema }),
 ]);
 export type TelemetryEventInput = z.infer<typeof telemetryEventInputSchema>;

@@ -83,6 +83,16 @@ describe('telemetry routes', () => {
     expect(track).not.toHaveBeenCalled();
   });
 
+  it('relays skills_update_apply_dropped with its closed outcome labels only', async () => {
+    for (const label of ['recovered', 'not_applied', 'unreachable', 'timed_out']) {
+      expect((await post('/api/v1/telemetry/event', { event: 'skills_update_apply_dropped', label })).status).toBe(204);
+      expect(track).toHaveBeenCalledWith('skills_update_apply_dropped', { label }, { sid: undefined });
+    }
+    vi.mocked(track).mockClear();
+    expect((await post('/api/v1/telemetry/event', { event: 'skills_update_apply_dropped', label: 'fetch failed' })).status).toBe(400);
+    expect(track).not.toHaveBeenCalled();
+  });
+
   it('relays a cockpit error and rejects an oversized context', async () => {
     const res = await post('/api/v1/telemetry/error', { type: 'TypeError', message: 'boom', context: { 'page.route': '/tasks' } });
     expect(res.status).toBe(204);

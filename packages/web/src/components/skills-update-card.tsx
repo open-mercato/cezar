@@ -17,8 +17,8 @@ import { toast } from '@/components/ui/toaster'
 import { useNavigate } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 import { startedRunPath } from '@/routes/new-task-form'
-import type { SkillsUpdateState } from '@open-mercato/cezar-api-client'
-import { trackMessageSent } from '@/lib/telemetry'
+import type { SkillsUpdateDropOutcome, SkillsUpdateState } from '@open-mercato/cezar-api-client'
+import { trackMessageSent, trackSkillsUpdateApplyDropped } from '@/lib/telemetry'
 
 type UpdateRequest =
   | { action: 'check'; seq: number }
@@ -41,6 +41,7 @@ export async function applySkillsUpdateSettled(
     read?: typeof getSkillsUpdate
     wait?: (ms: number) => Promise<void>
     now?: () => number
+    onDropped?: (outcome: SkillsUpdateDropOutcome) => void
   } = {},
 ): Promise<SkillsUpdateState> {
   const {
@@ -48,24 +49,37 @@ export async function applySkillsUpdateSettled(
     read = getSkillsUpdate,
     wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now = Date.now,
+    onDropped = trackSkillsUpdateApplyDropped,
   } = deps
   try {
     return await apply(projectId)
   } catch (error) {
     if (!(error instanceof ApiError) || (error.status !== 0 && error.status !== 409)) throw error
+    // Only a lost request is counted; a 409 is ordinary contention, not a transport fault.
+    const settle = (outcome: SkillsUpdateDropOutcome) => {
+      if (error.status === 0) onDropped(outcome)
+    }
     const deadline = now() + SETTLE_LIMIT_MS
     for (;;) {
       let state: SkillsUpdateState
       try {
         state = await read(projectId)
       } catch {
+        settle('unreachable')
         throw error
       }
       if (state.status !== 'updating') {
-        if (state.updatedAt && state.updatedAt !== previousUpdatedAt) return state
+        if (state.updatedAt && state.updatedAt !== previousUpdatedAt) {
+          settle('recovered')
+          return state
+        }
+        settle('not_applied')
         throw error
       }
-      if (now() >= deadline) throw error
+      if (now() >= deadline) {
+        settle('timed_out')
+        throw error
+      }
       await wait(SETTLE_POLL_MS)
     }
   }
