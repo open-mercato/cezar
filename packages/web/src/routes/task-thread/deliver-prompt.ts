@@ -45,7 +45,22 @@ export function deliveryPath(status: RunStatus): DeliveryPath {
 
 export type DeliverPrompt = (text: string, images: AttachmentEntry[]) => Promise<unknown>
 
-export function useDeliverPrompt(run: ApiRun, continueAction: ContinueAction): DeliverPrompt {
+/** A `running` run can be between sessions: settling after its last turn, or between two workflow
+ *  steps. `/messages` answers `session closed` while the record still names the live path, so wait
+ *  (bounded, ~10s) for it to settle into Continue or for the next session to open (telemetry 1408d7cb). */
+export const SESSION_GAP_RETRY_DELAYS_MS = [250, 500, 1_000, 1_000, 2_000, 2_000, 3_000] as const
+
+const delaySessionGapRetry = (delayMs: number) => new Promise<void>((resolve) => setTimeout(resolve, delayMs))
+
+function isSessionClosed(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.status === 409 && error.message === 'session closed'
+}
+
+export function useDeliverPrompt(
+  run: ApiRun,
+  continueAction: ContinueAction,
+  wait: (delayMs: number) => Promise<void> = delaySessionGapRetry,
+): DeliverPrompt {
   const queryClient = useQueryClient()
   // `mutateAsync` is referentially stable (the mutation RESULT is not — see the thread's `edit`
   // memo for the same rule), so this callback is stable across the streaming re-renders a live
@@ -65,28 +80,44 @@ export function useDeliverPrompt(run: ApiRun, continueAction: ContinueAction): D
         return await deliver(attempted)
       } catch (error) {
         if (!(error instanceof ApiError) || error.status !== 409) throw error
-        let fresh: ApiRun
-        try {
-          fresh = await queryClient.fetchQuery({ ...runQueryOptions(run.id), staleTime: 0 })
-        } catch {
-          // The refetch is the recovery, not the delivery: if it cannot answer, the user still
-          // gets the server's own words about the send they made.
-          throw error
+        let refusal: ApiError = error
+        for (let retry = 0; ; retry += 1) {
+          let fresh: ApiRun
+          try {
+            fresh = await queryClient.fetchQuery({ ...runQueryOptions(run.id), staleTime: 0 })
+          } catch {
+            // The refetch is the recovery, not the delivery: if it cannot answer, the user still
+            // gets the server's own words about the send they made.
+            throw refusal
+          }
+          const path = deliveryPath(fresh.status)
+          if (path === attempted) {
+            // Only the live path's `session closed` is a transient gap; any other agreeing 409 is
+            // the server's considered answer.
+            const delayMs = attempted === 'live' && isSessionClosed(refusal) ? SESSION_GAP_RETRY_DELAYS_MS[retry] : undefined
+            if (delayMs === undefined) throw refusal
+            await wait(delayMs)
+            try {
+              return await deliver('live')
+            } catch (retryError) {
+              if (!isSessionClosed(retryError)) throw retryError
+              refusal = retryError
+              continue
+            }
+          }
+          // Nothing to say and the run is already live: the empty submit was "reopen the session",
+          // and it is open. The 409 says exactly that, and the refetch above has already put the
+          // truth in the cache.
+          if (path === 'live' && text.trim() === '' && images.length === 0) throw refusal
+          // A record with no session to resume cannot take this prompt either — `POST /continue`
+          // would answer its own 409, which would read as the new failure rather than the real one.
+          // Judged on the FRESH record: `continueAction.available` was computed from the stale one,
+          // which in this direction is precisely the record that says the run is still live.
+          if (path === 'continue' && lastSessionId(fresh) === undefined) throw refusal
+          return await deliver(path)
         }
-        const path = deliveryPath(fresh.status)
-        if (path === attempted) throw error
-        // Nothing to say and the run is already live: the empty submit was "reopen the session",
-        // and it is open. The 409 says exactly that, and the refetch above has already put the
-        // truth in the cache.
-        if (path === 'live' && text.trim() === '' && images.length === 0) throw error
-        // A record with no session to resume cannot take this prompt either — `POST /continue`
-        // would answer its own 409, which would read as the new failure rather than the real one.
-        // Judged on the FRESH record: `continueAction.available` was computed from the stale one,
-        // which in this direction is precisely the record that says the run is still live.
-        if (path === 'continue' && lastSessionId(fresh) === undefined) throw error
-        return await deliver(path)
       }
     },
-    [continueWith, queryClient, run.id, run.status, sendMessageAsync],
+    [continueWith, queryClient, run.id, run.status, sendMessageAsync, wait],
   )
 }

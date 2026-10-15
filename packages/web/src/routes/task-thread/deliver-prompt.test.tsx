@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import type { ApiRun, RunStatus } from '@open-mercato/cezar-api-client'
 
-import { deliveryPath, useDeliverPrompt } from './deliver-prompt'
+import { SESSION_GAP_RETRY_DELAYS_MS, deliveryPath, useDeliverPrompt } from './deliver-prompt'
 import { useContinueAction } from './follow-up-engine'
 
 /**
@@ -74,13 +74,17 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
 }
 
 /** The two hooks the thread wires together, driven from one harness. */
-async function renderDeliver(record: ApiRun, overrides: Record<string, () => Response> = {}) {
+async function renderDeliver(
+  record: ApiRun,
+  overrides: Record<string, () => Response> = {},
+  wait: (delayMs: number) => Promise<void> = async () => {},
+) {
   const sent = stubFetch(overrides)
   const client = createQueryClient()
   const view = renderHook(
     () => {
       const action = useContinueAction(record)
-      return { action, deliver: useDeliverPrompt(record, action) }
+      return { action, deliver: useDeliverPrompt(record, action, wait) }
     },
     {
       wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
@@ -186,6 +190,78 @@ describe('useDeliverPrompt', () => {
 
     await expect(deliver('carry on')).rejects.toThrow('session closed')
     expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(0)
+  })
+
+  /** Answers from `responses` in order, repeating the last one. */
+  const sequence = (...responses: Array<() => Response>) => {
+    let call = 0
+    return () => responses[Math.min(call++, responses.length - 1)]!()
+  }
+
+  it('telemetry 1408d7cb: a session that closed while the run settles waits for Continue instead of failing', async () => {
+    const waits: number[] = []
+    const { sent, deliver } = await renderDeliver(
+      run('running'),
+      {
+        'POST /api/v1/runs/r1/messages': () => jsonResponse({ error: 'session closed' }, 409),
+        // Still `running` while the engine settles the record, then parked at review.
+        'GET /api/v1/runs/r1': sequence(() => jsonResponse(run('running')), () => jsonResponse(run('review'))),
+        'POST /api/v1/runs/r1/continue': () => jsonResponse({ continued: true }),
+      },
+      async (delayMs) => {
+        waits.push(delayMs)
+      },
+    )
+
+    await expect(deliver('carry on')).resolves.toBeTruthy()
+
+    expect(waits).toEqual([SESSION_GAP_RETRY_DELAYS_MS[0]])
+    expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(2)
+    expect(posts(sent, '/api/v1/runs/r1/continue')[0]?.body).toMatchObject({ text: 'carry on' })
+  })
+
+  it('a message sent between two workflow steps reaches the next step’s session', async () => {
+    const { sent, deliver } = await renderDeliver(run('running'), {
+      'POST /api/v1/runs/r1/messages': sequence(
+        () => jsonResponse({ error: 'session closed' }, 409),
+        () => jsonResponse({ delivered: true }),
+      ),
+      'GET /api/v1/runs/r1': () => jsonResponse(run('running')),
+    })
+
+    await expect(deliver('carry on')).resolves.toBeTruthy()
+    expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(2)
+    expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(0)
+  })
+
+  it('the wait is bounded: a run that never settles reports the refusal', async () => {
+    const waits: number[] = []
+    const { sent, deliver } = await renderDeliver(
+      run('running'),
+      {
+        'POST /api/v1/runs/r1/messages': () => jsonResponse({ error: 'session closed' }, 409),
+        'GET /api/v1/runs/r1': () => jsonResponse(run('running')),
+      },
+      async (delayMs) => {
+        waits.push(delayMs)
+      },
+    )
+
+    await expect(deliver('carry on')).rejects.toThrow('session closed')
+    expect(waits).toEqual([...SESSION_GAP_RETRY_DELAYS_MS])
+    expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(SESSION_GAP_RETRY_DELAYS_MS.length + 1)
+    expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(0)
+  })
+
+  it('a different live 409 the fresh record agrees with is not retried', async () => {
+    const { sent, deliver } = await renderDeliver(run('running'), {
+      'POST /api/v1/runs/r1/messages': () =>
+        jsonResponse({ error: 'Claude Code is disabled. Enable it in Settings → Agents → Providers.' }, 409),
+      'GET /api/v1/runs/r1': () => jsonResponse(run('running')),
+    })
+
+    await expect(deliver('go on')).rejects.toThrow('Claude Code is disabled')
+    expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(1)
   })
 
   it('a non-409 failure is reported as it comes — no refetch, no second attempt', async () => {
