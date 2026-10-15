@@ -3,7 +3,7 @@ import {
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
   trackerCredentialsSchema, trackerItemParamsSchema, trackerAssociationInputSchema, type TrackerChangedEvent,
   secretParamsSchema, secretValueInputSchema, type SecretsList, type SecretValueInput,
-  e2eSetupInputSchema, type E2eStatus,
+  e2eSetupInputSchema, type E2eStatus, taskActionSurfaceSchema,
 } from '@open-mercato/cezar-contract';
 import { SecretStore, SecretsError, type SecretScopeRef } from '../workspace/secrets.ts';
 import { E2E_SETUP_TASK, e2eCredentialsAmong, e2eSetupWorkflow, latestE2eSetupRun, readE2eStatus, setupInFlight } from '../e2e-setup.ts';
@@ -80,6 +80,7 @@ import {
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
 import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
+import { hasTaskOrAttachments, TASK_OR_ATTACHMENTS_ISSUE } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { hostUsageSampler, type HostSampler } from '../core/host-usage.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
@@ -702,8 +703,9 @@ const startRunSchema = z
     // The primary agent prompt handed to the spawned runner. Bounded like the
     // other prompt fields (`systemPrompt` 20k, message `text` 100k) so an
     // unbounded body can't be piped into a spawned process (#429). 100k chars
-    // (~25k tokens) is well past any hand-written task.
-    task: z.string().min(1).max(100_000, 'must be at most 100000 characters'),
+    // (~25k tokens) is well past any hand-written task. May be empty when attachments carry the
+    // task (telemetry 18c930de) — the refine below requires one or the other.
+    task: z.string().max(100_000, 'must be at most 100000 characters'),
     model: z.string().optional(),
     // Agent backend for this task (falls back to config `defaultRunner`).
     runner: z.enum(RUNNER_IDS).optional(),
@@ -751,7 +753,8 @@ const startRunSchema = z
   })
   .refine((b) => Boolean(b.workflow) !== Boolean(b.steps), {
     message: 'provide either "workflow" or "steps", not both',
-  });
+  })
+  .refine(hasTaskOrAttachments, TASK_OR_ATTACHMENTS_ISSUE);
 
 const pickSchema = z.object({
   runId: z.string().min(1),
@@ -1067,6 +1070,7 @@ type TodoStartEnv = ProjectApiEnv & { Variables: { todo: TodoItem } };
 // un-archives. A tiny schema so the route follows the safeParse convention.
 const archiveSchema = z.object({
   archived: z.boolean().optional(),
+  surface: taskActionSurfaceSchema.optional(),
 });
 
 // `POST /api/v1/runs/:id/pin` (#935) — no body pins; `{pinned:false}` unpins. The archive
@@ -1074,6 +1078,7 @@ const archiveSchema = z.object({
 // "absent means do the thing" would be one more rule for a client to remember.
 const pinSchema = z.object({
   pinned: z.boolean().optional(),
+  surface: taskActionSurfaceSchema.optional(),
 });
 
 // Request-body size guards (#429). A generous global cap keeps a single
@@ -4419,8 +4424,8 @@ export function createApp(deps: ServerDeps) {
       const retiresQuestion = parsed.data.archived !== false && store.getRun(id)?.awaitingAnswerSince !== undefined;
       const run = store.setArchived(id, parsed.data.archived !== false);
       if (run && retiresQuestion) manager.notifyQuestionRetired?.(id);
-      // Labelled with the task's outcome: which results get kept, which get put away.
-      if (run) track(parsed.data.archived !== false ? 'task_archived' : 'task_unarchived', { label: run.status }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
+      // Labelled with the button that did it.
+      if (run) track(parsed.data.archived !== false ? 'task_archived' : 'task_unarchived', { label: parsed.data.surface ?? 'api' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return run ? c.json(run) : c.json({ error: 'not found' }, 404);
     })
 
@@ -4430,9 +4435,10 @@ export function createApp(deps: ServerDeps) {
     // event and no new response shape.
     .post('/runs/:id/pin', jsonZodValidator(pinSchema, { absent: ({}) }), (c) => {
       const { store } = c.get('project');
-      const pinned = c.req.valid('json').pinned !== false;
+      const { pinned: pin, surface } = c.req.valid('json');
+      const pinned = pin !== false;
       const run = store.setPinned(c.req.param('id'), pinned);
-      if (run) track(pinned ? 'task_pinned' : 'task_unpinned', { label: run.status }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
+      if (run) track(pinned ? 'task_pinned' : 'task_unpinned', { label: surface ?? 'api' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return run ? c.json(run) : c.json({ error: 'not found' }, 404);
     })
 

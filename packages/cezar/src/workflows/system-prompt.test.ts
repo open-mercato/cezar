@@ -91,6 +91,10 @@ describe('skill-aware task naming (#432)', () => {
     // A bare number without a skill stays bare — no `469: 469`.
     expect(makeRunTitle('469', workflow)).toBe('469');
     expect(makeRunTitle('#469', workflow)).toBe('#469');
+    // An attachment-only task (telemetry 18c930de) is named after its attachments.
+    expect(makeRunTitle('', workflow, 1)).toBe('Task from 1 attachment');
+    expect(makeRunTitle('', workflow, 2)).toBe('Task from 2 attachments');
+    expect(makeRunTitle('', workflow)).toBe('(untitled task)');
   });
 });
 

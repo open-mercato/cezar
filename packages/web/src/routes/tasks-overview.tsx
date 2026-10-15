@@ -1434,7 +1434,7 @@ export function TasksOverviewRoute() {
     onError: (error: Error) => toast(error.message, { tone: 'danger' }),
   })
   // Pinning (#935) — this page is the scoped project's own table, so no explicit project id.
-  const pin = usePinRun()
+  const pin = usePinRun('tasks_table')
   const now = useNow(30_000)
   const taskTableColumns = useTaskTableColumns()
   const [origin, setOrigin] = useTaskOrigin()

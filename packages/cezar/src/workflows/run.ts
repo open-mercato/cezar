@@ -997,6 +997,9 @@ export function contentBlocksOf(content: readonly PastedContent[]): ContentBlock
   return content.filter((b): b is ContentBlock => b.type !== 'file');
 }
 
+/** The opening prompt of a task given as attachments alone (telemetry 18c930de). */
+export const ATTACHMENT_ONLY_TASK = 'The user attached the files below without a written task — work out what they need from them.';
+
 /**
  * Plain-text note listing the absolute paths of pasted attachments, appended
  * to the message that carries them (#357). The base64 image blocks stay in
@@ -1440,7 +1443,7 @@ export class RunManager {
       ...(input.forkRef && input.worktree === false ? { worktree: undefined } : {}),
     };
     const run = this.store.createRun({
-      title: makeRunTitle(input.task, workflow) + (group ? ` (${group.variant})` : ''),
+      title: makeRunTitle(input.task, workflow, input.images?.length) + (group ? ` (${group.variant})` : ''),
       workflow: workflow.name,
       task: input.task,
       model: effectiveInput.model,
@@ -1515,7 +1518,12 @@ export class RunManager {
     // the model answers. Never awaited here, never fails the run. The same call
     // also answers the task branch when instructions are set; `execute` waits
     // for that part, bounded, before it forks.
-    this.pendingBranchNames.set(run.id, this.autoNameRun(run.id, skillHint, input.task));
+    // An attachment-only task gives the namer nothing to read; the turn-end refresh names it instead
+    // (under `branchNaming` its branch keeps the default `cez/<id8>`).
+    this.pendingBranchNames.set(
+      run.id,
+      input.task.trim() ? this.autoNameRun(run.id, skillHint, input.task) : Promise.resolve(undefined),
+    );
     // `default` = no explicit pick; the runner/CLI chose. Never the prompt itself.
     track(
       'task_start',
@@ -5884,7 +5892,10 @@ export class RunManager {
     graphHooks?: { resumeSessionId?: string; lastTurn?: { text: string } },
   ): Promise<string | null> {
     let systemPrompt: string | undefined;
-    const rawPrompt = applyTemplate(step.prompt ?? '{{task}}', input.task);
+    // An attachment-only task (telemetry 18c930de) — the note stands in for the missing text, so a
+    // step template (`Review: {{task}}`) still reads as a sentence.
+    const taskText = input.task.trim() === '' && attachments.length ? ATTACHMENT_ONLY_TASK : input.task;
+    const rawPrompt = applyTemplate(step.prompt ?? '{{task}}', taskText);
     // Install the selected skill and its companions where the agent's own skill lookup looks.
     const installed = await this.provisionTaskSkills(state, { stepSkill: step.skill, slash: leadingSlashSkillName(rawPrompt) });
     if (installed.length) {
@@ -7450,7 +7461,7 @@ function applyTemplate(template: string, task: string): string {
  * when no model is available (#432, spec 2026-07-17-task-auto-naming). When
  * the task references a PR/issue, the number leads: `469: /om-auto-review-pr`.
  */
-export function makeRunTitle(task: string, workflow: WorkflowDef): string {
+export function makeRunTitle(task: string, workflow: WorkflowDef, attachmentCount = 0): string {
   const firstLine = task.trim().split('\n')[0] ?? '';
   const skill = workflow.steps.find((step) => stepKind(step) === 'agent' && step.skill)?.skill?.trim();
   const contextual = skill && !firstLine.startsWith(`/${skill}`)
@@ -7467,7 +7478,11 @@ export function makeRunTitle(task: string, workflow: WorkflowDef): string {
     refNumber !== undefined && !body.trimStart().replace(/^#/, '').startsWith(String(refNumber))
       ? `${refNumber}: ${body}`
       : body;
-  const chars = [...(prefixed || '(untitled task)')];
+  // An attachment-only task has no first line; the namer replaces this once the model answers.
+  const fallback = attachmentCount > 0
+    ? `Task from ${attachmentCount} attachment${attachmentCount > 1 ? 's' : ''}`
+    : '(untitled task)';
+  const chars = [...(prefixed || fallback)];
   return chars.length > 80 ? `${chars.slice(0, 79).join('').trimEnd()}…` : chars.join('');
 }
 

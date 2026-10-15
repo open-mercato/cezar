@@ -120,6 +120,18 @@ export function attachmentCountBucket(count: number): AttachmentCountBucket {
   return '11-20';
 }
 
+/** Which button archived or pinned a task — the label of `task_(un)archived` / `task_(un)pinned`.
+ *  Sent as `surface` in the archive/pin body; absent (a non-cockpit caller) labels as `api`. */
+export const TASK_ACTION_SURFACES = ['sidebar', 'tasks_table', 'all_tasks', 'task_view'] as const;
+export const taskActionSurfaceSchema = z.enum(TASK_ACTION_SURFACES);
+export type TaskActionSurface = z.infer<typeof taskActionSurfaceSchema>;
+
+/** How a skills-update apply whose request got no answer ended — `skills_update_apply_dropped`'s
+ *  label (telemetry edd8c83e). */
+export const SKILLS_UPDATE_DROP_OUTCOMES = ['recovered', 'not_applied', 'unreachable', 'timed_out'] as const;
+export const skillsUpdateDropOutcomeSchema = z.enum(SKILLS_UPDATE_DROP_OUTCOMES);
+export type SkillsUpdateDropOutcome = z.infer<typeof skillsUpdateDropOutcomeSchema>;
+
 /**
  * `POST /api/v1/telemetry/event` — a user action only the cockpit can name. Every event has its
  * own closed label set, so this relay can never carry free text. `204`, like the other two.
@@ -135,5 +147,7 @@ export const telemetryEventInputSchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('attachments_sent'), label: attachmentCountBucketSchema }),
   /** A send hit an expired staged upload; the composer re-staged and resent once — the outcome. */
   z.object({ event: z.literal('attachments_restaged'), label: z.enum(['recovered', 'failed']) }),
+  /** A skills-update apply lost its connection, and how following the server's state ended. */
+  z.object({ event: z.literal('skills_update_apply_dropped'), label: skillsUpdateDropOutcomeSchema }),
 ]);
 export type TelemetryEventInput = z.infer<typeof telemetryEventInputSchema>;

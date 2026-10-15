@@ -6,6 +6,7 @@ import {
   TELEMETRY_ROUTE_SEGMENTS,
   type AddProjectDialog,
   type MessageSurface,
+  type SkillsUpdateDropOutcome,
   type TelemetryErrorInput,
 } from '@open-mercato/cezar-api-client'
 
@@ -70,6 +71,12 @@ export function trackAttachmentsRestaged(outcome: 'recovered' | 'failed'): void 
 /** One of the "Add project" dialogs was opened (New project, Clone from GitHub, Open local folder). */
 export function trackAddProjectOpened(dialog: AddProjectDialog): void {
   send('/api/v1/telemetry/event', { event: 'add_project_opened', label: dialog })
+}
+
+/** A skills-update apply got no answer; how following the server's state ended. A `recovered`
+ *  drop shows no error, so this is the only signal it happened (telemetry edd8c83e). */
+export function trackSkillsUpdateApplyDropped(outcome: SkillsUpdateDropOutcome): void {
+  send('/api/v1/telemetry/event', { event: 'skills_update_apply_dropped', label: outcome })
 }
 
 /** Whether a pathname is a page the user actually sees. Everything else outside these roots is

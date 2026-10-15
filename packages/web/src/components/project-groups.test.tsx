@@ -390,7 +390,7 @@ describe('ProjectGroups', () => {
     fireEvent.click(within(group('cezar')).getByRole('button', { name: 'Archive task' }))
     await waitFor(() =>
       expect(posts).toEqual([
-        { path: '/api/v1/p/cezar/runs/other-project-task/archive', body: { archived: true } },
+        { path: '/api/v1/p/cezar/runs/other-project-task/archive', body: { archived: true, surface: 'sidebar' } },
       ]),
     )
   })

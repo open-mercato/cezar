@@ -2790,7 +2790,7 @@ export async function prRepoArgs(worktree: string, baseRemote: string, pushRemot
  * the cezar footer.
  */
 export function buildPrBody(handoffText: string, task: string): string {
-  const goal = section(handoffText, '## Goal') || task.trim();
+  const goal = section(handoffText, '## Goal') || task.trim() || '(given as attachments only)';
   const progress = section(handoffText, '## Progress log')
     .split('\n')
     .filter((l) => l.trim())
