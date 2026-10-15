@@ -127,7 +127,16 @@ export function dictationNotice(code: string | undefined): DictationNotice | nul
 /** Web Speech needs the microphone, and browsers grant it only to a secure context — over plain
  *  http to a non-loopback host (a hosted cockpit) every start ends in `not-allowed`. */
 function dictationAvailable(): boolean {
-  return speechRecognitionCtor() !== undefined && window.isSecureContext !== false
+  return !serviceRefused && speechRecognitionCtor() !== undefined && window.isSecureContext !== false
+}
+
+/** Module-level, not per hook: a `service-not-allowed` browser refuses every composer, so a
+ *  remount (another task, the new-task composer) must not offer the mic again. */
+let serviceRefused = false
+
+/** Test seam: forget a `service-not-allowed` seen by an earlier case. */
+export function resetDictationAvailability(): void {
+  serviceRefused = false
 }
 
 export function useDictation(onNotice: (notice: DictationNotice) => void): Dictation {
@@ -173,7 +182,10 @@ export function useDictation(onNotice: (notice: DictationNotice) => void): Dicta
       }
       recognition.onerror = (event) => {
         teardown()
-        if (event.error === 'service-not-allowed') setSupported(false)
+        if (event.error === 'service-not-allowed') {
+          serviceRefused = true
+          setSupported(false)
+        }
         const notice = dictationNotice(event.error)
         if (notice) onNotice(notice)
       }

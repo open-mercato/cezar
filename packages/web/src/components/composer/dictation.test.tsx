@@ -11,6 +11,7 @@ import {
   dictationNotice,
   foldResults,
   formatElapsed,
+  resetDictationAvailability,
   type SpeechRecognitionLike,
   type SpeechResultEventLike,
 } from './dictation'
@@ -25,6 +26,7 @@ afterEach(() => {
   resetToasts()
   vi.unstubAllGlobals()
   vi.mocked(reportDictationFailed).mockClear()
+  resetDictationAvailability()
 })
 
 describe('dictationNotice', () => {
@@ -232,6 +234,10 @@ describe('the dictation overlay (paseo pattern)', () => {
     renderComposer()
     act(() => startDictation().onerror!({ error: 'service-not-allowed' }))
     expect(await screen.findByText('Dictation is not available in this browser')).toBeTruthy()
+    expect(screen.queryByLabelText('Start dictation')).toBeNull()
+    // A fresh composer (another task, the new-task form) must not offer it again.
+    cleanup()
+    renderComposer()
     expect(screen.queryByLabelText('Start dictation')).toBeNull()
   })
 
