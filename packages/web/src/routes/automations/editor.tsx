@@ -29,7 +29,9 @@ import {
   newDraft,
   pickSource,
   sourceOf,
+  splitList,
   toBody,
+  unenforcedPromptLogins,
   type EditorDraft,
 } from './editor-draft'
 import { EditorGithubFields } from './editor-github-fields'
@@ -119,6 +121,7 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
   const sourcesReady = skills.data !== undefined && workflows.data !== undefined && !uiState.isPending
   const baseBranch = repo.data?.baseBranch ?? repo.data?.info?.branch ?? undefined
   const cli = useMemo(() => cliDefinitionOf(draft), [draft])
+  const unenforcedLogins = useMemo(() => unenforcedPromptLogins(draft), [draft])
   const canSave = draft.name.trim().length > 0 && draft.prompt.trim().length > 0 && !saving && (draft.kind !== 'tracker' || trackerValid)
 
   const insertPrompt = (snippet: string) => {
@@ -268,6 +271,20 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
                 onChange={(event) => patch({ prompt: event.target.value })}
                 className="min-h-[104px] text-sm leading-[1.55] md:text-sm"
               />
+              {unenforcedLogins.length > 0 ? (
+                <div role="status" data-slot="editor-prompt-condition" className="flex flex-wrap items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-[12.5px] text-foreground">
+                  <span className="min-w-0 flex-1">
+                    The prompt names {unenforcedLogins.map((login) => `@${login}`).join(', ')}, but prompt text does not decide what launches — without a filter every matching event starts a task.
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => patch({ filters: { ...draft.filters, authors: [...splitList(draft.filters.authors), ...unenforcedLogins].join(', ') } })}
+                  >
+                    Add to Authors
+                  </Button>
+                </div>
+              ) : null}
               <EditorRunAs
                 source={sourceOf(draft)}
                 sourcesReady={sourcesReady}

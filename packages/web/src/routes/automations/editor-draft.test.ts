@@ -14,7 +14,29 @@ import {
   splitList,
   templatePick,
   toBody,
+  unenforcedPromptLogins,
 } from './editor-draft'
+
+describe('unenforcedPromptLogins', () => {
+  const github = (prompt: string, authors = '') =>
+    ({ kind: 'github' as const, prompt, filters: { ...newDraft().filters, authors } })
+
+  it('names a login the prompt conditions on while no people filter enforces it', () => {
+    expect(unenforcedPromptLogins(github('When user `patzick` opens PR run auto review'))).toEqual(['patzick'])
+    expect(unenforcedPromptLogins(github('Only PRs by @Octo-Cat, ping @octo-cat'))).toEqual(['Octo-Cat'])
+  })
+  it('is quiet once a filter names the login, and for schedules', () => {
+    expect(unenforcedPromptLogins(github('When user `patzick` opens PR', 'Patzick'))).toEqual([])
+    expect(unenforcedPromptLogins(github('When @patzick opens', '@patzick'))).toEqual([])
+    expect(unenforcedPromptLogins({ ...github('When user `patzick` opens'), kind: 'schedule' })).toEqual([])
+  })
+  it('ignores emails, npm scopes, placeholders and unquoted prose', () => {
+    expect(unenforcedPromptLogins(github(
+      'Mail a@b.com, bump @open-mercato/cezar, greet @{{github.author}}, branch from `main`',
+    ))).toEqual([])
+    expect(unenforcedPromptLogins(github('Review it by default as the user asked'))).toEqual([])
+  })
+})
 
 const SCHEDULE_DEF: AutomationDefinition = {
   id: 'a1',
@@ -228,6 +250,28 @@ describe('applyTemplate', () => {
       autonomous: true,
     })
     expect(applyTemplate(newDraft(), pick).runner).toBe('codex')
+  })
+
+  it('copies another project\'s GitHub filters and skill, so the copy launches for the same items', () => {
+    const steps = [{ id: 'task', name: 'om-auto-review-pr', skill: 'om-auto-review-pr', prompt: '{{task}}' }]
+    const pick = templatePick({
+      project: { id: 'cezar', name: 'cezar' },
+      id: 'eee6c276',
+      name: 'Self-review tasks',
+      kind: 'github',
+      events: ['pull_request.opened'],
+      intervalSeconds: 900,
+      filters: { authors: ['patzick'], lookbackDays: 7, maxRecords: 25 },
+      task: { prompt: 'Review it', steps, model: 'opus', autonomous: true, checkout: 'pr-head' },
+    })
+    const next = applyTemplate(newDraft(), pick)
+    expect(next.filters.authors).toBe('patzick')
+    expect(next.skill).toBe('om-auto-review-pr')
+    expect(toBody(next)).toMatchObject({
+      filters: { authors: ['patzick'], lookbackDays: 7, maxRecords: 25 },
+      task: { prompt: 'Review it', steps, model: 'opus', checkout: 'pr-head' },
+    })
+    expect(unenforcedPromptLogins(next)).toEqual([])
   })
 })
 

@@ -404,13 +404,18 @@ export const automationTemplateSchema = z.object({
   schedule: automationScheduleSchema.optional(),
   events: z.array(automationEventSchema).optional(),
   intervalSeconds: z.number().optional(),
+  /** `github` kind only. A copy without them would launch for every item. */
+  filters: automationFiltersSchema.optional(),
   task: z.object({
     prompt: z.string(),
     workflow: z.string().optional(),
+    steps: automationTaskSchema.shape.steps,
     runner: z.string().optional(),
     model: z.string().optional(),
     autonomous: z.boolean().optional(),
     dispatch: automationDispatchSchema.optional(),
+    checkout: automationTaskSchema.shape.checkout,
+    allowForkHeads: automationTaskSchema.shape.allowForkHeads,
   }),
 });
 export type AutomationTemplate = z.infer<typeof automationTemplateSchema>;
