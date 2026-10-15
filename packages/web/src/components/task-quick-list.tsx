@@ -34,6 +34,7 @@ import { formatCost, taskReference, taskReferences } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
+import { IsolationMark } from '@/components/isolation-indicator'
 
 /**
  * The sidebar's task quick-list (spec, "App shell & navigation"): Active/Archived tabs, then the
@@ -483,6 +484,12 @@ const RunRow = React.memo(function RunRow({
       {/* Outside the Link so it can lead the reference chip. The dot is a status indicator, not a
           navigation target, and the wrapper still owns the row's hover surface. */}
       <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
+      {/* Where the agent ran, when that is worth saying. Outside the Link, beside
+          the status dot: like the dot it describes the run rather than being a
+          place to go. Renders nothing for an ordinary host run — see the
+          component — so the width-priority rule keeps spending its pixels on the
+          task's name. */}
+      <IsolationMark run={run} />
       {/* The reference, ONCE (#788, option C): the number that used to be both a `775: ` title
           prefix and a trailing `PR ↗` chip is now one leading chip that is itself the link. */}
       {reference ? (

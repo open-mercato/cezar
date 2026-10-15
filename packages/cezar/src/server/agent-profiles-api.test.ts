@@ -103,12 +103,12 @@ describe('agent profiles API', () => {
       const body = await list();
       expect(body.editable).toBe(true);
       expect(body.profiles.every((p) => p.isDefault)).toBe(true);
-      expect(body.profiles.map((p) => p.provider)).toEqual(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot']);
+      expect(body.profiles.map((p) => p.provider)).toEqual(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'kimi']);
       expect(body.profiles.every((p) => p.id === 'default')).toBe(true);
     });
 
     it('names the providers that can carry an account at all — OpenCode cannot', async () => {
-      expect((await list()).profileCapableProviders).toEqual(['claude', 'codex']);
+      expect((await list()).profileCapableProviders).toEqual(['claude', 'codex', 'kimi']);
     });
 
     it('reports each account\'s folder state, and does not refuse one that is missing', async () => {

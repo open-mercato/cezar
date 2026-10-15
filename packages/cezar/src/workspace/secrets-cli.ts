@@ -4,7 +4,7 @@ import { SECRET_AUDIENCES, secretNameIssue, type SecretAudience } from '@open-me
 import { SecretStore, SecretsError, type SecretScopeRef } from './secrets.ts';
 import { loadWorkspaceConfig } from './config.ts';
 
-const USAGE = 'Usage: cezar secrets list | set <NAME> [--audience checks,cezar] | unset <NAME>   [--workspace] [--repo <dir>]\n' +
+const USAGE = 'Usage: cezar secrets list | set <NAME> [--audience checks,cezar,containers] | unset <NAME>   [--workspace] [--repo <dir>]\n' +
   '  set reads the value from stdin (pipe it in, or type it at the hidden prompt) — never from argv.\n' +
   '  --workspace addresses the user\'s own secrets, shared by every project; the default is this project\'s.\n' +
   `  --audience names who may read the secret (${SECRET_AUDIENCES.join(', ')}); the default is checks.`;

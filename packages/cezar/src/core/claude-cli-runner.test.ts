@@ -348,3 +348,20 @@ describe('ClaudeCliRunner private MCP (spec 2026-10-07-private-project-mcp)', ()
     }
   });
 });
+
+describe('the default tools a headless claude may use', () => {
+  it('include web search, page fetching and skills — dontAsk silently refuses anything left out', async () => {
+    const { DEFAULT_ALLOWED_TOOLS } = await import('../workflows/types.ts');
+    const { buildClaudeArgs } = await import('./claude-cli-runner.ts');
+    const args = buildClaudeArgs({ userPrompt: 'x', cwd: '/tmp', allowedTools: DEFAULT_ALLOWED_TOOLS }, {});
+    expect(args[args.indexOf('--permission-mode') + 1]).toBe('dontAsk');
+    const allowed = args[args.indexOf('--allowedTools') + 1]!.split(',');
+    expect(allowed).toEqual(expect.arrayContaining(['WebSearch', 'WebFetch', 'Skill', 'Bash', 'Edit']));
+  });
+
+  it('still narrows to exactly what a workflow step lists', async () => {
+    const { buildClaudeArgs } = await import('./claude-cli-runner.ts');
+    const args = buildClaudeArgs({ userPrompt: 'x', cwd: '/tmp', allowedTools: ['Read', 'Grep'] }, {});
+    expect(args[args.indexOf('--allowedTools') + 1]).toBe('Read,Grep');
+  });
+});

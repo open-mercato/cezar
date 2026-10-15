@@ -50,6 +50,14 @@ export const DATA_GITIGNORE_ENTRIES = [
   'automation-poll.lock.guard/',
   'automation-mutation.lock.guard/',
   'automation-mutation.lock',
+  // Observed installs proposed for the repo's Containerfile: cezar wrote it by
+  // watching, the user never typed it. The Containerfile it produces IS
+  // committable and deliberately absent from this list.
+  'container-suggestions.json',
+  'container-suggestions.json.tmp',
+  // A project's credential grants when its config.json is committed (`LOCAL_CONFIG_FILE`): the
+  // operator's machine-local choice, never something a clone may carry in.
+  'config.local.json',
 ] as const;
 
 export function ensureDataGitignore(repoRoot: string): void {

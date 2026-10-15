@@ -47,6 +47,7 @@ import { StatusDot } from '@/components/status-dot'
 import { TabLink } from '@/components/tab-link'
 import { Button } from '@/components/ui/button'
 import { IconTooltip } from '@/components/ui/icon-tooltip'
+import { IsolationBadge } from '@/components/isolation-indicator'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -1076,6 +1077,7 @@ function RunUsage({
           {part}
         </Fragment>
       ))}
+      <IsolationBadge run={run} />
       <AgentBadge run={run} continuationEngine={continuationEngine} />
     </span>
   )

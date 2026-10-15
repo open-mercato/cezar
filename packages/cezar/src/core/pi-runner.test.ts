@@ -187,3 +187,11 @@ describe('pi spawns under pi credentials, not another runner', () => {
     expect(new PiRunner().backend).toBe('pi');
   });
 });
+
+describe('the default tool list on pi', () => {
+  it('never hands pi Claude Code’s own tools, which it does not have', async () => {
+    const { DEFAULT_ALLOWED_TOOLS } = await import('../workflows/types.ts');
+    const args = buildPiArgs({ userPrompt: 'x', cwd: '/tmp', allowedTools: DEFAULT_ALLOWED_TOOLS });
+    expect(args[args.indexOf('--tools') + 1]).toBe('read,edit,write,grep,find,bash');
+  });
+});

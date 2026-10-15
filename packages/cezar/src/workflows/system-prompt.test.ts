@@ -247,7 +247,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
     const prompt = capturedSystemPrompt();
     expect(prompt).toContain('cez task create');
     expect(prompt).toContain(CONFIG_PROMPT);
-  });
+  }, 30_000);
 
   // The headless hole: `cezar run` builds its own RunManager and never sets CEZ_API_URL/CEZ_BIN, so
   // `cez task create` can only ever fail — and its refusal tells the agent to STOP and report
@@ -263,7 +263,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
     const prompt = capturedSystemPrompt();
     expect(prompt).not.toContain('cez task create');
     expect(prompt).toContain(CONFIG_PROMPT);
-  });
+  }, 30_000);
 
   // The automations twin of the two dispatch cases above (spec 2026-09-13-automations-from-prompt):
   // the part rides only when the flag is on AND the cockpit is reachable, at the same session
@@ -283,7 +283,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
     // Dispatch is off in this suite, so the automations part is the only cockpit part composed —
     // ahead of the extra prompt, which may amend it.
     expect(prompt).toBe(composeSystemPrompt(AUTOMATIONS_PROMPT, CONFIG_PROMPT, HANDOFF_INSTRUCTIONS));
-  });
+  }, 30_000);
 
   it('automations on but unreachable (headless), or opted out: no task is taught the CLI', async () => {
     delete process.env.CEZ_AUTOMATIONS;

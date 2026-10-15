@@ -241,6 +241,10 @@ export const BACKEND_ALLOW_PREFIXES: Record<AgentBackend, readonly string[]> = {
   // it authenticates with (`GH_TOKEN`, `GITHUB_TOKEN`, `GH_HOST`) are already forwarded to every
   // backend below, and `COPILOT_GITHUB_TOKEN` is covered by this prefix — so nothing else widens.
   copilot: ['COPILOT_'],
+  // Kimi Code reads `KIMI_API_KEY`/`KIMI_BASE_URL` and its `KIMI_CODE_*` settings, including
+  // `KIMI_CODE_HOME` (its whole per-user home — what an agent profile relocates). It serves
+  // Moonshot's models only, so no other provider's credentials.
+  kimi: ['KIMI_', 'MOONSHOT_'],
 };
 
 /** `gh` handoff (draft PRs) works in every backend — the one credential the

@@ -16,6 +16,7 @@ import {
   BlocksIcon,
   TicketIcon,
   ShieldCheckIcon,
+  ShieldIcon,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 
@@ -27,6 +28,8 @@ import { AgentsSection } from './agents-section'
 import { AppearanceSection } from './appearance'
 import { InstructionsSection } from './instructions-section'
 import { BookmarkletsSection } from './bookmarklets-section'
+import { IsolationDefaultsSection } from './isolation-defaults-section'
+import { IsolationSection } from './isolation-section'
 import { NotificationsSection } from './notifications-section'
 import { PrivacySection } from './privacy-section'
 import { ProjectsSection } from './projects-section'
@@ -62,6 +65,8 @@ export type SettingsSectionId =
   | 'agent-config'
   | 'instructions'
   | 'tasks'
+  | 'isolation'
+  | 'isolation-defaults'
   | 'resources'
   | 'worktrees'
   | 'projects'
@@ -118,7 +123,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     id: 'secrets',
     title: 'Secrets',
-    description: 'Encrypted values for this project’s check steps and cezar — never for agents.',
+    description: 'Encrypted values for this project’s check steps, cezar and isolated agents — never an agent on this machine.',
     icon: KeyRoundIcon,
     component: ProjectSecretsSection,
     scope: 'project',
@@ -164,6 +169,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     scope: 'project',
   },
   {
+    id: 'isolation',
+    title: 'Isolation',
+    description: 'Run this project’s agents in a container instead of on this machine.',
+    icon: ShieldIcon,
+    component: IsolationSection,
+    scope: 'project',
+  },
+  {
     id: 'worktrees',
     title: 'Worktrees',
     description: 'How many finished task worktrees this project keeps on disk.',
@@ -205,6 +218,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     scope: 'global',
   },
   {
+    id: 'isolation-defaults',
+    title: 'Isolation defaults',
+    description: 'What a project inherits when it has not configured isolation itself.',
+    icon: ShieldIcon,
+    component: IsolationDefaultsSection,
+    scope: 'global',
+  },
+  {
     id: 'skills',
     title: 'Skills',
     description: 'Updates for skills installed on this machine.',
@@ -215,7 +236,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     id: 'workspace-secrets',
     title: 'Secrets',
-    description: 'Encrypted values shared by every project on this machine — never for agents.',
+    description: 'Encrypted values shared by every project on this machine — never an agent running on it.',
     icon: KeyRoundIcon,
     component: WorkspaceSecretsSection,
     scope: 'global',

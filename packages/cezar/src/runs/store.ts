@@ -16,7 +16,12 @@ import {
 import { join } from 'node:path';
 import { z } from 'zod';
 import { StreamRedaction } from './stream-redaction.ts';
-import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
+import {
+  collectSecretValues,
+  redactDeep,
+  redactSecrets,
+  registeredSecretValues,
+} from '../core/secret-redaction.ts';
 // Sibling module, files only — a draft belongs to a run and is deleted with it (#939).
 import { deleteRunDrafts } from './drafts.ts';
 import { failureKind, taskFailedLabel } from './failure-kind.ts';
@@ -100,6 +105,8 @@ const stepStateSchema = z.object({
   /** Backend that owns `sessionId`. Optional so pre-affinity runs.json files still parse;
    *  `storedRunnerSchema` so a legacy `claude-cli` folds to `claude` instead of failing (#547). */
   backend: storedRunnerSchema.optional(),
+  /** Whether this step's latest agent turn ran in the task's container (contract `isolated`). */
+  isolated: z.boolean().optional(),
   /** Agent profile (account) this step actually spawned under — `default`, or a stored profile
    *  id (spec 2026-07-29-agent-profiles). Recorded rather than re-derived because a session id
    *  only means something inside the config dir that created it: `sessionId` and `profileId` are
@@ -371,6 +378,40 @@ export const runRecordSchema = z.object({
   /** Explicit execution policy. `false` means the run intentionally uses the repo root;
    *  absent on older runs and for the default isolated-worktree mode. */
   worktree: z.literal(false).optional(),
+  /**
+   * Per-task isolation override from the composer (additive). Absent = the
+   * project's Settings → Isolation switch decides. Persisted because a Continue
+   * must land where the first turn did: a task that started in a container
+   * cannot silently continue on the host, where its conversation does not exist.
+   */
+  isolated: z.boolean().optional(),
+  /**
+   * Where the agent ACTUALLY executed, recorded when the decision is made.
+   *
+   * Separate from `isolated`, which is the request, because the two disagree
+   * more often than is comfortable: `prepareSandbox` falls back to the host
+   * when the provider is not podman, when the backend has no launcher, and
+   * when the container cannot be prepared at all. An indicator driven by the
+   * request would then claim isolation for a run that executed on this machine
+   * — the same lie the isolation settings avoid by separating `enabled` from
+   * `effective`.
+   *
+   * The request is deliberately NOT overwritten with the outcome: a Continue
+   * reads `isolated` as its override, so a run whose container failed once
+   * would otherwise be pinned to the host forever.
+   *
+   * Absent on runs from before this existed, and on runs that never asked.
+   */
+  isolation: z
+    .object({
+      /** True only when a container was actually brought up for this run. */
+      effective: z.boolean(),
+      /** Its name, when there is one. */
+      container: z.string().optional(),
+      /** Why isolation was wanted but not obtained — shown on the indicator. */
+      reason: z.string().optional(),
+    })
+    .optional(),
   /** Task worktree (spec 006) — absent for in-place runs and after explicit cleanup. */
   worktreePath: z.string().optional(),
   /** The task's own branch, created off `baseBranch`: `cez/<id8>` unless branch naming
@@ -1040,6 +1081,8 @@ export class RunStore extends EventEmitter {
     title: string;
     workflow: string;
     task: string;
+    /** Per-task isolation override from the composer (see `runRecordSchema`). */
+    isolated?: boolean;
     model?: string;
     runner?: RunnerId;
     /** Composer's per-task agent account (spec 2026-07-29-agent-profiles). */
@@ -1068,6 +1111,13 @@ export class RunStore extends EventEmitter {
       generateFollowups: input.generateFollowups,
       autonomous: input.autonomous,
       worktree: input.worktree,
+      // The per-task isolation override. Declared on the input since the
+      // composer toggle landed, and — until this line — never copied onto the
+      // record, so `getRun(id).isolated` was ALWAYS undefined: a task marked
+      // isolated fell back to the project default on its first step, and a task
+      // that opted out could still be containerized. The toggle looked wired at
+      // every layer above and did nothing.
+      isolated: input.isolated,
       groupId: input.groupId,
       variant: input.variant,
       status: 'queued',
@@ -1651,7 +1701,12 @@ export class RunStore extends EventEmitter {
 
   private hostSecrets(): readonly string[] {
     if (this.secretValues === null) this.secretValues = collectSecretValues();
-    return this.secretValues;
+    // The host env is read once — it does not change under a running cockpit.
+    // Fetched secrets DO arrive later (the first task that resolves one), so
+    // they are merged per call rather than folded into the cached list.
+    const fetched = registeredSecretValues();
+    if (fetched.length === 0) return this.secretValues;
+    return [...this.secretValues, ...fetched].sort((a, b) => b.length - a.length);
   }
 
   readEvents(runId: string): RunEvent[] {

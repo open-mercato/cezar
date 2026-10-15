@@ -1,4 +1,8 @@
+import { macosxCaddy } from './platforms/macosx-caddy.ts';
+import { macosxCloudflareTunnel } from './platforms/macosx-cloudflare-tunnel.ts';
+import { macosxExternalProxy } from './platforms/macosx-external-proxy.ts';
 import { macosxNgrok } from './platforms/macosx-ngrok.ts';
+import { macosxTailscale } from './platforms/macosx-tailscale.ts';
 import { ubuntuVps } from './platforms/ubuntu-vps.ts';
 import { PLATFORM_IDS, type PlatformId, type PlatformStrategy } from './types.ts';
 
@@ -10,6 +14,10 @@ import { PLATFORM_IDS, type PlatformId, type PlatformStrategy } from './types.ts
 const REGISTRY: Partial<Record<PlatformId, PlatformStrategy>> = {
   'ubuntu-vps': ubuntuVps,
   'macosx-ngrok': macosxNgrok,
+  'macosx-cloudflare-tunnel': macosxCloudflareTunnel,
+  'macosx-tailscale': macosxTailscale,
+  'macosx-caddy': macosxCaddy,
+  'macosx-external-proxy': macosxExternalProxy,
 };
 
 export function getStrategy(id: string): PlatformStrategy | undefined {

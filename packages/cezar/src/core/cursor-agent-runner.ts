@@ -27,6 +27,7 @@ import type {
 import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { disclaimActive, disclaimedCommand, readHead, resolveProgram, type DisclaimOptions } from './disclaim-spawn.ts';
+import { localLauncher, type ProcessLauncher } from './process-launcher.ts';
 import { readNdjson } from './ndjson.ts';
 import {
   createCursorUiState,
@@ -82,6 +83,8 @@ export const CURSOR_KILL_GRACE_MS = 10_000;
 export interface CursorAgentRunnerOptions {
   bin?: string;
   timeoutMs?: number;
+  /** WHERE it runs. Defaults to this machine; a container launcher isolates it. */
+  launcher?: ProcessLauncher;
 }
 
 export type BuildCursorArgsInput = {
@@ -152,10 +155,13 @@ export class CursorAgentRunner implements AgentRunner {
 
   private readonly bin: string;
   private readonly timeoutMs: number;
+  private readonly launcher: ProcessLauncher;
   private lastSession: AgentSession | null = null;
 
   constructor(opts: CursorAgentRunnerOptions = {}) {
-    this.bin = resolveCursorBin(opts.bin);
+    this.launcher = opts.launcher ?? localLauncher;
+    // Host overrides and the dry-run mock are HOST paths; inside a container the image's `agent` runs.
+    this.bin = opts.bin ?? (this.launcher.id === 'local' ? resolveCursorBin() : 'agent');
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_CURSOR_TIMEOUT_MS;
   }
 
@@ -181,12 +187,17 @@ export class CursorAgentRunner implements AgentRunner {
     let child: ChildProcessWithoutNullStreams;
     try {
       const isNodeScript = /\.[cm]?js$/.test(this.bin);
-      const launch = isNodeScript
-        ? { program: process.execPath, args: [this.bin, ...args], env: buildChildEnv({ backend: this.backend, extraEnv: spec.env }) }
-        : cursorLaunch(this.bin, args, buildChildEnv({ backend: this.backend, extraEnv: spec.env }));
-      const env = launch.env;
-      const [file, argv] = disclaimedCommand(launch.program, launch.args, env, { name: 'cursor-agent' });
-      child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
+      if (this.launcher.id === 'local') {
+        const launch = isNodeScript
+          ? { program: process.execPath, args: [this.bin, ...args], env: buildChildEnv({ backend: this.backend, extraEnv: spec.env }) }
+          : cursorLaunch(this.bin, args, buildChildEnv({ backend: this.backend, extraEnv: spec.env }));
+        const env = launch.env;
+        const [file, argv] = disclaimedCommand(launch.program, launch.args, env, { name: 'cursor-agent' });
+        child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
+      } else {
+        // In a container the image's `agent` runs as is: no macOS trampoline, no host path lookup.
+        child = this.launcher.spawn(this.bin, args, { cwd: spec.cwd, env: buildChildEnv({ backend: this.backend, extraEnv: spec.env }) });
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       throw new Error(`failed to spawn Cursor agent (${this.bin}): ${message}`);
@@ -244,13 +255,13 @@ export class CursorAgentRunner implements AgentRunner {
         timedOut = true;
         terminatedByCezar = true;
         try {
-          child.kill('SIGTERM');
+          void this.launcher.signal(child, 'SIGTERM');
         } catch {
           /* ignore */
         }
         killTimer = setTimeout(() => {
           try {
-            child.kill('SIGKILL');
+            void this.launcher.signal(child, 'SIGKILL');
           } catch {
             /* ignore */
           }
@@ -327,7 +338,7 @@ export class CursorAgentRunner implements AgentRunner {
       terminatedByCezar = true;
       open = false;
       try {
-        child.kill('SIGTERM');
+        void this.launcher.signal(child, 'SIGTERM');
       } catch {
         /* ignore */
       }

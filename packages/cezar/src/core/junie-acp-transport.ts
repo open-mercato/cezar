@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { localLauncher, type ProcessLauncher } from './process-launcher.ts';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve as resolvePath } from 'node:path';
 import { trackChildExit } from './agent-runner.ts';
@@ -52,12 +53,15 @@ export function spawnJunieAcp(
   bin: string,
   cwd: string,
   extraEnv?: Record<string, string>,
+  /** WHERE it runs. Defaults to this machine; a container launcher isolates it. */
+  launcher: ProcessLauncher = localLauncher,
 ): ChildProcessWithoutNullStreams {
   try {
-    return nodeSpawn(bin, ['--acp=true', '-p', cwd], {
-      cwd,
-      env: buildJunieAcpEnv(extraEnv),
-    });
+    const opts = { cwd, env: buildJunieAcpEnv(extraEnv) };
+    // Locally exactly as before (no disclaim trampoline); a container launcher execs inside.
+    return launcher.id === 'local'
+      ? nodeSpawn(bin, ['--acp=true', '-p', cwd], opts)
+      : launcher.spawn(bin, ['--acp=true', '-p', cwd], opts);
   } catch (error) {
     throw junieSpawnError(error, bin);
   }
@@ -139,6 +143,8 @@ export function endJunieAcp(
   child: ChildProcessWithoutNullStreams,
   onTimers?: (term: NodeJS.Timeout, kill: NodeJS.Timeout | undefined) => void,
   onSignal?: () => void,
+  /** How to signal it — the launcher's, so an agent inside a container is reached too. */
+  send: (sig: NodeJS.Signals) => void = (sig) => child.kill(sig),
 ): void {
   try {
     child.stdin.end();
@@ -150,12 +156,12 @@ export function endJunieAcp(
   const termTimer = setTimeout(() => {
     if (!hasExited()) {
       onSignal?.();
-      child.kill('SIGTERM');
+      send('SIGTERM');
     }
     killTimer = setTimeout(() => {
       if (!hasExited()) {
         onSignal?.();
-        child.kill('SIGKILL');
+        send('SIGKILL');
       }
     }, EOF_KILL_GRACE_MS);
     killTimer.unref?.();

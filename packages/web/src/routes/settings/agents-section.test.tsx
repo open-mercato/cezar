@@ -90,6 +90,7 @@ function serve({
       { provider: 'opencode', status: 'connected', enabled: true },
       { provider: 'cursor', status: 'connected', enabled: true },
       { provider: 'pi', status: 'connected', enabled: true },
+      { provider: 'kimi', status: 'connected', enabled: true },
     ],
   },
   providerStatusCode = 200,
@@ -526,6 +527,7 @@ describe('the agents form', () => {
         'cursor',
         'pi',
         'copilot',
+        'kimi',
       ])
       // …and it is still called what it always was, because there is no account in play.
       expect(document.body.textContent).toContain('Default runner')
@@ -535,7 +537,7 @@ describe('the agents form', () => {
       serve({ agentProfiles: WITH_WORK_ACCOUNT })
       renderAt('/settings/agents')
 
-      await waitFor(() => expect(rows()).toHaveLength(8))
+      await waitFor(() => expect(rows()).toHaveLength(9))
       expect(rows().map((r) => r.textContent)).toEqual([
         'claude · Default/home/u/.claude',
         'claude · Klaudiusz~/.claude-klaudiusz',
@@ -545,6 +547,7 @@ describe('the agents form', () => {
         'cursorCursor Agent CLI',
         'pipi CLI (provider/model)',
         'copilotGitHub Copilot CLI (ACP)',
+        'kimiKimi Code (ACP)',
       ])
       // The discovered account is the checked row until the repo says otherwise.
       expect(rowFor('claude', '')?.getAttribute('aria-checked')).toBe('true')
@@ -567,7 +570,7 @@ describe('the agents form', () => {
       serve({ agentProfiles: WITH_WORK_ACCOUNT })
       renderAt('/settings/agents')
 
-      await waitFor(() => expect(rows()).toHaveLength(8))
+      await waitFor(() => expect(rows()).toHaveLength(9))
       fireEvent.click(rowFor('claude', 'klaudiusz')!)
 
       await waitFor(() => expect(selections()).toHaveLength(1))
@@ -590,7 +593,7 @@ describe('the agents form', () => {
 
       // Wait for the SPLIT state: until the accounts land, claude is one plain row, and clicking
       // that one writes no selection — which is correct, and would make this pass for no reason.
-      await waitFor(() => expect(rows()).toHaveLength(8))
+      await waitFor(() => expect(rows()).toHaveLength(9))
       fireEvent.click(rowFor('claude', '')!)
 
       await waitFor(() => expect(selections()).toHaveLength(1))
@@ -605,7 +608,7 @@ describe('the agents form', () => {
       serve({ agentProfiles: WITH_WORK_ACCOUNT })
       renderAt('/settings/agents')
 
-      await waitFor(() => expect(rows()).toHaveLength(8))
+      await waitFor(() => expect(rows()).toHaveLength(9))
       fireEvent.click(rowFor('codex')!)
 
       await waitFor(() => expect(puts()).toHaveLength(1))
@@ -637,7 +640,7 @@ describe('the agents form', () => {
       serve({ agentProfiles: WITH_WORK_ACCOUNT })
       renderAt('/settings/agents')
 
-      await waitFor(() => expect(rows()).toHaveLength(8))
+      await waitFor(() => expect(rows()).toHaveLength(9))
       const pane = document.querySelector('[data-slot="agents-runner"]')?.closest('section')
       expect(pane?.textContent).toContain('never committed')
       // The consequence a reader cannot guess: sessions live in the account's own folder.

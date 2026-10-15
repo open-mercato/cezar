@@ -1,5 +1,5 @@
-import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { disclaimedCommand } from './disclaim-spawn.ts';
+import { localLauncher, type ProcessLauncher } from './process-launcher.ts';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve as resolvePath } from 'node:path';
 import type {
@@ -27,6 +27,8 @@ export interface PiRunnerOptions {
   bin?: string;
   /** Wall-clock timeout for a run (ms); per-spec `timeoutMs` still wins. */
   timeoutMs?: number;
+  /** WHERE the CLI runs — this machine, or a container. Defaults to local. */
+  launcher?: ProcessLauncher;
 }
 
 /**
@@ -39,10 +41,14 @@ export class PiRunner implements AgentRunner {
   readonly backend = 'pi' as const;
   private readonly bin: string;
   private readonly timeoutMs: number;
+  private readonly launcher: ProcessLauncher;
   private lastSession: AgentSession | null = null;
 
   constructor(opts: PiRunnerOptions = {}) {
-    this.bin = opts.bin ?? process.env.CEZ_PI_BIN ?? (process.env.CEZ_DRY_RUN === '1' ? mockPiPath() : 'pi');
+    this.launcher = opts.launcher ?? localLauncher;
+    // Host overrides and the dry-run mock are HOST paths; inside a container the image's `pi` runs.
+    this.bin = opts.bin
+      ?? (this.launcher.id !== 'local' ? 'pi' : process.env.CEZ_PI_BIN ?? (process.env.CEZ_DRY_RUN === '1' ? mockPiPath() : 'pi'));
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
@@ -59,9 +65,10 @@ export class PiRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
-    const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
-    const [file, argv] = disclaimedCommand(this.bin, buildPiArgs(spec), env);
-    const child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
+    const child = this.launcher.spawn(this.bin, buildPiArgs(spec), {
+      cwd: spec.cwd,
+      env: buildChildEnv({ backend: this.backend, extraEnv: spec.env }),
+    });
     let open = true;
     let settled = true;
     let timedOut = false;
@@ -129,20 +136,21 @@ export class PiRunner implements AgentRunner {
       if (!open) return;
       open = false;
       child.stdin.end();
-      killTimer = setTimeout(() => child.exitCode == null && child.kill('SIGTERM'), KILL_GRACE_MS);
+      killTimer = setTimeout(() => child.exitCode == null && void this.launcher.signal(child, 'SIGTERM'), KILL_GRACE_MS);
       killTimer.unref?.();
     };
     const interrupt = (): void => {
       if (!open) return;
       write({ type: 'abort' });
       open = false;
-      child.kill('SIGTERM');
+      void this.launcher.signal(child, 'SIGTERM');
     };
     const hardStop = (): void => {
       interrupt();
       if (hardKillTimer || hasExited()) return;
       hardKillTimer = setTimeout(() => {
-        if (!hasExited()) child.kill('SIGKILL');
+        // Through the launcher: killing a `podman exec` client leaves the agent running inside.
+        if (!hasExited()) void this.launcher.signal(child, 'SIGKILL');
       }, KILL_GRACE_MS);
       hardKillTimer.unref?.();
     };
@@ -290,6 +298,8 @@ export function buildPiArgs(spec: AgentRunSpec): string[] {
   return args;
 }
 
+const CLAUDE_ONLY_TOOLS: ReadonlySet<string> = new Set(['WebFetch', 'WebSearch', 'Skill']);
+
 function piTools(tools: string[], bashAllowlist?: string[]): string[] {
   const map: Readonly<Record<string, string>> = {
     Read: 'read',
@@ -305,6 +315,9 @@ function piTools(tools: string[], bashAllowlist?: string[]): string[] {
         // Pi can allow/deny the whole bash tool but has no command-prefix
         // equivalent. Fail closed when a workflow requests that narrower mode.
         .filter((tool) => tool !== 'Bash' || !bashAllowlist || bashAllowlist.length === 0)
+        // Claude Code's own tools in cezar's default list: pi has none of them,
+        // and naming an unknown tool would be pi's error, not a narrower grant.
+        .filter((tool) => !CLAUDE_ONLY_TOOLS.has(tool))
         .map((tool) => map[tool] ?? tool.toLowerCase()),
     ),
   ];

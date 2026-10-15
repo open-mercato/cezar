@@ -41,9 +41,16 @@ describe('macosx-ngrok', () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  it('is registered alongside ubuntu-vps', () => {
+  it('is registered alongside the other platforms', () => {
     expect(getStrategy('macosx-ngrok')?.id).toBe('macosx-ngrok');
-    expect(availablePlatformIds()).toEqual(['ubuntu-vps', 'macosx-ngrok']);
+    expect(availablePlatformIds()).toEqual([
+      'ubuntu-vps',
+      'macosx-ngrok',
+      'macosx-cloudflare-tunnel',
+      'macosx-tailscale',
+      'macosx-caddy',
+      'macosx-external-proxy',
+    ]);
   });
 
   it('launchdPlist embeds the port, basic-auth and reserved domain', () => {
@@ -56,7 +63,7 @@ describe('macosx-ngrok', () => {
   });
 
   it('cezar launchd plist has one PATH key and carries instance identity', () => {
-    const plist = cezarLaunchdPlist('/repo', 4321, ['/usr/bin/node', '/repo/dist/index.js'], 'install-a');
+    const plist = cezarLaunchdPlist('/repo', 4321, ['/usr/bin/node', '/repo/dist/index.js'], { instanceId: 'install-a' });
     expect(plist.match(/<key>PATH<\/key>/g)).toHaveLength(1);
     expect(plist).toContain('<key>CEZ_INSTANCE_ID</key>');
     expect(plist).toContain('<string>install-a</string>');

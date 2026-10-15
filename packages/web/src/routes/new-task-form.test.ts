@@ -161,11 +161,12 @@ describe('model option resolution', () => {
   })
 
   it('exactly the runners with a host catalog discover their models', () => {
-    // #794 gave OpenCode a catalog, #784 gave Claude one and #807 gave Cursor one. The contract's
+    // #794 gave OpenCode a catalog, #784 gave Claude one, #807 gave Cursor one, and Kimi reads its own config.toml. The contract's
     // list is the single source both the route and the picker compile against — this asserts they
     // still agree on who discovers, and that a runner is never added to it by accident.
-    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode', 'cursor', 'junie'])
+    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode', 'cursor', 'junie', 'kimi'])
     expect(MODEL_DISCOVERY_RUNNERS.every((runner) => runnerDiscoversModels(runner))).toBe(true)
+    expect(runnerDiscoversModels('pi')).toBe(false)
   })
 
   it('reports Cursor catalog status the same way', () => {

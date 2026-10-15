@@ -19,6 +19,7 @@ import { ASK_MAX_QUESTIONS, parseAskRequest, type AskQuestion } from './ask.ts';
 import { readNdjson } from './ndjson.ts';
 import { skippedServersNote, toCodexConfigOverrides } from './private-mcp.ts';
 import { V1TextCoalescer } from './v1-text-coalescer.ts';
+import { localLauncher, type ProcessLauncher } from './process-launcher.ts';
 import {
   CodexAppServerRpc,
   codexSpawnError,
@@ -41,6 +42,8 @@ export interface CodexRunnerOptions {
   bin?: string;
   /** Wall-clock timeout for a run (ms); per-spec `timeoutMs` still wins. */
   timeoutMs?: number;
+  /** WHERE the CLI runs — this machine, or a container. Defaults to local. */
+  launcher?: ProcessLauncher;
 }
 
 /**
@@ -63,10 +66,13 @@ export class CodexAppServerRunner implements AgentRunner {
 
   private readonly bin: string;
   private readonly timeoutMs: number;
+  private readonly launcher: ProcessLauncher;
   private lastSession: CodexSession | null = null;
 
   constructor(opts: CodexRunnerOptions = {}) {
-    this.bin = resolveCodexExecutable(opts.bin);
+    this.launcher = opts.launcher ?? localLauncher;
+    // A host override (`CEZ_CODEX_BIN`) names a HOST path; inside a container the image's is used.
+    this.bin = opts.bin ?? (this.launcher.id === 'local' ? resolveCodexExecutable() : 'codex');
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
   }
 
@@ -83,7 +89,7 @@ export class CodexAppServerRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
-    const session = new CodexSession(this.bin, this.timeoutMs, spec, onEvent, opts);
+    const session = new CodexSession(this.bin, this.timeoutMs, spec, onEvent, opts, this.launcher);
     this.lastSession = session;
     return session;
   }
@@ -155,9 +161,11 @@ class CodexSession implements AgentSession {
     private readonly spec: AgentRunSpec,
     private readonly onEvent: ((event: AgentEvent) => void) | undefined,
     private readonly opts: SessionOptions,
+    /** WHERE the app-server runs; signals must reach it there, not on the host. */
+    private readonly launcher: ProcessLauncher = localLauncher,
   ) {
     try {
-      this.child = spawnCodexAppServer(bin, spec.cwd, spec.env);
+      this.child = spawnCodexAppServer(bin, spec.cwd, spec.env, this.launcher);
       this.rpc = new CodexAppServerRpc(this.child);
     } catch (err) {
       throw codexSpawnError(err, bin);
@@ -183,7 +191,7 @@ class CodexSession implements AgentSession {
         killTimer = setTimeout(() => {
           if (!this.hasExited()) {
             this.terminatedByCezar = true;
-            this.child.kill('SIGKILL');
+            void this.launcher.signal(this.child, 'SIGKILL');
           }
         }, KILL_GRACE_MS);
         killTimer.unref?.();
@@ -372,6 +380,7 @@ class CodexSession implements AgentSession {
         () => {
           this.terminatedByCezar = true;
         },
+        (sig) => void this.launcher.signal(this.child, sig),
       );
     } catch {
       // already gone
@@ -390,7 +399,7 @@ class CodexSession implements AgentSession {
     }
     if (!this.hasExited()) {
       this.terminatedByCezar = true;
-      this.child.kill('SIGTERM');
+      void this.launcher.signal(this.child, 'SIGTERM');
     }
   }
 
@@ -400,7 +409,8 @@ class CodexSession implements AgentSession {
     this.hardKillTimer = setTimeout(() => {
       if (!this.hasExited()) {
         this.terminatedByCezar = true;
-        this.child.kill('SIGKILL');
+        // Through the launcher: killing a `podman exec` client leaves the agent running inside.
+        void this.launcher.signal(this.child, 'SIGKILL');
       }
     }, KILL_GRACE_MS);
     this.hardKillTimer.unref?.();

@@ -898,7 +898,7 @@ function GlobalSettingsLink({
 /**
  * The "Add project" dropdown beside the New task CTA (multi-project spec, "Sidebar → Header").
  *
- * "Open local folder…" opens the folder-browser dialog (step 4.2); "Clone from GitHub…" opens
+ * "Open local folder…" opens the folder-browser dialog (step 4.2); "Clone repository…" opens
  * the checkout dialog (step 4.3); "New project…" opens the create dialog (spec
  * 2026-09-29-create-new-project) — a fresh git repo, optionally a new private GitHub repo.
  *
@@ -952,7 +952,7 @@ function AddProjectMenu() {
           }}
         >
           <GithubIcon aria-hidden="true" />
-          Clone from GitHub…
+          Clone repository…
         </DropdownMenuItem>
         <DropdownMenuItem
           data-slot="add-project-create"

@@ -139,6 +139,9 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           card owns its own subscription, so this screen is what keeps the sampler alive. */}
       <MachineCard />
 
+      {/* The machine-wide isolation default lives in Settings → Isolation
+          defaults, beside the rest of what a project inherits. It used to be
+          here as well, and the two controls disagreed about what "off" means. */}
       <SettingsField
         title="Max parallel tasks"
         hint="How many tasks run at once across every project. The rest wait in the queue. A non-git directory always runs one at a time."

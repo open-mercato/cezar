@@ -122,6 +122,15 @@ describe('Global settings → Resources', () => {
     expect(requests.some((r) => r.url === '/api/v1/config')).toBe(false)
   })
 
+  it('does not carry a second isolation-default control — Isolation defaults owns it', async () => {
+    // Two controls disagreed about "off": the one here was three-state, the one
+    // on Isolation defaults wrote null, erasing a deliberate false set here.
+    serve()
+    renderResources()
+    await waitFor(() => expect(parallelSelect()).not.toBeNull())
+    expect(screen.queryByLabelText('Isolate agents by default')).toBeNull()
+  })
+
   it('saves maxParallel to the WORKSPACE config, never the per-repo one', async () => {
     serve({ maxParallel: 2 })
     renderResources()

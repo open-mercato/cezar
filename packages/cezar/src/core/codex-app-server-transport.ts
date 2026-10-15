@@ -1,7 +1,7 @@
-import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { localLauncher, type ProcessLauncher } from './process-launcher.ts';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { trackChildExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
-import { disclaimedCommand } from './disclaim-spawn.ts';
 import { EOF_KILL_GRACE_MS, EOF_TERM_GRACE_MS, KILL_GRACE_MS } from './claude-cli-runner.ts';
 
 export interface CodexAppServerMessage {
@@ -30,11 +30,14 @@ export function spawnCodexAppServer(
   bin: string,
   cwd: string,
   extraEnv?: Record<string, string>,
+  /** WHERE it runs. Defaults to this machine; a container launcher isolates it. */
+  launcher: ProcessLauncher = localLauncher,
 ): ChildProcessWithoutNullStreams {
   try {
-    const env = buildCodexAppServerEnv(extraEnv);
-    const [file, argv] = disclaimedCommand(bin, ['app-server'], env);
-    return nodeSpawn(file, argv, { cwd, env });
+    return launcher.spawn(bin, ['app-server'], {
+      cwd,
+      env: buildCodexAppServerEnv(extraEnv),
+    });
   } catch (error) {
     throw codexSpawnError(error, bin);
   }
@@ -118,6 +121,8 @@ export function endCodexAppServer(
   child: ChildProcessWithoutNullStreams,
   onTimers?: (term: NodeJS.Timeout, kill: NodeJS.Timeout | undefined) => void,
   onSignal?: () => void,
+  /** How to signal it — the launcher's, so a server inside a container is reached too. */
+  send: (sig: NodeJS.Signals) => void = (sig) => child.kill(sig),
 ): void {
   try {
     child.stdin.end();
@@ -132,12 +137,12 @@ export function endCodexAppServer(
   const termTimer = setTimeout(() => {
     if (!hasExited()) {
       onSignal?.();
-      child.kill('SIGTERM');
+      send('SIGTERM');
     }
     killTimer = setTimeout(() => {
       if (!hasExited()) {
         onSignal?.();
-        child.kill('SIGKILL');
+        send('SIGKILL');
       }
     }, EOF_KILL_GRACE_MS);
     killTimer.unref?.();

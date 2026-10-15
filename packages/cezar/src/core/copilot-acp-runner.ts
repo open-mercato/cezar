@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { localLauncher, type ProcessLauncher } from './process-launcher.ts';
 import { dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -45,6 +46,8 @@ export interface CopilotAcpRunnerOptions {
   bin?: string;
   /** Wall-clock timeout for a run (ms); per-spec `timeoutMs` still wins. */
   timeoutMs?: number;
+  /** WHERE it runs. Defaults to this machine; a container launcher isolates it. */
+  launcher?: ProcessLauncher;
 }
 
 /**
@@ -63,11 +66,16 @@ export class CopilotAcpRunner implements AgentRunner {
   readonly backend = 'copilot' as const;
   private readonly bin: string;
   private readonly timeoutMs: number;
+  private readonly launcher: ProcessLauncher;
   private lastSession: AgentSession | null = null;
 
   constructor(opts: CopilotAcpRunnerOptions = {}) {
-    this.bin =
-      opts.bin ?? process.env.CEZ_COPILOT_BIN ?? (process.env.CEZ_DRY_RUN === '1' ? mockCopilotPath() : 'copilot');
+    this.launcher = opts.launcher ?? localLauncher;
+    // Host overrides and the dry-run mock are HOST paths; inside a container the image's `copilot` runs.
+    this.bin = opts.bin
+      ?? (this.launcher.id !== 'local'
+        ? 'copilot'
+        : process.env.CEZ_COPILOT_BIN ?? (process.env.CEZ_DRY_RUN === '1' ? mockCopilotPath() : 'copilot'));
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
@@ -80,7 +88,9 @@ export class CopilotAcpRunner implements AgentRunner {
   }
 
   startSession(spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void, opts: SessionOptions = {}): AgentSession {
-    const session = new CopilotAcpSession(this.bin, this.backend, spec, spec.timeoutMs ?? this.timeoutMs, onEvent, opts);
+    const session = new CopilotAcpSession(
+      this.bin, this.backend, spec, spec.timeoutMs ?? this.timeoutMs, onEvent, opts, this.launcher,
+    );
     this.lastSession = session;
     return session;
   }
@@ -167,8 +177,13 @@ class CopilotAcpSession implements AgentSession {
     private readonly limitMs: number,
     private readonly onEvent: ((event: AgentEvent) => void) | undefined,
     private readonly opts: SessionOptions,
+    private readonly launcher: ProcessLauncher = localLauncher,
   ) {
-    this.child = nodeSpawn(bin, buildCopilotArgs(spec), { cwd: spec.cwd, env: buildCopilotEnv(backend, spec.env) });
+    const spawnOpts = { cwd: spec.cwd, env: buildCopilotEnv(backend, spec.env) };
+    // Locally exactly as before; a container launcher execs inside.
+    this.child = launcher.id === 'local'
+      ? nodeSpawn(bin, buildCopilotArgs(spec), spawnOpts)
+      : launcher.spawn(bin, buildCopilotArgs(spec), spawnOpts);
     this.pid = this.child.pid;
     this.hasExited = trackChildExit(this.child);
     this.child.on('error', (error: NodeJS.ErrnoException) => {
@@ -527,7 +542,8 @@ class CopilotAcpSession implements AgentSession {
     const signal = (sig: NodeJS.Signals): void => {
       if (this.hasExited()) return;
       this.terminatedByCezar = true;
-      this.child.kill(sig);
+      // Through the launcher: killing a `podman exec` client leaves the agent running inside.
+      void this.launcher.signal(this.child, sig);
     };
     if (hard) {
       this.terminatedByCezar = true;

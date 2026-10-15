@@ -15,6 +15,7 @@ import { toast } from '@/components/ui/toaster'
 const AUDIENCE_LABELS: Record<SecretAudience, string> = {
   checks: 'Check steps (workflow commands)',
   cezar: 'cezar itself (its own features — not the agents)',
+  containers: 'Isolated agents (task containers only — e.g. CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`)',
 }
 
 /** The backend line under the list: a file fallback is never silent. */
@@ -74,8 +75,8 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
 
   const title = scope === 'project' ? 'Project secrets' : 'Workspace secrets'
   const intro = scope === 'project'
-    ? 'Values for this project only — an e2e runner’s model key, a staging login. They reach the audiences you pick and never an agent session.'
-    : 'Values shared by every project on this machine — a key cezar’s own features use, a token every project’s checks need. A project secret of the same name wins. They never reach an agent session.'
+    ? 'Values for this project only — an e2e runner’s model key, a staging login. They reach the audiences you pick, and never an agent running on this machine.'
+    : 'Values shared by every project on this machine — a key cezar’s own features use, a token every project’s checks need, a login for isolated agents. A project secret of the same name wins. They never reach an agent running on this machine.'
   const secrets = list.data?.secrets ?? []
 
   return (
@@ -124,7 +125,7 @@ function SecretsSection({ scope, list, save, remove, invalidate }: SecretsSectio
               {AUDIENCE_LABELS[audience]}
             </label>
           ))}
-          <p className="mt-1 text-xs text-muted-foreground">Agents are never an audience: a secret cannot be handed to a Claude Code, Codex or OpenCode session.</p>
+          <p className="mt-1 text-xs text-muted-foreground">An agent on this machine is never an audience; only agents isolated in a task container can be given a secret.</p>
         </fieldset>
         {error && error !== nameIssue ? <p role="alert" className="mt-2 text-sm text-danger">{error}</p> : null}
         <div className="mt-3">

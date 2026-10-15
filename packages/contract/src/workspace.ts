@@ -63,6 +63,47 @@ export const workspaceConfigResponseSchema = z.object({
    * the repo's own `.ai/cezar/config.json` is silent — a repo that chose is never overruled.
    */
   agentDefaults: z.object({
+    /** Whether a repo that has said nothing isolates its agents. */
+    isolation: z.boolean().optional(),
+    /**
+     * Sandbox settings a repo inherits when it has none of its own — which
+     * credentials this machine's agents may use, how big a container may get,
+     * which caches they share. Properties of the MACHINE, so they are picked
+     * once here instead of per checkout; a repo that states a key wins for that
+     * key. `enabled` is not here — that is `isolation` above.
+     */
+    sandbox: z.object({
+      provider: z.literal('podman').optional(),
+      claudeCredentialPassthrough: z.boolean().optional(),
+      cacheVolumes: z.record(z.string(), z.string()).optional(),
+      resources: z.object({
+        memory: z.string().optional(),
+        cpus: z.number().optional(),
+        shmSize: z.string().optional(),
+      }).optional(),
+      credentials: z.object({
+        enabled: z.record(z.string(), z.union([
+          z.boolean(),
+          z.object({
+            mode: z.enum(['mount', 'copy']).optional(),
+            keys: z.array(z.string()).optional(),
+          }),
+        ])).optional(),
+        /** Machine-wide secrets — a reference each, never a value. */
+        custom: z.array(z.object({
+          id: z.string(),
+          label: z.string().optional(),
+          env: z.array(z.string()).optional(),
+          valueFrom: z.string().optional(),
+          required: z.boolean().optional(),
+        })).optional(),
+      }).optional(),
+    }).optional(),
+    /** Where this machine's Vault is. An address, never a token. */
+    vault: z.object({
+      address: z.string().optional(),
+      namespace: z.string().optional(),
+    }).optional(),
     runner: runnerSchema.optional(),
     models: z.object({
       claude: z.string().optional(),
@@ -72,10 +113,44 @@ export const workspaceConfigResponseSchema = z.object({
       pi: z.string().optional(),
       junie: z.string().optional(),
       copilot: z.string().optional(),
+      kimi: z.string().optional(),
     }).optional(),
   }),
 });
 export type WorkspaceConfigResponse = z.infer<typeof workspaceConfigResponseSchema>;
+
+/** An environment variable NAME — it becomes a `-e NAME` for podman, so nothing else is allowed. */
+const envNameSchema = z.string().trim().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'must be an environment variable name').max(128);
+
+/**
+ * One secret passed to isolated agents, as a REFERENCE (`vault://<mount>/<path>#<field>`) — never
+ * a value — and the variables it lands in. No host or guest paths over the API: a custom MOUNT is
+ * something a person writes into an untracked config by hand, not a field a request can set.
+ */
+export const secretReferenceSchema = z.object({
+  id: z.string().trim().min(1).max(512),
+  label: z.string().trim().max(120).optional(),
+  env: z.array(envNameSchema).max(8).optional(),
+  valueFrom: z.string().trim().min(1).max(512).optional(),
+  required: z.boolean().optional(),
+});
+export type SecretReference = z.infer<typeof secretReferenceSchema>;
+
+/** One catalog credential's choice: on/off, mount or copy, and — for `~/.ssh` — the files picked. */
+export const credentialChoiceSchema = z.union([
+  z.boolean(),
+  z.object({
+    mode: z.enum(['mount', 'copy']).optional(),
+    keys: z.array(z.string().trim().min(1).max(128)).max(64).optional(),
+  }),
+]);
+
+/** Which credentials isolated agents get — the shape both the project and the machine edit. */
+export const credentialGrantsSchema = z.object({
+  enabled: z.record(z.string().max(64), credentialChoiceSchema).optional(),
+  /** Secrets, as references. The whole array is sent on every edit. */
+  custom: z.array(secretReferenceSchema).max(64).optional(),
+});
 
 /**
  * `PUT /api/v1/workspace/config` body — partial: absent keys stay untouched. A rejected workspace
@@ -101,6 +176,39 @@ export const setWorkspaceConfigInputSchema = z.object({
    *  absent key cannot say in a partial patch. */
   agentDefaults: z
     .object({
+      isolation: z.boolean().nullable().optional(),
+      /** The machine-wide sandbox template; `null` on a key clears it. */
+      sandbox: z
+        .object({
+          provider: z.literal('podman').nullable().optional(),
+          claudeCredentialPassthrough: z.boolean().nullable().optional(),
+          /** NAMED volumes only → an absolute guest path. A path-shaped key would bind a host
+           *  directory into every container, and `:`/`,` would smuggle mount options. */
+          cacheVolumes: z
+            .record(
+              z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/, 'must be a volume name'),
+              z.string().regex(/^\/[^:,\n]*$/, 'must be an absolute path without : or ,').max(512),
+            )
+            .refine((volumes) => Object.keys(volumes).length <= 32, 'at most 32 cache volumes')
+            .nullable()
+            .optional(),
+          resources: z
+            .object({
+              memory: z.string().trim().min(1).max(20).nullable().optional(),
+              cpus: z.number().positive().max(256).nullable().optional(),
+              shmSize: z.string().trim().min(1).max(20).nullable().optional(),
+            })
+            .optional(),
+          credentials: credentialGrantsSchema.optional(),
+        })
+        .optional(),
+      /** `null` on a key clears it. Never carries a token. */
+      vault: z
+        .object({
+          address: z.string().trim().min(1).max(512).nullable().optional(),
+          namespace: z.string().trim().min(1).max(256).nullable().optional(),
+        })
+        .optional(),
       runner: runnerSchema.nullable().optional(),
       models: z
         .object({
@@ -111,6 +219,7 @@ export const setWorkspaceConfigInputSchema = z.object({
           cursor: z.string().trim().min(1).max(200).nullable().optional(),
           pi: z.string().trim().min(1).max(200).nullable().optional(),
           copilot: z.string().trim().min(1).max(200).nullable().optional(),
+          kimi: z.string().trim().min(1).max(200).nullable().optional(),
         })
         .optional(),
     })
@@ -292,6 +401,7 @@ export const workspaceUiStateSchema = z.looseObject({
       pi: z.string().optional(),
       junie: z.string().optional(),
       copilot: z.string().optional(),
+      kimi: z.string().optional(),
     })
     .optional(),
   /** Settings → Appearance, GLOBAL since step 3.5: accent + density describe the person at the
@@ -350,6 +460,7 @@ export const setWorkspaceUiStateInputSchema = z
         pi: z.string().min(1).max(128).optional(),
         junie: z.string().min(1).max(128).optional(),
         copilot: z.string().min(1).max(128).optional(),
+        kimi: z.string().min(1).max(128).optional(),
       })
       .optional(),
     importedSkills: z.array(z.string().min(1).max(200)).max(WORKSPACE_UI_STATE_MAX_KEYS).optional(),
@@ -390,6 +501,7 @@ export const runnerModelsSchema = z.object({
   cursor: z.string().optional(),
   pi: z.string().optional(),
   copilot: z.string().optional(),
+  kimi: z.string().optional(),
 });
 export type RunnerModels = z.infer<typeof runnerModelsSchema>;
 
@@ -431,6 +543,24 @@ export type SetConfigResponse = z.infer<typeof setConfigResponseSchema>;
  * another runner's preset.
  */
 export const setConfigInputSchema = z.object({
+  /**
+   * Agent isolation, as a PATCH the server merges into the repo's `sandbox` block, so a switch can
+   * never drop the keys it does not send (image, Containerfile). Credential grants are written
+   * where they can be trusted — see `config.local.json` in the service's config loader.
+   */
+  sandbox: z
+    .object({
+      enabled: z.boolean().optional(),
+      resources: z
+        .object({
+          memory: z.string().trim().min(1).max(20).nullable().optional(),
+          cpus: z.number().positive().max(256).nullable().optional(),
+          shmSize: z.string().trim().min(1).max(20).optional(),
+        })
+        .optional(),
+      credentials: credentialGrantsSchema.optional(),
+    })
+    .optional(),
   baseBranch: z.string().trim().min(1).max(200).nullable().optional(),
   defaultRunner: runnerSchema.optional(),
   systemPrompt: z.string().trim().max(20_000).nullable().optional(),
@@ -444,6 +574,7 @@ export const setConfigInputSchema = z.object({
       cursor: z.string().trim().max(200).nullable().optional(),
       pi: z.string().trim().max(200).nullable().optional(),
       copilot: z.string().trim().max(200).nullable().optional(),
+      kimi: z.string().trim().max(200).nullable().optional(),
     })
     .optional(),
   /** Per-runner "auto is the default" override (#906), additive: clearing a `defaultModels` preset
@@ -456,6 +587,7 @@ export const setConfigInputSchema = z.object({
       codex: z.boolean().nullable().optional(),
       opencode: z.boolean().nullable().optional(),
       pi: z.boolean().nullable().optional(),
+      kimi: z.boolean().nullable().optional(),
     })
     .optional(),
   maxParallel: z.number().int().min(1).max(16).optional(),
@@ -566,11 +698,12 @@ export type ProviderConnectResponse = z.infer<typeof providerConnectResponseSche
 /**
  * The runners whose model list is discovered from the host rather than hard-coded: Codex through
  * its app-server protocol, OpenCode through its own `models` listing (#794), Claude through the
- * CLI's `list_models` control request (#784), Cursor through its CLI model listing, and Junie through ACP session config options. A runner absent here has no discovery path and
+ * CLI's `list_models` control request (#784), Cursor through its CLI model listing, and Junie through ACP session config options, Kimi from the `[models.*]` tables of its own
+ * config.toml. A runner absent here has no discovery path and
  * 400s, so the client compiles against exactly what the route accepts. One definition, used by
  * the route's query validator and by the cockpit's picker.
  */
-export const modelDiscoveryRunnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'junie']);
+export const modelDiscoveryRunnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'junie', 'kimi']);
 export type ModelDiscoveryRunner = z.infer<typeof modelDiscoveryRunnerSchema>;
 export const MODEL_DISCOVERY_RUNNERS: readonly ModelDiscoveryRunner[] =
   modelDiscoveryRunnerSchema.options;
@@ -587,7 +720,7 @@ export const runnerModelOptionSchema = z.object({
 });
 export type RunnerModelOption = z.infer<typeof runnerModelOptionSchema>;
 
-/** `GET /api/v1/models?runner=claude|codex|opencode|cursor|junie` — the models discovered from that runner's
+/** `GET /api/v1/models?runner=claude|codex|opencode|cursor|junie|kimi` — the models discovered from that runner's
  *  own host installation, plus how fresh the answer is. Never an error: an unavailable CLI
  *  degrades to `source: 'unavailable'` with a `reason`. */
 export const runnerModelCatalogResponseSchema = z.object({

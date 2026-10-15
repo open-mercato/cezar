@@ -18,7 +18,7 @@ import type { AgentConfigFile, Runner } from '@open-mercato/cezar-api-client'
  *
  * Group membership derives from the flat `/api/agent-config` listing: a file
  * belongs to an agent when `runners` INCLUDES it (not `runners[0]` — the shared
- * `AGENTS.md` entry is read by Codex AND OpenCode and must show under both), and
+ * `AGENTS.md` entry is read by Codex, OpenCode AND Kimi and must show under each), and
  * `holdsMcp` promotes a file into the MCP group as well as its own kind — for
  * Codex/OpenCode the main config genuinely is where MCP servers live.
  */
@@ -134,6 +134,17 @@ export const AGENT_DESCRIPTORS: AgentDescriptor[] = [
         'MCP',
         'User ~/.cursor/mcp.json and project .cursor/mcp.json.',
       ),
+    ],
+  },
+  {
+    id: 'kimi',
+    label: 'Kimi',
+    note: EDITOR_PLUS_COMMIT,
+    // No MCP group: cezar has not verified where Kimi Code keeps MCP server definitions, and an
+    // empty group that implies "none configured" would be the kind of guess the catalog forbids.
+    groups: [
+      group('kimi', 'settings', 'Settings'),
+      group('kimi', 'memory', 'Memory & instructions'),
     ],
   },
 ]

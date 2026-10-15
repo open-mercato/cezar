@@ -1,4 +1,5 @@
-import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { localLauncher, type ProcessLauncher } from './process-launcher.ts';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type {
   AgentEvent,
   AgentRunResult,
@@ -10,7 +11,6 @@ import type {
 import type { AgentSession, SessionOptions } from './agent-runner.ts';
 import { prependSystemPrompt, trackChildExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
-import { disclaimedCommand } from './disclaim-spawn.ts';
 import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.ts';
 import { parseModelIdentity } from './model-identity.ts';
 import { V1TextCoalescer } from './v1-text-coalescer.ts';
@@ -34,6 +34,8 @@ export interface OpencodeRunnerOptions {
   bin?: string;
   /** Wall-clock timeout for a run (ms); per-spec `timeoutMs` still wins. */
   timeoutMs?: number;
+  /** WHERE the server runs — this machine, or a container. Defaults to local. */
+  launcher?: ProcessLauncher;
 }
 
 const SERVER_START_TIMEOUT_MS = 30_000;
@@ -74,9 +76,12 @@ export class OpencodeServerRunner implements AgentRunner {
   private readonly bin: string;
   private readonly timeoutMs: number;
   private lastSession: OpencodeSession | null = null;
+  private readonly launcher: ProcessLauncher;
 
   constructor(opts: OpencodeRunnerOptions = {}) {
-    this.bin = opts.bin ?? process.env.CEZ_OPENCODE_BIN ?? 'opencode';
+    this.launcher = opts.launcher ?? localLauncher;
+    // A host override names a HOST path; inside a container the image's `opencode` runs.
+    this.bin = opts.bin ?? (this.launcher.id === 'local' ? process.env.CEZ_OPENCODE_BIN ?? 'opencode' : 'opencode');
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
   }
 
@@ -93,7 +98,7 @@ export class OpencodeServerRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
-    const session = new OpencodeSession(this.bin, this.timeoutMs, spec, onEvent, opts);
+    const session = new OpencodeSession(this.bin, this.timeoutMs, spec, onEvent, opts, this.launcher);
     this.lastSession = session;
     return session;
   }
@@ -166,9 +171,26 @@ class OpencodeSession implements AgentSession {
     private readonly spec: AgentRunSpec,
     private readonly onEvent: ((event: AgentEvent) => void) | undefined,
     private readonly opts: SessionOptions,
+    /** WHERE the server runs; also supplies the published port when isolated. */
+    private readonly launcher: ProcessLauncher = localLauncher,
   ) {
-    // Random high port; the actual bound URL is read back from stdout.
-    const port = 40000 + Math.floor(Math.random() * 20000);
+    // opencode is the one backend cezar talks to over HTTP rather than stdio,
+    // so WHERE it runs changes how it must bind:
+    //
+    //  - locally, loopback and a random high port is right — nothing else
+    //    should be able to reach it;
+    //  - in a container, the port must be one the launcher PUBLISHED (chosen
+    //    at container-creation time, so it cannot be picked here) and the
+    //    server must bind 0.0.0.0 inside, or the publish forwards to a socket
+    //    listening only on the container's own loopback and cezar sees a hung
+    //    agent rather than a networking mistake.
+    const published = this.launcher.publishedPort;
+    // The server prints the address it BOUND. Inside a container that is the
+    // wildcard, which is not a valid destination to dial — the published
+    // mapping is on loopback, so that is what the host must connect to.
+
+    const port = published ?? 40000 + Math.floor(Math.random() * 20000);
+    const hostname = published ? '0.0.0.0' : '127.0.0.1';
     try {
       const env = buildChildEnv({ backend: 'opencode', extraEnv: spec.env });
       // Private MCP servers (spec 2026-10-07-private-project-mcp): OpenCode loads
@@ -176,8 +198,10 @@ class OpencodeSession implements AgentSession {
       if (spec.mcpServers?.length) {
         env.OPENCODE_CONFIG_CONTENT = opencodeConfigContent(spec.mcpServers, env.OPENCODE_CONFIG_CONTENT);
       }
-      const [file, argv] = disclaimedCommand(bin, ['serve', '--hostname', '127.0.0.1', '--port', String(port)], env);
-      this.child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
+      this.child = this.launcher.spawn(bin, ['serve', '--hostname', hostname, '--port', String(port)], {
+        cwd: spec.cwd,
+        env,
+      });
     } catch (err) {
       throw wrapSpawnError(err, bin);
     }
@@ -206,7 +230,7 @@ class OpencodeSession implements AgentSession {
     this.child.stderr.on('data', (chunk: string) => stderrChunks.push(chunk));
 
     // The server prints its URL on stdout once listening.
-    const urlReady = this.waitForServerUrl();
+    const urlReady = this.waitForServerUrl(published ? '127.0.0.1' : undefined);
 
     const limitMs = spec.timeoutMs ?? timeoutMs;
     let deadline: NodeJS.Timeout | undefined;
@@ -333,16 +357,16 @@ class OpencodeSession implements AgentSession {
   private terminate(): void {
     if (this.signalled || this.hasExited()) return;
     this.signalled = true;
-    this.child.kill('SIGTERM');
+    void this.launcher.signal(this.child, 'SIGTERM');
     setTimeout(() => {
       if (this.hasExited()) return;
-      this.child.kill('SIGKILL');
+      void this.launcher.signal(this.child, 'SIGKILL');
     }, KILL_GRACE_MS).unref?.();
   }
 
   // ---- server lifecycle ---------------------------------------------------
 
-  private waitForServerUrl(): Promise<string> {
+  private waitForServerUrl(dialHost?: string): Promise<string> {
     return new Promise((resolve, reject) => {
       let buffer = '';
       const timer = setTimeout(() => {
@@ -355,7 +379,11 @@ class OpencodeSession implements AgentSession {
         const m = /https?:\/\/[\d.]+:\d+/.exec(buffer);
         if (m) {
           cleanup();
-          resolve(m[0]);
+          // The server prints the address it BOUND. In a container that is the
+          // wildcard `0.0.0.0`, which is not a valid destination to dial — the
+          // published mapping is on loopback, so rewrite the host rather than
+          // relying on 0.0.0.0 happening to route locally.
+          resolve(dialHost ? m[0].replace(/\/\/[\d.]+:/, `//${dialHost}:`) : m[0]);
         }
       };
       const onExit = () => {

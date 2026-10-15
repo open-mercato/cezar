@@ -10,6 +10,7 @@ const PROVIDER_LABEL: Record<Runner, string> = {
   cursor: 'Cursor',
   pi: 'pi',
   copilot: 'GitHub Copilot CLI',
+  kimi: 'Kimi',
 }
 
 /** Mirrors the server's providerForActiveRun for POST /runs/:id/messages. */

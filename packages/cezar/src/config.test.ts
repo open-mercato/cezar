@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_SKILLS_REPOS, gatedSkillsRepos, loadConfig, resolveWorktreeRetention } from './config.ts';
 
@@ -157,6 +157,58 @@ describe('loadConfig systemPrompt', () => {
  * only *seeds* repos that set none, which is exactly what Settings → Worktrees
  * tells the user, so the precedence is the contract under test here.
  */
+describe('machine-wide isolation default', () => {
+  let repoRoot: string;
+  let cezHome: string;
+  const savedHome = process.env.CEZ_HOME;
+
+  beforeEach(() => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-isolation-'));
+    mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+    cezHome = mkdtempSync(join(tmpdir(), 'cez-home-iso-'));
+    process.env.CEZ_HOME = cezHome;
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.CEZ_HOME;
+    else process.env.CEZ_HOME = savedHome;
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(cezHome, { recursive: true, force: true });
+  });
+
+  const writeRepo = (value: unknown) =>
+    writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), JSON.stringify(value), 'utf8');
+  const writeWorkspace = (value: unknown) =>
+    writeFileSync(join(cezHome, 'config.json'), JSON.stringify(value), 'utf8');
+
+  it('applies when the repo says nothing about isolation', async () => {
+    writeWorkspace({ agentDefaults: { isolation: true } });
+    writeRepo({ sandbox: { name: 'app' } });
+    expect((await loadConfig(repoRoot)).sandbox?.enabled).toBe(true);
+  });
+
+  it('applies when the repo has no sandbox block at all', async () => {
+    writeWorkspace({ agentDefaults: { isolation: true } });
+    expect((await loadConfig(repoRoot)).sandbox?.enabled).toBe(true);
+  });
+
+  it('NEVER overrides a repo that chose — an explicit false is a decision', async () => {
+    // The three-state rule. Collapsing "absent" and "false" here would let a
+    // machine default permanently overrule a project that opted out.
+    writeWorkspace({ agentDefaults: { isolation: true } });
+    writeRepo({ sandbox: { enabled: false } });
+    expect((await loadConfig(repoRoot)).sandbox?.enabled).toBe(false);
+  });
+
+  it('a machine with no opinion leaves the repo exactly as it was', async () => {
+    writeWorkspace({});
+    writeRepo({ sandbox: { enabled: true, name: 'app' } });
+    expect((await loadConfig(repoRoot)).sandbox?.enabled).toBe(true);
+    writeRepo({});
+    expect((await loadConfig(repoRoot)).sandbox).toBeUndefined();
+  });
+});
+
 describe('resolveWorktreeRetention', () => {
   let repoRoot: string;
   let cezHome: string;
@@ -371,5 +423,85 @@ describe('loadConfig machine-wide agent defaults', () => {
     const config = await loadConfig(repoRoot);
     expect(config.defaultRunner).toBe('claude');
     expect(config.systemPrompt).toBe('be brief');
+  });
+});
+
+describe('the machine-wide sandbox template', () => {
+  let repoRoot: string;
+  let cezHome: string;
+  const savedHome = process.env.CEZ_HOME;
+
+  beforeEach(() => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-tmpl-'));
+    cezHome = mkdtempSync(join(tmpdir(), 'cez-home-tmpl-'));
+    process.env.CEZ_HOME = cezHome;
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.CEZ_HOME;
+    else process.env.CEZ_HOME = savedHome;
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(cezHome, { recursive: true, force: true });
+  });
+
+  const writeWorkspace = (value: unknown) =>
+    writeFileSync(join(cezHome, 'config.json'), JSON.stringify(value), 'utf8');
+  const writeRepo = (value: unknown) => {
+    mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+    writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), JSON.stringify(value), 'utf8');
+  };
+
+  it("a repo with NO config inherits the machine's credentials, caches and resources", async () => {
+    // The gap this closes: a fresh project's isolated agent had no ssh key and a
+    // cold npm cache while the operator had configured both next door. Those are
+    // properties of the machine, not of any one checkout.
+    writeWorkspace({
+      agentDefaults: {
+        isolation: true,
+        sandbox: {
+          resources: { shmSize: '2g', memory: '8g' },
+          credentials: { enabled: { ssh: { mode: 'copy', keys: ['github'] } } },
+          cacheVolumes: { 'cez-npm': '/root/.npm' },
+        },
+      },
+    });
+    const config = await loadConfig(repoRoot);
+    expect(config.sandbox?.enabled).toBe(true);
+    expect(config.sandbox?.resources?.shmSize).toBe('2g');
+    expect(config.sandbox?.credentials?.enabled?.ssh).toEqual({ mode: 'copy', keys: ['github'] });
+    expect(config.sandbox?.cacheVolumes).toEqual({ 'cez-npm': '/root/.npm' });
+    // Named after the repo, not the schema's literal default: otherwise every
+    // unconfigured project on the machine would share one image tag. Lowercased,
+    // because the name becomes one — `mkdtemp` happily produces capitals and
+    // podman refuses a tag that contains them.
+    expect(config.sandbox?.name).toBe(basename(repoRoot).toLowerCase());
+  });
+
+  it('the repo wins per KEY, and keeps what it did not mention', async () => {
+    writeWorkspace({
+      agentDefaults: {
+        sandbox: {
+          resources: { shmSize: '2g', memory: '8g' },
+          credentials: { enabled: { ssh: true, aws: true } },
+        },
+      },
+    });
+    writeRepo({
+      sandbox: { enabled: true, name: 'mine', resources: { memory: '4g' }, credentials: { enabled: { ssh: false } } },
+    });
+
+    const config = await loadConfig(repoRoot);
+    expect(config.sandbox?.name).toBe('mine');
+    expect(config.sandbox?.resources?.memory).toBe('4g');
+    // Not dropped by the repo pinning only `memory`: podman's 64m shm default
+    // kills any headless browser, so losing the machine's value is a silent trap.
+    expect(config.sandbox?.resources?.shmSize).toBe('2g');
+    // The repo turned ssh off for itself; the machine's other grant stands.
+    expect(config.sandbox?.credentials?.enabled?.ssh).toBe(false);
+    expect(config.sandbox?.credentials?.enabled?.aws).toBe(true);
+  });
+
+  it('no template means exactly what it meant before', async () => {
+    expect((await loadConfig(repoRoot)).sandbox).toBeUndefined();
   });
 });

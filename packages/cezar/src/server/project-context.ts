@@ -3,6 +3,7 @@ import { AutomationStore } from '../automations/store.ts';
 import { reconcileAutomationReceipts } from '../automations/task-template.ts';
 import { DEFAULT_WORKTREE_RETENTION, resolveWorktreeRetention } from '../config.ts';
 import { pruneOrphans } from '../git-worktree.ts';
+import { removeContainersOf } from '../core/podman-lifecycle.ts';
 import { armRepoHandle } from '../runs/arm-repo-handle.ts';
 import { reclaimWorktrees } from '../runs/retention.ts';
 import { RunStore } from '../runs/store.ts';
@@ -228,7 +229,8 @@ export class ProjectContexts {
         const keep = await resolveWorktreeRetention(project.root).catch(
           () => DEFAULT_WORKTREE_RETENTION,
         );
-        await reclaimWorktrees(project.root, store, keep).catch(() => [] as string[]);
+        const reclaimed = await reclaimWorktrees(project.root, store, keep).catch(() => [] as string[]);
+        void removeContainersOf(reclaimed, (id) => store.getRun(id)?.isolation?.container !== undefined);
       }
       await manager.recover();
       // Which repository this project IS (#945), so the referenced tier stops adopting another

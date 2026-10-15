@@ -62,12 +62,55 @@ const storedSecretSchema = z.object({
 });
 type StoredSecret = z.infer<typeof storedSecretSchema>;
 
-const secretFileSchema = z.object({
+type SecretFile = { version: typeof FILE_VERSION; root?: string; secrets: Record<string, StoredSecret> };
+
+/**
+ * The file ON DISK, written so a cezar that predates the `containers` audience still reads it:
+ * that cezar validates `audiences` against its own two names and rejects the WHOLE file on a third,
+ * dropping every secret with it. So `audiences` carries only the names every cezar knows, a
+ * `containers` flag (an unknown key, which older schemas strip) adds the new one, and a secret
+ * ONLY for containers lives in `containerOnly`, which older cezars never look at.
+ */
+const LEGACY_AUDIENCES: readonly SecretAudience[] = ['checks', 'cezar'];
+const diskSecretSchema = storedSecretSchema.extend({
+  // `containers` itself is accepted too: a build of this branch wrote it there before the split.
+  audiences: z.array(secretAudienceSchema),
+  containers: z.boolean().optional(),
+});
+type DiskSecret = z.infer<typeof diskSecretSchema>;
+const diskFileSchema = z.object({
   version: z.literal(FILE_VERSION),
   root: z.string().optional(),
-  secrets: z.record(z.string(), storedSecretSchema),
+  secrets: z.record(z.string(), diskSecretSchema),
+  containerOnly: z.record(z.string(), diskSecretSchema).optional(),
 });
-type SecretFile = z.infer<typeof secretFileSchema>;
+
+function fromDisk(entry: DiskSecret, containerOnly: boolean): StoredSecret | undefined {
+  const { containers, ...rest } = entry;
+  const audiences = [...new Set<SecretAudience>([
+    ...entry.audiences,
+    ...(containers || containerOnly ? ['containers' as const] : []),
+  ])];
+  return audiences.length > 0 ? { ...rest, audiences } : undefined;
+}
+
+/** The on-disk JSON for `file` — see `diskFileSchema`. */
+export function serializeSecretFile(file: SecretFile): string {
+  const secrets: Record<string, DiskSecret> = {};
+  const containerOnly: Record<string, DiskSecret> = {};
+  for (const [name, entry] of Object.entries(file.secrets)) {
+    const legacy = entry.audiences.filter((a) => LEGACY_AUDIENCES.includes(a));
+    const containers = entry.audiences.includes('containers');
+    if (legacy.length > 0) secrets[name] = { ...entry, audiences: legacy, ...(containers ? { containers: true } : {}) };
+    else containerOnly[name] = { ...entry, audiences: [] };
+  }
+  return `${JSON.stringify({
+    version: file.version,
+    ...(file.root !== undefined ? { root: file.root } : {}),
+    secrets,
+    ...(Object.keys(containerOnly).length > 0 ? { containerOnly } : {}),
+  }, null, 2)}\n`;
+}
 
 /**
  * A read of one scope's store. `skipped` is set only when a store the user DID write could not
@@ -276,7 +319,7 @@ export class SecretStore {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error instanceof SecretsError)) throw error;
       }
       if (!mutate(file, id)) return false;
-      await this.save(this.file(id), `${JSON.stringify(file, null, 2)}\n`);
+      await this.save(this.file(id), serializeSecretFile(file));
       return true;
     });
   }
@@ -459,9 +502,18 @@ export function parseSecretFile(text: string): SecretFile {
   } catch {
     throw new SecretsError('the store file is corrupt — not JSON');
   }
-  const parsed = secretFileSchema.safeParse(json);
+  const parsed = diskFileSchema.safeParse(json);
   if (!parsed.success) throw new SecretsError('the store file is corrupt — not a shape this cezar writes');
-  return parsed.data;
+  const secrets: Record<string, StoredSecret> = {};
+  for (const [name, entry] of Object.entries(parsed.data.containerOnly ?? {})) {
+    const stored = fromDisk(entry, true);
+    if (stored) secrets[name] = stored;
+  }
+  for (const [name, entry] of Object.entries(parsed.data.secrets)) {
+    const stored = fromDisk(entry, false);
+    if (stored) secrets[name] = stored;
+  }
+  return { version: parsed.data.version, ...(parsed.data.root !== undefined ? { root: parsed.data.root } : {}), secrets };
 }
 
 async function canonicalRoot(root: string): Promise<string> {

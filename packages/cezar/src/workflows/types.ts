@@ -235,8 +235,17 @@ export function stepsIssue(steps: WorkflowStepDef[]): string | null {
   return null;
 }
 
-/** Tools an agent step gets when the workflow doesn't say otherwise. */
-export const DEFAULT_ALLOWED_TOOLS = ['Read', 'Edit', 'Write', 'Grep', 'Glob', 'Bash'];
+/**
+ * Tools an agent step gets when the workflow doesn't say otherwise.
+ *
+ * Claude runs headless in `dontAsk` mode, where anything not listed here is REFUSED, silently to
+ * the user — the agent just reports it cannot. `WebSearch` and `WebFetch` were refused that way
+ * across real tasks (a research task could search nothing and fetch only the few documentation
+ * sites Claude pre-approves), and `Skill` too, which is how Claude runs a skill such as
+ * om-code-review mid-task. None widens what the default already grants: unrestricted `Bash`
+ * reaches the network with `curl` and reads every skill file on disk.
+ */
+export const DEFAULT_ALLOWED_TOOLS = ['Read', 'Edit', 'Write', 'Grep', 'Glob', 'Bash', 'WebFetch', 'WebSearch', 'Skill'];
 
 /** The zero-config workflow: one agent step that just does the task. */
 export const QUICK_TASK_WORKFLOW: WorkflowDef = {

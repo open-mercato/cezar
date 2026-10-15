@@ -6,8 +6,9 @@ import { z } from 'zod';
  *
  * A secret is a named value with a SCOPE (one project, or the whole workspace) and a list of
  * AUDIENCES — who may read it. The API speaks names and metadata; a value goes in once and
- * never comes back out, not even masked. An agent session is never an audience: the type has
- * no such member, so no route, store or workflow can hand one to a backend.
+ * never comes back out, not even masked. An agent session ON THIS MACHINE is never an audience:
+ * the type has no such member, so no route, store or workflow can hand one to a host backend.
+ * `containers` reaches only agents isolated in a task container.
  */
 
 /** A value's upper bound: 16 KiB of UTF-8 (a service-account JSON fits, a log file does not). */
@@ -18,8 +19,11 @@ export const SECRET_VALUE_MAX_BYTES = 16 * 1024;
  * - `checks`: a workflow's check steps (`command:`), as environment variables.
  * - `cezar`: cezar's own features (an LLM key for cezar-level actions). Reserved for consumers
  *   that read through the store's `cezar` audience; nothing ships one yet.
+ * - `containers`: agents isolated in a task container, as environment variables — a login a
+ *   container cannot keep fresh itself, such as `CLAUDE_CODE_OAUTH_TOKEN` from
+ *   `claude setup-token`, or `CURSOR_API_KEY`. Never an agent on this machine.
  */
-export const SECRET_AUDIENCES = ['checks', 'cezar'] as const;
+export const SECRET_AUDIENCES = ['checks', 'cezar', 'containers'] as const;
 export const secretAudienceSchema = z.enum(SECRET_AUDIENCES);
 export type SecretAudience = z.infer<typeof secretAudienceSchema>;
 

@@ -29,21 +29,31 @@ function fileOf(over: Partial<AgentConfigFile> & Pick<AgentConfigFile, 'id'>): A
 
 describe('AGENT_DESCRIPTORS', () => {
   // `pi` has no entry on purpose — no pi-owned config file is cataloged yet, so its pane would
-  // be three empty groups (see the descriptor table's header comment).
-  it('has one entry per config-owning runner; Cursor has settings+mcp (no memory group yet)', () => {
-    expect(AGENT_DESCRIPTORS.map((d) => d.id)).toEqual(['claude', 'codex', 'copilot', 'opencode', 'cursor'])
-    for (const d of AGENT_DESCRIPTORS.filter((d) => d.id !== 'cursor')) {
-      expect(d.groups.map((g) => g.id)).toEqual(['settings', 'mcp', 'memory'])
-      expect(d.groups.find((g) => g.id === 'mcp')?.note).toBeTruthy()
+  // be three empty groups (see the descriptor table's header comment). Cursor has no memory group
+  // yet, and Kimi no MCP group on purpose: where Kimi Code keeps MCP servers is unverified, and an
+  // empty group would read as "none configured".
+  it('has one entry per config-owning runner, each with its groups in stable order', () => {
+    const expected: Array<[string, string[]]> = [
+      ['claude', ['settings', 'mcp', 'memory']],
+      ['codex', ['settings', 'mcp', 'memory']],
+      ['copilot', ['settings', 'mcp', 'memory']],
+      ['opencode', ['settings', 'mcp', 'memory']],
+      ['cursor', ['settings', 'mcp']],
+      ['kimi', ['settings', 'memory']],
+    ]
+    expect(AGENT_DESCRIPTORS.map((d) => [d.id, d.groups.map((g) => g.id)])).toEqual(expected)
+    for (const d of AGENT_DESCRIPTORS) {
+      const mcp = d.groups.find((g) => g.id === 'mcp')
+      if (mcp) expect(mcp.note).toBeTruthy() // every agent with an MCP group says where MCP servers live
     }
-    expect(descriptorFor('cursor').groups.map((g) => g.id)).toEqual(['settings', 'mcp'])
   })
 
   it('membership uses runners[] inclusion — shared files belong to every reader', () => {
-    const shared = fileOf({ id: 'project.agents', runners: ['codex', 'opencode', 'copilot'], kind: 'memory', format: 'markdown' })
+    const shared = fileOf({ id: 'project.agents', runners: ['codex', 'opencode', 'copilot', 'kimi'], kind: 'memory', format: 'markdown' })
     expect(descriptorFor('codex').groups.find((g) => g.id === 'memory')!.files(shared)).toBe(true)
     expect(descriptorFor('opencode').groups.find((g) => g.id === 'memory')!.files(shared)).toBe(true)
     expect(descriptorFor('copilot').groups.find((g) => g.id === 'memory')!.files(shared)).toBe(true)
+    expect(descriptorFor('kimi').groups.find((g) => g.id === 'memory')!.files(shared)).toBe(true)
     expect(descriptorFor('claude').groups.find((g) => g.id === 'memory')!.files(shared)).toBe(false)
   })
 

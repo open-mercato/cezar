@@ -53,14 +53,38 @@ const GIT_HARDENING_ENV = {
   GIT_TERMINAL_PROMPT: '0',
 };
 
-function git(args: string[], timeoutMs: number, cwd?: string): Promise<GitResult> {
+/** Stdio pipes are `net.Socket`s at runtime, typed as plain streams. */
+function unrefPipe(pipe: unknown): void {
+  (pipe as { unref?: () => void } | null)?.unref?.();
+}
+
+function git(
+  args: string[],
+  timeoutMs: number,
+  cwd?: string,
+  /**
+   * Best-effort work nobody is waiting on. Such a child must not keep the
+   * process alive: a headless `cezar run` finished its task in 2s and then sat
+   * for 60 more while a background clone of the skills repo ran into its
+   * timeout — every run, on any machine without a warm cache, because that
+   * clone takes longer than 60s on a slow link and so never completes. Unref'd,
+   * the CLI exits when its work is done; an orphaned clone runs to completion
+   * and warms the cache for next time. In the long-lived server nothing changes:
+   * the process stays up and the timeout still applies.
+   */
+  opts: { background?: boolean } = {},
+): Promise<GitResult> {
   return new Promise((resolve) => {
-    execFile(
+    const child = execFile(
       'git',
       [...GIT_HARDENING_ARGS, ...args],
       {
         cwd,
-        timeout: timeoutMs,
+        // In the background the timeout is ours (below): execFile's own is a
+        // REF'd kill timer, which kept the process alive exactly as long as the
+        // timeout even after the child itself was unref'd — measured as the
+        // CLI exiting at 60.6s, the instant the 60s clone timeout fired.
+        timeout: opts.background ? 0 : timeoutMs,
         killSignal: 'SIGKILL',
         maxBuffer: 16 * 1024 * 1024,
         encoding: 'utf8',
@@ -68,6 +92,16 @@ function git(args: string[], timeoutMs: number, cwd?: string): Promise<GitResult
       },
       (err, stdout, stderr) => resolve({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' }),
     );
+    if (opts.background) {
+      // The child AND its pipes: an unref'd child with ref'd stdio pipes still
+      // holds the event loop open.
+      child.unref();
+      for (const pipe of [child.stdin, child.stdout, child.stderr]) unrefPipe(pipe);
+      // The same timeout while this process is alive, without holding it open.
+      const kill = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
+      kill.unref();
+      child.once('exit', () => clearTimeout(kill));
+    }
   });
 }
 
@@ -173,7 +207,10 @@ function warnUnsafeRemoteOnce(repo: string): void {
 }
 
 /** Clone the skills repo bare (no checkout) into the global cache, once. */
-export async function ensureBareClone(repo: string): Promise<{ bareDir: string; created: boolean }> {
+export async function ensureBareClone(
+  repo: string,
+  opts: { background?: boolean } = {},
+): Promise<{ bareDir: string; created: boolean }> {
   // Validate before anything else, cache hit or not: "this source is refusable"
   // should never depend on whether a clone happens to exist already.
   const remote = safeRemoteFor(repo);
@@ -189,17 +226,18 @@ export async function ensureBareClone(repo: string): Promise<{ bareDir: string; 
   await mkdir(dirname(bareDir), { recursive: true });
   // `--` separates options from the remote/dir operands: even a value that
   // slipped past validation can't pose as a git option.
-  const res = await git(['clone', '--bare', '--', remote, bareDir], CLONE_TIMEOUT_MS);
+  const res = await git(['clone', '--bare', '--', remote, bareDir], CLONE_TIMEOUT_MS, undefined, opts);
   if (!res.ok) throw new Error(`git clone --bare ${remote} failed: ${res.stderr.trim()}`);
   return { bareDir, created: true };
 }
 
 /** "Refresh" — update every branch head in the bare clone from origin. */
-export async function fetchAll(bareDir: string): Promise<void> {
+export async function fetchAll(bareDir: string, opts: { background?: boolean } = {}): Promise<void> {
   const res = await git(
     ['fetch', 'origin', '--prune', '+refs/heads/*:refs/heads/*'],
     CLONE_TIMEOUT_MS,
     bareDir,
+    opts,
   );
   if (!res.ok) throw new Error(`git fetch failed: ${res.stderr.trim() || res.stdout.trim()}`);
 }
@@ -491,10 +529,13 @@ async function loadTeamSkills(repoRoot: string, refresh: boolean): Promise<Skill
         })
       ) {
         cloneAttempted.add(src.repo);
-        const { bareDir, created } = await ensureBareClone(src.repo);
+        // Background: this is the passive load `getTeamSkillsCached` fires and
+        // forgets. Nothing waits on it, so it must not hold the process open.
+        // An explicit Refresh (above) stays in the foreground.
+        const { bareDir, created } = await ensureBareClone(src.repo, { background: true });
         // A clone left by an earlier run is very likely behind origin; fetch it
         // so worktree reviews never read a stale skills template.
-        if (!created) await fetchAll(bareDir);
+        if (!created) await fetchAll(bareDir, { background: true });
         lastFetchByRepo.set(src.repo, Date.now());
       }
     } catch {

@@ -160,12 +160,13 @@ describe('per-agent translation', () => {
   });
 
   it('cursor and pi have no launch-time channel', () => {
-    expect(['claude', 'claude-cli', 'codex', 'opencode', 'junie', 'copilot'].filter(supportsPrivateMcp)).toEqual([
+    expect(['claude', 'claude-cli', 'codex', 'opencode', 'junie', 'copilot', 'kimi'].filter(supportsPrivateMcp)).toEqual([
       'claude',
       'codex',
       'opencode',
       'junie',
       'copilot',
+      'kimi',
     ]);
     expect(supportsPrivateMcp('cursor')).toBe(false);
     expect(supportsPrivateMcp('pi')).toBe(false);
@@ -181,7 +182,7 @@ describe('the cezar.private.mcp catalog file', () => {
   afterEach(() => rmSync(repo, { recursive: true, force: true }));
 
   it('is listed for every agent that can take it', () => {
-    expect(findConfigFile('cezar.private.mcp')?.runners).toEqual(['claude', 'codex', 'opencode', 'junie', 'copilot']);
+    expect(findConfigFile('cezar.private.mcp')?.runners).toEqual(['claude', 'codex', 'opencode', 'junie', 'copilot', 'kimi']);
   });
 
   it('is written 0600 and is git-ignored even when a .mcp.json is committed', async () => {

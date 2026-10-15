@@ -24,7 +24,11 @@ import {
 } from '../core/private-mcp.ts';
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
-import { createRunner } from '../core/runner-factory.ts';
+import { backendSupportsLauncher, createRunner } from '../core/runner-factory.ts';
+import type { AgentBackend } from '../core/agent-runner.ts';
+import { createLauncher } from '../core/launcher-factory.ts';
+import { PodmanUnavailable, removeContainersOf, removeTaskContainer, startTaskContainer, type TaskContainer } from '../core/podman-lifecycle.ts';
+import { noteInstalls } from '../core/containerfile-store.ts';
 import type { RunnerId } from '../core/agent-runner.ts';
 import { modelConflictsWithRunner } from '../core/model-presets.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
@@ -42,7 +46,9 @@ import {
   readHandoff,
   seedHandoffFile,
 } from '../handoff.ts';
-import { todosPath } from '../todos.ts';
+import { ingestTodos, todosPath } from '../todos.ts';
+import { ISOLATED_TODOS_FILE } from '../core/podman-launcher.ts';
+import { containerAgent, missingLoginNote } from '../core/container-agents.ts';
 // Contract VALUES, like `workspaceUiStateSchema` in workspace/migrations.ts: the attachment
 // vocabulary the routes validate with is the same one the engine stores and re-reads by, so the
 // wire and the disk can never disagree about what counts as an image (#950).
@@ -59,9 +65,24 @@ import { automationsReachable } from '../automations/builtin-skill.ts';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
 import { getTeamSkillsCached, materializeSkillDir, waitForTeamSkills } from '../skills-remote.ts';
 import { provisionSkills } from '../skills-provision.ts';
+import { claudeMcpGrants } from '../core/claude-mcp.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { readAgentModelProvider } from '../agent-config/models.ts';
-import { loadConfig, resolveWorktreeRetention } from '../config.ts';
+import { defaultSandboxFor, loadConfig, resolveWorktreeRetention, type SandboxConfig } from '../config.ts';
+import { bootstrapRepoSandbox } from '../core/sandbox-bootstrap.ts';
+import { localLauncher, type ProcessLauncher } from '../core/process-launcher.ts';
+import { loadWorkspaceConfig } from '../workspace/config.ts';
+import { githubTokenEnv, resolvePassthrough, resolveSecretEnv, type ResolvedCredential } from '../core/credential-passthrough.ts';
+import { readHostGithubToken } from '../core/backend-detect.ts';
+import {
+  cachingVaultReader,
+  effectiveVaultAddress,
+  parseVaultRef,
+  readWith,
+  VaultUnavailable,
+  type VaultReader,
+} from '../core/vault-secrets.ts';
+import { MIN_SECRET_LEN, registerSecretValues, secretFragments } from '../core/secret-redaction.ts';
 import {
   autosaveCommit,
   chooseForkBase,
@@ -118,6 +139,7 @@ import {
 import { reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.ts';
 import {
   AgentTempDirError,
+  agentTmpDir,
   agentTmpEnv,
   removeAgentTmpDir,
   sweepAgentTmpDirs,
@@ -132,7 +154,6 @@ import { WorkspaceSemaphore, type AccountHolds } from '../workspace/semaphore.ts
 import { SecretStore } from '../workspace/secrets.ts';
 import { PROJECT_ID_RE } from '../workspace/config.ts';
 import { prunePrHeadRefs } from '../automations/pr-head.ts';
-import { MIN_SECRET_LEN } from '../core/secret-redaction.ts';
 import { track } from '../telemetry.ts';
 import { UiEventSink } from '../runs/ui-event-sink.ts';
 import type { UiEvent } from '../core/ui-events.ts';
@@ -720,6 +741,13 @@ export interface StartRunInput {
   /** The cockpit device that started this task (telemetry only, `x-cezar-sid`). */
   deviceSid?: string;
   model?: string;
+  /**
+   * Per-task isolation override from the composer. Absent = the project's
+   * Settings → Isolation switch decides. Persisted on the record so a Continue
+   * lands where the first turn did — a task that started in a container must
+   * not silently continue on the host, where its conversation does not exist.
+   */
+  isolated?: boolean;
   /** Agent backend chosen for this task (GUI). Unset = the config default. */
   runner?: RunnerId;
   /** Agent account for this task (spec 2026-07-29-agent-profiles), applying to steps that run
@@ -1074,6 +1102,37 @@ interface PreparedUserMessage {
   text: string;
   persisted: PersistedAttachment[];
   imageLibraryWrites: Array<() => void>;
+}
+
+/**
+ * A container gets the host's Claude access token but never its refresh token (see
+ * `containerClaudeLogin`), so a token that is already spent, or will be within the turn, is worth
+ * a line: the fix is any Claude use on the host, which refreshes it for the next turn.
+ */
+export function claudeLoginNote(expiresAt: number | undefined, now: number): string | undefined {
+  if (expiresAt === undefined) return undefined;
+  const minutes = Math.round((expiresAt - now) / 60_000);
+  if (minutes > CLAUDE_LOGIN_WARN_MINUTES) return undefined;
+  const when = minutes <= 0 ? 'has expired' : `expires in ${minutes} min`;
+  return `⚠ the Claude login copied into this container ${when}, and a copy cannot refresh itself — a turn `
+    + 'that outlives it fails with "OAuth access token has expired". For a login containers keep fresh '
+    + 'themselves, run `cez container-login claude` once; or store a `claude setup-token` token as '
+    + 'CLAUDE_CODE_OAUTH_TOKEN in Settings → Secrets for isolated agents.';
+}
+
+const CLAUDE_LOGIN_WARN_MINUTES = 20;
+
+/** Where an isolated agent's follow-ups land — must match `podmanExec`'s CEZ_TODOS_FILE. */
+function isolatedTodosFile(dataDir: string, runId: string): string {
+  return join(agentTmpDir(dataDir, runId), ISOLATED_TODOS_FILE);
+}
+
+/** Where one agent turn runs, decided once by `prepareSandbox`. */
+interface TurnPlacement {
+  /** The sandbox the agent runs in, with `enabled` forced on. Absent = this machine. */
+  sandbox?: SandboxConfig;
+  /** The per-task container, for podman. */
+  container?: TaskContainer;
 }
 
 /**
@@ -1463,6 +1522,10 @@ export class RunManager {
       // Persist the explicit opt-out so queued-run restart recovery and the
       // session Git routes can distinguish it from a removed isolated worktree.
       worktree: !group && !input.dispatchIntent && !input.forkRef && input.worktree === false ? false : undefined,
+      // Per-task isolation override, persisted so a Continue on a resumed run
+      // lands in the same place the first turn did — a task that started
+      // isolated must not silently continue on the host.
+      isolated: input.isolated,
       groupId: group?.groupId,
       variant: group?.variant,
       steps: workflow.graph
@@ -2078,6 +2141,11 @@ export class RunManager {
     this.active.delete(runId);
     // Session result has settled and its sink has flushed before terminal cleanup.
     this.store.clearRunSecrets(runId);
+    // Per-run state that would otherwise outlive the run: the account env carries resolved
+    // tracker credentials, and an install whose result never arrived would never be removed.
+    this.lastAccountEnv.delete(runId);
+    this.containerSecretNotes.delete(runId);
+    for (const key of this.pendingInstalls.keys()) if (key.startsWith(`${runId}\0`)) this.pendingInstalls.delete(key);
     this.memoryPausing.delete(runId);
     this.lastNamerKey.delete(runId);
     this.pendingBranchNames.delete(runId);
@@ -2107,11 +2175,16 @@ export class RunManager {
     // Enforce count-based retention (#483) here so a single hook covers every
     // terminal path. Fire-and-forget: retention must never delay or throw into
     // the lifecycle.
-    void this.enforceRetention();
+    void this.enforceRetention(runId);
+    // A repo that isolated without ever being configured writes down what it
+    // learned — see `bootstrapRepoSandbox`. Same terminal hook, same
+    // fire-and-forget terms: this must never delay or throw into the lifecycle.
+    void this.bootstrapSandboxConfig(runId);
     // The run's temp directory (#785) goes on the same terminal transition, and
     // unconditionally — it is scratch, not an artifact, so unlike a worktree
     // there is no keep-count to respect and nothing left to recover from it. A
     // Continue (or an auto-resume) re-creates it through `agentEnv`.
+    void ingestTodos(this.dataDir, isolatedTodosFile(this.dataDir, runId));
     removeAgentTmpDir(this.dataDir, runId);
   }
 
@@ -2983,16 +3056,417 @@ export class RunManager {
     }
   }
 
+  /**
+   * A `Bash` tool call may have installed a system-wide tool. Record it as a
+   * Containerfile suggestion for this project.
+   *
+   * Only the SHAPE of the command is read — never its output — and only
+   * global installs count: a project's own `npm install` belongs to its
+   * lockfile, not to the image.
+   */
+  private noteToolInstall(runId: string, event: AgentEvent): void {
+    // The command is held at the CALL and recorded at its RESULT, and only a successful one: an
+    // `apt-get install` that failed (wrong package name, no network) installed nothing, and these
+    // suggestions are written into a Containerfile unreviewed when a project bootstraps.
+    if (event.type === 'tool-call') {
+      if (event.tool !== 'Bash') return;
+      // Only installs that happened INSIDE a container describe what the image
+      // is missing. A host run's `brew install`, or an `apt-get` on a Mac that
+      // never ran, is not a fact about the container.
+      if (!this.store.getRun(runId)?.isolation?.effective) return;
+      const command = (event.input as { command?: unknown } | null)?.command;
+      if (typeof command !== 'string' || command.length === 0) return;
+      this.pendingInstalls.set(`${runId}\0${event.id}`, command);
+      return;
+    }
+    if (event.type !== 'tool-result') return;
+    const key = `${runId}\0${event.toolCallId}`;
+    const command = this.pendingInstalls.get(key);
+    if (command === undefined) return;
+    this.pendingInstalls.delete(key);
+    if (!event.isError) noteInstalls(this.dataDir, command);
+  }
+
+  /** `Bash` calls awaiting their result, keyed `runId\0toolCallId` — see `noteToolInstall`. */
+  private readonly pendingInstalls = new Map<string, string>();
+
+  /**
+   * Bring up this task's container, or explain in the run's own event log why
+   * it could not. Returns the container name, or `undefined` to run locally.
+   *
+   * A failure here is deliberately NOT fatal — a broken podman should not make
+   * the cockpit unusable — but it is deliberately loud: the run says, in the
+   * transcript the user reads, that it is executing unisolated. Silence would
+   * let a config that promises a sandbox quietly run agents on the host.
+   */
+  private async prepareSandbox(
+    runId: string,
+    sandbox: SandboxConfig | undefined,
+    backend: AgentBackend | undefined,
+    stepId: string,
+    override?: boolean,
+    /** The selected agent account's env — whose login the container gets. */
+    accountEnv?: Record<string, string>,
+  ): Promise<TurnPlacement> {
+    // WHERE THIS RUN ALREADY WENT WINS. A run's conversation lives in the home
+    // of whoever wrote it — the operator's `~/.claude` on the host, the agent's
+    // own inside a container — and `claude --resume` on a session it cannot see
+    // fails with an opaque `error_during_execution`. So once a run has executed
+    // somewhere, every later turn goes back there, even if the request, the
+    // project setting, or cezar's own code has changed meaning in between.
+    //
+    // Otherwise the per-task override wins over the project switch in BOTH
+    // directions: marked isolated runs in a container even with the project
+    // off, marked not-isolated stays on the host with the project on.
+    const recorded = this.store.getRun(runId)?.isolation;
+    const wanted = recorded ? recorded.effective : (override ?? sandbox?.enabled === true);
+
+    if (!wanted) {
+      // Record only a FIRST decision. A later turn following an earlier
+      // fallback must not overwrite it with a bare `{ effective: false }`:
+      // that erases the reason and makes a run that asked for isolation and
+      // missed it indistinguishable from one that never asked.
+      if (!recorded) this.store.updateRun(runId, { isolation: { effective: false } });
+      return {};
+    }
+    // A dry run's agents are the bundled mocks, which exist only on this machine — inside a
+    // container the real CLI would run instead, with a real login and a real bill.
+    if (process.env.CEZ_DRY_RUN === '1') {
+      if (!recorded) {
+        this.store.updateRun(runId, {
+          isolation: { effective: false, reason: 'dry run (CEZ_DRY_RUN=1): agents are the bundled mocks on this machine' },
+        });
+      }
+      return {};
+    }
+    // Isolation is wanted and the repo has no sandbox of its own: use the
+    // default. Not only for a fresh request — a run that already isolated keeps
+    // isolating after its project config is removed, rather than moving to the
+    // host where its conversation does not exist.
+    const chosen = sandbox ?? defaultSandboxFor(basename(this.repoRoot));
+    // What the launcher will be built from. `enabled` is forced on because THIS
+    // is the decision, made once: the launcher factory's own `enabled` gate is a
+    // second, older reading of the config, and handing it the caller's sandbox —
+    // switch off, or no block at all — is what started a container for a task
+    // marked isolated and then ran the agent on the host anyway.
+    const placed: SandboxConfig = { ...chosen, enabled: true };
+
+    // Checked before any container work: a runner that cannot run in one runs on this machine, and
+    // recording it isolated would put an "isolated" badge on a process running on the host.
+    if (!backendSupportsLauncher(backend)) {
+      if (!recorded?.effective) {
+        this.store.updateRun(runId, {
+          isolation: {
+            effective: false,
+            reason: `the ${backend ?? 'selected'} runner cannot run in a container yet`,
+          },
+        });
+      } else {
+        // An isolated task continued on a runner that cannot follow it there. The record keeps the
+        // first outcome (its conversation lives in the container), but this turn must not pass
+        // silently as isolated.
+        this.store.appendEvent(runId, {
+          type: 'note',
+          stepId,
+          message: `⚠ the ${backend ?? 'selected'} runner cannot run in a container — this turn of an isolated task runs UNISOLATED on this machine`,
+        });
+      }
+      return {};
+    }
+    try {
+      const container = await startTaskContainer(placed, this.repoRoot, runId, 'podman', {
+        ...(backend ? { backend } : {}),
+        ...(accountEnv ? { accountEnv } : {}),
+        ...(this.store.getRun(runId)?.untrustedHead === true ? { untrusted: true } : {}),
+      });
+      if (container.remounted) {
+        this.store.appendEvent(runId, {
+          type: 'note',
+          stepId,
+          message: `this task's container was recreated because what it should mount changed since it started `
+            + `(${container.remounted.join(', ')}). The worktree and the conversation are intact; anything that `
+            + `lived only inside the old container — a background server, a package installed outside the repo — is gone.`,
+        });
+      }
+      if (container.startedMachine) {
+        this.store.appendEvent(runId, {
+          type: 'note',
+          stepId,
+          message: `podman's VM "${container.startedMachine}" was stopped — cezar started it, and this task runs isolated as asked`,
+        });
+      }
+      if (container.addedAgent) {
+        this.store.appendEvent(runId, {
+          type: 'note',
+          stepId,
+          message: `this task's container was recreated with ${container.addedAgent} in its image — the worktree and `
+            + 'conversations are intact; anything that lived only inside the old container is gone.',
+        });
+      }
+      this.store.updateRun(runId, { isolation: { effective: true, container: container.name } });
+      return { sandbox: placed, container };
+    } catch (err) {
+      const why = err instanceof PodmanUnavailable ? err.message : String(err);
+      this.store.appendEvent(runId, {
+        type: 'note',
+        stepId,
+        message: recorded?.effective
+          // A turn that already ran in a container has its conversation there.
+          // Saying "unisolated" alone would understate it: this turn will also
+          // fail to find the session it is resuming.
+          ? `⚠ this task's container could not be started, and its conversation lives inside it — `
+            + `this turn runs UNISOLATED and may not find the session to resume.\n${why}`
+          : `⚠ sandbox requested but the container could not be prepared — running UNISOLATED on this machine.\n${why}`,
+      });
+      // The record keeps the FIRST outcome when there is one: flipping it to
+      // `false` here would send every later turn to the host permanently, away
+      // from the conversation, over what may be a stopped VM.
+      if (!recorded?.effective) {
+        this.store.updateRun(runId, {
+          isolation: { effective: false, reason: `the container could not be prepared — ${why}` },
+        });
+      }
+      return {};
+    }
+  }
+
+  /**
+   * The launcher for one agent turn — the ONE place both the step path and the
+   * Continue path get it from.
+   *
+   * Two sites used to assemble it themselves, and both handed the launcher
+   * factory the config they had read rather than the placement
+   * `prepareSandbox` had just decided. That is how a task marked isolated in a
+   * project whose switch was off got a container started for it and an agent
+   * spawned on the host, while its record said "isolated".
+   *
+   * Secrets are fetched only where they can be DELIVERED: the local launcher
+   * ignores fetched values, so fetching for a host turn only created a way for a
+   * `required` secret to fail a task that would have discarded it anyway.
+   */
+  private async launcherForTurn(
+    runId: string,
+    sandbox: SandboxConfig | undefined,
+    backend: AgentBackend | undefined,
+    stepId: string,
+    /** The step's agent-account env (`agentEnvForStep`): which login the container gets. */
+    accountEnv?: Record<string, string>,
+    /** A check step's command, not an agent: no `containers`-audience secrets, no login notes. */
+    purpose: 'agent' | 'check' = 'agent',
+  ): Promise<{ launcher: ProcessLauncher; fatal: string | null }> {
+    if (accountEnv && purpose === 'agent') this.lastAccountEnv.set(runId, accountEnv);
+    const placement = await this.prepareSandbox(runId, sandbox, backend, stepId, this.store.getRun(runId)?.isolated, accountEnv);
+    // Where THIS turn ran, per step: the auth-failure watcher reads it, because the run's own
+    // `isolation` keeps the first outcome even when a later turn falls back to the host.
+    if (purpose === 'agent') this.store.updateStep(runId, stepId, { isolated: placement.container !== undefined });
+    let env: string[] = [];
+    if (placement.container) {
+      const secrets = await this.fetchSecrets(runId, placement.sandbox, stepId, purpose === 'agent');
+      if (secrets.fatal) return { launcher: localLauncher, fatal: secrets.fatal };
+      env = secrets.env;
+      if (purpose === 'check') return { launcher: createLauncher(placement.sandbox, placement.container, env), fatal: null };
+      // Login notes wait for the secrets: a stored token is a login the container has.
+      const handed = new Set(env.map((pair) => pair.slice(0, pair.indexOf('='))));
+      const loginNote = handed.has('CLAUDE_CODE_OAUTH_TOKEN')
+        ? undefined
+        : claudeLoginNote(placement.container.claudeLoginExpiresAt, Date.now());
+      if (loginNote) this.store.appendEvent(runId, { type: 'note', stepId, message: loginNote });
+      const missing = containerAgent(placement.container.missingLogin);
+      if (missing && !missing.envKeys.some((key) => handed.has(key))) {
+        this.store.appendEvent(runId, { type: 'note', stepId, message: missingLoginNote(missing) });
+      }
+    }
+    return { launcher: createLauncher(placement.sandbox, placement.container, env), fatal: null };
+  }
+
+  /**
+   * Fetch this turn's store-backed secrets on the HOST, and say what failed.
+   *
+   * Per turn rather than per container: a container outlives a turn, and a
+   * secret rotated between turns must reach the next one — the same property
+   * the file-backed credentials have. The reader caches briefly so a multi-step
+   * workflow does not pay a round trip per step for the same reference.
+   *
+   * Values are registered for redaction BEFORE they are handed to a launcher,
+   * so a secret cannot reach a transcript unscrubbed even if the very first
+   * tool call prints it.
+   */
+  private async fetchSecrets(
+    runId: string,
+    sandbox: SandboxConfig | undefined,
+    stepId: string,
+    /** Include the `containers`-audience secrets — for an agent's turn, never a check step's. */
+    forAgent = true,
+  ): Promise<{ env: string[]; fatal: string | null }> {
+    const resolved = resolvePassthrough(sandbox?.credentials);
+    const stored = forAgent ? await this.containerSecretPairs(runId, stepId) : [];
+    const github = await this.githubTokenEnv(runId, resolved);
+    // A custom entry with no `valueFrom` forwards a HOST variable by name. The host-env sweep
+    // scrubs only names that look secret and values of 12+ characters; the operator named these
+    // as secrets, so they are scrubbed whatever they are called.
+    this.registerChosenSecrets(runId, resolved
+      .filter((c) => !c.valueFrom && !c.skipped)
+      .flatMap((c) => c.env.map((name) => process.env[name] ?? '')));
+    if (!resolved.some((c) => c.valueFrom)) return { env: [...stored, ...github], fatal: null };
+    const read = await this.readerForVault();
+    const { pairs, problems } = await resolveSecretEnv(resolved, async (reference) => {
+      const ref = parseVaultRef(reference);
+      if (!ref) throw new VaultUnavailable(`not a secret reference cezar can fetch: ${reference}`);
+      return read(ref);
+    });
+    const values = pairs.map((pair) => pair.slice(pair.indexOf('=') + 1));
+    registerSecretValues(values);
+    this.registerChosenSecrets(runId, values);
+
+    for (const problem of problems) {
+      this.store.appendEvent(runId, {
+        type: 'note',
+        stepId,
+        message: `⚠ secret "${problem.id}" could not be fetched — ${problem.reason}`
+          + (problem.required ? '' : '; the task runs without it'),
+      });
+    }
+    const required = problems.find((p) => p.required);
+    return {
+      env: [...stored, ...github, ...pairs],
+      // A load-bearing secret is a step failure, not a note: without it the
+      // agent gets several tool calls in and fails at something that names
+      // neither the secret nor the store.
+      fatal: required ? `required secret "${required.id}" could not be fetched — ${required.reason}` : null,
+    };
+  }
+
+  /**
+   * `GH_TOKEN` for a turn whose project passes the GitHub CLI through, fetched on the host.
+   *
+   * The copied `hosts.yml` carries a token only on machines where gh stores it in the file; gh's
+   * default on macOS is the Keychain, which leaves `hosts.yml` naming a user and no token — and
+   * the agent reporting gh "not logged in" with the credential ticked. `gh auth token` answers
+   * from wherever gh keeps it. Per turn, like every fetched secret, so a re-login on the host
+   * reaches the next turn; skipped when the host already exports one (that one is forwarded).
+   */
+  private async githubTokenEnv(runId: string, resolved: readonly ResolvedCredential[]): Promise<string[]> {
+    const pairs = await githubTokenEnv(resolved, process.env, readHostGithubToken);
+    const values = pairs.map((pair) => pair.slice(pair.indexOf('=') + 1));
+    registerSecretValues(values);
+    this.registerChosenSecrets(runId, values);
+    return pairs;
+  }
+
+  /**
+   * Secrets stored for the `containers` audience (Settings → Secrets), as `NAME=value` pairs for this
+   * turn's container — a long-lived `CLAUDE_CODE_OAUTH_TOKEN`, a `CURSOR_API_KEY`. Withheld from an
+   * untrusted fork head, like a check step's. Scrubbed from the transcript before they are handed on.
+   */
+  private async containerSecretPairs(runId: string, stepId: string): Promise<string[]> {
+    if (this.store.getRun(runId)?.untrustedHead === true) return [];
+    const resolved = await this.secrets.resolve(
+      this.projectId ? { projectId: this.projectId, root: this.repoRoot } : undefined,
+      'containers',
+    );
+    // Once per run: an unreadable store reads the same way on every turn.
+    if (!this.containerSecretNotes.has(runId)) {
+      this.containerSecretNotes.add(runId);
+      for (const note of resolved.notes) this.store.appendEvent(runId, { type: 'note', stepId, message: note });
+    }
+    // Process-wide as well as per run, like the Vault and gh values beside it: text derived after
+    // the run ends (a late title, a summary) is still scrubbed by value, not by token shape alone.
+    registerSecretValues(Object.values(resolved.values));
+    this.registerChosenSecrets(runId, Object.values(resolved.values));
+    return Object.entries(resolved.values).map(([name, value]) => `${name}=${value}`);
+  }
+
+  /** Scrub values an operator chose as secrets from THIS run's transcript — see `secretFragments`. */
+  private registerChosenSecrets(runId: string, values: readonly string[]): void {
+    this.store.registerRunSecrets(runId, values.flatMap(secretFragments));
+  }
+
+  /**
+   * Persist the sandbox a first isolated run used, and the packages it
+   * installed, for a repo that has no config of its own.
+   *
+   * Only for a run that ACTUALLY isolated: a fallback to the host installed its
+   * packages on this machine, and writing a Containerfile from that would
+   * describe an image nothing ever built.
+   */
+  private async bootstrapSandboxConfig(runId: string): Promise<void> {
+    try {
+      const run = this.store.getRun(runId);
+      if (!run?.isolation?.effective) return;
+      const sandbox = (await loadConfig(this.repoRoot)).sandbox
+        ?? defaultSandboxFor(basename(this.repoRoot));
+      const written = bootstrapRepoSandbox(this.repoRoot, this.dataDir, sandbox);
+      if (!written.config) return;
+      this.store.appendEvent(runId, {
+        type: 'note',
+        message: written.containerfile
+          ? `isolation saved to .ai/cezar/config.json, with ${written.installs} install`
+            + `${written.installs === 1 ? '' : 's'} this task performed written to ${sandbox.containerfile}`
+            + ' — the next task starts from an image that already has them'
+          : 'isolation saved to .ai/cezar/config.json — this project now isolates by default',
+      });
+    } catch {
+      // Bookkeeping. A repo that cannot be written to still ran its task.
+    }
+  }
+
   /** Reclaim finished worktrees beyond the keep-limit (#483) — directory only,
    *  `cez/<id8>` branch kept. Best-effort; a failure never affects run
    *  lifecycle. `review`/live runs are excluded by the selector. */
-  private async enforceRetention(): Promise<void> {
+  private async enforceRetention(runId?: string): Promise<void> {
     try {
       const keep = await resolveWorktreeRetention(this.repoRoot);
-      await reclaimWorktrees(this.repoRoot, this.store, keep);
+      const reclaimed = await reclaimWorktrees(this.repoRoot, this.store, keep);
+      // A task's container has the same lifetime as its worktree: both are the
+      // task's materialized state, and both are recoverable only while they
+      // exist. Removing the container on every terminal transition — which is
+      // what this used to do — threw away an environment the next Continue
+      // needed, and a run that FAILS is exactly the one most likely to be
+      // continued. An hour of installed services died with each failure.
+      //
+      // Retention already answers "is this task still live enough to keep its
+      // disk state?", so the container follows that answer rather than
+      // inventing a second, harsher policy.
+      void removeContainersOf(reclaimed, (id) => this.store.getRun(id)?.isolation?.container !== undefined);
+      // A run with `worktree: false` has no worktreePath, so retention skips it
+      // entirely and its container would live forever. Its container is scratch
+      // the moment the run is finished: there is no worktree to inspect, so
+      // nothing about it is worth keeping warm for a Continue that has no
+      // isolated tree to return to.
+      // `runId` is absent when retention runs at startup rather than on a
+      // terminal transition; there is no single run to special-case then.
+      if (runId) {
+        const run = this.store.getRun(runId);
+        if (run?.worktree === false) void removeTaskContainer(runId);
+      }
     } catch {
       // retention is best-effort; swallow so terminal transitions never break.
     }
+  }
+
+  /**
+   * One Vault reader per manager, so its short TTL cache is shared by every
+   * step of every run in this project rather than re-fetching per step.
+   *
+   * Rebuilt whenever the machine's Vault address changes, because the address
+   * is a SETTING: an operator who fixes it in Settings must not have to restart
+   * the cockpit for the next task to use it.
+   */
+  private vaultReader = cachingVaultReader();
+  private vaultReaderKey: string | undefined;
+
+  private async readerForVault(): Promise<VaultReader> {
+    const settings = (await loadWorkspaceConfig()).agentDefaults.vault ?? {};
+    // Keyed on EVERYTHING that changes which Vault answers, not just the
+    // address: a namespace edited in Settings — or set while the address comes
+    // from an inherited VAULT_ADDR — kept the old reader, and its cache, until
+    // the cockpit restarted.
+    const key = JSON.stringify([effectiveVaultAddress(settings), settings.namespace ?? '']);
+    if (key !== this.vaultReaderKey) {
+      this.vaultReaderKey = key;
+      this.vaultReader = cachingVaultReader(readWith(settings));
+    }
+    return this.vaultReader;
   }
 
   /** Last live-refresh namer inputs per run — unchanged inputs skip the call. */
@@ -4004,6 +4478,8 @@ export class RunManager {
         if (text) this.store.appendEvent(runId, { type: 'text', text, stepId });
         return;
       }
+      // A Continue turn installs things too — the same observation as a step's.
+      this.noteToolInstall(runId, event);
       this.store.appendEvent(runId, { ...event, stepId });
       if (event.type === 'error') {
         sessionError ??= event.message;
@@ -4253,8 +4729,30 @@ export class RunManager {
     }
     this.store.updateStep(runId, stepId, { profileId: continueProfile.profileId });
 
-    const runner = createRunner(continueBackend);
+    // A Continue MUST land in a container too, and for a reason beyond
+    // isolation: the conversation it resumes lives in the AGENT's `~/.claude`,
+    // which is mounted into the container. Running it on the host sends claude
+    // looking in the operator's own `~/.claude`, where that session id has never
+    // existed — "No conversation found with session ID …", on a task that is
+    // perfectly intact.
+    const continueSandbox = (await loadConfig(this.repoRoot)).sandbox;
+    // The same helper the step path uses, so the two cannot drift apart again.
+    // Secrets are re-fetched for this turn: one rotated between turns has to
+    // reach the next.
+    const continueTurn = await this.launcherForTurn(runId, continueSandbox, continueBackend, stepId, continueProfile.env);
+    if (continueTurn.fatal) {
+      // Same treatment as a broken temp dir: refuse before spawning, with the
+      // reason on the record, rather than resuming into a turn that will fail
+      // at something naming neither the secret nor the store.
+      failBeforeSpawn(continueTurn.fatal);
+      return;
+    }
+    const runner = createRunner(continueBackend, { launcher: continueTurn.launcher });
     const continueMcp = await this.privateMcpForLaunch(continueBackend, onEvent);
+    // Every await BEFORE the cancel check below: a cancel that lands during one must stop the
+    // spawn. The tool list waits up to seconds on MCP discovery, and resolved inside the
+    // `startSession` arguments it ran after the check — so a cancelled task still spawned its agent.
+    const continueAllowedTools = toolsStep?.allowedTools ?? (await this.defaultAllowedTools(continueBackend, continueProfile.env));
     if (state.cancelled) return;
     state.currentStepId = stepId;
     this.beginUsageInvocation(runId, state, stepId);
@@ -4296,7 +4794,7 @@ export class RunManager {
             : contextualOpeningPrompt,
           ...(openingImages.length ? { images: openingImages } : {}),
           cwd: state.cwd,
-          allowedTools: toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
+          allowedTools: continueAllowedTools,
           bashAllowlist: toolsStep?.bashAllowlist,
             additionalDirectories: agentDirectories(
               join(this.dataDir, 'runs'),
@@ -5793,6 +6291,34 @@ export class RunManager {
     return rec!.sessionId;
   }
 
+  /** The agent account env of a run's last turn, so its check steps reuse the same container
+   *  mounts instead of recreating the container for a different login. */
+  private readonly lastAccountEnv = new Map<string, Record<string, string>>();
+  /** Runs that already reported an unreadable secret store — see `containerSecretPairs`. */
+  private readonly containerSecretNotes = new Set<string>();
+
+  /** The backend of the run's most recent agent step — the one its container is shaped for. */
+  private lastTurnBackend(runId: string): AgentBackend | undefined {
+    const run = this.store.getRun(runId);
+    const steps = run?.steps ?? [];
+    for (let i = steps.length - 1; i >= 0; i--) {
+      const backend = steps[i]?.backend;
+      if (backend) return backend as AgentBackend;
+    }
+    return (run?.runner as AgentBackend | undefined) ?? undefined;
+  }
+
+  /**
+   * The tool list for a step that names none: `DEFAULT_ALLOWED_TOOLS`, plus — for Claude — the
+   * user's MCP servers, without which `dontAsk` refused every MCP tool they had connected (see
+   * `claude-mcp.ts`). Keyed on the project, not the task worktree: same servers, one discovery.
+   * A step that lists its own tools never comes here, so it keeps exactly that list.
+   */
+  private async defaultAllowedTools(backend: AgentBackend | RunnerId, env?: Record<string, string>): Promise<string[]> {
+    if (backend !== 'claude' && backend !== 'claude-cli') return DEFAULT_ALLOWED_TOOLS;
+    return [...DEFAULT_ALLOWED_TOOLS, ...(await claudeMcpGrants(this.repoRoot, env))];
+  }
+
   /**
    * Install the named skills and every companion they name into the run's cwd (skills-provision.ts).
    * Once a named skill is known, waits (bounded) for the team-skill load before collecting companions.
@@ -5997,6 +6523,11 @@ export class RunManager {
         if (text) emit({ type: 'text', text, stepId: step.id });
         return;
       }
+      // Watch what the agent installs, so a repo with no Containerfile can be
+      // offered one built from the toolchain its own tasks needed. Observation
+      // only — it never writes anything a person has not accepted, and never
+      // throws into the run.
+      this.noteToolInstall(runId, event);
       emit({ ...event, stepId: step.id });
       if (event.type === 'error') {
         sessionError ??= event.message;
@@ -6265,8 +6796,30 @@ export class RunManager {
     }
     this.store.updateStep(runId, step.id, { profileId: stepProfile.profileId });
 
-    const runner = createRunner(stepBackend);
+    // WHERE this step runs (this machine, or the repo's sandbox) is config, and
+    // orthogonal to WHICH agent runs it. Read per step so a config edit takes
+    // effect on the next task without a cockpit restart.
+    const sandbox = (await loadConfig(this.repoRoot)).sandbox;
+    // Never let "sandbox: enabled" read as isolation on a backend that spawns
+    // locally regardless — silence there would be the dangerous kind.
+    const isolationWanted = this.store.getRun(runId)?.isolated ?? sandbox?.enabled === true;
+    if (isolationWanted && !backendSupportsLauncher(stepBackend)) {
+      this.store.appendEvent(runId, {
+        type: 'note',
+        stepId: step.id,
+        message: `⚠ sandbox is configured, but the ${stepBackend} runner does not support it yet — this step runs on this machine, unisolated`,
+      });
+    }
+    // Placement, secrets and launcher from ONE decision — see `launcherForTurn`.
+    // A required secret that cannot be fetched fails the step here, before an
+    // agent spawns and discovers it several tool calls later.
+    const turn = await this.launcherForTurn(runId, sandbox, stepBackend, step.id, stepProfile.env);
+    if (turn.fatal) return turn.fatal;
+    const runner = createRunner(stepBackend, { launcher: turn.launcher });
     const stepMcp = await this.privateMcpForLaunch(stepBackend, onEvent);
+    // Resolved before the cancel check, not inside `startSession`'s arguments: MCP discovery can
+    // take seconds, and a cancel landing in that wait still spawned the agent.
+    const stepAllowedTools = step.allowedTools ?? (await this.defaultAllowedTools(stepBackend, stepProfile.env));
     let session: AgentSession;
     state.currentStepId = step.id;
     this.beginUsageInvocation(runId, state, step.id);
@@ -6291,7 +6844,7 @@ export class RunManager {
           userPrompt: prompt,
           images,
           cwd: state.cwd,
-          allowedTools: step.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
+          allowedTools: stepAllowedTools,
           bashAllowlist: step.bashAllowlist,
           // The handoff file lives outside the worktree — grant access.
           additionalDirectories: agentDirectories(
@@ -6615,6 +7168,9 @@ export class RunManager {
   }
 
   async recordTurnEnd(runId: string, turnText: string, owner?: ActiveRun): Promise<void> {
+    // Follow-ups an isolated agent wrote this turn (see `isolatedTodosFile`). The read is
+    // synchronous, so it happens before anything below can await.
+    void ingestTodos(this.dataDir, isolatedTodosFile(this.dataDir, runId));
     // The namer can finish after session cleanup removes its in-memory secrets.
     turnText = this.store.redactRunText(runId, turnText);
     try {
@@ -7246,9 +7802,12 @@ export class RunManager {
     // cannot diagnose alone: the value is write-only, so `cezar secrets list` and Settings show
     // the same list whether this run read it or ignored it. Say which, once each, on the step.
     for (const note of resolved.notes) emit({ type: 'note', stepId: step.id, message: note });
+    // Check-step secrets keep the store's floor (a short value would shred the step's own output,
+    // which the operator reads to see why the check failed); a multi-line one is still scrubbed
+    // line by line.
     this.store.registerRunSecrets(
       runId,
-      Object.values(resolved.values).filter((value) => value.length >= MIN_SECRET_LEN),
+      Object.values(resolved.values).flatMap(secretFragments).filter((value) => value.length >= MIN_SECRET_LEN),
     );
     // The run context wins last (Phase 2). Its names are first removed from what the server
     // inherited — a cezar started inside another cezar task carries that task's `CEZ_*` — so a
@@ -7325,12 +7884,39 @@ export class RunManager {
     const command = step.command as string;
     emit({ type: 'note', stepId: step.id, message: `$ ${command}` });
     const env = await this.checkStepEnv(runId, state, step, emit);
+    // An isolated run's checks run where its agent ran: in the task's container. On the host, a
+    // check executed whatever the isolated agent had written — a test, a `package.json` script —
+    // with the operator's full environment and filesystem, on a run recorded as isolated.
+    const isolation = this.store.getRun(runId)?.isolation;
+    let launcher: ProcessLauncher | undefined;
+    if (isolation?.effective && isolation.container) {
+      const turn = await this.launcherForTurn(
+        runId,
+        (await loadConfig(this.repoRoot)).sandbox,
+        this.lastTurnBackend(runId),
+        step.id,
+        this.lastAccountEnv.get(runId),
+        'check',
+      );
+      if (turn.fatal) return { ok: false, output: turn.fatal, exitCode: -1 };
+      if (turn.launcher.id !== 'local') launcher = turn.launcher;
+    }
     // A cancel that landed during the read had no child to interrupt; do not spawn one now.
     if (state.cancelled) return { ok: false, output: 'cancelled', exitCode: -1 };
     return new Promise((resolve) => {
-      // Check steps run in the same cwd as the agent steps — the worktree.
-      const child = spawn('bash', ['-lc', command], { cwd: state.cwd, env });
-      state.interrupt = () => child.kill('SIGTERM');
+      // Check steps run in the same cwd as the agent steps — the worktree. In a container they get
+      // what cezar set for them (the run context, the secrets bound to checks) and nothing the
+      // server inherited: the host's environment is exactly what isolation withholds.
+      const child = launcher
+        ? launcher.spawn('bash', ['-lc', command], {
+            cwd: state.cwd,
+            env: Object.fromEntries(
+              Object.entries(env).filter((e): e is [string, string] => e[1] !== undefined && process.env[e[0]] !== e[1]),
+            ),
+          })
+        : spawn('bash', ['-lc', command], { cwd: state.cwd, env });
+      // In a container, killing the `podman exec` client leaves the command running inside.
+      state.interrupt = launcher ? () => void launcher!.signal(child, 'SIGTERM') : () => child.kill('SIGTERM');
 
       let output = '';
       const collect = (chunk: Buffer) => {

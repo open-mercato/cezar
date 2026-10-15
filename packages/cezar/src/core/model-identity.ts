@@ -119,6 +119,10 @@ export const BACKEND_MODEL_MAP: Readonly<Record<AgentBackend, BackendModelMap>> 
   // the run (#405's invariant). Rejecting a bare id the way opencode and pi do would reject the
   // only form Copilot accepts.
   copilot: { defaultProvider: 'github' },
+  // Kimi Code selects a model by the alias of a `[models."<alias>"]` table in its config.toml, and
+  // its own aliases are already `provider/model`-shaped (`kimi-code/k3`). No default provider, so
+  // the alias travels whole and a bare `k3` is rejected rather than guessed at.
+  kimi: {},
 };
 
 const SLASH = '/';

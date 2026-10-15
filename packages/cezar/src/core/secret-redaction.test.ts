@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { collectSecretValues, redactDeep, redactSecrets, REDACTED } from './secret-redaction.ts';
+import {
+  collectSecretValues,
+  redactDeep,
+  redactSecrets,
+  registerSecretValues,
+  registeredSecretValues,
+  REDACTED,
+} from './secret-redaction.ts';
 
 /**
  * #427: credentials must never be persisted to a run's NDJSON transcript.
@@ -139,4 +146,23 @@ describe('redactDeep', () => {
 it('redacts raw tracker key values from persisted task text', () => {
   const secrets = collectSecretValues({ JIRA_API_TOKEN: 'jira-token-value', LINEAR_API_KEY: 'linear-key-value' });
   expect(redactSecrets('jira-token-value linear-key-value', secrets)).toBe(REDACTED + ' ' + REDACTED);
+});
+
+describe('secrets fetched from a store', () => {
+  it('are scrubbed by VALUE once registered', () => {
+    // The argument for cezar resolving secrets rather than handing the agent a
+    // Vault token: a value cezar never saw can only be caught by its shape, and
+    // most secrets do not have one.
+    const value = 'zX9qPlain-Looking-Value-With-No-Token-Shape';
+    expect(redactSecrets(`token is ${value}`, registeredSecretValues())).toContain(value);
+    registerSecretValues([value]);
+    expect(redactSecrets(`token is ${value}`, registeredSecretValues())).toBe(`token is ${REDACTED}`);
+  });
+
+  it('ignores values too short to scrub safely', () => {
+    // Same floor as the env-derived list: a short "secret" is a dictionary word
+    // and redacting it mangles ordinary output.
+    registerSecretValues(['dev']);
+    expect(registeredSecretValues()).not.toContain('dev');
+  });
 });

@@ -52,6 +52,9 @@ export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
   // `claude-sonnet-4`). Naming them here would make this guard reject a legitimate codex or
   // claude model as "another runner's preset" — the exact failure pi's comment warns about.
   copilot: [],
+  // Kimi's models are discovered from its config.toml (`kimi-model-catalog.ts`), so nothing is
+  // hard-coded here for the same reason OpenCode's list is empty (#794).
+  kimi: [],
 };
 
 /**

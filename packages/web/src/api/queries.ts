@@ -10,6 +10,8 @@ import {
   checkoutProject,
   createProject,
   getGithubOwners,
+  browseVault,
+  getVaultStatus,
   connectProvider,
   continueRun,
   continueProjectRun,
@@ -20,6 +22,7 @@ import {
   getAgentAccountStatus,
   getAgentProfiles,
   getConfig,
+  getIsolationStatus,
   getGithub,
   getGithubChecks,
   getGithubSearch,
@@ -243,6 +246,11 @@ export const queryKeys = {
   repoFile: (path: string) => [queryScope(), 'repo', 'file', path] as const,
   get uiState() {
     return [queryScope(), 'ui-state'] as const
+  },
+  /** Agent isolation for THIS project (`GET /api/isolation`): the machine's
+   *  container-runtime status plus the project's own switch. */
+  get isolation() {
+    return [queryScope(), 'isolation'] as const
   },
   /** The Settings → Agents knobs (`GET /api/config`, R6 1.5). */
   get config() {
@@ -501,7 +509,8 @@ export function useRunnerModelCatalogs(
   const pi = useRunnerModels('pi', enabled)
   const junie = useRunnerModels('junie', enabled)
   const copilot = useRunnerModels('copilot', enabled)
-  return { claude, codex, junie, opencode, cursor, pi, copilot }
+  const kimi = useRunnerModels('kimi', enabled)
+  return { claude, codex, junie, opencode, cursor, pi, copilot, kimi }
 }
 
 export function useProviderStatus() {
@@ -864,6 +873,27 @@ export function useCheckoutProject() {
     mutationFn: (input: CheckoutProjectInput) => checkoutProject(input),
     retry: false,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+  })
+}
+
+/** Vault reachability + mounts, for the secret picker. Names only. */
+export function useVaultStatus(enabled = true) {
+  return useQuery({
+    queryKey: [...workspaceQueryKeys.config, 'vault-status'],
+    queryFn: ({ signal }) => getVaultStatus({ signal }),
+    enabled,
+    // A `vault login` in a terminal should show up without a page reload, but
+    // not at the cost of shelling out on every render.
+    staleTime: 15_000,
+  })
+}
+
+/** One level of a KV mount. Disabled until a mount is picked. */
+export function useVaultBrowse(mount: string, path: string, enabled = true) {
+  return useQuery({
+    queryKey: [...workspaceQueryKeys.config, 'vault-browse', mount, path],
+    queryFn: ({ signal }) => browseVault(mount, path, { signal }),
+    enabled: enabled && mount !== '',
   })
 }
 
@@ -1417,6 +1447,23 @@ export function useConfig() {
   return useQuery({
     queryKey: queryKeys.config,
     queryFn: ({ signal }) => getConfig({ signal }),
+  })
+}
+
+/**
+ * Settings → Isolation, and the composer's isolation toggle.
+ *
+ * Refetched on focus rather than polled: the answer changes when someone starts
+ * or stops the container VM OUTSIDE cezar, which is a returning-to-the-tab
+ * event, not a per-second one. Probing spawns a process, so an interval here
+ * would run `podman machine list` forever on an idle settings page.
+ */
+export function useIsolationStatus() {
+  return useQuery({
+    queryKey: queryKeys.isolation,
+    queryFn: ({ signal }) => getIsolationStatus({ signal }),
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
   })
 }
 

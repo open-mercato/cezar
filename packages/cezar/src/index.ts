@@ -13,6 +13,7 @@ import {
 import { applyProviderEnablement } from './core/provider-availability.ts';
 import { ensureDataGitignore } from './data-gitignore.ts';
 import { pruneOrphans } from './git-worktree.ts';
+import { removeContainersOf } from './core/podman-lifecycle.ts';
 import { getRepoInfo } from './server/git.ts';
 import { DEFAULT_WORKTREE_RETENTION, loadConfig, resolveWorktreeRetention } from './config.ts';
 import { reclaimWorktrees } from './runs/retention.ts';
@@ -59,6 +60,7 @@ Usage:
   cezar task <create|report|list>  dispatch or report from inside a running task (CEZ_DISPATCH=0 turns it off)
   cezar automation <add|create|check|run|list|…>  create and manage automations (GitHub polls, schedules) on a running cockpit
   cezar runs list           list a running cockpit's tasks from a shell (CEZ_API_URL=http://127.0.0.1:4321)
+  cezar container-login claude  sign in once for isolated Claude tasks; containers refresh that login themselves
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)
@@ -86,7 +88,9 @@ Options:
       --workflow <name>       workflow for \`run\` (default: quick-task)
       --model <model>         model override for \`run\`
       --no-open               don't open the browser
-      --platform <id>         server-install target (ubuntu-vps | macosx-ngrok)
+      --platform <id>         server-install target (ubuntu-vps | macosx-ngrok |
+                              macosx-cloudflare-tunnel | macosx-tailscale |
+                              macosx-caddy | macosx-external-proxy)
       --domain <host>         server-install (ubuntu-vps): host a SECOND, independent
                               cockpit for this domain (own nginx site + service + port).
                               A new domain never resumes/clobbers the first install.
@@ -94,9 +98,11 @@ Options:
                               reverse proxy owning :80/:443 (Dokploy/Traefik, Coolify,
                               Caddy, your own nginx). Installs the service only — no
                               nginx, no certbot. That proxy must provide TLS + auth.
+                              (On macOS use --platform macosx-external-proxy.)
       --bind-host <host>      host the cockpit binds (default 127.0.0.1). Use with
-                              --external-proxy when the proxy runs in a container and
-                              cannot reach loopback (e.g. docker bridge 172.17.0.1).
+                              --external-proxy / macosx-external-proxy when the proxy
+                              runs in a container and cannot reach loopback (e.g.
+                              docker bridge 172.17.0.1).
                               cezar has NO built-in auth — never expose this publicly.
       --yes                   server-install: accept safe defaults (never auto-sudo)
       --reconfigure <ids>     server-install: force re-run of step id(s), comma-separated
@@ -132,6 +138,12 @@ async function main(): Promise<void> {
   // Opt-in telemetry's terminal switch (docs/telemetry.md): no server, no repo needed.
   if (process.argv[2] === 'telemetry') {
     process.exitCode = await runTelemetryCommand(process.argv.slice(3));
+    return;
+  }
+  // `cez container-login …`: an interactive sign-in run in a container, with its own arguments.
+  if (process.argv[2] === 'container-login') {
+    const { runContainerLoginCommand } = await import('./core/container-login.ts');
+    process.exitCode = await runContainerLoginCommand(process.argv.slice(3));
     return;
   }
   // `cez runs …` (#1080): the read-only twin for a person at a shell, same addressing.
@@ -296,6 +308,7 @@ async function serveCommand(
     // Best-effort; never blocks boot.
     const keep = await resolveWorktreeRetention(repoRoot).catch(() => DEFAULT_WORKTREE_RETENTION);
     const reclaimed = await reclaimWorktrees(repoRoot, store, keep).catch(() => [] as string[]);
+    void removeContainersOf(reclaimed, (id) => store.getRun(id)?.isolation?.container !== undefined);
     if (reclaimed.length > 0) {
       console.log(`  reclaimed ${reclaimed.length} old worktree(s), branch kept: ${reclaimed.map((id) => id.slice(0, 8)).join(', ')}`);
     }

@@ -4,7 +4,8 @@ import { dirname, join, resolve } from 'node:path';
 import { isAbsolutePath } from '../paths.ts';
 
 /**
- * `POST /api/projects/checkout` — the "Add project → Clone from GitHub" flow
+ * `POST /api/projects/checkout` — the "Add project → Clone" flow (GitHub and
+ * GitLab)
  * (spec 2026-07-20-multi-project-workspace, step 4.3).
  *
  * The route itself (server.ts) owns the registry write; this module owns the
@@ -60,63 +61,113 @@ export type CheckoutFailure =
 
 export type CheckoutResult = { ok: true; target: string; name: string } | CheckoutFailure;
 
-/** A GitHub repo reference the clone flow accepts. */
+/** Which forge a reference names. The clone mechanism differs per forge. */
+export type RepoForge = 'github' | 'gitlab';
+
+/** A repo reference the clone flow accepts. */
 export interface RepoRef {
+  /** GitHub's owner, or GitLab's full namespace (`group` or `group/subgroup`). */
   owner: string;
   repo: string;
-  /** Normalized identity used in messages and dry-run output. */
+  /** The normalized `<namespace>/<repo>`, so a URL spelling can never smuggle
+   *  flags or a different host past the clone command. */
   slug: string;
-  /** What `gh repo clone` is handed. Always reconstructed from validated
-   *  segments rather than preserving user input. Forcing HTTPS is load-bearing:
-   *  a machine configured with `gh config set git_protocol ssh` may have an
-   *  OAuth token authorized for an organization's SAML policy while its SSH key
-   *  is not. Passing only `owner/repo` silently selects that rejected key.
-   *  The resulting HTTPS `origin` needs a credential path of its own after the
-   *  clone — see `persistGhCredentialHelper`. */
+  /** `github` clones through `gh`; `gitlab` through `glab`, falling back to `git`. */
+  forge: RepoForge;
+  /** The HTTPS URL the clone is handed, for BOTH forges. Always reconstructed
+   *  from validated segments rather than preserving user input. For GitHub,
+   *  forcing HTTPS is load-bearing: a machine configured with
+   *  `gh config set git_protocol ssh` may have an OAuth token authorized for an
+   *  organization's SAML policy while its SSH key is not, and passing only
+   *  `owner/repo` silently selects that rejected key. The resulting HTTPS
+   *  `origin` needs a credential path of its own after the clone — see
+   *  `persistGhCredentialHelper`. For GitLab it is what `git` needs, since
+   *  there is no `gh` to resolve a slug — unless the user typed an SSH address
+   *  (see `transport`). */
   cloneUrl: string;
+  /**
+   * `ssh` when the user typed a GitLab SSH address (`git@gitlab.com:group/repo.git`),
+   * and the clone then goes over SSH. That spelling is a statement about how this
+   * machine authenticates: a private GitLab project cloned that way in a terminal
+   * failed here with "could not read Username for 'https://gitlab.com'", because
+   * the address had been rewritten to HTTPS, where this machine has no credential.
+   * GitHub never does this — its HTTPS is load-bearing (above) and `gh` carries
+   * the token.
+   */
+  transport: 'https' | 'ssh';
 }
 
-/** `owner` and `repo` as GitHub itself allows them: alphanumerics, `-`, `_`,
- *  `.`. Deliberately strict — this string becomes a `gh` argv entry and half of
- *  a filesystem path, and every character outside this set is someone trying
- *  something. */
+/** A path segment as GitHub and GitLab both allow them: alphanumerics, `-`,
+ *  `_`, `.`. Deliberately strict — this string becomes a clone-command argv
+ *  entry and half of a filesystem path, and every character outside this set is
+ *  someone trying something. */
 const NAME_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+/** GitLab nests groups, so a project path may carry subgroups. This is the
+ *  documented ceiling (a project sits at most 20 levels deep) and a guard: the
+ *  path becomes a URL and half a filesystem path. */
+const MAX_GITLAB_DEPTH = 20;
+
 /**
- * Parse `owner/repo`, `https://github.com/owner/repo(.git)`, `git@github.com:owner/repo.git`
- * or `github.com/owner/repo` into a normalized ref. `null` when it is not a
- * GitHub repo reference — the route answers 400 rather than handing an
- * arbitrary string to `gh`.
+ * Parse a repo reference for a forge cezar can clone from, or `null` — the
+ * route answers 400 rather than handing an arbitrary string to a clone command.
  *
- * Only github.com: `gh repo clone` would happily take an enterprise host, but
- * this flow's contract (and its `gh`-availability degradation) is GitHub's, and
- * silently accepting `evil.example/owner/repo` would make the "which host am I
- * cloning from" question unanswerable from the dialog.
+ * Accepted spellings, per forge:
+ *  - **GitHub** — `owner/repo`, `github.com/owner/repo`,
+ *    `https://github.com/owner/repo(.git)`, `git@github.com:owner/repo.git`
+ *  - **GitLab** — the same four with `gitlab.com`, and additionally NESTED
+ *    namespaces (`group/subgroup/project`), which GitHub has no equivalent of
+ *    and which a two-segment check silently rejects.
+ *
+ * A bare `owner/repo` with no host stays GitHub, so every existing caller and
+ * saved value keeps its meaning; naming a forge requires naming its host.
+ *
+ * Only the two public hosts. Self-hosted GitLab is deliberately out: the
+ * instance URL is unbounded input, and "which host am I cloning from" must stay
+ * answerable from the dialog.
  */
 export function parseRepoRef(input: string): RepoRef | null {
   const trimmed = input.trim();
   if (trimmed === '' || trimmed.length > 512) return null;
-  // Strip the scheme/host spellings down to `owner/repo`, then validate ONE
-  // shape. Doing it the other way round (a regex per spelling) is how a fourth
-  // spelling eventually gets a weaker check than the other three.
+
+  // Strip the scheme/host spellings down to a bare path, remembering which
+  // forge said so. Doing it this way — rather than a regex per spelling per
+  // forge — is what keeps every spelling under the SAME validation below.
   let path = trimmed;
-  const ssh = /^(?:ssh:\/\/)?git@github\.com[:/](.+)$/.exec(path);
-  if (ssh?.[1]) path = ssh[1];
-  else {
-    const https = /^(?:https?:\/\/)?(?:www\.)?github\.com\/(.+)$/.exec(path);
-    if (https?.[1]) path = https[1];
+  let forge: RepoForge = 'github';
+  const hosts: Array<{ forge: RepoForge; host: string }> = [
+    { forge: 'github', host: 'github\\.com' },
+    { forge: 'gitlab', host: 'gitlab\\.com' },
+  ];
+  let typedSsh = false;
+  for (const candidate of hosts) {
+    const ssh = new RegExp(`^(?:ssh://)?git@${candidate.host}[:/](.+)$`).exec(path);
+    if (ssh?.[1]) { path = ssh[1]; forge = candidate.forge; typedSsh = true; break; }
+    const https = new RegExp(`^(?:https?://)?(?:www\\.)?${candidate.host}/(.+)$`).exec(path);
+    if (https?.[1]) { path = https[1]; forge = candidate.forge; break; }
   }
+
   path = path.replace(/\/+$/, '').replace(/\.git$/, '');
   const parts = path.split('/');
-  if (parts.length !== 2) return null;
-  const [owner, repo] = parts;
-  if (!owner || !repo || !NAME_SEGMENT.test(owner) || !NAME_SEGMENT.test(repo)) return null;
-  return {
-    owner,
-    repo,
-    slug: `${owner}/${repo}`,
-    cloneUrl: `https://github.com/${owner}/${repo}.git`,
-  };
+  // GitHub is exactly owner/repo. GitLab allows subgroups between the two.
+  const maxParts = forge === 'gitlab' ? MAX_GITLAB_DEPTH : 2;
+  if (parts.length < 2 || parts.length > maxParts) return null;
+  if (!parts.every((segment) => segment && NAME_SEGMENT.test(segment))) return null;
+
+  const repo = parts[parts.length - 1] as string;
+  const owner = parts.slice(0, -1).join('/');
+  const slug = `${owner}/${repo}`;
+  if (forge === 'gitlab' && typedSsh) {
+    // The URL is rebuilt from the validated segments like every other spelling,
+    // so an SSH address can no more smuggle an option or a host than HTTPS can.
+    return { owner, repo, slug, forge, transport: 'ssh', cloneUrl: `git@gitlab.com:${slug}.git` };
+  }
+  return forge === 'gitlab'
+    // HTTPS by default: it works for a public project with no key set up, and
+    // for a private one through glab, a credential helper, or a token. Someone
+    // whose GitLab login IS an ssh key says so by typing the ssh address.
+    ? { owner, repo, slug, forge, transport: 'https', cloneUrl: `https://gitlab.com/${slug}.git` }
+    : { owner, repo, slug, forge, transport: 'https', cloneUrl: `https://github.com/${slug}.git` };
 }
 
 /**
@@ -211,28 +262,67 @@ async function persistGhCredentialHelper(dir: string): Promise<boolean> {
   return true;
 }
 
+/** What a spawned clone reports back, shared by every forge's runner. */
+type CloneOutcome = { ok: true } | { ok: false; error: string; notFound?: boolean };
+
 /**
- * `gh repo clone <validated HTTPS URL> <dir> -- --progress`.
+ * Run one clone command, streaming its progress.
  *
  * `spawn`, not `execFile`, because the whole point of this route is that the
  * dialog sees progress while it happens: `git clone --progress` writes its
  * counters to stderr, and each line becomes a `checkout-progress` event.
  * (`--progress` is needed explicitly — git suppresses it when stderr is not a
  * TTY, which it never is here.)
+ *
+ * Every forge shares this body and differs only in argv, so a fix to the
+ * progress parsing or the abort path cannot land for one forge and miss another.
  */
-export const ghCloneRunner: CloneRunner = (ref, dir, onLine, signal) =>
-  new Promise((resolvePromise) => {
-    const child = spawn('gh', ghCloneArgs(ref, dir), {
+/**
+ * The ssh command for a clone nobody can answer a prompt for.
+ *
+ * `GIT_TERMINAL_PROMPT=0` silences git, not ssh: a passphrase-protected key with
+ * no agent, or a host key never seen, makes ssh wait on a terminal the dialog
+ * does not have — until the clone timeout. `BatchMode` makes it fail with its
+ * own words instead. EXTENDS an exported `GIT_SSH_COMMAND` (one that names a
+ * key is how that machine authenticates at all), the same rule
+ * `nonInteractiveSsh` in git-worktree.ts follows for fetches.
+ */
+export function nonInteractiveSsh(env: NodeJS.ProcessEnv = process.env, configured = ''): Record<string, string> {
+  // git's precedence: GIT_SSH_COMMAND, then `core.sshCommand` (global, for a clone), then GIT_SSH
+  // — a bare program with nowhere to put options, so it is left alone rather than overridden.
+  const own = env.GIT_SSH_COMMAND?.trim() || configured.trim();
+  if (!own && env.GIT_SSH) return {};
+  return { GIT_SSH_COMMAND: `${own || 'ssh'} -o BatchMode=yes -o ConnectTimeout=15` };
+}
+
+/** The operator's global `core.sshCommand` — a clone has no repo config yet. Empty when unset. */
+function globalSshCommand(): Promise<string> {
+  return new Promise((resolvePromise) => {
+    execFile('git', ['config', '--global', '--get', 'core.sshCommand'], { timeout: 5_000 }, (err, stdout) =>
+      resolvePromise(err ? '' : String(stdout).trim()));
+  });
+}
+
+function spawnClone(
+  command: string,
+  args: string[],
+  onLine: (line: string) => void,
+  signal: AbortSignal | undefined,
+  extraEnv: Record<string, string> = {},
+): Promise<CloneOutcome> {
+  return new Promise((resolvePromise) => {
+    const child = spawn(command, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: CLONE_TIMEOUT_MS,
-      // No inherited stdin and `GH_PROMPT_DISABLED`: an unauthenticated `gh`
-      // must fail with a message the dialog can show, not block on a prompt
-      // nobody can see.
-      env: { ...process.env, GH_PROMPT_DISABLED: '1', GIT_TERMINAL_PROMPT: '0' },
+      // No inherited stdin, and prompts disabled for both CLIs: an
+      // unauthenticated `gh`/`glab`, or a private repo `git` wants a password
+      // for, must fail with a message the dialog can show rather than block on a
+      // prompt nobody can see.
+      env: { ...process.env, GH_PROMPT_DISABLED: '1', GIT_TERMINAL_PROMPT: '0', ...extraEnv },
     });
     const tail: string[] = [];
     let settled = false;
-    const finish = (result: { ok: true } | { ok: false; error: string; notFound?: boolean }): void => {
+    const finish = (result: CloneOutcome): void => {
       if (settled) return;
       settled = true;
       resolvePromise(result);
@@ -271,26 +361,100 @@ export const ghCloneRunner: CloneRunner = (ref, dir, onLine, signal) =>
 
     child.on('error', (err) => {
       signal?.removeEventListener('abort', onAbort);
-      // ENOENT is the `gh`-not-installed case, which the route degrades on
+      // ENOENT is the CLI-not-installed case, which the caller degrades on
       // rather than reports as a clone failure.
       const notFound = (err as NodeJS.ErrnoException).code === 'ENOENT';
       finish({ ok: false, error: err.message, notFound });
     });
     child.on('close', (code) => {
       signal?.removeEventListener('abort', onAbort);
-      if (code === 0) {
-        void persistGhCredentialHelper(dir).then((ok) => finish(ok
-          ? { ok: true }
-          : { ok: false, error: 'Could not configure GitHub credentials for the checkout. Check directory permissions and retry.' }));
-        return;
-      }
-      // The tail of gh/git's own output IS the error message — `gh` writes
-      // "could not find repository", "authentication required" and the network
-      // errors itself, and paraphrasing them would only lose detail.
+      if (code === 0) return finish({ ok: true });
+      // The tail of the CLI's own output IS the error message — gh, glab and
+      // git write "could not find repository", "authentication required" and
+      // the network errors themselves, and paraphrasing them would only lose
+      // detail.
       const detail = tail.join('\n').trim();
-      finish({ ok: false, error: detail === '' ? `gh repo clone exited with code ${code}` : detail });
+      finish({ ok: false, error: detail === '' ? `${command} exited with code ${code}` : detail });
     });
   });
+}
+
+/** `gh repo clone <owner/repo> <dir> -- --progress`. */
+export const ghCloneRunner: CloneRunner = async (ref, dir, onLine, signal) => {
+  const outcome = await spawnClone('gh', ghCloneArgs(ref, dir), onLine, signal);
+  if (!outcome.ok) return outcome;
+  // PR #968: gh injects credentials for the clone only. Without a persisted
+  // helper, the HTTPS origin the SAML-safe clone produced cannot be pushed to.
+  return (await persistGhCredentialHelper(dir))
+    ? outcome
+    : { ok: false, error: 'Could not configure GitHub credentials for the checkout. Check directory permissions and retry.' };
+};
+
+/**
+ * GitLab: `glab repo clone` when the GitLab CLI is there, plain `git clone`
+ * otherwise.
+ *
+ * The fallback is what makes this work with no setup — a public project clones
+ * over HTTPS with nothing installed but git. `glab` is preferred when present
+ * because it carries the operator's GitLab token the way `gh` does, which is the
+ * only way a PRIVATE project clones without a credential helper already
+ * configured; most GitLab projects are private, so trying it first is the
+ * difference between "works" and "asks for a password nobody can type".
+ *
+ * The probe is the spawn itself: ENOENT from `glab` means not installed, and it
+ * arrives before any output, so falling through costs nothing and cannot
+ * half-write the directory. A glab that IS installed but unauthenticated fails
+ * with its own message, which is more useful than git's.
+ */
+export const gitlabCloneRunner: CloneRunner = async (ref, dir, onLine, signal) => {
+  const url = ref.cloneUrl ?? `https://gitlab.com/${ref.slug}.git`;
+  // An ssh address goes straight to git: glab picks its own protocol from its
+  // config, and the user just told us which one works here.
+  if (ref.transport === 'ssh') {
+    const viaSsh = await spawnClone(
+      'git', ['clone', '--progress', url, dir], onLine, signal,
+      nonInteractiveSsh(process.env, await globalSshCommand()),
+    );
+    if (viaSsh.ok || signal?.aborted || !SSH_UNUSABLE.test(viaSsh.error)) return viaSsh;
+    // ssh itself could not be used — no key, an unknown host key — which is
+    // the case HTTPS exists for: a public project clones with nothing set up.
+    // git cleans out a failed clone, so the directory is empty again for it.
+    onLine('ssh could not authenticate to gitlab.com — trying HTTPS instead');
+    const viaHttps = await cloneGitlabOverHttps({ ...ref, cloneUrl: `https://gitlab.com/${ref.slug}.git` }, dir, onLine, signal);
+    // Both failed: the ssh reason is the one that matches what the user typed.
+    return viaHttps.ok ? viaHttps : viaSsh;
+  }
+  return cloneGitlabOverHttps(ref, dir, onLine, signal);
+};
+
+/** ssh failed before GitLab could say anything about the project itself. */
+const SSH_UNUSABLE = /Permission denied \(publickey|Host key verification failed|no such identity|Connection timed out|Could not resolve hostname/i;
+
+/**
+ * `glab repo clone` gets the full HTTPS URL, never the bare slug — the same
+ * rule as `ghCloneArgs`. A slug is resolved against glab's configured DEFAULT
+ * host, so on a machine logged in to a company GitLab, `gitlab.com/acme/app`
+ * pasted into the dialog would clone `acme/app` from the company instance: a
+ * different repository, or a confusing "not found", under the right name. The
+ * URL pins the host the user typed. Kept pure so that is testable without a
+ * `glab` binary.
+ */
+export function glabCloneArgs(ref: RepoRef, dir: string): string[] {
+  return ['repo', 'clone', ref.cloneUrl, dir, '--', '--progress'];
+}
+
+const cloneGitlabOverHttps: CloneRunner = async (ref, dir, onLine, signal) => {
+  const url = ref.cloneUrl ?? `https://gitlab.com/${ref.slug}.git`;
+  const viaGlab = await spawnClone('glab', glabCloneArgs(ref, dir), onLine, signal);
+  if (viaGlab.ok || !viaGlab.notFound) return viaGlab;
+  return spawnClone('git', ['clone', '--progress', url, dir], onLine, signal);
+};
+
+/** The runner for a ref's forge. `gh` and `glab`/`git` are not interchangeable:
+ *  `gh` resolves a slug against github.com and nothing else. */
+export function cloneRunnerFor(ref: RepoRef): CloneRunner {
+  return ref.forge === 'gitlab' ? gitlabCloneRunner : ghCloneRunner;
+}
 
 /** `CEZ_DRY_RUN=1` — a fake clone so the dialog (and the tests) can exercise
  *  the whole flow offline: a few progress lines and a plausible repo on disk.
@@ -308,7 +472,7 @@ export const dryRunCloneRunner: CloneRunner = async (ref, dir, onLine) => {
 };
 
 export interface CheckoutOptions {
-  /** Raw user input: `owner/repo` or a GitHub URL. */
+  /** Raw user input: `owner/repo`, or a GitHub or GitLab URL. */
   url: string;
   /** Target folder name; defaults to the repo name. */
   name?: string | undefined;
@@ -322,7 +486,7 @@ export interface CheckoutOptions {
 }
 
 /**
- * Clone a GitHub repo into `<projectsDir>/<name>`, streaming progress.
+ * Clone a GitHub or GitLab repo into `<projectsDir>/<name>`, streaming progress.
  *
  * Answers only when the clone has finished (the spec's "long-running: answers
  * when the clone finishes"); the dialog's liveness comes from `onProgress`.
@@ -332,7 +496,11 @@ export interface CheckoutOptions {
 export async function checkoutRepo(opts: CheckoutOptions): Promise<CheckoutResult> {
   const ref = parseRepoRef(opts.url);
   if (!ref) {
-    return { ok: false, status: 400, error: `not a GitHub repository: ${opts.url.trim().slice(0, 200)}` };
+    return {
+      ok: false,
+      status: 400,
+      error: `not a GitHub or GitLab repository: ${opts.url.trim().slice(0, 200)}`,
+    };
   }
   const name = (opts.name ?? '').trim() === '' ? ref.repo : (opts.name ?? '').trim();
   if (!isValidCheckoutName(name)) {
@@ -369,7 +537,7 @@ export async function checkoutRepo(opts: CheckoutOptions): Promise<CheckoutResul
   const emit = (event: Omit<CheckoutProgressEvent, 'name' | 'checkoutId'>): void =>
     opts.onProgress({ ...event, name, ...(opts.checkoutId ? { checkoutId: opts.checkoutId } : {}) });
 
-  const run = opts.run ?? (process.env.CEZ_DRY_RUN === '1' ? dryRunCloneRunner : ghCloneRunner);
+  const run = opts.run ?? (process.env.CEZ_DRY_RUN === '1' ? dryRunCloneRunner : cloneRunnerFor(ref));
   let outcome: Awaited<ReturnType<CloneRunner>>;
   try {
     outcome = await run(ref, target, (line) => emit({ phase: 'cloning', line }), opts.signal);
@@ -383,16 +551,65 @@ export async function checkoutRepo(opts: CheckoutOptions): Promise<CheckoutResul
     // directory that is still on disk (it would get the 409 instead).
     await cleanupCheckout(root, target);
     if (outcome.notFound) {
-      const reason = 'gh CLI not found — install it and run `gh auth login`';
+      // Which CLI is missing depends on the forge — and for GitLab a missing
+      // `git` is the only way to get here at all, since `glab` being absent
+      // falls back rather than failing.
+      const reason = ref.forge === 'gitlab'
+        ? 'git not found — install it (or the GitLab CLI, `glab auth login`) to clone from GitLab'
+        : 'gh CLI not found — install it and run `gh auth login`';
       emit({ phase: 'error', error: reason });
       return { ok: false, status: 503, error: reason, reason };
     }
-    emit({ phase: 'error', error: outcome.error });
-    return { ok: false, status: 500, error: outcome.error };
+    const error = ref.forge === 'gitlab' ? explainGitlabAuth(outcome.error, ref) : outcome.error;
+    emit({ phase: 'error', error });
+    return { ok: false, status: 500, error };
   }
 
   emit({ phase: 'done' });
   return { ok: true, target, name };
+}
+
+/** Does this failure mean the clone wanted credentials and could not ask? */
+const NEEDS_CREDENTIALS = /could not read Username|Authentication failed|terminal prompts disabled|HTTP Basic: Access denied/i;
+
+/**
+ * Add the missing half of git's own message, for the one GitLab failure that is
+ * unreadable without it.
+ *
+ * GitLab answers 401 for a project that is private AND for one that does not
+ * exist — deliberately, so an anonymous probe cannot enumerate private projects.
+ * Git turns that into "could not read Username for 'https://gitlab.com'", which
+ * is true, does not look like an auth failure (prompts are disabled here), and
+ * tells the operator nothing about what to do. Verified against gitlab.com.
+ *
+ * Appended, never substituted: git's line names the URL it actually tried, and
+ * this module is otherwise built on showing the CLI's own words rather than a
+ * paraphrase. Applied HERE rather than in the runner because it is a property of
+ * the forge, not of which command happened to run — an authenticated `glab`
+ * failing the same way earns the same explanation.
+ */
+function explainGitlabAuth(error: string, ref: RepoRef): string {
+  if (ref.transport === 'ssh') return explainGitlabSsh(error, ref);
+  if (!NEEDS_CREDENTIALS.test(error)) return error;
+  return `${error}\n\ngitlab.com answers the same way for a private project and one that does not `
+    + `exist, so this is either — check ${ref.slug}, and for a private project install the GitLab `
+    + 'CLI and run `glab auth login` (cezar uses it when it is there), configure a git '
+    + `credential helper for gitlab.com, or — if your GitLab login is an ssh key — paste the ssh `
+    + `address instead (git@gitlab.com:${ref.slug}.git).`;
+}
+
+/** The ssh failures worth a sentence, each with the one thing that fixes it. */
+function explainGitlabSsh(error: string, ref: RepoRef): string {
+  if (/Host key verification failed/i.test(error)) {
+    return `${error}\n\nThis machine has not accepted gitlab.com's host key yet, and cezar cannot answer `
+      + 'that prompt for you — run `ssh -T git@gitlab.com` once in a terminal, accept the key, and retry.';
+  }
+  if (/Permission denied \(publickey|Could not read from remote repository|could not be found or you don't have permission/i.test(error)) {
+    return `${error}\n\ngitlab.com refused the ssh key cezar's process offered, or ${ref.slug} does not exist `
+      + '(gitlab.com answers the same way for both). A key that works in your terminal may need an '
+      + 'agent this process can reach (`ssh-add`), or a passphrase-free deploy key.';
+  }
+  return error;
 }
 
 function errText(err: unknown): string {

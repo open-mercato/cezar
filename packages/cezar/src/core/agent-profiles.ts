@@ -49,6 +49,9 @@ import type { ProviderId } from './provider-auth.ts';
  *   `GITHUB_TOKEN` ahead of any stored credential regardless. `null` until a test proves one
  *   variable moves both (spec 2026-09-19-runner-seam-native-backends Q14) — being wrong here
  *   bills the wrong account.
+ * - **kimi** → `KIMI_CODE_HOME`. Verified against `kimi` 0.39.1 on 2026-09-30: under a fresh
+ *   `KIMI_CODE_HOME` the CLI reports "No providers configured" — config AND the OAuth
+ *   `credentials/` directory move together, so a second account really is a second login.
  */
 export const PROFILE_ENV_VAR: Record<ProviderId, string | null> = {
   claude: 'CLAUDE_CONFIG_DIR',
@@ -58,6 +61,7 @@ export const PROFILE_ENV_VAR: Record<ProviderId, string | null> = {
   pi: null,
   junie: null,
   copilot: null,
+  kimi: 'KIMI_CODE_HOME',
 };
 
 /** Providers that can carry more than one account — what the UI offers "Add account" for. */
@@ -116,4 +120,5 @@ const PROFILE_DIR_MARKERS: Record<ProviderId, readonly string[]> = {
   junie: [],
   // Same for copilot (`PROFILE_ENV_VAR.copilot === null`).
   copilot: [],
+  kimi: ['config.toml', 'credentials'],
 };

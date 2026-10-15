@@ -35,7 +35,7 @@ id — that is the whole point of the seam.
 ### Identity
 
 ```ts
-const RUNNER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie'] as const;  // the source of truth
+const RUNNER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'kimi'] as const;  // the source of truth
 type RunnerId     = (typeof RUNNER_IDS)[number];                             // user-selectable
 type AgentBackend = RunnerId | 'claude-cli';                                 // + legacy id, still parses
 ```
@@ -334,6 +334,29 @@ transport into `UiEvent`s. The authoritative table is
 `.ai/runs/2026-09-27-copilot-cli-runner/copilot-acp-notes.md`, and
 `__fixtures__/copilot/README.md` states exactly which of those frames are a live capture and
 which were read out of the CLI's own ACP bridge.
+
+**Kimi (`kimi acp`, Agent Client Protocol — `kimi-ui-mapper.ts`).** One persistent
+`kimi acp` process per session, JSON-RPC 2.0 over stdio. `session.started` fires once the
+session exists AND its model is selected (`session/new` or `session/resume`, then
+`session/set_config_option`), so it names the model the session will really use rather than the
+account default. `turn.started` = each `session/prompt` sent; `turn.completed` = that request's
+RESPONSE (`stopReason` mapped 1:1, a JSON-RPC error — a quota 403 — ends the turn as `error`).
+Message/reasoning items = runs of `agent_message_chunk` / `agent_thought_chunk`. Tool items: the
+`tool_call` title is the tool NAME; `in_progress` updates stream the ARGUMENTS as partial JSON and
+are ignored until the one carrying `rawInput`; `completed`/`failed` carry the output. `diffs` from
+`Edit`/`Write` input (or ACP `diff` content), `plan.updated` from the `TodoList` input AND the
+native ACP `plan` update — deduplicated, since Kimi sends both for one change. Sub-agents: the
+`Agent` tool is the task item; ACP never streams the child's own calls, so there is no nesting
+(like codex). **Usage is not on the ACP wire** (`usage_update` is context occupancy only, used
+for `contextWindow`): the runner reads `usage.record` lines from Kimi's own session log
+(`$KIMI_CODE_HOME/sessions/*/<sessionId>/agents/*/wire.jsonl`, sub-agents included) and feeds them
+before the prompt response, waiting boundedly for the log's `turn.ended` marker so a turn's last
+record cannot slip into the next turn. Permission prompts (`session/request_permission`) are
+answered by the runner — approved, except a tool from cezar's allowlist vocabulary the step did not
+allow, and `Bash` under a `bashAllowlist` (fail closed; the prompt's command is truncated). Mid-turn
+messages queue as the next turn: ACP has no steering. Isolated, the base image's `kimi` runs in
+the task container with its home on the host at `~/.kimi-agent` (so the usage log stays readable)
+and the host's Kimi login directories mounted into it (`hostKimiLogin`).
 
 **Mapper robustness contract.** Inputs come off the wire and may be `null`,
 partial or malformed. A mapper **must never throw**: unparseable NDJSON lines are

@@ -430,6 +430,53 @@ describe('workspace config', () => {
     expect((await loadWorkspaceConfig()).projectsDir).toBe('/srv/checkouts');
   });
 
+  describe('machine-wide isolation settings survive what they do not understand', () => {
+    const write = (value: unknown) => writeFileSync(workspaceConfigPath(), JSON.stringify(value), 'utf8');
+
+    it('one bad credential grant costs THAT grant, not every grant on the machine', async () => {
+      // The review's scenario: a mode this version does not know. The whole
+      // `credentials` block used to fall to `.catch(undefined)`, and the next
+      // merge-write then persisted the loss — erasing every machine-wide grant.
+      write({
+        agentDefaults: {
+          sandbox: {
+            credentials: {
+              enabled: { ssh: { mode: 'teleport' }, gcloud: true, aws: { mode: 'copy' } },
+              custom: [
+                { id: 'good', env: ['K'], valueFrom: 'vault://kv/a#k' },
+                { id: 42 },
+              ],
+            },
+          },
+        },
+      });
+      const config = await loadWorkspaceConfig();
+      const credentials = config.agentDefaults.sandbox?.credentials;
+      expect(credentials?.enabled).toEqual({ gcloud: true, aws: { mode: 'copy' } });
+      expect(credentials?.custom?.map((c) => c.id)).toEqual(['good']);
+
+      // And an unrelated write leaves the surviving grants on disk.
+      await mergeWriteWorkspaceConfig((c) => { c.browseRoot = home; });
+      const onDisk = JSON.parse(readFileSync(workspaceConfigPath(), 'utf8'));
+      expect(onDisk.agentDefaults.sandbox.credentials.enabled.gcloud).toBe(true);
+    });
+
+    it('unknown keys round-trip through a version that does not know them', async () => {
+      write({
+        agentDefaults: {
+          sandbox: { futureKey: 1, resources: { futureLimit: 'x' }, credentials: { futureMap: {} } },
+          vault: { address: 'https://v', futureAuth: 'oidc' },
+        },
+      });
+      await mergeWriteWorkspaceConfig((c) => { c.browseRoot = home; });
+      const onDisk = JSON.parse(readFileSync(workspaceConfigPath(), 'utf8'));
+      expect(onDisk.agentDefaults.sandbox.futureKey).toBe(1);
+      expect(onDisk.agentDefaults.sandbox.resources.futureLimit).toBe('x');
+      expect(onDisk.agentDefaults.sandbox.credentials.futureMap).toEqual({});
+      expect(onDisk.agentDefaults.vault.futureAuth).toBe('oidc');
+    });
+  });
+
   describe('registry backup and self-heal', () => {
     const registerOne = () =>
       mergeWriteWorkspaceConfig((config) => {

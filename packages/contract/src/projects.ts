@@ -155,7 +155,9 @@ export const updateProjectInputSchema = z
 export type UpdateProjectInput = z.infer<typeof updateProjectInputSchema>;
 
 /**
- * `POST /api/v1/projects/checkout` (multi-project spec, step 4.3) — the clone-from-GitHub body.
+ * `POST /api/v1/projects/checkout` (multi-project spec, step 4.3) — the clone body. `url` is a
+ * GitHub or GitLab reference in any spelling `parseRepoRef` accepts; the forge decides which
+ * clone command runs, so nothing here changes when one is added.
  * `name` defaults server-side to the repo name; `checkoutId` is the cockpit's own correlation
  * token, echoed on every `checkout-progress` event so two tabs cloning at once never render each
  * other's progress.

@@ -9,7 +9,14 @@ import { z } from 'zod';
  */
 
 /** The platforms the registry knows. Extend here + add a strategy file. */
-export const PLATFORM_IDS = ['ubuntu-vps', 'macosx-ngrok'] as const;
+export const PLATFORM_IDS = [
+  'ubuntu-vps',
+  'macosx-ngrok',
+  'macosx-cloudflare-tunnel',
+  'macosx-tailscale',
+  'macosx-caddy',
+  'macosx-external-proxy',
+] as const;
 export type PlatformId = (typeof PLATFORM_IDS)[number];
 
 /** Per-step lifecycle. `failed` resumes identically to `pending`. */
@@ -108,6 +115,15 @@ export const serverStateSchema = z
     publicUrl: z.string().optional().catch(undefined),
     /** macOS+ngrok free tier: the tunnel URL changes across restarts. */
     ephemeral: z.boolean().optional().catch(undefined),
+    /**
+     * macOS+Tailscale: how the cockpit is published — on this node's own name
+     * (`serve`), as a Tailscale Service with its own stable name and ACL grants
+     * (`service`), or to the open internet (`funnel`). Remembered so a later
+     * deploy re-advertises and prints the right identity note, and so uninstall
+     * withdraws exactly the mapping that was created. An unknown value degrades
+     * to undefined, which the strategy reads as the safe `serve`.
+     */
+    tailscaleMode: z.enum(['serve', 'service', 'funnel']).optional().catch(undefined),
     // A single malformed entry degrades to a `failed` record (undo still runs
     // from constants), never to losing every other step's ledger.
     steps: z

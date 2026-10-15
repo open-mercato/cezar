@@ -1,9 +1,15 @@
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { CANCEL, PreflightError, type InstallContext, type InstallStep, type PlatformStrategy, type StepArtifact } from '../types.ts';
+import { CANCEL, type InstallContext, type InstallStep, type PlatformStrategy, type StepArtifact } from '../types.ts';
 import { brewInstallTool, brewRemoveHint, depCheckStep, HOSTNAME_RE, owned, shared, StepAborted, StepCancelled, verifyCommand } from '../steps.ts';
+import {
+  CEZAR_PLIST_LABEL,
+  cezarAutostartStep,
+  darwinPreflight,
+  installLaunchdAgent,
+  kickstartAgent,
+  launchAgentPath,
+  launchdAgentPlist,
+  removeLaunchdAgent,
+} from './macosx-shared.ts';
 
 /**
  * The `macosx-ngrok` strategy: the app runs locally on a Mac and ngrok is the
@@ -11,58 +17,23 @@ import { brewInstallTool, brewRemoveHint, depCheckStep, HOSTNAME_RE, owned, shar
  * the identity gate (the htpasswd equivalent), and a launchd agent is the
  * autostart (the systemd equivalent). Proves the engine seam with a genuinely
  * different platform — same engine, different steps.
+ *
+ * The launchd mechanics and the cezar cockpit agent live in
+ * `macosx-shared.ts`, reused by every macOS strategy.
  */
 
 const PLIST_LABEL = 'ai.cezar.ngrok';
-const plistPath = (): string => join(homedir(), 'Library', 'LaunchAgents', `${PLIST_LABEL}.plist`);
 
-/**
- * `launchctl bootstrap` + proof the agent actually loaded. A discarded
- * bootstrap exit code (malformed plist, spawn failure) used to record the
- * step `done` — install reported complete with nothing running.
- */
-async function bootstrapVerified(ctx: InstallContext, uid: number, label: string, path: string, what: string): Promise<void> {
-  const code = await ctx.runner.interactive('launchctl', ['bootstrap', `gui/${uid}`, path]);
-  const loaded = (await ctx.runner.capture('launchctl', ['print', `gui/${uid}/${label}`])).code === 0;
-  if (code !== 0 || !loaded) {
-    throw new StepAborted(
-      `launchctl could not load ${what} (bootstrap exit ${code}) — inspect it with: launchctl print gui/${uid}/${label}`,
-    );
-  }
-}
-
-/** Escape a value for inclusion in plist XML text. */
-function escapeXml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
+// Re-exported: the cezar cockpit agent plist builder moved to macosx-shared
+// (with an optional bindHost for the external-proxy strategy); existing
+// consumers and tests import it from here.
+export { cezarLaunchdPlist } from './macosx-shared.ts';
 
 /** launchd agent that keeps an authenticated ngrok tunnel to the local cockpit up. */
 export function launchdPlist(port: number, basicAuth: string, domain?: string, ngrokBin = '/opt/homebrew/bin/ngrok'): string {
   const args = ['http', String(port), '--basic-auth', basicAuth];
   if (domain) args.push('--domain', domain);
-  // Escape every arg — a password/domain with `&`, `<`, `>` would otherwise
-  // produce invalid plist XML and launchctl would silently fail to load it.
-  const argXml = [ngrokBin, ...args]
-    .map((a) => `      <string>${escapeXml(a)}</string>`)
-    .join('\n');
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<!-- Managed by cezar server-install — do not edit by hand. -->
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-  <dict>
-    <key>Label</key>
-    <string>${PLIST_LABEL}</string>
-    <key>ProgramArguments</key>
-    <array>
-${argXml}
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-  </dict>
-</plist>
-`;
+  return launchdAgentPlist({ label: PLIST_LABEL, argv: [ngrokBin, ...args] });
 }
 
 const ngrokStep: InstallStep = {
@@ -70,7 +41,7 @@ const ngrokStep: InstallStep = {
   title: 'ngrok tunnel (authtoken + domain + basic-auth)',
   async check(ctx) {
     if (ctx.dryRun) return false;
-    return verifyCommand(ctx, 'test', ['-f', plistPath()]);
+    return verifyCommand(ctx, 'test', ['-f', launchAgentPath(PLIST_LABEL)]);
   },
   async run(ctx): Promise<{ artifacts: StepArtifact[] }> {
     // 1) ngrok present?
@@ -128,28 +99,17 @@ const ngrokStep: InstallStep = {
     const basicAuth = `${String(user)}:${String(password)}`;
 
     // 5) launchd agent (the plist embeds the basic-auth creds, like htpasswd on Linux)
-    const path = plistPath();
-    if (ctx.dryRun) {
-      ctx.ui.info(`DRY RUN — would write ${path} and launchctl bootstrap it.`);
-    } else {
-      // Resolve the real ngrok binary path so the plist works on both Apple
-      // Silicon (/opt/homebrew/bin) and Intel (/usr/local/bin) Macs.
-      const ngrokBin = (await ctx.runner.capture('bash', ['-lc', 'command -v ngrok'])).stdout.trim() || '/opt/homebrew/bin/ngrok';
-
-      mkdirSync(join(homedir(), 'Library', 'LaunchAgents'), { recursive: true });
-      // 0600: unlike the Linux htpasswd (a hash, 0640 root:www-data), this file
-      // embeds the PLAINTEXT basic-auth credentials. `mode` only applies on
-      // create, so chmod too for re-installs over an existing 0644 plist.
-      writeFileSync(path, launchdPlist(ctx.state.primaryPort, basicAuth, domain, ngrokBin), { encoding: 'utf8', mode: 0o600 });
-      chmodSync(path, 0o600);
-
-      // Use the modern launchctl API — the legacy `launchctl load` returns
-      // error 5 (EIO) on recent macOS versions.
-      const uid = process.getuid ? process.getuid() : 0;
-      // Bootout any prior instance so re-installs don't collide.
-      await ctx.runner.capture('launchctl', ['bootout', `gui/${uid}/${PLIST_LABEL}`]);
-      await bootstrapVerified(ctx, uid, PLIST_LABEL, path, 'the ngrok tunnel agent');
-    }
+    // Resolve the real ngrok binary path so the plist works on both Apple
+    // Silicon (/opt/homebrew/bin) and Intel (/usr/local/bin) Macs.
+    const ngrokBin = ctx.dryRun
+      ? '/opt/homebrew/bin/ngrok'
+      : (await ctx.runner.capture('bash', ['-lc', 'command -v ngrok'])).stdout.trim() || '/opt/homebrew/bin/ngrok';
+    const path = await installLaunchdAgent(
+      ctx,
+      PLIST_LABEL,
+      launchdPlist(ctx.state.primaryPort, basicAuth, domain, ngrokBin),
+      'the ngrok tunnel agent',
+    );
 
     if (domain) {
       ctx.state.publicUrl = `https://${domain}`;
@@ -170,126 +130,13 @@ const ngrokStep: InstallStep = {
     // Work from the static label/path, not just the recorded artifact — a step
     // satisfied via check() records `created: null`, and the agent (whose plist
     // holds the basic-auth credentials) must still be removed.
-    const path = (created?.artifacts ?? []).find((a) => a.type === 'launchd')?.path ?? plistPath();
-    if (ctx.dryRun) {
-      ctx.ui.info('DRY RUN — would launchctl bootout and remove the ngrok agent.');
-    } else {
-      const uid = process.getuid ? process.getuid() : 0;
-      await ctx.runner.capture('launchctl', ['bootout', `gui/${uid}/${PLIST_LABEL}`]);
-      rmSync(path, { force: true });
-    }
+    await removeLaunchdAgent(ctx, PLIST_LABEL);
     const cfg = (created?.artifacts ?? []).find((a) => a.type === 'ngrok-config');
     if (cfg) {
       ctx.ui.note(
         `The ngrok authtoken was left in ngrok's own config — remove it yourself if you want it gone:\n${cfg.removeHint ?? ''}`,
         'ngrok',
       );
-    }
-  },
-};
-
-/* ── autostart: run cezar itself as a launchd agent ─────────────────── */
-
-const CEZAR_PLIST_LABEL = 'ai.cezar.cockpit';
-const OFFICIAL_CLI_PKG = 'cezar-cli';
-const cezarPlistPath = (): string => join(homedir(), 'Library', 'LaunchAgents', `${CEZAR_PLIST_LABEL}.plist`);
-
-/** Read the PID launchd currently associates with an agent, when available. */
-async function launchdPid(ctx: InstallContext, uid: number, label: string): Promise<string | undefined> {
-  const result = await ctx.runner.capture('launchctl', ['print', `gui/${uid}/${label}`]);
-  if (result.code !== 0) return undefined;
-  return /^\s*pid\s*=\s*(\d+)\s*$/m.exec(result.stdout)?.[1];
-}
-
-/** Resolve the argv array for the cezar launchd agent, mirroring how the CLI was launched. */
-async function resolveCezarArgv(ctx: InstallContext): Promise<string[]> {
-  const node = process.execPath;
-  const pkgRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
-  const entry = join(pkgRoot, 'dist', 'index.js');
-  const npxPath = join(dirname(node), 'npx');
-
-  if (/[/\\]_npx[/\\]/.test(pkgRoot)) return [npxPath, '--yes', OFFICIAL_CLI_PKG];
-  if (ctx.dryRun || existsSync(entry)) return [node, entry];
-
-  const out = (await ctx.runner.capture('bash', ['-lc', `command -v ${OFFICIAL_CLI_PKG} || command -v cezar`])).stdout.trim();
-  const globalBin = out.split('\n').map((s) => s.trim()).filter(Boolean).pop();
-  if (globalBin) return [node, globalBin];
-
-  // No runnable cezar → installing a KeepAlive agent would make launchd
-  // respawn-throttle a permanently failing job across reboots. Fail the step.
-  throw new StepAborted(
-    `could not locate a runnable cezar (${entry} missing, no global ${OFFICIAL_CLI_PKG}) — ` +
-      `install it (npm i -g ${OFFICIAL_CLI_PKG}) or build the checkout, then re-run with --reconfigure autostart`,
-  );
-}
-
-/** launchd agent that keeps the cezar cockpit running on the given port. */
-export function cezarLaunchdPlist(repoRoot: string, port: number, argv: string[], instanceId?: string): string {
-  // Give the agent the operator's PATH so cezar can spawn claude/gh/codex.
-  const pathDirs = [dirname(process.execPath), ...(process.env.PATH ?? '').split(':'), '/usr/local/bin', '/usr/bin', '/bin']
-    .filter((d, i, a) => d && d !== '.' && a.indexOf(d) === i);
-  const fullArgv = [...argv, 'serve', '--no-open', '--port', String(port)];
-  const argXml = fullArgv.map((a) => `      <string>${escapeXml(a)}</string>`).join('\n');
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<!-- Managed by cezar server-install — do not edit by hand. -->
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-  <dict>
-    <key>Label</key>
-    <string>${CEZAR_PLIST_LABEL}</string>
-    <key>ProgramArguments</key>
-    <array>
-${argXml}
-    </array>
-    <key>WorkingDirectory</key>
-    <string>${escapeXml(repoRoot)}</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-      <key>CEZ_REMOTE</key>
-      <string>1</string>
-${instanceId ? `      <key>CEZ_INSTANCE_ID</key>\n      <string>${escapeXml(instanceId)}</string>\n` : ''}      <key>PATH</key>
-      <string>${escapeXml(pathDirs.join(':'))}</string>
-    </dict>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-  </dict>
-</plist>
-`;
-}
-
-const autostartStep: InstallStep = {
-  id: 'autostart',
-  title: 'Run cezar as a service (launchd — starts now + on boot)',
-  async check(ctx) {
-    if (ctx.dryRun) return false;
-    return verifyCommand(ctx, 'test', ['-f', cezarPlistPath()]);
-  },
-  async run(ctx): Promise<{ artifacts: StepArtifact[] }> {
-    const argv = await resolveCezarArgv(ctx);
-    const path = cezarPlistPath();
-    if (ctx.dryRun) {
-      ctx.ui.info(`DRY RUN — would write ${path} and launchctl bootstrap it.`);
-    } else {
-      mkdirSync(join(homedir(), 'Library', 'LaunchAgents'), { recursive: true });
-      writeFileSync(path, cezarLaunchdPlist(ctx.repoRoot, ctx.state.primaryPort, argv, ctx.state.instanceId), { encoding: 'utf8', mode: 0o600 });
-      chmodSync(path, 0o600);
-      const uid = process.getuid ? process.getuid() : 0;
-      await ctx.runner.capture('launchctl', ['bootout', `gui/${uid}/${CEZAR_PLIST_LABEL}`]);
-      await bootstrapVerified(ctx, uid, CEZAR_PLIST_LABEL, path, 'the cezar cockpit agent');
-    }
-    return { artifacts: [owned('launchd', { name: CEZAR_PLIST_LABEL, path })] };
-  },
-  async undo(ctx, created) {
-    // Static label/path fallback — see the ngrok step's undo.
-    const path = (created?.artifacts ?? []).find((a) => a.type === 'launchd')?.path ?? cezarPlistPath();
-    if (ctx.dryRun) {
-      ctx.ui.info('DRY RUN — would launchctl bootout and remove the cezar agent.');
-    } else {
-      const uid = process.getuid ? process.getuid() : 0;
-      await ctx.runner.capture('launchctl', ['bootout', `gui/${uid}/${CEZAR_PLIST_LABEL}`]);
-      rmSync(path, { force: true });
     }
   },
 };
@@ -355,53 +202,22 @@ export const macosxNgrok: PlatformStrategy = {
   id: 'macosx-ngrok',
   label: 'macOS + ngrok',
   async preflight(ctx: InstallContext) {
-    if (ctx.dryRun) {
-      ctx.ui.info('DRY RUN — skipping OS preflight.');
-      return;
-    }
-    if (!(await ctx.runner.capture('uname', ['-s'])).stdout.includes('Darwin')) {
-      throw new PreflightError('macosx-ngrok requires macOS. On a Linux VPS use --platform ubuntu-vps.');
-    }
+    await darwinPreflight(ctx, 'macosx-ngrok');
   },
   steps(): InstallStep[] {
     return [
       depCheckStep({ installTool: brewInstallTool, removeHint: brewRemoveHint }),
-      autostartStep,
+      cezarAutostartStep,
       ngrokStep,
       macosxNgrokIdentityStep,
     ];
   },
   async redeploy(ctx: InstallContext) {
     // Restart both the cezar cockpit and the ngrok tunnel, then re-verify.
-    if (ctx.dryRun) {
-      ctx.ui.info('DRY RUN — would restart the cezar and ngrok launchd agents and re-verify.');
-      return;
-    }
-    const uid = process.getuid ? process.getuid() : 0;
     ctx.ui.info('Redeploying — restarting the cezar cockpit.');
-    const previousPid = await launchdPid(ctx, uid, CEZAR_PLIST_LABEL);
-    const cezarCode = await ctx.runner.interactive('launchctl', ['kickstart', '-k', `gui/${uid}/${CEZAR_PLIST_LABEL}`]);
-    if (cezarCode !== 0) {
-      throw new StepAborted(
-        `launchctl could not restart the cezar cockpit (kickstart exit ${cezarCode}) — ` +
-          `inspect it with: launchctl print gui/${uid}/${CEZAR_PLIST_LABEL}`,
-      );
-    }
-    const currentPid = await launchdPid(ctx, uid, CEZAR_PLIST_LABEL);
-    if (previousPid && currentPid && previousPid === currentPid) {
-      throw new StepAborted(
-        `the cezar cockpit did not actually restart (PID stayed ${currentPid}) — ` +
-          `inspect it with: launchctl print gui/${uid}/${CEZAR_PLIST_LABEL}`,
-      );
-    }
+    await kickstartAgent(ctx, CEZAR_PLIST_LABEL, 'the cezar cockpit agent');
     ctx.ui.info('Redeploying — restarting the ngrok tunnel.');
-    const code = await ctx.runner.interactive('launchctl', ['kickstart', '-k', `gui/${uid}/${PLIST_LABEL}`]);
-    if (code !== 0) {
-      throw new StepAborted(
-        `launchctl could not restart the ngrok tunnel (kickstart exit ${code}) — ` +
-          `inspect it with: launchctl print gui/${uid}/${PLIST_LABEL}`,
-      );
-    }
+    await kickstartAgent(ctx, PLIST_LABEL, 'the ngrok tunnel agent');
     await macosxNgrokIdentityStep.run(ctx);
   },
 };

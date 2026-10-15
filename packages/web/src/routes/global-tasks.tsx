@@ -83,6 +83,7 @@ import { TASK_ORIGIN_OPTIONS, useTaskOrigin, type TaskOrigin } from '@/lib/task-
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
+import { IsolationMark } from '@/components/isolation-indicator'
 
 /**
  * The global Tasks page at `/tasks` — every registered project's work in one table.
@@ -941,6 +942,10 @@ function TaskRow({
               onToggle={() => onToggleSubtasks(run.id)}
             />
           ) : null}
+          {/* Where the agent ran, when it is worth saying — nothing for an
+              ordinary host run, so this costs the title column no width on the
+              rows that are the majority. */}
+          <IsolationMark run={run} />
         </span>
       </td>
       {showProject ? (

@@ -28,7 +28,8 @@ Three words, no jargon — **task**, **skill**, **chain**:
   the live session while it works.
 - 📖 **Skills** are Markdown playbooks. Drop them in `.ai/skills/` or
   `.ai/cezar/skills/`, or pull them from a shared **team skills repo** (a bare
-  git clone cached globally in `~/.cache/cez/`). A workflow step references one by
+  git clone cached globally in `~/.cache/cez/`, or `$CEZ_HOME/cache/` when
+  `CEZ_HOME` is set). A workflow step references one by
   `skill: <name>` and its body becomes the agent's extra system prompt — so you
   shape *how* the agent reasons without touching code.
 - 🔗 **Chains (workflows)** stitch steps into a pipeline: agent steps plus shell
@@ -263,8 +264,9 @@ A check step runs `bash -lc <command>` in the task's worktree with the server's
 environment plus the **secrets** it may read, which no agent step ever
 receives. A secret has a scope — the project (Settings → *Secrets*,
 `cezar secrets …`) or the whole workspace (Settings → Global → *Secrets*,
-`cezar secrets … --workspace`) — and audiences: `checks` (check steps) and/or
-`cezar` (cezar's own features). By default a check step gets every
+`cezar secrets … --workspace`) — and audiences: `checks` (check steps),
+`cezar` (cezar's own features) and/or `containers` (agents isolated in a task
+container, as environment variables — never an agent on this machine). By default a check step gets every
 `checks`-audience secret of the workspace and the project, the project's
 winning on a shared name; a step can bind exactly the ones it needs instead:
 
@@ -439,9 +441,11 @@ cezar shells out to your locally installed, logged-in agent CLI —
 means headless `stream-json` mode, tool access via `--allowedTools`, with
 unapproved tools denied without prompting (`--permission-mode dontAsk`) inside
 the task's worktree — but note the zero-config default list (`Read`, `Edit`,
-`Write`, `Grep`, `Glob`, `Bash`) grants unrestricted `Bash` unless a step sets
-`bashAllowlist`, so treat a run as having full shell access in its worktree,
-not a sandboxed allowlist. Set `CEZ_APPROVAL_GATE=1` to select Claude's
+`Write`, `Grep`, `Glob`, `Bash`, `WebFetch`, `WebSearch`, `Skill`) grants
+unrestricted `Bash` unless a step sets `bashAllowlist`, so treat a run as having
+full shell access in its worktree, not a sandboxed allowlist. The web tools and
+`Skill` are on the list because `dontAsk` refuses anything unlisted without a
+prompt: left off, an agent could not look anything up or invoke a skill at all. Set `CEZ_APPROVAL_GATE=1` to select Claude's
 `acceptEdits` mode, but cezar has no cockpit permission response channel, so
 approval prompts are not actionable in the cockpit. Codex, Junie and OpenCode are driven through their own
 native protocols and don't honor `allowedTools` at all — see
@@ -456,6 +460,7 @@ Useful environment variables:
 | `CEZ_TELEMETRY=0` | Block usage telemetry even after you opted in. Telemetry is opt-in — nothing is sent until you answer yes in the cockpit, Settings → Privacy or `cezar telemetry enable` ([docs/telemetry.md](telemetry.md)). `DO_NOT_TRACK=1` works too. `CEZ_TELEMETRY=1` only lifts the CI / test-runner / `CEZ_DRY_RUN=1` block; it never grants consent. |
 | `CEZ_INSTANCE_ID` | Internal server-install identity set automatically in generated systemd/launchd services; normally leave unset. It is surfaced additively by `/api/v1/health` for install verification. |
 | `CEZ_AGENT_MODELS_LOCKED=1` | Globally lock each runner to the model configured in its native Claude/Codex/OpenCode settings while keeping runner selection available. Exact `1` also delegates authentication and provider enablement to those native agents, so Cezar skips its credential probes and provider-disable preferences. Existing Cezar presets are preserved but ignored, and an environment change requires a restart. The config-file equivalent is `"modelsLocked": true` in global `~/.cezar/config.json` or one repository's `.ai/cezar/config.json`; config-file locks do not disable provider checks. |
+| `CEZ_MCP_TOOLS=0` | Stop granting your own MCP servers to Claude agents by default. By default a step with no tool list of its own may use every tool of every MCP server Claude would load — the claude.ai connectors (Gmail, BigQuery, Notion…) and any configured server — found with `claude mcp list` and from each session's own tool list. That includes tools that act as you (sending mail, writing data), in tasks nobody is watching. With `0`, the project's private servers (`.ai/cezar/mcp.local.json`) are still attached and granted, and so is any `mcp__…` entry a workflow step names explicitly in its tool list. |
 | `CEZ_APPROVAL_GATE=1` | Select Claude's `acceptEdits` mode. Cezar has no cockpit permission response channel; by default, unapproved tools are denied without interrupting the run. |
 | `CEZ_FOLLOWUPS=1` | Turn on the global follow-up **Inbox**: agents are asked to leave follow-ups in `todos.json` when they finish, and the Inbox view appears. Off by default — each task's own **Notes** handoff journal runs either way. |
 | `CEZ_AUTOMATIONS=0` | Turn **automations** off. On by default since the automations redesign (spec `.ai/specs/2026-09-14-automations-redesign.md`): the Automations view lists GitHub-triggered and scheduled automations, and cezar polls GitHub or fires schedules on each enabled one while it is running — nothing runs until you enable an automation yourself. An agent can also **create an automation from a prompt**: type "whenever a PR is opened, review it" into New task — pick the built-in `create-cezar-automation` skill, or just ask; every task's system prompt teaches it to recognise the intent — and the agent writes the definition and creates it through `cez automation create` (paused, with a `cez automation check` preview of what it would match), then links the Automations page. Only the exact value `0` opts out (`CEZ_AUTOMATIONS=1`, the old opt-in, is accepted and changes nothing); opted out, the nav item is absent, the endpoints answer `409`, and the workspace scheduler never starts. Read at boot, so restart after changing it; definitions, receipts and high-watermarks are kept either way. |
@@ -469,7 +474,8 @@ Useful environment variables:
 | `CEZ_CURSOR_AGENT_BIN=/path/to/agent` | Override which Cursor Agent CLI (`agent`) binary is used. |
 | `CEZ_PI_BIN=/path/to/pi` | Override which `pi` binary is used. |
 | `CEZ_COPILOT_BIN=/path/to/copilot` | Override which GitHub Copilot CLI binary is used. |
-| `CLAUDE_CONFIG_DIR`, `CODEX_HOME` | The agents' **own** variables, honoured where the vendor documents one. Setting one moves that agent's **default account** — the config folder cezar discovers. A *second* login of the same CLI is deliberately not an environment setting, since one process-wide value cannot differ per project: add it under **Settings → Agent accounts** and pick it per project. |
+| `CEZ_KIMI_BIN=/path/to/kimi` | Override which `kimi` (Kimi Code) binary is used. Without it cezar looks on `PATH`, then at `~/.kimi-code/bin/kimi`, where Kimi's installer puts it — so a cockpit started by launchd finds it without a `PATH` edit. |
+| `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `KIMI_CODE_HOME` | The agents' **own** variables, honoured where the vendor documents one. Setting one moves that agent's **default account** — the config folder cezar discovers. A *second* login of the same CLI is deliberately not an environment setting, since one process-wide value cannot differ per project: add it under **Settings → Agent accounts** and pick it per project. |
 | `CEZ_BROWSE_ROOT=~/` | Default root for **Add project → Open local folder…**. The picker cannot navigate above it; a saved workspace value overrides the environment default and must name an existing folder. |
 | `CEZ_PROJECTS_DIR=~/cezar/projects` | Default destination for **Clone from GitHub**. Saved workspace settings override it, and missing directories are created recursively. |
 | `CEZ_SKILLS_AUTO_UPDATE=0` | Disable automatic checks and updates for upstream-CLI-tracked Open Mercato skill installations. On by default; a saved global Skills setting overrides this environment default. Checks are delayed, bounded, cached, and non-blocking. |
@@ -493,6 +499,27 @@ Useful environment variables:
 | `CEZ_REVIEW_GATE=1` | Turn ON the optional diff-first review gate (#489): a successful, non-autonomous run with changes parks at `review` (Accept / Send back / Draft PR) instead of finishing. Off by default — changed runs settle to `done` with the diff left in the worktree. Only `1` enables. The Settings → Tasks toggle overrides this; autonomous runs always skip it. |
 | `CEZ_NO_BANNER=1` | Silence every promo: the `open-mercato/skills` banner and the star-ask line on `cezar serve` startup, the sidebar's ⭐ chip, and the star-ask dialog (shown at most three times per browser, only after a task ends well once three have, and only while you are at the screen). It is also the star count's off switch — with it set, `GET /api/v1/star-count` answers `available: false` and cezar makes no request to github.com for it. Unset, the count refreshes every 10 seconds while a cockpit tab is visible, paced to GitHub's rate limit (about once a minute unauthenticated; every 10 s with `GITHUB_TOKEN`/`GH_TOKEN` set, which is then sent with the request). Dismissing the banner in the cockpit (back when it had one) still silences the terminal half on its own. |
 | `VITE_CEZ_API_BASE=http://localhost:4321` | **Build time only**, and only when the cockpit bundle is deployed apart from the service it talks to. Empty (the default) means "the origin that served this page", which is right for both normal cases: the CLI serves the bundle itself, and `npm run dev` proxies `/api` to the local service. A deployment that must be configured without a rebuild can put `<meta name="cez-api-base" content="…">` in the served HTML instead, which wins over this. |
+
+### Signing in inside an isolated task's container
+
+An isolated Claude task needs a login inside its container, and cezar never
+hands a container your Mac's own refresh token: refresh tokens are single-use,
+so two copies of one login log each other out. In order of preference:
+
+1. **A container-only login** — run `cez container-login claude` once (open the
+   printed link, paste the code). It is a separate login, kept in
+   `~/.cezar/container-logins/claude` and mounted into every task container;
+   containers refresh it themselves. `cez container-login claude status` says
+   whether it is set up.
+2. **A long-lived token** — run `claude setup-token` and store the token as
+   `CLAUDE_CODE_OAUTH_TOKEN` in Settings → Secrets with the *Isolated agents*
+   audience. It never needs refreshing. If both are set up, the token wins.
+3. **Neither** — each turn gets a copy of this machine's login with its refresh
+   token blanked. A copy cannot refresh, so a turn that outlives it fails with
+   "OAuth access token has expired"; the task log warns when one is close.
+
+The same *Isolated agents* audience carries any other runner's static key into
+containers (`CURSOR_API_KEY`, `JUNIE_API_KEY`, `COPILOT_GITHUB_TOKEN`).
 
 ### Troubleshooting: the agent's shell returns nothing
 

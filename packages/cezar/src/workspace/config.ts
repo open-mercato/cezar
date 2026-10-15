@@ -148,8 +148,119 @@ const composerDefaultsSchema = z
  * Personal and per-machine, like everything else in this file. The repo config is the team's; this
  * is yours.
  */
+/**
+ * A record whose bad ENTRIES are dropped one at a time, instead of the whole
+ * record failing — the same per-entry salvage the project registry has. Used
+ * where one malformed grant must not cost every other grant on the machine.
+ */
+function salvageRecord<T extends z.ZodTypeAny>(value: T) {
+  return z.preprocess((raw) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+    const kept: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(raw as Record<string, unknown>)) {
+      if (value.safeParse(entry).success) kept[key] = entry;
+    }
+    return kept;
+  }, z.record(z.string(), value));
+}
+
+/** An array whose bad ENTRIES are dropped one at a time. */
+function salvageArray<T extends z.ZodTypeAny>(item: T) {
+  return z.preprocess(
+    (raw) => (Array.isArray(raw) ? raw.filter((entry) => item.safeParse(entry).success) : raw),
+    z.array(item),
+  );
+}
+
 const agentDefaultsSchema = z
   .object({
+    /**
+     * Whether a repo that has said nothing runs its agents in a container.
+     *
+     * Machine-wide rather than per repo because the answer is a property of how
+     * much the operator trusts this machine's agents, not of any one project —
+     * and because the alternative is remembering to set it on every checkout.
+     * Optional with no default, like every key here: absent has to stay
+     * distinguishable from a deliberate `false`, or "the machine decides"
+     * collapses into "always off".
+     */
+    isolation: z.boolean().optional().catch(undefined),
+    /**
+     * The sandbox settings a repo inherits when it has none of its own.
+     *
+     * Machine-wide for the same reason `isolation` is: which credentials this
+     * machine's agents may use, how big a container may get, and which package
+     * caches they share are properties of the MACHINE, not of any one checkout.
+     * Without this they had to be re-picked per repo, so a fresh project's
+     * isolated agent had no ssh key and a cold npm cache — while the operator
+     * had configured both, next door.
+     *
+     * Deliberately not here: `enabled` (that IS `isolation`), and the three
+     * keys that describe a specific repo rather than this machine — `name`,
+     * `image`/`containerfile` (its toolchain) and `ephemeralPaths` (its build
+     * output). A machine-wide answer to those would be wrong everywhere.
+     */
+    sandbox: z
+      .object({
+        provider: z.literal('podman').optional().catch(undefined),
+        claudeCredentialPassthrough: z.boolean().optional().catch(undefined),
+        cacheVolumes: salvageRecord(z.string()).optional().catch(undefined),
+        resources: z
+          .object({
+            memory: z.string().trim().min(1).max(20).optional().catch(undefined),
+            cpus: z.number().positive().max(256).optional().catch(undefined),
+            shmSize: z.string().trim().min(1).max(20).optional().catch(undefined),
+          })
+          .passthrough()
+          .optional()
+          .catch(undefined),
+        credentials: z
+          .object({
+            // Per ENTRY: one grant with a mode this version does not know must
+            // cost that grant, not every grant on the machine. A whole-block
+            // `.catch(undefined)` dropped them all, and the next merge-write
+            // then persisted the loss.
+            enabled: salvageRecord(z.union([
+              z.boolean(),
+              z.object({
+                mode: z.enum(['mount', 'copy']).optional(),
+                keys: z.array(z.string().trim().min(1).max(128)).max(64).optional(),
+              }).passthrough(),
+            ])).optional().catch(undefined),
+            custom: salvageArray(z.object({
+              id: z.string().trim().min(1).max(512),
+              label: z.string().trim().max(120).optional(),
+              env: z.array(z.string().trim().min(1).max(128)).max(8).optional(),
+              valueFrom: z.string().trim().min(1).max(512).optional(),
+              required: z.boolean().optional(),
+            }).passthrough()).optional().catch(undefined),
+          })
+          .passthrough()
+          .optional()
+          .catch(undefined),
+      })
+      // Unknown keys survive a round trip through an older or newer cezar —
+      // the rule every other object in this file follows.
+      .passthrough()
+      .optional()
+      .catch(undefined),
+    /**
+     * Where this machine's Vault lives. An address, not a secret — the token
+     * still comes from `~/.vault-token`, written by `vault login`.
+     *
+     * Here rather than in the cockpit's environment because under launchd that
+     * environment is the launch agent's plist: `export VAULT_ADDR` in a shell
+     * never reaches the running cockpit, and editing a plist to name a server
+     * is not a setting, it is a workaround.
+     */
+    vault: z
+      .object({
+        address: z.string().trim().min(1).max(512).optional().catch(undefined),
+        namespace: z.string().trim().min(1).max(256).optional().catch(undefined),
+      })
+      .passthrough()
+      .optional()
+      .catch(undefined),
     runner: z.enum(PROVIDER_IDS).optional().catch(undefined),
     models: z
       .object({
@@ -160,6 +271,7 @@ const agentDefaultsSchema = z
         pi: z.string().trim().min(1).max(200).optional().catch(undefined),
         junie: z.string().trim().min(1).max(200).optional().catch(undefined),
         copilot: z.string().trim().min(1).max(200).optional().catch(undefined),
+        kimi: z.string().trim().min(1).max(200).optional().catch(undefined),
       })
       .passthrough()
       .optional()

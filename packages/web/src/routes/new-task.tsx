@@ -18,6 +18,7 @@ import {
   queryKeys,
   useConfig,
   useHealth,
+  useIsolationStatus,
   useProviderStatus,
   useProjects,
   useRepo,
@@ -135,6 +136,7 @@ export function NewTaskRoute() {
   // cannot answer these per-project defaults when another project is active (#699).
   const config = useConfig()
   const workspaceConfig = useWorkspaceConfig()
+  const isolation = useIsolationStatus()
 
   // The draft survives navigation (module store); explicit deep-link params beat it — a
   // pasted `/new?skill=&ref=` link states intent, a leftover draft only remembers it.
@@ -337,6 +339,9 @@ export function NewTaskRoute() {
     dispatch: dispatchOn,
   })
   const worktreeOn = runMode.worktree
+  // The composer shows what a task started NOW would do: the project's switch
+  // and a ready runtime, unless this draft overrode it.
+  const isolationOn = draft.isolated ?? isolation.data?.effective ?? false
   const autonomousOn = runMode.autonomous
 
   // Follow-up generation (#444) is offered only while the server has the global inbox on
@@ -483,6 +488,10 @@ export function NewTaskRoute() {
         variants,
         images: submitted,
         worktree: worktreeOn,
+        // Only sent when the user actually touched it: absent means "whatever
+        // the project's setting says at start time", which keeps a task started
+        // from a stale page honest.
+        isolated: draft.isolated ?? undefined,
         autonomous: autonomousOn,
         generateFollowups: generateFollowupsOn,
         // #374: when the Inbox's "Run" sent us here, hand the entry's id back so the server
@@ -704,6 +713,14 @@ export function NewTaskRoute() {
                   onChange={(on) => update({ worktree: on })}
                 />
               ) : null}
+              {isolation.data?.runtime.installed ? (
+                <IsolationToggle
+                  on={isolationOn}
+                  disabled={!isolation.data.runtime.ready}
+                  disabledReason={isolation.data.runtime.reason}
+                  onChange={(on) => update({ isolated: on })}
+                />
+              ) : null}
               <AutonomousToggle
                 on={autonomousOn}
                 onChange={(on) => update({ autonomous: on })}
@@ -822,6 +839,56 @@ function WorktreeToggle({
         <SquareIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
       )}
       Worktree
+    </button>
+  )
+}
+
+/**
+ * Isolation toggle: run this task's agent inside a container instead of on this
+ * machine.
+ *
+ * It starts from what the project's Settings → Isolation says, but shows
+ * `effective` — the setting AND a container runtime that is actually ready.
+ * Rendering the setting alone would promise isolation the run then has to
+ * retract in its own log when the VM turns out to be stopped.
+ *
+ * Hidden entirely when no runtime is installed: a control whose only outcome is
+ * an error is worse than no control.
+ */
+function IsolationToggle({
+  on,
+  disabled,
+  disabledReason,
+  onChange,
+}: {
+  on: boolean
+  disabled?: boolean
+  disabledReason?: string
+  onChange: (on: boolean) => void
+}) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={on}
+      disabled={disabled}
+      data-slot="isolation-toggle"
+      onClick={() => onChange(!on)}
+      title={
+        disabled
+          ? disabledReason
+          : on
+          ? 'Runs in a container — the agent sees this repo and nothing else of your machine'
+          : 'Runs on this machine, with your credentials and your whole home directory in reach'
+      }
+      className={cn(chipClass, on && 'border-primary/60 text-foreground')}
+    >
+      {on ? (
+        <CheckIcon aria-hidden="true" className="size-3 shrink-0 text-primary" />
+      ) : (
+        <SquareIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
+      )}
+      Isolated
     </button>
   )
 }

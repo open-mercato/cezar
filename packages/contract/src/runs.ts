@@ -95,6 +95,9 @@ export const stepStateSchema = z.object({
   sessionId: z.string().optional(),
   /** Backend that owns `sessionId`; absent on records written before backend affinity. */
   backend: runnerSchema.optional(),
+  /** Whether this step's latest agent turn ran in the task's container. A run's `isolation` keeps
+   *  its FIRST outcome; a later turn can still fall back to the host. Absent before it existed. */
+  isolated: z.boolean().optional(),
   /** Agent account (spec 2026-07-29-agent-profiles) that owns `sessionId` — `default`, or a
    *  stored profile id. The two are a PAIR: a session id only resolves inside the config dir
    *  that created it, so resume and Continue read this rather than the project's current
@@ -312,6 +315,35 @@ export const runRecordSchema = z.object({
   /** Explicit execution policy. `false` means the run intentionally uses the repo root;
    *  absent on older runs and for the default isolated-worktree mode. */
   worktree: z.literal(false).optional(),
+  /** Per-task isolation override, when the composer set one (additive). */
+  isolated: z.boolean().optional(),
+  /**
+   * Where the agent ACTUALLY executed, recorded when the decision is made.
+   *
+   * Separate from `isolated`, which is the request, because the two disagree
+   * more often than is comfortable: `prepareSandbox` falls back to the host
+   * when the provider is not podman, when the backend has no launcher, and
+   * when the container cannot be prepared at all. An indicator driven by the
+   * request would then claim isolation for a run that executed on this machine
+   * — the same lie the isolation settings avoid by separating `enabled` from
+   * `effective`.
+   *
+   * The request is deliberately NOT overwritten with the outcome: a Continue
+   * reads `isolated` as its override, so a run whose container failed once
+   * would otherwise be pinned to the host forever.
+   *
+   * Absent on runs from before this existed, and on runs that never asked.
+   */
+  isolation: z
+    .object({
+      /** True only when a container was actually brought up for this run. */
+      effective: z.boolean(),
+      /** Its name, when there is one. */
+      container: z.string().optional(),
+      /** Why isolation was wanted but not obtained — shown on the indicator. */
+      reason: z.string().optional(),
+    })
+    .optional(),
   /** Absent for in-place runs and after an isolated worktree is removed. */
   worktreePath: z.string().optional(),
   branch: z.string().optional(),
@@ -449,6 +481,13 @@ export const runIndexEntrySchema = z.object({
    *  global page's origin filter reads it, and a dispatched child inherits its root's answer
    *  there through `dispatch.rootRunId` rather than through a copy here. */
   automationId: z.string().optional(),
+  /**
+   * Where the agent actually ran, so a cross-project row can mark the isolated
+   * ones. Slimmer than the record's field on purpose — the container's NAME is
+   * detail for the task's own header, not for a list — but the same three
+   * states: a container (`effective`), a fallback (`reason`), or neither.
+   */
+  isolation: z.object({ effective: z.boolean(), reason: z.string().optional() }).optional(),
   /** When the agent actually started, as opposed to when the task was created. The global page's
    *  age column prefers it and falls back to `createdAt`, exactly as the per-project table does. */
   startedAt: z.string().optional(),
@@ -1050,6 +1089,16 @@ export const createRunInputBaseSchema = z
     /** false → run in the repo working tree instead of an isolated worktree (read-only skills).
      *  Omit for the default. Ignored server-side when variants > 1. */
     worktree: z.boolean().optional(),
+    /**
+     * Per-task isolation override. Absent = the project's Settings → Isolation
+     * switch decides; `true`/`false` overrides it for THIS task only.
+     *
+     * It is an override rather than a copy of the setting because the composer
+     * shows what a task would ACTUALLY do (the setting AND a ready runtime),
+     * and a user who flips it there means "this one, differently" — not "change
+     * the project".
+     */
+    isolated: z.boolean().optional(),
     /** true → autonomous run: never parks at "waiting"; auto-continues until done. */
     autonomous: z.boolean().optional(),
     /** false → keep the handoff journal but do not expose or request a follow-up todos file.

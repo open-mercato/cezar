@@ -327,6 +327,60 @@ This release is about seeing the work. A workspace Dashboard arrives with Overvi
 - @matkowalski
 - @tayfuryldz
 - @aleksanderw1992
+# Unreleased
+
+## ✨ Features
+- ✨ **Caddy is a server deploy target, and it is the one that gives you the login itself.**
+  `server-install --platform macosx-caddy` puts Caddy in front of a Mac-hosted cockpit: it
+  terminates TLS and challenges every request for a **username and password cezar sets up during
+  the install** — generate a strong one (shown once) or type your own — before anything reaches
+  the loopback port. That is what separates it from the other macOS providers, where identity is
+  someone else's (`macosx-ngrok`'s edge, a Cloudflare Access application, tailnet membership, or a
+  front you already run): here the whole story is a bcrypt hash in a `0600` `~/.cezar/Caddyfile`
+  cezar owns, hashed by `caddy hash-password` over **stdin** so the plaintext never reaches
+  `ps`-readable argv, and the plaintext is never written anywhere at all. One prompt picks how TLS
+  is obtained: *LAN / VPN* (the default) issues the certificate from Caddy's own local CA, so it
+  needs no public DNS, no open port and no root — the installer tells you how to trust that CA;
+  *public domain* gets automatic Let's Encrypt certificates on :80/:443, and because those ports
+  are privileged it installs Caddy as a root LaunchDaemon through the same printed-and-verified
+  privileged command every other step uses; *plain HTTP* serves a local port for a tunnel that
+  already does TLS, and still enforces the login so the tunnel does not have to. The generated
+  config is run through `caddy validate` before launchd ever sees it, the proxy is SSE-safe
+  (`flush_interval -1`, the Caddy equivalent of nginx's `proxy_buffering off` — without it the
+  cockpit goes mute), Caddy's admin API is off, and its output is logged to a real file so a
+  failed certificate or a taken port explains itself. Install ends with the same end-to-end proof
+  `ubuntu-vps` gives: an anonymous request must be challenged **and** an authenticated one must
+  reach cezar. `server-deploy` restarts both jobs and re-verifies; `server-uninstall` removes the
+  launchd job and the Caddyfile with the login in it. Guide:
+  `docs/server-install/macosx-caddy.md`.
+- ✨ **Tailscale is a server deploy target, and it is the one that brings its own login.**
+  `server-install --platform macosx-tailscale` fronts a Mac-hosted cockpit with `tailscale serve`:
+  tailscaled terminates HTTPS on a MagicDNS name with an auto-provisioned certificate and proxies
+  to the loopback port. It installs **no second launchd agent** — the mapping persists in
+  tailscaled's own state, so the front returns with the daemon on boot — and one prompt decides the
+  security story. *Tailnet* (the default) rides this Mac's own `*.ts.net` name and needs no admin
+  setup at all: a device has to be logged into your tailnet to reach the cockpit, which makes this
+  the first macOS provider where identity is not something you wire up afterwards. *Tailscale
+  Service* gives the cockpit its own stable `<name>.<tailnet>.ts.net` identity and virtual IP, so
+  the URL survives moving it to another Mac and access narrows to an ACL grant on `svc:<name>`
+  rather than the whole machine — the installer states the prerequisites it cannot do for you
+  (1.86+, the service defined in the admin console, a **tagged** host, the grant, host approval)
+  before it runs anything. *Funnel* publishes to the open internet and warns, twice, that Funnel
+  has no authentication and neither does cezar. Uninstall withdraws **only** the mapping cezar
+  created — `--https=443 off`, or `serve drain` then `off` for a service — never `serve reset`,
+  which would take your own mappings with it; `server-deploy` restarts the cockpit and
+  re-advertises a drained service host. Guide: `docs/server-install/macosx-tailscale.md`.
+- ✨ **Two new macOS server deploy targets.** `server-install` grew two strategies alongside
+  `macosx-ngrok`: `macosx-cloudflare-tunnel` fronts the cockpit with a token-managed Cloudflare
+  Tunnel (`cloudflared` as a launchd agent, the tunnel token riding in the `0600` plist's
+  environment — never in `ps`-visible argv — with the installer stating plainly that identity is a
+  Cloudflare Access application you attach to the hostname, since a tunnel alone has no auth), and
+  `macosx-external-proxy` is the macOS analogue of `ubuntu-vps --external-proxy`: your existing
+  front (Caddy, nginx, a tunnel you manage) owns TLS + auth, cezar installs only the launchd
+  cockpit service, verifies it answers on the bound address (`--bind-host` supported), and prints
+  ready-to-adapt routing snippets. The launchd mechanics and the shared `ai.cezar.cockpit` agent
+  moved into `platforms/macosx-shared.ts`, reused by all three macOS strategies; `server-deploy`
+  and `server-uninstall` work for both. Guides: `docs/server-install/`.
 
 # 0.11.1 (2026-09-18)
 

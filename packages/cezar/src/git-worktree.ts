@@ -71,12 +71,38 @@ async function fetchBase(repoRoot: string, remote: string, base: string): Promis
   const wellFormed = await git(repoRoot, ['check-ref-format', `refs/heads/${base}`]);
   if (!wellFormed.ok) return;
   const refspec = `+refs/heads/${base}:refs/remotes/${remote}/${base}`;
-  // GIT_TERMINAL_PROMPT only silences git's own (HTTPS) prompts; an SSH remote
-  // can still ask on the controlling TTY — the timeout is what bounds that.
+  // GIT_TERMINAL_PROMPT only silences git's own (HTTPS) prompts; ssh asks on its
+  // own — see `nonInteractiveSsh` — and the timeout bounds whatever is left.
   await git(repoRoot, ['fetch', '--quiet', '--no-tags', '--no-recurse-submodules', remote, refspec], {
     timeout: FETCH_TIMEOUT_MS,
-    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...(await nonInteractiveSshEnv(repoRoot)) },
   });
+}
+
+/**
+ * The ssh command for a fetch that must never wait on a person.
+ *
+ * `GIT_TERMINAL_PROMPT=0` stops git's own prompts, not ssh's: a key with a
+ * passphrase, or a host key it has not seen, makes ssh open the terminal and
+ * wait — up to the whole fetch timeout, at every task start, in a cockpit
+ * started from a shell. `BatchMode` makes ssh fail instead, and the task forks
+ * from what is on disk.
+ *
+ * EXTENDS the operator's command rather than replacing it. A repo whose
+ * `core.sshCommand` names a key, or an exported `GIT_SSH_COMMAND`, is using it
+ * to authenticate at all; overriding it with a bare `ssh` would turn a working
+ * fetch into a failing one.
+ */
+async function nonInteractiveSshEnv(repoRoot: string): Promise<Record<string, string>> {
+  // git's own precedence, which the override must not reorder: an exported GIT_SSH_COMMAND beats
+  // `core.sshCommand`, which beats GIT_SSH. GIT_SSH names a bare program git runs with no shell,
+  // so there is nothing to append options to — it is left alone, and the timeout still bounds it.
+  const exported = process.env.GIT_SSH_COMMAND?.trim();
+  if (exported) return { GIT_SSH_COMMAND: `${exported} -o BatchMode=yes -o ConnectTimeout=10` };
+  const configured = await git(repoRoot, ['config', '--get', 'core.sshCommand']);
+  const own = configured.ok ? configured.stdout.trim() : '';
+  if (!own && process.env.GIT_SSH) return {};
+  return { GIT_SSH_COMMAND: `${own || 'ssh'} -o BatchMode=yes -o ConnectTimeout=10` };
 }
 
 export function branchFor(runId: string): string {

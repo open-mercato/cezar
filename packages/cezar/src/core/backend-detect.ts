@@ -2,11 +2,12 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolveCursorAgentBin } from './cursor-agent-runner.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
+import { resolveKimiExecutable } from './kimi-runner.ts';
 
 const exec = promisify(execFile);
 
 export interface BackendCheck {
-  name: 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'junie' | 'copilot' | 'gh' | 'git';
+  name: 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'junie' | 'copilot' | 'kimi' | 'gh' | 'git';
   available: boolean;
   version?: string;
   hint?: string;
@@ -28,6 +29,7 @@ export async function detectEnvironment(): Promise<BackendCheck[]> {
     probePi(),
     probeJunie(),
     probeCopilot(),
+    probeKimi(),
     probeGh(),
     probeGit(),
   ]);
@@ -211,6 +213,28 @@ async function probeCopilot(): Promise<BackendCheck> {
       name: 'copilot',
       available: false,
       hint: 'optional: install GitHub Copilot CLI (`npm i -g @github/copilot`) and run `copilot login` to use the copilot runner',
+    };
+  }
+}
+
+async function probeKimi(): Promise<BackendCheck> {
+  if (process.env.CEZ_DRY_RUN === '1') {
+    return { name: 'kimi', available: true, version: 'mock (CEZ_DRY_RUN=1)' };
+  }
+  const bin = resolveKimiExecutable();
+  try {
+    const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });
+    return {
+      name: 'kimi',
+      available: true,
+      version: stdout.trim(),
+      hint: 'if not authenticated, run `kimi login`',
+    };
+  } catch {
+    return {
+      name: 'kimi',
+      available: false,
+      hint: 'optional: install Kimi Code (https://moonshotai.github.io/kimi-code/) and run `kimi login` to use the Kimi runner',
     };
   }
 }

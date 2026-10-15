@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
-import { mkdirSync, watch, type FSWatcher } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, watch, type FSWatcher } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 
@@ -114,6 +114,45 @@ export async function readTodos(dataDir: string): Promise<TodoItem[]> {
     }
     return items;
   });
+}
+
+/**
+ * Move the follow-ups an ISOLATED agent wrote into the inbox. `.ai/cezar` is read-only inside a
+ * task container (an agent that could write there could grant itself credentials), so its
+ * `CEZ_TODOS_FILE` points into the run's writable scratch dir instead, and this carries the
+ * entries over — each validated exactly like a host agent's.
+ *
+ * The file is read and removed SYNCHRONOUSLY, so a caller that deletes the scratch dir right
+ * after cannot lose it; only the append is deferred (under the inbox lock). Never throws.
+ */
+export function ingestTodos(dataDir: string, file: string): Promise<void> {
+  let raw: string;
+  try {
+    raw = readFileSync(file, 'utf8');
+    rmSync(file, { force: true });
+  } catch {
+    return Promise.resolve(); // nothing written this turn
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    console.warn('[cez] an isolated task wrote follow-ups that are not valid JSON — skipped');
+    return Promise.resolve();
+  }
+  if (!Array.isArray(parsed)) return Promise.resolve();
+  const incoming: TodoItem[] = [];
+  for (const entry of parsed) {
+    const result = todoSchema.safeParse(entry);
+    if (result.success) incoming.push({ ...result.data, id: result.data.id ?? randomUUID() });
+  }
+  if (incoming.length === 0) return Promise.resolve();
+  return withLock(dataDir, async () => {
+    const { items } = await readRaw(dataDir);
+    const known = new Set(items.map((t) => t.id));
+    // The inbox's own fs watch sees this write, exactly as it sees a host agent's.
+    await writeAtomic(dataDir, [...items, ...incoming.filter((t) => !known.has(t.id))]);
+  }).catch(() => undefined);
 }
 
 /** Check off (delete) an entry. False when the id isn't there. */

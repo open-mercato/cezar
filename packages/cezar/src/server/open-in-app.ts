@@ -134,6 +134,14 @@ const AGENT_CLIS: Array<{ runner: RunnerId; label: string; icon: string; bin: st
   { runner: 'cursor', label: 'Cursor Agent', icon: 'cursor', bin: 'agent', envBin: () => process.env.CEZ_CURSOR_AGENT_BIN },
   { runner: 'pi', label: 'pi CLI', icon: 'pi', bin: 'pi', envBin: () => process.env.CEZ_PI_BIN },
   { runner: 'copilot', label: 'Copilot CLI', icon: 'copilot', bin: 'copilot', envBin: () => process.env.CEZ_COPILOT_BIN },
+  // Kimi's installer puts the binary in ~/.kimi-code/bin and adds that to the shell profile only.
+  {
+    runner: 'kimi',
+    label: 'Kimi Code',
+    icon: 'kimi',
+    bin: 'kimi',
+    envBin: () => process.env.CEZ_KIMI_BIN ?? join(homedir(), '.kimi-code', 'bin', 'kimi'),
+  },
 ];
 
 /**

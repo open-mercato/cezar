@@ -23,6 +23,10 @@ npx cezar-run server-uninstall --platform <id>   # reverse it
 |----------|--------------|--------------|----------|-----------|-------|
 | **Ubuntu / Debian VPS** | `ubuntu-vps` | nginx + Let's Encrypt (HTTPS) | HTTP Basic-Auth (htpasswd) | systemd | [Step-by-step →](./ubuntu-vps.md) |
 | **macOS + ngrok** | `macosx-ngrok` | ngrok tunnel (HTTPS) | ngrok `--basic-auth` | launchd | [Step-by-step →](./macosx-ngrok.md) |
+| **macOS + Cloudflare Tunnel** | `macosx-cloudflare-tunnel` | cloudflared tunnel (HTTPS) | Cloudflare Access | launchd | [Step-by-step →](./macosx-cloudflare-tunnel.md) |
+| **macOS + Tailscale** | `macosx-tailscale` | Tailscale serve / Service / Funnel (HTTPS) | tailnet membership or ACL grants | launchd | [Step-by-step →](./macosx-tailscale.md) |
+| **macOS + Caddy** | `macosx-caddy` | Caddy (HTTPS: local CA or Let's Encrypt) | HTTP Basic-Auth (bcrypt, set by cezar) | launchd | [Step-by-step →](./macosx-caddy.md) |
+| **macOS + external proxy** | `macosx-external-proxy` | your existing front (Caddy/nginx/…) | your front (required) | launchd | [Step-by-step →](./macosx-external-proxy.md) |
 
 Same engine, different steps — each strategy is a small registry entry, so new
 platforms slot in without touching the engine.
@@ -83,4 +87,4 @@ or track a branch with `npx cezar-run@develop server-deploy --platform <id>`.
 
 ---
 
-Guides: **[Ubuntu / Debian VPS](./ubuntu-vps.md)** · **[macOS + ngrok](./macosx-ngrok.md)**
+Guides: **[Ubuntu / Debian VPS](./ubuntu-vps.md)** · **[macOS + ngrok](./macosx-ngrok.md)** · **[macOS + Cloudflare Tunnel](./macosx-cloudflare-tunnel.md)** · **[macOS + Tailscale](./macosx-tailscale.md)** · **[macOS + Caddy](./macosx-caddy.md)** · **[macOS + external proxy](./macosx-external-proxy.md)**

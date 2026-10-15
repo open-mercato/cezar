@@ -53,6 +53,32 @@ describe('SecretStore (spec 2026-10-10-project-secrets-vault-options)', () => {
     expect(await store.keyBackend()).toBe('file');
   });
 
+  it('stays readable by a cezar that predates the `containers` audience', async () => {
+    await store.set(workspace, 'CHECK_KEY', 'value-checks-only-12345', ['checks']);
+    await store.set(workspace, 'BOTH_KEY', 'value-checks-and-containers', ['checks', 'containers']);
+    await store.set(workspace, 'CLAUDE_CODE_OAUTH_TOKEN', 'sk-ant-oat01-container-only', ['containers']);
+    const raw = JSON.parse(await readFile(join(home, 'secrets', 'workspace.json'), 'utf8')) as Record<string, unknown>;
+    // The schema the previous release parses with: two audience names, every entry at least one.
+    const { z } = await import('zod');
+    const older = z.object({
+      version: z.literal(1),
+      secrets: z.record(z.string(), z.object({ audiences: z.array(z.enum(['checks', 'cezar'])).min(1) })),
+    });
+    const read = older.safeParse(raw);
+    expect(read.success).toBe(true);
+    expect(Object.keys(read.data!.secrets).sort()).toEqual(['BOTH_KEY', 'CHECK_KEY']);
+    // And this cezar reads all three, with their full audiences.
+    expect((await store.list(workspace)).secrets.map((s) => [s.name, s.audiences])).toEqual([
+      ['BOTH_KEY', ['checks', 'containers']],
+      ['CHECK_KEY', ['checks']],
+      ['CLAUDE_CODE_OAUTH_TOKEN', ['containers']],
+    ]);
+    expect((await store.resolve(undefined, 'containers')).values).toEqual({
+      BOTH_KEY: 'value-checks-and-containers',
+      CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-container-only',
+    });
+  });
+
   it('lists names with audiences, sorted, and removes one', async () => {
     await store.set(project, 'ZED', 'z-value', ['checks', 'cezar']);
     await store.set(project, 'ALPHA', 'a-value', ['cezar']);

@@ -71,6 +71,90 @@ describe('the config API', () => {
       body: JSON.stringify(body),
     });
 
+  describe('a project page edits only the project\'s own credentials', () => {
+    // The machine grants ssh and aws. Before this, the page showed the merged
+    // view and wrote that whole map back, pinning both into the repo — so
+    // revoking either machine-wide later had no effect in this project.
+    const machineGrants = () => writeFileSync(
+      join(homeRoot, '.cezar', 'config.json'),
+      JSON.stringify({ agentDefaults: { sandbox: { credentials: { enabled: { ssh: true, aws: true } } } } }),
+    );
+
+    it('a hosted cockpit (CEZ_REMOTE=1) can grant a credential too — its operator has no other way in', async () => {
+      // A refusal here protected nothing: whoever reaches a hosted cockpit can already start an
+      // unisolated task that reads the same files on the host. It only locked the operator of a
+      // remote-only cockpit out of isolation with any credential.
+      const saved = process.env.CEZ_REMOTE;
+      process.env.CEZ_REMOTE = '1';
+      try {
+        expect((await put({ sandbox: { credentials: { enabled: { azure: true } } } })).status).toBe(200);
+        expect((rawFile().sandbox as { credentials: { enabled: Record<string, unknown> } }).credentials.enabled).toEqual({ azure: true });
+      } finally {
+        if (saved === undefined) delete process.env.CEZ_REMOTE;
+        else process.env.CEZ_REMOTE = saved;
+      }
+    });
+
+    it('a one-credential change writes that one credential, not the inherited ones', async () => {
+      machineGrants();
+      expect((await put({ sandbox: { credentials: { enabled: { gcloud: true } } } })).status).toBe(200);
+      const own = (rawFile().sandbox as { credentials: { enabled: Record<string, unknown> } }).credentials.enabled;
+      expect(own).toEqual({ gcloud: true });
+    });
+
+    it('turning off an INHERITED grant stores an explicit false, and revoking it machine-wide then applies', async () => {
+      machineGrants();
+      await put({ sandbox: { credentials: { enabled: { aws: false } } } });
+      await put({ sandbox: { credentials: { enabled: { gcloud: true } } } });
+      // Per-key merge: the second edit kept the first.
+      const own = (rawFile().sandbox as { credentials: { enabled: Record<string, unknown> } }).credentials.enabled;
+      expect(own).toEqual({ aws: false, gcloud: true });
+
+      const iso = await (await apiRequest(app, '/api/v1/isolation')).json() as {
+        credentials: { enabled: Record<string, unknown>; own: { enabled: Record<string, unknown> } };
+      };
+      // ssh still flows from the machine; the repo never wrote it down.
+      expect(iso.credentials.enabled.ssh).toBe(true);
+      expect(iso.credentials.own.enabled).toEqual({ aws: false, gcloud: true });
+
+      // Revoke ssh machine-wide: this project follows, because it never pinned it.
+      writeFileSync(
+        join(homeRoot, '.cezar', 'config.json'),
+        JSON.stringify({ agentDefaults: { sandbox: { credentials: { enabled: { aws: true } } } } }),
+      );
+      const after = await (await apiRequest(app, '/api/v1/isolation')).json() as {
+        credentials: { enabled: Record<string, unknown> };
+      };
+      expect(after.credentials.enabled.ssh).toBeUndefined();
+    });
+
+    it('names the image a task will ACTUALLY run — the base, when there is no Containerfile', async () => {
+      // `imageTag` defaults to "has a Containerfile", so a repo with none was
+      // shown `cezar-agent/<name>` while its tasks ran the base image.
+      await put({ sandbox: { enabled: true } });
+      const iso = await (await apiRequest(app, '/api/v1/isolation')).json() as { image: string; hasContainerfile: boolean };
+      expect(iso.hasContainerfile).toBe(false);
+      expect(iso.image).toBe('localhost/cezar-agent/base:latest');
+    });
+
+    it('a project that adds a secret keeps the machine\'s secrets too', async () => {
+      // The repo's list used to REPLACE the machine's: one project secret
+      // silently cost every machine-wide one.
+      writeFileSync(
+        join(homeRoot, '.cezar', 'config.json'),
+        JSON.stringify({ agentDefaults: { sandbox: { credentials: { custom: [
+          { id: 'machine', env: ['M'], valueFrom: 'vault://kv/m#m' },
+        ] } } } }),
+      );
+      await put({ sandbox: { credentials: { custom: [{ id: 'mine', env: ['P'], valueFrom: 'vault://kv/p#p' }] } } });
+      const iso = await (await apiRequest(app, '/api/v1/isolation')).json() as {
+        credentials: { custom: { id: string }[]; own: { custom: { id: string }[] } };
+      };
+      expect(iso.credentials.custom.map((c) => c.id).sort()).toEqual(['machine', 'mine']);
+      expect(iso.credentials.own.custom.map((c) => c.id)).toEqual(['mine']);
+    });
+  });
+
   it('GET answers the zero-config defaults when no file exists', async () => {
     const res = await get();
     expect(res.status).toBe(200);
@@ -430,4 +514,5 @@ describe('reviewGate round-trip (optional review gate, #489)', () => {
     expect(cleared.reviewGate).toBeNull();
     expect(rawFile().reviewGate).toBeUndefined();
   });
+
 });

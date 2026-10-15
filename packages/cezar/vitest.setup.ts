@@ -63,3 +63,8 @@ afterEach(pinSandboxHome)
 afterAll(() => {
   rmSync(sandboxHome, { recursive: true, force: true })
 })
+
+// No test may run the real `claude mcp list`: it spawns the installed CLI, which health-checks
+// every MCP server the developer has — network calls, local server processes — and it made the
+// granted tool list depend on whose machine ran the suite. Tests of the discovery opt back in.
+process.env.CEZ_MCP_TOOLS = '0'

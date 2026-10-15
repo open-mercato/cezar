@@ -85,6 +85,56 @@ export function collectSecretValues(env: NodeJS.ProcessEnv = process.env): strin
   return [...values].sort((a, b) => b.length - a.length);
 }
 
+/**
+ * Values fetched at runtime from a secret store, registered so they are scrubbed
+ * from transcripts by VALUE rather than only when they happen to match a known
+ * token shape.
+ *
+ * This is the argument for cezar resolving secrets itself instead of handing the
+ * agent a Vault token: a value cezar never saw can only be caught by its shape,
+ * and most secrets do not have one.
+ *
+ * Process-wide and append-only. It holds credentials, so it is never persisted,
+ * never served over the API, and never logged.
+ */
+const fetchedSecrets = new Set<string>();
+
+/** Register values to scrub. Short values are ignored, as in `collectSecretValues`. */
+export function registerSecretValues(values: Iterable<string>): void {
+  for (const value of values) {
+    if (value && value.length >= MIN_SECRET_LEN) fetchedSecrets.add(value);
+  }
+}
+
+/**
+ * The strings to scrub for ONE value an operator explicitly marked secret: the value itself and,
+ * for a multi-line one (a PEM key, a service-account JSON), each of its lines — a tool that
+ * prints the file line by line, or wraps it, never reproduces the whole value in one chunk.
+ *
+ * No 12-character floor: that floor exists for the host-env sweep, which guesses at what is a
+ * secret; these were chosen as secrets, and a short password is still a password. Only values
+ * too short to be anything but noise (< 4 characters) are skipped, since scrubbing "ab" would
+ * shred every transcript.
+ */
+export function secretFragments(value: string): string[] {
+  const out = new Set<string>();
+  if (value.length >= MIN_CHOSEN_SECRET_LEN) out.add(value);
+  if (value.includes('\n')) {
+    for (const line of value.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (trimmed.length >= MIN_CHOSEN_SECRET_LEN && !/^-----(BEGIN|END) /.test(trimmed)) out.add(trimmed);
+    }
+  }
+  return [...out];
+}
+
+const MIN_CHOSEN_SECRET_LEN = 4;
+
+/** Everything registered so far, longest first so overlaps scrub completely. */
+export function registeredSecretValues(): string[] {
+  return [...fetchedSecrets].sort((a, b) => b.length - a.length);
+}
+
 /** Replace every known secret value / token shape in `text` with `[REDACTED]`. */
 export function redactSecrets(text: string, secretValues: readonly string[]): string {
   let out = text;

@@ -12,12 +12,13 @@ describe('PROFILE_ENV_VAR', () => {
   it('names one variable per provider that can carry an account', () => {
     expect(PROFILE_ENV_VAR.claude).toBe('CLAUDE_CONFIG_DIR');
     expect(PROFILE_ENV_VAR.codex).toBe('CODEX_HOME');
+    expect(PROFILE_ENV_VAR.kimi).toBe('KIMI_CODE_HOME');
   });
 
   it('leaves OpenCode unsupported — its credentials do not follow its config dir', () => {
     expect(PROFILE_ENV_VAR.opencode).toBeNull();
     expect(supportsProfiles('opencode')).toBe(false);
-    expect(PROFILE_CAPABLE_PROVIDERS).toEqual(['claude', 'codex']);
+    expect(PROFILE_CAPABLE_PROVIDERS).toEqual(['claude', 'codex', 'kimi']);
   });
 
   it('covers every provider, so adding one forces a decision here', () => {

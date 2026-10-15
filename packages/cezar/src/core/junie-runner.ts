@@ -9,6 +9,7 @@ import type {
   ContentBlock,
   SessionOptions,
 } from './agent-runner.ts';
+import { localLauncher, type ProcessLauncher } from './process-launcher.ts';
 import { isSignalTerminationExit, prependSystemPrompt, trackChildExit } from './agent-runner.ts';
 import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS, KILL_GRACE_MS } from './claude-cli-runner.ts';
 import { readNdjson } from './ndjson.ts';
@@ -40,6 +41,8 @@ export interface JunieRunnerOptions {
   bin?: string;
   /** Wall-clock timeout for a run (ms); per-spec `timeoutMs` still wins. */
   timeoutMs?: number;
+  /** WHERE it runs. Defaults to this machine; a container launcher isolates it. */
+  launcher?: ProcessLauncher;
 }
 
 /**
@@ -75,10 +78,13 @@ export class JunieRunner implements AgentRunner {
 
   private readonly bin: string;
   private readonly timeoutMs: number;
+  private readonly launcher: ProcessLauncher;
   private lastSession: JunieSession | null = null;
 
   constructor(opts: JunieRunnerOptions = {}) {
-    this.bin = resolveJunieExecutable(opts.bin);
+    this.launcher = opts.launcher ?? localLauncher;
+    // Host overrides and the dry-run mock are HOST paths; inside a container the image's `junie` runs.
+    this.bin = opts.bin ?? (this.launcher.id === 'local' ? resolveJunieExecutable() : 'junie');
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
   }
 
@@ -95,7 +101,7 @@ export class JunieRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
-    const session = new JunieSession(this.bin, this.timeoutMs, spec, onEvent, opts);
+    const session = new JunieSession(this.bin, this.timeoutMs, spec, onEvent, opts, this.launcher);
     this.lastSession = session;
     return session;
   }
@@ -146,9 +152,10 @@ class JunieSession implements AgentSession {
     private readonly spec: AgentRunSpec,
     private readonly onEvent: ((event: AgentEvent) => void) | undefined,
     private readonly opts: SessionOptions,
+    private readonly launcher: ProcessLauncher = localLauncher,
   ) {
     try {
-      this.child = spawnJunieAcp(bin, spec.cwd, spec.env);
+      this.child = spawnJunieAcp(bin, spec.cwd, spec.env, launcher);
       this.rpc = new JunieAcpRpc(this.child);
     } catch (err) {
       throw junieSpawnError(err, bin);
@@ -173,7 +180,7 @@ class JunieSession implements AgentSession {
         killTimer = setTimeout(() => {
           if (!this.hasExited()) {
             this.terminatedByCezar = true;
-            this.child.kill('SIGKILL');
+            void this.launcher.signal(this.child, 'SIGKILL');
           }
         }, KILL_GRACE_MS);
         killTimer.unref?.();
@@ -296,6 +303,7 @@ class JunieSession implements AgentSession {
         () => {
           this.terminatedByCezar = true;
         },
+        (sig) => void this.launcher.signal(this.child, sig),
       );
     } catch {
       // already gone
@@ -316,7 +324,7 @@ class JunieSession implements AgentSession {
     }
     if (!this.hasExited()) {
       this.terminatedByCezar = true;
-      this.child.kill('SIGTERM');
+      void this.launcher.signal(this.child, 'SIGTERM');
     }
   }
 
@@ -326,7 +334,7 @@ class JunieSession implements AgentSession {
     this.hardKillTimer = setTimeout(() => {
       if (!this.hasExited()) {
         this.terminatedByCezar = true;
-        this.child.kill('SIGKILL');
+        void this.launcher.signal(this.child, 'SIGKILL');
       }
     }, KILL_GRACE_MS);
     this.hardKillTimer.unref?.();

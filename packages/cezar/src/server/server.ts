@@ -3,7 +3,7 @@ import {
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
   trackerCredentialsSchema, trackerItemParamsSchema, trackerAssociationInputSchema, type TrackerChangedEvent,
   secretParamsSchema, secretValueInputSchema, type SecretsList, type SecretValueInput,
-  e2eSetupInputSchema, type E2eStatus, taskActionSurfaceSchema,
+  e2eSetupInputSchema, type E2eStatus, taskActionSurfaceSchema, setConfigInputSchema,
 } from '@open-mercato/cezar-contract';
 import { SecretStore, SecretsError, type SecretScopeRef } from '../workspace/secrets.ts';
 import { E2E_SETUP_TASK, e2eCredentialsAmong, e2eSetupWorkflow, latestE2eSetupRun, readE2eStatus, setupInFlight } from '../e2e-setup.ts';
@@ -78,6 +78,7 @@ import {
   modelDiscoveryRunnerSchema,
   openProjectInSchema,
   updateProjectInputSchema,
+  vaultBrowseQuerySchema,
 } from '@open-mercato/cezar-contract';
 import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
 import { hasTaskOrAttachments, TASK_OR_ATTACHMENTS_ISSUE } from '@open-mercato/cezar-contract';
@@ -91,6 +92,7 @@ import { discoverCodexModels } from '../core/codex-model-catalog.ts';
 import { discoverCursorModels } from '../core/cursor-model-catalog.ts';
 import { discoverOpencodeModels } from '../core/opencode-model-catalog.ts';
 import { discoverJunieModels } from '../core/junie-model-catalog.ts';
+import { discoverKimiModels } from '../core/kimi-model-catalog.ts';
 import {
   PROVIDER_IDS,
   ProviderAuthService,
@@ -189,7 +191,14 @@ import {
   readWorktreePath,
   repoIndexContains,
 } from './git-changes.ts';
-import { gatedSkillsRepos, loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
+import { configIsTracked, gatedSkillsRepos, loadConfig, LOCAL_CONFIG_FILE, resolveWorktreeRetention, type CezConfig } from '../config.ts';
+import { detectContainerRuntime } from '../core/container-probe.ts';
+import { pushCredentialsToRunning, removeContainersOf, removeTaskContainer } from '../core/podman-lifecycle.ts';
+import { CREDENTIAL_CATALOG, hostPathOf, listSshEntries } from '../core/credential-passthrough.ts';
+import { listFields, listMounts, listPaths, vaultCli, vaultStatus } from '../core/vault-secrets.ts';
+import { acceptSuggestions, dismissSuggestions, loadProposal } from '../core/containerfile-store.ts';
+import { renderContainerfile } from '../core/containerfile-suggest.ts';
+import { imageTag } from '../core/podman-launcher.ts';
 import { findConfigFile } from '../agent-config/catalog.ts';
 import { readConfigFile, statConfigPath, writeConfigFile } from '../agent-config/files.ts';
 import { type AgentModelDefaults, readAgentModelDefaults } from '../agent-config/models.ts';
@@ -722,6 +731,8 @@ const startRunSchema = z
     // Composer worktree opt-out (#worktree-toggle): false runs in the repo
     // working tree. Ignored when variants > 1.
     worktree: z.boolean().optional(),
+    /** Per-task isolation override; absent = the project's Settings switch. */
+    isolated: z.boolean().optional(),
     // Autonomous mode (#autonomous): the run never parks at `waiting` — it
     // auto-continues until the agent signals done. No "needs you" is raised.
     autonomous: z.boolean().optional(),
@@ -1337,6 +1348,7 @@ export function createApp(deps: ServerDeps) {
       opencode: { discover: () => discoverOpencodeModels({ cwd: bootRoot }) },
       junie: { discover: () => discoverJunieModels({ cwd: bootRoot }) },
       cursor: { discover: () => discoverCursorModels() },
+      kimi: { discover: () => discoverKimiModels() },
     },
   });
   const providerAuth = deps.providerAuth
@@ -2010,7 +2022,7 @@ export function createApp(deps: ServerDeps) {
     // `modelDiscoveryRunnerSchema` is the contract's own list of the runners with an
     // authoritative host-local catalog (#794, #784), so the client compiles against exactly what
     // this validates. A runner absent from it has no discovery path and this 400s.
-    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, cursor, or junie' }), async (c) => {
+    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, cursor, junie, or kimi' }), async (c) => {
       const query = { data: c.req.valid('query') };
       return c.json(await modelCatalog.get(query.data.runner));
     });
@@ -2156,7 +2168,7 @@ export function createApp(deps: ServerDeps) {
       },
     )
 
-    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, opencode, cursor, pi, or copilot' }), async (c) => {
+    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, opencode, cursor, pi, copilot, or kimi' }), async (c) => {
       const body = { data: c.req.valid('json') };
       const sid = deviceSid(c.req.header('x-cezar-sid'));
 
@@ -2950,7 +2962,7 @@ export function createApp(deps: ServerDeps) {
       return c.json(body);
     })
 
-    .post('/projects/checkout', jsonZodValidator(() => checkoutSchema, { message: 'url must be a GitHub repository' }), async (c) => {
+    .post('/projects/checkout', jsonZodValidator(() => checkoutSchema, { message: 'url must be a GitHub or GitLab repository' }), async (c) => {
       if (capabilities().singleProject) {
         return c.json(singleProjectRefusal('adding projects'), 409);
       }
@@ -3317,7 +3329,7 @@ export function createApp(deps: ServerDeps) {
     });
 
   // ---- GUI clone (multi-project spec, step 4.3) ----------------------------
-  // "Add project → Clone from GitHub": clone into the checkout root, then
+  // "Add project → Clone": clone into the checkout root, then
   // register the result through `registerFolder` above (same guards, same
   // `project-added`). Everything dangerous — where the clone may land, and
   // what a failed clone is allowed to delete — lives in src/server/checkout.ts.
@@ -3375,12 +3387,102 @@ export function createApp(deps: ServerDeps) {
     // `JSON.stringify` drops it, which is the exact drift `contract-parity` catches. And absent has
     // to keep meaning "no opinion" here, or the fallback collapses into "always claude".
     agentDefaults: {
+      ...(config.agentDefaults.isolation !== undefined ? { isolation: config.agentDefaults.isolation } : {}),
+      ...(config.agentDefaults.sandbox !== undefined ? { sandbox: config.agentDefaults.sandbox } : {}),
+      ...(config.agentDefaults.vault !== undefined ? { vault: config.agentDefaults.vault } : {}),
       ...(config.agentDefaults.runner !== undefined ? { runner: config.agentDefaults.runner } : {}),
       ...(config.agentDefaults.models !== undefined ? { models: config.agentDefaults.models } : {}),
     },
   });
+  /**
+   * The repo's OWN credential choices, read from its config file without the
+   * machine template merged in — what the per-project page may edit.
+   */
+  const ownSandboxCredentials = async (
+    repoRoot: string,
+  ): Promise<{ enabled: Record<string, unknown>; custom: unknown[] }> => {
+    // The project's own grants, from where `loadConfig` honors them: an UNTRACKED config.json,
+    // then `config.local.json` over it. A committed config.json grants nothing (see GRANT_KEYS).
+    const read = async (file: string) => {
+      try {
+        const raw = JSON.parse(await readFile(join(repoRoot, '.ai/cezar', file), 'utf8')) as {
+          sandbox?: { credentials?: { enabled?: Record<string, unknown>; custom?: unknown[] } };
+        };
+        return raw.sandbox?.credentials;
+      } catch {
+        return undefined;
+      }
+    };
+    const repo = (await configIsTracked(repoRoot)) ? undefined : await read('config.json');
+    const local = await read(LOCAL_CONFIG_FILE);
+    const byId = new Map<string, unknown>();
+    for (const list of [repo?.custom, local?.custom]) {
+      for (const entry of Array.isArray(list) ? list : []) {
+        const id = entry && typeof entry === 'object' ? (entry as { id?: unknown }).id : undefined;
+        if (typeof id === 'string') byId.set(id, entry);
+      }
+    }
+    return {
+      enabled: {
+        ...(repo?.enabled && typeof repo.enabled === 'object' ? repo.enabled : {}),
+        ...(local?.enabled && typeof local.enabled === 'object' ? local.enabled : {}),
+      },
+      custom: [...byId.values()],
+    };
+  };
+
   // ---- chained family: workspace settings + GUI prefs (workspace-level) ----
   const workspaceConfigRoutes = new Hono<ProjectApiEnv>()
+    /**
+     * What the secret picker reads. NAMES ONLY — see the contract: a value is
+     * fetched on the host when a container starts and goes straight into it,
+     * and this endpoint is served to a browser.
+     *
+     * Workspace-level because a Vault is a property of the machine, not of a
+     * project: the same picker serves the machine-wide defaults and any one
+     * project's overrides.
+     */
+    .get('/vault/status', async (c) => {
+      const settings = (await loadWorkspaceConfig()).agentDefaults.vault ?? {};
+      const exec = vaultCli(settings);
+      const status = await vaultStatus(exec, process.env, settings);
+      // Mounts need a working token, so they ride on the same probe rather
+      // than making the page fire a second request that will just fail.
+      const listed = status.authenticated
+        ? await listMounts(exec).catch((err: unknown) => ({ mounts: [], error: String(err) }))
+        : { mounts: [] as string[] };
+      return c.json({
+        ...status,
+        mounts: listed.mounts,
+        ...(listed.error ? { mountsError: listed.error } : {}),
+      });
+    })
+
+    .get('/vault/browse', queryZodValidator(vaultBrowseQuerySchema, { message: 'mount must be a KV mount name and path a KV path' }), async (c) => {
+      const { mount, path } = c.req.valid('query');
+      const exec = vaultCli((await loadWorkspaceConfig()).agentDefaults.vault ?? {});
+      const listed = await listPaths(mount, path, exec)
+        .catch((err: unknown) => ({ entries: [] as string[], error: String(err) }));
+      // A leaf has fields; a folder has none. Asking for both in one call is
+      // what lets the picker show a level without a round trip per row.
+      const read = path === ''
+        ? { fields: [] as string[], error: undefined as string | undefined }
+        : await listFields(mount, path, exec)
+          .catch((err: unknown) => ({ fields: [] as string[], error: String(err) }));
+      // Only report a failure when the level really is empty: a folder that
+      // lists fine is not "denied" just because it is not itself a secret.
+      const error = listed.entries.length === 0 && read.fields.length === 0
+        ? read.error ?? listed.error
+        : undefined;
+      return c.json({
+        mount,
+        path,
+        entries: listed.entries,
+        fields: read.fields,
+        ...(error ? { error } : {}),
+      });
+    })
+
     .get('/workspace/config', async (c) => c.json(workspaceConfigBody(await loadWorkspaceConfig())))
 
     // Live host totals for a REMOTE cockpit (spec `.ai/specs/2026-09-20-host-resource-telemetry.md`):
@@ -3462,6 +3564,38 @@ export function createApp(deps: ServerDeps) {
           }
           // `null` CLEARS back to "no opinion" — a partial patch cannot say that by omission,
           // and leaving a stale runner behind would keep overriding repos that never chose.
+          if (agentDefaults?.isolation === null) delete config.agentDefaults.isolation;
+          else if (agentDefaults?.isolation !== undefined) config.agentDefaults.isolation = agentDefaults.isolation;
+          // The sandbox template merges key by key, like the per-project block:
+          // a page that edits only `resources.shmSize` must not drop the
+          // credential grants sitting beside it. `null` clears a key.
+          if (agentDefaults?.sandbox !== undefined) {
+            const current = { ...(config.agentDefaults.sandbox ?? {}) } as Record<string, unknown>;
+            for (const [key, value] of Object.entries(agentDefaults.sandbox)) {
+              if (value === null) { delete current[key]; continue; }
+              if (value === undefined) continue;
+              const nested = typeof value === 'object' && !Array.isArray(value) ? value : undefined;
+              const existing = current[key];
+              if (nested && existing && typeof existing === 'object' && !Array.isArray(existing)) {
+                const merged = { ...(existing as Record<string, unknown>), ...nested } as Record<string, unknown>;
+                for (const [k, v] of Object.entries(merged)) if (v === null) delete merged[k];
+                current[key] = merged;
+              } else {
+                current[key] = value;
+              }
+            }
+            if (Object.keys(current).length === 0) delete config.agentDefaults.sandbox;
+            else config.agentDefaults.sandbox = current as never;
+          }
+          if (agentDefaults?.vault !== undefined) {
+            const current = { ...(config.agentDefaults.vault ?? {}) } as Record<string, unknown>;
+            for (const [key, value] of Object.entries(agentDefaults.vault)) {
+              if (value === null) delete current[key];
+              else if (value !== undefined) current[key] = value;
+            }
+            if (Object.keys(current).length === 0) delete config.agentDefaults.vault;
+            else config.agentDefaults.vault = current as never;
+          }
           if (agentDefaults?.runner === null) delete config.agentDefaults.runner;
           else if (agentDefaults?.runner !== undefined) config.agentDefaults.runner = agentDefaults.runner;
           for (const runner of PROVIDER_IDS) {
@@ -4530,6 +4664,10 @@ export function createApp(deps: ServerDeps) {
         images,
         systemPrompt: parsed.data.systemPrompt,
         worktree: parsed.data.worktree,
+        // The composer's per-task isolation override. Absent = the project's
+        // Settings → Isolation switch decides; dropping it here made the chip
+        // decorative and left a Continue with nothing to land back into.
+        isolated: parsed.data.isolated,
         autonomous: parsed.data.autonomous,
         // Opt-in inbox (#471): the capability is the ceiling, so a client asking
         // for follow-ups on a server that has them off gets a plain `false`
@@ -5275,6 +5413,10 @@ export function createApp(deps: ServerDeps) {
       if (!run) return c.json({ error: 'not found' }, 404);
       if (manager.isActive(id)) return c.json({ error: 'run is active — cancel it first' }, 409);
       if (run.worktreePath) await removeWorktree(repoRoot, run.worktreePath, run.branch);
+      // The container is this task's materialized state exactly as the worktree
+      // is, so it goes wherever the worktree goes. Removing it in retention
+      // alone leaked one per deleted task, running forever.
+      await removeTaskContainer(id);
       store.updateRun(id, { worktreePath: undefined, branch: undefined });
       if (run.prHead) await manager.sweepPrHeadRefs();
       return c.json({ removed: true });
@@ -5288,6 +5430,7 @@ export function createApp(deps: ServerDeps) {
       if (!run) return c.json({ error: 'not found' }, 404);
       // Delete cleans up after itself: worktree + branch go with the run (spec 006).
       if (run.worktreePath) await removeWorktree(repoRoot, run.worktreePath, run.branch);
+      await removeTaskContainer(id);
       const deleted = store.deleteRun(id);
       // The run's `refs/cezar/pr/<n>` goes with the last run that needed it (Phase 3).
       if (deleted && run.prHead) await manager.sweepPrHeadRefs();
@@ -5483,6 +5626,7 @@ export function createApp(deps: ServerDeps) {
       for (const loser of losers) {
         if (manager.isActive(loser.id)) manager.cancel(loser.id);
         if (loser.worktreePath) await removeWorktree(repoRoot, loser.worktreePath, loser.branch);
+        await removeTaskContainer(loser.id);
         store.updateRun(loser.id, { worktreePath: undefined, branch: undefined });
         store.setArchived(loser.id, true);
         store.appendEvent(loser.id, {
@@ -5611,6 +5755,7 @@ export function createApp(deps: ServerDeps) {
       // The body is validated (an empty or `{}` one is accepted) but carries nothing this
       // handler reads; retention is best-effort, so 200 always.
       const reclaimed = await reclaimWorktrees(repoRoot, store, await resolveWorktreeRetention(repoRoot));
+      void removeContainersOf(reclaimed, (id) => store.getRun(id)?.isolation?.container !== undefined);
       return c.json({ reclaimed });
     });
 
@@ -6662,6 +6807,89 @@ export function createApp(deps: ServerDeps) {
       return c.json(await configAnswer(repoRoot, await loadConfig(repoRoot)));
     })
 
+    /**
+     * Agent isolation: what this MACHINE can do, and what this PROJECT asks for.
+     * Two questions, deliberately answered separately — a toggle that reads
+     * "on" while the container VM is stopped is a lie the run would then have
+     * to correct in its own log, so the composer renders `effective`.
+     */
+    .get('/isolation', async (c) => {
+      const repoRoot = c.get('project').root;
+      const config = await loadConfig(repoRoot);
+      const sandbox = config.sandbox;
+      const runtime = await detectContainerRuntime();
+      const enabled = sandbox?.enabled === true;
+      const containerfile = join(repoRoot, sandbox?.containerfile ?? '.ai/cezar/Containerfile');
+      const hasContainerfile = existsSync(containerfile);
+      const own = await ownSandboxCredentials(repoRoot);
+      // A hosted visitor sees WHAT can be passed through, not where it lives on this machine nor
+      // which identities the keys carry (the `.pub` comment is usually an email).
+      const hosted = !capabilities().localHandoff;
+      const home = homedir();
+      const shownPath = (path: string | undefined) =>
+        path && hosted && (path === home || path.startsWith(`${home}/`)) ? `~${path.slice(home.length)}` : path;
+      return c.json({
+        runtime,
+        enabled,
+        effective: enabled && runtime.ready,
+        // What a task will actually run. `imageTag` defaults to "has a
+        // Containerfile", so without the real answer a repo with none was shown
+        // `cezar-agent/<name>` while its tasks ran the pin or the base image.
+        image: sandbox ? imageTag(sandbox, hasContainerfile) : '',
+        hasContainerfile,
+        suggestions: loadProposal(c.get('project').dataDir).pending,
+        resources: sandbox?.resources ?? { shmSize: '1g' },
+        credentials: {
+          catalog: CREDENTIAL_CATALOG.map((source) => ({
+            id: source.id,
+            label: source.label,
+            kind: source.kind,
+            hostPath: shownPath(hostPathOf(source)),
+            env: source.env ?? [],
+            defaultMode: source.defaultMode,
+            note: source.note,
+            // Whether it is actually on this machine: a credential the operator
+            // does not have should read as unavailable, not as "off".
+            present: source.hostPath ? existsSync(hostPathOf(source) ?? '') : true,
+            // What the operator could tick instead of the whole directory.
+            // Read fresh on every request rather than cached: a key generated a
+            // minute ago should appear without restarting the cockpit.
+            entries: source.selectable === 'ssh'
+              ? listSshEntries().map((entry) => (hosted ? { name: entry.name, kind: entry.kind } : entry))
+              : [],
+          })),
+          enabled: sandbox?.credentials?.enabled ?? {},
+          custom: (sandbox?.credentials?.custom ?? []).map((entry) =>
+            hosted && entry.hostPath ? { ...entry, hostPath: shownPath(entry.hostPath) } : entry),
+          // The REPO's own choices, apart from what it inherits. The page edits
+          // these: writing the merged view back pinned every machine-wide grant
+          // into the repo, so revoking one machine-wide later did nothing there.
+          own,
+        },
+      });
+    })
+
+    /**
+     * Accept or dismiss the "your agents installed these" proposal.
+     *
+     * Accepting WRITES the Containerfile but does NOT rebuild the image: the
+     * container running right now already has these tools — that is where the
+     * suggestion came from — so a rebuild here would pay for an image nobody is
+     * waiting on. `ensureImage` sees the newer file and rebuilds before the NEXT
+     * task instead.
+     */
+    .post('/isolation/suggestions', jsonZodValidator(() => suggestionDecisionSchema), async (c) => {
+      const { root: repoRoot, dataDir } = c.get('project');
+      const { accept, dismiss } = c.req.valid('json');
+      const sandbox = (await loadConfig(repoRoot)).sandbox;
+      const relPath = sandbox?.containerfile ?? '.ai/cezar/Containerfile';
+      if (dismiss?.length) dismissSuggestions(dataDir, dismiss);
+      if (accept?.length) {
+        acceptSuggestions(dataDir, repoRoot, relPath, accept, (all) => renderContainerfile(all));
+      }
+      return c.json({ pending: loadProposal(dataDir).pending });
+    })
+
     .put('/config', jsonZodValidator(() => setConfigSchema), async (c) => {
       const { root: repoRoot, dataDir } = c.get('project');
       const parsed = { data: c.req.valid('json') };
@@ -6681,9 +6909,70 @@ export function createApp(deps: ServerDeps) {
       } catch {
         // missing or malformed — start fresh
       }
+      // Credential GRANTS go where `loadConfig` honors them. A committed config.json grants nothing
+      // (a clone must not be able to grant itself the operator's credentials), so for one the
+      // grant is written to the git-ignored `config.local.json` instead — still this project's,
+      // never in its history.
+      // Editable in hosted mode too: whoever reaches this cockpit can already start an unisolated
+      // task that reads the same files on the host, so refusing grants protected nothing and left
+      // the operator of a remote-only cockpit unable to isolate with any credential (2026-10-15).
+      const grantsLocally = (await configIsTracked(repoRoot)) && parsed.data.sandbox?.credentials !== undefined;
+      const localPath = join(dataDir, LOCAL_CONFIG_FILE);
+      let local: Record<string, unknown> = {};
+      if (grantsLocally) {
+        try {
+          const existing: unknown = JSON.parse(await readFile(localPath, 'utf8'));
+          if (existing && typeof existing === 'object') local = existing as Record<string, unknown>;
+        } catch {
+          // none yet
+        }
+      }
       if (parsed.data.baseBranch !== undefined) {
         if (parsed.data.baseBranch === null) delete raw.baseBranch;
         else raw.baseBranch = parsed.data.baseBranch;
+      }
+      if (parsed.data.sandbox !== undefined) {
+        // Merge, never replace: the block also carries image, cacheVolumes and
+        // credential wiring that the cockpit does not send and must not drop.
+        const existingSandbox = raw.sandbox && typeof raw.sandbox === 'object' && !Array.isArray(raw.sandbox)
+          ? raw.sandbox as Record<string, unknown>
+          : {};
+        const localSandbox = local.sandbox && typeof local.sandbox === 'object' && !Array.isArray(local.sandbox)
+          ? local.sandbox as Record<string, unknown>
+          : {};
+        // Nested blocks merge too: a page that edits only `resources.memory`
+        // must not drop the credential selection sitting beside it.
+        const patch = { ...parsed.data.sandbox } as Record<string, unknown>;
+        for (const key of ['resources', 'credentials'] as const) {
+          const incoming = patch[key];
+          if (incoming === undefined) continue;
+          const existing = key === 'credentials' && grantsLocally ? localSandbox[key] : existingSandbox[key];
+          const base = existing && typeof existing === 'object' && !Array.isArray(existing)
+            ? existing as Record<string, unknown>
+            : {};
+          const merged: Record<string, unknown> = { ...base, ...(incoming as Record<string, unknown>) };
+          // `credentials.enabled` merges one level further, per credential: the
+          // page sends only the grants that CHANGED. Replacing the whole map
+          // meant sending the whole map, and the only whole map the page has is
+          // the merged one — machine grants included.
+          if (key === 'credentials') {
+            const baseEnabled = base.enabled && typeof base.enabled === 'object' ? base.enabled as Record<string, unknown> : {};
+            const incomingEnabled = (incoming as { enabled?: Record<string, unknown> }).enabled;
+            if (incomingEnabled) {
+              const enabled: Record<string, unknown> = { ...baseEnabled, ...incomingEnabled };
+              for (const [k, v] of Object.entries(enabled)) if (v === null) delete enabled[k];
+              merged.enabled = enabled;
+            }
+          }
+          // `null` clears a key rather than storing a null the schema would reject.
+          for (const [k, v] of Object.entries(merged)) if (v === null) delete merged[k];
+          patch[key] = merged;
+        }
+        if (grantsLocally) {
+          local.sandbox = { ...localSandbox, credentials: patch.credentials };
+          delete patch.credentials;
+        }
+        raw.sandbox = { ...existingSandbox, ...patch };
       }
       if (parsed.data.defaultRunner !== undefined) raw.defaultRunner = parsed.data.defaultRunner;
       if (parsed.data.systemPrompt !== undefined) {
@@ -6758,11 +7047,25 @@ export function createApp(deps: ServerDeps) {
       try {
         await mkdir(dataDir, { recursive: true });
         await writeFile(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf8');
+        if (grantsLocally) await writeFile(localPath, `${JSON.stringify(local, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
       } catch (err) {
         return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
       }
+      const saved = await loadConfig(repoRoot);
+      // Ticking a credential applies to the task you are IN, not just the next
+      // one. Copies can be refreshed in a running container, so a selection
+      // that only ever took effect at container creation would look broken for
+      // exactly as long as the current task lasts — which is how long anyone
+      // would be looking at it. Best-effort: a container that cannot be
+      // updated still gets the credential when its next turn starts.
+      // In the background: it is a follow-up to the save, not part of it, and
+      // with a dozen task containers it took most of a minute — long enough for
+      // the page to look like the save did nothing (see `pushCredentialsToRunning`).
+      if (parsed.data.sandbox?.credentials !== undefined && saved.sandbox) {
+        void pushCredentialsToRunning(repoRoot, async () => (await loadConfig(repoRoot)).sandbox);
+      }
       // Pre-R6 answer shape ({baseBranch, defaultRunner}) + additive R6 fields.
-      return c.json(await configAnswer(repoRoot, await loadConfig(repoRoot)));
+      return c.json(await configAnswer(repoRoot, saved));
     });
 
   // Set/clear the agents' config knobs (Settings → Agents; the Repo tab's
@@ -6772,7 +7075,23 @@ export function createApp(deps: ServerDeps) {
   // R6 keys) clears a knob back to its default.
   const modelPresetSchema = z.string().trim().max(200).nullable().optional();
   const autoModelSchema = z.boolean().nullable().optional();
+  // Bounded: `dismiss` entries are persisted and re-read on every status call and every observed
+  // install, so an unbounded list was a way to grow a state file without limit.
+  const suggestionDecisionSchema = z.object({
+    accept: z.array(z.string().min(1).max(1_000)).max(100).optional(),
+    dismiss: z.array(z.string().min(1).max(1_000)).max(100).optional(),
+  });
+
   const setConfigSchema = z.object({
+    /**
+     * Agent isolation. Only `enabled` is settable from the cockpit: the rest of
+     * the block (image, mounts, credentials) is repo configuration a person
+     * edits deliberately, and a switch that could rewrite mount paths would be
+     * a much larger blast radius than a switch needs.
+     */
+    // The contract's own patch shape — one definition, bounded, with no host or guest paths (a
+    // custom mount is hand-written config, not a request field).
+    sandbox: setConfigInputSchema.shape.sandbox,
     baseBranch: z.string().trim().min(1).max(200).nullable().optional(),
     defaultRunner: z.enum(RUNNER_IDS).optional(),
     systemPrompt: z.string().trim().max(20_000, 'must be at most 20000 characters').nullable().optional(),
@@ -6979,6 +7298,16 @@ export function createApp(deps: ServerDeps) {
       : {}),
     ...(automationId !== undefined ? { automationId } : {}),
     ...(run.startedAt !== undefined ? { startedAt: run.startedAt } : {}),
+    // Slimmed to the two fields a row's marker reads: the container's name is
+    // detail the task's own header carries.
+    ...(run.isolation !== undefined
+      ? {
+        isolation: {
+          effective: run.isolation.effective,
+          ...(run.isolation.reason !== undefined ? { reason: run.isolation.reason } : {}),
+        },
+      }
+      : {}),
     // The tracker-reference inputs, verbatim — the cockpit's `taskReference()` owns the rule
     // that picks between them (see the schema's note).
     ...(run.pullRequestUrl !== undefined ? { pullRequestUrl: run.pullRequestUrl } : {}),
@@ -7568,6 +7897,8 @@ export function resumeCommand(runner: string | undefined, sessionId: string): st
     case 'copilot':
       // `--resume <id>` takes a session id, a task id or an id prefix (`copilot --help`, 1.0.88).
       return `copilot --resume ${sessionId}`;
+    case 'kimi':
+      return `kimi --session ${sessionId}`;
     default:
       return `claude --resume ${sessionId}`;
   }
