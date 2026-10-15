@@ -2633,14 +2633,18 @@ describe('the follow-up prompt template menu (#413)', () => {
   async function chooseTemplate(id: string): Promise<void> {
     const textarea = () => screen.getByLabelText('Custom prompt') as HTMLTextAreaElement
     const before = textarea().value
-    fireEvent.click(document.querySelector('[data-slot="prompt-template-trigger"]')!)
-    await waitFor(() => {
-      if (!option(id)) throw new Error(`template option "${id}" not mounted yet`)
-    })
-    await selectOption(id)
-    // Menu closure proves the click landed, but React may commit the prompt state in the next
-    // render. Wait for this selection's value transition before the caller checks its exact text.
-    await waitFor(() => expect(textarea().value).not.toBe(before))
+    // An option can unmount WITHOUT being selected — a stale node from the previous, still-closing
+    // popover, or a re-render closing the menu — and `selectOption` reads that as "landed". Only
+    // the prompt changing proves the insert, so reopen and reselect until it does.
+    await waitFor(async () => {
+      if (textarea().value !== before) return
+      if (!option(id)) fireEvent.click(document.querySelector('[data-slot="prompt-template-trigger"]')!)
+      await waitFor(() => {
+        if (!option(id)) throw new Error(`template option "${id}" not mounted yet`)
+      })
+      await selectOption(id)
+      expect(textarea().value).not.toBe(before)
+    }, { timeout: 5_000 })
   }
 
   it('an untouched ui-state shows the built-in templates, and inserting one fills the custom prompt', async () => {
