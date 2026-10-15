@@ -89,6 +89,8 @@ interface ProviderDescriptor {
    * spawn entirely removes that race instead of racing to out-guess it.
    */
   precheck?: () => ProviderConnectionState | undefined;
+  /** A more specific hint than "try again" for an exit-0/1 answer `parse` could not read. */
+  unrecognizedHint?: (result: ProviderCommandResult) => string | undefined;
   /** The `CEZ_*_BIN` override `executable` honours — only so a report can say the binary came from it. */
   overrideEnv: string;
 }
@@ -322,6 +324,15 @@ function parseCopilotStatus(result: ProviderCommandResult): ProviderConnectionSt
   return null;
 }
 
+/** Telemetry 298c2e1f: a `copilot` that answered with no JSON-RPC frame never started an ACP
+ *  server — an old Copilot CLI, or another program of that name (AWS Copilot) first on PATH. */
+function copilotUnrecognizedHint(result: ProviderCommandResult): string | undefined {
+  if (/"jsonrpc"\s*:/.test(`${result.stdout}\n${result.stderr}`)) return undefined;
+  return 'The `copilot` command did not start GitHub Copilot CLI\'s ACP server. Update it with '
+    + '`npm i -g @github/copilot`, or point CEZ_COPILOT_BIN at the GitHub Copilot CLI if another '
+    + 'program named `copilot` comes first on PATH.';
+}
+
 const DESCRIPTORS: readonly ProviderDescriptor[] = [
   {
     id: 'claude',
@@ -384,11 +395,14 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     id: 'copilot',
     overrideEnv: 'CEZ_COPILOT_BIN',
     executable: () => process.env.CEZ_COPILOT_BIN ?? 'copilot',
-    statusArgs: ['--acp'],
+    // `--no-auto-update`, as the runner passes: a status check must not download a CLI, nor run a
+    // cached newer package than the one a run will launch (telemetry 298c2e1f).
+    statusArgs: ['--acp', '--no-auto-update'],
     loginArgs: ['login'],
     installHint: 'Install GitHub Copilot CLI (`npm i -g @github/copilot`), then run `copilot login`.',
     parse: parseCopilotStatus,
     stdin: copilotAcpProbeStdin,
+    unrecognizedHint: copilotUnrecognizedHint,
   },
 ];
 
@@ -535,7 +549,8 @@ function parsesAsJson(text: string): boolean {
 
 /** The first semver in a `--version` answer; anything else in it is dropped. */
 export function cliVersionFrom(output: string): string | null {
-  return output.match(/\b\d+\.\d+\.\d+(?:-[0-9A-Za-z.]{1,24})?/)?.[0] ?? null;
+  // `v` optional: AWS Copilot answers `copilot version: v1.34.1`, which `\b` alone never matched.
+  return output.match(/(?<![\w.])v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]{1,24})?)/)?.[1] ?? null;
 }
 
 export class ProviderAuthService {
@@ -946,8 +961,10 @@ export class ProviderAuthService {
     const status = descriptor.parse(result);
     if (status !== null) return { provider: descriptor.id, status };
     // Exit 0 and 1 are the codes vendors answer status with; anything else is the CLI failing.
-    const reason = result.exitCode === 0 || result.exitCode === 1 ? 'unrecognized_output' : 'unexpected_exit';
-    return inconclusive(reason, UNKNOWN_HINT, result);
+    if (result.exitCode === 0 || result.exitCode === 1) {
+      return inconclusive('unrecognized_output', descriptor.unrecognizedHint?.(result) ?? UNKNOWN_HINT, result);
+    }
+    return inconclusive('unexpected_exit', UNKNOWN_HINT, result);
   }
 
   private reportInconclusive(

@@ -22,6 +22,7 @@ vi.mock('./junie-auth-probe.ts', () => ({
 import { PROVIDER_IDS } from './provider-auth.ts';
 import {
   ProviderAuthService,
+  cliVersionFrom,
   isRuntimeProviderAuthFailure,
   providerAuthChecksDisabled,
   type ProviderCommandResult,
@@ -684,7 +685,7 @@ describe('ProviderAuthService', () => {
       { executable: 'opencode', args: ['auth', 'list'], timeoutMs: 10_000 },
       { executable: 'agent', args: ['status', '--format', 'json'], timeoutMs: 10_000 },
       { executable: 'pi', args: ['--list-models'], timeoutMs: 10_000 },
-      { executable: 'copilot', args: ['--acp'], timeoutMs: 10_000 },
+      { executable: 'copilot', args: ['--acp', '--no-auto-update'], timeoutMs: 10_000 },
     ]);
     release();
     await expect(pending).resolves.toBeDefined();
@@ -1468,6 +1469,42 @@ describe('inconclusive probe reports', () => {
     expect((await reasonsFor({ stdout: '', stderr: '', exitCode: null, errorCode: 'ETIMEDOUT', timedOut: true }))[0]?.reason)
       .toBe('timeout');
     expect((await reasonsFor(() => { throw new Error('boom'); }))[0]?.reason).toBe('spawn_threw');
+  });
+
+  // Telemetry 298c2e1f: exit 0, a short non-JSON answer, and no version cezar could read.
+  it('names the fix when `copilot` on PATH never started an ACP server', async () => {
+    const onInconclusive = vi.fn();
+    const service = new ProviderAuthService({
+      runCommand: async (executable, args) => {
+        if (executable !== 'copilot') return { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' };
+        if (args[0] === '--version') return { stdout: 'copilot version: v1.34.1\n', stderr: '', exitCode: 0 };
+        return { stdout: 'something that is not JSON-RPC\n', stderr: 'warning', exitCode: 0 };
+      },
+      onInconclusive,
+    });
+    const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'copilot');
+    expect(row).toMatchObject({ status: 'unknown', hint: expect.stringContaining('CEZ_COPILOT_BIN') });
+    const [probe] = onInconclusive.mock.calls.map(([call]) => call);
+    expect(probe).toMatchObject({ provider: 'copilot', reason: 'unrecognized_output' });
+    expect(await probe.cliVersion()).toBe('1.34.1');
+  });
+
+  it('keeps the generic hint when Copilot spoke ACP but the answer was unreadable', async () => {
+    const service = new ProviderAuthService({
+      runCommand: async (executable) => executable === 'copilot'
+        ? { stdout: '{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"Internal error"}}', stderr: '', exitCode: 0 }
+        : { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' },
+    });
+    const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'copilot');
+    expect(row).toMatchObject({ status: 'unknown', hint: 'Authentication could not be verified. Try again.' });
+  });
+
+  it('reads a version with or without a leading v, never from inside a longer number', () => {
+    expect(cliVersionFrom('GitHub Copilot CLI 1.0.98.')).toBe('1.0.98');
+    expect(cliVersionFrom('copilot version: v1.34.1')).toBe('1.34.1');
+    expect(cliVersionFrom('codex-cli 0.46.0-alpha.1')).toBe('0.46.0-alpha.1');
+    expect(cliVersionFrom('build 10.1.2.3')).toBe('10.1.2');
+    expect(cliVersionFrom('no version here')).toBeNull();
   });
 
   it('reports each provider and reason once per process, and nothing for a conclusive answer', async () => {
