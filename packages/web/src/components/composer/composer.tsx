@@ -17,7 +17,7 @@ import {
 
 import { putUiState } from '@/api/client'
 import { queryKeys, useSkills, useUiState } from '@/api/queries'
-import type { AttachmentInput } from '@open-mercato/cezar-api-client'
+import type { AttachmentEntry } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Command, CommandItem, CommandList } from '@/components/ui/command'
@@ -32,7 +32,6 @@ import { cn } from '@/lib/utils'
 
 import {
   appendAttachment,
-  attachedBytes,
   fileToPendingAttachment,
   MAX_ATTACHMENTS,
   screenFiles,
@@ -40,6 +39,7 @@ import {
   type AttachmentsChangeReason,
   type PendingAttachment,
 } from './composer-attachments'
+import { releaseStaged, sendWithStaged, stageAttachment } from './attachment-staging'
 import { applyCompletion, detectTrigger, type TriggerState } from './composer-text'
 import { formatElapsed, useDictation } from './dictation'
 
@@ -57,7 +57,7 @@ import { formatElapsed, useDictation } from './dictation'
 export interface ComposerProps {
   /** Deliver the message. Rejection = the message did NOT land: the composer toasts the error
    *  and restores the draft (nothing the user typed is ever lost). */
-  onSubmit: (text: string, attachments: AttachmentInput[], meta?: ComposerSubmitMeta) => Promise<unknown>
+  onSubmit: (text: string, attachments: AttachmentEntry[], meta?: ComposerSubmitMeta) => Promise<unknown>
   /**
    * Controlled text (pass BOTH or neither): the /new host owns the draft so it survives
    * navigation (spec: "Queued form state survives navigation"). Every internal edit — typing,
@@ -346,12 +346,16 @@ export function Composer({
       // StrictMode double-invokes updater functions in dev, so screening here would encode and
       // append each pasted file twice (#double-paste). `imagesRef` gives the current count
       // without reading through state; each async append re-checks the cap functionally.
-      const intake = screenFiles(files, imagesRef.current.length, attachedBytes(imagesRef.current))
+      const intake = screenFiles(files, imagesRef.current.length)
       for (const reason of intake.rejected) toast(reason, { tone: 'danger' })
       for (const file of intake.accepted) {
-        void fileToPendingAttachment(file, source).then((attachment) =>
-          setImages((prev) => appendAttachment(prev, attachment) ?? prev),
-        )
+        void fileToPendingAttachment(file, source).then((attachment) => {
+          const next = appendAttachment(imagesRef.current, attachment)
+          if (!next) return
+          // Upload now, while the user is still typing, so the send only names it (7054e5f2).
+          void stageAttachment(attachment)
+          setImages(next)
+        })
       }
     },
     [disabled],
@@ -392,8 +396,10 @@ export function Composer({
       setBusy(true)
       try {
         // `meta` only when there is something to say, so an ordinary send keeps its two-argument call.
-        const attachments = messageImages.map(toAttachmentInput)
-        await (meta ? onSubmit(body, attachments, meta) : onSubmit(body, attachments))
+        await sendWithStaged(messageImages, (attachments) =>
+          meta ? onSubmit(body, attachments, meta) : onSubmit(body, attachments),
+        )
+        releaseStaged(messageImages)
       } catch (error) {
         toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
         if (restoreOnError) {
@@ -536,7 +542,10 @@ export function Composer({
                       ? 'size-12'
                       : 'flex h-12 max-w-[200px] items-center gap-1.5 bg-muted/40 px-2.5 text-xs text-muted-foreground',
                   )}
-                  onClick={() => setImages((current) => current.filter((_, i) => i !== index))}
+                  onClick={() => {
+                    releaseStaged([attachment])
+                    setImages((current) => current.filter((_, i) => i !== index))
+                  }}
                 >
                   {/* An image previews; a file (#950) has nothing to look at, so it gets its own
                       name instead — the one place the user's filename is used at all. */}

@@ -3,7 +3,7 @@ import { useCallback } from 'react'
 
 import { ApiError } from '@/api/client'
 import { runQueryOptions, useSendMessage } from '@/api/queries'
-import type { ApiRun, AttachmentInput, RunStatus } from '@open-mercato/cezar-api-client'
+import type { ApiRun, AttachmentEntry, RunStatus } from '@open-mercato/cezar-api-client'
 
 import type { ContinueAction } from './follow-up-engine'
 import { lastSessionId } from './run-actions'
@@ -43,7 +43,7 @@ export function deliveryPath(status: RunStatus): DeliveryPath {
   return status === 'running' || status === 'waiting' || status === 'queued' ? 'live' : 'continue'
 }
 
-export type DeliverPrompt = (text: string, images: AttachmentInput[]) => Promise<unknown>
+export type DeliverPrompt = (text: string, images: AttachmentEntry[]) => Promise<unknown>
 
 export function useDeliverPrompt(run: ApiRun, continueAction: ContinueAction): DeliverPrompt {
   const queryClient = useQueryClient()
@@ -54,7 +54,7 @@ export function useDeliverPrompt(run: ApiRun, continueAction: ContinueAction): D
   const { continueWith } = continueAction
 
   return useCallback(
-    async (text: string, images: AttachmentInput[]) => {
+    async (text: string, images: AttachmentEntry[]) => {
       const deliver = async (path: DeliveryPath) => {
         const result = await (path === 'live' ? sendMessageAsync({ text, images }) : continueWith(text, images))
         trackMessageSent('existing_session')

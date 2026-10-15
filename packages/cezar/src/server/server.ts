@@ -63,8 +63,14 @@ import {
 // A contract VALUE, like `workspaceUiStateSchema` in workspace/migrations.ts — the request
 // schema this route validates with is the same one the client compiles against.
 import {
+  ATTACHMENT_UPLOAD_MISSING,
+  attachmentInputSchema,
   attachmentListSchema,
+  type AttachmentEntry,
+  deleteUploadResponseSchema,
   MAX_ATTACHMENTS_PER_MESSAGE,
+  stagedUploadSchema,
+  uploadIdParamSchema,
   modelDiscoveryRunnerSchema,
   openProjectInSchema,
   updateProjectInputSchema,
@@ -160,6 +166,7 @@ import {
   type DeleteDraftResponse,
 } from '@open-mercato/cezar-contract';
 import { toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
+import { deleteUpload, readUpload, writeUpload } from '../uploads.ts';
 import { removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
 import { isReclaimable, reclaimWorktrees } from '../runs/retention.ts';
 import { getBranches, getCommit, getDiff, getLog, getRepoInfo, getStatus } from './git.ts';
@@ -967,6 +974,26 @@ function foldedLength(task: string, stack: Array<{ text: string }>): number {
     .map((part) => part.trim())
     .filter((part) => part.length > 0)
     .join('\n\n').length;
+}
+
+/** A message's attachments as engine content, staged uploads read back from the store
+ *  (telemetry 7054e5f2). `null` when a referenced upload is gone — the route answers
+ *  `ATTACHMENT_UPLOAD_MISSING`, which the composer meets by staging again. */
+function resolveAttachments(entries: AttachmentEntry[]): PastedContent[] | null;
+function resolveAttachments(entries: AttachmentEntry[] | undefined): PastedContent[] | undefined | null;
+function resolveAttachments(entries: AttachmentEntry[] | undefined): PastedContent[] | undefined | null {
+  if (entries === undefined) return undefined;
+  const out: PastedContent[] = [];
+  for (const entry of entries) {
+    if ('data' in entry) {
+      out.push(toPastedContent(entry));
+      continue;
+    }
+    const staged = readUpload(entry.uploadId);
+    if (!staged) return null;
+    out.push(toPastedContent(entry.name ? { ...staged, name: entry.name } : staged));
+  }
+  return out;
 }
 
 // "Continue"/"Send back" body (spec 003 / #401): every field optional, so an empty POST reopens
@@ -3458,6 +3485,19 @@ export function createApp(deps: ServerDeps) {
       return c.json(workspaceBrandingLogoResponseSchema.parse({ logoUrl: null }));
     })
 
+    // Staged attachments (telemetry 7054e5f2): the composer uploads each file when it is attached
+    // and the message references it, so attachments stop sharing one request body. One file per
+    // request rides the global body limit.
+    .post('/workspace/uploads', jsonZodValidator(attachmentInputSchema), (c) => {
+      const result = writeUpload(c.req.valid('json'));
+      if (!result.ok) return c.json({ error: result.error }, 500);
+      return c.json(stagedUploadSchema.parse(result.upload));
+    })
+    .delete('/workspace/uploads/:uploadId', paramZodValidator(uploadIdParamSchema), (c) => {
+      deleteUpload(c.req.valid('param').uploadId);
+      return c.json(deleteUploadResponseSchema.parse({ deleted: true }));
+    })
+
     // Global GUI state (`~/.cezar/ui-state.json`) — same parse/key-cap/shallow-
     // merge semantics as the per-repo /api/v1/ui-state route below (the shared half
     // is `uiStateBodySchema`), but backed by the workspace file.
@@ -4443,7 +4483,8 @@ export function createApp(deps: ServerDeps) {
           );
         }
       }
-      const images = parsed.data.images?.map((image) => toPastedContent(image));
+      const images = resolveAttachments(parsed.data.images);
+      if (images === null) return c.json({ error: ATTACHMENT_UPLOAD_MISSING }, 400);
       const input = {
         task: parsed.data.task,
         model: parsed.data.model,
@@ -4578,8 +4619,10 @@ export function createApp(deps: ServerDeps) {
         });
         if (blocked) return c.json({ error: blocked }, 409);
       }
+      const attachments = resolveAttachments(parsed.data.images);
+      if (attachments === null) return c.json({ error: ATTACHMENT_UPLOAD_MISSING }, 400);
       const content: PastedContent[] = [
-        ...parsed.data.images.map((image) => toPastedContent(image)),
+        ...attachments,
         ...(parsed.data.text.trim() ? [{ type: 'text', text: parsed.data.text } satisfies ContentBlock] : []),
       ];
       // Three-rung delivery ladder (#472). Branch on the ENGINE's answer rather
@@ -4656,7 +4699,8 @@ export function createApp(deps: ServerDeps) {
       }
 
       if (run.status !== 'queued') return c.json({ error: 'run already started' }, 409);
-      const images: PastedContent[] | undefined = parsed.data.images?.map((image) => toPastedContent(image));
+      const images = resolveAttachments(parsed.data.images);
+      if (images === null) return c.json({ error: ATTACHMENT_UPLOAD_MISSING }, 400);
       const message = manager.editQueuedMessage(id, msgId, {
         ...(parsed.data.text !== undefined ? { text: parsed.data.text } : {}),
         ...(images !== undefined ? { images } : {}),
@@ -4716,9 +4760,11 @@ export function createApp(deps: ServerDeps) {
         const account = await resolveWorkspaceProfile(provider, parsed.data.agentProfile);
         if ('error' in account) return c.json({ error: account.error }, 400);
       }
+      const images = resolveAttachments(parsed.data.images);
+      if (images === null) return c.json({ error: ATTACHMENT_UPLOAD_MISSING }, 400);
       const result = manager.continueRun(id, {
         text: parsed.data.text,
-        images: parsed.data.images?.map((image) => toPastedContent(image)),
+        images,
         runner: parsed.data.runner,
         model: parsed.data.model,
         agentProfile: parsed.data.agentProfile,

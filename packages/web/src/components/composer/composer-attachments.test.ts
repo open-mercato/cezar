@@ -70,7 +70,7 @@ describe('screenFiles — the caps, mirrored from the server zod', () => {
 
   /** Telemetry 7054e5f2: a fifth ordinary screenshot was refused under the old cap of four. */
   it('takes a fifth screenshot', () => {
-    const intake = screenFiles([fakeFile({ name: 'e.png', size: 1024 * 1024 })], 4, 4 * 1024 * 1024)
+    const intake = screenFiles([fakeFile({ name: 'e.png', size: 1024 * 1024 })], 4)
     expect(intake.accepted).toHaveLength(1)
     expect(intake.rejected).toEqual([])
   })
@@ -79,16 +79,6 @@ describe('screenFiles — the caps, mirrored from the server zod', () => {
     const intake = screenFiles([fakeFile({ name: 'a.png' }), fakeFile({ name: 'b.png' })], MAX_ATTACHMENTS - 1)
     expect(intake.accepted).toHaveLength(1)
     expect(intake.rejected).toEqual([`b.png skipped — max ${MAX_ATTACHMENTS} attachments per message`])
-  })
-
-  it('enforces the 20 MB total across what is already attached and the batch', () => {
-    const intake = screenFiles(
-      [fakeFile({ name: 'a.png', size: MAX_ATTACHMENT_BYTES }), fakeFile({ name: 'b.png', size: 2 })],
-      3,
-      3 * MAX_ATTACHMENT_BYTES - 1,
-    )
-    expect(intake.accepted.map((f) => f.name)).toEqual(['a.png'])
-    expect(intake.rejected).toEqual(['b.png skipped — max 20 MB of attachments per message'])
   })
 
   it('a batch mixing every failure mode reports each file by name', () => {
@@ -114,12 +104,12 @@ describe('screenFiles — the caps, mirrored from the server zod', () => {
   })
 })
 
-/** The async append re-applies both caps: encodes from an earlier drop land after `screenFiles`
+/** The async append re-applies the count cap: encodes from an earlier drop land after `screenFiles`
  *  screened the next one against a snapshot that did not include them. */
 describe('appendAttachment', () => {
   const att = (bytes: number) => ({ data: 'A'.repeat(Math.ceil(bytes / 3) * 4) })
 
-  it('appends within both caps', () => {
+  it('appends within the cap', () => {
     expect(appendAttachment([att(3)], att(3))).toHaveLength(2)
   })
 
@@ -127,11 +117,6 @@ describe('appendAttachment', () => {
     expect(appendAttachment(Array.from({ length: MAX_ATTACHMENTS }, () => att(3)), att(3))).toBeNull()
   })
 
-  it('refuses past the 20 MB total', () => {
-    const full = Array.from({ length: 4 }, () => att(MAX_ATTACHMENT_BYTES - 2))
-    expect(appendAttachment(full, att(3))).toHaveLength(5)
-    expect(appendAttachment(full, att(30))).toBeNull()
-  })
 })
 
 describe('attachmentMediaType', () => {

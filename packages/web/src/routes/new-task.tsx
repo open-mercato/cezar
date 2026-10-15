@@ -28,7 +28,7 @@ import {
   useWorkflows,
 } from '@/api/queries'
 import type {
-  AttachmentInput,
+  AttachmentEntry,
   DispatchIntent,
   ProjectListEntry,
   RepoResponse,
@@ -456,7 +456,7 @@ export function NewTaskRoute() {
       ?.focus()
   }, [notice, sourcesReady]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const submit = async (text: string, submitted: AttachmentInput[]) => {
+  const submit = async (text: string, submitted: AttachmentEntry[]) => {
     if (!providersReady || runner === null) {
       throw new Error(
         providers.isPending

@@ -13,6 +13,7 @@ import {
   type AttachmentsChangeReason,
   type PendingAttachment,
 } from './composer-attachments'
+import { resetStaging } from './attachment-staging'
 import { Composer, type ComposerProps } from './composer'
 
 beforeAll(() => {
@@ -35,6 +36,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   resetToasts()
+  resetStaging()
   vi.unstubAllGlobals()
 })
 
@@ -195,9 +197,12 @@ describe('attachments — attach, paste, thumbnails, caps (legacy parity)', () =
     type(textarea, 'see screenshot')
     fireEvent.keyDown(textarea, { key: 'Enter' })
     // Clipboard images can carry a browser-generated filename; it must not reach the library.
-    expect(onSubmit).toHaveBeenCalledWith('see screenshot', [
-      { mediaType: 'image/png', data: btoa(String.fromCharCode(9, 9)) },
-    ])
+    // The default fetch stub cannot stage, so the bytes ride inline — the fallback path.
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith('see screenshot', [
+        { mediaType: 'image/png', data: btoa(String.fromCharCode(9, 9)) },
+      ]),
+    )
     // Sent images leave the tray with the optimistic clear.
     await waitFor(() => expect(screen.queryByLabelText('Remove pasted image')).toBeNull())
   })
@@ -227,7 +232,33 @@ describe('attachments — attach, paste, thumbnails, caps (legacy parity)', () =
     paste(textarea, [pngFile()])
     await screen.findByLabelText('Remove pasted image')
     fireEvent.click(screen.getByLabelText('Send'))
-    expect(onSubmit).toHaveBeenCalledWith('', [expect.objectContaining({ mediaType: 'image/png' })])
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith('', [expect.objectContaining({ mediaType: 'image/png' })]),
+    )
+  })
+
+  /** Telemetry 7054e5f2: an attachment is uploaded when attached, and the message names it. */
+  it('stages an attachment when it is attached and sends a reference', async () => {
+    const { onSubmit, textarea, fetchMock } = renderComposer()
+    fetchMock.mockImplementation((input: RequestInfo | URL) =>
+      Promise.resolve(
+        new Response(
+          String(input).includes('/api/v1/workspace/uploads')
+            ? JSON.stringify({ uploadId: 'a'.repeat(24), mediaType: 'image/png', bytes: 1 })
+            : '{}',
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      ),
+    )
+    fireEvent.drop(textarea, { dataTransfer: { files: [pngFile('shot.png')] } })
+    await screen.findByLabelText('Remove shot.png')
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([u]) => String(u).includes('/api/v1/workspace/uploads'))).toBe(true),
+    )
+    fireEvent.click(screen.getByLabelText('Send'))
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith('', [{ uploadId: 'a'.repeat(24), name: 'shot.png' }]),
+    )
   })
 
   it('clicking a thumbnail removes exactly that image', async () => {
@@ -262,9 +293,11 @@ describe('attachments — attach, paste, thumbnails, caps (legacy parity)', () =
     fireEvent.keyDown(textarea, { key: 'Enter' })
     // The filename rides along since #929 — it is what the attachment library files the copy
     // under, and the only handle the agent gets on a file it never sees the bytes of.
-    expect(onSubmit).toHaveBeenCalledWith('read this', [
-      { mediaType: 'text/markdown', data: btoa('# hi'), name: 'brief.md' },
-    ])
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith('read this', [
+        { mediaType: 'text/markdown', data: btoa('# hi'), name: 'brief.md' },
+      ]),
+    )
   })
 
   it('a dropped PDF is taken, and an unsupported file is refused out loud', async () => {
@@ -304,9 +337,11 @@ describe('the controlled-images seam (#939)', () => {
     fireEvent.click(screen.getByLabelText('Send'))
     // `pngFile` always names its file (#960), so the wire carries it — unrelated to what this
     // test is actually pinning (the uncontrolled `/new` seam).
-    expect(onSubmit).toHaveBeenCalledWith('', [
-      { mediaType: 'image/png', data: btoa(String.fromCharCode(7)), name: 'local.png' },
-    ])
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith('', [
+        { mediaType: 'image/png', data: btoa(String.fromCharCode(7)), name: 'local.png' },
+      ]),
+    )
   })
 
   /** A host that really owns the array, the way the thread does — a spy that swallows the
@@ -371,7 +406,7 @@ describe('the controlled-images seam (#939)', () => {
     const { seen, reasons } = renderControlled(onSubmit)
 
     fireEvent.click(screen.getByLabelText('Send'))
-    expect(onSubmit).toHaveBeenCalledWith('', [{ mediaType: 'image/png', data: 'AAA' }])
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('', [{ mediaType: 'image/png', data: 'AAA' }]))
     expect(seen.at(-1)).toEqual([])
     // The clear is TAGGED, because the host cannot otherwise tell it from the user removing the
     // last thumbnail — and the two differ: a message in flight keeps its bytes until it lands.
@@ -384,6 +419,7 @@ describe('the controlled-images seam (#939)', () => {
     const { seen } = renderControlled(onSubmit)
 
     fireEvent.click(screen.getByLabelText('Send'))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled())
     reject(new Error('session closed'))
 
     // Back through the same seam, exactly once and with its id intact — so the host's draft

@@ -9,7 +9,7 @@ import {
 /**
  * The composer's attachment intake — paperclip, ⌘V paste, and drag-drop all funnel here, exactly
  * like the legacy message bar (web/app.js `addImage`/`readImageFile`). The caps mirror the
- * server's zod (`attachmentListSchema`: count, ~5 MB decoded each, 20 MB in total) so the client rejects with a human sentence
+ * server's zod (`attachmentListSchema`: count, ~5 MB decoded each) so the client rejects with a human sentence
  * instead of shipping a request the server will bounce.
  *
  * Since #950 an attachment is not necessarily an image: a `.pdf`, `.txt` or `.md` is taken too.
@@ -20,19 +20,11 @@ import {
 
 export const MAX_ATTACHMENTS = MAX_ATTACHMENTS_PER_MESSAGE
 export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
-/** Decoded bytes per message — base64 of this stays under `MAX_ATTACHMENTS_TOTAL_BASE64`. */
-export const MAX_ATTACHMENTS_TOTAL_BYTES = 4 * MAX_ATTACHMENT_BYTES
-
-/** Decoded size of what is already attached, from its base64 length. */
-export function attachedBytes(attachments: readonly Pick<AttachmentInput, 'data'>[]): number {
-  return attachments.reduce((n, a) => n + Math.floor((a.data.length * 3) / 4), 0)
-}
 
 /** The async append's re-check: `screenFiles` ran against a snapshot, and encodes still in flight
- *  from an earlier drop are not in it — so both caps are re-applied to the list as it now is. */
-export function appendAttachment<T extends Pick<AttachmentInput, 'data'>>(prev: readonly T[], next: T): T[] | null {
+ *  from an earlier drop are not in it — so the cap is re-applied to the list as it now is. */
+export function appendAttachment<T>(prev: readonly T[], next: T): T[] | null {
   if (prev.length >= MAX_ATTACHMENTS) return null
-  if (attachedBytes(prev) + attachedBytes([next]) > MAX_ATTACHMENTS_TOTAL_BYTES) return null
   return [...prev, next]
 }
 
@@ -141,15 +133,10 @@ export interface AttachmentIntake {
  * failure this screening exists to prevent is the silent one: before #950 a `.md` dropped on the
  * composer simply vanished, which reads as a broken composer rather than as an unsupported file.
  */
-export function screenFiles(
-  files: readonly File[],
-  alreadyAttached: number,
-  alreadyAttachedBytes = 0,
-): AttachmentIntake {
+export function screenFiles(files: readonly File[], alreadyAttached: number): AttachmentIntake {
   const accepted: File[] = []
   const rejected: string[] = []
   let count = alreadyAttached
-  let bytes = alreadyAttachedBytes
   for (const file of files) {
     const label = file.name || 'attachment'
     if (attachmentMediaType(file) === null) {
@@ -166,13 +153,8 @@ export function screenFiles(
       rejected.push(`${label} skipped — max ${MAX_ATTACHMENTS} attachments per message`)
       continue
     }
-    if (bytes + file.size > MAX_ATTACHMENTS_TOTAL_BYTES) {
-      rejected.push(`${label} skipped — max 20 MB of attachments per message`)
-      continue
-    }
     accepted.push(file)
     count += 1
-    bytes += file.size
   }
   return { accepted, rejected }
 }

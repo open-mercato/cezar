@@ -68,7 +68,10 @@ import type {
   GroupResponse,
   HealthResponse,
   HostUsage,
+  AttachmentEntry,
   AttachmentInput,
+  DeleteUploadResponse,
+  StagedUpload,
   LaunchKeyResponse,
   MessageInput,
   EditQueuedMessageResponse,
@@ -1556,7 +1559,7 @@ export async function finishRun(id: string): Promise<FinishResponse> {
  *  the engine opens with its plain "Continue.". */
 export interface ContinueOptions {
   text?: string
-  images?: AttachmentInput[]
+  images?: AttachmentEntry[]
   runner?: Runner
   model?: string
   /** Which login of that agent reopens it (spec 2026-07-29-agent-profiles). Switching account
@@ -1931,6 +1934,19 @@ export async function postRunDraftImage(
       json: image,
     }),
     runPath(id, `/drafts/${surface}/images`),
+  )
+}
+
+/** Stage one attachment the moment it is attached; the message then references it by id
+ *  (telemetry 7054e5f2). Workspace-level, so it survives a project switch on `/new`. */
+export async function stageUpload(input: AttachmentInput): Promise<StagedUpload> {
+  return unwrap(await cez.api.v1.workspace.uploads.$post({ json: input }), '/workspace/uploads')
+}
+
+export async function deleteStagedUpload(uploadId: string): Promise<DeleteUploadResponse> {
+  return unwrap(
+    await cez.api.v1.workspace.uploads[':uploadId'].$delete({ param: { uploadId } }),
+    `/workspace/uploads/${uploadId}`,
   )
 }
 
