@@ -32,8 +32,8 @@ import { cn } from '@/lib/utils'
 
 import {
   appendAttachment,
+  attachedImageBytes,
   fileToPendingAttachment,
-  MAX_ATTACHMENTS,
   screenFiles,
   toAttachmentInput,
   type AttachmentsChangeReason,
@@ -346,7 +346,7 @@ export function Composer({
       // StrictMode double-invokes updater functions in dev, so screening here would encode and
       // append each pasted file twice (#double-paste). `imagesRef` gives the current count
       // without reading through state; each async append re-checks the cap functionally.
-      const intake = screenFiles(files, imagesRef.current.length)
+      const intake = screenFiles(files, imagesRef.current.length, attachedImageBytes(imagesRef.current))
       for (const reason of intake.rejected) toast(reason, { tone: 'danger' })
       for (const file of intake.accepted) {
         void fileToPendingAttachment(file, source).then((attachment) => {
@@ -406,7 +406,7 @@ export function Composer({
           // The optimistic clear already happened — put the message back, in front of anything
           // typed since, so nothing the user wrote is lost.
           setText((current) => (current === '' ? messageText : `${messageText}\n${current}`))
-          setImages((current) => [...messageImages, ...current].slice(0, MAX_ATTACHMENTS))
+          setImages((current) => current.reduce((list, a) => appendAttachment(list, a) ?? list, messageImages))
         }
       } finally {
         setBusy(false)

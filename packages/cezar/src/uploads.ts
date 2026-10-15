@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { readdirSync, readFileSync, statSync, unlinkSync } from 'node:fs';
+import { closeSync, fstatSync, openSync, readdirSync, readFileSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { UPLOAD_ID_RE, type AttachmentInput, type StagedUpload } from '@open-mercato/cezar-contract';
+import { attachmentInputSchema, UPLOAD_ID_RE, type AttachmentInput, type StagedUpload } from '@open-mercato/cezar-contract';
 import { cezarHomeDir } from './paths.ts';
 import { atomicWriteJsonSync } from './workspace/config.ts';
 
@@ -88,18 +88,23 @@ export function writeUpload(
 /** The staged attachment, or `null` when it is unknown, expired or unreadable. */
 export function readUpload(id: string, now = Date.now()): AttachmentInput | null {
   if (!UPLOAD_ID_RE.test(id)) return null;
+  let fd = -1;
   try {
-    const path = uploadPath(id);
-    if (now - statSync(path).mtimeMs > UPLOAD_TTL_MS) return null;
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<StoredUpload>;
-    if (typeof parsed.mediaType !== 'string' || typeof parsed.data !== 'string') return null;
-    return {
-      mediaType: parsed.mediaType,
-      data: parsed.data,
-      ...(typeof parsed.name === 'string' && parsed.name ? { name: parsed.name } : {}),
-    };
+    // One descriptor for the TTL check and the read, so both see the same file (CodeQL js/file-system-race).
+    fd = openSync(uploadPath(id), 'r');
+    if (now - fstatSync(fd).mtimeMs > UPLOAD_TTL_MS) return null;
+    const stored = JSON.parse(readFileSync(fd, 'utf8')) as Partial<StoredUpload>;
+    // Re-validated: the file sits on disk between write and read.
+    const parsed = attachmentInputSchema.safeParse({
+      mediaType: stored.mediaType,
+      data: stored.data,
+      ...(typeof stored.name === 'string' && stored.name ? { name: stored.name } : {}),
+    });
+    return parsed.success ? parsed.data : null;
   } catch {
     return null;
+  } finally {
+    if (fd !== -1) closeSync(fd);
   }
 }
 

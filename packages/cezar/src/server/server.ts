@@ -63,12 +63,15 @@ import {
 // A contract VALUE, like `workspaceUiStateSchema` in workspace/migrations.ts — the request
 // schema this route validates with is the same one the client compiles against.
 import {
+  ATTACHMENT_IMAGES_TOO_LARGE,
+  isImageMediaType,
   ATTACHMENT_UPLOAD_MISSING,
   attachmentInputSchema,
   attachmentListSchema,
   type AttachmentEntry,
   deleteUploadResponseSchema,
   MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_ATTACHMENTS_TOTAL_BASE64,
   stagedUploadSchema,
   uploadIdParamSchema,
   modelDiscoveryRunnerSchema,
@@ -977,22 +980,22 @@ function foldedLength(task: string, stack: Array<{ text: string }>): number {
 }
 
 /** A message's attachments as engine content, staged uploads read back from the store
- *  (telemetry 7054e5f2). `null` when a referenced upload is gone — the route answers
- *  `ATTACHMENT_UPLOAD_MISSING`, which the composer meets by staging again. */
-function resolveAttachments(entries: AttachmentEntry[]): PastedContent[] | null;
-function resolveAttachments(entries: AttachmentEntry[] | undefined): PastedContent[] | undefined | null;
-function resolveAttachments(entries: AttachmentEntry[] | undefined): PastedContent[] | undefined | null {
+ *  (telemetry 7054e5f2). A string is the refusal: `ATTACHMENT_UPLOAD_MISSING` when a referenced
+ *  upload is gone (the composer re-stages), or the image budget — images reach the provider
+ *  inline in one turn, so references count toward it too. */
+function resolveAttachments(entries: AttachmentEntry[]): PastedContent[] | string;
+function resolveAttachments(entries: AttachmentEntry[] | undefined): PastedContent[] | undefined | string;
+function resolveAttachments(entries: AttachmentEntry[] | undefined): PastedContent[] | undefined | string {
   if (entries === undefined) return undefined;
   const out: PastedContent[] = [];
+  let imageChars = 0;
   for (const entry of entries) {
-    if ('data' in entry) {
-      out.push(toPastedContent(entry));
-      continue;
-    }
-    const staged = readUpload(entry.uploadId);
-    if (!staged) return null;
-    out.push(toPastedContent(entry.name ? { ...staged, name: entry.name } : staged));
+    const attachment = 'data' in entry ? entry : readUpload(entry.uploadId);
+    if (!attachment) return ATTACHMENT_UPLOAD_MISSING;
+    if (isImageMediaType(attachment.mediaType)) imageChars += attachment.data.length;
+    out.push(toPastedContent('data' in entry || !entry.name ? attachment : { ...attachment, name: entry.name }));
   }
+  if (imageChars > MAX_ATTACHMENTS_TOTAL_BASE64) return ATTACHMENT_IMAGES_TOO_LARGE;
   return out;
 }
 
@@ -4484,7 +4487,7 @@ export function createApp(deps: ServerDeps) {
         }
       }
       const images = resolveAttachments(parsed.data.images);
-      if (images === null) return c.json({ error: ATTACHMENT_UPLOAD_MISSING }, 400);
+      if (typeof images === 'string') return c.json({ error: images }, 400);
       const input = {
         task: parsed.data.task,
         model: parsed.data.model,
@@ -4620,7 +4623,7 @@ export function createApp(deps: ServerDeps) {
         if (blocked) return c.json({ error: blocked }, 409);
       }
       const attachments = resolveAttachments(parsed.data.images);
-      if (attachments === null) return c.json({ error: ATTACHMENT_UPLOAD_MISSING }, 400);
+      if (typeof attachments === 'string') return c.json({ error: attachments }, 400);
       const content: PastedContent[] = [
         ...attachments,
         ...(parsed.data.text.trim() ? [{ type: 'text', text: parsed.data.text } satisfies ContentBlock] : []),
@@ -4700,7 +4703,7 @@ export function createApp(deps: ServerDeps) {
 
       if (run.status !== 'queued') return c.json({ error: 'run already started' }, 409);
       const images = resolveAttachments(parsed.data.images);
-      if (images === null) return c.json({ error: ATTACHMENT_UPLOAD_MISSING }, 400);
+      if (typeof images === 'string') return c.json({ error: images }, 400);
       const message = manager.editQueuedMessage(id, msgId, {
         ...(parsed.data.text !== undefined ? { text: parsed.data.text } : {}),
         ...(images !== undefined ? { images } : {}),
@@ -4761,7 +4764,7 @@ export function createApp(deps: ServerDeps) {
         if ('error' in account) return c.json({ error: account.error }, 400);
       }
       const images = resolveAttachments(parsed.data.images);
-      if (images === null) return c.json({ error: ATTACHMENT_UPLOAD_MISSING }, 400);
+      if (typeof images === 'string') return c.json({ error: images }, 400);
       const result = manager.continueRun(id, {
         text: parsed.data.text,
         images,

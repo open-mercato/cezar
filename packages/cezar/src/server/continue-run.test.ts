@@ -9,6 +9,7 @@ import type { RunManager } from '../workflows/run.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { createApp } from './server.ts';
 import {
+  ATTACHMENT_IMAGES_TOO_LARGE,
   ATTACHMENT_UPLOAD_MISSING,
   MAX_ATTACHMENTS_PER_MESSAGE,
   MAX_ATTACHMENTS_TOTAL_BASE64,
@@ -148,24 +149,37 @@ describe('POST /api/v1/runs/:id/continue override', () => {
   });
 
   /** Telemetry 7054e5f2: a message names staged uploads instead of carrying their bytes, so the
-   *  inline size budget does not apply to them. */
+   *  inline size budget does not apply to them — files travel as paths, so they never count. */
+  const stage = async (mediaType: string, data: string, name: string): Promise<string> => {
+    const res = await apiRequest(app, '/api/v1/workspace/uploads', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mediaType, data, name }),
+    });
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { uploadId: string }).uploadId;
+  };
+
   it('resolves staged uploads, past the inline size budget', async () => {
     // Five of these inline would exceed the budget; each alone is a valid attachment.
     const big = 'A'.repeat(MAX_ATTACHMENTS_TOTAL_BASE64 / 5 + 4);
-    const staged = [];
-    for (let i = 0; i < 5; i += 1) {
-      const res = await apiRequest(app, '/api/v1/workspace/uploads', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ mediaType: 'image/png', data: big, name: `shot-${i}.png` }),
-      });
-      expect(res.status).toBe(200);
-      staged.push(((await res.json()) as { uploadId: string }).uploadId);
-    }
+    const staged = [await stage('image/png', 'AAAA', 'shot.png')];
+    for (let i = 0; i < 5; i += 1) staged.push(await stage('application/pdf', big, `doc-${i}.pdf`));
     const res = await post({ text: 'compare', images: staged.map((uploadId) => ({ uploadId })) });
     expect(res.status).toBe(200);
-    expect(captured?.opts.images).toHaveLength(5);
-    expect(captured?.opts.images?.[0]?.source.data).toBe(big);
+    expect(captured?.opts.images).toHaveLength(6);
+    expect(captured?.opts.images?.[0]?.source.data).toBe('AAAA');
+  });
+
+  /** Images reach the provider inline in one turn, so staging them does not lift their budget. */
+  it('refuses staged images past the image budget', async () => {
+    const big = 'A'.repeat(MAX_ATTACHMENTS_TOTAL_BASE64 / 5 + 4);
+    const staged = [];
+    for (let i = 0; i < 5; i += 1) staged.push(await stage('image/png', big, `shot-${i}.png`));
+    const res = await post({ text: 'compare', images: staged.map((uploadId) => ({ uploadId })) });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe(ATTACHMENT_IMAGES_TOO_LARGE);
+    expect(captured).toBeUndefined();
   });
 
   it('refuses a reference to an upload that is gone, with the wording the composer matches', async () => {

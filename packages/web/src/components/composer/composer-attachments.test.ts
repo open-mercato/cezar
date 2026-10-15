@@ -6,6 +6,7 @@ import {
   fileToPendingAttachment,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS,
+  MAX_IMAGE_BYTES_PER_MESSAGE,
   screenFiles,
   toAttachmentInput,
 } from './composer-attachments'
@@ -107,9 +108,9 @@ describe('screenFiles — the caps, mirrored from the server zod', () => {
 /** The async append re-applies the count cap: encodes from an earlier drop land after `screenFiles`
  *  screened the next one against a snapshot that did not include them. */
 describe('appendAttachment', () => {
-  const att = (bytes: number) => ({ data: 'A'.repeat(Math.ceil(bytes / 3) * 4) })
+  const att = (bytes: number, mediaType = 'image/png') => ({ mediaType, data: 'A'.repeat(Math.ceil(bytes / 3) * 4) })
 
-  it('appends within the cap', () => {
+  it('appends within the caps', () => {
     expect(appendAttachment([att(3)], att(3))).toHaveLength(2)
   })
 
@@ -117,6 +118,25 @@ describe('appendAttachment', () => {
     expect(appendAttachment(Array.from({ length: MAX_ATTACHMENTS }, () => att(3)), att(3))).toBeNull()
   })
 
+  /** Images reach the provider inline in one turn, staged or not; files travel as paths. */
+  it('refuses images past the 20 MB image budget, and never counts files toward it', () => {
+    const full = Array.from({ length: 4 }, () => att(MAX_ATTACHMENT_BYTES - 2))
+    expect(appendAttachment(full, att(3))).toHaveLength(5)
+    expect(appendAttachment(full, att(30))).toBeNull()
+    expect(appendAttachment(full, att(MAX_ATTACHMENT_BYTES - 2, 'application/pdf'))).toHaveLength(5)
+  })
+})
+
+describe('screenFiles — the image budget', () => {
+  it('refuses an image past 20 MB of images, but still takes a PDF', () => {
+    const intake = screenFiles(
+      [fakeFile({ name: 'a.png', size: 2 }), fakeFile({ name: 'r.pdf', type: 'application/pdf', size: MAX_ATTACHMENT_BYTES })],
+      4,
+      MAX_IMAGE_BYTES_PER_MESSAGE - 1,
+    )
+    expect(intake.accepted.map((f) => f.name)).toEqual(['r.pdf'])
+    expect(intake.rejected).toEqual(['a.png skipped — max 20 MB of images per message'])
+  })
 })
 
 describe('attachmentMediaType', () => {

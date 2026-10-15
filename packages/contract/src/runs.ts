@@ -982,6 +982,11 @@ export type AttachmentEntry = z.input<typeof attachmentEntrySchema>;
  *  composer matches it to re-stage and resend once, so keep the wording stable. */
 export const ATTACHMENT_UPLOAD_MISSING = 'attachment upload expired — attach the file again';
 
+/** The refusal for a message whose IMAGES, staged or inline, exceed `MAX_ATTACHMENTS_TOTAL_BASE64`:
+ *  images reach the provider inline in one turn, so staging lifts the body limit but not this one.
+ *  Files reach the agent as paths and never count. */
+export const ATTACHMENT_IMAGES_TOO_LARGE = 'attachments too large — 20 MB of images in total per message';
+
 /** Attachments per message. Staged uploads keep the bytes out of the request, so the count is a
  *  sanity bound rather than a size proxy (telemetry 7054e5f2: a fifth screenshot was refused). */
 export const MAX_ATTACHMENTS_PER_MESSAGE = 20;
