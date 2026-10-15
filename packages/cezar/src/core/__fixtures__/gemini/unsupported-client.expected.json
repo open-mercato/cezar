@@ -1,0 +1,7 @@
+[
+  {
+    "type": "session.error",
+    "message": "Gemini CLI authentication failed — Gemini CLI needs an API key (aistudio.google.com), Vertex AI, or a Workspace/Code Assist license — personal Google sign-in no longer works for Gemini CLI.",
+    "fatal": true
+  }
+]

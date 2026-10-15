@@ -151,7 +151,7 @@ describe('POST /api/v1/runs/:id/continue override', () => {
   });
 
   it('rejects an unknown runner with a 400 and never reaches the manager', async () => {
-    const res = await post({ runner: 'gemini' });
+    const res = await post({ runner: 'no-such-runner' });
     expect(res.status).toBe(400);
     expect(captured).toBeUndefined();
   });

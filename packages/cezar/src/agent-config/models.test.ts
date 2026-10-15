@@ -66,6 +66,35 @@ describe('readAgentModelDefaults', () => {
     ).resolves.toEqual({ claude: 'deepseek' });
   });
 
+  it('reads Gemini CLI model.name: GEMINI_MODEL, then the project .gemini/settings.json, then the user one (#581)', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'cez-native-models-repo-'));
+    const home = mkdtempSync(join(tmpdir(), 'cez-native-models-home-'));
+    roots.push(repo, home);
+    mkdirSync(join(home, '.gemini'), { recursive: true });
+    writeFileSync(join(home, '.gemini', 'settings.json'), '{"model":{"name":"gemini-2.5-pro"}}\n');
+
+    await expect(readAgentModelDefaults(repo, { HOME: home })).resolves.toEqual({ gemini: 'gemini-2.5-pro' });
+
+    mkdirSync(join(repo, '.gemini'), { recursive: true });
+    writeFileSync(join(repo, '.gemini', 'settings.json'), '{"model":{"name":"gemini-3-flash-preview"}}\n');
+    await expect(readAgentModelDefaults(repo, { HOME: home })).resolves.toEqual({ gemini: 'gemini-3-flash-preview' });
+
+    // Environment variables outrank every settings file in Gemini CLI's documented order.
+    await expect(
+      readAgentModelDefaults(repo, { HOME: home, GEMINI_MODEL: 'gemini-3.5-flash' }),
+    ).resolves.toEqual({ gemini: 'gemini-3.5-flash' });
+
+    // GEMINI_CLI_HOME relocates the user file, as it does for the CLI.
+    const relocated = mkdtempSync(join(tmpdir(), 'cez-native-models-gemini-home-'));
+    roots.push(relocated);
+    mkdirSync(join(relocated, '.gemini'), { recursive: true });
+    writeFileSync(join(relocated, '.gemini', 'settings.json'), '{"model":{"name":"gemini-3.1-flash-lite"}}\n');
+    rmSync(join(repo, '.gemini'), { recursive: true, force: true });
+    await expect(
+      readAgentModelDefaults(repo, { HOME: home, GEMINI_CLI_HOME: relocated }),
+    ).resolves.toEqual({ gemini: 'gemini-3.1-flash-lite' });
+  });
+
   it('pairs a Codex custom provider with its configured model', async () => {
     const repo = mkdtempSync(join(tmpdir(), 'cez-native-models-repo-'));
     const home = mkdtempSync(join(tmpdir(), 'cez-native-models-home-'));

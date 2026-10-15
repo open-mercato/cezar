@@ -5,6 +5,7 @@ import { JunieRunner } from './junie-runner.ts';
 import { CopilotAcpRunner } from './copilot-acp-runner.ts';
 import { OpencodeServerRunner } from './opencode-server-runner.ts';
 import { CursorAgentRunner } from './cursor-agent-runner.ts';
+import { GeminiAcpRunner } from './gemini-acp-runner.ts';
 import { PiRunner } from './pi-runner.ts';
 
 /**
@@ -13,7 +14,7 @@ import { PiRunner } from './pi-runner.ts';
  * goes through here so switching the agent backend is one function call.
  * `claude-cli` is the legacy id for `claude`.
  */
-export function createRunner(backend: AgentBackend | RunnerId | undefined): AgentRunner {
+export function createRunner(backend: AgentBackend): AgentRunner {
   switch (backend) {
     case 'codex':
       return new CodexAppServerRunner();
@@ -27,9 +28,14 @@ export function createRunner(backend: AgentBackend | RunnerId | undefined): Agen
       return new JunieRunner();
     case 'copilot':
       return new CopilotAcpRunner();
+    case 'gemini':
+      return new GeminiAcpRunner();
     case 'claude':
     case 'claude-cli':
-    default:
       return new ClaudeCliRunner();
+    default: {
+      const unreachable: never = backend;
+      throw new Error(`Unknown runner: ${String(unreachable)}`);
+    }
   }
 }

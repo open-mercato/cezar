@@ -1,0 +1,23 @@
+[
+  {
+    "type": "session.started",
+    "sessionId": "f4a8c614-eaf3-4c11-aff2-91d0cf0ea142",
+    "backend": "gemini",
+    "model": "gemini-3-flash-preview",
+    "cwd": "/tmp/claude-1000/acp/repo"
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_1"
+  },
+  {
+    "type": "session.error",
+    "message": "Gemini CLI authentication failed — Gemini CLI needs an API key (aistudio.google.com), Vertex AI, or a Workspace/Code Assist license — personal Google sign-in no longer works for Gemini CLI.",
+    "fatal": false
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "error"
+  }
+]

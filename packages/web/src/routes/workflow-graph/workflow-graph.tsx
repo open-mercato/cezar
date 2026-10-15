@@ -45,7 +45,7 @@ import {
   validateWorkflowGraph,
 } from '@/api/client'
 import { queryKeys, useSkills, useWorkflowNodes, useWorkflows } from '@/api/queries'
-import type { WorkflowGraph, WorkflowGraphNode } from '@open-mercato/cezar-api-client'
+import { RUNNER_IDS, type WorkflowGraph, type WorkflowGraphNode } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import {
   AlertDialog,
@@ -112,7 +112,7 @@ import { backLanes, CATEGORY_ORDER, edgeStyle, edgeTypes, GraphNodeView, ICONS, 
  * a node without its `measured` size is hidden until React Flow measures it again.
  */
 
-const RUNNERS = ['claude', 'codex', 'opencode', 'cursor', 'pi'] as const
+const RUNNERS = RUNNER_IDS
 const DRAG_MIME = 'application/x-cezar-node'
 
 type FlowNodeData = {

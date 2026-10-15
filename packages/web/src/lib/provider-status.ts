@@ -1,10 +1,27 @@
+import { RUNNER_IDS } from '@open-mercato/cezar-api-client'
 import type { ProviderStatus, ProviderStatusResponse, Runner } from '@open-mercato/cezar-api-client'
 
 /** The cockpit's canonical runner order, exported so a surface that renders one row per
  *  provider derives it instead of keeping a fifth hand-written copy — the copy in
  *  `accounts-section.tsx` silently dropped Copilot when #582 added it, and nothing in the
- *  type system noticed, because a `ProviderId[]` literal is under-wide, never wrong. */
-export const RUNNER_ORDER: readonly Runner[] = ['claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot']
+ *  type system noticed, because a `ProviderId[]` literal is under-wide, never wrong.
+ *  Spelled as a `Record<Runner, number>` rather than a list: the record is exhaustive by type,
+ *  so a runner joining the contract tuple fails the typecheck here instead of silently falling
+ *  out of the cockpit — and the server answers one status row per runner, so a runner missing
+ *  from the parser below would fail every real `/api/v1/providers/status` response. */
+const RUNNER_DISPLAY_ORDER: Record<Runner, number> = {
+  claude: 0,
+  codex: 1,
+  junie: 2,
+  opencode: 3,
+  cursor: 4,
+  pi: 5,
+  copilot: 6,
+  gemini: 7,
+}
+export const RUNNER_ORDER: readonly Runner[] = [...RUNNER_IDS].sort(
+  (a, b) => RUNNER_DISPLAY_ORDER[a] - RUNNER_DISPLAY_ORDER[b],
+)
 const PROVIDER_STATES = new Set(['connected', 'disconnected', 'not-installed', 'unknown'])
 
 function isRecord(value: unknown): value is Record<string, unknown> {

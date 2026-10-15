@@ -4,12 +4,16 @@ import { tmpdir } from 'node:os';
 import { extname, isAbsolute } from 'node:path';
 import { AGENT_MODELS_LOCKED_ENV } from './agent-model-policy.ts';
 import { profileEnv } from './agent-profiles.ts';
+import { RUNNER_IDS, type RunnerId } from './agent-runner.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
 import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
 import { probeJunieAuthentication } from './junie-auth-probe.ts';
+import { geminiHasCredentials } from './gemini-credentials.ts';
+import { GEMINI_AUTH_HINT } from './gemini-ui-mapper.ts';
 
-export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot'] as const;
-export type ProviderId = (typeof PROVIDER_IDS)[number];
+/** Every runner is a provider cezar verifies — one tuple, the contract's. */
+export const PROVIDER_IDS = RUNNER_IDS;
+export type ProviderId = RunnerId;
 export type ProviderConnectionState =
   | 'connected'
   | 'disconnected'
@@ -89,6 +93,8 @@ interface ProviderDescriptor {
    * spawn entirely removes that race instead of racing to out-guess it.
    */
   precheck?: () => ProviderConnectionState | undefined;
+  /** What to tell the user when `parse` answers `unknown` on purpose (default: the generic hint). */
+  unknownHint?: string;
   /** The `CEZ_*_BIN` override `executable` honours — only so a report can say the binary came from it. */
   overrideEnv: string;
 }
@@ -322,6 +328,17 @@ function parseCopilotStatus(result: ProviderCommandResult): ProviderConnectionSt
   return null;
 }
 
+/**
+ * Gemini CLI has no `auth status` subcommand (#581): `--version` proves the CLI is there, and the
+ * credentials are read where the CLI itself reads them (`gemini-credentials.ts`). Evidence of a key,
+ * a gateway or a Vertex project is `connected`; its absence is `unknown`, never `disconnected` — a
+ * keychain-stored key or a Workspace login is invisible from outside — and carries the API-key hint.
+ */
+function parseGeminiStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+  if (result.exitCode !== 0 || !/\d+\.\d+/.test(result.stdout)) return null;
+  return geminiHasCredentials() ? 'connected' : 'unknown';
+}
+
 const DESCRIPTORS: readonly ProviderDescriptor[] = [
   {
     id: 'claude',
@@ -389,6 +406,17 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     installHint: 'Install GitHub Copilot CLI (`npm i -g @github/copilot`), then run `copilot login`.',
     parse: parseCopilotStatus,
     stdin: copilotAcpProbeStdin,
+  },
+  {
+    id: 'gemini',
+    executable: () => process.env.CEZ_GEMINI_BIN ?? 'gemini',
+    overrideEnv: 'CEZ_GEMINI_BIN',
+    statusArgs: ['--version'],
+    // No login subcommand: the interactive CLI's `/auth` is where a key is entered.
+    loginArgs: [],
+    installHint: `Install Gemini CLI (npm i -g @google/gemini-cli). ${GEMINI_AUTH_HINT}`,
+    parse: parseGeminiStatus,
+    unknownHint: GEMINI_AUTH_HINT,
   },
 ];
 
@@ -944,6 +972,7 @@ export class ProviderAuthService {
     if (result.timedOut) return inconclusive('timeout', TIMEOUT_HINT, result);
     if (result.errorCode) return inconclusive('spawn_error', UNKNOWN_HINT, result);
     const status = descriptor.parse(result);
+    if (status === 'unknown') return { provider: descriptor.id, status, hint: descriptor.unknownHint ?? UNKNOWN_HINT };
     if (status !== null) return { provider: descriptor.id, status };
     // Exit 0 and 1 are the codes vendors answer status with; anything else is the CLI failing.
     const reason = result.exitCode === 0 || result.exitCode === 1 ? 'unrecognized_output' : 'unexpected_exit';

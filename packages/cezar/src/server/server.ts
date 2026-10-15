@@ -66,12 +66,13 @@ import {
   attachmentInputSchema,
   modelDiscoveryRunnerSchema,
   openProjectInSchema,
+  perRunner,
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
 import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { hostUsageSampler, type HostSampler } from '../core/host-usage.ts';
-import { RUNNER_IDS } from '../core/agent-runner.ts';
+import { RUNNER_IDS, type RunnerId } from '../core/agent-runner.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import { discoverClaudeModels } from '../core/claude-model-catalog.ts';
@@ -2093,7 +2094,7 @@ export function createApp(deps: ServerDeps) {
       },
     )
 
-    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, opencode, cursor, pi, or copilot' }), async (c) => {
+    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: `provider must be one of ${RUNNER_IDS.join(', ')}` }), async (c) => {
       const body = { data: c.req.valid('json') };
       const sid = deviceSid(c.req.header('x-cezar-sid'));
 
@@ -6671,14 +6672,7 @@ export function createApp(deps: ServerDeps) {
     systemPrompt: z.string().trim().max(20_000, 'must be at most 20000 characters').nullable().optional(),
     // Branch naming instructions (spec 2026-10-11-branch-naming-instructions); null/'' clears.
     branchNaming: z.string().trim().max(4_000, 'must be at most 4000 characters').nullable().optional(),
-    defaultModels: z
-      .object({
-        claude: modelPresetSchema,
-        codex: modelPresetSchema,
-        opencode: modelPresetSchema,
-        cursor: modelPresetSchema,
-        pi: modelPresetSchema,
-      })
+    defaultModels: perRunner(modelPresetSchema)
       .optional(),
     // Per-runner "auto is the default" override (#906). Additive, and necessarily
     // its own key: clearing a preset cannot express an explicit auto, because the
@@ -7439,29 +7433,32 @@ export function quoteResumeBin(bin: string): string | null {
  * guarantee than escaping, and platform-independent. Ids are UUID/CLI-minted
  * today; this keeps a future source safe.
  */
+/** One resume recipe per runner — a runner without one is a type error here, not a silent `null`. */
+const RESUME_COMMANDS: Record<RunnerId, (sessionId: string) => string | null> = {
+  claude: (sessionId) => `claude --resume ${sessionId}`,
+  codex: (sessionId) => `codex resume ${sessionId}`,
+  opencode: (sessionId) => `opencode --session ${sessionId}`,
+  cursor: (sessionId) => {
+    const bin = quoteResumeBin(process.env.CEZ_CURSOR_AGENT_BIN ?? 'agent');
+    return bin === null ? null : `${bin} --resume ${sessionId}`;
+  },
+  pi: (sessionId) => `pi --session ${sessionId}`,
+  // Verified live (`junie --help`, 26.9.22): `--resume` alone reopens the LAST session;
+  // the target session is named by the separate `--session-id=<id>` flag, not a positional
+  // argument (junie's positional slot is `[<task>]`) — `junie --resume ${sessionId}` would
+  // silently resume the wrong session and read the id as a task prompt instead.
+  junie: (sessionId) => `junie --resume --session-id=${sessionId}`,
+  // `--resume <id>` takes a session id, a task id or an id prefix (`copilot --help`, 1.0.88).
+  copilot: (sessionId) => `copilot --resume ${sessionId}`,
+  // The ACP session id is the id of Gemini's own chat recording, which `--resume` accepts.
+  gemini: (sessionId) => `gemini --resume ${sessionId}`,
+};
+
 export function resumeCommand(runner: string | undefined, sessionId: string): string | null {
   if (!isSafeSessionId(sessionId)) return null;
-  switch (runner) {
-    case 'junie':
-      // Verified live (`junie --help`, 26.9.22): `--resume` alone reopens the LAST session;
-      // the target session is named by the separate `--session-id=<id>` flag, not a positional
-      // argument (junie's positional slot is `[<task>]`) — `junie --resume ${sessionId}` would
-      // silently resume the wrong session and read the id as a task prompt instead.
-      return `junie --resume --session-id=${sessionId}`;
-    case 'codex':
-      return `codex resume ${sessionId}`;
-    case 'opencode':
-      return `opencode --session ${sessionId}`;
-    case 'cursor': {
-      const bin = quoteResumeBin(process.env.CEZ_CURSOR_AGENT_BIN ?? 'agent');
-      return bin === null ? null : `${bin} --resume ${sessionId}`;
-    }
-    case 'pi':
-      return `pi --session ${sessionId}`;
-    case 'copilot':
-      // `--resume <id>` takes a session id, a task id or an id prefix (`copilot --help`, 1.0.88).
-      return `copilot --resume ${sessionId}`;
-    default:
-      return `claude --resume ${sessionId}`;
-  }
+  // A record from before runners existed, or the legacy spelling, is a Claude session.
+  const id = runner === undefined || runner === 'claude-cli' ? 'claude' : runner;
+  // A runner id this version does not know (a downgraded record) has no recipe here.
+  if (!(RUNNER_IDS as readonly string[]).includes(id)) return null;
+  return RESUME_COMMANDS[id as RunnerId](sessionId);
 }

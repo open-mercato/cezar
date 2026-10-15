@@ -191,6 +191,21 @@ describe('model option resolution', () => {
     ).toEqual([''])
   })
 
+  it('gemini stays OUT of discovery: its presets plus free text, and no /models request', () => {
+    // Gemini CLI has no host catalog in cezar, so `GET /models?runner=gemini` would 400 and the
+    // picker offers `MODELS_BY_RUNNER.gemini` — the server's `KNOWN_PRESETS_BY_RUNNER.gemini` plus
+    // the implicit `auto` (#581; spec § API Contracts, same rule as pi and copilot).
+    expect(runnerDiscoversModels('gemini')).toBe(false)
+    expect(MODEL_DISCOVERY_RUNNERS).not.toContain('gemini')
+    expect(modelsForRunner('gemini').map((m) => m.id)).toEqual([
+      '',
+      'gemini-3.5-flash',
+      'gemini-3-flash-preview',
+      'gemini-3.1-flash-lite',
+      'gemini-2.5-pro',
+    ])
+  })
+
   it('opencode: auto alone until the host catalog answers (#794)', () => {
     expect(modelsForRunner('opencode').map((m) => m.id)).toEqual([''])
     expect(
