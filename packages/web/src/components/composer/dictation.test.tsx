@@ -3,20 +3,38 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
-import { resetToasts, Toaster } from '@/components/ui/toaster'
+import { onDangerToast, resetToasts, Toaster } from '@/components/ui/toaster'
+import { reportDictationFailed } from '@/lib/telemetry'
 
 import { Composer } from './composer'
 import {
+  dictationNotice,
   foldResults,
   formatElapsed,
   type SpeechRecognitionLike,
   type SpeechResultEventLike,
 } from './dictation'
 
+vi.mock('@/lib/telemetry', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/telemetry')>()),
+  reportDictationFailed: vi.fn(),
+}))
+
 afterEach(() => {
   cleanup()
   resetToasts()
   vi.unstubAllGlobals()
+  vi.mocked(reportDictationFailed).mockClear()
+})
+
+describe('dictationNotice', () => {
+  it('maps Web Speech codes to what the user can do, and which ones are failures', () => {
+    expect(dictationNotice('aborted')).toBeNull()
+    expect(dictationNotice('no-speech')?.failure).toBeNull()
+    expect(dictationNotice('not-allowed')?.failure).toBe('not-allowed')
+    expect(dictationNotice('service-not-allowed')?.failure).toBe('service-not-allowed')
+    expect(dictationNotice(undefined)).toEqual({ message: 'Dictation failed', failure: 'unknown' })
+  })
 })
 
 /** A scriptable Web Speech stand-in: tests drive `onresult`/`onerror` by hand — exactly the
@@ -177,10 +195,51 @@ describe('the dictation overlay (paseo pattern)', () => {
     stubSpeech()
     renderComposer()
     const recognition = startDictation()
-    act(() => recognition.onerror!({ error: 'no-speech' }))
-    expect(await screen.findByText('Dictation failed — no-speech')).toBeTruthy()
+    act(() => recognition.onerror!({ error: 'bad-grammar' }))
+    expect(await screen.findByText('Dictation failed — bad-grammar')).toBeTruthy()
     expect(document.querySelector('[data-slot="dictation-overlay"]')).toBeNull()
     expect(recognition.aborted).toBe(true)
+    expect(reportDictationFailed).toHaveBeenCalledWith('bad-grammar')
+  })
+
+  // telemetry 38ccdbdc / 252d00a6: every code is one report under one fingerprint, never the
+  // generic danger-toast report whose group is the message text.
+  it('a refused microphone says what to do and is reported once, not as a toast group', async () => {
+    stubSpeech()
+    const toastReports: string[] = []
+    const off = onDangerToast((message) => toastReports.push(message))
+    renderComposer()
+    act(() => startDictation().onerror!({ error: 'not-allowed' }))
+    expect(await screen.findByText(/allow it for this site/)).toBeTruthy()
+    expect(reportDictationFailed).toHaveBeenCalledWith('not-allowed')
+    expect(toastReports).toEqual([])
+    off()
+  })
+
+  it('no-speech is a plain notice, not a reported failure; aborted is silent', async () => {
+    stubSpeech()
+    renderComposer()
+    act(() => startDictation().onerror!({ error: 'aborted' }))
+    expect(document.querySelector('[data-tone="danger"]')).toBeNull()
+    act(() => startDictation().onerror!({ error: 'no-speech' }))
+    const toast = (await screen.findByText('Dictation heard nothing — try again')).closest('[data-tone]')
+    expect(toast?.getAttribute('data-tone')).toBe('default')
+    expect(reportDictationFailed).not.toHaveBeenCalled()
+  })
+
+  it('a speech service that refuses hides the mic for the session', async () => {
+    stubSpeech()
+    renderComposer()
+    act(() => startDictation().onerror!({ error: 'service-not-allowed' }))
+    expect(await screen.findByText('Dictation is not available in this browser')).toBeTruthy()
+    expect(screen.queryByLabelText('Start dictation')).toBeNull()
+  })
+
+  it('no mic in an insecure context — the browser would refuse it with not-allowed', () => {
+    stubSpeech()
+    vi.stubGlobal('isSecureContext', false)
+    renderComposer()
+    expect(screen.queryByLabelText('Start dictation')).toBeNull()
   })
 
   it('a mic that will not start (permissions) toasts honestly instead of hanging the overlay', async () => {

@@ -353,6 +353,21 @@ export function reportAttachmentStagingFailed(error: unknown): void {
   })
 }
 
+/** A dictation the browser refused or broke off (telemetry 38ccdbdc, 252d00a6). One fingerprint
+ *  for every Web Speech error code — the code rides in context — so `not-allowed` and
+ *  `service-not-allowed` stop splitting into separate groups by their toast text. */
+export function reportDictationFailed(errorCode: string): void {
+  reportClientError(new Error('Dictation failed'), 'toast', {
+    type: 'DictationError',
+    code: 'dictation_failed',
+    fingerprint: 'cockpit:dictation_failed',
+    context: {
+      'dictation.error': /^[a-z][a-z-]{0,63}$/.test(errorCode) ? errorCode : 'other',
+      'dictation.secure_context': window.isSecureContext !== false,
+    },
+  })
+}
+
 /** `React.lazy` that says WHICH page failed when its bundle can't load. Engines word the failure
  *  differently (WebKit: "Importing a module script failed.", Chromium: "Failed to fetch
  *  dynamically imported module") and WebKit sends no stack, so these share one code and one

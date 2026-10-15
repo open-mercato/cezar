@@ -28,7 +28,7 @@ import { isEditableTarget } from '@/lib/use-command-shortcut'
 import { bumpSkillUsage, filterSkills, fuzzyMatch, isProjectSkill } from '@/lib/skills'
 import { useNow } from '@/lib/use-now'
 import { isSubmitShortcut } from '@/lib/use-submit-shortcut'
-import { trackAttachmentsSent } from '@/lib/telemetry'
+import { reportDictationFailed, trackAttachmentsSent } from '@/lib/telemetry'
 import { cn } from '@/lib/utils'
 
 import {
@@ -218,7 +218,10 @@ export function Composer({
   // highest-traffic skill surface — both reads and feeds the same stats as the pickers.
   const uiState = useUiState()
   const queryClient = useQueryClient()
-  const dictation = useDictation((message) => toast(message, { tone: 'danger' }))
+  const dictation = useDictation(({ message, failure }) => {
+    if (failure) reportDictationFailed(failure)
+    toast(message, failure ? { tone: 'danger', reported: true } : {})
+  })
 
   // On-mount only, by design: re-focusing on a later `autoFocus` flip would steal focus mid-visit.
   useEffect(() => {
