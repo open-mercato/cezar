@@ -5,6 +5,7 @@ import { REFERENCE_STATUS_MAX } from '@open-mercato/cezar-contract';
 import { autosaveCommit, taskRemotes } from '../../git-worktree.ts';
 import { parseRemote, splitRemoteRef } from '../../git-remotes.ts';
 import { GITHUB_COM, isGithubHost } from '../../github-hosts.ts';
+import { baseDivergence } from '../git-changes.ts';
 import { getRepoInfo } from '../git.ts';
 import type {
   DraftPrInput,
@@ -2686,6 +2687,9 @@ async function existingPrUrl(worktree: string, repoArgs: string[]): Promise<stri
   return hit && PR_URL_RE.test(hit.url) ? hit.url : null;
 }
 
+const nothingToPropose = (branch: string, base: string | undefined) =>
+  `nothing to propose — ${branch} has no commits that ${base ?? 'the base branch'} does not already have`;
+
 export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome> {
   const { run } = input;
   const worktree = run.worktreePath;
@@ -2722,6 +2726,12 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
     return { ok: false, error: 'no git remote — add one (git remote add origin <url>) or merge the branch locally' };
   }
 
+  const prBase = run.baseBranch ? splitRemoteRef(run.baseBranch, remotes.names).branch : undefined;
+  // Refuse an empty branch BEFORE pushing it (telemetry 16aef26d): gh would only refuse after the
+  // push, leaving a branch on the remote with nothing in it. Unknown base → let gh decide.
+  const { ahead } = await baseDivergence(worktree, run.baseBranch);
+  if (ahead === 0) return { ok: false, error: nothingToPropose(branch, prBase) };
+
   const push = await execTool(['push', '-u', remotes.push, branch], worktree, 'git', PUSH_TIMEOUT_MS);
   if (!push.ok) {
     return { ok: false, error: `git push failed — ${tail(push.stderr) || 'unknown error'}` };
@@ -2732,7 +2742,6 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
   // --base, gh aims at the repo default (main) even when work started on
   // develop. `<remote>/x` normalizes to `x`; a raw sha (detached-HEAD fork
   // point) can't be a PR base, so gh falls back to the default branch.
-  const prBase = run.baseBranch ? splitRemoteRef(run.baseBranch, remotes.names).branch : undefined;
   const baseArgs = prBase && !/^[0-9a-f]{7,40}$/i.test(prBase) ? ['--base', prBase] : [];
   const repoArgs = await prRepoArgs(worktree, remotes.base, remotes.push, branch);
   const createArgs = ['pr', 'create', ...(input.draft === false ? [] : ['--draft']), ...repoArgs, ...baseArgs, '--title', run.title, '--body', body];
@@ -2751,7 +2760,7 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
       return { ok: false, error: 'gh not found — install the GitHub CLI and run `gh auth login`, or merge the branch locally' };
     }
     if (/no commits between/i.test(pr.stderr)) {
-      return { ok: false, error: `nothing to propose — ${branch} has no commits that ${prBase ?? 'the base branch'} does not already have` };
+      return { ok: false, error: nothingToPropose(branch, prBase) };
     }
     const hint = /auth|log ?in|credential/i.test(pr.stderr) ? ' (try `gh auth login`)' : '';
     return { ok: false, error: `gh pr create failed — ${tail(pr.stderr) || 'unknown error'}${hint}` };

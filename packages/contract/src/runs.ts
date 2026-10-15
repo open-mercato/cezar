@@ -668,6 +668,8 @@ export const gitStatusResponseSchema = z.object({
   /** Commits on the task's base branch (as last fetched) the branch does not have; null when the
    *  base cannot be resolved (none recorded, a raw sha, or a ref the repo lacks). */
   behind: z.number().nullable(),
+  /** Commits the branch has that same base lacks — what a PR would propose; null alike. */
+  ahead: z.number().nullable(),
 });
 export type GitStatusResponse = z.infer<typeof gitStatusResponseSchema>;
 

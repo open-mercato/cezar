@@ -571,7 +571,7 @@ describe('session git API routes', () => {
     expect(res.status).toBe(200);
     // No upstream yet: "never pushed" is null, not 0.
     // The fixture's base `main` is where `task` forked from, so it is not behind (yet).
-    expect(await res.json()).toEqual({ uncommitted: 1, unpushed: null, behind: 0 });
+    expect(await res.json()).toEqual({ uncommitted: 1, unpushed: null, behind: 0, ahead: 0 });
 
     // Base moves on: two commits land on main that the task branch does not have.
     g(worktree, 'checkout', '-q', 'main');
@@ -1223,13 +1223,13 @@ describe('worktreeGitStatus — what has not left the worktree', () => {
       writeFileSync(join(dir, 'b.txt'), 'b\n');
       g(dir, 'add', '-A');
       g(dir, 'commit', '-m', 'base');
-      expect(await worktreeGitStatus(dir)).toEqual({ ok: true, uncommitted: 0, unpushed: null, behind: null });
+      expect(await worktreeGitStatus(dir)).toEqual({ ok: true, uncommitted: 0, unpushed: null, behind: null, ahead: null });
 
       writeFileSync(join(dir, 'a.txt'), 'changed\n');
       writeFileSync(join(dir, 'new.txt'), 'new\n');
       g(dir, 'mv', 'b.txt', 'c.txt');
       // modified + untracked + one rename (whose old path rides as an extra -z field)
-      expect(await worktreeGitStatus(dir)).toEqual({ ok: true, uncommitted: 3, unpushed: null, behind: null });
+      expect(await worktreeGitStatus(dir)).toEqual({ ok: true, uncommitted: 3, unpushed: null, behind: null, ahead: null });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1246,11 +1246,11 @@ describe('worktreeGitStatus — what has not left the worktree', () => {
       g(dir, 'commit', '-m', 'base');
       g(dir, 'remote', 'add', 'origin', remote);
       g(dir, 'push', '-q', '-u', 'origin', 'HEAD');
-      expect(await worktreeGitStatus(dir)).toEqual({ ok: true, uncommitted: 0, unpushed: 0, behind: null });
+      expect(await worktreeGitStatus(dir)).toEqual({ ok: true, uncommitted: 0, unpushed: 0, behind: null, ahead: null });
 
       writeFileSync(join(dir, 'a.txt'), 'b\n');
       g(dir, 'commit', '-qam', 'second');
-      expect(await worktreeGitStatus(dir)).toEqual({ ok: true, uncommitted: 0, unpushed: 1, behind: null });
+      expect(await worktreeGitStatus(dir)).toEqual({ ok: true, uncommitted: 0, unpushed: 1, behind: null, ahead: null });
     } finally {
       rmSync(remote, { recursive: true, force: true });
       rmSync(dir, { recursive: true, force: true });
@@ -1283,11 +1283,17 @@ describe('worktreeGitStatus — what has not left the worktree', () => {
       g(dir, 'reset', '-q', '--hard', fork);
       g(dir, 'checkout', '-q', 'task');
       expect(await worktreeGitStatus(dir, 'main')).toMatchObject({ behind: 1 });
-      expect(await worktreeGitStatus(dir, 'origin/main')).toMatchObject({ behind: 1 });
+      expect(await worktreeGitStatus(dir, 'origin/main')).toMatchObject({ behind: 1, ahead: 0 });
 
-      expect(await worktreeGitStatus(dir, fork)).toMatchObject({ behind: null });
-      expect(await worktreeGitStatus(dir, 'no-such-branch')).toMatchObject({ behind: null });
-      expect(await worktreeGitStatus(dir)).toMatchObject({ behind: null });
+      // The task commits its own work: ahead counts only what the branch would propose.
+      writeFileSync(join(dir, 'task.txt'), 't\n');
+      g(dir, 'add', '-A');
+      g(dir, 'commit', '-qm', 'task work');
+      expect(await worktreeGitStatus(dir, 'main')).toMatchObject({ behind: 1, ahead: 1 });
+
+      expect(await worktreeGitStatus(dir, fork)).toMatchObject({ behind: null, ahead: null });
+      expect(await worktreeGitStatus(dir, 'no-such-branch')).toMatchObject({ behind: null, ahead: null });
+      expect(await worktreeGitStatus(dir)).toMatchObject({ behind: null, ahead: null });
     } finally {
       rmSync(remote, { recursive: true, force: true });
       rmSync(dir, { recursive: true, force: true });

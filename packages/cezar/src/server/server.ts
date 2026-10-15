@@ -5196,7 +5196,7 @@ export function createApp(deps: ServerDeps) {
       if (!worktree) return c.json({ error: NO_WORKTREE }, 409);
       const result = await worktreeGitStatus(worktree, run.baseBranch);
       if (!result.ok) return c.json({ error: result.error }, 409);
-      return c.json({ uncommitted: result.uncommitted, unpushed: result.unpushed, behind: result.behind });
+      return c.json({ uncommitted: result.uncommitted, unpushed: result.unpushed, behind: result.behind, ahead: result.ahead });
     })
 
     // Draft PR from the review gate (spec 009): final autosave → push →
