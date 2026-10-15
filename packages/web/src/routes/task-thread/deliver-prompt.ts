@@ -29,10 +29,12 @@ import { trackMessageSent } from '@/lib/telemetry'
  * What it deliberately does NOT do:
  *  - retry when the fresh record agrees with the path already tried. That 409 is the server's
  *    considered answer (a disconnected provider, a locked model, a session with nothing to
- *    resume), and re-posting it would only turn one honest error into two;
+ *    resume), and re-posting it would only turn one honest error into two. The one exception is
+ *    the live path's `session closed`: a `running` run between sessions, retried on a bounded
+ *    backoff (`SESSION_GAP_RETRY_DELAYS_MS`);
  *  - reopen a session for an EMPTY draft. Submitting nothing is the one-click Continue, and a
  *    run that turns out to be live has nothing to continue — there is no message to deliver;
- *  - retry more than once. The second answer is reported as it comes.
+ *  - retry beyond that bound. The last answer is reported as it comes.
  */
 
 /** Which endpoint a record's status calls for. `queued` is `live`: the message is folded into
