@@ -52,7 +52,11 @@ export async function discoverCursorModels(
   const run =
     options.run ??
     (async (executable, runEnv, timeout) =>
-      exec(...spawnableCommand(executable, ['models']), { timeout, env: runEnv, maxBuffer: 2 * 1024 * 1024 }));
+      exec(...spawnableCommand(executable, ['models']), {
+        timeout,
+        env: runEnv,
+        maxBuffer: 2 * 1024 * 1024,
+      }));
 
   const { stdout, stderr } = await run(bin, env, timeoutMs);
   const models = parseCursorModelsOutput(`${stdout}\n${stderr}`);
