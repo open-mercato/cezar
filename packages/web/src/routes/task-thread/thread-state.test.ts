@@ -752,6 +752,20 @@ describe('reduceThread — outdated agent CLI', () => {
     ])
   })
 
+  it.each([false, true])('retains one update card while deduplicating fatal error twins (reversed=%s)', (reversed) => {
+    const twins = [
+      line(2, 'error', { message: OUTDATED }),
+      line(3, 'session.error', { message: OUTDATED, fatal: true }),
+    ]
+    const { turns } = reduceThread([
+      line(1, 'session.started', { sessionId: 's', backend: 'opencode' }),
+      ...(reversed ? twins.reverse() : twins),
+    ])
+    expect(turns[0]?.items.filter((item) => item.kind === 'note')).toHaveLength(1)
+    expect(turns[0]?.items.filter((item) => item.kind === 'agent-update-required'))
+      .toEqual([expect.objectContaining({ provider: 'opencode' })])
+  })
+
   it('offers nothing for other errors, or without a known backend', () => {
     const items = (events: RunEvent[]) => reduceThread(events).turns.flatMap((turn) => turn.items)
     expect(items([
