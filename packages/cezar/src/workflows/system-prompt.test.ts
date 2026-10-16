@@ -465,25 +465,28 @@ describe('systemPrompt end-to-end (dry run)', () => {
     expect(named?.titleSummary).toBe('432: implementing cr fixes');
     expect(named?.titleOrigin).toBe('auto');
 
-    const skillPrompt = skillSystemPrompt({
-      name: 'om-auto-review-pr',
-      description: SKILL_DESCRIPTION,
-      body: SKILL_BODY,
-      // The runner passes the full discovered skill, so the prompt carries the
-      // absolute path of the installed copy (read from the MAIN repo even in a
-      // worktree). Mirror that here so the expected prompt matches.
-      path: join(repoRoot, '.ai/skills/om-auto-review-pr/SKILL.md'),
-      source: 'ai',
-    });
+    // The skill is provisioned into the run's worktree, so the prompt names that copy
+    // instead of carrying the body.
+    const worktreePath = record?.worktreePath;
+    if (!worktreePath) throw new Error('run did not create its worktree');
+    const skillPrompt = skillSystemPrompt(
+      {
+        name: 'om-auto-review-pr',
+        description: SKILL_DESCRIPTION,
+        body: SKILL_BODY,
+        path: join(repoRoot, '.ai/skills/om-auto-review-pr/SKILL.md'),
+        source: 'ai',
+      },
+      { mode: 'path', file: join(worktreePath, '.claude/skills/om-auto-review-pr/SKILL.md') },
+    );
     expect(capturedSystemPrompt()).toBe(
       composeSystemPrompt(skillPrompt, CONFIG_PROMPT, HANDOFF_INSTRUCTIONS),
     );
+    expect(capturedSystemPrompt()).not.toContain(SKILL_BODY);
 
     // The mock writes the actual first user message it received into the run
     // worktree, proving the argument is still the runner's user prompt rather
     // than being swallowed by title construction.
-    const worktreePath = record?.worktreePath;
-    if (!worktreePath) throw new Error('run did not create its worktree');
     expect(readFileSync(join(worktreePath, 'notes.md'), 'utf8')).toContain(': 432\n');
   }, 30_000);
 
