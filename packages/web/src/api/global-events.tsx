@@ -13,15 +13,18 @@ import {
 import {
   applyRunDeleted,
   applyRunEvent,
+  isFullRunRecord,
   createUsageStore,
   EMPTY_USAGE,
   mergeRun,
   parseWorkspaceEvent,
   type GlobalEvent,
+  type RunSummary,
   type UsageStore,
 } from './events'
 import { apiPath, getApiScope, queryScope } from '@open-mercato/cezar-api-client'
 import { queryKeys, useHealthSubscription, workspaceQueryKeys } from './queries'
+import { ApiError, getProjectRun } from './client'
 import { RUN_EVENT_BATCH_MS } from './run-events'
 import type {
   ApiRun,
@@ -142,6 +145,130 @@ function createRunsIndexRefresher(queryClient: QueryClient): {
   }
 }
 
+/** How many times one hydration is attempted, and the wait before each retry. A run's last frame
+ *  can arrive and then its single read fail transiently; without a retry the task would not appear
+ *  until the next reconnect. A 4xx is a considered answer and is not retried, matching the query
+ *  client's policy (`query-client.ts`). */
+const UNKNOWN_RUN_RETRY_DELAYS_MS = [500, 1_500] as const
+
+/** The latest stream event for a run being hydrated. A frame that arrives while the read is in
+ *  flight is the freshest status and must land on top of the fetched record; a deletion is a
+ *  tombstone that the fetched record must not resurrect. */
+type PendingUnknownRunEvent =
+  | { kind: 'run'; frame: RunSummary }
+  | { kind: 'deleted' }
+
+/** The hydration hooks the run-event path calls: a slim frame for an unknown run, and its
+ *  deletion. `cancel` is torn down with the effect. */
+export interface UnknownRunHydrator {
+  run: (runId: string, frame: RunSummary) => void
+  deleted: (runId: string) => void
+  cancel: () => void
+}
+
+/** Fetch one run the active list does not hold yet, and insert it as a row.
+ *
+ *  A slim `run` frame cannot become a list row on its own — it has no `steps` — so the list has
+ *  to learn the whole record. Refetching the whole list would cost one `GET /runs` for a single
+ *  new task; the bounded read is `GET /runs/:id`, scoped to the project the frame arrived in. A
+ *  run's create → queued → running frames arrive in separate batches, so the request is deduped
+ *  per run while one is in flight, and the newest such frame is applied over the fetched record
+ *  once it resolves. The project id, list key and request key are all captured when the frame
+ *  arrives: every retry reads that same project (`getProjectRun`, not the active scope) and writes
+ *  that same list, so a project switch inside the window can neither fetch nor contaminate another
+ *  project's cache. */
+function createUnknownRunFetcher(queryClient: QueryClient): UnknownRunHydrator {
+  const inFlight = new Set<string>()
+  const pending = new Map<string, PendingUnknownRunEvent>()
+  const retryTimers = new Set<ReturnType<typeof setTimeout>>()
+  let disposed = false
+
+  const forget = (requestKey: string): void => {
+    inFlight.delete(requestKey)
+    pending.delete(requestKey)
+  }
+
+  const applyHydrated = (requestKey: string, listKey: readonly unknown[], run: ApiRun): void => {
+    const queued = pending.get(requestKey)
+    forget(requestKey)
+    if (queued?.kind === 'deleted') {
+      // The run was deleted while we were reading it: apply the tombstone, do not resurrect it.
+      queryClient.setQueryData<ApiRun[]>(listKey, (list) => applyRunDeleted(list, run.id))
+      return
+    }
+    queryClient.setQueryData<ApiRun[]>(listKey, (list) => {
+      // The fetched read is only inserted when the row is still absent. Another path (a reconcile,
+      // a mutation) landing the row first makes its record authoritative, but the queued stream
+      // frame is newer than our read and must still be folded on rather than dropped.
+      const hydrated = list !== undefined && list.some((row) => row.id === run.id)
+        ? list
+        : applyRunEvent(list, run)
+      return queued?.kind === 'run' ? applyRunEvent(hydrated, queued.frame) : hydrated
+    })
+  }
+
+  const attempt = (
+    requestKey: string,
+    listKey: readonly unknown[],
+    projectId: string,
+    runId: string,
+    retry: number,
+  ): void => {
+    void getProjectRun(projectId, runId)
+      .then((run) => {
+        if (disposed) return
+        applyHydrated(requestKey, listKey, run)
+      })
+      .catch((error: unknown) => {
+        if (disposed) return
+        const delay = UNKNOWN_RUN_RETRY_DELAYS_MS[retry]
+        const clientError = error instanceof ApiError && error.status >= 400 && error.status < 500
+        if (delay === undefined || clientError) {
+          // Bounded retries exhausted (or the run is gone): forget it so the next frame can start
+          // a fresh hydration instead of the request being deduped against a dead one. Exhaustion
+          // means the run's last frame (and its event) never landed, so ask the captured project's
+          // list once — the same recovery a reconnect would have performed.
+          forget(requestKey)
+          if (delay === undefined) {
+            void queryClient.invalidateQueries({ queryKey: listKey, refetchType: 'active' })
+          }
+          return
+        }
+        const timer = setTimeout(() => {
+          retryTimers.delete(timer)
+          if (!disposed) attempt(requestKey, listKey, projectId, runId, retry + 1)
+        }, delay)
+        retryTimers.add(timer)
+      })
+  }
+
+  return {
+    run(runId, frame) {
+      if (disposed) return
+      const projectId = queryScope()
+      const requestKey = `${projectId}\0${runId}`
+      if (inFlight.has(requestKey)) {
+        pending.set(requestKey, { kind: 'run', frame })
+        return
+      }
+      inFlight.add(requestKey)
+      attempt(requestKey, [projectId, 'runs', 'list'], projectId, runId, 0)
+    },
+    deleted(runId) {
+      if (disposed) return
+      const requestKey = `${queryScope()}\0${runId}`
+      if (inFlight.has(requestKey)) pending.set(requestKey, { kind: 'deleted' })
+    },
+    cancel() {
+      disposed = true
+      for (const timer of retryTimers) clearTimeout(timer)
+      retryTimers.clear()
+      inFlight.clear()
+      pending.clear()
+    },
+  }
+}
+
 function projectCacheScopes(queryClient: QueryClient, project: string): string[] {
   let bootProject: string | undefined
   for (const query of queryClient.getQueryCache().getAll()) {
@@ -237,6 +364,7 @@ function createRunEventBatcher(
   queryClient: QueryClient,
   usage: UsageStore,
   onDroppedProject: (project: string) => void,
+  unknownRun: UnknownRunHydrator,
 ): {
   onEvent: (event: Extract<GlobalEvent, { type: 'run' | 'run-deleted' }>, project: string) => void
   beginReconcile: () => void
@@ -260,7 +388,7 @@ function createRunEventBatcher(
     for (const queued of events.values()) {
       // The route can change while the 50 ms window is open. Never resolve the cache keys from
       // the new scope for an event that arrived under the old one.
-      if (queued.project === project) applyGlobalEvent(queryClient, usage, queued.event)
+      if (queued.project === project) applyGlobalEvent(queryClient, usage, queued.event, unknownRun)
       else onDroppedProject(queued.project)
     }
   }
@@ -383,16 +511,29 @@ function activeProject(queryClient: QueryClient): string | undefined {
 
 /** Fold one stream message into the cache. The reducers it calls are pure and table-tested in
  *  events.ts; this is only the wiring from an event to the cache it belongs in. */
-function applyGlobalEvent(queryClient: QueryClient, usage: UsageStore, event: GlobalEvent): void {
+function applyGlobalEvent(
+  queryClient: QueryClient,
+  usage: UsageStore,
+  event: GlobalEvent,
+  unknownRun: UnknownRunHydrator,
+): void {
   switch (event.type) {
     case 'run': {
-      queryClient.setQueryData<ApiRun[]>(queryKeys.runs.list(), (list) => applyRunEvent(list, event.run))
+      const listKey = queryKeys.runs.list()
+      const list = queryClient.getQueryData<ApiRun[]>(listKey)
+      if (list && !isFullRunRecord(event.run) && !list.some((row) => row.id === event.run.id)) {
+        // A run this list never held arrives as a slim frame, which is not a row: fetch the one.
+        unknownRun.run(event.run.id, event.run)
+      } else {
+        queryClient.setQueryData<ApiRun[]>(listKey, (current) => applyRunEvent(current, event.run))
+      }
       // Only a detail cache that exists: `setQueryData` would happily create one, leaving an entry
       // for a run nobody opened — and, worse, one built from a summary rather than from
       // `GET /api/runs/:id`, which the next reader would then be served as if it were fetched.
       const key = queryKeys.runs.detail(event.run.id)
       if (queryClient.getQueryData(key) !== undefined) {
-        queryClient.setQueryData<ApiRun>(key, (previous) => mergeRun(previous, event.run))
+        queryClient.setQueryData<ApiRun>(key, (previous) =>
+          previous === undefined ? previous : mergeRun(previous, event.run))
       }
       // The Changes tab stops polling once a run leaves the active set (queries.ts:
       // refetchInterval only lives while active), so end-of-run writes would otherwise wait
@@ -409,6 +550,9 @@ function applyGlobalEvent(queryClient: QueryClient, usage: UsageStore, event: Gl
       return
     }
     case 'run-deleted': {
+      // A deletion for a run still being hydrated is a tombstone: the in-flight read must not
+      // resurrect the row when it resolves.
+      unknownRun.deleted(event.id)
       queryClient.setQueryData<ApiRun[]>(queryKeys.runs.list(), (list) => applyRunDeleted(list, event.id))
       // Removed, not set to undefined: the run is gone server-side, so its detail and diff caches
       // are garbage. Anything still mounted on them refetches and gets the server's 404 — the
@@ -464,11 +608,13 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       dashboardMax ??= setTimeout(refreshDashboard, 1000)
     }
     const runsIndexRefresher = createRunsIndexRefresher(queryClient)
+    const unknownRunFetcher = createUnknownRunFetcher(queryClient)
     const inactiveProjectRefresher = createInactiveProjectRefresher(queryClient)
     const runEventBatcher = createRunEventBatcher(
       queryClient,
       usage,
       inactiveProjectRefresher.onEvent,
+      unknownRunFetcher,
     )
     let reopenTimer: ReturnType<typeof setTimeout> | undefined
     let everOpened = false
@@ -630,7 +776,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           } else if (parsed.event.type === 'todos' && reconciliationDepth > 0) {
             if (parsed.project !== null) pendingTodos.add(parsed.project)
           } else {
-            applyGlobalEvent(queryClient, usage, parsed.event)
+            applyGlobalEvent(queryClient, usage, parsed.event, unknownRunFetcher)
           }
         })
       }
@@ -764,6 +910,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       dashboardLive.connected(false)
       clearTimeout(dashboardTimer); clearTimeout(dashboardMax)
       runsIndexRefresher.cancel()
+      unknownRunFetcher.cancel()
       inactiveProjectRefresher.cancel()
       runEventBatcher.cancel()
       pendingTodos.clear()

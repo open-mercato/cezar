@@ -138,6 +138,7 @@ import { getTeamSkillsCached, refreshTeamSkills, waitForTeamSkills } from '../sk
 import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.ts';
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
 import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.ts';
+import { onRunFrames } from './run-frames.ts';
 import {
   HistoryCursorError,
   deriveRunContextEvents,
@@ -5763,15 +5764,14 @@ export function createApp(deps: ServerDeps) {
           if (replaying) buffered.push(event);
           else void writeEvent(event);
         };
-        const onRun = (run: RunRecord) => {
-          if (run.id !== id) return;
-          void stream.writeSSE({ event: 'run', data: JSON.stringify(run) });
-        };
         const offEvent = onRunEvent(store, id, onEvent);
-        store.on('run', onRun);
+        const offRun = onRunFrames(store, (run, frames) => {
+          if (run.id !== id) return;
+          void stream.writeSSE({ event: 'run', data: frames.record() });
+        });
         stream.onAbort(() => {
           offEvent();
-          store.off('run', onRun);
+          offRun();
         });
 
         const replay = query.cursor
@@ -5807,7 +5807,6 @@ export function createApp(deps: ServerDeps) {
     .get('/events', (c) => {
       const { dataDir, store } = c.get('project');
       return streamSSENoBuffer(c, async (stream) => {
-        const onRun = (run: RunRecord) => void stream.writeSSE({ event: 'run', data: JSON.stringify(run) });
         const onDeleted = (id: string) =>
           void stream.writeSSE({
             event: 'run-deleted',
@@ -5836,10 +5835,10 @@ export function createApp(deps: ServerDeps) {
           }
           void stream.writeSSE({ event: 'usage', data: JSON.stringify(owned) });
         });
-        store.on('run', onRun);
+        const offRun = onRunFrames(store, (_run, frames) => void stream.writeSSE({ event: 'run', data: frames.record() }));
         const offDeleted = onRunDeleted(store, onDeleted);
         stream.onAbort(() => {
-          store.off('run', onRun);
+          offRun();
           offDeleted();
           offTodos();
           offUsage();
@@ -5861,11 +5860,6 @@ export function createApp(deps: ServerDeps) {
         const attach = (project: string, ctx: Pick<ProjectContext, 'store' | 'dataDir'>): void => {
           if (attached.has(project)) return;
           const { store, dataDir } = ctx;
-          const onRun = (run: RunRecord) =>
-            void stream.writeSSE({
-              event: 'run',
-              data: JSON.stringify({ ...run, project }),
-            });
           const onDeleted = (id: string) =>
             void stream.writeSSE({
               event: 'run-deleted',
@@ -5881,12 +5875,14 @@ export function createApp(deps: ServerDeps) {
           // Same opt-in gate as the per-project stream (#471): no capability, no
           // watcher — and each subscription is scoped to its own dataDir (2.3).
           const offTodos = capabilities().followups ? onTodosChanged(dataDir, () => void sendTodos()) : () => undefined;
-          store.on('run', onRun);
+          const offRun = onRunFrames(store, (_run, frames) =>
+            void stream.writeSSE({ event: 'run', data: frames.workspace(project) }),
+          );
           const offDeleted = onRunDeleted(store, onDeleted);
           attached.set(project, {
             store,
             detach: () => {
-              store.off('run', onRun);
+              offRun();
               offDeleted();
               offTodos();
             },
