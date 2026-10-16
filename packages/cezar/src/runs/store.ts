@@ -916,6 +916,13 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
  */
 export class RunStore extends EventEmitter {
   private runs = new Map<string, RunRecord>();
+  /** Secondary indexes for dispatch tree lookups. They are rebuilt from runs.json on open and
+   *  remain process-local, so the persisted record format stays unchanged. */
+  private runsByRoot = new Map<string, Set<string>>();
+  private runsByParent = new Map<string, Set<string>>();
+  /** Map insertion order is the tie-breaker of the historical listRuns() stable sort. */
+  private runOrder = new Map<string, number>();
+  private nextRunOrder = 0;
   /** Ids this process removed on purpose — see `forget`, which is the only thing that writes it. */
   private forgotten = new Set<string>();
   private saveTimer: NodeJS.Timeout | null = null;
@@ -946,7 +953,9 @@ export class RunStore extends EventEmitter {
         const parsed = z.array(runRecordSchema).safeParse(raw);
         if (parsed.success) {
           for (const run of parsed.data) {
-            store.runs.set(run.id, reconcileLoadedRun(run, opts));
+            const reconciled = reconcileLoadedRun(run, opts);
+            store.runs.set(reconciled.id, reconciled);
+            store.indexRun(reconciled);
           }
         } else {
           store.indexReadHealth = { state: 'unavailable', omittedRuns: Array.isArray(raw) ? raw.length : 0, reason: 'Task index could not be loaded by this server' };
@@ -1019,7 +1028,17 @@ export class RunStore extends EventEmitter {
   }
 
   listRuns(): RunRecord[] {
-    return [...this.runs.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return [...this.runs.values()].sort((a, b) => this.compareRuns(a, b));
+  }
+
+  /** Runs in one dispatch tree, in the same order as listRuns(). */
+  listRunsByRoot(rootRunId: string): RunRecord[] {
+    return this.indexedRuns(this.runsByRoot, rootRunId);
+  }
+
+  /** Direct children of one run, in the same order as listRuns(). */
+  listRunsByParent(parentRunId: string): RunRecord[] {
+    return this.indexedRuns(this.runsByParent, parentRunId);
   }
 
   /** Fresh durable evidence for receipt reconciliation; never replaces live in-memory runs. */
@@ -1087,6 +1106,7 @@ export class RunStore extends EventEmitter {
     this.trackReferencedPrs(run, input.task);
     this.trackReferencedIssues(run, input.task);
     this.runs.set(run.id, run);
+    this.indexRun(run);
     this.pruneOldRuns();
     this.touch(run);
     return run;
@@ -1095,6 +1115,8 @@ export class RunStore extends EventEmitter {
   updateRun(id: string, patch: Partial<Omit<RunRecord, 'id' | 'steps'>>): RunRecord | undefined {
     const run = this.runs.get(id);
     if (!run) return undefined;
+    const previousRootRunId = run.dispatch?.rootRunId;
+    const previousParentRunId = run.dispatch?.parentRunId;
     if (Object.prototype.hasOwnProperty.call(patch, 'issueNumber')) {
       delete run.referencedIssueNumberSeeded;
     }
@@ -1132,6 +1154,7 @@ export class RunStore extends EventEmitter {
       if (kind) track('task_failed', { label: taskFailedLabel(run.runner, kind) });
     }
     Object.assign(run, this.redactPatch(normalized, id));
+    this.reindexRun(run, previousRootRunId, previousParentRunId);
     // Keep legacy writers (including workflow resume/naming paths) in sync without requiring
     // every caller to know about the additive list. The list's provenance still decides the
     // compatibility scalar, so an inferred number cannot displace a declared/created one.
@@ -1794,7 +1817,66 @@ export class RunStore extends EventEmitter {
    *  which is exactly how long a deletion has to outlive its own index entry. */
   private forget(id: string): boolean {
     this.forgotten.add(id);
+    const run = this.runs.get(id);
+    if (!run) return false;
+    this.deindexRun(run);
+    this.runOrder.delete(id);
     return this.runs.delete(id);
+  }
+
+  private compareRuns(a: RunRecord, b: RunRecord): number {
+    const byCreatedAt = b.createdAt.localeCompare(a.createdAt);
+    if (byCreatedAt !== 0) return byCreatedAt;
+    return (this.runOrder.get(a.id) ?? 0) - (this.runOrder.get(b.id) ?? 0);
+  }
+
+  private indexedRuns(index: Map<string, Set<string>>, key: string): RunRecord[] {
+    const ids = index.get(key);
+    if (!ids) return [];
+    return [...ids]
+      .map((id) => this.runs.get(id))
+      .filter((run): run is RunRecord => run !== undefined)
+      .sort((a, b) => this.compareRuns(a, b));
+  }
+
+  private indexRun(run: RunRecord): void {
+    this.runOrder.set(run.id, this.nextRunOrder++);
+    this.addToIndex(this.runsByRoot, run.dispatch?.rootRunId, run.id);
+    this.addToIndex(this.runsByParent, run.dispatch?.parentRunId, run.id);
+  }
+
+  private reindexRun(run: RunRecord, previousRootRunId?: string, previousParentRunId?: string): void {
+    if (previousRootRunId !== run.dispatch?.rootRunId) {
+      this.removeFromIndex(this.runsByRoot, previousRootRunId, run.id);
+      this.addToIndex(this.runsByRoot, run.dispatch?.rootRunId, run.id);
+    }
+    if (previousParentRunId !== run.dispatch?.parentRunId) {
+      this.removeFromIndex(this.runsByParent, previousParentRunId, run.id);
+      this.addToIndex(this.runsByParent, run.dispatch?.parentRunId, run.id);
+    }
+  }
+
+  private deindexRun(run: RunRecord): void {
+    this.removeFromIndex(this.runsByRoot, run.dispatch?.rootRunId, run.id);
+    this.removeFromIndex(this.runsByParent, run.dispatch?.parentRunId, run.id);
+  }
+
+  private addToIndex(index: Map<string, Set<string>>, key: string | undefined, id: string): void {
+    if (!key) return;
+    let ids = index.get(key);
+    if (!ids) {
+      ids = new Set<string>();
+      index.set(key, ids);
+    }
+    ids.add(id);
+  }
+
+  private removeFromIndex(index: Map<string, Set<string>>, key: string | undefined, id: string): void {
+    if (!key) return;
+    const ids = index.get(key);
+    if (!ids) return;
+    ids.delete(id);
+    if (ids.size === 0) index.delete(key);
   }
 
   private pruneOldRuns(): void {

@@ -110,6 +110,60 @@ describe('RunStore — directional usage persistence', () => {
   });
 });
 
+describe('RunStore — dispatch secondary indexes (#1216)', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  function create(store: RunStore, title: string): RunRecord {
+    return store.createRun({ title, workflow: 'quick-task', task: title, steps: [] });
+  }
+
+  it('builds indexes on load and keeps root/parent membership in listRuns order', () => {
+    const store = RunStore.open(dataDir);
+    const root = create(store, 'root');
+    const first = create(store, 'first');
+    const second = create(store, 'second');
+    const unrelated = create(store, 'unrelated');
+    store.updateRun(root.id, { dispatch: { rootRunId: root.id } });
+    store.updateRun(first.id, { dispatch: { rootRunId: root.id, parentRunId: root.id } });
+    store.updateRun(second.id, { dispatch: { rootRunId: root.id, parentRunId: root.id } });
+    store.updateRun(unrelated.id, { dispatch: { rootRunId: unrelated.id } });
+
+    const expectedTree = store.listRuns().filter((run) => run.dispatch?.rootRunId === root.id).map((run) => run.id);
+    const expectedChildren = store.listRuns().filter((run) => run.dispatch?.parentRunId === root.id).map((run) => run.id);
+    expect(store.listRunsByRoot(root.id).map((run) => run.id)).toEqual(expectedTree);
+    expect(store.listRunsByParent(root.id).map((run) => run.id)).toEqual(expectedChildren);
+    store.flush();
+
+    const reopened = RunStore.open(dataDir, { keepLive: true });
+    expect(reopened.listRunsByRoot(root.id).map((run) => run.id)).toEqual(expectedTree);
+    expect(reopened.listRunsByParent(root.id).map((run) => run.id)).toEqual(expectedChildren);
+  });
+
+  it('reassigns and removes indexed records without leaving stale membership', () => {
+    const store = RunStore.open(dataDir);
+    const rootA = create(store, 'root-a');
+    const rootB = create(store, 'root-b');
+    const child = create(store, 'child');
+    store.updateRun(child.id, { dispatch: { rootRunId: rootA.id, parentRunId: rootA.id } });
+    store.updateRun(child.id, { dispatch: { rootRunId: rootB.id, parentRunId: rootB.id } });
+
+    expect(store.listRunsByRoot(rootA.id)).toEqual([]);
+    expect(store.listRunsByParent(rootA.id)).toEqual([]);
+    expect(store.listRunsByRoot(rootB.id).map((run) => run.id)).toEqual([child.id]);
+    expect(store.deleteRun(child.id)).toBe(true);
+    expect(store.listRunsByRoot(rootB.id)).toEqual([]);
+    expect(store.listRunsByParent(rootB.id)).toEqual([]);
+  });
+});
+
 describe('RunStore — titleSummary + diffStat (#389)', () => {
   let dataDir: string;
 

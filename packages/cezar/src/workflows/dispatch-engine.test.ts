@@ -1,10 +1,10 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PENDING_ASK_MAX_QUESTIONS, type DispatchInput, type RunDispatch } from '@open-mercato/cezar-contract';
 import { runRecordSchema, RunStore, type RunRecord } from '../runs/store.ts';
 import { WorkspaceSemaphore, type WorkspaceResourceLimits } from '../workspace/semaphore.ts';
@@ -226,8 +226,11 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
         const child = store.createRun({ title: `in flight ${i}`, workflow: '(planned)', task: 't', steps: [] });
         store.updateRun(child.id, { status: 'running', dispatch: childOf(parent.id) });
       }
+      const fullScan = vi.spyOn(store, 'listRuns');
+      fullScan.mockClear();
       const reason = refusal(parent.id, order('one more'));
       expect(reason).toContain('the cap is 4');
+      expect(fullScan).not.toHaveBeenCalled();
       expect(childrenOf(parent.id)).toHaveLength(4);
       expect(notes(parent.id).some((n) => n.includes('dispatch refused') && n.includes('the cap is 4'))).toBe(true);
     }, 40_000);
@@ -235,7 +238,10 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
     it('refuses a child that would overspend the parent, and hands an uncapped child the remainder', async () => {
       reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
       const parent = await parkedRoot(1);
+      const fullScan = vi.spyOn(store, 'listRuns');
+      fullScan.mockClear();
       expect(refusal(parent.id, order('too rich', { max_cost: 2.5 }))).toMatch(/only \$[\d.]+ of the budget is left/);
+      expect(fullScan).not.toHaveBeenCalled();
       const created = dispatchOk(parent.id, order('mock:done fits'));
       // The uncapped child gets the whole remainder — one child at a time, nobody to share with.
       const remainder = store.getRun(created.id)?.dispatch?.budgetUsd ?? 0;
@@ -448,6 +454,83 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
   // ---- the tree directory (the filesystem channel) -------------------------------------------
 
   describe('the tree directory', () => {
+    it('uses the indexed same-tree monitor set, advances the watermark once, and sees rewrites', () => {
+      const root = store.createRun({ title: 'root', workflow: '(planned)', task: 'hold', steps: [] });
+      store.updateRun(root.id, { status: 'waiting', dispatch: rootOf(root.id) });
+
+      const monitor = store.createRun({ title: 'monitor', workflow: '(planned)', task: 'watch', steps: [] });
+      store.updateRun(monitor.id, {
+        status: 'running',
+        activity: 'monitoring',
+        dispatch: childOf(root.id),
+      });
+      const writer = store.createRun({ title: 'writer', workflow: '(planned)', task: 'write', steps: [] });
+      store.updateRun(writer.id, {
+        status: 'running',
+        activity: 'monitoring',
+        dispatch: childOf(root.id),
+      });
+      const waiting = store.createRun({ title: 'waiting', workflow: '(planned)', task: 'wait', steps: [] });
+      store.updateRun(waiting.id, { status: 'waiting', dispatch: childOf(root.id) });
+      const closed = store.createRun({ title: 'closed', workflow: '(planned)', task: 'closed', steps: [] });
+      store.updateRun(closed.id, {
+        status: 'running',
+        activity: 'monitoring',
+        dispatch: childOf(root.id),
+      });
+      const otherRoot = store.createRun({ title: 'other root', workflow: '(planned)', task: 'other', steps: [] });
+      store.updateRun(otherRoot.id, { status: 'waiting', dispatch: rootOf(otherRoot.id) });
+      const otherTree = store.createRun({ title: 'other tree', workflow: '(planned)', task: 'other', steps: [] });
+      store.updateRun(otherTree.id, {
+        status: 'running',
+        activity: 'monitoring',
+        dispatch: childOf(otherRoot.id),
+      });
+
+      const active = (manager as unknown as { active: Map<string, { session?: { open: boolean } }> }).active;
+      active.set(monitor.id, { session: { open: true } });
+      active.set(writer.id, { session: { open: true } });
+      active.set(closed.id, { session: { open: false } });
+      active.set(otherTree.id, { session: { open: true } });
+
+      const inbox = (runId: string) => join(treeDirOf(root.id), 'inbox', runId.slice(0, 8));
+      for (const runId of [monitor.id, writer.id, waiting.id, closed.id]) mkdirSync(inbox(runId), { recursive: true });
+      mkdirSync(join(treeDirOf(otherRoot.id), 'inbox', otherTree.id.slice(0, 8)), { recursive: true });
+      const monitorFile = join(inbox(monitor.id), 'message.md');
+      writeFileSync(monitorFile, 'first delivery\n');
+      writeFileSync(join(inbox(writer.id), 'writer.md'), 'writer delivery\n');
+      writeFileSync(join(inbox(waiting.id), 'waiting.md'), 'waiting delivery\n');
+      writeFileSync(join(inbox(closed.id), 'closed.md'), 'closed delivery\n');
+      writeFileSync(join(treeDirOf(otherRoot.id), 'inbox', otherTree.id.slice(0, 8), 'other.md'), 'other delivery\n');
+
+      const deliver = vi.spyOn(manager as unknown as { deliverMessage: (...args: unknown[]) => boolean }, 'deliverMessage').mockReturnValue(true);
+      const fullScan = vi.spyOn(store, 'listRuns');
+      const notify = (manager as unknown as { notifyTreeInboxes: (rootRunId: string, writerId: string) => void }).notifyTreeInboxes.bind(manager);
+
+      notify(root.id, writer.id);
+      expect(fullScan).not.toHaveBeenCalled();
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(deliver.mock.calls[0]?.[0]).toBe(monitor.id);
+      const watermark = store.getRun(monitor.id)?.dispatch?.inboxSeenAt;
+      expect(watermark).toBeTruthy();
+      expect(store.getRun(writer.id)?.dispatch?.inboxSeenAt).toBeUndefined();
+      expect(store.getRun(waiting.id)?.dispatch?.inboxSeenAt).toBeUndefined();
+      expect(store.getRun(closed.id)?.dispatch?.inboxSeenAt).toBeUndefined();
+      expect(store.getRun(otherTree.id)?.dispatch?.inboxSeenAt).toBeUndefined();
+
+      fullScan.mockClear();
+      notify(root.id, writer.id);
+      expect(fullScan).not.toHaveBeenCalled();
+      expect(deliver).toHaveBeenCalledTimes(1); // unchanged files are not repeated
+
+      writeFileSync(monitorFile, 'in-place rewrite\n');
+      utimesSync(monitorFile, new Date(Date.parse(watermark!) + 2_000), new Date(Date.parse(watermark!) + 2_000));
+      notify(root.id, writer.id);
+      expect(deliver).toHaveBeenCalledTimes(2);
+      expect(deliver.mock.calls[1]?.[0]).toBe(monitor.id);
+      for (const runId of [monitor.id, writer.id, closed.id, otherTree.id]) active.delete(runId);
+    });
+
     it('wakes a parked parent when a file lands in its inbox', async () => {
       const stdinFile = join(repoRoot, 'mock-stdin-inbox.ndjson');
       savedEnv.CEZ_MOCK_STDIN_FILE = process.env.CEZ_MOCK_STDIN_FILE;
@@ -598,7 +681,10 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
     store.updateRun(grandchild.id, { status: 'queued', dispatch: { rootRunId: root.id, parentRunId: child.id } });
     // Queued in the manager's own queue so `cancel` has something to drop.
     (manager as unknown as { queue: string[] }).queue.push(grandchild.id);
+    const fullScan = vi.spyOn(store, 'listRuns');
+    fullScan.mockClear();
     expect(manager.cancel(root.id)).toBe(true);
+    expect(fullScan).not.toHaveBeenCalled();
     expect(store.getRun(grandchild.id)?.status).toBe('cancelled');
     await waitFor(root.id, (r) => r?.status === 'cancelled');
   }, 40_000);
