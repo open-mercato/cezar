@@ -60,6 +60,19 @@ if (process.env.CEZ_MOCK_ARGS_FILE) {
   }
 }
 
+// Testability hook: CEZ_MOCK_MISSING_SESSIONS=<id,id|*> makes `--resume <id>` fail the way the
+// real CLI does once it has pruned that transcript (cleanupPeriodDays).
+const resumeAt = process.argv.indexOf('--resume');
+const resumedId = resumeAt >= 0 ? process.argv[resumeAt + 1] : undefined;
+const missingSessions = (process.env.CEZ_MOCK_MISSING_SESSIONS ?? '').split(',').filter(Boolean);
+if (resumedId && (missingSessions.includes('*') || missingSessions.includes(resumedId))) {
+  // Flushed before exiting: a pipe write is asynchronous on macOS, and exit would drop it.
+  const result = { type: 'result', subtype: 'error_during_execution', is_error: true, session_id: resumedId };
+  await new Promise((resolve) => process.stdout.write(`${JSON.stringify(result)}\n`, resolve));
+  await new Promise((resolve) => process.stderr.write(`No conversation found with session ID: ${resumedId}\n`, resolve));
+  process.exit(1);
+}
+
 emit({ type: 'system', subtype: 'init' });
 
 let turn = 0;

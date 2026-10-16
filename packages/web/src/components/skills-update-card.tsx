@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { CheckCircle2Icon, RefreshCwIcon } from 'lucide-react'
 import { useRef, useState } from 'react'
 
-import { applySkillsUpdate, checkSkillsUpdate, createRun } from '@/api/client'
+import { ApiError, applySkillsUpdate, checkSkillsUpdate, createRun, getSkillsUpdate } from '@/api/client'
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { Button } from '@/components/ui/button'
 import {
@@ -17,12 +17,73 @@ import { toast } from '@/components/ui/toaster'
 import { useNavigate } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 import { startedRunPath } from '@/routes/new-task-form'
-import type { SkillsUpdateState } from '@open-mercato/cezar-api-client'
-import { trackMessageSent } from '@/lib/telemetry'
+import type { SkillsUpdateDropOutcome, SkillsUpdateState } from '@open-mercato/cezar-api-client'
+import { trackMessageSent, trackSkillsUpdateApplyDropped } from '@/lib/telemetry'
 
 type UpdateRequest =
   | { action: 'check'; seq: number }
   | { action: 'apply'; seq: number; previousUpdatedAt: string | null }
+
+const SETTLE_POLL_MS = 2_000
+const SETTLE_LIMIT_MS = 5 * 60_000
+
+/**
+ * Apply, and survive losing the request. An apply runs `npx` for up to minutes, so a dropped
+ * connection (status 0) or a 409 against an apply already running says nothing about the update
+ * itself: follow the server's `updating` state to its end instead (telemetry edd8c83e). The
+ * original error stands only when the server shows no apply finished.
+ */
+export async function applySkillsUpdateSettled(
+  projectId: string,
+  previousUpdatedAt: string | null,
+  deps: {
+    apply?: typeof applySkillsUpdate
+    read?: typeof getSkillsUpdate
+    wait?: (ms: number) => Promise<void>
+    now?: () => number
+    onDropped?: (outcome: SkillsUpdateDropOutcome) => void
+  } = {},
+): Promise<SkillsUpdateState> {
+  const {
+    apply = applySkillsUpdate,
+    read = getSkillsUpdate,
+    wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    now = Date.now,
+    onDropped = trackSkillsUpdateApplyDropped,
+  } = deps
+  try {
+    return await apply(projectId)
+  } catch (error) {
+    if (!(error instanceof ApiError) || (error.status !== 0 && error.status !== 409)) throw error
+    // Only a lost request is counted; a 409 is ordinary contention, not a transport fault.
+    const settle = (outcome: SkillsUpdateDropOutcome) => {
+      if (error.status === 0) onDropped(outcome)
+    }
+    const deadline = now() + SETTLE_LIMIT_MS
+    for (;;) {
+      let state: SkillsUpdateState
+      try {
+        state = await read(projectId)
+      } catch {
+        settle('unreachable')
+        throw error
+      }
+      if (state.status !== 'updating') {
+        if (state.updatedAt && state.updatedAt !== previousUpdatedAt) {
+          settle('recovered')
+          return state
+        }
+        settle('not_applied')
+        throw error
+      }
+      if (now() >= deadline) {
+        settle('timed_out')
+        throw error
+      }
+      await wait(SETTLE_POLL_MS)
+    }
+  }
+}
 
 function scopeLabel(scope: SkillsUpdateState['scopes'][number]['scope']) {
   return scope === 'project' ? 'Project installation' : 'Global installation'
@@ -84,7 +145,7 @@ export function SkillsUpdateCard({
   })
   const applyMutation = useMutation({
     mutationFn: (request: Extract<UpdateRequest, { action: 'apply' }>) =>
-      applySkillsUpdate(projectId).then((result) => ({ result, request })),
+      applySkillsUpdateSettled(projectId, request.previousUpdatedAt).then((result) => ({ result, request })),
     onSuccess: ({ result, request }) => accept(result, request),
     onError: (error: Error, request) => reject(error, request),
   })

@@ -24,6 +24,12 @@ if (!process.env.GIT_CONFIG_COUNT) {
   process.env.GIT_CONFIG_VALUE_0 = 'false'
 }
 
+// `gh`'s signed-in hosts decide which remotes count as GitHub Enterprise (`src/github-hosts.ts`);
+// a developer's own `hosts.yml` must not change what the suite classifies. A case that wants
+// a host sets `GH_CONFIG_DIR` itself.
+process.env.GH_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'cez-gh-config-'))
+delete process.env.GH_HOST
+
 // LLM task naming is on by default (`autoNamingActive`), so any case that starts a run on
 // a real backend spawned `claude -p "[cez-namer] Name this task."` on the developer's own
 // subscription — the same canned tasks, every run. Off for the whole suite; a test that

@@ -444,7 +444,7 @@ describe('useGlobalEvents — run events', () => {
 
   it('disables retained task links only for a removed project and restores a re-added project', () => {
     const { source } = mount()
-    const row = { ...runRecord('retained'), projectId: 'removed-feed-project' }
+    const row = { ...runRecord('retained'), projectId: 'removed-feed-project', lastActivityAt: '2026-01-01T00:00:00.000Z' }
     render(<MemoryRouter><TaskRow row={row} /><TaskRow row={{ ...row, projectId: 'still-present', title: 'Other project' }} /></MemoryRouter>)
     const link = screen.getByRole('link', { name: 'retained' })
     expect(link.getAttribute('aria-disabled')).toBeNull()

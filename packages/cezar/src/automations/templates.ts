@@ -37,13 +37,18 @@ export function automationTemplatesOf(
         ...(definition.schedule ? { schedule: definition.schedule } : {}),
         ...(definition.events ? { events: definition.events } : {}),
         ...(definition.intervalSeconds !== undefined ? { intervalSeconds: definition.intervalSeconds } : {}),
+        // The filters decide WHICH items launch; a copy without them launches for every item.
+        ...(definition.kind === 'github' && definition.filters ? { filters: definition.filters } : {}),
         task: {
           prompt: definition.task.prompt,
           ...(definition.task.workflow ? { workflow: definition.task.workflow } : {}),
+          ...(definition.task.steps ? { steps: definition.task.steps } : {}),
           ...(definition.task.runner ? { runner: definition.task.runner } : {}),
           ...(definition.task.model ? { model: definition.task.model } : {}),
           ...(definition.task.autonomous !== undefined ? { autonomous: definition.task.autonomous } : {}),
           ...(definition.task.dispatch ? { dispatch: definition.task.dispatch } : {}),
+          ...(definition.task.checkout ? { checkout: definition.task.checkout } : {}),
+          ...(definition.task.allowForkHeads !== undefined ? { allowForkHeads: definition.task.allowForkHeads } : {}),
         },
       });
     }

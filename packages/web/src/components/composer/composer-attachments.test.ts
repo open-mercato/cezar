@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  appendAttachment,
   attachmentMediaType,
   fileToPendingAttachment,
   MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENTS,
+  MAX_IMAGE_BYTES_PER_MESSAGE,
   screenFiles,
   toAttachmentInput,
 } from './composer-attachments'
@@ -13,7 +16,7 @@ import {
 const fakeFile = (over: { type?: string; size?: number; name?: string } = {}): File =>
   ({ type: 'image/png', size: 1024, name: 'shot.png', ...over }) as File
 
-describe('screenFiles — the legacy 4×5MB caps, mirrored from the server zod', () => {
+describe('screenFiles — the caps, mirrored from the server zod', () => {
   it('accepts images within the caps', () => {
     const intake = screenFiles([fakeFile(), fakeFile({ name: 'b.png' })], 0)
     expect(intake.accepted).toHaveLength(2)
@@ -66,10 +69,17 @@ describe('screenFiles — the legacy 4×5MB caps, mirrored from the server zod',
     expect(screenFiles([fakeFile({ size: MAX_ATTACHMENT_BYTES })], 0).accepted).toHaveLength(1)
   })
 
-  it('enforces the 4-attachment cap against what is already attached', () => {
-    const intake = screenFiles([fakeFile({ name: 'a.png' }), fakeFile({ name: 'b.png' })], 3)
+  /** Telemetry 7054e5f2: a fifth ordinary screenshot was refused under the old cap of four. */
+  it('takes a fifth screenshot', () => {
+    const intake = screenFiles([fakeFile({ name: 'e.png', size: 1024 * 1024 })], 4)
     expect(intake.accepted).toHaveLength(1)
-    expect(intake.rejected).toEqual(['b.png skipped — max 4 attachments per message'])
+    expect(intake.rejected).toEqual([])
+  })
+
+  it('enforces the attachment-count cap against what is already attached', () => {
+    const intake = screenFiles([fakeFile({ name: 'a.png' }), fakeFile({ name: 'b.png' })], MAX_ATTACHMENTS - 1)
+    expect(intake.accepted).toHaveLength(1)
+    expect(intake.rejected).toEqual([`b.png skipped — max ${MAX_ATTACHMENTS} attachments per message`])
   })
 
   it('a batch mixing every failure mode reports each file by name', () => {
@@ -92,6 +102,40 @@ describe('screenFiles — the legacy 4×5MB caps, mirrored from the server zod',
   it('an unnamed paste still reads humanly in the rejection', () => {
     const intake = screenFiles([fakeFile({ name: '', size: MAX_ATTACHMENT_BYTES + 1 })], 0)
     expect(intake.rejected).toEqual(['attachment is too large (max 5 MB)'])
+  })
+})
+
+/** The async append re-applies the count cap: encodes from an earlier drop land after `screenFiles`
+ *  screened the next one against a snapshot that did not include them. */
+describe('appendAttachment', () => {
+  const att = (bytes: number, mediaType = 'image/png') => ({ mediaType, data: 'A'.repeat(Math.ceil(bytes / 3) * 4) })
+
+  it('appends within the caps', () => {
+    expect(appendAttachment([att(3)], att(3))).toHaveLength(2)
+  })
+
+  it('refuses past the count cap', () => {
+    expect(appendAttachment(Array.from({ length: MAX_ATTACHMENTS }, () => att(3)), att(3))).toBeNull()
+  })
+
+  /** Images reach the provider inline in one turn, staged or not; files travel as paths. */
+  it('refuses images past the 20 MB image budget, and never counts files toward it', () => {
+    const full = Array.from({ length: 4 }, () => att(MAX_ATTACHMENT_BYTES - 2))
+    expect(appendAttachment(full, att(3))).toHaveLength(5)
+    expect(appendAttachment(full, att(30))).toBeNull()
+    expect(appendAttachment(full, att(MAX_ATTACHMENT_BYTES - 2, 'application/pdf'))).toHaveLength(5)
+  })
+})
+
+describe('screenFiles — the image budget', () => {
+  it('refuses an image past 20 MB of images, but still takes a PDF', () => {
+    const intake = screenFiles(
+      [fakeFile({ name: 'a.png', size: 2 }), fakeFile({ name: 'r.pdf', type: 'application/pdf', size: MAX_ATTACHMENT_BYTES })],
+      4,
+      MAX_IMAGE_BYTES_PER_MESSAGE - 1,
+    )
+    expect(intake.accepted.map((f) => f.name)).toEqual(['r.pdf'])
+    expect(intake.rejected).toEqual(['a.png skipped — max 20 MB of images per message'])
   })
 })
 

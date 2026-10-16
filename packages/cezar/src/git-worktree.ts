@@ -29,6 +29,8 @@ interface GitResult {
 interface RegisteredWorktree {
   path: string;
   branch?: string;
+  /** Its directory is gone; `git worktree prune` would drop the registration. */
+  prunable?: boolean;
 }
 
 /** Run git, never throw — degradation is the caller's policy. */
@@ -240,6 +242,8 @@ async function registeredWorktrees(repoRoot: string): Promise<RegisteredWorktree
       current = { path: line.slice('worktree '.length) };
     } else if (current && line.startsWith('branch ')) {
       current.branch = line.slice('branch '.length);
+    } else if (current && (line === 'prunable' || line.startsWith('prunable '))) {
+      current.prunable = true;
     } else if (!line && current) {
       worktrees.push(current);
       current = undefined;
@@ -247,6 +251,22 @@ async function registeredWorktrees(repoRoot: string): Promise<RegisteredWorktree
   }
   if (current) worktrees.push(current);
   return worktrees;
+}
+
+/**
+ * Local branches checked out in a worktree OTHER than the one at `dir`, mapped to that
+ * worktree's path. git refuses to check such a branch out a second time (telemetry da5ca728).
+ * A worktree whose directory is gone does not count — `git worktree prune` releases its branch.
+ */
+export async function branchesCheckedOutElsewhere(dir: string): Promise<Map<string, string>> {
+  const top = await git(dir, ['rev-parse', '--show-toplevel']);
+  const self = top.ok ? canonicalPath(top.stdout.trim()) : canonicalPath(dir);
+  const held = new Map<string, string>();
+  for (const wt of await registeredWorktrees(dir)) {
+    if (wt.prunable || !wt.branch?.startsWith('refs/heads/') || canonicalPath(wt.path) === self) continue;
+    held.set(wt.branch.slice('refs/heads/'.length), wt.path);
+  }
+  return held;
 }
 
 function worktreeInfo(path: string, branch: string, baseBranch: string): WorktreeInfo {

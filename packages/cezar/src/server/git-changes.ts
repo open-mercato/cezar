@@ -6,7 +6,7 @@ import { join, resolve, sep } from 'node:path';
 import { resolveTaskDiffBase, type RepointedHead } from '../git-diff-base.ts';
 import { isSafeGitRef } from '../git-refs.ts';
 import { resolveTaskRemotes, splitRemoteRef } from '../git-remotes.ts';
-import { gitHasIdentity, unresolvedConflicts } from '../git-worktree.ts';
+import { branchesCheckedOutElsewhere, gitHasIdentity, unresolvedConflicts } from '../git-worktree.ts';
 
 /**
  * Session git plumbing for the cockpit's Changes & Files tabs (redesign spec
@@ -718,6 +718,16 @@ export async function createOrSwitchBranch(
 
   const exists = await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`]);
   if (exists.ok) {
+    // git refuses a branch another worktree holds; say where it is instead of a bare `fatal:`.
+    const holder = (await branchesCheckedOutElsewhere(dir)).get(name);
+    if (holder) {
+      return {
+        ok: false,
+        error: `${name} is checked out in another worktree (${holder}) — open it there, or remove that worktree first`,
+      };
+    }
+    // A deleted worktree's stale registration still blocks the checkout until pruned.
+    await git(dir, ['worktree', 'prune']);
     const sw = await git(dir, ['checkout', name]);
     if (!sw.ok) return { ok: false, error: gitReason(sw, `git checkout ${name} failed`) };
     return { ok: true, branch: name, created: false };
@@ -764,14 +774,15 @@ export async function commitAll(dir: string, message: string): Promise<CommitRes
 }
 
 export type GitStatusResult =
-  | { ok: true; uncommitted: number; unpushed: number | null; behind: number | null }
+  | { ok: true; uncommitted: number; unpushed: number | null; behind: number | null; ahead: number | null }
   | { ok: false; error: string };
 
 /** What has not left the worktree yet: the files `commitAll` would commit, and the commits the
- *  upstream has not seen (`null` with no upstream — the branch was never pushed). Plus what has
- *  not ARRIVED: commits on the task's base branch that the branch does not have yet (`behind`,
- *  `null` when the base cannot be resolved). Read-only, and offline on purpose: the base is read
- *  from the remote-tracking ref as last fetched, never fetched here — this is polled. */
+ *  upstream has not seen (`null` with no upstream — the branch was never pushed). Plus how the
+ *  branch stands against the task's base: commits the base has that it lacks (`behind`) and the
+ *  commits it would propose (`ahead`), both `null` when the base cannot be resolved. Read-only,
+ *  and offline on purpose: the base is read from the remote-tracking ref as last fetched, never
+ *  fetched here — this is polled. */
 export async function worktreeGitStatus(dir: string, baseBranch?: string): Promise<GitStatusResult> {
   const status = await git(dir, ['status', '--porcelain', '-z']);
   if (!status.ok) return { ok: false, error: gitReason(status, 'git status failed') };
@@ -784,33 +795,43 @@ export async function worktreeGitStatus(dir: string, baseBranch?: string): Promi
     uncommitted++;
     if (/^(?:[RC].|.[RC])/.test(entries[i] as string)) i++;
   }
-  const behind = await commitsBehindBase(dir, baseBranch);
+  const { behind, ahead } = await baseDivergence(dir, baseBranch);
   const upstream = await git(dir, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
-  if (!upstream.ok) return { ok: true, uncommitted, unpushed: null, behind };
-  const ahead = await git(dir, ['rev-list', '--count', '@{u}..HEAD']);
-  const unpushed = ahead.ok ? Number.parseInt(ahead.stdout.trim(), 10) : Number.NaN;
-  return { ok: true, uncommitted, unpushed: Number.isFinite(unpushed) ? unpushed : null, behind };
+  if (!upstream.ok) return { ok: true, uncommitted, unpushed: null, behind, ahead };
+  const count = await git(dir, ['rev-list', '--count', '@{u}..HEAD']);
+  const unpushed = count.ok ? Number.parseInt(count.stdout.trim(), 10) : Number.NaN;
+  return { ok: true, uncommitted, unpushed: Number.isFinite(unpushed) ? unpushed : null, behind, ahead };
 }
 
-/** Commits on the base branch the worktree's HEAD does not contain — the freshest base ref
- *  first (`<base remote>/<base>`, then the local `<base>`; agents fetch, they never pull — the same
- *  reasoning as `resolveTaskDiffBase`). The base remote is the PR target (`git-remotes.ts`, #1383),
- *  or the remote a recorded `upstream/main` names. `null` when there is no named base: none
- *  recorded, a raw sha (a detached-HEAD fork point has no "latest" to be behind), or a ref this
- *  repo lacks. */
-async function commitsBehindBase(dir: string, baseBranch: string | undefined): Promise<number | null> {
-  if (!baseBranch || !isSafeGitRef(baseBranch) || /^[0-9a-f]{7,40}$/i.test(baseBranch)) return null;
+/** How the worktree's HEAD stands against the task's base branch: commits the base has that HEAD
+ *  lacks (`behind`) and commits HEAD has that the base lacks (`ahead` — what a PR would propose).
+ *  The freshest base ref first (`<base remote>/<base>`, then the local `<base>`; agents fetch, they
+ *  never pull — the same reasoning as `resolveTaskDiffBase`). The base remote is the PR target
+ *  (`git-remotes.ts`, #1383), or the remote a recorded `upstream/main` names. Both `null` when there
+ *  is no named base: none recorded, a raw sha (a detached-HEAD fork point has no "latest" to be
+ *  behind), or a ref this repo lacks. */
+export async function baseDivergence(
+  dir: string,
+  baseBranch: string | undefined,
+): Promise<{ behind: number | null; ahead: number | null }> {
+  const unknown = { behind: null, ahead: null };
+  if (!baseBranch || !isSafeGitRef(baseBranch) || /^[0-9a-f]{7,40}$/i.test(baseBranch)) return unknown;
   const remotes = await resolveTaskRemotes((args) => git(dir, args));
   const split = splitRemoteRef(baseBranch, remotes.names);
   const remote = split.remote ?? remotes.base;
   for (const ref of remote ? [`${remote}/${split.branch}`, split.branch] : [split.branch]) {
     const exists = await git(dir, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
     if (!exists.ok) continue;
-    const count = await git(dir, ['rev-list', '--count', `HEAD..${ref}`]);
-    const behind = count.ok ? Number.parseInt(count.stdout.trim(), 10) : Number.NaN;
-    return Number.isFinite(behind) ? behind : null;
+    // `--left-right` over `HEAD...ref` prints "<only in HEAD>\t<only in ref>".
+    const count = await git(dir, ['rev-list', '--left-right', '--count', `HEAD...${ref}`]);
+    if (!count.ok) return unknown;
+    const [ahead, behind] = count.stdout.trim().split(/\s+/).map((n) => Number.parseInt(n, 10));
+    return {
+      behind: Number.isFinite(behind) ? (behind as number) : null,
+      ahead: Number.isFinite(ahead) ? (ahead as number) : null,
+    };
   }
-  return null;
+  return unknown;
 }
 
 export type PushResult =

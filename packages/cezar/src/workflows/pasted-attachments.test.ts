@@ -619,6 +619,30 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
     expect(ndjson).not.toContain(TINY_PNG_B64);
   }, 30_000);
 
+  // Telemetry 18c930de: the note stands in for the empty task inside the step's template.
+  it('an attachment-only task opens on the attachment note, inside the step template', async () => {
+    writeFileSync(argsFile, '', 'utf8');
+    writeFileSync(stdinFile, '', 'utf8');
+    const workflow: WorkflowDef = {
+      name: 'attachment-only-test',
+      source: 'built-in',
+      steps: [
+        { id: 'work', prompt: 'Review: {{task}} Then report back.' },
+        { id: 'verify', command: 'true' },
+      ],
+    };
+    const image: ContentBlock = {
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: TINY_PNG_B64 },
+    };
+    const record = manager.startRun(workflow, { task: '', images: [image], worktree: false });
+    await waitForStatus(record.id, ['done', 'review', 'failed', 'cancelled']);
+
+    const userText = readStdinLines()[0]?.userText ?? '';
+    expect(userText.startsWith('Review: The user attached the files below without a written task — work out what they need from them. Then report back.')).toBe(true);
+    expect(userText).toContain('The user attached 1 pasted file, also saved on disk at:');
+  }, 30_000);
+
   /**
    * The PDF/TXT/MD half of the same contract (#950). A file has nothing for the model to look at,
    * so the assertions are the mirror image of the screenshot case: the bytes must land on disk and

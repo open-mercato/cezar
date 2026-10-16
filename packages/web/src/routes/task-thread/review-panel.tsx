@@ -7,7 +7,7 @@ import {
   EyeIcon,
   GitPullRequestIcon,
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { ApiError, continueRun, createRunPr } from '@/api/client'
 import { queryKeys } from '@/api/queries'
@@ -23,10 +23,10 @@ import { isHttpUrl } from '@/lib/utils'
 
 import { finishTitle } from './run-actions'
 import { useContinuationProvider } from './continuation-provider'
+import { useDeliverPrompt } from './deliver-prompt'
 import { MESSAGE_TEXT_MAX, messageWithReview, type DiffComments } from './diff-comments'
 import { useDraft } from './thread-draft'
 import { useFinishRun } from './use-finish-run'
-import { trackMessageSent } from '@/lib/telemetry'
 
 /**
  * The review gate (spec 009, §"Task thread" review bullet) on the new surface — cezar's core
@@ -77,6 +77,15 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
   const [manual, setManual] = useState<string | null>(null)
   const finish = useFinishRun(run.id)
   const continuation = useContinuationProvider(run)
+  // The review notes ride the SAME delivery seam as the composer's (deliver-prompt): a record
+  // still claiming `review` over a run that has been reopened (an auto-resume, a restart
+  // recovery) sends the notes to a dead session, and only the recovery — refetch, then deliver on
+  // the live path — keeps them from bouncing back as a `run is still active` toast (77117b95).
+  const continueWith = useCallback(
+    (text: string) => continueRun(run.id, { text, runner: continuation.runnerOverride }),
+    [run.id, continuation.runnerOverride],
+  )
+  const deliverPrompt = useDeliverPrompt(run, continueWith, { surface: 'review' })
   const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
 
   // Legacy send-back semantics verbatim (web/app.js `data-action="send-back"`): the notes go
@@ -95,9 +104,7 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
         if (message.length > MESSAGE_TEXT_MAX) {
           throw new Error('Too long with the diff comments attached — shorten the notes or remove some comments.')
         }
-        const result = await continueRun(run.id, { text: message, runner: continuation.runnerOverride })
-        trackMessageSent('review')
-        return result
+        return deliverPrompt(message, [])
       }
       return draft.submit(() => (diffComments ? diffComments.submit(deliver) : deliver([])))
     },

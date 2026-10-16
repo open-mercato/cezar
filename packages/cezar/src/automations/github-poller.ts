@@ -87,6 +87,8 @@ export interface GithubPollResult {
 }
 
 export interface GithubPollerOptions {
+  /** GitHub Enterprise host; omitted for github.com. Added to every `gh api` as `--hostname`. */
+  host?: string;
   run?: (executable: string, args: readonly string[]) => Promise<string>;
 }
 
@@ -106,11 +108,18 @@ export const POLL_RECORD_CEILING = HARD_CANDIDATE_CAP;
 export class GithubPoller {
   private readonly run: NonNullable<GithubPollerOptions['run']>;
 
+  private readonly host: string | undefined;
+
   constructor(options: GithubPollerOptions = {}) {
-    this.run = options.run ?? (async (executable, args) => (await execFileAsync(executable, [...args], {
+    this.host = options.host && options.host.toLowerCase() !== 'github.com' ? options.host : undefined;
+    const run = options.run ?? (async (executable, args) => (await execFileAsync(executable, [...args], {
       maxBuffer: 4 * 1024 * 1024,
       timeout: GITHUB_COMMAND_TIMEOUT_MS,
     })).stdout);
+    const host = this.host;
+    this.run = host
+      ? (executable, args) => run(executable, args[0] === 'api' ? ['api', '--hostname', host, ...args.slice(1)] : args)
+      : run;
   }
 
   async poll(
@@ -163,7 +172,10 @@ export class GithubPoller {
     }
 
     const maxRecords = Math.min(options.maxRecords ?? definition.filters.maxRecords, HARD_CANDIDATE_CAP);
-    const expectedRepoUrl = `https://api.github.com/repos/${owner}/${repo}`.toLowerCase();
+    // github.com answers `https://api.github.com/repos/o/r`; Enterprise answers `…/api/v3/repos/o/r`
+    // (self-hosted) or `https://api.<sub>.ghe.com/repos/o/r`, so Enterprise matches on the tail.
+    const expectedRepoPath = `/repos/${owner}/${repo}`.toLowerCase();
+    const expectedRepoUrl = `https://api.github.com${expectedRepoPath}`;
     const observations: Array<{
       timestamp: string;
       tieBreaker: string;
@@ -207,7 +219,8 @@ export class GithubPoller {
       const sourceObservations: typeof observations = [];
       truncated ||= items.length >= maxRecords;
       for (const item of closedSource ? items : items.slice(0, HARD_CANDIDATE_CAP)) {
-        if (item.repository_url.toLowerCase() !== expectedRepoUrl) continue;
+        const itemRepoUrl = item.repository_url.toLowerCase();
+        if (this.host ? !itemRepoUrl.endsWith(expectedRepoPath) : itemRepoUrl !== expectedRepoUrl) continue;
         if (source.opened && item.pull_request && definition.events.includes('pull_request.opened')) {
           const candidate = normalizeOpened(owner, repo, item, 'pull_request.opened');
           if (atOrAfter(candidate.timestamp, options.since)) {

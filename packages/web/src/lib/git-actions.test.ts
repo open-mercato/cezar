@@ -34,6 +34,9 @@ describe('gitActionPolicy — the one action', () => {
     // Regression: autosave leaves finished tasks with nothing uncommitted, and Create PR used to
     // hide behind a stale `+0 −0` diffStat. It needs nothing from `git status` at all.
     ['no PR, git status still loading → Create PR', { uncommitted: undefined }, 'create-pr'],
+    ['no PR, commits over the base → Create PR', { uncommitted: 0, ahead: 2 }, 'create-pr'],
+    ['no PR, even with the base but uncommitted work → Create PR (it commits first)', { uncommitted: 2, ahead: 0 }, 'create-pr'],
+    ['no PR, base unknown and clean → Create PR (the server decides)', { uncommitted: 0, ahead: null }, 'create-pr'],
     // a PR
     ['PR + uncommitted changes → Commit and push', { prUrl: PR, uncommitted: 2, unpushed: 0 }, 'commit-push'],
     ['PR + uncommitted AND unpushed → Commit and push (one step publishes both)', { prUrl: PR, uncommitted: 2, unpushed: 1 }, 'commit-push'],
@@ -111,6 +114,8 @@ describe('gitActionPolicy — a chosen step that cannot run right now says why',
     [{ forge: { kind: 'github', available: false, reason: 'gh is not logged in' } }, 'gh is not logged in'],
     [{ forge: { kind: 'github', available: false } }, 'unreachable'],
     [{ branch: undefined }, 'no worktree'],
+    // Telemetry 16aef26d: an empty branch was offered, pushed, then refused by gh.
+    [{ uncommitted: 0, ahead: 0 }, 'no changes to propose'],
   ])('Create PR disabled for %j', (extra, phrase) => {
     const action = gitActionPolicy(withState(extra))
     expect(action).toMatchObject({ id: 'create-pr', enabled: false })

@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { z } from 'zod';
 import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
 import { parseRemote, resolveTaskRemotes } from '../git-remotes.ts';
+import { GITHUB_COM, isSafeHostname } from '../github-hosts.ts';
 
 /**
  * Pull-request head checkouts for automations (spec 2026-10-06-agentic-e2e-checks Phase 3).
@@ -75,15 +76,16 @@ function unavailable(what: string, stderr: string): PrHeadResolution {
   return { kind: 'failed', reason: `pr-head-unavailable: ${what}${detail ? ` — ${detail}` : ''}` };
 }
 
-/** The remote whose URL is `repo`, else the base remote, else `origin` (the old default). */
-async function remoteForRepo(exec: CommandRunner, root: string, repo: string): Promise<string> {
+/** The remote whose URL is `repo`, else the base remote, else `origin` (the old default); with the
+ *  host of the URL it matched (undefined when it fell back), which `gh api` needs on Enterprise. */
+async function remoteForRepo(exec: CommandRunner, root: string, repo: string): Promise<{ name: string; host?: string }> {
   const remotes = await resolveTaskRemotes((args) => exec('git', args, root));
   for (const name of remotes.names) {
     const url = await exec('git', ['remote', 'get-url', name], root);
     const parsed = url.ok ? parseRemote(url.stdout.trim()) : null;
-    if (parsed && `${parsed.owner}/${parsed.repo}`.toLowerCase() === repo.toLowerCase()) return name;
+    if (parsed && `${parsed.owner}/${parsed.repo}`.toLowerCase() === repo.toLowerCase()) return { name, host: parsed.host };
   }
-  return remotes.base ?? 'origin';
+  return { name: remotes.base ?? 'origin' };
 }
 
 export async function resolvePrHead(options: {
@@ -118,7 +120,9 @@ export async function resolvePrHead(options: {
     };
   }
 
-  const api = await exec('gh', ['api', `repos/${repo}/pulls/${number}`], root);
+  const remote = await remoteForRepo(exec, root, repo);
+  const hostArgs = remote.host && isSafeHostname(remote.host) && remote.host !== GITHUB_COM ? ['--hostname', remote.host] : [];
+  const api = await exec('gh', ['api', ...hostArgs, `repos/${repo}/pulls/${number}`], root);
   if (!api.ok) return unavailable('could not read the pull request', api.stderr);
   let parsed: z.infer<typeof pullSchema>;
   try {
@@ -132,8 +136,7 @@ export async function resolvePrHead(options: {
   if (untrusted && !options.allowForkHeads) return { kind: 'skipped', reason: 'fork-head' };
 
   // `refs/pull/N/head` lives on the PR's repo, not necessarily `origin` (#1383).
-  const remote = await remoteForRepo(exec, root, repo);
-  const fetched = await exec('git', ['fetch', '--no-tags', remote, `+refs/pull/${number}/head:${ref}`], root);
+  const fetched = await exec('git', ['fetch', '--no-tags', remote.name, `+refs/pull/${number}/head:${ref}`], root);
   if (!fetched.ok) return unavailable(`could not fetch refs/pull/${number}/head`, fetched.stderr);
   const resolved = await exec('git', ['rev-parse', '--verify', `${ref}^{commit}`], root);
   if (!resolved.ok) return unavailable(`could not resolve ${ref}`, resolved.stderr);

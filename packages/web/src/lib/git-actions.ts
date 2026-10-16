@@ -24,6 +24,8 @@ export interface GitActionState {
   unpushed?: number | null
   /** Commits on the task's base branch (as last fetched) that the branch lacks; null = unknown. */
   behind?: number | null
+  /** Commits the branch has that its base lacks — what a PR would propose; null = unknown. */
+  ahead?: number | null
   /** The repo's remote from `/api/health` (`repo.remote`); undefined when none configured. */
   remote?: string
   /** `/api/v1/health` `forge` — null means no supported forge remote (plain-git features only).
@@ -130,6 +132,11 @@ function createPrAction(state: GitActionState): GitAction {
   if (isActive(state.status)) {
     return disabled('Create PR unavailable — the run is still active; wait for the review gate')
   }
+  // Live `git status`, not the stale diffStat: only a branch KNOWN to hold nothing is refused
+  // (telemetry 16aef26d) — loading or unknown still offers the step.
+  if (state.ahead === 0 && state.uncommitted === 0) {
+    return disabled('Create PR unavailable — no changes to propose; the branch has nothing its base lacks')
+  }
   return {
     id: 'create-pr',
     label: 'Create PR',
@@ -149,7 +156,8 @@ function createPrAction(state: GitActionState): GitAction {
  *    server's final autosave), and needs nothing from `git status` — so it is offered even while
  *    that answer is loading or failed. Deliberately NOT gated on the run's `diffStat`: autosave
  *    leaves a finished task with nothing uncommitted, and a stale `+0 −0` beside it hid the button
- *    on tasks that had real work to publish. An empty branch gets the server's own refusal.
+ *    on tasks that had real work to publish. Only a live `git status` saying the branch is
+ *    even with its base and the tree is clean disables it.
  *    Without a supported forge a PR cannot be opened, so the step falls back to Commit, then Push.
  *  - A PR, or no forge → nothing until `git status` has answered (no flash of a wrong step).
  *  - A PR → **Commit and push** while there are uncommitted changes (one step: the commit dialog,

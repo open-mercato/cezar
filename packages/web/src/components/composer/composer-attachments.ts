@@ -2,13 +2,14 @@ import {
   attachmentExtension,
   isAttachmentMediaType,
   isImageMediaType,
+  MAX_ATTACHMENTS_PER_MESSAGE,
   type AttachmentInput,
 } from '@open-mercato/cezar-api-client'
 
 /**
  * The composer's attachment intake — paperclip, ⌘V paste, and drag-drop all funnel here, exactly
  * like the legacy message bar (web/app.js `addImage`/`readImageFile`). The caps mirror the
- * server's zod (max 4 entries, ~5 MB decoded each) so the client rejects with a human sentence
+ * server's zod (`attachmentListSchema`: count, ~5 MB decoded each, 20 MB of images) so the client rejects with a human sentence
  * instead of shipping a request the server will bounce.
  *
  * Since #950 an attachment is not necessarily an image: a `.pdf`, `.txt` or `.md` is taken too.
@@ -17,8 +18,31 @@ import {
  * `.md`, so the extension is consulted before a file is turned away.
  */
 
-export const MAX_ATTACHMENTS = 4
+export const MAX_ATTACHMENTS = MAX_ATTACHMENTS_PER_MESSAGE
 export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
+
+/** Decoded image bytes per message — images reach the provider inline in one turn, staged or not,
+ *  so the server holds them to `MAX_ATTACHMENTS_TOTAL_BASE64`; files travel as paths and are exempt. */
+export const MAX_IMAGE_BYTES_PER_MESSAGE = 4 * MAX_ATTACHMENT_BYTES
+
+/** Decoded size of the images already attached, from their base64 length. */
+export function attachedImageBytes(attachments: readonly Pick<AttachmentInput, 'mediaType' | 'data'>[]): number {
+  return attachments.reduce(
+    (n, a) => (isImageMediaType(a.mediaType) ? n + Math.floor((a.data.length * 3) / 4) : n),
+    0,
+  )
+}
+
+/** The async append's re-check: `screenFiles` ran against a snapshot, and encodes still in flight
+ *  from an earlier drop are not in it — so both caps are re-applied to the list as it now is. */
+export function appendAttachment<T extends Pick<AttachmentInput, 'mediaType' | 'data'>>(
+  prev: readonly T[],
+  next: T,
+): T[] | null {
+  if (prev.length >= MAX_ATTACHMENTS) return null
+  if (attachedImageBytes(prev) + attachedImageBytes([next]) > MAX_IMAGE_BYTES_PER_MESSAGE) return null
+  return [...prev, next]
+}
 
 /** Extension → media type for a file whose own `type` is empty or unrecognised. `.log` is here
  *  because `text/plain` is what the allowlist takes, and a log the browser typed as `text/plain`
@@ -125,10 +149,15 @@ export interface AttachmentIntake {
  * failure this screening exists to prevent is the silent one: before #950 a `.md` dropped on the
  * composer simply vanished, which reads as a broken composer rather than as an unsupported file.
  */
-export function screenFiles(files: readonly File[], alreadyAttached: number): AttachmentIntake {
+export function screenFiles(
+  files: readonly File[],
+  alreadyAttached: number,
+  alreadyAttachedImageBytes = 0,
+): AttachmentIntake {
   const accepted: File[] = []
   const rejected: string[] = []
   let count = alreadyAttached
+  let imageBytes = alreadyAttachedImageBytes
   for (const file of files) {
     const label = file.name || 'attachment'
     if (attachmentMediaType(file) === null) {
@@ -145,8 +174,14 @@ export function screenFiles(files: readonly File[], alreadyAttached: number): At
       rejected.push(`${label} skipped — max ${MAX_ATTACHMENTS} attachments per message`)
       continue
     }
+    const isImage = isImageMediaType(attachmentMediaType(file) ?? '')
+    if (isImage && imageBytes + file.size > MAX_IMAGE_BYTES_PER_MESSAGE) {
+      rejected.push(`${label} skipped — max 20 MB of images per message`)
+      continue
+    }
     accepted.push(file)
     count += 1
+    if (isImage) imageBytes += file.size
   }
   return { accepted, rejected }
 }

@@ -79,6 +79,7 @@ function indexed(
   return {
     status: 'done',
     createdAt: '2026-07-14T10:00:00Z',
+    lastActivityAt: '2026-07-14T10:00:00Z',
     archived: false,
     workflow: 'build',
     ...overrides,

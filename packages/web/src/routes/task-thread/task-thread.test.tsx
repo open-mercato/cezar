@@ -566,6 +566,108 @@ describe('ThreadView', () => {
     expect(button.title.length).toBeGreaterThan(0)
   })
 
+  it('any failure with a session to continue offers Continue after its message', async () => {
+    const MISSING = 'continue failed: claude CLI exited with code 1 — No conversation found with session ID: s-1'
+    renderView(
+      <ThreadView
+        run={run('failed', {
+          error: MISSING,
+          steps: [
+            { id: 'task', name: 'Do the task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0, sessionId: 's-1' },
+          ],
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    const button = await waitFor(() => {
+      const el = document.querySelector('[data-slot="footer-continue"]') as HTMLButtonElement | null
+      expect(el).not.toBeNull()
+      expect(el!.disabled).toBe(false)
+      return el!
+    })
+    expect(document.querySelector('[data-slot="thread-footer"]')?.textContent).toBe(
+      `Session failed — ${MISSING} · Continue`,
+    )
+    fireEvent.click(button)
+    await waitFor(() =>
+      expect(
+        vi.mocked(fetch).mock.calls.some(
+          ([input, init]) => String(input) === '/api/v1/runs/r1/continue' && init?.method === 'POST',
+        ),
+      ).toBe(true),
+    )
+  })
+
+  it('telemetry 77117b95: a footer Continue on a record that has drifted live refetches instead of toasting', async () => {
+    const sent: { path: string; method: string }[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init: RequestInit = {}) => {
+        const path = String(input)
+        const method = init.method ?? 'GET'
+        sent.push({ path, method })
+        const json = (body: unknown, status = 200) =>
+          Promise.resolve(
+            new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }),
+          )
+        if (path === '/api/v1/providers/status')
+          return json({ providers: [{ provider: 'claude', status: 'connected', enabled: true }] })
+        // The record said `failed`; the server has the run active — a resume it never saw.
+        if (path === '/api/v1/runs/r1/continue' && method === 'POST') return json({ error: 'run is still active' }, 409)
+        if (path === '/api/v1/runs/r1' && method === 'GET') return json(run('running'))
+        return json([])
+      }),
+    )
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter>
+          <ThreadView
+            run={run('failed', {
+              error: 'the session closed after inactivity before the task declared completion — continue to resume it',
+              steps: [{ id: 'task', name: 'Do the task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0, sessionId: 's-1' }],
+            })}
+            thread={reduceThread(EVENTS)}
+          />
+        </MemoryRouter>
+        <Toaster />
+      </QueryClientProvider>,
+    )
+
+    const button = await waitFor(() => {
+      const el = document.querySelector('[data-slot="footer-continue"]') as HTMLButtonElement | null
+      expect(el).not.toBeNull()
+      expect(el!.disabled).toBe(false)
+      return el!
+    })
+    fireEvent.click(button)
+
+    // The refusal is answered by one authoritative refetch, not a red toast naming it...
+    await waitFor(() => expect(sent.some((r) => r.method === 'GET' && r.path === '/api/v1/runs/r1')).toBe(true))
+    // ...and nothing went out: an empty one-click Continue has no message to deliver.
+    expect(sent.some((r) => r.path === '/api/v1/runs/r1/messages')).toBe(false)
+    const toastEl = document.querySelector('[data-slot="toast"]')
+    expect(toastEl?.textContent ?? '').not.toContain('run is still active')
+  })
+
+  it('a failure already scheduled to resume itself offers no extra Continue', () => {
+    renderView(
+      <ThreadView
+        run={run('failed', {
+          error: 'Claude AI usage limit reached',
+          autoResumeAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+          steps: [
+            { id: 'task', name: 'Do the task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0, sessionId: 's-1' },
+          ],
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    expect(document.querySelector('[data-slot="thread-footer"]')?.textContent).toBe(
+      'Session failed — Claude AI usage limit reached',
+    )
+    expect(document.querySelector('[data-slot="footer-continue"]')).toBeNull()
+  })
+
   it('the same advice stays plain text when there is no session to continue', () => {
     renderView(
       <ThreadView

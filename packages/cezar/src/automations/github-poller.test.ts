@@ -36,6 +36,32 @@ describe('GithubPoller', () => {
     expect(result.candidates[0]).toMatchObject({ repo: 'acme/demo', number: 7, title: 'A  title' });
   });
 
+  it('talks to an enterprise host and accepts its repository_url shapes', async () => {
+    const run = vi.fn(async () => JSON.stringify({ items: [
+      { ...item, node_id: 'ghes', repository_url: 'https://ghe.corp.example/api/v3/repos/acme/demo' },
+      { ...item, node_id: 'cloud', repository_url: 'https://api.company.ghe.com/repos/Acme/Demo' },
+      { ...item, node_id: 'foreign', repository_url: 'https://ghe.corp.example/api/v3/repos/evil/demo' },
+    ] }));
+    const result = await new GithubPoller({ run, host: 'ghe.corp.example' }).poll('acme', 'demo', definition);
+    expect(run).toHaveBeenCalledWith('gh', expect.arrayContaining(['api', '--hostname', 'ghe.corp.example', '/search/issues']));
+    expect(result.candidates.map((c) => c.nodeId).sort()).toEqual(['cloud', 'ghes']);
+  });
+
+  it('accepts the Enterprise Cloud repository_url on a *.ghe.com host', async () => {
+    const run = vi.fn(async () => JSON.stringify({ items: [
+      { ...item, node_id: 'cloud', repository_url: 'https://api.acme.ghe.com/repos/acme/demo' },
+      { ...item, node_id: 'foreign', repository_url: 'https://api.acme.ghe.com/repos/acme/other' },
+    ] }));
+    const result = await new GithubPoller({ run, host: 'acme.ghe.com' }).poll('acme', 'demo', definition);
+    expect(result.candidates.map((c) => c.nodeId)).toEqual(['cloud']);
+  });
+
+  it('adds no --hostname for github.com', async () => {
+    const run = vi.fn(async (_executable: string, _args: readonly string[]) => JSON.stringify({ items: [] }));
+    await new GithubPoller({ run, host: 'github.com' }).poll('acme', 'demo', definition);
+    expect(run.mock.calls[0]?.[1]).not.toContain('--hostname');
+  });
+
   it('drains opened and label-event searches independently in oldest-first order', async () => {
     const pullRequest = {
       ...item,

@@ -3,7 +3,7 @@ import {
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
   trackerCredentialsSchema, trackerItemParamsSchema, trackerAssociationInputSchema, type TrackerChangedEvent,
   secretParamsSchema, secretValueInputSchema, type SecretsList, type SecretValueInput,
-  e2eSetupInputSchema, type E2eStatus,
+  e2eSetupInputSchema, type E2eStatus, taskActionSurfaceSchema,
 } from '@open-mercato/cezar-contract';
 import { SecretStore, SecretsError, type SecretScopeRef } from '../workspace/secrets.ts';
 import { E2E_SETUP_TASK, e2eCredentialsAmong, e2eSetupWorkflow, latestE2eSetupRun, readE2eStatus, setupInFlight } from '../e2e-setup.ts';
@@ -76,12 +76,24 @@ import {
 // A contract VALUE, like `workspaceUiStateSchema` in workspace/migrations.ts — the request
 // schema this route validates with is the same one the client compiles against.
 import {
+  ATTACHMENT_IMAGES_TOO_LARGE,
+  ATTACHMENT_UPLOAD_MISSING,
   attachmentInputSchema,
+  attachmentListSchema,
+  type AttachmentEntry,
+  deleteUploadResponseSchema,
+  isImageAttachmentName,
+  isImageMediaType,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_ATTACHMENTS_TOTAL_BASE64,
+  stagedUploadSchema,
+  uploadIdParamSchema,
   modelDiscoveryRunnerSchema,
   openProjectInSchema,
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
 import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
+import { hasTaskOrAttachments, TASK_OR_ATTACHMENTS_ISSUE } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { hostUsageSampler, type HostSampler } from '../core/host-usage.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
@@ -100,6 +112,13 @@ import {
   type ProviderStatusResponse,
 } from '../core/provider-auth.ts';
 import { applyProviderEnablement } from '../core/provider-availability.ts';
+import {
+  LOGIN_WATCH_OFFSETS_MS,
+  reportInconclusiveProbe,
+  trackLoginNotOpened,
+  trackLoginOpened,
+  watchLogin,
+} from './provider-telemetry.ts';
 import { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
 import { currentUsage, currentTimedUsage, onUsage } from '../core/process-usage.ts';
 import { DashboardReader } from '../workspace/dashboard.ts';
@@ -140,7 +159,7 @@ import {
   streamRunEvents,
   validateLiveCursor,
 } from '../runs/event-history.ts';
-import { readRunIndexFromDisk } from '../runs/run-index.ts';
+import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
 import { onRunDeleted, onRunEvent } from './sse-subscriptions.ts';
 import {
@@ -165,7 +184,8 @@ import {
   type DeleteDraftResponse,
 } from '@open-mercato/cezar-contract';
 import { toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
-import { removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
+import { deleteUpload, readUpload, writeUpload } from '../uploads.ts';
+import { branchesCheckedOutElsewhere, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
 import { isReclaimable, reclaimWorktrees } from '../runs/retention.ts';
 import { getBranches, getCommit, getDiff, getLog, getRepoInfo, getStatus } from './git.ts';
 import {
@@ -242,8 +262,10 @@ import { readUiState, uiStatePath } from '../ui-state.ts';
 import { agentHomePaths, cezarHomeDir, expandTilde, isAbsolutePath } from '../paths.ts';
 import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
+import { applyKeepAlive } from './keep-alive.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
 import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index.ts';
+import { isGithubHost } from '../github-hosts.ts';
 import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
@@ -254,7 +276,7 @@ import {
   openInApp,
   withResolvedClaudeBin,
 } from './open-in-app.ts';
-import { createDraftPr } from './pr.ts';
+import { createDraftPr, type DraftPrOutcome } from './pr.ts';
 import {
   DEFAULT_TELEMETRY_URL,
   TELEMETRY_POLICY_VERSION,
@@ -277,7 +299,10 @@ import {
   providerForActiveRun,
   providerForExistingRun,
   providersRequiredByWorkflow,
+  recordedProfileFor,
   unavailableProviderMessage,
+  withSelectedAccounts,
+  type ProviderAccountScope,
 } from './provider-action-gate.ts';
 import {
   ASSET_CACHE_CONTROL,
@@ -354,6 +379,8 @@ export interface ServerDeps {
   providerRuntimeAuth?: ProviderRuntimeAuthObserver;
   /** Local terminal handoff for provider-owned login. */
   openTerminal?: typeof openInTerminal;
+  /** When Connect re-checks the login it opened (`LOGIN_WATCH_OFFSETS_MS`); tests pass `[]`. */
+  loginWatchOffsetsMs?: readonly number[];
   /** Hand a local FILE (or folder) to the OS default app. Injected so the account-file open route
    *  is testable without actually launching an editor. */
   openFile?: typeof openFileInDefaultApp;
@@ -459,6 +486,9 @@ function allocateAgentProfileId(source: string, taken: Iterable<string>): string
   // `^[a-z0-9][a-z0-9-]{0,63}$` shape, so `~/.claude-klaudiusz` slugs to `claude-klaudiusz`.
   return allocateProjectSlug(source, taken);
 }
+
+/** In-flight `POST /runs/:id/pr` publishes, keyed by data dir + run id. */
+const prPublishes = new Map<string, Promise<{ outcome: DraftPrOutcome; branch: string }>>();
 
 const providerParamSchema = z.enum(PROVIDER_IDS);
 const providerEnabledSchema = z.object({ enabled: z.boolean() }).strict();
@@ -691,8 +721,9 @@ const startRunSchema = z
     // The primary agent prompt handed to the spawned runner. Bounded like the
     // other prompt fields (`systemPrompt` 20k, message `text` 100k) so an
     // unbounded body can't be piped into a spawned process (#429). 100k chars
-    // (~25k tokens) is well past any hand-written task.
-    task: z.string().min(1).max(100_000, 'must be at most 100000 characters'),
+    // (~25k tokens) is well past any hand-written task. May be empty when attachments carry the
+    // task (telemetry 18c930de) — the refine below requires one or the other.
+    task: z.string().max(100_000, 'must be at most 100000 characters'),
     model: z.string().optional(),
     // Agent backend for this task (falls back to config `defaultRunner`).
     runner: z.enum(RUNNER_IDS).optional(),
@@ -726,7 +757,7 @@ const startRunSchema = z
       .transform((s) => (s ? s : undefined)),
     // Attachments pasted into the new-task form — same shape and limits as a
     // live-session message; delivered with the first agent step's opening.
-    images: z.array(attachmentInputSchema).max(4).optional(),
+    images: attachmentListSchema.optional(),
     // Inbox follow-up (#374): the todo the composer was prefilled from
     // (`/new?skill=&ref=&todo=t1`). On a successful start the entry is marked
     // started — the same bookkeeping POST /api/todos/:id/start does, so the
@@ -740,7 +771,8 @@ const startRunSchema = z
   })
   .refine((b) => Boolean(b.workflow) !== Boolean(b.steps), {
     message: 'provide either "workflow" or "steps", not both',
-  });
+  })
+  .refine(hasTaskOrAttachments, TASK_OR_ATTACHMENTS_ISSUE);
 
 const pickSchema = z.object({
   runId: z.string().min(1),
@@ -928,13 +960,13 @@ const openInSchema = z.object({
   path: z.string().max(1_000).optional(),
 });
 
-// Attachment-carrying bodies validate with the CONTRACT's `attachmentInputSchema` (#950) —
+// Attachment-carrying bodies validate with the CONTRACT's `attachmentListSchema` (#950) —
 // images plus the short PDF/TXT/MD allowlist, ~5 MB each once base64-decoded. Imported rather
 // than mirrored here, so the wire cannot drift from what the cockpit compiles against.
 const messageSchema = z
   .object({
     text: z.string().max(100_000).default(''),
-    images: z.array(attachmentInputSchema).max(4).default([]),
+    images: attachmentListSchema.default([]),
   })
   .refine((m) => m.text.trim().length > 0 || m.images.length > 0, {
     message: 'message needs text or at least one attachment',
@@ -945,7 +977,7 @@ const messageSchema = z
 const queuedMessagePatchSchema = z
   .object({
     text: z.string().max(100_000).optional(),
-    images: z.array(attachmentInputSchema).max(4).optional(),
+    images: attachmentListSchema.optional(),
   })
   .refine((m) => m.text !== undefined || m.images !== undefined, {
     message: 'message edit needs text or attachments',
@@ -955,7 +987,7 @@ const queuedMessagePatchSchema = z
 // above; the one that actually matters is the FOLDED total, because 20 messages of
 // 100 000 chars each would otherwise compose a ~2 M-character {{task}}.
 const MAX_QUEUED_MESSAGES = 20;
-const MAX_QUEUED_ATTACHMENTS = 8;
+const MAX_QUEUED_ATTACHMENTS = 2 * MAX_ATTACHMENTS_PER_MESSAGE;
 const MAX_FOLDED_TASK_CHARS = 200_000;
 
 /** Length of the prompt a run would execute with — `task` plus its whole stack,
@@ -969,6 +1001,49 @@ function foldedLength(task: string, stack: Array<{ text: string }>): number {
     .join('\n\n').length;
 }
 
+/** A message's attachments as engine content, staged uploads read back from the store
+ *  (telemetry 7054e5f2). A string is the refusal: `ATTACHMENT_UPLOAD_MISSING` when a referenced
+ *  upload is gone (the composer re-stages), or the image budget — images reach the provider
+ *  inline in one turn, so references count toward it too. */
+function resolveAttachments(entries: AttachmentEntry[]): PastedContent[] | string;
+function resolveAttachments(entries: AttachmentEntry[] | undefined): PastedContent[] | undefined | string;
+function resolveAttachments(entries: AttachmentEntry[] | undefined): PastedContent[] | undefined | string {
+  if (entries === undefined) return undefined;
+  const out: PastedContent[] = [];
+  let imageChars = 0;
+  for (const entry of entries) {
+    const attachment = 'data' in entry ? entry : readUpload(entry.uploadId);
+    if (!attachment) return ATTACHMENT_UPLOAD_MISSING;
+    if (isImageMediaType(attachment.mediaType)) imageChars += attachment.data.length;
+    out.push(toPastedContent('data' in entry || !entry.name ? attachment : { ...attachment, name: entry.name }));
+  }
+  if (imageChars > MAX_ATTACHMENTS_TOTAL_BASE64) return ATTACHMENT_IMAGES_TOO_LARGE;
+  return out;
+}
+
+/** Base64 size of the images a queued run's OPENING turn will carry: its task images plus every
+ *  stacked message's, read back from disk at dequeue and delivered together (#472). */
+function queuedImageChars(dataDir: string, runId: string, urls: readonly string[]): number {
+  let bytes = 0;
+  for (const url of urls) {
+    const name = url.split('/').pop() ?? '';
+    if (!isImageAttachmentName(name) || name.includes('..')) continue;
+    try {
+      bytes += statSync(join(dataDir, 'runs', `${runId}-images`, name)).size;
+    } catch {
+      // Gone files are dropped at dequeue too.
+    }
+  }
+  return Math.ceil(bytes / 3) * 4;
+}
+
+/** Base64 size of the image blocks among a message's resolved attachments. */
+function imageChars(content: readonly PastedContent[]): number {
+  return content.reduce((n, b) => (b.type === 'image' ? n + b.source.data.length : n), 0);
+}
+
+const QUEUED_IMAGES_TOO_LARGE = 'too many queued images — 20 MB of images across the task and its queued messages';
+
 // "Continue"/"Send back" body (spec 003 / #401): every field optional, so an empty POST reopens
 // the last session on the run's current backend (backward compat). A runner/model/account override
 // lets the follow-up composer choose which engine handles the continuation. `text` stays bounded
@@ -977,7 +1052,7 @@ function foldedLength(task: string, stack: Array<{ text: string }>): number {
 // session rather than being silently dropped.
 const continueSchema = z.object({
   text: z.string().max(100_000, 'must be at most 100000 characters').optional(),
-  images: z.array(attachmentInputSchema).max(4).optional(),
+  images: attachmentListSchema.optional(),
   runner: z.enum(RUNNER_IDS).optional(),
   model: z.string().max(200).optional(),
   /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Bound mirrors
@@ -1013,6 +1088,7 @@ type TodoStartEnv = ProjectApiEnv & { Variables: { todo: TodoItem } };
 // un-archives. A tiny schema so the route follows the safeParse convention.
 const archiveSchema = z.object({
   archived: z.boolean().optional(),
+  surface: taskActionSurfaceSchema.optional(),
 });
 
 // `POST /api/v1/runs/:id/pin` (#935) — no body pins; `{pinned:false}` unpins. The archive
@@ -1020,11 +1096,12 @@ const archiveSchema = z.object({
 // "absent means do the thing" would be one more rule for a client to remember.
 const pinSchema = z.object({
   pinned: z.boolean().optional(),
+  surface: taskActionSurfaceSchema.optional(),
 });
 
 // Request-body size guards (#429). A generous global cap keeps a single
-// localhost request from being unbounded (the largest legit body is 4 pasted
-// images at ~7 MB base64 each); the ui-state PUT gets a much tighter cap since
+// localhost request from being unbounded (the largest legit body is one message's
+// attachments, ≤ MAX_ATTACHMENTS_TOTAL_BASE64 in total); the ui-state PUT gets a much tighter cap since
 // it only ever carries small GUI prefs.
 const GLOBAL_BODY_LIMIT = 32 * 1024 * 1024; // 32 MiB
 const UI_STATE_BODY_LIMIT = 128 * 1024; // 128 KiB
@@ -1277,7 +1354,8 @@ export function createApp(deps: ServerDeps) {
       cursor: { discover: () => discoverCursorModels() },
     },
   });
-  const providerAuth = deps.providerAuth ?? new ProviderAuthService({ cwd: bootRoot });
+  const providerAuth = deps.providerAuth
+    ?? new ProviderAuthService({ cwd: bootRoot, onInconclusive: (probe) => void reportInconclusiveProbe(probe) });
   const workspaceConfig = deps.workspaceConfig ?? {
     load: loadWorkspaceConfig,
     mergeWrite: mergeWriteWorkspaceConfig,
@@ -1315,8 +1393,16 @@ export function createApp(deps: ServerDeps) {
    */
   const providerActionError = async (
     required: readonly ProviderId[],
+    scope: ProviderAccountScope = {},
   ): Promise<string | null> => {
-    const known = await providerStatus();
+    // Judge the account the action runs on, not only the default login (telemetry ac53a6ef).
+    const judged = async (refresh: boolean): Promise<ProviderStatusResponse> => {
+      const rows = await providerStatus(refresh ? { refresh: true } : undefined);
+      return providerAuthChecksDisabled()
+        ? rows
+        : withSelectedAccounts(rows, required, scope, providerAuth, { refresh });
+    };
+    const known = await judged(false);
     const message = unavailableProviderMessage(required, known);
     if (message === null) return null;
     // A DISABLED provider is a settings fact, not a probe result — re-probing it learns nothing and
@@ -1324,7 +1410,7 @@ export function createApp(deps: ServerDeps) {
     const disabled = required.some((provider) =>
       known.providers.find((row) => row.provider === provider)?.enabled === false);
     if (disabled) return message;
-    return unavailableProviderMessage(required, await providerStatus({ refresh: true }));
+    return unavailableProviderMessage(required, await judged(true));
   };
   const openTerminal = deps.openTerminal ?? openInTerminal;
   const openFile = deps.openFile ?? openFileInDefaultApp;
@@ -2018,6 +2104,28 @@ export function createApp(deps: ServerDeps) {
   };
 
   // ---- chained family: agent providers (workspace-level) ----
+  // One watch per account: a second Connect restarts its schedule instead of doubling it.
+  const loginWatches = new Map<string, () => void>();
+  const watchOpenedLogin = (provider: ProviderId, profile: { id: string; isDefault: boolean; path: string | null }, sid?: string) => {
+    const key = `${provider}\u0000${profile.id}`;
+    loginWatches.get(key)?.();
+    const check = async (): Promise<boolean> => {
+      if (profile.isDefault) {
+        const row = (await providerStatus({ refresh: true })).providers.find((candidate) => candidate.provider === provider);
+        // The cockpit does not poll provider status, so the card learns about the login here.
+        if (row?.status === 'connected') workspaceEvents.emit('provider-status', row);
+        return row?.status === 'connected';
+      }
+      providerAuth.forgetProfileStatus(provider, profile.id);
+      return (await providerAuth.profileStatus(provider, { id: profile.id, configDir: profile.path })).status === 'connected';
+    };
+    const cancel = watchLogin(check, () => {
+      loginWatches.delete(key);
+      track('provider_connected', { label: provider }, { sid });
+    }, deps.loginWatchOffsetsMs ?? LOGIN_WATCH_OFFSETS_MS);
+    loginWatches.set(key, cancel);
+  };
+
   const providersRoutes = new Hono<ProjectApiEnv>()
     .get(
       '/providers/status',
@@ -2075,6 +2183,7 @@ export function createApp(deps: ServerDeps) {
 
     .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, opencode, cursor, pi, or copilot' }), async (c) => {
       const body = { data: c.req.valid('json') };
+      const sid = deviceSid(c.req.header('x-cezar-sid'));
 
       const provider = body.data.provider as ProviderId;
       // A NAMED account is refused in hosted mode before anything is resolved, exactly like every
@@ -2100,6 +2209,7 @@ export function createApp(deps: ServerDeps) {
       // safe degradation. Running the bare command would sign the user into a DIFFERENT account
       // than the one they clicked, and nothing in the terminal would say so.
       if (command === null) {
+        trackLoginNotOpened(provider, 'invalid_folder', sid);
         return c.json({ error: `This account's folder cannot be used in a terminal command: ${profile.configDir}` }, 409);
       }
       // BOTH branches must mean "is this account signed in NOW". The default branch refreshes; the
@@ -2119,15 +2229,18 @@ export function createApp(deps: ServerDeps) {
       }
 
       if (row.status === 'connected') {
+        trackLoginNotOpened(provider, 'already_connected', sid);
         return c.json({ opened: false, connected: true, command });
       }
       if (row.status === 'not-installed') {
+        trackLoginNotOpened(provider, 'not_installed', sid);
         return c.json({ error: row.hint ?? providerAuth.installHint(provider), command }, 409);
       }
-      if (row.status === 'unknown') {
-        return c.json({ error: row.hint ?? 'Authentication could not be verified. Try again.', command }, 409);
-      }
+      // `unknown` (inconclusive output, timeout, unexpected exit) falls through to the login like
+      // `disconnected`: the CLI is installed, and its own login is the one surface that can say
+      // what is wrong. Refusing here left Connect a dead end that "Try again" re-probed into.
       if (!capabilities().localHandoff) {
+        trackLoginNotOpened(provider, 'hosted', sid);
         return c.json({ error: 'Run this command on the machine hosting cezar.', command }, 409);
       }
       let opened = false;
@@ -2140,8 +2253,11 @@ export function createApp(deps: ServerDeps) {
         // Terminal handoff is best-effort; the exact command remains the safe fallback.
       }
       if (!opened) {
+        trackLoginNotOpened(provider, 'no_terminal', sid);
         return c.json({ error: 'No terminal emulator could be opened. Run this command manually.', command }, 409);
       }
+      trackLoginOpened(provider, row.status === 'unknown' ? 'unknown' : 'disconnected', sid);
+      watchOpenedLogin(provider, { id: profile.id, isDefault: profile.isDefault, path: profile.isDefault ? null : profile.path }, sid);
       return c.json({ opened: true, command });
     });
 
@@ -3431,6 +3547,20 @@ export function createApp(deps: ServerDeps) {
       return c.json(workspaceBrandingLogoResponseSchema.parse({ logoUrl: null }));
     })
 
+    // Staged attachments (telemetry 7054e5f2): the composer uploads each file when it is attached
+    // and the message references it, so attachments stop sharing one request body. One file per
+    // request rides the global body limit.
+    .post('/workspace/uploads', jsonZodValidator(attachmentInputSchema), (c) => {
+      const result = writeUpload(c.req.valid('json'));
+      // The fs error names a path under the user's home; the cockpit reports this answer to telemetry.
+      if (!result.ok) return c.json({ error: 'could not stage the attachment' }, 500);
+      return c.json(stagedUploadSchema.parse(result.upload));
+    })
+    .delete('/workspace/uploads/:uploadId', paramZodValidator(uploadIdParamSchema), (c) => {
+      deleteUpload(c.req.valid('param').uploadId);
+      return c.json(deleteUploadResponseSchema.parse({ deleted: true }));
+    })
+
     // Global GUI state (`~/.cezar/ui-state.json`) — same parse/key-cap/shallow-
     // merge semantics as the per-repo /api/v1/ui-state route below (the shared half
     // is `uiStateBodySchema`), but backed by the workspace file.
@@ -3691,7 +3821,7 @@ export function createApp(deps: ServerDeps) {
     .post('/plan', jsonZodValidator(planSchema), async (c) => {
       const { root: repoRoot } = c.get('project');
       const parsed = { data: c.req.valid('json') };
-      const blocked = await providerActionError([(await loadConfig(repoRoot)).defaultRunner]);
+      const blocked = await providerActionError([(await loadConfig(repoRoot)).defaultRunner], { repoRoot });
       if (blocked) return c.json({ error: blocked }, 409);
       return c.json(await planChain(repoRoot, parsed.data.task));
     });
@@ -4085,12 +4215,12 @@ export function createApp(deps: ServerDeps) {
             return;
           }
           const remote = parseRemote((await getRepoInfo(project.root))?.remote ?? '');
-          if (!remote || remote.host !== 'github.com') throw new Error('No GitHub remote is configured');
+          if (!remote || !isGithubHost(remote.host)) throw new Error('No GitHub remote is configured');
           const scheduler = new ProjectAutomationScheduler({
             projectId: project.id,
             timeZone: localTimeZone(),
             store,
-            github: { owner: remote.owner, repo: remote.repo, poller: new GithubPoller() },
+            github: { owner: remote.owner, repo: remote.repo, poller: new GithubPoller({ host: remote.host }) },
             launch: parsed.data.mode === 'execute'
               ? (definition, candidate, receiptId) => launchAutomationRun({ root: project.root, manager: project.manager, store: project.store, definition, candidate, receiptId, dispatchEnabled: capabilities().dispatch })
               : undefined,
@@ -4329,8 +4459,8 @@ export function createApp(deps: ServerDeps) {
       const run = store.setArchived(id, parsed.data.archived !== false);
       if (run && parsed.data.archived !== false) stopTaskProcesses(id);
       if (run && retiresQuestion) manager.notifyQuestionRetired?.(id);
-      // Labelled with the task's outcome: which results get kept, which get put away.
-      if (run) track(parsed.data.archived !== false ? 'task_archived' : 'task_unarchived', { label: run.status }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
+      // Labelled with the button that did it.
+      if (run) track(parsed.data.archived !== false ? 'task_archived' : 'task_unarchived', { label: parsed.data.surface ?? 'api' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return run ? c.json(run) : c.json({ error: 'not found' }, 404);
     })
 
@@ -4340,9 +4470,10 @@ export function createApp(deps: ServerDeps) {
     // event and no new response shape.
     .post('/runs/:id/pin', jsonZodValidator(pinSchema, { absent: ({}) }), (c) => {
       const { store } = c.get('project');
-      const pinned = c.req.valid('json').pinned !== false;
+      const { pinned: pin, surface } = c.req.valid('json');
+      const pinned = pin !== false;
       const run = store.setPinned(c.req.param('id'), pinned);
-      if (run) track(pinned ? 'task_pinned' : 'task_unpinned', { label: run.status }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
+      if (run) track(pinned ? 'task_pinned' : 'task_unpinned', { label: surface ?? 'api' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return run ? c.json(run) : c.json({ error: 'not found' }, 404);
     })
 
@@ -4394,7 +4525,10 @@ export function createApp(deps: ServerDeps) {
         if (!workflow) return c.json({ error: `unknown workflow: ${parsed.data.workflow}` }, 404);
       }
       const fallback = parsed.data.runner ?? (await loadConfig(repoRoot)).defaultRunner;
-      const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback));
+      const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback), {
+        repoRoot,
+        profileFor: (provider) => (provider === fallback ? parsed.data.agentProfile : undefined),
+      });
       if (blocked) return c.json({ error: blocked }, 409);
       // A composer override names an account the user just picked, so a stale id (deleted since
       // the page loaded) is answered honestly instead of quietly running on the default — the
@@ -4418,7 +4552,8 @@ export function createApp(deps: ServerDeps) {
           );
         }
       }
-      const images = parsed.data.images?.map((image) => toPastedContent(image));
+      const images = resolveAttachments(parsed.data.images);
+      if (typeof images === 'string') return c.json({ error: images }, 400);
       const input = {
         task: parsed.data.task,
         model: parsed.data.model,
@@ -4536,7 +4671,7 @@ export function createApp(deps: ServerDeps) {
     // Live-session participation (spec 002): deliver a user message (text +
     // pasted screenshots) into the run's open claude session.
     .post('/runs/:id/messages', jsonZodValidator(messageSchema), async (c) => {
-      const { store, manager } = c.get('project');
+      const { root: repoRoot, dataDir, store, manager } = c.get('project');
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
@@ -4547,11 +4682,16 @@ export function createApp(deps: ServerDeps) {
       // disconnected (provider-auth spec: disabling never blocks existing-task mutations).
       // In the dequeue race, the ladder below safely turns this into a starting-state buffer.
       if (run.status !== 'queued') {
-        const blocked = await providerActionError([providerForActiveRun(run)]);
+        const blocked = await providerActionError([providerForActiveRun(run)], {
+          repoRoot,
+          profileFor: (provider) => recordedProfileFor(run, provider),
+        });
         if (blocked) return c.json({ error: blocked }, 409);
       }
+      const attachments = resolveAttachments(parsed.data.images);
+      if (typeof attachments === 'string') return c.json({ error: attachments }, 400);
       const content: PastedContent[] = [
-        ...parsed.data.images.map((image) => toPastedContent(image)),
+        ...attachments,
         ...(parsed.data.text.trim() ? [{ type: 'text', text: parsed.data.text } satisfies ContentBlock] : []),
       ];
       // Three-rung delivery ladder (#472). Branch on the ENGINE's answer rather
@@ -4576,6 +4716,10 @@ export function createApp(deps: ServerDeps) {
         if (stackedImages + parsed.data.images.length > MAX_QUEUED_ATTACHMENTS) {
           return c.json({ error: `too many queued attachments — ${MAX_QUEUED_ATTACHMENTS} attachment limit across the stack` }, 400);
         }
+        const opening = [...(currentRun.taskImages ?? []), ...stack.flatMap((m) => m.images ?? [])];
+        if (queuedImageChars(dataDir, id, opening) + imageChars(attachments) > MAX_ATTACHMENTS_TOTAL_BASE64) {
+          return c.json({ error: QUEUED_IMAGES_TOO_LARGE }, 400);
+        }
         const prospective = foldedLength(currentRun.task, [...stack, { text: parsed.data.text }]);
         if (prospective > MAX_FOLDED_TASK_CHARS) {
           return c.json(
@@ -4596,7 +4740,7 @@ export function createApp(deps: ServerDeps) {
     // Edit / remove a stacked message (#472). Registered before any conflicting
     // `/:id` route so `queued-messages` never matches as a run id.
     .patch('/runs/:id/queued-messages/:msgId', jsonZodValidator(queuedMessagePatchSchema), async (c) => {
-      const { store, manager } = c.get('project');
+      const { dataDir, store, manager } = c.get('project');
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
@@ -4628,7 +4772,14 @@ export function createApp(deps: ServerDeps) {
       }
 
       if (run.status !== 'queued') return c.json({ error: 'run already started' }, 409);
-      const images: PastedContent[] | undefined = parsed.data.images?.map((image) => toPastedContent(image));
+      const images = resolveAttachments(parsed.data.images);
+      if (typeof images === 'string') return c.json({ error: images }, 400);
+      if (images !== undefined) {
+        const opening = [...(run.taskImages ?? []), ...others.flatMap((m) => m.images ?? [])];
+        if (queuedImageChars(dataDir, id, opening) + imageChars(images) > MAX_ATTACHMENTS_TOTAL_BASE64) {
+          return c.json({ error: QUEUED_IMAGES_TOO_LARGE }, 400);
+        }
+      }
       const message = manager.editQueuedMessage(id, msgId, {
         ...(parsed.data.text !== undefined ? { text: parsed.data.text } : {}),
         ...(images !== undefined ? { images } : {}),
@@ -4672,7 +4823,12 @@ export function createApp(deps: ServerDeps) {
       if (agentModelsLocked(repoRoot) && parsed.data.model?.trim()) {
         return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
       }
-      const blocked = await providerActionError([providerForExistingRun(run, parsed.data.runner)]);
+      const blocked = await providerActionError([providerForExistingRun(run, parsed.data.runner)], {
+        repoRoot,
+        // A runner switch drops the run's account (`continueRun`), so only the same runner inherits it.
+        profileFor: (provider) => parsed.data.agentProfile
+          ?? (provider === (run.runner ?? 'claude') ? recordedProfileFor(run, provider) : undefined),
+      });
       if (blocked) return c.json({ error: blocked }, 409);
       // The follow-up pill names an account the user just picked, so an id that has been deleted
       // since the thread loaded is answered honestly — the same asymmetry `POST /runs` keeps: a
@@ -4683,9 +4839,11 @@ export function createApp(deps: ServerDeps) {
         const account = await resolveWorkspaceProfile(provider, parsed.data.agentProfile);
         if ('error' in account) return c.json({ error: account.error }, 400);
       }
+      const images = resolveAttachments(parsed.data.images);
+      if (typeof images === 'string') return c.json({ error: images }, 400);
       const result = manager.continueRun(id, {
         text: parsed.data.text,
-        images: parsed.data.images?.map((image) => toPastedContent(image)),
+        images,
         runner: parsed.data.runner,
         model: parsed.data.model,
         agentProfile: parsed.data.agentProfile,
@@ -4715,7 +4873,11 @@ export function createApp(deps: ServerDeps) {
       const sessionStep = [...run.steps].reverse().find((s) => s.sessionId);
       const sessionId = sessionStep?.sessionId;
       if (!sessionId) return c.json({ error: 'no agent session to resume' }, 409);
-      const blocked = await providerActionError([providerForExistingRun(run)]);
+      // Gate the account `handoffEnv` launches on below: the session's own, default when it recorded none.
+      const blocked = await providerActionError([providerForExistingRun(run)], {
+        repoRoot,
+        profileFor: () => sessionStep?.profileId ?? DEFAULT_AGENT_ACCOUNT_ID,
+      });
       if (blocked) return c.json({ error: blocked }, 409);
       const cwd = run.worktreePath && existsSync(run.worktreePath) ? run.worktreePath : repoRoot;
       const command = resumeCommand(run.runner, sessionId);
@@ -4822,14 +4984,18 @@ export function createApp(deps: ServerDeps) {
       // and what the client's cliTargetResumes now labels. Resume-after-finish is untouched.
       const cliRunner = agentCliRunner(target);
       if (cliRunner) {
-        const blocked = await providerActionError([cliRunner]);
-        if (blocked) return c.json({ error: blocked }, 409);
         const engineOwnsSession = run.status === 'running' || run.status === 'queued' || run.status === 'waiting';
         const sessionStep = engineOwnsSession ? undefined : [...run.steps].reverse().find((s) => s.sessionId);
         const sessionId = sessionStep?.sessionId;
         // An id resumeCommand refuses (#431) degrades to a fresh CLI in the worktree,
         // exactly like a run that never recorded a session.
         const resume = sessionId && cliRunner === (run.runner ?? 'claude') ? resumeCommand(cliRunner, sessionId) : null;
+        // Gate the account the terminal opens on below: the session's for a resume, the project's otherwise.
+        const blocked = await providerActionError([cliRunner], {
+          repoRoot,
+          profileFor: () => (resume ? sessionStep?.profileId ?? DEFAULT_AGENT_ACCOUNT_ID : undefined),
+        });
+        if (blocked) return c.json({ error: blocked }, 409);
         // The terminal this opens does not share our PATH (see `withResolvedClaudeBin`), so a
         // claude found off PATH by detection has to be named by absolute path here too —
         // otherwise the menu offers a handoff that opens on `command not found`.
@@ -5065,7 +5231,7 @@ export function createApp(deps: ServerDeps) {
       if (!worktree) return c.json({ error: NO_WORKTREE }, 409);
       const result = await worktreeGitStatus(worktree, run.baseBranch);
       if (!result.ok) return c.json({ error: result.error }, 409);
-      return c.json({ uncommitted: result.uncommitted, unpushed: result.unpushed, behind: result.behind });
+      return c.json({ uncommitted: result.uncommitted, unpushed: result.unpushed, behind: result.behind, ahead: result.ahead });
     })
 
     // Draft PR from the review gate (spec 009): final autosave → push →
@@ -5096,29 +5262,39 @@ export function createApp(deps: ServerDeps) {
           400,
         );
       }
-      const outcome = await createDraftPr({
-        repoRoot,
-        run,
-        handoffText: readHandoff(dataDir, id),
-        draft,
-      });
-      if (!outcome.ok) {
-        return c.json({ error: outcome.error, manual: `git merge ${run.branch}` }, 409);
+      // One publish per run at a time: a cockpit re-asking after its response was lost (telemetry
+      // 9119d21a) joins the publish still running instead of racing its autosave commit and push.
+      const key = `${dataDir}\0${id}`;
+      let publish = prPublishes.get(key);
+      if (!publish) {
+        const branch = run.branch;
+        publish = (async () => {
+          const outcome = await createDraftPr({ repoRoot, run, handoffText: readHandoff(dataDir, id), draft });
+          if (!outcome.ok) return outcome;
+          // A number the cockpit asked about BEFORE the pull request existed is cached as "this
+          // repository has no such number" — which is exactly what a `CEZ:PR=901` marker declared
+          // ahead of the push looks like. It exists now.
+          const createdNumber = refNumberFromUrl(outcome.url);
+          if (createdNumber !== null) forgetRefStatus(repoRoot, createdNumber);
+          store.updateRun(id, {
+            pullRequestUrl: outcome.url,
+            status: 'done',
+            finishedAt: run.finishedAt ?? new Date().toISOString(),
+          });
+          store.appendEvent(id, {
+            type: 'note',
+            message: `${draft ? 'draft PR' : 'PR'} created: ${outcome.url}${outcome.dryRun ? ' (dry run — no real PR)' : ''}`,
+          });
+          return outcome;
+        })()
+          .then((outcome) => ({ outcome, branch }))
+          .finally(() => prPublishes.delete(key));
+        prPublishes.set(key, publish);
       }
-      // A number the cockpit asked about BEFORE the pull request existed is cached as "this
-      // repository has no such number" — which is exactly what a `CEZ:PR=901` marker declared
-      // ahead of the push looks like. It exists now.
-      const createdNumber = refNumberFromUrl(outcome.url);
-      if (createdNumber !== null) forgetRefStatus(repoRoot, createdNumber);
-      store.updateRun(id, {
-        pullRequestUrl: outcome.url,
-        status: 'done',
-        finishedAt: run.finishedAt ?? new Date().toISOString(),
-      });
-      store.appendEvent(id, {
-        type: 'note',
-        message: `${draft ? 'draft PR' : 'PR'} created: ${outcome.url}${outcome.dryRun ? ' (dry run — no real PR)' : ''}`,
-      });
+      const { outcome, branch } = await publish;
+      if (!outcome.ok) {
+        return c.json({ error: outcome.error, manual: `git merge ${branch}` }, 409);
+      }
       return c.json({ url: outcome.url, dryRun: outcome.dryRun }, 201);
     })
 
@@ -5607,7 +5783,7 @@ export function createApp(deps: ServerDeps) {
         }
 
         const fallback = parsed.data?.runner ?? (await loadConfig(repoRoot)).defaultRunner;
-        const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback));
+        const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback), { repoRoot });
         if (blocked) return c.json({ error: blocked }, 409);
 
         const run = manager.startRun(workflow, {
@@ -6004,6 +6180,7 @@ export function createApp(deps: ServerDeps) {
       const workflow = e2eSetupWorkflow(e2eCredentialsAmong(await checkSecretNames(project)));
       const blocked = await providerActionError(
         providersRequiredByWorkflow(workflow, (await loadConfig(project.root)).defaultRunner),
+        { repoRoot: project.root },
       );
       if (blocked) return c.json({ error: blocked }, 409);
       // Not autonomous: an autonomous run skips the review gate (`settleSuccess`) a user may have
@@ -6328,14 +6505,16 @@ export function createApp(deps: ServerDeps) {
           status: [],
           log: [],
           branches: [],
+          checkedOutElsewhere: {},
           baseBranch: null,
         });
       // Task branches are never a base: hide the named ones (no `cez/` prefix) by record.
       const taskBranches = new Set(store.listRuns().flatMap((r) => (r.branch ? [r.branch] : [])));
-      const [status, log, branches, config] = await Promise.all([
+      const [status, log, branches, held, config] = await Promise.all([
         getStatus(info.root),
         getLog(info.root),
         getBranches(info.root, taskBranches),
+        branchesCheckedOutElsewhere(info.root),
         loadConfig(repoRoot),
       ]);
       return c.json({
@@ -6343,6 +6522,7 @@ export function createApp(deps: ServerDeps) {
         status,
         log,
         branches,
+        checkedOutElsewhere: Object.fromEntries(branches.flatMap((b) => (held.has(b) ? [[b, held.get(b)!]] : []))),
         baseBranch: config.baseBranch ?? null,
       });
     })
@@ -7052,16 +7232,27 @@ export function createApp(deps: ServerDeps) {
       : {}),
     ...(automationId !== undefined ? { automationId } : {}),
     ...(run.startedAt !== undefined ? { startedAt: run.startedAt } : {}),
+    lastActivityAt: lastActivityAt(run),
     // The tracker-reference inputs, verbatim — the cockpit's `taskReference()` owns the rule
     // that picks between them (see the schema's note).
     ...(run.pullRequestUrl !== undefined ? { pullRequestUrl: run.pullRequestUrl } : {}),
     ...(run.referencedPullRequestUrl !== undefined
       ? { referencedPullRequestUrl: run.referencedPullRequestUrl }
       : {}),
+    // #854: the PR half of the same evidence rule — a `prNumber` the auto-namer scraped off a
+    // task driving ANOTHER repository is refused by the client on the strength of these.
+    ...(run.referencedPrCandidates !== undefined
+      ? { referencedPrCandidates: run.referencedPrCandidates }
+      : {}),
     ...(run.prNumber !== undefined ? { prNumber: run.prNumber } : {}),
     ...(run.prRefs !== undefined ? { prRefs: run.prRefs } : {}),
     ...(run.issueNumber !== undefined ? { issueNumber: run.issueNumber } : {}),
     ...(run.referencedIssueUrl !== undefined ? { referencedIssueUrl: run.referencedIssueUrl } : {}),
+    // #819: evidence, not a link — the candidates are what let the client prove a bare
+    // `issueNumber` is another repository's and paint no chip rather than a 404 one.
+    ...(run.referencedIssueCandidates !== undefined
+      ? { referencedIssueCandidates: run.referencedIssueCandidates }
+      : {}),
     ...(run.markerRefs !== undefined ? { markerRefs: run.markerRefs } : {}),
     ...(run.costUsd !== undefined ? { costUsd: run.costUsd } : {}),
     ...(run.peakRssBytes !== undefined ? { peakRssBytes: run.peakRssBytes } : {}),
@@ -7108,8 +7299,8 @@ export function createApp(deps: ServerDeps) {
         // No folder, no runs to read. `not-git` still has an `.ai/cezar` worth indexing.
         if (project.status === 'missing') continue;
         const owned = project.id === bootId ? bootContext : contexts.peek(project.id);
-        // `listRuns()` already sorts newest-first; the disk reader returns file order, so both
-        // paths get sorted below rather than trusting either.
+        // Sorted by last activity, not creation: the cap must keep a weeks-old task finished
+        // today, and the table shows this order as-is. Neither source's own order is trusted.
         //
         // Archived runs are INCLUDED. The active project's rows reach the palette through
         // `GET /runs`, which has always carried them, and excluding them here would mean a task
@@ -7117,7 +7308,7 @@ export function createApp(deps: ServerDeps) {
         // exact asymmetry a cross-project finder exists to remove.
         const recent = (
           owned ? owned.store.listRuns() : readRunIndexFromDisk(join(project.root, '.ai/cezar'))
-        ).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        ).sort(byLastActivityDesc);
         if (recent.length > RUNS_INDEX_PER_PROJECT) truncated.push(project.id);
         const mentioned: number[] = [];
         for (const run of recent.slice(0, RUNS_INDEX_PER_PROJECT)) {
@@ -7134,7 +7325,8 @@ export function createApp(deps: ServerDeps) {
           }
         }
       }
-      runs.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      // The slim rows carry no steps — sort on the value computed from them, never re-derive it.
+      runs.sort((a, b) => compareIsoDesc(a.lastActivityAt, b.lastActivityAt));
       const body: RunsIndexResponse = {
         runs,
         perProjectLimit: RUNS_INDEX_PER_PROJECT,
@@ -7354,18 +7546,19 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
     port,
     hostname: deps.bindHost ?? '127.0.0.1',
   });
+  applyKeepAlive(server);
   const coordinator = new SkillsUpdateCoordinator(skillsUpdate, async () =>
     effectiveSkillsAutoUpdate(await loadWorkspaceConfig()));
   // Every registered project gets a handle (spec 2026-09-14): `github` only when the remote is
-  // on github.com — a project without one still fires its scheduled automations.
-  const automationProjects = new Map<string, { root: string; github?: { owner: string; repo: string } }>();
+  // on GitHub (github.com or Enterprise) — a project without one still fires its scheduled automations.
+  const automationProjects = new Map<string, { root: string; github?: { owner: string; repo: string; host: string } }>();
   // A second instance from the one the HTTP routes use (out of scope here, built inside the app
   // function) — cheap: `createTrackerService` performs no I/O at construction, only a small
   // per-connection provider cache that duplicating costs nothing correctness-wise.
   const automationTrackers = createTrackerService();
   const registerAutomationProject = async (id: string, root: string): Promise<void> => {
     const parsed = parseRemote((await getRepoInfo(root))?.remote ?? '');
-    automationProjects.set(id, { root, ...(parsed?.host === 'github.com' ? { github: { owner: parsed.owner, repo: parsed.repo } } : {}) });
+    automationProjects.set(id, { root, ...(parsed && isGithubHost(parsed.host) ? { github: { owner: parsed.owner, repo: parsed.repo, host: parsed.host } } : {}) });
   };
   const automationScheduler = new WorkspaceAutomationScheduler({
     coordinator: automationCoordinator,
@@ -7383,7 +7576,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
         projectId,
         store,
         timeZone: localTimeZone(),
-        ...(project.github ? { github: { ...project.github, poller: new GithubPoller() } } : {}),
+        ...(project.github ? { github: { ...project.github, poller: new GithubPoller({ host: project.github.host }) } } : {}),
         // Present unconditionally (unlike `github`, precomputed above from a sync remote parse):
         // whether the project actually has a tracker connection is resolved lazily, at poll time,
         // by `getDriver()` — a project with none simply fails that call and the scheduler backs off.

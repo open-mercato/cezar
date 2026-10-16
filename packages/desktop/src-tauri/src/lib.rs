@@ -1137,30 +1137,16 @@ fn update_cezar(app: &AppHandle, shell: &Shell, title: &str) -> bool {
     let mut lines: Vec<String> = Vec::new();
     let installed = install_into(&versions, |staging| {
         let spec = format!("{PACKAGE}@{tag}");
-        let prefix = staging.to_string_lossy();
-        let mut command = tool_command(
-            npm_program(),
-            &["install", "--prefix", &prefix, "--omit=dev", "--no-audit", "--no-fund", "--no-package-lock", "--loglevel=notice", &spec],
-        );
-        command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-        let mut child = command.spawn().map_err(|error| format!("could not start npm: {error}. Is Node 20+ on your PATH?"))?;
-        for reader in [
-            child.stdout.take().map(|out| Box::new(out) as Box<dyn Read + Send>),
-            child.stderr.take().map(|err| Box::new(err) as Box<dyn Read + Send>),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            // Sequential drain is fine: npm's chatter is small and stdout closes at the end.
-            for line in BufReader::new(reader).lines().map_while(Result::ok) {
-                splash_log(&window, &line);
-                lines.push(line);
+        let mut log = |line: &str| splash_log(&window, line);
+        let first_attempt = lines.len();
+        match npm_install(staging, &spec, None, &mut lines, &mut log) {
+            // A root-owned ~/.npm (an old `sudo npm`) must not block the install (telemetry 7a3f659a).
+            Err(_) if npm_cache_unwritable(&lines[first_attempt..]) => {
+                let cache = npm_fallback_cache();
+                log(&format!("npm's cache is not writable; retrying with {}", cache.display()));
+                npm_install(staging, &spec, Some(&cache), &mut lines, &mut log)
             }
-        }
-        match child.wait() {
-            Ok(status) if status.success() => Ok(()),
-            Ok(status) => Err(format!("npm exited with {status}. Is Node 20+ on your PATH?")),
-            Err(error) => Err(error.to_string()),
+            other => other,
         }
     });
     let ok = match installed {
@@ -1591,6 +1577,70 @@ fn activate(versions: &Path, id: &str) -> Result<(), String> {
         }
         junction::create(versions.join(id), &current).map_err(|error| error.to_string())
     }
+}
+
+/// `npm install <spec>` into `staging`, every output line into `lines` and `log`. `cache`
+/// overrides npm's own cache folder.
+fn npm_install(staging: &Path, spec: &str, cache: Option<&Path>, lines: &mut Vec<String>, log: &mut dyn FnMut(&str)) -> Result<(), String> {
+    let prefix = staging.to_string_lossy();
+    let cache = cache.map(|dir| dir.to_string_lossy().into_owned());
+    let mut args = vec!["install", "--prefix", &prefix, "--omit=dev", "--no-audit", "--no-fund", "--no-package-lock", "--loglevel=notice"];
+    if let Some(cache) = cache.as_deref() {
+        args.extend(["--cache", cache]);
+    }
+    args.push(spec);
+    let mut command = tool_command(npm_program(), &args);
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|error| format!("could not start npm: {error}. Is Node 20+ on your PATH?"))?;
+    let first = lines.len();
+    for reader in [
+        child.stdout.take().map(|out| Box::new(out) as Box<dyn Read + Send>),
+        child.stderr.take().map(|err| Box::new(err) as Box<dyn Read + Send>),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        // Sequential drain is fine: npm's chatter is small and stdout closes at the end.
+        for line in BufReader::new(reader).lines().map_while(Result::ok) {
+            log(&line);
+            lines.push(line);
+        }
+    }
+    match child.wait() {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(npm_exit_reason(&status.to_string(), &lines[first..])),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// npm ran and failed: name its error code, not a Node problem it did not have.
+fn npm_exit_reason(status: &str, log: &[String]) -> String {
+    match npm_error_field(log, "code") {
+        Some(code) => format!("npm exited with {status} ({code})"),
+        None => format!("npm exited with {status}"),
+    }
+}
+
+/// The value of npm's `npm error <field> <value>` line (`npm ERR!` before npm 10).
+fn npm_error_field<'a>(log: &'a [String], field: &str) -> Option<&'a str> {
+    log.iter().find_map(|line| {
+        let rest = line.trim().strip_prefix("npm error ").or_else(|| line.trim().strip_prefix("npm ERR! "))?;
+        rest.strip_prefix(field)?.strip_prefix(' ').map(str::trim).filter(|value| !value.is_empty())
+    })
+}
+
+/// npm failed because it may not write its cache folder (root-owned files left by `sudo npm`),
+/// not because of the package.
+fn npm_cache_unwritable(log: &[String]) -> bool {
+    let denied = matches!(npm_error_field(log, "code"), Some("EACCES" | "EPERM"));
+    let in_cache = npm_error_field(log, "path").is_some_and(|path| ["_cacache", "_logs", "_npx"].iter().any(|dir| path.contains(dir)))
+        || log.iter().any(|line| line.contains("cache folder contains root-owned files"));
+    denied && in_cache
+}
+
+/// A cache folder cezar owns, for when npm's own is not writable.
+fn npm_fallback_cache() -> PathBuf {
+    cezar_home().join("npm-cache")
 }
 
 /// Install one version into `versions` and make it current. `run_npm` fills the staging
@@ -2411,6 +2461,44 @@ require('node:http').createServer((req, res) => {
         let _ = child.kill();
         let _ = child.wait();
         assert_eq!(version.as_deref(), Some("9.9.9-test"), "sidecar output: {:?}", log.lock().unwrap());
+    }
+
+    fn log_lines(raw: &str) -> Vec<String> {
+        raw.lines().map(str::to_owned).collect()
+    }
+
+    /// The tail telemetry 7a3f659a carried: a root-owned ~/.npm, reported as a missing Node.
+    const ROOT_OWNED_CACHE: &str = "npm warn ERESOLVE overriding peer dependency
+npm error code EACCES
+npm error syscall mkdir
+npm error path /Users/ann/.npm/_cacache/index-v5/57/89
+npm error errno EACCES
+npm error
+npm error Your cache folder contains root-owned files, due to a bug in previous versions of npm which has since been addressed.
+npm error
+npm error To permanently fix this problem, please run:
+npm error   sudo chown -R 502:20 \"/Users/ann/.npm\"";
+
+    #[test]
+    fn a_root_owned_npm_cache_is_recognized() {
+        assert!(npm_cache_unwritable(&log_lines(ROOT_OWNED_CACHE)));
+        // npm 9 and older spell it `npm ERR!`.
+        assert!(npm_cache_unwritable(&log_lines("npm ERR! code EPERM\nnpm ERR! path C:\\Users\\ann\\AppData\\Local\\npm-cache\\_cacache\\tmp")));
+    }
+
+    #[test]
+    fn other_npm_failures_are_not_a_cache_problem() {
+        assert!(!npm_cache_unwritable(&[]));
+        assert!(!npm_cache_unwritable(&log_lines("npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/nope")));
+        // Permission denied somewhere that is not npm's cache: a fresh cache would not help.
+        assert!(!npm_cache_unwritable(&log_lines("npm error code EACCES\nnpm error path /Users/ann/.cezar/versions/.staging-shell-1")));
+        assert!(!npm_cache_unwritable(&log_lines("npm error code ETIMEDOUT\nnpm error path /Users/ann/.npm/_cacache/tmp")));
+    }
+
+    #[test]
+    fn an_npm_failure_names_npms_error_not_node() {
+        assert_eq!(npm_exit_reason("exit status: 1", &log_lines(ROOT_OWNED_CACHE)), "npm exited with exit status: 1 (EACCES)");
+        assert_eq!(npm_exit_reason("exit status: 1", &[]), "npm exited with exit status: 1");
     }
 
     /// npm itself, through the same command the shell builds: a real (small) install into a

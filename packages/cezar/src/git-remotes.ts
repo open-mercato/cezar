@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { isSafeGitRef } from './git-refs.ts';
+import { isGithubHost } from './github-hosts.ts';
 
 /**
  * The PR-target ("base") remote and the push remote, so nothing hard-codes `origin` (#1383).
@@ -131,8 +132,8 @@ export async function resolveTaskRemotes(runGit: RemoteGitRunner): Promise<TaskR
 async function forkParentRemote(urls: Map<string, string>, names: string[]): Promise<string | null> {
   if (names.length < 2 || process.env.CEZ_DRY_RUN === '1') return null;
   const origin = parseRemote(urls.get('origin') ?? '');
-  // Only GitHub can answer (`FORGE_HOSTS` in forge/index.ts); never spawn `gh` for GitLab & co.
-  if (origin?.host !== 'github.com') return null;
+  // Only GitHub (github.com or Enterprise) can answer; never spawn `gh` for GitLab & co.
+  if (!origin || !isGithubHost(origin.host)) return null;
   const parent = (await forkParentLookup(origin))?.toLowerCase();
   if (!parent) return null;
   for (const name of names) {

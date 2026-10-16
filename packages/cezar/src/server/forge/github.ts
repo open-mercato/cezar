@@ -4,6 +4,9 @@ import { z } from 'zod';
 import { REFERENCE_STATUS_MAX } from '@open-mercato/cezar-contract';
 import { autosaveCommit, taskRemotes } from '../../git-worktree.ts';
 import { parseRemote, splitRemoteRef } from '../../git-remotes.ts';
+import { GITHUB_COM, isGithubHost } from '../../github-hosts.ts';
+import { baseDivergence } from '../git-changes.ts';
+import { getRepoInfo } from '../git.ts';
 import type {
   DraftPrInput,
   DraftPrOutcome,
@@ -311,11 +314,41 @@ export function rollupToChecks(rollup: z.infer<typeof ghStatusCheckRollup>): Git
   return 'passing';
 }
 
+/** repoRoot → its GitHub Enterprise host (`null` = github.com). `gh api` (GraphQL, the
+ *  `{owner}/{repo}` placeholders) and `gh repo view` take their host from gh's default, not from
+ *  the repo's remote, so every call pins it with `GH_HOST`. Resolved with `getRepoInfo`'s remote
+ *  choice (origin, else the first remote) so a worktree cwd or an expired entry pins the same host
+ *  the driver was built for. Bounded like `detectCache`: `execTool` sees one key per worktree. */
+const HOST_TTL_MS = 60_000;
+const HOST_CACHE_MAX = 50;
+const enterpriseHostByRoot = new Map<string, { host: string | null; at: number }>();
+
+function rememberHost(repoRoot: string, host: string | null): void {
+  enterpriseHostByRoot.delete(repoRoot); // re-insert so this key becomes the newest
+  enterpriseHostByRoot.set(repoRoot, { host, at: Date.now() });
+  while (enterpriseHostByRoot.size > HOST_CACHE_MAX) {
+    const oldest = enterpriseHostByRoot.keys().next().value;
+    if (oldest === undefined) break;
+    enterpriseHostByRoot.delete(oldest);
+  }
+}
+
+async function enterpriseHost(repoRoot: string): Promise<string | null> {
+  const hit = enterpriseHostByRoot.get(repoRoot);
+  if (hit && Date.now() - hit.at < HOST_TTL_MS) return hit.host;
+  const parsed = parseRemote((await getRepoInfo(repoRoot))?.remote ?? '');
+  const host = parsed && parsed.host !== GITHUB_COM && isGithubHost(parsed.host) ? parsed.host : null;
+  rememberHost(repoRoot, host);
+  return host;
+}
+
 async function gh(repoRoot: string, args: string[], timeout = 15_000): Promise<string> {
+  const host = await enterpriseHost(repoRoot);
   const { stdout } = await exec('gh', args, {
     cwd: repoRoot,
     timeout,
     maxBuffer: 50 * 1024 * 1024,
+    ...(host ? { env: { ...process.env, GH_HOST: host } } : {}),
   });
   return stdout;
 }
@@ -2613,9 +2646,49 @@ function mockGithubComments(kind: 'issue' | 'pr'): ForgeCommentsData {
 // maps to a one-line human error — the GUI
 // shows it as a toast plus the manual `git merge <branch>` fallback. Never throws.
 
-const PR_URL_RE = /https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
+const PR_URL_RE = /https:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
 const PUSH_TIMEOUT_MS = 60_000;
 const PROGRESS_LINES_MAX = 10;
+const PR_CREATE_ATTEMPTS = 2;
+const PR_CREATE_RETRY_MS = 2_000;
+// GitHub answers these while a just-pushed head is not yet visible to the PR API, or under load.
+const TRANSIENT_PR_CREATE_RE =
+  /head sha can't be blank|head ref must be a branch|not all refs are readable|submitted too quickly|something went wrong|HTTP 5\d\d|timed? ?out|ECONNRESET/i;
+
+const existingPrSchema = z.array(
+  z.object({ url: z.string(), headRepositoryOwner: z.object({ login: z.string() }).nullish() }),
+);
+
+/** URL of the open PR whose head is this `gh pr create` head (`branch` or `owner:branch`), if any. */
+async function existingPrUrl(worktree: string, repoArgs: string[]): Promise<string | null> {
+  const headAt = repoArgs.indexOf('--head');
+  const head = headAt >= 0 ? repoArgs[headAt + 1] : undefined;
+  if (!head) return null;
+  const repoAt = repoArgs.indexOf('--repo');
+  const repo = repoAt >= 0 ? repoArgs[repoAt + 1] : undefined;
+  const colon = head.indexOf(':');
+  // An unqualified head lives in the target repo itself (`host/owner/repo`).
+  const owner = (colon >= 0 ? head.slice(0, colon) : repo?.split('/').at(-2))?.toLowerCase();
+  const branch = colon >= 0 ? head.slice(colon + 1) : head;
+  const res = await execTool(
+    ['pr', 'list', ...(repo ? ['--repo', repo] : []), '--head', branch, '--state', 'open', '--json', 'url,headRepositoryOwner'],
+    worktree,
+    'gh',
+  );
+  if (!res.ok) return null;
+  let parsed: z.infer<typeof existingPrSchema>;
+  try {
+    parsed = existingPrSchema.parse(JSON.parse(res.stdout));
+  } catch {
+    return null;
+  }
+  // `gh pr list --head` matches the branch NAME only; a fork head must also match its owner.
+  const hit = parsed.find((p) => !owner || p.headRepositoryOwner?.login.toLowerCase() === owner);
+  return hit && PR_URL_RE.test(hit.url) ? hit.url : null;
+}
+
+const nothingToPropose = (branch: string, base: string | undefined) =>
+  `nothing to propose — ${branch} has no commits that ${base ?? 'the base branch'} does not already have`;
 
 export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome> {
   const { run } = input;
@@ -2653,6 +2726,12 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
     return { ok: false, error: 'no git remote — add one (git remote add origin <url>) or merge the branch locally' };
   }
 
+  const prBase = run.baseBranch ? splitRemoteRef(run.baseBranch, remotes.names).branch : undefined;
+  // Refuse an empty branch BEFORE pushing it (telemetry 16aef26d): gh would only refuse after the
+  // push, leaving a branch on the remote with nothing in it. Unknown base → let gh decide.
+  const { ahead } = await baseDivergence(worktree, run.baseBranch);
+  if (ahead === 0) return { ok: false, error: nothingToPropose(branch, prBase) };
+
   const push = await execTool(['push', '-u', remotes.push, branch], worktree, 'git', PUSH_TIMEOUT_MS);
   if (!push.ok) {
     return { ok: false, error: `git push failed — ${tail(push.stderr) || 'unknown error'}` };
@@ -2663,18 +2742,25 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
   // --base, gh aims at the repo default (main) even when work started on
   // develop. `<remote>/x` normalizes to `x`; a raw sha (detached-HEAD fork
   // point) can't be a PR base, so gh falls back to the default branch.
-  const prBase = run.baseBranch ? splitRemoteRef(run.baseBranch, remotes.names).branch : undefined;
   const baseArgs = prBase && !/^[0-9a-f]{7,40}$/i.test(prBase) ? ['--base', prBase] : [];
   const repoArgs = await prRepoArgs(worktree, remotes.base, remotes.push, branch);
-  const pr = await execTool(
-    ['pr', 'create', ...(input.draft === false ? [] : ['--draft']), ...repoArgs, ...baseArgs, '--title', run.title, '--body', body],
-    worktree,
-    'gh',
-    PUSH_TIMEOUT_MS,
-  );
+  const createArgs = ['pr', 'create', ...(input.draft === false ? [] : ['--draft']), ...repoArgs, ...baseArgs, '--title', run.title, '--body', body];
+  let pr = await execTool(createArgs, worktree, 'gh', PUSH_TIMEOUT_MS);
+  for (let attempt = 1; !pr.ok && !pr.notFound; attempt++) {
+    // The PR may already exist — opened by the agent, an earlier click whose response was
+    // lost, or a create GitHub committed before it errored. Publishing is idempotent: adopt it.
+    const existing = await existingPrUrl(worktree, repoArgs);
+    if (existing) return { ok: true, url: existing, dryRun: false };
+    if (attempt >= PR_CREATE_ATTEMPTS || !TRANSIENT_PR_CREATE_RE.test(pr.stderr)) break;
+    await new Promise((r) => setTimeout(r, PR_CREATE_RETRY_MS));
+    pr = await execTool(createArgs, worktree, 'gh', PUSH_TIMEOUT_MS);
+  }
   if (!pr.ok) {
     if (pr.notFound) {
       return { ok: false, error: 'gh not found — install the GitHub CLI and run `gh auth login`, or merge the branch locally' };
+    }
+    if (/no commits between/i.test(pr.stderr)) {
+      return { ok: false, error: nothingToPropose(branch, prBase) };
     }
     const hint = /auth|log ?in|credential/i.test(pr.stderr) ? ' (try `gh auth login`)' : '';
     return { ok: false, error: `gh pr create failed — ${tail(pr.stderr) || 'unknown error'}${hint}` };
@@ -2713,7 +2799,7 @@ export async function prRepoArgs(worktree: string, baseRemote: string, pushRemot
  * the cezar footer.
  */
 export function buildPrBody(handoffText: string, task: string): string {
-  const goal = section(handoffText, '## Goal') || task.trim();
+  const goal = section(handoffText, '## Goal') || task.trim() || '(given as attachments only)';
   const progress = section(handoffText, '## Progress log')
     .split('\n')
     .filter((l) => l.trim())
@@ -2802,7 +2888,9 @@ export async function commentOnPr(
   return { ok: false, error: (res.stderr || res.stdout).trim().split('\n')[0] || 'gh pr comment failed' };
 }
 
-function execTool(args: string[], cwd: string, bin: string, timeoutMs = 30_000): Promise<ExecResult> {
+async function execTool(args: string[], cwd: string, bin: string, timeoutMs = 30_000): Promise<ExecResult> {
+  // Same pin as `gh()`: PR create/comment/update must hit the repo's own host, not gh's default.
+  const ghHost = bin === 'gh' ? await enterpriseHost(cwd) : null;
   return new Promise((resolve) => {
     execFile(
       bin,
@@ -2816,7 +2904,7 @@ function execTool(args: string[], cwd: string, bin: string, timeoutMs = 30_000):
         // piped stdio is not enough to stop it. Without this a `git push` that
         // cannot authenticate hangs for the whole timeout and surfaces as a
         // blank one-minute stall instead of git's own "could not read Username".
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...(ghHost ? { GH_HOST: ghHost } : {}) },
       },
       (err, stdout, stderr) =>
         resolve({
@@ -3242,6 +3330,7 @@ const GH_PR_STATES: Record<string, ForgePrStatus['state']> = {
 };
 
 export function createGithubDriver(repoRoot: string, repoRef: GithubRepoRef | null): ForgeDriver {
+  rememberHost(repoRoot, repoRef?.host && repoRef.host !== GITHUB_COM ? repoRef.host : null);
   return {
     kind: 'github',
 
@@ -3287,7 +3376,7 @@ export function createGithubDriver(repoRoot: string, repoRef: GithubRepoRef | nu
 
     viewUrl: (kind: ForgeRefKind, ref: string | number): string | null => {
       if (!repoRef) return null;
-      const base = `https://github.com/${repoRef.owner}/${repoRef.repo}`;
+      const base = `https://${repoRef.host ?? GITHUB_COM}/${repoRef.owner}/${repoRef.repo}`;
       // Branch names may contain '/' — encode per segment, keep the slashes.
       const path = String(ref).split('/').map(encodeURIComponent).join('/');
       switch (kind) {
@@ -3317,7 +3406,7 @@ const ghCreatedSchema = z.object({
 async function recentGithubCreated(
   root: string, ref: GithubRepoRef | null, kind: 'issue' | 'pr', sinceDate: string,
 ): Promise<ForgeRecentCreatedData> {
-  if (!ref || !/^[a-zA-Z0-9.-]+$/.test(ref.host ?? 'github.com') ||
+  if (!ref || !/^[a-zA-Z0-9.-]+$/.test(ref.host ?? GITHUB_COM) ||
       !/^[a-zA-Z0-9_.-]+$/.test(ref.owner) || !/^[a-zA-Z0-9_.-]+$/.test(ref.repo) ||
       !/^\d{4}-\d{2}-\d{2}$/.test(sinceDate) || !Number.isFinite(Date.parse(sinceDate))) {
     return { available: false, reason: 'GitHub repository or creation date is invalid', items: [] };
@@ -3327,12 +3416,12 @@ async function recentGithubCreated(
       number: kind === 'issue' ? 101 : 102,
       title: kind === 'issue' ? 'Dashboard example issue' : 'Dashboard example pull request',
       createdAt: new Date().toISOString(),
-      url: `https://${ref.host ?? 'github.com'}/${ref.owner}/${ref.repo}/${kind === 'issue' ? 'issues' : 'pull'}/${kind === 'issue' ? 101 : 102}`,
+      url: `https://${ref.host ?? GITHUB_COM}/${ref.owner}/${ref.repo}/${kind === 'issue' ? 'issues' : 'pull'}/${kind === 'issue' ? 101 : 102}`,
     }] };
   }
   try {
     const output = await gh(root, [
-      'api', '--hostname', ref.host ?? 'github.com', '--method', 'GET', 'search/issues',
+      'api', '--hostname', ref.host ?? GITHUB_COM, '--method', 'GET', 'search/issues',
       '-f', `q=repo:${ref.owner}/${ref.repo} is:${kind} created:>=${sinceDate}`,
       '-f', 'sort=created', '-f', 'order=desc', '-f', 'per_page=30',
     ]);

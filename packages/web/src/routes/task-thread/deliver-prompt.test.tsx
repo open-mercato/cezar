@@ -5,8 +5,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import type { ApiRun, RunStatus } from '@open-mercato/cezar-api-client'
 
-import { deliveryPath, useDeliverPrompt } from './deliver-prompt'
+import { trackMessageSent } from '@/lib/telemetry'
+
+import { SESSION_GAP_RETRY_DELAYS_MS, deliveryPath, useDeliverPrompt } from './deliver-prompt'
 import { useContinueAction } from './follow-up-engine'
+
+vi.mock('@/lib/telemetry', () => ({ trackMessageSent: vi.fn() }))
 
 /**
  * The composer's delivery recovery (deliver-prompt.ts).
@@ -74,13 +78,18 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
 }
 
 /** The two hooks the thread wires together, driven from one harness. */
-async function renderDeliver(record: ApiRun, overrides: Record<string, () => Response> = {}) {
+async function renderDeliver(
+  record: ApiRun,
+  overrides: Record<string, () => Response> = {},
+  wait: (delayMs: number) => Promise<void> = async () => {},
+  surface?: 'existing_session' | 'review' | null,
+) {
   const sent = stubFetch(overrides)
   const client = createQueryClient()
   const view = renderHook(
     () => {
       const action = useContinueAction(record)
-      return { action, deliver: useDeliverPrompt(record, action) }
+      return { action, deliver: useDeliverPrompt(record, action.continueWith, surface === undefined ? { wait } : { wait, surface }) }
     },
     {
       wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
@@ -97,6 +106,7 @@ const posts = (sent: SentRequest[], path: string) =>
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  vi.mocked(trackMessageSent).mockClear()
 })
 
 describe('deliveryPath', () => {
@@ -166,15 +176,21 @@ describe('useDeliverPrompt', () => {
     expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(1)
   })
 
-  it('an empty submit is a Continue, and a run that is already live has nothing to continue', async () => {
-    const { sent, deliver } = await renderDeliver(run('done'), {
+  it('telemetry 77117b95: an empty one-click Continue on a run that is already live succeeds silently', async () => {
+    const { sent, client, deliver } = await renderDeliver(run('done'), {
       'POST /api/v1/runs/r1/continue': () => jsonResponse({ error: 'run is still active' }, 409),
       'GET /api/v1/runs/r1': () => jsonResponse(run('running')),
     })
 
-    await expect(deliver('')).rejects.toThrow('run is still active')
-    // An empty message is not a message: nothing is delivered on the live path either.
+    // Nothing to continue: the run the click asked for is ALREADY live, so this is the state the
+    // user wanted, not a failure. Resolving (rather than throwing "run is still active") is what
+    // stops the cockpit toasting an error for a task that is simply already under way.
+    await expect(deliver('')).resolves.toBeUndefined()
+    // Nothing was delivered on the live path either — an empty message is not a message.
     expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(0)
+    // The refetch ran and healed the cache the thread reads.
+    expect(sent.filter((r) => r.method === 'GET' && r.path === '/api/v1/runs/r1')).toHaveLength(1)
+    expect(client.getQueryData<ApiRun>(['default', 'runs', 'detail', 'r1'])?.status).toBe('running')
   })
 
   it('a fresh record with no session to resume keeps the original error', async () => {
@@ -188,6 +204,78 @@ describe('useDeliverPrompt', () => {
     expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(0)
   })
 
+  /** Answers from `responses` in order, repeating the last one. */
+  const sequence = (...responses: Array<() => Response>) => {
+    let call = 0
+    return () => responses[Math.min(call++, responses.length - 1)]!()
+  }
+
+  it('telemetry 1408d7cb: a session that closed while the run settles waits for Continue instead of failing', async () => {
+    const waits: number[] = []
+    const { sent, deliver } = await renderDeliver(
+      run('running'),
+      {
+        'POST /api/v1/runs/r1/messages': () => jsonResponse({ error: 'session closed' }, 409),
+        // Still `running` while the engine settles the record, then parked at review.
+        'GET /api/v1/runs/r1': sequence(() => jsonResponse(run('running')), () => jsonResponse(run('review'))),
+        'POST /api/v1/runs/r1/continue': () => jsonResponse({ continued: true }),
+      },
+      async (delayMs) => {
+        waits.push(delayMs)
+      },
+    )
+
+    await expect(deliver('carry on')).resolves.toBeTruthy()
+
+    expect(waits).toEqual([SESSION_GAP_RETRY_DELAYS_MS[0]])
+    expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(2)
+    expect(posts(sent, '/api/v1/runs/r1/continue')[0]?.body).toMatchObject({ text: 'carry on' })
+  })
+
+  it('a message sent between two workflow steps reaches the next step’s session', async () => {
+    const { sent, deliver } = await renderDeliver(run('running'), {
+      'POST /api/v1/runs/r1/messages': sequence(
+        () => jsonResponse({ error: 'session closed' }, 409),
+        () => jsonResponse({ delivered: true }),
+      ),
+      'GET /api/v1/runs/r1': () => jsonResponse(run('running')),
+    })
+
+    await expect(deliver('carry on')).resolves.toBeTruthy()
+    expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(2)
+    expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(0)
+  })
+
+  it('the wait is bounded: a run that never settles reports the refusal', async () => {
+    const waits: number[] = []
+    const { sent, deliver } = await renderDeliver(
+      run('running'),
+      {
+        'POST /api/v1/runs/r1/messages': () => jsonResponse({ error: 'session closed' }, 409),
+        'GET /api/v1/runs/r1': () => jsonResponse(run('running')),
+      },
+      async (delayMs) => {
+        waits.push(delayMs)
+      },
+    )
+
+    await expect(deliver('carry on')).rejects.toThrow('session closed')
+    expect(waits).toEqual([...SESSION_GAP_RETRY_DELAYS_MS])
+    expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(SESSION_GAP_RETRY_DELAYS_MS.length + 1)
+    expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(0)
+  })
+
+  it('a different live 409 the fresh record agrees with is not retried', async () => {
+    const { sent, deliver } = await renderDeliver(run('running'), {
+      'POST /api/v1/runs/r1/messages': () =>
+        jsonResponse({ error: 'Claude Code is disabled. Enable it in Settings → Agents → Providers.' }, 409),
+      'GET /api/v1/runs/r1': () => jsonResponse(run('running')),
+    })
+
+    await expect(deliver('go on')).rejects.toThrow('Claude Code is disabled')
+    expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(1)
+  })
+
   it('a non-409 failure is reported as it comes — no refetch, no second attempt', async () => {
     const { sent, deliver } = await renderDeliver(run('running'), {
       'POST /api/v1/runs/r1/messages': () => jsonResponse({ error: 'agent crashed' }, 500),
@@ -196,5 +284,24 @@ describe('useDeliverPrompt', () => {
     await expect(deliver('carry on')).rejects.toThrow('agent crashed')
     expect(sent.filter((r) => r.method === 'GET' && r.path === '/api/v1/runs/r1')).toHaveLength(0)
     expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(1)
+  })
+
+  it('counts a landed delivery under its surface, and nothing when the caller opts out (#1473 review)', async () => {
+    const counted = await renderDeliver(run('waiting'))
+    await counted.deliver('hello')
+    expect(trackMessageSent).toHaveBeenCalledWith('existing_session')
+
+    vi.mocked(trackMessageSent).mockClear()
+    cleanup()
+    const review = await renderDeliver(run('waiting'), {}, undefined, 'review')
+    await review.deliver('notes')
+    expect(trackMessageSent).toHaveBeenCalledWith('review')
+
+    vi.mocked(trackMessageSent).mockClear()
+    cleanup()
+    // The footer's one-click Continue: delivered, but never a `message_sent`.
+    const footer = await renderDeliver(run('done'), {}, undefined, null)
+    await footer.deliver('')
+    expect(trackMessageSent).not.toHaveBeenCalled()
   })
 })

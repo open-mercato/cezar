@@ -139,10 +139,11 @@ const REPO: RepoResponse = {
   status: [],
   log: [],
   branches: ['main', 'develop'],
+  checkedOutElsewhere: {},
   baseBranch: null,
 }
 
-const REPO_NO_GIT: RepoResponse = { info: null, status: [], log: [], branches: [], baseBranch: null }
+const REPO_NO_GIT: RepoResponse = { info: null, status: [], log: [], branches: [], checkedOutElsewhere: {}, baseBranch: null }
 
 const CONFIG: ConfigResponse = {
   baseBranch: null,
@@ -383,6 +384,20 @@ describe('the hero surface', () => {
     expect(textarea().value).toContain('failing or flaky test')
     expect(requests.some((r) => r.method === 'POST')).toBe(false)
     expect(location()).toBe('/new')
+  })
+
+  it('starts an attachment-only task: empty task text, the attachment in images (telemetry 18c930de)', async () => {
+    serve()
+    renderNewTask()
+    await pillReady()
+    paste(textarea(), [pngFile()])
+    await waitFor(() => expect(attachmentChips()).toHaveLength(1))
+
+    await startTask()
+
+    const body = postedBody() as { task: string; images?: unknown[] }
+    expect(body.task).toBe('')
+    expect(body.images).toHaveLength(1)
   })
 })
 

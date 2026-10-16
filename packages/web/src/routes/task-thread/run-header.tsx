@@ -100,10 +100,8 @@ import { useDraft } from './thread-draft'
  * Two deliberate omissions, both seams rather than gaps:
  *  - **VS Code** (spec: `POST /api/runs/:id/open-in-editor`) — the endpoint does not exist yet;
  *    R5 adds it driver-detected. Faking the button against nothing would be dishonest.
- *  - **Hosted mode** (spec §"Deployment modes"): when R5's `capabilities.localHandoff` lands in
- *    `/api/health`, Terminal (and VS Code) must disappear entirely and the resume hint must drop
- *    its `cd`. Today's HealthResponse carries no such field, so Terminal renders per current
- *    (local-only) behavior — the gate goes in where the flags are read, `runActionFlags` callers.
+ *  - **Hosted mode** (spec §"Deployment modes"): Terminal disappears when `capabilities.localHandoff`
+ *    is false (`useCanOpenTerminal`); the resume hint still carries its `cd`.
  */
 /** Which run-detail tab this header instance sits above — drives the active underline.
  *  A prop rather than a route match so the header stays testable with a bare render. */
@@ -168,7 +166,7 @@ function RunHeaderView({
 }: RunHeaderProps) {
   const attention = deriveAttention(run)
   const budget = budgetStop(run)
-  const flags = runActionFlags(run)
+  const canTerminal = useCanOpenTerminal(run)
   const hint = resumeHint(run)
   const actions = useRunActions(run, onMarkedUnread)
   // The Session tab's composer carries Continue (its send button) and ■ Stop, so the header only
@@ -276,7 +274,7 @@ function RunHeaderView({
                 <div data-slot="run-actions" className="ml-auto hidden items-center gap-1 md:flex">
                   <TaskItemActions run={run} actions={actions} showRunControls={!composerOwnsRunControls} />
                   {/* Terminal is folded into the Open in… menu to save room. */}
-                  <OpenInMenuForRun run={run} canResume={flags.terminal} onResume={() => actions.terminal.mutate()} />
+                  <OpenInMenuForRun run={run} canResume={canTerminal} onResume={() => actions.terminal.mutate()} />
                 </div>
               }
               continuationEngine={continuationEngine}
@@ -402,6 +400,14 @@ function RunProgress({
       ) : null}
     </>
   )
+}
+
+/** Terminal resume spawns a terminal on the SERVER's machine, so a hosted cockpit
+ *  (`localHandoff: false`) never offers it — the route 409s there (telemetry f179cc7d). Only an
+ *  explicit `false` hides it: the route stays authoritative while health is still loading. */
+function useCanOpenTerminal(run: ApiRun): boolean {
+  const localHandoff = useHealth().data?.capabilities?.localHandoff
+  return runActionFlags(run).terminal && localHandoff !== false
 }
 
 /** Why a task-management action is unavailable right now, or undefined when it is available. The
@@ -678,14 +684,14 @@ function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
   // must be ONE implementation, not two buttons that happen to agree today.
   const finish = useFinishRun(run.id)
   const archive = useMutation({
-    mutationFn: () => archiveRun(run.id, !run.archived),
+    mutationFn: () => archiveRun(run.id, !run.archived, 'task_view'),
     onSuccess: invalidate,
     onError,
   })
   // Pin/unpin (#935) — the shared hook rather than a local mutation, because the sidebar and the
   // Tasks table drive the same action and the cache rule belongs in one place. Toggling off the
   // record, exactly like archive above.
-  const pinMutation = usePinRun()
+  const pinMutation = usePinRun('task_view')
   const pin = {
     isPending: pinMutation.isPending,
     mutate: () => pinMutation.mutate({ id: run.id, pinned: !run.pinned }, { onError }),
@@ -1424,6 +1430,7 @@ function ActionsKebab({
   showRunControls: boolean
 }) {
   const flags = runActionFlags(run)
+  const canTerminal = useCanOpenTerminal(run)
   const live = liveRunReason(run)
   const step = git.action
   const unread = flags.markRead
@@ -1458,7 +1465,7 @@ function ActionsKebab({
             <CheckIcon aria-hidden="true" /> End session
           </DropdownMenuItem>
         ) : null}
-        {flags.terminal ? (
+        {canTerminal ? (
           <DropdownMenuItem onSelect={() => actions.terminal.mutate()}>
             <SquareTerminalIcon aria-hidden="true" /> Terminal
           </DropdownMenuItem>

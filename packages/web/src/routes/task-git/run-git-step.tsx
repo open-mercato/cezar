@@ -101,6 +101,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
     uncommitted: status.data?.uncommitted,
     unpushed: status.data?.unpushed,
     behind: status.data?.behind,
+    ahead: status.data?.ahead,
     remote: repo.data?.info?.remote,
     forge: health.data?.forge ?? null,
     prUrl,

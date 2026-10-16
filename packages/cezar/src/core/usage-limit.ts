@@ -67,6 +67,11 @@ const UNIT_MS: Record<string, number> = {
   h: 3_600_000, hr: 3_600_000, hrs: 3_600_000, hour: 3_600_000, hours: 3_600_000,
 };
 
+/** True for any usage-limit error, reset instant or not — `task_failed`'s `usage_limit` kind (#1438). */
+export function isUsageLimitMessage(message: string): boolean {
+  return CLAUDE_MARKER_RE.test(message) || LIMIT_PHRASE_RE.test(message);
+}
+
 /**
  * Read a usage limit out of a terminal error message, or `null` when it is not one (or carries no
  * usable reset instant). `now` is injected so callers and tests share one clock.
