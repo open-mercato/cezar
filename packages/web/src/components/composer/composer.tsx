@@ -33,6 +33,7 @@ import { cn } from '@/lib/utils'
 
 import {
   appendAttachment,
+  ATTACHMENT_ACCEPT,
   attachedImageBytes,
   fileToPendingAttachment,
   screenFiles,
@@ -792,7 +793,7 @@ function AttachButton({
       <input
         ref={inputRef}
         type="file"
-        accept="image/*,application/pdf,text/plain,text/markdown,.pdf,.txt,.md,.markdown,.log"
+        accept={ATTACHMENT_ACCEPT}
         multiple
         className="hidden"
         aria-hidden="true"

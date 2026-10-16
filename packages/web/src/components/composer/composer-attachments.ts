@@ -55,18 +55,46 @@ const EXTENSION_MEDIA_TYPES: Record<string, string> = {
   pdf: 'application/pdf',
 }
 
+/** Text formats sent as `text/plain` (telemetry 6c4b3066: an `.html` was refused). The contract
+ *  never widens to `text/html` — cezar serves attachments from the cockpit's origin — so the bytes
+ *  travel as plain text and the server pins the stored name to `.txt` (`sanitizeAttachmentName`). */
+const PLAIN_TEXT_EXTENSIONS = new Set([
+  'html', 'htm', 'xml', 'css', 'scss', 'less', 'csv', 'tsv', 'json', 'jsonl', 'ndjson',
+  'yaml', 'yml', 'toml', 'ini', 'env', 'conf', 'cfg', 'sql', 'graphql', 'gql', 'diff', 'patch',
+  'js', 'mjs', 'cjs', 'jsx', 'ts', 'mts', 'cts', 'tsx', 'vue', 'svelte', 'astro', 'php', 'py',
+  'rb', 'go', 'rs', 'java', 'kt', 'swift', 'c', 'h', 'cc', 'cpp', 'hpp', 'cs', 'sh', 'bash',
+  'zsh', 'ps1', 'bat', 'lua', 'pl', 'r', 'dart', 'scala', 'ex', 'exs', 'erl', 'hs', 'twig',
+  'rst', 'adoc', 'tex', 'srt', 'vtt',
+])
+
+/** Browser-reported types that are text whatever their subtype says. */
+const PLAIN_TEXT_MEDIA_TYPES = new Set([
+  'application/json', 'application/xml', 'application/javascript', 'application/x-yaml',
+  'application/yaml', 'application/sql', 'application/x-sh',
+])
+
+/** The file picker's `accept`, built from the same lists `attachmentMediaType` takes. */
+export const ATTACHMENT_ACCEPT = [
+  'image/*', 'application/pdf', 'text/*', ...PLAIN_TEXT_MEDIA_TYPES,
+  ...[...Object.keys(EXTENSION_MEDIA_TYPES), ...PLAIN_TEXT_EXTENSIONS].map((ext) => `.${ext}`),
+].join(',')
+
 /**
  * What cezar will call this file on the wire, or `null` when it will not take it at all.
  *
  * The browser's `type` wins when it is one the contract knows. When it is empty — a `.md` on
  * Windows, a file dragged out of some archive tools — the extension decides instead, because
  * refusing a supported file over a MIME database the user does not control would be a defect they
- * could do nothing about.
+ * could do nothing about. Other text formats (HTML, CSV, JSON, source code) go as `text/plain`.
  */
 export function attachmentMediaType(file: File): string | null {
   if (isAttachmentMediaType(file.type)) return file.type
-  const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
-  return EXTENSION_MEDIA_TYPES[ext] ?? null
+  const ext = file.name.includes('.') ? (file.name.split('.').pop()?.toLowerCase() ?? '') : ''
+  const known = EXTENSION_MEDIA_TYPES[ext]
+  if (known) return known
+  if (PLAIN_TEXT_EXTENSIONS.has(ext)) return 'text/plain'
+  if (file.type.startsWith('text/') || PLAIN_TEXT_MEDIA_TYPES.has(file.type)) return 'text/plain'
+  return null
 }
 
 /** A pending attachment: the wire shape, plus what the composer's row needs to show it. */
@@ -162,7 +190,7 @@ export function screenFiles(
     const label = file.name || 'attachment'
     if (attachmentMediaType(file) === null) {
       rejected.push(
-        `${label} is not a supported attachment (images, PDF and plain-text files such as TXT or MD)`,
+        `${label} is not a supported attachment (images, PDF and text files such as TXT, MD, HTML or source code)`,
       )
       continue
     }
