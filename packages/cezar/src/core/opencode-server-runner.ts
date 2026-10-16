@@ -182,6 +182,9 @@ class OpencodeSession implements AgentSession {
       throw wrapSpawnError(err, bin);
     }
     this.hasExited = trackChildExit(this.child);
+    this.child.once('exit', () => {
+      this.serverOpen = false;
+    });
 
     this.child.on('error', (err: NodeJS.ErrnoException) => {
       this.spawnFailed = wrapSpawnError(err, bin);

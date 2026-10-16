@@ -363,6 +363,55 @@ describe('SIGTERM→SIGKILL escalation for an app-server that survives SIGTERM',
     }
   }
 
+  it.each([false, true])(
+    'stops accepting messages after spontaneous child exit (stdout held open: %s)',
+    async (holdStdoutOpen) => {
+      const fake = signallableChild();
+      const stdout = fake.child.stdout as PassThrough;
+      spawnHook.override = () => fake.child;
+      let firstTurn: () => void = () => {};
+      const started = new Promise<void>((resolve) => { firstTurn = resolve; });
+      fake.child.stdin.on('data', (chunk: Buffer) => {
+        const request = JSON.parse(chunk.toString()) as { id?: number; method: string };
+        if (request.id === undefined) return;
+        const result = request.method === 'thread/start'
+          ? { thread: { id: 'thread-1' } }
+          : request.method === 'turn/start' ? { turn: { id: 'turn-1' } } : {};
+        stdout.write(`${JSON.stringify({ id: request.id, result })}\n`);
+        if (request.method === 'turn/start') firstTurn();
+      });
+      const session = new CodexAppServerRunner({ bin: 'codex', timeoutMs: 0 }).startSession({
+        userPrompt: 'do it', cwd: process.cwd(),
+      });
+      let resultSettled = false;
+      void session.result.then(() => { resultSettled = true; }, () => { resultSettled = true; });
+      try {
+        await started;
+        expect(session.open).toBe(true);
+        expect(fake.child.stdin.writable).toBe(true);
+        fake.exit(0);
+        if (!holdStdoutOpen) stdout.end();
+
+        expect(session.open).toBe(false);
+        expect(session.sendMessage([{ type: 'text', text: 'x' }])).toBe(false);
+        if (holdStdoutOpen) {
+          // A grandchild can inherit stdout and keep the result loop waiting after exit.
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          expect(stdout.readableEnded).toBe(false);
+          expect(resultSettled).toBe(false);
+          expect(session.open).toBe(false);
+          expect(session.sendMessage([{ type: 'text', text: 'x' }])).toBe(false);
+        }
+      } finally {
+        stdout.end();
+        await session.result;
+        fake.child.stdin.destroy();
+        fake.child.stderr.destroy();
+        spawnHook.override = null;
+      }
+    },
+  );
+
   it('escalates on the wall-clock timeout even after Node flagged the child as killed', () => {
     withFakeChild((fake) => {
       const session = new CodexAppServerRunner({ bin: 'codex', timeoutMs: 20 }).startSession({

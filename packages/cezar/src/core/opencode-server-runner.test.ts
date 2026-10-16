@@ -22,6 +22,17 @@ vi.mock('node:child_process', async (importOriginal) => {
   };
 });
 
+const httpHook = vi.hoisted(() => ({ override: null as null | (() => Promise<never>) }));
+
+vi.mock('./opencode-http.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./opencode-http.ts')>();
+  return {
+    ...actual,
+    opencodeRequest: (...args: Parameters<typeof actual.opencodeRequest>) =>
+      httpHook.override ? httpHook.override() : actual.opencodeRequest(...args),
+  };
+});
+
 /**
  * #858 — the OpenCode half of #844. `opencode serve` installs its own SIGTERM handler, so the
  * teardown watchdog must decide "is it dead?" from a real exit, never from `ChildProcess.killed`,
@@ -81,6 +92,57 @@ describe('SIGTERM→SIGKILL escalation for an opencode server that survives SIGT
     void session.result.catch(() => undefined);
     return session;
   }
+
+  it.each([false, true])('refuses messages after autonomous exit (stdout held open: %s)', (heldOpen) => {
+    withFakeChild((fake) => {
+      const session = startSession(0);
+      expect(session.open).toBe(true);
+      fake.exit(1);
+      if (!heldOpen) (fake.child.stdout as PassThrough).end();
+
+      expect.soft(session.open).toBe(false);
+      expect.soft(session.sendMessage([{ type: 'text', text: 'x' }])).toBe(false);
+      if (heldOpen) expect(fake.child.stdout.readableEnded).toBe(false);
+      expect(fake.signals).toEqual([]);
+      (fake.child.stdout as PassThrough).end();
+    });
+  });
+
+  it('refuses messages after autonomous exit while the HTTP channel stays open', async () => {
+    let received!: () => void;
+    const requestReceived = new Promise<void>((resolve) => { received = resolve; });
+    let closeChannel!: (error: Error) => void;
+    const channel = new Promise<never>((_resolve, reject) => { closeChannel = reject; });
+    httpHook.override = () => {
+      received();
+      return channel;
+    };
+    const fake = signallableChild();
+    spawnHook.override = () => fake.child;
+    const session = startSession(0);
+    let settled = false;
+    const result = session.result.then(() => { settled = true; });
+    try {
+      (fake.child.stdout as PassThrough).write('http://127.0.0.1:5150\n');
+      await requestReceived;
+      expect(session.open).toBe(true);
+      fake.exit(1);
+
+      expect.soft(session.open).toBe(false);
+      expect.soft(session.sendMessage([{ type: 'text', text: 'x' }])).toBe(false);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(settled).toBe(false);
+      expect(fake.child.stdout.readableEnded).toBe(false);
+      expect(fake.signals).toEqual([]);
+    } finally {
+      closeChannel(new Error('HTTP channel closed'));
+      (fake.child.stdout as PassThrough).end();
+      await result;
+      spawnHook.override = null;
+      httpHook.override = null;
+    }
+    expect(settled).toBe(true);
+  });
 
   it('escalates after end() even once Node flagged the server as killed', () => {
     withFakeChild((fake) => {

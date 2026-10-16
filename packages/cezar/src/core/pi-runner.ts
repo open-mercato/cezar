@@ -69,6 +69,9 @@ export class PiRunner implements AgentRunner {
     let killTimer: NodeJS.Timeout | undefined;
     let hardKillTimer: NodeJS.Timeout | undefined;
     const hasExited = trackChildExit(child);
+    child.once('exit', () => {
+      open = false;
+    });
     let piUi = createPiUiState();
     const textChunks: string[] = [];
     // Pi streams one assistant message at a time, without a stable message id.

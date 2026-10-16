@@ -1,8 +1,11 @@
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentEvent } from './agent-runner.ts';
 import { createRunner } from './runner-factory.ts';
@@ -271,5 +274,69 @@ describe('CopilotAcpRunner — session lifecycle', () => {
     await session.result;
     expect(c.events.some((e) => e.type === 'error' && /timed out/.test(e.message))).toBe(true);
     expect(session.open).toBe(false);
+  });
+});
+
+
+const spawnHook = vi.hoisted(() => ({ override: null as null | (() => unknown) }));
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawn: (...args: Parameters<typeof actual.spawn>) =>
+      spawnHook.override ? spawnHook.override() : actual.spawn(...args),
+  };
+});
+
+describe('backend child exit', () => {
+  it.each([false, true])('refuses messages after autonomous exit (stdout held open: %s)', async (heldOpen) => {
+    const child = Object.assign(new EventEmitter(), {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      exitCode: null as number | null,
+      signalCode: null,
+      pid: 5150,
+      kill: vi.fn(() => true),
+    });
+    spawnHook.override = () => child as unknown as ChildProcessWithoutNullStreams;
+    const events: AgentEvent[] = [];
+    const session = new CopilotAcpRunner({ bin: 'backend', timeoutMs: 0 }).startSession({
+      userPrompt: 'go',
+      cwd: process.cwd(),
+    }, (event) => events.push(event));
+    let settled = false;
+    let failure: unknown;
+    const result = session.result.then(
+      () => { settled = true; },
+      (error: unknown) => { settled = true; failure = error; },
+    );
+    try {
+      expect(session.open).toBe(true);
+      child.exitCode = 1;
+      child.emit('exit', 1, null);
+      if (!heldOpen) child.stdout.end();
+
+      expect.soft(session.open).toBe(false);
+      expect.soft(session.sendMessage([{ type: 'text', text: 'x' }])).toBe(false);
+      if (heldOpen) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(settled).toBe(false);
+        expect(child.stdout.readableEnded).toBe(false);
+        expect(child.stdin.writable).toBe(true);
+        child.stdout.write('buffered final line\n');
+
+      }
+    } finally {
+      child.stdout.end();
+      child.emit('close', 1, null);
+      await result;
+      spawnHook.override = null;
+    }
+    expect(settled).toBe(true);
+    if (heldOpen) expect(events).toContainEqual({ type: 'note', message: 'copilot: skipped unparseable ACP line: buffered final line' });
+    expect(failure).toEqual(new Error('Copilot CLI exited with code 1'));
+    expect(child.kill).not.toHaveBeenCalled();
   });
 });
