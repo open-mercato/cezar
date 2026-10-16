@@ -178,11 +178,21 @@ export function threadFilePaths(state: ThreadState): string[] {
   return deduped
 }
 
+const FAILURE_PREFIX = /^(?:continue failed|run stopped|step (?:"[^"]+"|\S+) failed)(?: — |: )/
+
+/** Engine failure summaries wrap the provider text; compare the detail, not its wrapper. */
+function failureText(text: string): string {
+  let detail = text.trim()
+  while (FAILURE_PREFIX.test(detail)) detail = detail.replace(FAILURE_PREFIX, '').trim()
+  return detail
+}
+
 export function threadFooter(
   status: RunStatus,
   error?: string,
   awaitingAnswer = false,
   idleClosed = false,
+  thread?: ThreadState,
 ): ThreadFooter {
   switch (status) {
     case 'waiting':
@@ -197,7 +207,11 @@ export function threadFooter(
       if (idleClosed) {
         return { state: 'closed', tone: 'dim', label: 'Closed after inactivity — Continue to pick it up' }
       }
-      return { state: 'closed', tone: 'danger', label: error ? `Session failed — ${error}` : 'Session failed' }
+      const alreadyShown = error && thread?.turns.at(-1)?.items.some((item) =>
+        item.kind === 'note' && (item.tone === 'danger' || FAILURE_PREFIX.test(item.text)) &&
+        failureText(item.text) === failureText(error),
+      )
+      return { state: 'closed', tone: 'danger', label: error && !alreadyShown ? `Session failed — ${error}` : 'Session failed' }
     case 'review':
       return { state: 'closed', tone: 'dim', label: 'Session closed — waiting for your review' }
     case 'done':
@@ -216,6 +230,7 @@ export function threadFooter(
 interface DraftEntry {
   origin: 'v1' | 'v2' | 'meta'
   entry: ThreadEntry
+  failure?: { message: string; stepId: unknown; summary: boolean }
 }
 
 interface DraftTurn {
@@ -631,6 +646,8 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         const tone = event.tone === 'danger' ? 'danger' : event.tone === 'info' ? 'info' : 'dim'
         currentTurn().entries.push({
           origin: 'meta',
+          ...(event.type === 'lifecycle' && FAILURE_PREFIX.test(text)
+            ? { failure: { message: failureText(text), stepId: event.stepId, summary: true } } : {}),
           entry: { kind: 'note', id: `v1:${event.seq}`, text, tone },
         })
         break
@@ -640,6 +657,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         if (text === '' || isErrorTwin(event, text, 'v1')) break
         currentTurn().entries.push({
           origin: 'meta',
+          failure: { message: failureText(text), stepId: event.stepId, summary: false },
           entry: { kind: 'note', id: `v1:${event.seq}`, text, tone: 'danger' },
         })
         offerAgentUpdate(text, `v1:${event.seq}`)
@@ -650,6 +668,8 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         if (text === '' || (event.fatal === true && isErrorTwin(event, text, 'v2'))) break
         currentTurn().entries.push({
           origin: 'meta',
+          ...(event.fatal === true
+            ? { failure: { message: failureText(text), stepId: event.stepId, summary: false } } : {}),
           entry: { kind: 'note', id: `v2:${event.seq}`, text, tone: 'danger' },
         })
         offerAgentUpdate(text, `v2:${event.seq}`)
@@ -671,6 +691,8 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         const suffix = str(event.error) ? ` — ${str(event.error)}` : ''
         currentTurn().entries.push({
           origin: 'meta',
+          ...(str(event.error)
+            ? { failure: { message: failureText(str(event.error)!), stepId: event.stepId, summary: true } } : {}),
           entry: { kind: 'note', id: `v1:${event.seq}`, text: `step ${str(event.stepId) ?? '?'} failed${suffix}`, tone: 'danger' },
         })
         break
@@ -800,6 +822,11 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
   // persisting, while v2 items carry the raw text and are stripped below at render time.
   // Anything left unmatched is prose that exists ONLY in v1 — it renders rather than vanishing.
   for (const draft of turns) {
+    // Match summaries after replay so event order cannot hide the only error detail.
+    const failures = draft.entries.flatMap(({ failure }) => failure && !failure.summary ? [failure] : [])
+    draft.entries = draft.entries.filter(({ failure }) => !failure?.summary || !failures.some((source) =>
+      source.message === failure.message && (failure.stepId === undefined || source.stepId === failure.stepId),
+    ))
     if (!draft.v2Items) continue
     const v2Texts = new Set<string>()
     for (const { origin, entry } of draft.entries) {
