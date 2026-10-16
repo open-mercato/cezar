@@ -561,6 +561,12 @@ export const providerConnectResponseSchema = z.discriminatedUnion('opened', [
 ]);
 export type ProviderConnectResponse = z.infer<typeof providerConnectResponseSchema>;
 
+/** `POST /api/v1/providers/:provider/update` — a terminal was handed the agent CLI's own update
+ *  command (`opencode upgrade`). Every other outcome is a 409 `{error, command?}`: `command` for
+ *  the clipboard fallback, absent when the CLI has no self-update. */
+export const providerUpdateResponseSchema = z.object({ opened: z.literal(true), command: z.string() });
+export type ProviderUpdateResponse = z.infer<typeof providerUpdateResponseSchema>;
+
 // ---- host model catalog (`GET /api/v1/models`) -----------------------------------------------
 
 /**

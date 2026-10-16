@@ -51,6 +51,13 @@ export function trackLoginNotOpened(provider: ProviderId, reason: ConnectNotOpen
   track('provider_login_not_opened', { label: `${provider}:${reason}` }, { sid });
 }
 
+export type UpdateOutcome = 'opened' | 'unsupported' | 'hosted' | 'no_terminal';
+
+/** What an agent's **Update** (offered next to an outdated-CLI error) did. */
+export function trackUpdateOpened(provider: ProviderId, outcome: UpdateOutcome, sid?: string): void {
+  track('provider_update_opened', { label: `${provider}:${outcome}` }, { sid });
+}
+
 /**
  * When to re-check after Connect opened a login, as offsets from the open. Nothing else re-probes
  * on its own — the cockpit does not poll provider status — so without these a finished login is

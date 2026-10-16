@@ -117,6 +117,7 @@ import {
   reportInconclusiveProbe,
   trackLoginNotOpened,
   trackLoginOpened,
+  trackUpdateOpened,
   watchLogin,
 } from './provider-telemetry.ts';
 import { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
@@ -2259,7 +2260,39 @@ export function createApp(deps: ServerDeps) {
       trackLoginOpened(provider, row.status === 'unknown' ? 'unknown' : 'disconnected', sid);
       watchOpenedLogin(provider, { id: profile.id, isDefault: profile.isDefault, path: profile.isDefault ? null : profile.path }, sid);
       return c.json({ opened: true, command });
-    });
+    })
+
+    // Offered next to an "X or newer is required" agent error: hands the CLI's own self-update to
+    // a terminal, like Connect hands it the login.
+    .post(
+      '/providers/:provider/update',
+      paramZodValidator(z.object({ provider: providerParamSchema }), { message: 'unknown provider' }),
+      async (c) => {
+        const provider = c.req.valid('param').provider as ProviderId;
+        const sid = deviceSid(c.req.header('x-cezar-sid'));
+        const command = providerAuth.updateCommand(provider);
+        if (command === null) {
+          trackUpdateOpened(provider, 'unsupported', sid);
+          return c.json({ error: 'This agent has no update command of its own. Update it the way you installed it.' }, 409);
+        }
+        if (!capabilities().localHandoff) {
+          trackUpdateOpened(provider, 'hosted', sid);
+          return c.json({ error: 'Run this command on the machine hosting cezar.', command }, 409);
+        }
+        let opened = false;
+        try {
+          opened = await openTerminal(bootRoot, command);
+        } catch {
+          // Best-effort, as for Connect: the command is the fallback.
+        }
+        if (!opened) {
+          trackUpdateOpened(provider, 'no_terminal', sid);
+          return c.json({ error: 'No terminal emulator could be opened. Run this command manually.', command }, 409);
+        }
+        trackUpdateOpened(provider, 'opened', sid);
+        return c.json({ opened: true as const, command });
+      },
+    );
 
   // ---- chained family: agent profiles / accounts (workspace-level) ----------
   // Extra config dirs for a SECOND login of the same agent CLI (spec
