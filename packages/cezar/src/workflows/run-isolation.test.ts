@@ -51,7 +51,8 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe('RunManager repository-root isolation', () => {
+// Real runs with git and the mock CLI: well under a second alone, past the 5 s default under the full parallel suite.
+describe('RunManager repository-root isolation', { timeout: 20_000 }, () => {
   it('runs the first task in place with the root lease before a repository has a commit', async () => {
     const root = mkdtempSync(join(tmpdir(), 'cez-unborn-isolation-'));
     roots.push(root);
