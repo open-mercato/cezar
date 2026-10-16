@@ -19,6 +19,7 @@ import { StreamRedaction } from './stream-redaction.ts';
 import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
 // Sibling module, files only — a draft belongs to a run and is deleted with it (#939).
 import { deleteRunDrafts } from './drafts.ts';
+import { atomicTmpPath } from '../atomic-tmp.ts';
 import { failureKind, taskFailedLabel } from './failure-kind.ts';
 import { track } from '../telemetry.ts';
 // Pure, dependency-free reference helpers — the same sanity bound the marker parser applies.
@@ -1828,11 +1829,12 @@ export class RunStore extends EventEmitter {
 
   private saveNow(throwOnError = false, pretty = false): void {
     const indexPath = join(this.dataDir, 'runs.json');
-    const tmpPath = `${indexPath}.tmp`;
+    const tmpPath = atomicTmpPath(indexPath);
     try {
       writeFileSync(tmpPath, JSON.stringify(this.mergeWithIndexOnDisk(indexPath), null, pretty ? 2 : undefined), 'utf8');
       renameSync(tmpPath, indexPath);
     } catch (err) {
+      rmSync(tmpPath, { force: true });
       if (throwOnError) throw new Error('Could not persist automation run provenance; the launch was not confirmed.');
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[cez] failed to save runs.json: ${message}`);
