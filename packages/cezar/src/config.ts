@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { loadWorkspaceConfig, type WorkspaceConfig } from './workspace/config.ts';
-import { RUNNER_IDS } from './core/agent-runner.ts';
+import { AGENT_TIMEOUT_MAX_MS, RUNNER_IDS } from './core/agent-runner.ts';
 
 /**
  * Optional advanced config at `.ai/cezar/config.json`. Zero-config rule:
@@ -49,6 +49,13 @@ const configSchema = z.object({
    * the key additive-safe: a bad value degrades to "no limit".
    */
   memoryLimitMb: z.number().int().min(0).max(1_048_576).optional().catch(undefined),
+  /**
+   * Wall-clock limit in ms for a non-interactive agent step (#880), on every backend. Unset =
+   * the runner's built-in 30 minutes; `0` = no wall clock. A workflow step's own `timeoutMs`
+   * wins over it (`agentStepTimeoutMs`). `.catch(undefined)` keeps the key additive-safe: a
+   * bad value degrades to the built-in default without discarding the rest of the config.
+   */
+  agentTimeoutMs: z.number().int().min(0).max(AGENT_TIMEOUT_MAX_MS).optional().catch(undefined),
   /**
    * Which agent backend a task uses unless overridden per task (GUI) or per
    * step (workflow). The GUI only offers runners actually installed; this is
