@@ -540,3 +540,16 @@ breaking change requiring the documented deprecation path.
 - `BACKWARD_COMPATIBILITY.md` — §7 (this protocol) and §2/§3 (SSE names, NDJSON).
 - `.ai/analysis/cockpit-ui-redesign/agent-event-protocols.md` — the deep design record (§7, §7.1).
 - `.ai/specs/2026-07-14-cockpit-ui-redesign.md` — the spec (protocol v2, parity requirement).
+
+
+## Local Antigravity extension
+
+`antigravity-runner.ts` implements the same seam using `agy -p` and
+`--output-format stream-json`. Its mapper folds `init`, `step_update`, and
+`result` into both event streams. One process per turn; `sendMessage` returns
+false and Continue resumes through `--conversation`. Source:
+https://antigravity.google/docs/cli/headless/ (checked 2026-10-14).
+Golden fixtures and the parity matrix cover text, tools, errors, usage and
+turn completion. Headless step types expose no plan or reasoning text, and
+write tool captures contain paths without file content, so those parity cells
+are explicitly excluded. No backend-specific orchestration is added.

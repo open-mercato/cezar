@@ -470,6 +470,8 @@ Useful environment variables:
 | `CEZ_CURSOR_AGENT_BIN=/path/to/agent` | Override which Cursor Agent CLI (`agent`) binary is used. |
 | `CEZ_PI_BIN=/path/to/pi` | Override which `pi` binary is used. |
 | `CEZ_COPILOT_BIN=/path/to/copilot` | Override which GitHub Copilot CLI binary is used. |
+| `CEZ_ANTIGRAVITY=1` | Enable the local Antigravity runner, authentication probes and model discovery (off by default). |
+| `CEZ_AGY_BIN=/path/to/agy` | Override the official Antigravity CLI executable. |
 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME` | The agents' **own** variables, honoured where the vendor documents one. Setting one moves that agent's **default account** — the config folder cezar discovers. A *second* login of the same CLI is deliberately not an environment setting, since one process-wide value cannot differ per project: add it under **Settings → Agent accounts** and pick it per project. |
 | `CEZ_BROWSE_ROOT=~/` | Default root for **Add project → Open local folder…**. The picker cannot navigate above it; a saved workspace value overrides the environment default and must name an existing folder. |
 | `CEZ_PROJECTS_DIR=~/cezar/projects` | Default destination for **Clone from GitHub**. Saved workspace settings override it, and missing directories are created recursively. |
@@ -975,3 +977,22 @@ published package carries the built app, so `npx` users never run a bundler.
 Every module is meant to be read in one sitting.
 
 ---
+
+
+### Antigravity runner (local extension)
+
+Choose `antigravity` to use the official Google `agy` CLI. Install it from
+https://antigravity.google/docs/cli/ and sign in once with `agy` in a terminal.
+Set `CEZ_ANTIGRAVITY=1` to enable execution, authentication probes and model
+listing. `CEZ_AGY_BIN` optionally selects another executable. With no opt-in,
+Antigravity stays unavailable and the other runners retain their defaults.
+
+Model options come from `agy models`; an empty model uses the CLI default.
+Each headless turn runs in its task worktree. Continue uses `--conversation`
+with the persisted conversation id; changing runners uses the upstream context
+reconstruction. Real Antigravity turns are serialized within each César process.
+Cancellation and timeout stop its process group and captured descendants.
+`CEZ_DRY_RUN=1` uses the bundled mock without contacting Google, unless a binary
+override is supplied. Images and private MCP injection are unsupported and
+rejected explicitly. Native plans, reasoning text and file diffs are not exposed
+by the documented headless stream; task changes still use the native Git view.

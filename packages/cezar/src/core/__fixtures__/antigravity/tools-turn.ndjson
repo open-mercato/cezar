@@ -1,0 +1,4 @@
+{"event": "init", "conversation_id": "fixture", "init": {"cwd": "/repo", "tools": ["run_command"]}}
+{"event": "step_update", "step_update": {"step_index": 2, "state": "ACTIVE", "step_type": "tool", "tool_name": "run_command", "tool_info": {"parameters": {"CommandLine": "echo hello"}}}}
+{"event": "step_update", "step_update": {"step_index": 2, "state": "DONE", "step_type": "tool", "tool_info": {"output": "hello"}}}
+{"event": "result", "result": {"conversation_id": "fixture", "status": "SUCCESS", "response": "", "usage": {"input_tokens": 10, "output_tokens": 5, "thinking_tokens": 2, "cache_read_tokens": 3, "total_tokens": 15}}}

@@ -68,6 +68,7 @@ const connectedResults: Record<string, ProviderCommandResult> = {
 };
 
 const originalEnv = {
+  CEZ_ANTIGRAVITY: process.env.CEZ_ANTIGRAVITY,
   CEZ_AGENT_MODELS_LOCKED: process.env.CEZ_AGENT_MODELS_LOCKED,
   CEZ_DRY_RUN: process.env.CEZ_DRY_RUN,
   CEZ_CLAUDE_BIN: process.env.CEZ_CLAUDE_BIN,
@@ -79,6 +80,7 @@ const originalEnv = {
 };
 
 beforeEach(() => {
+  process.env.CEZ_ANTIGRAVITY = '0';
   delete process.env.CEZ_AGENT_MODELS_LOCKED;
   delete process.env.CEZ_DRY_RUN;
   delete process.env.CEZ_CLAUDE_BIN;
@@ -100,7 +102,7 @@ afterEach(() => {
  *  written out so adding runner #6 does not mean editing a dozen literal counts in this file.
  *  Junie is the exception: `probe()` routes it through `probeJunieAuthentication`, never
  *  `runCommand`, so it is a status row but not a status command. */
-const PROBE_ROUND = PROVIDER_IDS.filter((provider) => provider !== 'junie').length;
+const PROBE_ROUND = PROVIDER_IDS.filter((provider) => provider !== 'junie' && provider !== 'antigravity').length;
 
 function resultFor(executable: string): ProviderCommandResult {
   if (executable === 'claude') return connectedResults.claude!;
@@ -650,6 +652,17 @@ describe('provider auth parsers', () => {
 });
 
 describe('ProviderAuthService', () => {
+  it('does not probe Antigravity until opted in, then uses the mocked models command', async () => {
+    const runCommand = vi.fn(runner());
+    const disabled = new ProviderAuthService({ runCommand });
+    expect((await statuses(disabled)).antigravity?.status).toBe('not-installed');
+    expect(runCommand.mock.calls.some(([bin]) => bin === 'agy')).toBe(false);
+    process.env.CEZ_ANTIGRAVITY = '1';
+    const enabled = new ProviderAuthService({ runCommand });
+    expect((await statuses(enabled)).antigravity?.status).toBe('connected');
+    expect(runCommand.mock.calls.some(([bin, args]) => bin === 'agy' && args[0] === 'models')).toBe(true);
+  });
+
   it('always returns every provider in descriptor order', async () => {
     const service = new ProviderAuthService({ runCommand: runner() });
 
@@ -662,6 +675,7 @@ describe('ProviderAuthService', () => {
         { provider: 'pi' },
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot' },
+        { provider: 'antigravity', status: 'not-installed' },
       ],
     });
   });
@@ -724,6 +738,7 @@ describe('ProviderAuthService', () => {
 
   describe('cache lifetime is asymmetric on purpose', () => {
     it('keeps an all-connected answer for MINUTES — it is what every run needs and rarely changes', async () => {
+      process.env.CEZ_ANTIGRAVITY = '1'; // runCommand is mocked; include the opt-in provider.
       let now = 1_000;
       const runCommand = runner();
       const service = new ProviderAuthService({ runCommand, now: () => now });
@@ -732,7 +747,7 @@ describe('ProviderAuthService', () => {
       now += 9 * 60_000;
       await service.status();
       // Still four: one probe per provider, from the first call only.
-      expect(runCommand).toHaveBeenCalledTimes(PROBE_ROUND);
+      expect(runCommand).toHaveBeenCalledTimes(PROBE_ROUND + 1);
     });
 
     it('re-probes an all-connected answer once the long window passes', async () => {
@@ -1142,6 +1157,7 @@ describe('ProviderAuthService', () => {
         { provider: 'pi', status: 'connected' },
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot', status: 'connected' },
+        { provider: 'antigravity', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -1255,6 +1271,7 @@ describe('ProviderAuthService', () => {
         { provider: 'pi', status: 'connected' },
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot', status: 'connected' },
+        { provider: 'antigravity', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();

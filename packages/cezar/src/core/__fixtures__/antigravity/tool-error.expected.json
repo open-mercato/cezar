@@ -1,0 +1,78 @@
+[
+  {
+    "type": "session.started",
+    "backend": "antigravity",
+    "sessionId": "fixture",
+    "cwd": "/repo",
+    "tools": [
+      "run_command"
+    ]
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_1"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "step_3",
+      "name": "Read",
+      "title": "Read /missing",
+      "toolKind": "read",
+      "status": "running",
+      "input": {
+        "AbsolutePath": "/missing",
+        "path": "/missing"
+      },
+      "locations": [
+        {
+          "path": "/missing"
+        }
+      ]
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "step_3",
+      "name": "Read",
+      "title": "Read /missing",
+      "toolKind": "read",
+      "status": "failed",
+      "input": {
+        "AbsolutePath": "/missing",
+        "path": "/missing"
+      },
+      "locations": [
+        {
+          "path": "/missing"
+        }
+      ],
+      "error": "missing"
+    }
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "end_turn",
+    "usage": {
+      "input": 10,
+      "output": 5,
+      "total": 15,
+      "reasoning": 2,
+      "cacheRead": 3
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 10,
+      "output": 5,
+      "total": 15,
+      "reasoning": 2,
+      "cacheRead": 3
+    }
+  }
+]

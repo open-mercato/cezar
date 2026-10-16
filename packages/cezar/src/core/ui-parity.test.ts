@@ -42,7 +42,7 @@ import { describe, expect, it } from 'vitest';
 import type { UiEvent, UiItem } from './ui-events.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const BACKENDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot'] as const;
+const BACKENDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'antigravity'] as const;
 
 /** Every event across every golden fixture of one backend. */
 function fixtureEvents(backend: (typeof BACKENDS)[number]): UiEvent[] {
@@ -78,6 +78,8 @@ const CAPABILITIES: ReadonlyArray<
   [
     'plan.updated with entries (TodoWrite / todoList / todowrite)',
     (events) => events.some((e) => e.type === 'plan.updated' && e.entries.length > 0),
+    // agy headless step types carry no plan: antigravity.google/docs/cli/headless/.
+    ['antigravity'],
   ],
   ['tool status: running', (events) => hasToolStatus(events, 'running')],
   ['tool status: completed', (events) => hasToolStatus(events, 'completed')],
@@ -89,11 +91,14 @@ const CAPABILITIES: ReadonlyArray<
     (events) => items(events).some((item) => item.kind === 'reasoning' && item.text.trim() !== ''),
     // Cursor's docs are explicit: "`thinking` events are suppressed in print mode and will
     // not appear in any output format" (cursor.com/docs/cli/reference/output-format).
-    ['cursor'],
+    // agy headless exposes thinking token counts, no reasoning text (same source).
+    ['cursor', 'antigravity'],
   ],
   [
     'structured diffs (Edit input / fileChange.changes / patch parts)',
     (events) => items(events).some((item) => item.kind === 'tool' && (item.diffs?.length ?? 0) > 0),
+    // agy 1.3.3 write captures contain TargetFile without content; no diff can be reconstructed.
+    ['antigravity'],
   ],
   [
     'sub-agent task items (Task / review-mode items / subtask parts)',

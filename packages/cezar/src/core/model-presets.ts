@@ -51,7 +51,9 @@ export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
   // from GitHub at run time, and the ids it routes are other vendors' own (`gpt-5.4`,
   // `claude-sonnet-4`). Naming them here would make this guard reject a legitimate codex or
   // claude model as "another runner's preset" — the exact failure pi's comment warns about.
+  // Antigravity lists nothing: its slugs come from `agy models` for the signed-in account.
   copilot: [],
+  antigravity: [],
 };
 
 /**
@@ -91,6 +93,7 @@ function namesAnotherKnownProvider(model: string, runner: RunnerId): boolean {
  *  also one of `runner`'s own. `''`/unknown/custom ids never conflict. */
 export function modelConflictsWithRunner(model: string, runner: RunnerId): boolean {
   if (!model) return false;
+  if (runner === 'antigravity') return false;
   if (KNOWN_PRESETS_BY_RUNNER[runner]?.includes(model)) return false;
   if (NATIVE_MODEL_ID_PREFIX[runner]?.test(model)) return false;
   // Both structural halves of the guard need no vendor model knowledge, so — unlike the preset

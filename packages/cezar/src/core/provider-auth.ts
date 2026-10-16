@@ -9,7 +9,7 @@ import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
 import { probeJunieAuthentication } from './junie-auth-probe.ts';
 import { spawnableCommand } from './windows-shim.ts';
 
-export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot'] as const;
+export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'antigravity'] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 export type ProviderConnectionState =
   | 'connected'
@@ -410,7 +410,28 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     stdin: copilotAcpProbeStdin,
     unrecognizedHint: copilotUnrecognizedHint,
   },
+  {
+    id: 'antigravity',
+    overrideEnv: 'CEZ_AGY_BIN',
+    executable: () => process.env.CEZ_AGY_BIN ?? 'agy',
+    // `agy models` needs a session and exits 1 with "Please sign in…" without one (agy 1.3.3), in
+    // under a second and without prompting — the cheapest definitive signed-in check the CLI has.
+    statusArgs: ['models'],
+    loginArgs: [],
+    installHint:
+      'Enable CEZ_ANTIGRAVITY=1, install the official Antigravity CLI, then run agy in a terminal to sign in.',
+    parse: parseAntigravityStatus,
+    // Off by default: do not spawn the authenticated CLI to ask it anything.
+    precheck: () => (process.env.CEZ_ANTIGRAVITY === '1' ? undefined : 'not-installed'),
+  },
 ];
+
+function parseAntigravityStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+  if (result.exitCode === 0) return 'connected';
+  const text = `${result.stdout}\n${result.stderr}`.toLowerCase();
+  if (text.includes('sign in') || text.includes('authentication required')) return 'disconnected';
+  return null;
+}
 
 function parseCursorStatus(result: ProviderCommandResult): ProviderConnectionState | null {
   // probe() already handles ENOENT / any other errorCode before calling parse() — result here

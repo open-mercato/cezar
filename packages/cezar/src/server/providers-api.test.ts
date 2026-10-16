@@ -36,7 +36,7 @@ vi.mock('../core/junie-auth-probe.ts', () => ({
 
 /** One status command per provider — the size of a full probe round. Junie is probed through
  *  `probeJunieAuthentication` (mocked above), never `runCommand`, so it is not counted. */
-const PROBE_ROUND = PROVIDER_IDS.filter((provider) => provider !== 'junie').length;
+const PROBE_ROUND = PROVIDER_IDS.filter((provider) => provider !== 'junie' && provider !== 'antigravity').length;
 
 const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   claude: '{"loggedIn":true}',
@@ -59,6 +59,7 @@ const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   // Copilot's probe drives its ACP server, so its "connected" evidence is the `session/new`
   // answer (`.ai/runs/2026-09-27-copilot-cli-runner/copilot-acp-notes.md`).
   copilot: '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"3f1b6f2e-0000-4000-8000-1f2e3d4c5b6a"}}',
+  antigravity: 'Please sign in',
 };
 
 const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
@@ -75,6 +76,7 @@ const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
   pi: 'No models available. Use /login to authenticate.',
   junie: 'Junie version: 26.9.22 (3419.7)',
   copilot: '{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"Authentication required"}}',
+  antigravity: 'Please sign in',
 };
 
 const providerForExecutable = (executable: string): ProviderId => {
@@ -211,6 +213,7 @@ describe('workspace provider API', () => {
         { provider: 'pi', status: 'connected', enabled: true },
         { provider: 'junie', status: 'connected', enabled: true },
         { provider: 'copilot', status: 'connected', enabled: true },
+        { provider: 'antigravity', status: 'not-installed', enabled: true },
       ],
     });
   });
@@ -234,6 +237,7 @@ describe('workspace provider API', () => {
         { provider: 'pi', status: 'connected', enabled: true },
         { provider: 'junie', status: 'connected', enabled: true },
         { provider: 'copilot', status: 'connected', enabled: true },
+        { provider: 'antigravity', status: 'connected', enabled: true },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -826,7 +830,7 @@ describe('workspace provider API', () => {
     });
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'provider must be claude, codex, opencode, cursor, pi, or copilot' });
+    expect(await response.json()).toEqual({ error: 'provider must be claude, codex, opencode, cursor, pi, junie, copilot, or antigravity' });
   });
 
   it('never places request-controlled text in the opened command', async () => {
