@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import quotaFailure from './__fixtures__/codex-usage-limit.json'
 
 import type { RunEvent } from '@open-mercato/cezar-api-client'
 import type { UiMessageItem, UiToolItem } from '@open-mercato/cezar-api-client'
@@ -310,6 +311,52 @@ describe('reduceThread — mixed v1+v2 files (the dedup rule)', () => {
       line(5, 'error', { message: 'quota' }),
     ])
     expect(turns.flatMap((turn) => turn.items)).toHaveLength(3)
+  })
+
+  it('replays the actual Codex quota failure with one error and its scheduling note', () => {
+    const thread = reduceThread(quotaFailure as RunEvent[])
+    const message = quotaFailure[0]!.message!
+    const notes = thread.turns.flatMap((turn) => turn.items).filter((item) => item.kind === 'note')
+    expect(notes.map((note) => note.text)).toEqual([
+      message,
+      'usage limit reached — resuming automatically at Oct 16, 2026, 2:39:30 PM UTC',
+    ])
+    expect(threadFooter('failed', `continue failed: ${message}`, false, thread))
+      .toEqual({ state: 'closed', tone: 'danger', label: 'Session failed' })
+    // The protocol keeps its full v2 failure payload.
+    expect(thread.sessionEnded?.message).toBe(message)
+  })
+
+  it('deduplicates a failure summary even if it arrives before its provider error', () => {
+    const thread = reduceThread([
+      line(1, 'lifecycle', { message: 'continue failed — quota' }),
+      line(2, 'session.error', { message: 'quota', fatal: true, stepId: 'work' }),
+      line(3, 'step-end', { stepId: 'work', status: 'failed', error: 'quota' }),
+      line(4, 'step-end', { stepId: 'work', status: 'failed', error: 'different error' }),
+    ])
+    expect(thread.turns.flatMap((turn) => turn.items).map((item) => item.kind === 'note' ? item.text : item.kind))
+      .toEqual(['quota', 'step work failed — different error'])
+  })
+
+  it('keeps failure summaries without a matching error and failures from other steps or turns', () => {
+    const thread = reduceThread([
+      line(1, 'error', { message: 'quota', stepId: 'one' }),
+      line(2, 'step-end', { stepId: 'two', status: 'failed', error: 'quota' }),
+      line(3, 'user-message', { text: 'try again' }),
+      line(4, 'lifecycle', { message: 'continue failed — quota' }),
+    ])
+    expect(thread.turns.flatMap((turn) => turn.items)).toHaveLength(3)
+    expect(threadFooter('failed', 'another failure', false, thread)?.state).toBe('closed')
+    expect(threadFooter('failed', 'another failure', false, thread))
+      .toEqual({ state: 'closed', tone: 'danger', label: 'Session failed — another failure' })
+    expect(threadFooter('failed', 'continue failed: quota', false, thread))
+      .toEqual({ state: 'closed', tone: 'danger', label: 'Session failed' })
+    const previousFailure = reduceThread([
+      line(1, 'error', { message: 'quota' }),
+      line(2, 'user-message', { text: 'try again' }),
+    ])
+    expect(threadFooter('failed', 'quota', false, previousFailure))
+      .toEqual({ state: 'closed', tone: 'danger', label: 'Session failed — quota' })
   })
 
   it('the drop also works when a v1 line slips in BEFORE its v2 twin', () => {
