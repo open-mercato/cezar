@@ -124,7 +124,24 @@ Notable fields (full doc-comments in the source):
   OpenCode auto-approves every permission. Configurable restrictive modes are
   specified by `2026-07-17-permission-modes` (#475).
 - `sessionId?` / `resume?` — stable session id for interactive takeover and for
-  `--resume` ("Continue" after a run ends).
+  `--resume` ("Continue" after a run ends, and an `onFail.retry` re-run). A
+  runner that declares `strictResume` reopens that id (claude `--resume`, codex
+  `thread/resume`, opencode `GET /session/:id`) and fails the session when it
+  is gone — never a silent fresh one — so the workflow engine may send a
+  resumed retry only the failure. When a resume fails before the session shows
+  any sign of life, the engine's one fallback (`workflows/resume-fallback.ts`)
+  starts a fresh session instead. A retry (claude, codex, opencode) falls back
+  on any such error unless one of them is a usage limit, another provider
+  refusal or a timeout.
+  Continue falls back only on a recognised missing session: a pruned Claude
+  transcript, or an opencode session that is gone (a 404, or an id that is not
+  opencode's own `ses_…` shape); a gone codex thread still fails a Continue.
+  A graph node's own `session.continue` falls back on the Claude case only. A runner without `strictResume` (pi, whose
+  missing-session behavior is unverified, and cursor, whose one-shot print
+  mode does not resume at all) gets retries as fresh sessions. A step records
+  its id only as resumable once the PROVIDER minted it: claude pins its id at
+  spawn, while codex/opencode/pi/cursor announce theirs with a `session`
+  event, so the engine's pre-assigned placeholder is never resumed.
 
 **System prompt channel** — a backend without a dedicated system-prompt input
 must deliver `spec.systemPrompt` as a leading block of the opening user message.
@@ -133,7 +150,7 @@ Use the shared helper so the mapping is uniform:
 ```ts
 prependSystemPrompt(spec.systemPrompt, spec.userPrompt)
 // claude:          --append-system-prompt   (native channel, do NOT prepend)
-// codex / opencode: prepended here
+// codex / opencode: prepended here — new sessions only; a resumed one already holds it
 ```
 
 `ContentBlock` mirrors the Anthropic wire format (`text` | `image` base64) so it
@@ -495,7 +512,12 @@ To be first-class:
    `buildChildEnv` is least-privilege per backend, so a multi-provider runner
    must receive credentials for every provider its own model ids can name
    without widening other backends.
-12. **Private MCP** — honor `AgentRunSpec.mcpServers` through the backend's own launch-time
+12. **Resume** — set `strictResume` only once you have verified that
+   `resume: true` either reopens `sessionId` or fails the session when the
+   backend no longer has it. Leave it unset while that is unknown: retries then
+   run as fresh sessions, which costs tokens but cannot lose the task (§1,
+   `AgentRunSpec`).
+13. **Private MCP** — honor `AgentRunSpec.mcpServers` through the backend's own launch-time
    channel (a flag, a config override, an env var, or ACP's `session/new` `mcpServers`), never by
    writing into `cwd`; translators live in `private-mcp.ts`. Add the id to `PRIVATE_MCP_RUNNERS`
    only once that works — a backend outside the list gets a run note naming the servers it could

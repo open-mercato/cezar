@@ -60,6 +60,7 @@ export interface CodexRunnerOptions {
  */
 export class CodexAppServerRunner implements AgentRunner {
   readonly backend = 'codex' as const;
+  readonly strictResume = true;
 
   private readonly bin: string;
   private readonly timeoutMs: number;
@@ -423,8 +424,16 @@ class CodexSession implements AgentSession {
       // config overrides, so the user's own [mcp_servers] table is extended, never replaced.
       config: this.privateMcpConfig(),
     };
-    if (this.spec.resume && this.spec.sessionId) {
-      await this.rpc.request('thread/resume', { threadId: this.spec.sessionId, ...clean(overrides) });
+    const resumed = Boolean(this.spec.resume && this.spec.sessionId);
+    if (resumed) {
+      try {
+        await this.rpc.request('thread/resume', { threadId: this.spec.sessionId, ...clean(overrides) });
+      } catch (err) {
+        // A bootstrap rejection otherwise reaches the engine only as a thrown result; the error event
+        // is what lets a resume of a gone thread fall back to a fresh session.
+        this.emit({ type: 'error', message: err instanceof Error ? err.message : String(err) });
+        throw err;
+      }
       this.threadId = this.spec.sessionId;
     } else {
       const res = await this.rpc.request('thread/start', clean(overrides));
@@ -440,8 +449,9 @@ class CodexSession implements AgentSession {
 
     // Seed the first turn. The system prompt (skill body + handoff contract)
     // has no dedicated app-server field, so it rides along as a leading block
-    // of the opening message.
-    const first = prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt);
+    // of the opening message — of a new thread only: a resumed thread already
+    // holds it from its own first turn.
+    const first = resumed ? this.spec.userPrompt : prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt);
     await this.startOrSteerTurn(first);
   }
 

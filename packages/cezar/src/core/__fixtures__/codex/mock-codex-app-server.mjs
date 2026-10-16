@@ -8,9 +8,17 @@
 // `MOCK_CODEX_IGNORE_EOF=1` switches to the #703 teardown shape instead: the
 // server stays deaf to stdin EOF (the CLI hang the EOF watchdog exists for)
 // and handles SIGTERM itself, exiting 143 rather than dying from the signal.
+//
+// `MOCK_CODEX_TURNS_FILE=<path>` appends every turn/start input text (one JSON
+// string per line), so a test can assert exactly what reached the thread.
+import { appendFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 
 const emit = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
+// `MOCK_CODEX_RESTORED_TOTAL=<n>`: a resumed thread restores a cumulative total of n tokens, reported
+// before its first turn and carried in every later total.
+const restoredTotal = Number(process.env.MOCK_CODEX_RESTORED_TOTAL ?? 0) || 0;
+let threadBase = 0;
 const rl = createInterface({ input: process.stdin });
 
 /**
@@ -117,8 +125,15 @@ rl.on('line', (line) => {
     } else if (process.env.MOCK_CODEX_REJECT_RESUME === '1') {
       emit({ id: msg.id, error: { code: -32603, message: `no rollout found for thread id ${msg.params?.threadId ?? ''}` } });
       rl.close();
+    } else if (process.env.MOCK_CODEX_REJECT_RESUME === 'limit') {
+      emit({ id: msg.id, error: { code: -32603, message: 'HTTP 429 Too Many Requests: usage_limit_reached' } });
+      rl.close();
     } else {
       emit({ id: msg.id, result: { thread: { id: msg.params?.threadId } } });
+      threadBase = restoredTotal;
+      if (restoredTotal > 0) {
+        emit({ method: 'thread/tokenUsage/updated', params: { threadId: msg.params?.threadId, tokenUsage: { total: { totalTokens: restoredTotal, inputTokens: restoredTotal, outputTokens: 0 }, last: { totalTokens: 0, inputTokens: 0, outputTokens: 0 } } } });
+      }
     }
   } else if (msg.method === 'turn/steer') {
     // A follow-up delivered INTO a live turn. `mock:steer-reject` refuses it after stdin
@@ -133,6 +148,7 @@ rl.on('line', (line) => {
     emit({ id: msg.id, result: {} });
   } else if (msg.method === 'turn/start') {
     const turnText = msg.params?.input?.map?.((part) => part.text ?? '').join('\n') ?? '';
+    if (process.env.MOCK_CODEX_TURNS_FILE) appendFileSync(process.env.MOCK_CODEX_TURNS_FILE, `${JSON.stringify(turnText)}\n`);
     turnSeq += 1;
     if (turnSeq === 1) {
       if (turnText.includes('mock:steer-reject')) scenario = 'steer-reject';
@@ -236,7 +252,7 @@ rl.on('line', (line) => {
     emit({ method: 'item/started', params: { threadId: 'th_mock_1', turnId: 'turn_mock_1', item: { type: 'commandExecution', id: 'item_c1', command: ['bash', '-lc', 'git status --short'], cwd: '/repo', status: 'inProgress' } } });
     emit({ method: 'item/commandExecution/outputDelta', params: { threadId: 'th_mock_1', turnId: 'turn_mock_1', itemId: 'item_c1', delta: ' M src/example.ts\n' } });
     emit({ method: 'item/completed', params: { threadId: 'th_mock_1', turnId: 'turn_mock_1', item: { type: 'commandExecution', id: 'item_c1', command: ['bash', '-lc', 'git status --short'], cwd: '/repo', status: 'completed', exitCode: 0 } } });
-    emit({ method: 'thread/tokenUsage/updated', params: { threadId: 'th_mock_1', tokenUsage: { total: { totalTokens: 1500, inputTokens: 1200, outputTokens: 300 }, last: { totalTokens: 1500, inputTokens: 1200, outputTokens: 300 } } } });
+    emit({ method: 'thread/tokenUsage/updated', params: { threadId: 'th_mock_1', tokenUsage: { total: { totalTokens: threadBase + 1500, inputTokens: threadBase + 1200, outputTokens: 300 }, last: { totalTokens: 1500, inputTokens: 1200, outputTokens: 300 } } } });
     emit({ method: 'turn/completed', params: { turn: { id: 'turn_mock_1', status: 'completed' } } });
   }
 });

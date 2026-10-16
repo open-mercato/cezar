@@ -225,6 +225,10 @@ export interface AgentSession {
 
 export interface AgentRunner {
   readonly backend: AgentBackend;
+  /** `spec.resume` either reopens `spec.sessionId` or fails the session — it never quietly
+   *  starts a blank one. Only then may a caller send a resumed session nothing but the new
+   *  instruction. */
+  readonly strictResume?: boolean;
   run(spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void): Promise<AgentRunResult>;
   startSession(
     spec: AgentRunSpec,
