@@ -1528,6 +1528,23 @@ describe('inconclusive probe reports', () => {
     }
   });
 
+  // Telemetry 3626ac13: a `.ps1` override throws with a code other than EINVAL.
+  it('names the setting for an unrunnable PowerShell shim too', async () => {
+    vi.stubEnv('CEZ_OPENCODE_BIN', 'C:\\tools\\opencode.ps1');
+    try {
+      const service = new ProviderAuthService({
+        runCommand: async (executable) => {
+          if (executable !== 'C:\\tools\\opencode.ps1') return { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' };
+          throw Object.assign(new Error('spawn UNKNOWN'), { code: 'UNKNOWN' });
+        },
+      });
+      const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'opencode');
+      expect(row).toMatchObject({ status: 'unknown', hint: expect.stringContaining('CEZ_OPENCODE_BIN') });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   // Telemetry 298c2e1f: exit 0, a short non-JSON answer, and no version cezar could read.
   it('names the fix when `copilot` on PATH never started an ACP server', async () => {
     const onInconclusive = vi.fn();

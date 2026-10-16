@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { disclaimedCommand } from './disclaim-spawn.ts';
-import { shimScript, spawnableCommand } from './windows-shim.ts';
+import { shimScript, shimTarget, spawnableCommand } from './windows-shim.ts';
 
 // Verbatim shapes of what `npm i -g` (cmd-shim) and pnpm write on Windows.
 const NPM_SHIM = [
@@ -16,6 +16,24 @@ const PNPM_SHIM = [
   '@SETLOCAL', '@IF EXIST "%~dp0\\node.exe" (', '  "%~dp0\\node.exe"  "%~dp0\\..\\codex\\bin\\codex.js" %*',
   ') ELSE (', '  @SET PATHEXT=%PATHEXT:;.JS;=;%', '  node  "%~dp0\\..\\codex\\bin\\codex.js" %*', ')',
 ].join('\r\n');
+// cmd-shim's `.ps1` twin for a node bin, and both shims for a native bin (opencode-ai ships an .exe).
+const NPM_PS1 = [
+  '#!/usr/bin/env pwsh', '$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent', '', '$exe=""',
+  '$ret=0', 'if (Test-Path "$basedir/node$exe") {', '  if ($MyInvocation.ExpectingInput) {',
+  '    $input | & "$basedir/node$exe"  "$basedir/node_modules/@openai/codex/bin/codex.js" $args', '  } else {',
+  '    & "$basedir/node$exe"  "$basedir/node_modules/@openai/codex/bin/codex.js" $args', '  }', '} else {',
+  '  if ($MyInvocation.ExpectingInput) {', '    $input | & "node$exe"  "$basedir/node_modules/@openai/codex/bin/codex.js" $args',
+  '  } else {', '    & "node$exe"  "$basedir/node_modules/@openai/codex/bin/codex.js" $args', '  }', '}', 'exit $ret',
+].join('\n');
+const NATIVE_CMD = [
+  '@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b', ':start', 'SETLOCAL', 'CALL :find_dp0',
+  '"%dp0%\\node_modules\\opencode-ai\\bin\\opencode.exe"   %*',
+].join('\r\n');
+const NATIVE_PS1 = [
+  '#!/usr/bin/env pwsh', '$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent', '',
+  'if ($MyInvocation.ExpectingInput) {', '  $input | & "$basedir/node_modules/opencode-ai/bin/opencode.exe"   $args',
+  '} else {', '  & "$basedir/node_modules/opencode-ai/bin/opencode.exe"   $args', '}', 'exit $LASTEXITCODE',
+].join('\n');
 
 describe('spawnableCommand (telemetry a330744e)', () => {
   let dir: string;
@@ -53,6 +71,37 @@ describe('spawnableCommand (telemetry a330744e)', () => {
     writeFileSync(script, '');
     writeFileSync(join(bin, 'codex.cmd'), PNPM_SHIM);
     expect(shimScript(join(bin, 'codex.cmd'))).toBe(script);
+  });
+
+  // Telemetry 3626ac13: CEZ_OPENCODE_BIN pointed at npm's opencode.ps1, which Node cannot spawn.
+  it('reads the .ps1 twin npm writes beside the .cmd', () => {
+    const { script } = npmInstall();
+    writeFileSync(join(dir, 'codex.ps1'), NPM_PS1);
+    expect(spawnableCommand(join(dir, 'codex.ps1'), ['--version'], { platform: 'win32', nodePath: 'NODE' }))
+      .toEqual(['NODE', [script, '--version']]);
+  });
+
+  it('runs the native binary a shim launches directly, from either shim', () => {
+    const exe = join(dir, 'node_modules', 'opencode-ai', 'bin', 'opencode.exe');
+    mkdirSync(join(exe, '..'), { recursive: true });
+    writeFileSync(exe, '');
+    writeFileSync(join(dir, 'opencode.cmd'), NATIVE_CMD);
+    writeFileSync(join(dir, 'opencode.ps1'), NATIVE_PS1);
+    for (const shim of ['opencode.cmd', 'opencode.ps1']) {
+      expect(spawnableCommand(join(dir, shim), ['auth', 'list'], { platform: 'win32', nodePath: 'NODE' }))
+        .toEqual([exe, ['auth', 'list']]);
+    }
+    expect(shimScript(join(dir, 'opencode.cmd'))).toBeNull();
+  });
+
+  it('runs an extensionless bin with node only when its shebang names node', () => {
+    const bin = join(dir, 'node_modules', 'tool', 'bin', 'tool');
+    mkdirSync(join(bin, '..'), { recursive: true });
+    writeFileSync(join(dir, 'tool.cmd'), NPM_SHIM.replace('@openai\\codex\\bin\\codex.js', 'tool\\bin\\tool'));
+    writeFileSync(bin, '#!/usr/bin/env node\nrequire("./x")');
+    expect(shimTarget(join(dir, 'tool.cmd'))).toEqual({ kind: 'node', path: bin });
+    writeFileSync(bin, '#!/bin/sh\necho hi');
+    expect(shimTarget(join(dir, 'tool.cmd'))).toBeNull();
   });
 
   it('runs a .js override with node', () => {

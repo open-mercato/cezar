@@ -973,7 +973,7 @@ export class ProviderAuthService {
         ...(typeof code === 'string' ? { errorCode: code } : {}),
       };
       // A shim `spawnableCommand` could not unwrap: say which setting to change, not "try again".
-      const hint = code === 'EINVAL' && /\.(?:cmd|bat)$/i.test(executable)
+      const hint = /\.(?:cmd|bat|ps1)$/i.test(executable)
         ? `\`${executable}\` is a Windows script shim cezar cannot start without a shell. Point ${descriptor.overrideEnv} at the CLI's .exe or its .js entry point.`
         : UNKNOWN_HINT;
       return inconclusive('spawn_threw', hint, thrown);
