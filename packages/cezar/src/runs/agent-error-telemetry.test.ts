@@ -44,6 +44,22 @@ describe('scrubAgentErrorMessage', () => {
   it('keeps the text after a colon — the part of a vendor message worth reading', () => {
     expect(scrubAgentErrorMessage('API Error: 529 Overloaded', 'claude')).toBe('API Error: 529 Overloaded');
   });
+
+  it('masks a URL up to the next whitespace, query delimiters included', () => {
+    expect(scrubAgentErrorMessage('fetch https://api.x.com/v1?token=abc,secret;session=s2 failed', 'codex'))
+      .toBe('fetch <url> failed');
+  });
+
+  it('masks Windows paths too', () => {
+    expect(scrubAgentErrorMessage('cannot open C:\\work\\acme\\app.ts', 'codex')).toBe('cannot open <path>');
+  });
+
+  it('stays fast on a long pathological line (stderr tails arrive unbounded)', () => {
+    const started = performance.now();
+    scrubAgentErrorMessage('a@'.repeat(50_000), 'claude');
+    scrubAgentErrorMessage('a'.repeat(200_000), 'claude');
+    expect(performance.now() - started).toBeLessThan(200);
+  });
 });
 
 describe('reportAgentError', () => {

@@ -13,7 +13,6 @@ const TOKEN_RE = /[^\s()[\]{}<>,;]+/g;
 
 /** One whitespace/bracket-delimited token, classified without backtracking regexes. */
 function maskToken(token: string): string {
-  if (/^https?:\/\//i.test(token)) return '<url>';
   const at = token.indexOf('@');
   if (at > 0 && token.indexOf('.', at + 2) !== -1) return '<email>';
   if (token.includes('/') || token.includes('\\')) return '<path>';
@@ -29,6 +28,8 @@ export function scrubAgentErrorMessage(message: string, backend: string): string
     .replace(PREFIX_RE, '')
     .replace(new RegExp(`^${backend}: `, 'i'), '')
     .replace(/“[^”]*”|‘[^’]*’|"[^"]*"|`[^`]*`|(?<!\w)'[^'\n]+'(?!\w)/g, '<value>')
+    // A URL runs to the next whitespace — its query may carry `,` `;` or brackets (linear: nothing follows `\S+`).
+    .replace(/\bhttps?:\/\/\S+/gi, '<url>')
     .replace(TOKEN_RE, maskToken)
     .trim()
     .slice(0, 300);
