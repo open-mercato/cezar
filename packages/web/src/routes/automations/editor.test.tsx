@@ -245,6 +245,27 @@ describe('AutomationEditor — new', () => {
     expect((post?.body as { filters: unknown }).filters).toEqual({ authors: ['patzick'], lookbackDays: 7, maxRecords: 25 })
   })
 
+  it('copies another project\'s skill only when this repo has it', async () => {
+    const template = (skill: string) => ({
+      project: { id: 'p2', name: 'shop' },
+      id: skill,
+      name: `Review with ${skill}`,
+      kind: 'github',
+      events: ['pull_request.opened'],
+      task: { prompt: 'Review {{github.url}}', steps: [{ id: 'task', skill, prompt: '{{task}}' }] },
+    })
+    stubFetch({ 'GET /api/v1/workspace/automation-templates': () => jsonResponse({ templates: [template('om-review'), template('not-here')] }) })
+    renderEditor()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Choose a skill or workflow' })).not.toBeNull())
+    fireEvent.click(screen.getByRole('tab', { name: 'From your other projects' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Use this: Review with not-here' }))
+    expect(sourcePill().getAttribute('data-source-kind')).toBe('none')
+    fireEvent.click(screen.getByRole('button', { name: 'Start from a template' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'From your other projects' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Use this: Review with om-review' }))
+    expect(sourcePill().getAttribute('data-source-kind')).toBe('skill')
+  })
+
   it('"Use this" fills the form from a template and closes the palette', async () => {
     stubFetch()
     renderEditor()

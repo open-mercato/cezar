@@ -116,6 +116,7 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
   const workflowList = workflows.data?.workflows ?? []
   const workflowNames = workflowList.map((workflow) => workflow.name)
   const skillsData = skills.data
+  const skillNames = (skillsData ?? []).map((skill) => skill.name)
   const skillUsage = uiState.data?.skillUsage
   const skillList = useMemo(() => orderSkillsByUsage(skillsData ?? [], skillUsage), [skillsData, skillUsage])
   const sourcesReady = skills.data !== undefined && workflows.data !== undefined && !uiState.isPending
@@ -202,10 +203,11 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
             {showTemplates && !automation ? (
               <TemplatePalette
                 onPick={(template) => {
-                  // A template from another project may name a workflow this repo does not
-                  // have; only a workflow the cockpit lists survives, else the default applies.
+                  // A template from another project may name a workflow or skill this repo does
+                  // not have; only what the cockpit lists survives, else the default applies.
                   const workflow = template.workflow && workflowNames.includes(template.workflow) ? template.workflow : undefined
-                  setDraft((current) => applyTemplate(current, { ...template, workflow }))
+                  const steps = template.steps?.every((step) => !step.skill || skillNames.includes(step.skill)) ? template.steps : undefined
+                  setDraft((current) => applyTemplate(current, { ...template, workflow, steps }))
                   setShowTemplates(false)
                 }}
               />

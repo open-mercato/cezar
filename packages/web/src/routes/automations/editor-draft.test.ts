@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
+import { QUICK_TASK } from '@/lib/task-source'
 
 import type { AutomationDefinition } from '@open-mercato/cezar-api-client'
 
 import {
+  DEFAULT_FILTERS,
   applyTemplate,
   cliDefinitionOf,
   fromDefinition,
@@ -35,6 +37,11 @@ describe('unenforcedPromptLogins', () => {
       'Mail a@b.com, bump @open-mercato/cezar, greet @{{github.author}}, branch from `main`',
     ))).toEqual([])
     expect(unenforcedPromptLogins(github('Review it by default as the user asked'))).toEqual([])
+  })
+  it('ignores a bare @word that is no launch condition, and trailing-hyphen non-logins', () => {
+    expect(unenforcedPromptLogins(github('cc @patzick, mention @claude, keep @ts-ignore and @deprecated'))).toEqual([])
+    expect(unenforcedPromptLogins(github('opened by @patzick or author `octo-cat`'))).toEqual(['patzick', 'octo-cat'])
+    expect(unenforcedPromptLogins(github('by @foo- only'))).toEqual([])
   })
 })
 
@@ -272,6 +279,25 @@ describe('applyTemplate', () => {
       task: { prompt: 'Review it', steps, model: 'opus', checkout: 'pr-head' },
     })
     expect(unenforcedPromptLogins(next)).toEqual([])
+  })
+
+  it('a later pick never inherits an earlier pick\'s filters, skill or fork-head admission', () => {
+    const copied = applyTemplate(newDraft(), templatePick({
+      project: { id: 'cezar', name: 'cezar' },
+      id: 'eee6c276',
+      name: 'Self-review tasks',
+      kind: 'github',
+      events: ['pull_request.opened'],
+      filters: { authors: ['patzick'], lookbackDays: 7, maxRecords: 25 },
+      task: { prompt: 'Review it', steps: [{ id: 'task', skill: 'om-auto-review-pr', prompt: '{{task}}' }], checkout: 'pr-head', allowForkHeads: true },
+    }))
+    const next = applyTemplate(copied, { name: 'Triage new issues', kind: 'github', events: ['issue.opened'], prompt: 'Read it' })
+    expect(next).toMatchObject({ filters: DEFAULT_FILTERS, skill: null, customSteps: null, workflow: QUICK_TASK })
+    const body = toBody(next)
+    expect(body.filters).toEqual({ lookbackDays: 7, maxRecords: 25 })
+    expect(body.task).not.toHaveProperty('steps')
+    expect(body.task).not.toHaveProperty('checkout')
+    expect(body.task).not.toHaveProperty('allowForkHeads')
   })
 })
 

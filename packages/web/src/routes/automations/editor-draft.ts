@@ -247,7 +247,7 @@ const isRunner = (value: string): value is Runner =>
   value === 'pi' ||
   value === 'copilot'
 
-/** "Use this": the template fills name, kind, trigger (filters too), prompt and task; everything else stays. */
+/** "Use this": the template fills name, kind, trigger (filters too), prompt and task source; the rest stays. */
 export function applyTemplate(draft: EditorDraft, template: TemplatePick): EditorDraft {
   const skill = skillOfSteps(template.steps)
   return {
@@ -257,13 +257,15 @@ export function applyTemplate(draft: EditorDraft, template: TemplatePick): Edito
     schedule: template.schedule ? { ...template.schedule } : draft.schedule,
     events: template.events?.length ? [...template.events] : draft.events,
     intervalSeconds: template.intervalSeconds ?? draft.intervalSeconds,
-    filters: template.filters ? draftFiltersOf(template.filters) : draft.filters,
+    // The trigger and the task source are the template's, or the default: a second pick must never
+    // inherit the first one's filters, skill or (control-less) fork-head admission.
+    filters: template.filters ? draftFiltersOf(template.filters) : { ...DEFAULT_FILTERS },
     prompt: template.prompt,
     ...(template.steps
       ? { skill, customSteps: skill ? null : template.steps, workflow: QUICK_TASK }
-      : template.workflow ? pickSource({ source: 'workflow', ref: template.workflow }) : {}),
-    ...(template.checkout !== undefined ? { checkout: template.checkout } : {}),
-    ...(template.allowForkHeads !== undefined ? { allowForkHeads: template.allowForkHeads } : {}),
+      : pickSource(template.workflow ? { source: 'workflow', ref: template.workflow } : null)),
+    checkout: template.checkout,
+    allowForkHeads: template.allowForkHeads,
     runner: template.runner !== undefined && isRunner(template.runner) ? template.runner : draft.runner,
     // An account belongs to one runner; a template that names a runner must not inherit it.
     account: template.runner !== undefined && isRunner(template.runner) ? null : draft.account,
@@ -361,8 +363,10 @@ export function cliDefinitionOf(draft: EditorDraft): CliDefinition {
   }
 }
 
-// `@login` (not an email, not an npm scope) or a backticked login after user/author/by.
-const PROMPT_LOGIN = /(?<![\w.@/-])@([a-z\d](?:[a-z\d-]{0,38}))(?![\w/-])|\b(?:user|author|by)\s+`@?([a-z\d](?:[a-z\d-]{0,38}))`/gi
+// A login right after user/author/by, as `login`, `@login` or @login (not an npm scope):
+// a bare @word elsewhere ("cc @x", "@ts-ignore") is not a launch condition.
+const LOGIN = '([a-z\\d](?:[a-z\\d]|-(?=[a-z\\d])){0,38})'
+const PROMPT_LOGIN = new RegExp(`\\b(?:user|author|by)\\s+(?:\`@?${LOGIN}\`|@${LOGIN}(?![\\w/-]))`, 'gi')
 
 /**
  * GitHub logins the prompt names that no people filter enforces. Prompt text never decides which
