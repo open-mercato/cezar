@@ -76,6 +76,18 @@ async function waitForDraft(url: string, id: string, expected: string): Promise<
   throw new Error(`cezar e2e: run ${id} never stored the composer draft`)
 }
 
+/** The mirror image: the clear is an optimistic empty PUT, so wait for the SERVER to drop it. */
+async function waitForNoDraft(url: string, id: string): Promise<void> {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const body = (await (await fetch(`${url}/api/v1/runs/${id}/drafts`)).json()) as {
+      surfaces?: Record<string, unknown>
+    }
+    if (body.surfaces?.composer === undefined) return
+    await new Promise((r) => setTimeout(r, 250))
+  }
+  throw new Error(`cezar e2e: run ${id} never dropped the composer draft after the send`)
+}
+
 const DRAFT = 'Actually — check the retry path before you touch the parser.'
 
 let browser: AgentBrowser
@@ -146,6 +158,9 @@ describe('a half-written reply survives leaving the task', () => {
   it('sending it clears the draft — the next visit starts empty', async () => {
     browser.click('[aria-label="Send"]')
     browser.waitForFunction(`document.querySelector('${composer}').value === ''`)
+    // Leaving before the send resolves would unmount mid-flight and the restore path could
+    // legitimately keep the text; the contract is "once it landed, the draft is gone".
+    await waitForNoDraft(baseUrl, taskA)
 
     browser.goto(`${baseUrl}/tasks/${taskB}`)
     browser.waitForFunction(`document.querySelector('${composer}') !== null`)

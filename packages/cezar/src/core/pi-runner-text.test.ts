@@ -36,7 +36,8 @@ describe('PiRunner whole-block v1 text', () => {
 
   function peer(frames: unknown[], hold = false): PiRunner {
     const bin = join(cwd, 'pi-peer.mjs');
-    writeFileSync(bin, `#!${process.execPath}
+    // `env`, not `#!${process.execPath}`: a shebang cannot carry a path with a space in it.
+    writeFileSync(bin, `#!/usr/bin/env node
 import readline from 'node:readline';
 for await (const line of readline.createInterface({ input: process.stdin })) {
   if (JSON.parse(line).type !== 'prompt') continue;

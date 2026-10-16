@@ -220,7 +220,9 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
     for (const route of gets) {
       await expectParity(fillParams(route.path));
     }
-  });
+    // A walk over the whole route table (~1.3 s alone, growing with every route), not a unit:
+    // the 5 s default times out under a fully parallel suite.
+  }, 20_000);
 
   it('keeps mutating-route rejections byte-identical (targeted non-GET cases)', async () => {
     const json =
