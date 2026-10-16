@@ -207,6 +207,16 @@ describe('the Agents dock against a replayed fan-out', () => {
     browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 2`)
     browser.click(`${ROW}:nth-of-type(1) button`)
     browser.waitForFunction(`document.querySelector('[data-slot="transcript-viewport"]') !== null`)
+    // The panel folds all but the last few finished tool calls under "N earlier tool calls"
+    // (the tool-streak fold), so 36 tools no longer overflow it on their own. Open the fold —
+    // the long transcript a reader actually scrolls — before measuring.
+    browser.waitForFunction(`document.querySelector('[data-slot="transcript-viewport"] [data-slot="tool-streak"] button') !== null`)
+    // A DOM click: the synthesized pointer click on this trigger lands outside the sheet in the
+    // harness and dismisses it, which is not what this test is about.
+    browser.evaluate(`document.querySelector('[data-slot="transcript-viewport"] [data-slot="tool-streak"] button').click()`)
+    browser.waitForFunction(
+      `(() => { const el = document.querySelector('[data-slot="transcript-viewport"]'); return el.scrollHeight > el.clientHeight })()`,
+    )
 
     const metrics = JSON.parse(
       browser.evaluate(`JSON.stringify((() => {
