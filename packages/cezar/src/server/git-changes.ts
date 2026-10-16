@@ -26,6 +26,8 @@ interface GitResult {
   ok: boolean;
   stdout: string;
   stderr: string;
+  /** Process exit code when the caller could read one (not an ENOENT). */
+  code?: number;
 }
 
 /** Run git, never throw — degradation is the caller's policy. `env` overrides (e.g. a scratch
@@ -41,7 +43,14 @@ function git(cwd: string, args: string[], env?: Record<string, string>): Promise
         encoding: 'utf8',
         ...(env ? { env: { ...process.env, ...env } } : {}),
       },
-      (err, stdout, stderr) => resolvePromise({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' }),
+      (err, stdout, stderr) => resolvePromise({
+        ok: !err,
+        stdout: stdout ?? '',
+        stderr: stderr ?? '',
+        ...(typeof (err as { code?: unknown } | null)?.code === 'number'
+          ? { code: (err as { code: number }).code }
+          : {}),
+      }),
     );
   });
 }
@@ -294,6 +303,7 @@ export async function collectChanges(
       {
         taskBranch: opts.taskBranch,
         runStartedAt: opts.runStartedAt,
+        cacheKey: dir,
       },
     );
 

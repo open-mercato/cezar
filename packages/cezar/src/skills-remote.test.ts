@@ -1,5 +1,20 @@
+import { execFileSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import * as remote from './skills-remote.ts';
 import { bareDirFor, isPinnedSha, shouldPassiveFetch } from './skills-remote.ts';
+
+/** Namespace-resolved so these tests load against a build that predates the
+ *  export and fail on behavior, not on an import error. */
+const abortBackground = (remote as { abortTeamSkillsBackgroundWork?: () => void }).abortTeamSkillsBackgroundWork;
+const settleBackground = (remote as { settleTeamSkillsBackgroundWork?: () => Promise<void> })
+  .settleTeamSkillsBackgroundWork;
+const resetAbort = (remote as { resetTeamSkillsBackgroundWorkAbort?: () => void })
+  .resetTeamSkillsBackgroundWorkAbort;
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 const TTL = 6 * 60 * 60 * 1_000;
 
@@ -41,4 +56,70 @@ describe('isPinnedSha', () => {
     expect(isPinnedSha('b'.repeat(64))).toBe(true);
     expect(isPinnedSha('main')).toBe(false);
   });
+});
+
+describe('background team-skills work can be stopped', () => {
+  it('kills a pending clone so nothing touches the cache after teardown', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'cez-bg-home-'));
+    const srcDir = mkdtempSync(join(tmpdir(), 'cez-bg-src-'));
+    const projectRoot = mkdtempSync(join(tmpdir(), 'cez-bg-root-'));
+    const shimDir = mkdtempSync(join(tmpdir(), 'cez-bg-shim-'));
+    const prevHome = process.env.HOME;
+    const prevCezHome = process.env.CEZ_HOME;
+    const prevPath = process.env.PATH;
+    process.env.HOME = home;
+    process.env.CEZ_HOME = home;
+
+    const git = (args: string[]) => execFileSync('git', args, { cwd: srcDir, encoding: 'utf8' });
+    git(['-c', 'init.defaultBranch=main', 'init']);
+    git(['config', 'user.email', 'test@example.com']);
+    git(['config', 'user.name', 'Test']);
+    mkdirSync(join(srcDir, 'demo'));
+    writeFileSync(join(srcDir, 'demo', 'SKILL.md'), '---\ndescription: demo\n---\nbody\n');
+    git(['add', '-A']);
+    git(['commit', '-m', 'init']);
+
+    mkdirSync(join(projectRoot, '.ai/cezar'), { recursive: true });
+    writeFileSync(
+      join(projectRoot, '.ai/cezar', 'config.json'),
+      JSON.stringify({ skillsRepos: [{ repo: srcDir, ref: 'main' }] }),
+    );
+
+    // A clone that stalls keeps the child writing under the cache dir, exactly
+    // the window a teardown removal can land in.
+    const log = join(shimDir, 'calls.log');
+    const realGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+    writeFileSync(
+      join(shimDir, 'git'),
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(log)}\ncase "$*" in *clone*) sleep 3;; esac\nexec ${JSON.stringify(realGit)} "$@"\n`,
+    );
+    chmodSync(join(shimDir, 'git'), 0o755);
+    process.env.PATH = `${shimDir}:${prevPath ?? ''}`;
+
+    try {
+      remote.getTeamSkillsCached(projectRoot);
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline) {
+        let calls = '';
+        try { calls = readFileSync(log, 'utf8'); } catch { /* not started yet */ }
+        if (calls.includes('clone')) break;
+        await delay(20);
+      }
+
+      abortBackground?.();
+      await settleBackground?.();
+      // Long enough for the stalled clone to have completed if it was not killed.
+      await delay(3_500);
+
+      expect(existsSync(join(bareDirFor(srcDir), 'HEAD'))).toBe(false);
+    } finally {
+      resetAbort?.();
+      process.env.PATH = prevPath;
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+      if (prevCezHome === undefined) delete process.env.CEZ_HOME;
+      else process.env.CEZ_HOME = prevCezHome;
+      for (const dir of [home, srcDir, projectRoot, shimDir]) rmSync(dir, { recursive: true, force: true });
+    }
+  }, 15_000);
 });

@@ -9,8 +9,9 @@ import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
 import { probeJunieAuthentication } from './junie-auth-probe.ts';
 import { spawnableCommand } from './windows-shim.ts';
 
-export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot'] as const;
-export type ProviderId = (typeof PROVIDER_IDS)[number];
+import { PROVIDER_IDS, type ProviderId } from './provider-ids.ts';
+
+export { PROVIDER_IDS, type ProviderId } from './provider-ids.ts';
 export type ProviderConnectionState =
   | 'connected'
   | 'disconnected'

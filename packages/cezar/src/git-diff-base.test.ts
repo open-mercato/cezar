@@ -3,7 +3,12 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import * as diffBase from './git-diff-base.ts';
 import { resolveTaskDiffBase, type GitRunner } from './git-diff-base.ts';
+
+/** Namespace-resolved so these tests load against a build that predates the
+ *  export and fail on behavior, not on an import error. */
+const clearTaskDiffBaseCache = (diffBase as { clearTaskDiffBaseCache?: () => void }).clearTaskDiffBaseCache;
 
 /**
  * The one place the "which ref anchors this task's diff" rule lives (#751).
@@ -12,7 +17,7 @@ import { resolveTaskDiffBase, type GitRunner } from './git-diff-base.ts';
  * behavior — the real-git coverage sits on the two callers
  * (`git-worktree.test.ts`, `server/git-changes.test.ts`).
  */
-function stubGit(answers: Record<string, { ok: boolean; stdout: string }>): {
+function stubGit(answers: Record<string, { ok: boolean; stdout: string; code?: number }>): {
   run: GitRunner;
   calls: string[][];
 } {
@@ -62,7 +67,10 @@ function realGitFixture() {
 }
 
 const STARTED_AT = '2026-08-04T05:00:08.919Z';
-const HEAD_BRANCH = 'rev-parse --abbrev-ref HEAD';
+// The sha and the branch are read in one spawn; the sha keys the memo.
+const HEAD_BRANCH = 'rev-parse HEAD --abbrev-ref HEAD';
+const HEAD_SHA = 'headshaheadshahead0';
+const headRef = (branch: string) => ({ ok: true, stdout: `${HEAD_SHA}\n${branch}\n` });
 const MERGE_BASE = 'merge-base main HEAD';
 const MERGE_BASE_REMOTE = 'merge-base origin/main HEAD';
 const HAS_REMOTE = 'rev-parse --verify --quiet origin/main^{commit}';
@@ -75,7 +83,7 @@ describe('resolveTaskDiffBase — the freshest base ref', () => {
   it('anchors at the merge-base when HEAD is still on the task branch', async () => {
     const { run, calls } = stubGit({
       ...NO_REMOTE,
-      [HEAD_BRANCH]: { ok: true, stdout: 'cez/ab12cd34\n' },
+      [HEAD_BRANCH]: headRef('cez/ab12cd34'),
       [MERGE_BASE]: { ok: true, stdout: 'deadbeefdeadbeef\n' },
     });
 
@@ -90,8 +98,8 @@ describe('resolveTaskDiffBase — the freshest base ref', () => {
     // collapses onto its tip and every upstream commit counts as the task's work.
     const { run } = stubGit({
       [HAS_REMOTE]: { ok: true, stdout: 'b61ae485b61ae485\n' },
-      [LOCAL_CURRENT]: { ok: false, stdout: '' }, // origin/main is NOT an ancestor of main
-      [HEAD_BRANCH]: { ok: true, stdout: 'cez/ab12cd34\n' },
+      [LOCAL_CURRENT]: { ok: false, stdout: '', code: 1 }, // origin/main is NOT an ancestor of main
+      [HEAD_BRANCH]: headRef('cez/ab12cd34'),
       [MERGE_BASE_REMOTE]: { ok: true, stdout: 'freshfreshfresh0\n' },
     });
 
@@ -100,12 +108,28 @@ describe('resolveTaskDiffBase — the freshest base ref', () => {
     });
   });
 
+  it('keeps the local base when `merge-base --is-ancestor` fails for a reason other than "not ancestor"', async () => {
+    // A transient/broken git (exit 128, a signal, an ENOENT) says nothing about
+    // ancestry. Only a clean exit 1 picks origin; anything else must not silently
+    // switch the diff base.
+    const { run } = stubGit({
+      [HAS_REMOTE]: { ok: true, stdout: 'b61ae485b61ae485\n' },
+      [LOCAL_CURRENT]: { ok: false, stdout: '', code: 128 },
+      [HEAD_BRANCH]: headRef('cez/ab12cd34'),
+      [MERGE_BASE]: { ok: true, stdout: 'deadbeefdeadbeef\n' },
+    });
+
+    expect(await resolveTaskDiffBase(run, 'main', { taskBranch: 'cez/ab12cd34' })).toEqual({
+      base: 'deadbeefdeadbeef',
+    });
+  });
+
   it('keeps the local base ref when it is equal to or ahead of origin', async () => {
     // Unpushed base commits are real base commits — origin is not automatically newer.
     const { run, calls } = stubGit({
       [HAS_REMOTE]: { ok: true, stdout: 'b61ae485b61ae485\n' },
       [LOCAL_CURRENT]: { ok: true, stdout: '' },
-      [HEAD_BRANCH]: { ok: true, stdout: 'cez/ab12cd34\n' },
+      [HEAD_BRANCH]: headRef('cez/ab12cd34'),
       [MERGE_BASE]: { ok: true, stdout: 'deadbeefdeadbeef\n' },
     });
 
@@ -119,6 +143,7 @@ describe('resolveTaskDiffBase — the freshest base ref', () => {
     // A zero-config task forked from the user's own diverged branch (keepDiverged).
     const { run } = stubGit({
       [HAS_REMOTE]: { ok: true, stdout: 'b61ae485b61ae485\n' },
+      [LOCAL_CURRENT]: { ok: false, stdout: '', code: 1 },
       [HEAD_BRANCH]: { ok: true, stdout: 'cez/ab12cd34\n' },
       [MERGE_BASE]: { ok: true, stdout: 'localtiplocaltip\n' },
       [MERGE_BASE_REMOTE]: { ok: true, stdout: 'olderolderolder0\n' },
@@ -134,6 +159,7 @@ describe('resolveTaskDiffBase — the freshest base ref', () => {
     // A configured base: stale diverged local main, the task forked from origin/main.
     const { run } = stubGit({
       [HAS_REMOTE]: { ok: true, stdout: 'b61ae485b61ae485\n' },
+      [LOCAL_CURRENT]: { ok: false, stdout: '', code: 1 },
       [HEAD_BRANCH]: { ok: true, stdout: 'cez/ab12cd34\n' },
       [MERGE_BASE]: { ok: true, stdout: 'olderolderolder0\n' },
       [MERGE_BASE_REMOTE]: { ok: true, stdout: 'freshfreshfresh0\n' },
@@ -169,6 +195,8 @@ describe('resolveTaskDiffBase — the freshest base ref', () => {
     expect(await resolveTaskDiffBase(run, baseSha)).toEqual({ base: 'forkpointforkpoint' });
     expect(calls).toContainEqual(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']);
     expect(calls).toContainEqual(['merge-base', '--is-ancestor', baseSha, 'origin/main']);
+    expect(calls.filter((c) => c[0] === 'rev-parse')).toEqual([]);
+    expect(calls.filter((c) => c[0] === 'symbolic-ref' || c.includes('--is-ancestor'))).toHaveLength(2);
   });
 
   it('anchors a real SHA-pinned checkout at the remote fork and keeps task commits', async () => {
@@ -214,7 +242,7 @@ describe('resolveTaskDiffBase — the freshest base ref', () => {
   });
 
   it('falls back to the base branch name when the merge-base cannot be resolved', async () => {
-    const { run } = stubGit({ ...NO_REMOTE, [HEAD_BRANCH]: { ok: true, stdout: 'cez/ab12cd34\n' } });
+    const { run } = stubGit({ ...NO_REMOTE, [HEAD_BRANCH]: headRef('cez/ab12cd34') });
 
     expect(await resolveTaskDiffBase(run, 'main', { taskBranch: 'cez/ab12cd34' })).toEqual({
       base: 'main',
@@ -226,7 +254,7 @@ describe('resolveTaskDiffBase — a repointed HEAD', () => {
   /** A review run: the checked-out branch already carried its own history. */
   const reviewRun = {
     ...NO_REMOTE,
-    [HEAD_BRANCH]: { ok: true, stdout: 'review/pr-694\n' },
+    [HEAD_BRANCH]: headRef('review/pr-694'),
     [MERGE_BASE]: { ok: true, stdout: 'forkpointforkpoint\n' },
     [BASELINE]: { ok: true, stdout: 'prtipprtipprtip0\n' },
     'diff --shortstat prtipprtipprtip0': { ok: true, stdout: '' },
@@ -255,7 +283,7 @@ describe('resolveTaskDiffBase — a repointed HEAD', () => {
     // anchoring there would re-attribute all of it to this task.
     const { run } = stubGit({
       ...NO_REMOTE,
-      [HEAD_BRANCH]: { ok: true, stdout: 'review/pr-694\n' },
+      [HEAD_BRANCH]: headRef('review/pr-694'),
       [MERGE_BASE]: { ok: true, stdout: 'mergedbasemergedb\n' },
       [BASELINE]: { ok: true, stdout: 'oldtipoldtipoldti\n' },
       'diff --shortstat oldtipoldtipoldti': {
@@ -284,7 +312,7 @@ describe('resolveTaskDiffBase — a repointed HEAD', () => {
     // the run's own commits are the whole answer.
     const { run } = stubGit({
       ...NO_REMOTE,
-      [HEAD_BRANCH]: { ok: true, stdout: 'review/pr-694\n' },
+      [HEAD_BRANCH]: headRef('review/pr-694'),
       [MERGE_BASE]: { ok: true, stdout: 'sameshasamesha00\n' },
       [BASELINE]: { ok: true, stdout: 'sameshasamesha00\n' },
       'diff --shortstat sameshasamesha00': {
@@ -318,7 +346,7 @@ describe('resolveTaskDiffBase — a repointed HEAD', () => {
   it('narrows to HEAD when the branch reflog cannot answer', async () => {
     const { run } = stubGit({
       ...NO_REMOTE,
-      [HEAD_BRANCH]: { ok: true, stdout: 'review/pr-694\n' },
+      [HEAD_BRANCH]: headRef('review/pr-694'),
       [MERGE_BASE]: { ok: true, stdout: 'forkpointforkpoint\n' },
       [BASELINE]: { ok: false, stdout: '' },
     });
@@ -337,7 +365,7 @@ describe('resolveTaskDiffBase — a repointed HEAD', () => {
   it('treats a detached HEAD as repointed, with no branch reflog to consult', async () => {
     const { run, calls } = stubGit({
       ...NO_REMOTE,
-      [HEAD_BRANCH]: { ok: true, stdout: 'HEAD\n' },
+      [HEAD_BRANCH]: headRef('HEAD'),
       [MERGE_BASE]: { ok: true, stdout: 'deadbeefdeadbeef\n' },
     });
 
@@ -358,7 +386,7 @@ describe('resolveTaskDiffBase — a repointed HEAD', () => {
     // not plainly ISO-8601 disables the baseline instead of being interpreted.
     const { run, calls } = stubGit({
       ...NO_REMOTE,
-      [HEAD_BRANCH]: { ok: true, stdout: 'review/pr-694\n' },
+      [HEAD_BRANCH]: headRef('review/pr-694'),
     });
 
     expect(
@@ -380,7 +408,7 @@ describe('resolveTaskDiffBase — degradation', () => {
 
     expect(await resolveTaskDiffBase(run, 'main')).toEqual({ base: 'deadbeefdeadbeef' });
     // Nothing to compare HEAD against, so HEAD is never even resolved.
-    expect(calls).not.toContainEqual(['rev-parse', '--abbrev-ref', 'HEAD']);
+    expect(calls).not.toContainEqual(['rev-parse', 'HEAD', '--abbrev-ref', 'HEAD']);
   });
 
   it('does NOT narrow on an unreadable HEAD — a failed rev-parse is not evidence of a repoint', async () => {
@@ -404,7 +432,7 @@ describe('resolveTaskDiffBase — degradation', () => {
     expect(await resolveTaskDiffBase(run, 'main', { taskBranch: '' })).toEqual({
       base: 'deadbeefdeadbeef',
     });
-    expect(calls).not.toContainEqual(['rev-parse', '--abbrev-ref', 'HEAD']);
+    expect(calls).not.toContainEqual(['rev-parse', 'HEAD', '--abbrev-ref', 'HEAD']);
   });
 
   it('never builds a remote probe out of an option-like base ref', async () => {
@@ -416,5 +444,127 @@ describe('resolveTaskDiffBase — degradation', () => {
     // No `origin/--upload-pack=evil` probe: the caller's `isSafeGitRef` gate rejects the
     // ref before it ever reaches git, and this helper must not smuggle it in either.
     expect(calls).toEqual([['merge-base', '--upload-pack=evil', 'HEAD']]);
+  });
+});
+
+describe('resolveTaskDiffBase — memoization', () => {
+  const CACHE_SETUP = {
+    ...NO_REMOTE,
+    [HEAD_BRANCH]: headRef('review/pr-694'),
+    [MERGE_BASE]: { ok: true, stdout: 'anchoranchoranchor' },
+    [BASELINE]: { ok: true, stdout: 'baselinebaseline' },
+    'diff --shortstat baselinebaseline': { ok: true, stdout: ' 1 file changed, 1 insertion(+)\n' },
+    'diff --shortstat anchoranchoranchor': { ok: true, stdout: ' 1 file changed, 2 insertions(+)\n' },
+  };
+
+  it('reuses the resolved anchor while HEAD is unchanged, re-probing only HEAD', async () => {
+    clearTaskDiffBaseCache?.();
+    const { run, calls } = stubGit(CACHE_SETUP);
+    const opts = { taskBranch: 'cez/ab12cd34', runStartedAt: STARTED_AT, cacheKey: '/wt/a' };
+    const first = await resolveTaskDiffBase(run, 'main', opts);
+    const afterFirst = calls.length;
+    const second = await resolveTaskDiffBase(run, 'main', opts);
+    expect(second).toEqual(first);
+    // A hit validates the sha and the branch and stops: no reflog lookup, no shortstat comparison.
+    expect(calls.slice(afterFirst)).toEqual([['rev-parse', 'HEAD', '--abbrev-ref', 'HEAD']]);
+  });
+
+  it('recomputes when the fetched origin/<base> tip moves under an unchanged HEAD', async () => {
+    clearTaskDiffBaseCache?.();
+    const answers: Record<string, { ok: boolean; stdout: string; code?: number }> = {
+      [HAS_REMOTE]: { ok: true, stdout: 'tipone...\n' },
+      [LOCAL_CURRENT]: { ok: false, stdout: '', code: 1 },
+      [HEAD_BRANCH]: headRef('review/pr-694'),
+      [MERGE_BASE_REMOTE]: { ok: true, stdout: 'anchoranchoranchor' },
+      [BASELINE]: { ok: true, stdout: 'baselinebaseline' },
+      'diff --shortstat baselinebaseline': { ok: true, stdout: ' 1 file changed, 1 insertion(+)\n' },
+      'diff --shortstat anchoranchoranchor': { ok: true, stdout: ' 1 file changed, 2 insertions(+)\n' },
+    };
+    const { run, calls } = stubGit(answers);
+    const opts = { taskBranch: 'cez/ab12cd34', runStartedAt: STARTED_AT, cacheKey: '/wt/e' };
+    await resolveTaskDiffBase(run, 'main', opts);
+    const afterFirst = calls.length;
+    // A fetch advanced origin/main; HEAD did not move, so the sha/branch guard
+    // alone would have served the stale anchor.
+    answers[HAS_REMOTE] = { ok: true, stdout: 'tiptwo...\n' };
+    await resolveTaskDiffBase(run, 'main', opts);
+    expect(calls.slice(afterFirst)).toContainEqual(['merge-base', 'origin/main', 'HEAD']);
+  });
+
+  it('recomputes when the base remote is not origin and its tip moves under an unchanged HEAD', async () => {
+    clearTaskDiffBaseCache?.();
+    const answers: Record<string, { ok: boolean; stdout: string; code?: number }> = {
+      'config --get-regexp ^remote\\.': {
+        ok: true,
+        stdout: [
+          'remote.origin.url https://github.com/me/shop.git',
+          'remote.upstream.url https://github.com/acme/shop.git',
+          'remote.upstream.gh-resolved base',
+        ].join('\n') + '\n',
+      },
+      // The fork's `origin/main` started at the same tip and stays put, so a memo
+      // that re-read it instead of `upstream/main` would serve the stale anchor.
+      [HAS_REMOTE]: { ok: true, stdout: 'tipone...\n' },
+      'rev-parse --verify --quiet upstream/main^{commit}': { ok: true, stdout: 'tipone...\n' },
+      'merge-base --is-ancestor upstream/main main': { ok: false, stdout: '', code: 1 },
+      [HEAD_BRANCH]: headRef('review/pr-694'),
+      'merge-base upstream/main HEAD': { ok: true, stdout: 'anchoranchoranchor' },
+      [BASELINE]: { ok: true, stdout: 'baselinebaseline' },
+      'diff --shortstat baselinebaseline': { ok: true, stdout: ' 1 file changed, 1 insertion(+)\n' },
+      'diff --shortstat anchoranchoranchor': { ok: true, stdout: ' 1 file changed, 2 insertions(+)\n' },
+    };
+    const { run, calls } = stubGit(answers);
+    const opts = { taskBranch: 'cez/ab12cd34', runStartedAt: STARTED_AT, cacheKey: '/wt/f' };
+    await resolveTaskDiffBase(run, 'main', opts);
+    const afterFirst = calls.length;
+    answers['rev-parse --verify --quiet upstream/main^{commit}'] = { ok: true, stdout: 'tiptwo...\n' };
+    await resolveTaskDiffBase(run, 'main', opts);
+    expect(calls.slice(afterFirst)).toContainEqual(['merge-base', 'upstream/main', 'HEAD']);
+  });
+
+  it('recomputes once HEAD moves under the same worktree key', async () => {
+    clearTaskDiffBaseCache?.();
+    const answers = { ...CACHE_SETUP };
+    const { run, calls } = stubGit(answers);
+    const opts = { taskBranch: 'cez/ab12cd34', runStartedAt: STARTED_AT, cacheKey: '/wt/b' };
+    await resolveTaskDiffBase(run, 'main', opts);
+    const afterFirst = calls.length;
+    answers[HEAD_BRANCH] = { ok: true, stdout: `newheadnewheadnew00\nreview/pr-694\n` };
+    await resolveTaskDiffBase(run, 'main', opts);
+    // A moved HEAD misses, so the full decision runs again.
+    expect(calls.slice(afterFirst)).toContainEqual(['merge-base', 'main', 'HEAD']);
+  });
+
+  it('recomputes when HEAD returns to the task branch at the same commit', async () => {
+    clearTaskDiffBaseCache?.();
+    const answers = {
+      ...CACHE_SETUP,
+      // A sha-only validator would read this and wrongly accept the cached repoint.
+      'rev-parse HEAD': { ok: true, stdout: `${HEAD_SHA}\n` },
+    };
+    const { run, calls } = stubGit(answers);
+    const opts = { taskBranch: 'cez/ab12cd34', runStartedAt: STARTED_AT, cacheKey: '/wt/d' };
+    await resolveTaskDiffBase(run, 'main', opts);
+    const afterFirst = calls.length;
+    // Same sha, now on the task branch: the sha alone cannot tell the branches
+    // apart, so the memo must validate the branch too and drop the stale repoint.
+    answers[HEAD_BRANCH] = headRef('cez/ab12cd34');
+    const second = await resolveTaskDiffBase(run, 'main', opts);
+    expect(second).toEqual({ base: 'anchoranchoranchor' });
+    expect(calls.slice(afterFirst)).toContainEqual(['merge-base', 'main', 'HEAD']);
+  });
+
+  it('never memoizes the cheap non-repointed answer', async () => {
+    clearTaskDiffBaseCache?.();
+    const { run, calls } = stubGit({
+      ...NO_REMOTE,
+      [HEAD_BRANCH]: headRef('cez/ab12cd34'),
+      [MERGE_BASE]: { ok: true, stdout: 'deadbeefdeadbeef\n' },
+    });
+    const opts = { taskBranch: 'cez/ab12cd34', cacheKey: '/wt/c' };
+    await resolveTaskDiffBase(run, 'main', opts);
+    const afterFirst = calls.length;
+    await resolveTaskDiffBase(run, 'main', opts);
+    expect(calls.length).toBeGreaterThan(afterFirst);
   });
 });
