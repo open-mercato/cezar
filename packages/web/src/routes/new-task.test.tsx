@@ -156,6 +156,7 @@ const CONFIG: ConfigResponse = {
   memoryLimitMb: null,
   worktreeRetention: 10,
   liveTitleUpdates: null,
+  effectiveLiveTitleUpdates: false,
   reviewGate: null,
 }
 

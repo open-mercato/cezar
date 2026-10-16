@@ -129,6 +129,7 @@ function serve({
     memoryLimitMb: null,
     worktreeRetention: 10,
     liveTitleUpdates: null,
+    effectiveLiveTitleUpdates: false,
     reviewGate: null,
     ...config,
   }
@@ -165,6 +166,7 @@ function serve({
         }
         if (body?.liveTitleUpdates !== undefined) {
           state.liveTitleUpdates = body.liveTitleUpdates as boolean | null
+          state.effectiveLiveTitleUpdates = (body.liveTitleUpdates as boolean | null) ?? false
         }
         if (body?.reviewGate !== undefined) {
           state.reviewGate = body.reviewGate as boolean | null
@@ -722,17 +724,38 @@ describe('the instructions section', () => {
 
 /** Settings → Tasks: the lifecycle and git knobs that moved out of Agents keep their contract. */
 describe('the tasks section', () => {
-  it('live title updates: the switch defaults ON and PUTs the toggle', async () => {
+  it('live title updates: the switch defaults OFF and PUTs the toggle', async () => {
     serve()
     renderAt('/settings/tasks')
     await waitFor(() => expect(tasks()).not.toBeNull())
 
     const toggle = screen.getByLabelText('Live title updates')
-    expect(toggle.getAttribute('aria-checked') ?? toggle.getAttribute('data-state')).toBeTruthy()
+    expect(toggle.getAttribute('aria-checked') ?? toggle.getAttribute('data-state')).toMatch(/false|unchecked/)
+    fireEvent.click(toggle)
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ liveTitleUpdates: true })
+    await waitFor(() => expect(screen.getByText('On')).toBeTruthy())
+  })
+
+  it('live title updates: an env opt-in with no config key shows ON and turns off in one click', async () => {
+    // CEZ_TITLE_UPDATES=1 folds into the effective value while the raw key stays null, so the
+    // switch must render ON — and one click must clear it, not first write the ON it already had.
+    serve({ config: { liveTitleUpdates: null, effectiveLiveTitleUpdates: true } })
+    renderAt('/settings/tasks')
+    await waitFor(() => expect(tasks()).not.toBeNull())
+
+    const toggle = screen.getByLabelText('Live title updates')
+    await waitFor(() =>
+      expect(toggle.getAttribute('aria-checked') ?? toggle.getAttribute('data-state')).toMatch(/true|checked/),
+    )
+    expect(screen.getByText(/^On/)).toBeTruthy()
     fireEvent.click(toggle)
     await waitFor(() => expect(puts()).toHaveLength(1))
     expect(puts()[0]?.body).toEqual({ liveTitleUpdates: false })
-    await waitFor(() => expect(screen.getByText('Off')).toBeTruthy())
+    await waitFor(() =>
+      expect(toggle.getAttribute('aria-checked') ?? toggle.getAttribute('data-state')).toMatch(/false|unchecked/),
+    )
+    expect(screen.getByText('Off')).toBeTruthy()
   })
   it('review gate: the switch defaults OFF and PUTs the toggle (#489)', async () => {
     serve()

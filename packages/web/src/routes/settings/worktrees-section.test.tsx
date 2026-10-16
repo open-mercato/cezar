@@ -35,6 +35,7 @@ function serve(config: Partial<ConfigResponse> = {}) {
     memoryLimitMb: null,
     worktreeRetention: 10,
     liveTitleUpdates: null,
+    effectiveLiveTitleUpdates: false,
     reviewGate: null,
     ...config,
   }

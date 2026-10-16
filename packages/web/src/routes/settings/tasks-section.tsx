@@ -106,7 +106,7 @@ function TasksForm({ config }: { config: ConfigResponse }) {
           <Switch
             aria-label="Live title updates"
             data-slot="tasks-live-title-updates"
-            checked={config.liveTitleUpdates ?? true}
+            checked={config.effectiveLiveTitleUpdates}
             disabled={save.isPending}
             onCheckedChange={(checked) =>
               save.mutate(
@@ -116,7 +116,7 @@ function TasksForm({ config }: { config: ConfigResponse }) {
             }
           />
           <span className="text-[13px] text-muted-foreground">
-            {(config.liveTitleUpdates ?? true) ? 'On' : 'Off'}
+            {config.effectiveLiveTitleUpdates ? 'On' : 'Off'}
             {config.liveTitleUpdates === null && ' (default)'}
           </span>
         </label>

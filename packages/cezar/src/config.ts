@@ -61,12 +61,11 @@ const configSchema = z.object({
    *  alias that answers strict JSON; naming is fire-and-forget and never blocks. */
   namerModel: z.string().min(1).default('haiku'),
   /** Live title updates: refresh the display title through the namer on each
-   *  turn end. Absent = the `CEZ_TITLE_UPDATES` env decides (default ON — owner
-   *  decision on PR #479). */
+   *  turn end. Absent = the `CEZ_TITLE_UPDATES` env decides (default OFF). */
   liveTitleUpdates: z.boolean().optional(),
   /** Optional diff-first review gate (#489): when a successful run with changes
    *  should park at `review` for a human. Absent = the `CEZ_REVIEW_GATE` env
-   *  decides (default OFF — the deliberate inverse of `liveTitleUpdates`).
+   *  decides (default OFF, like `liveTitleUpdates`).
    *  Autonomous runs always skip the gate regardless of this. */
   reviewGate: z.boolean().optional(),
   /**

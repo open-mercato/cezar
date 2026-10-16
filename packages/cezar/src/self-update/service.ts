@@ -77,6 +77,7 @@ export class SelfUpdateService {
   /** The channel's newest version when it is newer than the running one — what health's
    *  `latestVersion` reports and the version chip pulses for. */
   async updateAvailable(refresh = false): Promise<string | null> {
+    if (this.env.CEZ_DRY_RUN === '1') return null;
     const doc = refresh ? await this.registry.refresh() : await this.registry.get();
     const channel = await this.channel();
     // Development runs whatever was picked by hand; nothing is ever "newer" than a worktree.
