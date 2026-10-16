@@ -109,7 +109,7 @@ describe('cockpit app shell', () => {
     browser.goto(baseUrl + scoped('/'))
 
     expect(browser.isVisible('[data-slot="sidebar"]')).toBe(true)
-    expect(browser.isVisible('[data-slot="brand-tile"]')).toBe(true)
+    expect(browser.isVisible('[data-slot="brand-lockup"]')).toBe(true)
     expect(browser.text('[data-slot="sidebar"] nav')).toContain('Tasks')
 
     // The GitHub item waits on the health answer — settle it before sampling the nav.
