@@ -8,7 +8,7 @@ import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createUsageStore, type UsageStore } from './events'
-import { GlobalEventsProvider, useGlobalEvents, useRunUsage, useUsage } from './global-events'
+import { GlobalEventsProvider, RECONCILE_TIMEOUT_MS, useGlobalEvents, useRunUsage, useUsage } from './global-events'
 import { setApiScope } from '@open-mercato/cezar-api-client'
 import { createQueryClient } from './query-client'
 import { queryKeys, useProviderStatus, useRuns, useTodos, workspaceQueryKeys } from './queries'
@@ -936,6 +936,7 @@ describe('useGlobalEvents — reconcile doctrine', () => {
       queryKeys.health, // the repo/branch chip — health is not on the stream (#369)
       queryKeys.worktrees, // the Resources panel's list/total (#483)
       workspaceQueryKeys.providerStatus,
+      workspaceQueryKeys.skillsUpdateAll, // its poll stops once a check settles
       ['run-history', 'default'],
       ['run-history-context', 'default'],
     ]))
@@ -1065,6 +1066,65 @@ describe('useGlobalEvents — reconcile doctrine', () => {
       ['run-history', 'default'],
       ['run-history-context', 'default'],
     ]))
+  })
+
+  it('reconciles ONCE when a tab comes back to a closed socket — on the reopened socket\'s open', () => {
+    const { source } = mount()
+    source.open()
+    source.fail()
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    const runsReconciles = () =>
+      invalidatedKeys(invalidate).filter((key) => JSON.stringify(key) === JSON.stringify(queryKeys.runs.all)).length
+
+    setVisibility('hidden')
+    setVisibility('visible')
+    expect(FakeEventSource.instances).toHaveLength(2)
+    expect(runsReconciles()).toBe(0)
+
+    FakeEventSource.last.open()
+    expect(runsReconciles()).toBe(1)
+  })
+
+  it('still reconciles once on a tab return when the reopened socket never opens', async () => {
+    vi.useFakeTimers()
+    const { source } = mount()
+    source.open()
+    source.fail()
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    const runsReconciles = () =>
+      invalidatedKeys(invalidate).filter((key) => JSON.stringify(key) === JSON.stringify(queryKeys.runs.all)).length
+
+    setVisibility('hidden')
+    setVisibility('visible')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RECONCILE_TIMEOUT_MS - 1)
+    })
+    expect(runsReconciles()).toBe(0)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    expect(runsReconciles()).toBe(1)
+  })
+
+  it('reconciles ONCE on a bfcache restore', () => {
+    const { source } = mount()
+    source.open()
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'))
+    })
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    const event = new Event('pageshow')
+    Object.defineProperty(event, 'persisted', { value: true })
+    act(() => {
+      window.dispatchEvent(event)
+    })
+    FakeEventSource.last.open()
+
+    const runsReconciles = invalidatedKeys(invalidate).filter(
+      (key) => JSON.stringify(key) === JSON.stringify(queryKeys.runs.all),
+    ).length
+    expect(runsReconciles).toBe(1)
   })
 
   it('stops listening for visibility once unmounted', () => {

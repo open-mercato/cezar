@@ -116,7 +116,7 @@ export function onWorkspaceEvent(
  * busy minute would be a refetch per event. One request per quiet moment is the whole point.
  */
 const RUNS_INDEX_REFRESH_DEBOUNCE_MS = 400
-const RECONCILE_TIMEOUT_MS = 15_000
+export const RECONCILE_TIMEOUT_MS = 15_000
 
 /** Built per mount, not module-level: a pending timer holds the `queryClient` it will write to,
  *  and one that outlives its provider would invalidate a cache nobody is reading. `cancel` runs
@@ -331,6 +331,8 @@ async function reconcile(queryClient: QueryClient): Promise<void> {
     // this reconcile, so the Machine card must be in the list — the local cockpit ignores it
     // because its frames arrive over the `host` topic.
     workspaceQueryKeys.hostUsage,
+    // Its poll stops once a check settles, and no stream carries skills news.
+    workspaceQueryKeys.skillsUpdateAll,
     ['run-history', activeScope] as const,
     ['run-history-context', activeScope] as const,
   ] as const
@@ -472,6 +474,10 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     )
     let reopenTimer: ReturnType<typeof setTimeout> | undefined
     let everOpened = false
+    // Set when a tab return reopens the socket: its `open` then runs the one reconcile, so the
+    // return handler does not run a second one of its own.
+    let reconcileOnOpen = false
+    let reopenReconcileTimer: ReturnType<typeof setTimeout> | undefined
     let disposed = false
     // Liveness watchdog — the same one the per-run transcript stream has carried since #424, and
     // missing here until a thread showed a `done` header over a session that was visibly still
@@ -588,9 +594,12 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
         // Not the first one: at boot the queries are fetching anyway, and invalidating them here
         // would only ask the same questions twice. Every later open is a *re*connect — we were
         // disconnected, events happened without us, and the cache is now a guess.
-        if (everOpened) reconcileNow()
+        clearTimeout(reopenReconcileTimer)
+        reopenReconcileTimer = undefined
+        if (everOpened || reconcileOnOpen) reconcileNow()
         dashboardLive.connected(true)
         everOpened = true
+        reconcileOnOpen = false
       })
 
       for (const name of EVENT_NAMES) {
@@ -706,18 +715,33 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       })
     }
 
+    const reconcileOnReopen = (): void => {
+      reconcileOnOpen = true
+      clearTimeout(reopenReconcileTimer)
+      // The stream can stay down while plain HTTP works (a proxy that drops SSE, a server
+      // restarting): the reader still gets the reconcile, just later.
+      reopenReconcileTimer = setTimeout(() => {
+        reopenReconcileTimer = undefined
+        if (disposed || !reconcileOnOpen) return
+        reconcileOnOpen = false
+        reconcileNow()
+      }, RECONCILE_TIMEOUT_MS)
+    }
+
     const onVisibilityChange = (): void => {
       if (document.visibilityState !== 'visible') return
       // The phone-in-a-pocket case: mobile browsers freeze background tabs, so the stream may have
       // been dead for an hour with no error handler ever running. Whatever is on screen right now
       // is what the reader is about to trust, so ask the server before they read it.
-      reconcileNow()
       if (!source || source.readyState === CLOSED) {
         // Don't make them wait out a backoff that started while they were away.
         clearTimeout(reopenTimer)
         reopenTimer = undefined
+        reconcileOnReopen()
         connect()
+        return
       }
+      reconcileNow()
     }
 
     const onPageHide = (): void => {
@@ -737,7 +761,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       // Only a bfcache restore (`persisted`) finds this document alive with its stream closed
       // by onPageHide; on a normal load this effect just ran and the stream is fresh.
       if (!event.persisted) return
-      reconcileNow()
+      reconcileOnReopen()
       connect()
     }
 
@@ -760,6 +784,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     return () => {
       disposed = true
       clearTimeout(reopenTimer)
+      clearTimeout(reopenReconcileTimer)
       clearInterval(livenessTimer)
       dashboardLive.connected(false)
       clearTimeout(dashboardTimer); clearTimeout(dashboardMax)
