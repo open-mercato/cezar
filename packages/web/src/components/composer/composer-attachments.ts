@@ -44,16 +44,23 @@ export function appendAttachment<T extends Pick<AttachmentInput, 'mediaType' | '
   return [...prev, next]
 }
 
-/** Extension → media type for a file whose own `type` is empty or unrecognised. `.log` is here
+/** Extension → media type for a file whose own `type` is empty or unrecognised. A Map, because the
+ *  key is a user-supplied filename fragment and an object would answer `constructor` off its prototype.
+ *  Images are limited to the four formats every backend decodes (no svg). `.log` is here
  *  because `text/plain` is what the allowlist takes, and a log the browser typed as `text/plain`
  *  is accepted either way — the fallback only decides the TYPELESS case. */
-const EXTENSION_MEDIA_TYPES: Record<string, string> = {
-  md: 'text/markdown',
-  markdown: 'text/markdown',
-  txt: 'text/plain',
-  log: 'text/plain',
-  pdf: 'application/pdf',
-}
+const EXTENSION_MEDIA_TYPES = new Map<string, string>([
+  ['md', 'text/markdown'],
+  ['markdown', 'text/markdown'],
+  ['txt', 'text/plain'],
+  ['log', 'text/plain'],
+  ['pdf', 'application/pdf'],
+  ['png', 'image/png'],
+  ['jpg', 'image/jpeg'],
+  ['jpeg', 'image/jpeg'],
+  ['gif', 'image/gif'],
+  ['webp', 'image/webp'],
+])
 
 /**
  * What cezar will call this file on the wire, or `null` when it will not take it at all.
@@ -66,7 +73,7 @@ const EXTENSION_MEDIA_TYPES: Record<string, string> = {
 export function attachmentMediaType(file: File): string | null {
   if (isAttachmentMediaType(file.type)) return file.type
   const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
-  return EXTENSION_MEDIA_TYPES[ext] ?? null
+  return EXTENSION_MEDIA_TYPES.get(ext) ?? null
 }
 
 /** A pending attachment: the wire shape, plus what the composer's row needs to show it. */
