@@ -24,6 +24,7 @@ interface HealthBody {
   forge: { kind: string; available: boolean; reason?: string } | null;
   capabilities: {
     localHandoff: boolean;
+    terminal: boolean;
     followups: boolean;
     singleProject: boolean;
     automations: boolean;
@@ -110,6 +111,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     expect(body.forge).toBeNull(); // tmp dir — not a git repo, no remote
     expect(body.capabilities).toEqual({
       localHandoff: true,
+      terminal: true,
       followups: false,
       singleProject: false,
       automations: true,
@@ -165,6 +167,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     const body = await health();
     expect(body.capabilities).toEqual({
       localHandoff: false,
+      terminal: false,
       followups: false,
       singleProject: false,
       automations: true,
@@ -194,6 +197,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     const body = await health({ bindHost: '0.0.0.0' });
     expect(body.capabilities).toEqual({
       localHandoff: false,
+      terminal: false,
       followups: false,
       singleProject: false,
       automations: true,
@@ -208,6 +212,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     const body = await health({ bindHost: '127.0.0.1' });
     expect(body.capabilities).toEqual({
       localHandoff: true,
+      terminal: true,
       followups: false,
       singleProject: false,
       automations: true,
@@ -227,6 +232,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     process.env.CEZ_FOLLOWUPS = '1';
     expect((await health()).capabilities).toEqual({
       localHandoff: true,
+      terminal: true,
       followups: true,
       singleProject: false,
       automations: true,
@@ -252,6 +258,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     process.env.CEZ_AUTOMATIONS = '1';
     expect((await health()).capabilities).toEqual({
       localHandoff: true,
+      terminal: true,
       followups: false,
       singleProject: false,
       automations: true,
@@ -266,6 +273,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     process.env.CEZ_HIDE_TOKEN_METRICS = '1';
     expect((await health()).capabilities).toEqual({
       localHandoff: true,
+      terminal: true,
       followups: false,
       singleProject: false,
       automations: true,

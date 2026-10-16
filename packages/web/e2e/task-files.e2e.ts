@@ -133,9 +133,9 @@ describe('the Files tab against a live dry-run worktree', () => {
 
     expect(
       browser.evaluate(
-        `document.querySelector('[data-slot="run-tabs"] a[aria-current="page"]').textContent`,
+        `document.querySelector('[data-slot="layout-card"][data-active]').textContent.trim()`,
       ),
-    ).toBe('Files')
+    ).toBe('Code')
     // The real worktree root: the committed fixture files plus the src dir.
     expect(browser.count('[data-slot="files-file"][data-path="README.md"]')).toBe(1)
     expect(browser.count('[data-slot="files-file"][data-path="logo.png"]')).toBe(1)
@@ -196,8 +196,8 @@ describe('the Files tab against a live dry-run worktree', () => {
         `document.querySelector('[data-slot="files-tree"]').offsetParent !== null`,
       ),
     ).toBe(true)
-    // Session / Changes / Commits / Files / Graph / Notes.
-    expect(browser.count('[data-slot="run-tabs"] a')).toBe(6)
+    // The layout strip folds what does not fit into `…` rather than widening the page.
+    expect(browser.count('[data-slot="layout-card"]')).toBeGreaterThan(0)
     expect(browser.evaluate(`document.documentElement.scrollWidth <= window.innerWidth`)).toBe(true)
 
     browser.screenshot(`${artifactsDir}/files-mobile.png`)

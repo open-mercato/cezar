@@ -5,6 +5,8 @@ import {
   BotIcon,
   CheckIcon,
   ChevronDownIcon,
+  ChevronsDownUpIcon,
+  ChevronsUpDownIcon,
   CircleStopIcon,
   CopyIcon,
   EllipsisIcon,
@@ -98,14 +100,12 @@ import { useDraft } from './thread-draft'
  * Two deliberate omissions, both seams rather than gaps:
  *  - **VS Code** (spec: `POST /api/runs/:id/open-in-editor`) — the endpoint does not exist yet;
  *    R5 adds it driver-detected. Faking the button against nothing would be dishonest.
- *  - **Hosted mode** (spec §"Deployment modes"): when R5's `capabilities.localHandoff` lands in
- *    `/api/health`, Terminal (and VS Code) must disappear entirely and the resume hint must drop
- *    its `cd`. Today's HealthResponse carries no such field, so Terminal renders per current
- *    (local-only) behavior — the gate goes in where the flags are read, `runActionFlags` callers.
+ *  - **Hosted mode** (spec §"Deployment modes"): Terminal disappears when `capabilities.localHandoff`
+ *    is false (`useCanOpenTerminal`); the resume hint still carries its `cd`.
  */
 /** Which run-detail tab this header instance sits above — drives the active underline.
  *  A prop rather than a route match so the header stays testable with a bare render. */
-export type RunTab = 'session' | 'changes' | 'commits' | 'files' | 'graph' | 'notes'
+export type RunTab = 'session' | 'changes' | 'commits' | 'files' | 'graph' | 'notes' | 'terminal'
 
 /** Which runs the reader has expanded the phone-width meta row for (#765). A module-level map for
  *  the same reason `WorkflowSteps` keeps one (`openByRun` in step-rail.tsx) — and it has to be BOTH
@@ -128,6 +128,12 @@ interface RunHeaderProps {
   /** The Session tab's engine picker for the next continuation. Kept out of the three Git tabs:
    *  they share this header but do not own the continuation draft or its pending selection. */
   continuationEngine?: ReactNode
+  /** Replaces the route tab links — the task workspace's layout strip (spec `2026-10-07-task-workspace` §5.2). */
+  tabs?: ReactNode
+  /** Right after the tab row's links or strip — the workspace's terminal toggle and full view. */
+  trailing?: ReactNode
+  /** Span the whole window, like the workspace columns under it, instead of the reading measure. */
+  wide?: boolean
 }
 
 // Every prop must participate: adding one without a comparator is a compile error.
@@ -136,6 +142,9 @@ const headerPropComparators = {
   tab: (before, after) => before.tab === after.tab,
   onMarkedUnread: (before, after) => before.onMarkedUnread === after.onMarkedUnread,
   continuationEngine: (before, after) => before.continuationEngine === after.continuationEngine,
+  tabs: (before, after) => before.tabs === after.tabs,
+  trailing: (before, after) => before.trailing === after.trailing,
+  wide: (before, after) => before.wide === after.wide,
   planTally: (before, after) => before.planTally?.done === after.planTally?.done &&
     before.planTally?.total === after.planTally?.total,
 } satisfies Record<keyof RunHeaderProps, (before: RunHeaderProps, after: RunHeaderProps) => boolean>
@@ -151,10 +160,13 @@ function RunHeaderView({
   tab = 'session',
   onMarkedUnread,
   continuationEngine,
+  tabs,
+  trailing,
+  wide = false,
 }: RunHeaderProps) {
   const attention = deriveAttention(run)
   const budget = budgetStop(run)
-  const flags = runActionFlags(run)
+  const canTerminal = useCanOpenTerminal(run)
   const hint = resumeHint(run)
   const actions = useRunActions(run, onMarkedUnread)
   // The Session tab's composer carries Continue (its send button) and ■ Stop, so the header only
@@ -184,6 +196,7 @@ function RunHeaderView({
   const health = useHealth()
   const metricVisibility = usageMetricVisibility(health.data)
   const refs = useRunReferences(run)
+  const [collapsed, setCollapsed] = useHeaderCollapsed()
 
   return (
     <ReferenceStatusProvider projectId={refs.projectId} requests={refs.requests}>
@@ -191,7 +204,7 @@ function RunHeaderView({
         data-slot="run-header"
         className="relative z-20 border-b border-border bg-background/95 px-3 pt-2 backdrop-blur md:sticky md:top-0 md:px-6 md:pt-3"
       >
-        <div className="mx-auto w-full max-w-[var(--measure)]">
+        <div className={cn('mx-auto w-full', !wide && 'max-w-[var(--measure)]')}>
           {/* `min-h-[30px]` is the git button's own height (Button size `sm`): the row keeps it
               whether or not a git step is on offer, so the header — and the thread under it —
               does not jump when the button appears or goes. */}
@@ -203,6 +216,20 @@ function RunHeaderView({
             <span className="ml-auto flex shrink-0 items-center gap-2.5">
               {/* The run's state, top right, beside the git button it decides. */}
               <RunStatus attention={attention} queuePosition={queuePosition} />
+              {/* Desktop: fold the meta row, the step rail and the resume hint away, leaving the
+                  title and the tabs. Phones have their own disclosure (#765) below. */}
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                data-action="collapse-header"
+                className="hidden text-muted-foreground md:inline-flex"
+                aria-label={collapsed ? 'Expand header' : 'Collapse header'}
+                aria-expanded={!collapsed}
+                title={collapsed ? 'Expand header' : 'Collapse header'}
+                onClick={() => setCollapsed(!collapsed)}
+              >
+                {collapsed ? <ChevronsUpDownIcon aria-hidden="true" /> : <ChevronsDownUpIcon aria-hidden="true" />}
+              </Button>
               {/* Phone-width only: above `md` the meta row never collapses, so a control to expand
                   it would be a permanently disabled-looking chevron next to always-visible content. */}
               <Button
@@ -230,7 +257,11 @@ function RunHeaderView({
               accessibility tree instead of lingering as invisible-but-focusable chips. `md:block`
               keeps the desktop header exactly as it was — this is a narrow-viewport fix, and a
               desktop reader who has always seen these at a glance should not have to click for them. */}
-          <div id={detailsId} data-slot="run-details" className={cn(detailsOpen ? 'block' : 'hidden', 'md:block')}>
+          <div
+            id={detailsId}
+            data-slot="run-details"
+            className={cn(detailsOpen ? 'block' : 'hidden', collapsed ? 'md:hidden' : 'md:block')}
+          >
             <MetaRow
               run={run}
               references={refs.references}
@@ -243,7 +274,7 @@ function RunHeaderView({
                 <div data-slot="run-actions" className="ml-auto hidden items-center gap-1 md:flex">
                   <TaskItemActions run={run} actions={actions} showRunControls={!composerOwnsRunControls} />
                   {/* Terminal is folded into the Open in… menu to save room. */}
-                  <OpenInMenuForRun run={run} canResume={flags.terminal} onResume={() => actions.terminal.mutate()} />
+                  <OpenInMenuForRun run={run} canResume={canTerminal} onResume={() => actions.terminal.mutate()} />
                 </div>
               }
               continuationEngine={continuationEngine}
@@ -270,47 +301,51 @@ function RunHeaderView({
             // supports) — contained scroll here, not page-wide overflow on `main`.
             className="mt-1.5 flex items-end gap-1 overflow-x-auto md:mt-2.5 md:overflow-x-visible"
           >
-            <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
-              Session
-            </TabLink>
-            <TabLink to={`/tasks/${run.id}/changes`} active={tab === 'changes'}>
-              Changes
-            </TabLink>
-            <TabLink to={`/tasks/${run.id}/commits`} active={tab === 'commits'}>
-              Commits
-            </TabLink>
-            <TabLink to={`/tasks/${run.id}/files`} active={tab === 'files'}>
-              Files
-            </TabLink>
-            {/* The live workflow graph (#1322) — every run with a definition: a step list opens as
-                its graph. */}
-            {run.workflowDef ? (
-              <TabLink to={`/tasks/${run.id}/graph`} active={tab === 'graph'}>
-                Graph
-              </TabLink>
-            ) : null}
-            <TabLink to={`/tasks/${run.id}/notes`} active={tab === 'notes'}>
-              Notes
-            </TabLink>
-
-            {/* What the run has spent, and on what — on the tabs line, out of the way of the
-                actions above. Desktop only; phones read it in the details row. */}
-            <RunUsage
-              run={run}
-              showTokens={metricVisibility.tokens}
-              showCost={metricVisibility.cost}
-              continuationEngine={continuationEngine}
-              className="ml-auto hidden pb-1.5 md:flex"
-            />
+            {tabs ?? (
+              <>
+                <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
+                  Session
+                </TabLink>
+                <TabLink to={`/tasks/${run.id}/changes`} active={tab === 'changes'}>
+                  Changes
+                </TabLink>
+                <TabLink to={`/tasks/${run.id}/commits`} active={tab === 'commits'}>
+                  Commits
+                </TabLink>
+                <TabLink to={`/tasks/${run.id}/files`} active={tab === 'files'}>
+                  Files
+                </TabLink>
+                {/* The live workflow graph (#1322) — every run with a definition: a step list opens as
+                    its graph. */}
+                {run.workflowDef ? (
+                  <TabLink to={`/tasks/${run.id}/graph`} active={tab === 'graph'}>
+                    Graph
+                  </TabLink>
+                ) : null}
+                <TabLink to={`/tasks/${run.id}/notes`} active={tab === 'notes'}>
+                  Notes
+                </TabLink>
+                {health.data?.capabilities?.terminal ? (
+                  <TabLink to={`/tasks/${run.id}/terminal`} active={tab === 'terminal'}>
+                    Terminal
+                  </TabLink>
+                ) : null}
+              </>
+            )}
+            {trailing}
           </div>
 
           {run.steps.length > 0 ? (
-            <div className="border-t border-border pt-1 pb-0 md:pt-2 md:pb-1">
+            <div className={cn('border-t border-border pt-1 pb-0 md:pt-2 md:pb-1', collapsed && 'md:hidden')}>
               <WorkflowSteps runId={run.id} steps={run.steps} />
             </div>
           ) : null}
 
-          {hint ? <ResumeHintLine hint={hint} /> : null}
+          {hint ? (
+            <div className={collapsed ? 'md:hidden' : undefined}>
+              <ResumeHintLine hint={hint} />
+            </div>
+          ) : null}
         </div>
 
         <RunConfirmDialog
@@ -365,6 +400,14 @@ function RunProgress({
       ) : null}
     </>
   )
+}
+
+/** Terminal resume spawns a terminal on the SERVER's machine, so a hosted cockpit
+ *  (`localHandoff: false`) never offers it — the route 409s there (telemetry f179cc7d). Only an
+ *  explicit `false` hides it: the route stays authoritative while health is still loading. */
+function useCanOpenTerminal(run: ApiRun): boolean {
+  const localHandoff = useHealth().data?.capabilities?.localHandoff
+  return runActionFlags(run).terminal && localHandoff !== false
 }
 
 /** Why a task-management action is unavailable right now, or undefined when it is available. The
@@ -641,14 +684,14 @@ function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
   // must be ONE implementation, not two buttons that happen to agree today.
   const finish = useFinishRun(run.id)
   const archive = useMutation({
-    mutationFn: () => archiveRun(run.id, !run.archived),
+    mutationFn: () => archiveRun(run.id, !run.archived, 'task_view'),
     onSuccess: invalidate,
     onError,
   })
   // Pin/unpin (#935) — the shared hook rather than a local mutation, because the sidebar and the
   // Tasks table drive the same action and the cache rule belongs in one place. Toggling off the
   // record, exactly like archive above.
-  const pinMutation = usePinRun()
+  const pinMutation = usePinRun('task_view')
   const pin = {
     isPending: pinMutation.isPending,
     mutate: () => pinMutation.mutate({ id: run.id, pinned: !run.pinned }, { onError }),
@@ -936,16 +979,16 @@ function MetaRow({
           {part}
         </Fragment>
       ))}
-      {actions}
-      {/* Phones: usage stays here, behind the details disclosure (#765); from `md` it sits on the
-          tabs line. */}
+      {/* What the run has spent, and on what: at the row's end, before the actions, so the tab
+          row below carries navigation only. On phones it sits behind the details disclosure (#765). */}
       <RunUsage
         run={run}
         showTokens={showTokens}
         showCost={showCost}
         continuationEngine={continuationEngine}
-        className="ml-auto md:hidden"
+        className="ml-auto"
       />
+      {actions}
     </div>
   )
 }
@@ -1387,6 +1430,7 @@ function ActionsKebab({
   showRunControls: boolean
 }) {
   const flags = runActionFlags(run)
+  const canTerminal = useCanOpenTerminal(run)
   const live = liveRunReason(run)
   const step = git.action
   const unread = flags.markRead
@@ -1421,7 +1465,7 @@ function ActionsKebab({
             <CheckIcon aria-hidden="true" /> End session
           </DropdownMenuItem>
         ) : null}
-        {flags.terminal ? (
+        {canTerminal ? (
           <DropdownMenuItem onSelect={() => actions.terminal.mutate()}>
             <SquareTerminalIcon aria-hidden="true" /> Terminal
           </DropdownMenuItem>
@@ -1494,4 +1538,27 @@ function ResumeHintLine({ hint }: { hint: string }) {
       <span className="truncate">take over interactively: {hint}</span>
     </button>
   )
+}
+
+const HEADER_COLLAPSED_KEY = 'cez:run-header-collapsed'
+
+/** Whether the desktop header is folded — one answer for every task, kept in this browser. */
+function useHeaderCollapsed(): [boolean, (next: boolean) => void] {
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return window.localStorage.getItem(HEADER_COLLAPSED_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+  const update = (next: boolean) => {
+    setCollapsed(next)
+    try {
+      if (next) window.localStorage.setItem(HEADER_COLLAPSED_KEY, '1')
+      else window.localStorage.removeItem(HEADER_COLLAPSED_KEY)
+    } catch {
+      // A browser without storage still folds for this visit.
+    }
+  }
+  return [collapsed, update]
 }

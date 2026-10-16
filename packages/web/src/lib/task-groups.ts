@@ -30,9 +30,11 @@ export const BUCKET_ORDER: readonly BucketLabel[] = ['Pinned', 'Needs you', 'Wor
  * without reading a single row's detail.
  *
  * Grown from the legacy `STATUS_ORDER` (waiting/review/running/queued, everything else 9): the
- * terminal states are now ranked among themselves, and `scheduled` — a run waiting out a usage
- * limit — sits between running and queued, because it is work with an appointment rather than an
- * outcome (spec 2026-08-03-auto-resume-after-usage-limit).
+ * terminal states share ONE weight, so the sidebar's Recent bucket reads purely by time and the
+ * status dot carries the outcome (a done-before-failed split buried a just-finished failure under
+ * days-old done rows), and `scheduled` — a run waiting out a usage limit — sits between running
+ * and queued, because it is work with an appointment rather than an outcome (spec
+ * 2026-08-03-auto-resume-after-usage-limit).
  */
 const STATUS_ORDER: Partial<Record<RunRecord['status'], number>> = {
   waiting: 0,
@@ -40,8 +42,8 @@ const STATUS_ORDER: Partial<Record<RunRecord['status'], number>> = {
   running: 2,
   queued: 4,
   done: 5,
-  failed: 6,
-  cancelled: 7,
+  failed: 5,
+  cancelled: 5,
 }
 
 /** Not a status of its own: `scheduled` is a `failed` run holding a live resume deadline, which
@@ -190,6 +192,56 @@ export function queuePositions(runs: readonly RunRecord[]): Map<string, number> 
   return new Map(queued.map((run, index) => [run.id, index + 1]))
 }
 
+/** Row order on both Tasks tables: newest last activity (`recent`, the default) or newest
+ *  creation (`created`). Flat time orders — a table has no section headers to explain a status
+ *  ranking, so its time column must read in row order. The sidebar keeps `sortRuns`. */
+export type SortBy = 'recent' | 'created'
+
+export const SORT_OPTIONS: readonly { value: SortBy; label: string }[] = [
+  { value: 'recent', label: 'Recent' },
+  { value: 'created', label: 'Created' },
+]
+
+type RunTimes = {
+  createdAt: string
+  startedAt?: string
+  finishedAt?: string
+  /** Precomputed by the server on the slim cross-project row, which carries no steps. */
+  lastActivityAt?: string
+  steps?: ReadonlyArray<{ startedAt?: string; finishedAt?: string }>
+}
+
+/** Newest first, comparing instants rather than strings: stored timestamps mix `…00Z` and
+ *  `…00.123Z`, which order wrongly as text within one second. Unparseable falls back to text. */
+export function compareIsoDesc(a: string, b: string): number {
+  const ta = Date.parse(a)
+  const tb = Date.parse(b)
+  if (Number.isNaN(ta) || Number.isNaN(tb)) return b.localeCompare(a)
+  return tb - ta
+}
+
+/** When a run last moved — the same rule as the server's `lastActivityAt` (`runs/run-index.ts`).
+ *  Steps count: a Continue is a new step, while the run's `startedAt` stays at the first launch. */
+export function lastActivityAt(run: RunTimes): string {
+  if (run.lastActivityAt !== undefined) return run.lastActivityAt
+  let latest = run.finishedAt ?? run.startedAt ?? run.createdAt
+  for (const step of run.steps ?? []) {
+    const at = step.finishedAt ?? step.startedAt
+    if (at !== undefined && compareIsoDesc(at, latest) < 0) latest = at
+  }
+  return latest
+}
+
+/** The timestamp a time column prints under `sortBy`, so the column reads in row order. */
+export function sortTimestamp(run: RunTimes, sortBy: SortBy): string {
+  return sortBy === 'created' ? run.createdAt : lastActivityAt(run)
+}
+
+/** The time column's heading under `sortBy`. */
+export function sortTimeLabel(sortBy: SortBy): string {
+  return sortBy === 'created' ? 'Created' : 'Updated'
+}
+
 /**
  * The Tasks table's sections (#935): `Pinned`, then everything else — or one unlabelled section
  * when nothing is pinned, or in the archived view, where the pin is ignored (see `sortRuns`).
@@ -236,6 +288,9 @@ export function taskSections<T extends Pick<RunRecord, 'id' | 'pinned' | 'dispat
  *
  * ISO-8601 strings compare lexicographically because every timestamp cezar writes is UTC
  * (`toISOString()` → trailing `Z`), the same reason `read-state.ts` compares them directly.
+ *
+ * This is the SIDEBAR's order, whose bucket headers explain the ranks. The Tasks tables use
+ * `sortTableRuns`, a flat time order.
  */
 export function sortRuns(runs: readonly RunRecord[], view: ListView): RunRecord[] {
   return runs
@@ -264,7 +319,26 @@ export function sortRuns(runs: readonly RunRecord[], view: ListView): RunRecord[
       if (a.status === 'queued' && b.status === 'queued') {
         return a.createdAt.localeCompare(b.createdAt)
       }
-      return b.createdAt.localeCompare(a.createdAt)
+      // Everything else — outcomes, needs-you, running — newest activity first, the time the
+      // row prints, so a task continued minutes ago is not filed under its creation date.
+      return compareIsoDesc(lastActivityAt(a), lastActivityAt(b))
+    })
+}
+
+/**
+ * The Tasks table's order: pins on top (#935 — the row's pin icon says why), then strictly by
+ * the `sortBy` time, newest first, so the time column reads in row order. Pins are ignored in
+ * the archived view, as in `sortRuns`.
+ */
+export function sortTableRuns(runs: readonly RunRecord[], view: ListView, sortBy: SortBy): RunRecord[] {
+  return runs
+    .filter((run) => (view === 'archived' ? run.archived : !run.archived))
+    .sort((a, b) => {
+      if (view !== 'archived') {
+        const pin = Number(Boolean(b.pinned)) - Number(Boolean(a.pinned))
+        if (pin !== 0) return pin
+      }
+      return compareIsoDesc(sortTimestamp(a, sortBy), sortTimestamp(b, sortBy))
     })
 }
 

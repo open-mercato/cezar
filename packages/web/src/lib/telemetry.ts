@@ -2,9 +2,11 @@ import { lazy, useEffect, type ComponentType, type LazyExoticComponent } from 'r
 import { useLocation } from 'react-router'
 
 import {
+  attachmentCountBucket,
   TELEMETRY_ROUTE_SEGMENTS,
   type AddProjectDialog,
   type MessageSurface,
+  type SkillsUpdateDropOutcome,
   type TelemetryErrorInput,
 } from '@open-mercato/cezar-api-client'
 
@@ -12,6 +14,7 @@ import { useHealth, useProjects } from '@/api/queries'
 import { onDangerToast } from '@/components/ui/toaster'
 import { recentFailedRequest, type FailedRequest } from '@/lib/failed-request'
 import { SID_HEADER, sid } from '@/lib/sid'
+import { reloadForStaleBuild } from '@/lib/stale-build'
 
 /**
  * Cockpit half of the opt-in telemetry (`packages/cezar/src/telemetry.ts`, docs/telemetry.md). The
@@ -54,9 +57,27 @@ export function trackDiffCommentAdded(kind: 'single_line' | 'multi_line'): void 
   send('/api/v1/telemetry/event', { event: 'diff_comment_added', label: kind })
 }
 
+/** A sent message carried attachments (telemetry 7054e5f2) — only the count's bucket, after the
+ *  send landed. */
+export function trackAttachmentsSent(count: number): void {
+  if (count < 1) return
+  send('/api/v1/telemetry/event', { event: 'attachments_sent', label: attachmentCountBucket(count) })
+}
+
+/** A send that hit an expired staged upload, after the automatic re-stage and resend settled. */
+export function trackAttachmentsRestaged(outcome: 'recovered' | 'failed'): void {
+  send('/api/v1/telemetry/event', { event: 'attachments_restaged', label: outcome })
+}
+
 /** One of the "Add project" dialogs was opened (New project, Clone from GitHub, Open local folder). */
 export function trackAddProjectOpened(dialog: AddProjectDialog): void {
   send('/api/v1/telemetry/event', { event: 'add_project_opened', label: dialog })
+}
+
+/** A skills-update apply got no answer; how following the server's state ended. A `recovered`
+ *  drop shows no error, so this is the only signal it happened (telemetry edd8c83e). */
+export function trackSkillsUpdateApplyDropped(outcome: SkillsUpdateDropOutcome): void {
+  send('/api/v1/telemetry/event', { event: 'skills_update_apply_dropped', label: outcome })
 }
 
 /** Whether a pathname is a page the user actually sees. Everything else outside these roots is
@@ -182,7 +203,7 @@ function assetFile(url: string | undefined): string | null {
 /** Errors already reported, so the window hooks don't report a chunk failure a second time. */
 const reported = new WeakSet<object>()
 /** Last report per throttle slot: toasts get their own, so a repeated toast never hides a crash. */
-const lastErrorAt = { error: 0, toast: 0 }
+const lastErrorAt = { error: 0, toast: 0, staging: 0 }
 
 /** An uncaught `ApiError(0)` — the server never answered — carries its transport cause too. */
 function unreachableContext(err: Error): Context {
@@ -203,7 +224,8 @@ function reportClientError(
   session.errors += 1
   // Don't flood: at most one cockpit error report per 10 s (the server throttles per error too).
   const now = Date.now()
-  const slot = handler === 'toast' ? 'toast' : 'error'
+  // Own slots, so a burst of toasts or staging failures cannot mute a real crash report.
+  const slot = handler === 'toast' ? 'toast' : handler === 'attachment-staging' ? 'staging' : 'error'
   if (now - lastErrorAt[slot] < 10_000) return
   lastErrorAt[slot] = now
   // A thrown non-Error (a string, a bare `window.error` message) has no stack of its own. Never
@@ -321,6 +343,32 @@ function reportErrorToast(message: string): void {
   reportClientError(scrubToastMessage(message), 'toast', { type, context })
 }
 
+/** A composer attachment that could not be staged (telemetry 7054e5f2). The send still works —
+ *  the bytes ride inline — which is exactly why nobody would notice a broken uploads store
+ *  without this report. */
+export function reportAttachmentStagingFailed(error: unknown): void {
+  const status = (error as { status?: unknown } | null)?.status
+  reportClientError(error, 'attachment-staging', {
+    code: 'attachment_stage_failed',
+    context: { 'request.route': '/api/v1/workspace/uploads', ...(typeof status === 'number' ? { 'request.status': status } : {}) },
+  })
+}
+
+/** A dictation the browser refused or broke off (telemetry 38ccdbdc, 252d00a6). One fingerprint
+ *  for every Web Speech error code — the code rides in context — so `not-allowed` and
+ *  `service-not-allowed` stop splitting into separate groups by their toast text. */
+export function reportDictationFailed(errorCode: string): void {
+  reportClientError(new Error('Dictation failed'), 'toast', {
+    type: 'DictationError',
+    code: 'dictation_failed',
+    fingerprint: 'cockpit:dictation_failed',
+    context: {
+      'dictation.error': /^[a-z][a-z-]{0,63}$/.test(errorCode) ? errorCode : 'other',
+      'dictation.secure_context': window.isSecureContext !== false,
+    },
+  })
+}
+
 /** `React.lazy` that says WHICH page failed when its bundle can't load. Engines word the failure
  *  differently (WebKit: "Importing a module script failed.", Chromium: "Failed to fetch
  *  dynamically imported module") and WebKit sends no stack, so these share one code and one
@@ -332,6 +380,8 @@ export function lazyRoute<T extends ComponentType<any>>(
 ): LazyExoticComponent<T> {
   return lazy(() =>
     load().catch((error: unknown) => {
+      // Stale shell after an update: keep the Suspense fallback up while the page reloads.
+      if (reloadForStaleBuild()) return new Promise<never>(() => {})
       reportClientError(error, 'lazy-route', {
         code: 'chunk_load_failed',
         fingerprint: 'cockpit:chunk_load_failed',
@@ -380,12 +430,15 @@ export function Telemetry() {
       reportClientError(e.reason, 'unhandledrejection'),
     )
     // Vite's own signal that a preloaded dependency of a dynamic import failed to load.
-    window.addEventListener('vite:preloadError', (e) =>
+    window.addEventListener('vite:preloadError', (e) => {
+      // A reload is the recovery. No preventDefault: that makes Vite resolve the import with
+      // `undefined`, and callers expect the rejection (lazyRoute holds its fallback on it).
+      if (reloadForStaleBuild()) return
       reportClientError((e as Event & { payload?: unknown }).payload, 'vite:preloadError', {
         code: 'chunk_load_failed',
         fingerprint: 'cockpit:chunk_load_failed',
-      }),
-    )
+      })
+    })
     onDangerToast(reportErrorToast)
   }, [])
 

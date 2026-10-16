@@ -120,6 +120,19 @@ describe('isLoopbackHost (our own bind host)', () => {
   });
 });
 
+describe('resolveCapabilities — terminal (CEZ_TERMINAL)', () => {
+  it('follows localHandoff when unset: on locally, off when hosted', () => {
+    expect(resolveCapabilities({}, '127.0.0.1').terminal).toBe(true);
+    expect(resolveCapabilities({ CEZ_REMOTE: '1' }, undefined).terminal).toBe(false);
+    expect(resolveCapabilities({}, '0.0.0.0').terminal).toBe(false);
+  });
+
+  it('=1 opts a hosted cockpit in; =0 turns it off everywhere', () => {
+    expect(resolveCapabilities({ CEZ_REMOTE: '1', CEZ_TERMINAL: '1' }, '0.0.0.0').terminal).toBe(true);
+    expect(resolveCapabilities({ CEZ_TERMINAL: '0' }, '127.0.0.1').terminal).toBe(false);
+  });
+});
+
 describe('resolveCapabilities — localHandoff', () => {
   it('is on for a default local bind', () => {
     expect(resolveCapabilities({}, undefined).localHandoff).toBe(true);
@@ -157,6 +170,7 @@ describe('resolveCapabilities — followups (#471)', () => {
   it('is independent of the deployment mode', () => {
     expect(resolveCapabilities({ CEZ_FOLLOWUPS: '1', CEZ_REMOTE: '1' }, '0.0.0.0')).toEqual({
       localHandoff: false,
+      terminal: false,
       followups: true,
       singleProject: false,
       automations: true,

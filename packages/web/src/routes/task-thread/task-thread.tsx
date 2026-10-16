@@ -34,6 +34,7 @@ import { useDiffComments } from './diff-comments'
 import { TaskComposer, TaskDock } from './task-composer'
 import { WorkingIndicator } from './thread-items'
 import { useContinueAction } from './follow-up-engine'
+import { useDeliverPrompt } from './deliver-prompt'
 import { AgentsDock } from './agents-dock'
 import { PlanDock, planCounts } from './plan-dock'
 import { SkillsDock } from './skills-dock'
@@ -181,6 +182,7 @@ export function ThreadView({
   currentThread = thread,
   history,
   onMarkedUnread,
+  embedded = false,
 }: {
   run: ApiRun
   thread: ThreadState
@@ -190,6 +192,8 @@ export function ThreadView({
    *  auto-mark-read effect. Optional: every test that drives this view with a fixture, and the
    *  header's other three tabs, have no such effect to suppress. */
   onMarkedUnread?: (runId: string) => void
+  /** A task-workspace column: the workspace draws the one run header above every column. */
+  embedded?: boolean
 }) {
   const footer = threadFooter(run.status, run.error, isAwaitingAnswer(run))
   const markedUnread = useCallback(() => onMarkedUnread?.(run.id), [onMarkedUnread, run.id])
@@ -217,6 +221,10 @@ export function ThreadView({
   const continueAction = useContinueAction(run)
   const hasContinuation = !sessionOpen && !queued && continueAction.available
   const continuable = hasContinuation && continueAction.canContinue
+  // The footer's one-click Continue rides the same delivery seam as the composer's (deliver-prompt):
+  // its record can be just as stale, and a `run is still active` refusal means the run is already
+  // live — refetch and drop it, never the false failure a raw `continueWith` toasted (77117b95).
+  const deliverPrompt = useDeliverPrompt(run, continueAction.continueWith, { surface: null })
   // A closed session can never settle its in-flight items — nothing in the reducer rewrites a
   // `running` item on `session.ended`, so an interrupted fan-out stays `running` in the
   // persisted stream forever. Without this, reopening it pulses `Agents · 0/1` above a dead
@@ -322,7 +330,7 @@ export function ThreadView({
 
   return (
     <div data-route="task-thread" data-run-id={run.id} className="flex min-h-full flex-col">
-      <RunHeader
+      {embedded ? null : <RunHeader
         run={run}
         planTally={planTally}
         onMarkedUnread={markedUnread}
@@ -330,7 +338,7 @@ export function ThreadView({
         // continuation choice as the dock. One hook owns both renderings, so a header pick is
         // exactly what the next composer submission sends — no second, drifting engine state.
         continuationEngine={continuable ? continueAction.pills : undefined}
-      />
+      />}
 
       {/* Row spacing lives on each thread row (pb-2.5, both render modes measure alike);
           this gap only separates the sections — rows, empty state, footer, review panel. */}
@@ -395,7 +403,7 @@ export function ThreadView({
               // Offered whenever there is a session to reopen — not only once the provider check
               // has passed: while it loads (or the provider is disconnected) the button is there,
               // greyed, saying why, instead of the advice silently degrading to plain text.
-              onContinue={hasContinuation ? () => continueAction.continueWith('', []) : undefined}
+              onContinue={hasContinuation ? () => deliverPrompt('', []) : undefined}
               blockedReason={
                 continuable
                   ? undefined

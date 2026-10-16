@@ -151,19 +151,18 @@ afterAll(async () => {
 })
 
 describe('the Changes tab against a live dry run', () => {
-  it('the Session header tab navigates to /changes: tree, toolbar and the real diff', () => {
+  it('the Changes card shows tree, toolbar and the real diff', () => {
     browser.goto(`${baseUrl}${scoped(`/tasks/${runId}`)}`)
-    browser.waitForFunction(`document.querySelector('[data-slot="run-tabs"]') !== null`)
-    browser.click(`[data-slot="run-tabs"] a[href="${scoped(`/tasks/${runId}/changes`)}"]`)
+    browser.waitForFunction(`document.querySelector('[data-slot="layout-card"][data-fixed="changes"]') !== null`)
+    browser.click(`[data-slot="layout-card"][data-fixed="changes"]`)
 
-    // Client-side navigation into the lazy chunk — wait for the toolbar to exist.
+    // A layout is not a URL (spec §5.3): the card swaps the stage in place.
     browser.waitForFunction(`document.querySelector('[data-slot="git-toolbar"]') !== null`)
-    expect(browser.url()).toBe(`${baseUrl}${scoped(`/tasks/${runId}/changes`)}`)
 
-    // The Changes tab is the active one now.
+    // The Changes card is the active one now.
     expect(
       browser.evaluate(
-        `document.querySelector('[data-slot="run-tabs"] a[aria-current="page"]').textContent`,
+        `document.querySelector('[data-slot="layout-card"][data-active]').textContent.trim()`,
       ),
     ).toBe('Changes')
 
@@ -257,15 +256,14 @@ describe('the Changes tab against a live dry run', () => {
     browser.waitForFunction(`document.querySelector('[data-slot="tree-file"][data-path="edited-by-e2e.md"]') !== null`)
   })
 
-  it('the Files tab opens the worktree browser under the same header (deep coverage: task-files.e2e.ts)', () => {
-    browser.click(`[data-slot="run-tabs"] a[href="${scoped(`/tasks/${runId}/files`)}"]`)
+  it('the Code card opens the worktree browser under the same header (deep coverage: task-files.e2e.ts)', () => {
+    browser.click(`[data-slot="layout-card"][data-fixed="files"]`)
     browser.waitForFunction(`document.querySelector('[data-route="task-files"] [data-slot="files-tree"]') !== null`)
-    expect(browser.url()).toBe(`${baseUrl}${scoped(`/tasks/${runId}/files`)}`)
     expect(
       browser.evaluate(
-        `document.querySelector('[data-slot="run-tabs"] a[aria-current="page"]').textContent`,
+        `document.querySelector('[data-slot="layout-card"][data-active]').textContent.trim()`,
       ),
-    ).toBe('Files')
+    ).toBe('Code')
   })
 
   it('below md the segments stay tappable and the diff forces unified+wrap (toggles gone)', () => {
@@ -287,10 +285,8 @@ describe('the Changes tab against a live dry run', () => {
         `(() => { const el = document.querySelector('[data-slot="changes-tree"]'); return el === null || el.offsetParent === null })()`,
       ),
     ).toBe(true)
-    // The tabs remain a tappable segment row and the page does not overflow sideways.
-    // Session / Changes / Commits / Files / Graph / Notes — the whole row survives the phone
-    // framing (it scrolls within itself rather than widening the page).
-    expect(browser.count('[data-slot="run-tabs"] a')).toBe(6)
+    // The layout strip folds what does not fit into `…` rather than widening the page.
+    expect(browser.count('[data-slot="layout-card"]')).toBeGreaterThan(0)
     expect(browser.evaluate(`document.documentElement.scrollWidth <= window.innerWidth`)).toBe(true)
 
     browser.screenshot(`${artifactsDir}/changes-mobile.png`)

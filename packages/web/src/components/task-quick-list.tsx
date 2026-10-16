@@ -19,6 +19,7 @@ import { isRunActive } from '@/lib/run-status'
 import { directionalUsageText } from '@/components/directional-usage'
 import {
   groupRuns,
+  lastActivityAt,
   listCounts,
   refPrefixMatches,
   runTitle,
@@ -453,7 +454,7 @@ const RunRow = React.memo(function RunRow({
     ? ''
     : queuePosition !== null
       ? `#${queuePosition}`
-      : shortAge(run.finishedAt ?? run.createdAt, now)
+      : shortAge(lastActivityAt(run), now)
 
   const subtasks = subtaskLabel(childCount)
   const dispatchKind = dispatchKindLabel(run)
@@ -645,7 +646,7 @@ export function TaskQuickListContainer() {
   const health = useHealth()
   const activeProjectId = useActiveProjectId()
   const runs = useRunsForProject(activeProjectId, health.data?.bootProject ?? null)
-  const pinMutation = usePinRun()
+  const pinMutation = usePinRun('sidebar')
   const visibility = usageMetricVisibility(health.data)
   const [view, setView] = useListView()
   // The remembered Regular | Automations | All split the Tasks tables set — the sidebar shows the
@@ -667,7 +668,7 @@ export function TaskQuickListContainer() {
       ),
     [pinMutation.mutate],
   )
-  const archiveMutation = useArchiveRun()
+  const archiveMutation = useArchiveRun('sidebar')
   const onToggleArchive = React.useCallback(
     (run: RunRecord, archived: boolean) =>
       archiveMutation.mutate(

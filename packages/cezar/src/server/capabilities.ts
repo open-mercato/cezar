@@ -156,12 +156,21 @@ export function isLoopbackHostHeader(host: string | null | undefined): boolean {
  *  `dispatch` is boot-time for a third reason: the dispatch prompt is composed into a run's system
  *  prompt when the run STARTS, so flipping the flag mid-flight would open (or close) the routes
  *  while every run already in the tree kept its prompt. Set it and restart. */
+/** `CEZ_TERMINAL` tri-state: unset follows `localHandoff` (an interactive shell is the most
+ *  exposure a hosted cockpit can add), `=1` opts a hosted cockpit in, `=0` turns it off everywhere. */
+function terminalEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
+  if (env.CEZ_TERMINAL === '1') return true;
+  if (env.CEZ_TERMINAL === '0') return false;
+  return env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost);
+}
+
 export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHost?: string): Capabilities {
   const hideAllUsage = env.CEZ_HIDE_TOKEN_METRICS === '1';
   const tokenUsageMetrics = !hideAllUsage && env.CEZ_HIDE_TOKEN_USAGE !== '1';
   const costMetrics = !hideAllUsage && env.CEZ_HIDE_COST !== '1';
   return {
     localHandoff: env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost),
+    terminal: terminalEnabled(env, bindHost),
     // Deliberately not re-derived here: RunManager enforces the same predicate,
     // and two spellings of "is the inbox on" would eventually disagree.
     followups: followupsEnabled(env),

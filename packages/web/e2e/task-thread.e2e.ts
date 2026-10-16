@@ -391,20 +391,22 @@ describe('task thread', () => {
     ).toBe('cez/fcd519dd')
   })
 
-  it('tabs point at the routed Session/Changes/Commits/Files/Graph/Notes surfaces; the done run offers the closed-run actions', () => {
-    const tabs = browser.evaluate(`[...document.querySelectorAll('[data-slot="run-tabs"] a')].map((a) => ({
-      text: a.textContent,
-      href: a.getAttribute('href'),
-      current: a.getAttribute('aria-current'),
-    }))`) as Array<{ text: string; href: string; current: string | null }>
-    expect(tabs).toEqual([
-      { text: 'Session', href: scoped(`/tasks/${RUN_ID}`), current: 'page' },
-      { text: 'Changes', href: scoped(`/tasks/${RUN_ID}/changes`), current: null },
-      { text: 'Commits', href: scoped(`/tasks/${RUN_ID}/commits`), current: null },
-      { text: 'Files', href: scoped(`/tasks/${RUN_ID}/files`), current: null },
-      { text: 'Graph', href: scoped(`/tasks/${RUN_ID}/graph`), current: null },
-      { text: 'Notes', href: scoped(`/tasks/${RUN_ID}/notes`), current: null },
+  it('the layout strip replaces the route tabs (spec 2026-10-07-task-workspace); the done run offers the closed-run actions', () => {
+    const cards = browser.evaluate(`[...document.querySelectorAll('[data-slot="layout-card"]')].map((card) => ({
+      text: card.textContent.trim(),
+      active: card.hasAttribute('data-active'),
+    }))`) as Array<{ text: string; active: boolean }>
+    // A local cockpit allows a shell, so Terminal is a fixed card too.
+    expect(cards).toEqual([
+      { text: 'Chat', active: true },
+      { text: 'Graph', active: false },
+      { text: 'Changes', active: false },
+      { text: 'Commits', active: false },
+      { text: 'Code', active: false },
+      { text: 'Terminal', active: false },
     ])
+    // Notes keeps its own page, reached from the strip's trailing icon.
+    expect(browser.count(`[data-slot="run-tabs"] a[href="${scoped(`/tasks/${RUN_ID}/notes`)}"]`)).toBe(1)
 
     // Read/unread, Pin and Archive are icon toggles now (aria-label, no visible text) — Continue
     // moved to the composer, Notes to its own tab.

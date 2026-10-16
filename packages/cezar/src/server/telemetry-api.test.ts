@@ -63,6 +63,20 @@ describe('telemetry routes', () => {
     expect(track).not.toHaveBeenCalled();
   });
 
+  it('labels archive and pin with the button that sent them, never the task status', async () => {
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+    expect((await post(`/api/v1/runs/${run.id}/pin`, { surface: 'sidebar' })).status).toBe(200);
+    expect(track).toHaveBeenCalledWith('task_pinned', { label: 'sidebar' }, { sid: undefined });
+    expect((await post(`/api/v1/runs/${run.id}/archive`, { archived: true, surface: 'task_view' })).status).toBe(200);
+    expect(track).toHaveBeenCalledWith('task_archived', { label: 'task_view' }, { sid: undefined });
+    expect((await post(`/api/v1/runs/${run.id}/archive`, { archived: false })).status).toBe(200);
+    expect(track).toHaveBeenCalledWith('task_unarchived', { label: 'api' }, { sid: undefined });
+
+    vi.mocked(track).mockClear();
+    expect((await post(`/api/v1/runs/${run.id}/pin`, { surface: 'my-secret-repo' })).status).toBe(400);
+    expect(track).not.toHaveBeenCalled();
+  });
+
   it('relays only the closed event labels', async () => {
     expect((await post('/api/v1/telemetry/event', { event: 'message_sent', label: 'github' })).status).toBe(204);
     expect(track).toHaveBeenCalledWith('message_sent', { label: 'github' }, { sid: undefined });
@@ -80,6 +94,31 @@ describe('telemetry routes', () => {
     }
     vi.mocked(track).mockClear();
     expect((await post('/api/v1/telemetry/event', { event: 'add_project_opened', label: 'my-secret-repo' })).status).toBe(400);
+    expect(track).not.toHaveBeenCalled();
+  });
+
+  /** Telemetry 7054e5f2: attachment counts as buckets, re-stage outcomes — closed sets only. */
+  it('relays attachments_sent and attachments_restaged with their closed labels only', async () => {
+    for (const label of ['1', '2-4', '5-10', '11-20']) {
+      expect((await post('/api/v1/telemetry/event', { event: 'attachments_sent', label })).status).toBe(204);
+      expect(track).toHaveBeenCalledWith('attachments_sent', { label }, { sid: undefined });
+    }
+    for (const label of ['recovered', 'failed']) {
+      expect((await post('/api/v1/telemetry/event', { event: 'attachments_restaged', label })).status).toBe(204);
+    }
+    vi.mocked(track).mockClear();
+    expect((await post('/api/v1/telemetry/event', { event: 'attachments_sent', label: '7' })).status).toBe(400);
+    expect((await post('/api/v1/telemetry/event', { event: 'attachments_restaged', label: 'shot.png' })).status).toBe(400);
+    expect(track).not.toHaveBeenCalled();
+  });
+
+  it('relays skills_update_apply_dropped with its closed outcome labels only', async () => {
+    for (const label of ['recovered', 'not_applied', 'unreachable', 'timed_out']) {
+      expect((await post('/api/v1/telemetry/event', { event: 'skills_update_apply_dropped', label })).status).toBe(204);
+      expect(track).toHaveBeenCalledWith('skills_update_apply_dropped', { label }, { sid: undefined });
+    }
+    vi.mocked(track).mockClear();
+    expect((await post('/api/v1/telemetry/event', { event: 'skills_update_apply_dropped', label: 'fetch failed' })).status).toBe(400);
     expect(track).not.toHaveBeenCalled();
   });
 

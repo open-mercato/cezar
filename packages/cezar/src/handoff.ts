@@ -134,7 +134,7 @@ export function seedHandoffFile(dataDir: string, run: HandoffSeed): string {
     `**Workflow:** ${run.workflow}\n` +
     (run.branch ? `**Branch:** ${run.branch}\n` : '') +
     (run.worktreePath ? `**Worktree:** ${run.worktreePath}\n` : '') +
-    `\n## Goal\n\n${run.task.trim()}\n\n` +
+    `\n## Goal\n\n${run.task.trim() || '(given as attachments only)'}\n\n` +
     `## Progress log\n\n` +
     `## Resume notes\n`;
   try {

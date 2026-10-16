@@ -43,7 +43,18 @@ export interface CommitListItem {
   shaLabel: string
 }
 
-export function CommitList({ slot, commits, className }: { slot: string; commits: CommitListItem[]; className?: string }) {
+export function CommitList({
+  slot,
+  commits,
+  className,
+  onSelect,
+}: {
+  slot: string
+  commits: CommitListItem[]
+  className?: string
+  /** Pick a commit in place instead of navigating — a task-workspace column has no URL of its own. */
+  onSelect?: (sha: string) => void
+}) {
   const virtual = commits.length > COMMIT_VIRTUALIZE_THRESHOLD
   const containerRef = useRef<HTMLDivElement | null>(null)
   const scrollElRef = useRef<HTMLElement | null>(null)
@@ -71,7 +82,7 @@ export function CommitList({ slot, commits, className }: { slot: string; commits
     return () => window.removeEventListener('resize', measure)
   }, [virtual])
 
-  const rows = commits.map((commit) => <CommitRow key={commit.sha} commit={commit} />)
+  const rows = commits.map((commit) => <CommitRow key={commit.sha} commit={commit} onSelect={onSelect} />)
 
   return (
     <div
@@ -96,7 +107,7 @@ export function CommitList({ slot, commits, className }: { slot: string; commits
   )
 }
 
-function CommitRow({ commit }: { commit: CommitListItem }) {
+function CommitRow({ commit, onSelect }: { commit: CommitListItem; onSelect?: (sha: string) => void }) {
   return (
     // Not a <ul>/<li>: virtua inserts its own positioned wrapper between the list and the
     // items, which would break that parent/child contract. A plain list of links reads the
@@ -106,6 +117,15 @@ function CommitRow({ commit }: { commit: CommitListItem }) {
         data-slot="commit-row"
         data-sha={commit.sha}
         to={commit.href}
+        onClick={
+          onSelect
+            ? (event) => {
+                if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return
+                event.preventDefault()
+                onSelect(commit.sha)
+              }
+            : undefined
+        }
         className="flex min-w-0 items-baseline gap-3 rounded-sm px-2 py-2.5 hover:bg-muted"
       >
         <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{commit.shaLabel}</span>

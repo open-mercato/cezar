@@ -8,6 +8,8 @@ import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { useIsDesktop } from '@/lib/use-desktop'
 
+import { cn } from '@/lib/utils'
+import { useRememberedState } from '@/lib/view-memory'
 import { RunHeader } from '../task-thread/run-header'
 import { FilePreview } from './file-preview'
 import { FilesTree } from './files-tree'
@@ -34,18 +36,28 @@ export function TaskFilesRoute() {
   return <FilesView key={run.data.id} run={run.data} />
 }
 
-function FilesView({ run }: { run: ApiRun }) {
+export function FilesView({
+  run,
+  embedded = false,
+  stateKey,
+}: {
+  run: ApiRun
+  /** `embedded` drops the run header for a task-workspace column (spec `2026-10-07-task-workspace` §5.1);
+   *  `stateKey` remembers the selection across layout switches (`lib/view-memory.ts`). */
+  embedded?: boolean
+  stateKey?: string
+}) {
   // The root listing doubles as the "is there a worktree at all?" probe — a 409 here is the
   // server's answer for the whole view, same stance as the Changes tab's /changes 409.
   const root = useRunFile(run.id, '')
-  const [selected, setSelected] = useState<string | null>(null)
+  const [selected, setSelected] = useRememberedState<string | null>(stateKey, null)
   const desktop = useIsDesktop()
 
   const refused = root.isError && root.error instanceof ApiError && root.error.status === 409
 
   return (
-    <div data-route="task-files" className="flex min-h-full flex-col md:h-full">
-      <RunHeader run={run} tab="files" />
+    <div data-route="task-files" className={cn('flex min-h-full flex-col md:h-full', embedded && '@container')}>
+      {embedded ? null : <RunHeader run={run} tab="files" />}
 
       {root.isPending ? (
         <p data-slot="files-loading" className="px-4 py-6 text-center text-xs text-soft-foreground md:px-6">
@@ -67,7 +79,11 @@ function FilesView({ run }: { run: ApiRun }) {
               stack and the page IS the pane, so neither has a scroller of its own. */}
           <aside
             data-slot="files-tree-pane"
-            className="w-full shrink-0 md:w-60 md:overflow-y-auto md:overscroll-contain md:py-4 lg:w-72"
+            className={cn(
+              'w-full shrink-0 md:overflow-y-auto md:overscroll-contain md:py-4',
+              // Embedded, sized by the column (container query) rather than the window.
+              embedded ? 'md:w-44 @xl:w-60 @4xl:w-72' : 'md:w-60 lg:w-72',
+            )}
           >
             <FilesTree runId={run.id} selected={selected} onSelect={setSelected} />
           </aside>

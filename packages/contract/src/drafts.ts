@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { attachmentInputSchema } from './runs.ts';
+import { attachmentInputSchema, MAX_ATTACHMENTS_PER_MESSAGE } from './runs.ts';
 
 /**
  * Per-run, per-surface DRAFTS — the unsent text (and pasted screenshots) of every editable input
@@ -18,7 +18,7 @@ import { attachmentInputSchema } from './runs.ts';
 export const DRAFT_TEXT_MAX = 100_000;
 
 /** Attachments per surface — composer parity (`MAX_ATTACHMENTS`). */
-export const DRAFT_MAX_IMAGES = 4;
+export const DRAFT_MAX_IMAGES = MAX_ATTACHMENTS_PER_MESSAGE;
 
 /** Surfaces per run. A task has five editable inputs plus one editor per queued message; 16 is
  *  well past any real task and keeps one run's draft file bounded. */
@@ -89,7 +89,7 @@ export type SetRunDraftInput = z.input<typeof setRunDraftInputSchema>;
 
 /**
  * `POST /runs/:id/drafts/:surface/images` — one attachment, base64, on the same terms as a live
- * message's (`imageInputSchema`, ≤4 per surface, ~5 MB decoded each). `name` is the composer's
+ * message's (`imageInputSchema`, ≤`DRAFT_MAX_IMAGES` per surface, ~5 MB decoded each). `name` is the composer's
  * thumbnail label; an omitted one degrades to a generic label rather than failing an upload.
  */
 export const draftImageInputSchema = attachmentInputSchema.extend({

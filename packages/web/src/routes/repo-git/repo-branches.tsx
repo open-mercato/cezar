@@ -90,6 +90,8 @@ export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: 
         <ul data-slot="repo-branch-list" className="mt-2 flex max-w-xl flex-col divide-y divide-border">
           {filteredBranches.map((name) => {
             const current = name === info.branch
+            // git refuses to check out a branch another worktree holds (telemetry da5ca728).
+            const heldAt = repo.checkedOutElsewhere?.[name]
             return (
               <li key={name} data-slot="branch-row" data-branch={name} className="flex min-h-9 items-center gap-2 py-1">
                 <GitBranchIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
@@ -101,6 +103,14 @@ export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: 
                   >
                     <CheckIcon aria-hidden="true" className="size-3" />
                     current
+                  </span>
+                ) : heldAt ? (
+                  <span
+                    data-slot="branch-elsewhere"
+                    title={`Checked out in ${heldAt}`}
+                    className="ml-auto shrink-0 text-[11px] text-soft-foreground"
+                  >
+                    in another worktree
                   </span>
                 ) : (
                   <Button
