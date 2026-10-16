@@ -72,16 +72,18 @@ describe('settings → appearance against the live dry-run server', () => {
     browser.goto(`${baseUrl}/settings/global/appearance`)
     browser.waitForFunction(`document.querySelector('[data-route="settings-global-appearance"]') !== null`)
 
-    // The GLOBAL nav: appearance, notifications, resources, skills, agent accounts and projects,
+    // The GLOBAL nav: appearance, notifications, resources, skills, workspace secrets, agent accounts, projects and privacy,
     // with nothing project-scoped.
     const nav = '[data-slot="settings-nav"][data-scope="global"]'
-    expect(browser.count(`${nav} [data-section]`)).toBe(6)
+    expect(browser.count(`${nav} [data-section]`)).toBe(8)
     expect(browser.count(`${nav} [data-section="appearance"]`)).toBe(1)
     expect(browser.count(`${nav} [data-section="notifications"]`)).toBe(1)
     expect(browser.count(`${nav} [data-section="resources"]`)).toBe(1)
     expect(browser.count(`${nav} [data-section="skills"]`)).toBe(1)
     expect(browser.count(`${nav} [data-section="accounts"]`)).toBe(1)
+    expect(browser.count(`${nav} [data-section="workspace-secrets"]`)).toBe(1)
     expect(browser.count(`${nav} [data-section="projects"]`)).toBe(1)
+    expect(browser.count(`${nav} [data-section="privacy"]`)).toBe(1)
     // Project sections live in the OTHER area; hidden registry entries are nowhere at all.
     expect(browser.count(`${nav} [data-section="agents"]`)).toBe(0)
     expect(browser.count(`${nav} [data-section="bookmarklets"]`)).toBe(0)
