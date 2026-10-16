@@ -221,7 +221,7 @@ export function ThreadView({
   // The footer's one-click Continue rides the same delivery seam as the composer's (deliver-prompt):
   // its record can be just as stale, and a `run is still active` refusal means the run is already
   // live — refetch and drop it, never the false failure a raw `continueWith` toasted (77117b95).
-  const deliverPrompt = useDeliverPrompt(run, continueAction.continueWith)
+  const deliverPrompt = useDeliverPrompt(run, continueAction.continueWith, { surface: null })
   // A closed session can never settle its in-flight items — nothing in the reducer rewrites a
   // `running` item on `session.ended`, so an interrupted fan-out stays `running` in the
   // persisted stream forever. Without this, reopening it pulses `Agents · 0/1` above a dead

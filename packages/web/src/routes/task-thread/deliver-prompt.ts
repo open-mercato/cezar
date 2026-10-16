@@ -66,8 +66,9 @@ export function useDeliverPrompt(
   opts: {
     wait?: (delayMs: number) => Promise<void>
     /** The `message_sent` label for a delivery that landed through this seam. Every caller of one
-     *  thread's composer is `existing_session`; the review gate's notes are `review`. */
-    surface?: Exclude<MessageSurface, 'cli'>
+     *  thread's composer is `existing_session`; the review gate's notes are `review`. `null` counts
+     *  nothing — the footer's one-click Continue was never a `message_sent` (#1473 review). */
+    surface?: Exclude<MessageSurface, 'cli'> | null
   } = {},
 ): DeliverPrompt {
   const { wait = delaySessionGapRetry, surface = 'existing_session' } = opts
@@ -81,7 +82,7 @@ export function useDeliverPrompt(
     async (text: string, images: AttachmentEntry[]) => {
       const deliver = async (path: DeliveryPath) => {
         const result = await (path === 'live' ? sendMessageAsync({ text, images }) : continueWith(text, images))
-        trackMessageSent(surface)
+        if (surface) trackMessageSent(surface)
         return result
       }
       const attempted = deliveryPath(run.status)

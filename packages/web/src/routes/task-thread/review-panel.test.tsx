@@ -217,6 +217,29 @@ describe('the review gate on the thread', () => {
     await waitFor(() => expect(notes.value).toBe(''))
   })
 
+  it('telemetry 77117b95: a send-back on a record that has drifted live lands the notes on the live session', async () => {
+    // The record still says `review`; the server has the run reopened (an auto-resume, a restart recovery).
+    const sent = stubFetch({
+      'POST /api/v1/runs/r1/continue': () => jsonResponse({ error: 'run is still active' }, 409),
+      'GET /api/v1/runs/r1': () => jsonResponse(run('running')),
+    })
+    renderWithProviders(<ReviewPanel run={run('review')} />)
+
+    const notes = screen.getByLabelText('Notes for the agent') as HTMLTextAreaElement
+    fireEvent.change(notes, { target: { value: 'fix the port handling' } })
+    const sendBack = screen.getByRole<HTMLButtonElement>('button', { name: /Send back/ })
+    await waitFor(() => expect(sendBack.disabled).toBe(false))
+    fireEvent.click(sendBack)
+
+    await waitFor(() => {
+      expect(sent.find((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/messages')).toMatchObject({
+        body: { text: 'Review feedback:\nfix the port handling' },
+      })
+    })
+    await waitFor(() => expect(notes.value).toBe(''))
+    expect(screen.queryByText('run is still active')).toBeNull()
+  })
+
   it('restores half-written review notes on return, and drops them once they go back (#939)', async () => {
     const sent = stubFetch({
       'GET /api/v1/runs/r1/drafts': () =>
