@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { autosaveCommit, createWorktree } from '../git-worktree.ts';
+import { autosaveCommit, commitAll, createWorktree } from '../git-worktree.ts';
 import { RunStore } from '../runs/store.ts';
 import { AUTOSAVE_INTERVAL_MS, periodicAutosaveEnabled, RunManager } from './run.ts';
 
@@ -23,6 +23,9 @@ interface TimerSeam {
   armAutosave(runId: string, state: TimerState): void;
   clearAutosaveTimer(state: TimerState): void;
   active: Map<string, unknown>;
+  checkArtifactSnapshots: Map<string, Map<string, string>>;
+  autosaveCheckpointBlockedRuns: Set<string>;
+  dispose(): void;
 }
 
 /**
@@ -131,13 +134,107 @@ describe('periodic autosave gate (#471)', () => {
     expect(status.trim()).toBe('?? check-output.txt');
   });
 
+  it('keeps unchanged check artifacts out of an explicit graph commit', async () => {
+    writeFileSync(join(worktreePath, 'work.txt'), 'agent progress for explicit commit\n');
+    writeFileSync(join(worktreePath, 'check-output.txt'), 'verification residue\n');
+
+    expect(await commitAll(worktreePath, 'explicit commit', ['check-output.txt'])).toMatchObject({ result: 'committed' });
+    const { stdout: files } = await run('git', ['show', '--format=', '--name-only', 'HEAD'], { cwd: worktreePath });
+    expect(files.trim().split('\n')).toEqual(['work.txt']);
+    expect(readFileSync(join(worktreePath, 'check-output.txt'), 'utf8')).toBe('verification residue\n');
+    const { stdout: status } = await run('git', ['status', '--porcelain'], { cwd: worktreePath });
+    expect(status.trim()).toBe('?? check-output.txt');
+  });
+
+  it('preserves tracked and untracked check residue, then reclaims a path after agent edits', async () => {
+    for (const path of ['check-output.txt', 'untracked-check.txt', 'tracked-check.txt', 'agent-edit.txt']) {
+      rmSync(join(worktreePath, path), { force: true });
+    }
+    await run('git', ['restore', '--', 'tracked-check.txt'], { cwd: worktreePath }).catch(() => undefined);
+    writeFileSync(join(worktreePath, 'tracked-check.txt'), 'check baseline\n');
+    await run('git', ['add', 'tracked-check.txt'], { cwd: worktreePath });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'check baseline'], { cwd: worktreePath });
+    writeFileSync(join(worktreePath, 'tracked-check.txt'), 'check residue\n');
+    writeFileSync(join(worktreePath, 'untracked-check.txt'), 'check residue\n');
+    writeFileSync(join(worktreePath, 'agent-edit.txt'), 'agent work\n');
+
+    expect(await commitAll(worktreePath, 'explicit check commit', ['tracked-check.txt', 'untracked-check.txt'])).toMatchObject({ result: 'committed' });
+    const { stdout: files } = await run('git', ['show', '--format=', '--name-only', 'HEAD'], { cwd: worktreePath });
+    expect(files.trim().split('\n')).toEqual(['agent-edit.txt']);
+    const { stdout: status } = await run('git', ['status', '--porcelain'], { cwd: worktreePath });
+    expect(status).toContain(' M tracked-check.txt');
+    expect(status).toContain('?? untracked-check.txt');
+
+    writeFileSync(join(worktreePath, 'tracked-check.txt'), 'agent reclaimed this path\n');
+    expect(await commitAll(worktreePath, 'commit reclaimed edit', ['untracked-check.txt'])).toMatchObject({ result: 'committed' });
+    const { stdout: reclaimed } = await run('git', ['show', '--format=', '--name-only', 'HEAD'], { cwd: worktreePath });
+    expect(reclaimed.trim().split('\n')).toEqual(['tracked-check.txt']);
+  });
+
   it('refuses a checkpoint when an excluded path cannot be reset, without losing work', async () => {
-    rmSync(join(worktreePath, 'check-output.txt'), { force: true });
+    for (const path of ['check-output.txt', 'untracked-check.txt', 'tracked-check.txt', 'agent-edit.txt']) {
+      rmSync(join(worktreePath, path), { force: true });
+    }
+    await run('git', ['restore', '--', 'agent-edit.txt', 'tracked-check.txt'], { cwd: worktreePath }).catch(() => undefined);
     writeFileSync(join(worktreePath, 'unsafe-work.txt'), 'keep this dirty\n');
 
     expect(await autosaveCommit(worktreePath, 'turn end', ['../outside-worktree.txt'])).toBe('failed');
     expect(readFileSync(join(worktreePath, 'unsafe-work.txt'), 'utf8')).toBe('keep this dirty\n');
     const { stdout: status } = await run('git', ['status', '--porcelain'], { cwd: worktreePath });
     expect(status.trim()).toBe('?? unsafe-work.txt');
+
+    writeFileSync(join(worktreePath, 'unsafe-explicit.txt'), 'keep this too\n');
+    expect(await commitAll(worktreePath, 'explicit unsafe', ['../outside-worktree.txt'])).toMatchObject({ result: 'failed' });
+    expect(readFileSync(join(worktreePath, 'unsafe-explicit.txt'), 'utf8')).toBe('keep this too\n');
+  });
+
+  it('retains continuation state until archive/delete makes it disposable', () => {
+    const seam = manager;
+    seam.checkArtifactSnapshots.set(runId, new Map([['check-output.txt', 'snapshot']]));
+    seam.autosaveCheckpointBlockedRuns.add(runId);
+    const record = store.getRun(runId)!;
+    record.steps.push({
+      id: 'agent', name: 'agent', kind: 'agent', status: 'done', iterations: 1,
+      tokensUsed: 0, sessionId: 'session-1',
+    });
+    expect(seam.checkArtifactSnapshots.has(runId)).toBe(true);
+    expect(seam.autosaveCheckpointBlockedRuns.has(runId)).toBe(true);
+    store.setArchived(runId, true);
+    expect(seam.checkArtifactSnapshots.has(runId)).toBe(false);
+    expect(seam.autosaveCheckpointBlockedRuns.has(runId)).toBe(false);
+
+    const deleted = store.createRun({ title: 'deleted', workflow: 'quick-task', task: 'deleted', steps: [] });
+    seam.checkArtifactSnapshots.set(deleted.id, new Map([['check-output.txt', 'snapshot']]));
+    seam.autosaveCheckpointBlockedRuns.add(deleted.id);
+    expect(store.deleteRun(deleted.id)).toBe(true);
+    expect(seam.checkArtifactSnapshots.has(deleted.id)).toBe(false);
+    expect(seam.autosaveCheckpointBlockedRuns.has(deleted.id)).toBe(false);
+  });
+
+  it('releases state when retention prunes archived and unarchived runs', () => {
+    const seam = manager;
+    const unarchived = store.createRun({ title: 'old unarchived', workflow: 'quick-task', task: 'old', steps: [] });
+    store.getRun(unarchived.id)!.createdAt = '2000-01-01T00:00:00.000Z';
+    seam.checkArtifactSnapshots.set(unarchived.id, new Map([['check-output.txt', 'snapshot']]));
+    seam.autosaveCheckpointBlockedRuns.add(unarchived.id);
+    for (let index = 0; index < 301; index++) {
+      store.createRun({ title: `unarchived-${index}`, workflow: 'quick-task', task: 'new', steps: [] });
+    }
+    expect(store.getRun(unarchived.id)).toBeUndefined();
+    expect(seam.checkArtifactSnapshots.has(unarchived.id)).toBe(false);
+    expect(seam.autosaveCheckpointBlockedRuns.has(unarchived.id)).toBe(false);
+
+    const archived = store.createRun({ title: 'old archived', workflow: 'quick-task', task: 'old', steps: [] });
+    store.getRun(archived.id)!.createdAt = '2000-01-01T00:00:00.000Z';
+    store.setArchived(archived.id, true);
+    seam.checkArtifactSnapshots.set(archived.id, new Map([['check-output.txt', 'snapshot']]));
+    seam.autosaveCheckpointBlockedRuns.add(archived.id);
+    for (let index = 0; index < 501; index++) {
+      const record = store.createRun({ title: `archived-${index}`, workflow: 'quick-task', task: 'old', steps: [] });
+      store.setArchived(record.id, true);
+    }
+    expect(store.getRun(archived.id)).toBeUndefined();
+    expect(seam.checkArtifactSnapshots.has(archived.id)).toBe(false);
+    expect(seam.autosaveCheckpointBlockedRuns.has(archived.id)).toBe(false);
   });
 });
