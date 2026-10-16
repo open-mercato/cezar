@@ -102,6 +102,16 @@ describe('AgentUpdateRequiredCard', () => {
       vi.unstubAllGlobals()
     }
   })
+
+  it('offers no button for a CLI that cannot update itself', () => {
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <AgentUpdateRequiredCard incident={{ kind: 'agent-update-required', id: 'v2:3:update', provider: 'codex' }} />
+      </QueryClientProvider>,
+    )
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(screen.getByRole('alert').textContent).toContain('the way you installed it')
+  })
 })
 
 /**

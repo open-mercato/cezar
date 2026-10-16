@@ -81,12 +81,12 @@ export function TaskThreadRoute() {
   const history = useRunHistory(id)
   const runStatus = run.data?.status
   const thread = useMemo(
-    () => reduceThread(history.visibleEvents, { activeTurn: runStatus === 'running' }),
-    [history.visibleEvents, runStatus],
+    () => reduceThread(history.visibleEvents, { activeTurn: runStatus === 'running', runner: run.data?.runner }),
+    [history.visibleEvents, runStatus, run.data?.runner],
   )
   const currentThread = useMemo(
-    () => reduceThread(history.currentEvents, { activeTurn: runStatus === 'running' }),
-    [history.currentEvents, runStatus],
+    () => reduceThread(history.currentEvents, { activeTurn: runStatus === 'running', runner: run.data?.runner }),
+    [history.currentEvents, runStatus, run.data?.runner],
   )
 
   // Read receipt (#unread-done-items): opening a finished task's thread marks it read — the same

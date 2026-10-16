@@ -653,12 +653,12 @@ export function ConversationColumn({
 }) {
   const history = useRunHistory(run.id)
   const thread = useMemo(
-    () => reduceThread(history.visibleEvents, { activeTurn: run.status === 'running' }),
-    [history.visibleEvents, run.status],
+    () => reduceThread(history.visibleEvents, { activeTurn: run.status === 'running', runner: run.runner }),
+    [history.visibleEvents, run.status, run.runner],
   )
   const currentThread = useMemo(
-    () => reduceThread(history.currentEvents, { activeTurn: run.status === 'running' }),
-    [history.currentEvents, run.status],
+    () => reduceThread(history.currentEvents, { activeTurn: run.status === 'running', runner: run.runner }),
+    [history.currentEvents, run.status, run.runner],
   )
   useRunRecordReconcile(run, history.visibleEvents)
 

@@ -387,6 +387,10 @@ export function ProviderAuthRequiredCard({
   )
 }
 
+/** The CLIs with a self-update cezar can run (`updateArgs` in `provider-auth.ts`); the rest
+ *  update the way they were installed, so the card says so instead of offering a 409. */
+const SELF_UPDATING = new Set<ThreadProviderAuthRequired['provider']>(['claude', 'opencode', 'cursor'])
+
 /** Follows an agent error saying its CLI is too old: hands the CLI's own update to a terminal,
  *  or shows the command to run when no terminal can be opened. */
 export function AgentUpdateRequiredCard({ incident }: { incident: ThreadAgentUpdateRequired }) {
@@ -416,19 +420,27 @@ export function AgentUpdateRequiredCard({ incident }: { incident: ThreadAgentUpd
       className="rounded-md border border-danger/30 bg-danger/5 px-3.5 py-3"
     >
       <p className="text-[13px] font-semibold text-foreground">{label} needs an update</p>
-      <p className="mt-1 text-xs text-muted-foreground">
-        Update it, then continue the task.
-      </p>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="mt-2"
-        disabled={update.isPending}
-        onClick={() => update.mutate()}
-      >
-        Update {label}
-      </Button>
+      {SELF_UPDATING.has(incident.provider) ? (
+        <>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Update it, then continue the task.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-2"
+            disabled={update.isPending}
+            onClick={() => update.mutate()}
+          >
+            Update {label}
+          </Button>
+        </>
+      ) : (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Update it the way you installed it, then continue the task.
+        </p>
+      )}
       {manual ? (
         <div data-slot="agent-update-manual" className="mt-2 text-xs text-muted-foreground">
           <p>{manual.message}</p>

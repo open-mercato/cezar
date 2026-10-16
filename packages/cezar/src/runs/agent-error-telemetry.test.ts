@@ -5,9 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isOutdatedBackendError } from '../core/agent-errors.ts';
 import { reportAgentError, scrubAgentErrorMessage } from './agent-error-telemetry.ts';
 import { RunStore } from './store.ts';
-import { reportError } from '../telemetry.ts';
+import { reportError, telemetryEnabled } from '../telemetry.ts';
 
-vi.mock('../telemetry.ts', async (importOriginal) => ({ ...(await importOriginal<object>()), reportError: vi.fn() }));
+vi.mock('../telemetry.ts', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  reportError: vi.fn(),
+  telemetryEnabled: vi.fn(() => true),
+}));
 
 const reported = () => vi.mocked(reportError).mock.calls.map(([error, context]) => ({
   name: (error as Error).name,
@@ -55,6 +59,12 @@ describe('reportAgentError', () => {
   it('an unknown backend id never reaches the report', () => {
     reportAgentError('../../etc', { type: 'error', message: 'boom' });
     expect(reported()[0]?.message).toBe('unknown: boom');
+  });
+
+  it('does nothing without telemetry consent', () => {
+    vi.mocked(telemetryEnabled).mockReturnValueOnce(false);
+    reportAgentError('claude', { type: 'error', message: 'boom' });
+    expect(reported()).toEqual([]);
   });
 
   it('skips restart bookkeeping', () => {

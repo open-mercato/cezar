@@ -127,6 +127,8 @@ export interface ThreadReduceOptions {
    * trailing ask block is provisional protocol text until turn-end either
    * emits its card or settles into the readable invalid-marker fallback. */
   activeTurn?: boolean
+  /** The run's runner, naming an outdated-CLI error raised before any `session.started`. */
+  runner?: string
 }
 
 /** What the strip under the thread says. Pure so the mapping is table-testable. */
@@ -396,7 +398,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
   const currentTurn = (): DraftTurn => turns.at(-1) ?? newTurn()
 
   /** The backend of the latest session, which an outdated-CLI error is about. */
-  let sessionBackend: ThreadProviderAuthRequired['provider'] | undefined
+  let sessionBackend: ThreadProviderAuthRequired['provider'] | undefined = providerId(options.runner)
   /** One update card per turn: the v1 `error` and v2 `session.error` twins both match. */
   const offeredUpdate = new WeakSet<DraftTurn>()
   const offerAgentUpdate = (text: string, noteId: string) => {

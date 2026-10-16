@@ -660,6 +660,11 @@ describe('reduceThread — outdated agent CLI', () => {
     expect(items([line(1, 'session.error', { message: OUTDATED, fatal: false })])
       .some((item) => item.kind === 'agent-update-required')).toBe(false)
   })
+
+  it('names the run\'s runner when the error comes before any session started (OpenCode bootstrap)', () => {
+    const { turns } = reduceThread([line(1, 'error', { message: `opencode: ${OUTDATED}` })], { runner: 'opencode' })
+    expect(turns[0]?.items).toContainEqual({ kind: 'agent-update-required', id: 'v1:1:update', provider: 'opencode' })
+  })
 })
 
 describe('threadFooter', () => {

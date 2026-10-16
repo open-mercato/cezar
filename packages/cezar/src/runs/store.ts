@@ -1687,7 +1687,6 @@ export class RunStore extends EventEmitter {
 
   deleteRun(id: string): boolean {
     const existed = this.forget(id);
-    this.sessionBackends.delete(id);
     if (existed) {
       try {
         rmSync(this.eventsPath(id), { force: true });
@@ -1807,6 +1806,7 @@ export class RunStore extends EventEmitter {
    *  which is exactly how long a deletion has to outlive its own index entry. */
   private forget(id: string): boolean {
     this.forgotten.add(id);
+    this.sessionBackends.delete(id);
     return this.runs.delete(id);
   }
 
