@@ -1,9 +1,12 @@
+import type { UsageWindowsObservation } from '@open-mercato/cezar-contract';
+import { saveUsageWindows } from '../workspace/usage-windows.ts';
+import { probeCodexIdentity, probeCodexUsageWindows } from '../core/codex-usage-probe.ts';
 import type { TrackerAssociation } from '@open-mercato/cezar-contract';
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, realpath, access } from 'node:fs/promises';
 import { assertCezarHomeWriteIsSandboxed, cezarHomeDir } from '../paths.ts';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import {
@@ -702,6 +705,32 @@ function resumeInFlight(run: Pick<RunRecord, 'status' | 'autoResumeAttempts'>): 
   );
 }
 
+/** A scheduled run's binding guards its launch only (spec 2026-10-07-deferred-task-start): once an
+ *  agent step has recorded the account it spawned under, later steps, Continue and recovery resolve
+ *  as for any run. The recorded `profileId` is durable, so the answer survives a restart. */
+function deferredBindingActive(run: Pick<RunRecord, 'id' | 'deferredBinding' | 'steps'>, runs: readonly RunRecord[]): boolean {
+  if (!run.deferredBinding || run.steps.some(step => step.profileId !== undefined)) return false;
+  // A declarative child may own the first session. Its durable step attribution also releases
+  // the parent's later steps, including after recovery; unrelated trees must not release it.
+  const children = new Map<string, RunRecord[]>();
+  for (const child of runs) {
+    const parentId = child.dispatch?.parentRunId;
+    if (parentId) children.set(parentId, [...(children.get(parentId) ?? []), child]);
+  }
+  const pending = [run.id];
+  const visited = new Set<string>();
+  while (pending.length) {
+    const id = pending.pop()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    for (const child of children.get(id) ?? []) {
+      if (child.steps.some(step => step.profileId !== undefined)) return false;
+      pending.push(child.id);
+    }
+  }
+  return true;
+}
+
 const AUTO_RESUME_PROMPT =
   'The provider usage limit that interrupted this task has reset. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.';
 /**
@@ -716,6 +745,10 @@ function formatWakeInstant(at: Date): string {
 }
 
 export interface StartRunInput {
+  /** Internal scheduled launch identity, persisted before any naming or execution side effect. */
+  scheduledLaunch?: { id: string; provenance: NonNullable<RunRecord['automationTrigger']>; binding: NonNullable<RunRecord['deferredBinding']> };
+  /** Internal child admission: inherit the launch guard without the scheduler's run identity. */
+  deferredBinding?: RunRecord['deferredBinding'];
   task: string;
   /** The cockpit device that started this task (telemetry only, `x-cezar-sid`). */
   deviceSid?: string;
@@ -1041,7 +1074,7 @@ export function pastedAttachmentsNote(attachments: PersistedAttachment[], librar
 /** Variant letters + the fixed diversification hints (spec 010). A runs the
  *  task verbatim; B/C get one constant sentence each — zero configuration. */
 export const VARIANT_LETTERS = ['A', 'B', 'C'] as const;
-const VARIANT_HINTS: Record<string, string | undefined> = {
+export const VARIANT_HINTS: Record<string, string | undefined> = {
   A: undefined,
   B: 'Approach hint: prefer the minimal, surgical change.',
   C: 'Approach hint: prefer a thorough, structural approach.',
@@ -1234,7 +1267,11 @@ export class RunManager {
       pump: () => this.pump(),
       oldestQueuedAt: () => this.oldestQueuedAt(),
       accountHolds: () => this.accountHolds(),
+      refreshQueueReasons: () => this.refreshQueueReasons(),
     });
+    this.store.on('run', this.onRunHoldInputs);
+    this.store.on('deleted', this.onRunDeletedHolds);
+    this.onQueueHoldChange();
     // Memory guard (#memory-guard): the shared process-tree sampler already ticks ~every 2 s for
     // the runs table; piggyback on it to enforce the per-task memory ceiling.
     this.offUsage = onUsage((snapshot) => void this.enforceMemoryLimit(snapshot));
@@ -1253,6 +1290,9 @@ export class RunManager {
    * dispose only guarantees the manager makes no further moves on its own.
    */
   dispose(): void {
+    ++this.queueReasonRevision;
+    this.store.off('run', this.onRunHoldInputs);
+    this.store.off('deleted', this.onRunDeletedHolds);
     this.offUsage();
     this.offSemaphore();
     clearInterval(this.queueWatchdog);
@@ -1406,11 +1446,32 @@ export class RunManager {
     runId: string,
     backend: RunnerId,
     options: { generateFollowups?: boolean; recordedProfileId?: string } = {},
-  ): Promise<{ env: Record<string, string>; profileId: string }> {
+  ): Promise<{ env: Record<string, string>; profileId: string; onUsageWindows?: (observation: UsageWindowsObservation) => void }> {
     const run = this.store.getRun(runId);
     const profileId = options.recordedProfileId
       ?? (backend === (run?.runner ?? 'claude') ? run?.agentProfile : undefined);
     const resolved = await resolveProfileEnvForRoot(this.repoRoot, backend, profileId);
+    const bound = run?.deferredBinding?.accounts.find(a => a.runner === backend);
+    if (run && deferredBindingActive(run, this.store.listRuns())) {
+      const nativePi = backend === 'pi';
+      if (!bound || bound.id !== resolved.profile.id
+        || (nativePi ? bound.id !== DEFAULT_AGENT_ACCOUNT_ID || bound.path !== ''
+          : bound.path !== await realpath(resolved.profile.path))) {
+        throw new Error('Scheduled account binding changed; refusing to use another account.');
+      }
+      // Pi has no per-provider profile: its discovery-only Claude path is not a login.
+      if (!nativePi) await access(bound.path);
+      if (bound.identity && backend === 'codex') {
+        const live = await probeCodexIdentity(resolved.profile);
+        if ('unavailable' in live) throw new Error('Could not read the scheduled Codex account right now (timed out or busy). Retry the task.');
+        if (live.identity !== bound.identity) throw new Error('The scheduled Codex identity changed or cannot be verified.');
+      }
+    }
+    // Codex attribution needs an app-server probe, so only scheduled runs (whose bound
+    // identity it can be checked against) pay for one; ordinary Codex runs spawn nothing (#1340).
+    const profilePath = await realpath(resolved.profile.path).catch(() => resolved.profile.path);
+    const boundIdentity = backend === 'codex' && bound?.id === resolved.profile.id && bound.path === profilePath ? bound.identity : undefined;
+    let attributionDisabled = false;
     const association = run?.automationTracker?.association;
     const trackerEnv = association && this.resolveTrackerEnv && process.env.CEZ_DRY_RUN !== '1'
       ? await this.resolveTrackerEnv(this.repoRoot, association)
@@ -1420,9 +1481,31 @@ export class RunManager {
       secrets.push(Buffer.from(`${trackerEnv.JIRA_EMAIL}:${trackerEnv.JIRA_API_TOKEN}`).toString('base64'));
     }
     this.store.registerRunSecrets(runId, secrets);
+    const usageProvider = backend === 'claude' ? 'claude' : boundIdentity ? 'codex' : undefined;
+    const onUsageWindows = usageProvider ? async (observation: UsageWindowsObservation) => {
+      try {
+        if (usageProvider === 'codex') {
+          if (attributionDisabled) return;
+          // A login can change during a long-running session. Once verification
+          // fails, this stream cannot safely identify any later observation. The probe's
+          // short cache bounds this to one app-server per window, however chatty the stream.
+          const current = await probeCodexIdentity(resolved.profile, { force: false });
+          if (attributionDisabled || 'unavailable' in current) return;
+          if (current.identity !== boundIdentity) {
+            attributionDisabled = true;
+            return;
+          }
+        }
+        await saveUsageWindows({ provider: usageProvider, accountId: resolved.profile.id, profilePath, ...(boundIdentity ? { identity: boundIdentity } : {}) }, observation);
+      } catch {
+        // Metadata must never fail the task or produce an unhandled rejection.
+        attributionDisabled = true;
+      }
+    } : undefined;
     return {
       env: { ...this.agentEnv(runId, options.generateFollowups), ...trackerEnv, ...resolved.env },
       profileId: resolved.profile.id,
+      ...(onUsageWindows ? { onUsageWindows } : {}),
     };
   }
 
@@ -1443,6 +1526,7 @@ export class RunManager {
       ...(input.forkRef && input.worktree === false ? { worktree: undefined } : {}),
     };
     const run = this.store.createRun({
+      id: input.scheduledLaunch?.id,
       title: makeRunTitle(input.task, workflow, input.images?.length) + (group ? ` (${group.variant})` : ''),
       workflow: workflow.name,
       task: input.task,
@@ -1512,6 +1596,16 @@ export class RunManager {
         ...(refs.prNumber !== undefined ? { prNumber: refs.prNumber } : {}),
         ...(refs.issueNumber !== undefined ? { issueNumber: refs.issueNumber } : {}),
       });
+    }
+    const binding = input.scheduledLaunch?.binding ?? input.deferredBinding;
+    if (binding) {
+      this.store.updateRun(run.id, {
+        ...(input.scheduledLaunch ? { automationTrigger: input.scheduledLaunch.provenance } : {}),
+        deferredBinding: binding,
+      });
+      // Children need the same durable guard before naming or queue admission, but retain
+      // their own fresh id and never masquerade as the scheduler's idempotent launch.
+      this.store.flushCreatedRun(run);
     }
     // Fire-and-forget LLM naming (task auto-naming spec): the heuristic title
     // above shows instantly; the namer's short title replaces it when (and if)
@@ -2026,6 +2120,8 @@ export class RunManager {
    * run that already started a step (a re-queue from inside `execute`) keeps what it has.
    */
   private refreshQueuedWorkflow(runId: string, snapshot: WorkflowDef, catalog: readonly WorkflowDef[]): WorkflowDef {
+    // Scheduled tasks were confirmed against this exact workflow and account binding.
+    if (this.store.getRun(runId)?.deferredBinding) return snapshot;
     const current = newerCatalogWorkflow(snapshot, catalog);
     if (!current) return snapshot;
     const steps = current.steps.map((s) => ({ id: s.id, name: s.name ?? s.id, kind: stepKind(s) }));
@@ -2452,6 +2548,7 @@ export class RunManager {
       // mints it, so the envelope is finished below once it exists.
       task: childTaskEnvelope(input, { id: parentId, branch: parent.branch }, ['{{TREE_PATHS}}']),
       systemPrompt: composeDispatchPrompt(input.kind),
+      ...(deferredBindingActive(parent, runs) ? { deferredBinding: parent.deferredBinding } : {}),
       runner: input.runner ?? intent?.runner ?? parent.runner,
       ...(input.model ?? intent?.model ?? parent.model ? { model: input.model ?? intent?.model ?? parent.model } : {}),
       autonomous: true,
@@ -2927,7 +3024,50 @@ export class RunManager {
    * Deliberately excludes a deadline that has already passed — that run is about to resume, and
    * holding the queue for it would only stall the very work the window reopened for.
    */
+  private readonly onQueueHoldChange = () => this.semaphore.notifyAccountHoldsChanged();
+  /** Last hold inputs seen per run. Token and title updates fire `run` constantly, and each
+   *  notification re-derives every participant's queue reasons, so only hold inputs notify (#1340). */
+  private readonly holdInputs = new Map<string, string>();
+  private readonly onRunHoldInputs = (run: RunRecord) => {
+    const inputs = JSON.stringify([run.status, run.autoResumeAt, run.autoResumeAttempts, run.runner, run.agentProfile]);
+    if (this.holdInputs.get(run.id) === inputs) return;
+    this.holdInputs.set(run.id, inputs);
+    this.onQueueHoldChange();
+  };
+  private readonly onRunDeletedHolds = (id: string) => {
+    this.holdInputs.delete(id);
+    this.onQueueHoldChange();
+  };
+
+  private queueReasonRevision = 0;
+  private refreshQueueReasons(): void {
+    const revision = ++this.queueReasonRevision;
+    const holds = this.semaphore.accountHolds();
+    if ((holds.deadline.size > 0 || holds.inFlight.size > 0)
+      && this.store.listRuns().some((run) => run.status === 'queued' && !run.runner)) {
+      // Match admission's effective account without persisting a runner override (#1340).
+      void loadConfig(this.repoRoot).then((config) => {
+        if (revision === this.queueReasonRevision) this.applyQueueReasons(config.defaultRunner);
+      });
+      return;
+    }
+    this.applyQueueReasons('claude');
+  }
+
+  private applyQueueReasons(defaultRunner: RunnerId): void {
+    const holds = this.semaphore.accountHolds();
+    for (const run of this.store.listRuns()) {
+      const key = runAccountKey(run, defaultRunner);
+      const until = holds.deadlines?.get(key);
+      const reason: RunRecord['queueWaitReason'] = run.status !== 'queued' ? undefined
+        : until !== undefined ? { kind: 'usage-reset', until: new Date(until).toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }
+        : holds.inFlight.has(key) && !resumeInFlight(run) ? { kind: 'account-resume' } : undefined;
+      if (JSON.stringify(reason) !== JSON.stringify(run.queueWaitReason)) this.store.updateRun(run.id, { queueWaitReason: reason });
+    }
+  }
+
   accountHolds(now = Date.now()): AccountHolds {
+    const deadlines = new Map<string, number>();
     const deadline = new Set<string>();
     const inFlight = new Set<string>();
     for (const run of this.store.listRuns()) {
@@ -2936,12 +3076,12 @@ export class RunManager {
       const key = () => runAccountKey(run, run.runner ?? 'claude');
       if (run.status === 'failed' && run.autoResumeAt) {
         const at = Date.parse(run.autoResumeAt);
-        if (Number.isFinite(at) && at > now) deadline.add(key());
+        if (Number.isFinite(at) && at > now) { deadline.add(key()); deadlines.set(key(), Math.min(at, deadlines.get(key()) ?? Infinity)); }
       } else if (resumeInFlight(run)) {
         inFlight.add(key());
       }
     }
-    return { deadline, inFlight };
+    return { deadline, inFlight, deadlines };
   }
 
 
@@ -4240,7 +4380,7 @@ export class RunManager {
     // The temp-directory preflight (#785) rides along with the account resolution: a resumed
     // turn hits the same broken `/tmp` a fresh one would, and an agent whose shell silently
     // returns nothing is worse than a turn that refuses to start and says why.
-    let continueProfile: { env: Record<string, string>; profileId: string };
+    let continueProfile: Awaited<ReturnType<RunManager['agentEnvForStep']>>;
     try {
       continueProfile = await this.agentEnvForStep(runId, continueBackend, {
         generateFollowups,
@@ -4298,12 +4438,13 @@ export class RunManager {
           cwd: state.cwd,
           allowedTools: toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
           bashAllowlist: toolsStep?.bashAllowlist,
-            additionalDirectories: agentDirectories(
-              join(this.dataDir, 'runs'),
-              state.grantedAttachmentLibrary,
+          additionalDirectories: agentDirectories(
+            join(this.dataDir, 'runs'),
+            state.grantedAttachmentLibrary,
             continueProfile.env,
           ),
           env: continueProfile.env,
+          onUsageWindows: continueProfile.onUsageWindows,
           mcpServers: continueMcp,
           model: continueModel,
           sessionId: launchSessionId,
@@ -6254,7 +6395,7 @@ export class RunManager {
     // reads the wrong account's config dir finds no session and silently starts a fresh one.
     // Resolved together with the temp-directory preflight (#785): the step fails with a named,
     // actionable error instead of spawning a backend whose shell would return empty output.
-    let stepProfile: { env: Record<string, string>; profileId: string };
+    let stepProfile: Awaited<ReturnType<RunManager['agentEnvForStep']>>;
     try {
       stepProfile = await this.agentEnvForStep(runId, stepBackend, {
         generateFollowups: followupsEnabled() && input.generateFollowups !== false,
@@ -6300,6 +6441,7 @@ export class RunManager {
             stepProfile.env,
           ),
           env: stepProfile.env,
+          onUsageWindows: stepProfile.onUsageWindows,
           mcpServers: stepMcp,
           model: backendModel,
           sessionId: launchSessionId,
@@ -6554,7 +6696,20 @@ export class RunManager {
         skillDescription = skills.find((s) => s.name === skillName)?.description;
       }
       // Only the creation call names the branch: the live refresh must never move it.
-      const result = await generateRunName(this.repoRoot, { task, skillName, skillDescription, ...live, nameBranch: !live });
+      const scheduled = this.store.getRun(runId);
+      let execution: Parameters<typeof generateRunName>[2];
+      // A scheduled launch names under its bound account with the ordinary namer model; a live
+      // refresh is ordinary naming and must not re-probe the binding (#1340).
+      if (!live && scheduled && deferredBindingActive(scheduled, this.store.listRuns())) {
+        const first = scheduled.workflowDef?.graph
+          ? Object.values(scheduled.workflowDef.graph.nodes).find(node => node.type === 'agent')
+          : scheduled.workflowDef?.steps.find(s => stepKind(s) === 'agent');
+        const runner = first?.runner ?? scheduled.runner ?? 'claude';
+        const profile = await this.agentEnvForStep(runId, runner);
+        const { namerModel } = await loadConfig(this.repoRoot);
+        execution = { runner, model: runner === 'claude' ? namerModel : undefined, env: profile.env, onUsageWindows: profile.onUsageWindows };
+      }
+      const result = await generateRunName(this.repoRoot, { task, skillName, skillDescription, ...live, nameBranch: !live }, execution);
       if (!result) return undefined;
       const run = this.store.getRun(runId);
       // Marker-owned state outranks the namer (spec 2026-07-18-task-ref-markers):

@@ -2487,3 +2487,44 @@ describe('RunStore — janitor cost once its answer is settled (#540)', () => {
     expect(store.getRun(run.id)?.referencedIssueCandidates).toEqual([issue(8)]);
   });
 });
+
+describe('RunStore — index lock failures', () => {
+  let dataDir: string;
+  beforeEach(() => { dataDir = mkdtempSync(join(tmpdir(), 'cez-store-lock-')); });
+  afterEach(() => { vi.restoreAllMocks(); rmSync(dataDir, { recursive: true, force: true }); });
+
+  it('fails closed on a malformed live ticket, retaining ordinary writes and rolling back strict creation', () => {
+    const store = RunStore.open(dataDir);
+    const ordinary = store.createRun({ title: 'ordinary', workflow: 'test', task: 'test', steps: [] });
+    const directory = join(dataDir, 'runs', '.index-writers');
+    mkdirSync(directory);
+    const malformed = join(directory, `${process.pid}-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.ticket`);
+    writeFileSync(malformed, 'invalid');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() => store.flush()).not.toThrow();
+    expect(error).toHaveBeenCalled();
+    expect(store.getRun(ordinary.id)).toBe(ordinary);
+    const strict = store.createRun({ title: 'strict', workflow: 'test', task: 'test', steps: [] });
+    expect(() => store.flushCreatedRun(strict)).toThrow('Could not persist');
+    expect(store.getRun(strict.id)).toBeUndefined();
+    rmSync(malformed);
+    store.flush({ throwOnError: true });
+    expect(RunStore.open(dataDir, { keepLive: true }).listRuns().map(run => run.id)).toEqual([ordinary.id]);
+    // Failure left no deletion tombstone: a caller may retry the reserved ID.
+    const retry = store.createRun({ id: strict.id, title: 'retry', workflow: 'test', task: 'test', steps: [] });
+    expect(() => store.flushCreatedRun(retry)).not.toThrow();
+    expect(RunStore.open(dataDir, { keepLive: true }).getRun(strict.id)?.title).toBe('retry');
+  });
+
+  it('handles an unwritable lock location as an ordinary save failure and a strict creation failure', () => {
+    const store = RunStore.open(dataDir);
+    // A real filesystem error, independent of chmod/root privileges in the test runner.
+    writeFileSync(join(dataDir, 'runs', '.index-writers'), 'not a directory');
+    const run = store.createRun({ title: 'strict', workflow: 'test', task: 'test', steps: [] });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() => store.flush()).not.toThrow();
+    expect(store.getRun(run.id)).toBe(run);
+    expect(() => store.flushCreatedRun(run)).toThrow('Could not persist');
+    expect(store.getRun(run.id)).toBeUndefined();
+  });
+});

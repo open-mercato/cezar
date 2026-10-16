@@ -25,7 +25,8 @@ export function AutomationsRoute({ mode = 'list' }: { mode?: 'list' | 'new' | 'e
   const navigate = useNavigate()
   const gate = useAutomationsGate()
   const query = useAutomationsQuery(gate.known && !gate.off)
-  const actions = useAutomationActions(query.data)
+  const data = query.data ? { ...query.data, automations: query.data.automations.filter(a => !a.deferredStart) } : undefined
+  const actions = useAutomationActions(data)
   const [searchParams, setSearchParams] = useSearchParams()
   const view = viewOf(searchParams.get('view'))
 
@@ -52,24 +53,24 @@ export function AutomationsRoute({ mode = 'list' }: { mode?: 'list' | 'new' | 'e
 
   const back = () => navigate('/automations')
   if (mode === 'new') {
-    return <AutomationEditor data={query.data} onBack={back} onSaved={back} />
+    return <AutomationEditor data={data} onBack={back} onSaved={back} />
   }
   if (mode === 'edit') {
-    const automation = query.data?.automations.find((item) => item.id === automationId)
-    if (query.data && !automation) return <div data-route="automations" className="p-5"><PageState text="Automation not found." /></div>
+    const automation = data?.automations.find((item) => item.id === automationId)
+    if (data && !automation) return <div data-route="automations" className="p-5"><PageState text="Automation not found." /></div>
     return automation
-      ? <AutomationEditor data={query.data} automation={automation} actions={actions} onBack={back} onSaved={back} onLog={() => navigate(`/automations/${encodeURIComponent(automation.id)}/log`)} />
+      ? <AutomationEditor data={data} automation={automation} actions={actions} onBack={back} onSaved={back} onLog={() => navigate(`/automations/${encodeURIComponent(automation.id)}/log`)} />
       : <div data-route="automations" className="p-5"><PageState text="Loading automation…" /></div>
   }
   if (mode === 'log') {
-    const automation = query.data?.automations.find((item) => item.id === automationId)
+    const automation = data?.automations.find((item) => item.id === automationId)
     return automationId
-      ? <AutomationLog automationId={automationId} automation={automation} timeZone={query.data?.timeZone} onBack={back} />
+      ? <AutomationLog automationId={automationId} automation={automation} timeZone={data?.timeZone} onBack={back} />
       : <div data-route="automations" className="p-5"><PageState text="Automation not found." /></div>
   }
   return (
     <AutomationsList
-      data={query.data}
+      data={data}
       error={query.error ? String(query.error instanceof Error ? query.error.message : query.error) : undefined}
       actions={actions}
       view={view}

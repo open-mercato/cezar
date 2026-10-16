@@ -10,6 +10,7 @@ import {
   createRun,
   createRunPr,
   deleteRun,
+  deleteAutomation,
   finishRun,
   getGithub,
   getGithubChecks,
@@ -633,6 +634,15 @@ describe('errors', () => {
     expect(error).toBeInstanceOf(ApiError)
     expect((error as ApiError).status).toBe(409)
     expect((error as ApiError).message).toBe('run is active — cancel it first')
+  })
+
+  it('preserves completed launch links on a cancellation conflict', async () => {
+    fail(409, JSON.stringify({ error: 'This scheduled task already started.', runIds: ['run-a', 'run-b'] }))
+    const error = await deleteAutomation('scheduled-id', 2).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(ApiError)
+    expect((error as ApiError).runIds).toEqual(['run-a', 'run-b'])
+    fail(409, JSON.stringify({ error: 'Invalid response', runIds: [7] }))
+    expect(((await deleteAutomation('scheduled-id', 2).catch((e: unknown) => e)) as ApiError).runIds).toBeUndefined()
   })
 
   it('carries the 409 extras the server pairs with the reason', async () => {

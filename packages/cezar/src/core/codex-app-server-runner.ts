@@ -1,3 +1,4 @@
+import { emitUsageWindows, normalizeCodexUsageWindows } from './usage-windows.ts';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type {
   AgentEvent,
@@ -206,6 +207,9 @@ class CodexSession implements AgentSession {
               msg = JSON.parse(line) as CodexAppServerMessage;
             } catch {
               continue; // not JSON-RPC — skip
+            }
+            if (msg.method === 'account/rateLimits/updated') {
+              emitUsageWindows(spec.onUsageWindows, normalizeCodexUsageWindows(msg.params));
             }
             // A sub-agent child thread's turn lifecycle must reach neither channel (#600):
             // v1 would emit a bogus `turn-end`, and the v2 mapper — which carries no thread

@@ -1,3 +1,6 @@
+import { queueWaitLabel } from '@/lib/queue-wait-label'
+import { ScheduledTasks } from '@/components/scheduled-tasks'
+import { useScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
 import { ChevronDownIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
 import { useArchiveRun, useHealth, usePinRun, useReferenceProjectId, useRunsForProject } from '@/api/queries'
@@ -520,6 +523,7 @@ const RunRow = React.memo(function RunRow({
           )}
         >
           {variant ? variantLabel(run, showTokens, showCost) : displayTitle}
+          {run.queueWaitReason && <span className="block truncate text-[11px] font-normal text-muted-foreground">{queueWaitLabel(run.queueWaitReason)}</span>}
         </span>
         {/* The trailing metadata, as one unit that gives its place to the row's actions whenever
             they show — see `ROW_ACTIONS_CLASS`. `contents`, so each item still lays out in the
@@ -649,6 +653,8 @@ export function TaskQuickListContainer() {
   const pinMutation = usePinRun('sidebar')
   const visibility = usageMetricVisibility(health.data)
   const [view, setView] = useListView()
+  // Mounted only once a schedule is known, so the sidebar costs no `GET /automations` (#1340).
+  const scheduledGate = useScheduledTasksGate()
   // The remembered Regular | Automations | All split the Tasks tables set — the sidebar shows the
   // same list they do. Memoized so the chip-status request below keys off a stable list.
   const [origin] = useTaskOrigin()
@@ -700,6 +706,7 @@ export function TaskQuickListContainer() {
 
   return (
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
+      {view === 'active' && scheduledGate && <ScheduledTasks compact />}
       <TaskQuickList
         runs={shown}
         view={view}

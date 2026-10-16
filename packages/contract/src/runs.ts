@@ -1,3 +1,4 @@
+import { deferredBindingSchema, queueWaitReasonSchema } from './deferred-start-state.ts';
 import { z } from 'zod';
 import { runnerSchema } from './health.ts';
 import { referenceStatusSchema } from './github.ts';
@@ -197,6 +198,9 @@ export const runRecordSchema = z.object({
       githubUrl: z.string(),
     })
     .optional(),
+  /** Account/workflow confirmed for a composer-scheduled start (#1340); checked at launch. */
+  deferredBinding: deferredBindingSchema.optional(),
+  queueWaitReason: queueWaitReasonSchema.optional(),
   /**
    * Provenance for a task a SCHEDULED automation launched (spec 2026-09-14-automations-redesign
    * § Data Model). A separate optional key rather than a loosened `automation`: `runs.json` is
