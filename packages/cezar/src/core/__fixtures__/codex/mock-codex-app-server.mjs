@@ -187,15 +187,24 @@ rl.on('line', (line) => {
       return;
     }
     if (turnText.includes('mock:turn-failed')) {
-      if (turnText.includes('mock:usage-limit')) {
-        emit({ method: 'error', params: {
-          error: { message: "You've hit your usage limit. Try again in 60 minutes." },
-          codexErrorInfo: 'usageLimitExceeded',
-        } });
+      // Wire shape checked with codex-cli 0.160.0 app-server generate-ts:
+      // v2/TurnCompletedNotification, Turn, TurnError and ErrorNotification.
+      const usage = { message: "You've hit your usage limit. Try again in 60 minutes.", codexErrorInfo: 'usageLimitExceeded', additionalDetails: null };
+      const terminal = turnText.includes('mock:nested-limit') ? usage
+        : { message: 'exceeded retry limit, last status: 429 Too Many Requests', codexErrorInfo: 'rateLimitExceeded', additionalDetails: null };
+      if (turnText.includes('mock:retry-error')) {
+        emit({ method: 'error', params: { threadId: 'th_mock_1', turnId,
+          error: { message: 'Reconnecting... 1/5', codexErrorInfo: null, additionalDetails: null }, willRetry: true } });
       }
+      if (turnText.includes('mock:usage-limit')) {
+        emit({ method: 'error', params: { threadId: 'th_mock_1', turnId, error: usage, willRetry: false } });
+      }
+      const nested = turnText.includes('mock:nested-error') || turnText.includes('mock:nested-limit');
       emit({ method: turnText.includes('mock:turn-completed-failed') ? 'turn/completed' : 'turn/failed', params: {
-        turn: { id: 'turn_mock_1', status: 'failed' },
-        error: { message: 'model unavailable' },
+        threadId: 'th_mock_1',
+        turn: { id: turnId, status: 'failed', items: [], error: nested ? terminal : null },
+        // Retain coverage of the legacy turn/failed shape and absent terminal details.
+        ...(!nested && !turnText.includes('mock:usage-limit') ? { error: { message: 'model unavailable' } } : {}),
       } });
       return;
     }

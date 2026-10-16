@@ -532,18 +532,7 @@ class CodexSession implements AgentSession {
       }
       case 'error': {
         if (this.isForeignThreadTurn(params)) break;
-        const error = params.error;
-        const message = typeof error === 'string'
-          ? error
-          : stringField((error as Record<string, unknown> | undefined) ?? {}, 'message')
-            ?? stringField(params, 'message');
-        if (message) {
-          const errorRecord = error && typeof error === 'object' && !Array.isArray(error)
-            ? error as Record<string, unknown>
-            : {};
-          const codexErrorInfo = stringField(params, 'codexErrorInfo') ?? stringField(errorRecord, 'codexErrorInfo');
-          this.pendingTurnError = { message, ...(codexErrorInfo ? { codexErrorInfo } : {}) };
-        }
+        this.pendingTurnError = codexErrorDetails(params.error, params) ?? this.pendingTurnError;
         break;
       }
       case 'item/agentMessage/delta': {
@@ -613,9 +602,14 @@ class CodexSession implements AgentSession {
         const compacted = !failed && this.compactionEndedTurn;
         this.compactionEndedTurn = false;
         if (failed && !this.terminatedByCezar) {
-          const error = params.error as Record<string, unknown> | undefined;
-          const message = this.pendingTurnError?.message ?? stringField(error ?? {}, 'message') ?? 'codex turn failed';
-          const codexErrorInfo = this.pendingTurnError?.codexErrorInfo;
+          // The current protocol nests the authoritative failure in Turn.error.
+          // A retry notification can precede it; never let that stale message win.
+          const turn = params.turn as Record<string, unknown> | undefined;
+          const error = codexErrorDetails(turn?.error)
+            ?? codexErrorDetails(params.error)
+            ?? this.pendingTurnError;
+          const message = error?.message ?? 'codex turn failed';
+          const codexErrorInfo = error?.codexErrorInfo;
           this.emit({ type: 'error', message: codexErrorInfo ? `${message} [${codexErrorInfo}]` : message });
         }
         // The bare event when there is nothing extra to say, so every existing consumer
@@ -748,6 +742,17 @@ function clean<T extends Record<string, unknown>>(obj: T): Partial<T> {
     if (v !== undefined && v !== null) out[k as keyof T] = v as T[keyof T];
   }
   return out;
+}
+
+/** Keep each message and discriminator together when selecting an error source. */
+function codexErrorDetails(value: unknown, fallback: Record<string, unknown> = {}): { message: string; codexErrorInfo?: string } | undefined {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown> : {};
+  const message = (typeof value === 'string' ? value : stringField(record, 'message'))
+    ?? stringField(fallback, 'message');
+  if (!message) return undefined;
+  const codexErrorInfo = stringField(record, 'codexErrorInfo') ?? stringField(fallback, 'codexErrorInfo');
+  return { message, ...(codexErrorInfo ? { codexErrorInfo } : {}) };
 }
 
 function stringField(obj: Record<string, unknown>, key: string): string | undefined {

@@ -411,6 +411,28 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
     })
   }
 
+  // Pair only opposite-channel copies, within the same turn and workflow step.
+  // Same-channel repetitions and unrelated failures must remain visible.
+  const errorTwins = new WeakMap<DraftTurn, Map<string, { v1: number; v2: number }>>()
+  const isErrorTwin = (event: RunEvent, text: string, origin: 'v1' | 'v2'): boolean => {
+    const turn = currentTurn()
+    let counts = errorTwins.get(turn)
+    if (!counts) {
+      counts = new Map()
+      errorTwins.set(turn, counts)
+    }
+    const key = JSON.stringify([event.stepId, text])
+    const pending = counts.get(key) ?? { v1: 0, v2: 0 }
+    counts.set(key, pending)
+    const opposite = origin === 'v1' ? 'v2' : 'v1'
+    if (pending[opposite] > 0) {
+      pending[opposite] -= 1
+      return true
+    }
+    pending[origin] += 1
+    return false
+  }
+
   const itemKey = (event: RunEvent, itemId: string) => {
     return runItemKey(event.stepId, itemId)
   }
@@ -611,7 +633,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
       }
       case 'error': {
         const text = str(event.message) ?? ''
-        if (text === '') break
+        if (text === '' || isErrorTwin(event, text, 'v1')) break
         currentTurn().entries.push({
           origin: 'meta',
           entry: { kind: 'note', id: `v1:${event.seq}`, text, tone: 'danger' },
@@ -621,7 +643,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
       }
       case 'session.error': {
         const text = str(event.message) ?? ''
-        if (text === '') break
+        if (text === '' || (event.fatal === true && isErrorTwin(event, text, 'v2'))) break
         currentTurn().entries.push({
           origin: 'meta',
           entry: { kind: 'note', id: `v2:${event.seq}`, text, tone: 'danger' },
@@ -629,9 +651,12 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         offerAgentUpdate(text, `v2:${event.seq}`)
         break
       }
-      case 'session.started':
+      case 'session.started': {
         sessionBackend = providerId(event.backend) ?? sessionBackend
+        const turn = turns.at(-1)
+        if (turn) errorTwins.delete(turn)
         break
+      }
       case 'step-end': {
         // Steps stay out of the thread (they are header material) except the one thing the
         // transcript must not hide: a step that failed — mirroring the legacy renderer.

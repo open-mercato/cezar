@@ -6382,7 +6382,7 @@ export class RunManager {
       return null;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      sink.sessionEnded('error', message);
+      sink.sessionEnded('error', message); // alongside v1's fatal `error`
       return message;
     } finally {
       this.recordUsagePeaks(runId, state);

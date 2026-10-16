@@ -276,6 +276,42 @@ describe('reduceThread — mixed v1+v2 files (the dedup rule)', () => {
     expect(sessionEnded).toEqual({ reason: 'error' })
   })
 
+  it.each(['mixed', 'reversed', 'v2-only'] as const)('preserves failure details once in a %s stream', (mode) => {
+    const message = "You've hit your usage limit. Try again in 60 minutes. [usageLimitExceeded]"
+    const v1 = line(1, 'error', { message, stepId: 'task' })
+    const v2 = line(2, 'session.error', { message, fatal: true, stepId: 'task' })
+    const events = mode === 'mixed' ? [v1, v2] : mode === 'reversed' ? [v2, v1] : [v2]
+    const { turns, sessionEnded } = reduceThread([
+      ...events,
+      line(3, 'session.ended', { reason: 'error', message, stepId: 'task' }),
+    ])
+    expect(turns.flatMap((turn) => turn.items)).toHaveLength(1)
+    expect(turns[0]!.items[0]).toMatchObject({ kind: 'note', text: message, tone: 'danger' })
+    expect(sessionEnded).toEqual({ reason: 'error', message })
+  })
+
+  it('retains distinct errors, repeated same-channel errors and errors from different steps', () => {
+    const { turns } = reduceThread([
+      line(1, 'error', { message: 'quota', stepId: 'one' }),
+      line(2, 'error', { message: 'quota', stepId: 'one' }),
+      line(3, 'session.error', { message: 'quota', fatal: true, stepId: 'two' }),
+      line(4, 'session.error', { message: 'other', fatal: true, stepId: 'one' }),
+      line(5, 'session.error', { message: 'quota', fatal: false, stepId: 'one' }),
+    ])
+    expect(turns.flatMap((turn) => turn.items)).toHaveLength(5)
+  })
+
+  it('does not pair identical errors across turns or sessions', () => {
+    const { turns } = reduceThread([
+      line(1, 'error', { message: 'quota' }),
+      line(2, 'session.started', { sessionId: 'next', backend: 'codex' }),
+      line(3, 'session.error', { message: 'quota', fatal: true }),
+      line(4, 'user-message', { text: 'try again' }),
+      line(5, 'error', { message: 'quota' }),
+    ])
+    expect(turns.flatMap((turn) => turn.items)).toHaveLength(3)
+  })
+
   it('the drop also works when a v1 line slips in BEFORE its v2 twin', () => {
     const reordered = [...mixed]
     // Swap the v1 text (index 7) ahead of the two item events (indices 5,6).
