@@ -186,8 +186,12 @@ describe('a queued run’s prompt is amendable (#472)', () => {
     browser.screenshot(`${artifactsDir}/queued-editing.png`)
     browser.click('[data-slot="user-bubble"][data-editing="true"] button:last-of-type')
 
+    // The editor closing is the save landing. Matching the text alone is not enough: the open
+    // <textarea> carries that text as its own content while the save is still in flight, and the
+    // bubble's controls are disabled until it settles.
     browser.waitForFunction(
-      `document.body.textContent.includes('also update the changelog and the README')`,
+      `document.querySelector('[data-slot="user-bubble"][data-editing="true"]') === null &&
+       document.body.textContent.includes('also update the changelog and the README')`,
     )
     const record = await getRun(baseUrl, queuedId)
     expect(record.queuedMessages?.map((m) => m.text)).toEqual([

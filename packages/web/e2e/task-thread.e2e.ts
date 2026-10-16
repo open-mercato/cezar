@@ -381,9 +381,10 @@ describe('task thread', () => {
       return box.textContent
     })()`) as string
     expect(parts).not.toContain('claude')
-    // …and the badge is where naming the agent does belong.
+    // …and the badge is where naming the agent does belong. It is icon-only now (the chat box's
+    // engine pills carry the words), so the runner lives in its accessible name.
     expect(
-      browser.evaluate(`document.querySelector('[data-slot="agent-badge"]').textContent`),
+      browser.evaluate(`document.querySelector('[data-slot="agent-badge"]').getAttribute('aria-label')`),
     ).toContain('claude')
     // Branch renders as the mono chip, not plain text.
     expect(
