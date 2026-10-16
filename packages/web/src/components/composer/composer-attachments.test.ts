@@ -172,8 +172,8 @@ describe('attachmentMediaType', () => {
 
 describe('screenFiles — text formats (telemetry 6c4b3066)', () => {
   it('accepts an .html file instead of refusing it', () => {
-    const intake = screenFiles([fakeFile({ type: 'text/html', name: 'worksmile-blog-listing.html' })], 0)
-    expect(intake.accepted.map((f) => f.name)).toEqual(['worksmile-blog-listing.html'])
+    const intake = screenFiles([fakeFile({ type: 'text/html', name: 'page.html' })], 0)
+    expect(intake.accepted.map((f) => f.name)).toEqual(['page.html'])
     expect(intake.rejected).toEqual([])
   })
 
