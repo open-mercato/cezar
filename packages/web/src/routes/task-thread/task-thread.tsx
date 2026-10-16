@@ -1,3 +1,4 @@
+import { queueWaitLabel } from '@/lib/queue-wait-label'
 import { MessageSquareTextIcon, SearchXIcon } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useParams } from 'react-router'
@@ -715,10 +716,10 @@ function QueuedPlaceholder({ run }: { run: ApiRun }) {
     <div data-slot="queued-state" className="flex flex-col items-center gap-1.5 py-10 text-center">
       <StatusDot tone="pending" pulse />
       <p className="text-[13px] font-medium">
-        Waiting for a free agent slot{position !== undefined ? ` — #${position} in queue` : ''}
+        {queueWaitLabel(run.queueWaitReason) ?? `Waiting for a free agent slot${position !== undefined ? ` — #${position} in queue` : ''}`}
       </p>
       <p className="text-xs text-soft-foreground">
-        {run.workflow} · starts automatically when a slot frees up
+        {run.workflow} · {run.queueWaitReason ? 'starts automatically when the account and a slot are available' : 'starts automatically when a slot frees up'}
       </p>
     </div>
   )

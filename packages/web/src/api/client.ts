@@ -4,7 +4,7 @@ import type {
   lifecyclePreviewInputSchema, lifecycleListQuerySchema, LifecycleOutputResponse,
   LifecyclePreviewResponse, LifecycleActionInput, StartLifecycleRemovalInput,
 } from '@open-mercato/cezar-api-client'
-import { trackerReadScope, resolveApiUrl, workspaceBrandingLogoResponseSchema } from '@open-mercato/cezar-api-client'
+import { deferredAlreadyStartedSchema, trackerReadScope, resolveApiUrl, workspaceBrandingLogoResponseSchema } from '@open-mercato/cezar-api-client'
 import type {
   DetectedUrlsResponse,
   DiscoveredCommandsResponse,
@@ -227,13 +227,15 @@ export class ApiError extends Error {
   readonly manual?: string
   /** `POST /api/runs/:id/open-in-cli`: the resume command, when no terminal could be opened. */
   readonly command?: string
+  /** A cancellation lost to launch; links survive removal of the scheduled entry. */
+  readonly runIds?: import('@open-mercato/cezar-api-client').DeferredAlreadyStarted['runIds']
   /** `POST /api/workflows`: the file is already there — the caller may retry with `overwrite`. */
   readonly exists?: boolean
 
   constructor(
     status: number,
     message: string,
-    extras: { manual?: string; command?: string; exists?: boolean; cause?: unknown } = {},
+    extras: { manual?: string; command?: string; exists?: boolean; runIds?: import('@open-mercato/cezar-api-client').DeferredAlreadyStarted['runIds']; cause?: unknown } = {},
   ) {
     super(message, extras.cause !== undefined ? { cause: extras.cause } : undefined)
     this.name = 'ApiError'
@@ -241,6 +243,7 @@ export class ApiError extends Error {
     this.manual = extras.manual
     this.command = extras.command
     this.exists = extras.exists
+    this.runIds = extras.runIds
   }
 }
 
@@ -274,7 +277,9 @@ function errorFor(status: number, statusText: string, body: string): ApiError {
     // No `{ error }` — a proxy error page, an empty body, a crash. Say what we know rather
     // than leak a page of HTML into a toast.
     `${status} ${statusText || 'request failed'}`.trim()
+  const started = status === 409 ? deferredAlreadyStartedSchema.safeParse(parsed) : undefined
   return new ApiError(status, message, {
+    ...(started?.success ? { runIds: started.data.runIds } : {}),
     manual: str(json.manual),
     command: str(json.command),
     exists: typeof json.exists === 'boolean' ? json.exists : undefined,
@@ -2244,19 +2249,21 @@ export async function retryAutomationReceipt(receiptId: string): Promise<Automat
 
 /** Fire a SCHEDULED automation now, by hand (spec 2026-09-14 Q10) — paused or not; neither
  *  `enabled` nor the timer changes. A GitHub automation answers 409: it runs through `check`. */
-export async function runAutomationNow(id: string): Promise<AutomationRunResponse> {
+export async function runAutomationNow(id: string, expectedRevision?: number): Promise<AutomationRunResponse> {
   return unwrap(
     await cez.api.v1.p[':projectId'].automations[':id'].run.$post({
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      query: expectedRevision ? { expectedRevision: String(expectedRevision) } : {},
     }),
     `/automations/${encodeURIComponent(id)}/run`,
   )
 }
 
 /** Delete a definition. Its runs, receipts and log rows stay; the id is tombstoned. */
-export async function deleteAutomation(id: string): Promise<void> {
+export async function deleteAutomation(id: string, expectedRevision?: number): Promise<void> {
   const res = await cez.api.v1.p[':projectId'].automations[':id'].$delete({
     param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      query: expectedRevision ? { expectedRevision: String(expectedRevision) } : {},
   })
   if (!res.ok) throw errorFor(res.status, res.statusText, await res.text())
 }
@@ -2882,4 +2889,15 @@ export async function putRunLayouts(
     ),
     runPath(id, '/layouts'),
   )
+}
+
+export async function previewDeferredStart(body: import('@open-mercato/cezar-api-client').DeferredPreviewInput) {
+  return unwrap(await cez.api.v1.p[':projectId']['deferred-start'].preview.$post({ param: { projectId: queryScope() }, json: body }), '/deferred-start/preview')
+}
+export async function createDeferredStart(body: import('@open-mercato/cezar-api-client').DeferredCreateInput) {
+  return unwrap(await cez.api.v1.p[':projectId']['deferred-start'].$post({ param: { projectId: queryScope() }, json: body }), '/deferred-start')
+}
+
+export async function getDeferredStartOptions(body: import('@open-mercato/cezar-api-client').DeferredOptionsInput) {
+  return unwrap(await cez.api.v1.p[':projectId']['deferred-start'].options.$post({ param: { projectId: queryScope() }, json: body }), '/deferred-start/options')
 }

@@ -1,3 +1,5 @@
+import { ScheduledTasks } from '@/components/scheduled-tasks'
+import { useScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArchiveIcon,
@@ -132,10 +134,14 @@ export function TasksOverview({
   onOriginChange = () => undefined,
   automationNames,
   gitRepo = true,
+  scheduledTasks,
+  hasScheduledTasks = !!scheduledTasks,
 }: {
   /** Undefined while `/api/runs` has not answered: the header renders, the body stays empty —
    *  an empty state before we know there are no runs would be a lie. */
   runs: RunRecord[] | undefined
+  scheduledTasks?: React.ReactNode
+  hasScheduledTasks?: boolean
   view: ListView
   onViewChange: (view: ListView) => void
   onArchiveFinished: () => void
@@ -285,6 +291,7 @@ export function TasksOverview({
           />
         </div>
       </header>
+      {scheduledTasks}
 
       <div className="flex flex-1 flex-col p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5">
         {/* No bar over the first-run hero: with nothing to narrow, filters are noise. */}
@@ -302,7 +309,7 @@ export function TasksOverview({
             onSortByChange={setSortBy}
           />
         ) : null}
-        {runs === undefined ? null : visible.length === 0 ? (
+        {runs === undefined ? null : hasScheduledTasks && all.length === 0 ? <p className="text-sm text-muted-foreground">No tasks have started yet.</p> : visible.length === 0 ? (
           <TasksEmptyState
             view={view}
             query={query}
@@ -1474,14 +1481,18 @@ export function TasksOverviewRoute() {
   const now = useNow(30_000)
   const taskTableColumns = useTaskTableColumns()
   const [origin, setOrigin] = useTaskOrigin()
-  // Names for the Automation facet. Only asked for while automations are on AND automation rows
-  // are on screen — a project that never ran one pays no request for a facet it will not show.
+  // Names for the Automation facet and the Scheduled group. Only asked for while automations are
+  // on AND automation rows are on screen or a schedule is known — a project that never ran or
+  // scheduled one pays no request.
   const gate = useAutomationsGate()
+  const scheduledGate = useScheduledTasksGate()
   const hasAutomationRuns = React.useMemo(
     () => (runs.data ?? []).some((run) => run.automation ?? run.automationTrigger ?? run.automationTracker),
     [runs.data],
   )
-  const automationsQuery = useAutomationsQuery(gate.known && !gate.off && hasAutomationRuns && origin !== 'regular')
+  const automationsQuery = useAutomationsQuery(
+    gate.known && !gate.off && ((hasAutomationRuns && origin !== 'regular') || (scheduledGate && view === 'active')),
+  )
   const automationNames = React.useMemo(
     () => new Map((automationsQuery.data?.automations ?? []).map((entry) => [entry.id, entry.name])),
     [automationsQuery.data],
@@ -1510,6 +1521,8 @@ export function TasksOverviewRoute() {
   return (
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
       <TasksOverview
+        scheduledTasks={view === 'active' ? <ScheduledTasks enabled={scheduledGate} /> : undefined}
+        hasScheduledTasks={view === 'active' && !!automationsQuery.data?.automations.some(a => a.deferredStart)}
         runs={runs.data}
         view={view}
         onViewChange={setView}

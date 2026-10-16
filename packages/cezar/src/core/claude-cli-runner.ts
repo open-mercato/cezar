@@ -1,3 +1,4 @@
+import { emitUsageWindows, normalizeClaudeTerminalUsageLimit, normalizeClaudeUsageWindows } from './usage-windows.ts';
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -277,6 +278,8 @@ export class ClaudeCliRunner implements AgentRunner {
             onEvent?.({ type: 'note', message: `claude: skipped unparseable stream line: ${truncate(line)}` });
             continue;
           }
+
+          emitUsageWindows(spec.onUsageWindows, normalizeClaudeUsageWindows(msg) ?? normalizeClaudeTerminalUsageLimit(msg));
 
           // Claude reports `error_during_execution` while reacting to our
           // teardown signal. Once cezar has signalled the child, that frame

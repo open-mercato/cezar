@@ -6,6 +6,12 @@ cezar is a published npm CLI (`@open-mercato/cezar`, currently 0.x — renamed f
 
 ## 1. CLI commands, flags and exit codes (`packages/cezar/src/index.ts`)
 
+One-time schedules (#771) add `automation add --at "<YYYY-MM-DD HH:MM>"` (a `T` between date and
+time is accepted too): one run at that wall time in the cockpit's time zone, as a `once` schedule.
+It is mutually exclusive with `--cron` — both, or a malformed `--at`, exit 2 like any flag the
+command cannot express. Copy as CLI prints `--at` for a
+`once`. Additive: no existing flag, default or exit code changes.
+
 Tracker automations add `automation add --kind tracker --on <event> --to-status <id>` and
 `--changed-label <id>`, using the existing `--every` interval (default 30m for trackers).
 `create`/`update` JSON and `check` preview/execute support the same `trackerTrigger` contract;
@@ -68,6 +74,7 @@ What is protected now: **the shape of each route under `/api/v1`**, the three-wa
 - Telemetry: `POST /api/v1/telemetry/{page,event,error}` — workspace-level, single-mount; the cockpit's relay to the opt-in telemetry. Always `204` for a valid body (a no-op until the user opted in, or when `CEZ_TELEMETRY=0`/`DO_NOT_TRACK=1`), `400 {error}` otherwise. `GET`/`PUT /api/v1/telemetry/consent` — the user's answer, `{consent: 'unknown'|'granted'|'denied', policyVersion, blockedBy: 'env'|'automation'|null, endpoint}` (`packages/contract/src/telemetry.ts`); the PUT takes `{consent: 'granted'|'denied'}` and answers the same shape, `400 {error}` for anything else.
 - Skills: `GET /api/v1/skills`, `GET /api/v1/skills/importable`, `POST /api/v1/skills/refresh`
 - Workflows: `GET/POST /api/v1/workflows`, `DELETE /api/v1/workflows/:name`, `POST /api/v1/workflows/parse`, `GET /api/v1/workflows/nodes`, `POST /api/v1/workflows/validate`, `POST /api/v1/workflows/graph`, `POST /api/v1/plan`
+- Deferred task starts (#1340): `POST /api/v1/deferred-start/options` (local workflow eligibility and server time zone; no provider probing), `POST /api/v1/deferred-start/preview`, `POST /api/v1/deferred-start` (also project-scoped); existing automation DELETE/run accepts optional `expectedRevision` query, required for composer starts. An exact creation-key replay can return its existing outcome even with `CEZ_AUTOMATIONS=0`; new creation and preview remain disabled. Existing PUT permits only a validated time change for composer starts; enable/pause and generic receipt retry refuse them. `POST /runs` is unchanged.
 - Automations: `GET/POST /api/v1/automations`, `GET/PUT/DELETE /api/v1/automations/:id`, `POST /api/v1/automations/:id/{enable,pause,check,run}`, `GET /api/v1/automation-checks/:checkId`, `GET /api/v1/automation-log`, `POST /api/v1/automation-log/:receiptId/retry`, `GET /api/v1/workspace/automation-templates` — present always, **on by default** since spec `2026-09-14-automations-redesign` and gated OFF by `CEZ_AUTOMATIONS=0` (the #801 opt-in flipped; see the entry below): opted out, every route above answers `409` naming the flag, reads included. Unlike the inbox's `200 []` degradation, an off automations read refuses rather than answering empty — `{automations: []}` would read as "you have configured none", and a client would then offer to create one against a `409`ing POST. The routes themselves must keep existing and must behave exactly as before once the flag is on.
 - Task workspace layouts (spec `.ai/specs/2026-10-07-task-workspace.md` §5.3, additive): `GET /api/v1/runs/:id/layouts` → `{layouts: {layouts, active} | null}` (`null` = never opened), `PUT /api/v1/runs/:id/layouts` with `{layouts: [{name, columns: [{view, width, browser?}]}], active}` → the same shape, `409` when the host cannot write. `view` is one of `session|changes|commits|files|browser|graph|terminal`; at most 50 layouts of 3 columns. Stored per task in `.ai/cezar/layouts/<runId>.json` (gitignored), deleted with the task, never on archive.
 - Start recipe (spec `.ai/specs/2026-10-09-design-mode.md` §7c, additive): `GET /api/v1/start-app` → `{project, personal, personalAvailable}`, `PUT /api/v1/start-app` with `{scope: project|personal, recipe: {services: string[1..5], url?} | null}` → the same shape; `409` where `capabilities.terminal` is off, or for `personal` when the project is not in the user's registry. Stored as `startApp` in `.ai/cezar/config.json` (project) and in the project's entry of `~/.cezar/config.json` (personal, which wins). `GET /api/v1/runs/:id/terminal/commands` additionally answers `install?` and `recipe?` (the recipe in force, with its `scope`).
@@ -483,6 +490,23 @@ config exception names it.
 - **Rollback**: `CEZ_AUTOMATIONS=0` restores the opted-out surface without touching any file; a
   pre-redesign cezar ignores `kind: 'schedule'` definitions as invalid (one warning, the rest of
   the file intact) and never fires them.
+- **Additive for issue #771** (spec amendment "`once` schedule"): `SCHEDULE_TYPES` gains a fifth
+  member, `once`, and `schedule` gains an optional `date` (`YYYY-MM-DD`, a real calendar day),
+  required for — and only read on — a `once`; on every other shape it stays absent. Every existing
+  definition, request and response is unchanged. Three refusals are new and apply only to a
+  `once`: `POST /automations` with `enable: true` and `PUT /automations/:id` with `enabled: true`
+  answer `400` when its instant is not in the future, and `POST /automations/:id/enable` answers
+  `409` for the same reason; saved paused it is a draft and is accepted, and `run` still works on
+  it. A `once` without a `date` is a `400` on create and update. The runner pauses a `once`
+  itself once its single occurrence is consumed — launched, caught up, skipped, met as a
+  `duplicate` or written as a detection-only `launch-error` — and appends a `skipped` log row
+  saying so (an `error` row if the pause itself could not be written); no new log result value.
+  **Downgrade is heavier than the `pinnedCursor` precedent below**: an older cezar does not drop
+  a key, it drops the whole definition. It ignores a `once` row as invalid (`loadDefinitions`
+  per-entry salvage, one warning — the other definitions are untouched) and removes it from
+  `automations.json` on its next definition write, so a user's postponed task silently
+  disappears. Pause or run pending one-time automations before downgrading across this change.
+
 - **Additive for issue #982**: runtime state gains optional `pinnedCursor`
   (`{timestamp, tieBreaker?}`), written **only** when a widening re-poll could not get the cursor
   past a 120-second overlap band that is saturated at the search API's own 100-record ceiling.
@@ -501,3 +525,38 @@ config exception names it.
 ## When in doubt
 
 If a change might break any surface above, say so in the PR description, label the PR `risk-high`, and route it through the review + QA gates in `SDLC.md`. A silent break found in review is a blocker per `CODE_REVIEW.md`.
+
+## Deferred task starts (#1340)
+
+Automation definitions gain optional `deferredStart` (composer origin, absolute not-before instant,
+execution binding and lifecycle). The existing definitions file gains compact `deferredCreations`
+records that survive definition deletion, receipt compaction and run deletion. These records contain
+request hashes and IDs, not duplicate prompts or credentials. Clearing project automation data resets
+idempotency. Runs gain optional `deferredBinding` and `queueWaitReason`; old records need neither.
+Usage-reset queue reasons include optional `timeZone` from the server; older records remain readable.
+A deferred cancellation that loses to a completed launch returns 409 with `{ error, runIds }`,
+so clients can link to the started runs after the scheduled entry is removed.
+Ordinary automations retain placeholder substitution and manual-run semantics. Composer starts use
+verbatim prompts, normal autonomy/review settings, a stable receipt, and revision-checked mutations
+under the existing poll lease. Ambiguous launches do not automatically retry; durable run evidence
+must settle the outcome first. Definition cleanup and terminal idempotency outcome share one write.
+
+Downgrade: versions without `once` can discard pending definitions. Versions with `once` but without
+composer semantics can ignore account and absolute-time binding. Complete or cancel pending starts
+using a compatible version before downgrade; mixed-version execution on shared state is unsupported.
+
+Review follow-up: optional `deferredStart.failureKind` distinguishes invalid binding, transient
+failure and ambiguous launch; absent fields retain the legacy generic-error display. Optional
+`binding.models` preserves the confirmed runner/model for each agent step, for inspection and
+model-specific usage holds. Older definitions without it apply only account-wide observed holds;
+no model applicability is guessed. The binding revision hash retains its existing shape.
+Invalid creation-ledger entries are retained verbatim, block access to their own creation keys,
+and do not discard unrelated definitions. A malformed whole ledger blocks deferred creation and
+cleanup while ordinary automation definitions remain readable and writable.
+
+Second review follow-up: an ambiguous launch is never retried by the scheduler, but the explicit
+Run now on it starts only the missing runs under the run IDs recorded before launch, and DELETE with
+the current revision may dismiss it (ledger outcome `cancelled`, listing the recorded runs that
+exist). DELETE of a composer start that already launched answers 409 instead of 404. A Codex login
+that exposes no identity (API key) is bound by profile location; an unanswered identity check is a
+transient failure, not an invalid binding.
