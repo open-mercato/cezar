@@ -165,6 +165,42 @@ describe('recover() and the dispatch field', () => {
   });
 
   /**
+   * A child whose retry cap stopped the auto-continue nudge was parked `waiting` when cezar
+   * exited. Recovery must not force-settle it as a success — the ceiling is not the task ending —
+   * and its report must read `partial`, like the live idle-timeout path.
+   */
+  it('settles a waiting child parked on its retry cap unfinished, and reports it partial', async () => {
+    const flag = process.env.CEZ_DISPATCH;
+    process.env.CEZ_DISPATCH = '1';
+    try {
+      const parent = store.createRun({ title: 'commander', workflow: 'quick-task', task: 'hold', steps: [] });
+      store.updateRun(parent.id, { status: 'waiting', dispatch: { rootRunId: parent.id } });
+      const child = store.createRun({
+        title: 'flank left',
+        workflow: 'quick-task',
+        task: 'take the left flank',
+        steps: [{ id: 'work', name: 'Work', kind: 'agent' }],
+      });
+      store.updateRun(child.id, {
+        status: 'waiting',
+        workflowDef: WORKFLOW_DEF,
+        dispatch: { rootRunId: parent.id, parentRunId: parent.id, retryLimit: 1, retryLimitReached: true },
+      });
+
+      await new RunManager(store, repoRoot, { semaphore: frozen() }).recover();
+
+      expect(store.getRun(child.id)?.status).toBe('failed');
+      expect(store.getRun(child.id)?.error).toContain('retry limit stopped cezar');
+      const pending = store.getRun(parent.id)?.dispatch?.pendingReports ?? [];
+      expect(pending).toHaveLength(1);
+      expect(pending[0]?.report.status).toBe('partial');
+    } finally {
+      if (flag === undefined) delete process.env.CEZ_DISPATCH;
+      else process.env.CEZ_DISPATCH = flag;
+    }
+  });
+
+  /**
    * The Guard across a restart (audit R9): a child parked on its own `CEZ:ASK` is force-settled
    * like any other `waiting` run — but what reaches its commander must say BLOCKED, naming the
    * question, never a clean `done` nobody answered. The sibling above pins the other half: a
