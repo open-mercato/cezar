@@ -6,9 +6,7 @@ import { useWorkspaceUiState, workspaceQueryKeys } from '@/api/queries'
 import { toast } from '@/components/ui/toaster'
 import type { WorkspaceUiState } from '@open-mercato/cezar-api-client'
 import { trackShortcutRebound } from './telemetry'
-import { assignBinding, effectiveBindings, resetBinding, type Overrides } from './keybindings'
-
-const EMPTY: Overrides = {}
+import { assignBinding, effectiveBindings, resetBinding, sanitizeOverrides, type Overrides } from './keybindings'
 
 /**
  * The user's shortcuts, stored in the workspace ui-state (`~/.cezar/ui-state.json`) beside
@@ -21,7 +19,8 @@ export function useKeybindings() {
   const uiState = useWorkspaceUiState()
   const sequence = React.useRef(0)
   const writeChain = React.useRef<Promise<void>>(Promise.resolve())
-  const overrides = uiState.data?.keybindings ?? EMPTY
+  const stored = uiState.data?.keybindings
+  const overrides = React.useMemo(() => sanitizeOverrides(stored), [stored])
   const bindings = React.useMemo(() => effectiveBindings(overrides), [overrides])
 
   const write = React.useCallback(
@@ -29,7 +28,7 @@ export function useKeybindings() {
       const current = queryClient.getQueryData<WorkspaceUiState>(workspaceQueryKeys.uiState)
       // Until the GET lands a write could not preserve the stored map — refuse rather than guess.
       if (current === undefined) return
-      const keybindings = change(current.keybindings ?? EMPTY)
+      const keybindings = change(sanitizeOverrides(current.keybindings))
       queryClient.setQueryData<WorkspaceUiState>(workspaceQueryKeys.uiState, { ...current, keybindings })
       const writeSequence = ++sequence.current
       const pending = writeChain.current.then(async () => {

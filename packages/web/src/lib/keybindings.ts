@@ -54,11 +54,14 @@ function keyName(event: Pick<KeyboardEvent, 'code' | 'key'>): string | null {
   return null
 }
 
-export type ChordEvent = Pick<KeyboardEvent, 'code' | 'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>
+export type ChordEvent = Pick<KeyboardEvent, 'code' | 'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'> &
+  Partial<Pick<KeyboardEvent, 'getModifierState'>>
 
 /** The chord a keydown spells, or null for a lone modifier or a key chords cannot name. */
 export function chordFromEvent(event: ChordEvent, apple = isApplePlatform()): string | null {
-  if (['Meta', 'Control', 'Alt', 'Shift', 'OS'].includes(event.key)) return null
+  if (['Meta', 'Control', 'Alt', 'Shift', 'OS', 'AltGraph'].includes(event.key)) return null
+  // Windows reports AltGr as Ctrl+Alt: that is a layout typing `@` or `€`, not a chord.
+  if (event.getModifierState?.('AltGraph')) return null
   const key = keyName(event)
   if (!key) return null
   const parts: string[] = []
@@ -127,12 +130,14 @@ const RESERVED = new Set([
 ])
 
 /** Why `chord` cannot be bound, or undefined when it can. */
-export function chordProblem(chord: string): string | undefined {
+export function chordProblem(chord: string, apple = isApplePlatform()): string | undefined {
   const modifiers = chord.split('+').slice(0, -1)
   // A bare key or Shift+key is typing; the workspace's own bare keys are not rebindable here.
   if (!modifiers.some((m) => m === 'Mod' || m === 'Ctrl' || m === 'Alt')) {
     return 'Use ⌘/Ctrl, ⌃ or ⌥ with the key'
   }
+  // Off a Mac, Ctrl+Alt is AltGr on many layouts — the chord would eat a typed character.
+  if (!apple && modifiers.includes('Mod') && modifiers.includes('Alt')) return 'Ctrl+Alt types characters on many layouts'
   if (RESERVED.has(chord)) return 'That shortcut is taken by the browser or cezar'
   return undefined
 }
@@ -141,6 +146,23 @@ export function chordProblem(chord: string): string | undefined {
 export const DEFAULT_KEYBINDINGS: Readonly<Record<string, string>> = {
   ...Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`tab:${index + 1}`, `Mod+${index + 1}`])),
   'terminal-column': 'Mod+/',
+}
+
+const MAX_STORED_BINDINGS = 200
+
+/**
+ * The stored overrides, reduced to what the ui-state PUT accepts (`setWorkspaceUiStateInputSchema`):
+ * a hand-edited `~/.cezar/ui-state.json` must neither crash `formatChord` nor 400 every later write.
+ */
+export function sanitizeOverrides(stored: unknown): Overrides {
+  if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) return {}
+  const result: Record<string, string | null> = {}
+  for (const [id, chord] of Object.entries(stored)) {
+    if (Object.keys(result).length >= MAX_STORED_BINDINGS) break
+    if (id.length < 1 || id.length > 120) continue
+    if (chord === null || (typeof chord === 'string' && chord.length >= 1 && chord.length <= 40)) result[id] = chord
+  }
+  return result
 }
 
 /** command id → chord, after the user's overrides. */
@@ -172,7 +194,10 @@ export function assignBinding(overrides: Overrides, id: string, chord: string | 
   const next: Record<string, string | null> = { ...overrides }
   if (chord) {
     for (const [other, held] of effectiveBindings(overrides)) {
-      if (other !== id && held === chord) next[other] = null
+      if (other !== id && held === chord) {
+        if (DEFAULT_KEYBINDINGS[other]) next[other] = null
+        else delete next[other]
+      }
     }
   }
   if (chord === (DEFAULT_KEYBINDINGS[id] ?? null)) delete next[id]
@@ -180,10 +205,9 @@ export function assignBinding(overrides: Overrides, id: string, chord: string | 
   return next
 }
 
-/** Back to the shipped default for `id`. */
+/** Back to the shipped default for `id` — taken back from whichever command holds it now. */
 export function resetBinding(overrides: Overrides, id: string): Record<string, string | null> {
-  const { [id]: _dropped, ...rest } = overrides
-  return rest
+  return assignBinding(overrides, id, DEFAULT_KEYBINDINGS[id] ?? null)
 }
 
 /** Every command a shortcut can run, for Settings → Keyboard. Ids are `buildTaskCommands`'. */

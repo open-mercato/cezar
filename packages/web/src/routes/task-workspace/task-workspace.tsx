@@ -381,7 +381,7 @@ function WorkspaceView({
 
   /**
    * The workspace's keys — bare keys, never while typing or with a dialog/menu open (brutus §5.2):
-   *   1…9 nth card · [ ] previous/next card · f full view · \ split the last window ·
+   *   1…9 nth numbered tab (views, then Notes) · [ ] previous/next card · f full view · \ split the last window ·
    *   / focus the composer · ` show or hide the terminal drawer
    */
   const stripOrder = useMemo(

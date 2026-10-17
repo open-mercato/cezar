@@ -3,7 +3,14 @@ import * as React from 'react'
 
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
-import { BINDABLE_COMMANDS, chordFromEvent, chordProblem, DEFAULT_KEYBINDINGS, formatChord } from '@/lib/keybindings'
+import {
+  BINDABLE_COMMANDS,
+  chordFromEvent,
+  chordProblem,
+  DEFAULT_KEYBINDINGS,
+  formatChord,
+  isApplePlatform,
+} from '@/lib/keybindings'
 import { useKeybindings } from '@/lib/use-keybindings'
 import { cn } from '@/lib/utils'
 
@@ -34,6 +41,8 @@ export function KeyboardSection() {
   React.useEffect(() => {
     if (!recording) return
     const onKey = (event: KeyboardEvent) => {
+      // A bare Tab is leaving, not answering: focus moves on and recording ends.
+      if (event.key === 'Tab' && !event.metaKey && !event.ctrlKey && !event.altKey) return setRecording(null)
       event.preventDefault()
       event.stopImmediatePropagation()
       if (event.key === 'Escape') return setRecording(null)
@@ -51,9 +60,20 @@ export function KeyboardSection() {
       if (previous) toast(`${formatChord(chord)} moved from ${labelOf(previous)} to ${labelOf(recording)}`)
       setRecording(null)
     }
+    // A press anywhere but this row's chord button (whose click toggles) gives the keyboard back.
+    const onPointerDown = (event: PointerEvent) => {
+      const chordButton = event.target instanceof Element ? event.target.closest('[data-slot="shortcut-chord"]') : null
+      if (chordButton?.closest<HTMLElement>('[data-command-id]')?.dataset.commandId === recording) return
+      setRecording(null)
+    }
     window.addEventListener('keydown', onKey, { capture: true })
-    return () => window.removeEventListener('keydown', onKey, { capture: true })
+    window.addEventListener('pointerdown', onPointerDown, { capture: true })
+    return () => {
+      window.removeEventListener('keydown', onKey, { capture: true })
+      window.removeEventListener('pointerdown', onPointerDown, { capture: true })
+    }
   }, [recording, keybindings])
+  const apple = isApplePlatform()
 
   return (
     <div
@@ -66,7 +86,8 @@ export function KeyboardSection() {
             <h2 className="text-sm font-semibold text-foreground">Task shortcuts</h2>
             <p className="text-[13px] text-muted-foreground">
               Run a task’s commands from the keyboard while the task is open. {formatChord('Mod+P')} lists them all;
-              press ⇧↵ on a row there to set its shortcut. ⌘ chords also work while you type.
+              press {apple ? '⇧↵' : 'Shift+Enter'} on a row there to set its shortcut. {apple ? '⌘' : 'Ctrl'} chords also
+              work while you type.
             </p>
           </div>
           <Button
@@ -105,6 +126,9 @@ export function KeyboardSection() {
                     onClick={() => {
                       setProblem(null)
                       setRecording(isRecording ? null : entry.id)
+                    }}
+                    onBlur={() => {
+                      if (isRecording) setRecording(null)
                     }}
                     className={cn(
                       'min-w-16 rounded-[5px] border border-b-2 px-1.5 py-0.5 font-mono text-xs',

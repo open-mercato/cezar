@@ -178,8 +178,10 @@ export function TaskPalette() {
         else show(null, '@')
         return
       }
+      // Leaves a rename unsaved — else Enter on the switcher would rename the task to "@".
+      setRenaming(false)
       // Repeated ⌘P walks the switcher: the first repeat lands on the previous task.
-      if (!search.startsWith('@') && subjectId) {
+      if ((renaming || !search.startsWith('@')) && subjectId) {
         setSearch('@')
         cycled.current = true
         setCycleTo({ step: 1 })
@@ -230,13 +232,6 @@ export function TaskPalette() {
     return () => window.removeEventListener(OPEN_TASK_PALETTE_EVENT, onOpen)
   }, [actOn, pageTaskId, show])
 
-  React.useEffect(() => {
-    if (reopenFor.current && reopenFor.current === pageTaskId) {
-      reopenFor.current = null
-      show(pageTaskId, '')
-    }
-  }, [pageTaskId, show])
-
   // Leaving the page retires a closed palette's subject, so a task no longer on screen stops
   // being polled for its git status. An open dialog (Stop, Delete, Commit) is modal, so nothing
   // navigates while one is up.
@@ -248,6 +243,20 @@ export function TaskPalette() {
   React.useEffect(() => {
     if (!open && !keepSubject.current) setSubjectId(null)
   }, [open])
+  // After the two above: a cross-project Tab closes and navigates in one commit, and this
+  // re-open has to land last.
+  React.useEffect(() => {
+    if (reopenFor.current && reopenFor.current === pageTaskId) {
+      reopenFor.current = null
+      show(pageTaskId, '')
+    }
+  }, [pageTaskId, show])
+  // A dialog command's subject is kept only while its dialog (and the mutation behind it) is up.
+  const dialogDone = React.useCallback(() => {
+    if (!keepSubject.current) return
+    keepSubject.current = false
+    if (!dispatch.current.open) setSubjectId(null)
+  }, [])
 
   const perform = (id: string, beside = false) => {
     const command = subjectApi.current?.build().find((candidate) => candidate.id === id)
@@ -262,6 +271,8 @@ export function TaskPalette() {
     keepSubject.current = DIALOG_COMMANDS.has(command.id)
     setOpen(false)
     const run = beside && command.performBeside ? command.performBeside : command.perform
+    // Clipboard writes and new tabs need the key press's user gesture, which a timer loses (WebKit).
+    if (needsGesture(command.id)) return run()
     // After the dialog lets go, so a command that focuses something (the composer) or opens a
     // dialog of its own (Stop, Delete, Commit) is not fighting the palette's focus trap.
     setTimeout(run, 0)
@@ -360,6 +371,8 @@ export function TaskPalette() {
       )
       return setRecording(null)
     }
+    // An IME's Enter/Tab confirms the composition, not the row.
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return
     if (renaming) {
       if (event.key === 'Enter') {
         event.preventDefault()
@@ -381,7 +394,7 @@ export function TaskPalette() {
       perform(row.dataset.commandId, true)
       return
     }
-    if (event.key === 'Enter' && event.shiftKey && row?.dataset.commandId) {
+    if (event.key === 'Enter' && event.shiftKey && row?.dataset.commandId && recordable(row.dataset.commandId)) {
       event.preventDefault()
       startRecording(row.dataset.commandId)
       return
@@ -413,6 +426,7 @@ export function TaskPalette() {
           apiRef={subjectApi}
           onCommands={setPublished}
           onRename={beginRename}
+          onDialogDone={dialogDone}
           open={open}
         />
       ) : null}
@@ -608,7 +622,7 @@ function CommandGroups({
                   disabled={command.unavailable !== undefined}
                   data-slot="task-palette-command"
                   data-command-id={command.id}
-                  aria-pressed={command.pressed}
+                  aria-checked={command.pressed}
                   onSelect={() => onPerform(command.id)}
                   className={cn('group/command', command.danger && 'data-[selected=true]:text-danger')}
                 >
@@ -620,7 +634,7 @@ function CommandGroups({
                     <span className="shrink-0 text-xs text-primary">on</span>
                   ) : null}
                   {/* The mouse twin of ⇧↵ — only commands that can be bound by id. */}
-                  {command.id.startsWith('layout:') && command.id !== 'layout:new' ? null : (
+                  {!recordable(command.id) ? null : (
                     <button
                       type="button"
                       data-slot="task-palette-record"
@@ -659,6 +673,12 @@ function shortcutFor(command: TaskCommand, bindings: ReadonlyMap<string, string>
 
 /** Commands that open a dialog: the palette keeps their host mounted after it closes. */
 const DIALOG_COMMANDS = new Set(['stop', 'delete', 'git:commit', 'git:commit-push'])
+
+/** Commands that must run inside the key press or click that chose them. */
+const needsGesture = (id: string) => id.startsWith('copy:') || id === 'open-pr'
+
+/** Whether ⇧↵ can bind a command: saved layouts are not bound by id. */
+const recordable = (id: string) => !id.startsWith('layout:') || id === 'layout:new'
 
 /** A command's name for messages — the live row's label when it is listed, else the catalog's. */
 function bindableLabel(id: string, commands: readonly TaskCommand[] = []): string {
@@ -789,6 +809,8 @@ const SubjectHost = React.memo(function SubjectHost(props: {
   apiRef: React.RefObject<SubjectApi | null>
   onCommands: (published: { runId: string; commands: TaskCommand[] }) => void
   onRename: () => void
+  /** A dialog this host opened has closed, and nothing it started is still in flight. */
+  onDialogDone: () => void
 }) {
   const run = useRun(props.runId).data
   if (!run) return null
@@ -800,6 +822,8 @@ function SubjectReferences(props: {
   apiRef: React.RefObject<SubjectApi | null>
   onCommands: (published: { runId: string; commands: TaskCommand[] }) => void
   onRename: () => void
+  /** A dialog this host opened has closed, and nothing it started is still in flight. */
+  onDialogDone: () => void
 }) {
   // The git step reads the task's PR status; the header asks under the same provider.
   const refs = useRunReferences(props.run)
@@ -815,14 +839,18 @@ function SubjectCommands({
   apiRef,
   onCommands,
   onRename,
+  onDialogDone,
 }: {
   run: ApiRun
   apiRef: React.RefObject<SubjectApi | null>
   onCommands: (published: { runId: string; commands: TaskCommand[] }) => void
   onRename: () => void
+  /** A dialog this host opened has closed, and nothing it started is still in flight. */
+  onDialogDone: () => void
 }) {
   const workspace = taskWorkspaceFor(run.id)
-  const actions = useRunActions(run, { surface: 'palette', onMarkedUnread: workspace?.markedUnread })
+  const onScreen = taskIdFromPath(useLocation().pathname) === run.id
+  const actions = useRunActions(run, { surface: 'palette', onMarkedUnread: workspace?.markedUnread, onScreen })
   const git = useRunGitStep(run)
   const canTerminal = useCanOpenTerminal(run)
   const openIn = useRunOpenChoices(run, canTerminal)
@@ -877,6 +905,13 @@ function SubjectCommands({
   const latest = React.useRef(commands)
   latest.current = commands
   React.useEffect(() => onCommands({ runId: run.id, commands: latest.current }), [signature, onCommands, run.id])
+
+  const busy = actions.confirming !== null || git.commitOpen || actions.delete.isPending || actions.cancel.isPending
+  const wasBusy = React.useRef(busy)
+  React.useEffect(() => {
+    if (wasBusy.current && !busy) onDialogDone()
+    wasBusy.current = busy
+  }, [busy, onDialogDone])
 
   return (
     <>

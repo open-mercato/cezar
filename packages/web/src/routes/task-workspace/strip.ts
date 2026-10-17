@@ -1,6 +1,6 @@
 import * as React from 'react'
 
-import { shortcutsBlocked, tabHint } from '@/lib/keybindings'
+import { isApplePlatform, shortcutsBlocked, tabHint } from '@/lib/keybindings'
 import { useKeybindings } from '@/lib/use-keybindings'
 import { useModifierHeld } from '@/lib/use-modifier-held'
 
@@ -26,7 +26,7 @@ export function stripEntries(views: readonly ViewId[]): StripEntry[] {
 }
 
 /** Each tab's shortcut badge (its positional ⌘N, else a chord bound to it by id), and whether to
- *  show them — a plain ⌘ hold, while nothing else has the keyboard. */
+ *  show them — a plain ⌘ hold, while nothing else has the keyboard and the chords can fire. */
 export function useStripKeyHints(entries: readonly StripEntry[]): { hints: ReadonlyMap<string, string>; show: boolean } {
   const { bindings } = useKeybindings()
   const show = useModifierHeld(true, notBlocked)
@@ -44,4 +44,6 @@ export function useStripKeyHints(entries: readonly StripEntry[]): { hints: Reado
   return { hints, show }
 }
 
-const notBlocked = () => !shortcutsBlocked()
+// Off a Mac every Ctrl chord in the terminal is the shell's, so the badges would promise nothing.
+const notBlocked = () =>
+  !shortcutsBlocked() && (isApplePlatform() || !(document.activeElement instanceof HTMLElement && document.activeElement.closest('.xterm')))

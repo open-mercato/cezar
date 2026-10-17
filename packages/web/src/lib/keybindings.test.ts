@@ -9,6 +9,7 @@ import {
   formatChord,
   tabHint,
   resetBinding,
+  sanitizeOverrides,
   type ChordEvent,
 } from './keybindings'
 
@@ -35,6 +36,13 @@ describe('chords', () => {
     expect(chordFromEvent(key('Digit1', '!', { metaKey: true, shiftKey: true }), true)).toBe('Mod+Shift+1')
   })
 
+  it('AltGr is typing, not a chord', () => {
+    const altGr = key('KeyQ', '@', { ctrlKey: true, altKey: true, getModifierState: (k: string) => k === 'AltGraph' })
+    expect(chordFromEvent(altGr, false)).toBeNull()
+    expect(chordFromEvent(key('AltRight', 'AltGraph', { ctrlKey: true, altKey: true }), false)).toBeNull()
+    expect(chordFromEvent(key('KeyQ', 'q', { ctrlKey: true, altKey: true, getModifierState: () => false }), false)).toBe('Mod+Alt+Q')
+  })
+
   it('ignores a lone modifier', () => {
     expect(chordFromEvent(key('MetaLeft', 'Meta', { metaKey: true }), true)).toBeNull()
   })
@@ -58,6 +66,11 @@ describe('chords', () => {
     expect(chordProblem('Mod+W')).toBeDefined()
     expect(chordProblem('Mod+Shift+P')).toBeUndefined()
     expect(chordProblem('Alt+P')).toBeUndefined()
+  })
+
+  it('refuses Ctrl+Alt off a Mac, where it is AltGr', () => {
+    expect(chordProblem('Mod+Alt+P', false)).toBeDefined()
+    expect(chordProblem('Mod+Alt+P', true)).toBeUndefined()
   })
 })
 
@@ -87,6 +100,29 @@ describe('bindings', () => {
     expect(assignBinding({}, 'tab:1', 'Mod+1')).toEqual({})
     const moved = assignBinding({}, 'tab:1', 'Mod+Alt+1')
     expect(resetBinding(moved, 'tab:1')).toEqual({})
+  })
+
+  it('reset takes the default chord back from whichever command holds it', () => {
+    const moved = assignBinding({}, 'pin', 'Mod+/')
+    const reset = resetBinding(moved, 'terminal-column')
+    expect(effectiveBindings(reset).get('terminal-column')).toBe('Mod+/')
+    expect(effectiveBindings(reset).has('pin')).toBe(false)
+    expect(reset).toEqual({})
+    // No default: reset just drops the override.
+    expect(resetBinding({ pin: 'Mod+J' }, 'pin')).toEqual({})
+  })
+
+  it('stored overrides keep only what the ui-state PUT accepts', () => {
+    expect(sanitizeOverrides(undefined)).toEqual({})
+    expect(sanitizeOverrides('Mod+J')).toEqual({})
+    expect(sanitizeOverrides(['Mod+J'])).toEqual({})
+    expect(
+      sanitizeOverrides({ pin: 'Mod+J', 'tab:1': null, archive: 5, rename: '', stop: 'x'.repeat(41), ['x'.repeat(121)]: 'Mod+L' }),
+    ).toEqual({ pin: 'Mod+J', 'tab:1': null })
+    const many = Object.fromEntries(Array.from({ length: 250 }, (_, index) => [`id:${index}`, null]))
+    expect(Object.keys(sanitizeOverrides(many))).toHaveLength(200)
+    // A malformed value never reaches formatChord.
+    expect(() => [...effectiveBindings(sanitizeOverrides({ pin: 5 })).values()].map((chord) => formatChord(chord))).not.toThrow()
   })
 
   it('a stale map that double-books a chord still runs one command — the override wins', () => {

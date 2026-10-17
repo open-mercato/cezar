@@ -213,6 +213,28 @@ describe('the task workspace (main)', () => {
     vi.unstubAllGlobals()
   })
 
+  it('off a Mac, shows no tab numbers while the terminal has focus — Ctrl chords are the shell’s there', async () => {
+    vi.stubGlobal('navigator', { ...navigator, platform: 'Linux x86_64' })
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    const hints = () => document.querySelectorAll('[data-slot="tab-key-hint"]').length
+    const term = document.body.appendChild(Object.assign(document.createElement('div'), { className: 'xterm' }))
+    const helper = term.appendChild(document.createElement('textarea'))
+    helper.focus()
+
+    fireEvent.keyDown(window, { key: 'Control', ctrlKey: true })
+    await new Promise((resolve) => setTimeout(resolve, 450))
+    expect(hints()).toBe(0)
+    fireEvent.keyUp(window, { key: 'Control' })
+
+    term.remove()
+    fireEvent.keyDown(window, { key: 'Control', ctrlKey: true })
+    await waitFor(() => expect(hints()).toBeGreaterThan(0))
+    fireEvent.keyUp(window, { key: 'Control' })
+    vi.unstubAllGlobals()
+  })
+
   it('offers no Terminal anywhere when the cockpit allows no shell', async () => {
     stubFetch({ terminal: false })
     renderWorkspace()

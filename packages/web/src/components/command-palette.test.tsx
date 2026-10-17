@@ -806,6 +806,18 @@ describe('ranking', () => {
     expect(paletteScore('task a PR #123 PR #12', '#12')).toBeGreaterThan(paletteScore('task a PR #123 PR #99', '#12'))
   })
 
+  it('ranks an exact reference first however long the title before it', () => {
+    const exact = `task ${'a very long title about the checkout flow '.repeat(3)} PR #12 0000-1111`
+    const longer = 'task Short PR #123 0000-1111'
+    for (const query of ['#12', '12', 'pr 12']) {
+      expect(paletteScore(exact, query)).toBeGreaterThan(paletteScore(longer, query))
+    }
+    // Prose still decays: a title word earlier in the row still wins.
+    expect(paletteScore('task checkout PR #1', 'checkout')).toBeGreaterThan(
+      paletteScore(`task ${'x '.repeat(40)}checkout PR #1`, 'checkout'),
+    )
+  })
+
   it('matches keywords too — the project name on a task row', () => {
     expect(paletteScore('task checkout crash abc', 'shop', ['shop'])).toBeGreaterThan(0)
   })

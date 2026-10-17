@@ -102,6 +102,9 @@ export function paletteScore(value: string, search: string, keywords?: string[])
   const tokens = query.split(/\s+/)
   let total = 0
   for (const token of tokens) {
+    // A number, or the `pr`/`issue` naming one, is a reference: where it sits says nothing — the
+    // references follow the title, so a decay would rank `#12` on a long title below `#123`.
+    const reference = /^(#?\d+|pr|issue)$/.test(token)
     // The best of every occurrence, not the first: `#12` must find the exact `#12` reference even
     // when `#123` comes earlier in the row.
     let best = 0
@@ -109,8 +112,9 @@ export function paletteScore(value: string, search: string, keywords?: string[])
       const starts = at === 0 || !/[a-z0-9]/.test(haystack[at - 1] ?? '')
       // A whole-word hit (`#12` against `#12`, not `#123`) edges out a prefix one.
       const ends = !/[a-z0-9]/.test(haystack[at + token.length] ?? '')
+      const whole = reference && starts && ends
       // Decays with distance but never to zero: a late hit still beats no hit.
-      best = Math.max(best, ((starts ? 1 : 0.5) * (ends ? 1 : 0.8)) / (1 + at / 48))
+      best = Math.max(best, whole ? 1 : ((starts ? 1 : 0.5) * (ends ? 1 : 0.8)) / (1 + at / 48))
     }
     if (best === 0) return 0
     total += best
@@ -611,6 +615,8 @@ export const TaskItem = React.memo(function TaskItem({
 }) {
   const { task, label, projectName } = entry
   const attention = deriveAttention(task)
+  // A chip needs the project its reference status is asked under.
+  const chip = task.projectId ? entry.refList[0] : undefined
   return (
     <CommandItem
       value={entry.value}
@@ -623,7 +629,7 @@ export const TaskItem = React.memo(function TaskItem({
       <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
       {/* The sidebar's own chip, leading the row as it does there (#788) — status colour, the
           conflict panel and its Resolve action included. A click opens the PR, not the task. */}
-      {entry.refList[0] ? (
+      {chip && task.projectId ? (
         <span
           data-slot="palette-task-refs"
           // The palette sizes every icon in a row at 20px; the chips keep the sidebar's.
@@ -631,21 +637,19 @@ export const TaskItem = React.memo(function TaskItem({
           onClick={(event) => event.stopPropagation()}
           onPointerDown={(event) => event.stopPropagation()}
         >
-          {task.projectId ? (
-            <TaskReferenceChip
-              run={task}
-              projectId={task.projectId}
-              reference={entry.refList[0]}
-              compact
-              className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-[10.5px]"
-            />
-          ) : null}
+          <TaskReferenceChip
+            run={task}
+            projectId={task.projectId}
+            reference={chip}
+            compact
+            className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-[10.5px]"
+          />
         </span>
       ) : null}
       {/* Like the sidebar: the chip carries the number, so a matching `NNN: ` prefix is not
           painted twice. The search still matches the full title. */}
       <span className="min-w-0 flex-1 truncate" title={label}>
-        {refPrefixMatches(label, entry.refList[0]?.number) ? splitRefPrefix(label).rest : label}
+        {refPrefixMatches(label, chip?.number) ? splitRefPrefix(label).rest : label}
       </span>
       {task.automationId ? (
         <span

@@ -1,5 +1,5 @@
 import { MoreHorizontalIcon, NotebookTextIcon, PencilIcon, PlusIcon, XIcon } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -264,11 +264,9 @@ export function LayoutCards({
               selected && 'border-foreground text-foreground',
             )}
           >
-            {showKeyHints && hint ? (
-              <KeyHint hint={hint} className="size-3.5" />
-            ) : (
+            <TabIcon hint={showKeyHints ? hint : undefined}>
               <Icon aria-hidden="true" className="size-3.5 shrink-0" />
-            )}
+            </TabIcon>
             {label}
           </Button>
         )
@@ -280,17 +278,15 @@ export function LayoutCards({
           data-strip-chrome=""
           aria-current={notesActive ? 'page' : undefined}
           className={cn(
-            '-mb-px flex h-9 shrink-0 items-center gap-1.5 border-b-2 px-2.5 text-[13px] font-medium',
+            'relative -mb-px flex h-9 shrink-0 items-center gap-1.5 border-b-2 px-2.5 text-[13px] font-medium',
             notesActive
               ? 'border-foreground text-foreground'
               : 'border-transparent text-muted-foreground hover:text-foreground',
           )}
         >
-          {showKeyHints && keyHints.get('view:notes') ? (
-            <KeyHint hint={keyHints.get('view:notes')!} className="size-3.5" />
-          ) : (
+          <TabIcon hint={showKeyHints ? keyHints.get('view:notes') : undefined}>
             <NotebookTextIcon aria-hidden="true" className="size-3.5 shrink-0" />
-          )}
+          </TabIcon>
           Notes
         </Link>
       ) : null}
@@ -315,7 +311,6 @@ export function LayoutCards({
                 <LayoutCard
                   key={item.key}
                   layout={item.layout}
-                  keyHint={showKeyHints ? keyHints.get(`layout:${item.layout.name}`) : undefined}
                   active={isActive(item)}
                   onSelect={() => onSelect(item.layout.name)}
                   onRename={(requested) => onRename(item.layout.name, requested)}
@@ -394,22 +389,27 @@ export function LayoutCards({
   )
 }
 
-/** The key that selects a card, shown while ⌘ is held IN PLACE of the card's icon, at the icon's
- *  size: the strip's fit is measured from card widths, so a hint must never change one. A longer
- *  chord than a digit cannot fit there, so it floats over the card's corner instead. */
-function KeyHint({ hint, className }: { hint: string; className: string }) {
-  const digit = hint.length === 1
+/** A tab's icon, or while ⌘ is held the key that selects it. The strip's fit is measured from tab
+ *  widths, so a hint must never change one: a digit takes the icon's place at its size, a longer
+ *  chord floats over the tab's corner and the icon keeps its space. */
+function TabIcon({ hint, children }: { hint: string | undefined; children: ReactNode }) {
+  const kbdClass =
+    'pointer-events-none flex shrink-0 items-center justify-center rounded-[4px] bg-foreground font-mono text-[10px] leading-none font-semibold text-background'
+  if (!hint) return children
+  if (hint.length === 1) {
+    return (
+      <kbd data-slot="tab-key-hint" aria-hidden="true" className={cn(kbdClass, 'size-3.5')}>
+        {hint}
+      </kbd>
+    )
+  }
   return (
-    <kbd
-      data-slot="tab-key-hint"
-      aria-hidden="true"
-      className={cn(
-        'pointer-events-none flex shrink-0 items-center justify-center rounded-[4px] bg-foreground font-mono text-[10px] leading-none font-semibold text-background',
-        digit ? className : 'absolute -top-1 right-0 z-10 h-4 px-1',
-      )}
-    >
-      {hint}
-    </kbd>
+    <>
+      <span className="invisible flex shrink-0">{children}</span>
+      <kbd data-slot="tab-key-hint" aria-hidden="true" className={cn(kbdClass, 'absolute -top-1 right-0 z-10 h-4 px-1')}>
+        {hint}
+      </kbd>
+    </>
   )
 }
 
@@ -458,14 +458,12 @@ export function LayoutGlyph({ count, className }: { count: number; className?: s
  */
 function LayoutCard({
   layout,
-  keyHint,
   active,
   onSelect,
   onRename,
   onClose,
 }: {
   layout: WorkspaceLayout
-  keyHint?: string
   active: boolean
   onSelect: () => void
   onRename: (requested: string) => void
@@ -526,7 +524,7 @@ function LayoutCard({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {keyHint ? <KeyHint hint={keyHint} className="h-3.5 w-5" /> : <LayoutGlyph count={layout.columns.length} />}
+      <LayoutGlyph count={layout.columns.length} />
       {editing ? (
         <RenameField
           name={shown}

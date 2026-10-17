@@ -62,8 +62,46 @@ describe('Settings → Keyboard', () => {
     await waitFor(() => expect(puts.at(-1)).toEqual({ keybindings: { 'terminal-column': null, pin: 'Mod+/' } }))
     expect(chordOf('pin').textContent).toBe('⌘/')
 
+    // Reset takes the default back from the command holding it.
     fireEvent.click(screen.getByRole('button', { name: /Reset Terminal in a column/ }))
-    await waitFor(() => expect(puts.at(-1)).toEqual({ keybindings: { pin: 'Mod+/' } }))
+    await waitFor(() => expect(puts.at(-1)).toEqual({ keybindings: {} }))
+    expect(chordOf('terminal-column').textContent).toBe('⌘/')
+  })
+
+  it.each([
+    ['a press elsewhere', () => fireEvent.pointerDown(document.body)],
+    ['a bare Tab', () => fireEvent.keyDown(window, { code: 'Tab', key: 'Tab' })],
+    ['the chord button losing focus', () => fireEvent.blur(chordOf('pin'))],
+  ])('%s stops recording and gives the keyboard back', async (_name, leave) => {
+    renderSection()
+    await waitFor(() => expect(chordOf('pin').disabled).toBe(false))
+    fireEvent.click(chordOf('pin'))
+    expect(await screen.findByText(/Press keys/)).toBeTruthy()
+    act(() => {
+      leave()
+    })
+    await waitFor(() => expect(screen.queryByText(/Press keys/)).toBeNull())
+    const typed = new KeyboardEvent('keydown', { code: 'KeyA', key: 'a', cancelable: true })
+    act(() => {
+      window.dispatchEvent(typed)
+    })
+    expect(typed.defaultPrevented).toBe(false)
+    expect(puts).toEqual([])
+  })
+
+  it('a press on the recording row’s own button does not cancel before its click toggles', async () => {
+    renderSection()
+    await waitFor(() => expect(chordOf('pin').disabled).toBe(false))
+    fireEvent.click(chordOf('pin'))
+    fireEvent.pointerDown(chordOf('pin'))
+    expect(screen.getByText(/Press keys/)).toBeTruthy()
+  })
+
+  it('prints the hint text for the platform', async () => {
+    vi.stubGlobal('navigator', { ...navigator, platform: 'Win32' })
+    renderSection()
+    expect(await screen.findByText(/Shift\+Enter on a row there/)).toBeTruthy()
+    expect(screen.getByText(/Ctrl chords also/)).toBeTruthy()
   })
 
   it('refuses a reserved chord and saves nothing', async () => {

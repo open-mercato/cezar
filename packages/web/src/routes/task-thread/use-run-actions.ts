@@ -35,7 +35,17 @@ export function useCanOpenTerminal(run: ApiRun): boolean {
  *  exact same behavior. Every failure surfaces the server's own words as a danger toast. */
 export function useRunActions(
   run: ApiRun,
-  { onMarkedUnread, surface = 'task_view' }: { onMarkedUnread?: () => void; surface?: TaskActionSurface } = {},
+  {
+    onMarkedUnread,
+    surface = 'task_view',
+    onScreen = true,
+  }: {
+    onMarkedUnread?: () => void
+    surface?: TaskActionSurface
+    /** The run is the page's own. A deletion moves the page only then — the palette may delete a
+     *  task picked from elsewhere. */
+    onScreen?: boolean
+  } = {},
 ) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -117,11 +127,11 @@ export function useRunActions(
         }} : previous)
         void queryClient.invalidateQueries({queryKey: lifecycleQueryKeys.all()})
         toast('Cleanup requested. The task is kept until cleanup completes.')
-        void navigate(`/tasks/${run.id}`)
+        if (onScreen) void navigate(`/tasks/${run.id}`)
         return
       }
       // Only the legacy endpoint's completed deletion means the page is gone.
-      void navigate('/')
+      if (onScreen) void navigate('/')
     },
     onError,
   })

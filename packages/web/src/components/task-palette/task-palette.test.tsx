@@ -92,7 +92,14 @@ const HEALTH: HealthResponse = {
   capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
 }
 
-function serve(runs: RunRecord[] = RUNS): void {
+/** A second project's task, known to the palettes through the cross-project index. */
+const BLOG_TASK = run('b1', 'Blog follow-up')
+const TWO_PROJECTS = [
+  { id: 'shop', name: 'shop', root: '/repos/shop', addedAt: '2026-07-01T10:00:00Z', lastOpenedAt: '2026-07-01T10:00:00Z', source: 'local', status: 'ok' },
+  { id: 'blog', name: 'blog', root: '/repos/blog', addedAt: '2026-07-01T10:00:00Z', lastOpenedAt: '2026-07-01T10:00:00Z', source: 'local', status: 'ok' },
+]
+
+function serve(runs: RunRecord[] = RUNS, { multiProject = false } = {}): void {
   fetchMock.mockImplementation(async (input, init) => {
     const path = String(input)
     const method = init?.method ?? 'GET'
@@ -101,11 +108,26 @@ function serve(runs: RunRecord[] = RUNS): void {
       new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
     if (method === 'POST' && path.endsWith('/pin')) return json({ ...runs[0], pinned: true })
     if (path === '/api/v1/runs') return json(runs)
-    const detail = /^\/api\/v1\/runs\/([^/?]+)$/.exec(path)
-    const found = detail && runs.find((candidate) => candidate.id === detail[1])
+    const detail = /^\/api\/v1\/(?:p\/[^/]+\/)?runs\/([^/?]+)$/.exec(path)
+    const found = detail && [...runs, BLOG_TASK].find((candidate) => candidate.id === detail[1])
+    if (found && method === 'DELETE') return json({ deleted: true })
     if (found) return json(found)
     if (path === '/api/v1/health') return json(HEALTH)
-    if (path === '/api/v1/projects') return json({ projects: [], bootProject: 'default', projectsDir: '/repos' })
+    if (path === '/api/v1/projects') {
+      return json(
+        multiProject
+          ? { projects: TWO_PROJECTS, bootProject: 'shop', projectsDir: '/repos' }
+          : { projects: [], bootProject: 'default', projectsDir: '/repos' },
+      )
+    }
+    if (path === '/api/v1/workspace/runs-index') {
+      const { id, title, status, createdAt, archived, workflow } = BLOG_TASK
+      return json({
+        runs: [{ id, title, status, createdAt, archived, workflow, projectId: 'blog', lastActivityAt: createdAt }],
+        perProjectLimit: 200,
+        truncated: [],
+      })
+    }
     if (path === '/api/v1/ui-state') return json({})
     if (path === '/api/v1/workspace/ui-state') {
       if (method === 'PUT') uiState = { ...uiState, ...(JSON.parse(String(init?.body)) as object) }
@@ -121,8 +143,8 @@ function LocationProbe() {
   return <output data-testid="location">{location.pathname}</output>
 }
 
-function renderPalettes(entry: string) {
-  serve()
+function renderPalettes(entry: string, options: { multiProject?: boolean } = {}) {
+  serve(RUNS, options)
   render(
     <QueryClientProvider client={createQueryClient()}>
       <ThemeProvider>
@@ -205,6 +227,30 @@ describe('⌘P on a task page acts on that task', () => {
     await waitFor(() => expect(input().value).toBe('@'))
   })
 
+  it('Tab on a task in another project goes there and acts on it', async () => {
+    renderPalettes('/tasks/r1', { multiProject: true })
+    await pressP()
+    await within(palette()!).findByText('Pin')
+    fireEvent.change(input(), { target: { value: '@blog' } })
+    await waitFor(() => expect(selectedRow()?.dataset.runId).toBe('b1'))
+    fireEvent.keyDown(input(), { key: 'Tab' })
+    await waitFor(() => expect(location()).toBe('/p/blog/tasks/b1'))
+    expect(await screen.findByText('Blog follow-up', { selector: '[data-slot="task-palette-subject"] *' })).toBeTruthy()
+    expect(await within(palette()!).findByText('Pin')).toBeTruthy()
+  })
+
+  it('⌘P during a rename leaves it, so Enter on the switcher never renames to "@"', async () => {
+    renderPalettes('/tasks/r1')
+    await pressP()
+    fireEvent.click(await within(palette()!).findByText('Rename…'))
+    await waitFor(() => expect(input().value).toBe('Fix the login redirect'))
+    await pressP(input())
+    await waitFor(() => expect(palette()!.dataset.mode).toBe('tasks'))
+    expect(input().value).toBe('@')
+    fireEvent.keyDown(input(), { key: 'Enter' })
+    expect(sent.some((request) => request.method === 'PATCH')).toBe(false)
+  })
+
   it('Rename edits the title in the palette input', async () => {
     renderPalettes('/tasks/r1')
     await pressP()
@@ -275,6 +321,42 @@ describe('shortcuts', () => {
       window.dispatchEvent(event)
     })
     expect(event.defaultPrevented).toBe(false)
+  })
+
+  async function deleteDialogForPickedTask() {
+    await pressP()
+    await within(palette()!).findByText('Pin')
+    fireEvent.change(input(), { target: { value: '@dark' } })
+    await waitFor(() => expect(selectedRow()?.dataset.runId).toBe('r2'))
+    fireEvent.keyDown(input(), { key: 'Tab' })
+    await screen.findByText('Add dark mode toggle', { selector: '[data-slot="task-palette-subject"] *' })
+    fireEvent.click(await within(palette()!).findByText('Delete…'))
+    return screen.findByRole('alertdialog')
+  }
+
+  it('a dialog on a picked task hands the shortcuts back to the page once it closes', async () => {
+    uiState = { keybindings: { pin: 'Mod+Shift+L' } }
+    renderPalettes('/tasks/r1')
+    const confirm = await deleteDialogForPickedTask()
+    fireEvent.click(within(confirm).getByText('Keep it'))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+    await waitFor(async () => {
+      await press(window, 'KeyL', 'l', { metaKey: true, shiftKey: true })
+      expect(sent.some((request) => request.path.endsWith('/runs/r1/pin'))).toBe(true)
+    })
+    expect(sent.some((request) => request.path.endsWith('/runs/r2/pin'))).toBe(false)
+  })
+
+  it('deleting a picked task leaves the page on screen where it is', async () => {
+    renderPalettes('/tasks/r1')
+    const confirm = await deleteDialogForPickedTask()
+    fireEvent.click(within(confirm).getByText('Delete'))
+    await waitFor(() =>
+      expect(sent.some((request) => request.method === 'DELETE' && request.path.endsWith('/runs/r2'))).toBe(true),
+    )
+    // The deletion's success handler runs once the response lands.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)))
+    expect(location()).toBe('/tasks/r1')
   })
 
   it('⇧↵ on a palette row records a shortcut and saves it to the workspace', async () => {

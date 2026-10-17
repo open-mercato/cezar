@@ -111,12 +111,22 @@ describe('shouldTriggerCommandShortcut — inEditable (⌘P from the composer)',
     expect(shouldTriggerCommandShortcut(keyEvent({ key: 'p', target: textarea(), ...init }), 'p', inEditable)).toBe(fires)
   })
 
-  it('never fires inside the terminal, where Ctrl+P is shell history', () => {
-    vi.stubGlobal('navigator', { platform: 'Linux x86_64' })
+  const terminalInput = () => {
     const term = document.createElement('div')
     term.className = 'xterm'
-    const helper = term.appendChild(textarea())
-    expect(shouldTriggerCommandShortcut(keyEvent({ key: 'p', ctrlKey: true, target: helper }), 'p', inEditable)).toBe(false)
+    return term.appendChild(textarea())
+  }
+
+  it('never fires a Ctrl chord inside the terminal, where Ctrl+P is shell history', () => {
+    vi.stubGlobal('navigator', { platform: 'Linux x86_64' })
+    expect(shouldTriggerCommandShortcut(keyEvent({ key: 'p', ctrlKey: true, target: terminalInput() }), 'p', inEditable)).toBe(false)
+    vi.stubGlobal('navigator', { platform: 'MacIntel' })
+    expect(shouldTriggerCommandShortcut(keyEvent({ key: 'p', ctrlKey: true, target: terminalInput() }), 'p', inEditable)).toBe(false)
+  })
+
+  it('⌘ on a Mac still fires inside the terminal', () => {
+    vi.stubGlobal('navigator', { platform: 'MacIntel' })
+    expect(shouldTriggerCommandShortcut(keyEvent({ key: 'p', metaKey: true, target: terminalInput() }), 'p', inEditable)).toBe(true)
   })
 
   it('outside a text field either modifier still counts', () => {

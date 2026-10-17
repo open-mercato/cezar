@@ -1,5 +1,7 @@
 import * as React from 'react'
 
+import { isApplePlatform } from './keybindings'
+
 /**
  * The one "cmd-or-ctrl + key" helper (spec, cross-cutting keyboard rule): macOS and
  * Windows/Linux modifiers are always registered together, never as two separate bindings that
@@ -54,15 +56,13 @@ export function shouldTriggerCommandShortcut(
   if (isEditableTarget(event.target) && !isCommandPaletteInput(event.target)) {
     if (!inEditable) return false
     // Typing keeps its own meaning of the OTHER modifier: Ctrl+P is "line up" in a macOS text
-    // field and shell history in the terminal, so there only the platform's own chord counts.
-    if (event.target instanceof HTMLElement && event.target.closest('.xterm')) return false
-    if (isApplePlatform() ? !event.metaKey : !event.ctrlKey) return false
+    // field, so there only the platform's own chord counts. In the terminal every Ctrl chord is
+    // the shell's, so only ⌘ on a Mac fires (spec 2026-10-17-task-palette).
+    const apple = isApplePlatform()
+    if (event.target instanceof HTMLElement && event.target.closest('.xterm')) return apple && event.metaKey
+    if (apple ? !event.metaKey : !event.ctrlKey) return false
   }
   return true
-}
-
-function isApplePlatform(): boolean {
-  return typeof navigator !== 'undefined' && /mac|iphone|ipad|ipod/i.test(navigator.platform)
 }
 
 export interface CommandShortcutOptions {

@@ -16,7 +16,7 @@ export interface TaskWorkspaceBridge {
   activeView: ViewId | null
   openView: (view: ViewId) => void
   openViewBeside: (view: ViewId) => void
-  /** Saved multi-column layouts, in strip order (their number keys follow the views'). */
+  /** Saved multi-column layouts, in strip order. Not numbered: the number keys are the views', then Notes'. */
   layouts: readonly { name: string; label: string; active: boolean }[]
   selectLayout: (name: string) => void
   newLayout: () => void
