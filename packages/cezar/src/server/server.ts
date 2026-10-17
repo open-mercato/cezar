@@ -7233,8 +7233,11 @@ export function createApp(deps: ServerDeps) {
       // The task's own tree or nothing: suggesting the boot repo's scripts for a task would
       // offer commands that run against the wrong tree (spec §3.3). Same tree the terminal opens.
       const worktree = workingDirectoryOf(run, repoRoot);
+      // A project with its own setup scripts (#1495) prepares its worktrees itself; the automatic
+      // install is only for the zero-config project that has none.
+      const setupScripts = (await readLifecycleConfigOrDefault(repoRoot)).config.afterCreate.length;
       const [commands, install] = worktree
-        ? await Promise.all([discoverCommands(worktree), installCommand(worktree)])
+        ? await Promise.all([discoverCommands(worktree), setupScripts > 0 ? null : installCommand(worktree)])
         : [[], null];
       const recipe = effectiveStartApp(await readStartApp(dataDir, repoRoot));
       return c.json(

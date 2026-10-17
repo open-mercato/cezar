@@ -189,8 +189,8 @@ first discovered `dev` / `start` / `serve` / `preview` / `run` script or Make ta
 
 A worktree with a `package.json` and no `node_modules` of its own (a fresh task worktree — Node
 would otherwise resolve packages from the parent checkout, possibly another version) also gets
-`install` on that response: `npm ci`, or the tool its lockfile names (`npm install` without one).
-The panel installs first, in a tab of its own (§7c), and waits up to ten minutes for it.
+`install` on that response — unless the project has its own setup scripts (§7c) — : `npm ci`, or the
+tool its lockfile names (`npm install` without one). The panel installs first, in a tab of its own (§7c), and waits up to ten minutes for it.
 
 Running it opens a NEW terminal tab of the task (the same `POST /terminal` + input the drawer's
 **Run** uses) and polls `/runs/:id/terminal/urls` every second for an address first seen after the
@@ -205,7 +205,14 @@ A project can say how its app starts, instead of relying on discovery: `startApp
 `{ services: string[1..5], url? }`. `services` are long-running commands, each started in its own
 terminal tab of the task, in order; `url` is the address the Preview shows once something on its
 origin has printed (`localhost` and `127.0.0.1` count as one), else the first address printed.
-One-off preparation (`npm ci`, migrations) is not part of it: that is the worktree's setup (#1358).
+One-off preparation (`npm ci`, migrations) is not part of it: that is the worktree's setup scripts
+(`worktreeLifecycle.afterCreate`, #1495). A project that has them gets no automatic install, and the
+panel waits while they run ("setup scripts are still running") and says so when they need attention,
+still letting the user start the app anyway.
+
+The team recipe may live in a committed file although #1495 refuses setup scripts from one: those run
+on their own when a worktree is created, while a recipe runs only on a click that shows its commands
+verbatim — the same trust as a `package.json` script offered by **Run**.
 
 Two places, both optional: the repo's `.ai/cezar/config.json` (the team's — committable) and the
 project's entry in `~/.cezar/config.json` (yours), which wins. `GET/PUT /api/v1/start-app` reads and

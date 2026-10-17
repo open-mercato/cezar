@@ -2,7 +2,12 @@ import { ChevronDownIcon, LoaderCircleIcon, PencilIcon, PlayIcon, TerminalIcon }
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { createRunTerminal, getRunTerminal, getRunTerminalCommands, getRunTerminalUrls, writeRunTerminal } from '@/api/client'
-import type { DetectedUrlEntry, DiscoveredCommandEntry, EffectiveStartApp } from '@open-mercato/cezar-api-client'
+import type {
+  DetectedUrlEntry,
+  DiscoveredCommandEntry,
+  EffectiveStartApp,
+  WorktreeLifecycleProjection,
+} from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -99,12 +104,18 @@ export function RunAppPanel({
   projectId,
   onOpen,
   onShowTerminal,
+  setup,
 }: {
   runId: string
   projectId: string | null
   onOpen: (url: string) => void
   onShowTerminal?: () => void
+  /** The task worktree's lifecycle (#1495): its setup scripts prepare it, so the app waits for them. */
+  setup?: WorktreeLifecycleProjection
 }) {
+  // The same reading the task's status pill makes (`deriveAttention`).
+  const setupFailed = setup?.phase === 'setup' && setup.needsAttention
+  const setupRunning = setup?.phase === 'setup' && !setup.needsAttention && setup.activeOperationId !== undefined
   const [commands, setCommands] = useState<DiscoveredCommandEntry[] | null>(null)
   const [install, setInstall] = useState<string | null>(null)
   const [recipe, setRecipe] = useState<EffectiveStartApp | null>(null)
@@ -287,6 +298,7 @@ export function RunAppPanel({
           variant={recipe || suggested ? 'outline' : 'primary'}
           size="sm"
           data-action="run-app-other"
+          disabled={setupRunning}
         >
           {recipe || suggested ? 'Other command' : 'Choose a command'}
           <ChevronDownIcon aria-hidden="true" />
@@ -339,6 +351,11 @@ export function RunAppPanel({
   )
 
   const installNote = install ? ` Installs its dependencies first (${install}).` : ''
+  const setupNote = setupRunning
+    ? "This worktree's setup scripts are still running. Start the app when they finish."
+    : setupFailed
+      ? "This worktree's setup needs attention — retry it from the task's Chat, or start the app anyway."
+      : null
   return (
     <Shell
       icon={<PlayIcon aria-hidden="true" className="size-5" />}
@@ -350,6 +367,11 @@ export function RunAppPanel({
           : `Starts the task's app in a terminal of its worktree and opens the address it prints.${installNote} Or enter an address above.`)
       }
     >
+      {setupNote ? (
+        <p data-slot="run-app-setup" role="status" className="max-w-md text-xs text-foreground">
+          {setupNote}
+        </p>
+      ) : null}
       {recipe ? (
         <ul data-slot="start-app-services" className="flex flex-col gap-0.5 font-mono text-xs text-foreground">
           {recipe.services.map((service, index) => (
@@ -359,7 +381,7 @@ export function RunAppPanel({
       ) : null}
       <div data-slot="run-app-actions" className="flex flex-wrap items-center justify-center gap-2">
         {recipe ? (
-          <Button type="button" size="sm" data-action="start-app" onClick={() => start(recipe)}>
+          <Button type="button" size="sm" data-action="start-app" disabled={setupRunning} onClick={() => start(recipe)}>
             <PlayIcon aria-hidden="true" />
             Start app
           </Button>
@@ -368,6 +390,7 @@ export function RunAppPanel({
             type="button"
             size="sm"
             data-action="run-app"
+            disabled={setupRunning}
             onClick={() => start({ services: [suggested] }, { remember: true })}
           >
             <PlayIcon aria-hidden="true" />

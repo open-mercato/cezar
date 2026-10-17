@@ -164,6 +164,27 @@ describe('the workspace terminal routes', () => {
       expect(commands).toMatchObject({ recipe: { services: ['npm run dev'], url: 'http://localhost:5173', scope: 'project' } });
     });
 
+    it("installs nothing itself where the project's own setup scripts prepare the worktree (#1495)", async () => {
+      writeFileSync(join(worktree, 'package.json'), '{}');
+      writeFileSync(join(worktree, 'package-lock.json'), '{}');
+      const runId = seedRun();
+      const before = await (await apiRequest(makeApp(), `/api/v1/runs/${runId}/terminal/commands`)).json();
+      expect(before).toMatchObject({ install: 'npm ci' });
+
+      mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+      writeFileSync(
+        join(repoRoot, '.ai/cezar/config.json'),
+        JSON.stringify({
+          worktreeLifecycle: {
+            afterCreate: [{ id: '0d7c3c1e-6f2a-4b8e-9d1a-2f4c5b6a7e8f', command: 'npm ci' }],
+            beforeRemove: [],
+          },
+        }),
+      );
+      const after = await (await apiRequest(makeApp(), `/api/v1/runs/${runId}/terminal/commands`)).json();
+      expect(after).not.toHaveProperty('install');
+    });
+
     it('rejects a recipe with no services or a non-http address at the boundary', async () => {
       expect((await put({ scope: 'project', recipe: { services: [] } })).status).toBe(400);
       expect((await put({ scope: 'project', recipe: { services: ['x'], url: 'ftp://x' } })).status).toBe(400);

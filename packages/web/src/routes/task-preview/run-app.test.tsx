@@ -194,6 +194,28 @@ describe('RunAppPanel', () => {
   })
 })
 
+describe('the worktree setup (#1495)', () => {
+  it('waits while the setup scripts run, and says when they need attention', async () => {
+    const projection = { worktreeId: '0d7c3c1e-6f2a-4b8e-9d1a-2f4c5b6a7e8f', generation: 1, phase: 'setup' as const }
+    const { rerender } = render(
+      <RunAppPanel
+        runId="r1"
+        projectId="cezar"
+        onOpen={() => {}}
+        setup={{ ...projection, state: 'running', activeOperationId: '1d7c3c1e-6f2a-4b8e-9d1a-2f4c5b6a7e8f', needsAttention: false }}
+      />,
+    )
+    expect(await screen.findByText(/setup scripts are still running/)).not.toBeNull()
+    expect(screen.getByRole('button', { name: /Run npm run dev/ }).hasAttribute('disabled')).toBe(true)
+
+    rerender(
+      <RunAppPanel runId="r1" projectId="cezar" onOpen={() => {}} setup={{ ...projection, state: 'needs_attention', needsAttention: true }} />,
+    )
+    expect(screen.getByText(/setup needs attention/)).not.toBeNull()
+    expect(screen.getByRole('button', { name: /Run npm run dev/ }).hasAttribute('disabled')).toBe(false)
+  })
+})
+
 describe('the start recipe editor', () => {
   it('saves the team recipe from the suggestion, and the panel then offers it', async () => {
     api.getStartApp.mockResolvedValue({ project: null, personal: null, personalAvailable: true })

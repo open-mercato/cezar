@@ -524,6 +524,7 @@ function WorkspaceView({
                         runId={run.id}
                         projectId={projectId}
                         onOpen={open}
+                        setup={run.worktreeLifecycle}
                         onShowTerminal={terminalColumnShown ? undefined : () => updateDrawer({ open: true })}
                       />
                     )
