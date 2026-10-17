@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -136,6 +136,7 @@ function renderPalette({
   projects = [] as ProjectListEntry[],
   indexed = [] as RunIndexEntry[],
   truncated = [] as string[],
+  referenceStatuses = {} as Record<string, unknown>,
   theme,
   forge = true,
   automations = false,
@@ -148,6 +149,8 @@ function renderPalette({
   /** What `GET /workspace/runs-index` answers — every project's tasks, including the active one's. */
   indexed?: RunIndexEntry[]
   truncated?: string[]
+  /** What the runs index already knows about the rows' PRs and issues, by project. */
+  referenceStatuses?: Record<string, unknown>
   theme?: Theme
   forge?: boolean
   /** `capabilities.automations` (#801) — off by default, exactly as a default server reports. */
@@ -163,7 +166,7 @@ function renderPalette({
     '/api/v1/health': health(forge, automations),
     '/api/v1/ui-state': uiState,
     '/api/v1/projects': { projects, bootProject: projects[0]?.id ?? 'default', projectsDir: '/repos' },
-    '/api/v1/workspace/runs-index': { runs: indexed, perProjectLimit: 200, truncated },
+    '/api/v1/workspace/runs-index': { runs: indexed, perProjectLimit: 200, truncated, referenceStatuses },
   })
   render(
     <QueryClientProvider client={createQueryClient()}>
@@ -586,6 +589,35 @@ describe('Tasks group', () => {
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'thing 7' } })
     expect(document.querySelector<HTMLElement>('[data-slot="palette-task"]')?.dataset.runId).toBe('r-7')
     expect(rows()).toBeLessThanOrEqual(50)
+  })
+
+  it('shows the app’s PR chips on task rows, coloured by the status the index already knows', async () => {
+    renderPalette({
+      entry: '/p/shop/',
+      projects: [project({ id: 'shop' }), project({ id: 'blog' })],
+      indexed: [indexed({ id: 'b-1', projectId: 'blog', title: 'Blog fix', pullRequestUrl: 'https://github.com/o/blog/pull/77' })],
+      referenceStatuses: { blog: { prs: { 77: 'merged' }, issues: {} } },
+    })
+    openWith({ metaKey: true })
+    await screen.findByText('Blog fix')
+    await waitFor(() =>
+      expect(document.querySelector('[data-run-id="b-1"] [data-slot="pr-chip"]')?.getAttribute('data-status')).toBe('merged'),
+    )
+    expect(document.querySelector('[data-run-id="b-1"] [data-slot="pr-chip"]')?.textContent).toContain('77')
+  })
+
+  it('leads a row with the sidebar chip and drops the title prefix it already says', async () => {
+    renderPalette({ runs: [run({ id: 'r1', title: '1497: fixing the gate', pullRequestUrl: 'https://github.com/o/r/pull/1497' })] })
+    openWith({ metaKey: true })
+    const row = await waitFor(() => document.querySelector<HTMLElement>('[data-run-id="r1"]')!)
+    const chip = row.querySelector('[data-slot="pr-chip"]')!
+    const title = await within(row).findByText('fixing the gate')
+    // The chip comes first, and the number is painted once.
+    expect(chip.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(title.textContent).toBe('fixing the gate')
+    // …while the search still knows the whole title.
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '1497: fixing' } })
+    expect(document.querySelector('[data-run-id="r1"]')).not.toBeNull()
   })
 
   it('renders no Tasks group when there are no runs', async () => {

@@ -1,7 +1,18 @@
 import { CheckIcon, FolderOpenIcon, LayersIcon, MoonIcon, PlusIcon, SettingsIcon, ZapIcon } from 'lucide-react'
 import * as React from 'react'
 import { useNavigate as useRouterNavigate } from 'react-router'
-import { useHealth, useProjects, useRunsForProject, useRunsIndex, useSkills, useUiState } from '@/api/queries'
+import {
+  rememberReferenceStatuses,
+  useHealth,
+  useProjects,
+  useReferenceProjectId,
+  useRunsForProject,
+  useRunsIndex,
+  useSkills,
+  useUiState,
+} from '@/api/queries'
+import { TaskReferenceChip } from '@/components/reference-conflict-action'
+import { ReferenceStatusProvider } from '@/components/reference-status'
 import { scopeTo, useActiveProjectId, useNavigate } from '@/lib/project-router'
 import type { ProjectListEntry, RunIndexEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { visibleNavItems } from '@/components/nav-items'
@@ -22,8 +33,8 @@ import { shortAge } from '@/lib/format'
 import { orderProjects as orderRegistry } from '@/lib/project-order'
 import { isUnread } from '@/lib/read-state'
 import { orderSkillsByUsage } from '@/lib/skills'
-import { lastActivityAt, runTitle } from '@/lib/task-groups'
-import { taskReferences, type TaskReferenceInput } from '@/lib/tasks-table'
+import { lastActivityAt, refPrefixMatches, runTitle, splitRefPrefix } from '@/lib/task-groups'
+import { taskReferences, type TaskReference, type TaskReferenceInput } from '@/lib/tasks-table'
 import { automationIdOf, ownAutomationId } from '@/lib/task-origin'
 import { useCommandShortcut, useKeyShortcut } from '@/lib/use-command-shortcut'
 import { openTaskPalette } from '@/components/task-palette/open'
@@ -237,6 +248,8 @@ export interface SearchableTask {
   key: string
   label: string
   references: string
+  /** The PR/issue chips, as `taskReferences` resolves them — the chips' own rule. */
+  refList: TaskReference[]
   /** Exactly what the row hands cmdk, so the pre-ranking below and cmdk's filter agree. */
   value: string
   keywords: string[]
@@ -250,13 +263,15 @@ export function searchableTasks(
 ): SearchableTask[] {
   return tasks.map((task) => {
     const label = runTitle(task)
-    const references = taskReferenceText(task)
+    const refList = taskReferences(task)
+    const references = refList.map((reference) => `${reference.kind} #${reference.number}`).join(' ')
     const projectName = task.projectId === null ? null : (projectNames.get(task.projectId) ?? null)
     return {
       task,
       key: taskKey(task),
       label,
       references,
+      refList,
       // The id keeps duplicate titles apart; it also lets a pasted run id find its task.
       // `runTitle`, matching the rendered text — filtering on a raw title hidden behind an
       // auto-summary would surface rows for no visible reason. The PR/issue numbers sit before
@@ -296,13 +311,66 @@ export function rankTasks(
   return { shown: scored.slice(0, limit).map((item) => item.entry), total: scored.length }
 }
 
+/**
+ * Status for the chips on the rows that are SHOWING — asked once typing pauses, not per keystroke:
+ * each new request set republishes to the app-wide registry, which would cost a re-render of
+ * every chip in the app per key. Statuses the runs index already carried paint immediately.
+ */
+export function PaletteReferenceStatuses({
+  entries,
+  children,
+}: {
+  entries: readonly SearchableTask[]
+  children: React.ReactNode
+}) {
+  const projectId = useReferenceProjectId()
+  const wanted = React.useMemo(
+    () =>
+      entries.flatMap((entry) =>
+        entry.refList.map((reference) => ({
+          projectId: entry.task.projectId ?? projectId ?? '',
+          kind: reference.kind,
+          number: reference.number,
+        })),
+      ).filter((request) => request.projectId !== ''),
+    [entries, projectId],
+  )
+  // Keyed on CONTENT: the rows' array is rebuilt every render, and a timer keyed on its identity
+  // would re-arm forever.
+  const signature = wanted.map((request) => `${request.projectId} ${request.kind}#${request.number}`).join('|')
+  const latest = React.useRef(wanted)
+  latest.current = wanted
+  const [requests, setRequests] = React.useState(wanted)
+  React.useEffect(() => {
+    const timer = setTimeout(() => setRequests(latest.current), 250)
+    return () => clearTimeout(timer)
+  }, [signature])
+  return (
+    <ReferenceStatusProvider projectId={projectId} requests={requests}>
+      {children}
+    </ReferenceStatusProvider>
+  )
+}
+
+/** A task group's rows as a flex column, so `MoreTasks` can sit last by `order`. */
+export const TASK_GROUP_CLASS = '[&_[cmdk-group-items]]:flex [&_[cmdk-group-items]]:flex-col'
+
 /** The line under a capped task group: how many more match, and the way to reach them. */
 export function MoreTasks({ hidden }: { hidden: number }) {
   if (hidden <= 0) return null
+  // An item so cmdk always shows it (`forceMount`), disabled so it is never picked. cmdk re-orders
+  // only selectable rows, which would leave this one stranded on top — `order-last` (the group is a
+  // flex column, `TASK_GROUP_CLASS`) keeps it under the matches whatever the DOM order.
   return (
-    <div data-slot="palette-more-tasks" className="px-2 py-1.5 text-xs text-soft-foreground">
+    <CommandItem
+      forceMount
+      disabled
+      value="__more-tasks"
+      data-slot="palette-more-tasks"
+      className="order-last py-1.5! text-xs text-soft-foreground data-[disabled=true]:opacity-100"
+    >
       {hidden} more — keep typing to narrow
-    </div>
+    </CommandItem>
   )
 }
 
@@ -388,6 +456,11 @@ export function usePaletteTasks() {
   // The cross-project index answers "which project is this task in", so it is only worth asking
   // when that question has more than one answer. A single-project cockpit issues no request.
   const runsIndex = useRunsIndex(multiProject)
+  // The statuses the index already carries colour the chips in the first paint (as All tasks does).
+  const indexedStatuses = runsIndex.data?.referenceStatuses
+  React.useEffect(() => {
+    if (indexedStatuses) rememberReferenceStatuses(indexedStatuses)
+  }, [indexedStatuses])
   const projectNames = React.useMemo(
     () => new Map((registry?.projects ?? []).map((project) => [project.id, project.name])),
     [registry],
@@ -508,7 +581,7 @@ export const TaskItem = React.memo(function TaskItem({
   /** The task on screen — marked `open`. */
   current?: boolean
 }) {
-  const { task, label, references, projectName } = entry
+  const { task, label, projectName } = entry
   const attention = deriveAttention(task)
   return (
     <CommandItem
@@ -520,7 +593,32 @@ export const TaskItem = React.memo(function TaskItem({
       onSelect={() => onSelect(task)}
     >
       <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
-      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {/* The sidebar's own chip, leading the row as it does there (#788) — status colour, the
+          conflict panel and its Resolve action included. A click opens the PR, not the task. */}
+      {entry.refList[0] ? (
+        <span
+          data-slot="palette-task-refs"
+          // The palette sizes every icon in a row at 20px; the chips keep the sidebar's.
+          className="flex shrink-0 items-center gap-1 [&_svg]:size-3!"
+          onClick={(event) => event.stopPropagation()}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          {task.projectId ? (
+            <TaskReferenceChip
+              run={task}
+              projectId={task.projectId}
+              reference={entry.refList[0]}
+              compact
+              className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-[10.5px]"
+            />
+          ) : null}
+        </span>
+      ) : null}
+      {/* Like the sidebar: the chip carries the number, so a matching `NNN: ` prefix is not
+          painted twice. The search still matches the full title. */}
+      <span className="min-w-0 flex-1 truncate" title={label}>
+        {refPrefixMatches(label, entry.refList[0]?.number) ? splitRefPrefix(label).rest : label}
+      </span>
       {task.automationId ? (
         <span
           data-slot="palette-task-automation"
@@ -529,11 +627,6 @@ export const TaskItem = React.memo(function TaskItem({
         >
           <ZapIcon aria-hidden="true" className="size-3!" />
           auto
-        </span>
-      ) : null}
-      {references ? (
-        <span data-slot="palette-task-refs" className="shrink-0 font-mono text-xs text-soft-foreground">
-          {references.replace(/PR #/g, '#').replace(/Issue #/g, 'issue #')}
         </span>
       ) : null}
       {/* Only in a multi-project workspace: with one project the label would name the only
@@ -666,8 +759,9 @@ function PaletteContent({ close }: { close: () => void }) {
         {/* Only in the DEFAULT view. Once you type, splitting tasks by read-state is noise: it
             floats a section of near-misses above the exact match you are looking for, purely
             because that section renders first. Searching gets one ranked Tasks list. */}
+        <PaletteReferenceStatuses entries={[...recentlyFinished.shown, ...otherTasks.shown]}>
         {!searching && recentlyFinished.shown.length > 0 ? (
-          <CommandGroup heading={<TaskColumnsHeading label="Recently finished" />}>
+          <CommandGroup heading={<TaskColumnsHeading label="Recently finished" />} className={TASK_GROUP_CLASS}>
             {recentlyFinished.shown.map((entry) => (
               <TaskItem key={entry.key} entry={entry} showProject={showProjectOnTasks} now={now} onSelect={selectTask} />
             ))}
@@ -767,13 +861,14 @@ function PaletteContent({ close }: { close: () => void }) {
         ) : null}
 
         {otherTasks.shown.length > 0 ? (
-          <CommandGroup heading={<TaskColumnsHeading label="Tasks" />}>
+          <CommandGroup heading={<TaskColumnsHeading label="Tasks" />} className={TASK_GROUP_CLASS}>
             {otherTasks.shown.map((entry) => (
               <TaskItem key={entry.key} entry={entry} showProject={showProjectOnTasks} now={now} onSelect={selectTask} />
             ))}
             <MoreTasks hidden={otherTasks.total - otherTasks.shown.length} />
           </CommandGroup>
         ) : null}
+        </PaletteReferenceStatuses>
 
         <CommandGroup heading="Actions">
           <CommandItem

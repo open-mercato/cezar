@@ -8,8 +8,10 @@ import {
   paletteScore,
   paletteTaskPath,
   MoreTasks,
+  PaletteReferenceStatuses,
   rankTasks,
   searchableTasks,
+  TASK_GROUP_CLASS,
   TaskColumnsHeading,
   TaskItem,
   usePaletteExclusion,
@@ -667,7 +669,8 @@ function TaskResults({
   const [now] = React.useState(Date.now)
   if (shown.length === 0) return null
   return (
-    <CommandGroup heading={<TaskColumnsHeading label={recentOnly ? 'Recent tasks' : 'Tasks'} />}>
+    <PaletteReferenceStatuses entries={shown}>
+    <CommandGroup heading={<TaskColumnsHeading label={recentOnly ? 'Recent tasks' : 'Tasks'} />} className={TASK_GROUP_CLASS}>
       {shown.map((entry) => (
         <TaskItem
           key={entry.key}
@@ -681,6 +684,7 @@ function TaskResults({
       ))}
       <MoreTasks hidden={total - shown.length} />
     </CommandGroup>
+    </PaletteReferenceStatuses>
   )
 }
 
