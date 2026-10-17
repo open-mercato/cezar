@@ -8,6 +8,8 @@ import { trackerReadScope, resolveApiUrl, workspaceBrandingLogoResponseSchema } 
 import type {
   DetectedUrlsResponse,
   DiscoveredCommandsResponse,
+  StartAppSet,
+  StartAppState,
   TerminalCreateInput,
   TerminalOutput,
   TerminalSession,
@@ -2749,6 +2751,22 @@ export async function getRunTerminalCommands(id: string): Promise<DiscoveredComm
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
     }),
     runPath(id, '/terminal/commands'),
+  )
+}
+
+/** The project's start recipes, the team's and this user's (spec `2026-10-09-design-mode` §7c). */
+export async function getStartApp(): Promise<StartAppState> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['start-app'].$get({ param: { projectId: queryScope() } }),
+    '/start-app',
+  )
+}
+
+/** Save or (with `recipe: null`) remove one scope's start recipe. */
+export async function setStartApp(body: StartAppSet): Promise<StartAppState> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['start-app'].$put({ param: { projectId: queryScope() }, json: body }),
+    '/start-app',
   )
 }
 

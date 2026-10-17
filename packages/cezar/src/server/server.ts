@@ -13,12 +13,13 @@ import { readTrackerAssociation, writeTrackerAssociation, clearTrackerAssociatio
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import {
   detectedUrlsSchema, discoveredCommandsSchema,
-  terminalCreateSchema, terminalInputSchema, terminalOutputQuerySchema, terminalOutputSchema,
+  startAppSetSchema, startAppStateSchema, terminalCreateSchema, terminalInputSchema, terminalOutputQuerySchema, terminalOutputSchema,
   terminalResizeSchema, terminalSessionParamsSchema, terminalSessionSchema, terminalStateSchema,
 } from '@open-mercato/cezar-contract';
 import { workspaceLayoutsResponseSchema, workspaceLayoutsSchema } from '@open-mercato/cezar-contract';
 import { deleteRunLayouts, readRunLayouts, writeRunLayouts } from '../runs/layouts.ts';
-import { discoverCommands } from './terminal/commands.ts';
+import { discoverCommands, installCommand } from './terminal/commands.ts';
+import { effectiveStartApp, readStartApp, writeStartApp } from '../start-app.ts';
 import { DetectedUrls } from './terminal/detected-urls.ts';
 import { processSnapshot } from './terminal/foreground.ts';
 import { loadPty } from './terminal/pty-module.ts';
@@ -7226,14 +7227,39 @@ export function createApp(deps: ServerDeps) {
       return c.json(detectedUrlsSchema.parse({ urls }));
     })
     .get('/runs/:id/terminal/commands', async (c) => {
-      const { root: repoRoot, store } = c.get('project');
+      const { root: repoRoot, store, dataDir } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
       // The task's own tree or nothing: suggesting the boot repo's scripts for a task would
       // offer commands that run against the wrong tree (spec §3.3). Same tree the terminal opens.
       const worktree = workingDirectoryOf(run, repoRoot);
-      const commands = worktree ? await discoverCommands(worktree) : [];
-      return c.json(discoveredCommandsSchema.parse({ commands }));
+      // A project with its own setup scripts (#1495) prepares its worktrees itself; the automatic
+      // install is only for the zero-config project that has none.
+      const setupScripts = (await readLifecycleConfigOrDefault(repoRoot)).config.afterCreate.length;
+      const [commands, install] = worktree
+        ? await Promise.all([discoverCommands(worktree), setupScripts > 0 ? null : installCommand(worktree)])
+        : [[], null];
+      const recipe = effectiveStartApp(await readStartApp(dataDir, repoRoot));
+      return c.json(
+        discoveredCommandsSchema.parse({ commands, ...(install ? { install } : {}), ...(recipe ? { recipe } : {}) }),
+      );
+    })
+    // The project's start recipe (spec `2026-10-09-design-mode` §7c): the team's in the repo
+    // config, the user's own in their registry entry. Writing one stores a command a terminal will
+    // later run, so it is refused wherever the terminal is.
+    .get('/start-app', async (c) => {
+      const { root, dataDir } = c.get('project');
+      return c.json(startAppStateSchema.parse(await readStartApp(dataDir, root)));
+    })
+    .put('/start-app', jsonZodValidator(startAppSetSchema), async (c) => {
+      const refusal = terminalPolicyRefusal(capabilities());
+      if (refusal) return c.json({ error: refusal }, 409);
+      const { root, dataDir } = c.get('project');
+      const { scope, recipe } = c.req.valid('json');
+      if (!(await writeStartApp(dataDir, root, scope, recipe))) {
+        return c.json({ error: 'This project is not in your project list, so it cannot keep a recipe of your own.' }, 409);
+      }
+      return c.json(startAppStateSchema.parse(await readStartApp(dataDir, root)));
     })
     // Deliberately NOT policy-gated: stopping a shell is the one terminal action that reduces
     // exposure, and refusing it with the flag off would strand a running process tree with no

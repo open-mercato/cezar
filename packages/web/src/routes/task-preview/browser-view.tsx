@@ -61,6 +61,7 @@ export function BrowserView({
   designMarks,
   renderDesignNote,
   onDesignEscape,
+  renderEmpty,
 }: {
   state: BrowserState
   /** Called only for changes worth keeping — a successful load, a tab opened or closed — never
@@ -87,6 +88,9 @@ export function BrowserView({
   /** Esc was pressed in the page while the note for `mark` was open. The view closes the popup;
    *  the host decides what else that means (a draft is discarded). */
   onDesignEscape?: (mark: string) => void
+  /** What an empty tab shows instead of the bare hint — the task's "Run the app". Handed the
+   *  same `open` the address bar uses. Only on a cockpit that can frame a local address. */
+  renderEmpty?: (open: (url: string) => void) => React.ReactNode
 }) {
   const tabs = state.tabs.length > 0 ? state.tabs : ['']
   const active = Math.min(state.active, tabs.length - 1)
@@ -579,6 +583,8 @@ export function BrowserView({
             title="This address points at the machine you are sitting at"
             subtitle="This cockpit runs remotely, so a local address would open on your computer rather than on the task's host. Open the cockpit on the task's machine to preview its app."
           />
+        ) : target === '' && renderEmpty && canPreview ? (
+          renderEmpty(commit)
         ) : target === '' ? (
           <CenteredState
             icon={<GlobeIcon />}
