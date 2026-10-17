@@ -53,6 +53,12 @@ async function settled(coordinator: WorktreeLifecycleCoordinator, id: string): P
     current = await coordinator.operation(id);
     expect(['completed', 'needs_attention', 'interrupted', 'kept', 'cancelled', 'bypassed']).toContain(current.state);
     if (current.state === 'needs_attention') expect(current.allowedActions.length).toBeGreaterThan(0);
+    // `save` writes the finished operation before the record that releases it, so a finished
+    // operation is settled only once its worktree no longer names it as active.
+    if (['completed', 'cancelled', 'bypassed'].includes(current.state)) {
+      const worktree = await coordinator.detail(current.worktreeId).catch(() => null);
+      expect(worktree?.operation?.id).not.toBe(id);
+    }
   }, {timeout: 5000, interval: 25});
   return current!;
 }
