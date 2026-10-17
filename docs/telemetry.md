@@ -32,7 +32,7 @@ from), `open_in` (which app), `add_project_opened` (which Add project dialog: `n
 `new_github`, `new_template`), `project_create_failed` (the step that failed, e.g.
 `folder_exists`, `github_create` — never the error text), `diff_comment_added`,
 `task_archived` / `task_unarchived` / `task_pinned` / `task_unpinned` (which button: `sidebar`,
-`tasks_table`, `all_tasks`, `task_view`; `bulk` for Archive finished, `api` for a non-cockpit
+`tasks_table`, `all_tasks`, `task_view`, `palette`; `bulk` for Archive finished, `api` for a non-cockpit
 caller), `task_deleted` (with the task's status), `provider_login_opened` / `provider_login_not_opened` / `provider_connected`
 (what an agent's **Connect** did — the agent and an outcome such as `unknown`, `no_terminal` or
 `already_connected` — and whether the login it opened finished within 15 minutes),

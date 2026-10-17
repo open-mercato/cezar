@@ -24,6 +24,7 @@ import { isUnread } from '@/lib/read-state'
 import { orderSkillsByUsage } from '@/lib/skills'
 import { lastActivityAt, runTitle } from '@/lib/task-groups'
 import { useCommandShortcut, useKeyShortcut } from '@/lib/use-command-shortcut'
+import { openTaskPalette } from '@/components/task-palette/open'
 import { useProjectOrder } from '@/lib/use-project-order'
 
 /**
@@ -201,6 +202,69 @@ export function orderProjects(
   ]
 }
 
+/**
+ * Every task a palette can list: the live runs of the project on screen, plus every other
+ * project's from the cross-project index — ⌘K's Tasks and ⌘P's switcher read the same list.
+ */
+export function usePaletteTasks() {
+  const activeProjectId = useActiveProjectId()
+  // The registry is workspace-scoped (not project-scoped), so this is the ONE list the palette
+  // can offer everywhere — including global settings, which has no active project at all. The
+  // shell already holds this cache entry; opening the palette costs no extra request.
+  const projects = useProjects()
+  // Health is cached by the shell's chips; ⌘K reads it to gate the forge-gated Views row (R6 1.1).
+  const health = useHealth()
+  const registry = projects.data
+  const bootProjectId = registry?.bootProject ?? health.data?.bootProject ?? null
+  // Runs are already cached by the sidebar/shell. The palette also sits above the project route
+  // provider, so ask for the URL project explicitly rather than trusting the module scope.
+  const runs = useRunsForProject(activeProjectId, bootProjectId)
+  // Same threshold as the sidebar's grouped nav (`app-shell-container.tsx`): with one registered
+  // project there is nowhere to switch TO, and a one-row group would be pure noise.
+  const multiProject = registry !== undefined && registry.projects.length > 1
+  // The cross-project index answers "which project is this task in", so it is only worth asking
+  // when that question has more than one answer. A single-project cockpit issues no request.
+  const runsIndex = useRunsIndex(multiProject)
+  const projectNames = React.useMemo(
+    () => new Map((registry?.projects ?? []).map((project) => [project.id, project.name])),
+    [registry],
+  )
+  // Which project the live run list answered for — see `mergeTasks`. The active id when there is
+  // one, else the boot project, which is what an unscoped API client always reaches.
+  const runsProjectId = (activeProjectId === 'default' ? null : activeProjectId) ?? bootProjectId
+  const tasks = React.useMemo(
+    () => mergeTasks(runs.data ?? [], runsProjectId, runsIndex.data?.runs),
+    [runs.data, runsProjectId, runsIndex.data],
+  )
+  return { activeProjectId, registry, health, multiProject, projectNames, runsProjectId, tasks }
+}
+
+/** Where a palette task row lives: unprefixed for the project on screen, scoped otherwise. */
+export function paletteTaskPath(task: Pick<PaletteTask, 'projectId' | 'id'>, suffix = ''): string {
+  const path = `/tasks/${task.id}${suffix}`
+  return task.projectId === null ? path : scopeTo(task.projectId, path) as string
+}
+
+/** The two palettes are one surface at a time: opening either closes the other. */
+export const PALETTE_OPENED_EVENT = 'cezar:palette-opened'
+
+export function announcePaletteOpened(which: 'command' | 'task'): void {
+  window.dispatchEvent(new CustomEvent(PALETTE_OPENED_EVENT, { detail: which }))
+}
+
+export function usePaletteExclusion(which: 'command' | 'task', open: boolean, close: () => void): void {
+  React.useEffect(() => {
+    if (open) announcePaletteOpened(which)
+  }, [open, which])
+  React.useEffect(() => {
+    const onOpened = (event: Event) => {
+      if ((event as CustomEvent<string>).detail !== which) close()
+    }
+    window.addEventListener(PALETTE_OPENED_EVENT, onOpened)
+    return () => window.removeEventListener(PALETTE_OPENED_EVENT, onOpened)
+  }, [which, close])
+}
+
 export function CommandPalette() {
   const [open, setOpen] = React.useState(false)
   const navigate = useNavigate()
@@ -221,6 +285,19 @@ export function CommandPalette() {
     window.addEventListener(OPEN_COMMAND_PALETTE_EVENT, onOpen)
     return () => window.removeEventListener(OPEN_COMMAND_PALETTE_EVENT, onOpen)
   }, [])
+  const close = React.useCallback(() => setOpen(false), [])
+  usePaletteExclusion('command', open, close)
+
+  // Tab on a task row hands it to ⌘P, which acts on it (spec 2026-10-17-task-palette).
+  const onKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Tab' || event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) return
+    const row = event.currentTarget.querySelector<HTMLElement>('[cmdk-item][data-selected="true"][data-slot="palette-task"]')
+    const runId = row?.dataset.runId
+    if (!runId) return
+    event.preventDefault()
+    setOpen(false)
+    openTaskPalette({ runId, projectId: row.dataset.projectId ?? null })
+  }, [])
 
   return (
     <CommandDialog
@@ -230,6 +307,7 @@ export function CommandPalette() {
       description="Search projects, tasks, views, actions, and skills"
       showCloseButton={false}
       filter={paletteScore}
+      commandProps={{ onKeyDown }}
       // Two overrides of the shared dialog, both for this surface only — every other dialog in
       // the cockpit is a form, which wants to stay narrow and centred.
       //
@@ -251,18 +329,22 @@ export function CommandPalette() {
 
 /** One task row. Shared by Unread and Tasks so the two groups can never drift into rendering
  *  or filtering the same task differently — only which group holds it changes. */
-function TaskItem({
+export function TaskItem({
   task,
   projectName,
   showProject,
   now,
   onSelect,
+  slot = 'palette-task',
+  trailing,
 }: {
   task: PaletteTask
   projectName: string | null
   showProject: boolean
   now: number
   onSelect: (task: PaletteTask) => void
+  slot?: string
+  trailing?: React.ReactNode
 }) {
   const attention = deriveAttention(task)
   const label = runTitle(task)
@@ -275,7 +357,7 @@ function TaskItem({
       // The project name is filter fodder for the same reason it is rendered: with every
       // project's tasks in one list, "shop" has to narrow to shop's tasks.
       keywords={projectName ? [projectName] : undefined}
-      data-slot="palette-task"
+      data-slot={slot}
       data-run-id={task.id}
       data-project-id={task.projectId ?? undefined}
       onSelect={() => onSelect(task)}
@@ -295,6 +377,7 @@ function TaskItem({
       <span className="shrink-0 text-xs text-soft-foreground tabular-nums">
         {shortAge(task.finishedAt ?? task.createdAt, now)}
       </span>
+      {trailing}
     </CommandItem>
   )
 }
@@ -307,49 +390,19 @@ function PaletteContent({ close }: { close: () => void }) {
   // ranking (`paletteScore`); this only decides which SECTIONS exist.
   const [search, setSearch] = React.useState('')
   const searching = search.trim() !== ''
-  const activeProjectId = useActiveProjectId()
   const { theme, setTheme } = useTheme()
-  // The registry is workspace-scoped (not project-scoped), so this is the ONE list the palette
-  // can offer everywhere — including global settings, which has no active project at all. The
-  // shell already holds this cache entry; opening the palette costs no extra request.
-  const projects = useProjects()
-  // Health is cached by the shell's chips; here it gates the forge-gated Views row (R6 1.1) —
-  // the palette must not offer a GitHub view the sidebar honestly hides.
-  const health = useHealth()
-  const registry = projects.data
-  const bootProjectId = registry?.bootProject ?? health.data?.bootProject ?? null
-  // Runs are already cached by the sidebar/shell. The palette also sits above the project route
-  // provider, so ask for the URL project explicitly rather than trusting the module scope.
-  const runs = useRunsForProject(activeProjectId, bootProjectId)
+  const { activeProjectId, registry, health, multiProject, projectNames, tasks } = usePaletteTasks()
   const skills = useSkills()
   // Skills list most-used → project → global (#519) — the same order every picker renders.
   const uiState = useUiState()
   const now = Date.now()
 
-  // Same threshold as the sidebar's grouped nav (`app-shell-container.tsx`): with one registered
-  // project there is nowhere to switch TO, and a one-row group would be pure noise.
-  const multiProject = registry !== undefined && registry.projects.length > 1
-  // The cross-project index answers "which project is this task in", so it is only worth asking
-  // when that question has more than one answer. A single-project cockpit issues no request.
-  const runsIndex = useRunsIndex(multiProject)
-
   // The sidebar's hand-picked order (#952), read from the same cached workspace ui-state the
   // sidebar writes — so a project dragged to the top of the drawer is also the top of this list.
   const { order: projectOrder } = useProjectOrder()
   const orderedProjects = React.useMemo(
-    () => (multiProject ? orderProjects(registry.projects, activeProjectId, projectOrder) : []),
+    () => (multiProject && registry ? orderProjects(registry.projects, activeProjectId, projectOrder) : []),
     [multiProject, registry, activeProjectId, projectOrder],
-  )
-  const projectNames = React.useMemo(
-    () => new Map((registry?.projects ?? []).map((project) => [project.id, project.name])),
-    [registry],
-  )
-  // Which project the live run list answered for — see `mergeTasks`. The active id when there is
-  // one, else the boot project, which is what an unscoped API client always reaches.
-  const runsProjectId = (activeProjectId === 'default' ? null : activeProjectId) ?? bootProjectId
-  const tasks = React.useMemo(
-    () => mergeTasks(runs.data ?? [], runsProjectId, runsIndex.data?.runs),
-    [runs.data, runsProjectId, runsIndex.data],
   )
   const partitioned = React.useMemo(() => partitionTasks(tasks), [tasks])
   // Searching flattens the two task sections into one ranked list — see the Tasks group below.
@@ -386,7 +439,7 @@ function PaletteContent({ close }: { close: () => void }) {
    *  unprefixed target means to the scope-wrapping navigate. */
   const selectTask = (task: PaletteTask) => {
     close()
-    navigate(task.projectId === null ? `/tasks/${task.id}` : scopeTo(task.projectId, `/tasks/${task.id}`))
+    navigate(paletteTaskPath(task))
   }
   const nextTheme = NEXT_THEME[theme]
 

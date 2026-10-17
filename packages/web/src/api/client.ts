@@ -850,6 +850,18 @@ export async function getRepoCommit(sha: string, opts?: ReadOptions): Promise<Re
   )
 }
 
+/** A run's whole path index (`/repo/tree`'s shape, read from its worktree) — the ⌘P palette's
+ *  `#` file search. 409 when the run has no working directory. */
+export async function getRunTree(id: string, opts?: ReadOptions): Promise<RepoTree> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].tree.$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    runPath(id, '/tree'),
+  )
+}
+
 /** A run's own commits (`<base>..HEAD`, newest first) for the task's Commits tab. */
 export async function getRunCommits(id: string, opts?: ReadOptions): Promise<RunCommitsResponse> {
   return unwrap(

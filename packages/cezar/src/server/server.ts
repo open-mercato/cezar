@@ -5200,6 +5200,19 @@ export function createApp(deps: ServerDeps) {
       return c.json(result.commit);
     })
 
+    // The run's whole path index — `/repo/tree` against the task's worktree. Backs the ⌘P
+    // palette's `#` file search (spec 2026-10-17-task-palette); `/runs/:id/files` serves the file.
+    .get('/runs/:id/tree', async (c) => {
+      const { root: repoRoot, store } = c.get('project');
+      const run = store.getRun(c.req.param('id'));
+      if (!run) return c.json({ error: 'not found' }, 404);
+      const workingDirectory = workingDirectoryOf(run, repoRoot);
+      if (!workingDirectory) return c.json({ error: NO_WORKTREE }, 409);
+      const result = await listRepoPaths(workingDirectory);
+      if (!result.ok) return c.json({ error: result.error }, 409);
+      return c.json({ paths: result.paths, truncated: result.truncated });
+    })
+
     // Files tab: directory listing (path omitted or a dir) or file content
     // (size-capped, binary flagged). Traversal-safe — readWorktreePath rejects
     // anything escaping the worktree. `raw=1` (R5 Step 1.6) serves the BYTES of

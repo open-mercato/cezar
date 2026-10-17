@@ -28,6 +28,8 @@ import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Link } from '@/lib/project-router'
 import { isUnread } from '@/lib/read-state'
+import { recordTaskVisit } from '@/lib/recent-tasks'
+import { publishTaskWorkspace, takeQueuedFileOpen, withdrawTaskWorkspace } from '@/lib/task-workspace-bridge'
 import { isEditableTarget } from '@/lib/use-command-shortcut'
 import { cn } from '@/lib/utils'
 import { rememberViewState } from '@/lib/view-memory'
@@ -47,7 +49,7 @@ import { ThreadLoading } from '../task-thread/thread-loading'
 import { reduceThread } from '../task-thread/thread-state'
 import { readDrawerState, writeDrawerState, type DrawerState } from './drawer-state'
 import { LayoutCards } from './layout-cards'
-import { emptyBrowserState, FIXED_VIEW_ORDER, fixedViewOf, VIEW_IDS, type ViewId, type WorkspaceColumn } from './layout-state'
+import { emptyBrowserState, FIXED_VIEW_ORDER, fixedViewOf, layoutDisplayName, VIEW_IDS, type ViewId, type WorkspaceColumn } from './layout-state'
 import { FullViewExit, usePanelCover, WorkspaceMaximizeContext } from './maximize'
 import { useWorkspaceLayouts } from './use-workspace-layouts'
 import { AvailableViewsContext } from './view-picker'
@@ -460,6 +462,56 @@ function WorkspaceView({
     },
     [openBeside, run.id],
   )
+
+  // The ⌘P palette's handle on this workspace (spec 2026-10-17-task-palette), refreshed every
+  // commit so it reads the DOM (split buttons, composer) as it now stands.
+  useEffect(() => recordTaskVisit(run.id), [run.id])
+  useEffect(() => {
+    if (!layouts.ready) return
+    const path = takeQueuedFileOpen(run.id)
+    if (path) openReference({ view: 'files', value: path })
+  }, [layouts.ready, openReference, run.id])
+  useEffect(() => {
+    const stage = () => document.querySelector<HTMLElement>('[data-slot="workspace-stage"]')
+    const splitButton = () => {
+      const buttons = stage()?.querySelectorAll<HTMLButtonElement>('[data-action="split-view"]:not(:disabled)')
+      return buttons?.[buttons.length - 1] ?? null
+    }
+    const composer = () =>
+      stage()?.querySelector<HTMLElement>('[data-slot="composer"] textarea, [data-slot="composer-input"]') ?? null
+    const bridge = {
+      runId: run.id,
+      views: fixedViews,
+      activeView: fixedActive,
+      openView: openDeepLink,
+      openViewBeside,
+      layouts: cardLayouts.map((layout) => ({
+        name: layout.name,
+        label: layoutDisplayName(layout.name),
+        active: fixedActive === null && layout.name === layouts.state.active,
+      })),
+      selectLayout,
+      newLayout: createLayout,
+      maximized,
+      toggleMaximized,
+      splitView: splitButton() ? () => splitButton()?.click() : null,
+      terminal: {
+        allowed: terminalAllowed,
+        open: drawerOpen,
+        inColumn: terminalColumnShown,
+        toggle: () => updateDrawer({ open: !drawerOpen }),
+        openInColumn: () => {
+          updateDrawer({ open: false })
+          openBeside('terminal')
+        },
+      },
+      focusComposer: composer() ? () => composer()?.focus() : null,
+      openFile: (path: string) => openReference({ view: 'files', value: path }),
+      markedUnread,
+    }
+    publishTaskWorkspace(bridge)
+    return () => withdrawTaskWorkspace(bridge)
+  })
 
   // The layout name is part of each column's memory key, so two layouts never share a selection.
   const activeName = layouts.state.active

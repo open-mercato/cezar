@@ -38,6 +38,7 @@ import {
   getRepo,
   getRunCommit,
   getRunCommits,
+  getRunTree,
   getRepoChanges,
   getRepoCommit,
   getRepoFile,
@@ -195,6 +196,7 @@ export const queryKeys = {
      *  background — see `useRunDrafts`. */
     drafts: (id: string) => [queryScope(), 'runs', 'drafts', id] as const,
     commits: (id: string) => [queryScope(), 'runs', 'commits', id] as const,
+    tree: (id: string) => [queryScope(), 'runs', 'tree', id] as const,
     commit: (id: string, sha: string) => [queryScope(), 'runs', 'commit', id, sha] as const,
   },
   groups: {
@@ -1162,6 +1164,18 @@ export function useRunGitStatus(id: string, enabled: boolean, live = false) {
     retry: false,
     refetchInterval: live ? 10_000 : false,
     refetchOnWindowFocus: true,
+    staleTime: 0,
+  })
+}
+
+/** A run's whole path index for the ⌘P palette's `#` file search. Read only while the palette is
+ *  in that mode; same freshness override as `useRepoTree` — the agent may be adding files. */
+export function useRunTree(id: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.runs.tree(id ?? ''),
+    queryFn: ({ signal }) => getRunTree(id as string, { signal }),
+    enabled: enabled && Boolean(id),
+    retry: false,
     staleTime: 0,
   })
 }

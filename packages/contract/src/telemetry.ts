@@ -122,7 +122,7 @@ export function attachmentCountBucket(count: number): AttachmentCountBucket {
 
 /** Which button archived or pinned a task — the label of `task_(un)archived` / `task_(un)pinned`.
  *  Sent as `surface` in the archive/pin body; absent (a non-cockpit caller) labels as `api`. */
-export const TASK_ACTION_SURFACES = ['sidebar', 'tasks_table', 'all_tasks', 'task_view'] as const;
+export const TASK_ACTION_SURFACES = ['sidebar', 'tasks_table', 'all_tasks', 'task_view', 'palette'] as const;
 export const taskActionSurfaceSchema = z.enum(TASK_ACTION_SURFACES);
 export type TaskActionSurface = z.infer<typeof taskActionSurfaceSchema>;
 
