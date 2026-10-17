@@ -118,13 +118,15 @@ export function trackShortcutRebound(commandId: string): void {
   if (label) send('/api/v1/telemetry/event', { event: 'shortcut_rebound', label })
 }
 
-/** What a palette's search text says about how it was searched — its SHAPE, never the text. */
-export function searchModes(search: string): PaletteMode[] {
+/** What a palette's search text says about how it was searched — its SHAPE, never the text.
+ *  `files`: `#` opens the file search (⌘P on a task), not a `#1482` reference. A bare prefix is
+ *  not a search — ⌘P pre-fills `@` itself. */
+export function searchModes(search: string, { files = false }: { files?: boolean } = {}): PaletteMode[] {
   const modes: PaletteMode[] = []
-  if (search.startsWith('@')) modes.push('tasks')
-  else if (search.startsWith('>')) modes.push('commands')
-  else if (search.startsWith('#')) modes.push('files')
-  const rest = search.replace(/^[@>]/, '').trim().toLowerCase()
+  const prefix = search.startsWith('@') ? 'tasks' : search.startsWith('>') ? 'commands' : files && search.startsWith('#') ? 'files' : null
+  const rest = (prefix ? search.slice(1) : search).trim().toLowerCase()
+  if (prefix && rest !== '') modes.push(prefix)
+  if (prefix === 'files') return modes
   if (/^(?:(?:pr|issue)\s*)?#?\d{1,7}$/.test(rest)) modes.push('pr_number')
   if (/\bauto/.test(rest)) modes.push('automation')
   return modes

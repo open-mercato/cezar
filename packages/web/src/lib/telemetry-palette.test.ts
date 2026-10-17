@@ -19,7 +19,10 @@ describe('palette telemetry (spec 2026-10-17-task-palette)', () => {
 
   it('reads a search for its shape only', () => {
     expect(searchModes('@fix login')).toEqual(['tasks'])
-    expect(searchModes('#src/cart')).toEqual(['files'])
+    expect(searchModes('#src/cart', { files: true })).toEqual(['files'])
+    expect(searchModes('#1482', { files: true })).toEqual(['files'])
+    expect(searchModes('#1482')).toEqual(['pr_number'])
+    expect(searchModes('@')).toEqual([])
     expect(searchModes('>pin')).toEqual(['commands'])
     expect(searchModes('1482')).toEqual(['pr_number'])
     expect(searchModes('@#1482')).toEqual(['tasks', 'pr_number'])

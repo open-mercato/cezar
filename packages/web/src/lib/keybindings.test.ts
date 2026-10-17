@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  altGrProblem,
   assignBinding,
   bindingsByChord,
   chordFromEvent,
@@ -39,6 +40,11 @@ describe('chords', () => {
   it('AltGr is typing, not a chord', () => {
     const altGr = key('KeyQ', '@', { ctrlKey: true, altKey: true, getModifierState: (k: string) => k === 'AltGraph' })
     expect(chordFromEvent(altGr, false)).toBeNull()
+    // Firefox on a Mac says AltGraph for any ⌥ — an ⌥ chord there still records.
+    const option = key('KeyP', 'π', { altKey: true, getModifierState: (k: string) => k === 'AltGraph' })
+    expect(chordFromEvent(option, true)).toBe('Alt+P')
+    expect(altGrProblem(altGr, false)).toMatch(/Ctrl\+Alt/)
+    expect(altGrProblem(option, true)).toBeUndefined()
     expect(chordFromEvent(key('AltRight', 'AltGraph', { ctrlKey: true, altKey: true }), false)).toBeNull()
     expect(chordFromEvent(key('KeyQ', 'q', { ctrlKey: true, altKey: true, getModifierState: () => false }), false)).toBe('Mod+Alt+Q')
   })

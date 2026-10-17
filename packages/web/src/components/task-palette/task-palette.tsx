@@ -36,7 +36,7 @@ import { orderByRecency, readRecentTasks } from '@/lib/recent-tasks'
 import { runTitle } from '@/lib/task-groups'
 import { ownedTaskPr } from '@/lib/tasks-table'
 import { queueFileOpen, taskWorkspaceFor } from '@/lib/task-workspace-bridge'
-import { BINDABLE_COMMANDS, chordFromEvent, chordProblem, formatChord, isApplePlatform, shortcutsBlocked } from '@/lib/keybindings'
+import { altGrProblem, BINDABLE_COMMANDS, chordFromEvent, chordProblem, formatChord, isApplePlatform, shortcutsBlocked } from '@/lib/keybindings'
 import { commandShortcutHint, isEditableTarget, useCommandShortcut } from '@/lib/use-command-shortcut'
 import { useKeybindings } from '@/lib/use-keybindings'
 import {
@@ -361,7 +361,11 @@ export function TaskPalette() {
         return setRecording(null)
       }
       const chord = chordFromEvent(event.nativeEvent)
-      if (!chord) return
+      if (!chord) {
+        const altGr = altGrProblem(event.nativeEvent)
+        if (altGr) setRecording({ ...recording, problem: altGr })
+        return
+      }
       const problem = chordProblem(chord)
       if (problem) return setRecording({ ...recording, problem: `${formatChord(chord)} — ${problem}` })
       const previous = [...keybindings.bindings].find(([id, held]) => held === chord && id !== recording.id)?.[0]
@@ -409,8 +413,8 @@ export function TaskPalette() {
   const { mode, query } = renaming ? { mode: 'all' as const, query: '' } : paletteMode(search, subjectId !== null)
   React.useEffect(() => {
     if (!open || renaming || recording) return
-    for (const used of searchModes(search)) sessionModes.current.add(used)
-  }, [open, renaming, recording, search])
+    for (const used of searchModes(search, { files: subjectId !== null })) sessionModes.current.add(used)
+  }, [open, renaming, recording, search, subjectId])
   React.useEffect(() => {
     if (open || sessionModes.current.size === 0) return
     trackPaletteModes(sessionModes.current)

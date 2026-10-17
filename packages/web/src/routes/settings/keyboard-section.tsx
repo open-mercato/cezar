@@ -4,6 +4,7 @@ import * as React from 'react'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import {
+  altGrProblem,
   BINDABLE_COMMANDS,
   chordFromEvent,
   chordProblem,
@@ -52,7 +53,11 @@ export function KeyboardSection() {
         return setRecording(null)
       }
       const chord = chordFromEvent(event)
-      if (!chord) return
+      if (!chord) {
+        const altGr = altGrProblem(event)
+        if (altGr) setProblem(altGr)
+        return
+      }
       const refused = chordProblem(chord)
       if (refused) return setProblem(`${formatChord(chord)} — ${refused}`)
       const previous = [...keybindings.bindings].find(([id, held]) => held === chord && id !== recording)?.[0]

@@ -60,8 +60,9 @@ export type ChordEvent = Pick<KeyboardEvent, 'code' | 'key' | 'metaKey' | 'ctrlK
 /** The chord a keydown spells, or null for a lone modifier or a key chords cannot name. */
 export function chordFromEvent(event: ChordEvent, apple = isApplePlatform()): string | null {
   if (['Meta', 'Control', 'Alt', 'Shift', 'OS', 'AltGraph'].includes(event.key)) return null
-  // Windows reports AltGr as Ctrl+Alt: that is a layout typing `@` or `€`, not a chord.
-  if (event.getModifierState?.('AltGraph')) return null
+  // Windows reports AltGr as Ctrl+Alt: that is a layout typing `@` or `€`, not a chord. Firefox on a
+  // Mac reports AltGraph for every ⌥, where ⌥ chords are real.
+  if (!apple && event.getModifierState?.('AltGraph')) return null
   const key = keyName(event)
   if (!key) return null
   const parts: string[] = []
@@ -128,6 +129,13 @@ const RESERVED = new Set([
   'Mod+Shift+N',
   'Mod+Shift+W',
 ])
+
+/** Why a keydown `chordFromEvent` dropped as AltGr cannot be bound — the recorder's message for it. */
+export function altGrProblem(event: ChordEvent, apple = isApplePlatform()): string | undefined {
+  if (apple || ['Control', 'Alt', 'AltGraph'].includes(event.key)) return undefined
+  if (!(event.getModifierState?.('AltGraph') || (event.ctrlKey && event.altKey))) return undefined
+  return 'Ctrl+Alt — types characters on many layouts'
+}
 
 /** Why `chord` cannot be bound, or undefined when it can. */
 export function chordProblem(chord: string, apple = isApplePlatform()): string | undefined {
