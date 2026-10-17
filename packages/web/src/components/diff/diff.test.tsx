@@ -2,6 +2,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { Diff, DiffFallback } from './diff'
+import { DiffView } from './diff-view'
+import { DiffRenderObserverContext } from './line-comments'
 import type { DiffFileChange } from './types'
 
 // Explicit rather than relying on RTL's auto-cleanup, which only runs when vitest `globals` is on.
@@ -34,6 +36,8 @@ const ADDED: DiffFileChange = {
   dels: 0,
   patch: ['diff --git a/README.md b/README.md', '@@ -0,0 +1,2 @@', '+# Title', '+Body', ''].join('\n'),
 }
+
+const UNRELATED: DiffFileChange = { ...ADDED, path: 'notes.txt', patch: 'diff --git a/notes.txt b/notes.txt\n@@ -0,0 +1 @@\n+note\n' }
 
 /** The engine chunk loads lazily — settle on a rendered file header before asserting. */
 async function renderDiff(ui: React.ReactElement, settleText = 'src/a.ts') {
@@ -168,6 +172,38 @@ describe('Diff facade', () => {
 
     expect(screen.getByText('Binary file — no text diff.')).not.toBeNull()
     expect(screen.getByText('No content changes (metadata only).')).not.toBeNull()
+  })
+})
+
+describe('Diff selection render isolation', () => {
+  it('does not rerender the unrelated DiffFileBody while dragging in another file', async () => {
+    const renders = new Map<string, number>()
+    const observe = (path: string) => renders.set(path, (renders.get(path) ?? 0) + 1)
+    render(
+      <DiffRenderObserverContext.Provider value={observe}>
+        <DiffView files={[MODIFIED, UNRELATED]} onAddComment={vi.fn()} />
+      </DiffRenderObserverContext.Provider>,
+    )
+    await screen.findByText('notes.txt')
+
+    // Wait until both file bodies have rendered once; syntax highlighting may settle asynchronously.
+    await waitFor(() => {
+      expect(document.querySelector('[data-path="src/a.ts"] [data-slot="diff-file-body"]')).not.toBeNull()
+      expect(document.querySelector('[data-path="notes.txt"] [data-slot="diff-file-body"]')).not.toBeNull()
+      expect(renders.get('src/a.ts') ?? 0).toBeGreaterThan(0)
+      expect(renders.get('notes.txt') ?? 0).toBeGreaterThan(0)
+    })
+    const beforeA = renders.get('src/a.ts') ?? 0
+    const beforeB = renders.get('notes.txt') ?? 0
+    const file = document.querySelector<HTMLElement>('[data-slot="diff-file"][data-path="src/a.ts"]')!
+    const rows = [...file.querySelectorAll<HTMLElement>('[data-slot="diff-line"]')]
+    const plusOf = (row: HTMLElement) => row.querySelector<HTMLButtonElement>('[data-slot="diff-add-comment"]')!
+    fireEvent.mouseDown(plusOf(rows[0]!), { button: 0 })
+    fireEvent.mouseEnter(rows[2]!)
+
+    await waitFor(() => expect(rows[2]?.getAttribute('data-mark')).toBe('selected'))
+    expect(renders.get('src/a.ts') ?? 0).toBeGreaterThan(beforeA)
+    expect(renders.get('notes.txt') ?? 0).toBe(beforeB)
   })
 })
 
