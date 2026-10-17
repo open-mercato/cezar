@@ -23,6 +23,7 @@
 //   `#permission <path>` ask `external_directory` for <path> and, like the
 //                 real server, finish the turn only once the prompt is answered;
 //                 the final text names the reply.
+// `MOCK_LEGACY_PERMISSION=1` serves only the pre-rework session-scoped reply route.
 // `MOCK_NO_EVENT_BUS=1` in the environment makes `GET /event` 404 instead, for
 // the no-event-bus fallback.
 import { createServer } from 'node:http';
@@ -85,14 +86,31 @@ const server = createServer((req, res) => {
       res.end(JSON.stringify({ id: SESSION_ID, title: 'cezar task' }));
       return;
     }
-    const permissionReply = url.match(/^\/permission\/([^/]+)\/reply$/);
+    // The current reply route, or — under `MOCK_LEGACY_PERMISSION=1`, a server
+    // from before the permission rework — only the session-scoped one.
+    const legacy = process.env.MOCK_LEGACY_PERMISSION === '1';
+    const permissionReply = legacy
+      ? url.match(new RegExp(`^/session/${SESSION_ID}/permissions/([^/]+)$`))
+      : url.match(/^\/permission\/([^/]+)\/reply$/);
+    if (legacy && /^\/permission\//.test(url)) {
+      res.writeHead(404, { 'content-type': 'text/plain' });
+      res.end('not found');
+      return;
+    }
     if (req.method === 'POST' && permissionReply) {
       const finish = pendingPermissions.get(permissionReply[1]);
       pendingPermissions.delete(permissionReply[1]);
-      const known = typeof finish === 'function';
+      let reply;
+      try {
+        const parsed = JSON.parse(body);
+        reply = legacy ? parsed.response : parsed.reply;
+      } catch {
+        reply = undefined;
+      }
+      const known = typeof finish === 'function' && typeof reply === 'string';
       res.writeHead(known ? 200 : 404, { 'content-type': 'application/json' });
       res.end(known ? 'true' : '{}');
-      if (known) finish(JSON.parse(body).reply);
+      if (known) finish(reply);
       return;
     }
     if (req.method === 'POST' && url === `/session/${SESSION_ID}/message`) {

@@ -1,5 +1,6 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { dirname, join, resolve } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import type {
   AgentEvent,
   AgentRunResult,
@@ -728,13 +729,14 @@ function textOf(content: ContentBlock[]): string {
 }
 
 /**
- * The reply to one OpenCode permission prompt. Only two paths outside the
- * worktree are granted, each by exact location: this run's handoff file
- * (`CEZ_HANDOFF_FILE`) and the files in its own pasted-attachments folder
- * (`runs/<CEZ_TASK_ID>-images/`). A config rule cannot do this — OpenCode
- * matches rules against the whole parent directory (`runs/*`), which would
- * expose every other task's transcript. Everything else is refused, `once`
- * so no grant outlives the call.
+ * The reply to one OpenCode permission prompt. Only this run's own state
+ * outside the worktree is granted: its handoff file (`CEZ_HANDOFF_FILE`), the
+ * files in its pasted-attachments folder (`runs/<CEZ_TASK_ID>-images/`), and
+ * its scratch directory when cezar set `TMPDIR` to it (#785). A config rule
+ * cannot do this — OpenCode matches rules against the whole parent directory
+ * (`runs/*`), which would expose every other task's transcript. Paths are
+ * compared after following symlinks. Everything else is refused, `once` so no
+ * grant outlives the call.
  */
 export function opencodePermissionReply(
   props: Record<string, unknown>,
@@ -742,13 +744,37 @@ export function opencodePermissionReply(
 ): 'once' | 'reject' {
   const permission = stringField(props, 'permission') ?? stringField(props, 'type');
   const filepath = isRecord(props.metadata) ? stringField(props.metadata, 'filepath') : undefined;
-  const handoff = env?.CEZ_HANDOFF_FILE;
-  if (permission !== 'external_directory' || !filepath || !handoff) return 'reject';
-  const target = resolve(filepath);
-  if (target === resolve(handoff)) return 'once';
+  const handoffFile = env?.CEZ_HANDOFF_FILE;
   const taskId = env?.CEZ_TASK_ID;
-  if (taskId && dirname(target) === join(dirname(resolve(handoff)), `${taskId}-images`)) return 'once';
+  if (permission !== 'external_directory' || !filepath || !handoffFile || !taskId) return 'reject';
+  const target = canonicalPath(filepath);
+  const handoff = canonicalPath(handoffFile);
+  if (target === handoff) return 'once';
+  const runsDir = dirname(handoff);
+  if (dirname(target) === join(runsDir, `${taskId}-images`)) return 'once';
+  const tmp = join(dirname(runsDir), 'tmp', taskId);
+  if (env.TMPDIR && canonicalPath(env.TMPDIR) === tmp && (target === tmp || target.startsWith(tmp + sep))) {
+    return 'once';
+  }
   return 'reject';
+}
+
+/** `realpath` of the deepest existing ancestor, rest re-appended — the file a
+ *  prompt names may not exist yet (a write), but its directories decide where it lands. */
+function canonicalPath(path: string): string {
+  const abs = resolve(path);
+  const rest: string[] = [];
+  let dir = abs;
+  for (;;) {
+    try {
+      return join(realpathSync.native(dir), ...rest.reverse());
+    } catch {
+      const parent = dirname(dir);
+      if (parent === dir) return abs;
+      rest.push(basename(dir));
+      dir = parent;
+    }
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
