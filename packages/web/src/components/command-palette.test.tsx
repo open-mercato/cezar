@@ -520,6 +520,32 @@ describe('Tasks group', () => {
     expect(rows()).toEqual(['r-issue'])
   })
 
+  it('marks the tasks an automation started — and what they dispatched — and finds them by "auto"', async () => {
+    renderPalette({
+      entry: '/p/shop/',
+      projects: [project({ id: 'shop' }), project({ id: 'blog' })],
+      runs: [
+        run({ id: 'r-mine', title: 'Fix login' }),
+        // The provenance record's other fields do not matter to the palette.
+        run({ id: 'r-auto', title: 'Review PR', automation: { automationId: 'a1' } as RunRecord['automation'] }),
+        run({ id: 'r-child', title: 'Child check', dispatch: { rootRunId: 'r-auto', parentRunId: 'r-auto', kind: 'review' } as RunRecord['dispatch'] }),
+      ],
+      indexed: [indexed({ id: 'b-auto', projectId: 'blog', title: 'Nightly triage', automationId: 'a9' })],
+    })
+    openWith({ metaKey: true })
+    await screen.findByText('Nightly triage')
+    const marked = () =>
+      [...document.querySelectorAll<HTMLElement>('[data-slot="palette-task"]')]
+        .filter((row) => row.querySelector('[data-slot="palette-task-automation"]'))
+        .map((row) => row.dataset.runId)
+        .sort()
+    expect(marked()).toEqual(['b-auto', 'r-auto', 'r-child'])
+
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'automation' } })
+    const rows = [...document.querySelectorAll<HTMLElement>('[data-slot="palette-task"]')].map((row) => row.dataset.runId).sort()
+    expect(rows).toEqual(['b-auto', 'r-auto', 'r-child'])
+  })
+
   it('renders no Tasks group when there are no runs', async () => {
     renderPalette()
     openWith({ metaKey: true })

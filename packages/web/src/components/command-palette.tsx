@@ -1,4 +1,4 @@
-import { CheckIcon, FolderOpenIcon, LayersIcon, MoonIcon, PlusIcon, SettingsIcon } from 'lucide-react'
+import { CheckIcon, FolderOpenIcon, LayersIcon, MoonIcon, PlusIcon, SettingsIcon, ZapIcon } from 'lucide-react'
 import * as React from 'react'
 import { useNavigate as useRouterNavigate } from 'react-router'
 import { useHealth, useProjects, useRunsForProject, useRunsIndex, useSkills, useUiState } from '@/api/queries'
@@ -24,6 +24,7 @@ import { isUnread } from '@/lib/read-state'
 import { orderSkillsByUsage } from '@/lib/skills'
 import { lastActivityAt, runTitle } from '@/lib/task-groups'
 import { taskReferences, type TaskReferenceInput } from '@/lib/tasks-table'
+import { automationIdOf, ownAutomationId } from '@/lib/task-origin'
 import { useCommandShortcut, useKeyShortcut } from '@/lib/use-command-shortcut'
 import { openTaskPalette } from '@/components/task-palette/open'
 import { useProjectOrder } from '@/lib/use-project-order'
@@ -170,12 +171,28 @@ export function mergeTasks(
     startedAt: run.startedAt,
     lastActivityAt: lastActivityAt(run),
     ...definedOnly(referenceFields(run)),
+    ...definedOnly({
+      automationId: ownAutomationId(run),
+      dispatch: run.dispatch && {
+        rootRunId: run.dispatch.rootRunId,
+        parentRunId: run.dispatch.parentRunId,
+        kind: run.dispatch.kind,
+      },
+    }),
   }))
   const live = new Set(mine.map(taskKey))
   const theirs = (indexed ?? [])
     .filter((entry) => !live.has(taskKey(entry)))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-  return [...mine, ...theirs]
+  const all = [...mine, ...theirs]
+  // A task an automation's task dispatched is automatic too — the Tasks tables' rule
+  // (`automationIdOf`), so the palette and the Automations filter agree on every row.
+  const byId = new Map(all.map((task) => [task.id, task]))
+  return all.map((task) => {
+    if (task.automationId !== undefined) return task
+    const inherited = automationIdOf(task, (rootId) => byId.get(rootId))
+    return inherited === undefined ? task : { ...task, automationId: inherited }
+  })
 }
 
 /** Drops undefined keys, so a run without references keeps the row's exact old shape. */
@@ -393,7 +410,8 @@ export function TaskItem({
       value={`task ${label} ${references} ${task.id}`}
       // The project name is filter fodder for the same reason it is rendered: with every
       // project's tasks in one list, "shop" has to narrow to shop's tasks.
-      keywords={projectName ? [projectName] : undefined}
+      // `auto` finds the tasks an automation started, like the chip that marks them.
+      keywords={[...(projectName ? [projectName] : []), ...(task.automationId ? ['automation', 'automatic'] : [])]}
       data-slot={slot}
       data-run-id={task.id}
       data-project-id={task.projectId ?? undefined}
@@ -401,6 +419,16 @@ export function TaskItem({
     >
       <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
       <span className="min-w-0 flex-1 truncate">{label}</span>
+      {task.automationId ? (
+        <span
+          data-slot="palette-task-automation"
+          title="Started by an automation"
+          className="flex shrink-0 items-center gap-0.5 text-xs text-soft-foreground"
+        >
+          <ZapIcon aria-hidden="true" className="size-3!" />
+          auto
+        </span>
+      ) : null}
       {references ? (
         <span data-slot="palette-task-refs" className="shrink-0 font-mono text-xs text-soft-foreground">
           {references.replace(/PR #/g, '#').replace(/Issue #/g, 'issue #')}
