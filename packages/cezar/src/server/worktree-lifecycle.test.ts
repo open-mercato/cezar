@@ -109,10 +109,28 @@ describe('worktree lifecycle API', () => {
     expect((await request('/config',{worktreeLifecycle:{afterCreate:[script('echo "{{ root_path }}"')],beforeRemove:[]},worktreeLifecycleRevision:saved.worktreeLifecycleRevision},'PUT')).status).toBe(400);
     expect(raw().worktreeLifecycle).toEqual(config);
   });
-  it('does not erase malformed config through unrelated settings writes',async()=>{
+  it('a malformed config.json degrades to defaults on a hook-free project, as before scripts existed (BC §3)',async()=>{
     const configPath=join(root,'.ai/cezar/config.json');writeFileSync(configPath,'{broken');
-    expect((await request('/config',{worktreeRetention:9},'PUT')).status).toBe(409);expect(readFileSync(configPath,'utf8')).toBe('{broken');
+    expect((await request('/config')).status).toBe(200);
+    expect((await request('/config',{worktreeRetention:9},'PUT')).status).toBe(200);
+    expect(JSON.parse(readFileSync(configPath,'utf8'))).toEqual({worktreeRetention:9});
+    expect((await request(`/runs/${runId}/remove-worktree`,{})).status).toBe(200);expect(existsSync(path)).toBe(false);
+  });
+  it('an invalid worktreeLifecycle key still fails closed',async()=>{
+    const configPath=join(root,'.ai/cezar/config.json');writeFileSync(configPath,JSON.stringify({worktreeLifecycle:{afterCreate:'nope'}}));
+    expect((await request('/config',{worktreeRetention:9},'PUT')).status).toBe(409);
     expect((await request(`/runs/${runId}/remove-worktree`,{})).status).toBe(409);expect(existsSync(path)).toBe(true);
+  });
+  it('never saves or runs scripts from a git-tracked config.json',async()=>{
+    const configPath=join(root,'.ai/cezar/config.json');writeFileSync(configPath,JSON.stringify({worktreeRetention:3}));
+    execFileSync('git',['add','-f',configPath],{cwd:root});
+    const res=await request('/config',{worktreeLifecycle:{afterCreate:[script('true')],beforeRemove:[]},worktreeLifecycleRevision:null},'PUT');
+    expect(res.status).toBe(409);expect(await res.json()).toMatchObject({error:expect.stringContaining('git-tracked')});
+    // A list committed by someone else is refused at execution, yet still shown so it can be removed.
+    writeFileSync(configPath,JSON.stringify({worktreeLifecycle:{afterCreate:[script('touch pwned')],beforeRemove:[]}}));
+    const shown=await (await request('/config')).json() as {worktreeLifecycle?:{afterCreate:unknown[]}};
+    expect(shown.worktreeLifecycle?.afterCreate).toHaveLength(1);
+    expect((await request(`/runs/${runId}/remove-worktree`,{})).status).toBe(409);
   });
   it('rejects cross-origin mutation using the existing global guard',async()=>{
     const res=await apiRequest(app,'/api/v1/worktree-lifecycle/preview',{method:'POST',headers:{origin:'https://outside.example','content-type':'application/json'},body:JSON.stringify({command:'echo hello'})});

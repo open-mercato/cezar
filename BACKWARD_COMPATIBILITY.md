@@ -140,8 +140,11 @@ Written by one version, read by the next, and hand-editable by design:
 - **Worktree lifecycle scripts (2026-10-10):** optional local project configuration
   `worktreeLifecycle: {afterCreate, beforeRemove}` and derived
   `worktreeLifecycleRevision` are additive. Missing/empty lists preserve the
-  hook-free path; malformed/unreadable lifecycle configuration pauses managed
-  transitions rather than granting deletion. Config PUT omission preserves,
+  hook-free path. A `config.json` that does not parse (or a symlinked data
+  directory) with no lifecycle record degrades to defaults exactly as before;
+  an invalid `worktreeLifecycle` key, or one read while lifecycle records exist,
+  pauses managed transitions rather than granting deletion. Scripts in a
+  git-tracked `config.json` are never saved or run. Config PUT omission preserves,
   `null` clears, and a supplied object replaces both lists atomically under an
   expected revision; unrelated config keys survive. Stable entry UUIDs and exact
   execution fingerprints reconcile Retry against current saved commands, never

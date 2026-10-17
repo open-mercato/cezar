@@ -189,8 +189,8 @@ import { deleteUpload, readUpload, writeUpload } from '../uploads.ts';
 import { branchesCheckedOutElsewhere, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
 import { isReclaimable, reclaimWorktrees } from '../runs/retention.ts';
 import { worktreeLifecycleRoutes, lifecycleError } from './worktree-lifecycle.ts';
-import { readLifecycleConfig, readLifecycleConfigRaw, lifecycleConfigFromRaw, withLifecycleConfigLock, applyLifecycleConfigUpdate } from '../worktree-lifecycle/config.ts';
-import { atomicLifecycleWrite } from '../worktree-lifecycle/store.ts';
+import { readLifecycleConfigOrDefault, readLifecycleConfigRaw, lifecycleConfigFromRaw, withLifecycleConfigLock, applyLifecycleConfigUpdate, isLifecycleConfigTracked, LifecycleConfigError, TRACKED_CONFIG_ERROR } from '../worktree-lifecycle/config.ts';
+import { atomicLifecycleWrite, LifecycleStoreError } from '../worktree-lifecycle/store.ts';
 import { validateLifecycleCommand } from '../worktree-lifecycle/templates.ts';
 import { setConfigInputSchema, type WorktreeLifecycleInvalidation } from '@open-mercato/cezar-contract';
 import { getBranches, getCommit, getDiff, getLog, getRepoInfo, getStatus } from './git.ts';
@@ -427,7 +427,7 @@ export interface ServerDeps {
 async function legacyLifecycleGate(project: ProjectContext, runId: string): Promise<boolean> {
   if (project.manager.lifecycle) return project.manager.lifecycle.requiresGate(runId);
   // Older embedded callers/test doubles have no coordinator; configured hooks still fail closed.
-  const { config } = await readLifecycleConfig(project.root);
+  const { config } = await readLifecycleConfigOrDefault(project.root);
   return config.afterCreate.length > 0 || config.beforeRemove.length > 0;
 }
 const LIFECYCLE_ENDPOINT_REQUIRED = 'Worktree scripts require a lifecycle operation; use /worktree-lifecycle/operations';
@@ -6798,7 +6798,7 @@ export function createApp(deps: ServerDeps) {
   // The Settings → Agents knobs in one read (R6 Step 1.5) — an ADDITIVE
   // sibling of PUT /api/config below; /api/health keeps its protected shape.
   const configAnswer = async (repoRoot: string, config: CezConfig) => {
-    const lifecycle = await readLifecycleConfig(repoRoot);
+    const lifecycle = await readLifecycleConfigOrDefault(repoRoot, { trust: false });
     const nativeModels = await readAgentModelDefaults(repoRoot);
     const modelsLocked = agentModelsLocked(repoRoot);
     return {
@@ -6854,15 +6854,28 @@ export function createApp(deps: ServerDeps) {
         return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
       }
       try {
-        // All config writers share this short lock with the transition's final revision check.
-        await withLifecycleConfigLock(repoRoot, async () => {
-          const configPath = join(dataDir, 'config.json');
-          let raw = await readLifecycleConfigRaw(repoRoot);
+        const configPath = join(dataDir, 'config.json');
+        const save = async (locked: boolean) => {
+          let raw: Record<string, unknown> = {};
+          try { raw = await readLifecycleConfigRaw(repoRoot); }
+          catch (error) {
+            // Malformed or unreadable — start fresh, as before scripts existed. Unlocked (symlinked
+            // data dir) reads the file the way the old route did.
+            if (locked && !(error instanceof LifecycleConfigError)) throw error;
+            if (!locked) {
+              try {
+                const existing: unknown = JSON.parse(await readFile(configPath, 'utf8'));
+                if (existing && typeof existing === 'object' && !Array.isArray(existing)) raw = existing as Record<string, unknown>;
+              } catch { /* missing or malformed — start fresh */ }
+            }
+          }
           lifecycleConfigFromRaw(raw); // An unrelated save cannot silently repair or reset unsupported hooks.
           if (parsed.data.worktreeLifecycle !== undefined) {
             if (parsed.data.worktreeLifecycleRevision === undefined) throw new Error('Reload settings before saving worktree scripts: revision is required');
             if (parsed.data.worktreeLifecycle !== null) {
               for (const entry of [...parsed.data.worktreeLifecycle.afterCreate, ...parsed.data.worktreeLifecycle.beforeRemove]) validateLifecycleCommand(entry.command);
+              const scripts = parsed.data.worktreeLifecycle.afterCreate.length + parsed.data.worktreeLifecycle.beforeRemove.length;
+              if (scripts > 0 && await isLifecycleConfigTracked(repoRoot)) throw new LifecycleConfigError(TRACKED_CONFIG_ERROR);
             }
             raw = applyLifecycleConfigUpdate(raw, parsed.data.worktreeLifecycle, parsed.data.worktreeLifecycleRevision);
           }
@@ -6940,8 +6953,19 @@ export function createApp(deps: ServerDeps) {
             if (Object.keys(current).length === 0) delete raw.defaultModelsAuto;
             else raw.defaultModelsAuto = current;
           }
-          await atomicLifecycleWrite(configPath, raw);
-        });
+          if (locked) await atomicLifecycleWrite(configPath, raw);
+          else {
+            await mkdir(dataDir, { recursive: true });
+            await writeFile(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf8');
+          }
+        };
+        // All config writers share this short lock with the transition's final revision check.
+        try { await withLifecycleConfigLock(repoRoot, () => save(true)); }
+        catch (error) {
+          // The lifecycle store refuses a symlinked data dir; settings without scripts still save.
+          if (!(error instanceof LifecycleStoreError) || parsed.data.worktreeLifecycle !== undefined) throw error;
+          await save(false);
+        }
         return c.json(await configAnswer(repoRoot, await loadConfig(repoRoot)));
       } catch (error) { return lifecycleError(c, error); }
     });

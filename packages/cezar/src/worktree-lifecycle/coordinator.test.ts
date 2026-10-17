@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -320,6 +320,70 @@ describe('worktree lifecycle coordinator with real Git and command fixtures', ()
   it('never falls back for a recorded branch git refuses', async () => {
     const p = await project();
     await expect(p.coordinator.prepare(p.id, 'main', {kind: 'initial', runId: p.id}, undefined, {branch: 'main/child'})).rejects.toThrow();
+  });
+
+  it('a hook-free variant discard leaves the legacy routes ungated (#1358 review)', async () => {
+    const p = await project(); const prepared = await p.prepare();
+    Object.assign(p.records.get(p.id)!, {status: 'done', worktreePath: prepared.path, branch: prepared.branch});
+    expect(await p.coordinator.requiresGate(p.id)).toBe(false);
+    const discard = await p.coordinator.discardVariant(p.id);
+    expect((await settled(p.coordinator, discard!.id)).state).toBe('completed');
+    expect(existsSync(prepared.path)).toBe(false);
+    expect(await p.coordinator.requiresGate(p.id)).toBe(false);
+  });
+
+  it('dry run mocks scripts only: the worktree is real and delete-task really deletes', async () => {
+    const p = await project(); await p.config([entry('exit 9')], [entry('exit 9')]);
+    vi.stubEnv('CEZ_DRY_RUN', '1');
+    const prepared = await p.prepare();
+    expect(prepared.ready).toBe(true); expect(existsSync(join(prepared.path, '.git'))).toBe(true);
+    const deletion = await p.coordinator.startRemoval({requestId: randomUUID(), runId: p.id, intent: 'delete-task'});
+    expect((await settled(p.coordinator, deletion.id)).state).toBe('completed');
+    expect(existsSync(prepared.path)).toBe(false); expect(p.records.has(p.id)).toBe(false);
+  });
+
+  it('a malformed config.json with no record takes the zero-config path', async () => {
+    const p = await project();
+    await mkdir(join(p.root, '.ai/cezar'), {recursive: true});
+    await writeFile(join(p.root, '.ai/cezar/config.json'), '{broken');
+    expect(await p.coordinator.requiresGate(p.id)).toBe(false);
+    const prepared = await p.prepare();
+    expect(prepared.ready).toBe(true); expect(prepared.operationId).toBeUndefined();
+  });
+
+  it('Retry leaves a setup that failed on configuration once the file is fixed', async () => {
+    const p = await project();
+    await mkdir(join(p.root, '.ai/cezar'), {recursive: true});
+    await writeFile(join(p.root, '.ai/cezar/config.json'), JSON.stringify({worktreeLifecycle: {afterCreate: 'not a list'}}));
+    const failed = await p.prepare();
+    expect(failed.ready).toBe(false);
+    await writeFile(join(p.root, '.ai/cezar/config.json'), '{}');
+    await p.action(failed.operationId!, 'retry');
+    await vi.waitFor(() => expect(p.resume).toHaveBeenCalled());
+    const started = await p.prepare();
+    expect(started.ready).toBe(true); expect(existsSync(join(started.path, '.git'))).toBe(true);
+  });
+
+  it('git actions run beside this process\'s own agent lease instead of timing out', async () => {
+    const p = await project(); await p.config([entry('true')]); await p.prepare();
+    const release = await p.coordinator.acquireAgentLease(p.id);
+    try {
+      const started = Date.now();
+      expect(await p.coordinator.withWorktreeMutation(p.id, async () => 'committed')).toBe('committed');
+      expect(Date.now() - started).toBeLessThan(1000);
+    } finally { release(); }
+  });
+
+  it('boot reconcile leaves a symlinked .ai alone when no lifecycle state exists', async () => {
+    const p = await project();
+    const elsewhere = await realpath(await mkdtemp(join(tmpdir(), 'cez-lifecycle-ai-'))); roots.push(elsewhere);
+    await rm(join(p.root, '.ai'), {recursive: true, force: true});
+    execFileSync('ln', ['-s', elsewhere, join(p.root, '.ai')]);
+    Object.assign(p.records.get(p.id)!, {status: 'done', worktreePath: join(p.root, '.ai/cezar/worktrees', p.id)});
+    await p.coordinator.reconcile();
+    expect(p.records.get(p.id)).toMatchObject({status: 'done'}); expect(p.records.get(p.id)?.worktreeLifecycle).toBeUndefined();
+    expect(await p.coordinator.requiresGate(p.id)).toBe(false);
+    await rm(join(p.root, '.ai')); // the harness's teardown reads lifecycle state through the real path
   });
 
   it('makes duplicate removal requests idempotent and rejects stale action revisions', async () => {

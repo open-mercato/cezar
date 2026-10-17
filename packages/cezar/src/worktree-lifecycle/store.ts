@@ -57,17 +57,23 @@ export async function atomicLifecycleWrite(path: string, value: unknown): Promis
 }
 
 /** Same atomic mkdir + PID-owner lease used by tracker-association, with unique owner tokens. */
+/** Owner files this process holds or is creating: a lock naming our pid but not listed here was
+ *  left by an earlier process that had the same pid (a container's PID 1 after a restart). */
+const heldOwners = new Set<string>();
+
 export async function withLifecycleFileLock<T>(path: string, action: () => Promise<T>, options: { wait?: boolean } = {}): Promise<T> {
   await fs.mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const ownerName = `${process.pid}-${randomUUID()}`;
   const owner = join(path, ownerName);
   for (let attempt = 0; ; attempt++) {
     try {
+      heldOwners.add(ownerName);
       await fs.mkdir(path, { mode: 0o700 });
       try { await fs.writeFile(owner, '', { flag: 'wx', mode: 0o600 }); }
       catch (error) { await fs.rmdir(path).catch(() => undefined); throw error; }
       break;
     } catch (error) {
+      heldOwners.delete(ownerName);
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       const stat = await fs.lstat(path).catch(() => null);
       if (!stat) continue;
@@ -80,12 +86,14 @@ export async function withLifecycleFileLock<T>(path: string, action: () => Promi
       if (owners === null) continue;
       const match = owners.length === 1 ? /^([1-9][0-9]*)-[0-9a-f-]{36}$/.exec(owners[0]!) : null;
       if (match) {
-        try { process.kill(Number(match[1]), 0); }
-        catch (error) {
-          if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
-            // The unique owner filename elects one reaper. Never unlink a replacement lease.
-            try { await fs.unlink(join(path, owners[0]!)); await fs.rmdir(path); continue; } catch {}
-          }
+        let dead = Number(match[1]) === process.pid && !heldOwners.has(owners[0]!);
+        if (!dead) {
+          try { process.kill(Number(match[1]), 0); }
+          catch (error) { dead = (error as NodeJS.ErrnoException).code === 'ESRCH'; }
+        }
+        if (dead) {
+          // The unique owner filename elects one reaper. Never unlink a replacement lease.
+          try { await fs.unlink(join(path, owners[0]!)); await fs.rmdir(path); continue; } catch {}
         }
       } else if (owners.length === 0 && Date.now() - stat.mtimeMs > 60_000) {
         try { await fs.rmdir(path); continue; } catch { /* another owner won the lease */ }
@@ -95,7 +103,7 @@ export async function withLifecycleFileLock<T>(path: string, action: () => Promi
     }
   }
   try { return await action(); }
-  finally { await fs.unlink(owner).catch(() => undefined); await fs.rmdir(path).catch(() => undefined); }
+  finally { await fs.unlink(owner).catch(() => undefined); await fs.rmdir(path).catch(() => undefined); heldOwners.delete(ownerName); }
 }
 
 export class LifecycleStore {

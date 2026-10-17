@@ -130,6 +130,14 @@ describe('LifecycleStore', () => {
     })));
     expect(max).toBe(1);
   });
+  it('reaps a lock left by an earlier process that had this same pid (container PID 1 restart)', async () => {
+    const lock = join(root, 'reused-pid.lock');
+    await fs.mkdir(lock);
+    await fs.writeFile(join(lock, `${process.pid}-${randomUUID()}`), '');
+    const started = Date.now();
+    expect(await withLifecycleFileLock(lock, async () => 'acquired')).toBe('acquired');
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
   it('retries when a releasing owner removes its directory between stat and readdir', async () => {
     const lock = join(root, 'releasing.lock');
     await fs.mkdir(lock);

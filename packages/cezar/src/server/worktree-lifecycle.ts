@@ -16,8 +16,8 @@ export function lifecycleError(c: Context, error: unknown) {
   return c.json({ error: error instanceof Error ? error.message : 'Worktree lifecycle operation could not be completed' }, status);
 }
 
-/** One chained family: validated inputs and exact response inference survive both mounts. */
-/** `stopTaskProcesses`: a task's shells must not outlive the directory teardown removes (spec 2026-10-07-task-workspace §6). */
+/** One chained family: validated inputs and exact response inference survive both mounts.
+ *  `stopTaskProcesses`: a task's shells must not outlive the directory teardown removes (spec 2026-10-07-task-workspace §6). */
 export function worktreeLifecycleRoutes(opts: { stopTaskProcesses?: (runId: string) => void } = {}) {
   return new Hono<ProjectApiEnv>()
     .get('/worktree-lifecycle', queryZodValidator(lifecycleListQuerySchema), async c => {

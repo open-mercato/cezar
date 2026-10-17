@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import { promisify } from 'node:util';
 import { join } from 'node:path';
 import { worktreeLifecycleConfigSchema, type WorktreeLifecycleConfig } from '@open-mercato/cezar-contract';
-import { assertLifecyclePath, atomicLifecycleWrite, LifecycleConflictError, withLifecycleFileLock } from './store.ts';
+import { assertLifecyclePath, atomicLifecycleWrite, LifecycleConflictError, LifecycleStoreError, withLifecycleFileLock } from './store.ts';
 
 export class LifecycleConfigError extends Error {}
 export type LifecycleConfigSnapshot = { config: WorktreeLifecycleConfig; revision: string | null; configured: boolean };
@@ -32,8 +34,35 @@ export async function readLifecycleConfigRaw(projectRoot: string): Promise<Recor
     return raw as Record<string, unknown>;
   } catch { throw new LifecycleConfigError('Project configuration is malformed; worktree transition is paused'); }
 }
+const UNCONFIGURED: LifecycleConfigSnapshot = { config: { afterCreate: [], beforeRemove: [] }, revision: null, configured: false };
+export const TRACKED_CONFIG_ERROR = 'Worktree scripts in a git-tracked .ai/cezar/config.json are not run: scripts come only from local, untracked configuration. Untrack the file or remove its worktreeLifecycle key.';
+
+/** A committed hook list would run on every clone with no consent (spec: local configuration only). */
+export async function isLifecycleConfigTracked(projectRoot: string): Promise<boolean> {
+  return promisify(execFile)('git', ['ls-files', '--error-unmatch', '--', join('.ai', 'cezar', 'config.json')], { cwd: projectRoot })
+    .then(() => true, () => false);
+}
+/** The scripts Cezar may execute. Fails closed on an invalid or committed hook list. */
 export async function readLifecycleConfig(projectRoot: string): Promise<LifecycleConfigSnapshot> {
-  return lifecycleConfigFromRaw(await readLifecycleConfigRaw(projectRoot));
+  return trusted(projectRoot, lifecycleConfigFromRaw(await readLifecycleConfigRaw(projectRoot)));
+}
+/** Zero-config read for "are scripts configured?": an unreadable or malformed file, or a symlinked
+ *  data directory, means none — what `loadConfig` already degrades to. A present key still fails closed. */
+export async function readLifecycleConfigOrDefault(projectRoot: string, options: { trust?: boolean } = {}): Promise<LifecycleConfigSnapshot> {
+  let raw: Record<string, unknown>;
+  try { raw = await readLifecycleConfigRaw(projectRoot); }
+  catch (error) {
+    if (error instanceof LifecycleConfigError || error instanceof LifecycleStoreError) return UNCONFIGURED;
+    throw error;
+  }
+  const snapshot = lifecycleConfigFromRaw(raw);
+  // Settings shows an untrusted (committed) list too, so the user can remove it.
+  return options.trust === false ? snapshot : trusted(projectRoot, snapshot);
+}
+async function trusted(projectRoot: string, snapshot: LifecycleConfigSnapshot): Promise<LifecycleConfigSnapshot> {
+  const scripts = snapshot.config.afterCreate.length + snapshot.config.beforeRemove.length;
+  if (scripts > 0 && await isLifecycleConfigTracked(projectRoot)) throw new LifecycleConfigError(TRACKED_CONFIG_ERROR);
+  return snapshot;
 }
 export async function withLifecycleConfigLock<T>(projectRoot: string, action: () => Promise<T>): Promise<T> {
   const path = join(projectRoot, '.ai', 'cezar', 'config.lifecycle.lock');

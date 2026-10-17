@@ -17,8 +17,8 @@ import { isSafeGitRef } from '../git-refs.ts';
 import { createWorktree, createWorktreeWithOutcome, removeWorktree, worktreePathFor, branchFor } from '../git-worktree.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
-import { LifecycleStore, LifecycleConflictError, withLifecycleFileLock } from './store.ts';
-import { readLifecycleConfig, withLifecycleConfigLock } from './config.ts';
+import { LifecycleStore, LifecycleConflictError, LifecycleStoreError, withLifecycleFileLock } from './store.ts';
+import { readLifecycleConfig, readLifecycleConfigOrDefault, withLifecycleConfigLock } from './config.ts';
 import { renderLifecycleCommand, lifecycleCommandFingerprint, type LifecycleTemplateContext } from './templates.ts';
 import { executeLifecycleCommand, probeLifecycleProcess } from './executor.ts';
 
@@ -38,6 +38,8 @@ export class WorktreeLifecycleCoordinator {
   readonly store: LifecycleStore;
   private readonly listeners = new Set<(event: {worktreeId: string; operationId?: string; revision: number}) => void>();
   private readonly controllers = new Map<string, AbortController>();
+  /** Runs whose agent holds this process's worktree lease (`acquireAgentLease`). */
+  private readonly agentLeases = new Set<string>();
   private readonly ownedDiscardReservations = new Set<string>();
   private readonly executing = new Set<string>();
   private readonly liveOperations = new Map<string, LifecycleOperation>();
@@ -86,19 +88,33 @@ export class WorktreeLifecycleCoordinator {
     return gate?.needsAttention === true || (!!gate?.activeOperationId && !!gate.state && !terminal.has(gate.state));
   }
   async requiresGate(runId: string): Promise<boolean> {
-    const record = await this.store.readWorktree(runId);
-    if (record) return true;
+    const record = await this.readRecord(runId);
+    // A pending operation always gates; a settled record gates only while scripts exist, so a
+    // hook-free variant discard (which enrolls a record) leaves the legacy routes unchanged.
+    if (record?.activeOperationId) return true;
     const run = this.runs.getRun(runId);
-    if (run && !run.worktreePath) return false;
-    const config = await readLifecycleConfig(this.root);
+    if (!record && run && !run.worktreePath) return false;
+    if (record) {
+      try { const config = await readLifecycleConfig(this.root); return config.config.afterCreate.length > 0 || config.config.beforeRemove.length > 0; }
+      catch { return true; }
+    }
+    const config = await readLifecycleConfigOrDefault(this.root);
     return config.config.afterCreate.length > 0 || config.config.beforeRemove.length > 0;
+  }
+  /** No lifecycle directory means no record — even where the store refuses the path (a symlinked `.ai`). */
+  private async readRecord(runId: string): Promise<WorktreeLifecycleRecord | null> {
+    try { return await this.store.readWorktree(runId) ?? null; }
+    catch (error) {
+      if (error instanceof LifecycleStoreError && !existsSync(this.store.directory)) return null;
+      throw error;
+    }
   }
   private context(record: WorktreeLifecycleRecord): LifecycleTemplateContext {
     const expected = resolve(worktreePathFor(this.root, record.runId));
     // A named branch (spec 2026-10-11-branch-naming-instructions) is managed when the run records it;
-    // a deleted task or an orphan has no run left to ask, so only the ref's shape is checked.
-    const run = this.runs.getRun(record.runId);
-    if (record.branch && record.branch !== branchFor(record.runId) && (run ? record.branch !== run.branch : !isSafeGitRef(record.branch))) {
+    // a deleted task, an orphan or a removed worktree has no branch left to ask, so only its shape is checked.
+    const recorded = this.runs.getRun(record.runId)?.branch;
+    if (record.branch && record.branch !== branchFor(record.runId) && (recorded ? record.branch !== recorded : !isSafeGitRef(record.branch))) {
       throw new LifecycleConflict('Lifecycle branch is not the managed task branch');
     }
     if (resolve(record.projectRoot) !== resolve(this.root) || resolve(record.worktreePath) !== expected) throw new LifecycleConflict('Worktree context does not belong to this project');
@@ -146,12 +162,12 @@ export class WorktreeLifecycleCoordinator {
     }
   }
   /** Caller already holds normal task admission. No second slot is acquired for setup. */
-  async prepare(runId: string, base: string, pendingLaunch: LifecyclePendingLaunch, signal?: AbortSignal, choice: LifecycleBranchChoice = {}): Promise<{ready: boolean; path: string; branch: string; baseBranch: string; operationId?: string}> {
+  async prepare(runId: string, base: string, pendingLaunch: LifecyclePendingLaunch, signal?: AbortSignal, choice: LifecycleBranchChoice = {}): Promise<{ready: boolean; path: string; branch: string; baseBranch: string; operationId?: string; seeded?: string[]}> {
     const initialBranch = choice.branch ?? branchFor(runId);
     this.runs.flush();
-    const prior = await this.store.readWorktree(runId);
+    const prior = await this.readRecord(runId);
     let configured: Awaited<ReturnType<typeof readLifecycleConfig>>;
-    try { configured = await readLifecycleConfig(this.root); }
+    try { configured = prior ? await readLifecycleConfig(this.root) : await readLifecycleConfigOrDefault(this.root); }
     catch (error) {
       return this.store.withWorktreeLock(runId, async () => {
         const record: WorktreeLifecycleRecord = prior ?? {schemaVersion: 1, worktreeId: randomUUID(), runId, projectRoot: this.root,
@@ -168,8 +184,8 @@ export class WorktreeLifecycleCoordinator {
     }
     if (!prior && !configured.config.afterCreate.length && !configured.config.beforeRemove.length) {
       const wt = await this.materialize(choice, branch => createWorktree(this.root, runId, base, {branch}));
-      await seedAgentConfigLocalLayer(this.root, wt.path).catch(() => []);
-      return {ready: true, ...wt};
+      const seeded = await seedAgentConfigLocalLayer(this.root, wt.path).catch(() => []);
+      return {ready: true, ...wt, seeded};
     }
     return this.store.withWorktreeLock(runId, async () => {
       let record = await this.store.readWorktree(runId);
@@ -197,7 +213,8 @@ export class WorktreeLifecycleCoordinator {
       }
       try {
         if (signal?.aborted) throw new Error('Preparation cancelled before materialization');
-        if (process.env.CEZ_DRY_RUN !== '1') {
+        {
+          // Dry run mocks agents and script execution only; git and the store stay real (#1358 review).
           const wt = await this.materialize({...choice, branch: record.branch ?? choice.branch}, branch => createWorktreeWithOutcome(this.root, runId, base, {branch}));
           record.worktreePath = wt.path; record.branch = wt.branch;
           this.runs.updateRun(runId, {worktreePath: wt.path, branch: wt.branch, baseBranch: wt.baseBranch, worktreeReclaimedAt: undefined});
@@ -327,7 +344,7 @@ export class WorktreeLifecycleCoordinator {
       } else {
         if (this.options.isActive(record.runId)) throw new LifecycleConflict('Task is still active; directory retained');
         this.context(record);
-        if (process.env.CEZ_DRY_RUN !== '1') {
+        {
           await removeWorktree(this.root, record.worktreePath, operation.intent === 'reclaim' ? undefined : record.branch);
           if (existsSync(record.worktreePath)) throw new Error('Scripts completed but the worktree directory could not be removed');
           if (operation.intent !== 'reclaim' && record.branch) {
@@ -352,6 +369,7 @@ export class WorktreeLifecycleCoordinator {
   /** Keep cross-process directory ownership until the provider really exits. */
   async acquireAgentLease(runId: string): Promise<() => void> {
     if (!await this.requiresGate(runId)) return () => undefined;
+    if (this.agentLeases.has(runId)) return () => undefined;
     let release!: () => void;
     const released = new Promise<void>(resolve => { release = resolve; });
     let acquired!: () => void;
@@ -363,12 +381,16 @@ export class WorktreeLifecycleCoordinator {
         throw new LifecycleConflict('Prepared worktree is no longer available; retry preparation before starting the agent');
       }
       this.context(record);
-      acquired(); await released;
+      this.agentLeases.add(runId);
+      try { acquired(); await released; } finally { this.agentLeases.delete(runId); }
     }).catch(rejectAcquired);
     await ready;
     return release;
   }
   async withWorktreeMutation<T>(runId: string, mutate: () => Promise<T>): Promise<T> {
+    // This process's agent lease already excludes teardown; its own git actions (commit, push,
+    // publish) run beside the agent exactly as they did before scripts existed.
+    if (this.agentLeases.has(runId)) return mutate();
     if (!await this.requiresGate(runId)) return mutate();
     return this.store.withWorktreeLock(runId, async () => {
       const record = await this.store.readWorktree(runId);
@@ -708,12 +730,17 @@ export class WorktreeLifecycleCoordinator {
   }
   /** Reconcile metadata only. Never execute scripts on the boot critical path. */
   async reconcile(): Promise<void> {
+    // No lifecycle directory is the zero-config state, even where the store refuses the path.
+    if (!existsSync(this.store.directory)) return;
     const {records, errors} = await this.store.listWorktrees().catch(() => ({records: [] as WorktreeLifecycleRecord[],
       errors: this.runs.listRuns().filter(run => run.worktreePath).map(run => ({id: run.id, error: 'Lifecycle storage is unreadable; worktree retained'}))}));
     for (const item of errors) {
-      if (!this.runs.getRun(item.id)) continue;
+      const run = this.runs.getRun(item.id);
+      if (!run) continue;
       const summary = this.attentionSummary(item.id, item.error);
-      this.runs.updateRun(item.id, {status: 'waiting', error: item.error, worktreeLifecycle: {worktreeId: summary.worktreeId, generation: 1, needsAttention: true}});
+      // A finished task keeps its outcome; only the worktree is held for attention.
+      const live = run.status === 'running' || run.status === 'queued' || run.status === 'waiting';
+      this.runs.updateRun(item.id, {...(live ? {status: 'waiting', error: item.error} : {}), worktreeLifecycle: {worktreeId: summary.worktreeId, generation: 1, needsAttention: true}});
     }
     for (const candidate of records) {
       try {
