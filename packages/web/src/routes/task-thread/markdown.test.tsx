@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -81,6 +85,26 @@ describe('Markdown', () => {
       { timeout: 10_000 },
     )
   }, 15_000)
+
+  it('keeps a multi-line fence on separate lines with line numbers off', async () => {
+    // Streamdown marks line spans `block` only when line numbers are on; the stylesheet must.
+    const css = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../styles/index.css'), 'utf8')
+    const rule = css.match(/\.thread-markdown \[data-streamdown='code-block-body'\] code > span \{[^}]*\}/)
+    expect(rule).not.toBeNull()
+    const style = document.createElement('style')
+    style.textContent = rule?.[0] ?? ''
+    document.head.append(style)
+    try {
+      render(<Markdown>{'```bash\ngit checkout main\ngit pull\n```'}</Markdown>)
+      await waitFor(() => {
+        const lines = [...document.querySelectorAll('[data-streamdown="code-block-body"] code > span')]
+        expect(lines.map((l) => l.textContent)).toEqual(['git checkout main', 'git pull'])
+        for (const line of lines) expect(getComputedStyle(line).display).toBe('block')
+      })
+    } finally {
+      style.remove()
+    }
+  })
 
   it('renders an unknown fence language as plaintext — no crash, chip kept honest', async () => {
     render(<Markdown>{'```wat-lang\nsome opaque output\n```'}</Markdown>)

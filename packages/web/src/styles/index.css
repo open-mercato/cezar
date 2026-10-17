@@ -414,6 +414,16 @@
     font-family: var(--mono);
   }
 
+  /* v3's preflight gave buttons `cursor: pointer`; v4 dropped that rule, so they fall back to the
+   * user agent's arrow. In this cockpit anything clickable reads as clickable, so enabled buttons
+   * and button-like roles opt back into the pointer. Disabled controls keep the arrow (and their
+   * own `cursor-not-allowed` where set), and an explicit `cursor-*` utility still wins — the
+   * `utilities` layer outranks `base`. */
+  button:not(:disabled),
+  [role='button']:not([aria-disabled='true']) {
+    cursor: pointer;
+  }
+
   ::placeholder {
     color: var(--soft-foreground);
   }
@@ -528,6 +538,12 @@
 .thread-markdown {
   line-height: 1.6;
 }
+/* #1356: Scroll list containers too: Streamdown makes li > p inline, so paragraph overflow is inert.
+ * Keep markers within the list's padding; clipping individual li would hide outside markers. */
+.thread-markdown :is(p, ul, ol, h1, h2, h3, h4, h5, h6) {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
 .thread-markdown :is(h1, h2, h3, h4, h5, h6) {
   margin: 0.9em 0 0.35em;
   font-size: 1.05em;
@@ -565,6 +581,11 @@
 .thread-markdown [data-streamdown='code-block'] pre {
   font-size: 12px;
   line-height: 1.55;
+}
+/* Streamdown emits one span per line with no newline between them and makes them `block` only
+ * when line numbers are on; we turn those off, so without this every fence collapses to one line. */
+.thread-markdown [data-streamdown='code-block-body'] code > span {
+  display: block;
 }
 
 /* ---------- document markdown (diff preview) ----------

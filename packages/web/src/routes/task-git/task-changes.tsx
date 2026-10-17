@@ -3,7 +3,7 @@ import { FileDiffIcon, GitCommitHorizontalIcon } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
 import { useParams, useSearchParams } from 'react-router'
 
-import { ApiError, createRunPr, getRunFile, openRunFileInApp, openRunInCli, pushRun, runFileRawUrl } from '@/api/client'
+import { ApiError, createRunPr, getRunFile, openRunFileInApp, pushRun, runFileRawUrl } from '@/api/client'
 import { queryKeys, useHealth, useRepo, useRun, useRunChanges } from '@/api/queries'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
@@ -18,13 +18,16 @@ import { revealFromSearch } from '../task-thread/review-comments-block'
 import { TaskComposer, TaskDock } from '../task-thread/task-composer'
 import { useDraft } from '../task-thread/thread-draft'
 import { useKeyboardInsetVar } from '@/lib/keyboard-inset'
-import { isRunActive, lastSessionId } from '../task-thread/run-actions'
+import { isRunActive } from '../task-thread/run-actions'
+import { cn } from '@/lib/utils'
+import { useRememberedState } from '@/lib/view-memory'
 import { RunHeader } from '../task-thread/run-header'
 import { ChangesTree } from './changes-tree'
-import { CommitDialog } from './commit-dialog'
 import { buildFileTree } from './file-tree'
 import { GitTabLoadError, GitTabLoading } from './git-tab-loading'
 import { GitToolbar } from './git-toolbar'
+import type { DiffNewLineComment } from '@/components/diff/types'
+import { trackDiffCommentAdded } from '@/lib/telemetry'
 
 /**
  * `/tasks/:id/changes` — the session git view's Changes tab (spec §"Session git view —
@@ -53,7 +56,17 @@ export function TaskChangesRoute() {
   return <ChangesView key={run.data.id} run={run.data} />
 }
 
-function ChangesView({ run }: { run: ApiRun }) {
+export function ChangesView({
+  run,
+  embedded = false,
+  stateKey,
+}: {
+  run: ApiRun
+  /** `embedded` drops the run header for a task-workspace column (spec `2026-10-07-task-workspace` §5.1);
+   *  `stateKey` remembers the selection across layout switches (`lib/view-memory.ts`). */
+  embedded?: boolean
+  stateKey?: string
+}) {
   const health = useHealth()
   // The remote that decides whether Push is offered comes from the PROJECT-scoped `/repo`, not
   // from `/api/health.repo`: health is bound to the boot folder, so a cezar booted outside a git
@@ -66,13 +79,22 @@ function ChangesView({ run }: { run: ApiRun }) {
   const [mode, setMode] = useState<DiffMode>('unified')
   const [wrap, setWrap] = useState(false)
   const [preview, setPreview] = useState(false)
-  const [selected, setSelected] = useState<string | null>(null)
-  const [commitOpen, setCommitOpen] = useState(false)
+  const [selected, setSelected] = useRememberedState<string | null>(stateKey, null)
   const diffRef = useRef<DiffHandle | null>(null)
   // Line comments for the agent (self-review): drafted here, and sent from the SAME composer the
   // Session tab docks — floated here while there is something to send, so the review can be given
   // a message (or a skill) without leaving the diff. This route is the one host of both drafts.
   const diffComments = useDiffComments(run.id)
+  const { add: addDiffComment } = diffComments
+  // Counted only once the store accepted it; `start` is set exactly when the comment covers a range.
+  const addComment = useCallback(
+    (comment: DiffNewLineComment) => {
+      const added = addDiffComment(comment)
+      if (added) trackDiffCommentAdded(comment.start ? 'multi_line' : 'single_line')
+      return added
+    },
+    [addDiffComment],
+  )
   const commentCount = diffComments.comments.length
   const composerDraft = useDraft(run.id, 'composer')
   // Shown once there are comments, kept while a typed message is unsent — so deleting the last
@@ -111,39 +133,6 @@ function ChangesView({ run }: { run: ApiRun }) {
   const invalidateRuns = () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
   const onError = (error: Error) => toast(error.message, { tone: 'danger' })
 
-  const push = useMutation({
-    mutationFn: () => pushRun(run.id),
-    onSuccess: (result) =>
-      toast(
-        result.upstreamSet
-          ? `Pushed ${result.branch} to ${result.remote} (upstream set)`
-          : `Pushed ${result.branch} to ${result.remote}`,
-      ),
-    onError,
-  })
-  const createPr = useMutation({
-    mutationFn: () => createRunPr(run.id),
-    onSuccess: (result) => {
-      toast(`Draft PR created — ${result.url}`)
-      void invalidateRuns() // the record now carries pullRequestUrl → the policy flips to View PR
-    },
-    onError,
-  })
-  const terminal = useMutation({
-    mutationFn: () => openRunInCli(run.id),
-    onError: (error: Error) => {
-      // Same 409 fallback as the header's Terminal: no emulator → the command goes to the
-      // clipboard so the user stays one paste away.
-      if (error instanceof ApiError && error.command) {
-        void navigator.clipboard
-          .writeText(error.command)
-          .then(() => toast('No terminal found — command copied to clipboard.'))
-          .catch(() => toast(`Run manually: ${error.command}`))
-        return
-      }
-      onError(error)
-    },
-  })
   // Diff pane "open in default app" (#365, local mode only) — the mutation itself is safe to
   // wire unconditionally; only its trigger (the `onOpenInApp` prop below) is capability-gated.
   const openImage = useMutation({
@@ -153,37 +142,6 @@ function ChangesView({ run }: { run: ApiRun }) {
 
   // A 409 from /changes is an answer, not an outage: "no worktree — …" (or a git failure).
   const changesRefused = changes.isError && changes.error instanceof ApiError && changes.error.status === 409
-
-  const bar = gitActionPolicy({
-    status: run.status,
-    hasWorktree: Boolean(run.worktreePath) && !changesRefused,
-    branch: run.branch,
-    changedFiles: changes.data?.stat.files,
-    remote: repo.data?.info?.remote,
-    forge: health.data?.forge ?? null,
-    localHandoff: health.data?.capabilities.localHandoff ?? false,
-    hasSession: lastSessionId(run) !== undefined,
-    prUrl: run.pullRequestUrl,
-  })
-
-  const onAction = (id: GitActionId) => {
-    switch (id) {
-      case 'commit':
-        setCommitOpen(true)
-        break
-      case 'push':
-        push.mutate()
-        break
-      case 'create-pr':
-        createPr.mutate()
-        break
-      case 'open-terminal':
-        terminal.mutate()
-        break
-      case 'view-pr':
-        break // the toolbar renders it as an <a> (safe href) or disabled (unsafe) — never routed here
-    }
-  }
 
   const files = changes.data?.files ?? []
   const diffShown = !changes.isPending && !changes.isError && files.length > 0
@@ -229,11 +187,12 @@ function ChangesView({ run }: { run: ApiRun }) {
   }, [diffShown, revealOrScroll, searchParams, searchTarget])
 
   return (
-    <div data-route="task-changes" className="flex min-h-full flex-col md:h-full">
-      <RunHeader run={run} tab="changes" />
+    // Embedded, the tree follows the COLUMN's width (container query), not the window's: a third
+    // of a wide screen has no room for a 240px tree beside the diff.
+    <div data-route="task-changes" className={cn('flex min-h-full flex-col md:h-full', embedded && '@container')}>
+      {embedded ? null : <RunHeader run={run} tab="changes" />}
 
       <GitToolbar
-        bar={bar}
         branch={run.branch}
         stat={changes.data?.stat}
         mode={effectiveMode}
@@ -242,7 +201,6 @@ function ChangesView({ run }: { run: ApiRun }) {
         onModeChange={setMode}
         onWrapChange={setWrap}
         onPreviewChange={hasMarkdown ? setPreview : undefined}
-        onAction={onAction}
       />
 
       {changes.data?.repointedHead ? (
@@ -285,7 +243,10 @@ function ChangesView({ run }: { run: ApiRun }) {
               bottoms out in it from chaining into anything else. */}
           <aside
             data-slot="changes-tree-pane"
-            className="hidden w-60 shrink-0 overflow-y-auto overscroll-contain pt-4 pb-[calc(1rem_+_var(--changes-dock,0px))] md:block lg:w-72"
+            className={cn(
+              'hidden w-60 shrink-0 overflow-y-auto overscroll-contain pt-4 pb-[calc(1rem_+_var(--changes-dock,0px))]',
+              embedded ? 'md:@xl:block @4xl:w-72' : 'md:block lg:w-72',
+            )}
           >
             <ChangesTree root={tree} selected={selected} onSelect={selectFile} commentCounts={commentCounts} />
           </aside>
@@ -316,7 +277,7 @@ function ChangesView({ run }: { run: ApiRun }) {
               }
               comments={diffComments.comments}
               // Not until the stored comments have loaded — see `DiffComments.ready`.
-              onAddComment={diffComments.ready ? diffComments.add : undefined}
+              onAddComment={diffComments.ready ? addComment : undefined}
               onEditComment={diffComments.update}
               onRemoveComment={diffComments.remove}
               // The column runs under the floating dock, so its content pads its end by the dock's
@@ -352,7 +313,6 @@ function ChangesView({ run }: { run: ApiRun }) {
         </TaskDock>
       ) : null}
 
-      <CommitDialog run={run} open={commitOpen} onOpenChange={setCommitOpen} />
     </div>
   )
 }

@@ -17,7 +17,8 @@ export function lifecycleError(c: Context, error: unknown) {
 }
 
 /** One chained family: validated inputs and exact response inference survive both mounts. */
-export function worktreeLifecycleRoutes() {
+/** `stopTaskProcesses`: a task's shells must not outlive the directory teardown removes (spec 2026-10-07-task-workspace §6). */
+export function worktreeLifecycleRoutes(opts: { stopTaskProcesses?: (runId: string) => void } = {}) {
   return new Hono<ProjectApiEnv>()
     .get('/worktree-lifecycle', queryZodValidator(lifecycleListQuerySchema), async c => {
       try { return c.json(await c.get('project').manager.lifecycle.list(c.req.valid('query'))); }
@@ -28,7 +29,12 @@ export function worktreeLifecycleRoutes() {
       catch (error) { return lifecycleError(c, error); }
     })
     .post('/worktree-lifecycle/operations', jsonZodValidator(startLifecycleRemovalInputSchema), async c => {
-      try { return c.json({ operation: await c.get('project').manager.lifecycle.startRemoval(c.req.valid('json')) }, 202); }
+      const input = c.req.valid('json');
+      try {
+        const operation = await c.get('project').manager.lifecycle.startRemoval(input);
+        if ('runId' in input) opts.stopTaskProcesses?.(input.runId);
+        return c.json({ operation }, 202);
+      }
       catch (error) { return lifecycleError(c, error); }
     })
     .get('/worktree-lifecycle/operations/:operationId', paramZodValidator(lifecycleOperationParamSchema), async c => {

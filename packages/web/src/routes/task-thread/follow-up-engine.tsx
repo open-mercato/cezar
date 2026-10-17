@@ -5,7 +5,7 @@ import { hasAccountChoice, useAgentAccounts } from '@/api/agent-accounts'
 import { continueRun } from '@/api/client'
 import { queryKeys, useConfig, useRunnerModels } from '@/api/queries'
 import { DEFAULT_AGENT_ACCOUNT_ID } from '@open-mercato/cezar-api-client'
-import type { ApiRun, ContinueResponse, AttachmentInput, Runner } from '@open-mercato/cezar-api-client'
+import type { ApiRun, ContinueResponse, AttachmentEntry, Runner } from '@open-mercato/cezar-api-client'
 import { PickerPill, RunnerPill } from '@/components/picker-pill'
 import {
   modelsForRunner,
@@ -17,8 +17,8 @@ import { runActionFlags } from './run-actions'
 
 /** What the thread needs to offer Continue from its composer. */
 export interface ContinueAction {
-  /** Is there a session to reopen at all? (`runActionFlags.continueRun` — the same gate the
-   *  header's Continue button uses.) Everything else is inert when this is false. */
+  /** Is there a session to reopen at all? (`runActionFlags.continueRun` — the one gate every
+   *  Continue entry point shares.) Everything else is inert when this is false. */
   available: boolean
   /** Whether provider discovery currently permits reopening the session. */
   canContinue: boolean
@@ -34,7 +34,7 @@ export interface ContinueAction {
    * rather than toasting itself, so the composer can restore the draft it optimistically
    * cleared — nothing the user typed is lost to a 409.
    */
-  continueWith: (text: string, images: AttachmentInput[]) => Promise<ContinueResponse>
+  continueWith: (text: string, images: AttachmentEntry[]) => Promise<ContinueResponse>
 }
 
 /**
@@ -100,7 +100,7 @@ export function useContinueAction(run: ApiRun): ContinueAction {
     : null
 
   const mutation = useMutation({
-    mutationFn: ({ text, images }: { text: string; images: AttachmentInput[] }) => {
+    mutationFn: ({ text, images }: { text: string; images: AttachmentEntry[] }) => {
       if (!canContinue) {
         return Promise.reject(new Error(continuation.reason ?? 'Connect an agent provider to continue.'))
       }

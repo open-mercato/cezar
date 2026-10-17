@@ -30,6 +30,8 @@ import {
   useRuns,
   useSkills,
   useSkillsUpdate,
+  useStarCount,
+  STAR_COUNT_REFRESH_MS,
   workspaceQueryKeys,
 } from './queries'
 
@@ -75,7 +77,7 @@ const HEALTH = {
   repo: { root: '/home/me/cezar', branch: 'main' },
   checks: [],
   defaultRunner: 'claude',
-  capabilities: { localHandoff: true, followups: false, singleProject: false, automations: false },
+  capabilities: { localHandoff: true, terminal: false, followups: false, singleProject: false, automations: false },
 }
 
 /** Just enough WebSocket for useHealth's topic subscription (api/ws.ts): records the frames the
@@ -537,6 +539,34 @@ describe('useSkills', () => {
       expect(result.current.data?.map((skill) => skill.name)).toEqual(['local', 'om-fix']),
     )
     expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(['/api/v1/skills', '/api/v1/skills?wait=1'])
+  })
+})
+
+describe('useStarCount', () => {
+  it('re-reads the count every ten seconds so the chip tracks the live number', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      let count = 100
+      fetchMock.mockImplementation(async () =>
+        json({ available: true, count: count++, url: 'https://github.com/open-mercato/cezar' }),
+      )
+      const client = createQueryClient()
+      const { result } = renderHook(() => useStarCount(), {
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <QueryClientProvider client={client}>{children}</QueryClientProvider>
+        ),
+      })
+      await waitFor(() => expect(result.current.data?.count).toBe(100))
+      expect(STAR_COUNT_REFRESH_MS).toBe(10_000)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(STAR_COUNT_REFRESH_MS)
+      })
+      await waitFor(() => expect(result.current.data?.count).toBe(101))
+      expect(fetchMock.mock.calls.every(([path]) => path === '/api/v1/star-count')).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

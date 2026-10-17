@@ -7,6 +7,15 @@ import { Button } from '@/components/ui/button'
 
 import type { RunTab } from '../task-thread/run-header'
 
+const LOADING_TITLE: Record<Exclude<RunTab, 'session'>, string> = {
+  changes: 'Loading changes…',
+  commits: 'Loading changes…',
+  files: 'Loading files…',
+  graph: 'Loading the graph…',
+  notes: 'Loading notes…',
+  terminal: 'Loading the terminal…',
+}
+
 /**
  * The Changes/Files tabs' loading + error surfaces, in their own module for the same reason
  * as thread-loading.tsx: they double as the routes' `Suspense` fallbacks (routes.tsx), and a
@@ -18,7 +27,7 @@ export function GitTabLoading({ tab }: { tab: Exclude<RunTab, 'session'> }) {
       <CenteredState
         icon={<LoaderCircleIcon className="motion-safe:animate-spin" />}
         tone="neutral"
-        title={tab === 'changes' ? 'Loading changes…' : 'Loading files…'}
+        title={LOADING_TITLE[tab]}
         subtitle="Fetching the run record."
       />
     </div>

@@ -30,6 +30,7 @@ import { bumpSkillUsage } from '@/lib/skills'
 import { isSubmitShortcut, submitShortcutHint } from '@/lib/use-submit-shortcut'
 
 import { readFollowupPrompt, writeFollowupPrompt } from './hand-to-agent-draft'
+import { trackMessageSent } from '@/lib/telemetry'
 
 /**
  * The detail pane's "Hand this to the agent" panel: the legacy chip walls replaced by
@@ -169,6 +170,7 @@ export function HandToAgent({
     },
     onSuccess: (created) => {
       if (created === null) return
+      trackMessageSent('github')
       // The GitHub tab never starts variants, so the answer is a single record.
       const run = 'runs' in created ? created.runs[0] : created
       if (run) onQueued(item.url, run.id)

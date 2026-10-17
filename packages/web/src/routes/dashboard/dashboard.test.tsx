@@ -15,6 +15,7 @@ const row = (id: string, status: 'waiting' | 'review' = 'waiting'): DashboardTas
   title: `Task ${id}`,
   status,
   createdAt: at,
+  lastActivityAt: at,
   archived: false,
   workflow: 'quick',
 })

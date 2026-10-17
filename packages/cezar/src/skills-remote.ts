@@ -339,7 +339,13 @@ export async function listRemoteSkills(src: SkillsRepoSource): Promise<Skill[]> 
  * and keep it out of the user's git via `.git/info/exclude`. Returns false
  * when there is nothing to materialize (not a directory skill, no clone…).
  */
-export async function materializeSkillDir(repoRoot: string, skill: Skill): Promise<boolean> {
+export async function materializeSkillDir(
+  repoRoot: string,
+  skill: Skill,
+  skillsDir = '.claude/skills',
+  /** Keeps the copy out of git; defaults to the shared `info/exclude`. */
+  ignore: () => Promise<void> = () => excludeFromGit(repoRoot, `${skillsDir}/${skill.name}/`),
+): Promise<boolean> {
   if (!skill.team?.dir || !skill.team.path.endsWith('SKILL.md')) return false;
   const bareDir = bareDirFor(skill.team.repo);
   if (!existsSync(join(bareDir, 'HEAD'))) return false;
@@ -349,7 +355,7 @@ export async function materializeSkillDir(repoRoot: string, skill: Skill): Promi
   const ls = await git(['ls-tree', '-r', '--name-only', ref, '--', srcDir], LIST_TIMEOUT_MS, bareDir);
   if (!ls.ok) return false;
 
-  const destDir = join(repoRoot, '.claude', 'skills', skill.name);
+  const destDir = join(repoRoot, skillsDir, skill.name);
   let wrote = 0;
   for (const file of ls.stdout.split('\n').filter(Boolean)) {
     const rel = file.slice(srcDir.length + 1);
@@ -363,12 +369,12 @@ export async function materializeSkillDir(repoRoot: string, skill: Skill): Promi
     wrote++;
   }
   if (wrote === 0) return false;
-  await excludeFromGit(repoRoot, `.claude/skills/${skill.name}/`);
+  await ignore();
   return true;
 }
 
 /** Append a pattern to git's `info/exclude` (idempotent, non-fatal). */
-async function excludeFromGit(repoRoot: string, pattern: string): Promise<void> {
+export async function excludeFromGit(repoRoot: string, pattern: string): Promise<void> {
   try {
     // Resolve the real exclude file: in a linked worktree (spec 006) `.git`
     // is a file and `info/exclude` lives in the shared common dir — which

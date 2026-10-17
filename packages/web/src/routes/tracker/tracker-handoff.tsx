@@ -15,6 +15,7 @@ import { toast } from '@/components/ui/toaster'
 import { MAX_CHAIN_STEPS } from '@/lib/github-task'
 import { Link } from '@/lib/project-router'
 import { TRACKER_TASK_LIMIT, trackerLosses, trackerRunBody, trackerTaskPrompt } from '@/lib/tracker-task'
+import { trackMessageSent } from '@/lib/telemetry'
 
 export type TrackerDraftCache = Map<string, { instruction: string; supplemental: string; acknowledgedSnapshot: string | null }>
 
@@ -70,6 +71,7 @@ export function TrackerHandoff({ item, workflows, skills, selection, onSelection
       { instruction, supplemental, acknowledgeLoss },
     )),
     onSuccess: (created) => {
+      trackMessageSent('tracker')
       const run = 'runs' in created ? created.runs[0] : created
       setQueued(run?.id ?? null)
       void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })

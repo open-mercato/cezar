@@ -18,6 +18,8 @@ export const automationEventSchema = z.enum([
   'pull_request.reviewed',
   'pull_request.review_requested',
   'pull_request.rereview_requested',
+  'pull_request.closed',
+  'pull_request.merged',
 ]);
 
 const boundedString = z.string().trim().min(1).max(200);
@@ -105,7 +107,7 @@ export const automationDefinitionObjectSchema = z
     enabled: z.boolean().default(false),
     /** A definition written before schedules (spec 2026-09-14) has no `kind`: it is a poll. */
     kind: z.enum(['github', 'schedule', 'tracker']).default('github'),
-    events: z.array(automationEventSchema).min(1).max(7).optional(),
+    events: z.array(automationEventSchema).min(1).max(9).optional(),
     intervalSeconds: z.number().int().min(60).max(86_400).optional(),
     filters: automationFiltersSchema.optional(),
     trackerTrigger: trackerTriggerSchema.optional(),
@@ -123,6 +125,15 @@ export const automationDefinitionObjectSchema = z
       definition.kind === 'github' &&
       !!definition.events?.length &&
       definition.events.every((event) => event.startsWith('pull_request.'));
+    // A closed or merged PR has no head to check out — `resolvePrHead` would skip every launch.
+    const closedEvent = definition.events?.some((event) => event === 'pull_request.closed' || event === 'pull_request.merged');
+    if (definition.task.checkout === 'pr-head' && closedEvent) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['task', 'checkout'],
+        message: "checkout: 'pr-head' cannot be used with pull_request.closed or pull_request.merged",
+      });
+    }
     for (const key of prHeadKeys) {
       if (!pullRequestOnly) {
         ctx.addIssue({

@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowUpIcon, CheckIcon, MicIcon, PaperclipIcon, XIcon } from 'lucide-react'
+import { ArrowUpIcon, CheckIcon, MicIcon, PaperclipIcon, SquareIcon, XIcon } from 'lucide-react'
 import {
   useCallback,
   useEffect,
@@ -17,8 +17,9 @@ import {
 
 import { putUiState } from '@/api/client'
 import { queryKeys, useSkills, useUiState } from '@/api/queries'
-import type { AttachmentInput } from '@open-mercato/cezar-api-client'
+import type { AttachmentEntry } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Command, CommandItem, CommandList } from '@/components/ui/command'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { toast } from '@/components/ui/toaster'
@@ -27,16 +28,19 @@ import { isEditableTarget } from '@/lib/use-command-shortcut'
 import { bumpSkillUsage, filterSkills, fuzzyMatch, isProjectSkill } from '@/lib/skills'
 import { useNow } from '@/lib/use-now'
 import { isSubmitShortcut } from '@/lib/use-submit-shortcut'
+import { reportDictationFailed, trackAttachmentsSent } from '@/lib/telemetry'
 import { cn } from '@/lib/utils'
 
 import {
+  appendAttachment,
+  attachedImageBytes,
   fileToPendingAttachment,
-  MAX_ATTACHMENTS,
   screenFiles,
   toAttachmentInput,
   type AttachmentsChangeReason,
   type PendingAttachment,
 } from './composer-attachments'
+import { releaseStaged, sendWithStaged, stageAttachment } from './attachment-staging'
 import { applyCompletion, detectTrigger, type TriggerState } from './composer-text'
 import { formatElapsed, useDictation } from './dictation'
 
@@ -54,7 +58,7 @@ import { formatElapsed, useDictation } from './dictation'
 export interface ComposerProps {
   /** Deliver the message. Rejection = the message did NOT land: the composer toasts the error
    *  and restores the draft (nothing the user typed is ever lost). */
-  onSubmit: (text: string, attachments: AttachmentInput[], meta?: ComposerSubmitMeta) => Promise<unknown>
+  onSubmit: (text: string, attachments: AttachmentEntry[], meta?: ComposerSubmitMeta) => Promise<unknown>
   /**
    * Controlled text (pass BOTH or neither): the /new host owns the draft so it survives
    * navigation (spec: "Queued form state survives navigation"). Every internal edit — typing,
@@ -88,6 +92,12 @@ export interface ComposerProps {
   footerEnd?: ReactNode
   /** The send button's accessible name. */
   sendAriaLabel?: string
+  /**
+   * While the host's work is running, a Stop button sits where send does. With an empty box it is
+   * the only button (an empty box over a working agent offers to stop it); once there is something
+   * to send, Send appears beside it — a message to a busy agent still queues.
+   */
+  stop?: { label: string; onStop: () => void; pending?: boolean }
   disabled?: boolean
   /** Shown as the placeholder while disabled — e.g. the legacy "Session closed — Continue to
    *  reopen." */
@@ -145,6 +155,7 @@ export function Composer({
   footerStart,
   footerEnd,
   sendAriaLabel = 'Send',
+  stop,
   disabled = false,
   disabledReason = 'Session closed — Continue to reopen.',
   allowEmptySubmit = false,
@@ -207,7 +218,10 @@ export function Composer({
   // highest-traffic skill surface — both reads and feeds the same stats as the pickers.
   const uiState = useUiState()
   const queryClient = useQueryClient()
-  const dictation = useDictation((message) => toast(message, { tone: 'danger' }))
+  const dictation = useDictation(({ message, failure }) => {
+    if (failure) reportDictationFailed(failure)
+    toast(message, failure ? { tone: 'danger', reported: true } : {})
+  })
 
   // On-mount only, by design: re-focusing on a later `autoFocus` flip would steal focus mid-visit.
   useEffect(() => {
@@ -336,12 +350,16 @@ export function Composer({
       // StrictMode double-invokes updater functions in dev, so screening here would encode and
       // append each pasted file twice (#double-paste). `imagesRef` gives the current count
       // without reading through state; each async append re-checks the cap functionally.
-      const intake = screenFiles(files, imagesRef.current.length)
+      const intake = screenFiles(files, imagesRef.current.length, attachedImageBytes(imagesRef.current))
       for (const reason of intake.rejected) toast(reason, { tone: 'danger' })
       for (const file of intake.accepted) {
-        void fileToPendingAttachment(file, source).then((attachment) =>
-          setImages((prev) => (prev.length >= MAX_ATTACHMENTS ? prev : [...prev, attachment])),
-        )
+        void fileToPendingAttachment(file, source).then((attachment) => {
+          const next = appendAttachment(imagesRef.current, attachment)
+          if (!next) return
+          // Upload now, while the user is still typing, so the send only names it (7054e5f2).
+          void stageAttachment(attachment)
+          setImages(next)
+        })
       }
     },
     [disabled],
@@ -382,15 +400,27 @@ export function Composer({
       setBusy(true)
       try {
         // `meta` only when there is something to say, so an ordinary send keeps its two-argument call.
-        const attachments = messageImages.map(toAttachmentInput)
-        await (meta ? onSubmit(body, attachments, meta) : onSubmit(body, attachments))
+        await sendWithStaged(messageImages, (attachments) =>
+          meta ? onSubmit(body, attachments, meta) : onSubmit(body, attachments),
+        )
+        releaseStaged(messageImages)
+        trackAttachmentsSent(messageImages.length)
       } catch (error) {
         toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
         if (restoreOnError) {
           // The optimistic clear already happened — put the message back, in front of anything
           // typed since, so nothing the user wrote is lost.
           setText((current) => (current === '' ? messageText : `${messageText}\n${current}`))
-          setImages((current) => [...messageImages, ...current].slice(0, MAX_ATTACHMENTS))
+          // Outside the updater (StrictMode double-invokes it): what was attached since the send
+          // goes back behind the message's own, within both caps — and a drop is said, not silent.
+          const dropped: PendingAttachment[] = []
+          const restored = imagesRef.current.reduce((list, a) => {
+            const next = appendAttachment(list, a)
+            if (!next) dropped.push(a)
+            return next ?? list
+          }, messageImages)
+          for (const a of dropped) toast(`${a.name} removed — the restored message fills the attachment limit`, { tone: 'danger' })
+          setImages(restored)
         }
       } finally {
         setBusy(false)
@@ -526,7 +556,10 @@ export function Composer({
                       ? 'size-12'
                       : 'flex h-12 max-w-[200px] items-center gap-1.5 bg-muted/40 px-2.5 text-xs text-muted-foreground',
                   )}
-                  onClick={() => setImages((current) => current.filter((_, i) => i !== index))}
+                  onClick={() => {
+                    releaseStaged([attachment])
+                    setImages((current) => current.filter((_, i) => i !== index))
+                  }}
                 >
                   {/* An image previews; a file (#950) has nothing to look at, so it gets its own
                       name instead — the one place the user's filename is used at all. */}
@@ -589,7 +622,23 @@ export function Composer({
                 {footerStart}
               </div>
               <div className="ml-auto flex items-center gap-1">
-                {dictation.supported ? (
+                {dictation.supported && dictation.unavailable ? (
+                  // aria-disabled, not disabled: a disabled button never gets the hover/focus
+                  // that opens the tooltip saying why.
+                  <IconTooltip label={dictation.unavailable} side="top">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      aria-disabled="true"
+                      aria-label="Start dictation"
+                      className="h-8 cursor-not-allowed gap-1.5 px-2.5 text-xs font-medium text-muted-foreground opacity-50 hover:bg-transparent"
+                    >
+                      <MicIcon aria-hidden="true" className="size-3.5" />
+                      Dictation
+                    </Button>
+                  </IconTooltip>
+                ) : dictation.supported ? (
                   <Button
                     type="button"
                     variant="ghost"
@@ -609,18 +658,40 @@ export function Composer({
                     {footerEnd}
                   </div>
                 ) : null}
-                <Button
-                  type="button"
-                  size="icon-sm"
-                  aria-label={sendAriaLabel}
-                  disabled={
-                    disabled || busy || (text.trim() === '' && images.length === 0 && !allowEmptySubmit)
-                  }
-                  className="size-8"
-                  onClick={submitDraft}
-                >
-                  <ArrowUpIcon aria-hidden="true" />
-                </Button>
+                {stop ? (
+                  // Stop stays on screen for as long as the agent works — typing a message adds Send
+                  // beside it rather than replacing it, so stopping never means clearing the draft.
+                  <IconTooltip label={stop.label} side="top">
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="contrast"
+                      data-slot="composer-stop"
+                      aria-label={stop.label}
+                      disabled={stop.pending}
+                      className="size-8"
+                      onClick={stop.onStop}
+                    >
+                      <SquareIcon aria-hidden="true" className="size-3 fill-current" />
+                    </Button>
+                  </IconTooltip>
+                ) : null}
+                {/* With Stop showing, Send appears only once there is something to send: an empty box
+                    over a working agent offers exactly one action. */}
+                {!stop || text.trim() !== '' || images.length > 0 || allowEmptySubmit ? (
+                  <Button
+                    type="button"
+                    size="icon-sm"
+                    aria-label={sendAriaLabel}
+                    disabled={
+                      disabled || busy || (text.trim() === '' && images.length === 0 && !allowEmptySubmit)
+                    }
+                    className="size-8"
+                    onClick={submitDraft}
+                  >
+                    <ArrowUpIcon aria-hidden="true" />
+                  </Button>
+                ) : null}
               </div>
             </div>
           )}

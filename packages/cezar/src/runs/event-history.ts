@@ -1,4 +1,4 @@
-import { createReadStream } from 'node:fs';
+import { createReadStream, type Stats } from 'node:fs';
 import { open, stat } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { z } from 'zod';
@@ -243,6 +243,7 @@ async function reverseEventsUntil(
   fileHighWater: number;
   reachedStart: boolean;
   bytesRead: number;
+  canonical?: CanonicalItem[];
 }> {
   let fileSize = 0;
   try {
@@ -259,6 +260,7 @@ async function reverseEventsUntil(
   let reachedStart = false;
   let totalBytesRead = 0;
   let fileHighWater = 0;
+  let canonical: CanonicalItem[] | undefined;
   try {
     while (position > 0) {
       const length = Math.min(READ_CHUNK_BYTES, position);
@@ -277,8 +279,9 @@ async function reverseEventsUntil(
         }
       }
       const chronological = [...reversed].reverse();
+      canonical = canonicalSessionItems(chronological);
       if (
-        canonicalSessionItems(chronological).length >= wantedItems + 1 &&
+        canonical.length >= wantedItems + 1 &&
         chronological.some((event) => event.type === 'user-message' || event.type === 'turn.started')
       ) {
         break;
@@ -289,13 +292,23 @@ async function reverseEventsUntil(
       const event = parseLine(suffix.toString('utf8'));
       if (event) {
         fileHighWater = Math.max(fileHighWater, event.seq);
-        if (event.seq < beforeSeq) reversed.push(event);
+        if (event.seq < beforeSeq) {
+          reversed.push(event);
+          canonical = undefined;
+        }
       }
     }
   } finally {
     await handle.close();
   }
-  return { events: reversed.reverse(), fileSize, fileHighWater, reachedStart, bytesRead: totalBytesRead };
+  return {
+    events: reversed.reverse(),
+    fileSize,
+    fileHighWater,
+    reachedStart,
+    bytesRead: totalBytesRead,
+    ...(canonical === undefined ? {} : { canonical }),
+  };
 }
 
 async function readFileTail(filePath: string): Promise<{ fileSize: number; fileHighWater: number; bytesRead: number }> {
@@ -339,8 +352,9 @@ async function forwardEventsUntil(
   filePath: string,
   afterSeq: number,
   wantedItems: number,
-): Promise<{ events: RunHistoryEvent[]; reachedEnd: boolean; bytesRead: number }> {
+): Promise<{ events: RunHistoryEvent[]; reachedEnd: boolean; bytesRead: number; canonical?: CanonicalItem[] }> {
   const events: RunHistoryEvent[] = [];
+  let canonical: CanonicalItem[] | undefined;
   let previousBoundary: RunHistoryEvent | undefined;
   let reachedEnd = true;
   let input: ReturnType<typeof createReadStream> | undefined;
@@ -356,7 +370,8 @@ async function forwardEventsUntil(
       }
       if (events.length === 0 && previousBoundary) events.push(previousBoundary);
       events.push(event);
-      if (canonicalSessionItems(events).length >= wantedItems + 1) {
+      canonical = canonicalSessionItems(events);
+      if (canonical.length >= wantedItems + 1) {
         reachedEnd = false;
         break;
       }
@@ -366,7 +381,7 @@ async function forwardEventsUntil(
   } finally {
     input?.destroy();
   }
-  return { events, reachedEnd, bytesRead: input?.bytesRead ?? 0 };
+  return { events, reachedEnd, bytesRead: input?.bytesRead ?? 0, ...(canonical === undefined ? {} : { canonical }) };
 }
 
 function pageEventSlice(events: RunHistoryEvent[], selected: CanonicalItem[]): RunHistoryEvent[] {
@@ -422,7 +437,7 @@ export async function readRunHistoryPage(
       )
     : undefined;
   const scannedEvents = forward?.events ?? reverse?.events ?? [];
-  const canonical = canonicalSessionItems(scannedEvents);
+  const canonical = forward?.canonical ?? reverse?.canonical ?? canonicalSessionItems(scannedEvents);
   const selected = forward
     ? canonical.slice(0, RUN_HISTORY_PAGE_ITEMS)
     : canonical.slice(-RUN_HISTORY_PAGE_ITEMS);
@@ -486,133 +501,318 @@ interface ContextItem {
 const isSettledContextStatus = (status: string | undefined) =>
   status !== undefined && status !== 'pending' && status !== 'running';
 
-/** One forward pass retaining the latest Plan snapshot and only the selector-equivalent agent episode. */
-export async function deriveRunContextEvents(filePath: string): Promise<RunHistoryContext> {
-  let latestPlan: RunHistoryEvent | undefined;
-  let asOfSeq = 0;
-  let turn = 0;
-  const boundaries: RunHistoryEvent[] = [];
-  const roots = new Map<string, ContextItem>();
-  const children = new Map<string, ContextItem>();
-  const rootsByTurn = new Map<number, Set<string>>();
+interface ContextFold {
+  latestPlan?: RunHistoryEvent;
+  asOfSeq: number;
+  turn: number;
+  boundaries: RunHistoryEvent[];
+  roots: Map<string, ContextItem>;
+  children: Map<string, ContextItem>;
+  rootsByTurn: Map<number, Set<string>>;
+}
 
-  const itemIdentity = (event: RunHistoryEvent, id: string) => `${event.stepId ?? ''}:${id}`;
-  const pruneSettledHistory = () => {
-    const rootTurns = [...rootsByTurn.keys()].sort((a, b) => a - b);
-    const latestRootTurn = rootTurns.at(-1);
-    if (latestRootTurn === undefined) return;
-    let pruneThrough: number | undefined;
-    for (let index = rootTurns.length - 2; index >= 0; index -= 1) {
-      const candidate = rootTurns[index]!;
-      const ids = rootsByTurn.get(candidate)!;
-      if ([...ids].every((id) => isSettledContextStatus(roots.get(id)?.status))) {
-        pruneThrough = candidate;
+function createContextFold(): ContextFold {
+  return { asOfSeq: 0, turn: 0, boundaries: [], roots: new Map(), children: new Map(), rootsByTurn: new Map() };
+}
+
+function pruneSettledHistory(fold: ContextFold): void {
+  const { roots, children, rootsByTurn, boundaries } = fold;
+  const rootTurns = [...rootsByTurn.keys()].sort((a, b) => a - b);
+  const latestRootTurn = rootTurns.at(-1);
+  if (latestRootTurn === undefined) {
+    // No fan-out bounds carry-over, so the only episode is the current turn. Without this a run
+    // that never opens a subagent retains every turn boundary — and every orphan child — for as
+    // long as the fold is cached, which is the process lifetime. Children are already absent from
+    // the emitted context with no retained root, so only the boundary window is observable.
+    let turnStart = -1;
+    for (let index = boundaries.length - 1; index >= 0; index -= 1) {
+      const boundary = boundaries[index];
+      if (boundary === undefined) break;
+      if (boundary.type === 'user-message' || boundary.type === 'turn.started') {
+        turnStart = index;
         break;
       }
     }
-    const latestIds = rootsByTurn.get(latestRootTurn)!;
-    if (
-      turn > latestRootTurn &&
-      [...latestIds].every((id) => isSettledContextStatus(roots.get(id)?.status))
-    ) {
-      pruneThrough = latestRootTurn;
-    }
-    if (pruneThrough === undefined) return;
-    for (const [candidateTurn, ids] of rootsByTurn) {
-      if (candidateTurn > pruneThrough) continue;
-      for (const id of ids) roots.delete(id);
-      rootsByTurn.delete(candidateTurn);
-    }
-    const retainedRootIds = new Set([...roots.values()].map(({ id }) => id));
-    for (const [key, item] of children) {
-      if (item.parentId === undefined || !retainedRootIds.has(item.parentId)) children.delete(key);
-    }
-    const earliest = Math.min(...[...roots.values()].map(({ first }) => first.seq), Number.MAX_SAFE_INTEGER);
-    const firstRetained = boundaries.findIndex(({ seq }) => seq >= earliest);
-    if (firstRetained === -1) boundaries.length = 0;
-    else if (firstRetained > 0) boundaries.splice(0, firstRetained);
-  };
-
-  try {
-    const input = createReadStream(filePath, { encoding: 'utf8' });
-    const lines = createInterface({ input, crlfDelay: Infinity });
-    for await (const line of lines) {
-      const event = parseLine(line);
-      if (!event) continue;
-      asOfSeq = Math.max(asOfSeq, event.seq);
-      if (event.type === 'plan.updated' || (event.type === 'tool-call' && stringField(event, 'tool') === 'TodoWrite')) {
-        latestPlan = event;
-        continue;
-      }
-      if (event.type === 'user-message' || event.type === 'turn.started') {
-        turn += 1;
-        boundaries.push(event);
-        pruneSettledHistory();
-        continue;
-      }
-      if (
-        event.type === 'turn.completed' ||
-        event.type === 'session.ended' ||
-        event.type === 'session.error'
-      ) {
-        boundaries.push(event);
-        continue;
-      }
-      if (event.type === 'item.started' || event.type === 'item.updated' || event.type === 'item.completed') {
-        const raw = event.item;
-        if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) continue;
-        const item = raw as {
-          id?: unknown;
-          kind?: unknown;
-          toolKind?: unknown;
-          parentItemId?: unknown;
-          status?: unknown;
-        };
-        if (item.kind !== 'tool' || typeof item.id !== 'string' || item.id === '') continue;
-        const parentId = typeof item.parentItemId === 'string' ? item.parentItemId : undefined;
-        // `task` only, never `skill` (#1202): the retained episode is a sub-agent fan-out, and a
-        // skill spawns none — it loads instructions into the main agent's turn and settles at
-        // once, so treating it as a root would pin an episode that has nothing under it.
-        const isRoot = item.toolKind === 'task' && parentId === undefined;
-        if (!isRoot && parentId === undefined) continue;
-        const key = itemIdentity(event, item.id);
-        const collection = isRoot ? roots : children;
-        const existing = collection.get(key);
-        const next: ContextItem = existing
-          ? { ...existing, latest: event, status: typeof item.status === 'string' ? item.status : existing.status }
-          : {
-              id: item.id,
-              ...(parentId === undefined ? {} : { parentId }),
-              turn,
-              first: event,
-              latest: event,
-              ...(typeof item.status === 'string' ? { status: item.status } : {}),
-            };
-        collection.set(key, next);
-        if (isRoot && !existing) {
-          const ids = rootsByTurn.get(turn);
-          if (ids) ids.add(key);
-          else rootsByTurn.set(turn, new Set([key]));
-        }
-        pruneSettledHistory();
-      }
-    }
-  } catch {
-    return { contextEvents: [], asOfSeq: 0 };
+    if (turnStart > 0) boundaries.splice(0, turnStart);
+    children.clear();
+    return;
   }
-  pruneSettledHistory();
+  let pruneThrough: number | undefined;
+  for (let index = rootTurns.length - 2; index >= 0; index -= 1) {
+    const candidate = rootTurns[index]!;
+    const ids = rootsByTurn.get(candidate)!;
+    if ([...ids].every((id) => isSettledContextStatus(roots.get(id)?.status))) {
+      pruneThrough = candidate;
+      break;
+    }
+  }
+  const latestIds = rootsByTurn.get(latestRootTurn)!;
+  if (
+    fold.turn > latestRootTurn &&
+    [...latestIds].every((id) => isSettledContextStatus(roots.get(id)?.status))
+  ) {
+    pruneThrough = latestRootTurn;
+  }
+  if (pruneThrough === undefined) return;
+  for (const [candidateTurn, ids] of rootsByTurn) {
+    if (candidateTurn > pruneThrough) continue;
+    for (const id of ids) roots.delete(id);
+    rootsByTurn.delete(candidateTurn);
+  }
   const retainedRootIds = new Set([...roots.values()].map(({ id }) => id));
-  const relevantChildren = [...children.values()].filter(
+  for (const [key, item] of children) {
+    if (item.parentId === undefined || !retainedRootIds.has(item.parentId)) children.delete(key);
+  }
+  const earliest = Math.min(...[...roots.values()].map(({ first }) => first.seq), Number.MAX_SAFE_INTEGER);
+  const firstRetained = boundaries.findIndex(({ seq }) => seq >= earliest);
+  if (firstRetained === -1) boundaries.length = 0;
+  else if (firstRetained > 0) boundaries.splice(0, firstRetained);
+}
+
+function foldContextEvent(fold: ContextFold, event: RunHistoryEvent): void {
+  fold.asOfSeq = Math.max(fold.asOfSeq, event.seq);
+  if (event.type === 'plan.updated' || (event.type === 'tool-call' && stringField(event, 'tool') === 'TodoWrite')) {
+    fold.latestPlan = event;
+    return;
+  }
+  if (event.type === 'user-message' || event.type === 'turn.started') {
+    fold.turn += 1;
+    fold.boundaries.push(event);
+    pruneSettledHistory(fold);
+    return;
+  }
+  if (
+    event.type === 'turn.completed' ||
+    event.type === 'session.ended' ||
+    event.type === 'session.error'
+  ) {
+    fold.boundaries.push(event);
+    return;
+  }
+  if (event.type !== 'item.started' && event.type !== 'item.updated' && event.type !== 'item.completed') return;
+  const raw = event.item;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return;
+  const item = raw as {
+    id?: unknown;
+    kind?: unknown;
+    toolKind?: unknown;
+    parentItemId?: unknown;
+    status?: unknown;
+  };
+  if (item.kind !== 'tool' || typeof item.id !== 'string' || item.id === '') return;
+  const parentId = typeof item.parentItemId === 'string' ? item.parentItemId : undefined;
+  const isRoot = item.toolKind === 'task' && parentId === undefined;
+  if (!isRoot && parentId === undefined) return;
+  const key = `${event.stepId ?? ''}:${item.id}`;
+  const collection = isRoot ? fold.roots : fold.children;
+  const existing = collection.get(key);
+  const next: ContextItem = existing
+    ? { ...existing, latest: event, status: typeof item.status === 'string' ? item.status : existing.status }
+    : {
+        id: item.id,
+        ...(parentId === undefined ? {} : { parentId }),
+        turn: fold.turn,
+        first: event,
+        latest: event,
+        ...(typeof item.status === 'string' ? { status: item.status } : {}),
+      };
+  collection.set(key, next);
+  if (isRoot && !existing) {
+    const ids = fold.rootsByTurn.get(fold.turn);
+    if (ids) ids.add(key);
+    else fold.rootsByTurn.set(fold.turn, new Set([key]));
+  }
+  pruneSettledHistory(fold);
+}
+
+/** Idempotent on the fold, so a cached fold can keep folding appended lines after this ran. */
+function finishContextFold(fold: ContextFold): RunHistoryContext {
+  pruneSettledHistory(fold);
+  const retainedRootIds = new Set([...fold.roots.values()].map(({ id }) => id));
+  const relevantChildren = [...fold.children.values()].filter(
     ({ parentId }) => parentId !== undefined && retainedRootIds.has(parentId),
   );
   const contextEvents = new Map<number, RunHistoryEvent>();
-  if (latestPlan) contextEvents.set(latestPlan.seq, latestPlan);
-  for (const event of boundaries) contextEvents.set(event.seq, event);
-  for (const item of [...roots.values(), ...relevantChildren]) {
+  if (fold.latestPlan) contextEvents.set(fold.latestPlan.seq, fold.latestPlan);
+  for (const event of fold.boundaries) contextEvents.set(event.seq, event);
+  for (const item of [...fold.roots.values(), ...relevantChildren]) {
     contextEvents.set(item.first.seq, item.first);
     contextEvents.set(item.latest.seq, item.latest);
   }
-  return { contextEvents: [...contextEvents.values()].sort((a, b) => a.seq - b.seq), asOfSeq };
+  return { contextEvents: [...contextEvents.values()].sort((a, b) => a.seq - b.seq), asOfSeq: fold.asOfSeq };
+}
+
+/**
+ * Parse every complete line from `start` to EOF. `end` is the offset just past the last line that
+ * was consumed, so a record still being appended is left for the next read instead of being lost.
+ */
+async function foldLinesFrom(
+  filePath: string,
+  start: number,
+  onEvent: (event: RunHistoryEvent) => void,
+): Promise<{ end: number; bytesRead: number }> {
+  const input = createReadStream(filePath, { start });
+  let carry: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+  let consumed = start;
+  try {
+    for await (const chunk of input as AsyncIterable<Buffer>) {
+      const combined = carry.length === 0 ? chunk : Buffer.concat([carry, chunk]);
+      let lineStart = 0;
+      for (let newline = combined.indexOf(0x0a); newline !== -1; newline = combined.indexOf(0x0a, lineStart)) {
+        const event = parseLine(combined.subarray(lineStart, newline).toString('utf8'));
+        if (event) onEvent(event);
+        consumed += newline + 1 - lineStart;
+        lineStart = newline + 1;
+      }
+      carry = Buffer.from(combined.subarray(lineStart));
+    }
+  } finally {
+    input.destroy();
+  }
+  if (carry.length > 0) {
+    const event = parseLine(carry.toString('utf8'));
+    if (event) {
+      onEvent(event);
+      consumed += carry.length;
+    }
+  }
+  return { end: consumed, bytesRead: input.bytesRead };
+}
+
+const CONTEXT_CACHE_ENTRIES = 32;
+const CONTEXT_PROBE_BYTES = 64;
+
+interface ContextCacheEntry {
+  ino: number;
+  size: number;
+  mtimeMs: number;
+  end: number;
+  probe: Buffer;
+  fold: ContextFold;
+  result: RunHistoryContext;
+}
+
+const contextCache = new Map<string, ContextCacheEntry>();
+const contextReads = new Map<string, Promise<RunHistoryContext>>();
+
+/** Test seam: the fold cache is module-global, so a suite asserting hits or eviction starts clean. */
+export function __clearContextCacheForTests(): void {
+  contextCache.clear();
+  contextReads.clear();
+}
+
+async function readProbe(filePath: string, end: number): Promise<Buffer> {
+  const length = Math.min(CONTEXT_PROBE_BYTES, end);
+  if (length === 0) return Buffer.alloc(0);
+  const handle = await open(filePath, 'r');
+  try {
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, end - length);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
+async function deriveCachedContext(
+  filePath: string,
+  onRead?: (instrumentation: HistoryReadInstrumentation) => void,
+): Promise<RunHistoryContext> {
+  let current: Stats;
+  try {
+    current = await stat(filePath);
+  } catch {
+    contextCache.delete(filePath);
+    onRead?.({ fileSize: 0, bytesRead: 0, retainedEvents: 0 });
+    return { contextEvents: [], asOfSeq: 0 };
+  }
+  const cached = contextCache.get(filePath);
+  if (cached) {
+    contextCache.delete(filePath);
+    contextCache.set(filePath, cached);
+  }
+  if (cached && cached.ino === current.ino && cached.size === current.size && cached.mtimeMs === current.mtimeMs) {
+    onRead?.({ fileSize: current.size, bytesRead: 0, retainedEvents: cached.result.contextEvents.length });
+    return { ...cached.result, contextEvents: [...cached.result.contextEvents] };
+  }
+  try {
+    let resumeProbeBytes = 0;
+    let resumable = false;
+    if (cached !== undefined && cached.ino === current.ino && current.size >= cached.end) {
+      const probe = await readProbe(filePath, cached.end);
+      resumeProbeBytes = probe.length;
+      resumable = probe.equals(cached.probe);
+    }
+    const fold = resumable && cached !== undefined ? cached.fold : createContextFold();
+    const start = resumable && cached !== undefined ? cached.end : 0;
+    const { end, bytesRead } = await foldLinesFrom(filePath, start, (event) => foldContextEvent(fold, event));
+    const result = finishContextFold(fold);
+    // A line appended between the stat and the fold puts `end` past `size`: the next call misses the
+    // cheap hit and resumes through the probe, which is still correct.
+    const tailProbe = await readProbe(filePath, end);
+    contextCache.set(filePath, {
+      ino: current.ino,
+      size: current.size,
+      mtimeMs: current.mtimeMs,
+      end,
+      probe: tailProbe,
+      fold,
+      result,
+    });
+    while (contextCache.size > CONTEXT_CACHE_ENTRIES) {
+      const oldest = contextCache.keys().next().value;
+      if (oldest === undefined) break;
+      contextCache.delete(oldest);
+    }
+    onRead?.({
+      fileSize: current.size,
+      bytesRead: bytesRead + resumeProbeBytes + tailProbe.length,
+      retainedEvents: result.contextEvents.length,
+    });
+    return { ...result, contextEvents: [...result.contextEvents] };
+  } catch {
+    contextCache.delete(filePath);
+    return { contextEvents: [], asOfSeq: 0 };
+  }
+}
+
+/**
+ * The latest Plan snapshot plus only the selector-equivalent agent episode. The forward fold is
+ * kept per file and resumed from where it stopped, so reopening a task reads only what was
+ * appended since; reads of one file are serialized because they share that fold.
+ */
+export function deriveRunContextEvents(
+  filePath: string,
+  onRead?: (instrumentation: HistoryReadInstrumentation) => void,
+): Promise<RunHistoryContext> {
+  const previous = contextReads.get(filePath);
+  const next = (previous ?? Promise.resolve())
+    .catch(() => undefined)
+    .then(() => deriveCachedContext(filePath, onRead));
+  contextReads.set(filePath, next);
+  next
+    .finally(() => {
+      if (contextReads.get(filePath) === next) contextReads.delete(filePath);
+    })
+    .catch(() => undefined);
+  return next;
+}
+
+/** Every persisted event in file order, read incrementally so a long transcript never blocks the loop. */
+export async function* streamRunEvents(filePath: string): AsyncGenerator<RunHistoryEvent> {
+  let input: ReturnType<typeof createReadStream> | undefined;
+  try {
+    input = createReadStream(filePath, { encoding: 'utf8' });
+    const lines = createInterface({ input, crlfDelay: Infinity });
+    for await (const line of lines) {
+      const event = parseLine(line);
+      if (event) yield event;
+    }
+  } catch {
+    return;
+  } finally {
+    input?.destroy();
+  }
 }
 
 export async function readEventsAfterLiveCursor(filePath: string, cursor: string): Promise<{

@@ -1,5 +1,6 @@
 import type { RunEvent, RunStatus } from '@open-mercato/cezar-api-client'
 import { runItemKey } from '@/api/run-events'
+import { isOutdatedBackendError } from '@/lib/agent-errors'
 import {
   toolDisplay,
   type PlanEntry,
@@ -76,7 +77,20 @@ export interface ThreadProviderAuthRequired {
   authFailureId: string
 }
 
-export type ThreadEntry = UiItem | ThreadNote | ThreadImage | ThreadAsk | ThreadProviderAuthRequired
+/** Offered after an agent error saying its CLI is too old ("1.18.0 or newer is required"). */
+export interface ThreadAgentUpdateRequired {
+  kind: 'agent-update-required'
+  id: string
+  provider: ThreadProviderAuthRequired['provider']
+}
+
+export type ThreadEntry =
+  | UiItem
+  | ThreadNote
+  | ThreadImage
+  | ThreadAsk
+  | ThreadProviderAuthRequired
+  | ThreadAgentUpdateRequired
 
 export interface ThreadTurn {
   /** Stable source-derived render key. The opening event sequence survives prepended pages;
@@ -113,6 +127,8 @@ export interface ThreadReduceOptions {
    * trailing ask block is provisional protocol text until turn-end either
    * emits its card or settles into the readable invalid-marker fallback. */
   activeTurn?: boolean
+  /** The run's runner, naming an outdated-CLI error raised before any `session.started`. */
+  runner?: string
 }
 
 /** What the strip under the thread says. Pure so the mapping is table-testable. */
@@ -381,6 +397,20 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
   }
   const currentTurn = (): DraftTurn => turns.at(-1) ?? newTurn()
 
+  /** The backend of the latest session, which an outdated-CLI error is about. */
+  let sessionBackend: ThreadProviderAuthRequired['provider'] | undefined = providerId(options.runner)
+  /** One update card per turn: the v1 `error` and v2 `session.error` twins both match. */
+  const offeredUpdate = new WeakSet<DraftTurn>()
+  const offerAgentUpdate = (text: string, noteId: string) => {
+    const turn = currentTurn()
+    if (sessionBackend === undefined || offeredUpdate.has(turn) || !isOutdatedBackendError(text)) return
+    offeredUpdate.add(turn)
+    turn.entries.push({
+      origin: 'meta',
+      entry: { kind: 'agent-update-required', id: `${noteId}:update`, provider: sessionBackend },
+    })
+  }
+
   const itemKey = (event: RunEvent, itemId: string) => {
     return runItemKey(event.stepId, itemId)
   }
@@ -586,6 +616,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
           origin: 'meta',
           entry: { kind: 'note', id: `v1:${event.seq}`, text, tone: 'danger' },
         })
+        offerAgentUpdate(text, `v1:${event.seq}`)
         break
       }
       case 'session.error': {
@@ -595,8 +626,12 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
           origin: 'meta',
           entry: { kind: 'note', id: `v2:${event.seq}`, text, tone: 'danger' },
         })
+        offerAgentUpdate(text, `v2:${event.seq}`)
         break
       }
+      case 'session.started':
+        sessionBackend = providerId(event.backend) ?? sessionBackend
+        break
       case 'step-end': {
         // Steps stay out of the thread (they are header material) except the one thing the
         // transcript must not hide: a step that failed — mirroring the legacy renderer.
@@ -709,7 +744,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
       case 'session':
         break
 
-      // session.started, usage.updated, permission.* and anything future: header/telemetry
+      // usage.updated, permission.* and anything future: header/telemetry
       // material or not yet rendered — never guessed at in the thread body. (Deliberate
       // divergence from the legacy raw-JSON-note fallback: an unknown type renders as
       // nothing rather than as debug output.)

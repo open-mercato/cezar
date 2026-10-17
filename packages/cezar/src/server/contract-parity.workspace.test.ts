@@ -28,15 +28,21 @@ import type {
   openProjectInResponseSchema,
   openTargetsResponseSchema,
   providerConnectResponseSchema,
+  providerUpdateResponseSchema,
   providerStatusResponseSchema,
   runnerModelCatalogResponseSchema,
   setConfigResponseSchema,
   skillsUpdateStateSchema,
   selfUpdateStatusSchema,
   starCountSchema,
+  setTelemetryConsentInputSchema,
+  telemetryConsentSchema,
   uiStateSchema,
   workspaceConfigResponseSchema,
   workspaceBrandingLogoResponseSchema,
+  attachmentInputSchema,
+  deleteUploadResponseSchema,
+  stagedUploadSchema,
   workspaceUiStateSchema,
 } from '@open-mercato/cezar-contract';
 import type { AppType } from './app-type.ts';
@@ -98,6 +104,9 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
   type BrandingLogoUpload200 = InferResponseType<(typeof client.api.v1.workspace)['branding-logo']['$post'], 200>;
   type BrandingLogoUploadBody = InferRequestType<(typeof client.api.v1.workspace)['branding-logo']['$post']>['form'];
   type BrandingLogoDelete200 = InferResponseType<(typeof client.api.v1.workspace)['branding-logo']['$delete'], 200>;
+  type StageUpload200 = InferResponseType<typeof client.api.v1.workspace.uploads.$post, 200>;
+  type StageUploadBody = InferRequestType<typeof client.api.v1.workspace.uploads.$post>['json'];
+  type DeleteUpload200 = InferResponseType<(typeof client.api.v1.workspace.uploads)[':uploadId']['$delete'], 200>;
   type HostUsage200 = InferResponseType<(typeof client.api.v1.workspace)['host-usage']['$get'], 200>;
   type UiState200 = InferResponseType<(typeof client.api.v1)['ui-state']['$get'], 200>;
   type SetUiState200 = InferResponseType<(typeof client.api.v1)['ui-state']['$put'], 200>;
@@ -126,6 +135,11 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
   // ---- the star ask -------------------------------------------------------------------------
   type StarCount200 = InferResponseType<(typeof client.api.v1)['star-count']['$get'], 200>;
 
+  // ---- telemetry consent --------------------------------------------------------------------
+  type TelemetryConsent200 = InferResponseType<typeof client.api.v1.telemetry.consent.$get, 200>;
+  type SetTelemetryConsent200 = InferResponseType<typeof client.api.v1.telemetry.consent.$put, 200>;
+  type SetTelemetryConsentBody = InferRequestType<typeof client.api.v1.telemetry.consent.$put>['json'];
+
   // ---- providers, models, open targets ----------------------------------------------------
   type ProviderStatus200 = InferResponseType<typeof client.api.v1.providers.status.$get, 200>;
   type ProviderEnabled200 = InferResponseType<
@@ -137,6 +151,10 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     200
   >;
   type ProviderConnect200 = InferResponseType<typeof client.api.v1.providers.connect.$post, 200>;
+  type ProviderUpdate200 = InferResponseType<
+    (typeof client.api.v1.providers)[':provider']['update']['$post'],
+    200
+  >;
   type Models200 = InferResponseType<typeof client.api.v1.models.$get, 200>;
   type OpenTargets200 = InferResponseType<(typeof client.api.v1)['open-targets']['$get'], 200>;
   type OpenProjectIn200 = InferResponseType<(typeof client.api.v1)['open-in']['$post'], 200>;
@@ -196,6 +214,9 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     Assert<Exact<z.infer<typeof workspaceConfigResponseSchema>, SetWorkspaceConfig200>>,
     Assert<Exact<z.infer<typeof workspaceBrandingLogoResponseSchema>, BrandingLogoUpload200>>,
     Assert<Exact<z.infer<typeof workspaceBrandingLogoResponseSchema>, BrandingLogoDelete200>>,
+    Assert<Exact<z.infer<typeof stagedUploadSchema>, StageUpload200>>,
+    Assert<Exact<z.input<typeof attachmentInputSchema>, StageUploadBody>>,
+    Assert<Exact<z.infer<typeof deleteUploadResponseSchema>, DeleteUpload200>>,
     // the request half: a real `File`, not whatever `parseBody()` used to hand the handler
     Assert<Exact<z.input<typeof brandingLogoUploadSchema>, BrandingLogoUploadBody>>,
     Assert<Exact<z.infer<typeof hostUsageSchema>, HostUsage200>>,
@@ -217,11 +238,16 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     Assert<Exact<z.infer<typeof selfUpdateStatusSchema>, SelfUpdateApply200>>,
     // the star ask
     Assert<Exact<z.infer<typeof starCountSchema>, StarCount200>>,
+    // telemetry consent
+    Assert<Exact<z.infer<typeof telemetryConsentSchema>, TelemetryConsent200>>,
+    Assert<Exact<z.infer<typeof telemetryConsentSchema>, SetTelemetryConsent200>>,
+    Assert<Exact<z.input<typeof setTelemetryConsentInputSchema>, SetTelemetryConsentBody>>,
     // providers, models, open targets
     Assert<Exact<z.infer<typeof providerStatusResponseSchema>, ProviderStatus200>>,
     Assert<Exact<z.infer<typeof providerStatusResponseSchema>, ProviderEnabled200>>,
     Assert<Exact<z.infer<typeof providerStatusResponseSchema>, ProviderRetry200>>,
     Assert<Exact<z.infer<typeof providerConnectResponseSchema>, ProviderConnect200>>,
+    Assert<Exact<z.infer<typeof providerUpdateResponseSchema>, ProviderUpdate200>>,
     Assert<Exact<z.infer<typeof runnerModelCatalogResponseSchema>, Models200>>,
     Assert<Exact<z.infer<typeof openTargetsResponseSchema>, OpenTargets200>>,
     Assert<Exact<z.infer<typeof openProjectInResponseSchema>, OpenProjectIn200>>,

@@ -74,7 +74,7 @@ export async function rematerializeReclaimedWorktree(
   const run = store.getRun(runId);
   if (!run?.worktreePath || !run.worktreeReclaimedAt || existsSync(run.worktreePath)) return false;
   try {
-    await createWorktree(repoRoot, runId, run.baseBranch ?? 'HEAD');
+    await createWorktree(repoRoot, runId, run.baseBranch ?? 'HEAD', { branch: run.branch });
     store.updateRun(runId, { worktreeReclaimedAt: undefined });
     return true;
   } catch {

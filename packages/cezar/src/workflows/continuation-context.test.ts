@@ -37,6 +37,12 @@ describe('freshContinuationContext', () => {
     expect(context.match(/same answer/g)).toHaveLength(1);
   });
 
+  it('omits the status a queued continuation stamped on the run, keeping the step history', () => {
+    const context = freshContinuationContext(run({ status: 'queued', error: undefined }), []);
+    expect(context).not.toContain('Status: queued');
+    expect(context).toContain('- task (agent): failed');
+  });
+
   it('falls back to legacy assistant text for old task histories', () => {
     const context = freshContinuationContext(run(), [event(1, 'text', { text: 'legacy answer' })]);
     expect(context).toContain('Assistant:\nlegacy answer');

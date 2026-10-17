@@ -30,11 +30,11 @@ import { Segmented } from '@/components/segmented'
 import { useListView } from '@/components/list-view'
 import { Pill } from '@/components/pill'
 import { ReferenceChip } from '@/components/reference-chip'
+import { ReferenceOverflow } from '@/components/reference-overflow'
 import { ResolveConflictsForRun } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { SubtaskToggle } from '@/components/subtask-toggle'
 import { Button } from '@/components/ui/button'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { UnreadMarker } from '@/components/unread-marker'
@@ -61,6 +61,9 @@ import {
   urlStateFromSearchParams,
   urlStateToSearchParams,
   groupGlobalTasks,
+  sortGlobalTasks,
+  sortTimestamp,
+  SORT_OPTIONS,
   hasActiveFilters,
   tagValuesOf,
   tasksExcludingFacet,
@@ -74,11 +77,12 @@ import {
   type GlobalTaskFilters,
   type GlobalTasksUrlState,
   type GroupBy,
+  type SortBy,
 } from '@/lib/global-tasks'
 import { scopeTo } from '@/lib/project-router'
 import { allProjectTags } from '@/lib/project-tags'
 import { canBeUnread, isReadDoneItem, isUnread } from '@/lib/read-state'
-import { runTitle, type ListView } from '@/lib/task-groups'
+import { runTitle, sortTimeLabel, type ListView } from '@/lib/task-groups'
 import { TASK_ORIGIN_OPTIONS, useTaskOrigin, type TaskOrigin } from '@/lib/task-origin'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
@@ -131,10 +135,6 @@ const QUERY_DEBOUNCE_MS = 250
  *  created, else the one it is about, else its issue — is the one worth the row's own space. */
 const MAX_VISIBLE_REFERENCES = 1
 
-/** How long the `+N` list survives the pointer leaving it. The trigger and the list are separate
- *  elements with a gap between them, so closing instantly would make the list unreachable. */
-const HOVER_CLOSE_DELAY_MS = 220
-
 /** What "finished" means for the archive affordance — outcomes, not gates. A `review` run still
  *  wants a human, so it is not swept away, exactly as the per-project broom decides it. */
 const ARCHIVABLE_STATUSES: ReadonlySet<string> = new Set(['done', 'failed', 'cancelled'])
@@ -143,7 +143,7 @@ const ARCHIVABLE_STATUSES: ReadonlySet<string> = new Set(['done', 'failed', 'can
 function useArchiveIndexedRun() {
   return useIndexedRunMutation({
     request: ({ task, archived }: { task: GlobalTask; archived: boolean }) =>
-      archiveProjectRun(task.run.projectId, task.run.id, archived),
+      archiveProjectRun(task.run.projectId, task.run.id, archived, 'all_tasks'),
     patch: ({ archived }) => (run) => ({ ...run, archived }),
   })
 }
@@ -242,7 +242,7 @@ export function GlobalTasksRoute() {
   // source of truth means a refresh, a pasted link and the Back button all land on the same
   // filtered view, with no effect syncing two copies that can disagree.
   const [searchParams, setSearchParams] = useSearchParams()
-  const { filters, groupBy, view } = React.useMemo(
+  const { filters, groupBy, sortBy, view } = React.useMemo(
     () => urlStateFromSearchParams(searchParams),
     [searchParams],
   )
@@ -272,6 +272,7 @@ export function GlobalTasksRoute() {
   const setFilters = (next: (current: GlobalTaskFilters) => GlobalTaskFilters) =>
     commit((state) => ({ ...state, filters: next(state.filters) }))
   const setGroupBy = (groupBy: GroupBy) => commit((state) => ({ ...state, groupBy }))
+  const setSortBy = (sortBy: SortBy) => commit((state) => ({ ...state, sortBy }))
   const setView = (nextView: ListView) => commit((state) => ({ ...state, view: nextView }))
 
   /**
@@ -346,8 +347,8 @@ export function GlobalTasksRoute() {
     return { regular: count('regular'), automation: count('automation'), all: count('all') }
   }, [allTasks, automations, filters, view])
   const visible = React.useMemo(
-    () => filterGlobalTasks(tasks, filters, view),
-    [tasks, filters, view],
+    () => sortGlobalTasks(filterGlobalTasks(tasks, filters, view), sortBy),
+    [tasks, filters, view, sortBy],
   )
   const groups = React.useMemo(() => groupGlobalTasks(visible, groupBy), [visible, groupBy])
   /**
@@ -442,6 +443,8 @@ export function GlobalTasksRoute() {
           }}
           groupBy={groupBy}
           onGroupByChange={setGroupBy}
+          sortBy={sortBy}
+          onSortByChange={setSortBy}
           projects={registry}
           tasks={tasks}
           view={view}
@@ -452,7 +455,7 @@ export function GlobalTasksRoute() {
 
         {truncated.length > 0 ? (
           <p data-slot="global-tasks-truncated" className="text-[11.5px] text-soft-foreground">
-            Showing the newest {index.data?.perProjectLimit} tasks per project — older ones in{' '}
+            Showing the {index.data?.perProjectLimit} most recently active tasks per project — older ones in{' '}
             {truncated.join(', ')} are only in that project&rsquo;s own Tasks page.
           </p>
         ) : null}
@@ -495,6 +498,7 @@ export function GlobalTasksRoute() {
                 <TaskTable
                   tasks={group.tasks}
                   now={now}
+                  sortBy={sortBy}
                   isSubtasksExpanded={isSubtasksExpanded}
                   onToggleSubtasks={toggleSubtasks}
                   showProject={groupBy !== 'project'}
@@ -568,6 +572,8 @@ function FilterBar({
   onClearAll,
   groupBy,
   onGroupByChange,
+  sortBy,
+  onSortByChange,
   projects,
   tasks,
   view,
@@ -581,6 +587,8 @@ function FilterBar({
   onClearAll: () => void
   groupBy: GroupBy
   onGroupByChange: (next: GroupBy) => void
+  sortBy: SortBy
+  onSortByChange: (next: SortBy) => void
   projects: readonly ProjectListEntry[]
   tasks: readonly GlobalTask[]
   view: ListView
@@ -657,6 +665,16 @@ function FilterBar({
           options={GROUP_BY_OPTIONS}
           onChange={(picked) => onGroupByChange(toggleGroupBy(groupBy, picked))}
         />
+        {/* Same labelled-segmented grammar as Group by beside it. */}
+        <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
+        <span className="text-[11px] font-medium text-soft-foreground">Sort by</span>
+        <Segmented
+          slot="sort-by"
+          label="Sort tasks by"
+          value={sortBy}
+          options={SORT_OPTIONS}
+          onChange={onSortByChange}
+        />
         {canReset({ filters, groupBy }) ? (
           <button
             type="button"
@@ -728,6 +746,7 @@ const dispatchOf = (run: RunIndexEntry): TaskTreeInput['dispatch'] =>
 function TaskTable({
   tasks,
   now,
+  sortBy,
   isSubtasksExpanded,
   onToggleSubtasks,
   showProject,
@@ -738,6 +757,8 @@ function TaskTable({
 }: {
   tasks: readonly GlobalTask[]
   now: number
+  /** Picks the time column's heading and timestamp, so it always reads in row order. */
+  sortBy: SortBy
   /** The page-level accordion (#1110): whether a parent's dispatched rows are unfolded. */
   isSubtasksExpanded: (id: string) => boolean
   onToggleSubtasks: (id: string) => void
@@ -769,7 +790,7 @@ function TaskTable({
               {showCost ? <Th className="hidden w-[64px] text-right lg:table-cell">Cost</Th> : null}
               <Th className="hidden w-[56px] text-right xl:table-cell">CPU</Th>
               <Th className="hidden w-[84px] text-right xl:table-cell">Mem</Th>
-              <Th className="w-[56px] text-right">Age</Th>
+              <Th className="w-[72px] text-right">{sortTimeLabel(sortBy)}</Th>
               <Th className="w-[64px] text-right">
                 <span className="sr-only">Actions</span>
               </Th>
@@ -796,6 +817,7 @@ function TaskTable({
                 subtasksExpanded={isSubtasksExpanded(node.run.id)}
                 onToggleSubtasks={onToggleSubtasks}
                 now={now}
+                sortBy={sortBy}
                 showProject={showProject}
                 onArchive={onArchive}
                 onSetRead={onSetRead}
@@ -840,6 +862,7 @@ function TaskRow({
   subtasksExpanded,
   onToggleSubtasks,
   now,
+  sortBy,
   showProject,
   onArchive,
   onSetRead,
@@ -855,6 +878,7 @@ function TaskRow({
   subtasksExpanded: boolean
   onToggleSubtasks: (id: string) => void
   now: number
+  sortBy: SortBy
   showProject: boolean
   onArchive: (task: GlobalTask, archived: boolean) => void
   onSetRead: (task: GlobalTask, read: boolean) => void
@@ -988,7 +1012,7 @@ function TaskRow({
       <UsageTd column="cpu" cell={usage.cpu} />
       <UsageTd column="memory" cell={usage.mem} />
       <td className={cn(TD_BASE, 'text-right text-xs text-soft-foreground tabular-nums')}>
-        {shortAge(run.startedAt ?? run.createdAt, now)}
+        {shortAge(sortTimestamp(run, sortBy), now)}
       </td>
       <td className={cn(TD_BASE, 'text-right')}>
         <span className="inline-flex items-center gap-0.5">
@@ -1146,113 +1170,6 @@ function ReferenceChips({
         />
       ) : null}
     </span>
-  )
-}
-
-/**
- * The `+N`, opened.
- *
- * A tooltip listing the hidden references told you they existed and then refused to let you go
- * to them — which is worse than not mentioning them. This is a popover of real links instead.
- *
- * It opens on HOVER where hovering exists and on click everywhere — including touch, which has no
- * hover, and the keyboard, where the trigger is a real button. Radix's HoverCard would have given
- * the first for free but not the other two: it is explicitly not a touch affordance. So this is a
- * Popover (click-and-keyboard by construction) with hover layered on, which is the combination
- * that leaves no input method without a way in.
- *
- * It lists EVERY reference, not only the hidden ones: at the moment you open it you are asking
- * "what does this task point at?", and answering with the leftovers would make you reassemble
- * the set from two places. The rows are `ReferenceChip`s, so the http-only guard, the accessible
- * names and the `target`/`rel` handling are the same ones every other reference link uses rather
- * than a second, subtly different implementation.
- */
-function ReferenceOverflow({
-  references,
-  taskTitle,
-  hidden,
-  projectId,
-}: {
-  references: readonly TaskReference[]
-  taskTitle: string
-  hidden: number
-  projectId: string
-}) {
-  const [open, setOpen] = React.useState(false)
-  // How it was opened decides whether focus moves into the list. A CLICK should hand the keyboard
-  // the links; a hover must not yank focus out of whatever the reader was doing.
-  const openedByHover = React.useRef(false)
-  const closeTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  React.useEffect(() => () => clearTimeout(closeTimer.current), [])
-
-  // Touch has no hover: a tap fires `pointerenter` first, so without this guard the list would
-  // open under the finger and then be toggled shut again by the click that follows. Excluded
-  // rather than allow-listing `mouse`, so a pen (which does hover) and any device that reports
-  // nothing still get the hover behaviour.
-  const isHover = (event: React.PointerEvent) => event.pointerType !== 'touch'
-  const cancelClose = () => clearTimeout(closeTimer.current)
-  const onPointerEnter = (event: React.PointerEvent) => {
-    if (!isHover(event)) return
-    cancelClose()
-    openedByHover.current = true
-    setOpen(true)
-  }
-  // On a DELAY, and the same handler on the trigger and the content: the two are separate
-  // elements with a 4px gap between them, so an instant close would make the list impossible to
-  // reach with the pointer.
-  const onPointerLeave = (event: React.PointerEvent) => {
-    if (!isHover(event)) return
-    cancelClose()
-    closeTimer.current = setTimeout(() => setOpen(false), HOVER_CLOSE_DELAY_MS)
-  }
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          data-slot="reference-overflow"
-          aria-label={`Show all ${references.length} references for ${taskTitle}`}
-          onPointerEnter={onPointerEnter}
-          onPointerLeave={onPointerLeave}
-          // A real press — mouse, tap or keyboard — is not a hover, whatever happened before it.
-          onPointerDown={() => {
-            openedByHover.current = false
-          }}
-          onClick={() => {
-            openedByHover.current = false
-          }}
-          className="shrink-0 rounded-full px-1 text-[11px] font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-        >
-          +{hidden}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        className="w-auto min-w-40 p-1.5"
-        data-slot="reference-overflow-list"
-        onPointerEnter={onPointerEnter}
-        onPointerLeave={onPointerLeave}
-        onOpenAutoFocus={(event) => {
-          if (openedByHover.current) event.preventDefault()
-        }}
-        onCloseAutoFocus={(event) => {
-          if (openedByHover.current) event.preventDefault()
-        }}
-      >
-        <p className="px-1 pb-1.5 text-[10.5px] text-soft-foreground">References</p>
-        <span className="flex flex-col items-start gap-1">
-          {references.map((reference) => (
-            <ReferenceChip
-              key={`${reference.kind}#${reference.number}`}
-              reference={reference}
-              taskTitle={taskTitle}
-              projectId={projectId}
-            />
-          ))}
-        </span>
-      </PopoverContent>
-    </Popover>
   )
 }
 

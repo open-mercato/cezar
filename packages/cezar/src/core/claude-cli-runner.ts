@@ -485,6 +485,12 @@ function truncate(s: string, max = 200): string {
   return s.length > max ? `${s.slice(0, max)}…` : s;
 }
 
+/** `claude --resume <id>` for a transcript the CLI no longer has — typically pruned by its own
+ *  `cleanupPeriodDays` (default 30) between two Continues of a long-lived task. */
+export function isClaudeMissingSessionError(message: string): boolean {
+  return /No conversation found with session ID/i.test(message);
+}
+
 /** Path to the bundled mock (`scripts/mock-claude.mjs`), for CEZ_DRY_RUN=1. */
 function mockClaudePath(): string {
   const here = dirname(fileURLToPath(import.meta.url));

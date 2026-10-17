@@ -42,6 +42,7 @@ export const repoResponseSchema = z.union([
     status: z.array(z.never()),
     log: z.array(z.never()),
     branches: z.array(z.never()),
+    checkedOutElsewhere: z.record(z.string(), z.never()),
     baseBranch: z.null(),
   }),
   z.object({
@@ -49,6 +50,8 @@ export const repoResponseSchema = z.union([
     status: z.array(statusEntrySchema),
     log: z.array(logEntrySchema),
     branches: z.array(z.string()),
+    /** Branch → path of the OTHER worktree that has it checked out; git refuses to switch to these. */
+    checkedOutElsewhere: z.record(z.string(), z.string()),
     baseBranch: z.string().nullable(),
   }),
 ]);

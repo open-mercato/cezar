@@ -5,7 +5,17 @@ import type {
   LifecyclePreviewResponse, LifecycleActionInput, StartLifecycleRemovalInput,
 } from '@open-mercato/cezar-api-client'
 import { trackerReadScope, resolveApiUrl, workspaceBrandingLogoResponseSchema } from '@open-mercato/cezar-api-client'
-import type { TrackerAutomationOptions } from '@open-mercato/cezar-api-client'
+import type {
+  DetectedUrlsResponse,
+  DiscoveredCommandsResponse,
+  TerminalCreateInput,
+  TerminalOutput,
+  TerminalSession,
+  TerminalState,
+  WorkspaceLayouts,
+  WorkspaceLayoutsResponse,
+} from '@open-mercato/cezar-api-client'
+import type { TaskActionSurface, TrackerAutomationOptions } from '@open-mercato/cezar-api-client'
 import { trackerWatchHandleSchema, trackerWatchSnapshotSchema, type TrackerWatchInput } from "@open-mercato/cezar-api-client"
 import type {
   AgentConfigFileContent,
@@ -38,6 +48,8 @@ import type {
   CancelResponse,
   ChangesPayload,
   CheckoutProjectInput,
+  CreateProjectInput,
+  GithubOwnersResponse,
   ConfigResponse,
   ReclaimWorktreesResponse,
   RemoveWorktreeResponse,
@@ -59,6 +71,7 @@ import type {
   FsBrowseResponse,
   GitCommitResponse,
   GitPushResponse,
+  GitStatusResponse,
   GithubChecksData,
   GithubSearchData,
   GithubRefStatusData,
@@ -71,7 +84,10 @@ import type {
   GroupResponse,
   HealthResponse,
   HostUsage,
+  AttachmentEntry,
   AttachmentInput,
+  DeleteUploadResponse,
+  StagedUpload,
   LaunchKeyResponse,
   MessageInput,
   EditQueuedMessageResponse,
@@ -85,6 +101,7 @@ import type {
   PickVariantResponse,
   PlanResponse,
   ProviderConnectResponse,
+  ProviderUpdateResponse,
   ProviderId,
   ProviderStatusResponse,
   ProjectsResponse,
@@ -106,6 +123,8 @@ import type {
   RunRecord,
   RunsIndexResponse,
   StarCountPayload,
+  SetTelemetryConsentInput,
+  TelemetryConsentPayload,
   WorktreeEntry,
   SaveWorkflowInput,
   SaveWorkflowResponse,
@@ -152,11 +171,14 @@ import {
   queryScope,
   runHistoryContextSchema,
   runHistoryPageSchema,
+  githubOwnersResponseSchema,
 } from '@open-mercato/cezar-api-client'
 import type { Ok, OkJson } from '@open-mercato/cezar-api-client'
 import type { ClientResponse } from 'hono/client'
 import type { ResponseFormat } from 'hono/types'
 import type { AppType } from '@open-mercato/cezar/app-type'
+import { SID_HEADER, sid } from '@/lib/sid'
+import { noteFailedRequest } from '@/lib/failed-request'
 
 /**
  * The cockpit's client for its own HTTP API.
@@ -396,9 +418,16 @@ async function unwrapValidated<R extends ClientResponse<unknown, number, Respons
  */
 async function fetchOrThrow(url: string, init?: RequestInit): Promise<Response> {
   try {
-    return await fetch(url, { ...init, credentials: 'include' })
+    // The device id rides every request, so whatever this device does server-side (start a
+    // task, hit an error) is attributed to it — see lib/sid.ts.
+    const headers = new Headers(init?.headers)
+    headers.set(SID_HEADER, sid())
+    const res = await fetch(url, { ...init, headers, credentials: 'include' })
+    if (!res.ok) noteFailedRequest(url, init?.method, res.status, init?.body)
+    return res
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
+    noteFailedRequest(url, init?.method, 0, init?.body, cause)
     throw new ApiError(0, `cannot reach the cezar server (${url})`, { cause })
   }
 }
@@ -441,6 +470,16 @@ export async function getHealth(opts?: ReadOptions): Promise<HealthResponse> {
  *  answer and the chip renders nothing for it. */
 export async function getStarCount(opts?: ReadOptions): Promise<StarCountPayload> {
   return unwrap(await cez.api.v1['star-count'].$get({}, init(opts)), '/star-count')
+}
+
+/** The opt-in telemetry answer (`~/.cezar/config.json`), behind the consent bar and
+ *  Settings → Privacy. */
+export async function getTelemetryConsent(opts?: ReadOptions): Promise<TelemetryConsentPayload> {
+  return unwrap(await cez.api.v1.telemetry.consent.$get({}, init(opts)), '/telemetry/consent')
+}
+
+export async function putTelemetryConsent(input: SetTelemetryConsentInput): Promise<TelemetryConsentPayload> {
+  return unwrap(await cez.api.v1.telemetry.consent.$put({ json: input }), '/telemetry/consent')
 }
 
 /** Host-local catalog for one discovery runner (`claude`, `codex`, `opencode`, `cursor` — #794, #784).
@@ -1231,6 +1270,15 @@ export async function connectProvider(
   )
 }
 
+/** Opens a terminal running the agent CLI's own update (`opencode upgrade`). A 409 carries
+ *  `command` for the clipboard fallback, or none when the CLI cannot update itself. */
+export async function updateProvider(provider: ProviderId): Promise<ProviderUpdateResponse> {
+  return unwrap(
+    await cez.api.v1.providers[':provider'].update.$post({ param: { provider } }),
+    `/providers/${encodeURIComponent(provider)}/update`,
+  )
+}
+
 export async function setProviderEnabled(
   provider: ProviderId,
   enabled: boolean,
@@ -1305,6 +1353,27 @@ export async function checkoutProject(input: CheckoutProjectInput): Promise<Regi
 }
 
 /**
+ * Create a new project — a fresh git repo, optionally backed by a new private GitHub repo
+ * (`POST /api/projects/create`, spec 2026-09-29-create-new-project). Same contract as
+ * `checkoutProject`: every non-2xx is a failure whose `{ error }` the dialog shows verbatim, and
+ * progress arrives as `checkout-progress` keyed by `input.checkoutId`.
+ */
+export async function createProject(input: CreateProjectInput): Promise<RegisterProjectResponse> {
+  return unwrap(await cez.api.v1.projects.create.$post({ json: input }), '/projects/create')
+}
+
+/** Who a new GitHub repository may belong to (`GET /api/projects/github-owners`). Workspace-level.
+ *  Validated, not cast: the dialog iterates `owners`, so a body of another shape — a server
+ *  started before the owner cards, a proxy — must reject the query rather than throw mid-render. */
+export async function getGithubOwners(opts?: ReadOptions): Promise<GithubOwnersResponse> {
+  return unwrapValidated(
+    await cez.api.v1.projects['github-owners'].$get({}, init(opts)),
+    '/projects/github-owners',
+    githubOwnersResponseSchema,
+  )
+}
+
+/**
  * Deregister a project (`DELETE /api/projects/:projectId`, step 4.4).
  *
  * Registry-only by contract — the server deletes NOTHING under the project root — so this
@@ -1363,22 +1432,22 @@ export async function cancelRun(id: string): Promise<CancelResponse> {
 }
 
 /** Archives by default; pass `false` to bring a run back into the live list. */
-export async function archiveRun(id: string, archived = true): Promise<RunRecord> {
+export async function archiveRun(id: string, archived = true, surface?: TaskActionSurface): Promise<RunRecord> {
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].archive.$post({
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
-      json: { archived },
+      json: { archived, ...(surface ? { surface } : {}) },
     }),
     runPath(id, '/archive'),
   )
 }
 
 /** Pins by default; pass `false` to drop the task back into its ordinary bucket (#935). */
-export async function pinRun(id: string, pinned = true): Promise<RunRecord> {
+export async function pinRun(id: string, pinned = true, surface?: TaskActionSurface): Promise<RunRecord> {
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].pin.$post({
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
-      json: { pinned },
+      json: { pinned, ...(surface ? { surface } : {}) },
     }),
     runPath(id, '/pin'),
   )
@@ -1390,11 +1459,16 @@ export async function pinRun(id: string, pinned = true): Promise<RunRecord> {
  * REGISTERED project, so a pin toggle on another project's row would otherwise be sent with the
  * scope of whichever project the URL happens to name.
  */
-export async function pinProjectRun(projectId: string, id: string, pinned = true): Promise<RunRecord> {
+export async function pinProjectRun(
+  projectId: string,
+  id: string,
+  pinned = true,
+  surface?: TaskActionSurface,
+): Promise<RunRecord> {
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].pin.$post({
       param: { projectId, id: encodeURIComponent(id) },
-      json: { pinned },
+      json: { pinned, ...(surface ? { surface } : {}) },
     }),
     runPath(id, '/pin'),
   )
@@ -1411,11 +1485,12 @@ export async function archiveProjectRun(
   projectId: string,
   id: string,
   archived = true,
+  surface?: TaskActionSurface,
 ): Promise<RunRecord> {
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].archive.$post({
       param: { projectId, id: encodeURIComponent(id) },
-      json: { archived },
+      json: { archived, ...(surface ? { surface } : {}) },
     }),
     runPath(id, '/archive'),
   )
@@ -1516,7 +1591,7 @@ export async function finishRun(id: string): Promise<FinishResponse> {
  *  the engine opens with its plain "Continue.". */
 export interface ContinueOptions {
   text?: string
-  images?: AttachmentInput[]
+  images?: AttachmentEntry[]
   runner?: Runner
   model?: string
   /** Which login of that agent reopens it (spec 2026-07-29-agent-profiles). Switching account
@@ -1565,16 +1640,37 @@ export async function continueProjectRun(
   )
 }
 
-/** Draft PR from the review gate (spec 009): push the branch, `gh pr create --draft`; the run
- *  completes as done with the PR badge. On 409 the ApiError's `manual` carries the
- *  `git merge <branch>` fallback to show copyable. */
-export async function createRunPr(id: string): Promise<CreatePrResponse> {
-  return unwrap(
-    await cez.api.v1.p[':projectId'].runs[':id'].pr.$post({
-      param: { projectId: queryScope(), id: encodeURIComponent(id) },
-    }),
-    runPath(id, '/pr'),
-  )
+const PR_RETRY_DELAY_MS = 1_000
+
+/** Open the run's PR (spec 009): push the branch, `gh pr create`; the run completes as done with
+ *  the PR badge. Draft unless `draft: false` — the review gate's Draft PR omits it, the run
+ *  header's Create PR asks for a ready one. On 409 the ApiError's `manual` carries the
+ *  `git merge <branch>` fallback to show copyable.
+ *
+ *  A publish runs push + `gh pr create` for up to minutes, so a lost response (status 0) says
+ *  nothing about the PR: ask once more — the server joins a publish still running and adopts a
+ *  PR the first one opened (telemetry 9119d21a). */
+export async function createRunPr(id: string, opts: { draft?: boolean } = {}): Promise<CreatePrResponse> {
+  const projectId = queryScope()
+  const post = async () =>
+    unwrap(
+      await cez.api.v1.p[':projectId'].runs[':id'].pr.$post({
+        param: { projectId, id: encodeURIComponent(id) },
+        json: opts,
+      }),
+      runPath(id, '/pr'),
+    )
+  try {
+    return await post()
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.status !== 0) throw error
+    await new Promise((resolve) => setTimeout(resolve, PR_RETRY_DELAY_MS))
+    try {
+      return await post()
+    } catch (retry) {
+      throw retry instanceof ApiError && retry.status === 0 ? error : retry
+    }
+  }
 }
 
 /** Rename a run (#389): the edit becomes the display title and wins over any auto-summary. */
@@ -1736,6 +1832,17 @@ export async function commitRun(id: string, message: string): Promise<GitCommitR
   )
 }
 
+/** What the run's worktree holds that has not left it: uncommitted files, unpushed commits. */
+export async function getRunGitStatus(id: string, opts?: ReadOptions): Promise<GitStatusResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].git.status.$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    runPath(id, '/git/status'),
+  )
+}
+
 /** Push the worktree's branch, setting upstream when it has none (R5). No remote, detached
  *  HEAD and rejected pushes all come back as 409 + reason. */
 export async function pushRun(id: string): Promise<GitPushResponse> {
@@ -1878,6 +1985,19 @@ export async function postRunDraftImage(
       json: image,
     }),
     runPath(id, `/drafts/${surface}/images`),
+  )
+}
+
+/** Stage one attachment the moment it is attached; the message then references it by id
+ *  (telemetry 7054e5f2). Workspace-level, so it survives a project switch on `/new`. */
+export async function stageUpload(input: AttachmentInput): Promise<StagedUpload> {
+  return unwrap(await cez.api.v1.workspace.uploads.$post({ json: input }), '/workspace/uploads')
+}
+
+export async function deleteStagedUpload(uploadId: string): Promise<DeleteUploadResponse> {
+  return unwrap(
+    await cez.api.v1.workspace.uploads[':uploadId'].$delete({ param: { uploadId } }),
+    `/workspace/uploads/${uploadId}`,
   )
 }
 
@@ -2530,4 +2650,128 @@ export async function actOnLifecycleOperation(operationId: string, input: Lifecy
 }
 export async function previewLifecycleCommand(input: z.infer<typeof lifecyclePreviewInputSchema>): Promise<LifecyclePreviewResponse> {
   return unwrap(await cez.api.v1.p[':projectId']['worktree-lifecycle'].preview.$post({ param: { projectId: queryScope() }, json: input }), '/worktree-lifecycle/preview')
+}
+
+/** Hand the session off to a real terminal (spec 003), in the run's worktree when it still
+ *  exists. On 409 the ApiError's `command` carries the manual `cd … && <resume>` to copy. */
+/* ── The workspace terminal (spec `2026-10-07-task-workspace` §6) ──────────────────────────────
+ *
+ * Output is read with a CURSOR rather than streamed: the same call serves a local cockpit (woken
+ * by the session's WebSocket topic, which carries only the cursor) and a hosted one (polling,
+ * because a browser WebSocket cannot carry reverse-proxy credentials). One format, one replay
+ * rule, and terminal bytes never touch the workspace-level socket bus.
+ */
+
+export async function getRunTerminal(id: string): Promise<TerminalState> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].terminal.$get({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/terminal'),
+  )
+}
+
+export async function createRunTerminal(id: string, body: TerminalCreateInput): Promise<TerminalSession> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].terminal.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: body,
+    }),
+    runPath(id, '/terminal'),
+  )
+}
+
+export async function readRunTerminal(id: string, sessionId: string, cursor: number): Promise<TerminalOutput> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].terminal[':sessionId'].output.$get({
+      param: { projectId: queryScope(), id: encodeURIComponent(id), sessionId },
+      query: { cursor: String(cursor) },
+    }),
+    runPath(id, `/terminal/${sessionId}/output`),
+  )
+}
+
+export async function writeRunTerminal(id: string, sessionId: string, data: string): Promise<void> {
+  await unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].terminal[':sessionId'].input.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id), sessionId },
+      json: { data },
+    }),
+    runPath(id, `/terminal/${sessionId}/input`),
+  )
+}
+
+export async function resizeRunTerminal(id: string, sessionId: string, cols: number, rows: number): Promise<void> {
+  await unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].terminal[':sessionId'].resize.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id), sessionId },
+      json: { cols, rows },
+    }),
+    runPath(id, `/terminal/${sessionId}/resize`),
+  )
+}
+
+export async function stopRunTerminal(id: string, sessionId: string): Promise<void> {
+  await unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].terminal[':sessionId'].$delete({
+      param: { projectId: queryScope(), id: encodeURIComponent(id), sessionId },
+    }),
+    runPath(id, `/terminal/${sessionId}`),
+  )
+}
+
+/** Addresses this task's terminals printed, each probed for whether anything is listening
+ *  (spec §7). Nothing is opened by reading this — that is the user's click. */
+export async function getRunTerminalUrls(id: string): Promise<DetectedUrlsResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].terminal.urls.$get({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/terminal/urls'),
+  )
+}
+
+/** Commands the task's own project defines, each with the file it came from (spec §6). */
+export async function getRunTerminalCommands(id: string): Promise<DiscoveredCommandsResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].terminal.commands.$get({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/terminal/commands'),
+  )
+}
+
+/**
+ * A task's saved workspace layouts, from the cezar that owns the task (spec
+ * `.ai/specs/2026-10-07-task-workspace.md` §5.3). `layouts: null` means the task has never been
+ * opened — distinct from an empty list, which is a workspace the user emptied on purpose.
+ */
+export async function getRunLayouts(id: string): Promise<WorkspaceLayoutsResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].layouts.$get({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/layouts'),
+  )
+}
+
+export async function putRunLayouts(
+  id: string,
+  body: WorkspaceLayouts,
+  // The pagehide flush, as for `putRunDraft` — and with the same fallback: a body over the
+  // keepalive allowance is REJECTED by the browser, so it goes as an ordinary request instead.
+  opts?: { keepalive?: boolean },
+): Promise<WorkspaceLayoutsResponse> {
+  const keepalive =
+    opts?.keepalive === true && new TextEncoder().encode(JSON.stringify(body)).length <= KEEPALIVE_BODY_MAX
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].layouts.$put(
+      {
+        param: { projectId: queryScope(), id: encodeURIComponent(id) },
+        json: body,
+      },
+      { init: { keepalive } },
+    ),
+    runPath(id, '/layouts'),
+  )
 }
