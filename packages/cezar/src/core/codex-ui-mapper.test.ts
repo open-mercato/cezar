@@ -260,6 +260,8 @@ describe('mapCodexNotification edge cases', () => {
       [{ method: 'turn/failed', params: { turn: { id: 't1', status: 'failed' }, error: { message: 'Turn interrupted' } } }, 'cancelled'],
       [{ method: 'turn/failed', params: { turn: { id: 't1', status: 'interrupted' } } }, 'cancelled'],
       [{ method: 'turn/failed', params: { turn: { id: 't1' } } }, 'error'],
+      [{ method: 'turn/completed', params: { turn: { id: 't1', status: 'failed', error: { message: 'usage limit' } } } }, 'error'],
+      [{ method: 'turn/completed', params: { turn: { id: 't1', status: 'failed', error: { message: 'Turn interrupted' } } } }, 'cancelled'],
     ];
     for (const [frame, stopReason] of cases) {
       const [event] = mapCodexNotification(frame, state).events;

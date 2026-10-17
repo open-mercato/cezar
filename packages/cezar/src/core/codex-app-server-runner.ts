@@ -587,15 +587,12 @@ class CodexSession implements AgentSession {
         // partial prose before the turn boundary (run.ts reads markers there).
         this.textCoalescer.flush();
         // A turn that ended on nothing but a context compaction (#955). Only a CLEAN
-        // boundary carries it: a `turn/failed` already emits an authoritative error, and
+        // boundary carries it: a failed turn already emits an authoritative error, and
         // stacking a "keep going" reason on top of it would be two verdicts for one turn.
         const compacted = method === 'turn/completed' && this.compactionEndedTurn;
         this.compactionEndedTurn = false;
-        if (method === 'turn/failed' && !this.terminatedByCezar) {
-          const error = params.error as Record<string, unknown> | undefined;
-          const message = stringField(error ?? {}, 'message') ?? 'codex turn failed';
-          this.emit({ type: 'error', message });
-        }
+        const failure = turnFailureMessage(method, params);
+        if (failure !== undefined && !this.terminatedByCezar) this.emit({ type: 'error', message: failure });
         // The bare event when there is nothing extra to say, so every existing consumer
         // and every golden recording sees the exact frame it saw before (§7 additive).
         this.emit(compacted ? { type: 'turn-end', reason: 'context-compaction' } : { type: 'turn-end' });
@@ -692,6 +689,16 @@ const NON_TOOL_ITEMS = new Set(['agentMessage', 'userMessage', 'reasoning', 'pla
 
 /** Turn-lifecycle notification methods — the only frames whose child-thread copies must be
  *  dropped so a sub-agent turn can't be mistaken for the parent's (#600). */
+/** The error a turn ended on, or undefined for a clean turn. Current app-servers report a
+ *  failure as `turn/completed` with `turn.status: 'failed'` and `turn.error` — e.g. a usage
+ *  limit — rather than `turn/failed`; reading only the method parked such runs as waiting. */
+function turnFailureMessage(method: string, params: Record<string, unknown>): string | undefined {
+  const turn = (params.turn as Record<string, unknown> | undefined) ?? {};
+  if (method !== 'turn/failed' && turn.status !== 'failed') return undefined;
+  const error = (params.error ?? turn.error) as Record<string, unknown> | undefined;
+  return stringField(error ?? {}, 'message') ?? 'codex turn failed';
+}
+
 const TURN_LIFECYCLE_METHODS = new Set(['turn/started', 'turn/completed', 'turn/failed']);
 
 const REASONING_SUMMARIES = new Set(['auto', 'concise', 'detailed', 'none']);

@@ -160,7 +160,8 @@ export function mapCodexNotification(frame: unknown, state: CodexUiMapperState):
     case 'turn/started':
       return mapTurnStarted(params, state);
     case 'turn/completed':
-      return mapTurnEnd(params, state, /* failed */ false);
+      // Current app-servers report a failed turn here, with `turn.status: 'failed'`.
+      return mapTurnEnd(params, state, /* failed */ isRecord(params.turn) && params.turn.status === 'failed');
     case 'turn/failed':
       return mapTurnEnd(params, state, /* failed */ true);
     case 'turn/plan/updated':
@@ -260,14 +261,14 @@ function mapTurnEnd(
   };
 }
 
-/** §7.1: turn/completed→end_turn, turn/failed→error — except an interrupted
+/** §7.1: turn/completed→end_turn, turn/failed (or turn.status `failed`)→error — except an interrupted
  *  turn (turn.status `interrupted`, or an interrupt-shaped error message,
  *  the only wire signals codex gives us) → cancelled. */
 function turnStopReason(params: Record<string, unknown>, failed: boolean): StopReason {
   const turn = isRecord(params.turn) ? params.turn : {};
   if (turn.status === 'interrupted') return 'cancelled';
   if (!failed) return 'end_turn';
-  return /interrupt/i.test(errorMessage(params.error) ?? '') ? 'cancelled' : 'error';
+  return /interrupt/i.test(errorMessage(params.error ?? turn.error) ?? '') ? 'cancelled' : 'error';
 }
 
 // ---- plan -------------------------------------------------------------------

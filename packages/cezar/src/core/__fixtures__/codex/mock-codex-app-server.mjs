@@ -186,6 +186,13 @@ rl.on('line', (line) => {
       emit({ method: 'turn/completed', params: { threadId: 'th_mock_1', turn: { id: turnId, status: 'completed' } } });
       return;
     }
+    if (turnText.includes('mock:usage-limit')) {
+      // codex-cli 0.155.1's real shape: an `error` notification, then a FAILED turn/completed.
+      const error = { message: "You've hit your usage limit.", codexErrorInfo: 'usageLimitExceeded' };
+      emit({ method: 'error', params: { error, willRetry: false, turnId: 'turn_mock_1' } });
+      emit({ method: 'turn/completed', params: { turn: { id: 'turn_mock_1', status: 'failed', error } } });
+      return;
+    }
     if (turnText.includes('mock:turn-failed')) {
       emit({ method: 'turn/failed', params: {
         turn: { id: 'turn_mock_1', status: 'failed' },

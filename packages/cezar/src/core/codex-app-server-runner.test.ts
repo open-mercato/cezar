@@ -79,6 +79,21 @@ describe('a teardown cezar initiated (codex app-server)', () => {
     expect(events).toContainEqual({ type: 'error', message: 'model unavailable' });
     expect(events).toContainEqual({ type: 'turn-end' });
   }, 15_000);
+
+  it('surfaces a turn/completed with status failed (usage limit) as an AgentEvent error', async () => {
+    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const events: AgentEvent[] = [];
+    const session = runner.startSession(
+      { userPrompt: 'mock:usage-limit', cwd: process.cwd() },
+      (event) => events.push(event),
+      { autoEndAfterFirstTurn: true },
+    );
+
+    await session.result;
+
+    expect(events.filter((e) => e.type === 'error')).toEqual([{ type: 'error', message: "You've hit your usage limit." }]);
+    expect(events).toContainEqual({ type: 'turn-end' });
+  }, 15_000);
 });
 
 describe('late Codex teardown events (#1105)', () => {
