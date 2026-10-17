@@ -654,7 +654,7 @@ function TaskResults({
   query: string
   onPick: (task: PaletteTask) => void
 }) {
-  const { tasks, multiProject, projectNames } = usePaletteTasks()
+  const { tasks, multiProject, projectNames, repoBases } = usePaletteTasks()
   const recent = readRecentTasks()
   // Built once per task list; a keystroke only ranks and slices (`rankTasks`).
   const entries = React.useMemo(() => {
@@ -663,8 +663,8 @@ function TaskResults({
     const listed = recentOnly
       ? byRecency.filter((task) => seen.has(task.id) && task.id !== exclude).slice(0, RECENT_IN_DEFAULT_VIEW)
       : byRecency
-    return searchableTasks(listed, projectNames)
-  }, [tasks, recent, recentOnly, exclude, projectNames])
+    return searchableTasks(listed, projectNames, repoBases)
+  }, [tasks, recent, recentOnly, exclude, projectNames, repoBases])
   const { shown, total } = React.useMemo(() => rankTasks(entries, query), [entries, query])
   const [now] = React.useState(Date.now)
   if (shown.length === 0) return null

@@ -606,6 +606,19 @@ describe('Tasks group', () => {
     expect(document.querySelector('[data-run-id="b-1"] [data-slot="pr-chip"]')?.textContent).toContain('77')
   })
 
+  it('links a PR known only by number to its own project’s repo', async () => {
+    renderPalette({
+      entry: '/p/shop/',
+      projects: [project({ id: 'shop', repoUrl: 'https://github.com/o/shop' }), project({ id: 'blog', repoUrl: 'https://github.com/o/blog' })],
+      indexed: [indexed({ id: 'b-1', projectId: 'blog', title: 'Blog fix', markerRefs: { pr: 1497 } })],
+    })
+    openWith({ metaKey: true })
+    await screen.findByText('Blog fix')
+    await waitFor(() =>
+      expect(document.querySelector('[data-run-id="b-1"] a[href]')?.getAttribute('href')).toBe('https://github.com/o/blog/pull/1497'),
+    )
+  })
+
   it('leads a row with the sidebar chip and drops the title prefix it already says', async () => {
     renderPalette({ runs: [run({ id: 'r1', title: '1497: fixing the gate', pullRequestUrl: 'https://github.com/o/r/pull/1497' })] })
     openWith({ metaKey: true })

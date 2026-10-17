@@ -4,6 +4,7 @@ import { useNavigate as useRouterNavigate } from 'react-router'
 import {
   rememberReferenceStatuses,
   useHealth,
+  useProjectRepoBase,
   useProjects,
   useReferenceProjectId,
   useRunsForProject,
@@ -260,10 +261,12 @@ export interface SearchableTask {
 export function searchableTasks(
   tasks: readonly PaletteTask[],
   projectNames: ReadonlyMap<string, string>,
+  /** Each project's repo web root — a reference known only by number becomes a link with it. */
+  repoBases: ReadonlyMap<string, string> = new Map(),
 ): SearchableTask[] {
   return tasks.map((task) => {
     const label = runTitle(task)
-    const refList = taskReferences(task)
+    const refList = taskReferences(task, task.projectId === null ? undefined : repoBases.get(task.projectId))
     const references = refList.map((reference) => `${reference.kind} #${reference.number}`).join(' ')
     const projectName = task.projectId === null ? null : (projectNames.get(task.projectId) ?? null)
     return {
@@ -472,7 +475,16 @@ export function usePaletteTasks() {
     () => mergeTasks(runs.data ?? [], runsProjectId, runsIndex.data?.runs),
     [runs.data, runsProjectId, runsIndex.data],
   )
-  return { activeProjectId, registry, health, multiProject, projectNames, runsProjectId, tasks }
+  // Each project's repo web root, for links to references known only by number. The project on
+  // screen may have none registered — its remote (`useProjectRepoBase`) answers then.
+  const ownRepoBase = useProjectRepoBase()
+  const repoBases = React.useMemo(() => {
+    const bases = new Map<string, string>()
+    for (const project of registry?.projects ?? []) if (project.repoUrl) bases.set(project.id, project.repoUrl)
+    if (runsProjectId && ownRepoBase && !bases.has(runsProjectId)) bases.set(runsProjectId, ownRepoBase)
+    return bases
+  }, [registry, runsProjectId, ownRepoBase])
+  return { activeProjectId, registry, health, multiProject, projectNames, repoBases, runsProjectId, tasks }
 }
 
 /** Where a palette task row lives: unprefixed for the project on screen, scoped otherwise. */
@@ -663,7 +675,7 @@ function PaletteContent({ close }: { close: () => void }) {
   const [search, setSearch] = React.useState('')
   const searching = search.trim() !== ''
   const { theme, setTheme } = useTheme()
-  const { activeProjectId, registry, health, multiProject, projectNames, tasks } = usePaletteTasks()
+  const { activeProjectId, registry, health, multiProject, projectNames, repoBases, tasks } = usePaletteTasks()
   const skills = useSkills()
   // Skills list most-used → project → global (#519) — the same order every picker renders.
   const uiState = useUiState()
@@ -680,11 +692,11 @@ function PaletteContent({ close }: { close: () => void }) {
   const sections = React.useMemo(() => {
     const { recentlyFinished, otherTasks } = partitionTasks(tasks)
     return {
-      all: searchableTasks(tasks, projectNames),
-      recentlyFinished: searchableTasks(recentlyFinished, projectNames),
-      otherTasks: searchableTasks(otherTasks, projectNames),
+      all: searchableTasks(tasks, projectNames, repoBases),
+      recentlyFinished: searchableTasks(recentlyFinished, projectNames, repoBases),
+      otherTasks: searchableTasks(otherTasks, projectNames, repoBases),
     }
-  }, [tasks, projectNames])
+  }, [tasks, projectNames, repoBases])
   // Searching flattens the two task sections into one ranked list — see the Tasks group below.
   // Either way only the rows that will show are mounted (`rankTasks`).
   const recentlyFinished = searching ? { shown: [], total: 0 } : rankTasks(sections.recentlyFinished, '', 20)
