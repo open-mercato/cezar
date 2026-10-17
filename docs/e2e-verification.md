@@ -244,9 +244,13 @@ for follow-ups.
 
 ## What cezar gives the check, and what it does not
 
-- **cwd** is the task's worktree, and the command runs under `bash -lc`.
-- **Environment** is the cezar server's own `process.env` plus the **secrets**
-  the step may read (below). There is no per-step `env:` — workflow files are
+- **cwd** is the task's worktree, and the command runs under
+  `bash --noprofile --norc -c` (no login profile).
+- **Environment** is a minimal one — the toolchain basics (`PATH`, `HOME`,
+  locale, `TMPDIR`, …) with no vendor or cloud credentials, no `GITHUB_TOKEN`/`GH_*`
+  and no inherited `CEZ_*` — plus the run context and the **secrets** the step
+  may read (below). A host variable a check genuinely needs that is not a
+  credential (a CI flag, `SSH_AUTH_SOCK`) can be named in `CEZ_ENV_PASSTHROUGH`. There is no per-step `env:` — workflow files are
   committed, and a secret's value does not belong in them; a step names the
   secrets it needs instead. Tests with no agent step need no model at all.
 - **Model credentials go in `cezar secrets`, not in your shell.** Store the
@@ -282,8 +286,9 @@ for follow-ups.
   scrubbed from the run transcript or the retry prompt, so keep anything that
   must not be logged above the floor — every real API key already is.
 
-  **Why not just `export ANTHROPIC_API_KEY` before starting cezar?** Because
-  cezar passes provider-prefixed variables (`ANTHROPIC_*`, `OPENAI_*`, …) to
+  **Why not just `export ANTHROPIC_API_KEY` before starting cezar?** It would
+  not reach the check: the minimal environment drops every provider-prefixed
+  variable. And cezar passes those variables (`ANTHROPIC_*`, `OPENAI_*`, …) to
   the agents it starts. A key exported for e2e would reach every Claude Code or
   Codex session too, and switch it from the subscription account you chose in
   Agent accounts to API billing — silently. A secret never reaches an agent:

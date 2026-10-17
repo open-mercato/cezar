@@ -4,6 +4,11 @@ Status: proposed · Base: `main` @ `05471fd` (2026-10-05, #1265) · Related: `do
 `.ai/specs/2026-09-14-automations-redesign.md`, `.ai/specs/2026-09-18-jira-linear-tracker-browsing.md`,
 `.ai/specs/2026-08-10-task-pr-reference-list.md`
 
+> **Amended 2026-10-17 (#1164, owner decision):** the check env base is no longer `process.env`. A check
+> gets `{ ...buildCheckEnv(), ...secrets('checks'), ...context }`: a minimal toolchain env with no
+> `CEZ_*`, `GH_*`/`GITHUB_TOKEN` or vendor/cloud credentials, under `bash --noprofile --norc`. A
+> provider key exported on the server no longer reaches a check; it has to be stored as a secret.
+
 ## Goal
 
 Make an agentic e2e runner ([`tester-army/e2e`](https://github.com/tester-army/e2e), or any check that needs

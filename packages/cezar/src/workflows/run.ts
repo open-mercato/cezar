@@ -1,7 +1,6 @@
 import type { TrackerAssociation } from '@open-mercato/cezar-contract';
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
 import { createHash, randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { assertCezarHomeWriteIsSandboxed, cezarHomeDir } from '../paths.ts';
@@ -217,8 +216,15 @@ const GRAPH_TAKEN_CAP = 500;
 /** Tail of an agent node's last turn kept as `{{nodes.<id>.summary}}`. */
 const NODE_SUMMARY_CAP = 4_000;
 import { freshContinuationContext } from './continuation-context.ts';
-
-const CHECK_OUTPUT_CAP = 20_000;
+import {
+  CHECK_COMMAND_TIMEOUT_MS,
+  CHECK_GATE_TIMEOUT_MS,
+  runCheckCommand,
+  type CheckCommandOptions,
+  type CheckOutcome,
+  type CheckOutcomeStatus,
+} from './check-runner.ts';
+import { buildCheckEnv } from '../core/agent-env.ts';
 
 async function configuredModelProvider(
   backend: RunnerId,
@@ -585,6 +591,17 @@ interface ActiveRun {
     startedTurns: Set<string>;
     recordedTurns: Set<string>;
   };
+  /**
+   * Absolute epoch-ms deadline for this run's WHOLE check gate — every
+   * `command:` step the workflow executes, retries (`onFail`) included
+   * (`check-runner.ts`, `CHECK_GATE_TIMEOUT_MS`). Armed lazily before the first
+   * check of the run, because agent time is not gate time, and never reset: a
+   * check that loops back into its agent must not get a fresh 45 minutes per
+   * attempt, or the wall clock bounds nothing. `ActiveRun` is built in `execute`
+   * AND in `runContinuation`; a lazily-armed optional field reads identically
+   * in both.
+   */
+  checkGateDeadline?: number;
 }
 
 /** Safety cap on autonomous auto-continues per run — stops a stuck agent from nudging forever.
@@ -5036,7 +5053,7 @@ export class RunManager {
         state.autosaveCheckpointBlocked = !checkpointSafe;
         if (checkpointSafe) this.autosaveCheckpointBlockedRuns.delete(runId);
         else this.autosaveCheckpointBlockedRuns.add(runId);
-        let checkResult: { ok: boolean; output: string; exitCode: number };
+        let checkResult: { ok: boolean; output: string; exitCode: number; status: CheckOutcomeStatus };
         state.checkInProgress = true;
         try {
           checkResult = await this.runCheckStep(runId, state, rendered, emit);
@@ -5048,9 +5065,24 @@ export class RunManager {
           // captureCheckArtifacts yields while reading git status.
           state.checkInProgress = false;
         }
-        const { ok, output, exitCode } = checkResult;
+        const { ok, output, exitCode, status } = checkResult;
         if (state.cancelled) return null;
         outputs.set(node.id, { exitCode, output });
+        if (status !== 'passed' && status !== 'failed') {
+          // Not a verdict on the diff (#1164): after the gate deadline every retry runs nothing,
+          // and a missing shell never runs anything, so the fail port's loop back to an agent
+          // would only burn turns. End the run and say which it was.
+          const why = { 'timed-out': 'timed out', 'could-not-run': 'could not run', cancelled: 'was cancelled', skipped: 'was skipped' }[status];
+          if (status !== 'cancelled') {
+            emit({
+              type: 'note',
+              stepId: node.id,
+              message: `not retrying: the check did not run to an exit status (${status}) — re-running it cannot change that`,
+            });
+          }
+          this.finishStep(runId, node.id, 'failed', checkFailureNote(rendered.command as string, status), emit);
+          return `check "${node.id}" ${why}`;
+        }
         if (ok) {
           this.finishStep(runId, node.id, 'done', undefined, emit);
           port = 'pass';
@@ -7218,7 +7250,7 @@ export class RunManager {
   }
 
   /**
-   * The environment a check step runs with: the server's own, plus the secrets the step may
+   * The environment a check step runs with: the minimal `buildCheckEnv` base, plus the secrets the step may
    * read (spec 2026-10-10-project-secrets-vault-options) — the project's and the workspace's
    * with the `checks` audience, or exactly the step's `secrets:` bindings. Read fresh for every
    * check execution, so an edit applies to the next check, never one mid-command. The values
@@ -7233,7 +7265,7 @@ export class RunManager {
     emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void,
   ): Promise<NodeJS.ProcessEnv> {
     // A fork's head is untrusted code (Phase 3): like GitHub Actions withholding secrets from fork
-    // PRs, its checks get the server env only — the credentials are neither read nor handed over.
+    // PRs, its checks get the minimal base only — the credentials are neither read nor handed over.
     const untrusted = this.store.getRun(runId)?.untrustedHead === true;
     const resolved = untrusted
       ? { values: {} as Record<string, string>, notes: [] as string[] }
@@ -7250,22 +7282,11 @@ export class RunManager {
       runId,
       Object.values(resolved.values).filter((value) => value.length >= MIN_SECRET_LEN),
     );
-    // The run context wins last (Phase 2). Its names are first removed from what the server
-    // inherited — a cezar started inside another cezar task carries that task's `CEZ_*` — so a
-    // variable this run does not set is absent, never a stale value from somewhere else. The
-    // login shell `runCheckStep` spawns sources the user's profile after this, so the guarantee
-    // is about the server's environment, not about a profile that exports one of these names.
-    const base: NodeJS.ProcessEnv = { ...process.env };
-    for (const name of CHECK_CONTEXT_VARS) {
-      // `CEZ_PROJECT_ID` is the one context name that is ALSO a documented CLI input
-      // (BACKWARD_COMPATIBILITY.md §1 — `cez task`/`cez automation` address a cockpit with it),
-      // so it is replaced, never stripped. A headless `cezar run` builds its manager without a
-      // projectId, and deleting the operator's value there would leave `CEZ_API_URL` in place
-      // while `cez task create` silently fell back to the cockpit's boot project.
-      if (name === 'CEZ_PROJECT_ID' && !this.projectId) continue;
-      delete base[name];
-    }
-    return { ...base, ...resolved.values, ...(await this.checkContextEnv(runId, state, step.id)) };
+    // Minimal base (#1164): `buildCheckEnv` drops every `CEZ_*` (so a context var this run does
+    // not set is absent, never a value inherited from an outer cezar task), `GH_*` and the
+    // vendor/cloud families. A credential a check needs comes from the vault above, and the run
+    // context wins last (Phase 2).
+    return { ...buildCheckEnv(), ...resolved.values, ...(await this.checkContextEnv(runId, state, step.id)) };
   }
 
   /**
@@ -7316,54 +7337,68 @@ export class RunManager {
     await prunePrHeadRefs(this.repoRoot, needed).catch(() => undefined);
   }
 
+  /**
+   * One `command:` step, executed through the shared check seam
+   * (`./check-runner.ts`) — the same call the landing check's gate will make.
+   *
+   * The seam owns the spawn (group kill, wall clock, minimal env, tail cap);
+   * this method owns what the workflow knows: the transcript event, the run's
+   * interrupt handle, and the ONE rule the outcome set exists for — a timeout
+   * or a could-not-run is never reported as a pass.
+   */
   private async runCheckStep(
     runId: string,
     state: ActiveRun,
     step: WorkflowStepDef,
     emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void,
-  ): Promise<{ ok: boolean; output: string; exitCode: number }> {
+  ): Promise<{ ok: boolean; output: string; exitCode: number; status: CheckOutcomeStatus }> {
     const command = step.command as string;
     emit({ type: 'note', stepId: step.id, message: `$ ${command}` });
     const env = await this.checkStepEnv(runId, state, step, emit);
     // A cancel that landed during the read had no child to interrupt; do not spawn one now.
-    if (state.cancelled) return { ok: false, output: 'cancelled', exitCode: -1 };
-    return new Promise((resolve) => {
+    if (state.cancelled) return { ok: false, output: 'cancelled', exitCode: -1, status: 'cancelled' };
+    const limits = await checkLimits(this.repoRoot);
+    if (state.checkGateDeadline === undefined && limits.gateTimeoutMs > 0) {
+      state.checkGateDeadline = Date.now() + limits.gateTimeoutMs;
+    }
+    const controller = new AbortController();
+    const previousInterrupt = state.interrupt;
+    state.interrupt = () => controller.abort();
+    let outcome: CheckOutcome;
+    try {
       // Check steps run in the same cwd as the agent steps — the worktree.
-      const child = spawn('bash', ['-lc', command], { cwd: state.cwd, env });
-      state.interrupt = () => child.kill('SIGTERM');
-
-      let output = '';
-      const collect = (chunk: Buffer) => {
-        if (output.length < CHECK_OUTPUT_CAP) {
-          output += chunk.toString('utf8');
-          if (output.length >= CHECK_OUTPUT_CAP) output += '\n… (output truncated)';
-        }
+      const options: CheckCommandOptions = {
+        cwd: state.cwd,
+        command,
+        env,
+        timeoutMs: limits.timeoutMs,
+        signal: controller.signal,
+        ...(state.checkGateDeadline !== undefined ? { gateDeadlineAt: state.checkGateDeadline } : {}),
       };
-      child.stdout.on('data', collect);
-      child.stderr.on('data', collect);
-      child.on('error', (err) => {
-        state.interrupt = () => undefined;
-        const message = `failed to spawn: ${err.message}`;
-        emit({ type: 'check-output', stepId: step.id, command, text: message, exitCode: -1 });
-        resolve({ ok: false, output: message, exitCode: -1 });
-      });
-      child.on('close', (code) => {
-        state.interrupt = () => undefined;
-        const trimmed = output.trim() || '(no output)';
-        // `code` is null when a signal killed the child; -1 then, the same value an
-        // unspawnable command reports, and one no `retryOn` list can name — neither
-        // is a verdict on the diff, so neither buys the agent another attempt.
-        const exitCode = code ?? -1;
-        emit({ type: 'check-output', stepId: step.id, command, text: trimmed, exitCode });
-        resolve({ ok: code === 0, output: trimmed, exitCode });
-      });
+      outcome = await runCheckCommand(options);
+    } finally {
+      // Restore rather than clobber: whoever set the previous handle owns it, and
+      // a stale no-op left behind would silently disarm a live session's
+      // cancellation (the half-fix AGENTS.md warns about).
+      state.interrupt = previousInterrupt;
+    }
+    emit({
+      type: 'check-output',
+      stepId: step.id,
+      command,
+      text: outcome.output,
+      exitCode: outcome.exitCode,
+      // Additive field (#landing-check S1): a timeout or a could-not-run is a
+      // distinguishable outcome on the wire. Existing readers key on `exitCode`.
+      status: outcome.status,
     });
+    return { ok: outcome.ok, output: outcome.output, exitCode: outcome.exitCode, status: outcome.status };
   }
 
   private finishStep(
     runId: string,
     stepId: string,
-    status: 'done' | 'failed',
+    status: 'done' | 'failed' | 'skipped',
     error: string | undefined,
     emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void,
   ): void {
@@ -7377,9 +7412,33 @@ export class RunManager {
   }
 }
 
+/** The repo's check limits — `.ai/cezar/config.json` when set, defaults when not. */
+async function checkLimits(repoRoot: string): Promise<{ timeoutMs: number; gateTimeoutMs: number }> {
+  // `loadConfig` never throws (a missing/invalid file degrades to the defaults);
+  // the catch is belt-and-braces for a read that raced a permission change.
+  const config = await loadConfig(repoRoot).catch(() => null);
+  return {
+    timeoutMs: config?.checkTimeoutMs ?? CHECK_COMMAND_TIMEOUT_MS,
+    gateTimeoutMs: config?.checkGateTimeoutMs ?? CHECK_GATE_TIMEOUT_MS,
+  };
+}
+
+/**
+ * The step-level `error` for a non-green check. Only `failed` takes the fail port; the rest end
+ * the run (#1164), and "exited non-zero" on a command that never started, or that we killed, is
+ * a lie a reviewer then spends an hour on. The transcript carries the detail.
+ */
+function checkFailureNote(command: string, status: CheckOutcomeStatus): string {
+  if (status === 'timed-out') return `\`${command}\` timed out`;
+  if (status === 'could-not-run') return `\`${command}\` could not run`;
+  if (status === 'cancelled') return `\`${command}\` was cancelled`;
+  if (status === 'skipped') return `\`${command}\` was skipped — nothing was run`;
+  return `\`${command}\` exited non-zero`;
+}
+
 /**
  * Every variable a check step's run context may set (spec 2026-10-06-agentic-e2e-checks
- * Phase 2) — also the list stripped from the inherited env, so an unset one is truly absent.
+ * Phase 2). None is inherited — `buildCheckEnv` drops every `CEZ_*` — so an unset one is absent.
  * Documented in `docs/reference.md` and `.env.example`; keep the three in step.
  */
 export const CHECK_CONTEXT_VARS = [
