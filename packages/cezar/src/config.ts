@@ -78,6 +78,15 @@ const configSchema = z.object({
    */
   baseBranch: z.string().trim().min(1).optional(),
   /**
+   * Direct-landing projects (agents-master I050 "Closer 2"): a top-level run that ends on
+   * `CEZ:DONE` with commits ahead of the base is merged `--no-ff` into the base branch in the
+   * main checkout, checked, pushed and archived (`runs/self-merge.ts`). Default off.
+   */
+  selfMerge: z.boolean().default(false).catch(false),
+  /** Shell command run in the main checkout after a self-merge, before it is committed; a
+   *  non-zero exit aborts the merge. Unset = no check. */
+  checkCommand: z.string().trim().min(1).max(4_000).optional().catch(undefined),
+  /**
    * Default extra system prompt applied to every run's agent steps (claude:
    * `--append-system-prompt`; codex/opencode: prepended to the opening user
    * message — the AgentRunSpec seam handles the per-backend delivery).

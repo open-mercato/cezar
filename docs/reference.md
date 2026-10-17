@@ -720,11 +720,23 @@ never blocks startup; configured lifecycle transitions pause on malformed config
   "modelsLocked": true,      // optional: native per-runner model is fixed/read-only; runner stays selectable
   "plannerModel": "sonnet",  // model the "Plan first" button uses to draft chains
   "baseBranch": "develop",   // branch worktrees fork from + PRs target (also settable in the Git tab)
+  "selfMerge": true,         // optional, default false: a task that ends on CEZ:DONE is merged --no-ff
+                             // into the base branch in the main checkout, pushed, and archived
+  "checkCommand": "npm test", // optional: run on the merged tree before a self-merge commits; failure aborts it
   "branchNaming": "your branch naming preferences"
                              // optional: task branches are named from the first prompt under these
                              // instructions (Settings → Instructions); absent = cez/<id8>
 }
 ```
+
+`selfMerge` is for projects where work lands by direct merge rather than a
+reviewed PR. It applies to top-level worktree tasks whose branch is ahead of the
+base (never to a dispatched subtask or a parallel variant), and the dispatch
+Guard stops listing the base-branch merge as an ask-first action. The merge is
+refused, with the base branch left untouched and the task parked under **Needs review**
+with the reason, when the main checkout is on another branch or has tracked
+changes, the merge conflicts, or `checkCommand` fails. A successful merge is
+logged in the task's transcript with its commit sha.
 
 Put the same `"modelsLocked": true` key in `~/.cezar/config.json` to apply it
 to every registered project. When the key is absent or `false` in both config

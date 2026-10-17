@@ -69,8 +69,10 @@ import {
   chooseForkBase,
   commitAll,
   pushBranch,
+  removeWorktree,
   resolveBaseRef,
   syncWithBase,
+  taskRemotes,
   uniqueBranchName,
   worktreeChangedFiles,
   worktreeChangedPaths,
@@ -127,6 +129,8 @@ import { extractTaskRefs, refineTaskRefs, titleRefNumber } from '../runs/task-re
 import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.ts';
 import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, NAMER_TIMEOUT_MS, postValidateTitle } from '../runs/auto-name.ts';
 import { reviewGateEnabled } from '../runs/review-gate.ts';
+import { selfMergeBranch } from '../runs/self-merge.ts';
+import { splitRemoteRef } from '../git-remotes.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
 import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
 import { WorkspaceSemaphore, type AccountHolds } from '../workspace/semaphore.ts';
@@ -490,6 +494,8 @@ interface ActiveRun {
   idleTimer?: NodeJS.Timeout;
   /** The inactivity watchdog closed this session; a plain final wait is not success evidence. */
   idleClosed?: boolean;
+  /** A turn ended on `CEZ:DONE` — the only settlement a self-merge (`config.selfMerge`) follows. */
+  goalAchieved?: boolean;
   monitoringWakeTimer?: NodeJS.Timeout;
   monitoringWakeIntervalMinutes?: number;
   monitoringWakeups?: number;
@@ -2207,11 +2213,17 @@ export class RunManager {
    * Gated on `dispatchReachable`, not on the flag alone — a headless run with no cockpit behind it
    * gets no dispatch prompt and behaves exactly as it did before this feature existed.
    */
-  private prepareDispatchSession(runId: string, state: ActiveRun): void {
+  private async prepareDispatchSession(runId: string, state: ActiveRun): Promise<void> {
     if (!this.dispatchReachable()) return;
-    const dispatch = this.store.getRun(runId)?.dispatch;
+    const run = this.store.getRun(runId);
+    const dispatch = run?.dispatch;
+    // Only a run `trySelfMerge` would land loses the Guard's base-branch merge.
+    const selfMerge =
+      !dispatch?.parentRunId && !run?.groupId && run?.worktree !== false && (await loadConfig(this.repoRoot)).selfMerge;
     // The intent block belongs to the ROOT the user started; a child reads its order instead.
-    state.dispatchPrompt = composeDispatchPrompt(dispatch?.kind, dispatch?.parentRunId ? undefined : dispatch?.intent);
+    state.dispatchPrompt = composeDispatchPrompt(dispatch?.kind, dispatch?.parentRunId ? undefined : dispatch?.intent, {
+      selfMerge,
+    });
   }
 
   /**
@@ -4030,7 +4042,7 @@ export class RunManager {
     // sites (spec 2026-09-10-dispatch; AGENTS.md § "every construction site"). A Continue
     // that skipped this would resume a task with no dispatch prompt and no way to dispatch:
     // a run that quietly degrades into an ordinary task.
-    this.prepareDispatchSession(runId, state);
+    await this.prepareDispatchSession(runId, state);
     this.prepareAutomationsSession(state);
 
     // Cancellation may have retired this continuation while its async preparation was running.
@@ -4180,6 +4192,7 @@ export class RunManager {
           // Goal achieved (agent contract, #347) — same as in runAgentStep.
           this.store.appendEvent(runId, { type: 'lifecycle', message: 'goal achieved — session closed' });
           appendHandoffHeartbeat(this.dataDir, runId, 'turn complete — goal achieved, session closed');
+          state.goalAchieved = true;
           state.session?.end();
           return;
         }
@@ -4492,7 +4505,7 @@ export class RunManager {
       } else {
         this.store.updateStep(runId, stepId, { status: 'done', finishedAt: finishedAt() });
         this.store.appendEvent(runId, { type: 'step-end', stepId, status: 'done' });
-        await this.settleSuccess(runId);
+        await this.settleSuccess(runId, state);
         appendHandoffHeartbeat(this.dataDir, runId, `step "${stepId}" complete — status=done`);
       }
     } catch (err) {
@@ -4731,7 +4744,7 @@ export class RunManager {
     // Same rule, same reason, for the dispatch session snapshot (the dispatch prompt; the child
     // role's prompt a spawn will need). This is the FIRST of the two construction sites; the
     // twin is in `runContinuation`.
-    this.prepareDispatchSession(runId, state);
+    await this.prepareDispatchSession(runId, state);
     this.prepareAutomationsSession(state);
     let runError: string | null = null;
     let idleFailed = false;
@@ -4879,7 +4892,7 @@ export class RunManager {
     } else {
       // Includes `askPark === 'abandoned'`: Finish on a parked run ends it the
       // way Finish always does, with the later steps left honestly at `pending`.
-      await this.settleSuccess(runId);
+      await this.settleSuccess(runId, state);
     }
     this.clearIdleTimer(state);
     this.dropActive(runId, state);
@@ -6191,6 +6204,7 @@ export class RunManager {
           // of parking at `waiting` — the run completes and frees its slot.
           emit({ type: 'lifecycle', message: 'goal achieved — session closed' });
           appendHandoffHeartbeat(this.dataDir, runId, 'turn complete — goal achieved, session closed');
+          state.goalAchieved = true;
           state.session?.end();
           return;
         }
@@ -6823,7 +6837,8 @@ export class RunManager {
    * OFF) AND the run is not autonomous. Autonomous runs — and runs with the gate
    * off — settle straight to `done`, leaving the diff in the worktree untouched.
    */
-  private async settleSuccess(runId: string): Promise<void> {
+  private async settleSuccess(runId: string, state?: ActiveRun): Promise<void> {
+    if (state?.goalAchieved && (await this.trySelfMerge(runId, state))) return;
     const review = await this.reviewGateApplies(runId);
     this.store.updateRun(runId, {
       status: review ? 'review' : 'done',
@@ -6841,6 +6856,80 @@ export class RunManager {
         : 'run finished',
     });
   }
+
+  /**
+   * Self-merge (`config.selfMerge`, agents-master I050 "Closer 2"): land a `CEZ:DONE` run's branch
+   * in the base branch, then remove its worktree and archive it. Returns false when it does not
+   * apply (the run settles as usual); true once it has settled the run — `done` and archived, or
+   * `review` with the reason when the merge was refused and the base left untouched.
+   *
+   * Top-level worktree runs only: a dispatch child lands in its parent's branch, a variant waits
+   * for the group pick, an in-place run has no branch to merge.
+   */
+  private async trySelfMerge(runId: string, state: ActiveRun): Promise<boolean> {
+    const run = this.store.getRun(runId);
+    if (!run?.branch || !run.worktreePath || run.worktree === false || run.dispatch?.parentRunId || run.groupId) return false;
+    const config = await loadConfig(this.repoRoot);
+    if (!config.selfMerge || !existsSync(run.worktreePath)) return false;
+    // `runContinuation` autosaves only after settling; land the final state, not the last turn's.
+    if (!state.autosaveCheckpointBlocked) {
+      await autosaveCommit(run.worktreePath, 'run finalize', await currentCheckExclusions(run.worktreePath, state.autosaveExcludedPaths));
+    }
+    const base = config.baseBranch ?? splitRemoteRef(run.baseBranch ?? '', (await taskRemotes(this.repoRoot)).names).branch;
+    // One self-merge at a time, and never under an in-place task that holds the main checkout.
+    const turn = this.selfMergeTail.then(async () => {
+      if (this.repoRootBusy > 0) {
+        return { outcome: 'blocked' as const, reason: 'an in-place task is using the main checkout' };
+      }
+      const lease = this.chainRepoRoot();
+      try {
+        return await selfMergeBranch({
+          repoRoot: this.repoRoot,
+          worktreePath: run.worktreePath!,
+          branch: run.branch!,
+          base,
+          ...(config.checkCommand ? { checkCommand: config.checkCommand } : {}),
+        });
+      } finally {
+        lease.release();
+      }
+    });
+    this.selfMergeTail = turn.then(() => undefined, () => undefined);
+    const result = await turn;
+    if (result.outcome === 'nothing') return false;
+    const finishedAt = new Date().toISOString();
+    if (result.outcome === 'blocked') {
+      this.store.updateRun(runId, { status: 'review', finishedAt, currentStepId: undefined, autoResumeAttempts: undefined });
+      this.store.appendEvent(runId, {
+        type: 'lifecycle',
+        message: result.sha
+          ? `self-merge incomplete — ${result.reason}`
+          : `self-merge stopped — ${result.reason}; "${base}" is untouched`,
+      });
+      return true;
+    }
+    const details = [
+      result.checked ? `check \`${config.checkCommand}\` passed` : undefined,
+      result.pushedTo ? `pushed to ${result.pushedTo}` : 'not pushed (no remote)',
+    ].filter(Boolean);
+    this.store.appendEvent(runId, {
+      type: 'lifecycle',
+      message: `merged ${run.branch} into ${result.base} as ${result.sha} — ${details.join(', ')}`,
+    });
+    await removeWorktree(this.repoRoot, run.worktreePath, run.branch);
+    this.store.updateRun(runId, {
+      status: 'done',
+      finishedAt,
+      currentStepId: undefined,
+      autoResumeAttempts: undefined,
+      worktreePath: undefined,
+    });
+    this.store.setArchived(runId, true);
+    return true;
+  }
+
+  /** Serializes self-merges in this project (`trySelfMerge`). */
+  private selfMergeTail: Promise<void> = Promise.resolve();
 
   /** Whether settling this run now would park it at the review gate (#489). */
   private async reviewGateApplies(runId: string): Promise<boolean> {

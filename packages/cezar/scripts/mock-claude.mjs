@@ -151,6 +151,9 @@ async function respond(userText, imageCount) {
   // `mock:ask-repeat` → the SAME CEZ:ASK on this turn and on every later one (a nudge included):
   // the agent that is blocked on something no nudge can fix and keeps asking about it.
   if (userText.includes('mock:ask-repeat')) askRepeat = true;
+  // `mock:write` → leave a file in the working directory, so the run's branch ends with a commit
+  // (the self-merge path, `self-merge.integration.test.ts`).
+  if (userText.includes('mock:write')) writeFileSync('mock-write.txt', `turn ${turn}\n`, 'utf8');
   // An inbox digest delivered into the session is answered with CEZ:DONE: the dry run proves the
   // message reached the model, then settles.
   const doneMarker =
