@@ -114,7 +114,7 @@ function renderPalettes(entry: string) {
   )
 }
 
-const pressP = (target: EventTarget = window, init: KeyboardEventInit = { metaKey: true }) =>
+const pressP = (target: Element | Window = window, init: KeyboardEventInit = { metaKey: true }) =>
   act(() => {
     fireEvent.keyDown(target, { key: 'p', ...init })
   })
