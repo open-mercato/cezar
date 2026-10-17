@@ -469,6 +469,13 @@ export function Composer({
         closeMenu()
       }
     }
+    // `/` focuses the composer from anywhere in the task; Escape gives the keyboard back to the
+    // page, draft kept (spec 2026-10-17-task-palette). Not mid-IME: there Escape cancels the
+    // composition. No preventDefault, so a dialog around the composer still closes on it.
+    if (event.key === 'Escape' && !event.nativeEvent.isComposing && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      event.currentTarget.blur()
+      return
+    }
     const shouldSend = isSubmitShortcut({
       key: event.key,
       shiftKey: event.shiftKey,
