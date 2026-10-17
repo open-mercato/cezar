@@ -187,6 +187,11 @@ hint. The suggested command is the one this browser last started the app with fo
 first discovered `dev` / `start` / `serve` / `preview` / `run` script or Make target
 (`/runs/:id/terminal/commands`). **Other command** lists the rest and takes a custom one.
 
+A worktree with a `package.json` and no `node_modules` of its own (a fresh task worktree — Node
+would otherwise resolve packages from the parent checkout, possibly another version) also gets
+`install` on that response: `npm ci`, or the tool its lockfile names (`npm install` without one).
+The panel then runs `<install> && <command>` in the same shell and waits up to ten minutes.
+
 Running it opens a NEW terminal tab of the task (the same `POST /terminal` + input the drawer's
 **Run** uses) and polls `/runs/:id/terminal/urls` every second for an address first seen after the
 start, preferring one that answers; the first one is opened in the tab. Exits: the address

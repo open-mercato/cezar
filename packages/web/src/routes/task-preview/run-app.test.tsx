@@ -85,6 +85,23 @@ describe('RunAppPanel', () => {
     expect(localStorage.getItem(rememberedCommandKey('cezar'))).toBe('npm run dev')
   })
 
+  it('installs the dependencies first when the worktree has none, in the same shell', async () => {
+    api.getRunTerminalCommands.mockResolvedValue({ commands, install: 'npm ci' })
+    api.getRunTerminalUrls.mockResolvedValue({
+      urls: [{ url: 'http://localhost:5173', lastSeenAt: new Date(Date.now() + 500).toISOString(), running: true }],
+    })
+    const onOpen = vi.fn()
+    render(<RunAppPanel runId="r1" projectId="cezar" onOpen={onOpen} />)
+    expect(await screen.findByText(/Installs its dependencies first \(npm ci\)/)).not.toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /Run npm run dev/ }))
+
+    await waitFor(() => expect(onOpen).toHaveBeenCalledWith('http://localhost:5173'))
+    expect(api.writeRunTerminal).toHaveBeenCalledWith('r1', 's-1', 'npm ci && npm run dev\r')
+    // Only the start command is remembered; the install is decided afresh each time.
+    expect(localStorage.getItem(rememberedCommandKey('cezar'))).toBe('npm run dev')
+  })
+
   it('suggests the command that worked last time over the discovered one', async () => {
     localStorage.setItem(rememberedCommandKey('cezar'), 'make start')
     render(<RunAppPanel runId="r1" projectId="cezar" onOpen={() => {}} />)

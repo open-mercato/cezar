@@ -17,6 +17,8 @@ import { Input } from '@/components/ui/input'
 /** How often the started app is looked for, and how long before the panel stops waiting. */
 const POLL_MS = 1000
 const GIVE_UP_MS = 120_000
+/** An install first can take minutes on its own. */
+const GIVE_UP_INSTALLING_MS = 600_000
 
 /** The script names that start an app, best first. */
 const START_SCRIPTS = ['dev', 'start', 'serve', 'preview', 'run']
@@ -57,7 +59,7 @@ export function startedAddress(urls: readonly DetectedUrlEntry[], since: number)
 
 type Phase =
   | { kind: 'idle' }
-  | { kind: 'starting'; command: string; sessionId: string | null }
+  | { kind: 'starting'; command: string; installing: string | null }
   | { kind: 'exited'; command: string; code: number }
   | { kind: 'no-address'; command: string }
   | { kind: 'failed'; command: string }
@@ -79,6 +81,7 @@ export function RunAppPanel({
   onShowTerminal?: () => void
 }) {
   const [commands, setCommands] = useState<DiscoveredCommandEntry[] | null>(null)
+  const [install, setInstall] = useState<string | null>(null)
   const [remembered, setRemembered] = useState(() => readRemembered(projectId))
   const [custom, setCustom] = useState('')
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' })
@@ -86,7 +89,11 @@ export function RunAppPanel({
   useEffect(() => {
     let cancelled = false
     void getRunTerminalCommands(runId)
-      .then((state) => !cancelled && setCommands(state.commands))
+      .then((state) => {
+        if (cancelled) return
+        setCommands(state.commands)
+        setInstall(state.install ?? null)
+      })
       .catch(() => !cancelled && setCommands([]))
     return () => {
       cancelled = true
@@ -115,18 +122,22 @@ export function RunAppPanel({
       const since = Date.now() - 1000
       const attempt = { since, timer: null as ReturnType<typeof setTimeout> | null }
       waiting.current = attempt
-      setPhase({ kind: 'starting', command: trimmed, sessionId: null })
+      // Dependencies first when the worktree has none (`install`), in the same shell so the app
+      // starts only if they installed. `&&` reads the same in sh, zsh, bash, fish and pwsh 7.
+      const installing = install
+      const limit = installing ? GIVE_UP_INSTALLING_MS : GIVE_UP_MS
+      setPhase({ kind: 'starting', command: trimmed, installing })
       remember(projectId, trimmed)
       setRemembered(trimmed)
 
       void createRunTerminal(runId, {})
         .then(async (session) => {
           if (waiting.current !== attempt) return
-          setPhase({ kind: 'starting', command: trimmed, sessionId: session.id })
-          await writeRunTerminal(runId, session.id, `${trimmed}\r`)
+          await writeRunTerminal(runId, session.id, `${installing ? `${installing} && ` : ''}${trimmed}\r`)
+          if (installing) setInstall(null)
           const poll = async () => {
             if (waiting.current !== attempt) return
-            if (Date.now() - since > GIVE_UP_MS) {
+            if (Date.now() - since > limit) {
               setPhase({ kind: 'no-address', command: trimmed })
               return
             }
@@ -154,7 +165,7 @@ export function RunAppPanel({
           if (waiting.current === attempt) setPhase({ kind: 'failed', command: trimmed })
         })
     },
-    [onOpen, projectId, runId],
+    [install, onOpen, projectId, runId],
   )
 
   const others = (commands ?? []).filter((entry) => entry.command !== suggested)
@@ -169,8 +180,8 @@ export function RunAppPanel({
     return (
       <Shell
         icon={<LoaderCircleIcon aria-hidden="true" className="size-5 motion-safe:animate-spin" />}
-        title={`Starting ${phase.command}`}
-        subtitle="Running in a new terminal tab of this task. The page opens here as soon as the app prints its address."
+        title={phase.installing ? `Installing dependencies, then ${phase.command}` : `Starting ${phase.command}`}
+        subtitle={`${phase.installing ? `This worktree has no dependencies yet, so ${phase.installing} runs first. ` : ''}Running in a new terminal tab of this task. The page opens here as soon as the app prints its address.`}
       >
         {showTerminal}
       </Shell>
@@ -181,7 +192,7 @@ export function RunAppPanel({
     phase.kind === 'exited'
       ? `${phase.command} exited with code ${phase.code} before printing an address.`
       : phase.kind === 'no-address'
-        ? `${phase.command} is still running, but printed no address in two minutes. Enter it above, or check the terminal.`
+        ? `${phase.command} is still running, but printed no address yet. Enter it above, or check the terminal.`
         : phase.kind === 'failed'
           ? 'Could not open a terminal for this task.'
           : null
@@ -192,7 +203,7 @@ export function RunAppPanel({
       title="Run the app"
       subtitle={
         outcome ??
-        "Starts the task's app in a terminal of its worktree and opens the address it prints. Or enter an address above."
+        `Starts the task's app in a terminal of its worktree and opens the address it prints.${install ? ` Installs its dependencies first (${install}).` : ''} Or enter an address above.`
       }
     >
       <div data-slot="run-app-actions" className="flex flex-wrap items-center justify-center gap-2">

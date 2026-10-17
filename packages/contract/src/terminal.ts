@@ -123,7 +123,12 @@ export const discoveredCommandSchema = z.object({
 });
 export type DiscoveredCommandEntry = z.infer<typeof discoveredCommandSchema>;
 
-export const discoveredCommandsSchema = z.object({ commands: z.array(discoveredCommandSchema) });
+export const discoveredCommandsSchema = z.object({
+  commands: z.array(discoveredCommandSchema),
+  /** What installs the worktree's dependencies, present only when it has a `package.json` and no
+   *  `node_modules` of its own. "Run the app" runs it first. */
+  install: z.string().optional(),
+});
 export type DiscoveredCommandsResponse = z.infer<typeof discoveredCommandsSchema>;
 
 export const terminalSessionParamsSchema = z.object({

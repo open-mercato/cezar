@@ -18,7 +18,7 @@ import {
 } from '@open-mercato/cezar-contract';
 import { workspaceLayoutsResponseSchema, workspaceLayoutsSchema } from '@open-mercato/cezar-contract';
 import { deleteRunLayouts, readRunLayouts, writeRunLayouts } from '../runs/layouts.ts';
-import { discoverCommands } from './terminal/commands.ts';
+import { discoverCommands, installCommand } from './terminal/commands.ts';
 import { DetectedUrls } from './terminal/detected-urls.ts';
 import { processSnapshot } from './terminal/foreground.ts';
 import { loadPty } from './terminal/pty-module.ts';
@@ -7232,8 +7232,10 @@ export function createApp(deps: ServerDeps) {
       // The task's own tree or nothing: suggesting the boot repo's scripts for a task would
       // offer commands that run against the wrong tree (spec §3.3). Same tree the terminal opens.
       const worktree = workingDirectoryOf(run, repoRoot);
-      const commands = worktree ? await discoverCommands(worktree) : [];
-      return c.json(discoveredCommandsSchema.parse({ commands }));
+      const [commands, install] = worktree
+        ? await Promise.all([discoverCommands(worktree), installCommand(worktree)])
+        : [[], null];
+      return c.json(discoveredCommandsSchema.parse({ commands, ...(install ? { install } : {}) }));
     })
     // Deliberately NOT policy-gated: stopping a shell is the one terminal action that reduces
     // exposure, and refusing it with the flag off would strand a running process tree with no

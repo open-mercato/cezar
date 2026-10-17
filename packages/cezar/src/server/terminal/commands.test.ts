@@ -1,9 +1,9 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { discoverCommands, parseMakefileTargets, parsePackageScripts } from './commands.ts';
+import { discoverCommands, installCommand, parseMakefileTargets, parsePackageScripts } from './commands.ts';
 
 describe('parsePackageScripts', () => {
   it('offers each script as the command a user would type, in file order', () => {
@@ -78,5 +78,39 @@ describe('discoverCommands', () => {
   it('survives a malformed manifest', async () => {
     writeFileSync(join(worktree, 'package.json'), '{ broken');
     expect(await discoverCommands(worktree)).toEqual([]);
+  });
+});
+
+describe('installCommand', () => {
+  let worktree: string;
+
+  beforeEach(() => {
+    worktree = mkdtempSync(join(tmpdir(), 'cez-install-'));
+  });
+
+  afterEach(() => {
+    rmSync(worktree, { recursive: true, force: true });
+  });
+
+  it('asks for nothing outside a Node project', async () => {
+    expect(await installCommand(worktree)).toBeNull();
+  });
+
+  it('picks the tool from the lockfile, and npm install without one', async () => {
+    writeFileSync(join(worktree, 'package.json'), '{}');
+    expect(await installCommand(worktree)).toBe('npm install');
+    writeFileSync(join(worktree, 'package-lock.json'), '{}');
+    expect(await installCommand(worktree)).toBe('npm ci');
+    writeFileSync(join(worktree, 'pnpm-lock.yaml'), '');
+    expect(await installCommand(worktree)).toBe('pnpm install --frozen-lockfile');
+  });
+
+  it('counts a node_modules holding only caches as not installed, and a real one as installed', async () => {
+    writeFileSync(join(worktree, 'package.json'), '{}');
+    writeFileSync(join(worktree, 'package-lock.json'), '{}');
+    mkdirSync(join(worktree, 'node_modules', '.vite'), { recursive: true });
+    expect(await installCommand(worktree)).toBe('npm ci');
+    mkdirSync(join(worktree, 'node_modules', 'react'));
+    expect(await installCommand(worktree)).toBeNull();
   });
 });
