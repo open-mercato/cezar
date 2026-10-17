@@ -3,6 +3,7 @@ import { useLocation } from 'react-router'
 
 import {
   attachmentCountBucket,
+  type AttachmentRejectionReason,
   TELEMETRY_ROUTE_SEGMENTS,
   type AddProjectDialog,
   type MessageSurface,
@@ -67,6 +68,12 @@ export function trackAttachmentsSent(count: number): void {
 /** A send that hit an expired staged upload, after the automatic re-stage and resend settled. */
 export function trackAttachmentsRestaged(outcome: 'recovered' | 'failed'): void {
   send('/api/v1/telemetry/event', { event: 'attachments_restaged', label: outcome })
+}
+
+/** The composer refused attachments (telemetry 0f1255b6): a refusal of the user's input is counted
+ *  by reason, never reported as an error — the toast names the file, telemetry must not. */
+export function trackAttachmentRejected(reason: AttachmentRejectionReason): void {
+  send('/api/v1/telemetry/event', { event: 'attachment_rejected', label: reason })
 }
 
 /** One of the "Add project" dialogs was opened (New project, Clone from GitHub, Open local folder). */

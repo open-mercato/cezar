@@ -28,7 +28,7 @@ import { isEditableTarget } from '@/lib/use-command-shortcut'
 import { bumpSkillUsage, filterSkills, fuzzyMatch, isProjectSkill } from '@/lib/skills'
 import { useNow } from '@/lib/use-now'
 import { isSubmitShortcut } from '@/lib/use-submit-shortcut'
-import { reportDictationFailed, trackAttachmentsSent } from '@/lib/telemetry'
+import { reportDictationFailed, trackAttachmentRejected, trackAttachmentsSent } from '@/lib/telemetry'
 import { cn } from '@/lib/utils'
 
 import {
@@ -352,7 +352,10 @@ export function Composer({
       // append each pasted file twice (#double-paste). `imagesRef` gives the current count
       // without reading through state; each async append re-checks the cap functionally.
       const intake = screenFiles(files, imagesRef.current.length, attachedImageBytes(imagesRef.current))
-      for (const reason of intake.rejected) toast(reason, { tone: 'danger' })
+      // `reported`: a refused file is the user's input meeting a limit, not a fault — counted by
+      // reason instead of reported with the file's name in it (telemetry 0f1255b6).
+      for (const { message } of intake.rejected) toast(message, { tone: 'danger', reported: true })
+      for (const reason of new Set(intake.rejected.map((r) => r.reason))) trackAttachmentRejected(reason)
       for (const file of intake.accepted) {
         void fileToPendingAttachment(file, source).then((attachment) => {
           const next = appendAttachment(imagesRef.current, attachment)

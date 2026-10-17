@@ -132,6 +132,12 @@ export const SKILLS_UPDATE_DROP_OUTCOMES = ['recovered', 'not_applied', 'unreach
 export const skillsUpdateDropOutcomeSchema = z.enum(SKILLS_UPDATE_DROP_OUTCOMES);
 export type SkillsUpdateDropOutcome = z.infer<typeof skillsUpdateDropOutcomeSchema>;
 
+/** Why the composer turned an attachment away — `attachment_rejected`'s label (telemetry 0f1255b6).
+ *  A refusal of the user's input is an outcome to count, not an error report. */
+export const ATTACHMENT_REJECTION_REASONS = ['unsupported_type', 'too_large', 'count_limit', 'image_bytes_limit'] as const;
+export const attachmentRejectionReasonSchema = z.enum(ATTACHMENT_REJECTION_REASONS);
+export type AttachmentRejectionReason = z.infer<typeof attachmentRejectionReasonSchema>;
+
 /**
  * `POST /api/v1/telemetry/event` — a user action only the cockpit can name. Every event has its
  * own closed label set, so this relay can never carry free text. `204`, like the other two.
@@ -147,6 +153,8 @@ export const telemetryEventInputSchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('attachments_sent'), label: attachmentCountBucketSchema }),
   /** A send hit an expired staged upload; the composer re-staged and resent once — the outcome. */
   z.object({ event: z.literal('attachments_restaged'), label: z.enum(['recovered', 'failed']) }),
+  /** The composer refused attachments the user picked, pasted or dropped — once per reason per batch. */
+  z.object({ event: z.literal('attachment_rejected'), label: attachmentRejectionReasonSchema }),
   /** A skills-update apply lost its connection, and how following the server's state ended. */
   z.object({ event: z.literal('skills_update_apply_dropped'), label: skillsUpdateDropOutcomeSchema }),
 ]);
