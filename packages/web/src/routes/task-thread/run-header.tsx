@@ -22,9 +22,10 @@ import {
 import { Fragment, memo, useEffect, useId, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
 
-import { ApiError, archiveRun, cancelRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
+import { ApiError, archiveRun, cancelRun, deleteRun, getConfig, startLifecycleRemoval, openRunIn, openRunInCli } from '@/api/client'
 import {
   queryKeys,
+  useConfig,
   useHealth,
   useMarkRunSeen,
   useMarkRunUnseen,
@@ -37,6 +38,7 @@ import {
   useRuns,
 } from '@/api/queries'
 import type { ApiRun, OpenTarget } from '@open-mercato/cezar-api-client'
+import { lifecycleQueryKeys } from '@/api/worktree-lifecycle'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor, type TitleEditor } from '@/components/editable-title'
 import { TOGGLE_ON_CLASS, TOGGLE_ON_ICON_CLASS } from '@/components/pin-toggle'
@@ -105,7 +107,7 @@ import { useDraft } from './thread-draft'
  */
 /** Which run-detail tab this header instance sits above — drives the active underline.
  *  A prop rather than a route match so the header stays testable with a bare render. */
-export type RunTab = 'session' | 'changes' | 'commits' | 'files' | 'graph' | 'notes' | 'terminal'
+export type RunTab = 'session' | 'changes' | 'commits' | 'files' | 'graph' | 'notes' | 'terminal' | 'preview'
 
 /** Which runs the reader has expanded the phone-width meta row for (#765). A module-level map for
  *  the same reason `WorkflowSteps` keeps one (`openByRun` in step-rail.tsx) — and it has to be BOTH
@@ -297,7 +299,7 @@ function RunHeaderView({
 
           <div
             data-slot="run-tabs"
-            // Up to six segments (Graph and Notes included) no longer fit a 320px phone (the narrowest viewport this header
+            // Up to seven segments (Graph, Notes and Preview included) no longer fit a 320px phone (the narrowest viewport this header
             // supports) — contained scroll here, not page-wide overflow on `main`.
             className="mt-1.5 flex items-end gap-1 overflow-x-auto md:mt-2.5 md:overflow-x-visible"
           >
@@ -325,6 +327,10 @@ function RunHeaderView({
                 <TabLink to={`/tasks/${run.id}/notes`} active={tab === 'notes'}>
                   Notes
                 </TabLink>
+                {/* The task's app, with Design Mode (spec 2026-10-09-design-mode). */}
+                <TabLink to={`/tasks/${run.id}/preview`} active={tab === 'preview'}>
+                  Preview
+                </TabLink>
                 {health.data?.capabilities?.terminal ? (
                   <TabLink to={`/tasks/${run.id}/terminal`} active={tab === 'terminal'}>
                     Terminal
@@ -351,6 +357,7 @@ function RunHeaderView({
         <RunConfirmDialog
           run={run}
           confirming={actions.confirming}
+          lifecycleDelete={actions.lifecycleDelete}
           onOpenChange={(open) => !open && actions.setConfirming(null)}
           onConfirm={(kind) => (kind === 'delete' ? actions.delete.mutate() : actions.cancel.mutate())}
         />
@@ -438,7 +445,9 @@ function TaskItemActions({
   const live = liveRunReason(run)
   const moreStop = showRunControls && flags.cancel
   // "End session" for a waiting run, on the tabs whose composer is not there to carry it.
-  const moreEnd = showRunControls && run.status === 'waiting'
+  const moreEnd = showRunControls && run.status === 'waiting' && flags.finish
+  // A worktree operation owns the task until it is resolved (#1358), live or not.
+  const gatedReason = run.worktreeLifecycle?.activeOperationId ? 'Resolve the worktree operation first' : undefined
   return (
     <span data-slot="task-item-actions" className="mx-1 flex items-center gap-0.5">
       {/* The three state toggles — read, pinned, archived — share ONE on-state (TOGGLE_ON_CLASS:
@@ -492,7 +501,7 @@ function TaskItemActions({
         slot="delete-run"
         label="Delete"
         title="Delete the task, its worktree and its branch"
-        unavailable={live}
+        unavailable={live ?? gatedReason}
         danger
         onClick={() => actions.setConfirming('delete')}
         className="ml-1"
@@ -609,7 +618,7 @@ function OpenInMenuForRun({
     ? (targets.data?.targets ?? [])
         .filter((target) => {
           const runner = cliTargetRunner(target.id)
-          return runner === undefined || agentAvailable(runner)
+          return runner === undefined || (!run.worktreeLifecycle?.activeOperationId && agentAvailable(runner))
         })
         // Agent-CLI targets (#402): the one matching this run's own runner resumes THIS run's
         // session when one exists — label that explicitly so it reads as different from just
@@ -668,6 +677,9 @@ function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [confirming, setConfirming] = useState<RunConfirmKind | null>(null)
+  const config = useConfig()
+  const configured = config.data?.worktreeLifecycle
+  const lifecycleDelete = !!run.worktreeLifecycle || (!!run.worktreePath && !!((configured?.afterCreate.length ?? 0) + (configured?.beforeRemove.length ?? 0)))
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
   const onError = (error: Error) => {
@@ -719,10 +731,33 @@ function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
   }
   const cancel = useMutation({ mutationFn: () => cancelRun(run.id), onSuccess: invalidate, onError })
   const deleteMutation = useMutation({
-    mutationFn: () => deleteRun(run.id),
-    onSuccess: () => {
-      invalidate()
-      // The run is gone — so is this page. Home is the only honest destination.
+    mutationFn: async () => {
+      // The projection covers existing managed generations. A fresh config read also
+      // protects a legacy worktree when scripts were configured after its creation.
+      const current = run.worktreePath && !run.worktreeLifecycle ? await getConfig() : undefined
+      const scripts = current?.worktreeLifecycle
+      if (run.worktreeLifecycle || (run.worktreePath && ((scripts?.afterCreate.length ?? 0) + (scripts?.beforeRemove.length ?? 0) > 0))) {
+        const response = await startLifecycleRemoval({requestId: crypto.randomUUID(), runId: run.id, intent: 'delete-task'})
+        return {kind: 'lifecycle' as const, operation: response.operation}
+      }
+      await deleteRun(run.id)
+      return {kind: 'deleted' as const}
+    },
+    onSuccess: result => {
+      void invalidate()
+      if (result.kind === 'lifecycle') {
+        const operation = result.operation
+        queryClient.setQueryData(lifecycleQueryKeys.operation(operation.id), {operation})
+        queryClient.setQueryData<ApiRun>(queryKeys.runs.detail(run.id), previous => previous ? {...previous, worktreeLifecycle: {
+          worktreeId: operation.worktreeId, generation: operation.generation, activeOperationId: operation.id,
+          phase: operation.phase, state: operation.state, needsAttention: operation.state === 'needs_attention' || operation.state === 'interrupted',
+        }} : previous)
+        void queryClient.invalidateQueries({queryKey: lifecycleQueryKeys.all()})
+        toast('Cleanup requested. The task is kept until cleanup completes.')
+        void navigate(`/tasks/${run.id}`)
+        return
+      }
+      // Only the legacy endpoint's completed deletion means the page is gone.
       void navigate('/')
     },
     onError,
@@ -748,6 +783,7 @@ function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
     markRead,
     cancel,
     delete: deleteMutation,
+    lifecycleDelete,
     terminal,
     confirming,
     setConfirming,
@@ -1460,7 +1496,7 @@ function ActionsKebab({
           </>
         ) : null}
         {/* Off the Session tab only: there the hint over the composer carries it. */}
-        {showRunControls && run.status === 'waiting' ? (
+        {showRunControls && run.status === 'waiting' && flags.finish ? (
           <DropdownMenuItem onSelect={() => actions.finish.mutate()}>
             <CheckIcon aria-hidden="true" /> End session
           </DropdownMenuItem>

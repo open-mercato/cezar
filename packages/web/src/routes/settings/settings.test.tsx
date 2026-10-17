@@ -1,14 +1,18 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router'
+import { MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
+import type { ProjectListEntry } from '@open-mercato/cezar-api-client'
 import { AppearanceProvider } from '@/components/appearance-provider'
+import { OPEN_COMMAND_PALETTE_EVENT } from '@/components/command-palette'
+import { ListViewProvider } from '@/components/list-view'
 import { ThemeProvider } from '@/components/theme-provider'
+import { recordSettingsReturn, resetSettingsReturn } from '@/lib/settings-return'
 import { AppRoutes } from '@/routes'
-import { SETTINGS_SECTIONS, visibleSettingsSections } from './registry'
+import { SETTINGS_SECTIONS, settingsSectionsByScope, visibleSettingsSections } from './registry'
 
 /**
  * The Settings shell + Appearance section (R6 Step 1.3): registry rendering, hidden gating,
@@ -28,7 +32,7 @@ let requests: Array<{ method: string; url: string; body?: unknown }> = []
 /** Both ui-state stores plus the project config answer; everything else the routes fetch stays
  *  honestly pending. Both stores are served on purpose — a section writing to the wrong one
  *  would otherwise hang instead of failing loudly. */
-function serve(uiState: Record<string, unknown> = {}) {
+function serve(uiState: Record<string, unknown> = {}, { projectsDown = false }: { projectsDown?: boolean } = {}) {
   requests = []
   const json = (payload: unknown) =>
     new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } })
@@ -40,6 +44,7 @@ function serve(uiState: Record<string, unknown> = {}) {
       const method = init?.method ?? 'GET'
       const body = init?.body ? (JSON.parse(String(init.body)) as unknown) : undefined
       requests.push({ method, url, body })
+      if (projectsDown && url === '/api/v1/projects') return new Response('registry down', { status: 500 })
       if (url === '/api/v1/workspace/ui-state' && method === 'GET') return json(uiState)
       if (url === '/api/v1/workspace/ui-state' && method === 'PUT')
         return json({ ...uiState, ...(body as Record<string, unknown>) })
@@ -82,27 +87,47 @@ const AGENTS_CONFIG = {
 /** Seeds the step-3.2 route gates — boot id (legacy redirect) + registry (known-check) — so a
  *  flat entry URL lands scoped immediately. The boot project mounts UNSCOPED, so the exact
  *  `/api/v1/*` paths this file's fetch stub matches stay byte-identical. */
-function gateSeededClient(singleProject = false) {
+function gateSeededClient(singleProject = false, projects: ProjectListEntry[] = []) {
   const client = createQueryClient()
   client.setQueryData(queryKeys.health, {
     bootProject: 'boot',
     capabilities: { localHandoff: true, terminal: false, followups: true, singleProject },
   })
   client.setQueryData(workspaceQueryKeys.projects, {
-    projects: [],
+    projects,
     bootProject: 'boot',
     projectsDir: '~/cezar/projects',
   })
   return client
 }
 
-function renderAt(entry: string, { singleProject = false }: { singleProject?: boolean } = {}) {
+/** The address bar, readable from assertions — how the Back/Escape tests prove where they went. */
+function LocationProbe() {
+  const location = useLocation()
+  return (
+    <span data-testid="location" data-search={location.search} data-hash={location.hash}>
+      {location.pathname}
+    </span>
+  )
+}
+const currentPathname = () => screen.getByTestId('location').textContent
+
+function renderAt(
+  entry: string,
+  { singleProject = false, projects = [] }: { singleProject?: boolean; projects?: ProjectListEntry[] } = {},
+) {
   render(
-    <QueryClientProvider client={gateSeededClient(singleProject)}>
+    <QueryClientProvider client={gateSeededClient(singleProject, projects)}>
       <ThemeProvider>
         <AppearanceProvider>
           <MemoryRouter initialEntries={[entry]}>
-            <AppRoutes />
+            {/* ListViewProvider: the Back fallback lands on the tasks pane, which reads it. */}
+            <ListViewProvider>
+              <AppRoutes />
+            </ListViewProvider>
+            <LocationProbe />
+            {/* A form field outside every section — what the Escape test focuses. */}
+            <input data-testid="field" aria-label="field" />
           </MemoryRouter>
         </AppearanceProvider>
       </ThemeProvider>
@@ -110,7 +135,27 @@ function renderAt(entry: string, { singleProject = false }: { singleProject?: bo
   )
 }
 
-beforeEach(() => serve())
+/** A registry worth a tree: the boot project, a second one, and one whose folder is gone. */
+const entry = (id: string, extra: Partial<ProjectListEntry> = {}): ProjectListEntry => ({
+  id,
+  name: id,
+  root: `/work/${id}`,
+  addedAt: '2026-07-20T09:00:00.000Z',
+  lastOpenedAt: '2026-07-20T09:00:00.000Z',
+  source: 'local',
+  status: 'ok',
+  ...extra,
+})
+const REGISTRY = [
+  entry('boot', { name: 'cezar', branch: 'main' }),
+  entry('other', { name: 'storefront', lastOpenedAt: '2026-07-19T09:00:00.000Z' }),
+  entry('gone', { name: 'old-repo', status: 'missing', lastOpenedAt: '2026-07-18T09:00:00.000Z' }),
+]
+
+beforeEach(() => {
+  serve()
+  resetSettingsReturn()
+})
 
 afterEach(() => {
   cleanup()
@@ -169,91 +214,495 @@ describe('the section registry', () => {
 })
 
 describe('the settings shell', () => {
-  it('renders the PROJECT nav from the registry — project sections only', () => {
-    renderAt('/settings/agents')
-    const nav = document.querySelector('[data-slot="settings-nav"]')!
-    const ids = [...nav.querySelectorAll('[data-section]')].map((el) => el.getAttribute('data-section'))
-    expect(ids).toEqual(PROJECT_SECTIONS)
-    // The active section is marked for assistive tech, not just by color.
-    expect(nav.querySelector('[aria-current="page"]')?.getAttribute('data-section')).toBe('agents')
-    // The mobile pill row renders through the same registry — the two can never disagree.
-    const pills = document.querySelector('[data-slot="settings-nav-mobile"]')!
-    expect([...pills.querySelectorAll('[data-section]')].length).toBe(PROJECT_SECTIONS.length)
+  const nav = () => document.querySelector('[data-slot="settings-nav"]')!
+  const sectionIds = (root: Element) =>
+    [...root.querySelectorAll('[data-section]')].map((el) => el.getAttribute('data-section'))
+  const projectSectionLinks = (projectId: string) =>
+    [...nav().querySelectorAll<HTMLAnchorElement>(`[data-project="${projectId}"][data-project-section]`)]
+
+  it('exposes both areas at once through settingsSectionsByScope', () => {
+    expect(settingsSectionsByScope().global.map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
+    expect(settingsSectionsByScope().project.map((s) => s.id)).toEqual(PROJECT_SECTIONS)
+    expect(settingsSectionsByScope({ singleProject: true }).global.map((s) => s.id)).not.toContain('projects')
   })
 
-  it('every section keeps a way BACK to the index: the "General" nav entry', () => {
-    renderAt('/settings/worktrees')
-    // Project scope: scoped like every other project link, and pointing at the area index.
+  it('renders ONE nav on a project page: the global sections, then the project tree with the URL\'s project open', () => {
+    renderAt('/settings/agents', { projects: REGISTRY })
+    expect(nav().getAttribute('data-scope')).toBe('project')
+    // The global rows are the flat `[data-section]` links, unprefixed — same as at /settings/global.
+    expect(sectionIds(nav())).toEqual(GLOBAL_SECTIONS)
+    expect(nav().querySelector('[data-section="resources"]')?.getAttribute('href')).toBe('/settings/global/resources')
+    // No global row is current on a project page…
+    expect(nav().querySelector('[data-section][aria-current="page"]')).toBeNull()
+
+    // …the tree lists every registered project, most recently opened first, and only the
+    // project the URL names is expanded.
+    const rows = [...nav().querySelectorAll('[data-slot="settings-project"]')]
+    expect(rows.map((row) => row.getAttribute('data-project'))).toEqual(['boot', 'other', 'gone'])
+    expect(rows[0]?.hasAttribute('data-expanded')).toBe(true)
+    expect(rows[1]?.hasAttribute('data-expanded')).toBe(false)
+    expect(projectSectionLinks('other')).toHaveLength(0)
+
+    // Its section links are EXPLICITLY scoped to that project, and the active one is marked.
+    const links = projectSectionLinks('boot')
+    expect(links.map((el) => el.getAttribute('data-project-section'))).toEqual(PROJECT_SECTIONS)
+    expect(links.map((el) => el.getAttribute('href'))).toEqual(
+      PROJECT_SECTIONS.map((id) => `/p/boot/settings/${id}`),
+    )
+    expect(nav().querySelector('[data-project-section][aria-current="page"]')?.getAttribute('data-project-section')).toBe('agents')
+    // With Agents open, another project's name is a one-click switch to ITS Agents; the active
+    // project's own name only folds its menu.
+    expect(rows[1]?.querySelector('[data-slot="settings-project-link"]')?.getAttribute('href')).toBe('/p/other/settings/agents')
+    expect(rows[0]?.querySelector('[data-slot="settings-project-link"]')).toBeNull()
+    expect(rows[0]?.querySelector('[data-slot="settings-project-toggle"]')).not.toBeNull()
+    expect(rows[0]?.textContent).toContain('cezar')
+    // No branch in settings — the row is the project's name only.
+    expect(rows[0]?.textContent).not.toContain('main')
+  })
+
+  it('expanding another project links into THAT project, not the active one', () => {
+    renderAt('/settings/agents', { projects: REGISTRY })
+    fireEvent.click(screen.getByRole('button', { name: 'Expand storefront' }))
+    const links = projectSectionLinks('other')
+    expect(links.map((el) => el.getAttribute('href'))).toEqual(
+      PROJECT_SECTIONS.map((id) => `/p/other/settings/${id}`),
+    )
+    // Not the active project: none of its rows may claim the current page.
+    expect(links.some((el) => el.getAttribute('aria-current') === 'page')).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse storefront' }))
+    expect(projectSectionLinks('other')).toHaveLength(0)
+  })
+
+  it('on mobile the hamburger opens the same sidebar as a drawer, which closes once a section is picked', async () => {
+    renderAt('/settings/global/appearance', { projects: REGISTRY })
+    expect(document.querySelector('[data-slot="settings-mobile-drawer"]')).toBeNull()
+    // The top bar's first control is the menu, not Back — Back lives inside the drawer.
+    const bar = document.querySelector('[data-slot="settings-mobile-bar"]')!
+    expect(bar.querySelector('[data-slot="settings-back"]')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Open settings menu' }))
+
+    const drawer = await waitFor(() => {
+      const el = document.querySelector('[data-slot="settings-mobile-drawer"]')
+      expect(el).not.toBeNull()
+      return el!
+    })
+    expect(drawer.getAttribute('role')).toBe('dialog')
+    // The SAME content as the desktop column: Back, both groups, the launcher.
+    expect(drawer.querySelector('[data-slot="settings-back"]')).not.toBeNull()
+    expect(drawer.textContent).toContain('General settings')
+    expect(drawer.textContent).toContain('Project settings')
+    expect(drawer.querySelector('[data-slot="command-palette-hint"]')).not.toBeNull()
+
+    fireEvent.click(drawer.querySelector('[data-section="resources"]')!)
+    expect(currentPathname()).toBe('/settings/global/resources')
+    await waitFor(() => expect(document.querySelector('[data-slot="settings-mobile-drawer"]')).toBeNull())
+  })
+
+  it('a project name reveals its menu when no project section is open, and switches section when one is', () => {
+    // Global page: nothing to switch to — the name is a disclosure, not a link.
+    renderAt('/settings/global/appearance', { projects: REGISTRY })
+    const other = () => nav().querySelector('[data-slot="settings-project"][data-project="other"]')!
+    expect(other().querySelector('a[data-slot="settings-project-link"]')).toBeNull()
+    fireEvent.click(other().querySelector('[data-slot="settings-project-toggle"]')!)
+    expect(other().hasAttribute('data-expanded')).toBe(true)
+    expect(projectSectionLinks('other')).toHaveLength(PROJECT_SECTIONS.length)
+    fireEvent.click(other().querySelector('[data-slot="settings-project-toggle"]')!)
+    expect(other().hasAttribute('data-expanded')).toBe(false)
+    cleanup()
+
+    // On a project's General page, clicking the other project lands on ITS General — and the
+    // previous project folds, since expansion follows the URL's project.
+    renderAt('/settings', { projects: REGISTRY })
+    const boot = () => nav().querySelector('[data-slot="settings-project"][data-project="boot"]')!
+    expect(boot().hasAttribute('data-expanded')).toBe(true)
+    fireEvent.click(other().querySelector('a[data-slot="settings-project-link"]')!)
+    expect(currentPathname()).toBe('/p/other/settings')
+    expect(other().hasAttribute('data-expanded')).toBe(true)
+    expect(boot().hasAttribute('data-expanded')).toBe(false)
     expect(
-      document.querySelector('[data-slot="settings-nav"] [data-slot="settings-nav-index"]')?.getAttribute('href'),
+      nav().querySelector('[data-project="other"][data-slot="settings-project-general"]')?.getAttribute('aria-current'),
+    ).toBe('page')
+    cleanup()
+
+    // Project page with Worktrees open: clicking the other project lands on ITS Worktrees.
+    renderAt('/settings/worktrees', { projects: REGISTRY })
+    fireEvent.click(other().querySelector('a[data-slot="settings-project-link"]')!)
+    expect(currentPathname()).toBe('/p/other/settings/worktrees')
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Worktrees')
+    // …and it is now the expanded one, with its Worktrees row current.
+    expect(other().hasAttribute('data-expanded')).toBe(true)
+    expect(nav().querySelector('[data-project-section][aria-current="page"]')?.getAttribute('data-project')).toBe('other')
+  })
+
+  it('every project section keeps a way BACK to its index: the "General" entries (main #772)', () => {
+    renderAt('/settings/worktrees', { projects: REGISTRY })
+    // The global area has no index row — its index is a redirect, not a page.
+    expect(nav().querySelector('[data-slot="settings-nav-index"]')).toBeNull()
+    // The ACTIVE project's own index (its General page), scoped to it.
+    expect(
+      nav().querySelector('[data-project="boot"][data-slot="settings-project-general"]')?.getAttribute('href'),
     ).toBe('/p/boot/settings')
     // The mobile pill row carries it too — the index is the ONLY place small screens see it.
     expect(
       document.querySelector('[data-slot="settings-nav-mobile"] [data-slot="settings-nav-index"]')?.getAttribute('href'),
     ).toBe('/p/boot/settings')
-    // A section is open, so "General" is not the current page.
+    // A section is open, so neither General is the current page.
     expect(document.querySelector('[data-slot="settings-nav-index"][aria-current="page"]')).toBeNull()
+    expect(document.querySelector('[data-slot="settings-project-general"][aria-current="page"]')).toBeNull()
   })
 
-  it('"General" is the current page on the index itself, and unprefixed in the global area', () => {
-    renderAt('/settings')
+  it('"General" is the current entry on the project index itself', () => {
+    renderAt('/settings', { projects: REGISTRY })
     expect(
-      document.querySelector('[data-slot="settings-nav"] [data-slot="settings-nav-index"]')?.getAttribute('aria-current'),
+      nav().querySelector('[data-project="boot"][data-slot="settings-project-general"]')?.getAttribute('aria-current'),
     ).toBe('page')
+    // The project index is a page of its own (folder, registry facts), not only a card menu.
+    expect(document.querySelector('[data-slot="project-general"], [data-route="settings"]')).not.toBeNull()
+  })
+
+  it('/settings/global is no card menu: it redirects to the first global section, query and hash kept', () => {
+    renderAt('/settings/global?agent=codex#x', { projects: REGISTRY })
+    expect(currentPathname()).toBe(`/settings/global/${GLOBAL_SECTIONS[0]}`)
+    expect(document.querySelector(`[data-route="settings-global-${GLOBAL_SECTIONS[0]}"]`)).not.toBeNull()
+    expect(nav().querySelector('[aria-current="page"]')?.getAttribute('data-section')).toBe(GLOBAL_SECTIONS[0])
+    // Nothing that repeated the sidebar survives.
+    expect(document.querySelector('[data-slot="settings-index"]')).toBeNull()
+    expect(document.querySelector('[data-slot="settings-project-index"]')).toBeNull()
+    expect(document.querySelector('[data-slot="settings-nav-index"]')).toBeNull()
+    expect(screen.getByTestId('location').getAttribute('data-search')).toBe('?agent=codex')
+    expect(screen.getByTestId('location').getAttribute('data-hash')).toBe('#x')
+  })
+
+  it('renders the SAME nav at /settings/global — global row current, no project row current', () => {
+    renderAt('/settings/global/appearance', { projects: REGISTRY })
+    expect(nav().getAttribute('data-scope')).toBe('global')
+    expect(sectionIds(nav())).toEqual(GLOBAL_SECTIONS)
+    expect(nav().querySelector('[aria-current="page"]')?.getAttribute('data-section')).toBe('appearance')
+    expect(nav().querySelector('[data-section="skills"]')?.getAttribute('href')).toBe('/settings/global/skills')
+    // The tree is there too, every project collapsed: no project is in scope on a global page.
+    const rows = [...nav().querySelectorAll('[data-slot="settings-project"]')]
+    expect(rows).toHaveLength(3)
+    expect(rows.some((row) => row.hasAttribute('data-expanded'))).toBe(false)
+    expect(nav().querySelector('[data-project-section]')).toBeNull()
+  })
+
+  it('an UNREGISTERED boot project (cezar started from a task worktree) gets no row — it is not a project', () => {
+    // The registry lists two other projects but not `boot`; health knows the boot repo.
+    const others = REGISTRY.filter((p) => p.id !== 'boot')
+    const client = gateSeededClient(false, others)
+    client.setQueryData(queryKeys.health, {
+      bootProject: 'boot',
+      repoRoot: '/work/checkouts/my-repo',
+      repo: { root: '/work/checkouts/my-repo', branch: 'feature/x' },
+      capabilities: { localHandoff: true, followups: true, singleProject: false },
+    })
+    const at = (entry: string) => {
+      render(
+        <QueryClientProvider client={client}>
+          <ThemeProvider>
+            <AppearanceProvider>
+              <MemoryRouter initialEntries={[entry]}>
+                <ListViewProvider>
+                  <AppRoutes />
+                </ListViewProvider>
+              </MemoryRouter>
+            </AppearanceProvider>
+          </ThemeProvider>
+        </QueryClientProvider>,
+      )
+      const out = {
+        rows: [...document.querySelectorAll('[data-slot="settings-nav"] [data-slot="settings-project"]')].map((row) => row.getAttribute('data-project')),
+        nav: nav().textContent ?? '',
+        sections: projectSectionLinks('boot').map((el) => el.getAttribute('href')),
+      }
+      cleanup()
+      return out
+    }
+    // Global page and another project's page: registered projects only, no boot row anywhere.
+    for (const entry of ['/settings/global', '/p/other/settings/agents']) {
+      const seen = at(entry)
+      expect(seen.rows).toEqual(['other', 'gone'])
+      expect(seen.sections).toEqual([])
+      expect(seen.nav).not.toContain('my-repo')
+    }
+    // Its OWN page is the one exception: its sections render flat, and the registered projects
+    // get no rows beside them, so it never appears as one of the list.
+    const own = at('/p/boot/settings/agents')
+    expect(own.rows).toEqual([])
+    expect(own.nav).toContain('This project')
+    expect(own.sections).toEqual(PROJECT_SECTIONS.map((id) => `/p/boot/settings/${id}`))
+  })
+
+  it('renders no stray `end` attribute on the pill row — the project pills are real NavLinks', () => {
+    renderAt('/settings/agents', { projects: REGISTRY })
+    const pills = document.querySelector('[data-slot="settings-nav-mobile"]')!
+    expect(pills.querySelector('[end]')).toBeNull()
+    expect(pills.getAttribute('aria-label')).toBe('Sections of this area')
+    // NavLink's own matching marks the open section.
+    expect(pills.querySelector('[data-section="agents"]')?.getAttribute('aria-current')).toBe('page')
+  })
+
+  it('a fold made on one project\'s page does not follow the user to another project and back', () => {
+    renderAt('/settings', { projects: REGISTRY })
+    const boot = () => nav().querySelector('[data-slot="settings-project"][data-project="boot"]')!
+    const other = () => nav().querySelector('[data-slot="settings-project"][data-project="other"]')!
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse cezar' }))
+    expect(boot().hasAttribute('data-expanded')).toBe(false)
+    // Switch to the other project's General, then back to boot's.
+    fireEvent.click(other().querySelector('a[data-slot="settings-project-link"]')!)
+    expect(currentPathname()).toBe('/p/other/settings')
+    fireEvent.click(boot().querySelector('a[data-slot="settings-project-link"]')!)
+    expect(currentPathname()).toBe('/p/boot/settings')
+    // Back on its own page it is open again: the earlier fold belonged to the earlier page.
+    expect(boot().hasAttribute('data-expanded')).toBe(true)
+  })
+
+  it('a double-click on the chevron toggles twice, not zero times', () => {
+    renderAt('/settings/global/appearance', { projects: REGISTRY })
+    const other = () => nav().querySelector('[data-slot="settings-project"][data-project="other"]')!
+    const chevron = () => screen.getByRole('button', { name: /^(Expand|Collapse) storefront$/ })
+    fireEvent.click(chevron())
+    fireEvent.click(chevron())
+    expect(other().hasAttribute('data-expanded')).toBe(false)
+    fireEvent.click(chevron())
+    expect(other().hasAttribute('data-expanded')).toBe(true)
+  })
+
+  it('the drawer and the column never share an id, and only the drawer uses touch-size rows', async () => {
+    renderAt('/settings/agents', { projects: REGISTRY })
+    fireEvent.click(screen.getByRole('button', { name: 'Open settings menu' }))
+    const drawer = await waitFor(() => {
+      const el = document.querySelector('[data-slot="settings-mobile-drawer"]')
+      expect(el).not.toBeNull()
+      return el!
+    })
+    const ids = [...document.querySelectorAll('[id^="settings-project-"]')].map((el) => el.id)
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(ids.length).toBeGreaterThanOrEqual(2)
+    // Every expanded body is what its own chevron controls.
+    for (const button of document.querySelectorAll('[aria-controls^="settings-project-"]')) {
+      expect(document.getElementById(button.getAttribute('aria-controls')!)).not.toBeNull()
+    }
+    // 44px rows in the drawer; the desktop column keeps the app sidebar's 34px.
+    expect(drawer.querySelector('[data-section="appearance"]')?.className).toContain('h-11')
+    expect(nav().querySelector('[data-section="appearance"]')?.className).not.toContain('h-11')
+    expect(drawer.querySelector('[data-slot="settings-back"]')?.className).toContain('h-11')
+  })
+
+  it('a single MISSING project renders inert in flat mode, and a lone project is named on a global page', () => {
+    const gone = [entry('gone', { name: 'old-repo', status: 'missing' })]
+    renderAt('/settings/global/appearance', { projects: gone })
+    const tree = () => nav().querySelector('[data-slot="settings-project-tree"]')!
+    expect(tree().textContent).toContain('old-repo')
+    expect(tree().textContent).not.toContain('This project')
+    expect(tree().querySelector('a, button')).toBeNull()
+    expect(tree().textContent).toContain('folder not found')
+    expect(tree().textContent).toContain('remove it in Projects')
     cleanup()
 
-    renderAt('/settings/global/resources')
-    expect(
-      document.querySelector('[data-slot="settings-nav"] [data-slot="settings-nav-index"]')?.getAttribute('href'),
-    ).toBe('/settings/global')
+    renderAt('/settings/global/appearance', { projects: [entry('solo', { name: 'solo-repo' })] })
+    expect(nav().querySelector('[data-slot="settings-project-tree"]')?.textContent).toContain('solo-repo')
+    expect(nav().querySelector('[data-slot="settings-project-tree"]')?.textContent).not.toContain('This project')
+    cleanup()
+
+    renderAt('/p/solo/settings/agents', { projects: [entry('solo', { name: 'solo-repo' })] })
+    expect(nav().querySelector('[data-slot="settings-project-tree"]')?.textContent).toContain('This project')
   })
 
-  it('renders the GLOBAL nav at /settings/global — global sections, unprefixed links', () => {
-    renderAt('/settings/global/appearance')
-    const nav = document.querySelector('[data-slot="settings-nav"]')!
-    expect(nav.getAttribute('data-scope')).toBe('global')
-    const ids = [...nav.querySelectorAll('[data-section]')].map((el) => el.getAttribute('data-section'))
-    expect(ids).toEqual(GLOBAL_SECTIONS)
-    // The whole point of the plain (non-scoped) links: no `/p/<id>` prefix may appear, or the
-    // target would not be a route at all.
-    expect(nav.querySelector('[data-section="resources"]')?.getAttribute('href')).toBe(
-      '/settings/global/resources',
+  it('an unknown project id is NOT named after the boot repo when the registry cannot answer', async () => {
+    // The registry query is in its ERROR state: the scope gate then lets an unknown id through
+    // rather than showing a permanent "Loading…", and the tree must not dress it up as the boot
+    // repo just because health knows that one. Seeded as an errored query with retry-on-mount
+    // off: with it on, every observer the page mounts refetches, TanStack flips a data-less
+    // errored query back to pending, the gate unmounts the page, and the two loop — a
+    // pre-existing shape of the gate's error fall-through, outside this change.
+    serve({}, { projectsDown: true })
+    const client = createQueryClient()
+    client.setDefaultOptions({ queries: { ...client.getDefaultOptions().queries, retry: false, retryOnMount: false } })
+    client
+      .getQueryCache()
+      .build(client, { queryKey: workspaceQueryKeys.projects, queryFn: () => Promise.reject(new Error('down')) })
+      .setState({ status: 'error', error: new Error('down'), errorUpdateCount: 1, fetchStatus: 'idle', data: undefined })
+    client.setQueryData(queryKeys.health, {
+      bootProject: 'boot',
+      repoRoot: '/work/checkouts/my-repo',
+      repo: { root: '/work/checkouts/my-repo', branch: 'main' },
+      capabilities: { localHandoff: true, followups: true, singleProject: false },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <ThemeProvider>
+          <AppearanceProvider>
+            <MemoryRouter initialEntries={['/p/whatever/settings/agents']}>
+              <ListViewProvider>
+                <AppRoutes />
+              </ListViewProvider>
+            </MemoryRouter>
+          </AppearanceProvider>
+        </ThemeProvider>
+      </QueryClientProvider>,
     )
-    expect(nav.querySelector('[data-section="skills"]')?.getAttribute('href')).toBe(
-      '/settings/global/skills',
+    await waitFor(() => expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Agents'))
+    expect(document.querySelector('[data-slot="settings-scope-chip"]')?.textContent).toBe('whatever')
+    expect(document.querySelector('[data-slot="settings-scope-chip"]')?.textContent).not.toContain('my-repo')
+  })
+
+  it('a missing project is listed but inert — its panes would all 409', () => {
+    renderAt('/settings/global/appearance', { projects: REGISTRY })
+    const gone = nav().querySelector('[data-slot="settings-project"][data-project="gone"]')!
+    expect(gone.getAttribute('data-status')).toBe('missing')
+    expect(gone.textContent).toContain('folder not found')
+    expect(gone.querySelector('a, button')).toBeNull()
+  })
+
+  it('with a single registered project the tree flattens into that project\'s sections', () => {
+    // The default seed registers nothing, so the URL's project is the only one in the tree.
+    renderAt('/settings/agents')
+    expect(nav().querySelector('[data-slot="settings-project"]')).toBeNull()
+    expect(nav().textContent).toContain('This project')
+    const links = projectSectionLinks('boot')
+    expect(links.map((el) => el.getAttribute('data-project-section'))).toEqual(PROJECT_SECTIONS)
+    expect(nav().querySelector('[data-project-section][aria-current="page"]')?.getAttribute('data-project-section')).toBe('agents')
+    // The mobile pill row renders the CURRENT area's sections, led by the way up.
+    const pills = document.querySelector('[data-slot="settings-nav-mobile"]')!
+    expect(sectionIds(pills)).toEqual(PROJECT_SECTIONS)
+    const up = pills.querySelector('[data-slot="settings-all-pill"]')
+    expect(up?.getAttribute('href')).toBe('/settings/global')
+    expect(up?.textContent).toBe('‹ General settings')
+  })
+
+  it('keeps the ⌘K launcher, the version and star chips and the theme toggle in the sidebar footer, and the launcher opens the palette', () => {
+    const client = gateSeededClient(false, REGISTRY)
+    client.setQueryData(queryKeys.health, {
+      bootProject: 'boot',
+      version: '0.14.0',
+      latestVersion: '0.15.0',
+      capabilities: { localHandoff: true, followups: true, singleProject: false },
+    })
+    client.setQueryData(workspaceQueryKeys.starCount, { available: true, count: 335 })
+    render(
+      <QueryClientProvider client={client}>
+        <ThemeProvider>
+          <AppearanceProvider>
+            <MemoryRouter initialEntries={['/settings/global/appearance']}>
+              <AppRoutes />
+            </MemoryRouter>
+          </AppearanceProvider>
+        </ThemeProvider>
+      </QueryClientProvider>,
     )
+    const footer = document.querySelector('[data-slot="settings-sidebar-footer"]')!
+    const hint = footer.querySelector<HTMLButtonElement>('[data-slot="command-palette-hint"]')!
+    expect(hint).not.toBeNull()
+    expect(footer.querySelector('[data-slot="theme-toggle"]')).not.toBeNull()
+    // The app footer's chips, from the same cached data.
+    expect(footer.querySelector('[data-slot="version-chip"]')?.textContent).toBe('v0.14.0')
+    expect(footer.querySelector('[data-slot="version-chip"]')?.getAttribute('data-update-available')).toBe('true')
+    expect(footer.querySelector('[data-slot="star-chip"]')?.textContent).toContain('335')
+    const opened = vi.fn()
+    window.addEventListener(OPEN_COMMAND_PALETTE_EVENT, opened)
+    fireEvent.click(hint)
+    expect(opened).toHaveBeenCalledTimes(1)
+    window.removeEventListener(OPEN_COMMAND_PALETTE_EVENT, opened)
+    // The mobile top bar repeats neither control — it is the app's top bar shape: menu + title.
+    const bar = document.querySelector('[data-slot="settings-mobile-bar"]')!
+    expect(bar.querySelector('[data-slot="theme-toggle"]')).toBeNull()
+    expect(bar.querySelector('[data-slot="command-palette-hint"], [data-slot="settings-search"]')).toBeNull()
+  })
+
+  it('the sidebar IS the app sidebar frame: resizable, sharing the stored width', () => {
+    localStorage.setItem('cez-sidebar-width', '350')
+    renderAt('/settings/agents', { projects: REGISTRY })
+    const sidebar = document.querySelector<HTMLElement>('[data-slot="settings-sidebar"]')!
+    // The width the app sidebar was dragged to is this column's width too — one preference.
+    expect(sidebar.style.width).toBe('350px')
+    const handle = sidebar.querySelector<HTMLElement>('[data-slot="sidebar-resize-handle"]')!
+    expect(handle.getAttribute('role')).toBe('separator')
+    fireEvent.keyDown(handle, { key: 'ArrowRight' })
+    expect(sidebar.style.width).toBe('366px')
+    expect(localStorage.getItem('cez-sidebar-width')).toBe('366')
+    localStorage.removeItem('cez-sidebar-width')
+  })
+
+  it('the sidebar reuses the app sidebar frame: Back + brand up top, labelled groups, no breadcrumb', () => {
+    renderAt('/settings/agents', { projects: REGISTRY })
+    const sidebar = document.querySelector('[data-slot="settings-sidebar"]')!
+    expect(sidebar.className).toContain('bg-sidebar')
+    expect(sidebar.querySelector('[data-slot="settings-back"]')).not.toBeNull()
+    expect(sidebar.querySelector('[data-slot="brand-lockup"]')).not.toBeNull()
+    // Both groups are labelled, so "General settings" is as obvious as "Project settings".
+    expect(nav().textContent).toContain('General settings')
+    expect(nav().textContent).toContain('Project settings')
+    // The page header is the current page only: the title with its project beside it, then
+    // the one-liner. No breadcrumb, no corner badge.
+    const header = document.querySelector('[data-slot="settings-header"]')!
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Agents')
+    // `project / view`: the project name leads, a slash separates, the view is the heading.
+    expect(header.querySelector('[data-slot="settings-scope-chip"]')?.textContent).toBe('cezar')
+    const h1 = screen.getByRole('heading', { level: 1 })
+    expect(h1.previousElementSibling?.textContent).toBe('/')
+    expect(h1.previousElementSibling?.previousElementSibling?.getAttribute('data-slot')).toBe('settings-scope-chip')
+    expect(h1.parentElement?.textContent).toBe('cezar/Agents')
+    expect(header.textContent).toContain('Providers, default runner and models.')
+    expect(header.querySelector('nav')).toBeNull()
+    // Desktop only: below `md` the mobile bar titles the page, so the header hides itself.
+    expect(header.className).toContain('hidden')
+    expect(header.className).toContain('md:flex')
+    const bar = document.querySelector('[data-slot="settings-mobile-bar"]')!
+    expect(bar.textContent).toContain('Agents')
+    expect(bar.textContent).toContain('cezar')
+  })
+
+  it('a global page carries no project marker, and the project index is titled by the project', () => {
+    renderAt('/settings/global/resources', { projects: REGISTRY })
+    expect(document.querySelector('[data-slot="settings-scope-chip"]')).toBeNull()
+    cleanup()
+    renderAt('/settings', { projects: REGISTRY })
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('cezar')
+  })
+
+  it('Back returns to the last non-settings page, however many settings pages were visited', () => {
+    recordSettingsReturn({ pathname: '/p/other/git', search: '', hash: '' })
+    renderAt('/settings/global/appearance', { projects: REGISTRY })
+    fireEvent.click(document.querySelector('[data-slot="settings-back"]')!)
+    expect(currentPathname()).toBe('/p/other/git')
+  })
+
+  it('Back falls back to the tasks pane of the project in scope on a cold load', () => {
+    renderAt('/settings/worktrees', { projects: REGISTRY })
+    fireEvent.click(document.querySelector('[data-slot="settings-back"]')!)
+    expect(currentPathname()).toBe('/p/boot/')
+  })
+
+  it('Escape leaves settings — unless a form field has focus', () => {
+    recordSettingsReturn({ pathname: '/p/boot/skills', search: '', hash: '' })
+    renderAt('/settings/global/resources', { projects: REGISTRY })
+    fireEvent.keyDown(screen.getByTestId('field'), { key: 'Escape' })
+    expect(currentPathname()).toBe('/settings/global/resources')
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(currentPathname()).toBe('/p/boot/skills')
   })
 
   it('/settings is the project registry as an index — one card per visible section', () => {
     renderAt('/settings')
     const index = document.querySelector('[data-slot="settings-index"]')!
-    const ids = [...index.querySelectorAll('[data-section]')].map((el) => el.getAttribute('data-section'))
-    expect(ids).toEqual(PROJECT_SECTIONS)
+    expect(sectionIds(index)).toEqual(PROJECT_SECTIONS)
     // Scope-aware links (step 3.2): the flat `to` picks up the active project's prefix.
     expect(index.querySelector('[data-section="bookmarklets"]')?.getAttribute('href')).toBe(
       '/p/boot/settings/bookmarklets',
     )
-    // …and the cross-link out of the project area is NOT prefixed.
-    expect(document.querySelector('[data-slot="settings-global-link"]')?.getAttribute('href')).toBe(
-      '/settings/global',
-    )
+    // The old cross-link paragraph is gone — the breadcrumb and the nav are the way up.
+    expect(document.querySelector('[data-slot="settings-global-link"]')).toBeNull()
   })
 
-  it('/settings/global is the global registry as an index', () => {
-    renderAt('/settings/global')
-    const index = document.querySelector('[data-slot="settings-index"]')!
-    const ids = [...index.querySelectorAll('[data-section]')].map((el) => el.getAttribute('data-section'))
-    expect(ids).toEqual(GLOBAL_SECTIONS)
-    expect(index.querySelector('[data-section="projects"]')?.getAttribute('href')).toBe(
-      '/settings/global/projects',
-    )
-  })
-
-  it('single-project mode removes Projects from the global index and navigation', () => {
-    renderAt('/settings/global', { singleProject: true })
+  it('single-project mode removes Projects from the global navigation', () => {
+    renderAt('/settings/global', { singleProject: true, projects: REGISTRY })
     expect(document.querySelector('[data-slot="settings-index"] [data-section="projects"]')).toBeNull()
     expect(document.querySelector('[data-slot="settings-nav"] [data-section="projects"]')).toBeNull()
+    expect(document.querySelector('[data-slot="settings-project-index"]')).toBeNull()
     expect(document.querySelector('[data-section="resources"]')).not.toBeNull()
+    // The tree flattens too: one project, no chevron rows.
+    expect(document.querySelector('[data-slot="settings-project"]')).toBeNull()
   })
 
   it('a moved section keeps its old URL working: /settings/appearance → the global twin', async () => {

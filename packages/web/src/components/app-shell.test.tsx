@@ -597,6 +597,38 @@ describe('AppShell', () => {
 
   /** jsdom cannot evaluate `md:` — so assert the structure and the responsive classes that
    *  encode it, and leave "does it actually reflow at 390px" to the e2e iPhone screenshot. */
+  /** Settings is full-screen (spec 2026-10-13-unified-settings): the shell renders none of its
+   *  chrome on a settings URL — the settings frame brings its own header, nav and way back. */
+  describe('chromeless settings', () => {
+    for (const entry of ['/p/boot/settings/agents', '/p/boot/settings', '/settings/global/appearance', '/settings/global']) {
+      it(`${entry} renders no sidebar, no drawer trigger and no mobile top bar`, () => {
+        renderShell(entry)
+        const shell = document.querySelector('[data-slot="app-shell"]') as HTMLElement
+        expect(shell.hasAttribute('data-chromeless')).toBe(true)
+        expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+        expect(document.querySelector('[data-slot="mobile-top-bar"]')).toBeNull()
+        expect(screen.queryByRole('button', { name: 'Open menu' })).toBeNull()
+        // The routed view still renders in the one scrolling region.
+        expect(within(document.querySelector('[data-slot="main"]') as HTMLElement).getByText('route content')).toBeTruthy()
+      })
+    }
+
+    it('keeps the banner row — provider failures link INTO settings, so the fix stays visible', () => {
+      renderShell('/p/boot/settings/agents', { banner: <div data-testid="banner">auth failed</div> })
+      expect(screen.getByTestId('banner')).toBeTruthy()
+      expect(document.querySelector('[data-slot="banner-slot"]')?.className).toContain('row-start-2')
+    })
+
+    it('is NOT chromeless on a look-alike path, or on the Skills page that /settings/skills redirects to', () => {
+      renderShell('/p/boot/settingsfoo')
+      expect(document.querySelector('[data-slot="app-shell"]')?.hasAttribute('data-chromeless')).toBe(false)
+      expect(sidebar()).not.toBeNull()
+      cleanup()
+      renderShell('/p/boot/skills')
+      expect(sidebar()).not.toBeNull()
+    })
+  })
+
   describe('responsive skeleton', () => {
     it('hides the sidebar below md and shows it from md up', () => {
       renderShell()

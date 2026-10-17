@@ -268,6 +268,27 @@ async function serveCommand(
   // the previous process exited are re-queued or resumed instead of failed.
   const store = openStore(repoRoot, { keepLive: true });
   const manager = new RunManager(store, repoRoot, { semaphore, projectId: bootProjectId, resolveTrackerEnv: resolveTrackerAgentEnv });
+  let httpServer: ReturnType<typeof startServer> | null = null;
+  let stopping = false;
+  // Owned lifecycle scripts drain first; then the store and telemetry flush as before.
+  const shutdown = (reason: 'signal' | 'supervisor_gone') => {
+    if (stopping) process.exit(0); // a second Ctrl-C never waits on scripts or telemetry
+    stopping = true;
+    store.flush({ pretty: true }); // before the drain too: a second Ctrl-C must not lose run state
+    void (httpServer?.shutdownLifecycle() ?? manager.lifecycle.shutdown())
+      .catch((error: unknown) => {
+        console.error('cezar: lifecycle shutdown failed', error);
+        process.exitCode = 1;
+      })
+      .then(() => {
+        store.flush({ pretty: true });
+        track('app_stop', { reason });
+        return flushTelemetry(reason === 'signal' ? undefined : 1_000);
+      })
+      .finally(() => process.exit(process.exitCode ?? 0));
+  };
+  process.on('SIGINT', () => shutdown('signal'));
+  process.on('SIGTERM', () => shutdown('signal'));
   const providerAuth = new ProviderAuthService({ cwd: repoRoot, onInconclusive: (probe) => void reportInconclusiveProbe(probe) });
   const workspaceEvents = new WorkspaceEventBus();
   const providerRuntimeAuth = new ProviderRuntimeAuthObserver(providerAuth, (status) => {
@@ -285,7 +306,7 @@ async function serveCommand(
 
   // Startup reconcile (spec 006): sweep worktrees whose run no longer exists.
   if (repo) {
-    const orphans = await pruneOrphans(repoRoot, new Set(store.listRuns().map((r) => r.id))).catch(
+    const orphans = await pruneOrphans(repoRoot, new Set(store.listRuns().map((r) => r.id)), id => manager.lifecycle.allowOrphanPrune(id)).catch(
       () => [] as string[],
     );
     if (orphans.length > 0) {
@@ -295,7 +316,7 @@ async function serveCommand(
     // the keep-limit (directory only — `cez/<id8>` branch kept, so recoverable).
     // Best-effort; never blocks boot.
     const keep = await resolveWorktreeRetention(repoRoot).catch(() => DEFAULT_WORKTREE_RETENTION);
-    const reclaimed = await reclaimWorktrees(repoRoot, store, keep).catch(() => [] as string[]);
+    const reclaimed = await reclaimWorktrees(repoRoot, store, keep, {lifecycle: manager.lifecycle}).catch(() => [] as string[]);
     if (reclaimed.length > 0) {
       console.log(`  reclaimed ${reclaimed.length} old worktree(s), branch kept: ${reclaimed.map((id) => id.slice(0, 8)).join(', ')}`);
     }
@@ -318,20 +339,24 @@ async function serveCommand(
   // chip can apply it when this cezar runs from the managed layout (`cezar install`).
   const pkgName = readOwnName();
   const update: { latest?: string } = {};
-  let httpServer: ReturnType<typeof startServer> | null = null;
   const selfUpdate = buildSelfUpdateService({
     activeRuns: () => store.listRuns().filter((r) => ['queued', 'waiting', 'running'].includes(r.status)).length,
     // The server's own predicate, not a second spelling of it: the `/apply` guard decides hosted
     // mode through `resolveCapabilities`, and the two must never disagree (they did, on 127.0.0.2).
     trimPaths: () => !resolveCapabilities(process.env, bindHost).localHandoff,
     restart: () => {
-      store.flush({ pretty: true });
-      // The old process stops here, so it reports its own stop before handing over (bounded).
-      track('app_stop', { reason: 'restart' });
-      void flushTelemetry(1_000).finally(() =>
-        restartProcess({ server: httpServer, args: process.argv.slice(2), port, supervised: isSupervised() }),
-      );
-      restartProcess({ server: httpServer, args: process.argv.slice(2), port, supervised: isSupervised() });
+      void (httpServer?.shutdownLifecycle() ?? manager.lifecycle.shutdown()).then(() => {
+        store.flush({ pretty: true });
+        // The old process stops here, so it reports its own stop before handing over (bounded).
+        track('app_stop', { reason: 'restart' });
+        void flushTelemetry(1_000).finally(() =>
+          restartProcess({ server: httpServer, args: process.argv.slice(2), port, supervised: isSupervised() }),
+        );
+        restartProcess({ server: httpServer, args: process.argv.slice(2), port, supervised: isSupervised() });
+      }).catch((error: unknown) => {
+        console.error('cezar: lifecycle shutdown failed before restart', error);
+        process.exit(1);
+      });
     },
   });
   void selfUpdate.updateAvailable().then((latest) => {
@@ -381,6 +406,7 @@ async function serveCommand(
     workspaceEvents,
     selfUpdate,
   }, port);
+  httpServer.once('listening', () => manager.lifecycle.start());
   const url = `http://localhost:${port}`;
 
   console.log(`\n  cezar v${version} — ${repoRoot}`);
@@ -397,16 +423,6 @@ async function serveCommand(
   // The star ask's terminal line — same block, same two off switches.
   await printStarBanner(repoRoot);
 
-  let stopping = false;
-  const shutdown = () => {
-    if (stopping) process.exit(0); // a second Ctrl-C never waits on telemetry
-    stopping = true;
-    store.flush({ pretty: true });
-    track('app_stop', { reason: 'signal' });
-    void flushTelemetry().finally(() => process.exit(0));
-  };
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
   // Under the desktop shell a managed install may exist without launchers (the shell installs
   // cezar itself on first launch, spec 2026-09-25-desktop-distribution): write them so
   // `cezar` in a terminal works too. Idempotent; never touches the shell profile.
@@ -448,12 +464,10 @@ async function serveCommand(
       if (!gone) return;
       try {
         process.stderr.write('  supervisor is gone — shutting down\n');
-        store.flush({ pretty: true });
-        track('app_stop', { reason: 'supervisor_gone' });
       } catch {
-        // Nothing left to save that is worth staying alive for.
+        // A closed stderr must not prevent draining scripts.
       }
-      void flushTelemetry(1_000).finally(() => process.exit(0));
+      shutdown('supervisor_gone');
     }, 2_000).unref();
   }
 
@@ -556,6 +570,19 @@ async function runCommand(
   const semaphore = new WorkspaceSemaphore();
   await semaphore.refresh();
   const manager = new RunManager(store, repoRoot, { semaphore });
+  let shuttingDown = false;
+  const shutdown = (exitCode: number) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    void manager.lifecycle.shutdown().then(() => process.exit(exitCode)).catch((error: unknown) => {
+      console.error('cezar: lifecycle shutdown failed', error);
+      process.exit(1);
+    });
+  };
+  const interrupt = () => shutdown(130);
+  const terminate = () => shutdown(143);
+  process.on('SIGINT', interrupt);
+  process.on('SIGTERM', terminate);
 
   store.on('event', ({ event }) => {
     switch (event.type) {
@@ -592,7 +619,11 @@ async function runCommand(
   // the GUI's review gate; the diff waits on the task branch/cockpit instead.
   const final = await new Promise<string>((resolveStatus) => {
     store.on('run', (r) => {
-      if (r.id === run.id && ['done', 'review', 'failed', 'cancelled'].includes(r.status)) resolveStatus(r.status);
+      if (r.id !== run.id) return;
+      if (r.worktreeLifecycle?.needsAttention) {
+        console.error(`Worktree scripts need attention — operation ${r.worktreeLifecycle.activeOperationId ?? '?'}; open Worktrees settings in the cockpit to recover.`);
+        resolveStatus('failed');
+      } else if (['done', 'review', 'failed', 'cancelled'].includes(r.status)) resolveStatus(r.status);
     });
   });
   store.flush({ pretty: true });
@@ -601,6 +632,10 @@ async function runCommand(
     console.log(`\n  changes ready for review on branch ${record?.branch ?? '?'} — inspect them in the cockpit: npx cezar`);
   }
   console.log(`\nrun ${final} — ${record?.tokensUsed ?? 0} tokens — details in the cockpit: npx cezar`);
+  await manager.lifecycle.shutdown();
+  manager.dispose();
+  process.off('SIGINT', interrupt);
+  process.off('SIGTERM', terminate);
   process.exitCode = final === 'done' || final === 'review' ? 0 : 1;
   await flushTelemetry();
 }

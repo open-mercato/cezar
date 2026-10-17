@@ -82,13 +82,13 @@ export function trackSkillsUpdateApplyDropped(outcome: SkillsUpdateDropOutcome):
 
 /** Whether a pathname is a page the user actually sees. Everything else outside these roots is
  *  a legacy flat URL that redirects into a project (`/` → `/p/<boot>/`) — counting it would put
- *  a phantom step before every real one. */
+ *  a phantom step before every real one. Bare `/settings/global` is one of those redirects: it
+ *  lands on the first global section (spec 2026-10-13-unified-settings). */
 export function isCanonicalRoute(pathname: string): boolean {
   return (
     pathname.startsWith('/p/') ||
     pathname === '/tasks' ||
     pathname === '/dashboard' ||
-    pathname === '/settings/global' ||
     pathname.startsWith('/settings/global/')
   )
 }

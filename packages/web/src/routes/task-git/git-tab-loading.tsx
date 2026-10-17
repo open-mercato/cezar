@@ -14,6 +14,7 @@ const LOADING_TITLE: Record<Exclude<RunTab, 'session'>, string> = {
   graph: 'Loading the graph…',
   notes: 'Loading notes…',
   terminal: 'Loading the terminal…',
+  preview: 'Loading the preview…',
 }
 
 /**

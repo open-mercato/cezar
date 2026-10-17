@@ -224,8 +224,10 @@ const ROUTE_CASES: Array<[url: string, route: string, title: string]> = [
   ['/workflows/ship-it', 'workflows', 'Loading workflows…'],
   ['/skills', 'skills', 'Skills'],
   // Project settings only (step 3.5) — appearance/notifications/resources/projects moved to
-  // the unscoped `/settings/global/*` area, covered in its own describe below.
-  ['/settings', 'settings', 'Settings'],
+  // the unscoped `/settings/global/*` area, covered in its own describe below. The project
+  // index is titled by the PROJECT (unified settings, spec 2026-10-13): the registry names
+  // the boot project "cezar".
+  ['/settings', 'settings', 'cezar'],
   ['/settings/agents', 'settings-agents', 'Agents'],
   ['/settings/instructions', 'settings-instructions', 'Instructions'],
   ['/settings/tasks', 'settings-tasks', 'Tasks'],
@@ -339,7 +341,6 @@ describe('the global settings area (/settings/global)', () => {
   }, 30_000)
 
   const GLOBAL_CASES: Array<[string, string, string]> = [
-    ['/settings/global', 'settings-global', 'Global settings'],
     ['/settings/global/appearance', 'settings-global-appearance', 'Appearance'],
     ['/settings/global/notifications', 'settings-global-notifications', 'Notifications'],
     ['/settings/global/resources', 'settings-global-resources', 'Resources'],
@@ -355,6 +356,12 @@ describe('the global settings area (/settings/global)', () => {
       expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(title)
     })
   }
+
+  it('/settings/global has no page of its own: it lands, unscoped, on the first global section', () => {
+    renderAt('/settings/global')
+    expect(routeName()).toBe('settings-global-appearance')
+    expect(currentPathname()).toBe('/settings/global/appearance')
+  })
 
   // A bookmarked deep link into any of the four `/automations*` routes still resolves — the route
   // map is unchanged — but on a cockpit started with CEZ_AUTOMATIONS=0 the view says the feature

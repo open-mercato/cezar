@@ -308,7 +308,7 @@ describe('attachments — attach, paste, thumbnails, caps (legacy parity)', () =
     ])
     await screen.findByLabelText('Remove report.pdf')
     expect(
-      await screen.findByText('payload.zip is not a supported attachment (images, PDF and plain-text files such as TXT or MD)'),
+      await screen.findByText('payload.zip is not a supported attachment (images, PDF and text files such as TXT, MD, HTML or source code)'),
     ).toBeTruthy()
     expect(screen.queryByLabelText('Remove payload.zip')).toBeNull()
   })

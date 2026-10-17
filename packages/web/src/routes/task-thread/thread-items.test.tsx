@@ -15,6 +15,7 @@ import thinkingEditWriteTodo from '../../../../cezar/src/core/__fixtures__/claud
 import opencodeToolLifecycle from '../../../../cezar/src/core/__fixtures__/opencode/tool-lifecycle.expected.json'
 import { groupThreadItems } from './thread-groups'
 import {
+  AgentUpdateRequiredCard,
   ContextGroup,
   isNearBottom,
   OUTPUT_CLAMP_LINES,
@@ -55,6 +56,61 @@ describe('ProviderAuthRequiredCard', () => {
     const link = screen.getByRole('link', { name: 'Open provider settings' })
     expect(link.getAttribute('href')).toBe('/p/acme/settings/agents#providers')
     expect(link.getAttribute('tabindex')).not.toBe('-1')
+  })
+})
+
+describe('AgentUpdateRequiredCard', () => {
+  const renderCard = () =>
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <AgentUpdateRequiredCard incident={{ kind: 'agent-update-required', id: 'v2:3:update', provider: 'opencode' }} />
+      </QueryClientProvider>,
+    )
+
+  it('asks the server to open the CLI update', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ opened: true, command: "'opencode' upgrade" }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      renderCard()
+      expect(screen.getByRole('alert').textContent).toContain('OpenCode needs an update')
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Update OpenCode' })))
+      expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toContain('/providers/opencode/update')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('shows the command to run when no terminal could be opened', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(JSON.stringify({
+        error: 'No terminal emulator could be opened. Run this command manually.',
+        command: "'opencode' upgrade",
+      }), { status: 409, headers: { 'content-type': 'application/json' } }),
+    ))
+    try {
+      renderCard()
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Update OpenCode' })))
+      const manual = await screen.findByText("'opencode' upgrade")
+      expect(manual.tagName).toBe('CODE')
+      expect(screen.getByText(/No terminal emulator could be opened/)).toBeTruthy()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('offers no button for a CLI that cannot update itself', () => {
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <AgentUpdateRequiredCard incident={{ kind: 'agent-update-required', id: 'v2:3:update', provider: 'codex' }} />
+      </QueryClientProvider>,
+    )
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(screen.getByRole('alert').textContent).toContain('the way you installed it')
   })
 })
 

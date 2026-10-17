@@ -517,7 +517,9 @@ leading `projectId` segment.
   expands; a `missing` project renders greyed with a "folder not found —
   remove?" affordance.
 - **Footer** — unchanged (tools, version, theme) plus a **Global settings**
-  link (`/settings/global/*`, outside any project scope).
+  link (`/settings/global/*`, outside any project scope). Since
+  `2026-10-13-unified-settings` the whole sidebar is hidden on settings pages;
+  the settings frame carries its own Back, theme toggle and ⌘K launcher.
 
 ### New task (mockup: `new-task-project.html`)
 
@@ -550,6 +552,10 @@ refusing them (four 5 MB images as base64 against a ~5 MB quota) is unchanged, a
 `/new` attachments still start empty on a real page load, exactly as before.
 
 ### Settings split (mockup: `settings-global.html`)
+
+> **Superseded for presentation** by `2026-10-13-unified-settings.md`: one full-screen frame
+> and one nav at both roots, the sidebar hidden in settings. The URL split and the store split
+> below are unchanged.
 
 - **Project settings** (`/p/<id>/settings/…`) — Agents, Resources→**Worktrees**
   (retention + worktree panel stay; the parallel/memory knobs move out),

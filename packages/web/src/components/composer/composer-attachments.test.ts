@@ -55,7 +55,7 @@ describe('screenFiles — the caps, mirrored from the server zod', () => {
     const intake = screenFiles([fakeFile({ type: 'application/zip', name: 'payload.zip' })], 0)
     expect(intake.accepted).toEqual([])
     expect(intake.rejected).toEqual([
-      'payload.zip is not a supported attachment (images, PDF and plain-text files such as TXT or MD)',
+      'payload.zip is not a supported attachment (images, PDF and text files such as TXT, MD, HTML or source code)',
     ])
   })
 
@@ -95,7 +95,7 @@ describe('screenFiles — the caps, mirrored from the server zod', () => {
     expect(intake.accepted.map((f: File) => f.name)).toEqual(['ok.png', 'brief.md'])
     expect(intake.rejected).toEqual([
       'big.png is too large (max 5 MB)',
-      'payload.zip is not a supported attachment (images, PDF and plain-text files such as TXT or MD)',
+      'payload.zip is not a supported attachment (images, PDF and text files such as TXT, MD, HTML or source code)',
     ])
   })
 
@@ -154,7 +154,33 @@ describe('attachmentMediaType', () => {
 
   it('answers null for a file cezar will not take, whatever it is called', () => {
     expect(attachmentMediaType(fakeFile({ type: 'application/zip', name: 'a.zip' }))).toBeNull()
-    expect(attachmentMediaType(fakeFile({ type: 'text/html', name: 'a.html' }))).toBeNull()
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'Makefile' }))).toBeNull()
+    expect(attachmentMediaType(fakeFile({ type: 'application/octet-stream', name: 'a.bin' }))).toBeNull()
+  })
+
+  /** Telemetry 6c4b3066: an `.html` was refused. Text formats go as `text/plain`, never `text/html`
+   *  — the contract stays narrow because attachments are served from the cockpit's own origin. */
+  it('sends HTML, CSV, JSON and source files as plain text', () => {
+    expect(attachmentMediaType(fakeFile({ type: 'text/html', name: 'blog-listing.html' }))).toBe('text/plain')
+    expect(attachmentMediaType(fakeFile({ type: 'text/csv', name: 'rows.csv' }))).toBe('text/plain')
+    expect(attachmentMediaType(fakeFile({ type: 'application/json', name: 'data.json' }))).toBe('text/plain')
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'main.ts' }))).toBe('text/plain')
+    expect(attachmentMediaType(fakeFile({ type: 'video/mp2t', name: 'main.ts' }))).toBe('text/plain')
+    expect(attachmentMediaType(fakeFile({ type: 'text/x-python', name: 'run' }))).toBe('text/plain')
+  })
+})
+
+describe('screenFiles — text formats (telemetry 6c4b3066)', () => {
+  it('accepts an .html file instead of refusing it', () => {
+    const intake = screenFiles([fakeFile({ type: 'text/html', name: 'page.html' })], 0)
+    expect(intake.accepted.map((f) => f.name)).toEqual(['page.html'])
+    expect(intake.rejected).toEqual([])
+  })
+
+  it('encodes it as text/plain and keeps its own name for the library', async () => {
+    const file = new File(['<h1>hi</h1>'], 'page.html', { type: 'text/html' })
+    const wire = toAttachmentInput(await fileToPendingAttachment(file))
+    expect(wire).toEqual({ mediaType: 'text/plain', data: btoa('<h1>hi</h1>'), name: 'page.html' })
   })
 })
 

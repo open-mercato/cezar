@@ -1,15 +1,29 @@
-import { execFile } from 'node:child_process';
+import { execFile, type SpawnOptions } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildChildEnv } from '../core/agent-env.ts';
 import { RunStore } from '../runs/store.ts';
 import { SecretStore } from '../workspace/secrets.ts';
 import { CHECK_CONTEXT_VARS, RunManager } from './run.ts';
 import { workflowStepSchema, type WorkflowDef } from './types.ts';
+
+// Secret fixtures assert exact check output; developer login profiles must not
+// add stderr or alter cwd. Keep real Bash/stdio/env and production -lc behavior.
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawn: (file: string, args: readonly string[], options?: SpawnOptions) => actual.spawn(
+      file,
+      file === 'bash' && args[0] === '-lc' ? ['--noprofile', '--norc', ...args] : args,
+      options ?? {},
+    ),
+  };
+});
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];

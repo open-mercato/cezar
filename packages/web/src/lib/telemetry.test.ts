@@ -33,6 +33,8 @@ describe('isCanonicalRoute', () => {
     expect(isCanonicalRoute('/settings/global/appearance')).toBe(true)
     expect(isCanonicalRoute('/')).toBe(false)
     expect(isCanonicalRoute('/settings/agents')).toBe(false)
+    // A redirect to the first global section, not a page — counting it double-counts every visit.
+    expect(isCanonicalRoute('/settings/global')).toBe(false)
     expect(isCanonicalRoute('/inbox')).toBe(false)
   })
 })

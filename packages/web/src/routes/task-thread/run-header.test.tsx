@@ -341,7 +341,7 @@ describe('action bar visibility per status (the legacy rules, rendered)', () => 
     expect(buttonNames(actionBar())).toEqual(visible)
   })
 
-  it.each<RunTab>(['session', 'changes', 'commits', 'files', 'notes'])(
+  it.each<RunTab>(['session', 'changes', 'commits', 'files', 'notes', 'preview'])(
     'the %s tab offers no header Continue — the chat box’s send is Continue',
     async (tab) => {
       stubFetch()
@@ -1146,6 +1146,17 @@ describe('notes tab', () => {
     const tabs = within(document.querySelector('[data-slot="run-tabs"]') as HTMLElement)
     expect(tabs.getByRole('link', { name: 'Notes' }).getAttribute('href')).toBe('/tasks/r1/notes')
     expect(actionBar().queryByRole('button', { name: 'Notes' })).toBeNull()
+  })
+})
+
+describe('preview tab', () => {
+  it('Preview is a deep-linkable tab, after Notes', () => {
+    stubFetch()
+    renderHeader(run('done'))
+    const tabs = within(document.querySelector('[data-slot="run-tabs"]') as HTMLElement)
+    expect(tabs.getByRole('link', { name: 'Preview' }).getAttribute('href')).toBe('/tasks/r1/preview')
+    const names = tabs.getAllByRole('link').map((link) => link.textContent)
+    expect(names.indexOf('Preview')).toBe(names.indexOf('Notes') + 1)
   })
 })
 
@@ -1984,5 +1995,37 @@ describe('dispatch lines', () => {
     renderHeader(run('running', { dispatch: { rootRunId: 'r1' } }))
     await waitFor(() => expect(document.querySelector('[data-slot="run-actions"]')).not.toBeNull())
     expect(document.querySelector('[data-slot="unit-role"]')).toBeNull()
+  })
+})
+
+describe('lifecycle-aware task deletion', () => {
+  const operation = {id:'11111111-1111-4111-8111-111111111111',worktreeId:'22222222-2222-4222-8222-222222222222',generation:1,phase:'teardown',intent:'delete-task',state:'queued',revision:0,createdAt:'now',updatedAt:'now',history:[],entries:[],allowedActions:['stop']}
+  it.each([true, false])('requests cleanup and keeps the task page for a %s managed projection', async managed => {
+    const sent = stubFetch({
+      '/api/v1/config': () => jsonResponse({worktreeLifecycle:{afterCreate:[],beforeRemove:[{id:'33333333-3333-4333-8333-333333333333',command:'echo cleanup'}]}}),
+      '/api/v1/worktree-lifecycle/operations': () => jsonResponse({operation}, 202),
+    })
+    renderHeader(run('done', {worktreePath:'/project/.ai/cezar/worktrees/r1', ...(managed ? {worktreeLifecycle:{worktreeId:operation.worktreeId,generation:1,needsAttention:false}} : {})}))
+    fireEvent.click(actionBar().getByRole('button',{name:'Delete'}))
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button',{name:'Delete'}))
+    await waitFor(() => expect(sent.some(request => request.path === '/api/v1/worktree-lifecycle/operations' && request.method === 'POST')).toBe(true))
+    expect(sent.some(request => request.method === 'DELETE')).toBe(false)
+    expect(sent.find(request => request.path === '/api/v1/worktree-lifecycle/operations')?.body).toMatchObject({runId:'r1',intent:'delete-task',requestId:expect.any(String)})
+    await screen.findByText('Cleanup requested. The task is kept until cleanup completes.')
+    expect(document.querySelector('[data-slot="home-probe"]')).toBeNull()
+  })
+  it('greys Delete out for a finished task whose cleanup is still running', () => {
+    stubFetch()
+    renderHeader(run('done',{worktreeLifecycle:{worktreeId:operation.worktreeId,generation:1,activeOperationId:operation.id,phase:'teardown',state:'running',needsAttention:false}}))
+    expect(itemActions().getByRole('button',{name:'Delete'}).getAttribute('aria-disabled')).toBe('true')
+  })
+
+  it('hides ordinary task actions while lifecycle recovery owns the worktree', () => {
+    stubFetch()
+    renderHeader(run('waiting',{worktreeLifecycle:{worktreeId:operation.worktreeId,generation:1,activeOperationId:operation.id,phase:'setup',state:'needs_attention',needsAttention:true}}))
+    for (const name of ['Finish','Cancel','Continue']) expect(actionBar().queryByRole('button',{name})).toBeNull()
+    // Delete stays in place, greyed out like a live run's (Pin · Archive · Delete, always in place).
+    expect(itemActions().getByRole('button',{name:'Delete'}).getAttribute('aria-disabled')).toBe('true')
   })
 })

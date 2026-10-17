@@ -544,7 +544,6 @@ describe('the constrained single-project workspace', () => {
       `document.querySelector('[data-slot="settings-nav"] [data-section="projects"]') === null`,
     )
     expect(browser.count('[data-slot="settings-nav"] [data-section="projects"]')).toBe(0)
-    expect(browser.count('[data-slot="settings-index"] [data-section="projects"]')).toBe(0)
 
     browser.goto(`${baseUrl}/settings/global/projects`)
     browser.waitForFunction(`document.querySelector('[data-route="not-found"]') !== null`)

@@ -19,7 +19,11 @@ import {
 } from 'lucide-react'
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 
+import { useMutation } from '@tanstack/react-query'
+import { ApiError, updateProvider } from '@/api/client'
+import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { toast } from '@/components/ui/toaster'
 import { ZoomableImage } from '@/components/zoomable-image'
 import { Link } from '@/lib/project-router'
 import { isImageAttachmentName, type FileDiff, type ToolKind, type UiToolItem } from '@open-mercato/cezar-api-client'
@@ -33,7 +37,13 @@ import { splitToolTitle, streakLabel, type ContextGroupBlock } from './thread-gr
 import { useThreadCardCache } from './thread-open-cards'
 import { isNearBottom } from './thread-scroll'
 import { MessageTime, clockLabel, elapsedSince, exactLabel, useNow } from './thread-time'
-import type { ThreadEntry, ThreadImage, ThreadNote, ThreadProviderAuthRequired } from './thread-state'
+import type {
+  ThreadAgentUpdateRequired,
+  ThreadEntry,
+  ThreadImage,
+  ThreadNote,
+  ThreadProviderAuthRequired,
+} from './thread-state'
 
 // The stick rule lives with the rest of the scroll math now; re-exported because this is
 // where the live tail below consumes it.
@@ -373,6 +383,77 @@ export function ProviderAuthRequiredCard({
       >
         Open provider settings
       </Link>
+    </div>
+  )
+}
+
+/** The CLIs with a self-update cezar can run (`updateArgs` in `provider-auth.ts`); the rest
+ *  update the way they were installed, so the card says so instead of offering a 409. */
+const SELF_UPDATING = new Set<ThreadProviderAuthRequired['provider']>(['claude', 'opencode', 'cursor'])
+
+/** Follows an agent error saying its CLI is too old: hands the CLI's own update to a terminal,
+ *  or shows the command to run when no terminal can be opened. */
+export function AgentUpdateRequiredCard({ incident }: { incident: ThreadAgentUpdateRequired }) {
+  const label = PROVIDER_LABEL[incident.provider]
+  const [manual, setManual] = useState<{ message: string; command?: string } | null>(null)
+  const update = useMutation({
+    mutationFn: () => updateProvider(incident.provider),
+    onSuccess: () => {
+      setManual(null)
+      toast(`Updating ${label} in a terminal. Continue the task once it finishes.`)
+    },
+    onError: (error: Error) =>
+      setManual({ message: error.message, command: error instanceof ApiError ? error.command : undefined }),
+  })
+  const copy = async (command: string) => {
+    try {
+      await navigator.clipboard.writeText(command)
+      toast('Command copied')
+    } catch {
+      toast('Could not copy the command', { tone: 'danger' })
+    }
+  }
+  return (
+    <div
+      role="alert"
+      data-slot="agent-update-required"
+      className="rounded-md border border-danger/30 bg-danger/5 px-3.5 py-3"
+    >
+      <p className="text-[13px] font-semibold text-foreground">{label} needs an update</p>
+      {SELF_UPDATING.has(incident.provider) ? (
+        <>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Update it, then continue the task.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-2"
+            disabled={update.isPending}
+            onClick={() => update.mutate()}
+          >
+            Update {label}
+          </Button>
+        </>
+      ) : (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Update it the way you installed it, then continue the task.
+        </p>
+      )}
+      {manual ? (
+        <div data-slot="agent-update-manual" className="mt-2 text-xs text-muted-foreground">
+          <p>{manual.message}</p>
+          {manual.command ? (
+            <div className="mt-1 flex items-center gap-2">
+              <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-foreground">{manual.command}</code>
+              <Button type="button" variant="ghost" size="sm" onClick={() => void copy(manual.command!)}>
+                Copy
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   )
 }

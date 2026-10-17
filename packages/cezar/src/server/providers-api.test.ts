@@ -735,6 +735,57 @@ describe('workspace provider API', () => {
     expect(openTerminal).not.toHaveBeenCalled();
   });
 
+  describe('POST /api/v1/providers/:provider/update', () => {
+    const update = (server: ReturnType<typeof app>, provider: string) =>
+      apiRequest(server, `/api/v1/providers/${provider}/update`, { method: 'POST' });
+
+    it('opens a terminal running the CLI\'s own update', async () => {
+      const openTerminal = vi.fn(async () => true);
+      const response = await update(app({ openTerminal }), 'opencode');
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ opened: true, command: "'opencode' upgrade" });
+      expect(openTerminal).toHaveBeenCalledWith(root, "'opencode' upgrade");
+    });
+
+    it('answers 409 without a command for a CLI that cannot update itself', async () => {
+      const openTerminal = vi.fn(async () => true);
+      const response = await update(app({ openTerminal }), 'codex');
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: 'This agent has no update command of its own. Update it the way you installed it.',
+      });
+      expect(openTerminal).not.toHaveBeenCalled();
+    });
+
+    it('answers 409 plus command when localHandoff is false', async () => {
+      const openTerminal = vi.fn(async () => true);
+      const response = await update(app({ openTerminal, bindHost: '0.0.0.0' }), 'opencode');
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: 'Run this command on the machine hosting cezar.',
+        command: "'opencode' upgrade",
+      });
+      expect(openTerminal).not.toHaveBeenCalled();
+    });
+
+    it('answers 409 plus command when no terminal opens', async () => {
+      const response = await update(app({ openTerminal: async () => false }), 'claude');
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: 'No terminal emulator could be opened. Run this command manually.',
+        command: "'claude' update",
+      });
+    });
+
+    it('rejects an unknown provider', async () => {
+      expect((await update(app(), 'nope')).status).toBe(400);
+    });
+  });
+
   it('POST returns 409 plus command when the terminal launcher returns false', async () => {
     const openTerminal = vi.fn(async () => false);
     const response = await connect(app({

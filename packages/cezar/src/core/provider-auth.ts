@@ -74,6 +74,8 @@ interface ProviderDescriptor {
   executable: () => string;
   statusArgs: readonly string[];
   loginArgs: readonly string[];
+  /** The CLI's own self-update, where it has one; others update the way they were installed. */
+  updateArgs?: readonly string[];
   installHint: string;
   parse: (result: ProviderCommandResult) => ProviderConnectionState | null;
   /** See {@link RunProviderCommand}'s `stdin`. */
@@ -341,6 +343,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     executable: () => resolveClaudeBin(),
     statusArgs: ['auth', 'status', '--json'],
     loginArgs: ['auth', 'login'],
+    updateArgs: ['update'],
     installHint: 'Install Claude Code, then run `claude auth login`.',
     parse: parseClaudeStatus,
   },
@@ -359,6 +362,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     executable: () => process.env.CEZ_OPENCODE_BIN ?? 'opencode',
     statusArgs: ['auth', 'list'],
     loginArgs: ['auth', 'login'],
+    updateArgs: ['upgrade'],
     installHint: 'Install OpenCode, then run `opencode auth login`.',
     parse: parseOpenCodeStatus,
   },
@@ -368,6 +372,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     executable: () => process.env.CEZ_CURSOR_AGENT_BIN ?? 'agent',
     statusArgs: ['status', '--format', 'json'],
     loginArgs: ['login'],
+    updateArgs: ['update'],
     installHint:
       'Install the Cursor CLI (`curl https://cursor.com/install -fsS | bash`), then run `agent login` (or set CURSOR_API_KEY).',
     parse: parseCursorStatus,
@@ -770,6 +775,13 @@ export class ProviderAuthService {
     const command = [quoteExecutable(descriptor.executable(), this.platform), ...descriptor.loginArgs].join(' ');
     const env = configDir ? profileEnv(provider, configDir) : {};
     return withEnvPrefix(command, env, this.platform);
+  }
+
+  /** The agent CLI's self-update command (`opencode upgrade`), or null when it has none. */
+  updateCommand(provider: ProviderId): string | null {
+    const descriptor = descriptorFor(provider);
+    if (!descriptor.updateArgs) return null;
+    return [quoteExecutable(descriptor.executable(), this.platform), ...descriptor.updateArgs].join(' ');
   }
 
   installHint(provider: ProviderId): string {

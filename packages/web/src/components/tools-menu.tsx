@@ -1,5 +1,5 @@
 import { ChevronDownIcon, SettingsIcon } from 'lucide-react'
-import { Link } from '@/lib/project-router'
+import { Link as RouterLink } from 'react-router'
 
 import type { BackendCheck, HealthResponse, Runner } from '@open-mercato/cezar-api-client'
 import { StatusDot } from '@/components/status-dot'
@@ -121,15 +121,21 @@ export function ToolsMenu({ health }: { health: HealthResponse | undefined }) {
           </>
         ) : null}
         <DropdownMenuSeparator />
+        {/* The tools listed above are MACHINE-wide CLIs, so their settings page is the machine's:
+            General settings → Agent accounts (install hints, sign-in, the default agent) — not
+            the per-project Agents page this row once pointed at. A plain router Link, on
+            purpose: `/settings/global/*` lives outside every project, and the scoped Link would
+            prefix it (or, outside any project, fall through the legacy redirect to the boot
+            project — which is how "Tool settings" used to land on a stray worktree). */}
         <DropdownMenuItem asChild>
-          <Link
-            to="/settings/agents"
+          <RouterLink
+            to={ACCOUNTS_PATH}
             data-slot="tools-settings"
             className="gap-2 text-[12.5px] text-muted-foreground"
           >
             <SettingsIcon className="size-3.5" aria-hidden="true" />
-            Tool settings
-          </Link>
+            Agent accounts
+          </RouterLink>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -158,42 +164,69 @@ function AvailableToolRow({ check }: { check: BackendCheck }) {
   )
 }
 
+/** General settings → Agent accounts: where a machine-wide CLI is installed and signed in. */
+const ACCOUNTS_PATH = '/settings/global/accounts'
+
 /**
  * A missing tool: red dot + "not found", the server's `hint` verbatim as the secondary line
- * (degradation doctrine — the server writes those for people), and "Set up →" into Settings →
- * Agents. The whole row is the link, so the DropdownMenuItem closes the menu on navigation.
+ * (degradation doctrine — the server writes those for people). For an AGENT, the whole row is a
+ * "Set up →" link into Agent accounts on that agent's tab (`?agent=`), so the DropdownMenuItem
+ * closes the menu on navigation; for `gh`/`git` the row is informational, like a present tool —
+ * a link that cannot help is worse than none. `isRunner` (the exhaustive `RUNNER_NAMES` record
+ * above) decides which is which, so a runner added to the contract cannot be missed here.
  */
 function UnavailableToolRow({ check }: { check: BackendCheck }) {
-  return (
-    <DropdownMenuItem asChild>
-      <Link
-        to="/settings/agents"
-        data-slot="tool-row"
-        data-tool={check.name}
-        data-available="false"
-        className="flex-col items-stretch gap-1"
-      >
-        <span className="flex items-center gap-2">
-          <StatusDot tone="danger" />
-          <span className="font-mono text-[12.5px] font-medium">{check.name}</span>
-          <span
-            data-slot="tool-version"
-            className="ml-auto font-mono text-[11.5px] font-medium text-muted-foreground"
-          >
-            not found
-          </span>
+  const body = (
+    <>
+      <span className="flex items-center gap-2">
+        <StatusDot tone="danger" />
+        <span className="font-mono text-[12.5px] font-medium">{check.name}</span>
+        <span
+          data-slot="tool-version"
+          className="ml-auto font-mono text-[11.5px] font-medium text-muted-foreground"
+        >
+          not found
         </span>
+      </span>
+      {check.hint || isRunner(check) ? (
         <span className="flex items-end justify-between gap-3 pl-[15px]">
           {check.hint ? (
             <span data-slot="tool-hint" className="min-w-0 text-[11px] leading-snug text-muted-foreground">
               {check.hint}
             </span>
           ) : null}
-          <span data-slot="tool-setup" className="ml-auto shrink-0 text-[11.5px] font-semibold text-violet">
-            Set up →
-          </span>
+          {isRunner(check) ? (
+            <span data-slot="tool-setup" className="ml-auto shrink-0 text-[11.5px] font-semibold text-violet">
+              Set up →
+            </span>
+          ) : null}
         </span>
-      </Link>
+      ) : null}
+    </>
+  )
+  if (!isRunner(check)) {
+    return (
+      <div
+        data-slot="tool-row"
+        data-tool={check.name}
+        data-available="false"
+        className="flex flex-col items-stretch gap-1 rounded-sm px-2 py-1.5"
+      >
+        {body}
+      </div>
+    )
+  }
+  return (
+    <DropdownMenuItem asChild>
+      <RouterLink
+        to={`${ACCOUNTS_PATH}?agent=${encodeURIComponent(check.name)}`}
+        data-slot="tool-row"
+        data-tool={check.name}
+        data-available="false"
+        className="flex-col items-stretch gap-1"
+      >
+        {body}
+      </RouterLink>
     </DropdownMenuItem>
   )
 }

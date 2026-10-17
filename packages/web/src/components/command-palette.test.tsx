@@ -109,7 +109,7 @@ function health(forgeAvailable: boolean, automations = false): HealthResponse {
     checks: [],
     defaultRunner: 'claude',
     forge: forgeAvailable ? { kind: 'github', available: true } : null,
-    capabilities: { localHandoff: true, terminal: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations, dispatch: false },
+    capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations, dispatch: false },
   }
 }
 
@@ -248,19 +248,20 @@ describe('Views group', () => {
     expect(document.querySelector('[data-nav-to="/tracker"]')?.textContent).toContain('Linear')
   })
 
-  it('leads with New task and its C hint, then the 8 nav destinations', async () => {
+  it('leads with New task and its C hint, then the 8 nav destinations and Global settings', async () => {
     renderPalette({ automations: true })
     openWith({ metaKey: true })
     await screen.findByRole('dialog')
 
     // The GitHub row waits on the health answer (forge gate) — settle before asserting.
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(9),
+      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(10),
     )
     const views = [...document.querySelectorAll('[data-slot="palette-view"]')]
     // New task FIRST — an empty query pre-selects it, so ⌘K then Enter starts a task.
     expect(views.map((view) => view.getAttribute('data-nav-to'))).toEqual([
       '/new', '/', '/inbox', '/git', '/github', '/automations', '/skills', '/workflows', '/settings',
+      '/settings/global',
     ])
     expect(views[0]?.textContent).toContain('New task')
     // The chip advertises `c` — ⌘N is browser-reserved and only fires in the desktop shell.
@@ -275,11 +276,11 @@ describe('Views group', () => {
     await screen.findByRole('dialog')
 
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(8),
+      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(9),
     )
     const views = [...document.querySelectorAll('[data-slot="palette-view"]')]
     expect(views.map((view) => view.getAttribute('data-nav-to'))).toEqual([
-      '/new', '/', '/inbox', '/git', '/github', '/skills', '/workflows', '/settings',
+      '/new', '/', '/inbox', '/git', '/github', '/skills', '/workflows', '/settings', '/settings/global',
     ])
   })
 
@@ -288,7 +289,7 @@ describe('Views group', () => {
     openWith({ metaKey: true })
     await screen.findByRole('dialog')
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(9),
+      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(10),
     )
 
     const newTaskRows = [...document.querySelectorAll('[data-nav-to="/new"]')]
@@ -316,13 +317,24 @@ describe('Views group', () => {
     await screen.findByRole('dialog')
 
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(7),
+      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(8),
     )
     const targets = [...document.querySelectorAll('[data-slot="palette-view"]')].map((view) =>
       view.getAttribute('data-nav-to'),
     )
     expect(targets).not.toContain('/github')
     expect(targets).not.toContain('/automations')
+  })
+
+  it('Global settings navigates OUTSIDE the project scope — never `/p/<id>/settings/global`', async () => {
+    renderPalette({ entry: '/p/cezar/git' })
+    openWith({ metaKey: true })
+    await screen.findByRole('dialog')
+
+    fireEvent.click(document.querySelector('[data-nav-to="/settings/global"]') as HTMLElement)
+
+    expect(location()).toBe('/settings/global')
+    await waitFor(() => expect(dialog()).toBeNull())
   })
 
   it('navigates to the selected view and closes', async () => {

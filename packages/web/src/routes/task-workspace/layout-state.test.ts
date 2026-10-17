@@ -12,6 +12,7 @@ import {
   findLayout,
   fixedViewOf,
   forgetTask,
+  layoutDisplayName,
   MAX_COLUMNS,
   MIN_COLUMN_WIDTH,
   moveColumn,
@@ -45,7 +46,7 @@ const widths = (state: WorkspaceState) => activeLayout(state)?.columns.map((colu
 const views = (state: WorkspaceState) => activeLayout(state)?.columns.map((column) => column.view)
 const names = (state: WorkspaceState) => state.layouts.map((layout) => layout.name)
 /** The six cards a task is born with, in order: one per view. */
-const BORN = ['Chat', 'Changes', 'Commits', 'Code', 'Browser', 'Graph']
+const BORN = ['Chat', 'Changes', 'Commits', 'Code', 'Preview', 'Graph']
 
 describe('defaultState', () => {
   it('opens a fresh task on Chat, with one full-width card per view behind it', () => {
@@ -388,6 +389,16 @@ describe('openDeepLink', () => {
     expect(fixedViewOf(saved)).toBe('files')
     const state = openDeepLink(before, 'files')
     expect(state.active).toBe('Files')
+    expect(state.layouts).toEqual(before.layouts)
+  })
+
+  it('still knows the born Browser card as the Preview', () => {
+    // The Browser view is labelled `Preview` now; every task opened before has its card saved as `Browser`.
+    const before = renameLayout(defaultState(), viewLabel('browser'), 'Browser')
+    expect(fixedViewOf(findLayout(before, 'Browser')!)).toBe('browser')
+    expect(layoutDisplayName('Browser')).toBe('Preview')
+    const state = openDeepLink(before, 'browser')
+    expect(state.active).toBe('Browser')
     expect(state.layouts).toEqual(before.layouts)
   })
 

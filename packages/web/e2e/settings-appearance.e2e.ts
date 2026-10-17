@@ -89,6 +89,38 @@ describe('settings → appearance against the live dry-run server', () => {
     expect(browser.count(`${nav} [aria-current="page"][data-section="appearance"]`)).toBe(1)
   })
 
+  it('is full-screen: no sidebar, the ⌘K launcher at the bottom of the nav, and Back leaves', () => {
+    // Enter from a real page so Back has somewhere to return to (spec 2026-10-13-unified-settings).
+    browser.goto(`${baseUrl}/`)
+    browser.waitForFunction(`document.querySelector('[data-slot="sidebar"]') !== null`)
+    browser.click('[data-slot="global-settings-link"]')
+    // The global index has no page of its own; it lands on the first section.
+    browser.waitForFunction(`document.querySelector('[data-route="settings-global-appearance"]') !== null`)
+
+    expect(browser.count('[data-slot="app-shell"][data-chromeless]')).toBe(1)
+    expect(browser.count('[data-slot="sidebar"]')).toBe(0)
+    expect(browser.count('[data-slot="mobile-top-bar"]')).toBe(0)
+    expect(browser.isVisible('[data-slot="settings-sidebar-footer"] [data-slot="theme-toggle"]')).toBe(true)
+
+    // The launcher sits in the settings sidebar's footer — the app sidebar's footer, reused —
+    // and opens the palette.
+    const hint = '[data-slot="settings-sidebar-footer"] [data-slot="command-palette-hint"]'
+    expect(browser.isVisible(hint)).toBe(true)
+    browser.click(hint)
+    browser.waitForFunction(`document.querySelector('[role="dialog"]') !== null`)
+    browser.press('Escape')
+    browser.waitForFunction(`document.querySelector('[role="dialog"]') === null`)
+
+    // Back returns to the page settings was opened from, and the sidebar is back with it.
+    browser.click('[data-slot="settings-back"]')
+    browser.waitForFunction(`document.querySelector('[data-slot="sidebar"]') !== null`)
+    expect(browser.count('[data-slot="app-shell"][data-chromeless]')).toBe(0)
+
+    // The tests below start on the appearance page without navigating — put the browser back.
+    browser.goto(`${baseUrl}/settings/global/appearance`)
+    browser.waitForFunction(`document.querySelector('[data-route="settings-global-appearance"]') !== null`)
+  })
+
   it('flipping the theme flips the root class and persists across a reload', () => {
     browser.click('[data-slot="appearance-theme"] [data-value="light"]')
     browser.waitForFunction(`document.documentElement.classList.contains('light')`)

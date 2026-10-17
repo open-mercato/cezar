@@ -45,16 +45,16 @@ describe('layout transitions stay inside the contract bounds', () => {
   })
 
   it('bounds what a Browser column is handed: tab count, active index, address length', () => {
-    const base = { ...defaultState(), active: 'Browser' }
+    const base = { ...defaultState(), active: 'Preview' }
     const tabs = Array.from({ length: 13 }, (_, index) => `http://localhost:${3000 + index}/`)
-    const many = setColumnBrowser(base, 'Browser', 0, { tabs, active: 12 })
-    expect(many.layouts.find((layout) => layout.name === 'Browser')!.columns[0]!.browser).toEqual({
+    const many = setColumnBrowser(base, 'Preview', 0, { tabs, active: 12 })
+    expect(many.layouts.find((layout) => layout.name === 'Preview')!.columns[0]!.browser).toEqual({
       tabs: tabs.slice(0, 12),
       active: 11,
     })
     expect(accepted(many)).toBe(true)
 
-    const long = setColumnBrowser(base, 'Browser', 0, { tabs: [`https://x.test/?q=${'a'.repeat(2048)}`], active: 0 })
+    const long = setColumnBrowser(base, 'Preview', 0, { tabs: [`https://x.test/?q=${'a'.repeat(2048)}`], active: 0 })
     expect(accepted(long)).toBe(true)
   })
 

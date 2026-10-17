@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ExternalLinkIcon, IdCardIcon } from 'lucide-react'
 import { Fragment, useState } from 'react'
+import { useSearchParams } from 'react-router'
 
 import { ApiError, putWorkspaceConfig } from '@/api/client'
 
@@ -153,6 +154,11 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
   // "is OpenCode set up?" somewhere else. Derived, not written out: as a literal this list went
   // stale the moment a fifth runner existed, and "every agent" quietly became "four of them".
   const providers: readonly ProviderId[] = RUNNER_ORDER
+  // `?agent=<id>` opens that agent's tab — the Tools menu's "Set up →" deep link for a missing
+  // CLI. Anything else (absent, unknown) keeps the first tab, as before.
+  const [searchParams] = useSearchParams()
+  const requested = searchParams.get('agent')
+  const initialTab = providers.find((provider) => provider === requested) ?? 'claude'
 
   if (!data.editable) {
     return (
@@ -185,7 +191,9 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
 
       <DefaultsForNewProjects profiles={data} />
 
-      <Tabs defaultValue="claude">
+      {/* Keyed so a changed `?agent=` on an already-mounted pane (back/forward, a second deep
+          link) switches the tab — `defaultValue` alone is read once. */}
+      <Tabs key={initialTab} defaultValue={initialTab}>
         <TabsList variant="line" data-slot="accounts-tabs">
           {providers.map((provider) => (
             <TabsTrigger key={provider} value={provider} data-provider={provider}>

@@ -70,6 +70,7 @@ const health = (terminal: boolean): HealthResponse => ({
   capabilities: {
     localHandoff: true,
     terminal,
+    designMode: true,
     tokenMetrics: true,
     tokenUsageMetrics: true,
     costMetrics: true,
@@ -157,7 +158,7 @@ describe('the task workspace (main)', () => {
     await ready()
 
     // Terminal has no tab: the Terminal button is its one control.
-    expect(cardNames()).toEqual(['Chat', 'Changes', 'Commits', 'Code'])
+    expect(cardNames()).toEqual(['Chat', 'Changes', 'Commits', 'Code', 'Preview'])
     expect(activeCard()).toBe('Chat')
     // One strip, never both: the old route links are gone from the header.
     expect(screen.queryByRole('link', { name: 'Changes' })).toBeNull()
@@ -175,8 +176,28 @@ describe('the task workspace (main)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'New layout' }))
     await waitFor(() => expect(document.querySelector('[data-slot="view-tiles-stage"]')).not.toBeNull())
     expect(document.querySelector('[data-slot="view-tiles-stage"] [data-view="terminal"]')).toBeNull()
-    // …and never a Browser: main has no Browser column yet.
-    expect(document.querySelector('[data-slot="view-tiles-stage"] [data-view="browser"]')).toBeNull()
+    // The Preview needs no shell: it is offered either way.
+    expect(document.querySelector('[data-slot="view-tiles-stage"] [data-view="browser"]')).not.toBeNull()
+  })
+
+  it('opens the Preview deep link on the real Preview, with its saved tabs and Design Mode', async () => {
+    hostLayouts.r1 = {
+      layouts: [
+        {
+          name: 'Browser',
+          columns: [{ view: 'browser', width: 100, browser: { tabs: ['http://localhost:3000/', ''], active: 1 } }],
+        },
+      ],
+      active: 'Chat',
+    }
+    stubFetch()
+    renderWorkspace('browser')
+    await ready()
+
+    await waitFor(() => expect(activeCard()).toBe('Preview'))
+    expect(columnViews()).toEqual(['browser'])
+    expect(document.querySelectorAll('[data-slot="browser-tab"]')).toHaveLength(2)
+    expect(document.querySelector('[data-slot="browser-design-toggle"]')).not.toBeNull()
   })
 
   it('puts a terminal beside the chat in a layout, saved on the host', async () => {

@@ -36,6 +36,8 @@ from), `open_in` (which app), `add_project_opened` (which Add project dialog: `n
 caller), `task_deleted` (with the task's status), `provider_login_opened` / `provider_login_not_opened` / `provider_connected`
 (what an agent's **Connect** did — the agent and an outcome such as `unknown`, `no_terminal` or
 `already_connected` — and whether the login it opened finished within 15 minutes),
+`provider_update_opened` (what an agent's **Update** — offered next to an "X or newer is required"
+error — did: the agent and `opened`, `unsupported`, `hosted` or `no_terminal`),
 `skills_provisioned` (whether a task's selected skill and its companions were `installed` into
 its workspace, were `already_present`, or the selected skill was `root_not_found`; the count
 installed — never a skill name), `skill_missing_in_session` (the agent's backend, once per task,
@@ -62,6 +64,11 @@ emails, URLs, slash-bearing names (paths, branches, `owner/repo`), your project 
 anything after a `: ` become placeholders. For a provider or agent-account call the report also
 names the agent (`claude`, `codex`, …). When the call got no answer at all, the report names the
 browser's own transport error (e.g. `TypeError: Load failed`), masked the same way.
+
+Every error an agent shows in a task's thread is reported the same way, as an `AgentError` named
+by the agent (`opencode: OpenCode 1.18.0 or newer is required to use the free tier`), with whether
+it ended the session and whether it asks for a newer CLI. The text is masked first: quoted values,
+emails, URLs and slash-bearing names (paths, branches, `owner/repo`) become placeholders.
 
 When cezar cannot read whether an agent's CLI is signed in, it reports why (timed out, could not
 start, unexpected exit, unrecognised output) with the shape of the answer only: exit code, Node's

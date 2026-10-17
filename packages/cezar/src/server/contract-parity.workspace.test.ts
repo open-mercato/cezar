@@ -28,12 +28,14 @@ import type {
   openProjectInResponseSchema,
   openTargetsResponseSchema,
   providerConnectResponseSchema,
+  providerUpdateResponseSchema,
   providerStatusResponseSchema,
   runnerModelCatalogResponseSchema,
   setConfigResponseSchema,
   skillsUpdateStateSchema,
   selfUpdateStatusSchema,
   starCountSchema,
+  designProxyResponseSchema,
   setTelemetryConsentInputSchema,
   telemetryConsentSchema,
   uiStateSchema,
@@ -134,6 +136,9 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
   // ---- the star ask -------------------------------------------------------------------------
   type StarCount200 = InferResponseType<(typeof client.api.v1)['star-count']['$get'], 200>;
 
+  // ---- Design Mode --------------------------------------------------------------------------
+  type DesignProxy200 = InferResponseType<(typeof client.api.v1.preview)['design-proxy']['$post'], 200>;
+
   // ---- telemetry consent --------------------------------------------------------------------
   type TelemetryConsent200 = InferResponseType<typeof client.api.v1.telemetry.consent.$get, 200>;
   type SetTelemetryConsent200 = InferResponseType<typeof client.api.v1.telemetry.consent.$put, 200>;
@@ -150,6 +155,10 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     200
   >;
   type ProviderConnect200 = InferResponseType<typeof client.api.v1.providers.connect.$post, 200>;
+  type ProviderUpdate200 = InferResponseType<
+    (typeof client.api.v1.providers)[':provider']['update']['$post'],
+    200
+  >;
   type Models200 = InferResponseType<typeof client.api.v1.models.$get, 200>;
   type OpenTargets200 = InferResponseType<(typeof client.api.v1)['open-targets']['$get'], 200>;
   type OpenProjectIn200 = InferResponseType<(typeof client.api.v1)['open-in']['$post'], 200>;
@@ -233,6 +242,8 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     Assert<Exact<z.infer<typeof selfUpdateStatusSchema>, SelfUpdateApply200>>,
     // the star ask
     Assert<Exact<z.infer<typeof starCountSchema>, StarCount200>>,
+    // Design Mode
+    Assert<Exact<z.infer<typeof designProxyResponseSchema>, DesignProxy200>>,
     // telemetry consent
     Assert<Exact<z.infer<typeof telemetryConsentSchema>, TelemetryConsent200>>,
     Assert<Exact<z.infer<typeof telemetryConsentSchema>, SetTelemetryConsent200>>,
@@ -242,6 +253,7 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     Assert<Exact<z.infer<typeof providerStatusResponseSchema>, ProviderEnabled200>>,
     Assert<Exact<z.infer<typeof providerStatusResponseSchema>, ProviderRetry200>>,
     Assert<Exact<z.infer<typeof providerConnectResponseSchema>, ProviderConnect200>>,
+    Assert<Exact<z.infer<typeof providerUpdateResponseSchema>, ProviderUpdate200>>,
     Assert<Exact<z.infer<typeof runnerModelCatalogResponseSchema>, Models200>>,
     Assert<Exact<z.infer<typeof openTargetsResponseSchema>, OpenTargets200>>,
     Assert<Exact<z.infer<typeof openProjectInResponseSchema>, OpenProjectIn200>>,

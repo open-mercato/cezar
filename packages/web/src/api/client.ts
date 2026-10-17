@@ -1,3 +1,9 @@
+import type { z } from 'zod'
+import type {
+  lifecycleListResponseSchema, lifecycleDetailResponseSchema, lifecycleOperationResponseSchema,
+  lifecyclePreviewInputSchema, lifecycleListQuerySchema, LifecycleOutputResponse,
+  LifecyclePreviewResponse, LifecycleActionInput, StartLifecycleRemovalInput,
+} from '@open-mercato/cezar-api-client'
 import { trackerReadScope, resolveApiUrl, workspaceBrandingLogoResponseSchema } from '@open-mercato/cezar-api-client'
 import type {
   DetectedUrlsResponse,
@@ -95,6 +101,7 @@ import type {
   PickVariantResponse,
   PlanResponse,
   ProviderConnectResponse,
+  ProviderUpdateResponse,
   ProviderId,
   ProviderStatusResponse,
   ProjectsResponse,
@@ -116,6 +123,8 @@ import type {
   RunRecord,
   RunsIndexResponse,
   StarCountPayload,
+  DesignProxyRequest,
+  DesignProxyResponse,
   SetTelemetryConsentInput,
   TelemetryConsentPayload,
   WorktreeEntry,
@@ -463,6 +472,15 @@ export async function getHealth(opts?: ReadOptions): Promise<HealthResponse> {
  *  answer and the chip renders nothing for it. */
 export async function getStarCount(opts?: ReadOptions): Promise<StarCountPayload> {
   return unwrap(await cez.api.v1['star-count'].$get({}, init(opts)), '/star-count')
+}
+
+/**
+ * The Design Mode proxy origin for a loopback dev server (`POST /api/v1/preview/design-proxy`).
+ * Idempotent, so the Preview tab asks before every load instead of tracking whether its proxy is
+ * still alive. Workspace-level — the dev server belongs to the machine, not to the project.
+ */
+export async function openDesignProxy(input: DesignProxyRequest): Promise<DesignProxyResponse> {
+  return unwrap(await cez.api.v1.preview['design-proxy'].$post({ json: input }), '/preview/design-proxy')
 }
 
 /** The opt-in telemetry answer (`~/.cezar/config.json`), behind the consent bar and
@@ -1260,6 +1278,15 @@ export async function connectProvider(
       json: { provider, ...(profileId ? { profileId } : {}) },
     }),
     '/providers/connect',
+  )
+}
+
+/** Opens a terminal running the agent CLI's own update (`opencode upgrade`). A 409 carries
+ *  `command` for the clipboard fallback, or none when the CLI cannot update itself. */
+export async function updateProvider(provider: ProviderId): Promise<ProviderUpdateResponse> {
+  return unwrap(
+    await cez.api.v1.providers[':provider'].update.$post({ param: { provider } }),
+    `/providers/${encodeURIComponent(provider)}/update`,
   )
 }
 
@@ -2608,6 +2635,32 @@ export async function readTrackerWatch(projectId: string, watchId: string, signa
 export async function refreshTrackerWatch(projectId: string, watchId: string, signal: AbortSignal) {
   return trackerWatchSnapshotSchema.parse(await unwrap(await cez.api.v1.p[':projectId'].tracker.watch[':watchId'].$post(
     { param: { projectId, watchId } }, { init: { signal } }), '/tracker/watch'))
+}
+
+/** Worktree lifecycle reads/actions share the existing scope and authenticated transport. */
+export async function getWorktreeLifecycle(query: z.output<typeof lifecycleListQuerySchema> = { limit: 50 }, opts?: ReadOptions): Promise<z.infer<typeof lifecycleListResponseSchema>> {
+  return unwrap(await cez.api.v1.p[':projectId']['worktree-lifecycle'].$get({
+    param: { projectId: queryScope() },
+    query: { cursor: query.cursor, limit: query.limit, attentionOnly: query.attentionOnly === undefined ? undefined : query.attentionOnly ? 'true' : 'false' },
+  }, init(opts)), '/worktree-lifecycle')
+}
+export async function getWorktreeLifecycleDetail(worktreeId: string, opts?: ReadOptions): Promise<z.infer<typeof lifecycleDetailResponseSchema>> {
+  return unwrap(await cez.api.v1.p[':projectId']['worktree-lifecycle'][':worktreeId'].$get({ param: { projectId: queryScope(), worktreeId } }, init(opts)), '/worktree-lifecycle')
+}
+export async function getLifecycleOperation(operationId: string, opts?: ReadOptions): Promise<z.infer<typeof lifecycleOperationResponseSchema>> {
+  return unwrap(await cez.api.v1.p[':projectId']['worktree-lifecycle'].operations[':operationId'].$get({ param: { projectId: queryScope(), operationId } }, init(opts)), '/worktree-lifecycle/operations')
+}
+export async function getLifecycleOutput(operationId: string, afterSeq = 0, opts?: ReadOptions): Promise<LifecycleOutputResponse> {
+  return unwrap(await cez.api.v1.p[':projectId']['worktree-lifecycle'].operations[':operationId'].output.$get({ param: { projectId: queryScope(), operationId }, query: { afterSeq, limit: 100 } }, init(opts)), '/worktree-lifecycle/operations/output')
+}
+export async function startLifecycleRemoval(input: StartLifecycleRemovalInput): Promise<z.infer<typeof lifecycleOperationResponseSchema>> {
+  return unwrap(await cez.api.v1.p[':projectId']['worktree-lifecycle'].operations.$post({ param: { projectId: queryScope() }, json: input }), '/worktree-lifecycle/operations')
+}
+export async function actOnLifecycleOperation(operationId: string, input: LifecycleActionInput): Promise<z.infer<typeof lifecycleOperationResponseSchema>> {
+  return unwrap(await cez.api.v1.p[':projectId']['worktree-lifecycle'].operations[':operationId'].actions.$post({ param: { projectId: queryScope(), operationId }, json: input }), '/worktree-lifecycle/operations/actions')
+}
+export async function previewLifecycleCommand(input: z.infer<typeof lifecyclePreviewInputSchema>): Promise<LifecyclePreviewResponse> {
+  return unwrap(await cez.api.v1.p[':projectId']['worktree-lifecycle'].preview.$post({ param: { projectId: queryScope() }, json: input }), '/worktree-lifecycle/preview')
 }
 
 /** Hand the session off to a real terminal (spec 003), in the run's worktree when it still

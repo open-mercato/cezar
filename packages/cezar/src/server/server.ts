@@ -69,6 +69,7 @@ import {
   type RunIndexEntry,
   type RunsIndexResponse,
   type StarCountPayload,
+  designProxyRequestSchema,
   type WorkspaceConfigResponse,
   workspaceBrandingLogoResponseSchema,
   githubListQuerySchema,
@@ -117,6 +118,7 @@ import {
   reportInconclusiveProbe,
   trackLoginNotOpened,
   trackLoginOpened,
+  trackUpdateOpened,
   watchLogin,
 } from './provider-telemetry.ts';
 import { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
@@ -149,6 +151,7 @@ import { SkillsUpdateConflictError, SkillsUpdateCoordinator, SkillsUpdateService
 import { selfUpdateApplyRequestSchema, selfUpdateChannelRequestSchema, selfUpdateDevelopmentQuerySchema } from '@open-mercato/cezar-contract';
 import { SelfUpdateBusyError, SelfUpdateService } from '../self-update/service.ts';
 import { StarCountReader } from './star-count.ts';
+import { DesignProxies } from './preview/design-proxy.ts';
 import { getTeamSkillsCached, refreshTeamSkills, waitForTeamSkills } from '../skills-remote.ts';
 import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.ts';
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
@@ -189,6 +192,11 @@ import { toPastedContent, type PastedContent, type RunManager } from '../workflo
 import { deleteUpload, readUpload, writeUpload } from '../uploads.ts';
 import { branchesCheckedOutElsewhere, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
 import { isReclaimable, reclaimWorktrees } from '../runs/retention.ts';
+import { worktreeLifecycleRoutes, lifecycleError } from './worktree-lifecycle.ts';
+import { readLifecycleConfigOrDefault, readLifecycleConfigRaw, lifecycleConfigFromRaw, withLifecycleConfigLock, applyLifecycleConfigUpdate, isLifecycleConfigTracked, LifecycleConfigError, TRACKED_CONFIG_ERROR } from '../worktree-lifecycle/config.ts';
+import { atomicLifecycleWrite, LifecycleStoreError } from '../worktree-lifecycle/store.ts';
+import { validateLifecycleCommand } from '../worktree-lifecycle/templates.ts';
+import { setConfigInputSchema, type WorktreeLifecycleInvalidation } from '@open-mercato/cezar-contract';
 import { getBranches, getCommit, getDiff, getLog, getRepoInfo, getStatus } from './git.ts';
 import {
   collectChanges,
@@ -404,6 +412,9 @@ export interface ServerDeps {
    *  Defaults to a reader that asks github.com at most once per ten seconds, paced to GitHub's rate limit, and caches the answer
    *  under `~/.cache/cez/`; tests inject their own so no suite ever reaches the network. */
   starCount?: { read(): Promise<StarCountPayload> };
+  /** The Design Mode proxies behind `POST /api/v1/preview/design-proxy` (src/server/preview/).
+   *  Injected by tests that need to close the listeners they opened. */
+  designProxies?: DesignProxies;
   /** WebSocket subscription hub (`/api/v1/ws`, src/server/ws.ts). `createApp`
    *  only registers topics on it — `startServer` builds one and attaches it
    *  to the HTTP server it binds. Optional so legacy callers/tests change
@@ -417,6 +428,25 @@ export interface ServerDeps {
   hostSampler?: HostSampler;
   /** Re-arm the workspace automation timer after definition mutations. */
   automationsChanged?: () => void;
+}
+
+/** Legacy destructive callers must opt into the recoverable operation API before mutation. */
+async function legacyLifecycleGate(project: ProjectContext, runId: string): Promise<boolean> {
+  if (project.manager.lifecycle) return project.manager.lifecycle.requiresGate(runId);
+  // Older embedded callers/test doubles have no coordinator; configured hooks still fail closed.
+  const { config } = await readLifecycleConfigOrDefault(project.root);
+  return config.afterCreate.length > 0 || config.beforeRemove.length > 0;
+}
+const LIFECYCLE_ENDPOINT_REQUIRED = 'Worktree scripts require a lifecycle operation; use /worktree-lifecycle/operations';
+
+async function withWorktreeMutation<T>(project: ProjectContext, runId: string, mutate: () => Promise<T>): Promise<T> {
+  return project.manager.lifecycle ? project.manager.lifecycle.withWorktreeMutation(runId, mutate) : mutate();
+}
+
+async function legacyWorktreeMutation<T>(project: ProjectContext, runId: string, mutate: () => Promise<T>): Promise<T> {
+  if (await legacyLifecycleGate(project, runId)) throw new Error(LIFECYCLE_ENDPOINT_REQUIRED);
+  // Unconfigured projects retain their original path without requiring writable lifecycle state.
+  return withWorktreeMutation(project, runId, mutate);
 }
 
 // ---- project-scoped routing (multi-project spec, step 2.2) -----------------
@@ -675,7 +705,8 @@ export type WorkspaceEventName =
   | 'checkout-progress'
   | 'provider-status'
   | 'automation-change'
-  | 'tracker-changed';
+  | 'tracker-changed'
+  | 'worktree-lifecycle';
 
 /**
  * The in-process bus for workspace-level SSE events. The registry-mutating
@@ -2270,7 +2301,39 @@ export function createApp(deps: ServerDeps) {
       trackLoginOpened(provider, row.status === 'unknown' ? 'unknown' : 'disconnected', sid);
       watchOpenedLogin(provider, { id: profile.id, isDefault: profile.isDefault, path: profile.isDefault ? null : profile.path }, sid);
       return c.json({ opened: true, command });
-    });
+    })
+
+    // Offered next to an "X or newer is required" agent error: hands the CLI's own self-update to
+    // a terminal, like Connect hands it the login.
+    .post(
+      '/providers/:provider/update',
+      paramZodValidator(z.object({ provider: providerParamSchema }), { message: 'unknown provider' }),
+      async (c) => {
+        const provider = c.req.valid('param').provider as ProviderId;
+        const sid = deviceSid(c.req.header('x-cezar-sid'));
+        const command = providerAuth.updateCommand(provider);
+        if (command === null) {
+          trackUpdateOpened(provider, 'unsupported', sid);
+          return c.json({ error: 'This agent has no update command of its own. Update it the way you installed it.' }, 409);
+        }
+        if (!capabilities().localHandoff) {
+          trackUpdateOpened(provider, 'hosted', sid);
+          return c.json({ error: 'Run this command on the machine hosting cezar.', command }, 409);
+        }
+        let opened = false;
+        try {
+          opened = await openTerminal(bootRoot, command);
+        } catch {
+          // Best-effort, as for Connect: the command is the fallback.
+        }
+        if (!opened) {
+          trackUpdateOpened(provider, 'no_terminal', sid);
+          return c.json({ error: 'No terminal emulator could be opened. Run this command manually.', command }, 409);
+        }
+        trackUpdateOpened(provider, 'opened', sid);
+        return c.json({ opened: true as const, command });
+      },
+    );
 
   // ---- chained family: agent profiles / accounts (workspace-level) ----------
   // Extra config dirs for a SECOND login of the same agent CLI (spec
@@ -3312,6 +3375,23 @@ export function createApp(deps: ServerDeps) {
   // change about it. Never fails — `{ available: false }` is the ordinary offline answer, so the
   // cockpit's chip simply is not there rather than showing an error nobody asked for.
   const starCountRoutes = new Hono().get('/star-count', async (c) => c.json(await starCount.read()));
+
+  // ---- chained family: Design Mode (workspace-level) -----------------------
+  // Spec `.ai/specs/2026-10-09-design-mode.md`. Single-mount: the proxy mirrors a loopback dev
+  // server, which belongs to the machine, not to a project. The request's own `Host` is passed
+  // as forbidden beside the body's cockpit origin (they differ under the Vite dev proxy), so
+  // this server can never be mirrored.
+  const designProxies = deps.designProxies ?? new DesignProxies();
+  deps.onDispose?.(() => designProxies.closeAll());
+  const previewRoutes = new Hono().post('/preview/design-proxy', jsonZodValidator(designProxyRequestSchema), async (c) => {
+    if (!capabilities().designMode) {
+      return c.json({ error: 'Design Mode is not available on this cockpit' }, 409);
+    }
+    const host = c.req.header('host');
+    const opened = await designProxies.open({ ...c.req.valid('json'), forbidden: host ? [`http://${host}`] : [] });
+    if (!opened.ok) return c.json({ error: opened.reason }, 400);
+    return c.json({ origin: opened.origin });
+  });
 
   const selfUpdateRoutes = new Hono()
     .get('/workspace/self-update', async (c) => c.json(await selfUpdate.status()))
@@ -4874,6 +4954,7 @@ export function createApp(deps: ServerDeps) {
       // The terminal would resume the agent's session with the user's own environment - no shim,
       // no push redirect - and the session would carry on as if it were still shadowed.
       if (run.shadow === true) return c.json({ error: SHADOW_RUN_REFUSAL }, 409);
+      if (c.get('project').manager.lifecycle?.isBlocked(id)) return c.json({ error: 'Resolve the pending worktree lifecycle operation before opening its environment' }, 409);
       // Hosted mode: there is no "my machine" to open a terminal on. The UI
       // hides the button when localHandoff is false — this is defense in depth.
       if (!capabilities().localHandoff) {
@@ -4921,6 +5002,7 @@ export function createApp(deps: ServerDeps) {
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
+      if (c.get('project').manager.lifecycle?.isBlocked(id)) return c.json({ error: 'Resolve the pending worktree lifecycle operation before opening its environment' }, 409);
       if (!capabilities().localHandoff) {
         return c.json(
           {
@@ -5211,7 +5293,9 @@ export function createApp(deps: ServerDeps) {
       const worktree = worktreeOf(run);
       if (!worktree) return c.json({ error: NO_WORKTREE }, 409);
       const parsed = { data: c.req.valid('json') };
-      const result = await commitAll(worktree, parsed.data.message);
+      let result;
+      try { result = await withWorktreeMutation(c.get('project'), run.id, () => commitAll(worktree, parsed.data.message)); }
+      catch (error) { return lifecycleError(c, error); }
       if (!result.ok) return c.json({ error: result.error }, 409);
       return c.json({ committed: true, sha: result.sha });
     })
@@ -5224,7 +5308,9 @@ export function createApp(deps: ServerDeps) {
       if (run.shadow === true) return c.json({ error: SHADOW_RUN_REFUSAL }, 409);
       const worktree = worktreeOf(run);
       if (!worktree) return c.json({ error: NO_WORKTREE }, 409);
-      const result = await pushCurrentBranch(worktree);
+      let result;
+      try { result = await withWorktreeMutation(c.get('project'), run.id, () => pushCurrentBranch(worktree)); }
+      catch (error) { return lifecycleError(c, error); }
       if (!result.ok) return c.json({ error: result.error }, 409);
       // A push is the event that changes what the chips say about this task's pull requests —
       // its checks start again, and its MERGEABILITY is recomputed from scratch. Both are cached
@@ -5289,7 +5375,9 @@ export function createApp(deps: ServerDeps) {
       if (!publish) {
         const branch = run.branch;
         publish = (async () => {
-          const outcome = await createDraftPr({ repoRoot, run, handoffText: readHandoff(dataDir, id), draft });
+          const outcome = await withWorktreeMutation(c.get('project'), id, () =>
+            createDraftPr({ repoRoot, run, handoffText: readHandoff(dataDir, id), draft }),
+          );
           if (!outcome.ok) return outcome;
           // A number the cockpit asked about BEFORE the pull request existed is cached as "this
           // repository has no such number" — which is exactly what a `CEZ:PR=901` marker declared
@@ -5311,7 +5399,11 @@ export function createApp(deps: ServerDeps) {
           .finally(() => prPublishes.delete(key));
         prPublishes.set(key, publish);
       }
-      const { outcome, branch } = await publish;
+      let published: Awaited<typeof publish>;
+      try {
+        published = await publish;
+      } catch (error) { return lifecycleError(c, error); }
+      const { outcome, branch } = published;
       if (!outcome.ok) {
         return c.json({ error: outcome.error, manual: `git merge ${branch}` }, 409);
       }
@@ -5326,12 +5418,16 @@ export function createApp(deps: ServerDeps) {
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
       if (manager.isActive(id)) return c.json({ error: 'run is active — cancel it first' }, 409);
-      // A shell must not outlive the directory it is standing in (spec §6).
-      stopTaskProcesses(id);
-      if (run.worktreePath) await removeWorktree(repoRoot, run.worktreePath, run.branch);
-      store.updateRun(id, { worktreePath: undefined, branch: undefined });
-      if (run.prHead) await manager.sweepPrHeadRefs();
-      return c.json({ removed: true });
+      try {
+        return await legacyWorktreeMutation(c.get('project'), id, async () => {
+          // A shell must not outlive the directory it is standing in (spec §6).
+          stopTaskProcesses(id);
+          if (run.worktreePath) await removeWorktree(repoRoot, run.worktreePath, run.branch);
+          store.updateRun(id, { worktreePath: undefined, branch: undefined });
+          if (run.prHead) await manager.sweepPrHeadRefs();
+          return c.json({ removed: true });
+        });
+      } catch (error) { return lifecycleError(c, error); }
     })
 
     .delete('/runs/:id', async (c) => {
@@ -5341,18 +5437,22 @@ export function createApp(deps: ServerDeps) {
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
       // Delete cleans up after itself: worktree + branch go with the run (spec 006), and so do its terminals.
-      stopTaskProcesses(id);
-      // Layouts go with the task, and only with it — archiving keeps them (spec §5.3).
-      deleteRunLayouts(dataDir, id);
-      if (run.worktreePath) await removeWorktree(repoRoot, run.worktreePath, run.branch);
-      // ...and a shadow run's ledger, shadow remotes and commit pins (spec 2026-10-06-shadow-runs).
-      if (run.shadow === true) await removeShadowState(dataDir, id, repoRoot);
-      const deleted = store.deleteRun(id);
-      // The run's `refs/cezar/pr/<n>` goes with the last run that needed it (Phase 3).
-      if (deleted && run.prHead) await manager.sweepPrHeadRefs();
-      if (!deleted) return c.json({ error: 'not found' }, 404);
-      track('task_deleted', { label: run.status }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
-      return c.json({ deleted: true });
+      try {
+        return await legacyWorktreeMutation(c.get('project'), id, async () => {
+          stopTaskProcesses(id);
+          // Layouts go with the task, and only with it — archiving keeps them (spec §5.3).
+          deleteRunLayouts(dataDir, id);
+          if (run.worktreePath) await removeWorktree(repoRoot, run.worktreePath, run.branch);
+          // ...and a shadow run's ledger, shadow remotes and commit pins (spec 2026-10-06-shadow-runs).
+          if (run.shadow === true) await removeShadowState(dataDir, id, repoRoot);
+          const deleted = store.deleteRun(id);
+          // The run's `refs/cezar/pr/<n>` goes with the last run that needed it (Phase 3).
+          if (deleted && run.prHead) await manager.sweepPrHeadRefs();
+          if (!deleted) return c.json({ error: 'not found' }, 404);
+          track('task_deleted', { label: run.status }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
+          return c.json({ deleted: true });
+        });
+      } catch (error) { return lifecycleError(c, error); }
     });
 
   // ---- chained family: in-task drafts (project-scoped) ----------------------
@@ -5581,14 +5681,29 @@ export function createApp(deps: ServerDeps) {
       appendHandoffHeartbeat(dataDir, winner.id, `picked from ${runs.length} variants`);
 
       for (const loser of losers) {
-        if (manager.isActive(loser.id)) manager.cancel(loser.id);
+        let removed = false;
+        let cleanupError: string | undefined;
+        // A shell must not outlive the directory it is standing in (spec §6).
         stopTaskProcesses(loser.id);
-        if (loser.worktreePath) await removeWorktree(repoRoot, loser.worktreePath, loser.branch);
-        store.updateRun(loser.id, { worktreePath: undefined, branch: undefined });
+        try {
+          const operation = manager.lifecycle ? await manager.lifecycle.discardVariant(loser.id) : null;
+          if (!operation) {
+            if (manager.cancelAndWait) {
+              if (!await manager.cancelAndWait(loser.id)) throw new Error('Variant process has not exited; worktree retained');
+            } else if (manager.isActive(loser.id)) {
+              manager.cancel(loser.id);
+              throw new Error('Variant cancellation requested; worktree retained until process exit is confirmed');
+            }
+            if (loser.worktreePath) await legacyWorktreeMutation(c.get('project'), loser.id, () => removeWorktree(repoRoot, loser.worktreePath!, loser.branch));
+            removed = !loser.worktreePath || !existsSync(loser.worktreePath);
+            if (!removed) throw new Error('Worktree removal did not complete');
+            store.updateRun(loser.id, { worktreePath: undefined, branch: undefined });
+          }
+        } catch (error) { cleanupError = error instanceof Error ? error.message : 'Cleanup needs attention'; }
         store.setArchived(loser.id, true);
         store.appendEvent(loser.id, {
           type: 'lifecycle',
-          message: `variant ${winner.variant ?? '?'} was picked — this variant is archived, its worktree removed`,
+          message: `variant ${winner.variant ?? '?'} was picked — this variant is archived; ${removed ? 'its worktree was removed' : cleanupError ? `cleanup needs attention: ${cleanupError}` : 'worktree cleanup is queued'}`,
         });
       }
       if (losers.some((loser) => loser.prHead)) await manager.sweepPrHeadRefs();
@@ -5711,7 +5826,7 @@ export function createApp(deps: ServerDeps) {
       const { root: repoRoot, store } = c.get('project');
       // The body is validated (an empty or `{}` one is accepted) but carries nothing this
       // handler reads; retention is best-effort, so 200 always.
-      const reclaimed = await reclaimWorktrees(repoRoot, store, await resolveWorktreeRetention(repoRoot));
+      const reclaimed = await reclaimWorktrees(repoRoot, store, await resolveWorktreeRetention(repoRoot), { lifecycle: c.get('project').manager.lifecycle });
       return c.json({ reclaimed });
     });
 
@@ -5959,7 +6074,7 @@ export function createApp(deps: ServerDeps) {
         // One detach bundle per attached project — the id guard makes a double
         // attach (connect-time snapshot vs. the built hook) impossible.
         const attached = new Map<string, { store: RunStore; detach: () => void }>();
-        const attach = (project: string, ctx: Pick<ProjectContext, 'store' | 'dataDir'>): void => {
+        const attach = (project: string, ctx: Pick<ProjectContext, 'store' | 'dataDir' | 'manager'>): void => {
           if (attached.has(project)) return;
           const { store, dataDir } = ctx;
           const onRun = (run: RunRecord) =>
@@ -5982,6 +6097,10 @@ export function createApp(deps: ServerDeps) {
           // Same opt-in gate as the per-project stream (#471): no capability, no
           // watcher — and each subscription is scoped to its own dataDir (2.3).
           const offTodos = capabilities().followups ? onTodosChanged(dataDir, () => void sendTodos()) : () => undefined;
+          const offLifecycle = ctx.manager.lifecycle?.onChange(event => {
+            const payload: WorktreeLifecycleInvalidation = { ...event, projectId: project };
+            void stream.writeSSE({ event: 'worktree-lifecycle', data: JSON.stringify(payload) });
+          });
           store.on('run', onRun);
           const offDeleted = onRunDeleted(store, onDeleted);
           attached.set(project, {
@@ -5990,6 +6109,7 @@ export function createApp(deps: ServerDeps) {
               store.off('run', onRun);
               offDeleted();
               offTodos();
+              offLifecycle?.();
             },
           });
         };
@@ -6722,6 +6842,7 @@ export function createApp(deps: ServerDeps) {
   // The Settings → Agents knobs in one read (R6 Step 1.5) — an ADDITIVE
   // sibling of PUT /api/config below; /api/health keeps its protected shape.
   const configAnswer = async (repoRoot: string, config: CezConfig) => {
+    const lifecycle = await readLifecycleConfigOrDefault(repoRoot, { trust: false });
     const nativeModels = await readAgentModelDefaults(repoRoot);
     const modelsLocked = agentModelsLocked(repoRoot);
     return {
@@ -6748,6 +6869,7 @@ export function createApp(deps: ServerDeps) {
       // Count-based worktree retention (#483): keep the last N finished worktrees
       // on disk. 0 = unlimited. Always materialized (schema default 10).
       worktreeRetention: config.worktreeRetention,
+      ...(lifecycle.configured ? { worktreeLifecycle: lifecycle.config, worktreeLifecycleRevision: lifecycle.revision! } : {}),
       // Live title updates (task auto-naming spec): tri-state — null means "no
       // config key, the CEZ_TITLE_UPDATES env default (ON) decides".
       liveTitleUpdates: config.liveTitleUpdates ?? null,
@@ -6760,10 +6882,11 @@ export function createApp(deps: ServerDeps) {
   const configRoutes = new Hono<ProjectApiEnv>()
     .get('/config', async (c) => {
       const repoRoot = c.get('project').root;
-      return c.json(await configAnswer(repoRoot, await loadConfig(repoRoot)));
+      try { return c.json(await configAnswer(repoRoot, await loadConfig(repoRoot))); }
+      catch (error) { return lifecycleError(c, error); }
     })
 
-    .put('/config', jsonZodValidator(() => setConfigSchema), async (c) => {
+    .put('/config', jsonZodValidator(setConfigInputSchema), async (c) => {
       const { root: repoRoot, dataDir } = c.get('project');
       const parsed = { data: c.req.valid('json') };
       // The auto override is a model choice too (#906), so the fixed-model
@@ -6774,96 +6897,121 @@ export function createApp(deps: ServerDeps) {
       ) {
         return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
       }
-      const configPath = join(dataDir, 'config.json');
-      let raw: Record<string, unknown> = {};
       try {
-        const existing: unknown = JSON.parse(await readFile(configPath, 'utf8'));
-        if (existing && typeof existing === 'object') raw = existing as Record<string, unknown>;
-      } catch {
-        // missing or malformed — start fresh
-      }
-      if (parsed.data.baseBranch !== undefined) {
-        if (parsed.data.baseBranch === null) delete raw.baseBranch;
-        else raw.baseBranch = parsed.data.baseBranch;
-      }
-      if (parsed.data.defaultRunner !== undefined) raw.defaultRunner = parsed.data.defaultRunner;
-      if (parsed.data.systemPrompt !== undefined) {
-        // '' and null both clear: an emptied textarea means "no extra prompt".
-        if (parsed.data.systemPrompt === null || parsed.data.systemPrompt === '') {
-          delete raw.systemPrompt;
-        } else {
-          raw.systemPrompt = parsed.data.systemPrompt;
+        const configPath = join(dataDir, 'config.json');
+        const save = async (locked: boolean) => {
+          let raw: Record<string, unknown> = {};
+          try { raw = await readLifecycleConfigRaw(repoRoot); }
+          catch (error) {
+            // Malformed or unreadable — start fresh, as before scripts existed. Unlocked (symlinked
+            // data dir) reads the file the way the old route did.
+            if (locked && !(error instanceof LifecycleConfigError)) throw error;
+            if (!locked) {
+              try {
+                const existing: unknown = JSON.parse(await readFile(configPath, 'utf8'));
+                if (existing && typeof existing === 'object' && !Array.isArray(existing)) raw = existing as Record<string, unknown>;
+              } catch { /* missing or malformed — start fresh */ }
+            }
+          }
+          lifecycleConfigFromRaw(raw); // An unrelated save cannot silently repair or reset unsupported hooks.
+          if (parsed.data.worktreeLifecycle !== undefined) {
+            if (parsed.data.worktreeLifecycleRevision === undefined) throw new Error('Reload settings before saving worktree scripts: revision is required');
+            if (parsed.data.worktreeLifecycle !== null) {
+              for (const entry of [...parsed.data.worktreeLifecycle.afterCreate, ...parsed.data.worktreeLifecycle.beforeRemove]) validateLifecycleCommand(entry.command);
+              const scripts = parsed.data.worktreeLifecycle.afterCreate.length + parsed.data.worktreeLifecycle.beforeRemove.length;
+              if (scripts > 0 && await isLifecycleConfigTracked(repoRoot)) throw new LifecycleConfigError(TRACKED_CONFIG_ERROR);
+            }
+            raw = applyLifecycleConfigUpdate(raw, parsed.data.worktreeLifecycle, parsed.data.worktreeLifecycleRevision);
+          }
+          if (parsed.data.baseBranch !== undefined) {
+            if (parsed.data.baseBranch === null) delete raw.baseBranch;
+            else raw.baseBranch = parsed.data.baseBranch;
+          }
+          if (parsed.data.defaultRunner !== undefined) raw.defaultRunner = parsed.data.defaultRunner;
+          if (parsed.data.systemPrompt !== undefined) {
+            // '' and null both clear: an emptied textarea means "no extra prompt".
+            if (parsed.data.systemPrompt === null || parsed.data.systemPrompt === '') {
+              delete raw.systemPrompt;
+            } else {
+              raw.systemPrompt = parsed.data.systemPrompt;
+            }
+          }
+          if (parsed.data.branchNaming !== undefined) {
+            // Same clearing rule as systemPrompt: an emptied textarea means `cez/<id8>` again.
+            if (parsed.data.branchNaming === null || parsed.data.branchNaming === '') {
+              delete raw.branchNaming;
+            } else {
+              raw.branchNaming = parsed.data.branchNaming;
+            }
+          }
+          if (parsed.data.maxParallel !== undefined) raw.maxParallel = parsed.data.maxParallel;
+          if (parsed.data.worktreeRetention !== undefined) {
+            // null clears back to the default (10); a number (including 0 = unlimited)
+            // is stored as-is.
+            if (parsed.data.worktreeRetention === null) delete raw.worktreeRetention;
+            else raw.worktreeRetention = parsed.data.worktreeRetention;
+          }
+          if (parsed.data.liveTitleUpdates !== undefined) {
+            if (parsed.data.liveTitleUpdates === null) delete raw.liveTitleUpdates;
+            else raw.liveTitleUpdates = parsed.data.liveTitleUpdates;
+          }
+          if (parsed.data.reviewGate !== undefined) {
+            if (parsed.data.reviewGate === null) delete raw.reviewGate;
+            else raw.reviewGate = parsed.data.reviewGate;
+          }
+          if (parsed.data.memoryLimitMb !== undefined) {
+            // null or 0 both mean "no ceiling" — drop the key back to the default.
+            if (parsed.data.memoryLimitMb === null || parsed.data.memoryLimitMb === 0) {
+              delete raw.memoryLimitMb;
+            } else {
+              raw.memoryLimitMb = parsed.data.memoryLimitMb;
+            }
+          }
+          if (parsed.data.defaultModels !== undefined) {
+            // Per-runner merge, so setting codex's preset never clobbers claude's.
+            const current =
+              raw.defaultModels && typeof raw.defaultModels === 'object'
+                ? { ...(raw.defaultModels as Record<string, unknown>) }
+                : {};
+            for (const [runner, model] of Object.entries(parsed.data.defaultModels)) {
+              if (model === undefined) continue;
+              if (model === null || model === '') delete current[runner];
+              else current[runner] = model;
+            }
+            if (Object.keys(current).length === 0) delete raw.defaultModels;
+            else raw.defaultModels = current;
+          }
+          if (parsed.data.defaultModelsAuto !== undefined) {
+            // Same per-runner merge as the presets above, and the same "store only a
+            // real opinion" rule: `false`/`null` deletes rather than persisting a
+            // key that means nothing (#906).
+            const current =
+              raw.defaultModelsAuto && typeof raw.defaultModelsAuto === 'object'
+                ? { ...(raw.defaultModelsAuto as Record<string, unknown>) }
+                : {};
+            for (const [runner, isAuto] of Object.entries(parsed.data.defaultModelsAuto)) {
+              if (isAuto === undefined) continue;
+              if (isAuto) current[runner] = true;
+              else delete current[runner];
+            }
+            if (Object.keys(current).length === 0) delete raw.defaultModelsAuto;
+            else raw.defaultModelsAuto = current;
+          }
+          if (locked) await atomicLifecycleWrite(configPath, raw);
+          else {
+            await mkdir(dataDir, { recursive: true });
+            await writeFile(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf8');
+          }
+        };
+        // All config writers share this short lock with the transition's final revision check.
+        try { await withLifecycleConfigLock(repoRoot, () => save(true)); }
+        catch (error) {
+          // The lifecycle store refuses a symlinked data dir; settings without scripts still save.
+          if (!(error instanceof LifecycleStoreError) || parsed.data.worktreeLifecycle !== undefined) throw error;
+          await save(false);
         }
-      }
-      if (parsed.data.branchNaming !== undefined) {
-        // Same clearing rule as systemPrompt: an emptied textarea means `cez/<id8>` again.
-        if (parsed.data.branchNaming === null || parsed.data.branchNaming === '') {
-          delete raw.branchNaming;
-        } else {
-          raw.branchNaming = parsed.data.branchNaming;
-        }
-      }
-      if (parsed.data.maxParallel !== undefined) raw.maxParallel = parsed.data.maxParallel;
-      if (parsed.data.worktreeRetention !== undefined) {
-        // null clears back to the default (10); a number (including 0 = unlimited)
-        // is stored as-is.
-        if (parsed.data.worktreeRetention === null) delete raw.worktreeRetention;
-        else raw.worktreeRetention = parsed.data.worktreeRetention;
-      }
-      if (parsed.data.liveTitleUpdates !== undefined) {
-        if (parsed.data.liveTitleUpdates === null) delete raw.liveTitleUpdates;
-        else raw.liveTitleUpdates = parsed.data.liveTitleUpdates;
-      }
-      if (parsed.data.reviewGate !== undefined) {
-        if (parsed.data.reviewGate === null) delete raw.reviewGate;
-        else raw.reviewGate = parsed.data.reviewGate;
-      }
-      if (parsed.data.memoryLimitMb !== undefined) {
-        // null or 0 both mean "no ceiling" — drop the key back to the default.
-        if (parsed.data.memoryLimitMb === null || parsed.data.memoryLimitMb === 0) {
-          delete raw.memoryLimitMb;
-        } else {
-          raw.memoryLimitMb = parsed.data.memoryLimitMb;
-        }
-      }
-      if (parsed.data.defaultModels !== undefined) {
-        // Per-runner merge, so setting codex's preset never clobbers claude's.
-        const current =
-          raw.defaultModels && typeof raw.defaultModels === 'object'
-            ? { ...(raw.defaultModels as Record<string, unknown>) }
-            : {};
-        for (const [runner, model] of Object.entries(parsed.data.defaultModels)) {
-          if (model === undefined) continue;
-          if (model === null || model === '') delete current[runner];
-          else current[runner] = model;
-        }
-        if (Object.keys(current).length === 0) delete raw.defaultModels;
-        else raw.defaultModels = current;
-      }
-      if (parsed.data.defaultModelsAuto !== undefined) {
-        // Same per-runner merge as the presets above, and the same "store only a
-        // real opinion" rule: `false`/`null` deletes rather than persisting a
-        // key that means nothing (#906).
-        const current =
-          raw.defaultModelsAuto && typeof raw.defaultModelsAuto === 'object'
-            ? { ...(raw.defaultModelsAuto as Record<string, unknown>) }
-            : {};
-        for (const [runner, isAuto] of Object.entries(parsed.data.defaultModelsAuto)) {
-          if (isAuto === undefined) continue;
-          if (isAuto) current[runner] = true;
-          else delete current[runner];
-        }
-        if (Object.keys(current).length === 0) delete raw.defaultModelsAuto;
-        else raw.defaultModelsAuto = current;
-      }
-      try {
-        await mkdir(dataDir, { recursive: true });
-        await writeFile(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf8');
-      } catch (err) {
-        return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
-      }
-      // Pre-R6 answer shape ({baseBranch, defaultRunner}) + additive R6 fields.
-      return c.json(await configAnswer(repoRoot, await loadConfig(repoRoot)));
+        return c.json(await configAnswer(repoRoot, await loadConfig(repoRoot)));
+      } catch (error) { return lifecycleError(c, error); }
     });
 
   // Set/clear the agents' config knobs (Settings → Agents; the Repo tab's
@@ -6871,50 +7019,6 @@ export function createApp(deps: ServerDeps) {
   // (skillsRepos…) survive and schema defaults are never materialized into
   // the file. All fields optional + additive: `null` (and `''` for the
   // R6 keys) clears a knob back to its default.
-  const modelPresetSchema = z.string().trim().max(200).nullable().optional();
-  const autoModelSchema = z.boolean().nullable().optional();
-  const setConfigSchema = z.object({
-    baseBranch: z.string().trim().min(1).max(200).nullable().optional(),
-    defaultRunner: z.enum(RUNNER_IDS).optional(),
-    systemPrompt: z.string().trim().max(20_000, 'must be at most 20000 characters').nullable().optional(),
-    // Branch naming instructions (spec 2026-10-11-branch-naming-instructions); null/'' clears.
-    branchNaming: z.string().trim().max(4_000, 'must be at most 4000 characters').nullable().optional(),
-    defaultModels: z
-      .object({
-        claude: modelPresetSchema,
-        codex: modelPresetSchema,
-        opencode: modelPresetSchema,
-        cursor: modelPresetSchema,
-        pi: modelPresetSchema,
-      })
-      .optional(),
-    // Per-runner "auto is the default" override (#906). Additive, and necessarily
-    // its own key: clearing a preset cannot express an explicit auto, because the
-    // answer then falls through to the coding agent's own settings file.
-    // `false`/`null` clears the override back to no opinion.
-    defaultModelsAuto: z
-      .object({
-        claude: autoModelSchema,
-        codex: autoModelSchema,
-        opencode: autoModelSchema,
-        pi: autoModelSchema,
-      })
-      .optional(),
-    // Concurrency + memory guard (Settings → Resources). maxParallel clamps to
-    // the schema's 1–16; memoryLimitMb null/0 clears the ceiling.
-    maxParallel: z.number().int().min(1).max(16).optional(),
-    memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
-    // Worktree retention count (Settings → Resources, #483). 0 = unlimited;
-    // null clears the key back to the schema default (10). Unlike memoryLimitMb,
-    // 0 is a meaningful value (unlimited), so it is stored, not treated as clear.
-    worktreeRetention: z.number().int().min(0).max(1000).nullable().optional(),
-    // Live title updates toggle (Settings → Agents): null clears the key back
-    // to the env-default behavior.
-    liveTitleUpdates: z.boolean().nullable().optional(),
-    // Optional review gate toggle (Settings → Agents, #489): null clears the key
-    // back to the env-default behavior (OFF).
-    reviewGate: z.boolean().nullable().optional(),
-  });
   const setAgentConfigSchema = z.object({
     content: z.string().max(2_000_000),
     version: z.string().nullable(),
@@ -7179,6 +7283,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', groupsRoutes)
     .route('/', openTargetsRoutes)
     .route('/', worktreesRoutes)
+    .route('/', worktreeLifecycleRoutes({ stopTaskProcesses }))
     .route('/', todosRoutes)
     .route('/', sseRoutes)
     .route('/', githubRoutes)
@@ -7232,6 +7337,7 @@ export function createApp(deps: ServerDeps) {
     projectId,
     id: run.id,
     title: run.title,
+    ...(run.worktreeLifecycle !== undefined ? { worktreeLifecycle: run.worktreeLifecycle } : {}),
     ...(run.titleSummary !== undefined ? { titleSummary: run.titleSummary } : {}),
     ...(run.titleOrigin !== undefined ? { titleOrigin: run.titleOrigin } : {}),
     status: run.status,
@@ -7483,6 +7589,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', skillsUpdateRoutes)
     .route('/', selfUpdateRoutes)
     .route('/', starCountRoutes)
+    .route('/', previewRoutes)
     .route('/', workspaceConfigRoutes)
     .route('/', workspaceSecretsRoutes)
     .route('/', fsBrowseRoutes)
@@ -7521,7 +7628,8 @@ export function createApp(deps: ServerDeps) {
   return routed;
 }
 
-export function startServer(deps: ServerDeps, port: number): ServerType {
+export function startServer(deps: ServerDeps, port: number): ServerType & { shutdownLifecycle(): Promise<void> } {
+  let shutdownPromise: Promise<void> | undefined;
   const workspaceEvents = deps.workspaceEvents ?? new WorkspaceEventBus();
   const skillsUpdate = deps.skillsUpdate ?? new SkillsUpdateService({ invalidateCatalog: refreshTeamSkills });
   // The subscription hub rides the same HTTP server (one port, zero config):
@@ -7650,6 +7758,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
   });
   server.once('listening', () => {
     void listProjects().then((projects) => {
+      if (shutdownPromise) return;
       const all = projects.some((project) => project.root === deps.repoRoot)
         ? projects : [{ id: deps.bootProjectId ?? 'default', root: deps.repoRoot, status: 'ok' as const }, ...projects];
       coordinator.start(all);
@@ -7665,12 +7774,28 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
           : sharedContexts.peek(project.id)?.store;
         if (automationStore && runStore) reconcileAutomationReceipts(automationStore, runStore);
         if (automationStore) rebaselineIdleAutomations(automationStore, (automationId, revision) => workspaceEvents.emit('automation-change', { project: project.id, automationId, revision }));
-      })).then(() => automationScheduler.start()).catch(() => undefined);
+      })).then(() => { if (!shutdownPromise) automationScheduler.start(); }).catch(() => undefined);
     }).catch(() => undefined);
   });
   server.once('close', () => { for (const cleanup of appCleanups) cleanup(); unsubscribe(); coordinator.stop(); automationScheduler.stop(); });
   socketHub.attach(server, (req) => verifyWsUpgrade(req, deps.bindHost));
-  return server;
+  return Object.assign(server, {
+    shutdownLifecycle(): Promise<void> {
+      if (shutdownPromise) return shutdownPromise;
+      // Stop HTTP admission and automatic task sources before draining detached scripts.
+      server.close();
+      coordinator.stop();
+      automationScheduler.stop();
+      shutdownPromise = (async () => {
+        const results = await Promise.allSettled([deps.manager.lifecycle.shutdown(), sharedContexts.shutdownAll()]);
+        deps.manager.dispose();
+        deps.store.flush({throwOnError: true});
+        const failure = results.find(result => result.status === 'rejected');
+        if (failure?.status === 'rejected') throw failure.reason;
+      })();
+      return shutdownPromise;
+    },
+  });
 }
 
 /**

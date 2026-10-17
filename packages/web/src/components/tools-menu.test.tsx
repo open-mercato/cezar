@@ -46,7 +46,7 @@ const HEALTH: HealthResponse = {
     },
   ],
   forge: null,
-  capabilities: { localHandoff: true, terminal: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
 }
 
 const ALL_GOOD: HealthResponse = {
@@ -214,30 +214,43 @@ describe('ToolsMenu', () => {
       'optional: install the Codex CLI (npm i -g @openai/codex) and log in to use the Codex runner'
     )
     expect(row.querySelector('[data-slot="tool-setup"]')?.textContent).toBe('Set up →')
-    // The whole row is the link into Settings → Agents.
-    expect(row.closest('a')?.getAttribute('href') ?? row.getAttribute('href')).toBe('/settings/agents')
+    // The whole row is the link into General settings → Agent accounts, on THAT agent's tab —
+    // a machine-wide CLI is set up on the machine's page, not a project's. Unprefixed, because
+    // `/settings/global/*` lives outside every project.
+    expect(row.closest('a')?.getAttribute('href') ?? row.getAttribute('href')).toBe('/settings/global/accounts?agent=codex')
   })
 
-  it('navigates to /settings/agents from the Set up row and closes the menu', async () => {
+  it('navigates to Agent accounts from the Set up row and closes the menu', async () => {
     renderMenu(HEALTH)
     const menu = await openMenu()
 
     fireEvent.click(rowsIn(menu).find((el) => el.dataset.tool === 'codex') as HTMLElement)
 
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
-    expect(screen.getByTestId('location').textContent).toBe('/settings/agents')
+    expect(screen.getByTestId('location').textContent).toBe('/settings/global/accounts')
   })
 
-  it('offers the cog row into Settings → Agents, and closes on navigation', async () => {
+  it('gives a missing gh or git its hint but no Set up link — no settings page installs them', async () => {
+    renderMenu({ ...HEALTH, checks: HEALTH.checks.map((c) => (c.name === 'gh' ? { ...c, available: false, version: undefined, hint: 'install gh' } : c)) })
+    const menu = await openMenu()
+
+    const row = rowsIn(menu).find((el) => el.dataset.tool === 'gh') as HTMLElement
+    expect(row.dataset.available).toBe('false')
+    expect(row.querySelector('[data-slot="tool-hint"]')?.textContent).toBe('install gh')
+    expect(row.querySelector('[data-slot="tool-setup"]')).toBeNull()
+    expect(row.closest('a')).toBeNull()
+  })
+
+  it('offers the Agent accounts row into General settings, and closes on navigation', async () => {
     renderMenu(ALL_GOOD)
     const menu = await openMenu()
 
-    const settings = within(menu).getByRole('menuitem', { name: /Tool settings/ })
-    expect(settings.getAttribute('href')).toBe('/settings/agents')
+    const settings = within(menu).getByRole('menuitem', { name: /Agent accounts/ })
+    expect(settings.getAttribute('href')).toBe('/settings/global/accounts')
 
     fireEvent.click(settings)
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
-    expect(screen.getByTestId('location').textContent).toBe('/settings/agents')
+    expect(screen.getByTestId('location').textContent).toBe('/settings/global/accounts')
   })
 })
 

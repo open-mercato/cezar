@@ -8,6 +8,7 @@ import { createQueryClient } from '@/api/query-client'
 import type { ProjectListEntry, ProjectsResponse, WorkspaceConfigResponse } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
+import { ThemeProvider } from '@/components/theme-provider'
 
 /**
  * Global settings → Projects (multi-project spec, step 4.4; mockup `settings-global.html`).
@@ -200,10 +201,12 @@ function renderProjects(unregisteredBoot = false) {
   const client = gateSeededClient(unregisteredBoot)
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={['/settings/global/projects']}>
-        <AppRoutes />
-        <Toaster />
-      </MemoryRouter>
+      <ThemeProvider>
+        <MemoryRouter initialEntries={['/settings/global/projects']}>
+          <AppRoutes />
+          <Toaster />
+        </MemoryRouter>
+      </ThemeProvider>
     </QueryClientProvider>,
   )
   return client
@@ -252,6 +255,18 @@ describe('Global settings → Projects', () => {
     // The `missing` row (step 3.3 greys it out in the sidebar) is actionable HERE.
     expect(row('old-spike')?.textContent).toContain('folder not found')
     expect(removeButton('old-spike')?.disabled).toBe(false)
+  })
+
+  it('links each usable project into its own settings — explicitly scoped, none for a missing one', async () => {
+    serve()
+    renderProjects()
+    await waitFor(() => expect(rows()).toHaveLength(3))
+    const link = (id: string) => row(id)?.querySelector('[data-action="project-settings"]')
+    // Unified settings (spec 2026-10-13): this pane renders OUTSIDE every project scope, so the
+    // path must carry its own `/p/<id>` — a scoped Link would have nothing to prefix with.
+    expect(link('shop-backend')?.getAttribute('href')).toBe('/p/shop-backend/settings')
+    expect(link('cezar')?.getAttribute('href')).toBe('/p/cezar/settings')
+    expect(link('old-spike')).toBeNull()
   })
 
   it('renders the 400 reason from the writability probe INLINE, verbatim', async () => {

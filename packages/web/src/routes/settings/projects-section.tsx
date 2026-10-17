@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { FoldersIcon, XIcon } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
+import { Link as RouterLink } from 'react-router'
 
 import { putWorkspaceConfig } from '@/api/client'
 import {
@@ -393,7 +394,22 @@ function ProjectRow({
       <td className="px-3 py-2 tabular-nums text-soft-foreground">
         {project.unregistered ? '—' : shortDate(project.addedAt)}
       </td>
-      <td className="px-3 py-2 text-right">
+      <td className="px-3 py-2 text-right whitespace-nowrap">
+        {/* Into the project's own settings (unified settings, spec 2026-10-13). An EXPLICIT
+            `/p/<id>` path — this pane renders outside every project scope, so the scoped Link
+            would have nothing to prefix with. Neither a missing project (its panes all 409) nor
+            the unregistered launch folder (not a project) gets one. */}
+        {!project.unregistered && project.status !== 'missing' ? (
+          <Button asChild variant="ghost" size="sm">
+            <RouterLink
+              to={`/p/${encodeURIComponent(project.id)}/settings`}
+              data-action="project-settings"
+              aria-label={`Settings for ${project.name}`}
+            >
+              Settings
+            </RouterLink>
+          </Button>
+        ) : null}
         {project.unregistered ? (
           <AddBootProjectButton root={project.root} name={project.name} disabled={disabled} />
         ) : (
