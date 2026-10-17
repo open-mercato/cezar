@@ -179,6 +179,21 @@ after the run has been SEEN working since delivery (or after a grace period), be
 window's copy of the run lags the request that changed it (`advance` in `design-notes.ts`). Sent
 notes are memory-only: a receipt for this review.
 
+## 7b. Running the app from an empty Preview tab (2026-10-17)
+
+An empty tab on a local cockpit with the terminal allowed offers **Run the app** instead of a bare
+hint. The suggested command is the one this browser last started the app with for the project
+(`localStorage`, `cez:preview-run:<projectId>` — a convenience, never configuration), else the
+first discovered `dev` / `start` / `serve` / `preview` / `run` script or Make target
+(`/runs/:id/terminal/commands`). **Other command** lists the rest and takes a custom one.
+
+Running it opens a NEW terminal tab of the task (the same `POST /terminal` + input the drawer's
+**Run** uses) and polls `/runs/:id/terminal/urls` every second for an address first seen after the
+start, preferring one that answers; the first one is opened in the tab. Exits: the address
+(opened), the command exiting first ("exited with code N"), or two minutes with neither (still
+running, no address). The last two offer **Show terminal**. A hosted cockpit keeps the plain hint:
+it refuses loopback addresses anyway.
+
 ## 8. Verification
 
 - `packages/cezar/src/server/preview/design-proxy.test.ts` — the proxy against a real loopback

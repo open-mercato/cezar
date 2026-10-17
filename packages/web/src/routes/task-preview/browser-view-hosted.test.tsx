@@ -26,6 +26,12 @@ describe('the Preview tab on a hosted cockpit', () => {
     expect(toggle.getAttribute('title')).toMatch(/needs a local cockpit/)
   })
 
+  it('leaves an empty tab to the address bar: there is no local app to run from here', () => {
+    render(<BrowserView state={{ tabs: [''], active: 0 }} onChange={() => {}} renderEmpty={() => <p>run panel</p>} />)
+    expect(screen.queryByText('run panel')).toBeNull()
+    expect(screen.getByText('Empty tab')).toBeTruthy()
+  })
+
   it('still frames a non-loopback address', () => {
     render(<BrowserView state={{ tabs: ['https://example.com/'], active: 0 }} onChange={() => {}} />)
     expect(document.querySelector('iframe')?.getAttribute('src')).toBe('https://example.com/')
