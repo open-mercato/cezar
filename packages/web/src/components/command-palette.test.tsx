@@ -609,7 +609,11 @@ describe('Tasks group', () => {
   it('leads a row with the sidebar chip and drops the title prefix it already says', async () => {
     renderPalette({ runs: [run({ id: 'r1', title: '1497: fixing the gate', pullRequestUrl: 'https://github.com/o/r/pull/1497' })] })
     openWith({ metaKey: true })
-    const row = await waitFor(() => document.querySelector<HTMLElement>('[data-run-id="r1"]')!)
+    const row = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[data-run-id="r1"]')
+      expect(found?.querySelector('[data-slot="pr-chip"]')).toBeTruthy()
+      return found!
+    })
     const chip = row.querySelector('[data-slot="pr-chip"]')!
     const title = await within(row).findByText('fixing the gate')
     // The chip comes first, and the number is painted once.
