@@ -6,6 +6,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
@@ -60,6 +61,8 @@ export function LayoutCards({
   onViewDragEnd,
   onOpenBeside,
   onColumnDropClose,
+  keyHints = [],
+  showKeyHints = false,
 }: {
   layouts: readonly WorkspaceLayout[]
   active: string
@@ -83,6 +86,10 @@ export function LayoutCards({
   onOpenBeside?: (view: ViewId) => void
   /** A column header dropped on the row. Absent where the columns cannot be edited. */
   onColumnDropClose?: (index: number) => void
+  /** The shortcut that selects each card, by its place on the row (views, then layouts) — `1`
+   *  for ⌘1. Printed on the cards while `showKeyHints` (⌘ held), and always in the `…` menu. */
+  keyHints?: readonly (string | undefined)[]
+  showKeyHints?: boolean
 }) {
   /*
    * The row never scrolls. Every card — fixed and saved alike — is one item, and the ones that do
@@ -224,6 +231,7 @@ export function LayoutCards({
         const Icon = VIEW_ICONS[item.view]
         const selected = isActive(item)
         const label = viewLabel(item.view)
+        const hint = keyHints[position - 1]
         return (
           <Button
             key={item.key}
@@ -250,11 +258,15 @@ export function LayoutCards({
             }}
             onDragEnd={() => onViewDragEnd?.()}
             className={cn(
-              '-mb-px h-9 shrink-0 gap-1.5 rounded-none border-b-2 border-transparent px-2.5 text-[13px] font-medium text-muted-foreground hover:bg-transparent hover:text-foreground active:translate-y-0',
+              'relative -mb-px h-9 shrink-0 gap-1.5 rounded-none border-b-2 border-transparent px-2.5 text-[13px] font-medium text-muted-foreground hover:bg-transparent hover:text-foreground active:translate-y-0',
               selected && 'border-foreground text-foreground',
             )}
           >
-            <Icon aria-hidden="true" className="size-3.5 shrink-0" />
+            {showKeyHints && hint ? (
+              <KeyHint hint={hint} className="size-3.5" />
+            ) : (
+              <Icon aria-hidden="true" className="size-3.5 shrink-0" />
+            )}
             {label}
           </Button>
         )
@@ -297,6 +309,7 @@ export function LayoutCards({
                 <LayoutCard
                   key={item.key}
                   layout={item.layout}
+                  keyHint={showKeyHints ? keyHints[items.indexOf(item)] : undefined}
                   active={isActive(item)}
                   onSelect={() => onSelect(item.layout.name)}
                   onRename={(requested) => onRename(item.layout.name, requested)}
@@ -337,6 +350,9 @@ export function LayoutCards({
                       <span className="truncate">
                         {item.kind === 'fixed' ? viewLabel(item.view) : layoutDisplayName(item.layout.name)}
                       </span>
+                      {keyHints[items.indexOf(item)] ? (
+                        <DropdownMenuShortcut>{keyHints[items.indexOf(item)]}</DropdownMenuShortcut>
+                      ) : null}
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
@@ -367,6 +383,25 @@ export function LayoutCards({
         </div>
       ) : null}
     </div>
+  )
+}
+
+/** The key that selects a card, shown while ⌘ is held IN PLACE of the card's icon, at the icon's
+ *  size: the strip's fit is measured from card widths, so a hint must never change one. A longer
+ *  chord than a digit cannot fit there, so it floats over the card's corner instead. */
+function KeyHint({ hint, className }: { hint: string; className: string }) {
+  const digit = hint.length === 1
+  return (
+    <kbd
+      data-slot="tab-key-hint"
+      aria-hidden="true"
+      className={cn(
+        'pointer-events-none flex shrink-0 items-center justify-center rounded-[4px] bg-foreground font-mono text-[10px] leading-none font-semibold text-background',
+        digit ? className : 'absolute -top-1 right-0 z-10 h-4 px-1',
+      )}
+    >
+      {hint}
+    </kbd>
   )
 }
 
@@ -415,12 +450,14 @@ export function LayoutGlyph({ count, className }: { count: number; className?: s
  */
 function LayoutCard({
   layout,
+  keyHint,
   active,
   onSelect,
   onRename,
   onClose,
 }: {
   layout: WorkspaceLayout
+  keyHint?: string
   active: boolean
   onSelect: () => void
   onRename: (requested: string) => void
@@ -481,7 +518,7 @@ function LayoutCard({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <LayoutGlyph count={layout.columns.length} />
+      {keyHint ? <KeyHint hint={keyHint} className="h-3.5 w-5" /> : <LayoutGlyph count={layout.columns.length} />}
       {editing ? (
         <RenameField
           name={shown}

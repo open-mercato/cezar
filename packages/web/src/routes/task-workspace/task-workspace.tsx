@@ -28,7 +28,10 @@ import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Link } from '@/lib/project-router'
 import { isUnread } from '@/lib/read-state'
+import { tabHint } from '@/lib/keybindings'
 import { recordTaskVisit } from '@/lib/recent-tasks'
+import { useKeybindings } from '@/lib/use-keybindings'
+import { useModifierHeld } from '@/lib/use-modifier-held'
 import { publishTaskWorkspace, takeQueuedFileOpen, withdrawTaskWorkspace, type TaskWorkspaceBridge } from '@/lib/task-workspace-bridge'
 import { isEditableTarget } from '@/lib/use-command-shortcut'
 import { cn } from '@/lib/utils'
@@ -221,6 +224,18 @@ function WorkspaceView({
   )
   const createLayout = useCallback(() => addLayout(), [addLayout])
 
+  // Holding ⌘ prints each card's shortcut on it (spec 2026-10-17-task-palette): its positional
+  // ⌘N, else a chord bound to that view or layout by name.
+  const { bindings } = useKeybindings()
+  const keysHeld = useModifierHeld()
+  const keyHints = useMemo(
+    () =>
+      [...fixedViews.map((view) => `view:${view}`), ...cardLayouts.map((layout) => `layout:${layout.name}`)].map(
+        (own, index) => tabHint(bindings.get(`tab:${index + 1}`) ?? bindings.get(own)),
+      ),
+    [bindings, fixedViews, cardLayouts],
+  )
+
   // A view tab being dragged: the stage shows its drop zones until the drag ends. Set a tick late,
   // because changing the page under a drag that has only just started can cancel it.
   const [draggingView, setDraggingView] = useState<ViewId | null>(null)
@@ -298,6 +313,8 @@ function WorkspaceView({
         onViewDragEnd={endViewDrag}
         onOpenBeside={openViewBeside}
         onColumnDropClose={closeColumnByDrop}
+        keyHints={keyHints}
+        showKeyHints={keysHeld}
       />
     ),
     [
@@ -315,6 +332,8 @@ function WorkspaceView({
       endViewDrag,
       openViewBeside,
       closeColumnByDrop,
+      keyHints,
+      keysHeld,
     ],
   )
 

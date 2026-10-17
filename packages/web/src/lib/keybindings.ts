@@ -86,6 +86,13 @@ export function formatChord(chord: string, apple = isApplePlatform()): string {
   return [...modifiers.map((m) => names[m] ?? m), key].join('+')
 }
 
+/** The badge for a tab: just the digit for the plain ⌘N it ships with, the full chord otherwise. */
+export function tabHint(chord: string | undefined, apple = isApplePlatform()): string | undefined {
+  if (!chord) return undefined
+  const plain = /^Mod\+([1-9])$/.exec(chord)
+  return plain ? plain[1] : formatChord(chord, apple)
+}
+
 /** Taken by the browser, the OS or the cockpit itself — never offered for a command. */
 const RESERVED = new Set([
   'Mod+K', // ⌘K palette

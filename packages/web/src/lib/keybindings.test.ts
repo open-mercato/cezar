@@ -7,6 +7,7 @@ import {
   chordProblem,
   effectiveBindings,
   formatChord,
+  tabHint,
   resetBinding,
   type ChordEvent,
 } from './keybindings'
@@ -36,6 +37,12 @@ describe('chords', () => {
 
   it('ignores a lone modifier', () => {
     expect(chordFromEvent(key('MetaLeft', 'Meta', { metaKey: true }), true)).toBeNull()
+  })
+
+  it('a tab badge is the bare digit for ⌘N, the full chord otherwise', () => {
+    expect(tabHint('Mod+3', true)).toBe('3')
+    expect(tabHint('Mod+Alt+3', true)).toBe('⌥⌘3')
+    expect(tabHint(undefined)).toBeUndefined()
   })
 
   it('prints the platform spelling', () => {

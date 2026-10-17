@@ -166,6 +166,25 @@ describe('the task workspace (main)', () => {
     expect(hostLayouts.r1).toBeUndefined()
   })
 
+  it('holding ⌘ prints each tab’s number on it; a quick ⌘ press or letting go hides them', async () => {
+    vi.stubGlobal('navigator', { ...navigator, platform: 'MacIntel' })
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    const hints = () => Array.from(document.querySelectorAll('[data-slot="tab-key-hint"]')).map(text)
+
+    fireEvent.keyDown(window, { key: 'Meta', metaKey: true })
+    fireEvent.keyUp(window, { key: 'Meta' })
+    await new Promise((resolve) => setTimeout(resolve, 450))
+    expect(hints()).toEqual([])
+
+    fireEvent.keyDown(window, { key: 'Meta', metaKey: true })
+    await waitFor(() => expect(hints()).toEqual(['1', '2', '3', '4', '5']))
+    fireEvent.keyUp(window, { key: 'Meta' })
+    await waitFor(() => expect(hints()).toEqual([]))
+    vi.unstubAllGlobals()
+  })
+
   it('offers no Terminal anywhere when the cockpit allows no shell', async () => {
     stubFetch({ terminal: false })
     renderWorkspace()
