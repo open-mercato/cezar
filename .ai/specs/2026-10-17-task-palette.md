@@ -1,6 +1,7 @@
 # ⌘P — the task palette
 
-Status: implemented (2026-10-17). Companion to the ⌘K command palette (`components/command-palette.tsx`).
+Status: implemented (2026-10-17). Companion to the ⌘K command palette (`components/command-palette.tsx`); the palette itself is
+`components/task-palette/task-palette.tsx`.
 
 ## Problem
 
@@ -27,7 +28,7 @@ layouts) lives in the run header behind the mouse, and only for the task on scre
 
 ## Design
 
-- `lib/task-commands.ts` — `buildTaskCommands`, a pure function of the run and its surroundings.
+- `components/task-palette/commands.tsx` — `buildTaskCommands`, a pure function of the run and its surroundings.
   Gating comes from `runActionFlags` and `gitActionPolicy`, the same rules the header uses, so the
   palette never offers what the header hides. Unavailable actions stay listed with their reason.
   The phone header menu renders from the same list.

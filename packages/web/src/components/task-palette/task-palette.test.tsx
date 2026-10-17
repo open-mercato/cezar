@@ -1,0 +1,251 @@
+import { QueryClientProvider } from '@tanstack/react-query'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter, useLocation } from 'react-router'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { createQueryClient } from '@/api/query-client'
+import type { HealthResponse, RunRecord } from '@open-mercato/cezar-api-client'
+import { CommandPalette } from '@/components/command-palette'
+import { ThemeProvider } from '@/components/theme-provider'
+import { recordTaskVisit, resetRecentTasks } from '@/lib/recent-tasks'
+import { resetTaskWorkspaceBridge } from '@/lib/task-workspace-bridge'
+
+import { paletteMode, rankPaths, TaskPalette, taskIdFromPath } from './task-palette'
+
+const fetchMock = vi.fn<typeof fetch>()
+let sent: { method: string; path: string; body: unknown }[] = []
+
+beforeAll(() => {
+  Element.prototype.scrollIntoView = vi.fn()
+})
+
+beforeEach(() => {
+  localStorage.clear()
+  resetRecentTasks()
+  resetTaskWorkspaceBridge()
+  sent = []
+  vi.stubGlobal('fetch', fetchMock)
+  vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }))
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  )
+})
+
+afterEach(() => {
+  cleanup()
+  fetchMock.mockReset()
+  vi.unstubAllGlobals()
+})
+
+function run(id: string, title: string, extra: Partial<RunRecord> = {}): RunRecord {
+  return {
+    id,
+    title,
+    workflow: 'quick-task',
+    task: title,
+    status: 'done',
+    createdAt: '2026-10-17T10:00:00Z',
+    finishedAt: '2026-10-17T10:05:00Z',
+    seenAt: '2026-10-17T10:06:00Z',
+    tokensUsed: 0,
+    archived: false,
+    steps: [],
+    ...extra,
+  }
+}
+
+const RUNS = [run('r1', 'Fix the login redirect'), run('r2', 'Add dark mode toggle'), run('r3', 'Refactor the store')]
+
+const HEALTH: HealthResponse = {
+  version: '0.0.0-test',
+  projects: [],
+  bootProject: 'default',
+  repoRoot: '/repo',
+  repo: { root: '/repo', branch: 'main' },
+  checks: [],
+  defaultRunner: 'claude',
+  forge: null,
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
+}
+
+function serve(runs: RunRecord[] = RUNS): void {
+  fetchMock.mockImplementation(async (input, init) => {
+    const path = String(input)
+    const method = init?.method ?? 'GET'
+    sent.push({ method, path, body: init?.body ? JSON.parse(String(init.body)) : undefined })
+    const json = (body: unknown) =>
+      new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+    if (method === 'POST' && path.endsWith('/pin')) return json({ ...runs[0], pinned: true })
+    if (path === '/api/v1/runs') return json(runs)
+    const detail = /^\/api\/v1\/runs\/([^/?]+)$/.exec(path)
+    const found = detail && runs.find((candidate) => candidate.id === detail[1])
+    if (found) return json(found)
+    if (path === '/api/v1/health') return json(HEALTH)
+    if (path === '/api/v1/projects') return json({ projects: [], bootProject: 'default', projectsDir: '/repos' })
+    if (path === '/api/v1/ui-state') return json({})
+    if (path === '/api/v1/skills') return json([])
+    return new Response(JSON.stringify({ error: 'not found' }), { status: 404 })
+  })
+}
+
+function LocationProbe() {
+  const location = useLocation()
+  return <output data-testid="location">{location.pathname}</output>
+}
+
+function renderPalettes(entry: string) {
+  serve()
+  render(
+    <QueryClientProvider client={createQueryClient()}>
+      <ThemeProvider>
+        <MemoryRouter initialEntries={[entry]}>
+          <CommandPalette />
+          <TaskPalette />
+          <LocationProbe />
+          <textarea data-testid="composer" aria-label="composer" />
+        </MemoryRouter>
+      </ThemeProvider>
+    </QueryClientProvider>,
+  )
+}
+
+const pressP = (target: EventTarget = window, init: KeyboardEventInit = { metaKey: true }) =>
+  act(() => {
+    fireEvent.keyDown(target, { key: 'p', ...init })
+  })
+const palette = () => document.querySelector<HTMLElement>('[data-slot="task-palette"]')
+const input = () => palette()!.querySelector<HTMLInputElement>('[cmdk-input]')!
+const selectedRow = () => palette()!.querySelector<HTMLElement>('[cmdk-item][data-selected="true"]')
+const location = () => screen.getByTestId('location').textContent
+
+describe('⌘P on a task page acts on that task', () => {
+  it('opens with the task named and its actions listed', async () => {
+    renderPalettes('/tasks/r1')
+    await pressP()
+    const subject = await screen.findByText('Fix the login redirect', { selector: '[data-slot="task-palette-subject"] *' })
+    expect(subject).toBeTruthy()
+    expect(await within(palette()!).findByText('Pin')).toBeTruthy()
+    expect(within(palette()!).getByText('Archive')).toBeTruthy()
+  })
+
+  it('Pin goes through the shared mutation, labelled as the palette for telemetry', async () => {
+    renderPalettes('/tasks/r1')
+    await pressP()
+    fireEvent.click(await within(palette()!).findByText('Pin'))
+    await waitFor(() => expect(sent.find((request) => request.path.endsWith('/pin'))).toBeDefined())
+    expect(sent.find((request) => request.path.endsWith('/pin'))?.body).toEqual({ pinned: true, surface: 'palette' })
+    await waitFor(() => expect(palette()).toBeNull())
+  })
+
+  it('fires from inside a text field, where the browser would otherwise print', async () => {
+    vi.stubGlobal('navigator', { ...navigator, platform: 'MacIntel' })
+    renderPalettes('/tasks/r1')
+    const composer = screen.getByTestId('composer')
+    composer.focus()
+    await pressP(composer, { ctrlKey: true })
+    expect(palette()).toBeNull()
+    await pressP(composer, { metaKey: true })
+    expect(palette()).not.toBeNull()
+  })
+
+  it('repeated ⌘P walks the switcher, and Enter opens the task', async () => {
+    recordTaskVisit('r3')
+    recordTaskVisit('r2')
+    recordTaskVisit('r1')
+    renderPalettes('/tasks/r1')
+    await pressP()
+    await within(palette()!).findByText('Pin')
+    await pressP()
+    await waitFor(() => expect(selectedRow()?.dataset.runId).toBe('r2'))
+    expect(input().value).toBe('@')
+    await pressP()
+    await waitFor(() => expect(selectedRow()?.dataset.runId).toBe('r3'))
+    fireEvent.keyDown(input(), { key: 'Enter' })
+    // The live list's rows carry their project — here the boot alias.
+    await waitFor(() => expect(location()).toBe('/p/default/tasks/r3'))
+  })
+
+  it('Tab on a task in the switcher acts on it in place; Backspace walks back', async () => {
+    renderPalettes('/tasks/r1')
+    await pressP()
+    fireEvent.change(input(), { target: { value: '@dark' } })
+    await waitFor(() => expect(selectedRow()?.dataset.runId).toBe('r2'))
+    fireEvent.keyDown(input(), { key: 'Tab' })
+    expect(await screen.findByText('Add dark mode toggle', { selector: '[data-slot="task-palette-subject"] *' })).toBeTruthy()
+    expect(location()).toBe('/tasks/r1')
+    fireEvent.keyDown(input(), { key: 'Backspace' })
+    await waitFor(() => expect(input().value).toBe('@'))
+  })
+
+  it('Rename edits the title in the palette input', async () => {
+    renderPalettes('/tasks/r1')
+    await pressP()
+    fireEvent.click(await within(palette()!).findByText('Rename…'))
+    await waitFor(() => expect(input().value).toBe('Fix the login redirect'))
+    fireEvent.change(input(), { target: { value: 'Fix the auth redirect' } })
+    fireEvent.keyDown(input(), { key: 'Enter' })
+    await waitFor(() =>
+      expect(sent.find((request) => request.method === 'PATCH')?.body).toEqual({ title: 'Fix the auth redirect' }),
+    )
+  })
+})
+
+describe('⌘P off a task page', () => {
+  it('opens the switcher, most recently opened first', async () => {
+    recordTaskVisit('r3')
+    renderPalettes('/')
+    await pressP()
+    expect(input().value).toBe('@')
+    await waitFor(() => expect(selectedRow()?.dataset.runId).toBe('r3'))
+  })
+})
+
+describe('⌘K hands a task to ⌘P', () => {
+  it('Tab on a ⌘K task row opens ⌘P acting on that task', async () => {
+    renderPalettes('/')
+    act(() => {
+      fireEvent.keyDown(window, { key: 'k', metaKey: true })
+    })
+    const search = await screen.findByPlaceholderText(/Search projects, tasks/)
+    fireEvent.change(search, { target: { value: 'dark' } })
+    await waitFor(() =>
+      expect(document.querySelector('[cmdk-item][data-selected="true"]')?.getAttribute('data-run-id')).toBe('r2'),
+    )
+    fireEvent.keyDown(search, { key: 'Tab' })
+    expect(await screen.findByText('Add dark mode toggle', { selector: '[data-slot="task-palette-subject"] *' })).toBeTruthy()
+    expect(screen.queryByPlaceholderText(/Search projects, tasks/)).toBeNull()
+  })
+})
+
+describe('the grammar', () => {
+  it.each([
+    ['', true, 'all', ''],
+    ['', false, 'tasks', ''],
+    ['@log', true, 'tasks', 'log'],
+    ['>pin', true, 'commands', 'pin'],
+    ['#src', true, 'files', 'src'],
+    ['#src', false, 'tasks', 'src'],
+  ] as const)('%j (subject: %s) → %s / %j', (search, hasSubject, mode, query) => {
+    expect(paletteMode(search, hasSubject)).toEqual({ mode, query })
+  })
+
+  it('reads the task from scoped and flat routes', () => {
+    expect(taskIdFromPath('/p/shop/tasks/r1')).toBe('r1')
+    expect(taskIdFromPath('/p/shop/tasks/r1/changes')).toBe('r1')
+    expect(taskIdFromPath('/tasks/r1')).toBe('r1')
+    expect(taskIdFromPath('/p/shop/tasks')).toBeUndefined()
+    expect(taskIdFromPath('/dashboard')).toBeUndefined()
+  })
+
+  it('ranks file names above directory hits and caps the list', () => {
+    const paths = ['src/header/index.ts', 'src/run-header.tsx', 'README.md']
+    expect(rankPaths(paths, 'header')[0]).toBe('src/run-header.tsx')
+    expect(rankPaths(paths, 'zzz')).toEqual([])
+    expect(rankPaths(Array.from({ length: 100 }, (_, index) => `f${index}.ts`), '')).toHaveLength(50)
+  })
+})

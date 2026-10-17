@@ -94,6 +94,12 @@ still means no build step and no dev server on your machine — with a dark/ligh
 theme, a ⌘K command palette, and bookmarklets that launch a task straight from
 a GitHub page.
 
+**⌘P / Ctrl+P** acts on one task: on a task page it lists that task's actions
+(pin, archive, rename, stop, the git step, views, layouts, Open in…, copy). The
+prefix picks the mode: `@` to switch tasks, `>` for commands only, `#` for the task's files.
+Repeated ⌘P walks back through recent tasks; Tab on a task row (here or in ⌘K)
+acts on that task without opening it; ⌥↵ opens a view beside the current one.
+
 ---
 
 ## Multiple projects, one cockpit
