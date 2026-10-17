@@ -5,6 +5,7 @@ import { extname, isAbsolute } from 'node:path';
 import { AGENT_MODELS_LOCKED_ENV } from './agent-model-policy.ts';
 import { profileEnv } from './agent-profiles.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
+import { resolveCursorAgentBin } from './cursor-bin.ts';
 import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
 import { probeJunieAuthentication } from './junie-auth-probe.ts';
 import { spawnableCommand } from './windows-shim.ts';
@@ -92,8 +93,10 @@ interface ProviderDescriptor {
    * spawn entirely removes that race instead of racing to out-guess it.
    */
   precheck?: () => ProviderConnectionState | undefined;
-  /** A more specific hint than "try again" for an exit-0/1 answer `parse` could not read. */
+  /** A more specific hint than "try again" for an answer `parse` could not read. */
   unrecognizedHint?: (result: ProviderCommandResult) => string | undefined;
+  /** Arguments to ask once more with when `statusArgs` was rejected by an older CLI. */
+  fallbackArgs?: (result: ProviderCommandResult) => readonly string[] | undefined;
   /** The `CEZ_*_BIN` override `executable` honours — only so a report can say the binary came from it. */
   overrideEnv: string;
 }
@@ -369,8 +372,10 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
   {
     id: 'cursor',
     overrideEnv: 'CEZ_CURSOR_AGENT_BIN',
-    executable: () => process.env.CEZ_CURSOR_AGENT_BIN ?? 'agent',
+    executable: () => resolveCursorAgentBin(),
     statusArgs: ['status', '--format', 'json'],
+    fallbackArgs: cursorFallbackArgs,
+    unrecognizedHint: cursorUnrecognizedHint,
     loginArgs: ['login'],
     updateArgs: ['update'],
     installHint:
@@ -427,10 +432,29 @@ function parseCursorStatus(result: ProviderCommandResult): ProviderConnectionSta
   } catch {
     /* fall through */
   }
+  // The plain `status` answer of a CLI without `--format` (`cursorFallbackArgs`).
+  if (result.exitCode === 0) {
+    const lines = normalizedLines(result.stdout, result.stderr);
+    const connected = lines.some((line) => /^(?:✓\s*)?logged in as\b/.test(line));
+    const disconnected = lines.some((line) => line === 'not logged in');
+    if (connected !== disconnected) return connected ? 'connected' : 'disconnected';
+  }
   // Malformed or unrecognized JSON is inconclusive, not a confirmed unauthenticated state —
   // return null so probe() reports 'unknown' instead of telling the user to reconnect an
   // account that was never actually checked.
   return null;
+}
+
+/** Cursor CLIs before `status --format` (≤ 2026.01.28, verified) reject it with exit 1. */
+function cursorFallbackArgs(result: ProviderCommandResult): readonly string[] | undefined {
+  return /unknown option '--format'/i.test(result.stderr) ? ['status'] : undefined;
+}
+
+/** Telemetry 8d304c50: an `agent` that answers neither shape is likely another program of that name. */
+function cursorUnrecognizedHint(result: ProviderCommandResult): string | undefined {
+  if (result.stdout.trim()) return undefined;
+  return 'The Cursor CLI did not answer its status check. Update it with `agent update`, or point '
+    + 'CEZ_CURSOR_AGENT_BIN at Cursor\'s `cursor-agent` if another program named `agent` comes first on PATH.';
 }
 
 function defaultRunProviderCommand(
@@ -963,19 +987,21 @@ export class ProviderAuthService {
     // Never pass a trailing `undefined`: the existing three- and four-argument calls are the
     // zero-config path and the injected test kit asserts them literally, so only a descriptor
     // that actually has a stdin payload reaches the five-argument form.
-    const run = (): Promise<ProviderCommandResult> => {
+    const run = (args: readonly string[] = descriptor.statusArgs): Promise<ProviderCommandResult> => {
       const stdin = descriptor.stdin?.();
       return stdin !== undefined
-        ? this.runCommand(executable, descriptor.statusArgs, COMMAND_TIMEOUT_MS, env, stdin)
+        ? this.runCommand(executable, args, COMMAND_TIMEOUT_MS, env, stdin)
         : env === undefined
-          ? this.runCommand(executable, descriptor.statusArgs, COMMAND_TIMEOUT_MS)
-          : this.runCommand(executable, descriptor.statusArgs, COMMAND_TIMEOUT_MS, env);
+          ? this.runCommand(executable, args, COMMAND_TIMEOUT_MS)
+          : this.runCommand(executable, args, COMMAND_TIMEOUT_MS, env);
     };
     try {
       result = await run();
       // A CLI that exits 0 having printed nothing at all did not answer — `claude auth status
       // --json` does this intermittently (telemetry 35838a52). Ask once more before giving up.
       if (isSilentSuccess(result) && descriptor.parse(result) === null) result = await run();
+      const fallback = descriptor.parse(result) === null ? descriptor.fallbackArgs?.(result) : undefined;
+      if (fallback) result = await run(fallback);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException | undefined)?.code;
       const thrown: ProviderCommandResult = {
@@ -997,11 +1023,10 @@ export class ProviderAuthService {
     if (result.errorCode) return inconclusive('spawn_error', UNKNOWN_HINT, result);
     const status = descriptor.parse(result);
     if (status !== null) return { provider: descriptor.id, status };
+    const hint = descriptor.unrecognizedHint?.(result) ?? UNKNOWN_HINT;
     // Exit 0 and 1 are the codes vendors answer status with; anything else is the CLI failing.
-    if (result.exitCode === 0 || result.exitCode === 1) {
-      return inconclusive('unrecognized_output', descriptor.unrecognizedHint?.(result) ?? UNKNOWN_HINT, result);
-    }
-    return inconclusive('unexpected_exit', UNKNOWN_HINT, result);
+    if (result.exitCode === 0 || result.exitCode === 1) return inconclusive('unrecognized_output', hint, result);
+    return inconclusive('unexpected_exit', hint, result);
   }
 
   private reportInconclusive(

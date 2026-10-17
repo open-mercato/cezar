@@ -1,4 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// The real resolver probes the host's PATH; `cursor-bin.test.ts` covers it.
+vi.mock('../core/cursor-bin.ts', () => ({
+  resolveCursorAgentBin: () => process.env.CEZ_CURSOR_AGENT_BIN || 'agent',
+}));
+
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { isSafeSessionId, quoteResumeBin, resumeCommand } from './server.ts';
 
