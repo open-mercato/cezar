@@ -458,9 +458,11 @@ export function TaskItem({
         title={`Created ${exactTime(task.createdAt)} · last active ${exactTime(task.lastActivityAt)}`}
         className="shrink-0 text-xs text-soft-foreground tabular-nums"
       >
-        <span className="hidden group-data-[selected=true]/task:inline">
-          created {shortAge(task.createdAt, now)} · active{' '}
-        </span>
+        {shortAge(task.createdAt, now) !== shortAge(task.lastActivityAt, now) ? (
+          <span className="hidden group-data-[selected=true]/task:inline">
+            created {shortAge(task.createdAt, now)} · active{' '}
+          </span>
+        ) : null}
         {shortAge(task.lastActivityAt, now)}
       </span>
       {trailing}
