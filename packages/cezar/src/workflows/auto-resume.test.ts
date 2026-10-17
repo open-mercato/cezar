@@ -149,6 +149,27 @@ describe('a run stopped by a usage limit resumes itself', () => {
     ]));
   }, 30_000);
 
+  it('schedules a minute-only Codex reset after its whole minute and the existing grace', async () => {
+    savedEnv.CEZ_CODEX_BIN = process.env.CEZ_CODEX_BIN;
+    process.env.CEZ_CODEX_BIN = fileURLToPath(new URL('../core/__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url));
+    manager = new RunManager(store, repoRoot);
+    const started = Date.now();
+    const record = manager.startRun(workflow, {
+      task: 'mock:turn-failed mock:turn-completed-failed mock:nested-limit mock:clock-limit',
+      runner: 'codex', worktree: false,
+    });
+    await settle(record.id);
+    const failed = store.getRun(record.id);
+    expect(failed?.status).toBe('failed');
+    const clock = /Try again at (\d{2}):(\d{2}) \(UTC\)/.exec(failed?.error ?? '');
+    expect(clock).not.toBeNull();
+    const reset = new Date(started);
+    reset.setUTCHours(Number(clock![1]), Number(clock![2]), 0, 0);
+    if (reset.getTime() < started) reset.setUTCDate(reset.getUTCDate() + 1);
+    expect(failed?.autoResumeAt)
+      .toBe(new Date(reset.getTime() + 60_000 + AUTO_RESUME_GRACE_MS).toISOString());
+  }, 30_000);
+
   it('leaves the run plainly failed when the setting is off', async () => {
     manager = new RunManager(store, repoRoot, {
       semaphore: new WorkspaceSemaphore({ initial: { autoResumeOnUsageLimit: false } }),

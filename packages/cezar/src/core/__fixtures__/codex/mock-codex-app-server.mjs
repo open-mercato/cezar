@@ -189,7 +189,11 @@ rl.on('line', (line) => {
     if (turnText.includes('mock:turn-failed')) {
       // Wire shape checked with codex-cli 0.160.0 app-server generate-ts:
       // v2/TurnCompletedNotification, Turn, TurnError and ErrorNotification.
-      const usage = { message: "You've hit your usage limit. Try again in 60 minutes.", codexErrorInfo: 'usageLimitExceeded', additionalDetails: null };
+      const futureClock = new Date(Date.now() + 2 * 60 * 60_000);
+      const clock = `${String(futureClock.getUTCHours()).padStart(2, '0')}:${String(futureClock.getUTCMinutes()).padStart(2, '0')}`;
+      const usage = { message: turnText.includes('mock:clock-limit')
+        ? `You've hit your usage limit. Try again at ${clock} (UTC).`
+        : "You've hit your usage limit. Try again in 60 minutes.", codexErrorInfo: 'usageLimitExceeded', additionalDetails: null };
       const terminal = turnText.includes('mock:nested-limit') ? usage
         : { message: 'exceeded retry limit, last status: 429 Too Many Requests', codexErrorInfo: 'rateLimitExceeded', additionalDetails: null };
       if (turnText.includes('mock:retry-error')) {
