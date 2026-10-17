@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
@@ -121,6 +122,52 @@ describe('a run stopped by a usage limit resumes itself', () => {
     // The transcript says so too — the cockpit is not the only place this is auditable.
     const events = store.readEvents(record.id);
     expect(events.some((event) => String(event.message ?? '').includes('resuming automatically at'))).toBe(true);
+  }, 30_000);
+
+  it('preserves nested Codex quota details in both streams and schedules recovery', async () => {
+    savedEnv.CEZ_CODEX_BIN = process.env.CEZ_CODEX_BIN;
+    process.env.CEZ_CODEX_BIN = fileURLToPath(new URL('../core/__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url));
+    manager = new RunManager(store, repoRoot);
+    const started = Date.now();
+    const record = manager.startRun(workflow, {
+      task: 'mock:turn-failed mock:turn-completed-failed mock:nested-limit mock:retry-error',
+      runner: 'codex', worktree: false,
+    });
+    await settle(record.id);
+    const message = "You've hit your usage limit. Try again in 60 minutes. [usageLimitExceeded]";
+    const failed = store.getRun(record.id);
+    expect(failed?.status).toBe('failed');
+    expect(failed?.error).toContain(message);
+    const resumeAt = Date.parse(failed?.autoResumeAt ?? '');
+    expect(resumeAt).toBeGreaterThanOrEqual(started + 3_600_000 + AUTO_RESUME_GRACE_MS);
+    expect(resumeAt).toBeLessThanOrEqual(Date.now() + 3_600_000 + AUTO_RESUME_GRACE_MS);
+    const events = store.readEvents(record.id);
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'error', message }),
+      expect.objectContaining({ type: 'session.error', message, fatal: true }),
+      expect.objectContaining({ type: 'session.ended', message, reason: 'error' }),
+    ]));
+  }, 30_000);
+
+  it('schedules a minute-only Codex reset after its whole minute and the existing grace', async () => {
+    savedEnv.CEZ_CODEX_BIN = process.env.CEZ_CODEX_BIN;
+    process.env.CEZ_CODEX_BIN = fileURLToPath(new URL('../core/__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url));
+    manager = new RunManager(store, repoRoot);
+    const started = Date.now();
+    const record = manager.startRun(workflow, {
+      task: 'mock:turn-failed mock:turn-completed-failed mock:nested-limit mock:clock-limit',
+      runner: 'codex', worktree: false,
+    });
+    await settle(record.id);
+    const failed = store.getRun(record.id);
+    expect(failed?.status).toBe('failed');
+    const clock = /Try again at (\d{2}):(\d{2}) \(UTC\)/.exec(failed?.error ?? '');
+    expect(clock).not.toBeNull();
+    const reset = new Date(started);
+    reset.setUTCHours(Number(clock![1]), Number(clock![2]), 0, 0);
+    if (reset.getTime() < started) reset.setUTCDate(reset.getUTCDate() + 1);
+    expect(failed?.autoResumeAt)
+      .toBe(new Date(reset.getTime() + 60_000 + AUTO_RESUME_GRACE_MS).toISOString());
   }, 30_000);
 
   it('leaves the run plainly failed when the setting is off', async () => {
