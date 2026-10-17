@@ -1,4 +1,3 @@
-import { useMutation } from '@tanstack/react-query'
 import {
   ArchiveIcon,
   ArchiveRestoreIcon,
@@ -19,17 +18,14 @@ import {
   SquareTerminalIcon,
   Trash2Icon,
 } from 'lucide-react'
-import { Fragment, memo, useEffect, useId, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
+import { cloneElement, Fragment, isValidElement, memo, useEffect, useId, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
 import { Link } from '@/lib/project-router'
 
-import { openRunIn } from '@/api/client'
 import {
   useHealth,
-  useOpenTargets,
   usePatchRun,
   useProjectRepoBase,
   useReferenceProjectId,
-  useProviderStatus,
   useRuns,
 } from '@/api/queries'
 import type { ApiRun, OpenTarget } from '@open-mercato/cezar-api-client'
@@ -57,9 +53,9 @@ import { OpenInMenu, type OpenInChoice } from '@/components/open-in-menu'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { DirectionalUsage } from '@/components/directional-usage'
+import { buildTaskCommands, type TaskCommand } from '@/components/task-palette/commands'
 import { ATTENTION_RANK, budgetStop, deriveAttention, type AttentionTone } from '@/lib/attention'
 import { queuePositions, runTitle } from '@/lib/task-groups'
-import { usableRunners } from '@/lib/provider-status'
 import {
   formatCost,
   prNumber,
@@ -72,13 +68,11 @@ import { usageMetricVisibility } from '@/lib/token-metrics'
 import { cn, isHttpUrl } from '@/lib/utils'
 
 import {
-  cliTargetResumes,
-  cliTargetRunner,
   isRunActive,
   resumeHint,
   runActionFlags,
 } from './run-actions'
-import { GIT_ACTION_ICONS, GitActions } from '../task-git/git-toolbar'
+import { GitActions } from '../task-git/git-toolbar'
 import { useRunGitStep, type RunGitStep } from '../task-git/run-git-step'
 import { RunConfirmDialog } from './run-confirm-dialog'
 import { useRunEngine } from './run-engine'
@@ -1277,8 +1271,11 @@ function GitStepAndKebab({
 }
 
 /** The <md action surface: everything the desktop rows offer, folded into one menu next to the
- *  status (the mockup's mobile pattern). Mirrors desktop item for item — the git step first, the
- *  state toggles in their one ON pattern, Stop only where the composer is not there to carry it. */
+ *  status (the mockup's mobile pattern). Rendered from the ⌘P palette's command list
+ *  (`buildTaskCommands`), so the two cannot disagree about what a run offers: the git step first,
+ *  then the state toggles in their one ON pattern, Stop only where the composer is not there to
+ *  carry it. Unlike the palette, a menu this small hides what is unavailable — except the git
+ *  step, whose disabled reason is the point. */
 function ActionsKebab({
   run,
   actions,
@@ -1290,11 +1287,47 @@ function ActionsKebab({
   git: RunGitStep
   showRunControls: boolean
 }) {
-  const flags = runActionFlags(run)
   const canTerminal = useCanOpenTerminal(run)
-  const live = liveRunReason(run)
-  const step = git.action
-  const unread = flags.markRead
+  const commands = buildTaskCommands(
+    { run, canResume: canTerminal, git: git.action, workspace: null, terminalAvailable: false, openChoices: [], taskUrl: '' },
+    {
+      markRead: () => actions.markRead.mutate(),
+      markUnread: () => actions.markUnread.mutate(),
+      pin: () => actions.pin.mutate(),
+      archive: () => actions.archive.mutate(),
+      rename: () => {},
+      finish: () => actions.finish.mutate(),
+      confirmStop: () => actions.setConfirming('cancel'),
+      confirmDelete: () => actions.setConfirming('delete'),
+      resumeInTerminal: () => actions.terminal.mutate(),
+      gitAction: git.onAction,
+      openIn: () => {},
+      navigate: () => {},
+      openUrl: () => {},
+      copy: () => {},
+    },
+  )
+  const byId = new Map(commands.map((command) => [command.id, command]))
+  const pick = (id: string) => {
+    const command = byId.get(id)
+    return command && command.unavailable === undefined ? command : undefined
+  }
+  const steps = commands.filter((command) => command.group === 'git' && command.id.startsWith('git:'))
+  const middle = [
+    // Off the Session tab only: there the hint over the composer carries End session.
+    showRunControls ? pick('end-session') : undefined,
+    pick('open:terminal-resume'),
+    pick('toggle-read'),
+    pick('pin'),
+    pick('archive'),
+  ].filter((command): command is TaskCommand => command !== undefined)
+  // On the Session tab the composer's ■ carries Stop, exactly as on desktop.
+  const stop = showRunControls ? pick('stop') : undefined
+  const remove = pick('delete')
+  const pending: Record<string, boolean> = {
+    'toggle-read': actions.markRead.isPending || actions.markUnread.isPending,
+    pin: actions.pin.isPending,
+  }
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -1303,84 +1336,58 @@ function ActionsKebab({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" data-slot="run-actions-menu">
-        {step ? (
+        {steps.length > 0 ? (
           <>
-            {[step, ...(step.alternatives ?? [])].map((choice) => (
+            {steps.map((step) => (
               <DropdownMenuItem
-                key={choice.id}
-                data-action={choice.id}
-                disabled={!choice.enabled}
-                title={choice.reason}
-                onSelect={() => git.onAction(choice.id)}
+                key={step.id}
+                data-action={step.id.slice('git:'.length)}
+                disabled={step.unavailable !== undefined}
+                title={step.unavailable}
+                onSelect={step.perform}
               >
-                {GIT_ACTION_ICONS[choice.id]}
-                {choice.label}
+                {step.icon}
+                {step.label}
               </DropdownMenuItem>
             ))}
             <DropdownMenuSeparator />
           </>
         ) : null}
-        {/* Off the Session tab only: there the hint over the composer carries it. */}
-        {showRunControls && run.status === 'waiting' && flags.finish ? (
-          <DropdownMenuItem onSelect={() => actions.finish.mutate()}>
-            <CheckIcon aria-hidden="true" /> End session
-          </DropdownMenuItem>
-        ) : null}
-        {canTerminal ? (
-          <DropdownMenuItem onSelect={() => actions.terminal.mutate()}>
-            <SquareTerminalIcon aria-hidden="true" /> Terminal
-          </DropdownMenuItem>
-        ) : null}
-        {/* The state toggles: one icon each, ON in the same violet-filled way as on desktop. */}
-        {flags.markRead || flags.markUnread ? (
+        {middle.map((command) => (
           <DropdownMenuItem
-            data-slot="unread-toggle"
-            aria-pressed={unread}
-            disabled={actions.markRead.isPending || actions.markUnread.isPending}
-            onSelect={() => (unread ? actions.markRead.mutate() : actions.markUnread.mutate())}
+            key={command.id}
+            data-slot={KEBAB_SLOTS[command.id]}
+            // The same `aria-pressed` the desktop twins carry — a toggle should announce its
+            // state in every spelling, not only the ones with room for the word.
+            aria-pressed={command.id in KEBAB_SLOTS || command.id === 'archive' ? Boolean(command.pressed) : undefined}
+            disabled={pending[command.id]}
+            onSelect={command.perform}
           >
-            <MailIcon aria-hidden="true" className={cn(unread && TOGGLE_ON_ICON_CLASS)} />
-            {unread ? 'Mark read' : 'Mark unread'}
+            {command.pressed ? onIcon(command.icon) : command.icon}
+            {KEBAB_LABELS[command.id] ?? command.label}
           </DropdownMenuItem>
-        ) : null}
-        {flags.pin ? (
-          <DropdownMenuItem
-            data-slot="pin-run"
-            // The same `aria-pressed` its desktop twin and `PinToggle` carry — a toggle should
-            // announce its state in every spelling, not only the ones with room for the word.
-            aria-pressed={Boolean(run.pinned)}
-            disabled={actions.pin.isPending}
-            onSelect={() => actions.pin.mutate()}
-          >
-            <PinIcon aria-hidden="true" className={cn(run.pinned && TOGGLE_ON_ICON_CLASS)} />
-            {run.pinned ? 'Unpin' : 'Pin'}
-          </DropdownMenuItem>
-        ) : null}
-        {flags.archive ? (
-          <DropdownMenuItem aria-pressed={Boolean(run.archived)} onSelect={() => actions.archive.mutate()}>
-            <ArchiveIcon aria-hidden="true" className={cn(run.archived && TOGGLE_ON_ICON_CLASS)} />
-            {run.archived ? 'Unarchive' : 'Archive'}
-          </DropdownMenuItem>
-        ) : null}
-        {(showRunControls && flags.cancel) || flags.deleteRun ? <DropdownMenuSeparator /> : null}
-        {/* On the Session tab the composer's ■ carries Stop, exactly as on desktop. */}
-        {showRunControls && flags.cancel ? (
-          <DropdownMenuItem variant="destructive" onSelect={() => actions.setConfirming('cancel')}>
-            <CircleStopIcon aria-hidden="true" /> Stop
-          </DropdownMenuItem>
-        ) : null}
-        {flags.deleteRun ? (
-          <DropdownMenuItem
-            variant="destructive"
-            disabled={live !== undefined}
-            onSelect={() => actions.setConfirming('delete')}
-          >
-            <Trash2Icon aria-hidden="true" /> Delete
-          </DropdownMenuItem>
-        ) : null}
+        ))}
+        {stop || remove ? <DropdownMenuSeparator /> : null}
+        {[stop, remove].map((command) =>
+          command ? (
+            <DropdownMenuItem key={command.id} variant="destructive" onSelect={command.perform}>
+              {command.icon} {KEBAB_LABELS[command.id] ?? command.label}
+            </DropdownMenuItem>
+          ) : null,
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   )
+}
+
+const KEBAB_SLOTS: Record<string, string> = { 'toggle-read': 'unread-toggle', pin: 'pin-run' }
+// A menu item's own words where the palette's would read oddly here.
+const KEBAB_LABELS: Record<string, string> = { 'open:terminal-resume': 'Terminal', stop: 'Stop', delete: 'Delete' }
+
+/** The ON pattern on a toggle's icon — violet and filled, like its desktop twin. */
+function onIcon(icon: ReactNode): ReactNode {
+  if (!isValidElement<{ className?: string }>(icon)) return icon
+  return cloneElement(icon, { className: cn(icon.props.className, TOGGLE_ON_ICON_CLASS) })
 }
 
 /** "take over interactively: cd … && claude --resume …" — the legacy `#d-resume` line, now
