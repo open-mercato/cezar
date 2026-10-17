@@ -31,6 +31,7 @@ function serve(resources: Partial<WorkspaceConfigResponse['resources']> = {}) {
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,
     effectiveSkillsAutoUpdate: true,
+    orgSkillsRepos: [],
     composerDefaults: {
       autonomous: null,
       worktree: null,

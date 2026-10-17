@@ -104,6 +104,7 @@ function serve(answers: Answers = {}) {
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,
     effectiveSkillsAutoUpdate: true,
+    orgSkillsRepos: [],
     composerDefaults: {
       autonomous: null,
       worktree: null,

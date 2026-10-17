@@ -95,6 +95,7 @@ describe('the workspace settings API (step 2.7)', () => {
       projectsDir: '~/cezar/projects',
       skillsAutoUpdate: null,
       effectiveSkillsAutoUpdate: true,
+      orgSkillsRepos: [],
       composerDefaults: {
         autonomous: null,
         worktree: null,
@@ -291,6 +292,7 @@ describe('the workspace settings API (step 2.7)', () => {
       projectsDir: '~/cezar/projects',
       skillsAutoUpdate: null,
       effectiveSkillsAutoUpdate: true,
+      orgSkillsRepos: [],
       composerDefaults: {
         autonomous: null,
         worktree: null,
@@ -374,6 +376,7 @@ describe('the workspace settings API (step 2.7)', () => {
     expect((await (await getConfig()).json()) as WorkspaceConfigResponse).toMatchObject({
       skillsAutoUpdate: null,
       effectiveSkillsAutoUpdate: false,
+      orgSkillsRepos: [],
     });
 
     const explicit = (await (await putConfig({ skillsAutoUpdate: true })).json()) as WorkspaceConfigResponse;

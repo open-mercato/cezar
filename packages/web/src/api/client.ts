@@ -2321,6 +2321,8 @@ export async function getWorkspaceConfig(opts?: ReadOptions): Promise<WorkspaceC
       ? { ...answer.branding, logoUrl: answer.branding.logoUrl ? resolveApiUrl(answer.branding.logoUrl) : null }
       : { name: 'cezar', logoUrl: null },
     agentDefaults: answer.agentDefaults ?? {},
+    // Additive key: an older server omits it.
+    orgSkillsRepos: answer.orgSkillsRepos ?? [],
     resources: {
       ...answer.resources,
       // Older servers omit this additive key; preserve an explicit null (disabled) while
@@ -2561,7 +2563,9 @@ export async function applySelfUpdate(version: string): Promise<SelfUpdateStatus
 export async function putWorkspaceConfig(
   patch: SetWorkspaceConfigInput,
 ): Promise<WorkspaceConfigResponse> {
-  return unwrap(await cez.api.v1.workspace.config.$put({ json: patch }), '/workspace/config')
+  const answer = await unwrap(await cez.api.v1.workspace.config.$put({ json: patch }), '/workspace/config')
+  // Same additive-key fallback as getWorkspaceConfig: an older server omits it.
+  return { ...answer, orgSkillsRepos: answer.orgSkillsRepos ?? [] }
 }
 
 /** Set/clear the agents' config knobs — base branch, default runner, system prompt, per-runner
