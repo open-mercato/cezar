@@ -141,10 +141,11 @@ export function isLoopbackHostHeader(host: string | null | undefined): boolean {
 /**
  * Whether the Preview tab may offer Design Mode (spec `2026-10-09-design-mode`). Only on a local
  * cockpit: the picker proxy listens on loopback, which a hosted cockpit's viewer cannot reach.
- * `CEZ_DESIGN_MODE=0` is the off switch; there is deliberately no `=1` for hosted mode.
+ * Opt-in (`CEZ_DESIGN_MODE=1`), as AGENTS.md § Zero config asks of a second listener; a hosted
+ * cockpit stays off even with it.
  */
 function designModeEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
-  return env.CEZ_DESIGN_MODE !== '0' && env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost);
+  return env.CEZ_DESIGN_MODE === '1' && env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost);
 }
 
 /** `CEZ_REMOTE=1` or a non-loopback bind host ⇒ hosted mode (no local handoff).

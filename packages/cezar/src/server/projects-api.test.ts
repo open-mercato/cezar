@@ -925,7 +925,7 @@ describe('workspace projects API', () => {
       expect(body.capabilities).toEqual({
         localHandoff: true,
         terminal: true,
-        designMode: true,
+        designMode: false,
         followups: false,
         singleProject: false,
         automations: true,

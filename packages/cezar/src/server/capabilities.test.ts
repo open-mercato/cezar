@@ -152,13 +152,15 @@ describe('resolveCapabilities — localHandoff', () => {
 });
 
 describe('resolveCapabilities — designMode (spec 2026-10-09-design-mode)', () => {
-  it('is on for a local cockpit by default', () => {
-    expect(resolveCapabilities({}, undefined).designMode).toBe(true);
-    expect(resolveCapabilities({}, '127.0.0.1').designMode).toBe(true);
+  it('is off by default, even on a local cockpit', () => {
+    expect(resolveCapabilities({}, undefined).designMode).toBe(false);
+    expect(resolveCapabilities({}, '127.0.0.1').designMode).toBe(false);
+    expect(resolveCapabilities({ CEZ_DESIGN_MODE: '0' }, undefined).designMode).toBe(false);
   });
 
-  it('is off with CEZ_DESIGN_MODE=0', () => {
-    expect(resolveCapabilities({ CEZ_DESIGN_MODE: '0' }, undefined).designMode).toBe(false);
+  it('is on for a local cockpit with CEZ_DESIGN_MODE=1', () => {
+    expect(resolveCapabilities({ CEZ_DESIGN_MODE: '1' }, undefined).designMode).toBe(true);
+    expect(resolveCapabilities({ CEZ_DESIGN_MODE: '1' }, '127.0.0.1').designMode).toBe(true);
   });
 
   it('is off on a hosted cockpit, even with CEZ_DESIGN_MODE=1 — a loopback mirror reaches nobody', () => {
