@@ -59,7 +59,7 @@ export function useRunActions(
   // must be ONE implementation, not two buttons that happen to agree today.
   const finish = useFinishRun(run.id)
   const archive = useMutation({
-    mutationFn: () => archiveRun(run.id, !run.archived, surface),
+    mutationFn: (via?: TaskActionSurface) => archiveRun(run.id, !run.archived, via ?? surface),
     onSuccess: invalidate,
     onError,
   })
@@ -69,7 +69,7 @@ export function useRunActions(
   const pinMutation = usePinRun(surface)
   const pin = {
     isPending: pinMutation.isPending,
-    mutate: () => pinMutation.mutate({ id: run.id, pinned: !run.pinned }, { onError }),
+    mutate: (via?: TaskActionSurface) => pinMutation.mutate({ id: run.id, pinned: !run.pinned, surface: via }, { onError }),
   }
   // Mark unread (#775) drives the shared optimistic hook rather than a local mutation: the
   // cache choreography (clear `seenAt`, guarded rollback) belongs next to its read twin in

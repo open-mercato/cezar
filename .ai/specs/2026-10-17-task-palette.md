@@ -62,6 +62,15 @@ layouts) lives in the run header behind the mouse, and only for the task on scre
   commit dialog. The palette never destroys on one Enter.
 - `GET /api/v1/runs/:id/tree` — `/repo/tree`'s answer for the run's working directory, for `#`.
 
+## Telemetry
+
+Opt-in like all of cezar's (docs/telemetry.md), through the cockpit relay, closed label sets in
+`packages/contract/src/telemetry.ts`: `palette_opened`, `task_command_run` / `task_shortcut_used`
+(the command — batched in the tab, one event per label with `value`), `task_switched`,
+`palette_mode_used` (search shape, never text), `palette_dismissed`, `shortcut_rebound`. Pin and
+archive carry `palette` or `shortcut` as their surface. Open-ended ids fold into closed labels
+(`taskCommandLabel`).
+
 ## Out of scope
 
 Copy-as-variant/re-run, discard changes, multi-chord sequences, shortcuts for ⌘K's global commands.

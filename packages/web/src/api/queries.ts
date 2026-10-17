@@ -1820,8 +1820,11 @@ function withoutReceipt(run: RunRecord): RunRecord {
 export function usePinRun(surface: TaskActionSurface, projectId?: string, cacheScope?: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) =>
-      projectId === undefined ? pinRun(id, pinned, surface) : pinProjectRun(projectId, id, pinned, surface),
+    // `surface` per call when one control can be reached two ways (⌘P: a row, or a shortcut).
+    mutationFn: ({ id, pinned, surface: via }: { id: string; pinned: boolean; surface?: TaskActionSurface }) =>
+      projectId === undefined
+        ? pinRun(id, pinned, via ?? surface)
+        : pinProjectRun(projectId, id, pinned, via ?? surface),
     // Hierarchical keys: this covers the list AND the open thread's own record.
     onSuccess: () =>
       queryClient.invalidateQueries({

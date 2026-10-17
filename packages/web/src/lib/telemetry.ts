@@ -3,6 +3,11 @@ import { useLocation } from 'react-router'
 
 import {
   attachmentCountBucket,
+  PALETTE_DISMISS_VIEWS,
+  PALETTE_KINDS,
+  PALETTE_MODES,
+  TASK_SWITCH_WAYS,
+  taskCommandLabel,
   TELEMETRY_ROUTE_SEGMENTS,
   type AddProjectDialog,
   type MessageSurface,
@@ -78,6 +83,99 @@ export function trackAddProjectOpened(dialog: AddProjectDialog): void {
  *  drop shows no error, so this is the only signal it happened (telemetry edd8c83e). */
 export function trackSkillsUpdateApplyDropped(outcome: SkillsUpdateDropOutcome): void {
   send('/api/v1/telemetry/event', { event: 'skills_update_apply_dropped', label: outcome })
+}
+
+// ---- the palettes (spec 2026-10-17-task-palette) ---------------------------------------------
+
+export type PaletteKind = (typeof PALETTE_KINDS)[number]
+export type TaskSwitchWay = (typeof TASK_SWITCH_WAYS)[number]
+export type PaletteMode = (typeof PALETTE_MODES)[number]
+export type PaletteDismissView = (typeof PALETTE_DISMISS_VIEWS)[number]
+
+/** ⌘K or ⌘P opened — once per opening, not per re-scope. */
+export function trackPaletteOpened(kind: PaletteKind): void {
+  send('/api/v1/telemetry/event', { event: 'palette_opened', label: kind })
+}
+
+/** Moved to another task from a palette, and how. */
+export function trackTaskSwitched(way: TaskSwitchWay): void {
+  send('/api/v1/telemetry/event', { event: 'task_switched', label: way })
+}
+
+/** The search modes one palette session used, sent once each when it closes. */
+export function trackPaletteModes(modes: Iterable<PaletteMode>): void {
+  for (const mode of modes) send('/api/v1/telemetry/event', { event: 'palette_mode_used', label: mode })
+}
+
+/** Closed with nothing chosen — the view it was in. */
+export function trackPaletteDismissed(view: PaletteDismissView): void {
+  send('/api/v1/telemetry/event', { event: 'palette_dismissed', label: view })
+}
+
+/** A command got (or lost) a shortcut. Commands telemetry does not name are not sent. */
+export function trackShortcutRebound(commandId: string): void {
+  const label = taskCommandLabel(commandId)
+  if (label) send('/api/v1/telemetry/event', { event: 'shortcut_rebound', label })
+}
+
+/** What a palette's search text says about how it was searched — its SHAPE, never the text. */
+export function searchModes(search: string): PaletteMode[] {
+  const modes: PaletteMode[] = []
+  if (search.startsWith('@')) modes.push('tasks')
+  else if (search.startsWith('>')) modes.push('commands')
+  else if (search.startsWith('#')) modes.push('files')
+  const rest = search.replace(/^[@>]/, '').trim().toLowerCase()
+  if (/^(?:(?:pr|issue)\s*)?#?\d{1,7}$/.test(rest)) modes.push('pr_number')
+  if (/\bauto/.test(rest)) modes.push('automation')
+  return modes
+}
+
+/**
+ * Summed counts, flushed as one event per (event, label) with `value` — a shortcut can fire many
+ * times a minute, and the tracking guide asks for one request per batch rather than per press.
+ * Flushes on its timer, and when the tab is hidden or unloads, so a closing tab loses nothing.
+ */
+export function createCountBatch(
+  sendCount: (event: string, label: string, value: number) => void,
+  intervalMs = 60_000,
+): { add: (event: string, label: string) => void; flush: () => void } {
+  const counts = new Map<string, number>()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const flush = () => {
+    clearTimeout(timer)
+    timer = undefined
+    for (const [key, value] of counts) {
+      const [event, label] = key.split('\u0000') as [string, string]
+      // The relay caps a batch at 1000; a minute of more is split rather than dropped.
+      for (let left = value; left > 0; left -= 1000) sendCount(event, label, Math.min(left, 1000))
+    }
+    counts.clear()
+  }
+  return {
+    add: (event, label) => {
+      const key = `${event}\u0000${label}`
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+      timer ??= setTimeout(flush, intervalMs)
+    },
+    flush,
+  }
+}
+
+const commandCounts = createCountBatch((event, label, value) =>
+  send('/api/v1/telemetry/event', { event, label, value }),
+)
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', commandCounts.flush)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') commandCounts.flush()
+  })
+}
+
+/** A task command ran — from the palette or from its shortcut. Batched (`createCountBatch`). */
+export function countTaskCommand(commandId: string, source: 'palette' | 'shortcut'): void {
+  const label = taskCommandLabel(commandId)
+  if (!label) return
+  commandCounts.add(source === 'palette' ? 'task_command_run' : 'task_shortcut_used', label)
 }
 
 /** Whether a pathname is a page the user actually sees. Everything else outside these roots is

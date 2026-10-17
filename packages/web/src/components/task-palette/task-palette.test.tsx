@@ -10,7 +10,24 @@ import { ThemeProvider } from '@/components/theme-provider'
 import { recordTaskVisit, resetRecentTasks } from '@/lib/recent-tasks'
 import { publishTaskWorkspace, resetTaskWorkspaceBridge, type TaskWorkspaceBridge } from '@/lib/task-workspace-bridge'
 
+import * as telemetry from '@/lib/telemetry'
+
 import { paletteMode, rankPaths, TaskPalette, taskIdFromPath } from './task-palette'
+
+// Spies over the real helpers (their `send` is a no-op under test): the palettes' wiring is what
+// is asserted here, the helpers themselves in `lib/telemetry-palette.test.ts`.
+vi.mock('@/lib/telemetry', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/telemetry')>()
+  return {
+    ...actual,
+    trackPaletteOpened: vi.fn(),
+    trackPaletteDismissed: vi.fn(),
+    trackPaletteModes: vi.fn(),
+    trackTaskSwitched: vi.fn(),
+    countTaskCommand: vi.fn(),
+    trackShortcutRebound: vi.fn(),
+  }
+})
 
 const fetchMock = vi.fn<typeof fetch>()
 let sent: { method: string; path: string; body: unknown }[] = []
@@ -251,7 +268,7 @@ describe('shortcuts', () => {
     renderPalettes('/tasks/r1')
     await waitFor(async () => {
       await press(window, 'KeyL', 'l', { metaKey: true, shiftKey: true })
-      expect(sent.find((request) => request.path.endsWith('/pin'))?.body).toEqual({ pinned: true, surface: 'palette' })
+      expect(sent.find((request) => request.path.endsWith('/pin'))?.body).toEqual({ pinned: true, surface: 'shortcut' })
     })
     const event = new KeyboardEvent('keydown', { code: 'KeyU', key: 'u', metaKey: true, shiftKey: true, cancelable: true })
     act(() => {
@@ -335,5 +352,53 @@ describe('the grammar', () => {
     expect(rankPaths(paths, 'header')[0]).toBe('src/run-header.tsx')
     expect(rankPaths(paths, 'zzz')).toEqual([])
     expect(rankPaths(Array.from({ length: 100 }, (_, index) => `f${index}.ts`), '')).toHaveLength(50)
+  })
+})
+
+describe('telemetry', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('reports an opening, the command run from a row, and its own surface on the pin', async () => {
+    renderPalettes('/tasks/r1')
+    await pressP()
+    expect(telemetry.trackPaletteOpened).toHaveBeenCalledWith('task')
+    fireEvent.click(await within(palette()!).findByText('Pin'))
+    expect(telemetry.countTaskCommand).toHaveBeenCalledWith('pin', 'palette')
+    await waitFor(() => expect(sent.find((request) => request.path.endsWith('/pin'))?.body).toEqual({ pinned: true, surface: 'palette' }))
+    // Choosing something is not a dismissal.
+    expect(telemetry.trackPaletteDismissed).not.toHaveBeenCalled()
+  })
+
+  it('a shortcut is counted as a shortcut, and its pin labelled `shortcut`', async () => {
+    vi.stubGlobal('navigator', { ...navigator, platform: 'MacIntel' })
+    uiState = { keybindings: { pin: 'Mod+Shift+L' } }
+    renderPalettes('/tasks/r1')
+    await waitFor(async () => {
+      await act(() => {
+        fireEvent.keyDown(window, { code: 'KeyL', key: 'l', metaKey: true, shiftKey: true })
+      })
+      expect(sent.find((request) => request.path.endsWith('/pin'))?.body).toEqual({ pinned: true, surface: 'shortcut' })
+    })
+    expect(telemetry.countTaskCommand).toHaveBeenCalledWith('pin', 'shortcut')
+    expect(telemetry.countTaskCommand).not.toHaveBeenCalledWith('pin', 'palette')
+  })
+
+  it('a cycled ⌘P ⌘P ↵ is a `cycle` switch; Escape from the switcher is a `tasks` dismissal with its modes', async () => {
+    recordTaskVisit('r2')
+    recordTaskVisit('r1')
+    renderPalettes('/tasks/r1')
+    await pressP()
+    await within(palette()!).findByText('Pin')
+    await pressP()
+    await waitFor(() => expect(selectedRow()?.dataset.runId).toBe('r2'))
+    fireEvent.keyDown(input(), { key: 'Enter' })
+    await waitFor(() => expect(telemetry.trackTaskSwitched).toHaveBeenCalledWith('cycle'))
+
+    await pressP()
+    fireEvent.change(input(), { target: { value: '@1482' } })
+    fireEvent.keyDown(input(), { key: 'Escape' })
+    await waitFor(() => expect(telemetry.trackPaletteDismissed).toHaveBeenCalledWith('tasks'))
+    const modes = vi.mocked(telemetry.trackPaletteModes).mock.calls.map(([used]) => [...used])
+    expect(modes).toContainEqual(['tasks', 'pr_number'])
   })
 })

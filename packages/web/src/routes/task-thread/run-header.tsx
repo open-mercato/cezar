@@ -458,7 +458,7 @@ function TaskItemActions({
         pressed={Boolean(run.pinned)}
         unavailable={flags.pin ? undefined : 'Archived tasks can’t be pinned'}
         pending={actions.pin.isPending}
-        onClick={actions.pin.mutate}
+        onClick={() => actions.pin.mutate()}
         className={cn(run.pinned && TOGGLE_ON_CLASS)}
       >
         <PinIcon aria-hidden="true" />
@@ -470,7 +470,7 @@ function TaskItemActions({
         pressed={Boolean(run.archived)}
         unavailable={live}
         pending={actions.archive.isPending}
-        onClick={() => actions.archive.mutate()}
+        onClick={() => actions.archive.mutate(undefined)}
         className={cn(run.archived && TOGGLE_ON_CLASS)}
       >
         <ArchiveIcon aria-hidden="true" />
@@ -1294,7 +1294,7 @@ function ActionsKebab({
       markRead: () => actions.markRead.mutate(),
       markUnread: () => actions.markUnread.mutate(),
       pin: () => actions.pin.mutate(),
-      archive: () => actions.archive.mutate(),
+      archive: () => actions.archive.mutate(undefined),
       rename: () => {},
       finish: () => actions.finish.mutate(),
       confirmStop: () => actions.setConfirming('cancel'),
@@ -1344,7 +1344,7 @@ function ActionsKebab({
                 data-action={step.id.slice('git:'.length)}
                 disabled={step.unavailable !== undefined}
                 title={step.unavailable}
-                onSelect={step.perform}
+                onSelect={() => step.perform()}
               >
                 {step.icon}
                 {step.label}
@@ -1361,7 +1361,7 @@ function ActionsKebab({
             // state in every spelling, not only the ones with room for the word.
             aria-pressed={command.id in KEBAB_SLOTS || command.id === 'archive' ? Boolean(command.pressed) : undefined}
             disabled={pending[command.id]}
-            onSelect={command.perform}
+            onSelect={() => command.perform()}
           >
             {command.pressed ? onIcon(command.icon) : command.icon}
             {KEBAB_LABELS[command.id] ?? command.label}
@@ -1370,7 +1370,7 @@ function ActionsKebab({
         {stop || remove ? <DropdownMenuSeparator /> : null}
         {[stop, remove].map((command) =>
           command ? (
-            <DropdownMenuItem key={command.id} variant="destructive" onSelect={command.perform}>
+            <DropdownMenuItem key={command.id} variant="destructive" onSelect={() => command.perform()}>
               {command.icon} {KEBAB_LABELS[command.id] ?? command.label}
             </DropdownMenuItem>
           ) : null,

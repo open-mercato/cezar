@@ -7540,8 +7540,10 @@ export function createApp(deps: ServerDeps) {
       '/telemetry/event',
       jsonZodValidator(telemetryEventInputSchema, { message: 'invalid event' }),
       (c) => {
-        const { event, label } = c.req.valid('json');
-        track(event, { label }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
+        const body = c.req.valid('json');
+        // `value` only on the batched events, and only when sent — every other relay stays `{ label }`.
+        const value = 'value' in body ? body.value : undefined;
+        track(body.event, { label: body.label, ...(value !== undefined ? { value } : {}) }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
         return c.body(null, 204);
       },
     )

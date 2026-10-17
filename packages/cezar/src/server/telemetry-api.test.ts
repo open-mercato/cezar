@@ -122,6 +122,32 @@ describe('telemetry routes', () => {
     expect(track).not.toHaveBeenCalled();
   });
 
+  /** Spec 2026-10-17-task-palette: palette usage, closed labels only; counts only where batched. */
+  it('relays the palette events with their closed labels, and a count only on the batched ones', async () => {
+    expect((await post('/api/v1/telemetry/event', { event: 'palette_opened', label: 'task' })).status).toBe(204)
+    expect(track).toHaveBeenCalledWith('palette_opened', { label: 'task' }, { sid: undefined })
+    expect((await post('/api/v1/telemetry/event', { event: 'task_shortcut_used', label: 'tab', value: 12 })).status).toBe(204)
+    expect(track).toHaveBeenCalledWith('task_shortcut_used', { label: 'tab', value: 12 }, { sid: undefined })
+    expect((await post('/api/v1/telemetry/event', { event: 'task_command_run', label: 'git:push' })).status).toBe(204)
+    expect(track).toHaveBeenCalledWith('task_command_run', { label: 'git:push' }, { sid: undefined })
+    for (const [event, label] of [['task_switched', 'cycle'], ['palette_mode_used', 'pr_number'], ['palette_dismissed', 'files'], ['shortcut_rebound', 'pin']]) {
+      expect((await post('/api/v1/telemetry/event', { event, label })).status).toBe(204)
+    }
+    vi.mocked(track).mockClear()
+    // Free text, an open-ended id, a count where none belongs, a count out of range: all refused.
+    expect((await post('/api/v1/telemetry/event', { event: 'task_command_run', label: 'layout:My secret layout' })).status).toBe(400)
+    expect((await post('/api/v1/telemetry/event', { event: 'palette_mode_used', label: 'fix login' })).status).toBe(400)
+    expect((await post('/api/v1/telemetry/event', { event: 'task_shortcut_used', label: 'tab', value: 5000 })).status).toBe(400)
+    expect((await post('/api/v1/telemetry/event', { event: 'palette_opened', label: 'task', value: 3 })).status).toBe(204)
+    expect(track).toHaveBeenCalledWith('palette_opened', { label: 'task' }, { sid: undefined })
+  })
+
+  it('a pin from a keyboard shortcut is labelled `shortcut`, apart from the palette', async () => {
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] })
+    expect((await post(`/api/v1/runs/${run.id}/pin`, { pinned: true, surface: 'shortcut' })).status).toBe(200)
+    expect(track).toHaveBeenCalledWith('task_pinned', { label: 'shortcut' }, expect.anything())
+  })
+
   it('relays a cockpit error and rejects an oversized context', async () => {
     const res = await post('/api/v1/telemetry/error', { type: 'TypeError', message: 'boom', context: { 'page.route': '/tasks' } });
     expect(res.status).toBe(204);
