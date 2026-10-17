@@ -29,7 +29,7 @@ import { Separator } from '@/components/ui/separator'
 import { Link } from '@/lib/project-router'
 import { isUnread } from '@/lib/read-state'
 import { recordTaskVisit } from '@/lib/recent-tasks'
-import { publishTaskWorkspace, takeQueuedFileOpen, withdrawTaskWorkspace } from '@/lib/task-workspace-bridge'
+import { publishTaskWorkspace, takeQueuedFileOpen, withdrawTaskWorkspace, type TaskWorkspaceBridge } from '@/lib/task-workspace-bridge'
 import { isEditableTarget } from '@/lib/use-command-shortcut'
 import { cn } from '@/lib/utils'
 import { rememberViewState } from '@/lib/view-memory'
@@ -463,8 +463,7 @@ function WorkspaceView({
     [openBeside, run.id],
   )
 
-  // The ⌘P palette's handle on this workspace (spec 2026-10-17-task-palette), refreshed every
-  // commit so it reads the DOM (split buttons, composer) as it now stands.
+  // The ⌘P palette's handle on this workspace (spec 2026-10-17-task-palette), refreshed every commit.
   useEffect(() => recordTaskVisit(run.id), [run.id])
   useEffect(() => {
     if (!layouts.ready) return
@@ -479,7 +478,7 @@ function WorkspaceView({
     }
     const composer = () =>
       stage()?.querySelector<HTMLElement>('[data-slot="composer"] textarea, [data-slot="composer-input"]') ?? null
-    const bridge = {
+    const bridge: TaskWorkspaceBridge = {
       runId: run.id,
       views: fixedViews,
       activeView: fixedActive,
@@ -494,7 +493,11 @@ function WorkspaceView({
       newLayout: createLayout,
       maximized,
       toggleMaximized,
-      splitView: splitButton() ? () => splitButton()?.click() : null,
+      // Getters: the composer and split buttons mount after this commit (history loads), so they
+      // are looked up when the palette reads them, not when this was published.
+      get splitView() {
+        return splitButton() ? () => splitButton()?.click() : null
+      },
       terminal: {
         allowed: terminalAllowed,
         open: drawerOpen,
@@ -505,7 +508,9 @@ function WorkspaceView({
           openBeside('terminal')
         },
       },
-      focusComposer: composer() ? () => composer()?.focus() : null,
+      get focusComposer() {
+        return composer() ? () => composer()?.focus() : null
+      },
       openFile: (path: string) => openReference({ view: 'files', value: path }),
       markedUnread,
     }

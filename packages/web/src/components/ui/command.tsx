@@ -37,6 +37,7 @@ function CommandDialog({
   showCloseButton = true,
   filter,
   commandProps,
+  onOpenAutoFocus,
   onCloseAutoFocus,
   onEscapeKeyDown,
   ...props
@@ -55,6 +56,7 @@ function CommandDialog({
     React.ComponentProps<typeof CommandPrimitive>,
     "value" | "onValueChange" | "onKeyDown" | "shouldFilter" | "loop"
   >
+  onOpenAutoFocus?: React.ComponentProps<typeof DialogContent>["onOpenAutoFocus"]
   onCloseAutoFocus?: React.ComponentProps<typeof DialogContent>["onCloseAutoFocus"]
   onEscapeKeyDown?: React.ComponentProps<typeof DialogContent>["onEscapeKeyDown"]
 }) {
@@ -67,6 +69,7 @@ function CommandDialog({
       <DialogContent
         className={cn("overflow-hidden p-0", className)}
         showCloseButton={showCloseButton}
+        onOpenAutoFocus={onOpenAutoFocus}
         onCloseAutoFocus={onCloseAutoFocus}
         onEscapeKeyDown={onEscapeKeyDown}
       >

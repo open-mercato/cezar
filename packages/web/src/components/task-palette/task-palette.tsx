@@ -154,10 +154,14 @@ export function TaskPalette() {
 
   React.useEffect(() => {
     if (!cycleTo) return
-    const rows = taskRows()
-    const row = rows[Math.min(cycleTo.step, rows.length - 1)]
-    if (row?.dataset.value) setSelected(row.dataset.value)
-    setCycleTo(null)
+    // A tick late: a changed search makes cmdk re-select its first row once it has re-filtered.
+    const timer = setTimeout(() => {
+      const rows = taskRows()
+      const row = rows[Math.min(cycleTo.step, rows.length - 1)]
+      if (row?.dataset.value) setSelected(row.dataset.value)
+      setCycleTo(null)
+    }, 0)
+    return () => clearTimeout(timer)
   }, [cycleTo, search])
 
   /** Act on `subject`: in place when it is in the project on screen, else go there and re-open. */
@@ -221,6 +225,8 @@ export function TaskPalette() {
     if (!run) return
     setRenaming(true)
     setSearch(runTitle(run))
+    // Selected, so typing replaces the old name and an arrow key edits it.
+    setTimeout(() => body.current?.querySelector<HTMLInputElement>('[cmdk-input]')?.select(), 0)
   }, [])
 
   const commitRename = () => {
@@ -284,6 +290,14 @@ export function TaskPalette() {
           onKeyDown,
           shouldFilter: !renaming && mode !== 'files',
         }}
+        onOpenAutoFocus={(event) => {
+          // Radix selects the input's text on focus; a pre-filled `@` must stay, caret after it.
+          const input = (event.currentTarget as HTMLElement | null)?.querySelector<HTMLInputElement>('[cmdk-input]')
+          if (!input) return
+          event.preventDefault()
+          input.focus()
+          input.setSelectionRange(input.value.length, input.value.length)
+        }}
         onCloseAutoFocus={(event) => {
           // A command chose where focus goes next; do not hand it back to the old element.
           if (performed.current) event.preventDefault()
@@ -303,7 +317,7 @@ export function TaskPalette() {
             value={search}
             onValueChange={setSearch}
           />
-          {subjectId && !renaming ? <SubjectBar runId={subjectId} picked={subjectId !== pageTaskId} /> : null}
+          {subjectId && !renaming && mode !== 'tasks' ? <SubjectBar runId={subjectId} picked={subjectId !== pageTaskId} /> : null}
           <CommandList className="max-h-[55vh] min-h-[14rem] sm:max-h-[60vh] lg:max-h-[68vh]">
             {renaming ? (
               <CommandGroup heading="Rename">
