@@ -101,10 +101,12 @@ export function paletteScore(value: string, search: string, keywords?: string[])
   const haystack = (keywords?.length ? `${value} ${keywords.join(' ')}` : value).toLowerCase()
   const tokens = query.split(/\s+/)
   let total = 0
-  for (const token of tokens) {
-    // A number, or the `pr`/`issue` naming one, is a reference: where it sits says nothing — the
-    // references follow the title, so a decay would rank `#12` on a long title below `#123`.
-    const reference = /^(#?\d+|pr|issue)$/.test(token)
+  for (const [index, token] of tokens.entries()) {
+    // A number is a reference: where it sits says nothing — the references follow the title, so a
+    // decay would rank `#12` on a long title below `#123`. `pr`/`issue` only as the word naming
+    // the number after it (`pr 12`); alone they are title words ("review pr"), and position counts.
+    const isNumber = (value: string | undefined) => value !== undefined && /^#?\d+$/.test(value)
+    const reference = isNumber(token) || (/^(pr|issue)$/.test(token) && isNumber(tokens[index + 1]))
     // The best of every occurrence, not the first: `#12` must find the exact `#12` reference even
     // when `#123` comes earlier in the row.
     let best = 0
@@ -706,6 +708,7 @@ function PaletteContent({ close }: { close: () => void }) {
   // How this session searched (a PR number, "auto") — sent once each when it closes (unmounts).
   const sessionModes = React.useRef(new Set<PaletteMode>())
   React.useEffect(() => {
+    // ⌘K has no prefixes: only the shape of what was searched (a PR number, `auto`).
     for (const used of searchModes(search)) sessionModes.current.add(used)
   }, [search])
   React.useEffect(() => () => trackPaletteModes(sessionModes.current), [])

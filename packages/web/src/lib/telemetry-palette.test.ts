@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { taskCommandLabel, TASK_COMMAND_LABELS } from '@open-mercato/cezar-api-client'
 import { BINDABLE_COMMANDS } from './keybindings'
+import { paletteMode } from '@/components/task-palette/task-palette'
 import { createCountBatch, searchModes } from './telemetry'
 
 describe('palette telemetry (spec 2026-10-17-task-palette)', () => {
@@ -17,18 +18,26 @@ describe('palette telemetry (spec 2026-10-17-task-palette)', () => {
     for (const label of TASK_COMMAND_LABELS) expect(label).toMatch(/^[\w .:@/+-]{1,64}$/)
   })
 
-  it('reads a search for its shape only', () => {
-    expect(searchModes('@fix login')).toEqual(['tasks'])
-    expect(searchModes('#src/cart', { files: true })).toEqual(['files'])
-    expect(searchModes('#1482', { files: true })).toEqual(['files'])
+  it('reads a search for its shape only, in the mode the palette really used', () => {
+    expect(searchModes('fix login', 'tasks')).toEqual(['tasks'])
+    expect(searchModes('src/cart', 'files')).toEqual(['files'])
+    // A file search's `#1482` is a path fragment, not a reference.
+    expect(searchModes('1482', 'files')).toEqual(['files'])
     expect(searchModes('#1482')).toEqual(['pr_number'])
-    expect(searchModes('@')).toEqual([])
-    expect(searchModes('>pin')).toEqual(['commands'])
+    // The bare `@` ⌘P fills in itself is not a search.
+    expect(searchModes('', 'tasks')).toEqual([])
+    expect(searchModes('pin', 'commands')).toEqual(['commands'])
     expect(searchModes('1482')).toEqual(['pr_number'])
-    expect(searchModes('@#1482')).toEqual(['tasks', 'pr_number'])
+    expect(searchModes('#1482', 'tasks')).toEqual(['tasks', 'pr_number'])
     expect(searchModes('pr 1482')).toEqual(['pr_number'])
     expect(searchModes('auto review')).toEqual(['automation'])
     expect(searchModes('fix the 1482 bug')).toEqual([])
+  })
+
+  it('counts `>` with no task open as the task search the palette really runs', () => {
+    // `paletteMode` with no subject searches tasks for every prefix — the label follows it.
+    const { mode, query } = paletteMode('>pin', false)
+    expect(searchModes(query, mode === 'all' ? undefined : mode)).toEqual(['tasks'])
   })
 
   it('batches counts per event and label, and sends them as one value each', () => {

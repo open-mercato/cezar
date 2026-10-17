@@ -836,6 +836,12 @@ describe('ranking', () => {
     )
   })
 
+  it('treats only numbers as position-free references — the word "pr" in a title still decays', () => {
+    expect(paletteScore('task fix the pr pipeline 0000', 'pr')).toBeGreaterThan(
+      paletteScore('task a much longer title that only later mentions the pr 0000', 'pr'),
+    )
+  })
+
   it('matches keywords too — the project name on a task row', () => {
     expect(paletteScore('task checkout crash abc', 'shop', ['shop'])).toBeGreaterThan(0)
   })

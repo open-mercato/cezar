@@ -465,6 +465,21 @@ describe('telemetry', () => {
     expect(telemetry.countTaskCommand).not.toHaveBeenCalledWith('pin', 'palette')
   })
 
+  it('the palette coming back on its own (the rename shortcut) is not a new opening', async () => {
+    vi.stubGlobal('navigator', { ...navigator, platform: 'MacIntel' })
+    uiState = { keybindings: { rename: 'Mod+Shift+E' } }
+    renderPalettes('/tasks/r1')
+    await waitFor(async () => {
+      await act(() => {
+        fireEvent.keyDown(window, { code: 'KeyE', key: 'e', metaKey: true, shiftKey: true })
+      })
+      expect(palette()).not.toBeNull()
+    })
+    await waitFor(() => expect(input().value).toBe('Fix the login redirect'))
+    expect(telemetry.trackPaletteOpened).not.toHaveBeenCalled()
+    expect(telemetry.countTaskCommand).toHaveBeenCalledWith('rename', 'shortcut')
+  })
+
   it('a cycled ⌘P ⌘P ↵ is a `cycle` switch; Escape from the switcher is a `tasks` dismissal with its modes', async () => {
     recordTaskVisit('r2')
     recordTaskVisit('r1')

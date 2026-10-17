@@ -151,9 +151,10 @@ export function TaskPalette() {
   const openRef = React.useRef(open)
   openRef.current = open
 
-  const show = React.useCallback((subject: string | null, initialSearch: string) => {
-    // An opening, not a re-scope of an open palette (Tab, Backspace).
-    if (!openRef.current) trackPaletteOpened(subject ? 'task' : 'task_switch')
+  const show = React.useCallback((subject: string | null, initialSearch: string, { reopen = false } = {}) => {
+    // An opening — not a re-scope of an open palette (Tab, Backspace), and not the palette coming
+    // back on its own (after a cross-project Tab's navigation, for the rename shortcut).
+    if (!openRef.current && !reopen) trackPaletteOpened(subject ? 'task' : 'task_switch')
     cycled.current = false
     setSubjectId(subject)
     setSearch(initialSearch)
@@ -248,7 +249,7 @@ export function TaskPalette() {
   React.useEffect(() => {
     if (reopenFor.current && reopenFor.current === pageTaskId) {
       reopenFor.current = null
-      show(pageTaskId, '')
+      show(pageTaskId, '', { reopen: true })
     }
   }, [pageTaskId, show])
   // A dialog command's subject is kept only while its dialog (and the mutation behind it) is up.
@@ -338,7 +339,7 @@ export function TaskPalette() {
       if (command.unavailable) return void toast(command.unavailable)
       countTaskCommand(command.id, 'shortcut')
       if (command.id === 'rename') {
-        now.show(now.pageTaskId, '')
+        now.show(now.pageTaskId, '', { reopen: true })
         setTimeout(now.beginRename, 0)
         return
       }
@@ -413,8 +414,8 @@ export function TaskPalette() {
   const { mode, query } = renaming ? { mode: 'all' as const, query: '' } : paletteMode(search, subjectId !== null)
   React.useEffect(() => {
     if (!open || renaming || recording) return
-    for (const used of searchModes(search, { files: subjectId !== null })) sessionModes.current.add(used)
-  }, [open, renaming, recording, search, subjectId])
+    for (const used of searchModes(query, mode === 'all' ? undefined : mode)) sessionModes.current.add(used)
+  }, [open, renaming, recording, query, mode])
   React.useEffect(() => {
     if (open || sessionModes.current.size === 0) return
     trackPaletteModes(sessionModes.current)

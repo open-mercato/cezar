@@ -118,15 +118,19 @@ export function trackShortcutRebound(commandId: string): void {
   if (label) send('/api/v1/telemetry/event', { event: 'shortcut_rebound', label })
 }
 
-/** What a palette's search text says about how it was searched — its SHAPE, never the text.
- *  `files`: `#` opens the file search (⌘P on a task), not a `#1482` reference. A bare prefix is
- *  not a search — ⌘P pre-fills `@` itself. */
-export function searchModes(search: string, { files = false }: { files?: boolean } = {}): PaletteMode[] {
-  const modes: PaletteMode[] = []
-  const prefix = search.startsWith('@') ? 'tasks' : search.startsWith('>') ? 'commands' : files && search.startsWith('#') ? 'files' : null
-  const rest = (prefix ? search.slice(1) : search).trim().toLowerCase()
-  if (prefix && rest !== '') modes.push(prefix)
-  if (prefix === 'files') return modes
+/**
+ * How a palette session searched — its SHAPE, never the text. `query` is what is searched, prefix
+ * already stripped; `mode` is the prefix mode the palette actually put in effect (`paletteMode`),
+ * absent where none was (⌘K has no prefixes; ⌘P's default list). Deriving it from the palette's
+ * own mode, not from the raw text, is what keeps `>` with no task open counted as the task search
+ * it really is. An empty query is not a search: ⌘P pre-fills a bare `@` itself.
+ */
+export function searchModes(query: string, mode?: 'tasks' | 'commands' | 'files'): PaletteMode[] {
+  const rest = query.trim().toLowerCase()
+  if (rest === '') return []
+  const modes: PaletteMode[] = mode ? [mode] : []
+  // A file search's `#1482` is a path fragment, not a reference.
+  if (mode === 'files') return modes
   if (/^(?:(?:pr|issue)\s*)?#?\d{1,7}$/.test(rest)) modes.push('pr_number')
   if (/\bauto/.test(rest)) modes.push('automation')
   return modes
