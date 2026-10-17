@@ -8,6 +8,7 @@ import { useNavigate } from '@/lib/project-router'
 import { GitTabLoadError, GitTabLoading } from '../task-git/git-tab-loading'
 import { LayoutCards } from '../task-workspace/layout-cards'
 import { FIXED_VIEW_ORDER, VIEW_PATHS } from '../task-workspace/layout-state'
+import { stripEntries, useStripKeyHints } from '../task-workspace/strip'
 import { Markdown } from './markdown'
 import { RunHeader } from './run-header'
 
@@ -41,9 +42,15 @@ function NotesHeader({ run }: { run: ApiRun }) {
     () => FIXED_VIEW_ORDER.filter((view) => (view !== 'graph' || Boolean(run.workflowDef)) && (view !== 'terminal' || terminal)),
     [run.workflowDef, terminal],
   )
+  // Same numbering as the workspace's row (`strip.ts`). ⌘N works here too — the palette's `tab:N`
+  // navigates to the view's page.
+  const strip = useMemo(() => stripEntries(fixedViews), [fixedViews])
+  const { hints, show } = useStripKeyHints(strip)
   const tabs = useMemo(
     () => (
       <LayoutCards
+        keyHints={hints}
+        showKeyHints={show}
         layouts={[]}
         active=""
         fixedViews={fixedViews}
@@ -57,7 +64,7 @@ function NotesHeader({ run }: { run: ApiRun }) {
         showLayouts={false}
       />
     ),
-    [fixedViews, navigate, run.id],
+    [fixedViews, navigate, run.id, hints, show],
   )
   return <RunHeader run={run} tab="notes" tabs={tabs} wide />
 }

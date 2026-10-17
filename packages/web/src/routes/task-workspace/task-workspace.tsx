@@ -26,12 +26,9 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
-import { Link } from '@/lib/project-router'
+import { Link, useNavigate } from '@/lib/project-router'
 import { isUnread } from '@/lib/read-state'
-import { shortcutsBlocked, tabHint } from '@/lib/keybindings'
 import { recordTaskVisit } from '@/lib/recent-tasks'
-import { useKeybindings } from '@/lib/use-keybindings'
-import { useModifierHeld } from '@/lib/use-modifier-held'
 import { publishTaskWorkspace, takeQueuedFileOpen, withdrawTaskWorkspace, type TaskWorkspaceBridge } from '@/lib/task-workspace-bridge'
 import { isEditableTarget } from '@/lib/use-command-shortcut'
 import { cn } from '@/lib/utils'
@@ -54,6 +51,7 @@ import { readDrawerState, writeDrawerState, type DrawerState } from './drawer-st
 import { LayoutCards } from './layout-cards'
 import { emptyBrowserState, FIXED_VIEW_ORDER, fixedViewOf, layoutDisplayName, VIEW_IDS, type ViewId, type WorkspaceColumn } from './layout-state'
 import { FullViewExit, usePanelCover, WorkspaceMaximizeContext } from './maximize'
+import { stripEntries, useStripKeyHints } from './strip'
 import { useWorkspaceLayouts } from './use-workspace-layouts'
 import { AvailableViewsContext } from './view-picker'
 import { ViewDropZones } from './view-drop-zones'
@@ -224,18 +222,11 @@ function WorkspaceView({
   )
   const createLayout = useCallback(() => addLayout(), [addLayout])
 
-  // Holding ⌘ prints each card's shortcut on it (spec 2026-10-17-task-palette): its positional
-  // ⌘N, else a chord bound to that view or layout by name.
-  const { bindings } = useKeybindings()
-  // Only while ⌘N would really switch: not under a palette, dialog or menu (`shortcutsBlocked`).
-  const keysHeld = useModifierHeld(true, notBlocked)
-  const keyHints = useMemo(
-    () =>
-      [...fixedViews.map((view) => `view:${view}`), ...cardLayouts.map((layout) => `layout:${layout.name}`)].map(
-        (own, index) => tabHint(bindings.get(`tab:${index + 1}`) ?? bindings.get(own)),
-      ),
-    [bindings, fixedViews, cardLayouts],
-  )
+  // The numbered tabs — views, then Notes (`strip.ts`) — and, while ⌘ is held on its own, each
+  // tab's number (spec 2026-10-17-task-palette). Saved layouts are not numbered.
+  const strip = useMemo(() => stripEntries(fixedViews), [fixedViews])
+  const { hints: keyHints, show: keysHeld } = useStripKeyHints(strip)
+  const navigate = useNavigate()
 
   // A view tab being dragged: the stage shows its drop zones until the drag ends. Set a tick late,
   // because changing the page under a drag that has only just started can cancel it.
@@ -403,8 +394,17 @@ function WorkspaceView({
     ],
     [fixedViews, cardLayouts, fixedActive, layouts.state.active, openDeepLink, selectLayout],
   )
-  const keys = useRef({ stripOrder, toggleMaximized, terminalAllowed, drawerOpen, updateDrawer })
-  keys.current = { stripOrder, toggleMaximized, terminalAllowed, drawerOpen, updateDrawer }
+  // The 1–9 keys: the numbered tabs only (`strip.ts` — views, then Notes; no layouts), so the key
+  // is the number the tab wears. `[` `]` still step through every card, layouts included.
+  const numbered = useMemo(
+    () => [
+      ...fixedViews.map((view) => () => openDeepLink(view)),
+      () => navigate(`/tasks/${run.id}/notes`),
+    ],
+    [fixedViews, openDeepLink, navigate, run.id],
+  )
+  const keys = useRef({ stripOrder, numbered, toggleMaximized, terminalAllowed, drawerOpen, updateDrawer })
+  keys.current = { stripOrder, numbered, toggleMaximized, terminalAllowed, drawerOpen, updateDrawer }
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey || event.repeat || event.defaultPrevented) return
@@ -419,9 +419,9 @@ function WorkspaceView({
         now.stripOrder[next]!.select()
       }
       if (/^[1-9]$/.test(event.key)) {
-        const entry = now.stripOrder[Number(event.key) - 1]
-        if (!entry) return
-        entry.select()
+        const open = now.numbered[Number(event.key) - 1]
+        if (!open) return
+        open()
       } else if (event.key === '[') step(-1)
       else if (event.key === ']') step(1)
       else if (event.key === 'f' || event.key === 'F') now.toggleMaximized()
@@ -727,7 +727,6 @@ function WorkspaceView({
 }
 
 const noop = () => {}
-const notBlocked = () => !shortcutsBlocked()
 
 function ColumnLoading({ title }: { title: string }) {
   return (

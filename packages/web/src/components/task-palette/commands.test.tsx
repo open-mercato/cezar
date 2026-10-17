@@ -157,8 +157,19 @@ describe('views', () => {
     changes?.performBeside?.()
     expect(bridge.openViewBeside).toHaveBeenCalledWith('changes')
     expect(byId.get('view:session')?.pressed).toBe(true)
-    // Layout keys continue after the views'.
-    expect(byId.get('layout:Review')?.shortcut).toBe('5')
+    // Notes is numbered after the views; saved layouts are not numbered at all.
+    expect(byId.get('view:notes')?.shortcut).toBe('5')
+    expect(byId.get('layout:Review')?.shortcut).toBeUndefined()
+    expect(byId.get('tab:5')?.label).toBe('Tab 5: Notes')
+    expect(byId.has('tab:6')).toBe(false)
+  })
+
+  it('⌘N works off the workspace too (the Notes page): tab:N navigates to the view', () => {
+    const { byId, on } = build(run('done'))
+    byId.get('tab:2')?.perform()
+    expect(on.navigate).toHaveBeenCalledWith('/tasks/r1/changes')
+    byId.get('tab:6')?.perform()
+    expect(on.navigate).toHaveBeenCalledWith('/tasks/r1/notes')
   })
 
   it('for a task not on screen they navigate to its routes, with no layout commands', () => {

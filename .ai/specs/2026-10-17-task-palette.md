@@ -28,7 +28,8 @@ layouts) lives in the run header behind the mouse, and only for the task on scre
   every project; an exact number ranks above a longer one that starts with it.
 - **Alt+Enter** on a view opens it beside the current columns (Alt+click on a card today).
 - **Shortcuts** run palette commands on the task on screen, palette shut. Defaults: ⌘1–⌘9 go to the
-  task's Nth tab (views, then saved layouts — positional `tab:N` commands), ⌘/ opens the terminal
+  task's Nth numbered tab (the views, then Notes — positional `tab:N` commands; saved layouts are
+  not numbered), on the workspace and on the Notes page alike, ⌘/ opens the terminal
   in a column. Any command can be (re)bound: ⇧↵ on a palette row, or Settings → Keyboard (the
   previously hidden section). Chords need ⌘/Ctrl, ⌃ or ⌥; ⌘K, ⌘P, ⌘↵ and the browser's own
   (⌘W, ⌘T, ⌘C…) are refused. In a text field only ⌘/Ctrl chords fire; in the terminal only ⌘

@@ -22,6 +22,7 @@ type StripItem =
 
 /** The row's `gap-0.5`, and the two icon buttons at the switcher's end (28px + that gap). */
 const CARD_GAP = 2
+const NO_HINTS: ReadonlyMap<string, string> = new Map()
 const NEW_BUTTON_WIDTH = 30
 const MORE_BUTTON_WIDTH = 30
 
@@ -61,7 +62,7 @@ export function LayoutCards({
   onViewDragEnd,
   onOpenBeside,
   onColumnDropClose,
-  keyHints = [],
+  keyHints = NO_HINTS,
   showKeyHints = false,
 }: {
   layouts: readonly WorkspaceLayout[]
@@ -86,9 +87,10 @@ export function LayoutCards({
   onOpenBeside?: (view: ViewId) => void
   /** A column header dropped on the row. Absent where the columns cannot be edited. */
   onColumnDropClose?: (index: number) => void
-  /** The shortcut that selects each card, by its place on the row (views, then layouts) — `1`
-   *  for ⌘1. Printed on the cards while `showKeyHints` (⌘ held), and always in the `…` menu. */
-  keyHints?: readonly (string | undefined)[]
+  /** The shortcut that opens each tab, by tab id (`view:<id>`, `view:notes`, `layout:<name>` —
+   *  `strip.ts`) — `1` for ⌘1. Printed on the tabs while `showKeyHints` (⌘ held), and always in
+   *  the `…` menu. */
+  keyHints?: ReadonlyMap<string, string>
   showKeyHints?: boolean
 }) {
   /*
@@ -231,7 +233,7 @@ export function LayoutCards({
         const Icon = VIEW_ICONS[item.view]
         const selected = isActive(item)
         const label = viewLabel(item.view)
-        const hint = keyHints[position - 1]
+        const hint = keyHints.get(`view:${item.view}`)
         return (
           <Button
             key={item.key}
@@ -284,7 +286,11 @@ export function LayoutCards({
               : 'border-transparent text-muted-foreground hover:text-foreground',
           )}
         >
-          <NotebookTextIcon aria-hidden="true" className="size-3.5 shrink-0" />
+          {showKeyHints && keyHints.get('view:notes') ? (
+            <KeyHint hint={keyHints.get('view:notes')!} className="size-3.5" />
+          ) : (
+            <NotebookTextIcon aria-hidden="true" className="size-3.5 shrink-0" />
+          )}
           Notes
         </Link>
       ) : null}
@@ -309,7 +315,7 @@ export function LayoutCards({
                 <LayoutCard
                   key={item.key}
                   layout={item.layout}
-                  keyHint={showKeyHints ? keyHints[items.indexOf(item)] : undefined}
+                  keyHint={showKeyHints ? keyHints.get(`layout:${item.layout.name}`) : undefined}
                   active={isActive(item)}
                   onSelect={() => onSelect(item.layout.name)}
                   onRename={(requested) => onRename(item.layout.name, requested)}
@@ -350,8 +356,10 @@ export function LayoutCards({
                       <span className="truncate">
                         {item.kind === 'fixed' ? viewLabel(item.view) : layoutDisplayName(item.layout.name)}
                       </span>
-                      {keyHints[items.indexOf(item)] ? (
-                        <DropdownMenuShortcut>{keyHints[items.indexOf(item)]}</DropdownMenuShortcut>
+                      {keyHints.get(item.kind === 'fixed' ? `view:${item.view}` : `layout:${item.layout.name}`) ? (
+                        <DropdownMenuShortcut>
+                          {keyHints.get(item.kind === 'fixed' ? `view:${item.view}` : `layout:${item.layout.name}`)}
+                        </DropdownMenuShortcut>
                       ) : null}
                     </DropdownMenuItem>
                   ))}

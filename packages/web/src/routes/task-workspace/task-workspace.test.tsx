@@ -179,7 +179,8 @@ describe('the task workspace (main)', () => {
     expect(hints()).toEqual([])
 
     fireEvent.keyDown(window, { key: 'Meta', metaKey: true })
-    await waitFor(() => expect(hints()).toEqual(['1', '2', '3', '4', '5']))
+    // The five views, then Notes — saved layouts are not numbered.
+    await waitFor(() => expect(hints()).toEqual(['1', '2', '3', '4', '5', '6']))
     fireEvent.keyUp(window, { key: 'Meta' })
     await waitFor(() => expect(hints()).toEqual([]))
     vi.unstubAllGlobals()

@@ -27,7 +27,8 @@ import type { GitAction, GitActionId } from '@/lib/git-actions'
 import type { TaskWorkspaceBridge } from '@/lib/task-workspace-bridge'
 import { isRunActive, resumeHint, runActionFlags } from '@/routes/task-thread/run-actions'
 import { GIT_ACTION_ICONS } from '@/routes/task-git/git-toolbar'
-import { VIEW_PATHS, viewLabel, type ViewId } from '@/routes/task-workspace/layout-state'
+import { FIXED_VIEW_ORDER, VIEW_PATHS, viewLabel, type ViewId } from '@/routes/task-workspace/layout-state'
+import { stripEntries, type StripEntry } from '@/routes/task-workspace/strip'
 import { VIEW_ICONS } from '@/routes/task-workspace/view-picker'
 
 /**
@@ -104,7 +105,7 @@ export interface TaskCommandInput {
 const icon = (Icon: typeof PinIcon) => <Icon aria-hidden="true" />
 
 export function buildTaskCommands(input: TaskCommandInput, on: TaskCommandHandlers): TaskCommand[] {
-  return [
+  const commands = [
     ...actionCommands(input, on),
     ...gitCommands(input, on),
     ...viewCommands(input, on),
@@ -112,6 +113,8 @@ export function buildTaskCommands(input: TaskCommandInput, on: TaskCommandHandle
     ...openCommands(input, on),
     ...copyCommands(input, on),
   ]
+  const strip = stripEntries(stripViews(input.run, input.workspace))
+  return [...commands, ...tabCommands(strip, commands)]
 }
 
 function actionCommands({ run, workspace }: TaskCommandInput, on: TaskCommandHandlers): TaskCommand[] {
@@ -241,11 +244,7 @@ function gitCommands({ git, prUrl }: TaskCommandInput, on: TaskCommandHandlers):
 /** On screen, views switch the workspace's columns; for another task they navigate to its route. */
 function viewCommands({ run, workspace, terminalAvailable }: TaskCommandInput, on: TaskCommandHandlers): TaskCommand[] {
   const base = `/tasks/${run.id}`
-  const views: readonly ViewId[] =
-    workspace?.views ??
-    (['session', 'graph', 'changes', 'commits', 'files', 'browser'] as const).filter(
-      (view) => view !== 'graph' || Boolean(run.workflowDef),
-    )
+  const views = stripViews(run, workspace)
   const commands: TaskCommand[] = views.map((view, index) => {
     const Icon = VIEW_ICONS[view]
     return {
@@ -276,40 +275,47 @@ function viewCommands({ run, workspace, terminalAvailable }: TaskCommandInput, o
     label: 'Notes',
     icon: icon(NotebookTextIcon),
     keywords: ['view', 'handoff'],
+    ...(workspace && views.length < 9 ? { shortcut: String(views.length + 1) } : {}),
     perform: () => on.navigate(`${base}/notes`),
   })
-  if (workspace) commands.push(...tabCommands(workspace))
   return commands
 }
 
-/** `tab:N` — the strip's Nth card (views, then saved layouts), like a browser's ⌘N. Positional,
- *  so they are shortcut targets rather than palette rows; the rows they point at are listed. */
-function tabCommands(workspace: TaskWorkspaceBridge): TaskCommand[] {
-  const cards = [
-    ...workspace.views.map((view) => ({ label: viewLabel(view), select: () => workspace.openView(view) })),
-    ...workspace.layouts.map((layout) => ({ label: layout.label, select: () => workspace.selectLayout(layout.name) })),
-  ]
-  return cards.slice(0, 9).map((card, index) => ({
-    id: `tab:${index + 1}`,
-    group: 'views',
-    label: `Tab ${index + 1}: ${card.label}`,
-    icon: icon(LayoutGridIcon),
-    hidden: true,
-    perform: card.select,
-  }))
+/** The views on a task's tab row: the workspace's, or — off it (Notes) — the same fixed set. */
+function stripViews(run: ApiRun, workspace: TaskWorkspaceBridge | null): readonly ViewId[] {
+  return workspace?.views ?? FIXED_VIEW_ORDER.filter((view) => view !== 'graph' || Boolean(run.workflowDef))
+}
+
+/** `tab:N` — the tab row's Nth numbered tab (`stripEntries`: views, then Notes), like a browser's
+ *  ⌘N. Positional, so they are shortcut targets rather than palette rows; each runs the command of
+ *  the tab it lands on — on any page of the task, Notes included. */
+function tabCommands(entries: readonly StripEntry[], commands: readonly TaskCommand[]): TaskCommand[] {
+  return entries.slice(0, 9).flatMap((entry, index) => {
+    const target = commands.find((command) => command.id === entry.id)
+    if (!target) return []
+    return [
+      {
+        id: `tab:${index + 1}`,
+        group: 'views' as const,
+        label: `Tab ${index + 1}: ${entry.label}`,
+        icon: icon(LayoutGridIcon),
+        hidden: true,
+        perform: target.perform,
+      },
+    ]
+  })
 }
 
 function layoutCommands({ workspace }: TaskCommandInput): TaskCommand[] {
   if (!workspace) return []
-  const commands: TaskCommand[] = workspace.layouts.map((layout, index) => {
-    const key = workspace.views.length + index + 1
+  const commands: TaskCommand[] = workspace.layouts.map((layout) => {
+    // Layouts are not numbered (`strip.ts`): no key hint, no ⌘N.
     return {
       id: `layout:${layout.name}`,
       group: 'layout',
       label: layout.label,
       icon: icon(LayoutGridIcon),
       keywords: ['layout', 'switch'],
-      ...(key <= 9 ? { shortcut: String(key) } : {}),
       pressed: layout.active,
       perform: () => workspace.selectLayout(layout.name),
     }
