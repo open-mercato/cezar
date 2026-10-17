@@ -89,9 +89,10 @@ const server = createServer((req, res) => {
     if (req.method === 'POST' && permissionReply) {
       const finish = pendingPermissions.get(permissionReply[1]);
       pendingPermissions.delete(permissionReply[1]);
-      res.writeHead(finish ? 200 : 404, { 'content-type': 'application/json' });
-      res.end(finish ? 'true' : '{}');
-      finish?.(JSON.parse(body).reply);
+      const known = typeof finish === 'function';
+      res.writeHead(known ? 200 : 404, { 'content-type': 'application/json' });
+      res.end(known ? 'true' : '{}');
+      if (known) finish(JSON.parse(body).reply);
       return;
     }
     if (req.method === 'POST' && url === `/session/${SESSION_ID}/message`) {
