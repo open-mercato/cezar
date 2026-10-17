@@ -18,7 +18,6 @@ import {
   orderRuns,
   paletteScore,
 } from '@/components/command-palette'
-import { listDate } from '@/lib/format'
 import { orderSkills } from '@/lib/skills'
 import { ThemeProvider } from '@/components/theme-provider'
 import { THEME_STORAGE_KEY, type Theme } from '@/lib/theme'
@@ -564,9 +563,8 @@ describe('Tasks group', () => {
       await screen.findByText('Old task continued today')
       const row = (slot: string) => document.querySelector<HTMLElement>(`[data-run-id="r-old"] [data-slot="${slot}"]`)!
       // Updated is the last step, not the three-week-old creation — and both are on the row.
-      expect(row('palette-task-updated').textContent).toBe(listDate('2026-07-30T09:55:00Z', Date.now()))
-      expect(row('palette-task-created').textContent).toBe(listDate('2026-07-09T10:00:00Z', Date.now()))
-      expect(row('palette-task-updated').textContent).not.toBe(row('palette-task-created').textContent)
+      expect(row('palette-task-updated').textContent).toBe('5m')
+      expect(row('palette-task-created').textContent).toBe('21d')
       expect(row('palette-task-age').title).toMatch(/^Updated .+ · created .+/)
     } finally {
       vi.useRealTimers()

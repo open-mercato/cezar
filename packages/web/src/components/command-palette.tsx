@@ -18,7 +18,7 @@ import {
   CommandShortcut,
 } from '@/components/ui/command'
 import { deriveAttention } from '@/lib/attention'
-import { listDate } from '@/lib/format'
+import { shortAge } from '@/lib/format'
 import { orderProjects as orderRegistry } from '@/lib/project-order'
 import { isUnread } from '@/lib/read-state'
 import { orderSkillsByUsage } from '@/lib/skills'
@@ -196,8 +196,8 @@ export function mergeTasks(
   })
 }
 
-/** One date column — wide enough for `17 Oct 2025`, the longest `listDate` prints. */
-const DATE_COLUMN = 'w-[5.75rem] truncate text-right'
+/** One age column — as wide as its label ("Updated"); `shortAge` never prints more than `999d`. */
+const DATE_COLUMN = 'w-12 text-right'
 
 /**
  * A task group's heading with the date columns' labels over them. The labels are drawn by CSS
@@ -207,7 +207,7 @@ export function TaskColumnsHeading({ label }: { label: string }) {
   return (
     <span className="flex items-center gap-2">
       <span className="min-w-0 flex-1">{label}</span>
-      <span aria-hidden="true" className="flex shrink-0 gap-2 text-[11px] font-normal">
+      <span aria-hidden="true" className="flex shrink-0 gap-1 text-[11px] font-normal">
         <span className={cn(DATE_COLUMN, "after:content-['Updated']")} />
         <span className={cn(DATE_COLUMN, "after:content-['Created']")} />
       </span>
@@ -476,13 +476,13 @@ export function TaskItem({
       <span
         data-slot="palette-task-age"
         title={`Updated ${exactTime(task.lastActivityAt)} · created ${exactTime(task.createdAt)}`}
-        className="flex shrink-0 gap-2 text-xs tabular-nums"
+        className="flex shrink-0 gap-1 text-xs tabular-nums"
       >
         <span data-slot="palette-task-updated" className={cn(DATE_COLUMN, 'text-muted-foreground')}>
-          {listDate(task.lastActivityAt, now)}
+          {shortAge(task.lastActivityAt, now)}
         </span>
         <span data-slot="palette-task-created" className={cn(DATE_COLUMN, 'text-soft-foreground')}>
-          {listDate(task.createdAt, now)}
+          {shortAge(task.createdAt, now)}
         </span>
       </span>
     </CommandItem>

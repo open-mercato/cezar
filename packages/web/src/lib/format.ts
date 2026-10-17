@@ -31,25 +31,3 @@ export function compactTokens(tokens: number): string {
   if (tokens >= 1_000) return `${(Math.floor(tokens / 100) / 10).toFixed(1)}k`
   return String(Math.floor(tokens))
 }
-
-/**
- * A calendar date the way Mail and Finder print one in a list column: `14:02` today, `Yesterday`,
- * a weekday within the last week, `17 Oct` this year, `17 Oct 2025` before that. Absolute rather
- * than `17d`, so two columns of them (updated, created) read at a glance. Locale-aware; `now` and
- * `locale` are parameters for the tests. '' for a missing or unparseable timestamp.
- */
-export function listDate(iso: string | undefined, now: number = Date.now(), locale?: string): string {
-  if (!iso) return ''
-  const date = new Date(iso)
-  if (Number.isNaN(date.getTime())) return ''
-  const today = new Date(now)
-  const startOfDay = (value: Date) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime()
-  const days = Math.round((startOfDay(today) - startOfDay(date)) / 86_400_000)
-  if (days <= 0) return date.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })
-  if (days === 1) return 'Yesterday'
-  if (days < 7) return date.toLocaleDateString(locale, { weekday: 'short' })
-  if (date.getFullYear() === today.getFullYear()) {
-    return date.toLocaleDateString(locale, { day: 'numeric', month: 'short' })
-  }
-  return date.toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' })
-}
