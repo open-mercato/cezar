@@ -1,4 +1,4 @@
-import { CheckIcon, FolderOpenIcon, LayersIcon, MoonIcon, PlusIcon, SettingsIcon, ZapIcon } from 'lucide-react'
+import { CalendarPlusIcon, CheckIcon, ClockIcon, FolderOpenIcon, LayersIcon, MoonIcon, PlusIcon, SettingsIcon, ZapIcon } from 'lucide-react'
 import * as React from 'react'
 import { useNavigate as useRouterNavigate } from 'react-router'
 import { useHealth, useProjects, useRunsForProject, useRunsIndex, useSkills, useUiState } from '@/api/queries'
@@ -420,7 +420,6 @@ export function TaskItem({
       keywords={[...(projectName ? [projectName] : []), ...(task.automationId ? ['automation', 'automatic'] : [])]}
       data-slot={slot}
       data-run-id={task.id}
-      className="group/task"
       data-project-id={task.projectId ?? undefined}
       onSelect={() => onSelect(task)}
     >
@@ -451,19 +450,21 @@ export function TaskItem({
           {projectName}
         </span>
       ) : null}
-      {/* Last activity on every row (the Tasks table's Updated); the highlighted row adds when it
-          was created, so both are one arrow key away without a second column on every row. */}
+      {/* Two stacked times in a fixed-width column, so they line up down the list: last activity
+          on top (the Tasks table's Updated — what recency means), creation under it, dimmer. */}
       <span
         data-slot="palette-task-age"
-        title={`Created ${exactTime(task.createdAt)} · last active ${exactTime(task.lastActivityAt)}`}
-        className="shrink-0 text-xs text-soft-foreground tabular-nums"
+        title={`Last active ${exactTime(task.lastActivityAt)} · created ${exactTime(task.createdAt)}`}
+        className="flex w-12 shrink-0 flex-col items-end text-right tabular-nums leading-tight"
       >
-        {shortAge(task.createdAt, now) !== shortAge(task.lastActivityAt, now) ? (
-          <span className="hidden group-data-[selected=true]/task:inline">
-            created {shortAge(task.createdAt, now)} · active{' '}
-          </span>
-        ) : null}
-        {shortAge(task.lastActivityAt, now)}
+        <span data-slot="palette-task-active" className="flex items-center gap-1 text-xs text-muted-foreground">
+          <ClockIcon aria-label="last active" className="size-2.5! shrink-0" />
+          {shortAge(task.lastActivityAt, now)}
+        </span>
+        <span data-slot="palette-task-created" className="flex items-center gap-1 text-[10px] text-soft-foreground">
+          <CalendarPlusIcon aria-label="created" className="size-2.5! shrink-0" />
+          {shortAge(task.createdAt, now)}
+        </span>
       </span>
       {trailing}
     </CommandItem>

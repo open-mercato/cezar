@@ -546,7 +546,7 @@ describe('Tasks group', () => {
     expect(rows).toEqual(['b-auto', 'r-auto', 'r-child'])
   })
 
-  it('shows last activity on every row, and when it was created on the highlighted one', async () => {
+  it('every row stacks last activity over its creation date', async () => {
     vi.useFakeTimers({ now: new Date('2026-07-30T10:00:00Z'), shouldAdvanceTime: true })
     try {
       renderPalette({
@@ -561,11 +561,11 @@ describe('Tasks group', () => {
       })
       openWith({ metaKey: true })
       await screen.findByText('Old task continued today')
-      const age = document.querySelector<HTMLElement>('[data-run-id="r-old"] [data-slot="palette-task-age"]')!
-      // The visible age is the last step, not the 21-day-old creation.
-      expect(age.lastChild?.textContent).toBe('5m')
-      expect(age.textContent).toContain('created 21d · active')
-      expect(age.title).toMatch(/^Created .+ · last active .+/)
+      const row = (slot: string) => document.querySelector<HTMLElement>(`[data-run-id="r-old"] [data-slot="${slot}"]`)!
+      // Last activity is the last step, not the 21-day-old creation — and both are on the row.
+      expect(row('palette-task-active').textContent).toBe('5m')
+      expect(row('palette-task-created').textContent).toBe('21d')
+      expect(row('palette-task-age').title).toMatch(/^Last active .+ · created .+/)
     } finally {
       vi.useRealTimers()
     }
