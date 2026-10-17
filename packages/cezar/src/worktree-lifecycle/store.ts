@@ -58,7 +58,8 @@ export async function atomicLifecycleWrite(path: string, value: unknown): Promis
 
 /** Same atomic mkdir + PID-owner lease used by tracker-association, with unique owner tokens. */
 /** Owner files this process holds or is creating: a lock naming our pid but not listed here was
- *  left by an earlier process that had the same pid (a container's PID 1 after a restart). */
+ *  left by an earlier process that had the same pid (a container's PID 1 after a restart).
+ *  Assumes one copy of this module per process (never `src` and `dist` side by side). */
 const heldOwners = new Set<string>();
 
 export async function withLifecycleFileLock<T>(path: string, action: () => Promise<T>, options: { wait?: boolean } = {}): Promise<T> {

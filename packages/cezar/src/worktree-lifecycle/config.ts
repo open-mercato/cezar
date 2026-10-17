@@ -42,7 +42,7 @@ export async function isLifecycleConfigTracked(projectRoot: string): Promise<boo
   return promisify(execFile)('git', ['ls-files', '--error-unmatch', '--', join('.ai', 'cezar', 'config.json')], { cwd: projectRoot })
     .then(() => true, () => false);
 }
-/** The scripts Cezar may execute. Fails closed on an invalid or committed hook list. */
+/** The scripts Cezar may execute. Fails closed on an invalid list; a committed list counts as none. */
 export async function readLifecycleConfig(projectRoot: string): Promise<LifecycleConfigSnapshot> {
   return trusted(projectRoot, lifecycleConfigFromRaw(await readLifecycleConfigRaw(projectRoot)));
 }
@@ -59,10 +59,10 @@ export async function readLifecycleConfigOrDefault(projectRoot: string, options:
   // Settings shows an untrusted (committed) list too, so the user can remove it.
   return options.trust === false ? snapshot : trusted(projectRoot, snapshot);
 }
+// Treated as unconfigured rather than an error, so a repo that ships scripts keeps the zero-config path.
 async function trusted(projectRoot: string, snapshot: LifecycleConfigSnapshot): Promise<LifecycleConfigSnapshot> {
   const scripts = snapshot.config.afterCreate.length + snapshot.config.beforeRemove.length;
-  if (scripts > 0 && await isLifecycleConfigTracked(projectRoot)) throw new LifecycleConfigError(TRACKED_CONFIG_ERROR);
-  return snapshot;
+  return scripts > 0 && await isLifecycleConfigTracked(projectRoot) ? UNCONFIGURED : snapshot;
 }
 export async function withLifecycleConfigLock<T>(projectRoot: string, action: () => Promise<T>): Promise<T> {
   const path = join(projectRoot, '.ai', 'cezar', 'config.lifecycle.lock');

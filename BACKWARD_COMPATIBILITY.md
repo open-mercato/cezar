@@ -144,7 +144,8 @@ Written by one version, read by the next, and hand-editable by design:
   directory) with no lifecycle record degrades to defaults exactly as before;
   an invalid `worktreeLifecycle` key, or one read while lifecycle records exist,
   pauses managed transitions rather than granting deletion. Scripts in a
-  git-tracked `config.json` are never saved or run. Config PUT omission preserves,
+  git-tracked `config.json` are never saved or run (they count as
+  unconfigured, so the hook-free path still applies). Config PUT omission preserves,
   `null` clears, and a supplied object replaces both lists atomically under an
   expected revision; unrelated config keys survive. Stable entry UUIDs and exact
   execution fingerprints reconcile Retry against current saved commands, never

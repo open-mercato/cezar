@@ -38,8 +38,8 @@ export class WorktreeLifecycleCoordinator {
   readonly store: LifecycleStore;
   private readonly listeners = new Set<(event: {worktreeId: string; operationId?: string; revision: number}) => void>();
   private readonly controllers = new Map<string, AbortController>();
-  /** Runs whose agent holds this process's worktree lease (`acquireAgentLease`). */
-  private readonly agentLeases = new Set<string>();
+  /** This process's agent leases, counted per run: the file lock is taken at 0→1 and dropped at 1→0. */
+  private readonly agentLeases = new Map<string, {count: number; held: boolean; ready: Promise<void>; release: () => void}>();
   private readonly ownedDiscardReservations = new Set<string>();
   private readonly executing = new Set<string>();
   private readonly liveOperations = new Map<string, LifecycleOperation>();
@@ -229,7 +229,11 @@ export class WorktreeLifecycleCoordinator {
           }
         }
         await this.runCommands(record, operation, signal);
-      } catch (error) { await this.fail(record, operation, error, 'context'); }
+      } catch (error) {
+        // A generated name that never became a worktree must not turn into the run's recorded branch.
+        if (choice.generated && !existsSync(join(record.worktreePath, '.git')) && this.runs.getRun(runId)?.branch === record.branch) this.runs.updateRun(runId, {branch: undefined});
+        await this.fail(record, operation, error, 'context');
+      }
       if (signal?.aborted && !record.preparedBy) {
         operation.state = 'cancelled'; operation.finishedAt = now(); record.autoCleanupSuppressed = true; delete record.activeOperationId;
         await this.save(record, operation);
@@ -295,7 +299,7 @@ export class WorktreeLifecycleCoordinator {
           if (committed) return;
           continue;
         }
-        if (process.env.CEZ_DRY_RUN !== '1' && !existsSync(context.worktree_path)) { await this.fail(record, operation, 'Worktree directory is missing; scripts cannot run in the project root', 'context'); return; }
+        if (!existsSync(context.worktree_path)) { await this.fail(record, operation, 'Worktree directory is missing; scripts cannot run in the project root', 'context'); return; }
         const {entry, ordinal, rendered, fingerprint} = pending;
         const execution = {id: randomUUID(), operationId: operation.id, entryId: entry.id, fingerprint, ordinal,
           label: redactSecrets(entry.name || `Command ${ordinal + 1}`, collectSecretValues(process.env)),
@@ -369,28 +373,41 @@ export class WorktreeLifecycleCoordinator {
   /** Keep cross-process directory ownership until the provider really exits. */
   async acquireAgentLease(runId: string): Promise<() => void> {
     if (!await this.requiresGate(runId)) return () => undefined;
-    if (this.agentLeases.has(runId)) return () => undefined;
-    let release!: () => void;
-    const released = new Promise<void>(resolve => { release = resolve; });
-    let acquired!: () => void;
-    let rejectAcquired!: (error: unknown) => void;
-    const ready = new Promise<void>((resolve, reject) => { acquired = resolve; rejectAcquired = reject; });
-    void this.withWorktreeMutation(runId, async () => {
-      const record = await this.store.readWorktree(runId);
-      if (!record?.preparedBy || !existsSync(join(record.worktreePath, '.git'))) {
-        throw new LifecycleConflict('Prepared worktree is no longer available; retry preparation before starting the agent');
-      }
-      this.context(record);
-      this.agentLeases.add(runId);
-      try { acquired(); await released; } finally { this.agentLeases.delete(runId); }
-    }).catch(rejectAcquired);
-    await ready;
-    return release;
+    let lease = this.agentLeases.get(runId);
+    if (!lease) {
+      let release!: () => void;
+      const released = new Promise<void>(resolve => { release = resolve; });
+      let acquired!: () => void;
+      let rejectAcquired!: (error: unknown) => void;
+      const ready = new Promise<void>((resolve, reject) => { acquired = resolve; rejectAcquired = reject; });
+      const entry = {count: 0, held: false, ready, release};
+      lease = entry;
+      this.agentLeases.set(runId, entry);
+      void this.lockedMutation(runId, async () => {
+        const record = await this.store.readWorktree(runId);
+        if (!record?.preparedBy || !existsSync(join(record.worktreePath, '.git'))) {
+          throw new LifecycleConflict('Prepared worktree is no longer available; retry preparation before starting the agent');
+        }
+        this.context(record);
+        entry.held = true; acquired(); await released;
+      }).catch(rejectAcquired).finally(() => { if (this.agentLeases.get(runId) === entry) this.agentLeases.delete(runId); });
+    }
+    const entry = lease;
+    entry.count++;
+    try { await entry.ready; } catch (error) { entry.count--; throw error; }
+    let done = false;
+    return () => {
+      if (done) return; done = true;
+      if (--entry.count === 0) { if (this.agentLeases.get(runId) === entry) this.agentLeases.delete(runId); entry.release(); }
+    };
   }
   async withWorktreeMutation<T>(runId: string, mutate: () => Promise<T>): Promise<T> {
-    // This process's agent lease already excludes teardown; its own git actions (commit, push,
-    // publish) run beside the agent exactly as they did before scripts existed.
-    if (this.agentLeases.has(runId)) return mutate();
+    // This process's held agent lease already excludes teardown; its own git actions (commit,
+    // push, publish) run beside the agent exactly as they did before scripts existed.
+    if (this.agentLeases.get(runId)?.held) return mutate();
+    return this.lockedMutation(runId, mutate);
+  }
+  private async lockedMutation<T>(runId: string, mutate: () => Promise<T>): Promise<T> {
     if (!await this.requiresGate(runId)) return mutate();
     return this.store.withWorktreeLock(runId, async () => {
       const record = await this.store.readWorktree(runId);
@@ -663,7 +680,7 @@ export class WorktreeLifecycleCoordinator {
     if (operation.state === 'queued' || operation.state === 'running') allowedActions = ['stop'];
     if (attention.has(operation.state) && await this.processQuiescent(operation)) allowedActions = operation.phase === 'setup'
       ? ['retry', 'start-anyway', 'cancel-task'] : ['retry', 'keep-worktree', 'force-delete'];
-    if (!existsSync(record.worktreePath) && process.env.CEZ_DRY_RUN !== '1') allowedActions = allowedActions.filter(action => action !== 'start-anyway');
+    if (!existsSync(record.worktreePath)) allowedActions = allowedActions.filter(action => action !== 'start-anyway');
     return lifecycleOperationViewSchema.parse({...operation, history: operation.executions, entries, allowedActions});
   }
   async operation(id: string): Promise<LifecycleOperationView> {
@@ -763,7 +780,9 @@ export class WorktreeLifecycleCoordinator {
         }, {wait: false});
       } catch (error) {
         if (error instanceof LifecycleConflictError) continue;
-        if (this.runs.getRun(candidate.runId)) this.runs.updateRun(candidate.runId, {status: 'waiting', error: 'Lifecycle context is incomplete; worktree retained',
+        const run = this.runs.getRun(candidate.runId);
+        const live = run?.status === 'running' || run?.status === 'queued' || run?.status === 'waiting';
+        if (run) this.runs.updateRun(candidate.runId, {...(live ? {status: 'waiting', error: 'Lifecycle context is incomplete; worktree retained'} : {}),
           worktreeLifecycle: {worktreeId: candidate.worktreeId, generation: candidate.generation, needsAttention: true}});
       }
     }

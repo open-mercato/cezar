@@ -130,7 +130,9 @@ describe('worktree lifecycle API', () => {
     writeFileSync(configPath,JSON.stringify({worktreeLifecycle:{afterCreate:[script('touch pwned')],beforeRemove:[]}}));
     const shown=await (await request('/config')).json() as {worktreeLifecycle?:{afterCreate:unknown[]}};
     expect(shown.worktreeLifecycle?.afterCreate).toHaveLength(1);
-    expect((await request(`/runs/${runId}/remove-worktree`,{})).status).toBe(409);
+    // Ignored rather than an error: the hook-free path keeps working and nothing runs.
+    expect((await request(`/runs/${runId}/remove-worktree`,{})).status).toBe(200);
+    expect(existsSync(join(root,'pwned'))).toBe(false);
   });
   it('rejects cross-origin mutation using the existing global guard',async()=>{
     const res=await apiRequest(app,'/api/v1/worktree-lifecycle/preview',{method:'POST',headers:{origin:'https://outside.example','content-type':'application/json'},body:JSON.stringify({command:'echo hello'})});

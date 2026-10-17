@@ -374,6 +374,18 @@ describe('worktree lifecycle coordinator with real Git and command fixtures', ()
     } finally { release(); }
   });
 
+  it('a second agent lease keeps the worktree locked after the first is released', async () => {
+    const p = await project(); await p.config([entry('true')]); await p.prepare();
+    const first = await p.coordinator.acquireAgentLease(p.id);
+    const second = await p.coordinator.acquireAgentLease(p.id);
+    first();
+    const peer = new WorktreeLifecycleCoordinator(p.root, p.runs, {semaphore: new WorkspaceSemaphore(), busySlots: () => 0, isActive: () => false, cancelAndWait: async () => true, resume: async () => {}});
+    coordinators.push(peer);
+    await expect(peer.withWorktreeMutation(p.id, async () => 'teardown')).rejects.toThrow(/busy/);
+    second();
+    expect(await peer.withWorktreeMutation(p.id, async () => 'teardown')).toBe('teardown');
+  }, 20_000);
+
   it('boot reconcile leaves a symlinked .ai alone when no lifecycle state exists', async () => {
     const p = await project();
     const elsewhere = await realpath(await mkdtemp(join(tmpdir(), 'cez-lifecycle-ai-'))); roots.push(elsewhere);
