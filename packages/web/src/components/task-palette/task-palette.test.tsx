@@ -8,12 +8,13 @@ import type { HealthResponse, RunRecord } from '@open-mercato/cezar-api-client'
 import { CommandPalette } from '@/components/command-palette'
 import { ThemeProvider } from '@/components/theme-provider'
 import { recordTaskVisit, resetRecentTasks } from '@/lib/recent-tasks'
-import { resetTaskWorkspaceBridge } from '@/lib/task-workspace-bridge'
+import { publishTaskWorkspace, resetTaskWorkspaceBridge, type TaskWorkspaceBridge } from '@/lib/task-workspace-bridge'
 
 import { paletteMode, rankPaths, TaskPalette, taskIdFromPath } from './task-palette'
 
 const fetchMock = vi.fn<typeof fetch>()
 let sent: { method: string; path: string; body: unknown }[] = []
+let uiState: Record<string, unknown> = {}
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn()
@@ -24,6 +25,7 @@ beforeEach(() => {
   resetRecentTasks()
   resetTaskWorkspaceBridge()
   sent = []
+  uiState = {}
   vi.stubGlobal('fetch', fetchMock)
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }))
   vi.stubGlobal(
@@ -88,6 +90,10 @@ function serve(runs: RunRecord[] = RUNS): void {
     if (path === '/api/v1/health') return json(HEALTH)
     if (path === '/api/v1/projects') return json({ projects: [], bootProject: 'default', projectsDir: '/repos' })
     if (path === '/api/v1/ui-state') return json({})
+    if (path === '/api/v1/workspace/ui-state') {
+      if (method === 'PUT') uiState = { ...uiState, ...(JSON.parse(String(init?.body)) as object) }
+      return json(uiState)
+    }
     if (path === '/api/v1/skills') return json([])
     return new Response(JSON.stringify({ error: 'not found' }), { status: 404 })
   })
@@ -192,6 +198,88 @@ describe('⌘P on a task page acts on that task', () => {
     await waitFor(() =>
       expect(sent.find((request) => request.method === 'PATCH')?.body).toEqual({ title: 'Fix the auth redirect' }),
     )
+  })
+})
+
+describe('shortcuts', () => {
+  beforeEach(() => vi.stubGlobal('navigator', { ...navigator, platform: 'MacIntel' }))
+
+  function bridge(overrides: Partial<TaskWorkspaceBridge> = {}): TaskWorkspaceBridge {
+    return {
+      runId: 'r1',
+      views: ['session', 'changes', 'commits'],
+      activeView: 'session',
+      openView: vi.fn(),
+      openViewBeside: vi.fn(),
+      layouts: [],
+      selectLayout: vi.fn(),
+      newLayout: vi.fn(),
+      maximized: false,
+      toggleMaximized: vi.fn(),
+      splitView: null,
+      terminal: { allowed: true, open: false, inColumn: false, toggle: vi.fn(), openInColumn: vi.fn() },
+      focusComposer: null,
+      openFile: vi.fn(),
+      markedUnread: vi.fn(),
+      ...overrides,
+    }
+  }
+
+  const press = (target: Element | Window, code: string, key: string, init: KeyboardEventInit) =>
+    act(() => {
+      fireEvent.keyDown(target, { code, key, ...init })
+    })
+
+  it('the defaults run on the task on screen with the palette shut — even from a text field', async () => {
+    const workspace = bridge()
+    publishTaskWorkspace(workspace)
+    renderPalettes('/tasks/r1')
+    const composer = screen.getByTestId('composer')
+    composer.focus()
+    await waitFor(async () => {
+      await press(composer, 'Digit2', '2', { metaKey: true })
+      expect(workspace.openView).toHaveBeenCalledWith('changes')
+    })
+    await press(composer, 'Slash', '/', { metaKey: true })
+    expect(workspace.terminal.openInColumn).toHaveBeenCalled()
+    // ⌥ chords type in a text field, so they never fire there.
+    expect(palette()).toBeNull()
+  })
+
+  it('a stored shortcut runs its command; one that is not on offer stays the browser’s', async () => {
+    uiState = { keybindings: { pin: 'Mod+Shift+L', 'git:push': 'Mod+Shift+U' } }
+    renderPalettes('/tasks/r1')
+    await waitFor(async () => {
+      await press(window, 'KeyL', 'l', { metaKey: true, shiftKey: true })
+      expect(sent.find((request) => request.path.endsWith('/pin'))?.body).toEqual({ pinned: true, surface: 'palette' })
+    })
+    const event = new KeyboardEvent('keydown', { code: 'KeyU', key: 'u', metaKey: true, shiftKey: true, cancelable: true })
+    act(() => {
+      window.dispatchEvent(event)
+    })
+    expect(event.defaultPrevented).toBe(false)
+  })
+
+  it('⇧↵ on a palette row records a shortcut and saves it to the workspace', async () => {
+    renderPalettes('/tasks/r1')
+    await pressP()
+    await within(palette()!).findByText('Pin')
+    fireEvent.change(input(), { target: { value: 'pin' } })
+    await waitFor(() => expect(selectedRow()?.dataset.commandId).toBe('pin'))
+    fireEvent.keyDown(input(), { key: 'Enter', shiftKey: true })
+    expect(await within(palette()!).findByText('Press the keys for this command…')).toBeTruthy()
+
+    // A chord cezar owns is refused, and nothing is saved.
+    fireEvent.keyDown(input(), { code: 'KeyK', key: 'k', metaKey: true })
+    expect(await within(palette()!).findByText(/taken by the browser or cezar/)).toBeTruthy()
+    expect(sent.some((request) => request.method === 'PUT')).toBe(false)
+
+    fireEvent.keyDown(input(), { code: 'KeyL', key: 'l', metaKey: true, shiftKey: true })
+    await waitFor(() =>
+      expect(sent.find((request) => request.method === 'PUT')?.body).toEqual({ keybindings: { pin: 'Mod+Shift+L' } }),
+    )
+    // Back on the list, the row now wears its chord.
+    await waitFor(() => expect(within(palette()!).getByText('⇧⌘L')).toBeTruthy())
   })
 })
 

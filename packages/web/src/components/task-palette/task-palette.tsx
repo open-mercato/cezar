@@ -1,4 +1,4 @@
-import { FileIcon, PencilIcon } from 'lucide-react'
+import { FileIcon, KeyboardIcon, PencilIcon } from 'lucide-react'
 import * as React from 'react'
 import { matchPath, useLocation } from 'react-router'
 
@@ -30,7 +30,9 @@ import { orderByRecency, readRecentTasks } from '@/lib/recent-tasks'
 import { runTitle } from '@/lib/task-groups'
 import { ownedTaskPr } from '@/lib/tasks-table'
 import { queueFileOpen, taskWorkspaceFor } from '@/lib/task-workspace-bridge'
-import { commandShortcutHint, useCommandShortcut } from '@/lib/use-command-shortcut'
+import { BINDABLE_COMMANDS, chordFromEvent, chordProblem, formatChord, isApplePlatform } from '@/lib/keybindings'
+import { commandShortcutHint, isEditableTarget, useCommandShortcut } from '@/lib/use-command-shortcut'
+import { useKeybindings } from '@/lib/use-keybindings'
 import { cn } from '@/lib/utils'
 import { useRunGitStep } from '@/routes/task-git/run-git-step'
 import { useRunReferences } from '@/routes/task-thread/run-header'
@@ -110,10 +112,16 @@ export function TaskPalette() {
   const [cycleTo, setCycleTo] = React.useState<{ step: number } | null>(null)
   // Tagged with the run they were built for, so a newly picked subject never shows the last one's.
   const [published, setPublished] = React.useState<{ runId: string; commands: TaskCommand[] } | null>(null)
+  // Assigning a shortcut (⇧↵ on a row): the next chord pressed is bound to this command.
+  const [recording, setRecording] = React.useState<{ id: string; label: string; problem?: string } | null>(null)
   const subjectApi = React.useRef<SubjectApi | null>(null)
   const body = React.useRef<HTMLDivElement>(null)
   const performed = React.useRef(false)
+  // A command that opens a dialog keeps its subject after the palette closes, so the dialog's
+  // host — and the mutation behind it — stays mounted.
+  const keepSubject = React.useRef(false)
   const reopenFor = React.useRef<string | null>(null)
+  const keybindings = useKeybindings()
 
   const close = React.useCallback(() => setOpen(false), [])
   usePaletteExclusion('task', open, close)
@@ -123,8 +131,10 @@ export function TaskPalette() {
     setSearch(initialSearch)
     setSelected('')
     setRenaming(false)
+    setRecording(null)
     setCycleTo(null)
     performed.current = false
+    keepSubject.current = false
     setOpen(true)
   }, [])
 
@@ -134,6 +144,7 @@ export function TaskPalette() {
   useCommandShortcut(
     'p',
     () => {
+      if (recording) return
       if (!open) {
         if (pageTaskId) show(pageTaskId, '')
         else show(null, '@')
@@ -203,6 +214,10 @@ export function TaskPalette() {
     if (!open) setSubjectId(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname])
+  // Closing hands the host back to the task on screen, whose commands the shortcuts run.
+  React.useEffect(() => {
+    if (!open && !keepSubject.current) setSubjectId(null)
+  }, [open])
 
   const perform = (id: string, beside = false) => {
     const command = subjectApi.current?.commands.find((candidate) => candidate.id === id)
@@ -213,6 +228,7 @@ export function TaskPalette() {
       return
     }
     performed.current = true
+    keepSubject.current = DIALOG_COMMANDS.has(command.id)
     setOpen(false)
     const run = beside && command.performBeside ? command.performBeside : command.perform
     // After the dialog lets go, so a command that focuses something (the composer) or opens a
@@ -236,7 +252,71 @@ export function TaskPalette() {
     setOpen(false)
   }
 
+  const startRecording = (id: string) => {
+    if (!keybindings.ready) return
+    setRecording({ id, label: bindableLabel(id, subjectApi.current?.commands) })
+  }
+
+  // The shortcuts themselves: a bound chord runs its command on the task on screen, palette shut.
+  const dispatch = React.useRef({ open, recording, pageTaskId, byChord: new Map<string, string>(), show, beginRename })
+  dispatch.current = {
+    open,
+    recording,
+    pageTaskId,
+    byChord: new Map([...keybindings.bindings].map(([id, chord]) => [chord, id])),
+    show,
+    beginRename,
+  }
+  React.useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.repeat || event.defaultPrevented) return
+      const now = dispatch.current
+      if (now.open || now.recording || !now.pageTaskId) return
+      const chord = chordFromEvent(event)
+      const id = chord ? now.byChord.get(chord) : undefined
+      if (!chord || !id || !chordFiresAt(event.target, chord)) return
+      if (document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')) return
+      const api = subjectApi.current
+      if (!api || api.run.id !== now.pageTaskId) return
+      const command = api.commands.find((candidate) => candidate.id === id)
+      // Not on offer right now (a git step that is not the next one): the chord stays the browser's.
+      if (!command) return
+      event.preventDefault()
+      if (command.unavailable) return void toast(command.unavailable)
+      if (command.id === 'rename') {
+        now.show(now.pageTaskId, '')
+        setTimeout(now.beginRename, 0)
+        return
+      }
+      command.perform()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (recording) {
+      // Every key belongs to the recorder — including ⌘K/⌘P, which must not reach their palettes.
+      event.preventDefault()
+      event.stopPropagation()
+      if (event.key === 'Escape') return setRecording(null)
+      const bare = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
+      if (bare && (event.key === 'Backspace' || event.key === 'Delete')) {
+        keybindings.assign(recording.id, null)
+        toast(`Removed the shortcut for ${recording.label}`)
+        return setRecording(null)
+      }
+      const chord = chordFromEvent(event.nativeEvent)
+      if (!chord) return
+      const problem = chordProblem(chord)
+      if (problem) return setRecording({ ...recording, problem: `${formatChord(chord)} — ${problem}` })
+      const previous = [...keybindings.bindings].find(([id, held]) => held === chord && id !== recording.id)?.[0]
+      keybindings.assign(recording.id, chord)
+      toast(
+        `${formatChord(chord)} → ${recording.label}${previous ? ` (was ${bindableLabel(previous, subjectApi.current?.commands)})` : ''}`,
+      )
+      return setRecording(null)
+    }
     if (renaming) {
       if (event.key === 'Enter') {
         event.preventDefault()
@@ -257,6 +337,11 @@ export function TaskPalette() {
       perform(row.dataset.commandId, true)
       return
     }
+    if (event.key === 'Enter' && event.shiftKey && row?.dataset.commandId) {
+      event.preventDefault()
+      startRecording(row.dataset.commandId)
+      return
+    }
     // Backspace on an empty input walks back from a picked task to the switcher.
     if (event.key === 'Backspace' && search === '' && subjectId !== null && subjectId !== pageTaskId) {
       event.preventDefault()
@@ -268,10 +353,10 @@ export function TaskPalette() {
 
   return (
     <>
-      {subjectId ? (
+      {(subjectId ?? pageTaskId) ? (
         <SubjectHost
-          key={subjectId}
-          runId={subjectId}
+          key={subjectId ?? pageTaskId}
+          runId={(subjectId ?? pageTaskId)!}
           apiRef={subjectApi}
           onCommands={setPublished}
           onRename={beginRename}
@@ -288,7 +373,7 @@ export function TaskPalette() {
           value: selected,
           onValueChange: setSelected,
           onKeyDown,
-          shouldFilter: !renaming && mode !== 'files',
+          shouldFilter: !renaming && !recording && mode !== 'files',
         }}
         onOpenAutoFocus={(event) => {
           // Radix selects the input's text on focus; a pre-filled `@` must stay, caret after it.
@@ -303,6 +388,10 @@ export function TaskPalette() {
           if (performed.current) event.preventDefault()
         }}
         onEscapeKeyDown={(event) => {
+          if (recording) {
+            event.preventDefault()
+            return setRecording(null)
+          }
           if (!renaming) return
           event.preventDefault()
           setRenaming(false)
@@ -311,15 +400,27 @@ export function TaskPalette() {
         // ⌘K's geometry, so the two palettes feel like one surface.
         className="top-[10vh] translate-y-0 sm:max-w-2xl lg:max-w-3xl xl:max-w-4xl"
       >
-        <div ref={body} data-slot="task-palette" data-mode={renaming ? 'rename' : mode} className="contents">
+        <div ref={body} data-slot="task-palette" data-mode={recording ? 'record' : renaming ? 'rename' : mode} className="contents">
           <CommandInput
-            placeholder={placeholder(renaming ? 'rename' : mode)}
+            placeholder={recording ? 'Press a shortcut — ⌫ removes it, esc cancels' : placeholder(renaming ? 'rename' : mode)}
             value={search}
             onValueChange={setSearch}
           />
           {subjectId && !renaming && mode !== 'tasks' ? <SubjectBar runId={subjectId} picked={subjectId !== pageTaskId} /> : null}
           <CommandList className="max-h-[55vh] min-h-[14rem] sm:max-h-[60vh] lg:max-h-[68vh]">
-            {renaming ? (
+            {recording ? (
+              <CommandGroup heading={`Shortcut for ${recording.label}`}>
+                <CommandItem value="record" data-slot="task-palette-recorder" onSelect={() => {}}>
+                  <KeyboardIcon aria-hidden="true" />
+                  <span className="min-w-0 flex-1 truncate">
+                    {recording.problem ?? 'Press the keys for this command…'}
+                  </span>
+                  {keybindings.bindings.get(recording.id) ? (
+                    <CommandShortcut>{formatChord(keybindings.bindings.get(recording.id)!)}</CommandShortcut>
+                  ) : null}
+                </CommandItem>
+              </CommandGroup>
+            ) : renaming ? (
               <CommandGroup heading="Rename">
                 <CommandItem value="rename" data-slot="task-palette-rename" onSelect={commitRename}>
                   <PencilIcon aria-hidden="true" />
@@ -335,7 +436,9 @@ export function TaskPalette() {
                 {mode === 'all' || mode === 'commands' ? (
                   <CommandGroups
                     commands={published?.runId === subjectId ? published.commands : []}
+                    bindings={keybindings.bindings}
                     onPerform={perform}
+                    onRecord={startRecording}
                   />
                 ) : null}
                 {mode === 'files' && subjectId ? (
@@ -369,7 +472,7 @@ export function TaskPalette() {
               </>
             )}
           </CommandList>
-          <PaletteFooter mode={renaming ? 'rename' : mode} />
+          <PaletteFooter mode={recording ? 'record' : renaming ? 'rename' : mode} />
         </div>
       </CommandDialog>
     </>
@@ -420,43 +523,104 @@ function SubjectBar({ runId, picked }: { runId: string; picked: boolean }) {
   )
 }
 
-function CommandGroups({ commands, onPerform }: { commands: TaskCommand[]; onPerform: (id: string) => void }) {
+function CommandGroups({
+  commands,
+  bindings,
+  onPerform,
+  onRecord,
+}: {
+  commands: TaskCommand[]
+  bindings: ReadonlyMap<string, string>
+  onPerform: (id: string) => void
+  onRecord: (id: string) => void
+}) {
   return (
     <>
       {TASK_COMMAND_GROUPS.map((group) => {
-        const members = commands.filter((command) => command.group === group.id)
+        const members = commands.filter((command) => command.group === group.id && !command.hidden)
         if (members.length === 0) return null
         return (
           <CommandGroup key={group.id} heading={group.heading}>
-            {members.map((command) => (
-              <CommandItem
-                key={command.id}
-                // The id keeps values unique (two layouts may share a label); the heading lets
-                // "git push" or "copy branch" find the row by its group.
-                value={`${group.heading} ${command.label} ${command.id}`}
-                keywords={command.keywords}
-                disabled={command.unavailable !== undefined}
-                data-slot="task-palette-command"
-                data-command-id={command.id}
-                aria-pressed={command.pressed}
-                onSelect={() => onPerform(command.id)}
-                className={cn(command.danger && 'data-[selected=true]:text-danger')}
-              >
-                {command.icon}
-                <span className="min-w-0 flex-1 truncate">{command.label}</span>
-                {command.unavailable ? (
-                  <span className="shrink-0 truncate text-xs text-soft-foreground">{command.unavailable}</span>
-                ) : command.pressed ? (
-                  <span className="shrink-0 text-xs text-primary">on</span>
-                ) : null}
-                {command.shortcut ? <CommandShortcut>{command.shortcut}</CommandShortcut> : null}
-              </CommandItem>
-            ))}
+            {members.map((command) => {
+              const chord = shortcutFor(command, bindings)
+              return (
+                <CommandItem
+                  key={command.id}
+                  // The id keeps values unique (two layouts may share a label); the heading lets
+                  // "git push" or "copy branch" find the row by its group.
+                  value={`${group.heading} ${command.label} ${command.id}`}
+                  keywords={command.keywords}
+                  disabled={command.unavailable !== undefined}
+                  data-slot="task-palette-command"
+                  data-command-id={command.id}
+                  aria-pressed={command.pressed}
+                  onSelect={() => onPerform(command.id)}
+                  className={cn('group/command', command.danger && 'data-[selected=true]:text-danger')}
+                >
+                  {command.icon}
+                  <span className="min-w-0 flex-1 truncate">{command.label}</span>
+                  {command.unavailable ? (
+                    <span className="shrink-0 truncate text-xs text-soft-foreground">{command.unavailable}</span>
+                  ) : command.pressed ? (
+                    <span className="shrink-0 text-xs text-primary">on</span>
+                  ) : null}
+                  {/* The mouse twin of ⇧↵ — only commands that can be bound by id. */}
+                  {command.id.startsWith('layout:') && command.id !== 'layout:new' ? null : (
+                    <button
+                      type="button"
+                      data-slot="task-palette-record"
+                      aria-label={`Set a shortcut for ${command.label}`}
+                      title="Set a shortcut (⇧↵)"
+                      className="hidden shrink-0 rounded p-0.5 text-soft-foreground group-hover/command:inline-flex hover:text-foreground"
+                      onPointerDown={(event) => event.preventDefault()}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onRecord(command.id)
+                      }}
+                    >
+                      <KeyboardIcon aria-hidden="true" className="size-3.5!" />
+                    </button>
+                  )}
+                  {chord ? <CommandShortcut>{chord}</CommandShortcut> : null}
+                </CommandItem>
+              )
+            })}
           </CommandGroup>
         )
       })}
     </>
   )
+}
+
+/** The hint a row prints: its own binding, else the positional ⌘N of the tab it is, else the
+ *  workspace's bare key. */
+function shortcutFor(command: TaskCommand, bindings: ReadonlyMap<string, string>): string | undefined {
+  const own = bindings.get(command.id)
+  if (own) return formatChord(own)
+  const positional = command.shortcut && /^[1-9]$/.test(command.shortcut) ? bindings.get(`tab:${command.shortcut}`) : undefined
+  if (positional) return formatChord(positional)
+  return command.shortcut
+}
+
+/** Commands that open a dialog: the palette keeps their host mounted after it closes. */
+const DIALOG_COMMANDS = new Set(['stop', 'delete', 'git:commit', 'git:commit-push'])
+
+/** A command's name for messages — the live row's label when it is listed, else the catalog's. */
+function bindableLabel(id: string, commands: readonly TaskCommand[] = []): string {
+  return (
+    BINDABLE_COMMANDS.find((entry) => entry.id === id)?.label ??
+    commands.find((command) => command.id === id)?.label ??
+    id
+  )
+}
+
+/** Where a bound chord may fire. In a text field only ⌘/Ctrl chords do — ⌥ and ⌃ type there; in
+ *  the terminal only ⌘ on a Mac, since every Ctrl/Alt chord belongs to the shell. */
+function chordFiresAt(target: EventTarget | null, chord: string): boolean {
+  const usesMod = chord.split('+').includes('Mod')
+  if (target instanceof HTMLElement && target.closest('.xterm')) return usesMod && isApplePlatform()
+  if (isEditableTarget(target) && !(target instanceof HTMLElement && target.closest('[cmdk-input]'))) return usesMod
+  return true
 }
 
 function TaskResults({
@@ -525,15 +689,17 @@ function FileResults({ runId, query, onPick }: { runId: string; query: string; o
   )
 }
 
-function PaletteFooter({ mode }: { mode: PaletteMode | 'rename' }) {
+function PaletteFooter({ mode }: { mode: PaletteMode | 'rename' | 'record' }) {
   const hints =
-    mode === 'rename'
+    mode === 'record'
+      ? ['⌫ remove', 'esc cancel']
+      : mode === 'rename'
       ? ['↵ save', 'esc cancel']
       : mode === 'tasks'
         ? ['↵ open', 'tab act on it', `${commandShortcutHint('p')} next`]
         : mode === 'files'
           ? ['↵ open in Code']
-          : ['↵ run', '⌥↵ open beside', '@ tasks', '> commands', '# files']
+          : ['↵ run', '⌥↵ open beside', '⇧↵ set shortcut', '@ tasks', '> commands', '# files']
   return (
     <div
       data-slot="task-palette-footer"

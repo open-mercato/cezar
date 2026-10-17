@@ -99,6 +99,9 @@ a GitHub page.
 prefix picks the mode: `@` to switch tasks (a PR or issue number finds every task about it — in ⌘K too), `>` for commands only, `#` for the task's files.
 Repeated ⌘P walks back through recent tasks; Tab on a task row (here or in ⌘K)
 acts on that task without opening it; ⌥↵ opens a view beside the current one.
+Shortcuts run those commands with the palette closed: ⌘1–⌘9 switch the task's tabs and
+⌘/ opens the terminal in a column. Rebind any command with ⇧↵ on its row, or in
+Settings → Keyboard. Shortcuts are saved in `~/.cezar/ui-state.json`.
 
 ---
 

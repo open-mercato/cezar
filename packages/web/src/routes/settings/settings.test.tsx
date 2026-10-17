@@ -171,6 +171,8 @@ const PROJECT_SECTIONS = ['tracker', 'secrets', 'integrations', 'agents', 'instr
 const GLOBAL_SECTIONS = [
   'appearance',
   'notifications',
+  // Task-palette shortcuts (spec 2026-10-17-task-palette) — the person at the keyboard.
+  'keyboard',
   'resources',
   'skills',
   // Agent accounts (spec 2026-07-29-agent-profiles) sit beside Projects: both describe the
@@ -183,14 +185,10 @@ const GLOBAL_SECTIONS = [
 ]
 
 describe('the section registry', () => {
-  it('declares the spec §Settings sections, later ones hidden', () => {
+  it('declares the spec §Settings sections, all of them implemented', () => {
     const byId = new Map(SETTINGS_SECTIONS.map((s) => [s.id, s]))
     for (const id of [...PROJECT_SECTIONS, ...GLOBAL_SECTIONS]) {
       expect(byId.get(id as never)?.hidden).toBeUndefined()
-    }
-    // Listed in the registry but hidden until implemented (later phase).
-    for (const id of ['keyboard']) {
-      expect(byId.get(id as never)?.hidden).toBe(true)
     }
   })
 
@@ -206,7 +204,7 @@ describe('the section registry', () => {
     // Accounts survives: a single-project cockpit still runs on ONE of possibly several logins,
     // so "which account" is orthogonal to "how many projects".
     expect(visibleSettingsSections('global', { singleProject: true }).map((s) => s.id)).toEqual([
-      'appearance', 'notifications', 'resources', 'skills', 'workspace-secrets', 'accounts', 'privacy',
+      'appearance', 'notifications', 'keyboard', 'resources', 'skills', 'workspace-secrets', 'accounts', 'privacy',
     ])
     expect(visibleSettingsSections('global', { singleProject: false }).map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
     expect(visibleSettingsSections('global').map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
@@ -714,14 +712,6 @@ describe('the settings shell', () => {
     })
   })
 
-  it('unfinished sections say so through the shared CenteredState template', () => {
-    // Hidden sections are not routed (their URLs 404) — render the registry component
-    // directly to pin the placeholder contract itself.
-    const Keyboard = SETTINGS_SECTIONS.find((s) => s.id === 'keyboard')!.component
-    render(<Keyboard />)
-    const state = document.querySelector('[data-slot="centered-state"]')
-    expect(state?.textContent).toContain('later phase')
-  })
 })
 
 describe('the appearance section (global scope)', () => {

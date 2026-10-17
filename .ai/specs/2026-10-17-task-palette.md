@@ -27,7 +27,15 @@ layouts) lives in the run header behind the mouse, and only for the task on scre
   `issue 56` finds every task about it (as `taskReferences` resolves them, the chips' rule), in
   every project; an exact number ranks above a longer one that starts with it.
 - **Alt+Enter** on a view opens it beside the current columns (Alt+click on a card today).
-- No new bare-key shortcuts; rows show the existing workspace keys (`1`–`9`, `f`, `` ` ``, `/`).
+- **Shortcuts** run palette commands on the task on screen, palette shut. Defaults: ⌘1–⌘9 go to the
+  task's Nth tab (views, then saved layouts — positional `tab:N` commands), ⌘/ opens the terminal
+  in a column. Any command can be (re)bound: ⇧↵ on a palette row, or Settings → Keyboard (the
+  previously hidden section). Chords need ⌘/Ctrl, ⌃ or ⌥; ⌘K, ⌘P, ⌘↵ and the browser's own
+  (⌘W, ⌘T, ⌘C…) are refused. In a text field only ⌘/Ctrl chords fire; in the terminal only ⌘
+  on a Mac. A chord whose command is not on offer right now (a git step that is not the next
+  one) is left to the browser. In a browser tab the browser may keep ⌘1–⌘9 for itself; the
+  desktop app delivers them. No bare-key shortcuts are added; rows show the existing workspace
+  keys or their chord.
 
 ## Design
 
@@ -41,6 +49,10 @@ layouts) lives in the run header behind the mouse, and only for the task on scre
   controls; the palette reads them only when the subject is the task on screen, and falls back to
   route navigation otherwise. A file picked in `#` mode for a task not on screen is queued and
   opened by the workspace when it mounts.
+- `lib/keybindings.ts` (chords, defaults, reserved set, override merging) and
+  `lib/use-keybindings.ts` (storage). Overrides live in the workspace ui-state
+  (`~/.cezar/ui-state.json`, `keybindings`: command id → chord, or `null` to unbind a default),
+  beside Appearance — one set per person, every project and browser. Absent means the defaults.
 - `lib/recent-tasks.ts` — most-recently-opened run ids, browser-local (`localStorage`), capped.
   No server state.
 - Destructive actions (Stop, Delete) open the header's existing confirm dialog; Commit opens the
@@ -49,4 +61,4 @@ layouts) lives in the run header behind the mouse, and only for the task on scre
 
 ## Out of scope
 
-Copy-as-variant/re-run, discard changes, user-rebindable keys.
+Copy-as-variant/re-run, discard changes, multi-chord sequences, shortcuts for ⌘K's global commands.

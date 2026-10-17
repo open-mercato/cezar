@@ -62,6 +62,8 @@ export interface TaskCommand {
   danger?: boolean
   /** A toggle that is ON (pinned, unread, archived, full view). */
   pressed?: boolean
+  /** Runs from a shortcut but is not listed — the positional `tab:N` commands. */
+  hidden?: boolean
   perform: () => void
   /** Alt+Enter: the same target opened beside what is on screen. */
   performBeside?: () => void
@@ -276,7 +278,25 @@ function viewCommands({ run, workspace, terminalAvailable }: TaskCommandInput, o
     keywords: ['view', 'handoff'],
     perform: () => on.navigate(`${base}/notes`),
   })
+  if (workspace) commands.push(...tabCommands(workspace))
   return commands
+}
+
+/** `tab:N` — the strip's Nth card (views, then saved layouts), like a browser's ⌘N. Positional,
+ *  so they are shortcut targets rather than palette rows; the rows they point at are listed. */
+function tabCommands(workspace: TaskWorkspaceBridge): TaskCommand[] {
+  const cards = [
+    ...workspace.views.map((view) => ({ label: viewLabel(view), select: () => workspace.openView(view) })),
+    ...workspace.layouts.map((layout) => ({ label: layout.label, select: () => workspace.selectLayout(layout.name) })),
+  ]
+  return cards.slice(0, 9).map((card, index) => ({
+    id: `tab:${index + 1}`,
+    group: 'views',
+    label: `Tab ${index + 1}: ${card.label}`,
+    icon: icon(LayoutGridIcon),
+    hidden: true,
+    perform: card.select,
+  }))
 }
 
 function layoutCommands({ workspace }: TaskCommandInput): TaskCommand[] {
