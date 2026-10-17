@@ -51,8 +51,7 @@ following the server then found it `recovered`, `not_applied`, `unreachable` or 
 `attachments_sent` (how many attachments a sent message carried, as a bucket —
 `1`, `2-4`, `5-10`, `11-20` — never their names, types or contents), `attachments_restaged`
 (whether the automatic re-upload after an expired staged attachment was `recovered` or
-`failed`), `attachment_rejected` (why the composer turned an attachment away —
-`unsupported_type`, `too_large`, `count_limit` or `image_bytes_limit` — never the file's name). Every label
+`failed`). Every label
 comes from a closed set the server enforces.
 
 Error reports carry the error type, message and stack with your home directory, working

@@ -112,17 +112,6 @@ describe('telemetry routes', () => {
     expect(track).not.toHaveBeenCalled();
   });
 
-  /** Telemetry 0f1255b6: a refused attachment is counted by reason — never its file name. */
-  it('relays attachment_rejected with its closed reason labels only', async () => {
-    for (const label of ['unsupported_type', 'too_large', 'count_limit', 'image_bytes_limit']) {
-      expect((await post('/api/v1/telemetry/event', { event: 'attachment_rejected', label })).status).toBe(204);
-      expect(track).toHaveBeenCalledWith('attachment_rejected', { label }, { sid: undefined });
-    }
-    vi.mocked(track).mockClear();
-    expect((await post('/api/v1/telemetry/event', { event: 'attachment_rejected', label: 'image.png' })).status).toBe(400);
-    expect(track).not.toHaveBeenCalled();
-  });
-
   it('relays skills_update_apply_dropped with its closed outcome labels only', async () => {
     for (const label of ['recovered', 'not_applied', 'unreachable', 'timed_out']) {
       expect((await post('/api/v1/telemetry/event', { event: 'skills_update_apply_dropped', label })).status).toBe(204);

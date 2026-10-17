@@ -16,8 +16,6 @@ import {
 const fakeFile = (over: { type?: string; size?: number; name?: string } = {}): File =>
   ({ type: 'image/png', size: 1024, name: 'shot.png', ...over }) as File
 
-const messages = (intake: ReturnType<typeof screenFiles>) => intake.rejected.map((r) => r.message)
-
 describe('screenFiles — the caps, mirrored from the server zod', () => {
   it('accepts images within the caps', () => {
     const intake = screenFiles([fakeFile(), fakeFile({ name: 'b.png' })], 0)
@@ -56,15 +54,15 @@ describe('screenFiles — the caps, mirrored from the server zod', () => {
   it('refuses an unsupported file out loud, naming it', () => {
     const intake = screenFiles([fakeFile({ type: 'application/zip', name: 'payload.zip' })], 0)
     expect(intake.accepted).toEqual([])
-    expect(messages(intake)).toEqual([
-      'payload.zip is not a supported attachment (images, PDF and text files such as TXT, MD, HTML or source code)',
+    expect(intake.rejected).toEqual([
+      '“payload.zip” is not a supported attachment (images, PDF and text files such as TXT, MD, HTML or source code)',
     ])
   })
 
   it('names an oversized file in the rejection', () => {
     const intake = screenFiles([fakeFile({ size: MAX_ATTACHMENT_BYTES + 1, name: 'huge.png' })], 0)
     expect(intake.accepted).toEqual([])
-    expect(messages(intake)).toEqual(['huge.png is too large (max 5 MB)'])
+    expect(intake.rejected).toEqual(['“huge.png” is too large (max 5 MB)'])
   })
 
   it('exactly 5 MB still passes (the cap is inclusive, like the legacy check)', () => {
@@ -81,19 +79,7 @@ describe('screenFiles — the caps, mirrored from the server zod', () => {
   it('enforces the attachment-count cap against what is already attached', () => {
     const intake = screenFiles([fakeFile({ name: 'a.png' }), fakeFile({ name: 'b.png' })], MAX_ATTACHMENTS - 1)
     expect(intake.accepted).toHaveLength(1)
-    expect(messages(intake)).toEqual([`b.png skipped — max ${MAX_ATTACHMENTS} attachments per message`])
-  })
-
-  /** Telemetry 0f1255b6: one toast for an over-the-cap batch, not one per file. */
-  it('collapses every file past the count cap into one rejection', () => {
-    const intake = screenFiles(
-      [fakeFile({ name: 'a.png' }), fakeFile({ name: 'b.png' }), fakeFile({ name: 'c.png' })],
-      MAX_ATTACHMENTS - 1,
-    )
-    expect(intake.accepted.map((f: File) => f.name)).toEqual(['a.png'])
-    expect(intake.rejected).toEqual([
-      { reason: 'count_limit', message: `2 attachments skipped — max ${MAX_ATTACHMENTS} attachments per message` },
-    ])
+    expect(intake.rejected).toEqual([`“b.png” skipped — max ${MAX_ATTACHMENTS} attachments per message`])
   })
 
   it('a batch mixing every failure mode reports each file by name', () => {
@@ -107,16 +93,15 @@ describe('screenFiles — the caps, mirrored from the server zod', () => {
       0,
     )
     expect(intake.accepted.map((f: File) => f.name)).toEqual(['ok.png', 'brief.md'])
-    expect(messages(intake)).toEqual([
-      'big.png is too large (max 5 MB)',
-      'payload.zip is not a supported attachment (images, PDF and text files such as TXT, MD, HTML or source code)',
+    expect(intake.rejected).toEqual([
+      '“big.png” is too large (max 5 MB)',
+      '“payload.zip” is not a supported attachment (images, PDF and text files such as TXT, MD, HTML or source code)',
     ])
-    expect(intake.rejected.map((r) => r.reason)).toEqual(['too_large', 'unsupported_type'])
   })
 
   it('an unnamed paste still reads humanly in the rejection', () => {
     const intake = screenFiles([fakeFile({ name: '', size: MAX_ATTACHMENT_BYTES + 1 })], 0)
-    expect(messages(intake)).toEqual(['attachment is too large (max 5 MB)'])
+    expect(intake.rejected).toEqual(['attachment is too large (max 5 MB)'])
   })
 })
 
@@ -150,7 +135,7 @@ describe('screenFiles — the image budget', () => {
       MAX_IMAGE_BYTES_PER_MESSAGE - 1,
     )
     expect(intake.accepted.map((f) => f.name)).toEqual(['r.pdf'])
-    expect(intake.rejected).toEqual([{ reason: 'image_bytes_limit', message: 'a.png skipped — max 20 MB of images per message' }])
+    expect(intake.rejected).toEqual(['“a.png” skipped — max 20 MB of images per message'])
   })
 })
 

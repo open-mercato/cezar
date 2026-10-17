@@ -4,7 +4,6 @@ import {
   isImageMediaType,
   MAX_ATTACHMENTS_PER_MESSAGE,
   type AttachmentInput,
-  type AttachmentRejectionReason,
 } from '@open-mercato/cezar-api-client'
 
 /**
@@ -166,17 +165,11 @@ export function toAttachmentInput({ mediaType, data, originalName }: PendingAtta
   return { mediaType, data, ...(originalName ? { name: originalName } : {}) }
 }
 
-export interface AttachmentRejection {
-  reason: AttachmentRejectionReason
-  /** A human sentence, ready for a toast. */
-  message: string
-}
-
 export interface AttachmentIntake {
   /** The files that passed — encode these and append. */
   accepted: File[]
-  /** One per refused file, except over-the-count files, which share one (a 30-file drop is one toast). */
-  rejected: AttachmentRejection[]
+  /** One human sentence per rejection, ready for a toast. */
+  rejected: string[]
 }
 
 /**
@@ -190,39 +183,35 @@ export function screenFiles(
   alreadyAttachedImageBytes = 0,
 ): AttachmentIntake {
   const accepted: File[] = []
-  const rejected: AttachmentRejection[] = []
-  const overCount: string[] = []
+  const rejected: string[] = []
   let count = alreadyAttached
   let imageBytes = alreadyAttachedImageBytes
   for (const file of files) {
-    const label = file.name || 'attachment'
+    // Quoted, so telemetry's toast scrub masks the whole name — spaces and all — and every
+    // refusal of one kind lands in one error group (telemetry 0f1255b6).
+    const label = file.name ? `“${file.name}”` : 'attachment'
     if (attachmentMediaType(file) === null) {
-      rejected.push({
-        reason: 'unsupported_type',
-        message: `${label} is not a supported attachment (images, PDF and text files such as TXT, MD, HTML or source code)`,
-      })
+      rejected.push(
+        `${label} is not a supported attachment (images, PDF and text files such as TXT, MD, HTML or source code)`,
+      )
       continue
     }
     if (file.size > MAX_ATTACHMENT_BYTES) {
-      rejected.push({ reason: 'too_large', message: `${label} is too large (max 5 MB)` })
+      rejected.push(`${label} is too large (max 5 MB)`)
       continue
     }
     if (count >= MAX_ATTACHMENTS) {
-      overCount.push(label)
+      rejected.push(`${label} skipped — max ${MAX_ATTACHMENTS} attachments per message`)
       continue
     }
     const isImage = isImageMediaType(attachmentMediaType(file) ?? '')
     if (isImage && imageBytes + file.size > MAX_IMAGE_BYTES_PER_MESSAGE) {
-      rejected.push({ reason: 'image_bytes_limit', message: `${label} skipped — max 20 MB of images per message` })
+      rejected.push(`${label} skipped — max 20 MB of images per message`)
       continue
     }
     accepted.push(file)
     count += 1
     if (isImage) imageBytes += file.size
-  }
-  if (overCount.length > 0) {
-    const what = overCount.length === 1 ? overCount[0] : `${overCount.length} attachments`
-    rejected.push({ reason: 'count_limit', message: `${what} skipped — max ${MAX_ATTACHMENTS} attachments per message` })
   }
   return { accepted, rejected }
 }

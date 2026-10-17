@@ -3,7 +3,6 @@ import { useLocation } from 'react-router'
 
 import {
   attachmentCountBucket,
-  type AttachmentRejectionReason,
   TELEMETRY_ROUTE_SEGMENTS,
   type AddProjectDialog,
   type MessageSurface,
@@ -68,12 +67,6 @@ export function trackAttachmentsSent(count: number): void {
 /** A send that hit an expired staged upload, after the automatic re-stage and resend settled. */
 export function trackAttachmentsRestaged(outcome: 'recovered' | 'failed'): void {
   send('/api/v1/telemetry/event', { event: 'attachments_restaged', label: outcome })
-}
-
-/** The composer refused attachments (telemetry 0f1255b6): a refusal of the user's input is counted
- *  by reason, never reported as an error — the toast names the file, telemetry must not. */
-export function trackAttachmentRejected(reason: AttachmentRejectionReason): void {
-  send('/api/v1/telemetry/event', { event: 'attachment_rejected', label: reason })
 }
 
 /** One of the "Add project" dialogs was opened (New project, Clone from GitHub, Open local folder). */
@@ -320,13 +313,18 @@ let knownProjects: string[] = []
 
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
+const FILE_NAME =
+  /(?<![\w./-])[\w-][\w.-]*\.(?:png|jpe?g|gif|webp|bmp|heic|svg|pdf|txt|md|markdown|log|html?|csv|tsv|json|ya?ml|zip)(?![\w.-])/gi
+
 /** A toast's text without the user's data it interpolates (docs/telemetry.md, "What is never
- *  sent"): quoted values, emails, API URLs (as their route shape), slash-bearing tokens — paths,
+ *  sent"): quoted values, emails, file names, API URLs (as their route shape), slash-bearing tokens — paths,
  *  branches, `owner/repo` —, the names and ids of the user's projects, and anything after `: `. */
 export function scrubToastMessage(message: string, projects: readonly string[] = knownProjects): string {
   let out = message
     .replace(/“[^”]*”|‘[^’]*’|"[^"]*"|`[^`]*`|(?<!\w)'[^'\n]+'(?!\w)/g, '<value>')
     .replace(/[^\s()[\]{}<>,;]+@[^\s()[\]{}<>,;]+\.\w+/g, '<email>')
+    // Bare file names (`image.png`): one per upload would make each its own error group (0f1255b6).
+    .replace(FILE_NAME, '<file>')
     .replace(/[^\s()[\]{}<>,;]*\/[^\s()[\]{}<>,;]*/g, (token) => {
       if (!/^(https?:\/\/[^/\s]+)?\/api\//.test(token)) return '<path>'
       try {

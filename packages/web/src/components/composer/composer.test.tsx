@@ -5,8 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 import { createQueryClient } from '@/api/query-client'
 import type { Skill } from '@open-mercato/cezar-api-client'
-import { onDangerToast, resetToasts, Toaster } from '@/components/ui/toaster'
-import { trackAttachmentRejected } from '@/lib/telemetry'
+import { resetToasts, Toaster } from '@/components/ui/toaster'
 
 import {
   MAX_ATTACHMENT_BYTES,
@@ -16,11 +15,6 @@ import {
 } from './composer-attachments'
 import { resetStaging } from './attachment-staging'
 import { Composer, type ComposerProps } from './composer'
-
-vi.mock('@/lib/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/telemetry')>()),
-  trackAttachmentRejected: vi.fn(),
-}))
 
 beforeAll(() => {
   // cmdk scrolls the selected item into view; jsdom has no scrollIntoView.
@@ -276,21 +270,14 @@ describe('attachments — attach, paste, thumbnails, caps (legacy parity)', () =
     expect(screen.getByLabelText('Remove b.png')).toBeTruthy()
   })
 
-  /** Telemetry 0f1255b6: the refusal is counted by reason, never reported as an error naming the file. */
   it('an image past the count cap is refused with a toast naming it', async () => {
-    const reports: string[] = []
-    const off = onDangerToast((message) => reports.push(message))
-    vi.mocked(trackAttachmentRejected).mockClear()
     const { textarea } = renderComposer()
     const names = Array.from({ length: MAX_ATTACHMENTS }, (_, i) => `${i}.png`)
     fireEvent.drop(textarea, { dataTransfer: { files: names.map((n) => pngFile(n)) } })
     await screen.findByLabelText(`Remove ${names.at(-1)}`)
     paste(textarea, [pngFile('extra.png')])
-    expect(await screen.findByText(`extra.png skipped — max ${MAX_ATTACHMENTS} attachments per message`)).toBeTruthy()
+    expect(await screen.findByText(`“extra.png” skipped — max ${MAX_ATTACHMENTS} attachments per message`)).toBeTruthy()
     expect(screen.queryByLabelText('Remove extra.png')).toBeNull()
-    expect(reports).toEqual([])
-    expect(trackAttachmentRejected).toHaveBeenCalledExactlyOnceWith('count_limit')
-    off()
   })
 
   /** #950 — the same road, for a file that has nothing to preview. */
@@ -321,7 +308,7 @@ describe('attachments — attach, paste, thumbnails, caps (legacy parity)', () =
     ])
     await screen.findByLabelText('Remove report.pdf')
     expect(
-      await screen.findByText('payload.zip is not a supported attachment (images, PDF and text files such as TXT, MD, HTML or source code)'),
+      await screen.findByText('“payload.zip” is not a supported attachment (images, PDF and text files such as TXT, MD, HTML or source code)'),
     ).toBeTruthy()
     expect(screen.queryByLabelText('Remove payload.zip')).toBeNull()
   })
@@ -331,7 +318,7 @@ describe('attachments — attach, paste, thumbnails, caps (legacy parity)', () =
     const big = pngFile('huge.png')
     Object.defineProperty(big, 'size', { value: MAX_ATTACHMENT_BYTES + 1 })
     paste(textarea, [big])
-    expect(await screen.findByText('huge.png is too large (max 5 MB)')).toBeTruthy()
+    expect(await screen.findByText('“huge.png” is too large (max 5 MB)')).toBeTruthy()
     expect(screen.queryByLabelText('Remove huge.png')).toBeNull()
   })
 })
