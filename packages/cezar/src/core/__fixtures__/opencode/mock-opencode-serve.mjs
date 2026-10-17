@@ -46,8 +46,9 @@ const suffix = () => (turn <= 1 ? '' : `_t${turn}`);
 const messageId = () => `${MESSAGE_ID}${suffix()}`;
 
 let sse = null;
-/** permission id → finishes the turn that is waiting on it. */
-const pendingPermissions = new Map();
+/** The one prompt a turn is blocked on, and what answering it does. A single
+ *  slot compared by id — never a lookup keyed by the request URL. */
+let pendingPermission = null;
 const send = (event) => {
   if (sse) sse.write(`data: ${JSON.stringify(event)}\n\n`);
 };
@@ -98,8 +99,7 @@ const server = createServer((req, res) => {
       return;
     }
     if (req.method === 'POST' && permissionReply) {
-      const finish = pendingPermissions.get(permissionReply[1]);
-      pendingPermissions.delete(permissionReply[1]);
+      const pending = pendingPermission?.id === permissionReply[1] ? pendingPermission : null;
       let reply;
       try {
         const parsed = JSON.parse(body);
@@ -107,10 +107,15 @@ const server = createServer((req, res) => {
       } catch {
         reply = undefined;
       }
-      const known = typeof finish === 'function' && typeof reply === 'string';
-      res.writeHead(known ? 200 : 404, { 'content-type': 'application/json' });
-      res.end(known ? 'true' : '{}');
-      if (known) finish(reply);
+      if (!pending || typeof reply !== 'string') {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end('{}');
+        return;
+      }
+      pendingPermission = null;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('true');
+      pending.finish(reply);
       return;
     }
     if (req.method === 'POST' && url === `/session/${SESSION_ID}/message`) {
@@ -134,7 +139,7 @@ const server = createServer((req, res) => {
       const asked = promptText.match(/#permission (\S+)/);
       if (asked) {
         const id = `per_mock_${turn}`;
-        pendingPermissions.set(id, (reply) => {
+        pendingPermission = { id, finish: (reply) => {
           send({
             type: 'message.part.updated',
             properties: {
@@ -142,7 +147,7 @@ const server = createServer((req, res) => {
             },
           });
           setTimeout(() => send({ type: 'session.idle', properties: { sessionID: SESSION_ID } }), 20);
-        });
+        } };
         send({ type: 'message.updated', properties: { info: info({}) } });
         send({
           type: 'permission.asked',
