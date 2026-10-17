@@ -107,7 +107,7 @@ import { useDraft } from './thread-draft'
  */
 /** Which run-detail tab this header instance sits above — drives the active underline.
  *  A prop rather than a route match so the header stays testable with a bare render. */
-export type RunTab = 'session' | 'changes' | 'commits' | 'files' | 'graph' | 'notes' | 'terminal'
+export type RunTab = 'session' | 'changes' | 'commits' | 'files' | 'graph' | 'notes' | 'terminal' | 'preview'
 
 /** Which runs the reader has expanded the phone-width meta row for (#765). A module-level map for
  *  the same reason `WorkflowSteps` keeps one (`openByRun` in step-rail.tsx) — and it has to be BOTH
@@ -299,7 +299,7 @@ function RunHeaderView({
 
           <div
             data-slot="run-tabs"
-            // Up to six segments (Graph and Notes included) no longer fit a 320px phone (the narrowest viewport this header
+            // Up to seven segments (Graph, Notes and Preview included) no longer fit a 320px phone (the narrowest viewport this header
             // supports) — contained scroll here, not page-wide overflow on `main`.
             className="mt-1.5 flex items-end gap-1 overflow-x-auto md:mt-2.5 md:overflow-x-visible"
           >
@@ -326,6 +326,10 @@ function RunHeaderView({
                 ) : null}
                 <TabLink to={`/tasks/${run.id}/notes`} active={tab === 'notes'}>
                   Notes
+                </TabLink>
+                {/* The task's app, with Design Mode (spec 2026-10-09-design-mode). */}
+                <TabLink to={`/tasks/${run.id}/preview`} active={tab === 'preview'}>
+                  Preview
                 </TabLink>
                 {health.data?.capabilities?.terminal ? (
                   <TabLink to={`/tasks/${run.id}/terminal`} active={tab === 'terminal'}>

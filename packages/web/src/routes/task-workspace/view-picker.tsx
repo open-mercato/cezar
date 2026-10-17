@@ -21,8 +21,8 @@ import {
 
 import { VIEW_IDS, viewLabel, type ViewId } from './layout-state'
 
-/** The views this cockpit can show. Main has no Browser column yet (brutus Milestone 3), and a
- *  Terminal only where `capabilities.terminal` allows a shell; every picker reads this. */
+/** The views this cockpit can show — a Terminal only where `capabilities.terminal` allows a
+ *  shell; every picker reads this. */
 export const AvailableViewsContext = createContext<readonly ViewId[]>(VIEW_IDS)
 
 function useAvailable(order: readonly ViewId[]): ViewId[] {
@@ -143,7 +143,7 @@ export function ViewPickerMenu({
 }
 
 /** The tiles' order — the same as the fixed cards on the strip. */
-const TILE_ORDER: readonly ViewId[] = ['session', 'graph', 'changes', 'commits', 'files', 'terminal', 'browser']
+const TILE_ORDER: readonly ViewId[] = ['session', 'graph', 'changes', 'commits', 'files', 'browser', 'terminal']
 
 /** One line per view, for the tiles of an empty layout. */
 const VIEW_HINTS: Record<ViewId, string> = {
@@ -152,7 +152,7 @@ const VIEW_HINTS: Record<ViewId, string> = {
   changes: 'What this task changed, as a diff',
   commits: 'The commits on the task branch',
   files: 'The worktree, file by file',
-  browser: 'A browser beside the work',
+  browser: "The task's app, with Design Mode",
   terminal: 'A shell in the task worktree',
 }
 

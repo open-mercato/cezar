@@ -335,7 +335,7 @@ describe('Open in Browser on a fixed card', () => {
       answer = result.current.openInBrowser('http://localhost:3000/')
     })
     expect(answer).toBe(true)
-    expect(result.current.layout!.name).toBe('Chat + Browser')
+    expect(result.current.layout!.name).toBe('Chat + Preview')
     expect(result.current.layout!.columns.map((column) => column.view)).toEqual(['session', 'browser'])
     expect(result.current.layout!.columns[1]!.browser).toEqual({ tabs: ['http://localhost:3000/'], active: 0 })
     const chat = result.current.state.layouts.find((layout) => layout.name === 'Chat')!

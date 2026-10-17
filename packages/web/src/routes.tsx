@@ -392,6 +392,14 @@ export const AppRoutes = memo(function AppRoutes() {
           }
         />
         <Route
+          path="tasks/:id/preview"
+          element={
+            <Suspense fallback={<GitTabLoading tab="preview" />}>
+              <TaskWorkspaceRoute view="browser" />
+            </Suspense>
+          }
+        />
+        <Route
           path="tasks/:id/terminal"
           element={
             <Suspense fallback={<GitTabLoading tab="terminal" />}>

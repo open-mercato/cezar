@@ -15,9 +15,9 @@
 >   maximized, and is saved with the layout like any other column. It is not pre-seeded in the
 >   default layouts; its card is minted on first use. While the active layout shows a Terminal
 >   column, the drawer is hidden (one view of the same shells, not two fighting over the PTY size).
-> - **No Browser view yet.** `browser` stays in the stored schema so brutus-written layouts load,
->   but no picker offers it; a saved Browser column renders a placeholder. A terminal's detected
->   address opens in a new browser tab instead.
+> - **The Browser view is labelled Preview** and carries Design Mode (spec `2026-10-09-design-mode`).
+>   It is a fixed card on the strip (`/tasks/:id/preview`); a born card saved as `Browser` still
+>   counts as it. A terminal's detected address opens in a Preview column (§7).
 > - **Main's run header.** The layout strip fills the header's tab row (`RunHeader` `tabs` slot);
 >   there is no separate overview header mode. Notes keeps its own page, linked from the strip.
 >   `/tasks/:id/commits/:sha` stays a standalone page; inside a column, Commits picks in place.

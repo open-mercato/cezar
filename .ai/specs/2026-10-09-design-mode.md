@@ -3,14 +3,15 @@
 > Status: implemented on `main` (2026-10-13), ported from `origin/brutus` (2026-10-09/10).
 > Implementation: `packages/cezar/src/server/preview/` (proxy + picker script), the
 > `POST /api/v1/preview/design-proxy` route in `packages/cezar/src/server/server.ts`, and
-> `packages/web/src/routes/task-preview/` — the task's **Preview** tab (`task-preview.tsx`), the
-> frame and toggle (`browser-view.tsx`), the notes (`design-notes.ts`, `design-note-popup.tsx`) and
+> `packages/web/src/routes/task-preview/` — the frame and toggle (`browser-view.tsx`) the task
+> workspace renders as its **Preview** view (`task-workspace/task-workspace.tsx`), the notes (`design-notes.ts`, `design-note-popup.tsx`) and
 > the pick format (`design-picks.ts`).
 > Prior art: Orca's Design Mode (`onorca.dev/docs/browser/design-mode`).
 >
-> **What the port to `main` changed (§9).** Brutus hosts this in the task-workspace redesign's
-> Browser column; `main` has no task workspace, so it lives in a Preview tab beside Changes,
-> Commits, Files and Notes. Brutus's session prompt queue and preview gateway are not ported: a
+> **What the port to `main` changed (§9).** As on brutus, it lives in the task workspace's Browser
+> view (spec `2026-10-07-task-workspace`), labelled **Preview** on `main`: a fixed card on the strip
+> (`/tasks/:id/preview`), and a column that can sit beside Chat or Changes in any saved layout.
+> Brutus's session prompt queue and preview gateway are not ported: a
 > note goes to the agent as a live message (or through Continue), and a hosted cockpit refuses a
 > loopback address as before.
 
@@ -19,7 +20,7 @@
 A task's app could only be looked at, not pointed at. To tell the agent "this button is misaligned" the user had
 to describe the button in words and hope the agent found the same one.
 
-Design Mode closes that loop. A **Design Mode** toggle button in the Preview tab's toolbar — always
+Design Mode closes that loop. A **Design Mode** toggle button in the Preview's toolbar — always
 shown, disabled with the reason where it cannot work — turns the cursor into a
 picker; clicking an element of the app opens a note beside it, and sending the note gives the
 agent the user's words followed by the element's selector, the page it is on,
@@ -51,10 +52,10 @@ on a **different origin**: its own loopback port.
 5. The cockpit validates the description (`parseDesignPick`) and opens a note draft for it, kept
    in the run's `design-picks` draft surface (§7a).
 
-Nothing is configured. The port is ephemeral and never shown; the saved Preview tab keeps the
-app's real address, never the mirror's, so a restart frames the app directly again. The tabs are
-kept per task in this browser's `localStorage` (`cez-preview-tabs:<runId>`) — an address names a
-machine-local dev server, so it is not written to the run record.
+Nothing is configured. The port is ephemeral and never shown; a saved Preview tab keeps the
+app's real address, never the mirror's, so a restart frames the app directly again. Each Preview
+column's tabs are saved with its layout on the host (`/runs/:id/layouts`, task-workspace §7), and
+a terminal's detected address opens in one.
 
 ### What the agent receives
 
@@ -108,9 +109,9 @@ does not hold, the change is one line in `designModeEnabled`.
   via `onDispose`). Nothing is persisted. The cockpit re-asks before every load while Design Mode
   is on, so a listener that was closed for idleness comes back on a new port instead of as a dead
   frame.
-- **Design Mode switch (Preview tab).** On by the toolbar button. Off by the button, by `Esc`
+- **Design Mode switch (Preview).** On by the toolbar button. Off by the button, by `Esc`
   inside the page, or by a failed proxy request (with a toast). Session-only; not saved.
-- **Mirror in use (Preview tab).** Kept after the switch goes off, so leaving Design Mode does
+- **Mirror in use (Preview).** Kept after the switch goes off, so leaving Design Mode does
   not reload the page. Dropped at the next navigation or reload made with the switch off.
 - **A note draft.** Created by a click. Gone when discarded (✕ / Esc) or sent. A failed send keeps
   it. Persisted in the run's `design-picks` draft surface.
@@ -201,8 +202,8 @@ notes are memory-only: a receipt for this review.
 - `packages/web/src/routes/task-preview/design-picker.test.ts` — the real picker script in a
   framed DOM: blue on hover, lime on click, the note reopened by a second click, numbers on sent
   frames, a draft's frame restored from its selector and never guessed.
-- `packages/web/src/routes/task-preview/task-preview.test.tsx` — the route: header tab, saved tabs
-  per task, a corrupt saved value.
+- `packages/web/src/routes/task-workspace/task-workspace.test.tsx` — the `/preview` deep link opens
+  the Preview card with its saved tabs and the Design Mode toggle.
 
 ## 9. Not ported from brutus
 
@@ -212,4 +213,3 @@ notes are memory-only: a receipt for this review.
   reviewed change; until then a note is a live message, which is what the composer already sends.
 - **The preview gateway** (`2026-10-10-preview-gateway`): it authenticates through brutus's hosted
   login (`auth/guard.ts`), which `main` does not have.
-- **The task workspace** (saved layouts, Browser columns beside Chat): the Preview tab stands in.

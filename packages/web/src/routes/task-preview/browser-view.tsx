@@ -19,6 +19,13 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toaster'
 import { cn } from '@/lib/utils'
 
+import {
+  emptyBrowserState,
+  MAX_BROWSER_TABS,
+  MAX_TAB_URL_LENGTH,
+  reviveBrowserState,
+  type BrowserState,
+} from '../task-workspace/layout-state'
 import { parseDesignPick, type NewDesignPick } from './design-picks'
 
 /**
@@ -39,42 +46,9 @@ import { parseDesignPick, type NewDesignPick } from './design-picks'
  *  server can take a while to answer its first request. */
 const LOAD_TIMEOUT_MS = 12_000
 
-/** Bounds on saved tabs: enough for any real comparison, small enough for localStorage. */
-export const MAX_BROWSER_TABS = 8
-export const MAX_TAB_URL_LENGTH = 2048
-
-/**
- * The tabs of a Preview. Only successfully loaded addresses are stored, so it holds plain strings;
- * an empty string IS a blank tab.
- */
-export interface BrowserState {
-  tabs: string[]
-  /** Index into `tabs`. Clamped on read, so a stored value can never point past the end. */
-  active: number
-}
-
-/** A Preview with nothing loaded: one blank tab. */
-export function emptyBrowserState(): BrowserState {
-  return { tabs: [''], active: 0 }
-}
-
-/** Anything → a state the view can paint. Total: the input is a stored, hand-editable value. */
-export function reviveBrowserState(raw: unknown): BrowserState {
-  if (typeof raw !== 'object' || raw === null) return emptyBrowserState()
-  const source = raw as { tabs?: unknown; active?: unknown }
-  if (!Array.isArray(source.tabs)) return emptyBrowserState()
-  const tabs = source.tabs
-    .filter((tab): tab is string => typeof tab === 'string')
-    .slice(0, MAX_BROWSER_TABS)
-    // Blank, not truncated: a cut address is a different address.
-    .map((tab) => (tab.length > MAX_TAB_URL_LENGTH ? '' : tab))
-  if (tabs.length === 0) return emptyBrowserState()
-  const active =
-    typeof source.active === 'number' && Number.isFinite(source.active)
-      ? Math.min(tabs.length - 1, Math.max(0, Math.trunc(source.active)))
-      : 0
-  return { tabs, active }
-}
+// One state shape with the workspace's Browser column, which saves it with the layout (spec
+// 2026-10-07-task-workspace §7), so the host's bounds apply here too.
+export { emptyBrowserState, MAX_BROWSER_TABS, MAX_TAB_URL_LENGTH, reviveBrowserState, type BrowserState }
 
 /** Hosts that mean "the machine cezar runs on". Framing one of these from a remote cockpit would
  *  resolve on the VIEWER's machine instead — a different computer entirely. */

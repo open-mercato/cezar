@@ -1,5 +1,4 @@
 import {
-  GlobeIcon,
   LayoutGridIcon,
   LoaderCircleIcon,
   Maximize2Icon,
@@ -34,6 +33,9 @@ import { cn } from '@/lib/utils'
 import { rememberViewState } from '@/lib/view-memory'
 
 import { GitTabLoading } from '../task-git/git-tab-loading'
+import { BrowserView } from '../task-preview/browser-view'
+import { DesignNotePopup } from '../task-preview/design-note-popup'
+import { useDesignNotes } from '../task-preview/design-notes'
 import { ChangesView } from '../task-git/task-changes'
 import { CommitsView } from '../task-git/task-commits'
 import { FilesView } from '../task-git/task-files'
@@ -45,7 +47,7 @@ import { ThreadLoading } from '../task-thread/thread-loading'
 import { reduceThread } from '../task-thread/thread-state'
 import { readDrawerState, writeDrawerState, type DrawerState } from './drawer-state'
 import { LayoutCards } from './layout-cards'
-import { FIXED_VIEW_ORDER, fixedViewOf, VIEW_IDS, type ViewId } from './layout-state'
+import { emptyBrowserState, FIXED_VIEW_ORDER, fixedViewOf, VIEW_IDS, type ViewId, type WorkspaceColumn } from './layout-state'
 import { FullViewExit, usePanelCover, WorkspaceMaximizeContext } from './maximize'
 import { useWorkspaceLayouts } from './use-workspace-layouts'
 import { AvailableViewsContext } from './view-picker'
@@ -66,7 +68,7 @@ const GraphColumn = lazy(() =>
  * `/tasks/:id` — the task workspace (spec `.ai/specs/2026-10-07-task-workspace.md`): the run
  * header, its route tabs replaced by the saved-layout strip, and one to three resizable columns
  * below. Each column embeds an existing view; `embedded` drops that view's own header and nothing
- * else. `/changes`, `/files`, `/commits`, `/graph` and `/terminal` render this route with `view`
+ * else. `/changes`, `/files`, `/commits`, `/graph`, `/preview` and `/terminal` render this route with `view`
  * set, which opens that view as a card and leaves every saved layout alone (§5.3).
  */
 export function TaskWorkspaceRoute({ view }: { view?: ViewId }) {
@@ -129,6 +131,7 @@ export function TaskWorkspaceRoute({ view }: { view?: ViewId }) {
 function DeepLinkLoading({ view }: { view?: ViewId }) {
   if (view === 'files') return <GitTabLoading tab="files" />
   if (view === 'terminal') return <GitTabLoading tab="terminal" />
+  if (view === 'browser') return <GitTabLoading tab="preview" />
   if (view === 'changes' || view === 'commits' || view === 'graph') return <GitTabLoading tab="changes" />
   return <ThreadLoading />
 }
@@ -143,13 +146,12 @@ function WorkspaceView({
   onMarkedUnread: (runId: string) => void
 }) {
   const layouts = useWorkspaceLayouts(run.id)
-  const { openDeepLink, addLayout, closeLayout, selectLayout, renameLayout } = layouts
+  const { openDeepLink, addLayout, closeLayout, selectLayout, renameLayout, setColumnBrowser, openInBrowser } = layouts
 
   // Policy, read from the one place that knows it: no shell here means no Terminal anywhere.
   const terminalAllowed = useHealth().data?.capabilities?.terminal === true
-  // Main has no Browser column yet (brutus Milestone 3); a saved one renders a placeholder.
   const availableViews = useMemo(
-    () => VIEW_IDS.filter((view) => view !== 'browser' && (view !== 'terminal' || terminalAllowed)),
+    () => VIEW_IDS.filter((view) => view !== 'terminal' || terminalAllowed),
     [terminalAllowed],
   )
 
@@ -464,8 +466,18 @@ function WorkspaceView({
   // The header's run controls (Continue, ■ Stop) live in the composer when a Chat column shows it.
   const headerTab: RunTab = columns?.some((column) => column.view === 'session') ? 'session' : 'changes'
 
+  // Design Mode notes (spec 2026-10-09-design-mode) are the task's, shared by every Preview column.
+  const designNotes = useDesignNotes(run)
+  const { addDraft, discard: discardNote, note: noteFor, marks: designMarks } = designNotes
+  const escapeNote = useCallback(
+    (mark: string) => {
+      if (noteFor(mark)?.phase === 'draft') discardNote(mark)
+    },
+    [discardNote, noteFor],
+  )
+
   const renderView = useCallback(
-    (view: ViewId, index: number) => {
+    (view: ViewId, index: number, column: WorkspaceColumn) => {
       switch (view) {
         case 'session':
           return <ConversationColumn run={run} onMarkedUnread={onMarkedUnread} onOpenReference={openReference} />
@@ -484,7 +496,7 @@ function WorkspaceView({
         case 'terminal':
           return terminalAllowed ? (
             <Suspense fallback={<ColumnLoading title="Loading terminal…" />}>
-              <TerminalDrawer runId={run.id} height={0} onHeightChange={noop} onOpenInBrowser={openInNewTab} fill />
+              <TerminalDrawer runId={run.id} height={0} onHeightChange={noop} onOpenInBrowser={openInBrowser} fill />
             </Suspense>
           ) : (
             <CenteredState
@@ -497,17 +509,34 @@ function WorkspaceView({
           )
         case 'browser':
           return (
-            <CenteredState
-              icon={<GlobeIcon />}
-              tone="neutral"
-              heading="h2"
-              title="Browser not available"
-              subtitle="This cockpit has no Browser window yet. Change this window's view from its header."
+            <BrowserView
+              state={column.browser ?? emptyBrowserState()}
+              onChange={(browser) => setColumnBrowser(index, browser)}
+              onPickElement={addDraft}
+              designMarks={designMarks}
+              onDesignEscape={escapeNote}
+              renderDesignNote={({ mark, close }) => {
+                const note = noteFor(mark)
+                return note ? <DesignNotePopup note={note} run={run} notes={designNotes} onClose={close} /> : null
+              }}
             />
           )
       }
     },
-    [activeName, onMarkedUnread, openReference, run, terminalAllowed],
+    [
+      activeName,
+      addDraft,
+      designMarks,
+      designNotes,
+      escapeNote,
+      noteFor,
+      onMarkedUnread,
+      openInBrowser,
+      openReference,
+      run,
+      setColumnBrowser,
+      terminalAllowed,
+    ],
   )
 
   return (
@@ -612,7 +641,7 @@ function WorkspaceView({
               updateDrawer({ open: false })
               openBeside('terminal')
             }}
-            onOpenInBrowser={openInNewTab}
+            onOpenInBrowser={openInBrowser}
           />
         </Suspense>
       ) : null}
@@ -621,11 +650,6 @@ function WorkspaceView({
 }
 
 const noop = () => {}
-
-/** A detected address opens in a new browser tab: main has no Browser column to put it in. */
-function openInNewTab(url: string): boolean {
-  return window.open(url, '_blank', 'noopener,noreferrer') !== null
-}
 
 function ColumnLoading({ title }: { title: string }) {
   return (

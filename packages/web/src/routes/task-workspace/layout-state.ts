@@ -33,7 +33,7 @@ export const VIEW_IDS: readonly ViewId[] = ['session', 'changes', 'commits', 'fi
 
 /** The view tabs, left to right. Chat is home; the graph is the task's shape, so it is next.
  *  Terminal has no tab: its one control is the Terminal button, which opens the drawer. */
-export const FIXED_VIEW_ORDER: readonly ViewId[] = ['session', 'graph', 'changes', 'commits', 'files']
+export const FIXED_VIEW_ORDER: readonly ViewId[] = ['session', 'graph', 'changes', 'commits', 'files', 'browser']
 
 /** The route each view tab deep-links to, for pages that are not the workspace (Notes). */
 export const VIEW_PATHS: Record<ViewId, string> = {
@@ -41,7 +41,7 @@ export const VIEW_PATHS: Record<ViewId, string> = {
   changes: 'changes',
   commits: 'commits',
   files: 'files',
-  browser: '',
+  browser: 'preview',
   graph: 'graph',
   terminal: 'terminal',
 }
@@ -53,7 +53,8 @@ const VIEW_LABELS: Record<ViewId, string> = {
   changes: 'Changes',
   commits: 'Commits',
   files: 'Code',
-  browser: 'Browser',
+  // The task's app, with Design Mode (spec 2026-10-09-design-mode).
+  browser: 'Preview',
   graph: 'Graph',
   terminal: 'Terminal',
 }
@@ -66,7 +67,8 @@ const LEGACY_AUTO_NAMES: Record<string, string> = {
   Commity: 'Commits',
   Pliki: 'Code',
   Files: 'Code',
-  Przeglądarka: 'Browser',
+  Przeglądarka: 'Preview',
+  Browser: 'Preview',
   Graf: 'Graph',
 }
 
@@ -86,6 +88,7 @@ export function layoutDisplayName(name: string): string {
  *  task grows a stray `Files` card beside the `Code` one that replaced it. */
 const LEGACY_VIEW_NAMES: Partial<Record<ViewId, readonly string[]>> = {
   files: ['Files'],
+  browser: ['Browser'],
 }
 
 /** Whether `name` is the automatic name of `view`'s own layout, under any label it has had. */
