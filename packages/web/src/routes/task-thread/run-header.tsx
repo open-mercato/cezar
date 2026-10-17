@@ -441,7 +441,9 @@ function TaskItemActions({
   const live = liveRunReason(run)
   const moreStop = showRunControls && flags.cancel
   // "End session" for a waiting run, on the tabs whose composer is not there to carry it.
-  const moreEnd = showRunControls && run.status === 'waiting'
+  const moreEnd = showRunControls && run.status === 'waiting' && flags.finish
+  // A worktree operation owns the task until it is resolved (#1358), live or not.
+  const gatedReason = run.worktreeLifecycle?.activeOperationId ? 'Resolve the worktree operation first' : undefined
   return (
     <span data-slot="task-item-actions" className="mx-1 flex items-center gap-0.5">
       {/* The three state toggles — read, pinned, archived — share ONE on-state (TOGGLE_ON_CLASS:
@@ -495,7 +497,7 @@ function TaskItemActions({
         slot="delete-run"
         label="Delete"
         title="Delete the task, its worktree and its branch"
-        unavailable={live}
+        unavailable={live ?? gatedReason}
         danger
         onClick={() => actions.setConfirming('delete')}
         className="ml-1"
@@ -1490,7 +1492,7 @@ function ActionsKebab({
           </>
         ) : null}
         {/* Off the Session tab only: there the hint over the composer carries it. */}
-        {showRunControls && run.status === 'waiting' ? (
+        {showRunControls && run.status === 'waiting' && flags.finish ? (
           <DropdownMenuItem onSelect={() => actions.finish.mutate()}>
             <CheckIcon aria-hidden="true" /> End session
           </DropdownMenuItem>

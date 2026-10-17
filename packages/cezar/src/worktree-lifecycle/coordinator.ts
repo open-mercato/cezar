@@ -13,7 +13,8 @@ import {
 } from '@open-mercato/cezar-contract';
 import type { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
-import { createWorktreeWithOutcome, removeWorktree, worktreePathFor, branchFor } from '../git-worktree.ts';
+import { isSafeGitRef } from '../git-refs.ts';
+import { createWorktree, createWorktreeWithOutcome, removeWorktree, worktreePathFor, branchFor } from '../git-worktree.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
 import { LifecycleStore, LifecycleConflictError, withLifecycleFileLock } from './store.ts';
@@ -94,8 +95,10 @@ export class WorktreeLifecycleCoordinator {
   }
   private context(record: WorktreeLifecycleRecord): LifecycleTemplateContext {
     const expected = resolve(worktreePathFor(this.root, record.runId));
-    // A named branch (spec 2026-10-11-branch-naming-instructions) is managed only when the run records it.
-    if (record.branch && record.branch !== branchFor(record.runId) && record.branch !== this.runs.getRun(record.runId)?.branch) {
+    // A named branch (spec 2026-10-11-branch-naming-instructions) is managed when the run records it;
+    // a deleted task or an orphan has no run left to ask, so only the ref's shape is checked.
+    const run = this.runs.getRun(record.runId);
+    if (record.branch && record.branch !== branchFor(record.runId) && (run ? record.branch !== run.branch : !isSafeGitRef(record.branch))) {
       throw new LifecycleConflict('Lifecycle branch is not the managed task branch');
     }
     if (resolve(record.projectRoot) !== resolve(this.root) || resolve(record.worktreePath) !== expected) throw new LifecycleConflict('Worktree context does not belong to this project');
@@ -134,12 +137,12 @@ export class WorktreeLifecycleCoordinator {
     this.context(record); await this.store.writeWorktree(record); return record;
   }
   /** A named branch git still refuses degrades to `cez/<id8>` only when it was freshly generated. */
-  private async materialize(runId: string, base: string, choice: LifecycleBranchChoice): Promise<Awaited<ReturnType<typeof createWorktreeWithOutcome>>> {
-    try { return await createWorktreeWithOutcome(this.root, runId, base, {branch: choice.branch}); }
+  private async materialize<T>(choice: LifecycleBranchChoice, create: (branch?: string) => Promise<T>): Promise<T> {
+    try { return await create(choice.branch); }
     catch (error) {
       if (choice.branch === undefined || !choice.generated) throw error;
       choice.onFallback?.(error instanceof Error ? error.message : String(error));
-      return createWorktreeWithOutcome(this.root, runId, base);
+      return create();
     }
   }
   /** Caller already holds normal task admission. No second slot is acquired for setup. */
@@ -164,7 +167,7 @@ export class WorktreeLifecycleCoordinator {
       });
     }
     if (!prior && !configured.config.afterCreate.length && !configured.config.beforeRemove.length) {
-      const {materialized: _materialized, ...wt} = await this.materialize(runId, base, choice);
+      const wt = await this.materialize(choice, branch => createWorktree(this.root, runId, base, {branch}));
       await seedAgentConfigLocalLayer(this.root, wt.path).catch(() => []);
       return {ready: true, ...wt};
     }
@@ -172,9 +175,13 @@ export class WorktreeLifecycleCoordinator {
       let record = await this.store.readWorktree(runId);
       const materialized = existsSync(join(worktreePathFor(this.root, runId), '.git'));
       if (record?.preparedBy && materialized && !record.activeOperationId) return {ready: true, path: record.worktreePath, branch: record.branch ?? initialBranch, baseBranch: base};
-      if (!record) record = {schemaVersion: 1, worktreeId: randomUUID(), runId, projectRoot: this.root,
-        worktreePath: worktreePathFor(this.root, runId), branch: initialBranch, generation: 1,
-        autoCleanupSuppressed: false, createdAt: now(), updatedAt: now()};
+      if (!record) {
+        record = {schemaVersion: 1, worktreeId: randomUUID(), runId, projectRoot: this.root,
+          worktreePath: worktreePathFor(this.root, runId), branch: initialBranch, generation: 1,
+          autoCleanupSuppressed: false, createdAt: now(), updatedAt: now()};
+        // context() trusts a named branch only once the run records it; materialization may still replace it.
+        if (this.runs.getRun(runId)?.branch !== initialBranch && initialBranch !== branchFor(runId)) this.runs.updateRun(runId, {branch: initialBranch});
+      }
       this.context(record);
       let operation = record.activeOperationId ? await this.store.readOperation(record.activeOperationId) : undefined;
       if (operation && operation.state !== 'queued' && !terminal.has(operation.state)) {
@@ -191,7 +198,7 @@ export class WorktreeLifecycleCoordinator {
       try {
         if (signal?.aborted) throw new Error('Preparation cancelled before materialization');
         if (process.env.CEZ_DRY_RUN !== '1') {
-          const wt = await this.materialize(runId, base, {...choice, branch: record.branch ?? choice.branch});
+          const wt = await this.materialize({...choice, branch: record.branch ?? choice.branch}, branch => createWorktreeWithOutcome(this.root, runId, base, {branch}));
           record.worktreePath = wt.path; record.branch = wt.branch;
           this.runs.updateRun(runId, {worktreePath: wt.path, branch: wt.branch, baseBranch: wt.baseBranch, worktreeReclaimedAt: undefined});
           await seedAgentConfigLocalLayer(this.root, wt.path).catch(() => []);

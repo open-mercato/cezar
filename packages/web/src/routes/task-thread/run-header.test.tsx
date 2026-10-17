@@ -2004,9 +2004,17 @@ describe('lifecycle-aware task deletion', () => {
     await screen.findByText('Cleanup requested. The task is kept until cleanup completes.')
     expect(document.querySelector('[data-slot="home-probe"]')).toBeNull()
   })
+  it('greys Delete out for a finished task whose cleanup is still running', () => {
+    stubFetch()
+    renderHeader(run('done',{worktreeLifecycle:{worktreeId:operation.worktreeId,generation:1,activeOperationId:operation.id,phase:'teardown',state:'running',needsAttention:false}}))
+    expect(itemActions().getByRole('button',{name:'Delete'}).getAttribute('aria-disabled')).toBe('true')
+  })
+
   it('hides ordinary task actions while lifecycle recovery owns the worktree', () => {
     stubFetch()
     renderHeader(run('waiting',{worktreeLifecycle:{worktreeId:operation.worktreeId,generation:1,activeOperationId:operation.id,phase:'setup',state:'needs_attention',needsAttention:true}}))
-    for (const name of ['Finish','Cancel','Continue','Delete']) expect(actionBar().queryByRole('button',{name})).toBeNull()
+    for (const name of ['Finish','Cancel','Continue']) expect(actionBar().queryByRole('button',{name})).toBeNull()
+    // Delete stays in place, greyed out like a live run's (Pin · Archive · Delete, always in place).
+    expect(itemActions().getByRole('button',{name:'Delete'}).getAttribute('aria-disabled')).toBe('true')
   })
 })

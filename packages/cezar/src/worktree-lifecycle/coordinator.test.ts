@@ -293,6 +293,35 @@ describe('worktree lifecycle coordinator with real Git and command fixtures', ()
     expect(p.git('branch', '--list', prepared.branch).trim()).toBe('');
   });
 
+  it('prepares and removes a named task branch (spec 2026-10-11-branch-naming-instructions)', async () => {
+    const p = await project(); await p.config([entry('true')], [entry('true')]);
+    const onTaskDeleted = vi.fn();
+    (p.coordinator as unknown as {options: {onTaskDeleted?: (id: string) => void}}).options.onTaskDeleted = onTaskDeleted;
+    const prepared = await p.coordinator.prepare(p.id, 'main', {kind: 'initial', runId: p.id}, undefined, {branch: 'feat/named-task', generated: true});
+    expect(prepared).toMatchObject({ready: true, branch: 'feat/named-task'});
+    expect(p.records.get(p.id)?.branch).toBe('feat/named-task');
+    const deletion = await p.coordinator.startRemoval({requestId: randomUUID(), runId: p.id, intent: 'delete-task'});
+    expect((await settled(p.coordinator, deletion.id)).state).toBe('completed');
+    expect(p.git('branch', '--list', 'feat/named-task').trim()).toBe('');
+    expect(onTaskDeleted).toHaveBeenCalledWith(p.id);
+  });
+
+  it('falls back to cez/<id8> when git refuses a generated branch, with or without scripts', async () => {
+    for (const scripts of [false, true]) {
+      const p = await project(); if (scripts) await p.config([entry('true')]);
+      const onFallback = vi.fn();
+      // `main` exists, so `main/child` cannot be created as a ref.
+      const prepared = await p.coordinator.prepare(p.id, 'main', {kind: 'initial', runId: p.id}, undefined, {branch: 'main/child', generated: true, onFallback});
+      expect(prepared).toMatchObject({ready: true, branch: `cez/${p.id.slice(0, 8)}`});
+      expect(onFallback).toHaveBeenCalledOnce();
+    }
+  });
+
+  it('never falls back for a recorded branch git refuses', async () => {
+    const p = await project();
+    await expect(p.coordinator.prepare(p.id, 'main', {kind: 'initial', runId: p.id}, undefined, {branch: 'main/child'})).rejects.toThrow();
+  });
+
   it('makes duplicate removal requests idempotent and rejects stale action revisions', async () => {
     const p = await project(); await p.config([], [entry('exit 6')]); await p.prepare();
     const request = {requestId: randomUUID(), runId: p.id, intent: 'reclaim' as const};
