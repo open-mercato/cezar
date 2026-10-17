@@ -25,6 +25,7 @@ import {
   cliVersionFrom,
   isRuntimeProviderAuthFailure,
   providerAuthChecksDisabled,
+  versionManagerShimMiss,
   type ProviderCommandResult,
   type RunProviderCommand,
 } from './provider-auth.ts';
@@ -1561,6 +1562,38 @@ describe('inconclusive probe reports', () => {
     const [probe] = onInconclusive.mock.calls.map(([call]) => call);
     expect(probe).toMatchObject({ provider: 'copilot', reason: 'unrecognized_output' });
     expect(await probe.cliVersion()).toBe('1.34.1');
+  });
+
+  // Telemetry f67df9d2: an asdf shim named `pi`, exit 1, nothing on stdout, Python's version on stderr.
+  it('reports a version-manager shim with no version behind it as not-installed, not inconclusive', async () => {
+    const onInconclusive = vi.fn();
+    const asdfMiss = 'No version is set for command pi\n'
+      + 'Consider adding one of the following versions in your config file at /work/.tool-versions\n'
+      + 'python 3.11.9\n';
+    const service = new ProviderAuthService({
+      runCommand: async (executable) => executable === 'pi'
+        ? { stdout: '', stderr: asdfMiss, exitCode: 1 }
+        : { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' },
+      onInconclusive,
+    });
+    const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'pi');
+    expect(row).toMatchObject({
+      status: 'not-installed',
+      hint: expect.stringContaining('No version is set for command pi'),
+    });
+    expect(row?.hint).toContain('CEZ_PI_BIN');
+    expect(onInconclusive).not.toHaveBeenCalled();
+  });
+
+  it('recognizes the mise and pyenv shim misses, and never re-reads a successful answer', () => {
+    expect(versionManagerShimMiss({ stdout: '', stderr: 'mise ERROR No version is set for shim: pi\nSet a global default version with one of the following:\nmise use -g python@3.11.9\n', exitCode: 1 }))
+      .toBe('No version is set for shim: pi');
+    expect(versionManagerShimMiss({ stdout: '', stderr: 'mise ERROR Tool not installed for shim: pi\n', exitCode: 1 }))
+      .toBe('Tool not installed for shim: pi');
+    expect(versionManagerShimMiss({ stdout: '', stderr: 'pyenv: pi: command not found\n\nThe `pi\' command exists in these Python versions:\n  3.11.9\n', exitCode: 127 }))
+      .toBe('pyenv: pi: command not found');
+    expect(versionManagerShimMiss({ stdout: 'No version is set for command pi', stderr: '', exitCode: 0 })).toBeNull();
+    expect(versionManagerShimMiss({ stdout: '', stderr: 'Error: something else broke', exitCode: 1 })).toBeNull();
   });
 
   it('keeps the generic hint when Copilot spoke ACP but the answer was unreadable', async () => {

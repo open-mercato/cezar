@@ -555,6 +555,29 @@ function parsesAsJson(text: string): boolean {
   }
 }
 
+// asdf, mise, pyenv/rbenv/nodenv-style shims answering for a command no active version provides.
+const SHIM_MISS_PATTERNS = [
+  /\bNo (?:version is set|preset version installed|versions set) for (?:command |shim: )?\S+/i,
+  /\bTools? not installed for shim: \S+/i,
+  /\S+ is not a valid shim\b/i,
+  /^[a-z]+env: \S+: command not found$/im,
+];
+
+/**
+ * The shim's own line when the command on PATH is a version-manager shim with nothing behind it
+ * (telemetry f67df9d2: an asdf `pi` for Python 3.11.9). Nothing can run, so that is not-installed,
+ * not an inconclusive auth check. Only a failed exit counts: a real answer is never re-read.
+ */
+export function versionManagerShimMiss(result: ProviderCommandResult): string | null {
+  if (result.exitCode === 0 || result.exitCode === null) return null;
+  const output = `${result.stderr}\n${result.stdout}`;
+  for (const pattern of SHIM_MISS_PATTERNS) {
+    const match = output.match(pattern);
+    if (match) return match[0].trim().slice(0, 160);
+  }
+  return null;
+}
+
 function isSilentSuccess(result: ProviderCommandResult): boolean {
   return result.exitCode === 0 && !result.errorCode && !result.timedOut
     && result.stdout.trim() === '' && result.stderr.trim() === '';
@@ -995,6 +1018,15 @@ export class ProviderAuthService {
     }
     if (result.timedOut) return inconclusive('timeout', TIMEOUT_HINT, result);
     if (result.errorCode) return inconclusive('spawn_error', UNKNOWN_HINT, result);
+    const shimMiss = versionManagerShimMiss(result);
+    if (shimMiss) {
+      return {
+        provider: descriptor.id,
+        status: 'not-installed',
+        hint: `\`${executable}\` is a version-manager shim with no version active ("${shimMiss}"). `
+          + `${descriptor.installHint} Or point ${descriptor.overrideEnv} at the CLI.`,
+      };
+    }
     const status = descriptor.parse(result);
     if (status !== null) return { provider: descriptor.id, status };
     // Exit 0 and 1 are the codes vendors answer status with; anything else is the CLI failing.
