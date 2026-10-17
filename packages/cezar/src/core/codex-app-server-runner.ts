@@ -1,3 +1,4 @@
+import { unwrapJsonErrorEnvelope } from './agent-errors.ts';
 import { emitUsageWindows, normalizeCodexUsageWindows } from './usage-windows.ts';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type {
@@ -680,7 +681,7 @@ class CodexSession implements AgentSession {
           const error = codexErrorDetails(turn?.error)
             ?? codexErrorDetails(params.error)
             ?? this.pendingTurnError;
-          const message = error?.message ?? 'codex turn failed';
+          const message = unwrapJsonErrorEnvelope(error?.message ?? turnError);
           const codexErrorInfo = error?.codexErrorInfo;
           this.emit({ type: 'error', message: explainCodexModelError(codexErrorInfo ? `${message} [${codexErrorInfo}]` : message, this.spec.model) });
         }
