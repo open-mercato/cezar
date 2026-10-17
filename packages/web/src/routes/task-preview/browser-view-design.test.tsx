@@ -85,6 +85,21 @@ describe('the Design Mode toggle', () => {
     expect(openDesignProxy).not.toHaveBeenCalled()
   })
 
+  it('is offered but off on entering the Preview, and stays off on every return until clicked', async () => {
+    renderView()
+    expect((toggle() as HTMLButtonElement).disabled).toBe(false)
+    expect(toggle().getAttribute('aria-pressed')).toBe('false')
+    expect(openDesignProxy).not.toHaveBeenCalled()
+    await enterDesignMode()
+    // Leaving the Preview and coming back starts it off again: no mirror is asked for until clicked.
+    cleanup()
+    openDesignProxy.mockClear()
+    renderView()
+    expect(toggle().getAttribute('aria-pressed')).toBe('false')
+    expect(frame().getAttribute('src')).toBe(APP)
+    expect(openDesignProxy).not.toHaveBeenCalled()
+  })
+
   it('switches on and off from the toggle button', async () => {
     renderView()
     fireEvent.click(toggle())

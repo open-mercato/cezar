@@ -96,11 +96,10 @@ The proxy is the new exposure, so each property below is load-bearing and has a 
 
 `CEZ_DESIGN_MODE=0` turns the feature off: the toggle disappears and the route answers 409.
 
-**For the owner to ratify.** AGENTS.md § Zero config asks that a feature widening exposure be
-opt-in behind a `CEZ_*` flag, off by default. Design Mode ships ON locally with an off switch, on
-the argument that the listener is loopback-only, mirrors only
-what was already listening on loopback, and exists only after an explicit click. If that argument
-does not hold, the change is one line in `designModeEnabled`.
+**Owner decision (2026-10-17).** Design Mode is available on a local cockpit with no setting, but
+the toggle starts OFF every time the Preview opens: nothing is mirrored until the user clicks it.
+That click is the opt-in AGENTS.md § Zero config asks of a feature that widens exposure — the
+listener is loopback-only, mirrors only what was already listening on loopback, and closes when idle.
 
 ## 5. States and their exits
 
