@@ -34,8 +34,9 @@ layouts) lives in the run header behind the mouse, and only for the task on scre
   (⌘W, ⌘T, ⌘C…) are refused. In a text field only ⌘/Ctrl chords fire; in the terminal only ⌘
   on a Mac. A chord whose command is not on offer right now (a git step that is not the next
   one) is left to the browser. In a browser tab the browser may keep ⌘1–⌘9 for itself; the
-  desktop app delivers them. Holding ⌘ (Ctrl elsewhere) for 350 ms swaps each tab's icon for its
-  number, so the strip shows which ⌘N is which; the `…` overflow menu always lists them. No bare-key shortcuts are added; rows show the existing workspace
+  desktop app delivers them. Holding ⌘ (Ctrl elsewhere) ON ITS OWN for 350 ms swaps each tab's icon for its
+  number (never for a chord such as ⌘C or the screenshot ⌘⇧4; a release the OS swallows is caught
+  by the next key or pointer event without ⌘), so the strip shows which ⌘N is which; the `…` overflow menu always lists them. No bare-key shortcuts are added; rows show the existing workspace
   keys or their chord.
 
 ## Design
