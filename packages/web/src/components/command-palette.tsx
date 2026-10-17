@@ -239,6 +239,15 @@ export function TaskColumnsHeading({ label }: { label: string }) {
   )
 }
 
+/**
+ * An agent mid-turn is active this very moment, whatever its last step boundary says — a step that
+ * has run for 19 minutes would otherwise read "Updated 19m". The record carries no per-event time
+ * (that lives in the event stream), but `running` outside monitoring IS that answer.
+ */
+export function isWorkingNow(task: Pick<PaletteTask, 'status' | 'activity'>): boolean {
+  return task.status === 'running' && task.activity !== 'monitoring'
+}
+
 /** A row's exact time for its hover title — the browser's locale, to the minute. */
 function exactTime(iso: string): string {
   const date = new Date(iso)
@@ -297,7 +306,7 @@ export function searchableTasks(
       // an automation started, like the chip that marks them.
       keywords: [...(projectName ? [projectName] : []), ...(task.automationId ? ['automation', 'automatic'] : [])],
       projectName,
-      title: `Updated ${exactTime(task.lastActivityAt)} · created ${exactTime(task.createdAt)}`,
+      title: `${isWorkingNow(task) ? 'Working now' : `Updated ${exactTime(task.lastActivityAt)}`} · created ${exactTime(task.createdAt)}`,
     }
   })
 }
@@ -676,7 +685,7 @@ export const TaskItem = React.memo(function TaskItem({
           (`TaskColumnsHeading`) — same widths there and here, so every date lines up. */}
       <span data-slot="palette-task-age" title={entry.title} className="flex shrink-0 gap-1 text-xs tabular-nums">
         <span data-slot="palette-task-updated" className={cn(DATE_COLUMN, 'text-muted-foreground')}>
-          {shortAge(task.lastActivityAt, now)}
+          {isWorkingNow(task) ? 'now' : shortAge(task.lastActivityAt, now)}
         </span>
         <span data-slot="palette-task-created" className={cn(DATE_COLUMN, 'text-soft-foreground')}>
           {shortAge(task.createdAt, now)}

@@ -557,6 +557,7 @@ describe('Tasks group', () => {
           run({
             id: 'r-old',
             title: 'Old task continued today',
+            status: 'done',
             createdAt: '2026-07-09T10:00:00Z',
             steps: [{ id: 's1', name: 'do', kind: 'agent', status: 'done', startedAt: '2026-07-30T09:55:00Z', finishedAt: '2026-07-30T09:55:00Z' }] as RunRecord['steps'],
           }),
@@ -635,6 +636,23 @@ describe('Tasks group', () => {
     // …while the search still knows the whole title.
     fireEvent.change(screen.getByRole('combobox'), { target: { value: '1497: fixing' } })
     expect(document.querySelector('[data-run-id="r1"]')).not.toBeNull()
+  })
+
+  it('a task the agent is working on right now reads Updated "now", not its step start', async () => {
+    renderPalette({
+      runs: [
+        run({ id: 'r-live', title: 'Long review', status: 'running', createdAt: '2026-07-01T10:00:00Z',
+          steps: [{ id: 's1', name: 'do', kind: 'agent', status: 'running', startedAt: '2026-07-01T10:00:05Z' }] as RunRecord['steps'] }),
+        run({ id: 'r-parked', title: 'Watching CI', status: 'running', activity: 'monitoring', createdAt: '2026-07-01T10:00:00Z',
+          steps: [{ id: 's1', name: 'do', kind: 'agent', status: 'running', startedAt: '2026-07-01T10:00:05Z' }] as RunRecord['steps'] }),
+      ],
+    })
+    openWith({ metaKey: true })
+    await screen.findByText('Long review')
+    const updated = (id: string) => document.querySelector(`[data-run-id="${id}"] [data-slot="palette-task-updated"]`)?.textContent
+    expect(updated('r-live')).toBe('now')
+    // Monitoring is parked, not working: its age stays honest.
+    expect(updated('r-parked')).not.toBe('now')
   })
 
   it('renders no Tasks group when there are no runs', async () => {
