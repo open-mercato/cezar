@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { TerminalSession } from '@open-mercato/cezar-api-client'
 
 const api = vi.hoisted(() => ({
+  getStartApp: vi.fn(),
+  setStartApp: vi.fn(),
   getRunTerminalCommands: vi.fn(),
   createRunTerminal: vi.fn(),
   writeRunTerminal: vi.fn(async () => undefined),
@@ -54,6 +56,16 @@ describe('suggestCommand', () => {
   })
 })
 
+describe('startedAddress with a recipe address', () => {
+  it('waits for its origin, counting localhost and 127.0.0.1 as one', () => {
+    const since = Date.parse('2026-10-17T10:00:00Z')
+    const api4000 = { url: 'http://localhost:4000', lastSeenAt: '2026-10-17T10:00:01Z', running: true }
+    const web = { url: 'http://127.0.0.1:5173/', lastSeenAt: '2026-10-17T10:00:02Z', running: null }
+    expect(startedAddress([api4000], since, 'http://localhost:5173/app')).toBeNull()
+    expect(startedAddress([api4000, web], since, 'http://localhost:5173/app')).toBe('http://localhost:5173/app')
+  })
+})
+
 describe('startedAddress', () => {
   it('takes an address printed after the start, preferring one that answers', () => {
     const since = Date.parse('2026-10-17T10:00:00Z')
@@ -85,10 +97,14 @@ describe('RunAppPanel', () => {
     expect(localStorage.getItem(rememberedCommandKey('cezar'))).toBe('npm run dev')
   })
 
-  it('installs the dependencies first when the worktree has none, in the same shell', async () => {
+  it('installs the dependencies in a tab of their own, then starts the app once they succeed', async () => {
     api.getRunTerminalCommands.mockResolvedValue({ commands, install: 'npm ci' })
+    api.createRunTerminal
+      .mockResolvedValueOnce(session({ id: 'install' }))
+      .mockResolvedValueOnce(session({ id: 's-1' }))
+    api.getRunTerminal.mockResolvedValue({ available: true, sessions: [session({ id: 'install', exitCode: 0 })] })
     api.getRunTerminalUrls.mockResolvedValue({
-      urls: [{ url: 'http://localhost:5173', lastSeenAt: new Date(Date.now() + 500).toISOString(), running: true }],
+      urls: [{ url: 'http://localhost:5173', lastSeenAt: new Date(Date.now() + 5000).toISOString(), running: true }],
     })
     const onOpen = vi.fn()
     render(<RunAppPanel runId="r1" projectId="cezar" onOpen={onOpen} />)
@@ -96,10 +112,57 @@ describe('RunAppPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Run npm run dev/ }))
 
-    await waitFor(() => expect(onOpen).toHaveBeenCalledWith('http://localhost:5173'))
-    expect(api.writeRunTerminal).toHaveBeenCalledWith('r1', 's-1', 'npm ci && npm run dev\r')
+    expect(await screen.findByText('Installing dependencies (npm ci)')).not.toBeNull()
+    await waitFor(() => expect(onOpen).toHaveBeenCalledWith('http://localhost:5173'), { timeout: 4000 })
+    expect(api.writeRunTerminal).toHaveBeenNthCalledWith(1, 'r1', 'install', 'npm ci && exit 0 || exit 1\r')
+    expect(api.writeRunTerminal).toHaveBeenNthCalledWith(2, 'r1', 's-1', 'npm run dev\r')
     // Only the start command is remembered; the install is decided afresh each time.
     expect(localStorage.getItem(rememberedCommandKey('cezar'))).toBe('npm run dev')
+  })
+
+  it('stops at a failed install and starts nothing', async () => {
+    api.getRunTerminalCommands.mockResolvedValue({ commands, install: 'npm ci' })
+    api.createRunTerminal.mockResolvedValue(session({ id: 'install' }))
+    api.getRunTerminal.mockResolvedValue({ available: true, sessions: [session({ id: 'install', exitCode: 1 })] })
+    render(<RunAppPanel runId="r1" projectId="cezar" onOpen={() => {}} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: /Run npm run dev/ }))
+
+    expect(await screen.findByText(/npm ci exited with code 1/, undefined, { timeout: 4000 })).not.toBeNull()
+    expect(api.createRunTerminal).toHaveBeenCalledTimes(1)
+  })
+
+  it("starts every service of the project's recipe and opens the address it names", async () => {
+    api.getRunTerminalCommands.mockResolvedValue({
+      commands,
+      recipe: { services: ['npm run api', 'npm run web'], url: 'http://localhost:5173/app', scope: 'project' },
+    })
+    api.createRunTerminal
+      .mockResolvedValueOnce(session({ id: 'api' }))
+      .mockResolvedValueOnce(session({ id: 'web' }))
+    api.getRunTerminal.mockResolvedValue({ available: true, sessions: [session({ id: 'api' }), session({ id: 'web' })] })
+    const fresh = new Date(Date.now() + 5000).toISOString()
+    // The api prints first; only the web's origin is the one to show.
+    api.getRunTerminalUrls
+      .mockResolvedValueOnce({ urls: [{ url: 'http://localhost:4000', lastSeenAt: fresh, running: true }] })
+      .mockResolvedValue({
+        urls: [
+          { url: 'http://localhost:4000', lastSeenAt: fresh, running: true },
+          { url: 'http://127.0.0.1:5173/', lastSeenAt: fresh, running: true },
+        ],
+      })
+    const onOpen = vi.fn()
+    render(<RunAppPanel runId="r1" projectId="cezar" onOpen={onOpen} />)
+
+    expect(await screen.findByText('Start the app')).not.toBeNull()
+    expect(screen.getByText('npm run api')).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Start app' }))
+
+    await waitFor(() => expect(onOpen).toHaveBeenCalledWith('http://localhost:5173/app'), { timeout: 4000 })
+    expect(api.writeRunTerminal).toHaveBeenCalledWith('r1', 'api', 'npm run api\r')
+    expect(api.writeRunTerminal).toHaveBeenCalledWith('r1', 'web', 'npm run web\r')
+    // A recipe is not a remembered command.
+    expect(localStorage.getItem(rememberedCommandKey('cezar'))).toBeNull()
   })
 
   it('suggests the command that worked last time over the discovered one', async () => {
@@ -128,5 +191,48 @@ describe('RunAppPanel', () => {
     render(<RunAppPanel runId="r1" projectId="cezar" onOpen={() => {}} />)
     expect(await screen.findByRole('button', { name: /Choose a command/ })).not.toBeNull()
     expect(screen.queryByRole('button', { name: /^Run / })).toBeNull()
+  })
+})
+
+describe('the start recipe editor', () => {
+  it('saves the team recipe from the suggestion, and the panel then offers it', async () => {
+    api.getStartApp.mockResolvedValue({ project: null, personal: null, personalAvailable: true })
+    api.setStartApp.mockImplementation(async (body: { recipe: unknown }) => ({
+      project: body.recipe,
+      personal: null,
+      personalAvailable: true,
+    }))
+    render(<RunAppPanel runId="r1" projectId="cezar" onOpen={() => {}} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Save a start recipe for this project' }))
+
+    const first = await screen.findByRole('textbox', { name: 'Service 1' })
+    await waitFor(() => expect((first as HTMLInputElement).value).toBe('npm run dev'))
+    fireEvent.click(screen.getByRole('button', { name: 'Add service' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Service 2' }), { target: { value: 'npm run api' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Address to show' }), { target: { value: 'http://localhost:5173' } })
+    api.getRunTerminalCommands.mockResolvedValue({
+      commands,
+      recipe: { services: ['npm run dev', 'npm run api'], url: 'http://localhost:5173', scope: 'project' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(api.setStartApp).toHaveBeenCalledWith({
+        scope: 'project',
+        recipe: { services: ['npm run dev', 'npm run api'], url: 'http://localhost:5173' },
+      }),
+    )
+    expect(await screen.findByRole('button', { name: 'Start app' })).not.toBeNull()
+  })
+
+  it('refuses an address that is not http(s), and offers no personal recipe outside the registry', async () => {
+    api.getStartApp.mockResolvedValue({ project: null, personal: null, personalAvailable: false })
+    render(<RunAppPanel runId="r1" projectId="cezar" onOpen={() => {}} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Save a start recipe for this project' }))
+    await screen.findByRole('textbox', { name: 'Service 1' })
+    await waitFor(() => expect(screen.getByRole('radio', { name: /Only me/ }).hasAttribute('disabled')).toBe(true))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Address to show' }), { target: { value: 'localhost:5173' } })
+    expect(screen.getByText('Start it with http:// or https://')).not.toBeNull()
+    expect(screen.getByRole('button', { name: 'Save' }).hasAttribute('disabled')).toBe(true)
   })
 })

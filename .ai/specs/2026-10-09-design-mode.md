@@ -190,7 +190,7 @@ first discovered `dev` / `start` / `serve` / `preview` / `run` script or Make ta
 A worktree with a `package.json` and no `node_modules` of its own (a fresh task worktree — Node
 would otherwise resolve packages from the parent checkout, possibly another version) also gets
 `install` on that response: `npm ci`, or the tool its lockfile names (`npm install` without one).
-The panel then runs `<install> && <command>` in the same shell and waits up to ten minutes.
+The panel installs first, in a tab of its own (§7c), and waits up to ten minutes for it.
 
 Running it opens a NEW terminal tab of the task (the same `POST /terminal` + input the drawer's
 **Run** uses) and polls `/runs/:id/terminal/urls` every second for an address first seen after the
@@ -198,6 +198,26 @@ start, preferring one that answers; the first one is opened in the tab. Exits: t
 (opened), the command exiting first ("exited with code N"), or two minutes with neither (still
 running, no address). The last two offer **Show terminal**. A hosted cockpit keeps the plain hint:
 it refuses loopback addresses anyway.
+
+## 7c. A project's start recipe (2026-10-17)
+
+A project can say how its app starts, instead of relying on discovery: `startApp` —
+`{ services: string[1..5], url? }`. `services` are long-running commands, each started in its own
+terminal tab of the task, in order; `url` is the address the Preview shows once something on its
+origin has printed (`localhost` and `127.0.0.1` count as one), else the first address printed.
+One-off preparation (`npm ci`, migrations) is not part of it: that is the worktree's setup (#1358).
+
+Two places, both optional: the repo's `.ai/cezar/config.json` (the team's — committable) and the
+project's entry in `~/.cezar/config.json` (yours), which wins. `GET/PUT /api/v1/start-app` reads and
+writes them; a write is refused (409) wherever the terminal is off, since it stores a command a
+terminal will run. `/runs/:id/terminal/commands` carries the recipe in force as `recipe`, with its
+`scope`. The empty Preview tab then offers **Start app** with the services listed, and **Edit start
+recipe** (or **Save a start recipe for this project**) opens the editor: Team / Only me, the
+services, the address.
+
+When the worktree needs installing, the install now runs in a tab of its own that exits with its
+status (`<install> && exit 0 || exit 1`), and the services start only once it succeeded — one shell
+running `<install> && <service>` cannot hold several services back.
 
 ## 8. Verification
 

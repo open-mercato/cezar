@@ -728,9 +728,13 @@ never blocks startup; configured lifecycle transitions pause on malformed config
   "modelsLocked": true,      // optional: native per-runner model is fixed/read-only; runner stays selectable
   "plannerModel": "sonnet",  // model the "Plan first" button uses to draft chains
   "baseBranch": "develop",   // branch worktrees fork from + PRs target (also settable in the Git tab)
-  "branchNaming": "your branch naming preferences"
+  "branchNaming": "your branch naming preferences",
                              // optional: task branches are named from the first prompt under these
                              // instructions (Settings → Instructions); absent = cez/<id8>
+  "startApp": { "services": ["npm run api", "npm run web"], "url": "http://localhost:5173" }
+                             // optional: what the Preview's Start app runs, each service in its own
+                             // terminal tab; url = the address to show (absent: the first one printed).
+                             // A `startApp` in your project entry of ~/.cezar/config.json wins.
 }
 ```
 
