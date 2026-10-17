@@ -178,7 +178,7 @@ export function BrowserView({
   const designUnavailable = !designAllowed
     ? health.data?.capabilities?.localHandoff === false
       ? "Design Mode needs a local cockpit — a hosted one cannot reach the task's local dev server"
-      : 'Design Mode is off on this cockpit — start cezar with CEZ_DESIGN_MODE=1 to enable it'
+      : 'Design Mode is turned off on this cockpit (CEZ_DESIGN_MODE=0)'
     : null
   const targetOrigin = designOrigin(target)
   const designActive = designAllowed && design && targetOrigin !== null

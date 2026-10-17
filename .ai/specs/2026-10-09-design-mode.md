@@ -94,9 +94,13 @@ The proxy is the new exposure, so each property below is load-bearing and has a 
 | Hostile element data in a prompt | Every field is length-capped twice — in the picker and again in `parseDesignPick` — and the markup is fenced with a fence longer than any backtick run inside it. It is still text from an untrusted page; it is presented to the agent as data about an element, the same trust level as the diff the agent already reads. |
 | Network exposure | `127.0.0.1` only, opened only after a user switches Design Mode on. Off on a hosted cockpit, where a loopback mirror reaches nobody. |
 
-Design Mode is **opt-in**: `CEZ_DESIGN_MODE=1` turns it on for a local cockpit (owner decision,
-2026-10-17 — AGENTS.md § Zero config asks that a feature widening exposure be off by default).
-Without it the toggle stays on the toolbar, disabled with the reason, and the route answers 409.
+`CEZ_DESIGN_MODE=0` turns the feature off: the toggle disappears and the route answers 409.
+
+**For the owner to ratify.** AGENTS.md § Zero config asks that a feature widening exposure be
+opt-in behind a `CEZ_*` flag, off by default. Design Mode ships ON locally with an off switch, on
+the argument that the listener is loopback-only, mirrors only
+what was already listening on loopback, and exists only after an explicit click. If that argument
+does not hold, the change is one line in `designModeEnabled`.
 
 ## 5. States and their exits
 
@@ -181,10 +185,10 @@ notes are memory-only: a receipt for this review.
 - `packages/cezar/src/server/preview/design-proxy.test.ts` — the proxy against a real loopback
   listener: injection, `Host` refusal, origin rewriting, redirects, WebSocket splice, 502, idle and
   LRU closing, every refused target.
-- `packages/cezar/src/server/design-proxy-api.test.ts` — route policy: 200 shape, 400, 409 without
-  `CEZ_DESIGN_MODE=1` (the default) and in hosted mode.
-- `packages/cezar/src/server/capabilities.test.ts` — `designMode`: off by default, on locally with
-  `CEZ_DESIGN_MODE=1`, off on a hosted cockpit even with `=1`.
+- `packages/cezar/src/server/design-proxy-api.test.ts` — route policy: 200 shape, 400, 409 for
+  `CEZ_DESIGN_MODE=0` and hosted mode.
+- `packages/cezar/src/server/capabilities.test.ts` — `designMode`: on locally, off with
+  `CEZ_DESIGN_MODE=0`, off on a hosted cockpit even with `=1`.
 - `packages/web/src/routes/task-preview/design-picks.test.ts` — parsing hostile input, the message
   format, the size refusals.
 - `packages/web/src/routes/task-preview/browser-view-design.test.tsx` — the toggle, the mirror

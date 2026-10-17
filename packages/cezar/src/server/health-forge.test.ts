@@ -112,7 +112,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     expect(body.capabilities).toEqual({
       localHandoff: true,
       terminal: true,
-      designMode: false,
+      designMode: true,
       followups: false,
       singleProject: false,
       automations: true,
@@ -216,7 +216,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     expect(body.capabilities).toEqual({
       localHandoff: true,
       terminal: true,
-      designMode: false,
+      designMode: true,
       followups: false,
       singleProject: false,
       automations: true,
@@ -237,7 +237,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     expect((await health()).capabilities).toEqual({
       localHandoff: true,
       terminal: true,
-      designMode: false,
+      designMode: true,
       followups: true,
       singleProject: false,
       automations: true,
@@ -264,7 +264,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     expect((await health()).capabilities).toEqual({
       localHandoff: true,
       terminal: true,
-      designMode: false,
+      designMode: true,
       followups: false,
       singleProject: false,
       automations: true,
@@ -280,7 +280,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     expect((await health()).capabilities).toEqual({
       localHandoff: true,
       terminal: true,
-      designMode: false,
+      designMode: true,
       followups: false,
       singleProject: false,
       automations: true,

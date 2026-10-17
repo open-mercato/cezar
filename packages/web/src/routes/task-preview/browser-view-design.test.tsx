@@ -80,7 +80,7 @@ describe('the Design Mode toggle', () => {
     health.designMode = false
     renderView()
     expect((toggle() as HTMLButtonElement).disabled).toBe(true)
-    expect(toggle().getAttribute('title')).toMatch(/CEZ_DESIGN_MODE=1/)
+    expect(toggle().getAttribute('title')).toMatch(/CEZ_DESIGN_MODE=0/)
     fireEvent.click(toggle())
     expect(openDesignProxy).not.toHaveBeenCalled()
   })

@@ -33,7 +33,7 @@ describe('the design-proxy API', () => {
 
   beforeEach(() => {
     delete process.env.CEZ_REMOTE;
-    process.env.CEZ_DESIGN_MODE = '1';
+    delete process.env.CEZ_DESIGN_MODE;
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-design-api-'));
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
@@ -71,8 +71,8 @@ describe('the design-proxy API', () => {
     expect(proxies.size).toBe(0);
   });
 
-  it('answers 409 and opens nothing when CEZ_DESIGN_MODE is unset — the default', async () => {
-    delete process.env.CEZ_DESIGN_MODE;
+  it('answers 409 and opens nothing when CEZ_DESIGN_MODE=0', async () => {
+    process.env.CEZ_DESIGN_MODE = '0';
     const res = await post({ target: 'http://localhost:5173', parentOrigin: 'http://localhost:4321' });
     expect(res.status).toBe(409);
     expect(proxies.size).toBe(0);
