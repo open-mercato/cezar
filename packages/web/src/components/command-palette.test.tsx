@@ -496,6 +496,30 @@ describe('Tasks group', () => {
     expect(document.querySelector('[data-slot="palette-task"]')).toBeNull()
   })
 
+  it('finds every task about a PR or issue by its number, in this project and the others', async () => {
+    renderPalette({
+      entry: '/p/shop/',
+      projects: [project({ id: 'shop' }), project({ id: 'blog' })],
+      runs: [
+        run({ id: 'r-opened', title: 'Fix login', pullRequestUrl: 'https://github.com/o/shop/pull/1234' }),
+        run({ id: 'r-review', title: 'Review it', prRefs: [{ number: 1234, origin: 'marker', at: '2026-10-17T10:00:00Z' }] }),
+        run({ id: 'r-issue', title: 'Triage', issueNumber: 56 }),
+        run({ id: 'r-near', title: 'Neighbour', pullRequestUrl: 'https://github.com/o/shop/pull/12345' }),
+      ],
+      indexed: [indexed({ id: 'b-1', projectId: 'blog', title: 'Blog follow-up', markerRefs: { pr: 1234 } })],
+    })
+    openWith({ metaKey: true })
+    await screen.findByText('Fix login')
+    await screen.findByText('Blog follow-up')
+    const rows = () => [...document.querySelectorAll<HTMLElement>('[data-slot="palette-task"]')].map((row) => row.dataset.runId)
+
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '#1234' } })
+    // The prefix-only hit (#12345) still matches, but ranks below every exact one.
+    expect(rows()).toEqual(['r-opened', 'r-review', 'b-1', 'r-near'])
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'issue 56' } })
+    expect(rows()).toEqual(['r-issue'])
+  })
+
   it('renders no Tasks group when there are no runs', async () => {
     renderPalette()
     openWith({ metaKey: true })
@@ -659,6 +683,10 @@ describe('ranking', () => {
     expect(paletteScore('task deploy the thing 0000-1111', 'deploy')).toBeGreaterThan(
       paletteScore('task something 0000-deploy', 'deploy'),
     )
+  })
+
+  it('prefers a whole-word hit, even when a longer one comes first', () => {
+    expect(paletteScore('task a PR #123 PR #12', '#12')).toBeGreaterThan(paletteScore('task a PR #123 PR #99', '#12'))
   })
 
   it('matches keywords too — the project name on a task row', () => {

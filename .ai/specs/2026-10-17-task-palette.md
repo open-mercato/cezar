@@ -23,6 +23,9 @@ layouts) lives in the run header behind the mouse, and only for the task on scre
 - **⌘P while open** cycles: the first repeat jumps into `@` with the previous task selected, each
   further press moves one down. ⌘P ⌘P Enter is "back to the last task".
 - **⌘K → Tab** on a task row hands that task to ⌘P.
+- **PR and issue numbers** are searchable in both palettes: `1234`, `#1234`, `pr 1234` or
+  `issue 56` finds every task about it (as `taskReferences` resolves them, the chips' rule), in
+  every project; an exact number ranks above a longer one that starts with it.
 - **Alt+Enter** on a view opens it beside the current columns (Alt+click on a card today).
 - No new bare-key shortcuts; rows show the existing workspace keys (`1`–`9`, `f`, `` ` ``, `/`).
 

@@ -96,7 +96,7 @@ a GitHub page.
 
 **⌘P / Ctrl+P** acts on one task: on a task page it lists that task's actions
 (pin, archive, rename, stop, the git step, views, layouts, Open in…, copy). The
-prefix picks the mode: `@` to switch tasks, `>` for commands only, `#` for the task's files.
+prefix picks the mode: `@` to switch tasks (a PR or issue number finds every task about it — in ⌘K too), `>` for commands only, `#` for the task's files.
 Repeated ⌘P walks back through recent tasks; Tab on a task row (here or in ⌘K)
 acts on that task without opening it; ⌥↵ opens a view beside the current one.
 

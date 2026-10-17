@@ -23,6 +23,7 @@ import { orderProjects as orderRegistry } from '@/lib/project-order'
 import { isUnread } from '@/lib/read-state'
 import { orderSkillsByUsage } from '@/lib/skills'
 import { lastActivityAt, runTitle } from '@/lib/task-groups'
+import { taskReferences, type TaskReferenceInput } from '@/lib/tasks-table'
 import { useCommandShortcut, useKeyShortcut } from '@/lib/use-command-shortcut'
 import { openTaskPalette } from '@/components/task-palette/open'
 import { useProjectOrder } from '@/lib/use-project-order'
@@ -79,13 +80,28 @@ export function paletteScore(value: string, search: string, keywords?: string[])
   const tokens = query.split(/\s+/)
   let total = 0
   for (const token of tokens) {
-    const at = haystack.indexOf(token)
-    if (at === -1) return 0
-    const boundary = at === 0 || !/[a-z0-9]/.test(haystack[at - 1] ?? '')
-    // Decays with distance but never to zero: a late hit still beats no hit.
-    total += (boundary ? 1 : 0.5) / (1 + at / 48)
+    // The best of every occurrence, not the first: `#12` must find the exact `#12` reference even
+    // when `#123` comes earlier in the row.
+    let best = 0
+    for (let at = haystack.indexOf(token); at !== -1; at = haystack.indexOf(token, at + 1)) {
+      const starts = at === 0 || !/[a-z0-9]/.test(haystack[at - 1] ?? '')
+      // A whole-word hit (`#12` against `#12`, not `#123`) edges out a prefix one.
+      const ends = !/[a-z0-9]/.test(haystack[at + token.length] ?? '')
+      // Decays with distance but never to zero: a late hit still beats no hit.
+      best = Math.max(best, ((starts ? 1 : 0.5) * (ends ? 1 : 0.8)) / (1 + at / 48))
+    }
+    if (best === 0) return 0
+    total += best
   }
   return total / tokens.length
+}
+
+/** A task's PR and issue numbers as search text — `PR #1234 Issue #56` — so a pasted number finds
+ *  every task about it. Resolved by `taskReferences`, the rule the chips use (#407, #526). */
+export function taskReferenceText(task: TaskReferenceInput): string {
+  return taskReferences(task)
+    .map((reference) => `${reference.kind} #${reference.number}`)
+    .join(' ')
 }
 
 /**
@@ -96,6 +112,19 @@ export function paletteScore(value: string, search: string, keywords?: string[])
  * we already are", which is exactly how the scope-wrapping navigate reads it.
  */
 export type PaletteTask = Omit<RunIndexEntry, 'projectId'> & { projectId: string | null }
+
+/** The reference fields a run record and an index row share — what `taskReferenceText` reads. */
+const referenceFields = (run: RunRecord): Partial<PaletteTask> => ({
+  pullRequestUrl: run.pullRequestUrl,
+  referencedPullRequestUrl: run.referencedPullRequestUrl,
+  referencedPrCandidates: run.referencedPrCandidates,
+  prNumber: run.prNumber,
+  prRefs: run.prRefs,
+  issueNumber: run.issueNumber,
+  referencedIssueUrl: run.referencedIssueUrl,
+  referencedIssueCandidates: run.referencedIssueCandidates,
+  markerRefs: run.markerRefs,
+})
 
 /**
  * The live runs for one project, plus every other project's from the cross-project index.
@@ -140,12 +169,18 @@ export function mergeTasks(
     branch: run.branch,
     startedAt: run.startedAt,
     lastActivityAt: lastActivityAt(run),
+    ...definedOnly(referenceFields(run)),
   }))
   const live = new Set(mine.map(taskKey))
   const theirs = (indexed ?? [])
     .filter((entry) => !live.has(taskKey(entry)))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   return [...mine, ...theirs]
+}
+
+/** Drops undefined keys, so a run without references keeps the row's exact old shape. */
+function definedOnly<T extends object>(value: T): Partial<T> {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as Partial<T>
 }
 
 /** Stable identity for a row that may come from either source — the run id alone collides
@@ -348,12 +383,14 @@ export function TaskItem({
 }) {
   const attention = deriveAttention(task)
   const label = runTitle(task)
+  const references = taskReferenceText(task)
   return (
     <CommandItem
       // The id keeps duplicate titles apart; it also lets a pasted run id find its task.
       // `runTitle`, matching the rendered text — filtering on a raw title hidden behind an
-      // auto-summary would surface rows for no visible reason.
-      value={`task ${label} ${task.id}`}
+      // auto-summary would surface rows for no visible reason. The PR/issue numbers sit before
+      // the id so `1234` finds the task about PR #1234 ahead of a uuid that happens to hold it.
+      value={`task ${label} ${references} ${task.id}`}
       // The project name is filter fodder for the same reason it is rendered: with every
       // project's tasks in one list, "shop" has to narrow to shop's tasks.
       keywords={projectName ? [projectName] : undefined}
@@ -364,6 +401,11 @@ export function TaskItem({
     >
       <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
       <span className="min-w-0 flex-1 truncate">{label}</span>
+      {references ? (
+        <span data-slot="palette-task-refs" className="shrink-0 font-mono text-xs text-soft-foreground">
+          {references.replace(/PR #/g, '#').replace(/Issue #/g, 'issue #')}
+        </span>
+      ) : null}
       {/* Only in a multi-project workspace: with one project the label would name the only
           place a task could possibly be. */}
       {showProject && projectName ? (
