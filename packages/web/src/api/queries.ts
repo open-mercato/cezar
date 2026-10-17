@@ -38,6 +38,7 @@ import {
   getRepo,
   getRunCommit,
   getRunCommits,
+  getRunTree,
   getRepoChanges,
   getRepoCommit,
   getRepoFile,
@@ -195,6 +196,7 @@ export const queryKeys = {
      *  background — see `useRunDrafts`. */
     drafts: (id: string) => [queryScope(), 'runs', 'drafts', id] as const,
     commits: (id: string) => [queryScope(), 'runs', 'commits', id] as const,
+    tree: (id: string) => [queryScope(), 'runs', 'tree', id] as const,
     commit: (id: string, sha: string) => [queryScope(), 'runs', 'commit', id, sha] as const,
   },
   groups: {
@@ -1166,6 +1168,18 @@ export function useRunGitStatus(id: string, enabled: boolean, live = false) {
   })
 }
 
+/** A run's whole path index for the ⌘P palette's `#` file search. Read only while the palette is
+ *  in that mode; same freshness override as `useRepoTree` — the agent may be adding files. */
+export function useRunTree(id: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.runs.tree(id ?? ''),
+    queryFn: ({ signal }) => getRunTree(id as string, { signal }),
+    enabled: enabled && Boolean(id),
+    retry: false,
+    staleTime: 0,
+  })
+}
+
 /** One worktree path for the Files tab (R5): the root/dir listings the tree lazy-loads and
  *  the file entries the preview renders. `path` is '' for the worktree root and `undefined`
  *  while nothing is selected. Like /changes, a 409 ("no worktree — …") is an answer retries
@@ -1806,8 +1820,11 @@ function withoutReceipt(run: RunRecord): RunRecord {
 export function usePinRun(surface: TaskActionSurface, projectId?: string, cacheScope?: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) =>
-      projectId === undefined ? pinRun(id, pinned, surface) : pinProjectRun(projectId, id, pinned, surface),
+    // `surface` per call when one control can be reached two ways (⌘P: a row, or a shortcut).
+    mutationFn: ({ id, pinned, surface: via }: { id: string; pinned: boolean; surface?: TaskActionSurface }) =>
+      projectId === undefined
+        ? pinRun(id, pinned, via ?? surface)
+        : pinProjectRun(projectId, id, pinned, via ?? surface),
     // Hierarchical keys: this covers the list AND the open thread's own record.
     onSuccess: () =>
       queryClient.invalidateQueries({

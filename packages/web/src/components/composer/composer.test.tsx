@@ -523,6 +523,28 @@ describe('/ skills autocomplete (#380)', () => {
     expect(onSubmit).toHaveBeenCalledWith('/om', [])
   })
 
+  it('Escape with no menu open unfocuses the composer and keeps the draft', async () => {
+    const { textarea } = renderComposer()
+    textarea.focus()
+    type(textarea, '/om')
+    await screen.findByText('om-fix')
+    // First Escape is the menu's…
+    fireEvent.keyDown(textarea, { key: 'Escape' })
+    await waitFor(() => expect(document.querySelector('[data-slot="composer-menu"]')).toBeNull())
+    expect(document.activeElement).toBe(textarea)
+    // …the next gives the keyboard back to the page.
+    fireEvent.keyDown(textarea, { key: 'Escape' })
+    expect(document.activeElement).not.toBe(textarea)
+    expect(textarea.value).toBe('/om')
+  })
+
+  it('Escape mid-IME composition only cancels the composition', () => {
+    const { textarea } = renderComposer()
+    textarea.focus()
+    fireEvent.keyDown(textarea, { key: 'Escape', isComposing: true })
+    expect(document.activeElement).toBe(textarea)
+  })
+
   it('a completed token (trailing space) closes the menu', async () => {
     const { textarea } = renderComposer()
     type(textarea, '/om')

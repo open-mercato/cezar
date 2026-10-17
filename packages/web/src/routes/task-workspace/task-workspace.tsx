@@ -26,8 +26,10 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
-import { Link } from '@/lib/project-router'
+import { Link, useNavigate } from '@/lib/project-router'
 import { isUnread } from '@/lib/read-state'
+import { recordTaskVisit } from '@/lib/recent-tasks'
+import { publishTaskWorkspace, takeQueuedFileOpen, withdrawTaskWorkspace, type TaskWorkspaceBridge } from '@/lib/task-workspace-bridge'
 import { isEditableTarget } from '@/lib/use-command-shortcut'
 import { cn } from '@/lib/utils'
 import { rememberViewState } from '@/lib/view-memory'
@@ -47,8 +49,9 @@ import { ThreadLoading } from '../task-thread/thread-loading'
 import { reduceThread } from '../task-thread/thread-state'
 import { readDrawerState, writeDrawerState, type DrawerState } from './drawer-state'
 import { LayoutCards } from './layout-cards'
-import { emptyBrowserState, FIXED_VIEW_ORDER, fixedViewOf, VIEW_IDS, type ViewId, type WorkspaceColumn } from './layout-state'
+import { emptyBrowserState, FIXED_VIEW_ORDER, fixedViewOf, layoutDisplayName, VIEW_IDS, type ViewId, type WorkspaceColumn } from './layout-state'
 import { FullViewExit, usePanelCover, WorkspaceMaximizeContext } from './maximize'
+import { stripEntries, useStripKeyHints } from './strip'
 import { useWorkspaceLayouts } from './use-workspace-layouts'
 import { AvailableViewsContext } from './view-picker'
 import { ViewDropZones } from './view-drop-zones'
@@ -219,6 +222,12 @@ function WorkspaceView({
   )
   const createLayout = useCallback(() => addLayout(), [addLayout])
 
+  // The numbered tabs — views, then Notes (`strip.ts`) — and, while ⌘ is held on its own, each
+  // tab's number (spec 2026-10-17-task-palette). Saved layouts are not numbered.
+  const strip = useMemo(() => stripEntries(fixedViews), [fixedViews])
+  const { hints: keyHints, show: keysHeld } = useStripKeyHints(strip)
+  const navigate = useNavigate()
+
   // A view tab being dragged: the stage shows its drop zones until the drag ends. Set a tick late,
   // because changing the page under a drag that has only just started can cancel it.
   const [draggingView, setDraggingView] = useState<ViewId | null>(null)
@@ -296,6 +305,8 @@ function WorkspaceView({
         onViewDragEnd={endViewDrag}
         onOpenBeside={openViewBeside}
         onColumnDropClose={closeColumnByDrop}
+        keyHints={keyHints}
+        showKeyHints={keysHeld}
       />
     ),
     [
@@ -313,6 +324,8 @@ function WorkspaceView({
       endViewDrag,
       openViewBeside,
       closeColumnByDrop,
+      keyHints,
+      keysHeld,
     ],
   )
 
@@ -368,7 +381,7 @@ function WorkspaceView({
 
   /**
    * The workspace's keys — bare keys, never while typing or with a dialog/menu open (brutus §5.2):
-   *   1…9 nth card · [ ] previous/next card · f full view · \ split the last window ·
+   *   1…9 nth numbered tab (views, then Notes) · [ ] previous/next card · f full view · \ split the last window ·
    *   / focus the composer · ` show or hide the terminal drawer
    */
   const stripOrder = useMemo(
@@ -381,8 +394,17 @@ function WorkspaceView({
     ],
     [fixedViews, cardLayouts, fixedActive, layouts.state.active, openDeepLink, selectLayout],
   )
-  const keys = useRef({ stripOrder, toggleMaximized, terminalAllowed, drawerOpen, updateDrawer })
-  keys.current = { stripOrder, toggleMaximized, terminalAllowed, drawerOpen, updateDrawer }
+  // The 1–9 keys: the numbered tabs only (`strip.ts` — views, then Notes; no layouts), so the key
+  // is the number the tab wears. `[` `]` still step through every card, layouts included.
+  const numbered = useMemo(
+    () => [
+      ...fixedViews.map((view) => () => openDeepLink(view)),
+      () => navigate(`/tasks/${run.id}/notes`),
+    ],
+    [fixedViews, openDeepLink, navigate, run.id],
+  )
+  const keys = useRef({ stripOrder, numbered, toggleMaximized, terminalAllowed, drawerOpen, updateDrawer })
+  keys.current = { stripOrder, numbered, toggleMaximized, terminalAllowed, drawerOpen, updateDrawer }
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey || event.repeat || event.defaultPrevented) return
@@ -397,9 +419,9 @@ function WorkspaceView({
         now.stripOrder[next]!.select()
       }
       if (/^[1-9]$/.test(event.key)) {
-        const entry = now.stripOrder[Number(event.key) - 1]
-        if (!entry) return
-        entry.select()
+        const open = now.numbered[Number(event.key) - 1]
+        if (!open) return
+        open()
       } else if (event.key === '[') step(-1)
       else if (event.key === ']') step(1)
       else if (event.key === 'f' || event.key === 'F') now.toggleMaximized()
@@ -460,6 +482,61 @@ function WorkspaceView({
     },
     [openBeside, run.id],
   )
+
+  // The ⌘P palette's handle on this workspace (spec 2026-10-17-task-palette), refreshed every commit.
+  useEffect(() => recordTaskVisit(run.id), [run.id])
+  useEffect(() => {
+    if (!layouts.ready) return
+    const path = takeQueuedFileOpen(run.id)
+    if (path) openReference({ view: 'files', value: path })
+  }, [layouts.ready, openReference, run.id])
+  useEffect(() => {
+    const stage = () => document.querySelector<HTMLElement>('[data-slot="workspace-stage"]')
+    const splitButton = () => {
+      const buttons = stage()?.querySelectorAll<HTMLButtonElement>('[data-action="split-view"]:not(:disabled)')
+      return buttons?.[buttons.length - 1] ?? null
+    }
+    const composer = () =>
+      stage()?.querySelector<HTMLElement>('[data-slot="composer"] textarea, [data-slot="composer-input"]') ?? null
+    const bridge: TaskWorkspaceBridge = {
+      runId: run.id,
+      views: fixedViews,
+      activeView: fixedActive,
+      openView: openDeepLink,
+      openViewBeside,
+      layouts: cardLayouts.map((layout) => ({
+        name: layout.name,
+        label: layoutDisplayName(layout.name),
+        active: fixedActive === null && layout.name === layouts.state.active,
+      })),
+      selectLayout,
+      newLayout: createLayout,
+      maximized,
+      toggleMaximized,
+      // Getters: the composer and split buttons mount after this commit (history loads), so they
+      // are looked up when the palette reads them, not when this was published.
+      get splitView() {
+        return splitButton() ? () => splitButton()?.click() : null
+      },
+      terminal: {
+        allowed: terminalAllowed,
+        open: drawerOpen,
+        inColumn: terminalColumnShown,
+        toggle: () => updateDrawer({ open: !drawerOpen }),
+        openInColumn: () => {
+          updateDrawer({ open: false })
+          openBeside('terminal')
+        },
+      },
+      get focusComposer() {
+        return composer() ? () => composer()?.focus() : null
+      },
+      openFile: (path: string) => openReference({ view: 'files', value: path }),
+      markedUnread,
+    }
+    publishTaskWorkspace(bridge)
+    return () => withdrawTaskWorkspace(bridge)
+  })
 
   // The layout name is part of each column's memory key, so two layouts never share a selection.
   const activeName = layouts.state.active

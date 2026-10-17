@@ -1,7 +1,19 @@
-import { CheckIcon, FolderOpenIcon, LayersIcon, MoonIcon, PlusIcon, SettingsIcon } from 'lucide-react'
+import { CheckIcon, FolderOpenIcon, LayersIcon, MoonIcon, PlusIcon, SettingsIcon, ZapIcon } from 'lucide-react'
 import * as React from 'react'
 import { useNavigate as useRouterNavigate } from 'react-router'
-import { useHealth, useProjects, useRunsForProject, useRunsIndex, useSkills, useUiState } from '@/api/queries'
+import {
+  rememberReferenceStatuses,
+  useHealth,
+  useProjectRepoBase,
+  useProjects,
+  useReferenceProjectId,
+  useRunsForProject,
+  useRunsIndex,
+  useSkills,
+  useUiState,
+} from '@/api/queries'
+import { TaskReferenceChip } from '@/components/reference-conflict-action'
+import { ReferenceStatusProvider } from '@/components/reference-status'
 import { scopeTo, useActiveProjectId, useNavigate } from '@/lib/project-router'
 import type { ProjectListEntry, RunIndexEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { visibleNavItems } from '@/components/nav-items'
@@ -22,9 +34,21 @@ import { shortAge } from '@/lib/format'
 import { orderProjects as orderRegistry } from '@/lib/project-order'
 import { isUnread } from '@/lib/read-state'
 import { orderSkillsByUsage } from '@/lib/skills'
-import { lastActivityAt, runTitle } from '@/lib/task-groups'
+import { lastActivityAt, refPrefixMatches, runTitle, splitRefPrefix } from '@/lib/task-groups'
+import { taskReferences, type TaskReference, type TaskReferenceInput } from '@/lib/tasks-table'
+import { automationIdOf, ownAutomationId } from '@/lib/task-origin'
 import { useCommandShortcut, useKeyShortcut } from '@/lib/use-command-shortcut'
+import {
+  searchModes,
+  trackPaletteDismissed,
+  trackPaletteModes,
+  trackPaletteOpened,
+  trackTaskSwitched,
+  type PaletteMode,
+} from '@/lib/telemetry'
+import { openTaskPalette } from '@/components/task-palette/open'
 import { useProjectOrder } from '@/lib/use-project-order'
+import { cn } from '@/lib/utils'
 
 /**
  * The ⌘K command palette (spec, "Cross-cutting"): projects, tasks, views, actions, skills —
@@ -77,14 +101,35 @@ export function paletteScore(value: string, search: string, keywords?: string[])
   const haystack = (keywords?.length ? `${value} ${keywords.join(' ')}` : value).toLowerCase()
   const tokens = query.split(/\s+/)
   let total = 0
-  for (const token of tokens) {
-    const at = haystack.indexOf(token)
-    if (at === -1) return 0
-    const boundary = at === 0 || !/[a-z0-9]/.test(haystack[at - 1] ?? '')
-    // Decays with distance but never to zero: a late hit still beats no hit.
-    total += (boundary ? 1 : 0.5) / (1 + at / 48)
+  for (const [index, token] of tokens.entries()) {
+    // A number is a reference: where it sits says nothing — the references follow the title, so a
+    // decay would rank `#12` on a long title below `#123`. `pr`/`issue` only as the word naming
+    // the number after it (`pr 12`); alone they are title words ("review pr"), and position counts.
+    const isNumber = (value: string | undefined) => value !== undefined && /^#?\d+$/.test(value)
+    const reference = isNumber(token) || (/^(pr|issue)$/.test(token) && isNumber(tokens[index + 1]))
+    // The best of every occurrence, not the first: `#12` must find the exact `#12` reference even
+    // when `#123` comes earlier in the row.
+    let best = 0
+    for (let at = haystack.indexOf(token); at !== -1; at = haystack.indexOf(token, at + 1)) {
+      const starts = at === 0 || !/[a-z0-9]/.test(haystack[at - 1] ?? '')
+      // A whole-word hit (`#12` against `#12`, not `#123`) edges out a prefix one.
+      const ends = !/[a-z0-9]/.test(haystack[at + token.length] ?? '')
+      const whole = reference && starts && ends
+      // Decays with distance but never to zero: a late hit still beats no hit.
+      best = Math.max(best, whole ? 1 : ((starts ? 1 : 0.5) * (ends ? 1 : 0.8)) / (1 + at / 48))
+    }
+    if (best === 0) return 0
+    total += best
   }
   return total / tokens.length
+}
+
+/** A task's PR and issue numbers as search text — `PR #1234 Issue #56` — so a pasted number finds
+ *  every task about it. Resolved by `taskReferences`, the rule the chips use (#407, #526). */
+export function taskReferenceText(task: TaskReferenceInput): string {
+  return taskReferences(task)
+    .map((reference) => `${reference.kind} #${reference.number}`)
+    .join(' ')
 }
 
 /**
@@ -95,6 +140,19 @@ export function paletteScore(value: string, search: string, keywords?: string[])
  * we already are", which is exactly how the scope-wrapping navigate reads it.
  */
 export type PaletteTask = Omit<RunIndexEntry, 'projectId'> & { projectId: string | null }
+
+/** The reference fields a run record and an index row share — what `taskReferenceText` reads. */
+const referenceFields = (run: RunRecord): Partial<PaletteTask> => ({
+  pullRequestUrl: run.pullRequestUrl,
+  referencedPullRequestUrl: run.referencedPullRequestUrl,
+  referencedPrCandidates: run.referencedPrCandidates,
+  prNumber: run.prNumber,
+  prRefs: run.prRefs,
+  issueNumber: run.issueNumber,
+  referencedIssueUrl: run.referencedIssueUrl,
+  referencedIssueCandidates: run.referencedIssueCandidates,
+  markerRefs: run.markerRefs,
+})
 
 /**
  * The live runs for one project, plus every other project's from the cross-project index.
@@ -139,12 +197,212 @@ export function mergeTasks(
     branch: run.branch,
     startedAt: run.startedAt,
     lastActivityAt: lastActivityAt(run),
+    ...definedOnly(referenceFields(run)),
+    ...definedOnly({
+      automationId: ownAutomationId(run),
+      dispatch: run.dispatch && {
+        rootRunId: run.dispatch.rootRunId,
+        parentRunId: run.dispatch.parentRunId,
+        kind: run.dispatch.kind,
+      },
+    }),
   }))
   const live = new Set(mine.map(taskKey))
   const theirs = (indexed ?? [])
     .filter((entry) => !live.has(taskKey(entry)))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-  return [...mine, ...theirs]
+  const all = [...mine, ...theirs]
+  // A task an automation's task dispatched is automatic too — the Tasks tables' rule
+  // (`automationIdOf`), so the palette and the Automations filter agree on every row.
+  const byId = new Map(all.map((task) => [task.id, task]))
+  return all.map((task) => {
+    if (task.automationId !== undefined) return task
+    const inherited = automationIdOf(task, (rootId) => byId.get(rootId))
+    return inherited === undefined ? task : { ...task, automationId: inherited }
+  })
+}
+
+/** One age column — as wide as its label ("Updated"); `shortAge` never prints more than `999d`. */
+const DATE_COLUMN = 'w-12 text-right'
+
+/**
+ * A task group's heading with the date columns' labels over them. The labels are drawn by CSS
+ * (`content`), so the heading's text — what screen readers and the tests read — stays its name.
+ */
+export function TaskColumnsHeading({ label }: { label: string }) {
+  return (
+    <span className="flex items-center gap-2">
+      <span className="min-w-0 flex-1">{label}</span>
+      <span aria-hidden="true" className="flex shrink-0 gap-1 text-[11px] font-normal">
+        <span className={cn(DATE_COLUMN, "after:content-['Updated']")} />
+        <span className={cn(DATE_COLUMN, "after:content-['Created']")} />
+      </span>
+    </span>
+  )
+}
+
+/**
+ * An agent mid-turn is active this very moment, whatever its last step boundary says — a step that
+ * has run for 19 minutes would otherwise read "Updated 19m". The record carries no per-event time
+ * (that lives in the event stream), but `running` outside monitoring IS that answer.
+ */
+export function isWorkingNow(task: Pick<PaletteTask, 'status' | 'activity'>): boolean {
+  return task.status === 'running' && task.activity !== 'monitoring'
+}
+
+/** A row's exact time for its hover title — the browser's locale, to the minute. */
+function exactTime(iso: string): string {
+  const date = new Date(iso)
+  return Number.isNaN(date.getTime()) ? iso : exactTimeFormat().format(date)
+}
+
+// One formatter for every row: `toLocaleString` builds a fresh Intl formatter per call, which at
+// hundreds of rows was a visible share of each keystroke.
+let exactTimeFormatter: Intl.DateTimeFormat | undefined
+const exactTimeFormat = () =>
+  (exactTimeFormatter ??= new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }))
+
+/**
+ * A task row's derived strings, computed ONCE per task list rather than per render — the row's
+ * label, PR/issue text, what cmdk filters on, and its hover title. Keystrokes then only rank and
+ * slice; they never redo this work.
+ */
+export interface SearchableTask {
+  task: PaletteTask
+  key: string
+  label: string
+  references: string
+  /** The PR/issue chips, as `taskReferences` resolves them — the chips' own rule. */
+  refList: TaskReference[]
+  /** Exactly what the row hands cmdk, so the pre-ranking below and cmdk's filter agree. */
+  value: string
+  keywords: string[]
+  projectName: string | null
+  title: string
+}
+
+export function searchableTasks(
+  tasks: readonly PaletteTask[],
+  projectNames: ReadonlyMap<string, string>,
+  /** Each project's repo web root — a reference known only by number becomes a link with it. */
+  repoBases: ReadonlyMap<string, string> = new Map(),
+): SearchableTask[] {
+  return tasks.map((task) => {
+    const label = runTitle(task)
+    const refList = taskReferences(task, task.projectId === null ? undefined : repoBases.get(task.projectId))
+    const references = refList.map((reference) => `${reference.kind} #${reference.number}`).join(' ')
+    const projectName = task.projectId === null ? null : (projectNames.get(task.projectId) ?? null)
+    return {
+      task,
+      key: taskKey(task),
+      label,
+      references,
+      refList,
+      // The id keeps duplicate titles apart; it also lets a pasted run id find its task.
+      // `runTitle`, matching the rendered text — filtering on a raw title hidden behind an
+      // auto-summary would surface rows for no visible reason. The PR/issue numbers sit before
+      // the id so `1234` finds the task about PR #1234 ahead of a uuid that happens to hold it.
+      value: `task ${label} ${references} ${task.id}`,
+      // The project name is filter fodder for the same reason it is rendered: with every
+      // project's tasks in one list, "shop" has to narrow to shop's tasks. `auto` finds the tasks
+      // an automation started, like the chip that marks them.
+      keywords: [...(projectName ? [projectName] : []), ...(task.automationId ? ['automation', 'automatic'] : [])],
+      projectName,
+      title: `${isWorkingNow(task) ? 'Working now' : `Updated ${exactTime(task.lastActivityAt)}`} · created ${exactTime(task.createdAt)}`,
+    }
+  })
+}
+
+/** How many task rows a palette mounts. Hundreds of cmdk items made every keystroke filter,
+ *  re-sort and re-render all of them; nobody reads past this many matches — they type more. */
+export const TASK_ROW_LIMIT = 50
+
+/**
+ * The best `limit` tasks for `query`, best first, by the palette's own scorer — the work cmdk
+ * would do, done once over plain strings, so only the rows that will show are ever mounted.
+ * An empty query keeps the list's order. `total` is every match, for the "N more" line.
+ */
+export function rankTasks(
+  entries: readonly SearchableTask[],
+  query: string,
+  limit = TASK_ROW_LIMIT,
+): { shown: SearchableTask[]; total: number } {
+  if (query.trim() === '') return { shown: entries.slice(0, limit), total: entries.length }
+  const scored: { entry: SearchableTask; score: number; index: number }[] = []
+  entries.forEach((entry, index) => {
+    const score = paletteScore(entry.value, query, entry.keywords)
+    if (score > 0) scored.push({ entry, score, index })
+  })
+  scored.sort((a, b) => b.score - a.score || a.index - b.index)
+  return { shown: scored.slice(0, limit).map((item) => item.entry), total: scored.length }
+}
+
+/**
+ * Status for the chips on the rows that are SHOWING — asked once typing pauses, not per keystroke:
+ * each new request set republishes to the app-wide registry, which would cost a re-render of
+ * every chip in the app per key. Statuses the runs index already carried paint immediately.
+ */
+export function PaletteReferenceStatuses({
+  entries,
+  children,
+}: {
+  entries: readonly SearchableTask[]
+  children: React.ReactNode
+}) {
+  const projectId = useReferenceProjectId()
+  const wanted = React.useMemo(
+    () =>
+      entries.flatMap((entry) =>
+        entry.refList.map((reference) => ({
+          projectId: entry.task.projectId ?? projectId ?? '',
+          kind: reference.kind,
+          number: reference.number,
+        })),
+      ).filter((request) => request.projectId !== ''),
+    [entries, projectId],
+  )
+  // Keyed on CONTENT: the rows' array is rebuilt every render, and a timer keyed on its identity
+  // would re-arm forever.
+  const signature = wanted.map((request) => `${request.projectId} ${request.kind}#${request.number}`).join('|')
+  const latest = React.useRef(wanted)
+  latest.current = wanted
+  const [requests, setRequests] = React.useState(wanted)
+  React.useEffect(() => {
+    const timer = setTimeout(() => setRequests(latest.current), 250)
+    return () => clearTimeout(timer)
+  }, [signature])
+  return (
+    <ReferenceStatusProvider projectId={projectId} requests={requests}>
+      {children}
+    </ReferenceStatusProvider>
+  )
+}
+
+/** A task group's rows as a flex column, so `MoreTasks` can sit last by `order`. */
+export const TASK_GROUP_CLASS = '[&_[cmdk-group-items]]:flex [&_[cmdk-group-items]]:flex-col'
+
+/** The line under a capped task group: how many more match, and the way to reach them. */
+export function MoreTasks({ hidden }: { hidden: number }) {
+  if (hidden <= 0) return null
+  // An item so cmdk always shows it (`forceMount`), disabled so it is never picked. cmdk re-orders
+  // only selectable rows, which would leave this one stranded on top — `order-last` (the group is a
+  // flex column, `TASK_GROUP_CLASS`) keeps it under the matches whatever the DOM order.
+  return (
+    <CommandItem
+      forceMount
+      disabled
+      value="__more-tasks"
+      data-slot="palette-more-tasks"
+      className="order-last py-1.5! text-xs text-soft-foreground data-[disabled=true]:opacity-100"
+    >
+      {hidden} more — keep typing to narrow
+    </CommandItem>
+  )
+}
+
+/** Drops undefined keys, so a run without references keeps the row's exact old shape. */
+function definedOnly<T extends object>(value: T): Partial<T> {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as Partial<T>
 }
 
 /** Stable identity for a row that may come from either source — the run id alone collides
@@ -201,6 +459,83 @@ export function orderProjects(
   ]
 }
 
+/**
+ * Every task a palette can list: the live runs of the project on screen, plus every other
+ * project's from the cross-project index — ⌘K's Tasks and ⌘P's switcher read the same list.
+ */
+export function usePaletteTasks() {
+  const activeProjectId = useActiveProjectId()
+  // The registry is workspace-scoped (not project-scoped), so this is the ONE list the palette
+  // can offer everywhere — including global settings, which has no active project at all. The
+  // shell already holds this cache entry; opening the palette costs no extra request.
+  const projects = useProjects()
+  // Health is cached by the shell's chips; ⌘K reads it to gate the forge-gated Views row (R6 1.1).
+  const health = useHealth()
+  const registry = projects.data
+  const bootProjectId = registry?.bootProject ?? health.data?.bootProject ?? null
+  // Runs are already cached by the sidebar/shell. The palette also sits above the project route
+  // provider, so ask for the URL project explicitly rather than trusting the module scope.
+  const runs = useRunsForProject(activeProjectId, bootProjectId)
+  // Same threshold as the sidebar's grouped nav (`app-shell-container.tsx`): with one registered
+  // project there is nowhere to switch TO, and a one-row group would be pure noise.
+  const multiProject = registry !== undefined && registry.projects.length > 1
+  // The cross-project index answers "which project is this task in", so it is only worth asking
+  // when that question has more than one answer. A single-project cockpit issues no request.
+  const runsIndex = useRunsIndex(multiProject)
+  // The statuses the index already carries colour the chips in the first paint (as All tasks does).
+  const indexedStatuses = runsIndex.data?.referenceStatuses
+  React.useEffect(() => {
+    if (indexedStatuses) rememberReferenceStatuses(indexedStatuses)
+  }, [indexedStatuses])
+  const projectNames = React.useMemo(
+    () => new Map((registry?.projects ?? []).map((project) => [project.id, project.name])),
+    [registry],
+  )
+  // Which project the live run list answered for — see `mergeTasks`. The active id when there is
+  // one, else the boot project, which is what an unscoped API client always reaches.
+  const runsProjectId = (activeProjectId === 'default' ? null : activeProjectId) ?? bootProjectId
+  const tasks = React.useMemo(
+    () => mergeTasks(runs.data ?? [], runsProjectId, runsIndex.data?.runs),
+    [runs.data, runsProjectId, runsIndex.data],
+  )
+  // Each project's repo web root, for links to references known only by number. The project on
+  // screen may have none registered — its remote (`useProjectRepoBase`) answers then.
+  const ownRepoBase = useProjectRepoBase()
+  const repoBases = React.useMemo(() => {
+    const bases = new Map<string, string>()
+    for (const project of registry?.projects ?? []) if (project.repoUrl) bases.set(project.id, project.repoUrl)
+    if (runsProjectId && ownRepoBase && !bases.has(runsProjectId)) bases.set(runsProjectId, ownRepoBase)
+    return bases
+  }, [registry, runsProjectId, ownRepoBase])
+  return { activeProjectId, registry, health, multiProject, projectNames, repoBases, runsProjectId, tasks }
+}
+
+/** Where a palette task row lives: unprefixed for the project on screen, scoped otherwise. */
+export function paletteTaskPath(task: Pick<PaletteTask, 'projectId' | 'id'>, suffix = ''): string {
+  const path = `/tasks/${task.id}${suffix}`
+  return task.projectId === null ? path : scopeTo(task.projectId, path) as string
+}
+
+/** The two palettes are one surface at a time: opening either closes the other. */
+export const PALETTE_OPENED_EVENT = 'cezar:palette-opened'
+
+export function announcePaletteOpened(which: 'command' | 'task'): void {
+  window.dispatchEvent(new CustomEvent(PALETTE_OPENED_EVENT, { detail: which }))
+}
+
+export function usePaletteExclusion(which: 'command' | 'task', open: boolean, close: () => void): void {
+  React.useEffect(() => {
+    if (open) announcePaletteOpened(which)
+  }, [open, which])
+  React.useEffect(() => {
+    const onOpened = (event: Event) => {
+      if ((event as CustomEvent<string>).detail !== which) close()
+    }
+    window.addEventListener(PALETTE_OPENED_EVENT, onOpened)
+    return () => window.removeEventListener(PALETTE_OPENED_EVENT, onOpened)
+  }, [which, close])
+}
+
 export function CommandPalette() {
   const [open, setOpen] = React.useState(false)
   const navigate = useNavigate()
@@ -221,15 +556,37 @@ export function CommandPalette() {
     window.addEventListener(OPEN_COMMAND_PALETTE_EVENT, onOpen)
     return () => window.removeEventListener(OPEN_COMMAND_PALETTE_EVENT, onOpen)
   }, [])
+  const close = React.useCallback(() => setOpen(false), [])
+  usePaletteExclusion('command', open, close)
+  React.useEffect(() => {
+    if (open) trackPaletteOpened('command')
+  }, [open])
+
+  // Tab on a task row hands it to ⌘P, which acts on it (spec 2026-10-17-task-palette).
+  const onKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Tab' || event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) return
+    const row = event.currentTarget.querySelector<HTMLElement>('[cmdk-item][data-selected="true"][data-slot="palette-task"]')
+    const runId = row?.dataset.runId
+    if (!runId) return
+    event.preventDefault()
+    trackTaskSwitched('cmdk_tab')
+    setOpen(false)
+    openTaskPalette({ runId, projectId: row.dataset.projectId ?? null })
+  }, [])
 
   return (
     <CommandDialog
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={(next) => {
+        // Radix closes only on Escape or a click outside — choosing something closes it via `close`.
+        if (!next) trackPaletteDismissed('command')
+        setOpen(next)
+      }}
       title="Command palette"
       description="Search projects, tasks, views, actions, and skills"
       showCloseButton={false}
       filter={paletteScore}
+      commandProps={{ onKeyDown }}
       // Two overrides of the shared dialog, both for this surface only — every other dialog in
       // the cockpit is a form, which wants to stay narrow and centred.
       //
@@ -244,44 +601,77 @@ export function CommandPalette() {
     >
       {/* The body mounts only while the dialog is open (Radix portals nothing when closed), so
           its queries — notably the skills fetch — run on first open, never on app boot. */}
-      <PaletteContent close={() => setOpen(false)} />
+      <PaletteContent close={close} />
     </CommandDialog>
   )
 }
 
 /** One task row. Shared by Unread and Tasks so the two groups can never drift into rendering
  *  or filtering the same task differently — only which group holds it changes. */
-function TaskItem({
-  task,
-  projectName,
+export const TaskItem = React.memo(function TaskItem({
+  entry,
   showProject,
   now,
   onSelect,
+  slot = 'palette-task',
+  current = false,
 }: {
-  task: PaletteTask
-  projectName: string | null
+  entry: SearchableTask
   showProject: boolean
   now: number
   onSelect: (task: PaletteTask) => void
+  slot?: string
+  /** The task on screen — marked `open`. */
+  current?: boolean
 }) {
+  const { task, label, projectName } = entry
   const attention = deriveAttention(task)
-  const label = runTitle(task)
+  // A chip needs the project its reference status is asked under.
+  const chip = task.projectId ? entry.refList[0] : undefined
   return (
     <CommandItem
-      // The id keeps duplicate titles apart; it also lets a pasted run id find its task.
-      // `runTitle`, matching the rendered text — filtering on a raw title hidden behind an
-      // auto-summary would surface rows for no visible reason.
-      value={`task ${label} ${task.id}`}
-      // The project name is filter fodder for the same reason it is rendered: with every
-      // project's tasks in one list, "shop" has to narrow to shop's tasks.
-      keywords={projectName ? [projectName] : undefined}
-      data-slot="palette-task"
+      value={entry.value}
+      keywords={entry.keywords}
+      data-slot={slot}
       data-run-id={task.id}
       data-project-id={task.projectId ?? undefined}
       onSelect={() => onSelect(task)}
     >
       <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
-      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {/* The sidebar's own chip, leading the row as it does there (#788) — status colour, the
+          conflict panel and its Resolve action included. A click opens the PR, not the task. */}
+      {chip && task.projectId ? (
+        <span
+          data-slot="palette-task-refs"
+          // The palette sizes every icon in a row at 20px; the chips keep the sidebar's.
+          className="flex shrink-0 items-center gap-1 [&_svg]:size-3!"
+          onClick={(event) => event.stopPropagation()}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <TaskReferenceChip
+            run={task}
+            projectId={task.projectId}
+            reference={chip}
+            compact
+            className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-[10.5px]"
+          />
+        </span>
+      ) : null}
+      {/* Like the sidebar: the chip carries the number, so a matching `NNN: ` prefix is not
+          painted twice. The search still matches the full title. */}
+      <span className="min-w-0 flex-1 truncate" title={label}>
+        {refPrefixMatches(label, chip?.number) ? splitRefPrefix(label).rest : label}
+      </span>
+      {task.automationId ? (
+        <span
+          data-slot="palette-task-automation"
+          title="Started by an automation"
+          className="flex shrink-0 items-center gap-0.5 text-xs text-soft-foreground"
+        >
+          <ZapIcon aria-hidden="true" className="size-3!" />
+          auto
+        </span>
+      ) : null}
       {/* Only in a multi-project workspace: with one project the label would name the only
           place a task could possibly be. */}
       {showProject && projectName ? (
@@ -292,12 +682,20 @@ function TaskItem({
           {projectName}
         </span>
       ) : null}
-      <span className="shrink-0 text-xs text-soft-foreground tabular-nums">
-        {shortAge(task.finishedAt ?? task.createdAt, now)}
+      {current ? <span className="shrink-0 text-xs text-primary">open</span> : null}
+      {/* Updated and Created, as two right-aligned table columns under the group's own labels
+          (`TaskColumnsHeading`) — same widths there and here, so every date lines up. */}
+      <span data-slot="palette-task-age" title={entry.title} className="flex shrink-0 gap-1 text-xs tabular-nums">
+        <span data-slot="palette-task-updated" className={cn(DATE_COLUMN, 'text-muted-foreground')}>
+          {isWorkingNow(task) ? 'now' : shortAge(task.lastActivityAt, now)}
+        </span>
+        <span data-slot="palette-task-created" className={cn(DATE_COLUMN, 'text-soft-foreground')}>
+          {shortAge(task.createdAt, now)}
+        </span>
       </span>
     </CommandItem>
   )
-}
+})
 
 function PaletteContent({ close }: { close: () => void }) {
   const navigate = useNavigate()
@@ -307,57 +705,41 @@ function PaletteContent({ close }: { close: () => void }) {
   // ranking (`paletteScore`); this only decides which SECTIONS exist.
   const [search, setSearch] = React.useState('')
   const searching = search.trim() !== ''
-  const activeProjectId = useActiveProjectId()
+  // How this session searched (a PR number, "auto") — sent once each when it closes (unmounts).
+  const sessionModes = React.useRef(new Set<PaletteMode>())
+  React.useEffect(() => {
+    // ⌘K has no prefixes: only the shape of what was searched (a PR number, `auto`).
+    for (const used of searchModes(search)) sessionModes.current.add(used)
+  }, [search])
+  React.useEffect(() => () => trackPaletteModes(sessionModes.current), [])
   const { theme, setTheme } = useTheme()
-  // The registry is workspace-scoped (not project-scoped), so this is the ONE list the palette
-  // can offer everywhere — including global settings, which has no active project at all. The
-  // shell already holds this cache entry; opening the palette costs no extra request.
-  const projects = useProjects()
-  // Health is cached by the shell's chips; here it gates the forge-gated Views row (R6 1.1) —
-  // the palette must not offer a GitHub view the sidebar honestly hides.
-  const health = useHealth()
-  const registry = projects.data
-  const bootProjectId = registry?.bootProject ?? health.data?.bootProject ?? null
-  // Runs are already cached by the sidebar/shell. The palette also sits above the project route
-  // provider, so ask for the URL project explicitly rather than trusting the module scope.
-  const runs = useRunsForProject(activeProjectId, bootProjectId)
+  const { activeProjectId, registry, health, multiProject, projectNames, repoBases, tasks } = usePaletteTasks()
   const skills = useSkills()
   // Skills list most-used → project → global (#519) — the same order every picker renders.
   const uiState = useUiState()
-  const now = Date.now()
-
-  // Same threshold as the sidebar's grouped nav (`app-shell-container.tsx`): with one registered
-  // project there is nowhere to switch TO, and a one-row group would be pure noise.
-  const multiProject = registry !== undefined && registry.projects.length > 1
-  // The cross-project index answers "which project is this task in", so it is only worth asking
-  // when that question has more than one answer. A single-project cockpit issues no request.
-  const runsIndex = useRunsIndex(multiProject)
+  // Once per opening: a clock that ticked per keystroke would re-render every (memoized) row.
+  const [now] = React.useState(Date.now)
 
   // The sidebar's hand-picked order (#952), read from the same cached workspace ui-state the
   // sidebar writes — so a project dragged to the top of the drawer is also the top of this list.
   const { order: projectOrder } = useProjectOrder()
   const orderedProjects = React.useMemo(
-    () => (multiProject ? orderProjects(registry.projects, activeProjectId, projectOrder) : []),
+    () => (multiProject && registry ? orderProjects(registry.projects, activeProjectId, projectOrder) : []),
     [multiProject, registry, activeProjectId, projectOrder],
   )
-  const projectNames = React.useMemo(
-    () => new Map((registry?.projects ?? []).map((project) => [project.id, project.name])),
-    [registry],
-  )
-  // Which project the live run list answered for — see `mergeTasks`. The active id when there is
-  // one, else the boot project, which is what an unscoped API client always reaches.
-  const runsProjectId = (activeProjectId === 'default' ? null : activeProjectId) ?? bootProjectId
-  const tasks = React.useMemo(
-    () => mergeTasks(runs.data ?? [], runsProjectId, runsIndex.data?.runs),
-    [runs.data, runsProjectId, runsIndex.data],
-  )
-  const partitioned = React.useMemo(() => partitionTasks(tasks), [tasks])
+  const sections = React.useMemo(() => {
+    const { recentlyFinished, otherTasks } = partitionTasks(tasks)
+    return {
+      all: searchableTasks(tasks, projectNames, repoBases),
+      recentlyFinished: searchableTasks(recentlyFinished, projectNames, repoBases),
+      otherTasks: searchableTasks(otherTasks, projectNames, repoBases),
+    }
+  }, [tasks, projectNames, repoBases])
   // Searching flattens the two task sections into one ranked list — see the Tasks group below.
-  const recentlyFinished = searching ? [] : partitioned.recentlyFinished
-  const otherTasks = searching ? tasks : partitioned.otherTasks
+  // Either way only the rows that will show are mounted (`rankTasks`).
+  const recentlyFinished = searching ? { shown: [], total: 0 } : rankTasks(sections.recentlyFinished, '', 20)
+  const otherTasks = rankTasks(searching ? sections.all : sections.otherTasks, search)
   const showProjectOnTasks = multiProject
-  const taskProjectName = (task: PaletteTask): string | null =>
-    task.projectId === null ? null : (projectNames.get(task.projectId) ?? null)
   const skillUsage = uiState.data?.skillUsage
   const orderedSkills = React.useMemo(
     () => orderSkillsByUsage(skills.data ?? [], skillUsage),
@@ -384,10 +766,15 @@ function PaletteContent({ close }: { close: () => void }) {
   /** A task thread in its OWN project — the one navigation that must ignore the active scope.
    *  A row with no project id belongs to wherever we already are, which is exactly what an
    *  unprefixed target means to the scope-wrapping navigate. */
-  const selectTask = (task: PaletteTask) => {
-    close()
-    navigate(task.projectId === null ? `/tasks/${task.id}` : scopeTo(task.projectId, `/tasks/${task.id}`))
-  }
+  // Stable, so typing does not re-render every memoized task row.
+  const selectTask = React.useCallback(
+    (task: PaletteTask) => {
+      trackTaskSwitched('cmdk')
+      close()
+      navigate(paletteTaskPath(task))
+    },
+    [close, navigate],
+  )
   const nextTheme = NEXT_THEME[theme]
 
   return (
@@ -423,18 +810,13 @@ function PaletteContent({ close }: { close: () => void }) {
         {/* Only in the DEFAULT view. Once you type, splitting tasks by read-state is noise: it
             floats a section of near-misses above the exact match you are looking for, purely
             because that section renders first. Searching gets one ranked Tasks list. */}
-        {!searching && recentlyFinished.length > 0 ? (
-          <CommandGroup heading="Recently finished">
-            {recentlyFinished.map((task) => (
-              <TaskItem
-                key={taskKey(task)}
-                task={task}
-                projectName={taskProjectName(task)}
-                showProject={showProjectOnTasks}
-                now={now}
-                onSelect={selectTask}
-              />
+        <PaletteReferenceStatuses entries={[...recentlyFinished.shown, ...otherTasks.shown]}>
+        {!searching && recentlyFinished.shown.length > 0 ? (
+          <CommandGroup heading={<TaskColumnsHeading label="Recently finished" />} className={TASK_GROUP_CLASS}>
+            {recentlyFinished.shown.map((entry) => (
+              <TaskItem key={entry.key} entry={entry} showProject={showProjectOnTasks} now={now} onSelect={selectTask} />
             ))}
+            <MoreTasks hidden={recentlyFinished.total - recentlyFinished.shown.length} />
           </CommandGroup>
         ) : null}
 
@@ -529,20 +911,15 @@ function PaletteContent({ close }: { close: () => void }) {
           </CommandGroup>
         ) : null}
 
-        {otherTasks.length > 0 ? (
-          <CommandGroup heading="Tasks">
-            {otherTasks.map((task) => (
-              <TaskItem
-                key={taskKey(task)}
-                task={task}
-                projectName={taskProjectName(task)}
-                showProject={showProjectOnTasks}
-                now={now}
-                onSelect={selectTask}
-              />
+        {otherTasks.shown.length > 0 ? (
+          <CommandGroup heading={<TaskColumnsHeading label="Tasks" />} className={TASK_GROUP_CLASS}>
+            {otherTasks.shown.map((entry) => (
+              <TaskItem key={entry.key} entry={entry} showProject={showProjectOnTasks} now={now} onSelect={selectTask} />
             ))}
+            <MoreTasks hidden={otherTasks.total - otherTasks.shown.length} />
           </CommandGroup>
         ) : null}
+        </PaletteReferenceStatuses>
 
         <CommandGroup heading="Actions">
           <CommandItem

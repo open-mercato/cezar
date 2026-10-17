@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -136,6 +136,7 @@ function renderPalette({
   projects = [] as ProjectListEntry[],
   indexed = [] as RunIndexEntry[],
   truncated = [] as string[],
+  referenceStatuses = {} as Record<string, unknown>,
   theme,
   forge = true,
   automations = false,
@@ -148,6 +149,8 @@ function renderPalette({
   /** What `GET /workspace/runs-index` answers — every project's tasks, including the active one's. */
   indexed?: RunIndexEntry[]
   truncated?: string[]
+  /** What the runs index already knows about the rows' PRs and issues, by project. */
+  referenceStatuses?: Record<string, unknown>
   theme?: Theme
   forge?: boolean
   /** `capabilities.automations` (#801) — off by default, exactly as a default server reports. */
@@ -163,7 +166,7 @@ function renderPalette({
     '/api/v1/health': health(forge, automations),
     '/api/v1/ui-state': uiState,
     '/api/v1/projects': { projects, bootProject: projects[0]?.id ?? 'default', projectsDir: '/repos' },
-    '/api/v1/workspace/runs-index': { runs: indexed, perProjectLimit: 200, truncated },
+    '/api/v1/workspace/runs-index': { runs: indexed, perProjectLimit: 200, truncated, referenceStatuses },
   })
   render(
     <QueryClientProvider client={createQueryClient()}>
@@ -496,6 +499,162 @@ describe('Tasks group', () => {
     expect(document.querySelector('[data-slot="palette-task"]')).toBeNull()
   })
 
+  it('finds every task about a PR or issue by its number, in this project and the others', async () => {
+    renderPalette({
+      entry: '/p/shop/',
+      projects: [project({ id: 'shop' }), project({ id: 'blog' })],
+      runs: [
+        run({ id: 'r-opened', title: 'Fix login', pullRequestUrl: 'https://github.com/o/shop/pull/1234' }),
+        run({ id: 'r-review', title: 'Review it', prRefs: [{ number: 1234, origin: 'marker', at: '2026-10-17T10:00:00Z' }] }),
+        run({ id: 'r-issue', title: 'Triage', issueNumber: 56 }),
+        run({ id: 'r-near', title: 'Neighbour', pullRequestUrl: 'https://github.com/o/shop/pull/12345' }),
+      ],
+      indexed: [indexed({ id: 'b-1', projectId: 'blog', title: 'Blog follow-up', markerRefs: { pr: 1234 } })],
+    })
+    openWith({ metaKey: true })
+    await screen.findByText('Fix login')
+    await screen.findByText('Blog follow-up')
+    const rows = () => [...document.querySelectorAll<HTMLElement>('[data-slot="palette-task"]')].map((row) => row.dataset.runId)
+
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '#1234' } })
+    // The prefix-only hit (#12345) still matches, but ranks below every exact one.
+    expect(rows()).toEqual(['r-opened', 'r-review', 'b-1', 'r-near'])
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'issue 56' } })
+    expect(rows()).toEqual(['r-issue'])
+  })
+
+  it('marks the tasks an automation started — and what they dispatched — and finds them by "auto"', async () => {
+    renderPalette({
+      entry: '/p/shop/',
+      projects: [project({ id: 'shop' }), project({ id: 'blog' })],
+      runs: [
+        run({ id: 'r-mine', title: 'Fix login' }),
+        // The provenance record's other fields do not matter to the palette.
+        run({ id: 'r-auto', title: 'Review PR', automation: { automationId: 'a1' } as RunRecord['automation'] }),
+        run({ id: 'r-child', title: 'Child check', dispatch: { rootRunId: 'r-auto', parentRunId: 'r-auto', kind: 'review' } as RunRecord['dispatch'] }),
+      ],
+      indexed: [indexed({ id: 'b-auto', projectId: 'blog', title: 'Nightly triage', automationId: 'a9' })],
+    })
+    openWith({ metaKey: true })
+    await screen.findByText('Nightly triage')
+    const marked = () =>
+      [...document.querySelectorAll<HTMLElement>('[data-slot="palette-task"]')]
+        .filter((row) => row.querySelector('[data-slot="palette-task-automation"]'))
+        .map((row) => row.dataset.runId)
+        .sort()
+    expect(marked()).toEqual(['b-auto', 'r-auto', 'r-child'])
+
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'automation' } })
+    const rows = [...document.querySelectorAll<HTMLElement>('[data-slot="palette-task"]')].map((row) => row.dataset.runId).sort()
+    expect(rows).toEqual(['b-auto', 'r-auto', 'r-child'])
+  })
+
+  it('every row shows Updated and Created as two columns', async () => {
+    vi.useFakeTimers({ now: new Date('2026-07-30T10:00:00Z'), shouldAdvanceTime: true })
+    try {
+      renderPalette({
+        runs: [
+          run({
+            id: 'r-old',
+            title: 'Old task continued today',
+            status: 'done',
+            createdAt: '2026-07-09T10:00:00Z',
+            steps: [{ id: 's1', name: 'do', kind: 'agent', status: 'done', startedAt: '2026-07-30T09:55:00Z', finishedAt: '2026-07-30T09:55:00Z' }] as RunRecord['steps'],
+          }),
+        ],
+      })
+      openWith({ metaKey: true })
+      await screen.findByText('Old task continued today')
+      const row = (slot: string) => document.querySelector<HTMLElement>(`[data-run-id="r-old"] [data-slot="${slot}"]`)!
+      // Updated is the last step, not the three-week-old creation — and both are on the row.
+      expect(row('palette-task-updated').textContent).toBe('5m')
+      expect(row('palette-task-created').textContent).toBe('21d')
+      expect(row('palette-task-age').title).toMatch(/^Updated .+ · created .+/)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('mounts at most 50 task rows however many tasks match, and says how many more there are', async () => {
+    renderPalette({
+      runs: Array.from({ length: 300 }, (_, index) =>
+        run({ id: `r-${index}`, title: `fix thing ${index}`, createdAt: new Date(Date.UTC(2026, 6, 1, 0, index)).toISOString() }),
+      ),
+    })
+    openWith({ metaKey: true })
+    await screen.findByText('fix thing 299')
+    const rows = () => document.querySelectorAll('[data-slot="palette-task"]').length
+    expect(rows()).toBe(50)
+    expect(screen.getByText('250 more — keep typing to narrow')).toBeTruthy()
+    // The best match still leads, even when it sits past the first 50.
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'thing 7' } })
+    expect(document.querySelector<HTMLElement>('[data-slot="palette-task"]')?.dataset.runId).toBe('r-7')
+    expect(rows()).toBeLessThanOrEqual(50)
+  })
+
+  it('shows the app’s PR chips on task rows, coloured by the status the index already knows', async () => {
+    renderPalette({
+      entry: '/p/shop/',
+      projects: [project({ id: 'shop' }), project({ id: 'blog' })],
+      indexed: [indexed({ id: 'b-1', projectId: 'blog', title: 'Blog fix', pullRequestUrl: 'https://github.com/o/blog/pull/77' })],
+      referenceStatuses: { blog: { prs: { 77: 'merged' }, issues: {} } },
+    })
+    openWith({ metaKey: true })
+    await screen.findByText('Blog fix')
+    await waitFor(() =>
+      expect(document.querySelector('[data-run-id="b-1"] [data-slot="pr-chip"]')?.getAttribute('data-status')).toBe('merged'),
+    )
+    expect(document.querySelector('[data-run-id="b-1"] [data-slot="pr-chip"]')?.textContent).toContain('77')
+  })
+
+  it('links a PR known only by number to its own project’s repo', async () => {
+    renderPalette({
+      entry: '/p/shop/',
+      projects: [project({ id: 'shop', repoUrl: 'https://github.com/o/shop' }), project({ id: 'blog', repoUrl: 'https://github.com/o/blog' })],
+      indexed: [indexed({ id: 'b-1', projectId: 'blog', title: 'Blog fix', markerRefs: { pr: 1497 } })],
+    })
+    openWith({ metaKey: true })
+    await screen.findByText('Blog fix')
+    await waitFor(() =>
+      expect(document.querySelector('[data-run-id="b-1"] a[href]')?.getAttribute('href')).toBe('https://github.com/o/blog/pull/1497'),
+    )
+  })
+
+  it('leads a row with the sidebar chip and drops the title prefix it already says', async () => {
+    renderPalette({ runs: [run({ id: 'r1', title: '1497: fixing the gate', pullRequestUrl: 'https://github.com/o/r/pull/1497' })] })
+    openWith({ metaKey: true })
+    const row = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[data-run-id="r1"]')
+      expect(found?.querySelector('[data-slot="pr-chip"]')).toBeTruthy()
+      return found!
+    })
+    const chip = row.querySelector('[data-slot="pr-chip"]')!
+    const title = await within(row).findByText('fixing the gate')
+    // The chip comes first, and the number is painted once.
+    expect(chip.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(title.textContent).toBe('fixing the gate')
+    // …while the search still knows the whole title.
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '1497: fixing' } })
+    expect(document.querySelector('[data-run-id="r1"]')).not.toBeNull()
+  })
+
+  it('a task the agent is working on right now reads Updated "now", not its step start', async () => {
+    renderPalette({
+      runs: [
+        run({ id: 'r-live', title: 'Long review', status: 'running', createdAt: '2026-07-01T10:00:00Z',
+          steps: [{ id: 's1', name: 'do', kind: 'agent', status: 'running', startedAt: '2026-07-01T10:00:05Z' }] as RunRecord['steps'] }),
+        run({ id: 'r-parked', title: 'Watching CI', status: 'running', activity: 'monitoring', createdAt: '2026-07-01T10:00:00Z',
+          steps: [{ id: 's1', name: 'do', kind: 'agent', status: 'running', startedAt: '2026-07-01T10:00:05Z' }] as RunRecord['steps'] }),
+      ],
+    })
+    openWith({ metaKey: true })
+    await screen.findByText('Long review')
+    const updated = (id: string) => document.querySelector(`[data-run-id="${id}"] [data-slot="palette-task-updated"]`)?.textContent
+    expect(updated('r-live')).toBe('now')
+    // Monitoring is parked, not working: its age stays honest.
+    expect(updated('r-parked')).not.toBe('now')
+  })
+
   it('renders no Tasks group when there are no runs', async () => {
     renderPalette()
     openWith({ metaKey: true })
@@ -658,6 +817,28 @@ describe('ranking', () => {
   it('prefers an earlier hit, so a title match outranks an id match', () => {
     expect(paletteScore('task deploy the thing 0000-1111', 'deploy')).toBeGreaterThan(
       paletteScore('task something 0000-deploy', 'deploy'),
+    )
+  })
+
+  it('prefers a whole-word hit, even when a longer one comes first', () => {
+    expect(paletteScore('task a PR #123 PR #12', '#12')).toBeGreaterThan(paletteScore('task a PR #123 PR #99', '#12'))
+  })
+
+  it('ranks an exact reference first however long the title before it', () => {
+    const exact = `task ${'a very long title about the checkout flow '.repeat(3)} PR #12 0000-1111`
+    const longer = 'task Short PR #123 0000-1111'
+    for (const query of ['#12', '12', 'pr 12']) {
+      expect(paletteScore(exact, query)).toBeGreaterThan(paletteScore(longer, query))
+    }
+    // Prose still decays: a title word earlier in the row still wins.
+    expect(paletteScore('task checkout PR #1', 'checkout')).toBeGreaterThan(
+      paletteScore(`task ${'x '.repeat(40)}checkout PR #1`, 'checkout'),
+    )
+  })
+
+  it('treats only numbers as position-free references — the word "pr" in a title still decays', () => {
+    expect(paletteScore('task fix the pr pipeline 0000', 'pr')).toBeGreaterThan(
+      paletteScore('task a much longer title that only later mentions the pr 0000', 'pr'),
     )
   })
 

@@ -5,6 +5,7 @@ import { useHealth, useProjectRuns, useProjects, useRunsForProject, useSkillsUpd
 import type { HealthResponse, SkillsUpdateState } from '@open-mercato/cezar-api-client'
 import { AppShell, type RepoChip } from '@/components/app-shell'
 import { CommandPalette } from '@/components/command-palette'
+import { TaskPalette } from '@/components/task-palette/task-palette'
 import { ListViewProvider } from '@/components/list-view'
 import { HostUsageWidget } from '@/components/host-usage-widget'
 import { ProviderBannerContainer } from '@/components/provider-banner-container'
@@ -207,6 +208,8 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
       {/* Global chrome, not a route: ⌘K must work on every URL. Mounted here (not in AppShell)
           because it needs the query client and router this container already assumes. */}
       <CommandPalette />
+      {/* ⌘P, its task-scoped twin (spec 2026-10-17-task-palette). */}
+      <TaskPalette />
     </ListViewProvider>
   )
 })

@@ -303,6 +303,9 @@ export const workspaceUiStateSchema = z.looseObject({
   notifications: z.looseObject({ enabled: z.boolean().optional() }).optional(),
   /** Desktop Tasks-table density, shared across every project in this workspace. */
   taskTable: taskTableUiStateSchema.optional(),
+  /** Keyboard shortcuts the user changed (spec 2026-10-17-task-palette): task-palette command id →
+   *  chord (`Mod+Shift+P`), or `null` to unbind a default. Absent ids keep the shipped default. */
+  keybindings: z.record(z.string(), z.string().nullable()).optional(),
   /** LEGACY, exactly like `sidebar` above — the last settled project-scoped page, restored when
    *  entering at the exact bare root. The shape is unchanged and still accepted, but the current
    *  cockpit keeps it in localStorage (`packages/web/src/lib/last-location.ts`): stored here, the
@@ -354,6 +357,12 @@ export const setWorkspaceUiStateInputSchema = z
       })
       .optional(),
     importedSkills: z.array(z.string().min(1).max(200)).max(WORKSPACE_UI_STATE_MAX_KEYS).optional(),
+    keybindings: z
+      .record(z.string().min(1).max(120), z.string().min(1).max(40).nullable())
+      .refine((map) => Object.keys(map).length <= WORKSPACE_UI_STATE_MAX_KEYS, {
+        message: `keybindings must have at most ${WORKSPACE_UI_STATE_MAX_KEYS} entries`,
+      })
+      .optional(),
     taskTable: taskTableUiStateSchema
       .extend({
         expandedColumns: z

@@ -1,4 +1,3 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArchiveIcon,
   ArchiveRestoreIcon,
@@ -19,26 +18,17 @@ import {
   SquareTerminalIcon,
   Trash2Icon,
 } from 'lucide-react'
-import { Fragment, memo, useEffect, useId, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
-import { Link, useNavigate } from '@/lib/project-router'
+import { cloneElement, Fragment, isValidElement, memo, useEffect, useId, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
+import { Link } from '@/lib/project-router'
 
-import { ApiError, archiveRun, cancelRun, deleteRun, getConfig, startLifecycleRemoval, openRunIn, openRunInCli } from '@/api/client'
 import {
-  queryKeys,
-  useConfig,
   useHealth,
-  useMarkRunSeen,
-  useMarkRunUnseen,
-  useOpenTargets,
   usePatchRun,
-  usePinRun,
   useProjectRepoBase,
   useReferenceProjectId,
-  useProviderStatus,
   useRuns,
 } from '@/api/queries'
 import type { ApiRun, OpenTarget } from '@open-mercato/cezar-api-client'
-import { lifecycleQueryKeys } from '@/api/worktree-lifecycle'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor, type TitleEditor } from '@/components/editable-title'
 import { TOGGLE_ON_CLASS, TOGGLE_ON_ICON_CLASS } from '@/components/pin-toggle'
@@ -63,9 +53,9 @@ import { OpenInMenu, type OpenInChoice } from '@/components/open-in-menu'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { DirectionalUsage } from '@/components/directional-usage'
+import { buildTaskCommands, type TaskCommand } from '@/components/task-palette/commands'
 import { ATTENTION_RANK, budgetStop, deriveAttention, type AttentionTone } from '@/lib/attention'
 import { queuePositions, runTitle } from '@/lib/task-groups'
-import { usableRunners } from '@/lib/provider-status'
 import {
   formatCost,
   prNumber,
@@ -78,19 +68,17 @@ import { usageMetricVisibility } from '@/lib/token-metrics'
 import { cn, isHttpUrl } from '@/lib/utils'
 
 import {
-  cliTargetResumes,
-  cliTargetRunner,
   isRunActive,
   resumeHint,
   runActionFlags,
 } from './run-actions'
-import { GIT_ACTION_ICONS, GitActions } from '../task-git/git-toolbar'
+import { GitActions } from '../task-git/git-toolbar'
 import { useRunGitStep, type RunGitStep } from '../task-git/run-git-step'
-import { RunConfirmDialog, type RunConfirmKind } from './run-confirm-dialog'
+import { RunConfirmDialog } from './run-confirm-dialog'
 import { useRunEngine } from './run-engine'
 import { WorkflowSteps } from './step-rail'
-import { useFinishRun } from './use-finish-run'
 import { useDraft } from './thread-draft'
+import { copyToClipboard, useCanOpenTerminal, useRunActions, useRunOpenChoices, type RunActions } from './use-run-actions'
 
 /**
  * The run header (spec §"Task thread" → Header): editable title + status pill, the meta line,
@@ -170,7 +158,7 @@ function RunHeaderView({
   const budget = budgetStop(run)
   const canTerminal = useCanOpenTerminal(run)
   const hint = resumeHint(run)
-  const actions = useRunActions(run, onMarkedUnread)
+  const actions = useRunActions(run, { onMarkedUnread })
   // The Session tab's composer carries Continue (its send button) and ■ Stop, so the header only
   // repeats them on the tabs that have no composer of their own to hold them.
   const composerOwnsRunControls = tab === 'session'
@@ -409,14 +397,6 @@ function RunProgress({
   )
 }
 
-/** Terminal resume spawns a terminal on the SERVER's machine, so a hosted cockpit
- *  (`localHandoff: false`) never offers it — the route 409s there (telemetry f179cc7d). Only an
- *  explicit `false` hides it: the route stays authoritative while health is still loading. */
-function useCanOpenTerminal(run: ApiRun): boolean {
-  const localHandoff = useHealth().data?.capabilities?.localHandoff
-  return runActionFlags(run).terminal && localHandoff !== false
-}
-
 /** Why a task-management action is unavailable right now, or undefined when it is available. The
  *  controls stay in place either way — a row whose icons come and go with the run's status is a
  *  row where the reader's muscle memory clicks the wrong one. */
@@ -478,7 +458,7 @@ function TaskItemActions({
         pressed={Boolean(run.pinned)}
         unavailable={flags.pin ? undefined : 'Archived tasks can’t be pinned'}
         pending={actions.pin.isPending}
-        onClick={actions.pin.mutate}
+        onClick={() => actions.pin.mutate()}
         className={cn(run.pinned && TOGGLE_ON_CLASS)}
       >
         <PinIcon aria-hidden="true" />
@@ -490,7 +470,7 @@ function TaskItemActions({
         pressed={Boolean(run.archived)}
         unavailable={live}
         pending={actions.archive.isPending}
-        onClick={() => actions.archive.mutate()}
+        onClick={() => actions.archive.mutate(undefined)}
         className={cn(run.archived && TOGGLE_ON_CLASS)}
       >
         <ArchiveIcon aria-hidden="true" />
@@ -601,37 +581,7 @@ function OpenInMenuForRun({
   canResume: boolean
   onResume: () => void
 }) {
-  const targets = useOpenTargets()
-  const providers = useProviderStatus()
-  const open = useMutation({
-    mutationFn: (target: string) => openRunIn(run.id, target),
-    onError: (error: Error) => toast(error.message, { tone: 'danger' }),
-  })
-  const availableRunners = usableRunners(providers.data)
-  // The action routes remain authoritative for a stale browser. Once the complete status has
-  // arrived, hide only unavailable *agent* handoffs; editors, Finder, and file tools stay
-  // available because they do not launch a provider.
-  const agentAvailable = (runner: ApiRun['runner']) =>
-    !providers.isSuccess || availableRunners.includes(runner ?? 'claude')
-  const canResumeHere = canResume && agentAvailable(run.runner)
-  const choices: OpenInChoice[] = run.worktreePath
-    ? (targets.data?.targets ?? [])
-        .filter((target) => {
-          const runner = cliTargetRunner(target.id)
-          return runner === undefined || (!run.worktreeLifecycle?.activeOperationId && agentAvailable(runner))
-        })
-        // Agent-CLI targets (#402): the one matching this run's own runner resumes THIS run's
-        // session when one exists — label that explicitly so it reads as different from just
-        // opening the editor/file-manager entries. Every other CLI (wrong backend, or no session
-        // yet) still opens, just starts clean — no silent cross-backend resume attempt.
-        .map((target) => {
-          const resumes = cliTargetResumes(run, target.id)
-          return {
-            target,
-            ...(resumes ? { suffix: ' (resume)', title: "Resume this run's session" } : {}),
-          }
-        })
-    : []
+  const { choices, canResumeHere, open } = useRunOpenChoices(run, canResume)
   if (!canResumeHere && choices.length === 0) return null
 
   const copyPath = () => {
@@ -646,7 +596,7 @@ function OpenInMenuForRun({
   return (
     <OpenInMenu
       choices={choices}
-      onPick={(target) => open.mutate(target)}
+      onPick={open}
       title="Resume in a terminal, or open the worktree locally"
       leading={
         canResumeHere ? (
@@ -669,137 +619,6 @@ function OpenInMenuForRun({
       }
     />
   )
-}
-
-/** The mutations + confirm state, bundled so the desktop bar and the mobile kebab drive the
- *  exact same behavior. Every failure surfaces the server's own words as a danger toast. */
-function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
-  const queryClient = useQueryClient()
-  const navigate = useNavigate()
-  const [confirming, setConfirming] = useState<RunConfirmKind | null>(null)
-  const config = useConfig()
-  const configured = config.data?.worktreeLifecycle
-  const lifecycleDelete = !!run.worktreeLifecycle || (!!run.worktreePath && !!((configured?.afterCreate.length ?? 0) + (configured?.beforeRemove.length ?? 0)))
-
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
-  const onError = (error: Error) => {
-    // Every 409 here says the same thing: the record these buttons were drawn from is not the run
-    // the server has (Continue on a run that is running again, Cancel on one that just finished).
-    // Refetch it, so the bar redraws to the truth instead of offering the same refused action —
-    // the composer's rule (deliver-prompt.ts) and the thread's healer (run-reconcile.ts), applied
-    // to the actions. `useSendMessage` in queries.ts has always done exactly this.
-    if (error instanceof ApiError && error.status === 409) void invalidate()
-    toast(error.message, { tone: 'danger' })
-  }
-
-  // Shared with the review panel's ✓ Accept (use-finish-run.ts) — the review-accept semantics
-  // must be ONE implementation, not two buttons that happen to agree today.
-  const finish = useFinishRun(run.id)
-  const archive = useMutation({
-    mutationFn: () => archiveRun(run.id, !run.archived, 'task_view'),
-    onSuccess: invalidate,
-    onError,
-  })
-  // Pin/unpin (#935) — the shared hook rather than a local mutation, because the sidebar and the
-  // Tasks table drive the same action and the cache rule belongs in one place. Toggling off the
-  // record, exactly like archive above.
-  const pinMutation = usePinRun('task_view')
-  const pin = {
-    isPending: pinMutation.isPending,
-    mutate: () => pinMutation.mutate({ id: run.id, pinned: !run.pinned }, { onError }),
-  }
-  // Mark unread (#775) drives the shared optimistic hook rather than a local mutation: the
-  // cache choreography (clear `seenAt`, guarded rollback) belongs next to its read twin in
-  // queries.ts, and no `invalidate` is wanted here — an invalidation would refetch the list
-  // and reinstate the receipt before the server's own answer lands.
-  const markUnreadMutation = useMarkRunUnseen()
-  const markUnread = {
-    isPending: markUnreadMutation.isPending,
-    mutate: () => {
-      // Before the mutation, so the Session tab's suppression is in place by the time the
-      // optimistic write re-renders the thread and re-evaluates its auto-mark-read effect.
-      onMarkedUnread?.()
-      markUnreadMutation.mutate(run.id, { onError })
-    },
-  }
-  // Mark read — the twin of the above, through the same optimistic hook the thread's own
-  // auto-read uses, so a click here and opening the task stamp the receipt identically.
-  const markReadMutation = useMarkRunSeen()
-  const markRead = {
-    isPending: markReadMutation.isPending,
-    mutate: () => markReadMutation.mutate(run.id, { onError }),
-  }
-  const cancel = useMutation({ mutationFn: () => cancelRun(run.id), onSuccess: invalidate, onError })
-  const deleteMutation = useMutation({
-    mutationFn: async () => {
-      // The projection covers existing managed generations. A fresh config read also
-      // protects a legacy worktree when scripts were configured after its creation.
-      const current = run.worktreePath && !run.worktreeLifecycle ? await getConfig() : undefined
-      const scripts = current?.worktreeLifecycle
-      if (run.worktreeLifecycle || (run.worktreePath && ((scripts?.afterCreate.length ?? 0) + (scripts?.beforeRemove.length ?? 0) > 0))) {
-        const response = await startLifecycleRemoval({requestId: crypto.randomUUID(), runId: run.id, intent: 'delete-task'})
-        return {kind: 'lifecycle' as const, operation: response.operation}
-      }
-      await deleteRun(run.id)
-      return {kind: 'deleted' as const}
-    },
-    onSuccess: result => {
-      void invalidate()
-      if (result.kind === 'lifecycle') {
-        const operation = result.operation
-        queryClient.setQueryData(lifecycleQueryKeys.operation(operation.id), {operation})
-        queryClient.setQueryData<ApiRun>(queryKeys.runs.detail(run.id), previous => previous ? {...previous, worktreeLifecycle: {
-          worktreeId: operation.worktreeId, generation: operation.generation, activeOperationId: operation.id,
-          phase: operation.phase, state: operation.state, needsAttention: operation.state === 'needs_attention' || operation.state === 'interrupted',
-        }} : previous)
-        void queryClient.invalidateQueries({queryKey: lifecycleQueryKeys.all()})
-        toast('Cleanup requested. The task is kept until cleanup completes.')
-        void navigate(`/tasks/${run.id}`)
-        return
-      }
-      // Only the legacy endpoint's completed deletion means the page is gone.
-      void navigate('/')
-    },
-    onError,
-  })
-  const terminal = useMutation({
-    mutationFn: () => openRunInCli(run.id),
-    onError: (error: Error) => {
-      // The legacy 409 fallback: no terminal emulator → the server sends the manual command;
-      // put it on the clipboard so "no terminal" still ends with the user one paste away.
-      if (error instanceof ApiError && error.command) {
-        void copyToClipboard(error.command, 'No terminal found — command copied to clipboard.')
-        return
-      }
-      onError(error)
-    },
-  })
-
-  return {
-    finish,
-    archive,
-    pin,
-    markUnread,
-    markRead,
-    cancel,
-    delete: deleteMutation,
-    lifecycleDelete,
-    terminal,
-    confirming,
-    setConfirming,
-  }
-}
-
-type RunActions = ReturnType<typeof useRunActions>
-
-async function copyToClipboard(text: string, doneMessage: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text)
-    toast(doneMessage)
-  } catch {
-    // No clipboard access (permissions, http) — show the command itself; it is the payload.
-    toast(`Run manually: ${text}`)
-  }
 }
 
 /**
@@ -1031,7 +850,7 @@ function MetaRow({
 
 /** The task's references, resolved once for the whole header so every chip — the PR chips by the
  *  git button, the issue chip in the details row — is answered by the same status batch. */
-function useRunReferences(run: ApiRun) {
+export function useRunReferences(run: ApiRun) {
   // #526: a chip may be synthesized from a CEZ:PR / CEZ:ISSUE marker, and the only repository
   // such a link may name is the one on screen — never the transcript's.
   const repoBase = useProjectRepoBase()
@@ -1452,8 +1271,11 @@ function GitStepAndKebab({
 }
 
 /** The <md action surface: everything the desktop rows offer, folded into one menu next to the
- *  status (the mockup's mobile pattern). Mirrors desktop item for item — the git step first, the
- *  state toggles in their one ON pattern, Stop only where the composer is not there to carry it. */
+ *  status (the mockup's mobile pattern). Rendered from the ⌘P palette's command list
+ *  (`buildTaskCommands`), so the two cannot disagree about what a run offers: the git step first,
+ *  then the state toggles in their one ON pattern, Stop only where the composer is not there to
+ *  carry it. Unlike the palette, a menu this small hides what is unavailable — except the git
+ *  step, whose disabled reason is the point. */
 function ActionsKebab({
   run,
   actions,
@@ -1465,11 +1287,47 @@ function ActionsKebab({
   git: RunGitStep
   showRunControls: boolean
 }) {
-  const flags = runActionFlags(run)
   const canTerminal = useCanOpenTerminal(run)
-  const live = liveRunReason(run)
-  const step = git.action
-  const unread = flags.markRead
+  const commands = buildTaskCommands(
+    { run, canResume: canTerminal, git: git.action, workspace: null, terminalAvailable: false, openChoices: [], taskUrl: '' },
+    {
+      markRead: () => actions.markRead.mutate(),
+      markUnread: () => actions.markUnread.mutate(),
+      pin: () => actions.pin.mutate(),
+      archive: () => actions.archive.mutate(undefined),
+      rename: () => {},
+      finish: () => actions.finish.mutate(),
+      confirmStop: () => actions.setConfirming('cancel'),
+      confirmDelete: () => actions.setConfirming('delete'),
+      resumeInTerminal: () => actions.terminal.mutate(),
+      gitAction: git.onAction,
+      openIn: () => {},
+      navigate: () => {},
+      openUrl: () => {},
+      copy: () => {},
+    },
+  )
+  const byId = new Map(commands.map((command) => [command.id, command]))
+  const pick = (id: string) => {
+    const command = byId.get(id)
+    return command && command.unavailable === undefined ? command : undefined
+  }
+  const steps = commands.filter((command) => command.group === 'git' && command.id.startsWith('git:'))
+  const middle = [
+    // Off the Session tab only: there the hint over the composer carries End session.
+    showRunControls ? pick('end-session') : undefined,
+    pick('open:terminal-resume'),
+    pick('toggle-read'),
+    pick('pin'),
+    pick('archive'),
+  ].filter((command): command is TaskCommand => command !== undefined)
+  // On the Session tab the composer's ■ carries Stop, exactly as on desktop.
+  const stop = showRunControls ? pick('stop') : undefined
+  const remove = pick('delete')
+  const pending: Record<string, boolean> = {
+    'toggle-read': actions.markRead.isPending || actions.markUnread.isPending,
+    pin: actions.pin.isPending,
+  }
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -1478,84 +1336,58 @@ function ActionsKebab({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" data-slot="run-actions-menu">
-        {step ? (
+        {steps.length > 0 ? (
           <>
-            {[step, ...(step.alternatives ?? [])].map((choice) => (
+            {steps.map((step) => (
               <DropdownMenuItem
-                key={choice.id}
-                data-action={choice.id}
-                disabled={!choice.enabled}
-                title={choice.reason}
-                onSelect={() => git.onAction(choice.id)}
+                key={step.id}
+                data-action={step.id.slice('git:'.length)}
+                disabled={step.unavailable !== undefined}
+                title={step.unavailable}
+                onSelect={() => step.perform()}
               >
-                {GIT_ACTION_ICONS[choice.id]}
-                {choice.label}
+                {step.icon}
+                {step.label}
               </DropdownMenuItem>
             ))}
             <DropdownMenuSeparator />
           </>
         ) : null}
-        {/* Off the Session tab only: there the hint over the composer carries it. */}
-        {showRunControls && run.status === 'waiting' && flags.finish ? (
-          <DropdownMenuItem onSelect={() => actions.finish.mutate()}>
-            <CheckIcon aria-hidden="true" /> End session
-          </DropdownMenuItem>
-        ) : null}
-        {canTerminal ? (
-          <DropdownMenuItem onSelect={() => actions.terminal.mutate()}>
-            <SquareTerminalIcon aria-hidden="true" /> Terminal
-          </DropdownMenuItem>
-        ) : null}
-        {/* The state toggles: one icon each, ON in the same violet-filled way as on desktop. */}
-        {flags.markRead || flags.markUnread ? (
+        {middle.map((command) => (
           <DropdownMenuItem
-            data-slot="unread-toggle"
-            aria-pressed={unread}
-            disabled={actions.markRead.isPending || actions.markUnread.isPending}
-            onSelect={() => (unread ? actions.markRead.mutate() : actions.markUnread.mutate())}
+            key={command.id}
+            data-slot={KEBAB_SLOTS[command.id]}
+            // The same `aria-pressed` the desktop twins carry — a toggle should announce its
+            // state in every spelling, not only the ones with room for the word.
+            aria-pressed={command.id in KEBAB_SLOTS || command.id === 'archive' ? Boolean(command.pressed) : undefined}
+            disabled={pending[command.id]}
+            onSelect={() => command.perform()}
           >
-            <MailIcon aria-hidden="true" className={cn(unread && TOGGLE_ON_ICON_CLASS)} />
-            {unread ? 'Mark read' : 'Mark unread'}
+            {command.pressed ? onIcon(command.icon) : command.icon}
+            {KEBAB_LABELS[command.id] ?? command.label}
           </DropdownMenuItem>
-        ) : null}
-        {flags.pin ? (
-          <DropdownMenuItem
-            data-slot="pin-run"
-            // The same `aria-pressed` its desktop twin and `PinToggle` carry — a toggle should
-            // announce its state in every spelling, not only the ones with room for the word.
-            aria-pressed={Boolean(run.pinned)}
-            disabled={actions.pin.isPending}
-            onSelect={() => actions.pin.mutate()}
-          >
-            <PinIcon aria-hidden="true" className={cn(run.pinned && TOGGLE_ON_ICON_CLASS)} />
-            {run.pinned ? 'Unpin' : 'Pin'}
-          </DropdownMenuItem>
-        ) : null}
-        {flags.archive ? (
-          <DropdownMenuItem aria-pressed={Boolean(run.archived)} onSelect={() => actions.archive.mutate()}>
-            <ArchiveIcon aria-hidden="true" className={cn(run.archived && TOGGLE_ON_ICON_CLASS)} />
-            {run.archived ? 'Unarchive' : 'Archive'}
-          </DropdownMenuItem>
-        ) : null}
-        {(showRunControls && flags.cancel) || flags.deleteRun ? <DropdownMenuSeparator /> : null}
-        {/* On the Session tab the composer's ■ carries Stop, exactly as on desktop. */}
-        {showRunControls && flags.cancel ? (
-          <DropdownMenuItem variant="destructive" onSelect={() => actions.setConfirming('cancel')}>
-            <CircleStopIcon aria-hidden="true" /> Stop
-          </DropdownMenuItem>
-        ) : null}
-        {flags.deleteRun ? (
-          <DropdownMenuItem
-            variant="destructive"
-            disabled={live !== undefined}
-            onSelect={() => actions.setConfirming('delete')}
-          >
-            <Trash2Icon aria-hidden="true" /> Delete
-          </DropdownMenuItem>
-        ) : null}
+        ))}
+        {stop || remove ? <DropdownMenuSeparator /> : null}
+        {[stop, remove].map((command) =>
+          command ? (
+            <DropdownMenuItem key={command.id} variant="destructive" onSelect={() => command.perform()}>
+              {command.icon} {KEBAB_LABELS[command.id] ?? command.label}
+            </DropdownMenuItem>
+          ) : null,
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   )
+}
+
+const KEBAB_SLOTS: Record<string, string> = { 'toggle-read': 'unread-toggle', pin: 'pin-run' }
+// A menu item's own words where the palette's would read oddly here.
+const KEBAB_LABELS: Record<string, string> = { 'open:terminal-resume': 'Terminal', stop: 'Stop', delete: 'Delete' }
+
+/** The ON pattern on a toggle's icon — violet and filled, like its desktop twin. */
+function onIcon(icon: ReactNode): ReactNode {
+  if (!isValidElement<{ className?: string }>(icon)) return icon
+  return cloneElement(icon, { className: cn(icon.props.className, TOGGLE_ON_ICON_CLASS) })
 }
 
 /** "take over interactively: cd … && claude --resume …" — the legacy `#d-resume` line, now

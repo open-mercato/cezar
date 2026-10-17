@@ -252,13 +252,12 @@ describe('scoped route map (/p/:projectId)', () => {
     expect(screen.queryByRole('heading', { name: 'Loading task…' })).toBeNull()
   })
 
-  // MCP lives inside Agent config; keyboard remains hidden and unrouted.
+  // MCP lives inside Agent config, so its old section URL is unrouted.
   const unknown = [
     '/nope-404',
     '/tasks',
     '/settings/nope',
     '/settings/mcp',
-    '/settings/keyboard',
     '/tasks/abc123/nope',
     '/compare',
   ]
