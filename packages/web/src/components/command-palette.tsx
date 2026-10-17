@@ -195,6 +195,12 @@ export function mergeTasks(
   })
 }
 
+/** A row's exact time for its hover title — the browser's locale, to the minute. */
+function exactTime(iso: string): string {
+  const date = new Date(iso)
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+}
+
 /** Drops undefined keys, so a run without references keeps the row's exact old shape. */
 function definedOnly<T extends object>(value: T): Partial<T> {
   return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as Partial<T>
@@ -414,6 +420,7 @@ export function TaskItem({
       keywords={[...(projectName ? [projectName] : []), ...(task.automationId ? ['automation', 'automatic'] : [])]}
       data-slot={slot}
       data-run-id={task.id}
+      className="group/task"
       data-project-id={task.projectId ?? undefined}
       onSelect={() => onSelect(task)}
     >
@@ -444,8 +451,17 @@ export function TaskItem({
           {projectName}
         </span>
       ) : null}
-      <span className="shrink-0 text-xs text-soft-foreground tabular-nums">
-        {shortAge(task.finishedAt ?? task.createdAt, now)}
+      {/* Last activity on every row (the Tasks table's Updated); the highlighted row adds when it
+          was created, so both are one arrow key away without a second column on every row. */}
+      <span
+        data-slot="palette-task-age"
+        title={`Created ${exactTime(task.createdAt)} · last active ${exactTime(task.lastActivityAt)}`}
+        className="shrink-0 text-xs text-soft-foreground tabular-nums"
+      >
+        <span className="hidden group-data-[selected=true]/task:inline">
+          created {shortAge(task.createdAt, now)} · active{' '}
+        </span>
+        {shortAge(task.lastActivityAt, now)}
       </span>
       {trailing}
     </CommandItem>

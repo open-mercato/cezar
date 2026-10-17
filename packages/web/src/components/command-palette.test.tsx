@@ -546,6 +546,31 @@ describe('Tasks group', () => {
     expect(rows).toEqual(['b-auto', 'r-auto', 'r-child'])
   })
 
+  it('shows last activity on every row, and when it was created on the highlighted one', async () => {
+    vi.useFakeTimers({ now: new Date('2026-07-30T10:00:00Z'), shouldAdvanceTime: true })
+    try {
+      renderPalette({
+        runs: [
+          run({
+            id: 'r-old',
+            title: 'Old task continued today',
+            createdAt: '2026-07-09T10:00:00Z',
+            steps: [{ id: 's1', name: 'do', kind: 'agent', status: 'done', startedAt: '2026-07-30T09:55:00Z', finishedAt: '2026-07-30T09:55:00Z' }] as RunRecord['steps'],
+          }),
+        ],
+      })
+      openWith({ metaKey: true })
+      await screen.findByText('Old task continued today')
+      const age = document.querySelector<HTMLElement>('[data-run-id="r-old"] [data-slot="palette-task-age"]')!
+      // The visible age is the last step, not the 21-day-old creation.
+      expect(age.lastChild?.textContent).toBe('5m')
+      expect(age.textContent).toContain('created 21d · active')
+      expect(age.title).toMatch(/^Created .+ · last active .+/)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('renders no Tasks group when there are no runs', async () => {
     renderPalette()
     openWith({ metaKey: true })
