@@ -28,6 +28,7 @@ import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts'
 import { buildChildEnv } from './agent-env.ts';
 import { disclaimActive, disclaimedCommand, readHead, resolveProgram, type DisclaimOptions } from './disclaim-spawn.ts';
 import { readNdjson } from './ndjson.ts';
+import { resolveCursorAgentBin } from './cursor-bin.ts';
 import {
   createCursorUiState,
   mapCursorMessage,
@@ -109,12 +110,7 @@ export function mockCursorAgentPath(): string {
   return resolvePath(here, '..', '..', 'scripts', 'mock-cursor-agent.mjs');
 }
 
-/** The real Cursor binary name — `CEZ_CURSOR_AGENT_BIN` override, else `agent` on PATH. Shared
- *  by every call site that shells out to the real CLI (identity, model discovery, detection),
- *  so an operator's override is honored consistently instead of four separate `?? 'agent'`s. */
-export function resolveCursorAgentBin(optsBin?: string): string {
-  return optsBin || process.env.CEZ_CURSOR_AGENT_BIN || 'agent';
-}
+export { resolveCursorAgentBin };
 
 /** Like {@link resolveCursorAgentBin}, but under `CEZ_DRY_RUN=1` substitutes the bundled mock —
  *  only for actually spawning a run turn. The mock does not implement `status`/`about`/`models`
@@ -124,7 +120,7 @@ export function resolveCursorBin(optsBin?: string): string {
   if (optsBin) return optsBin;
   if (process.env.CEZ_CURSOR_AGENT_BIN) return process.env.CEZ_CURSOR_AGENT_BIN;
   if (process.env.CEZ_DRY_RUN === '1') return mockCursorAgentPath();
-  return 'agent';
+  return resolveCursorAgentBin();
 }
 
 function wrapSpawnError(err: unknown, bin: string): Error {

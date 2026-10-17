@@ -5,7 +5,7 @@ import { Virtualizer, type VirtualizerHandle } from 'virtua'
 import type { DiffStat } from '@open-mercato/cezar-api-client'
 import { CommentCount } from '@/components/comment-count'
 import { DiffStatLabel } from '@/components/diff-stat'
-import { highlight, highlightSync, langForPath, type SynToken } from '@/lib/highlighter'
+import { ensureLang, highlightSync, langForPath, type SynToken } from '@/lib/highlighter'
 import { cn } from '@/lib/utils'
 
 import {
@@ -15,6 +15,7 @@ import {
   fileKey,
   widestLineChars,
 } from './diff-scroll'
+import { tokenizeDiffLines } from './diff-tokens'
 import { ImagePreview, shouldPreviewImage } from './image-preview'
 import { canPreviewMarkdown } from './markdown'
 import { MarkdownPreview } from './markdown-preview'
@@ -863,25 +864,22 @@ function DiffFileBody({
 
 /** Load-and-cache this file's syntax tokens through the shared singleton (never rejects). */
 function useFileTokens(path: string, lineList: HunkLine[]): SynToken[][] | null {
-  const text = useMemo(
-    () => (lineList.length > HIGHLIGHT_MAX_LINES ? null : lineList.map((line) => line.text).join('\n')),
-    [lineList],
-  )
+  const lines = lineList.length > HIGHLIGHT_MAX_LINES ? null : lineList
   const lang = useMemo(() => langForPath(path), [path])
-  const [loaded, setLoaded] = useState<{ text: string; tokens: SynToken[][] } | null>(null)
+  const [loaded, setLoaded] = useState<{ lines: HunkLine[]; tokens: SynToken[][] | null } | null>(null)
   useEffect(() => {
-    if (text === null || lang === null) return
+    if (lines === null || lang === null) return
     let cancelled = false
-    void highlight(text, lang).then((result) => {
-      if (!cancelled) setLoaded({ text, tokens: result.tokens })
+    void ensureLang(lang).then(() => {
+      if (!cancelled) setLoaded({ lines, tokens: tokenizeDiffLines(lines, (text) => highlightSync(text, lang)) })
     })
     return () => {
       cancelled = true
     }
-  }, [text, lang])
-  if (text === null || lang === null) return null
-  if (loaded?.text === text) return loaded.tokens
-  return highlightSync(text, lang)?.tokens ?? null
+  }, [lines, lang])
+  if (lines === null || lang === null) return null
+  if (loaded?.lines === lines) return loaded.tokens
+  return tokenizeDiffLines(lines, (text) => highlightSync(text, lang))
 }
 
 function Note({ children }: { children: React.ReactNode }) {

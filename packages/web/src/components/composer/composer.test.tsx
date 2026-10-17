@@ -276,7 +276,7 @@ describe('attachments — attach, paste, thumbnails, caps (legacy parity)', () =
     fireEvent.drop(textarea, { dataTransfer: { files: names.map((n) => pngFile(n)) } })
     await screen.findByLabelText(`Remove ${names.at(-1)}`)
     paste(textarea, [pngFile('extra.png')])
-    expect(await screen.findByText(`extra.png skipped — max ${MAX_ATTACHMENTS} attachments per message`)).toBeTruthy()
+    expect(await screen.findByText(`“extra.png” skipped — max ${MAX_ATTACHMENTS} attachments per message`)).toBeTruthy()
     expect(screen.queryByLabelText('Remove extra.png')).toBeNull()
   })
 
@@ -308,7 +308,7 @@ describe('attachments — attach, paste, thumbnails, caps (legacy parity)', () =
     ])
     await screen.findByLabelText('Remove report.pdf')
     expect(
-      await screen.findByText('payload.zip is not a supported attachment (images, PDF and text files such as TXT, MD, HTML or source code)'),
+      await screen.findByText('“payload.zip” is not a supported attachment (images, PDF and text files such as TXT, MD, HTML or source code)'),
     ).toBeTruthy()
     expect(screen.queryByLabelText('Remove payload.zip')).toBeNull()
   })
@@ -318,7 +318,7 @@ describe('attachments — attach, paste, thumbnails, caps (legacy parity)', () =
     const big = pngFile('huge.png')
     Object.defineProperty(big, 'size', { value: MAX_ATTACHMENT_BYTES + 1 })
     paste(textarea, [big])
-    expect(await screen.findByText('huge.png is too large (max 5 MB)')).toBeTruthy()
+    expect(await screen.findByText('“huge.png” is too large (max 5 MB)')).toBeTruthy()
     expect(screen.queryByLabelText('Remove huge.png')).toBeNull()
   })
 })

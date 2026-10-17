@@ -55,14 +55,14 @@ describe('screenFiles — the caps, mirrored from the server zod', () => {
     const intake = screenFiles([fakeFile({ type: 'application/zip', name: 'payload.zip' })], 0)
     expect(intake.accepted).toEqual([])
     expect(intake.rejected).toEqual([
-      'payload.zip is not a supported attachment (images, PDF and text files such as TXT, MD, HTML or source code)',
+      '“payload.zip” is not a supported attachment (images, PDF and text files such as TXT, MD, HTML or source code)',
     ])
   })
 
   it('names an oversized file in the rejection', () => {
     const intake = screenFiles([fakeFile({ size: MAX_ATTACHMENT_BYTES + 1, name: 'huge.png' })], 0)
     expect(intake.accepted).toEqual([])
-    expect(intake.rejected).toEqual(['huge.png is too large (max 5 MB)'])
+    expect(intake.rejected).toEqual(['“huge.png” is too large (max 5 MB)'])
   })
 
   it('exactly 5 MB still passes (the cap is inclusive, like the legacy check)', () => {
@@ -79,7 +79,7 @@ describe('screenFiles — the caps, mirrored from the server zod', () => {
   it('enforces the attachment-count cap against what is already attached', () => {
     const intake = screenFiles([fakeFile({ name: 'a.png' }), fakeFile({ name: 'b.png' })], MAX_ATTACHMENTS - 1)
     expect(intake.accepted).toHaveLength(1)
-    expect(intake.rejected).toEqual([`b.png skipped — max ${MAX_ATTACHMENTS} attachments per message`])
+    expect(intake.rejected).toEqual([`“b.png” skipped — max ${MAX_ATTACHMENTS} attachments per message`])
   })
 
   it('a batch mixing every failure mode reports each file by name', () => {
@@ -94,8 +94,8 @@ describe('screenFiles — the caps, mirrored from the server zod', () => {
     )
     expect(intake.accepted.map((f: File) => f.name)).toEqual(['ok.png', 'brief.md'])
     expect(intake.rejected).toEqual([
-      'big.png is too large (max 5 MB)',
-      'payload.zip is not a supported attachment (images, PDF and text files such as TXT, MD, HTML or source code)',
+      '“big.png” is too large (max 5 MB)',
+      '“payload.zip” is not a supported attachment (images, PDF and text files such as TXT, MD, HTML or source code)',
     ])
   })
 
@@ -135,7 +135,7 @@ describe('screenFiles — the image budget', () => {
       MAX_IMAGE_BYTES_PER_MESSAGE - 1,
     )
     expect(intake.accepted.map((f) => f.name)).toEqual(['r.pdf'])
-    expect(intake.rejected).toEqual(['a.png skipped — max 20 MB of images per message'])
+    expect(intake.rejected).toEqual(['“a.png” skipped — max 20 MB of images per message'])
   })
 })
 

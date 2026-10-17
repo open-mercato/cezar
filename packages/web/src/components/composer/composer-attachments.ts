@@ -187,7 +187,9 @@ export function screenFiles(
   let count = alreadyAttached
   let imageBytes = alreadyAttachedImageBytes
   for (const file of files) {
-    const label = file.name || 'attachment'
+    // Quoted, so telemetry's toast scrub masks the whole name — spaces and all — and every
+    // refusal of one kind lands in one error group (telemetry 0f1255b6).
+    const label = file.name ? `“${file.name}”` : 'attachment'
     if (attachmentMediaType(file) === null) {
       rejected.push(
         `${label} is not a supported attachment (images, PDF and text files such as TXT, MD, HTML or source code)`,

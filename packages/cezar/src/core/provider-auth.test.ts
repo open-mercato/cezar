@@ -15,6 +15,10 @@ vi.mock('./claude-bin.ts', async (importOriginal) => ({
   ...await importOriginal<typeof import('./claude-bin.ts')>(),
   resolveClaudeBin: (env: NodeJS.ProcessEnv = process.env) => env.CEZ_CLAUDE_BIN || 'claude',
 }));
+// Same reason for Cursor: `cursor-bin.test.ts` covers the real PATH resolution.
+vi.mock('./cursor-bin.ts', () => ({
+  resolveCursorAgentBin: () => process.env.CEZ_CURSOR_AGENT_BIN || 'agent',
+}));
 vi.mock('./junie-auth-probe.ts', () => ({
   probeJunieAuthentication: vi.fn(async () => ({ connected: true })),
 }));
@@ -25,6 +29,7 @@ import {
   cliVersionFrom,
   isRuntimeProviderAuthFailure,
   providerAuthChecksDisabled,
+  versionManagerShimMiss,
   type ProviderCommandResult,
   type RunProviderCommand,
 } from './provider-auth.ts';
@@ -574,6 +579,38 @@ describe('provider auth parsers', () => {
     });
 
     await expect(statuses(service)).resolves.toMatchObject({ cursor: { status: 'unknown' } });
+  });
+
+  // Cursor CLIs up to 2026.01.28 reject `status --format json` (exit 1); verified live.
+  it.each([
+    ['\u001B[2K\u001B[G\n Starting login process...\n\u001B[2K\u001B[1A\u001B[2K\u001B[G\n ✓ Logged in as me@example.com\n', 'connected'],
+    ['\u001B[2K\u001B[G\n Starting login process...\n\u001B[2K\u001B[1A\u001B[2K\u001B[G Not logged in\n', 'disconnected'],
+  ])('reads plain `status` from a Cursor CLI that predates --format', async (stdout, expected) => {
+    const onInconclusive = vi.fn();
+    const runCommand = vi.fn<RunProviderCommand>(async (executable, args) => {
+      if (executable !== 'agent') return resultFor(executable);
+      return args.includes('--format')
+        ? { stdout: '', stderr: "error: unknown option '--format'\n(Did you mean --force?)\n", exitCode: 1 }
+        : { stdout, stderr: '', exitCode: 0 };
+    });
+    const service = new ProviderAuthService({ runCommand, onInconclusive });
+
+    await expect(statuses(service)).resolves.toMatchObject({ cursor: { status: expected } });
+    expect(runCommand).toHaveBeenCalledWith('agent', ['status'], 10_000);
+    expect(onInconclusive).not.toHaveBeenCalled();
+  });
+
+  // Telemetry 8d304c50: another program named `agent` (0.2.22) exited 2 with a usage error.
+  it('names the PATH shadowing when `agent` answers like a different program', async () => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'agent'
+        ? { stdout: '', stderr: 'usage: agent [-h] {run,serve}\nagent: error: invalid choice', exitCode: 2 }
+        : resultFor(executable)),
+    });
+
+    const cursor = (await statuses(service)).cursor;
+    expect(cursor?.status).toBe('unknown');
+    expect(cursor?.hint).toContain('CEZ_CURSOR_AGENT_BIN');
   });
 
   describe('Cursor CURSOR_API_KEY precheck', () => {
@@ -1561,6 +1598,38 @@ describe('inconclusive probe reports', () => {
     const [probe] = onInconclusive.mock.calls.map(([call]) => call);
     expect(probe).toMatchObject({ provider: 'copilot', reason: 'unrecognized_output' });
     expect(await probe.cliVersion()).toBe('1.34.1');
+  });
+
+  // Telemetry f67df9d2: an asdf shim named `pi`, exit 1, nothing on stdout, Python's version on stderr.
+  it('reports a version-manager shim with no version behind it as not-installed, not inconclusive', async () => {
+    const onInconclusive = vi.fn();
+    const asdfMiss = 'No version is set for command pi\n'
+      + 'Consider adding one of the following versions in your config file at /work/.tool-versions\n'
+      + 'python 3.11.9\n';
+    const service = new ProviderAuthService({
+      runCommand: async (executable) => executable === 'pi'
+        ? { stdout: '', stderr: asdfMiss, exitCode: 1 }
+        : { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' },
+      onInconclusive,
+    });
+    const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'pi');
+    expect(row).toMatchObject({
+      status: 'not-installed',
+      hint: expect.stringContaining('No version is set for command pi'),
+    });
+    expect(row?.hint).toContain('CEZ_PI_BIN');
+    expect(onInconclusive).not.toHaveBeenCalled();
+  });
+
+  it('recognizes the mise and pyenv shim misses, and never re-reads a successful answer', () => {
+    expect(versionManagerShimMiss({ stdout: '', stderr: 'mise ERROR No version is set for shim: pi\nSet a global default version with one of the following:\nmise use -g python@3.11.9\n', exitCode: 1 }))
+      .toBe('No version is set for shim: pi');
+    expect(versionManagerShimMiss({ stdout: '', stderr: 'mise ERROR Tool not installed for shim: pi\n', exitCode: 1 }))
+      .toBe('Tool not installed for shim: pi');
+    expect(versionManagerShimMiss({ stdout: '', stderr: 'pyenv: pi: command not found\n\nThe `pi\' command exists in these Python versions:\n  3.11.9\n', exitCode: 127 }))
+      .toBe('pyenv: pi: command not found');
+    expect(versionManagerShimMiss({ stdout: 'No version is set for command pi', stderr: '', exitCode: 0 })).toBeNull();
+    expect(versionManagerShimMiss({ stdout: '', stderr: 'Error: something else broke', exitCode: 1 })).toBeNull();
   });
 
   it('keeps the generic hint when Copilot spoke ACP but the answer was unreadable', async () => {

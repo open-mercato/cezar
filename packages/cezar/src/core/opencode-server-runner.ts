@@ -1,4 +1,6 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { realpathSync } from 'node:fs';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import type {
   AgentEvent,
   AgentRunResult,
@@ -64,8 +66,9 @@ export const TURN_IDLE_GRACE_MS = 5_000;
  * /session` and does not read `spec.sessionId`; resuming a server-side session
  * id is not implemented.
  *
- * Auth = the host's opencode config/logins. The agent runs autonomously
- * (auto-approved permissions); OpenCode has no per-tool allowlist, so
+ * Auth = the host's opencode config/logins. The agent runs autonomously:
+ * nothing can answer a permission prompt, so the runner answers each one
+ * itself (`opencodePermissionReply`). OpenCode has no per-tool allowlist, so
  * `spec.allowedTools` is ignored. `spec.model` is `provider/model`.
  */
 export class OpencodeServerRunner implements AgentRunner {
@@ -127,6 +130,7 @@ class OpencodeSession implements AgentSession {
     this.emit({ type: 'text', text });
   });
   private readonly toolsSeen = new Set<string>();
+  private readonly permissionsAnswered = new Set<string>();
   /** messageID → role. Parts carry no role; only assistant parts are surfaced
    *  (the user's own message also streams as parts over the same SSE feed). */
   private readonly msgRole = new Map<string, string>();
@@ -564,11 +568,37 @@ class OpencodeSession implements AgentSession {
     } else if (type === 'message.part.updated' || type === 'message.part.created') {
       this.handlePart((props.part as Record<string, unknown>) ?? props);
       this.armTurnGrace();
+    } else if (type === 'permission.asked' || type === 'permission.updated') {
+      void this.answerPermission(props);
     } else if (type === 'session.idle') {
       // The turn boundary (#897). A subtask session going idle closes only its
       // own scope, exactly as the v2 mapper reads it.
       const sid = stringField(props, 'sessionID');
       if (sid === undefined || sid === this.sessionId) this.finishTurn(true);
+    }
+  }
+
+  /** An unanswered prompt parks `opencode serve` forever — c3d30076 sat 21 h on
+   *  `external_directory` for its own handoff file. Every prompt gets a reply. */
+  private async answerPermission(props: Record<string, unknown>): Promise<void> {
+    const id = stringField(props, 'id');
+    if (!id || this.permissionsAnswered.has(id)) return;
+    this.permissionsAnswered.add(id);
+    const reply = opencodePermissionReply(props, this.spec.env);
+    if (reply === 'reject') {
+      const what = stringField(props, 'permission') ?? stringField(props, 'type') ?? 'unknown';
+      const path = isRecord(props.metadata) ? stringField(props.metadata, 'filepath') : undefined;
+      this.emit({ type: 'note', message: `opencode: refused ${what} permission${path ? ` for ${path}` : ''}` });
+    }
+    try {
+      await this.http('POST', `/permission/${encodeURIComponent(id)}/reply`, { reply });
+    } catch {
+      // Servers before the permission rework only know the session-scoped route.
+      const sid = stringField(props, 'sessionID') ?? this.sessionId;
+      if (!sid) return;
+      await this.http('POST', `/session/${encodeURIComponent(sid)}/permissions/${encodeURIComponent(id)}`, {
+        response: reply,
+      }).catch(() => undefined);
     }
   }
 
@@ -696,6 +726,59 @@ function textOf(content: ContentBlock[]): string {
     .map((b) => b.text)
     .join('\n')
     .trim();
+}
+
+/**
+ * The reply to one OpenCode permission prompt. Only this run's own state
+ * outside the worktree is granted: its handoff file (`CEZ_HANDOFF_FILE`), the
+ * files in its pasted-attachments folder (`runs/<CEZ_TASK_ID>-images/`), and
+ * its scratch directory when cezar set `TMPDIR` to it (#785). A config rule
+ * cannot do this — OpenCode matches rules against the whole parent directory
+ * (`runs/*`), which would expose every other task's transcript. Paths are
+ * compared after following symlinks. Everything else is refused, `once` so no
+ * grant outlives the call.
+ */
+export function opencodePermissionReply(
+  props: Record<string, unknown>,
+  env: Record<string, string> | undefined,
+): 'once' | 'reject' {
+  const permission = stringField(props, 'permission') ?? stringField(props, 'type');
+  const filepath = isRecord(props.metadata) ? stringField(props.metadata, 'filepath') : undefined;
+  const handoffFile = env?.CEZ_HANDOFF_FILE;
+  const taskId = env?.CEZ_TASK_ID;
+  if (permission !== 'external_directory' || !filepath || !handoffFile || !taskId) return 'reject';
+  const target = canonicalPath(filepath);
+  const handoff = canonicalPath(handoffFile);
+  if (target === handoff) return 'once';
+  const runsDir = dirname(handoff);
+  if (dirname(target) === join(runsDir, `${taskId}-images`)) return 'once';
+  const tmp = join(dirname(runsDir), 'tmp', taskId);
+  if (env.TMPDIR && canonicalPath(env.TMPDIR) === tmp && (target === tmp || target.startsWith(tmp + sep))) {
+    return 'once';
+  }
+  return 'reject';
+}
+
+/** `realpath` of the deepest existing ancestor, rest re-appended — the file a
+ *  prompt names may not exist yet (a write), but its directories decide where it lands. */
+function canonicalPath(path: string): string {
+  const abs = resolve(path);
+  const rest: string[] = [];
+  let dir = abs;
+  for (;;) {
+    try {
+      return join(realpathSync.native(dir), ...rest.reverse());
+    } catch {
+      const parent = dirname(dir);
+      if (parent === dir) return abs;
+      rest.push(basename(dir));
+      dir = parent;
+    }
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function stringField(obj: Record<string, unknown>, key: string): string | undefined {

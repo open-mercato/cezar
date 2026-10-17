@@ -1,5 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +11,7 @@ import {
   KILL_GRACE_MS,
   OpencodeServerRunner,
   TURN_IDLE_GRACE_MS,
+  opencodePermissionReply,
 } from './opencode-server-runner.ts';
 
 const spawnHook = vi.hoisted(() => ({ override: null as null | ((...args: unknown[]) => unknown) }));
@@ -405,4 +408,83 @@ describe('#897 a turn that outlives its prompt POST', () => {
     expect(types(events).filter((t) => t === 'turn-end')).toHaveLength(1);
     expect(Date.now() - started).toBeLessThan(TURN_IDLE_GRACE_MS);
   }, 30_000);
+});
+
+describe('permission prompts outside the worktree (c3d30076 hung 21 h on one)', () => {
+  const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
+  const runs = '/repo/.ai/cezar/runs';
+  const env = { CEZ_HANDOFF_FILE: `${runs}/r1.handoff.md`, CEZ_TASK_ID: 'r1' };
+  const ask = (filepath: string, permission = 'external_directory') => ({
+    id: 'per_1',
+    permission,
+    patterns: [`${dirname(filepath)}/*`],
+    metadata: { filepath },
+  });
+
+  it('grants exactly this run\'s handoff file and its own pasted attachments', () => {
+    expect(opencodePermissionReply(ask(`${runs}/r1.handoff.md`), env)).toBe('once');
+    expect(opencodePermissionReply(ask(`${runs}/r1-images/pasted-1.png`), env)).toBe('once');
+  });
+
+  it('refuses everything else outside the worktree', () => {
+    expect(opencodePermissionReply(ask(`${runs}/r2.handoff.md`), env)).toBe('reject');
+    expect(opencodePermissionReply(ask(`${runs}/r1.ndjson`), env)).toBe('reject');
+    expect(opencodePermissionReply(ask(`${runs}/r2-images/pasted-1.png`), env)).toBe('reject');
+    expect(opencodePermissionReply(ask(`${runs}/r1-images/../r2.handoff.md`), env)).toBe('reject');
+    expect(opencodePermissionReply(ask(`${runs}/r1-images/nested/x.png`), env)).toBe('reject');
+    expect(opencodePermissionReply(ask('/etc/passwd'), env)).toBe('reject');
+    expect(opencodePermissionReply(ask(`${runs}/r1.handoff.md`, 'bash'), env)).toBe('reject');
+  });
+
+  it('grants anything under the run\'s own TMPDIR, and only when cezar set it there', () => {
+    const tmp = '/repo/.ai/cezar/tmp/r1';
+    const withTmp = { ...env, TMPDIR: tmp };
+    expect(opencodePermissionReply(ask(`${tmp}/build/out.log`), withTmp)).toBe('once');
+    expect(opencodePermissionReply(ask(`${tmp}/build/out.log`), env)).toBe('reject');
+    expect(opencodePermissionReply(ask('/repo/.ai/cezar/tmp/r2/x'), withTmp)).toBe('reject');
+    expect(opencodePermissionReply(ask('/repo/.ai/cezar/tmp/r1-other/x'), withTmp)).toBe('reject');
+    expect(opencodePermissionReply(ask('/tmp/x'), { ...env, TMPDIR: '/tmp' })).toBe('reject');
+  });
+
+  it('compares paths after following symlinks', () => {
+    const root = mkdtempSync(join(tmpdir(), 'cez-oc-perm-'));
+    try {
+      mkdirSync(join(root, 'data', 'runs', 'r1-images'), { recursive: true });
+      symlinkSync(join(root, 'data'), join(root, 'link'));
+      symlinkSync('/etc', join(root, 'data', 'runs', 'r1-images', 'escape'));
+      const viaLink = { CEZ_HANDOFF_FILE: join(root, 'link', 'runs', 'r1.handoff.md'), CEZ_TASK_ID: 'r1' };
+      // OpenCode reports the real path; cezar handed out the symlinked one.
+      expect(opencodePermissionReply(ask(join(root, 'data', 'runs', 'r1.handoff.md')), viaLink)).toBe('once');
+      expect(opencodePermissionReply(ask(join(root, 'data', 'runs', 'r1-images', 'a.png')), viaLink)).toBe('once');
+      expect(opencodePermissionReply(ask(join(root, 'link', 'runs', 'r1-images', 'escape', 'hosts')), viaLink)).toBe('reject');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses when the run has no handoff file to compare against', () => {
+    expect(opencodePermissionReply(ask(`${runs}/r1.handoff.md`), undefined)).toBe('reject');
+    expect(opencodePermissionReply({ id: 'per_1', permission: 'external_directory' }, env)).toBe('reject');
+  });
+
+  for (const [label, path, reply, legacy] of [
+    ['the handoff file is approved', `${runs}/r1.handoff.md`, 'once', false],
+    ['another path is refused', `${runs}/r2.handoff.md`, 'reject', false],
+    ['a pre-rework server is answered on its session route', `${runs}/r1.handoff.md`, 'once', true],
+  ] as const) {
+    it(`a turn blocked on a prompt finishes: ${label}`, async () => {
+      const runEnv = legacy ? { ...env, MOCK_LEGACY_PERMISSION: '1' } : env;
+      const runner = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 });
+      const events: AgentEvent[] = [];
+      const session = runner.startSession(
+        { userPrompt: `read it #permission ${path}`, cwd: process.cwd(), env: runEnv },
+        (e) => events.push(e),
+        { autoEndAfterFirstTurn: true },
+      );
+      const result = await session.result;
+      expect(result.text).toContain(`permission ${reply}`);
+      const notes = events.filter((e) => e.type === 'note').map((e) => (e as { message: string }).message);
+      expect(notes).toEqual(reply === 'reject' ? [`opencode: refused external_directory permission for ${path}`] : []);
+    }, 30_000);
+  }
 });
