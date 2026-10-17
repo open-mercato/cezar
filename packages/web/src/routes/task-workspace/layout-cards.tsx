@@ -19,10 +19,10 @@ type StripItem =
   | { kind: 'fixed'; key: string; view: ViewId }
   | { kind: 'layout'; key: string; layout: WorkspaceLayout }
 
-/** The row's `gap-0.5`, and the two icon buttons at the switcher's end (28px + that gap). */
+/** The row's `gap-0.5`, and the two icon buttons at the switcher's end (24px + that gap). */
 const CARD_GAP = 2
-const NEW_BUTTON_WIDTH = 30
-const MORE_BUTTON_WIDTH = 30
+const NEW_BUTTON_WIDTH = 26
+const MORE_BUTTON_WIDTH = 26
 
 /** The drag payload a view tab carries; the workspace's drop zones accept only this. */
 export const VIEW_DRAG_TYPE = 'text/cez-view'
@@ -291,7 +291,8 @@ export function LayoutCards({
           >
             Layout
           </span>
-          <div role="group" aria-label="Layouts" className="flex items-center gap-0.5 rounded-lg border border-border bg-muted/50 p-0.5">
+          {/* 24px items + `p-0.5` + border = 30px, the height of the Terminal and Full view buttons. */}
+          <div role="group" aria-label="Layouts" className="flex h-[30px] items-center gap-0.5 rounded-lg border border-border bg-muted/50 p-0.5">
             {visibleLayouts.map((item) =>
               item.kind === 'layout' ? (
                 <LayoutCard
@@ -315,7 +316,7 @@ export function LayoutCards({
                     data-action="more-layouts"
                     aria-label={`${overflow.length} more layouts`}
                     title="More layouts"
-                    className="size-7 shrink-0 text-muted-foreground"
+                    className="size-6 shrink-0 text-muted-foreground"
                   >
                     <MoreHorizontalIcon aria-hidden="true" />
                   </Button>
@@ -352,8 +353,8 @@ export function LayoutCards({
                  label. */
               data-action="new-layout"
               className={cn(
-                'h-7 shrink-0 gap-1.5 px-1.5 text-[12.5px] text-muted-foreground',
-                layouts.length > 0 && 'w-7 px-0',
+                'h-6 shrink-0 gap-1.5 px-1.5 text-[12.5px] text-muted-foreground',
+                layouts.length > 0 && 'w-6 px-0',
               )}
               aria-label="New layout"
               title="New layout — or drag a tab onto the workspace"
@@ -455,7 +456,7 @@ function LayoutCard({
       data-slot="layout-card"
       data-active={active ? '' : undefined}
       className={cn(
-        'group relative flex h-7 shrink-0 items-center gap-1.5 rounded-md pl-2 pr-0.5 text-[12.5px] font-medium transition-colors',
+        'group relative flex h-6 shrink-0 items-center gap-1.5 rounded-md pl-2 pr-0.5 text-[12.5px] font-medium transition-colors',
         active
           ? 'bg-background text-foreground shadow-sm ring-1 ring-border'
           : 'text-muted-foreground hover:text-foreground',

@@ -132,6 +132,16 @@ export const SKILLS_UPDATE_DROP_OUTCOMES = ['recovered', 'not_applied', 'unreach
 export const skillsUpdateDropOutcomeSchema = z.enum(SKILLS_UPDATE_DROP_OUTCOMES);
 export type SkillsUpdateDropOutcome = z.infer<typeof skillsUpdateDropOutcomeSchema>;
 
+/** How a task's terminal came on screen — `terminal_opened`'s label. */
+export const TERMINAL_OPEN_SURFACES = ['drawer', 'column', 'deep_link'] as const;
+export const terminalOpenSurfaceSchema = z.enum(TERMINAL_OPEN_SURFACES);
+export type TerminalOpenSurface = z.infer<typeof terminalOpenSurfaceSchema>;
+
+/** Which gesture changed what the task workspace shows — `layout_changed`'s label. */
+export const LAYOUT_CHANGES = ['drop_insert', 'drop_replace', 'alt_click', 'switcher', 'column_closed_by_drop'] as const;
+export const layoutChangeSchema = z.enum(LAYOUT_CHANGES);
+export type LayoutChange = z.infer<typeof layoutChangeSchema>;
+
 /**
  * `POST /api/v1/telemetry/event` — a user action only the cockpit can name. Every event has its
  * own closed label set, so this relay can never carry free text. `204`, like the other two.
@@ -149,5 +159,13 @@ export const telemetryEventInputSchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('attachments_restaged'), label: z.enum(['recovered', 'failed']) }),
   /** A skills-update apply lost its connection, and how following the server's state ended. */
   z.object({ event: z.literal('skills_update_apply_dropped'), label: skillsUpdateDropOutcomeSchema }),
+  /** A task's terminal came on screen: the drawer, moved into a column, or its own deep link. */
+  z.object({ event: z.literal('terminal_opened'), label: terminalOpenSurfaceSchema }),
+  /** A terminal tab was given a name, or handed back its automatic one. Never the name. */
+  z.object({ event: z.literal('terminal_tab_renamed'), label: z.enum(['named', 'reset']) }),
+  /** The task workspace's columns changed, and by which gesture. */
+  z.object({ event: z.literal('layout_changed'), label: layoutChangeSchema }),
+  /** Full view was entered — on a wide screen, or one that shows a window at a time. */
+  z.object({ event: z.literal('full_view_toggled'), label: z.enum(['desktop', 'narrow']) }),
 ]);
 export type TelemetryEventInput = z.infer<typeof telemetryEventInputSchema>;

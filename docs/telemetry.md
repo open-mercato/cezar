@@ -51,7 +51,11 @@ following the server then found it `recovered`, `not_applied`, `unreachable` or 
 `attachments_sent` (how many attachments a sent message carried, as a bucket —
 `1`, `2-4`, `5-10`, `11-20` — never their names, types or contents), `attachments_restaged`
 (whether the automatic re-upload after an expired staged attachment was `recovered` or
-`failed`). Every label
+`failed`), `terminal_opened` (how a task's terminal came on screen: `drawer`, `column` or
+`deep_link`), `terminal_tab_renamed` (`named` or `reset` — never the name), `layout_changed`
+(which gesture changed the task workspace's columns: `drop_insert`, `drop_replace`, `alt_click`,
+`switcher` or `column_closed_by_drop`) and `full_view_toggled` (full view entered on a
+`desktop` or a `narrow` screen). Every label
 comes from a closed set the server enforces.
 
 Error reports carry the error type, message and stack with your home directory, working

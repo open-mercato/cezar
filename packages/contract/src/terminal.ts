@@ -77,6 +77,12 @@ export const terminalResizeSchema = z.object({
 });
 export type TerminalResize = z.infer<typeof terminalResizeSchema>;
 
+/** A tab's own name. Empty (or only spaces) gives the tab back its automatic name. */
+export const terminalRenameSchema = z.object({
+  name: z.string().max(80),
+});
+export type TerminalRename = z.infer<typeof terminalRenameSchema>;
+
 /** Output since `cursor`. Omit it to replay the whole retained scrollback, which is what a tab
  *  being reattached after a reload wants. */
 export const terminalOutputQuerySchema = z.object({

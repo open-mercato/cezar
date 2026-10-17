@@ -29,6 +29,8 @@ import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Link } from '@/lib/project-router'
 import { isUnread } from '@/lib/read-state'
+import { trackFullViewEntered, trackLayoutChanged, trackTerminalOpened } from '@/lib/telemetry'
+import { useIsDesktop } from '@/lib/use-desktop'
 import { isEditableTarget } from '@/lib/use-command-shortcut'
 import { cn } from '@/lib/utils'
 import { rememberViewState } from '@/lib/view-memory'
@@ -50,7 +52,7 @@ import { FullViewExit, usePanelCover, WorkspaceMaximizeContext } from './maximiz
 import { useWorkspaceLayouts } from './use-workspace-layouts'
 import { AvailableViewsContext } from './view-picker'
 import { ViewDropZones } from './view-drop-zones'
-import { WorkspaceColumns, type ColumnActions } from './workspace-columns'
+import { SIDE_BY_SIDE_MIN_WIDTH, WorkspaceColumns, type ColumnActions } from './workspace-columns'
 
 /** Lazy: xterm is the heaviest thing on this screen, and most visits never open a shell. */
 const TerminalDrawer = lazy(() =>
@@ -157,6 +159,8 @@ function WorkspaceView({
   // never built on the stand-in state before the host has answered.
   const navigationType = useNavigationType()
   const beforeDeepLink = useRef<{ runId: string; name: string } | null>(null)
+  // Once per task visit: the effect below re-runs on a late host answer.
+  const trackedDeepLink = useRef<string | null>(null)
   const hops = useRef<Map<ViewId, string>>(new Map())
   const hopsRun = useRef(run.id)
   if (hopsRun.current !== run.id) {
@@ -168,6 +172,10 @@ function WorkspaceView({
   useEffect(() => {
     if (!layouts.ready) return
     if (deepLinkView) {
+      if (deepLinkView === 'terminal' && trackedDeepLink.current !== run.id) {
+        trackedDeepLink.current = run.id
+        trackTerminalOpened('deep_link')
+      }
       if (beforeDeepLink.current?.runId !== run.id) {
         beforeDeepLink.current = { runId: run.id, name: layouts.state.active }
       }
@@ -228,6 +236,7 @@ function WorkspaceView({
   const dropViewHere = useCallback(
     (view: ViewId, at: number, mode: 'insert' | 'replace') => {
       setDraggingView(null)
+      trackLayoutChanged(mode === 'insert' ? 'drop_insert' : 'drop_replace')
       dropView(view, at, mode)
     },
     [dropView],
@@ -235,12 +244,28 @@ function WorkspaceView({
   const openViewBeside = useCallback(
     (view: ViewId) => {
       const count = layouts.layout?.columns.length ?? 0
+      trackLayoutChanged('alt_click')
       dropView(view, count, 'insert')
     },
     [dropView, layouts.layout?.columns.length],
   )
   const columnCount = layouts.layout?.columns.length ?? 0
-  const closeColumnByDrop = fixedActive === null && columnCount > 1 ? layouts.closeColumn : undefined
+  const closeColumn = layouts.closeColumn
+  const closeColumnOnDrop = useCallback(
+    (index: number) => {
+      trackLayoutChanged('column_closed_by_drop')
+      closeColumn(index)
+    },
+    [closeColumn],
+  )
+  const closeColumnByDrop = fixedActive === null && columnCount > 1 ? closeColumnOnDrop : undefined
+  const selectFromSwitcher = useCallback(
+    (name: string) => {
+      trackLayoutChanged('switcher')
+      selectLayout(name)
+    },
+    [selectLayout],
+  )
 
   // The drawer: browser-local open + height, per task (spec §6). Read during render on a changed
   // task id, so run A's drawer never carries into run B.
@@ -272,7 +297,14 @@ function WorkspaceView({
     setMaximized(false)
   }
   const exitMaximized = useCallback(() => setMaximized(false), [])
-  const toggleMaximized = useCallback(() => setMaximized((current) => !current), [])
+  const wide = useIsDesktop(SIDE_BY_SIDE_MIN_WIDTH)
+  // Read from a ref, not inside the updater: React may run an updater twice.
+  const maximizedNow = useRef(maximized)
+  maximizedNow.current = maximized
+  const toggleMaximized = useCallback(() => {
+    if (!maximizedNow.current) trackFullViewEntered(wide ? 'desktop' : 'narrow')
+    setMaximized((current) => !current)
+  }, [wide])
   const cover = usePanelCover<HTMLDivElement>(maximized, exitMaximized)
   const maximize = useMemo(() => ({ maximized, toggle: toggleMaximized }), [maximized, toggleMaximized])
 
@@ -285,7 +317,7 @@ function WorkspaceView({
         fixedViews={fixedViews}
         fixedActive={fixedActive}
         onSelectFixed={openDeepLink}
-        onSelect={selectLayout}
+        onSelect={selectFromSwitcher}
         onRename={renameLayout}
         onClose={closeLayout}
         onCreate={createLayout}
@@ -302,7 +334,7 @@ function WorkspaceView({
       fixedViews,
       fixedActive,
       openDeepLink,
-      selectLayout,
+      selectFromSwitcher,
       renameLayout,
       closeLayout,
       createLayout,
@@ -339,7 +371,10 @@ function WorkspaceView({
               'shrink-0 disabled:opacity-100',
               drawerOpen || terminalColumnShown ? 'bg-muted text-foreground' : 'text-muted-foreground',
             )}
-            onClick={() => updateDrawer({ open: !drawerOpen })}
+            onClick={() => {
+              if (!drawerOpen) trackTerminalOpened('drawer')
+              updateDrawer({ open: !drawerOpen })
+            }}
           >
             <TerminalIcon aria-hidden="true" />
             <span className="max-lg:hidden">Terminal</span>
@@ -412,6 +447,7 @@ function WorkspaceView({
         input.focus()
       } else if (event.key === '`') {
         if (!now.terminalAllowed) return
+        if (!now.drawerOpen) trackTerminalOpened('drawer')
         now.updateDrawer({ open: !now.drawerOpen })
       } else return
       event.preventDefault()
@@ -609,6 +645,7 @@ function WorkspaceView({
             onHeightChange={(height) => updateDrawer({ height })}
             onClose={() => updateDrawer({ open: false })}
             onMoveToColumn={() => {
+              trackTerminalOpened('column')
               updateDrawer({ open: false })
               openBeside('terminal')
             }}

@@ -1,7 +1,7 @@
 import { Columns2Icon, Loader2Icon, PlusIcon, SquareIcon, TerminalIcon, XIcon } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { createRunTerminal, getRunTerminal, stopRunTerminal, writeRunTerminal } from '@/api/client'
+import { createRunTerminal, getRunTerminal, renameRunTerminal, stopRunTerminal, writeRunTerminal } from '@/api/client'
 import { useHealth } from '@/api/queries'
 import type { TerminalSession } from '@open-mercato/cezar-api-client'
 import {
@@ -22,7 +22,9 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { trackTerminalTabRenamed } from '@/lib/telemetry'
 import { cn } from '@/lib/utils'
 
 import {
@@ -268,6 +270,20 @@ export function TerminalDrawer({
               // process table (Windows), where treating "unknown" as "idle" silently skipped the
               // warning §6 requires and took a running build with it.
               onClose={() => (session.busy !== false ? setConfirming(session) : closeTab(session))}
+              onRename={(name) => {
+                trackTerminalTabRenamed(name.trim() ? 'named' : 'reset')
+                // Shown at once; the host's answer (the automatic name, for an empty one) follows.
+                if (name.trim()) {
+                  setSessions((current) =>
+                    current.map((entry) => (entry.id === session.id ? { ...entry, label: name.trim() } : entry)),
+                  )
+                }
+                void renameRunTerminal(runId, session.id, name)
+                  .then((renamed) =>
+                    setSessions((current) => current.map((entry) => (entry.id === renamed.id ? renamed : entry))),
+                  )
+                  .catch(() => {})
+              }}
             />
           ))}
           {unavailable ? null : shells.length > 1 ? (
@@ -438,12 +454,15 @@ function TerminalTab({
   active,
   onSelect,
   onClose,
+  onRename,
 }: {
   session: TerminalSession
   active: boolean
   onSelect: () => void
   onClose: () => void
+  onRename: (name: string) => void
 }) {
+  const [editing, setEditing] = useState(false)
   return (
     <div
       data-slot="terminal-tab"
@@ -457,14 +476,35 @@ function TerminalTab({
     >
       {/* Radix selects on pointer-down and on arrow-key focus (`onValueChange` on the list);
           `onClick` stays for a synthetic click, and re-selecting the active tab is a no-op. */}
+      {editing ? (
+        <TabNameField
+          name={session.label}
+          onCommit={(name) => {
+            setEditing(false)
+            if (name.trim() !== session.label) onRename(name)
+          }}
+          onCancel={() => setEditing(false)}
+        />
+      ) : (
       <TabsTrigger
         value={session.id}
         onClick={onSelect}
-        title={session.exitCode === null ? session.label : `${session.label} — exited (${session.exitCode})`}
+        // Double-click renames, as a layout card does; right-click is the same for a pointer that
+        // cannot double-click comfortably.
+        onDoubleClick={(event) => {
+          event.preventDefault()
+          setEditing(true)
+        }}
+        onContextMenu={(event) => {
+          event.preventDefault()
+          setEditing(true)
+        }}
+        title={`${session.exitCode === null ? session.label : `${session.label} — exited (${session.exitCode})`} — double-click to rename`}
         className="inline-block h-auto max-w-40 flex-none truncate rounded-none border-0 p-0 text-xs font-medium text-inherit hover:text-inherit focus-visible:underline focus-visible:ring-0 focus-visible:outline-0 data-[state=active]:bg-transparent data-[state=active]:font-medium data-[state=active]:text-inherit group-data-[variant=default]/tabs-list:data-[state=active]:shadow-none"
       >
         {session.label}
       </TabsTrigger>
+      )}
       <Button
         type="button"
         variant="ghost"
@@ -479,6 +519,53 @@ function TerminalTab({
         <XIcon aria-hidden="true" className="size-3" />
       </Button>
     </div>
+  )
+}
+
+/** The inline tab rename. Enter and blur commit, Escape abandons; an empty name asks the host for
+ *  the automatic one back. */
+function TabNameField({
+  name,
+  onCommit,
+  onCancel,
+}: {
+  name: string
+  onCommit: (name: string) => void
+  onCancel: () => void
+}) {
+  const [value, setValue] = useState(name)
+  const inputRef = useRef<HTMLInputElement>(null)
+  // Escape unmounts the field, and a focused node being detached can fire `blur`: first answer wins.
+  const settled = useRef(false)
+  useEffect(() => inputRef.current?.select(), [])
+  const settle = (commit: boolean) => {
+    if (settled.current) return
+    settled.current = true
+    if (commit) onCommit(value)
+    else onCancel()
+  }
+  return (
+    <Input
+      ref={inputRef}
+      autoFocus
+      maxLength={80}
+      aria-label={`Rename ${name}`}
+      value={value}
+      onChange={(event) => setValue(event.target.value)}
+      onBlur={() => settle(true)}
+      onKeyDown={(event) => {
+        // The tab list moves focus on arrow keys; inside the field they move the caret.
+        event.stopPropagation()
+        if (event.key === 'Enter') {
+          event.preventDefault()
+          settle(true)
+        } else if (event.key === 'Escape') {
+          event.preventDefault()
+          settle(false)
+        }
+      }}
+      className="h-5 w-28 rounded-sm px-1 py-0 text-xs shadow-none focus-visible:ring-0 md:text-xs"
+    />
   )
 }
 

@@ -319,6 +319,19 @@ describe('tab labels', () => {
     expect(sessions.get(session.id)?.label).toBe('npm test');
   });
 
+  it('keeps a name the user gave the tab, and gives the automatic one back on an empty name', async () => {
+    const { sessions } = harness();
+    const session = await open(sessions);
+    expect(sessions.rename(session.id, '  dev server  ')?.label).toBe('dev server');
+    sessions.observe([{ pid: 1, ppid: 4242, command: 'npm run dev' }]);
+    expect(sessions.get(session.id)?.label).toBe('dev server');
+
+    expect(sessions.rename(session.id, '   ')?.label).toBe('Terminal 1');
+    sessions.observe([{ pid: 1, ppid: 4242, command: 'npm run dev' }]);
+    expect(sessions.get(session.id)?.label).toBe('npm run dev');
+    expect(sessions.rename('missing', 'x')).toBeNull();
+  });
+
   it('leaves an exited session last label alone', async () => {
     const { sessions, spawned } = harness();
     const session = await open(sessions);

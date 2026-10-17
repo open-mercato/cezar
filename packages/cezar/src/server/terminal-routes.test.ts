@@ -270,6 +270,36 @@ describe('the workspace terminal routes', () => {
       expect(ptys[0]!.resized).toEqual([[120, 40]]);
     });
 
+    it('renames a tab, refuses a name past the cap, and 404s an unknown session', async () => {
+      const runId = seedRun();
+      const session = await openSession(runId);
+      const rename = (sessionId: string, name: string) =>
+        apiRequest(makeApp(), `/api/v1/runs/${runId}/terminal/${sessionId}`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name }),
+        });
+      const res = await rename(session.id, 'dev server');
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ id: session.id, label: 'dev server' });
+      const listed = await (await apiRequest(makeApp(), `/api/v1/runs/${runId}/terminal`)).json();
+      expect((listed as { sessions: Array<{ label: string }> }).sessions[0]!.label).toBe('dev server');
+      expect((await rename(session.id, 'x'.repeat(81))).status).toBe(400);
+      expect((await rename('nope', 'x')).status).toBe(404);
+    });
+
+    it('refuses a rename where the terminal is turned off', async () => {
+      const runId = seedRun();
+      const session = await openSession(runId);
+      process.env.CEZ_TERMINAL = '0';
+      const res = await apiRequest(makeApp(), `/api/v1/runs/${runId}/terminal/${session.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'dev' }),
+      });
+      expect(res.status).toBe(409);
+    });
+
     it('stops a session', async () => {
       const runId = seedRun();
       const session = await openSession(runId);
