@@ -218,7 +218,92 @@ export function TaskColumnsHeading({ label }: { label: string }) {
 /** A row's exact time for its hover title — the browser's locale, to the minute. */
 function exactTime(iso: string): string {
   const date = new Date(iso)
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+  return Number.isNaN(date.getTime()) ? iso : exactTimeFormat().format(date)
+}
+
+// One formatter for every row: `toLocaleString` builds a fresh Intl formatter per call, which at
+// hundreds of rows was a visible share of each keystroke.
+let exactTimeFormatter: Intl.DateTimeFormat | undefined
+const exactTimeFormat = () =>
+  (exactTimeFormatter ??= new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }))
+
+/**
+ * A task row's derived strings, computed ONCE per task list rather than per render — the row's
+ * label, PR/issue text, what cmdk filters on, and its hover title. Keystrokes then only rank and
+ * slice; they never redo this work.
+ */
+export interface SearchableTask {
+  task: PaletteTask
+  key: string
+  label: string
+  references: string
+  /** Exactly what the row hands cmdk, so the pre-ranking below and cmdk's filter agree. */
+  value: string
+  keywords: string[]
+  projectName: string | null
+  title: string
+}
+
+export function searchableTasks(
+  tasks: readonly PaletteTask[],
+  projectNames: ReadonlyMap<string, string>,
+): SearchableTask[] {
+  return tasks.map((task) => {
+    const label = runTitle(task)
+    const references = taskReferenceText(task)
+    const projectName = task.projectId === null ? null : (projectNames.get(task.projectId) ?? null)
+    return {
+      task,
+      key: taskKey(task),
+      label,
+      references,
+      // The id keeps duplicate titles apart; it also lets a pasted run id find its task.
+      // `runTitle`, matching the rendered text — filtering on a raw title hidden behind an
+      // auto-summary would surface rows for no visible reason. The PR/issue numbers sit before
+      // the id so `1234` finds the task about PR #1234 ahead of a uuid that happens to hold it.
+      value: `task ${label} ${references} ${task.id}`,
+      // The project name is filter fodder for the same reason it is rendered: with every
+      // project's tasks in one list, "shop" has to narrow to shop's tasks. `auto` finds the tasks
+      // an automation started, like the chip that marks them.
+      keywords: [...(projectName ? [projectName] : []), ...(task.automationId ? ['automation', 'automatic'] : [])],
+      projectName,
+      title: `Updated ${exactTime(task.lastActivityAt)} · created ${exactTime(task.createdAt)}`,
+    }
+  })
+}
+
+/** How many task rows a palette mounts. Hundreds of cmdk items made every keystroke filter,
+ *  re-sort and re-render all of them; nobody reads past this many matches — they type more. */
+export const TASK_ROW_LIMIT = 50
+
+/**
+ * The best `limit` tasks for `query`, best first, by the palette's own scorer — the work cmdk
+ * would do, done once over plain strings, so only the rows that will show are ever mounted.
+ * An empty query keeps the list's order. `total` is every match, for the "N more" line.
+ */
+export function rankTasks(
+  entries: readonly SearchableTask[],
+  query: string,
+  limit = TASK_ROW_LIMIT,
+): { shown: SearchableTask[]; total: number } {
+  if (query.trim() === '') return { shown: entries.slice(0, limit), total: entries.length }
+  const scored: { entry: SearchableTask; score: number; index: number }[] = []
+  entries.forEach((entry, index) => {
+    const score = paletteScore(entry.value, query, entry.keywords)
+    if (score > 0) scored.push({ entry, score, index })
+  })
+  scored.sort((a, b) => b.score - a.score || a.index - b.index)
+  return { shown: scored.slice(0, limit).map((item) => item.entry), total: scored.length }
+}
+
+/** The line under a capped task group: how many more match, and the way to reach them. */
+export function MoreTasks({ hidden }: { hidden: number }) {
+  if (hidden <= 0) return null
+  return (
+    <div data-slot="palette-more-tasks" className="px-2 py-1.5 text-xs text-soft-foreground">
+      {hidden} more — keep typing to narrow
+    </div>
+  )
 }
 
 /** Drops undefined keys, so a run without references keeps the row's exact old shape. */
@@ -400,44 +485,35 @@ export function CommandPalette() {
     >
       {/* The body mounts only while the dialog is open (Radix portals nothing when closed), so
           its queries — notably the skills fetch — run on first open, never on app boot. */}
-      <PaletteContent close={() => setOpen(false)} />
+      <PaletteContent close={close} />
     </CommandDialog>
   )
 }
 
 /** One task row. Shared by Unread and Tasks so the two groups can never drift into rendering
  *  or filtering the same task differently — only which group holds it changes. */
-export function TaskItem({
-  task,
-  projectName,
+export const TaskItem = React.memo(function TaskItem({
+  entry,
   showProject,
   now,
   onSelect,
   slot = 'palette-task',
-  trailing,
+  current = false,
 }: {
-  task: PaletteTask
-  projectName: string | null
+  entry: SearchableTask
   showProject: boolean
   now: number
   onSelect: (task: PaletteTask) => void
   slot?: string
-  trailing?: React.ReactNode
+  /** The task on screen — marked `open`. */
+  current?: boolean
 }) {
+  const { task, label, references, projectName } = entry
   const attention = deriveAttention(task)
-  const label = runTitle(task)
-  const references = taskReferenceText(task)
   return (
     <CommandItem
-      // The id keeps duplicate titles apart; it also lets a pasted run id find its task.
-      // `runTitle`, matching the rendered text — filtering on a raw title hidden behind an
-      // auto-summary would surface rows for no visible reason. The PR/issue numbers sit before
-      // the id so `1234` finds the task about PR #1234 ahead of a uuid that happens to hold it.
-      value={`task ${label} ${references} ${task.id}`}
-      // The project name is filter fodder for the same reason it is rendered: with every
-      // project's tasks in one list, "shop" has to narrow to shop's tasks.
-      // `auto` finds the tasks an automation started, like the chip that marks them.
-      keywords={[...(projectName ? [projectName] : []), ...(task.automationId ? ['automation', 'automatic'] : [])]}
+      value={entry.value}
+      keywords={entry.keywords}
       data-slot={slot}
       data-run-id={task.id}
       data-project-id={task.projectId ?? undefined}
@@ -470,14 +546,10 @@ export function TaskItem({
           {projectName}
         </span>
       ) : null}
-      {trailing}
+      {current ? <span className="shrink-0 text-xs text-primary">open</span> : null}
       {/* Updated and Created, as two right-aligned table columns under the group's own labels
           (`TaskColumnsHeading`) — same widths there and here, so every date lines up. */}
-      <span
-        data-slot="palette-task-age"
-        title={`Updated ${exactTime(task.lastActivityAt)} · created ${exactTime(task.createdAt)}`}
-        className="flex shrink-0 gap-1 text-xs tabular-nums"
-      >
+      <span data-slot="palette-task-age" title={entry.title} className="flex shrink-0 gap-1 text-xs tabular-nums">
         <span data-slot="palette-task-updated" className={cn(DATE_COLUMN, 'text-muted-foreground')}>
           {shortAge(task.lastActivityAt, now)}
         </span>
@@ -487,7 +559,7 @@ export function TaskItem({
       </span>
     </CommandItem>
   )
-}
+})
 
 function PaletteContent({ close }: { close: () => void }) {
   const navigate = useNavigate()
@@ -502,7 +574,8 @@ function PaletteContent({ close }: { close: () => void }) {
   const skills = useSkills()
   // Skills list most-used → project → global (#519) — the same order every picker renders.
   const uiState = useUiState()
-  const now = Date.now()
+  // Once per opening: a clock that ticked per keystroke would re-render every (memoized) row.
+  const [now] = React.useState(Date.now)
 
   // The sidebar's hand-picked order (#952), read from the same cached workspace ui-state the
   // sidebar writes — so a project dragged to the top of the drawer is also the top of this list.
@@ -511,13 +584,19 @@ function PaletteContent({ close }: { close: () => void }) {
     () => (multiProject && registry ? orderProjects(registry.projects, activeProjectId, projectOrder) : []),
     [multiProject, registry, activeProjectId, projectOrder],
   )
-  const partitioned = React.useMemo(() => partitionTasks(tasks), [tasks])
+  const sections = React.useMemo(() => {
+    const { recentlyFinished, otherTasks } = partitionTasks(tasks)
+    return {
+      all: searchableTasks(tasks, projectNames),
+      recentlyFinished: searchableTasks(recentlyFinished, projectNames),
+      otherTasks: searchableTasks(otherTasks, projectNames),
+    }
+  }, [tasks, projectNames])
   // Searching flattens the two task sections into one ranked list — see the Tasks group below.
-  const recentlyFinished = searching ? [] : partitioned.recentlyFinished
-  const otherTasks = searching ? tasks : partitioned.otherTasks
+  // Either way only the rows that will show are mounted (`rankTasks`).
+  const recentlyFinished = searching ? { shown: [], total: 0 } : rankTasks(sections.recentlyFinished, '', 20)
+  const otherTasks = rankTasks(searching ? sections.all : sections.otherTasks, search)
   const showProjectOnTasks = multiProject
-  const taskProjectName = (task: PaletteTask): string | null =>
-    task.projectId === null ? null : (projectNames.get(task.projectId) ?? null)
   const skillUsage = uiState.data?.skillUsage
   const orderedSkills = React.useMemo(
     () => orderSkillsByUsage(skills.data ?? [], skillUsage),
@@ -544,10 +623,14 @@ function PaletteContent({ close }: { close: () => void }) {
   /** A task thread in its OWN project — the one navigation that must ignore the active scope.
    *  A row with no project id belongs to wherever we already are, which is exactly what an
    *  unprefixed target means to the scope-wrapping navigate. */
-  const selectTask = (task: PaletteTask) => {
-    close()
-    navigate(paletteTaskPath(task))
-  }
+  // Stable, so typing does not re-render every memoized task row.
+  const selectTask = React.useCallback(
+    (task: PaletteTask) => {
+      close()
+      navigate(paletteTaskPath(task))
+    },
+    [close, navigate],
+  )
   const nextTheme = NEXT_THEME[theme]
 
   return (
@@ -583,18 +666,12 @@ function PaletteContent({ close }: { close: () => void }) {
         {/* Only in the DEFAULT view. Once you type, splitting tasks by read-state is noise: it
             floats a section of near-misses above the exact match you are looking for, purely
             because that section renders first. Searching gets one ranked Tasks list. */}
-        {!searching && recentlyFinished.length > 0 ? (
+        {!searching && recentlyFinished.shown.length > 0 ? (
           <CommandGroup heading={<TaskColumnsHeading label="Recently finished" />}>
-            {recentlyFinished.map((task) => (
-              <TaskItem
-                key={taskKey(task)}
-                task={task}
-                projectName={taskProjectName(task)}
-                showProject={showProjectOnTasks}
-                now={now}
-                onSelect={selectTask}
-              />
+            {recentlyFinished.shown.map((entry) => (
+              <TaskItem key={entry.key} entry={entry} showProject={showProjectOnTasks} now={now} onSelect={selectTask} />
             ))}
+            <MoreTasks hidden={recentlyFinished.total - recentlyFinished.shown.length} />
           </CommandGroup>
         ) : null}
 
@@ -689,18 +766,12 @@ function PaletteContent({ close }: { close: () => void }) {
           </CommandGroup>
         ) : null}
 
-        {otherTasks.length > 0 ? (
+        {otherTasks.shown.length > 0 ? (
           <CommandGroup heading={<TaskColumnsHeading label="Tasks" />}>
-            {otherTasks.map((task) => (
-              <TaskItem
-                key={taskKey(task)}
-                task={task}
-                projectName={taskProjectName(task)}
-                showProject={showProjectOnTasks}
-                now={now}
-                onSelect={selectTask}
-              />
+            {otherTasks.shown.map((entry) => (
+              <TaskItem key={entry.key} entry={entry} showProject={showProjectOnTasks} now={now} onSelect={selectTask} />
             ))}
+            <MoreTasks hidden={otherTasks.total - otherTasks.shown.length} />
           </CommandGroup>
         ) : null}
 

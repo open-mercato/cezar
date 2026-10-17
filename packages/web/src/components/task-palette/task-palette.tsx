@@ -7,6 +7,9 @@ import type { ApiRun } from '@open-mercato/cezar-api-client'
 import {
   paletteScore,
   paletteTaskPath,
+  MoreTasks,
+  rankTasks,
+  searchableTasks,
   TaskColumnsHeading,
   TaskItem,
   usePaletteExclusion,
@@ -31,7 +34,7 @@ import { orderByRecency, readRecentTasks } from '@/lib/recent-tasks'
 import { runTitle } from '@/lib/task-groups'
 import { ownedTaskPr } from '@/lib/tasks-table'
 import { queueFileOpen, taskWorkspaceFor } from '@/lib/task-workspace-bridge'
-import { BINDABLE_COMMANDS, chordFromEvent, chordProblem, formatChord, isApplePlatform } from '@/lib/keybindings'
+import { BINDABLE_COMMANDS, chordFromEvent, chordProblem, formatChord, isApplePlatform, shortcutsBlocked } from '@/lib/keybindings'
 import { commandShortcutHint, isEditableTarget, useCommandShortcut } from '@/lib/use-command-shortcut'
 import { useKeybindings } from '@/lib/use-keybindings'
 import { cn } from '@/lib/utils'
@@ -92,6 +95,9 @@ export function rankPaths(paths: readonly string[], query: string, limit = 50): 
 interface SubjectApi {
   run: ApiRun
   commands: TaskCommand[]
+  /** The commands against the workspace AS IT IS NOW — what runs on Enter or a shortcut. The host
+   *  is memoized, so `commands` is as of its last render; tabs and layouts may have moved since. */
+  build: () => TaskCommand[]
   rename: (title: string) => void
 }
 
@@ -221,7 +227,7 @@ export function TaskPalette() {
   }, [open])
 
   const perform = (id: string, beside = false) => {
-    const command = subjectApi.current?.commands.find((candidate) => candidate.id === id)
+    const command = subjectApi.current?.build().find((candidate) => candidate.id === id)
     if (!command || command.unavailable) return
     // Rename edits in place: the palette's input becomes the title field.
     if (command.id === 'rename') {
@@ -236,6 +242,16 @@ export function TaskPalette() {
     // dialog of its own (Stop, Delete, Commit) is not fighting the palette's focus trap.
     setTimeout(run, 0)
   }
+
+  // Stable, so typing does not re-render every memoized task row.
+  const pickTask = React.useCallback(
+    (task: PaletteTask) => {
+      performed.current = true
+      setOpen(false)
+      navigate(paletteTaskPath(task))
+    },
+    [navigate],
+  )
 
   const beginRename = React.useCallback(() => {
     const run = subjectApi.current?.run
@@ -276,10 +292,10 @@ export function TaskPalette() {
       const chord = chordFromEvent(event)
       const id = chord ? now.byChord.get(chord) : undefined
       if (!chord || !id || !chordFiresAt(event.target, chord)) return
-      if (document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')) return
+      if (shortcutsBlocked()) return
       const api = subjectApi.current
       if (!api || api.run.id !== now.pageTaskId) return
-      const command = api.commands.find((candidate) => candidate.id === id)
+      const command = api.build().find((candidate) => candidate.id === id)
       // Not on offer right now (a git step that is not the next one): the chord stays the browser's.
       if (!command) return
       event.preventDefault()
@@ -361,6 +377,7 @@ export function TaskPalette() {
           apiRef={subjectApi}
           onCommands={setPublished}
           onRename={beginRename}
+          open={open}
         />
       ) : null}
       <CommandDialog
@@ -463,11 +480,8 @@ export function TaskPalette() {
                     recentOnly={mode === 'all'}
                     exclude={mode === 'all' ? subjectId : null}
                     current={pageTaskId}
-                    onPick={(task) => {
-                      performed.current = true
-                      setOpen(false)
-                      navigate(paletteTaskPath(task))
-                    }}
+                    query={query}
+                    onPick={pickTask}
                   />
                 ) : null}
               </>
@@ -628,37 +642,44 @@ function TaskResults({
   recentOnly,
   exclude,
   current,
+  query,
   onPick,
 }: {
   recentOnly: boolean
   exclude: string | null
   current: string | undefined
+  /** The search without its prefix — ranked here so only the rows that show are mounted. */
+  query: string
   onPick: (task: PaletteTask) => void
 }) {
   const { tasks, multiProject, projectNames } = usePaletteTasks()
   const recent = readRecentTasks()
-  const ordered = React.useMemo(() => {
+  // Built once per task list; a keystroke only ranks and slices (`rankTasks`).
+  const entries = React.useMemo(() => {
     const byRecency = orderByRecency(tasks, (task) => task.id, recent)
-    if (!recentOnly) return byRecency
     const seen = new Set(recent)
-    return byRecency.filter((task) => seen.has(task.id) && task.id !== exclude).slice(0, RECENT_IN_DEFAULT_VIEW)
-  }, [tasks, recent, recentOnly, exclude])
-  const now = Date.now()
-  if (ordered.length === 0) return null
+    const listed = recentOnly
+      ? byRecency.filter((task) => seen.has(task.id) && task.id !== exclude).slice(0, RECENT_IN_DEFAULT_VIEW)
+      : byRecency
+    return searchableTasks(listed, projectNames)
+  }, [tasks, recent, recentOnly, exclude, projectNames])
+  const { shown, total } = React.useMemo(() => rankTasks(entries, query), [entries, query])
+  const [now] = React.useState(Date.now)
+  if (shown.length === 0) return null
   return (
     <CommandGroup heading={<TaskColumnsHeading label={recentOnly ? 'Recent tasks' : 'Tasks'} />}>
-      {ordered.map((task) => (
+      {shown.map((entry) => (
         <TaskItem
-          key={`${task.projectId ?? ''}/${task.id}`}
-          task={task}
+          key={entry.key}
+          entry={entry}
           slot={TASK_ROW}
-          projectName={task.projectId === null ? null : (projectNames.get(task.projectId) ?? null)}
           showProject={multiProject}
           now={now}
           onSelect={onPick}
-          trailing={task.id === current ? <span className="shrink-0 text-xs text-primary">open</span> : null}
+          current={entry.task.id === current}
         />
       ))}
+      <MoreTasks hidden={total - shown.length} />
     </CommandGroup>
   )
 }
@@ -718,8 +739,11 @@ function PaletteFooter({ mode }: { mode: PaletteMode | 'rename' | 'record' }) {
  * must outlive the palette that opened them. Publishes its commands up through `onCommands` when
  * what they say changes; `apiRef` always holds the latest closures for `perform`.
  */
-function SubjectHost(props: {
+const SubjectHost = React.memo(function SubjectHost(props: {
   runId: string
+  /** Changes only on open/close — re-reads the workspace for the listed commands then, and not
+   *  on every keystroke. */
+  open: boolean
   apiRef: React.RefObject<SubjectApi | null>
   onCommands: (published: { runId: string; commands: TaskCommand[] }) => void
   onRename: () => void
@@ -727,7 +751,7 @@ function SubjectHost(props: {
   const run = useRun(props.runId).data
   if (!run) return null
   return <SubjectReferences run={run} {...props} />
-}
+})
 
 function SubjectReferences(props: {
   run: ApiRun
@@ -766,12 +790,13 @@ function SubjectCommands({
   const liveProjectId = useLiveProjectId()
   const owned = ownedTaskPr(run)
 
-  const commands = buildTaskCommands(
+  const build = () =>
+    buildTaskCommands(
     {
       run,
       canResume: openIn.canResumeHere,
       git: git.action,
-      workspace,
+      workspace: taskWorkspaceFor(run.id),
       terminalAvailable,
       openChoices: openIn.choices,
       prUrl: owned?.url,
@@ -794,9 +819,11 @@ function SubjectCommands({
       copy: (text, what) => void copyToClipboard(text, `${what} copied`),
     },
   )
+  const commands = build()
   apiRef.current = {
     run,
     commands,
+    build,
     rename: (title) =>
       patch.mutate({ title }, { onError: (error) => toast(error.message, { tone: 'danger' }) }),
   }

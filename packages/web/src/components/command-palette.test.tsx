@@ -571,6 +571,23 @@ describe('Tasks group', () => {
     }
   })
 
+  it('mounts at most 50 task rows however many tasks match, and says how many more there are', async () => {
+    renderPalette({
+      runs: Array.from({ length: 300 }, (_, index) =>
+        run({ id: `r-${index}`, title: `fix thing ${index}`, createdAt: new Date(Date.UTC(2026, 6, 1, 0, index)).toISOString() }),
+      ),
+    })
+    openWith({ metaKey: true })
+    await screen.findByText('fix thing 299')
+    const rows = () => document.querySelectorAll('[data-slot="palette-task"]').length
+    expect(rows()).toBe(50)
+    expect(screen.getByText('250 more — keep typing to narrow')).toBeTruthy()
+    // The best match still leads, even when it sits past the first 50.
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'thing 7' } })
+    expect(document.querySelector<HTMLElement>('[data-slot="palette-task"]')?.dataset.runId).toBe('r-7')
+    expect(rows()).toBeLessThanOrEqual(50)
+  })
+
   it('renders no Tasks group when there are no runs', async () => {
     renderPalette()
     openWith({ metaKey: true })

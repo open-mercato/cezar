@@ -28,7 +28,7 @@ import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Link } from '@/lib/project-router'
 import { isUnread } from '@/lib/read-state'
-import { tabHint } from '@/lib/keybindings'
+import { shortcutsBlocked, tabHint } from '@/lib/keybindings'
 import { recordTaskVisit } from '@/lib/recent-tasks'
 import { useKeybindings } from '@/lib/use-keybindings'
 import { useModifierHeld } from '@/lib/use-modifier-held'
@@ -227,7 +227,8 @@ function WorkspaceView({
   // Holding ⌘ prints each card's shortcut on it (spec 2026-10-17-task-palette): its positional
   // ⌘N, else a chord bound to that view or layout by name.
   const { bindings } = useKeybindings()
-  const keysHeld = useModifierHeld()
+  // Only while ⌘N would really switch: not under a palette, dialog or menu (`shortcutsBlocked`).
+  const keysHeld = useModifierHeld(true, notBlocked)
   const keyHints = useMemo(
     () =>
       [...fixedViews.map((view) => `view:${view}`), ...cardLayouts.map((layout) => `layout:${layout.name}`)].map(
@@ -726,6 +727,7 @@ function WorkspaceView({
 }
 
 const noop = () => {}
+const notBlocked = () => !shortcutsBlocked()
 
 function ColumnLoading({ title }: { title: string }) {
   return (

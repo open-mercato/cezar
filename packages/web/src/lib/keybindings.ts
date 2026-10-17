@@ -86,6 +86,15 @@ export function formatChord(chord: string, apple = isApplePlatform()): string {
   return [...modifiers.map((m) => names[m] ?? m), key].join('+')
 }
 
+/**
+ * Is something on screen that owns the keyboard — a palette, a dialog, a menu? Then task shortcuts
+ * do not fire, and the tab badges that advertise them must not show either: one predicate, so the
+ * hint never promises a key that would do nothing.
+ */
+export function shortcutsBlocked(root: ParentNode = document): boolean {
+  return root.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]') !== null
+}
+
 /** The badge for a tab: just the digit for the plain ⌘N it ships with, the full chord otherwise. */
 export function tabHint(chord: string | undefined, apple = isApplePlatform()): string | undefined {
   if (!chord) return undefined

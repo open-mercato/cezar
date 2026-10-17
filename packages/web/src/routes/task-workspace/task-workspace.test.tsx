@@ -185,6 +185,33 @@ describe('the task workspace (main)', () => {
     vi.unstubAllGlobals()
   })
 
+  it('shows no tab numbers while a palette or dialog has the keyboard — ⌘N would not switch', async () => {
+    vi.stubGlobal('navigator', { ...navigator, platform: 'MacIntel' })
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    const hints = () => document.querySelectorAll('[data-slot="tab-key-hint"]').length
+
+    // Held while a dialog is already up: nothing.
+    const dialog = document.body.appendChild(Object.assign(document.createElement('div'), { role: 'dialog' }))
+    dialog.setAttribute('role', 'dialog')
+    fireEvent.keyDown(window, { key: 'Meta', metaKey: true })
+    await new Promise((resolve) => setTimeout(resolve, 450))
+    expect(hints()).toBe(0)
+    fireEvent.keyUp(window, { key: 'Meta' })
+    dialog.remove()
+
+    // Held, hints up — then ⌘K opens a palette: they go.
+    fireEvent.keyDown(window, { key: 'Meta', metaKey: true })
+    await waitFor(() => expect(hints()).toBeGreaterThan(0))
+    document.body.appendChild(dialog)
+    fireEvent.keyDown(window, { key: 'k', metaKey: true })
+    await waitFor(() => expect(hints()).toBe(0))
+    fireEvent.keyUp(window, { key: 'Meta' })
+    dialog.remove()
+    vi.unstubAllGlobals()
+  })
+
   it('offers no Terminal anywhere when the cockpit allows no shell', async () => {
     stubFetch({ terminal: false })
     renderWorkspace()
