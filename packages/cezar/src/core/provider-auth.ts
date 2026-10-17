@@ -453,7 +453,7 @@ function cursorFallbackArgs(result: ProviderCommandResult): readonly string[] | 
 /** Telemetry 8d304c50: an `agent` that answers neither shape is likely another program of that name. */
 function cursorUnrecognizedHint(result: ProviderCommandResult): string | undefined {
   if (result.stdout.trim()) return undefined;
-  return 'The Cursor CLI did not answer its status check. Update it with `agent update`, or point '
+  return 'The Cursor CLI did not answer its status check. Update it with `cursor-agent update`, or point '
     + 'CEZ_CURSOR_AGENT_BIN at Cursor\'s `cursor-agent` if another program named `agent` comes first on PATH.';
 }
 

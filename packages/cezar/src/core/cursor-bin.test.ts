@@ -39,6 +39,12 @@ describe.skipIf(process.platform === 'win32')('resolveCursorAgentBin', () => {
     expect(resolveCursorAgentBin(undefined, { PATH: join(root, 'empty') }, root, 'darwin')).toBe(installed);
   });
 
+  it('prefers the installer link off PATH over a foreign `agent` on PATH', () => {
+    executable(join(root, 'foreign'), 'agent');
+    const installed = executable(join(root, '.local', 'bin'), 'cursor-agent');
+    expect(resolveCursorAgentBin(undefined, { PATH: join(root, 'foreign') }, root, 'darwin')).toBe(installed);
+  });
+
   it('answers a bare `agent` when nothing is installed, so the spawn reports not-installed', () => {
     expect(resolveCursorAgentBin(undefined, { PATH: join(root, 'empty') }, root, 'darwin')).toBe('agent');
   });
