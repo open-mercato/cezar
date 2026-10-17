@@ -65,6 +65,8 @@ describe('RunManager worktree lifecycle admission', () => {
     await writeLifecycleConfig(p.root, {afterCreate: [entry('true')], beforeRemove: [entry('touch {{ root_path }}/cleanup-started; while [ ! -e {{ root_path }}/release-cleanup ]; do sleep 0.02; done')]}, null);
     const run = p.manager.startRun(workflow, {task: 'PR head cleanup', runner: 'claude'});
     await wait(() => expect(p.manager.isActive(run.id)).toBe(false));
+    // The terminal retention pass sweeps PR head refs from its own snapshot; pin after it.
+    await (p.manager as unknown as {retentionPass: Promise<void>}).retentionPass;
     const worktreePath = p.store.getRun(run.id)!.worktreePath!;
     const head = (await exec('git', ['rev-parse', 'HEAD'], {cwd: p.root})).stdout.trim();
     const ref = 'refs/cezar/pr/42';

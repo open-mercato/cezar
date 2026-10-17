@@ -2151,7 +2151,7 @@ export class RunManager {
     // Enforce count-based retention (#483) here so a single hook covers every
     // terminal path. Fire-and-forget: retention must never delay or throw into
     // the lifecycle.
-    void this.enforceRetention();
+    this.retentionPass = this.enforceRetention();
     // The run's temp directory (#785) goes on the same terminal transition, and
     // unconditionally — it is scratch, not an artifact, so unlike a worktree
     // there is no keep-count to respect and nothing left to recover from it. A
@@ -3030,6 +3030,8 @@ export class RunManager {
   /** Reclaim finished worktrees beyond the keep-limit (#483) — directory only,
    *  `cez/<id8>` branch kept. Best-effort; a failure never affects run
    *  lifecycle. `review`/live runs are excluded by the selector. */
+  /** The latest terminal retention pass — tests await it before pinning refs it may sweep. */
+  private retentionPass: Promise<void> = Promise.resolve();
   private async enforceRetention(): Promise<void> {
     try {
       const keep = await resolveWorktreeRetention(this.repoRoot);
