@@ -9,6 +9,7 @@ import {
   KILL_GRACE_MS,
   OpencodeServerRunner,
   TURN_IDLE_GRACE_MS,
+  opencodePermissionReply,
 } from './opencode-server-runner.ts';
 
 const spawnHook = vi.hoisted(() => ({ override: null as null | ((...args: unknown[]) => unknown) }));
@@ -405,4 +406,55 @@ describe('#897 a turn that outlives its prompt POST', () => {
     expect(types(events).filter((t) => t === 'turn-end')).toHaveLength(1);
     expect(Date.now() - started).toBeLessThan(TURN_IDLE_GRACE_MS);
   }, 30_000);
+});
+
+describe('permission prompts outside the worktree (c3d30076 hung 21 h on one)', () => {
+  const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
+  const runs = '/repo/.ai/cezar/runs';
+  const env = { CEZ_HANDOFF_FILE: `${runs}/r1.handoff.md`, CEZ_TASK_ID: 'r1' };
+  const ask = (filepath: string, permission = 'external_directory') => ({
+    id: 'per_1',
+    permission,
+    patterns: [`${dirname(filepath)}/*`],
+    metadata: { filepath },
+  });
+
+  it('grants exactly this run\'s handoff file and its own pasted attachments', () => {
+    expect(opencodePermissionReply(ask(`${runs}/r1.handoff.md`), env)).toBe('once');
+    expect(opencodePermissionReply(ask(`${runs}/r1-images/pasted-1.png`), env)).toBe('once');
+  });
+
+  it('refuses everything else outside the worktree', () => {
+    expect(opencodePermissionReply(ask(`${runs}/r2.handoff.md`), env)).toBe('reject');
+    expect(opencodePermissionReply(ask(`${runs}/r1.ndjson`), env)).toBe('reject');
+    expect(opencodePermissionReply(ask(`${runs}/r2-images/pasted-1.png`), env)).toBe('reject');
+    expect(opencodePermissionReply(ask(`${runs}/r1-images/../r2.handoff.md`), env)).toBe('reject');
+    expect(opencodePermissionReply(ask(`${runs}/r1-images/nested/x.png`), env)).toBe('reject');
+    expect(opencodePermissionReply(ask('/etc/passwd'), env)).toBe('reject');
+    expect(opencodePermissionReply(ask(`${runs}/r1.handoff.md`, 'bash'), env)).toBe('reject');
+  });
+
+  it('refuses when the run has no handoff file to compare against', () => {
+    expect(opencodePermissionReply(ask(`${runs}/r1.handoff.md`), undefined)).toBe('reject');
+    expect(opencodePermissionReply({ id: 'per_1', permission: 'external_directory' }, env)).toBe('reject');
+  });
+
+  for (const [label, path, reply] of [
+    ['the handoff file is approved', `${runs}/r1.handoff.md`, 'once'],
+    ['another path is refused', `${runs}/r2.handoff.md`, 'reject'],
+  ] as const) {
+    it(`a turn blocked on a prompt finishes: ${label}`, async () => {
+      const runner = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 });
+      const events: AgentEvent[] = [];
+      const session = runner.startSession(
+        { userPrompt: `read it #permission ${path}`, cwd: process.cwd(), env },
+        (e) => events.push(e),
+        { autoEndAfterFirstTurn: true },
+      );
+      const result = await session.result;
+      expect(result.text).toContain(`permission ${reply}`);
+      const notes = events.filter((e) => e.type === 'note').map((e) => (e as { message: string }).message);
+      expect(notes).toEqual(reply === 'reject' ? [`opencode: refused external_directory permission for ${path}`] : []);
+    }, 30_000);
+  }
 });

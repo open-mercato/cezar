@@ -20,6 +20,9 @@
 //                 a server whose turn boundary the runner has to synthesize.
 //   `#drop-then-die` destroy the message POST's socket AND then close the event
 //                 bus: the drop was real, and the runner has to say so.
+//   `#permission <path>` ask `external_directory` for <path> and, like the
+//                 real server, finish the turn only once the prompt is answered;
+//                 the final text names the reply.
 // `MOCK_NO_EVENT_BUS=1` in the environment makes `GET /event` 404 instead, for
 // the no-event-bus fallback.
 import { createServer } from 'node:http';
@@ -42,6 +45,8 @@ const suffix = () => (turn <= 1 ? '' : `_t${turn}`);
 const messageId = () => `${MESSAGE_ID}${suffix()}`;
 
 let sse = null;
+/** permission id → finishes the turn that is waiting on it. */
+const pendingPermissions = new Map();
 const send = (event) => {
   if (sse) sse.write(`data: ${JSON.stringify(event)}\n\n`);
 };
@@ -80,6 +85,15 @@ const server = createServer((req, res) => {
       res.end(JSON.stringify({ id: SESSION_ID, title: 'cezar task' }));
       return;
     }
+    const permissionReply = url.match(/^\/permission\/([^/]+)\/reply$/);
+    if (req.method === 'POST' && permissionReply) {
+      const finish = pendingPermissions.get(permissionReply[1]);
+      pendingPermissions.delete(permissionReply[1]);
+      res.writeHead(finish ? 200 : 404, { 'content-type': 'application/json' });
+      res.end(finish ? 'true' : '{}');
+      finish?.(JSON.parse(body).reply);
+      return;
+    }
     if (req.method === 'POST' && url === `/session/${SESSION_ID}/message`) {
       turn += 1;
       const MESSAGE_ID = messageId();
@@ -97,6 +111,35 @@ const server = createServer((req, res) => {
           : promptText.includes('#no-idle')
             ? 'no-idle'
             : 'default';
+
+      const asked = promptText.match(/#permission (\S+)/);
+      if (asked) {
+        const id = `per_mock_${turn}`;
+        pendingPermissions.set(id, (reply) => {
+          send({
+            type: 'message.part.updated',
+            properties: {
+              part: { id: `prt_perm${suffix()}`, messageID: MESSAGE_ID, sessionID: SESSION_ID, type: 'text', text: `permission ${reply}`, time: { start: 1, end: 2 } },
+            },
+          });
+          setTimeout(() => send({ type: 'session.idle', properties: { sessionID: SESSION_ID } }), 20);
+        });
+        send({ type: 'message.updated', properties: { info: info({}) } });
+        send({
+          type: 'permission.asked',
+          properties: {
+            id,
+            sessionID: SESSION_ID,
+            permission: 'external_directory',
+            patterns: [`${asked[1].replace(/\/[^/]*$/, '')}/*`],
+            metadata: { filepath: asked[1] },
+            always: [],
+          },
+        });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ info: info({}), parts: [] }));
+        return;
+      }
 
       // The other half of the #897 shape: the POST drops AND the session is
       // really gone. Swallowing the drop must not swallow this.
