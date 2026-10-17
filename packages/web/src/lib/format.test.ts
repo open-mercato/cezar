@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { compactTokens, shortAge } from '@/lib/format'
+import { compactTokens, listDate, shortAge } from '@/lib/format'
 
 describe('shortAge', () => {
   const now = Date.parse('2026-07-14T12:00:00.000Z')
@@ -51,5 +51,19 @@ describe('compactTokens', () => {
 
   it.each([-5, Number.NaN, Number.POSITIVE_INFINITY])('renders %s as 0', (tokens) => {
     expect(compactTokens(tokens)).toBe('0')
+  })
+})
+
+describe('listDate', () => {
+  // Local-time anchors, so the test means the same in every time zone.
+  const now = new Date(2026, 9, 17, 18, 0).getTime()
+  const at = (...args: [number, number, number, number?, number?]) => new Date(...(args as [number, number, number, number, number])).toISOString()
+  it('prints a time today, Yesterday, a weekday this week, a day this year, a full date before', () => {
+    expect(listDate(at(2026, 9, 17, 14, 2), now, 'en-GB')).toBe('14:02')
+    expect(listDate(at(2026, 9, 16, 9, 0), now, 'en-GB')).toBe('Yesterday')
+    expect(listDate(at(2026, 9, 12, 9, 0), now, 'en-GB')).toBe('Mon')
+    expect(listDate(at(2026, 8, 30, 9, 0), now, 'en-GB')).toBe('30 Sept')
+    expect(listDate(at(2025, 9, 17, 9, 0), now, 'en-GB')).toBe('17 Oct 2025')
+    expect(listDate(undefined, now)).toBe('')
   })
 })

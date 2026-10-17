@@ -7,6 +7,7 @@ import type { ApiRun } from '@open-mercato/cezar-api-client'
 import {
   paletteScore,
   paletteTaskPath,
+  TaskColumnsHeading,
   TaskItem,
   usePaletteExclusion,
   usePaletteTasks,
@@ -645,7 +646,7 @@ function TaskResults({
   const now = Date.now()
   if (ordered.length === 0) return null
   return (
-    <CommandGroup heading={recentOnly ? 'Recent tasks' : 'Tasks'}>
+    <CommandGroup heading={<TaskColumnsHeading label={recentOnly ? 'Recent tasks' : 'Tasks'} />}>
       {ordered.map((task) => (
         <TaskItem
           key={`${task.projectId ?? ''}/${task.id}`}

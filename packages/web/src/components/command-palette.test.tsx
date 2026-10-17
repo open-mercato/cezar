@@ -18,6 +18,7 @@ import {
   orderRuns,
   paletteScore,
 } from '@/components/command-palette'
+import { listDate } from '@/lib/format'
 import { orderSkills } from '@/lib/skills'
 import { ThemeProvider } from '@/components/theme-provider'
 import { THEME_STORAGE_KEY, type Theme } from '@/lib/theme'
@@ -546,7 +547,7 @@ describe('Tasks group', () => {
     expect(rows).toEqual(['b-auto', 'r-auto', 'r-child'])
   })
 
-  it('every row stacks last activity over its creation date', async () => {
+  it('every row shows Updated and Created as two columns', async () => {
     vi.useFakeTimers({ now: new Date('2026-07-30T10:00:00Z'), shouldAdvanceTime: true })
     try {
       renderPalette({
@@ -562,10 +563,11 @@ describe('Tasks group', () => {
       openWith({ metaKey: true })
       await screen.findByText('Old task continued today')
       const row = (slot: string) => document.querySelector<HTMLElement>(`[data-run-id="r-old"] [data-slot="${slot}"]`)!
-      // Last activity is the last step, not the 21-day-old creation — and both are on the row.
-      expect(row('palette-task-active').textContent).toBe('5m')
-      expect(row('palette-task-created').textContent).toBe('21d')
-      expect(row('palette-task-age').title).toMatch(/^Last active .+ · created .+/)
+      // Updated is the last step, not the three-week-old creation — and both are on the row.
+      expect(row('palette-task-updated').textContent).toBe(listDate('2026-07-30T09:55:00Z', Date.now()))
+      expect(row('palette-task-created').textContent).toBe(listDate('2026-07-09T10:00:00Z', Date.now()))
+      expect(row('palette-task-updated').textContent).not.toBe(row('palette-task-created').textContent)
+      expect(row('palette-task-age').title).toMatch(/^Updated .+ · created .+/)
     } finally {
       vi.useRealTimers()
     }

@@ -1,4 +1,4 @@
-import { CalendarPlusIcon, CheckIcon, ClockIcon, FolderOpenIcon, LayersIcon, MoonIcon, PlusIcon, SettingsIcon, ZapIcon } from 'lucide-react'
+import { CheckIcon, FolderOpenIcon, LayersIcon, MoonIcon, PlusIcon, SettingsIcon, ZapIcon } from 'lucide-react'
 import * as React from 'react'
 import { useNavigate as useRouterNavigate } from 'react-router'
 import { useHealth, useProjects, useRunsForProject, useRunsIndex, useSkills, useUiState } from '@/api/queries'
@@ -18,7 +18,7 @@ import {
   CommandShortcut,
 } from '@/components/ui/command'
 import { deriveAttention } from '@/lib/attention'
-import { shortAge } from '@/lib/format'
+import { listDate } from '@/lib/format'
 import { orderProjects as orderRegistry } from '@/lib/project-order'
 import { isUnread } from '@/lib/read-state'
 import { orderSkillsByUsage } from '@/lib/skills'
@@ -28,6 +28,7 @@ import { automationIdOf, ownAutomationId } from '@/lib/task-origin'
 import { useCommandShortcut, useKeyShortcut } from '@/lib/use-command-shortcut'
 import { openTaskPalette } from '@/components/task-palette/open'
 import { useProjectOrder } from '@/lib/use-project-order'
+import { cn } from '@/lib/utils'
 
 /**
  * The ⌘K command palette (spec, "Cross-cutting"): projects, tasks, views, actions, skills —
@@ -193,6 +194,25 @@ export function mergeTasks(
     const inherited = automationIdOf(task, (rootId) => byId.get(rootId))
     return inherited === undefined ? task : { ...task, automationId: inherited }
   })
+}
+
+/** One date column — wide enough for `17 Oct 2025`, the longest `listDate` prints. */
+const DATE_COLUMN = 'w-[5.75rem] truncate text-right'
+
+/**
+ * A task group's heading with the date columns' labels over them. The labels are drawn by CSS
+ * (`content`), so the heading's text — what screen readers and the tests read — stays its name.
+ */
+export function TaskColumnsHeading({ label }: { label: string }) {
+  return (
+    <span className="flex items-center gap-2">
+      <span className="min-w-0 flex-1">{label}</span>
+      <span aria-hidden="true" className="flex shrink-0 gap-2 text-[11px] font-normal">
+        <span className={cn(DATE_COLUMN, "after:content-['Updated']")} />
+        <span className={cn(DATE_COLUMN, "after:content-['Created']")} />
+      </span>
+    </span>
+  )
 }
 
 /** A row's exact time for its hover title — the browser's locale, to the minute. */
@@ -450,23 +470,21 @@ export function TaskItem({
           {projectName}
         </span>
       ) : null}
-      {/* Two stacked times in a fixed-width column, so they line up down the list: last activity
-          on top (the Tasks table's Updated — what recency means), creation under it, dimmer. */}
+      {trailing}
+      {/* Updated and Created, as two right-aligned table columns under the group's own labels
+          (`TaskColumnsHeading`) — same widths there and here, so every date lines up. */}
       <span
         data-slot="palette-task-age"
-        title={`Last active ${exactTime(task.lastActivityAt)} · created ${exactTime(task.createdAt)}`}
-        className="flex w-12 shrink-0 flex-col items-end text-right tabular-nums leading-tight"
+        title={`Updated ${exactTime(task.lastActivityAt)} · created ${exactTime(task.createdAt)}`}
+        className="flex shrink-0 gap-2 text-xs tabular-nums"
       >
-        <span data-slot="palette-task-active" className="flex items-center gap-1 text-xs text-muted-foreground">
-          <ClockIcon aria-label="last active" className="size-2.5! shrink-0" />
-          {shortAge(task.lastActivityAt, now)}
+        <span data-slot="palette-task-updated" className={cn(DATE_COLUMN, 'text-muted-foreground')}>
+          {listDate(task.lastActivityAt, now)}
         </span>
-        <span data-slot="palette-task-created" className="flex items-center gap-1 text-[10px] text-soft-foreground">
-          <CalendarPlusIcon aria-label="created" className="size-2.5! shrink-0" />
-          {shortAge(task.createdAt, now)}
+        <span data-slot="palette-task-created" className={cn(DATE_COLUMN, 'text-soft-foreground')}>
+          {listDate(task.createdAt, now)}
         </span>
       </span>
-      {trailing}
     </CommandItem>
   )
 }
@@ -566,7 +584,7 @@ function PaletteContent({ close }: { close: () => void }) {
             floats a section of near-misses above the exact match you are looking for, purely
             because that section renders first. Searching gets one ranked Tasks list. */}
         {!searching && recentlyFinished.length > 0 ? (
-          <CommandGroup heading="Recently finished">
+          <CommandGroup heading={<TaskColumnsHeading label="Recently finished" />}>
             {recentlyFinished.map((task) => (
               <TaskItem
                 key={taskKey(task)}
@@ -672,7 +690,7 @@ function PaletteContent({ close }: { close: () => void }) {
         ) : null}
 
         {otherTasks.length > 0 ? (
-          <CommandGroup heading="Tasks">
+          <CommandGroup heading={<TaskColumnsHeading label="Tasks" />}>
             {otherTasks.map((task) => (
               <TaskItem
                 key={taskKey(task)}
