@@ -27,6 +27,7 @@ export * from './tracker.ts';
 export * from './self-update.ts';
 export * from './telemetry.ts';
 export * from './star-count.ts';
+export * from './shadow.ts';
 export * from './worktree-lifecycle.ts';
 export * from './preview.ts';
 export * from './secrets.ts';

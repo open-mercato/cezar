@@ -42,11 +42,14 @@ describe('a run stopped by a usage limit resumes itself', () => {
     steps: [{ id: 'work', name: 'Work', prompt: '{{task}}' }],
   };
 
-  /** Drive one real run to a terminal status. */
-  async function settle(runId: string): Promise<void> {
+  /**
+   * Drive one real run to a terminal status AND out of `engine`: the status lands first, and the
+   * auto-resume schedule only when `dropActive` frees the run, so a status-only wait read it early.
+   */
+  async function settle(runId: string, engine: RunManager | undefined = manager): Promise<void> {
     const terminal = new Set(['done', 'review', 'failed', 'cancelled']);
     const deadline = Date.now() + 20_000;
-    while (!terminal.has(store.getRun(runId)?.status ?? '')) {
+    while (!terminal.has(store.getRun(runId)?.status ?? '') || engine?.isActive(runId)) {
       if (Date.now() > deadline) throw new Error('run did not finish in time');
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
@@ -79,6 +82,14 @@ describe('a run stopped by a usage limit resumes itself', () => {
           if (Date.now() >= deadline) throw new Error('timed out waiting for auto-resume runs to stop');
           await new Promise((resolve) => setTimeout(resolve, 25));
         }
+        // A run cancelled before its session opened is no longer active, but its `execute` may
+        // still be creating the worktree the rmSync below would race.
+        const timedOut = Symbol('timed out');
+        const outcome = await Promise.race([
+          manager.settled(),
+          new Promise((resolve) => setTimeout(resolve, Math.max(0, deadline - Date.now()), timedOut)),
+        ]);
+        if (outcome === timedOut) throw new Error('timed out waiting for auto-resume executions to return');
       } catch (error) {
         teardownError = error;
       } finally {
@@ -137,7 +148,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
   it('schedules the next window when the resumed turn hits the limit again, and counts up', async () => {
     const first = new RunManager(store, repoRoot);
     const record = first.startRun(workflow, { task: 'mock:limit ship it', worktree: false });
-    await settle(record.id);
+    await settle(record.id, first);
     first.dispose();
 
     // The task text stays `mock:limit`, so the resumed turn walks straight back into a limit —
@@ -162,7 +173,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
     // an elapsed deadline nobody is holding must not sit in the cockpit promising a resume.
     const first = new RunManager(store, repoRoot);
     const record = first.startRun(workflow, { task: 'mock:limit ship it', worktree: false });
-    await settle(record.id);
+    await settle(record.id, first);
     first.dispose(); // drops the timer, keeps the record
 
     store.updateRun(record.id, {
@@ -185,7 +196,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
   it('retires the deadline when the resume is refused, instead of promising a past time', async () => {
     const first = new RunManager(store, repoRoot);
     const record = first.startRun(workflow, { task: 'mock:limit ship it', worktree: false });
-    await settle(record.id);
+    await settle(record.id, first);
     first.dispose();
 
     // A due deadline on a run with no session left to resume: the reconcile arms it from the
@@ -304,7 +315,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
     const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 2 } });
     const first = new RunManager(store, repoRoot, { semaphore });
     const runs = [1, 2].map((n) => first.startRun(workflow, { task: `mock:limit pair ${n}` }));
-    for (const run of runs) await settle(run.id);
+    for (const run of runs) await settle(run.id, first);
     expect(runs.every((r) => store.getRun(r.id)?.autoResumeAt !== undefined)).toBe(true);
     first.dispose();
 
@@ -405,7 +416,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
     // shows a `scheduled` row for a resume that will never come.
     const first = new RunManager(store, repoRoot);
     const record = first.startRun(workflow, { task: 'mock:limit ship it', worktree: false });
-    await settle(record.id);
+    await settle(record.id, first);
     expect(store.getRun(record.id)?.autoResumeAt).toBeDefined();
     first.dispose(); // the timer is gone; the deadline is not
 
@@ -432,7 +443,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
     // sit there for good: neither running, nor failed, nor ever going to happen.
     const first = new RunManager(store, repoRoot);
     const record = first.startRun(workflow, { task: 'mock:done orphan', worktree: false });
-    await settle(record.id);
+    await settle(record.id, first);
     first.dispose();
     // Back to `queued` with nobody holding the work item — exactly what the engine sees after
     // losing one, and what a restart would otherwise be the only cure for.
@@ -457,10 +468,10 @@ describe('a run stopped by a usage limit resumes itself', () => {
     const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 1 } });
     const first = new RunManager(store, repoRoot, { semaphore });
     const a = first.startRun(workflow, { task: 'mock:limit probe a' });
-    await settle(a.id);
+    await settle(a.id, first);
     first.cancelAutoResume(a.id); // release the hold so b can take its turn
     const b = first.startRun(workflow, { task: 'mock:limit probe b' });
-    await settle(b.id);
+    await settle(b.id, first);
     first.dispose();
 
     const runs = [a, b];
@@ -525,7 +536,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
   it('lets a long-missed deadline expire instead of reviving a task from another era', async () => {
     const first = new RunManager(store, repoRoot);
     const record = first.startRun(workflow, { task: 'mock:limit ship it', worktree: false });
-    await settle(record.id);
+    await settle(record.id, first);
     first.dispose();
 
     // Overnight is the case the feature is for and still resumes (covered above); a deadline
@@ -601,7 +612,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
   it('re-arms across a restart and resumes the task from its last session', async () => {
     const first = new RunManager(store, repoRoot);
     const record = first.startRun(workflow, { task: 'mock:limit ship it', worktree: false });
-    await settle(record.id);
+    await settle(record.id, first);
     expect(store.getRun(record.id)?.autoResumeAt).toBeDefined();
     first.dispose();
 

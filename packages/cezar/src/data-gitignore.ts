@@ -30,9 +30,10 @@ export const DATA_GITIGNORE_ENTRIES = [
   'config.lifecycle.lock/',
   'config.json.*.tmp',
   'tmp/', // per-run agent temp directories (#785)
-  'drafts/',
+  'drafts/', // unsent composer text + pasted screenshots (#939) — never in git history
+  'shadow/', // shadow runs' intent ledgers, shim and shadow remotes (spec 2026-10-06-shadow-runs)
   // Per-task workspace layouts (spec `2026-10-07-task-workspace` §5.3): a screen preference, not repo content.
-  'layouts/', // unsent composer text + pasted screenshots (#939) — never in git history
+  'layouts/',
   'todos.json',
   'todos.json.tmp',
   // Private, per-project MCP servers (spec 2026-10-07-private-project-mcp) — personal tokens.
