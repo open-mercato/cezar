@@ -136,7 +136,9 @@ export function SelfUpdateDialog({
 
             {!data.canSelfUpdate ? <InstallHint data={data} /> : null}
 
-            {data.scheduled && !data.job ? (
+            {/* Not gated on `job`: a failed earlier job stays on the status, and starting the
+                scheduled apply clears `scheduled` anyway. */}
+            {data.scheduled ? (
               <div
                 data-slot="self-update-scheduled"
                 className="flex items-center justify-between gap-3 rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-[12.5px]"

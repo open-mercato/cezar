@@ -225,6 +225,19 @@ describe('SelfUpdateDialog', () => {
       expect(applySelfUpdate).not.toHaveBeenCalled()
     })
 
+    it('still shows the schedule and its Cancel after an earlier failed update', async () => {
+      renderDialog({
+        ...release,
+        updateAvailable: '0.12.1',
+        activeRuns: 3,
+        job: { status: 'failed', target: '0.12.1', startedAt: '2026-10-18T19:00:00.000Z', finishedAt: '2026-10-18T19:00:05.000Z', log: ['failed: offline'], error: 'offline' },
+        scheduled: { target: '0.12.1', requestedAt: '2026-10-18T20:00:00.000Z' },
+      })
+      await screen.findByRole('dialog')
+      expect(document.querySelector('[data-slot="self-update-scheduled"]')).toBeTruthy()
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy()
+    })
+
     it('cancels a scheduled update', async () => {
       cancelScheduledSelfUpdate.mockResolvedValue({ ...status, ...release, updateAvailable: '0.12.1', activeRuns: 3 })
       renderDialog({

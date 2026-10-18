@@ -249,6 +249,16 @@ describe('update when idle', () => {
     expect(activeId(env)).toBe('0.12.0');
   });
 
+  it('an explicit apply supersedes the schedule', async () => {
+    service.scheduleWhenIdle('0.12.1');
+    service.apply('0.12.1');
+    expect((await service.status()).scheduled).toBeNull();
+    await vi.waitFor(() => expect(restart).toHaveBeenCalledTimes(1), { timeout: 3_000 });
+    idle = true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(restart).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses up front when this install cannot update itself', () => {
     const unmanaged = new SelfUpdateService({ pkgName: 'x', version: '0.12.0', entry: join(home, 'elsewhere.js'), restart, env });
     expect(() => unmanaged.scheduleWhenIdle('0.12.1')).toThrow();
