@@ -2578,6 +2578,21 @@ export async function applySelfUpdate(version: string): Promise<SelfUpdateStatus
   )
 }
 
+/** "Update when idle": the server applies `version` once no task is running or queued. */
+export async function scheduleSelfUpdate(version: string): Promise<SelfUpdateStatus> {
+  return unwrap(
+    await cez.api.v1.workspace['self-update'].apply.$post({ json: { version, whenIdle: true } }),
+    '/workspace/self-update/apply',
+  )
+}
+
+export async function cancelScheduledSelfUpdate(): Promise<SelfUpdateStatus> {
+  return unwrap(
+    await cez.api.v1.workspace['self-update'].scheduled.$delete({}),
+    '/workspace/self-update/scheduled',
+  )
+}
+
 /** Partial update — absent keys stay untouched; answers the merged config. A `projectsDir`
  *  the server cannot write to comes back as a 400 `ApiError` whose message is the reason,
  *  which is exactly what the Projects pane renders inline (step 4.4). */

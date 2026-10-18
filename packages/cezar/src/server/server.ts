@@ -3400,7 +3400,7 @@ export function createApp(deps: ServerDeps) {
       return c.json(await selfUpdate.status());
     })
 
-    .post('/workspace/self-update/apply', jsonZodValidator(selfUpdateApplyRequestSchema, { message: 'body must be { version }' }), async (c) => {
+    .post('/workspace/self-update/apply', jsonZodValidator(selfUpdateApplyRequestSchema, { message: 'body must be { version, whenIdle? }' }), async (c) => {
       const { version: target } = c.req.valid('json');
       // SECURITY: a hosted cockpit may only move FORWARD. Installing a published package cannot
       // inject code, but installing an OLDER one can: every hosted-mode guard — the `/api/*`
@@ -3416,11 +3416,18 @@ export function createApp(deps: ServerDeps) {
         if (refusal) return c.json({ error: refusal }, 409);
       }
       try {
-        selfUpdate.apply(target);
+        if (c.req.valid('json').whenIdle) selfUpdate.scheduleWhenIdle(target);
+        else selfUpdate.apply(target);
       } catch (error) {
         if (error instanceof SelfUpdateBusyError) return c.json({ error: error.message }, 409);
         return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
       }
+      return c.json(await selfUpdate.status());
+    })
+
+    // Cancels a pending "update when idle"; a no-op when nothing is scheduled.
+    .delete('/workspace/self-update/scheduled', async (c) => {
+      selfUpdate.cancelScheduled();
       return c.json(await selfUpdate.status());
     });
 

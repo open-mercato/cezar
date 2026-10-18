@@ -4,7 +4,9 @@ import { useQueryClient } from '@tanstack/react-query'
 import { getHealth, getSelfUpdate } from '@/api/client'
 import {
   useApplySelfUpdate,
+  useCancelScheduledSelfUpdate,
   useRefreshSelfUpdate,
+  useScheduleSelfUpdate,
   useSelfUpdate,
   useSetSelfUpdateChannel,
   workspaceQueryKeys,
@@ -52,6 +54,8 @@ export function SelfUpdateDialog({
   const refresh = useRefreshSelfUpdate()
   const setChannel = useSetSelfUpdateChannel()
   const apply = useApplySelfUpdate()
+  const schedule = useScheduleSelfUpdate()
+  const cancelScheduled = useCancelScheduledSelfUpdate()
   const [picked, setPicked] = useState<string>('')
   const data = status.data
   const contentRef = useRef<HTMLDivElement>(null)
@@ -113,7 +117,8 @@ export function SelfUpdateDialog({
               checking={refresh.isPending}
               onCheck={() => refresh.mutate()}
               onApply={(version) => apply.mutate(version)}
-              applying={apply.isPending}
+              onSchedule={(version) => schedule.mutate(version)}
+              applying={apply.isPending || schedule.isPending}
             />
 
             {data.channel === 'development' ? (
@@ -130,10 +135,29 @@ export function SelfUpdateDialog({
 
             {!data.canSelfUpdate ? <InstallHint data={data} /> : null}
 
-            {data.activeRuns > 0 && data.canSelfUpdate ? (
+            {data.scheduled && !data.job ? (
+              <div
+                data-slot="self-update-scheduled"
+                className="flex items-center justify-between gap-3 rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-[12.5px]"
+              >
+                <p className="min-w-0">
+                  <span className="font-semibold">v{data.scheduled.target}</span> installs and restarts as soon as no task
+                  is running. You can close this window and keep working.
+                </p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => cancelScheduled.mutate()}
+                  disabled={cancelScheduled.isPending}
+                >
+                  Cancel
+                </Button>
+              </div>
+            ) : data.activeRuns > 0 && data.canSelfUpdate ? (
               <p className="rounded-md border border-pending/50 bg-pending/10 px-3 py-2 text-[12.5px] text-foreground">
                 {data.activeRuns} task{data.activeRuns === 1 ? ' is' : 's are'} running. A restart interrupts
                 them; {brandName} re-queues or resumes them on the way back up.
+                {data.updateAvailable ? ' Update when idle waits for them to finish instead.' : null}
               </p>
             ) : null}
 
@@ -149,6 +173,8 @@ export function SelfUpdateDialog({
             ) : null}
 
             {apply.error ? <p className="text-[12.5px] text-danger">{apply.error.message}</p> : null}
+            {schedule.error ? <p className="text-[12.5px] text-danger">{schedule.error.message}</p> : null}
+            {cancelScheduled.error ? <p className="text-[12.5px] text-danger">{cancelScheduled.error.message}</p> : null}
 
             {data.job ? <JobPanel data={data} /> : null}
           </div>
@@ -224,12 +250,14 @@ function LatestCard({
   checking,
   onCheck,
   onApply,
+  onSchedule,
   applying,
 }: {
   data: SelfUpdateStatus
   checking: boolean
   onCheck: () => void
   onApply: (version: string) => void
+  onSchedule: (version: string) => void
   applying: boolean
 }) {
   const jobBusy = data.job?.status === 'running' || data.job?.status === 'restarting'
@@ -334,6 +362,18 @@ function LatestCard({
         <Button variant="ghost" size="sm" onClick={onCheck} disabled={checking || jobBusy}>
           {checking ? 'Checking…' : 'Check again'}
         </Button>
+        {/* Only worth offering when a restart would interrupt something: idle, it applies at once. */}
+        {target && data.activeRuns > 0 && data.scheduled?.target !== target ? (
+          <Button
+            variant="outline"
+            size="sm"
+            title="Install and restart as soon as no task is running"
+            onClick={() => onSchedule(target)}
+            disabled={!data.canSelfUpdate || applying || jobBusy}
+          >
+            Update when idle
+          </Button>
+        ) : null}
         {target ? (
           <Button size="sm" onClick={() => onApply(target)} disabled={!data.canSelfUpdate || applying || jobBusy}>
             Update &amp; restart

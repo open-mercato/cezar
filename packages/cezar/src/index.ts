@@ -341,6 +341,8 @@ async function serveCommand(
   const update: { latest?: string } = {};
   const selfUpdate = buildSelfUpdateService({
     activeRuns: () => store.listRuns().filter((r) => ['queued', 'waiting', 'running'].includes(r.status)).length,
+    // Workspace-wide, every project's manager — not just this repo's store.
+    idle: () => semaphore.idle(),
     // The server's own predicate, not a second spelling of it: the `/apply` guard decides hosted
     // mode through `resolveCapabilities`, and the two must never disagree (they did, on 127.0.0.2).
     trimPaths: () => !resolveCapabilities(process.env, bindHost).localHandoff,
@@ -869,7 +871,7 @@ function openStore(repoRoot: string, opts?: { keepLive?: boolean }): RunStore {
 
 /** The self-update service over THIS process: its package, version and entry file. */
 function buildSelfUpdateService(
-  overrides: Partial<Pick<ConstructorParameters<typeof SelfUpdateService>[0], 'restart' | 'activeRuns' | 'trimPaths'>> & {
+  overrides: Partial<Pick<ConstructorParameters<typeof SelfUpdateService>[0], 'restart' | 'activeRuns' | 'idle' | 'trimPaths'>> & {
     restart: () => void;
   },
 ): SelfUpdateService {
