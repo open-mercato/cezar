@@ -624,6 +624,8 @@ export class ProviderAuthService {
    *  minute while a provider is logged out, and one broken install must not become a report a minute. */
   private readonly reportedInconclusive = new Set<string>();
   private readonly runtimeFailures = new Map<ProviderId, RuntimeAuthFailure>();
+  /** Named-account incidents, keyed by `profileCacheKey`; the default login uses `runtimeFailures`. */
+  private readonly profileRuntimeFailures = new Map<string, RuntimeAuthFailure>();
   /** One self-check at a time per provider, and not more often than the cooldown. Both guard the
    *  same thing — a CLI spawn per auth-shaped error line — from the two directions it can arrive
    *  from: concurrently, and in quick succession. */
@@ -726,6 +728,40 @@ export class ProviderAuthService {
       },
       transitioned: current === undefined,
     };
+  }
+
+  /**
+   * A runtime rejection on a NAMED agent account (telemetry 9e4a95db): latched on that account only.
+   * Raising the provider-wide latch instead blamed the default login, which was still signed in.
+   * Lifts when a probe of this account that started after the rejection answers connected — the
+   * pane's Check again, Connect's watch, or the action gate's verify-before-refuse.
+   */
+  reportProfileAuthFailure(provider: ProviderId, profileId: string): RuntimeAuthFailureReport | null {
+    if (process.env.CEZ_DRY_RUN === '1' || providerAuthChecksDisabled()) return null;
+    const key = profileCacheKey(provider, profileId);
+    const current = this.profileRuntimeFailures.get(key);
+    const failure: RuntimeAuthFailure = {
+      generation: ++this.nextRuntimeFailureGeneration,
+      authFailureId: current?.authFailureId ?? this.createAuthFailureId(),
+    };
+    this.profileRuntimeFailures.set(key, failure);
+    return {
+      status: {
+        provider,
+        status: 'disconnected',
+        hint: RUNTIME_AUTH_HINT,
+        authFailureId: failure.authFailureId,
+        profileId,
+      },
+      transitioned: current === undefined,
+    };
+  }
+
+  private withProfileFailure(status: ProviderStatus, profileId: string): ProviderStatus {
+    const failure = this.profileRuntimeFailures.get(profileCacheKey(status.provider, profileId));
+    return failure
+      ? { provider: status.provider, status: 'disconnected', hint: RUNTIME_AUTH_HINT, authFailureId: failure.authFailureId, profileId }
+      : status;
   }
 
   /** Clear only the incident the caller actually observed. A stale retry must
@@ -888,9 +924,8 @@ export class ProviderAuthService {
    *
    * Cached on the same asymmetric lifetime as `status()` (`cacheTtlFor`: minutes for a connected
    * answer, a minute for anything else), keyed by `(provider, profileId)` so two Claude accounts never read
-   * each other's answer. The runtime-auth latch is deliberately NOT applied: it is a coarse
-   * per-provider signal and stamping it onto every account of that provider would mark an
-   * untouched account as broken.
+   * each other's answer. The provider-wide runtime latch is deliberately NOT applied — it belongs
+   * to the default login; this account's own incident (`reportProfileAuthFailure`) is.
    */
   async profileStatus(
     provider: ProviderId,
@@ -901,14 +936,22 @@ export class ProviderAuthService {
     }
     const key = profileCacheKey(provider, profile.id);
     const cached = this.completedProfiles.get(key);
-    if (cached && this.now() - cached.timestamp < cacheTtlFor([cached.status])) return cached.status;
+    if (cached && this.now() - cached.timestamp < cacheTtlFor([cached.status])) {
+      return this.withProfileFailure(cached.status, profile.id);
+    }
     const pending = this.inFlightProfiles.get(key);
-    if (pending) return pending;
+    if (pending) return pending.then((status) => this.withProfileFailure(status, profile.id));
+    // A probe already running when a rejection arrived must not clear it (same rule as the default).
+    const startedAt = this.nextRuntimeFailureGeneration;
     const probe = this.probe(descriptorFor(provider), profile.configDir)
       .then((status) => {
         const stamped: ProviderStatus = { ...status, profileId: profile.id };
         this.completedProfiles.set(key, { status: stamped, timestamp: this.now() });
-        return stamped;
+        const failure = this.profileRuntimeFailures.get(key);
+        if (failure && failure.generation <= startedAt && stamped.status === 'connected') {
+          this.profileRuntimeFailures.delete(key);
+        }
+        return this.withProfileFailure(stamped, profile.id);
       })
       .finally(() => {
         if (this.inFlightProfiles.get(key) === probe) this.inFlightProfiles.delete(key);
@@ -954,7 +997,11 @@ export class ProviderAuthService {
     if (process.env.CEZ_DRY_RUN === '1') {
       return { provider, status: 'connected', profileId };
     }
-    return this.completedProfiles.get(profileCacheKey(provider, profileId))?.status;
+    const cached = this.completedProfiles.get(profileCacheKey(provider, profileId))?.status;
+    if (cached) return this.withProfileFailure(cached, profileId);
+    return this.profileRuntimeFailures.has(profileCacheKey(provider, profileId))
+      ? this.withProfileFailure({ provider, status: 'disconnected' }, profileId)
+      : undefined;
   }
 
   /** The cached default-profile rows, or `undefined` when the probe has never completed. Same

@@ -75,6 +75,8 @@ export interface ThreadProviderAuthRequired {
   id: string
   provider: 'claude' | 'codex' | 'junie' | 'opencode' | 'cursor' | 'pi' | 'copilot'
   authFailureId: string
+  /** The named agent account the rejection came from; absent for the default login. */
+  profileId?: string
 }
 
 /** Offered after an agent error saying its CLI is too old ("1.18.0 or newer is required"). */
@@ -669,9 +671,16 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         const provider = providerId(event.provider)
         const authFailureId = str(event.authFailureId)
         if (provider === undefined || authFailureId === undefined || authFailureId.length < 1 || authFailureId.length > 128) break
+        const profileId = str(event.profileId)
         currentTurn().entries.push({
           origin: 'meta',
-          entry: { kind: 'provider-auth-required', id: `v1:${event.seq}`, provider, authFailureId },
+          entry: {
+            kind: 'provider-auth-required',
+            id: `v1:${event.seq}`,
+            provider,
+            authFailureId,
+            ...(profileId !== undefined && profileId.length <= 128 ? { profileId } : {}),
+          },
         })
         break
       }

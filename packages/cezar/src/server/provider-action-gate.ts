@@ -10,6 +10,8 @@ import { loadAgentAccounts, type AgentAccountStore } from '../workspace/agent-ac
 import { selectProfile } from '../workspace/agent-profiles.ts';
 import { stepKind, type WorkflowDef } from '../workflows/types.ts';
 
+export { recordedProfileFor } from './recorded-profile.ts';
+
 const ORDER: readonly ProviderId[] = PROVIDER_IDS;
 const LABEL: Record<ProviderId, string> = {
   claude: 'Claude Code',
@@ -112,16 +114,6 @@ export async function withSelectedAccounts(
     return answered;
   }));
   return Object.keys(accountLabels).length > 0 ? { providers, accountLabels } : { providers };
-}
-
-/** The account a step of an existing run is bound to: its recorded one, else the run's override. */
-export function recordedProfileFor(run: RunRecord, provider: ProviderId): string | undefined {
-  const runner = run.runner ?? 'claude';
-  for (let index = run.steps.length - 1; index >= 0; index -= 1) {
-    const step = run.steps[index];
-    if (step?.profileId && (step.backend ?? runner) === provider) return step.profileId;
-  }
-  return provider === runner ? run.agentProfile : undefined;
 }
 
 /** The refusal for a signed-out NAMED account. Pointing at Providers sent users to a card that

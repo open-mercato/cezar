@@ -5,6 +5,8 @@ import {
   type ProviderStatus,
 } from '../core/provider-auth.ts';
 import type { RunEvent, RunStore } from '../runs/store.ts';
+import { DEFAULT_AGENT_ACCOUNT_ID } from '@open-mercato/cezar-contract';
+import { recordedProfileFor } from './recorded-profile.ts';
 
 const AUTH_ERROR_EVENT_TYPES = new Set(['error', 'session.error', 'note']);
 
@@ -35,9 +37,16 @@ export function watchProviderRuntimeAuthFailures(
       ? run.steps.find(({ id }) => id === event.stepId)
       : undefined;
     const provider: ProviderId = step?.backend ?? run.runner ?? 'claude';
-    const report = providerAuth.reportRuntimeAuthFailure(provider);
+    // The account the rejected session ran on: a named one is latched on its own, never on the
+    // default login (telemetry 9e4a95db).
+    const recorded = step?.profileId ?? recordedProfileFor(run, provider);
+    const profileId = recorded && recorded !== DEFAULT_AGENT_ACCOUNT_ID ? recorded : undefined;
+    const report = profileId
+      ? providerAuth.reportProfileAuthFailure(provider, profileId)
+      : providerAuth.reportRuntimeAuthFailure(provider);
     if (!report) return;
-    if (report.transitioned) onProviderStatus(report.status);
+    // `provider-status` rows fold into the default login's card, so an account incident stays off it.
+    if (report.transitioned && !profileId) onProviderStatus(report.status);
 
     const duplicate = store.readEvents(runId).some((candidate) =>
       candidate.type === 'provider-auth-required'
@@ -48,9 +57,12 @@ export function watchProviderRuntimeAuthFailures(
         type: 'provider-auth-required',
         provider,
         authFailureId: report.status.authFailureId,
+        ...(profileId ? { profileId } : {}),
         ...(event.stepId ? { stepId: event.stepId } : {}),
       });
     }
+    // An account's incident lifts on its next connected probe (`reportProfileAuthFailure`).
+    if (profileId) return;
 
     // The self-check rides the LATCH EDGE, not every matching line: the second and third auth-shaped
     // error of one failing run describe the incident already standing, and re-asking the CLI about it

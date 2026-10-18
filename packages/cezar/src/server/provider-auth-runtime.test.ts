@@ -299,6 +299,73 @@ describe('watchProviderRuntimeAuthFailures', () => {
     }
   });
 
+  describe('a rejection on a named agent account (telemetry 9e4a95db)', () => {
+    const MESSAGE = 'claude: Failed to authenticate: OAuth session expired and could not be refreshed';
+
+    it('latches the account the step ran on, never the default login', async () => {
+      const onProviderStatus = watch();
+      const verifying = vi.spyOn(providerAuth, 'verifyRuntimeAuthFailure');
+      const run = store.createRun({
+        title: 'work account',
+        workflow: 'quick-task',
+        task: 'work',
+        runner: 'claude',
+        steps: [{ id: 'work', name: 'Work', kind: 'agent' }],
+      });
+      store.updateStep(run.id, 'work', { backend: 'claude', profileId: 'work' });
+
+      store.appendEvent(run.id, { type: 'error', stepId: 'work', message: MESSAGE });
+
+      // The default login's card is never told it was rejected, and is never self-checked.
+      expect(onProviderStatus).not.toHaveBeenCalled();
+      expect(verifying).not.toHaveBeenCalled();
+      await expect(providerAuth.status()).resolves.toMatchObject({
+        providers: expect.arrayContaining([{ provider: 'claude', status: 'connected' }]),
+      });
+      expect(providerAuth.peekProfileStatus('claude', 'work')).toMatchObject({
+        provider: 'claude',
+        status: 'disconnected',
+        authFailureId: 'auth-incident-1',
+        profileId: 'work',
+      });
+      expect(store.readEvents(run.id).filter(({ type }) => type === 'provider-auth-required'))
+        .toEqual([expect.objectContaining({ provider: 'claude', profileId: 'work', stepId: 'work' })]);
+    });
+
+    it('falls back to the run override when no step recorded an account', () => {
+      const onProviderStatus = watch();
+      const run = store.createRun({
+        title: 'override',
+        workflow: 'quick-task',
+        task: 'work',
+        runner: 'claude',
+        agentProfile: 'work',
+        steps: [],
+      });
+
+      store.appendEvent(run.id, { type: 'error', message: MESSAGE });
+
+      expect(onProviderStatus).not.toHaveBeenCalled();
+      expect(providerAuth.peekProfileStatus('claude', 'work')).toMatchObject({ status: 'disconnected' });
+    });
+
+    it('treats an explicit default account as the default login', () => {
+      const onProviderStatus = watch();
+      const run = store.createRun({
+        title: 'default',
+        workflow: 'quick-task',
+        task: 'work',
+        runner: 'claude',
+        steps: [{ id: 'work', name: 'Work', kind: 'agent' }],
+      });
+      store.updateStep(run.id, 'work', { backend: 'claude', profileId: 'default' });
+
+      store.appendEvent(run.id, { type: 'error', stepId: 'work', message: MESSAGE });
+
+      expect(onProviderStatus).toHaveBeenCalledWith(expect.objectContaining({ provider: 'claude', status: 'disconnected' }));
+    });
+  });
+
   describe('the latch checks itself against the CLI before it stands', () => {
     const failing = (store_: RunStore, runner: ProviderId = 'claude') => {
       const run = store_.createRun({

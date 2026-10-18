@@ -930,6 +930,69 @@ describe('ProviderAuthService', () => {
     });
   });
 
+  describe('a named account carries its own runtime incident (telemetry 9e4a95db)', () => {
+    const account = { id: 'work', configDir: '/accounts/work' };
+
+    it('marks only that account, and leaves the default login connected', async () => {
+      const service = new ProviderAuthService({ runCommand: runner(), createAuthFailureId: () => 'incident-1' });
+      await service.profileStatus('claude', account);
+
+      expect(service.reportProfileAuthFailure('claude', 'work')).toMatchObject({ transitioned: true });
+      expect(service.reportProfileAuthFailure('claude', 'work')).toMatchObject({ transitioned: false });
+
+      await expect(statuses(service)).resolves.toMatchObject({ claude: { status: 'connected' } });
+      // Within the cached connected answer's lifetime, the incident still wins.
+      await expect(service.profileStatus('claude', account)).resolves.toMatchObject({
+        status: 'disconnected', authFailureId: 'incident-1', profileId: 'work',
+      });
+      expect(service.peekProfileStatus('claude', 'other')).toBeUndefined();
+    });
+
+    it('is known to a peek before the account was ever probed', () => {
+      const service = new ProviderAuthService({ runCommand: runner(), createAuthFailureId: () => 'incident-1' });
+      service.reportProfileAuthFailure('claude', 'work');
+
+      expect(service.peekProfileStatus('claude', 'work')).toMatchObject({
+        provider: 'claude', status: 'disconnected', authFailureId: 'incident-1', profileId: 'work',
+      });
+    });
+
+    it('lifts on a fresh connected probe of that account, and not on a disconnected one', async () => {
+      const answers: ProviderCommandResult[] = [
+        { stdout: '{"loggedIn":false}', stderr: '', exitCode: 1 },
+        { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 },
+      ];
+      const service = new ProviderAuthService({
+        runCommand: runner((executable) => (executable === 'claude' ? answers.shift()! : resultFor(executable))),
+        createAuthFailureId: () => 'incident-1',
+      });
+      service.reportProfileAuthFailure('claude', 'work');
+
+      await expect(service.profileStatus('claude', account)).resolves.toMatchObject({ status: 'disconnected', authFailureId: 'incident-1' });
+      service.forgetProfileStatus('claude', 'work');
+      await expect(service.profileStatus('claude', account)).resolves.toEqual({ provider: 'claude', status: 'connected', profileId: 'work' });
+      expect(service.peekProfileStatus('claude', 'work')).toEqual({ provider: 'claude', status: 'connected', profileId: 'work' });
+    });
+
+    it('survives a probe that was already running when the rejection arrived', async () => {
+      let release!: () => void;
+      const waiting = new Promise<void>((resolve) => { release = resolve; });
+      const runCommand = vi.fn(async (executable: string) => {
+        await waiting;
+        return resultFor(executable);
+      });
+      const service = new ProviderAuthService({ runCommand, createAuthFailureId: () => 'incident-1' });
+
+      const probing = service.profileStatus('claude', account);
+      await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(1));
+      service.reportProfileAuthFailure('claude', 'work');
+      release();
+
+      await expect(probing).resolves.toMatchObject({ status: 'disconnected', authFailureId: 'incident-1' });
+      expect(service.peekProfileStatus('claude', 'work')).toMatchObject({ status: 'disconnected' });
+    });
+  });
+
   describe('a latch verifies itself against the provider CLI', () => {
     const loggedOutClaude: ProviderCommandResult = {
       stdout: '{"loggedIn":false}',
