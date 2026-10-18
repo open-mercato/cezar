@@ -33,7 +33,6 @@ import { cn } from '@/lib/utils'
 
 import {
   appendAttachment,
-  ATTACHMENT_ACCEPT,
   attachedImageBytes,
   fileToPendingAttachment,
   screenFiles,
@@ -788,19 +787,18 @@ function AttachButton({
         variant="ghost"
         size="icon-sm"
         aria-label="Attach files"
-        title="Attach an image, PDF, TXT or MD file (or paste a screenshot)"
+        title="Attach images or files (or paste a screenshot)"
         disabled={disabled}
         className="size-8 text-muted-foreground"
         onClick={() => inputRef.current?.click()}
       >
         <PaperclipIcon aria-hidden="true" className="size-[15px]" />
       </Button>
-      {/* Both spellings of every type: an OS dialog filters on the extension as often as on the
-          MIME type, and `accept="image/*,text/plain"` alone greys out a `.md` on Windows (#950). */}
+      {/* No `accept`: every file is taken (telemetry 48850f4a), and a filter greyed out ones the
+          composer would have accepted anyway (#950). */}
       <input
         ref={inputRef}
         type="file"
-        accept={ATTACHMENT_ACCEPT}
         multiple
         className="hidden"
         aria-hidden="true"

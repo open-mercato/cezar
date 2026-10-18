@@ -750,6 +750,9 @@ export type PickVariantResponse = z.infer<typeof pickVariantResponseSchema>;
 // defaults/transforms below (`text`, `images`, `systemPrompt`) mean the parsed output is not the
 // same shape. `z.infer` here would demand keys the server fills in for you.
 
+/** The media type of an attachment cezar does not interpret — any file outside the list below. */
+export const BINARY_ATTACHMENT_MEDIA_TYPE = 'application/octet-stream';
+
 /**
  * Non-image attachment types the composer may send (#950). Deliberately an allowlist and
  * deliberately short: cezar serves these files back from the cockpit's own origin, so every entry
@@ -757,12 +760,16 @@ export type PickVariantResponse = z.infer<typeof pickVariantResponseSchema>;
  * what the route has always accepted would be the breaking half of this change.
  *
  * `text/x-markdown` is the spelling some browsers still report for a `.md`.
+ *
+ * `application/octet-stream` is every other file — an archive, a spreadsheet (telemetry 48850f4a:
+ * a `.zip` was refused). It reaches the agent as a path only and is served back as a download.
  */
 export const FILE_ATTACHMENT_MEDIA_TYPES = [
   'text/plain',
   'text/markdown',
   'text/x-markdown',
   'application/pdf',
+  BINARY_ATTACHMENT_MEDIA_TYPE,
 ] as const;
 
 /** Does this media type travel as an inline image block the model can look at? */
@@ -792,7 +799,20 @@ export function attachmentExtension(mediaType: string): string {
     : mediaType === 'application/pdf' ? 'pdf'
     : mediaType === 'text/plain' ? 'txt'
     : mediaType === 'text/markdown' || mediaType === 'text/x-markdown' ? 'md'
+    : mediaType === BINARY_ATTACHMENT_MEDIA_TYPE ? 'bin'
     : 'img';
+}
+
+/**
+ * The run-folder extension for an attachment: `attachmentExtension`, except that a binary file
+ * keeps its own extension when `sanitizeAttachmentName` let its name keep one — so the agent is
+ * handed `pasted-2.zip`, not an opaque `pasted-2.bin`. `name` must already be sanitized.
+ */
+export function storedAttachmentExtension(mediaType: string, name?: string): string {
+  const canonical = attachmentExtension(mediaType);
+  if (mediaType !== BINARY_ATTACHMENT_MEDIA_TYPE || !name) return canonical;
+  const ext = name.includes('.') ? (name.split('.').pop()?.toLowerCase() ?? '') : '';
+  return BINARY_NAME_EXTENSIONS.includes(ext) ? ext : canonical;
 }
 
 /** Extensions `attachmentExtension` produces for an inline image. */
@@ -822,7 +842,20 @@ export function isImageAttachmentName(name: string): boolean {
  * least as common a name to arrive with, and renaming it to `photo.jpeg.jpg` would be the exact
  * double-extension the canonical-extension rule exists to avoid, not enforce.
  */
+/** Extensions a binary attachment keeps: data formats only. A script or executable (`.sh`,
+ *  `.exe`) and an image or text spelling — which readers would take for an inline image or a
+ *  text file — gain `.bin` instead. */
+const BINARY_NAME_EXTENSIONS: readonly string[] = [
+  'zip', 'gz', 'tgz', 'tar', 'bz2', 'tbz2', 'xz', 'txz', 'zst', '7z', 'rar',
+  'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'epub', 'pages', 'numbers', 'key',
+  'sqlite', 'sqlite3', 'db', 'parquet', 'avro', 'xlsb', 'xlsm',
+  'mp3', 'wav', 'ogg', 'flac', 'm4a', 'mp4', 'mov', 'webm', 'mkv', 'avi',
+  'psd', 'ai', 'sketch', 'fig', 'xd', 'eps', 'ttf', 'otf', 'woff', 'woff2',
+  'har', 'pcap', 'dmp', 'heapsnapshot', 'cpuprofile', 'bin',
+];
+
 const ALLOWED_NAME_EXTENSIONS: Record<string, readonly string[]> = {
+  [BINARY_ATTACHMENT_MEDIA_TYPE]: BINARY_NAME_EXTENSIONS,
   'application/pdf': ['pdf'],
   'text/plain': ['txt', 'text', 'log'],
   'text/markdown': ['md', 'markdown'],
@@ -963,7 +996,7 @@ export function sanitizeAttachmentName(name: string, mediaType: string): string 
  */
 export const attachmentInputSchema = z.object({
   mediaType: z.string().refine(isAttachmentMediaType, {
-    message: 'unsupported attachment type — images, plain text, markdown and PDF only',
+    message: 'unsupported attachment type — send other files as application/octet-stream',
   }),
   data: z.string().min(1).max(7_000_000),
   name: z.string().max(255).optional(),

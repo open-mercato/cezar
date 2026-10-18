@@ -24,6 +24,7 @@ import {
   isAttachmentMediaType,
   isImageAttachmentName,
   sanitizeAttachmentName,
+  storedAttachmentExtension,
 } from '@open-mercato/cezar-contract';
 
 const run = promisify(execFile);
@@ -38,6 +39,8 @@ const TINY_PNG_B64 =
 // prompt, which is the whole point of handing the agent a path instead of the bytes.
 const BRIEF_MD = '# Brief\n\nShip the alpha-particle report.\n';
 const BRIEF_MD_B64 = Buffer.from(BRIEF_MD).toString('base64');
+// An empty ZIP archive (end-of-central-directory record only) — a binary attachment.
+const ZIP_B64 = Buffer.from([0x50, 0x4b, 0x05, 0x06, ...new Array(18).fill(0)]).toString('base64');
 const TINY_PDF = '%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n';
 const TINY_PDF_B64 = Buffer.from(TINY_PDF).toString('base64');
 
@@ -53,7 +56,7 @@ describe('HANDOFF_INSTRUCTIONS pasted-attachments note', () => {
   /** #950 — a file has no inline copy at all, and an agent that assumes one would answer about a
    *  document it never saw. The contract has to say so, not merely imply it. */
   it('says a non-image attachment exists only as the file on disk', () => {
-    expect(HANDOFF_INSTRUCTIONS).toMatch(/PDF, TXT, MD/);
+    expect(HANDOFF_INSTRUCTIONS).toMatch(/PDF, text, archives — any type/);
     expect(HANDOFF_INSTRUCTIONS).toMatch(/a non-image attachment exists ONLY as the file at that path/);
   });
 });
@@ -204,15 +207,34 @@ describe('copyToAttachmentLibrary (#929)', () => {
  * under another — these cases pin both directions of that round trip.
  */
 describe('attachment media types, extensions and blocks (#950)', () => {
-  it('accepts images and the PDF/TXT/MD allowlist, and nothing else', () => {
+  it('accepts images, the PDF/TXT/MD allowlist and opaque binary files, and nothing else', () => {
     expect(isAttachmentMediaType('image/png')).toBe(true);
     expect(isAttachmentMediaType('image/svg+xml')).toBe(true); // unchanged: images were never narrowed
     expect(isAttachmentMediaType('application/pdf')).toBe(true);
     expect(isAttachmentMediaType('text/plain')).toBe(true);
     expect(isAttachmentMediaType('text/markdown')).toBe(true);
     expect(isAttachmentMediaType('text/x-markdown')).toBe(true);
+    // Telemetry 48850f4a: every other file travels as `application/octet-stream` instead.
+    expect(isAttachmentMediaType('application/octet-stream')).toBe(true);
     expect(isAttachmentMediaType('application/zip')).toBe(false);
     expect(isAttachmentMediaType('text/html')).toBe(false);
+  });
+
+  it('stores a binary file under its own data extension, and anything else as .bin', () => {
+    const stored = (name: string) => {
+      const sanitized = sanitizeAttachmentName(name, 'application/octet-stream') ?? undefined;
+      return { sanitized, ext: storedAttachmentExtension('application/octet-stream', sanitized) };
+    };
+    expect(stored('TEGES spec v2.zip')).toEqual({ sanitized: 'TEGES spec v2.zip', ext: 'zip' });
+    expect(stored('budget.XLSX')).toEqual({ sanitized: 'budget.xlsx', ext: 'xlsx' });
+    // An executable or an image/text spelling must not keep its extension: readers branch on it.
+    expect(stored('install.sh')).toEqual({ sanitized: 'install.sh.bin', ext: 'bin' });
+    expect(stored('setup.exe')).toEqual({ sanitized: 'setup.exe.bin', ext: 'bin' });
+    expect(stored('fake.png')).toEqual({ sanitized: 'fake.png.bin', ext: 'bin' });
+    expect(isImageAttachmentName(`pasted-1.${stored('fake.png').ext}`)).toBe(false);
+    expect(storedAttachmentExtension('application/octet-stream')).toBe('bin');
+    // Every other type keeps `attachmentExtension`, whatever name it carries.
+    expect(storedAttachmentExtension('text/plain', 'archive.zip.txt')).toBe('txt');
   });
 
   it('derives the on-disk extension from the media type alone — no user filename reaches a path', () => {
@@ -738,6 +760,8 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
         // No name (a client from before #929, or a paste with nothing to go on): still persisted
         // to the run folder exactly as before, just not filed.
         { type: 'file', mediaType: 'application/pdf', data: TINY_PDF_B64 },
+        // Telemetry 48850f4a: an archive is a binary attachment that keeps its extension.
+        { type: 'file', mediaType: 'application/octet-stream', data: ZIP_B64, name: 'spec v2.zip' },
       ],
       worktree: false,
     });
@@ -745,7 +769,8 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
     const libraryPath = join(attachmentLibraryDir(dataDir), 'alpha-brief.md');
     // Filed at persist time, so it is on disk before the run is even dequeued.
     expect(readFileSync(libraryPath, 'utf8')).toBe(BRIEF_MD);
-    expect(readdirSync(attachmentLibraryDir(dataDir))).toEqual(['alpha-brief.md']);
+    expect(readdirSync(attachmentLibraryDir(dataDir)).sort()).toEqual(['alpha-brief.md', 'spec v2.zip']);
+    expect(readFileSync(join(attachmentLibraryDir(dataDir), 'spec v2.zip')).toString('base64')).toBe(ZIP_B64);
 
     await waitForStatus(record.id, ['done', 'review', 'failed', 'cancelled']);
     const after = store.getRun(record.id);
@@ -755,12 +780,14 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
     // Both run-folder paths are still announced — the library is additive, not a replacement.
     expect(lines[0]?.userText).toContain(`- ${join(dataDir, 'runs', `${record.id}-images`, 'pasted-1.md')}`);
     expect(lines[0]?.userText).toContain(`- ${join(dataDir, 'runs', `${record.id}-images`, 'pasted-2.pdf')}`);
+    expect(lines[0]?.userText).toContain(`- ${join(dataDir, 'runs', `${record.id}-images`, 'pasted-3.zip')}`);
+    expect(lines[0]?.userText).not.toContain(ZIP_B64);
     // …and the library is named, so a later task can find `alpha-brief.md` by the name the user
     // knows it by rather than by this run's `pasted-1.md`.
     expect(lines[0]?.userText).toContain(`kept under their original names in ${attachmentLibraryDir(dataDir)}`);
     // The unnamed PDF was persisted to the run folder but never filed.
     expect(existsSync(join(attachmentLibraryDir(dataDir), 'pasted-2.pdf'))).toBe(false);
-    expect(readdirSync(attachmentLibraryDir(dataDir))).toEqual(['alpha-brief.md']);
+    expect(readdirSync(attachmentLibraryDir(dataDir)).sort()).toEqual(['alpha-brief.md', 'spec v2.zip']);
     expect(readFileSync(libraryPath, 'utf8')).toBe(BRIEF_MD);
 
     // …and the agent is actually ALLOWED to look where it was told to. A run's cwd is its

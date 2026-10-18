@@ -300,17 +300,15 @@ describe('attachments — attach, paste, thumbnails, caps (legacy parity)', () =
     )
   })
 
-  it('a dropped PDF is taken, and an unsupported file is refused out loud', async () => {
+  it('a dropped PDF and a ZIP are both taken (telemetry 48850f4a)', async () => {
     const { textarea } = renderComposer()
     paste(textarea, [
       textFile('report.pdf', 'application/pdf', '%PDF'),
       textFile('payload.zip', 'application/zip', 'PK'),
     ])
     await screen.findByLabelText('Remove report.pdf')
-    expect(
-      await screen.findByText('“payload.zip” is not a supported attachment (images, PDF and text files such as TXT, MD, HTML or source code)'),
-    ).toBeTruthy()
-    expect(screen.queryByLabelText('Remove payload.zip')).toBeNull()
+    expect(await screen.findByLabelText('Remove payload.zip')).toBeTruthy()
+    expect(screen.queryByText(/not a supported attachment/)).toBeNull()
   })
 
   it('an oversized image is refused with the 5 MB toast', async () => {
