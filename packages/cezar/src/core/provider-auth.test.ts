@@ -974,6 +974,16 @@ describe('ProviderAuthService', () => {
       expect(service.peekProfileStatus('claude', 'work')).toEqual({ provider: 'claude', status: 'connected', profileId: 'work' });
     });
 
+    it('is dropped with the account, and kept by a plain cache refresh', () => {
+      const service = new ProviderAuthService({ runCommand: runner(), createAuthFailureId: () => 'incident-1' });
+      service.reportProfileAuthFailure('claude', 'work');
+
+      service.forgetProfileStatus('claude', 'work');
+      expect(service.peekProfileStatus('claude', 'work')).toMatchObject({ status: 'disconnected' });
+      service.forgetProfile('claude', 'work');
+      expect(service.peekProfileStatus('claude', 'work')).toBeUndefined();
+    });
+
     it('survives a probe that was already running when the rejection arrived', async () => {
       let release!: () => void;
       const waiting = new Promise<void>((resolve) => { release = resolve; });

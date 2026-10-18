@@ -2791,8 +2791,9 @@ export function createApp(deps: ServerDeps) {
         }
         if (!removed) return c.json({ error: `unknown account: ${id}` }, 404);
         // Only this account's answer: it is about to stop existing, and holding it would let a
-        // re-added account with the same id read the deleted one's state.
-        providerAuth.forgetProfileStatus(removedProvider, id);
+        // re-added account with the same id read the deleted one's state — its incident included.
+        if (removedProvider) providerAuth.forgetProfile(removedProvider, id);
+        else providerAuth.forgetProfileStatus(removedProvider, id);
         return c.json({ removed: true as const, id });
       },
     );

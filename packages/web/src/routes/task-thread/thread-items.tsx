@@ -401,7 +401,8 @@ function AccountAuthRequiredCard({
 }) {
   const profiles = useAgentProfiles()
   const label = PROVIDER_LABEL[incident.provider]
-  const account = profiles.data?.profiles.find((p) => p.id === profileId)?.label ?? profileId
+  const account = profiles.data?.profiles
+    .find((p) => p.id === profileId && p.provider === incident.provider)?.label ?? profileId
   return (
     <div
       role="alert"

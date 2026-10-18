@@ -976,6 +976,13 @@ export class ProviderAuthService {
     this.completedProfiles.delete(profileCacheKey(provider, profileId));
   }
 
+  /** A REMOVED account takes its runtime incident with it, so a re-added one with the same id
+   *  never inherits it. Not part of `forgetProfileStatus`: a refresh must keep the incident. */
+  forgetProfile(provider: ProviderId, profileId: string): void {
+    this.forgetProfileStatus(provider, profileId);
+    this.profileRuntimeFailures.delete(profileCacheKey(provider, profileId));
+  }
+
   /**
    * The cached answer for one account, or `undefined` when nothing is known yet — WITHOUT
    * spawning anything.

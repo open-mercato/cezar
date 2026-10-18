@@ -63,7 +63,10 @@ describe('ProviderAuthRequiredCard', () => {
     // The listing never answers, so the label below can only come from the seeded cache.
     vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
     const client = createQueryClient()
-    client.setQueryData(workspaceQueryKeys.agentProfiles, { profiles: [{ id: 'work', label: 'Work login' }] })
+    client.setQueryData(workspaceQueryKeys.agentProfiles, { profiles: [
+      { id: 'work', provider: 'codex', label: 'Codex work' },
+      { id: 'work', provider: 'claude', label: 'Work login' },
+    ] })
     render(
       <QueryClientProvider client={client}>
         <MemoryRouter initialEntries={['/p/acme/tasks/r1']}>
