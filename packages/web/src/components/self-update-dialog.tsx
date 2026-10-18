@@ -22,6 +22,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
 import { DevelopmentPanel, pullOfVersion } from './self-update-development'
@@ -366,15 +367,24 @@ function LatestCard({
         </Button>
         {/* Only worth offering when a restart would interrupt something: idle, it applies at once. */}
         {target && data.activeRuns > 0 && data.scheduled?.target !== target ? (
-          <Button
-            variant="outline"
-            size="sm"
-            title="Install and restart as soon as no task is running"
-            onClick={() => onSchedule(target)}
-            disabled={!data.canSelfUpdate || applying || jobBusy}
-          >
-            Update when idle
-          </Button>
+          <TooltipProvider delayDuration={300}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onSchedule(target)}
+                  disabled={!data.canSelfUpdate || applying || jobBusy}
+                >
+                  Update when idle
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent data-slot="update-when-idle-tooltip" side="bottom" className="max-w-64">
+                Waits until no task is running or queued, then installs v{target} and restarts. Tasks waiting on
+                your reply don&apos;t hold it up. You can close this window and keep working.
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         ) : null}
         {target ? (
           <Button size="sm" onClick={() => onApply(target)} disabled={!data.canSelfUpdate || applying || jobBusy}>

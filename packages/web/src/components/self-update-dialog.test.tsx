@@ -194,6 +194,15 @@ describe('SelfUpdateDialog', () => {
       expect(screen.queryByRole('button', { name: 'Update when idle' })).toBeNull()
     })
 
+    it('explains itself in a tooltip', async () => {
+      // Radix's tooltip arrow measures itself with a ResizeObserver; jsdom has no layout observer.
+      vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+      renderDialog({ ...release, updateAvailable: '0.12.1', activeRuns: 3 })
+      fireEvent.focus(await screen.findByRole('button', { name: 'Update when idle' }))
+      const tooltip = await screen.findByRole('tooltip')
+      expect(tooltip.textContent).toContain('Waits until no task is running or queued, then installs v0.12.1 and restarts')
+    })
+
     it('schedules the update instead of restarting now', async () => {
       applySelfUpdate.mockClear()
       scheduleSelfUpdate.mockResolvedValue({
