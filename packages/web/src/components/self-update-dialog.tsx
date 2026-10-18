@@ -337,11 +337,13 @@ function LatestCard({
     <div
       data-slot="self-update-latest"
       className={cn(
-        'flex items-center justify-between gap-3 rounded-md border px-3 py-2.5',
+        'flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-md border px-3 py-2.5',
         target ? 'border-primary/40 bg-primary/5' : 'border-border bg-card',
       )}
     >
-      <div className="min-w-0 text-[13px]">
+      {/* A floor on the text so a third button wraps the row instead of squeezing a long nightly
+          version into a word-per-line column. */}
+      <div className="min-w-[14rem] flex-1 text-[13px] break-words">
         {!data.checkedAt ? (
           <span className="text-muted-foreground">The npm registry has not answered yet.</span>
         ) : target ? (
@@ -358,7 +360,7 @@ function LatestCard({
           <div className="text-[11.5px] text-muted-foreground">checked {new Date(data.checkedAt).toLocaleTimeString()}</div>
         ) : null}
       </div>
-      <div className="flex shrink-0 items-center gap-2">
+      <div className="ml-auto flex shrink-0 items-center gap-2">
         <Button variant="ghost" size="sm" onClick={onCheck} disabled={checking || jobBusy}>
           {checking ? 'Checking…' : 'Check again'}
         </Button>
