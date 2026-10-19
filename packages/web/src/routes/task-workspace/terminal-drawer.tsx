@@ -1,4 +1,4 @@
-import { Columns2Icon, Loader2Icon, PanelBottomIcon, PlusIcon, SquareIcon, TerminalIcon, XIcon } from 'lucide-react'
+import { Columns2Icon, Loader2Icon, PlusIcon, SquareIcon, TerminalIcon, XIcon } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { createRunTerminal, getRunTerminal, stopRunTerminal, writeRunTerminal } from '@/api/client'
@@ -58,7 +58,6 @@ export function TerminalDrawer({
   onHeightChange,
   onClose,
   onMoveToColumn,
-  onMoveToDrawer,
   onOpenInBrowser,
   fill = false,
 }: {
@@ -69,8 +68,6 @@ export function TerminalDrawer({
   onClose?: () => void
   /** Moves the same shells into a column of the layout. Absent in a column. */
   onMoveToColumn?: () => void
-  /** Moves the shells from their column back into the bottom drawer. Column only. */
-  onMoveToDrawer?: () => void
   /** Fill a task-workspace column instead of docking at the bottom with a resizable height. */
   fill?: boolean
   /** Opens a detected address in a Browser column (spec §7). Returns false when the layout had
@@ -367,21 +364,6 @@ export function TerminalDrawer({
               className="rounded text-soft-foreground hover:text-foreground"
             >
               <Columns2Icon aria-hidden="true" className="size-3.5" />
-            </Button>
-          </IconTooltip>
-        ) : null}
-        {onMoveToDrawer ? (
-          <IconTooltip label="Move to bottom — under every view">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              data-action="terminal-to-drawer"
-              aria-label="Move to bottom"
-              onClick={onMoveToDrawer}
-              className="rounded text-soft-foreground hover:text-foreground"
-            >
-              <PanelBottomIcon aria-hidden="true" className="size-3.5" />
             </Button>
           </IconTooltip>
         ) : null}

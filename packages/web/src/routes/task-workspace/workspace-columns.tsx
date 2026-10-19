@@ -64,10 +64,13 @@ export function WorkspaceColumns({
   columns,
   actions,
   renderView,
+  headerExtras,
 }: {
   columns: readonly WorkspaceColumn[]
   actions: ColumnActions
   renderView: (view: ViewId, index: number, column: WorkspaceColumn) => ReactNode
+  /** Controls a view adds to its window's bar, before the split (the terminal's "Move to bottom"). */
+  headerExtras?: (view: ViewId, index: number) => ReactNode
 }) {
   // Columns go side by side only from `lg` up. The shared default (`md`, 768px) is the threshold
   // for a different question — whether a diff should wrap — and it left a 768-1024px tablet with
@@ -210,6 +213,7 @@ export function WorkspaceColumns({
               }}
               canSplit={canSplit}
               grip={false}
+              extras={headerExtras?.(column.view, slot as number)}
             />
             <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
               {renderView(column.view, slot as number, column)}
@@ -262,6 +266,7 @@ export function WorkspaceColumns({
             onSplit={() => setPendingAt(index + 1)}
             canSplit={canSplit}
             trailing={index === columns.length - 1 ? <FullViewExit className="ml-1.5" /> : null}
+            extras={headerExtras?.(column.view, index)}
           />
           <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
             <WorkspaceMaximizeContext.Provider value={null}>
@@ -290,7 +295,10 @@ function ColumnHeader({
   onSplit,
   canSplit = true,
   grip = true,
+  extras,
 }: {
+  /** The view's own controls, before the split. */
+  extras?: ReactNode
   /** Whether the window can be dragged to reorder — not on a narrow screen, which shows one. */
   grip?: boolean
   /** Split this window: a new, empty one opens to its right. */
@@ -382,6 +390,7 @@ function ColumnHeader({
         onDragStart={startDrag}
         className={cn('h-full min-w-0 flex-1', count > 1 && grip && 'cursor-grab active:cursor-grabbing')}
       />
+      {extras}
       {onSplit ? (
         // Main's shell mounts no app-wide tooltip provider; each tooltip brings its own.
         <TooltipProvider>

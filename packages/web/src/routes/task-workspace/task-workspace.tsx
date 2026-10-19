@@ -3,6 +3,7 @@ import {
   LoaderCircleIcon,
   Maximize2Icon,
   MessageSquareTextIcon,
+  PanelBottomIcon,
   SearchXIcon,
   TerminalIcon,
 } from 'lucide-react'
@@ -25,6 +26,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Link, useNavigate } from '@/lib/project-router'
 import { isUnread } from '@/lib/read-state'
 import { recordTaskVisit } from '@/lib/recent-tasks'
@@ -610,6 +612,27 @@ function WorkspaceView({
     [discardNote, noteFor],
   )
 
+  // A terminal column's bar docks the same shells at the bottom instead.
+  const headerExtras = useCallback(
+    (view: ViewId) =>
+      view === 'terminal' && terminalAllowed ? (
+        <IconTooltip label="Move to bottom — under every view">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            data-action="terminal-to-drawer"
+            aria-label="Move to bottom"
+            onClick={moveTerminalToDrawer}
+            className="text-soft-foreground hover:text-foreground"
+          >
+            <PanelBottomIcon aria-hidden="true" className="size-3.5" />
+          </Button>
+        </IconTooltip>
+      ) : null,
+    [moveTerminalToDrawer, terminalAllowed],
+  )
+
   const renderView = useCallback(
     (view: ViewId, index: number, column: WorkspaceColumn) => {
       switch (view) {
@@ -630,14 +653,7 @@ function WorkspaceView({
         case 'terminal':
           return terminalAllowed ? (
             <Suspense fallback={<ColumnLoading title="Loading terminal…" />}>
-              <TerminalDrawer
-                runId={run.id}
-                height={0}
-                onHeightChange={noop}
-                onMoveToDrawer={moveTerminalToDrawer}
-                onOpenInBrowser={openInBrowser}
-                fill
-              />
+              <TerminalDrawer runId={run.id} height={0} onHeightChange={noop} onOpenInBrowser={openInBrowser} fill />
             </Suspense>
           ) : (
             <CenteredState
@@ -673,7 +689,6 @@ function WorkspaceView({
       noteFor,
       onMarkedUnread,
       openInBrowser,
-      moveTerminalToDrawer,
       openReference,
       run,
       setColumnBrowser,
@@ -723,6 +738,7 @@ function WorkspaceView({
                 columns={layouts.layout.columns}
                 actions={actions}
                 renderView={renderView}
+                headerExtras={headerExtras}
               />
             ) : (
               <CenteredState
