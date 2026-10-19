@@ -5,6 +5,11 @@ Status: decided 2026-10-10 (owner: backend D with A as fallback, reworked on PR 
 `.ai/specs/2026-09-18-jira-linear-tracker-browsing.md` (§ Managed project credential storage),
 `.ai/specs/2026-07-29-agent-profiles.md`
 
+> **Amended 2026-10-17 (#1164, owner decision):** the check env base is no longer `process.env`. A check
+> gets `{ ...buildCheckEnv(), ...secrets('checks'), ...context }`: a minimal toolchain env with no
+> `CEZ_*`, `GH_*`/`GITHUB_TOKEN` or vendor/cloud credentials, under `bash --noprofile --norc`. A
+> provider key exported on the server no longer reaches a check; it has to be stored as a secret.
+
 ## The ask
 
 PR #1291 adds *check credentials*: per-project `NAME=value` secrets handed to a workflow's CHECK steps

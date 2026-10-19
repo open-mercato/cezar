@@ -218,20 +218,21 @@ describe('project and workspace secrets in check steps', () => {
     expect(retried).not.toContain(token);
   }, 40_000);
 
-  it('without a secret store the check runs with the server env, unchanged', async () => {
-    process.env.CEZ_GUARD_PROBE_FOR_CHECKS = 'server-value';
+  it('without a secret store the check runs with the minimal env: toolchain vars, no vendor keys (#1164)', async () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-exported-for-e2e-0123456789';
     try {
-      const record = manager.startRun(checkOnly('echo "$CEZ_GUARD_PROBE_FOR_CHECKS"'), {
-        task: 'mock:done go',
-        worktree: false,
-      });
+      const record = manager.startRun(
+        checkOnly('echo "${ANTHROPIC_API_KEY:-unset}/${PATH:+path}"'),
+        { task: 'mock:done go', worktree: false },
+      );
       await settle(record.id);
       expect(store.getRun(record.id)?.status).toBe('done');
-      expect(checkOutputs(record.id)).toEqual(['server-value']);
+      // An exported provider key no longer rides along; it has to be stored as a secret.
+      expect(checkOutputs(record.id)).toEqual(['unset/path']);
       // Nothing stored is the ordinary case: it degrades silently, with no note to explain.
       expect(notes(record.id).filter((note) => note.includes('secret'))).toEqual([]);
     } finally {
-      delete process.env.CEZ_GUARD_PROBE_FOR_CHECKS;
+      delete process.env.ANTHROPIC_API_KEY;
     }
   }, 30_000);
 
@@ -267,7 +268,7 @@ describe('run context for check steps', () => {
 
   beforeEach(async () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-check-context-'));
-    for (const key of ['CEZ_DRY_RUN', 'CEZ_RUN_ID', 'CEZ_GITHUB_NUMBER', 'CEZ_PROJECT_ID']) savedEnv[key] = process.env[key];
+    for (const key of ['CEZ_DRY_RUN', 'CEZ_RUN_ID', 'CEZ_GITHUB_NUMBER', 'CEZ_PROJECT_ID', 'CEZ_API_URL']) savedEnv[key] = process.env[key];
     process.env.CEZ_DRY_RUN = '1';
     // What a cezar started inside another cezar task inherits: it must never leak through.
     process.env.CEZ_RUN_ID = 'outer-task';
@@ -332,7 +333,7 @@ describe('run context for check steps', () => {
     });
     expect(seen.CEZ_SHARED_CACHE_DIR).toBe(join(process.env.CEZ_HOME!, 'cache', PROJECT));
     // Absent, not empty — including the stale values this process inherited. Driven off
-    // `CHECK_CONTEXT_VARS` rather than a second hand-written list, so a name added to the strip
+    // `CHECK_CONTEXT_VARS` rather than a second hand-written list, so a name added to the
     // list without a value cannot quietly stop being asserted here.
     const expected = new Set(Object.keys(seen));
     for (const name of CHECK_CONTEXT_VARS) {
@@ -345,23 +346,21 @@ describe('run context for check steps', () => {
   }, 40_000);
 
   /**
-   * `CEZ_PROJECT_ID` is the one context name that is also a documented CLI *input*
-   * (BACKWARD_COMPATIBILITY.md §1 — it is how `cez task`/`cez automation` address a cockpit), so
-   * the strip must not reach it on a run that cannot replace it. The headless `cezar run` path
-   * builds its manager without a projectId; stripping there left `CEZ_API_URL` in place while
-   * `cez task create` silently fell back to the cockpit's boot project.
+   * The minimal check env (#1164) inherits no `CEZ_*` at all, so a projectless headless
+   * `cezar run` forwards neither the operator's `CEZ_PROJECT_ID` nor `CEZ_API_URL` — the pair
+   * stays consistent, never one without the other.
    */
-  it('forwards an inherited CEZ_PROJECT_ID when the run has no project of its own', async () => {
+  it('forwards no inherited CEZ_PROJECT_ID or CEZ_API_URL when the run has no project of its own', async () => {
     process.env.CEZ_PROJECT_ID = 'operators-choice';
+    process.env.CEZ_API_URL = 'http://127.0.0.1:4321';
     const projectless = new RunManager(store, repoRoot);
     try {
       const record = store.createRun({ title: 't', workflow: 'w', task: 'x', steps: [{ id: 'verify', name: 'Verify', kind: 'check' }] });
       const env = await (projectless as unknown as {
         checkStepEnv(runId: string, state: { cwd: string }, step: { id: string }, emit: () => void): Promise<NodeJS.ProcessEnv>;
       }).checkStepEnv(record.id, { cwd: repoRoot }, { id: 'verify' }, () => undefined);
-      expect(env.CEZ_PROJECT_ID).toBe('operators-choice');
-      // No project means no per-project cache, and the run's own ids still replace the inherited
-      // ones — the forwarding is the single exception, not a hole in the strip.
+      expect(env).not.toHaveProperty('CEZ_PROJECT_ID');
+      expect(env).not.toHaveProperty('CEZ_API_URL');
       expect(env).not.toHaveProperty('CEZ_SHARED_CACHE_DIR');
       expect(env.CEZ_RUN_ID).toBe(record.id);
     } finally {
