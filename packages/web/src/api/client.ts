@@ -2758,6 +2758,56 @@ export async function stopRunTerminal(id: string, sessionId: string): Promise<vo
   )
 }
 
+/* The PROJECT terminal: the same session machinery, owned by the project and opened in its root. */
+
+export async function getProjectTerminal(): Promise<TerminalState> {
+  return unwrap(await cez.api.v1.p[':projectId'].terminal.$get({ param: { projectId: queryScope() } }), '/terminal')
+}
+
+export async function createProjectTerminal(body: TerminalCreateInput): Promise<TerminalSession> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].terminal.$post({ param: { projectId: queryScope() }, json: body }),
+    '/terminal',
+  )
+}
+
+export async function readProjectTerminal(sessionId: string, cursor: number): Promise<TerminalOutput> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].terminal[':sessionId'].output.$get({
+      param: { projectId: queryScope(), sessionId },
+      query: { cursor: String(cursor) },
+    }),
+    `/terminal/${sessionId}/output`,
+  )
+}
+
+export async function writeProjectTerminal(sessionId: string, data: string): Promise<void> {
+  await unwrap(
+    await cez.api.v1.p[':projectId'].terminal[':sessionId'].input.$post({
+      param: { projectId: queryScope(), sessionId },
+      json: { data },
+    }),
+    `/terminal/${sessionId}/input`,
+  )
+}
+
+export async function resizeProjectTerminal(sessionId: string, cols: number, rows: number): Promise<void> {
+  await unwrap(
+    await cez.api.v1.p[':projectId'].terminal[':sessionId'].resize.$post({
+      param: { projectId: queryScope(), sessionId },
+      json: { cols, rows },
+    }),
+    `/terminal/${sessionId}/resize`,
+  )
+}
+
+export async function stopProjectTerminal(sessionId: string): Promise<void> {
+  await unwrap(
+    await cez.api.v1.p[':projectId'].terminal[':sessionId'].$delete({ param: { projectId: queryScope(), sessionId } }),
+    `/terminal/${sessionId}`,
+  )
+}
+
 /** Addresses this task's terminals printed, each probed for whether anything is listening
  *  (spec §7). Nothing is opened by reading this — that is the user's click. */
 export async function getRunTerminalUrls(id: string): Promise<DetectedUrlsResponse> {

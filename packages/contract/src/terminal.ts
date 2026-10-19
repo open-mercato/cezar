@@ -131,3 +131,7 @@ export const terminalSessionParamsSchema = z.object({
   sessionId: z.string(),
 });
 export type TerminalSessionParams = z.infer<typeof terminalSessionParamsSchema>;
+
+/** A project terminal is addressed by session alone — its owner is the project in the scope. */
+export const projectTerminalSessionParamsSchema = z.object({ sessionId: z.string() });
+export type ProjectTerminalSessionParams = z.infer<typeof projectTerminalSessionParamsSchema>;
