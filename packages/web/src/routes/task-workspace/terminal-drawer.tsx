@@ -15,6 +15,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -355,32 +356,34 @@ export function TerminalDrawer({
           </Button>
         ) : null}
         {onMoveToColumn ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            data-action="terminal-to-column"
-            title="Show these shells in a column beside the current view"
-            onClick={onMoveToColumn}
-            className="rounded text-muted-foreground"
-          >
-            <Columns2Icon aria-hidden="true" className="size-3.5" />
-            Move to column
-          </Button>
+          <IconTooltip label="Move to column — beside the current view">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              data-action="terminal-to-column"
+              aria-label="Move to column"
+              onClick={onMoveToColumn}
+              className="rounded text-soft-foreground hover:text-foreground"
+            >
+              <Columns2Icon aria-hidden="true" className="size-3.5" />
+            </Button>
+          </IconTooltip>
         ) : null}
         {onMoveToDrawer ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            data-action="terminal-to-drawer"
-            title="Dock these shells at the bottom, under every view"
-            onClick={onMoveToDrawer}
-            className="rounded text-muted-foreground"
-          >
-            <PanelBottomIcon aria-hidden="true" className="size-3.5" />
-            Move to bottom
-          </Button>
+          <IconTooltip label="Move to bottom — under every view">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              data-action="terminal-to-drawer"
+              aria-label="Move to bottom"
+              onClick={onMoveToDrawer}
+              className="rounded text-soft-foreground hover:text-foreground"
+            >
+              <PanelBottomIcon aria-hidden="true" className="size-3.5" />
+            </Button>
+          </IconTooltip>
         ) : null}
         {onClose ? (
           <Button
