@@ -216,6 +216,9 @@ fn build_main_window(app: &AppHandle, shell: &Arc<Shell>) -> tauri::Result<Webvi
         // default size and position before jumping to where the user left it.
         .visible(false)
         .initialization_script(INIT_SCRIPT.replace("__PLATFORM__", platform_name()))
+        // The cockpit's own drag-and-drop (view tabs onto the workspace, column headers, files into
+        // the composer) is HTML5; Tauri's native file-drop handler swallows those events on macOS.
+        .disable_drag_drop_handler()
         // One window, on purpose. Anything that asks for another — `target="_blank"` links (the
         // cockpit's PR and tracker links), `window.open`, the context menu's "Open Link in New
         // Window" — goes to the default browser instead of silently doing nothing.
