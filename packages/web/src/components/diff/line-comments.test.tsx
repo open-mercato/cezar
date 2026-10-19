@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { Diff } from './diff'
+import { LineSelectionProvider, useLineSelection } from './line-comments'
 import type { DiffFileChange, DiffLineComment } from './types'
 
 afterEach(cleanup)
@@ -318,6 +319,42 @@ describe('Diff line comments on a range of lines', () => {
     )
     // The file header counts it.
     expect(document.querySelector('[data-slot="diff-file-header"] [data-slot="comment-count"]')?.textContent).toBe('1')
+  })
+})
+
+describe('Diff line selection isolation', () => {
+  function SelectionRenderProbe({ path, onRender }: { path: string; onRender: () => void }) {
+    onRender()
+    const selection = useLineSelection()
+    return (
+      <div>
+        <button type="button" data-testid={`${path}-start`} onMouseDown={() => selection?.beginSelect(path, 0, [])} />
+        <button type="button" data-testid={`${path}-extend`} onMouseEnter={() => selection?.extendSelect(path, 1)} />
+      </div>
+    )
+  }
+
+  it('does not rerender an unrelated file while the dragged file selection changes', () => {
+    const draggedRenders = vi.fn()
+    const unrelatedRenders = vi.fn()
+    render(
+      <>
+        <LineSelectionProvider path="src/a.ts">
+          <SelectionRenderProbe path="src/a.ts" onRender={draggedRenders} />
+        </LineSelectionProvider>
+        <LineSelectionProvider path="README.md">
+          <SelectionRenderProbe path="README.md" onRender={unrelatedRenders} />
+        </LineSelectionProvider>
+      </>,
+    )
+
+    expect(draggedRenders).toHaveBeenCalledTimes(1)
+    expect(unrelatedRenders).toHaveBeenCalledTimes(1)
+    fireEvent.mouseDown(screen.getByTestId('src/a.ts-start'))
+    fireEvent.mouseEnter(screen.getByTestId('src/a.ts-extend'))
+
+    expect(draggedRenders.mock.calls.length).toBeGreaterThan(1)
+    expect(unrelatedRenders).toHaveBeenCalledTimes(1)
   })
 })
 
