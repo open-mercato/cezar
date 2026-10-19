@@ -53,6 +53,7 @@ import {
   FIXED_VIEW_ORDER,
   fixedViewOf,
   layoutDisplayName,
+  MAX_COLUMNS,
   toSavedLayout,
   VIEW_IDS,
   type ViewId,
@@ -259,19 +260,45 @@ function WorkspaceView({
   }, [])
   const endViewDrag = useCallback(() => setDraggingView(null), [])
   const dropView = layouts.dropView
+  // The layout shown before this one. A view's tab dropped beside its OWN card (the Terminal tab
+  // dragged while the Terminal shows) means "beside what I was on", which is only known here.
+  const shownLayout = useRef({ runId: run.id, current: layouts.state.active, previous: null as string | null })
+  if (shownLayout.current.runId !== run.id) shownLayout.current = { runId: run.id, current: layouts.state.active, previous: null }
+  else if (shownLayout.current.current !== layouts.state.active) {
+    shownLayout.current = { runId: run.id, current: layouts.state.active, previous: shownLayout.current.current }
+  }
+  const besideItself = useCallback(
+    (view: ViewId): number | null => {
+      if (fixedActive !== view) return null
+      const previous = shownLayout.current.previous
+      const back = previous === null ? undefined : layouts.state.layouts.find((layout) => layout.name === previous)
+      if (back && !(back.columns.length === 1 && back.columns[0]?.view === view)) {
+        selectLayout(back.name)
+        return back.columns.length
+      }
+      openDeepLink(view === 'session' ? 'changes' : 'session')
+      return 1
+    },
+    [fixedActive, layouts.state.layouts, openDeepLink, selectLayout],
+  )
   const dropViewHere = useCallback(
     (view: ViewId, at: number, mode: 'insert' | 'replace') => {
       setDraggingView(null)
+      if (mode === 'insert' && besideItself(view) !== null) {
+        // Its own card offered a left and a right edge: keep the side, beside the view it returns to.
+        dropView(view, at === 0 ? 0 : MAX_COLUMNS, mode)
+        return
+      }
       dropView(view, at, mode)
     },
-    [dropView],
+    [besideItself, dropView],
   )
   const openViewBeside = useCallback(
     (view: ViewId) => {
-      const count = layouts.layout?.columns.length ?? 0
+      const count = besideItself(view) ?? layouts.layout?.columns.length ?? 0
       dropView(view, count, 'insert')
     },
-    [dropView, layouts.layout?.columns.length],
+    [besideItself, dropView, layouts.layout?.columns.length],
   )
   const columnCount = layouts.layout?.columns.length ?? 0
   const closeColumnByDrop = fixedActive === null && columnCount > 1 ? layouts.closeColumn : undefined

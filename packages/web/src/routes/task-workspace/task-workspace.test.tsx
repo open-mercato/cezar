@@ -335,6 +335,42 @@ describe('the task workspace (main)', () => {
     expect((await screen.findByTestId('terminal')).dataset.fill).toBeUndefined()
   })
 
+  it('drops the Terminal tab beside the view it was opened from when the Terminal itself shows', async () => {
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    fireEvent.click(document.querySelector<HTMLElement>('[data-fixed="changes"]')!)
+    await waitFor(() => expect(activeCard()).toBe('Changes'))
+    fireEvent.click(terminalTab()!)
+    await waitFor(() => expect(activeCard()).toBe('Terminal'))
+
+    const data = new Map<string, string>()
+    const dataTransfer = {
+      setData: (type: string, value: string) => data.set(type, value),
+      getData: (type: string) => data.get(type) ?? '',
+      get types() {
+        return [...data.keys()]
+      },
+      effectAllowed: 'all',
+      dropEffect: 'none',
+    }
+    fireEvent.dragStart(terminalTab()!, { dataTransfer })
+    const right = await waitFor(() => {
+      const zones = document.querySelectorAll('[data-slot="view-drop-zones"] [data-drop-zone="insert"]')
+      expect(zones.length).toBe(2)
+      return zones[1]!
+    })
+    fireEvent.dragOver(right, { dataTransfer })
+    fireEvent.drop(right, { dataTransfer })
+    await waitFor(() => expect(columnViews()).toEqual(['changes', 'terminal']))
+
+    // ⌥-click from the Terminal does the same.
+    fireEvent.click(terminalTab()!)
+    await waitFor(() => expect(activeCard()).toBe('Terminal'))
+    fireEvent.click(terminalTab()!, { altKey: true })
+    await waitFor(() => expect(columnViews()).toEqual(['changes', 'terminal']))
+  })
+
   it('docks the drawer under any layout, and the ` key toggles it', async () => {
     stubFetch()
     renderWorkspace('changes')
