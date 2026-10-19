@@ -72,6 +72,20 @@ export function ensureChangelogEntry(
   return { text: `${heading}\n\n${body}\n\n${changelog.replace(/^\n+/, '')}`, source: 'generated' };
 }
 
+/**
+ * Drop a leading `# Unreleased` section. A cut hands it to the new line, which renames it to
+ * the line's `x.y.0`; left on `main` it would sit above that entry once the release carries it
+ * back, and the next cut would ship it again.
+ */
+export function dropUnreleased(changelog: string): string {
+  const lines = changelog.split('\n');
+  const first = lines.findIndex((l) => HEADING.test(l));
+  if (first < 0 || !/^# unreleased\b/i.test(lines[first]!)) return changelog;
+  let end = lines.findIndex((l, i) => i > first && HEADING.test(l));
+  if (end < 0) end = lines.length;
+  return [...lines.slice(0, first), ...lines.slice(end)].join('\n');
+}
+
 /** The `# <version>` entry's heading line and body, or `null` when there is none. */
 export function changelogSection(
   changelog: string,

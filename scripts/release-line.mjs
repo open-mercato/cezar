@@ -30,6 +30,7 @@ import {
 } from '../packages/cezar/dist/release/stable.js';
 import {
   changelogSection,
+  dropUnreleased,
   ensureChangelogEntry,
   insertChangelogEntry,
   stampCompanionManifest,
@@ -147,6 +148,8 @@ async function cut() {
   if (!releaseBranch || !next) fail(`main's version "${current}" is not a plain x.y.z`);
   const head = dryRun ? 'HEAD' : git('rev-parse', 'HEAD');
   stampEverything(next);
+  // The line takes main's `# Unreleased` with it (it ships as the line's x.y.0).
+  if (existsSync(abs('CHANGELOG.md'))) write('CHANGELOG.md', dropUnreleased(readText('CHANGELOG.md')));
   log(`main ${current} → ${releaseBranch} at ${head.slice(0, 12)}; main moves to ${next}`);
 
   let prUrl = '';
@@ -158,6 +161,7 @@ async function cut() {
     if (existing) log(`${releaseBranch} already exists at ${existing.slice(0, 12)} — left as it is`);
     else await gh.createBranch(releaseBranch, head);
     await gh.ensureLabel(`backport ${releaseBranch}`, 'c5def5', `Cherry-pick into ${releaseBranch} once merged`);
+    await gh.ensureLabel('backport main', 'c5def5', 'Forward-port a release-line hotfix to main once merged');
     prUrl = await openPr(gh, {
       branch: `chore/open-v${next}`,
       parentSha: head,

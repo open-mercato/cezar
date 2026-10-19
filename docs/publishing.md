@@ -66,13 +66,17 @@ update channel follows. A patch to an older line publishes under
 latest — so a 0.15.4 after 0.16.0 never offers anyone a downgrade.
 
 **Changelog.** A hand-written entry wins: an existing `# X.Y.Z` heading is kept,
-and a leading `# Unreleased` on the line is renamed to the version. Otherwise the
+and a leading `# Unreleased` on the line is renamed to the version (*Release
+cut* moves `main`'s `# Unreleased` to the new line, so it is never shipped twice). Otherwise the
 entry is GitHub's generated notes since the previous tag on that line.
 
 **Re-runs are safe.** A version already tagged is skipped past, a package
 already on npm is not published again, and an existing GitHub Release, branch
 or PR is reused — so a release that failed half-way is finished by running it
 again from the same branch.
+
+Only `release/vX.Y.x` branches can run `Release`; the pre-release-lines
+`release/0.9.x` branch is retired.
 
 The `Release` job is gated behind the `production` environment (required
 reviewers). Without `NPM_TOKEN` it degrades to a loud dry run, and its
@@ -203,8 +207,10 @@ On **GitHub** (this repository):
 
 5. Settings → Secrets and variables → Actions → new repository secret
    **`NPM_TOKEN`** with the token from step 3.
-6. **`RELEASE_TOKEN`** (recommended): a GitHub App or fine-grained token with
-   *Contents* and *Pull requests* read/write on this repo. GitHub runs no CI on
+6. **`RELEASE_TOKEN`**: a GitHub App or fine-grained token with
+   *Contents* and *Pull requests* read/write on this repo. Required once the
+   step 7 ruleset exists — `GITHUB_TOKEN` cannot bypass it, so *Release* could
+   not commit the bump to the line. GitHub runs no CI on
    a PR opened with the workflow's own `GITHUB_TOKEN`, so without it the
    main-bump, changelog and backport PRs wait for a manual re-run of their checks.
    Those PRs are never auto-merged: approve and merge them like any other.

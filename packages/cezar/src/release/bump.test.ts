@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   changelogSection,
+  dropUnreleased,
   ensureChangelogEntry,
   insertChangelogEntry,
   stampCompanionManifest,
@@ -89,6 +90,18 @@ describe('ensureChangelogEntry', () => {
 
   it('never writes an empty entry', () => {
     expect(ensureChangelogEntry(CHANGELOG, '0.15.3', '2026-10-20', '  ').text).toContain('- Maintenance release.');
+  });
+});
+
+describe('dropUnreleased', () => {
+  it('removes a leading Unreleased section up to the next version', () => {
+    expect(dropUnreleased(`# Unreleased\n\n- fix\n\n${CHANGELOG}`)).toBe(CHANGELOG);
+  });
+
+  it('leaves a changelog without one, or with one below a version, alone', () => {
+    expect(dropUnreleased(CHANGELOG)).toBe(CHANGELOG);
+    const below = `${CHANGELOG}\n# Unreleased\n\n- x\n`;
+    expect(dropUnreleased(below)).toBe(below);
   });
 });
 

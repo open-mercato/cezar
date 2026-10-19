@@ -147,6 +147,17 @@ test('cut names the line after main and moves main to the next minor', { timeout
   }
 });
 
+test("cut hands main's Unreleased section to the line", { timeout: 120_000 }, async () => {
+  const root = await makeFixture('0.15.2', ['v0.15.2']);
+  try {
+    await writeFile(join(root, 'CHANGELOG.md'), '# Unreleased\n\n- big feature\n\n# 0.15.2 (2026-10-14)\n\n- older\n');
+    await run(root, ['cut', '--dry-run'], { GITHUB_REF_NAME: 'main' });
+    assert.equal(await read(root, 'CHANGELOG.md'), '# 0.15.2 (2026-10-14)\n\n- older\n');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('announce builds the release notes from the changelog entry', { timeout: 120_000 }, async () => {
   const root = await makeFixture('0.15.2', []);
   try {
