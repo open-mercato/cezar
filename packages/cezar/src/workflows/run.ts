@@ -1774,8 +1774,8 @@ export class RunManager {
             ).catch((err: unknown) => {
               const message = err instanceof Error ? err.message : String(err);
               this.failOwnedContinuation(runId, ownerToken, message);
-              this.starting.delete(runId);
-              this.cancelledStarting.delete(runId);
+              // A cancel that landed before the throw still owes the parent its report.
+              if (!this.abandonCancelledStart(runId)) this.starting.delete(runId);
             });
             continue;
           }
@@ -2098,7 +2098,6 @@ export class RunManager {
     return workflows.find((w) => w.name === run.workflow) ?? null;
   }
 
-  /** Fence a continuation failure to the async owner that started it. */
   /**
    * A run cancelled while still `starting` (see `cancelOne`): leave the window without a session,
    * settling the way `dropActive` does — report to a parent, free the slot.
@@ -2111,6 +2110,7 @@ export class RunManager {
     return true;
   }
 
+  /** Fence a continuation failure to the async owner that started it. */
   private failOwnedContinuation(runId: string, ownerToken: symbol, message: string): void {
     const state = this.active.get(runId);
     if (!state || state.ownerToken !== ownerToken || state.cancelled) return;
@@ -3930,8 +3930,8 @@ export class RunManager {
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         this.failOwnedContinuation(runId, ownerToken, message);
-        this.starting.delete(runId);
-        this.cancelledStarting.delete(runId);
+        // A cancel that landed before the throw still owes the parent its report.
+        if (!this.abandonCancelledStart(runId)) this.starting.delete(runId);
       },
     );
     return { ok: true };
