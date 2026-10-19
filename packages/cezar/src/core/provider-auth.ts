@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { extname, isAbsolute } from 'node:path';
 import { AGENT_MODELS_LOCKED_ENV } from './agent-model-policy.ts';
 import { profileEnv } from './agent-profiles.ts';
+import { isSignalTerminationExit } from './agent-runner.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
 import { resolveCursorAgentBin } from './cursor-bin.ts';
 import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
@@ -40,6 +41,8 @@ export interface ProviderCommandResult {
   exitCode: number | null;
   errorCode?: string;
   timedOut?: boolean;
+  /** The signal that killed the CLI, when one did and it was not cezar's own timeout. */
+  signal?: string;
 }
 
 export type RunProviderCommand = (
@@ -163,6 +166,7 @@ function cacheTtlFor(rows: readonly ProviderStatus[]): number {
 }
 const UNKNOWN_HINT = 'Authentication could not be verified. Try again.';
 const TIMEOUT_HINT = 'Authentication check timed out. Try again.';
+const INTERRUPTED_HINT = 'Authentication check was interrupted. Try again.';
 const RUNTIME_AUTH_HINT =
   'Authentication was rejected during a run. Reconnect, then try again.';
 const ANSI_SEQUENCE = /\u001B\[[0-?]*[ -/]*[@-~]/g;
@@ -485,13 +489,15 @@ function defaultRunProviderCommand(
           signal?: string | null;
         }) | null;
         const code = commandError?.code;
+        const timedOut = commandError?.code === 'ETIMEDOUT'
+          || (commandError?.killed === true && commandError.signal === 'SIGTERM');
         resolve({
           stdout: String(stdout),
           stderr: String(stderr),
           exitCode: typeof code === 'number' ? code : error ? null : 0,
           errorCode: typeof code === 'string' ? code : undefined,
-          timedOut: commandError?.code === 'ETIMEDOUT'
-            || (commandError?.killed === true && commandError.signal === 'SIGTERM'),
+          timedOut,
+          ...(!timedOut && commandError?.signal ? { signal: commandError.signal } : {}),
         });
       },
     );
@@ -600,6 +606,14 @@ export function versionManagerShimMiss(result: ProviderCommandResult): string | 
     if (match) return match[0].trim().slice(0, 160);
   }
   return null;
+}
+
+/**
+ * A probe stopped by a signal from outside — Ctrl-C reaches the whole foreground process group, so
+ * the CLI exits 130 while cezar shuts down (telemetry ce0c5d1f). Says nothing about the CLI.
+ */
+function wasInterrupted(result: ProviderCommandResult): boolean {
+  return !result.timedOut && (result.signal !== undefined || isSignalTerminationExit(result.exitCode));
 }
 
 function isSilentSuccess(result: ProviderCommandResult): boolean {
@@ -1077,6 +1091,8 @@ export class ProviderAuthService {
       // A CLI that exits 0 having printed nothing at all did not answer — `claude auth status
       // --json` does this intermittently (telemetry 35838a52). Ask once more before giving up.
       if (isSilentSuccess(result) && descriptor.parse(result) === null) result = await run();
+      // A signal meant for someone else (or the OOM killer) is not an answer: ask once more.
+      if (wasInterrupted(result) && descriptor.parse(result) === null) result = await run();
       const fallback = descriptor.parse(result) === null ? descriptor.fallbackArgs?.(result) : undefined;
       if (fallback) result = await run(fallback);
     } catch (error) {
@@ -1109,6 +1125,8 @@ export class ProviderAuthService {
     }
     const status = descriptor.parse(result);
     if (status !== null) return { provider: descriptor.id, status };
+    // Still interrupted: unknown, but unreported — there is no CLI defect to group on.
+    if (wasInterrupted(result)) return { provider: descriptor.id, status: 'unknown', hint: INTERRUPTED_HINT };
     const hint = descriptor.unrecognizedHint?.(result) ?? UNKNOWN_HINT;
     // Exit 0 and 1 are the codes vendors answer status with; anything else is the CLI failing.
     if (result.exitCode === 0 || result.exitCode === 1) return inconclusive('unrecognized_output', hint, result);

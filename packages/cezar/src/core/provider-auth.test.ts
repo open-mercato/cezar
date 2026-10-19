@@ -1604,6 +1604,39 @@ describe('inconclusive probe reports', () => {
     expect(onInconclusive.mock.calls[0]?.[0]).toMatchObject({ provider: 'codex', reason: 'unrecognized_output' });
   });
 
+  // Telemetry ce0c5d1f: Ctrl-C reached the probe too, `opencode` exited 130 and was reported.
+  it('asks again when a signal interrupted the CLI', async () => {
+    let codexCalls = 0;
+    const onInconclusive = vi.fn();
+    const service = new ProviderAuthService({
+      runCommand: async (executable) => {
+        if (executable !== 'codex') return { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' };
+        codexCalls += 1;
+        return codexCalls === 1 ? { stdout: '', stderr: '', exitCode: 130 } : connectedResults.codex!;
+      },
+      onInconclusive,
+    });
+    const status = await service.status({ refresh: true });
+    expect(status.providers.find((row) => row.provider === 'codex')?.status).toBe('connected');
+    expect(codexCalls).toBe(2);
+    expect(onInconclusive).not.toHaveBeenCalled();
+  });
+
+  it('never reports a probe that stays interrupted', async () => {
+    for (const result of [
+      { stdout: '', stderr: '', exitCode: 130 },
+      { stdout: '', stderr: '', exitCode: 143 },
+      { stdout: '', stderr: '', exitCode: null, signal: 'SIGINT' },
+    ]) {
+      const runCommand = vi.fn(codexOnly(result));
+      expect(await reasonsFor(result)).toEqual([]);
+      const service = new ProviderAuthService({ runCommand });
+      const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'codex');
+      expect(row).toMatchObject({ status: 'unknown', hint: expect.stringContaining('interrupted') });
+      expect(runCommand.mock.calls.filter(([executable]) => executable === 'codex')).toHaveLength(2);
+    }
+  });
+
   it('tells an unexpected exit, a spawn error, a timeout and a throw apart', async () => {
     expect((await reasonsFor({ stdout: '', stderr: '', exitCode: 3 }))[0]?.reason).toBe('unexpected_exit');
     expect((await reasonsFor({ stdout: '', stderr: '', exitCode: null, errorCode: 'EINVAL' }))[0])
