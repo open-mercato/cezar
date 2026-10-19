@@ -340,8 +340,9 @@ async function serveCommand(
   const pkgName = readOwnName();
   const update: { latest?: string } = {};
   const selfUpdate = buildSelfUpdateService({
-    activeRuns: () => store.listRuns().filter((r) => ['queued', 'waiting', 'running'].includes(r.status)).length,
-    // Workspace-wide, every project's manager — not just this repo's store.
+    // Workspace-wide, every project's manager — not just the boot repo's store, which is empty
+    // when cezar boots outside a project and hid every running task from the dialog.
+    activeRuns: () => semaphore.activeRuns(),
     idle: () => semaphore.idle(),
     // The server's own predicate, not a second spelling of it: the `/apply` guard decides hosted
     // mode through `resolveCapabilities`, and the two must never disagree (they did, on 127.0.0.2).

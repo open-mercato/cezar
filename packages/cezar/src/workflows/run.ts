@@ -1242,6 +1242,7 @@ export class RunManager {
       pump: () => this.pump(),
       oldestQueuedAt: () => this.oldestQueuedAt(),
       accountHolds: () => this.accountHolds(),
+      activeRuns: () => this.store.listRuns().filter((r) => r.status === 'queued' || r.status === 'waiting' || r.status === 'running').length,
     });
     this.lifecycle = new WorktreeLifecycleCoordinator(repoRoot, store, {
       semaphore: this.semaphore,
