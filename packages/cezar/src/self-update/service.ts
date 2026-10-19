@@ -8,6 +8,7 @@
 import type { SelfUpdateDevelopment, SelfUpdateJob, SelfUpdateScheduled, SelfUpdateStatus, UpdateChannel } from '@open-mercato/cezar-contract';
 
 import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from '../workspace/config.ts';
+import type { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { installFromLocal, installFromRegistry } from './installer.ts';
 import { buildCheckout, discoverCheckouts } from './checkouts.ts';
 import { activate, detectInstallKind, findInstalled, linkCheckout, listInstalled, packageRootOf, type InstallKind } from './layout.ts';
@@ -26,11 +27,9 @@ export interface SelfUpdateDeps {
   entry: string;
   /** Exit-or-reexec policy; the service only decides WHEN. */
   restart: () => void;
-  /** Runs in flight across the workspace, for the dialog's warning. */
-  activeRuns?: () => number;
-  /** Whether a restart would interrupt nothing — gates "update when idle". Defaults to
-   *  `activeRuns() === 0`. */
-  idle?: () => boolean;
+  /** The workspace's run counters — in production the `WorkspaceSemaphore` itself, so the dialog
+   *  can never again read one project's store (#1524). Absent: nothing runs. */
+  runs?: Pick<WorkspaceSemaphore, 'activeRuns' | 'idle'>;
   /** Test seam for the idle poll's interval. */
   idlePollMs?: number;
   /** Hosted mode trims the absolute entry path off the wire (#431). */
@@ -144,7 +143,7 @@ export class SelfUpdateService {
         })),
       job: this.job,
       scheduled: this.scheduled,
-      activeRuns: this.deps.activeRuns?.() ?? 0,
+      activeRuns: this.deps.runs?.activeRuns() ?? 0,
     };
   }
 
@@ -317,8 +316,7 @@ export class SelfUpdateService {
   private applyIfIdle(): void {
     const scheduled = this.scheduled;
     if (!scheduled) return;
-    const idle = this.deps.idle ? this.deps.idle() : (this.deps.activeRuns?.() ?? 0) === 0;
-    if (!idle) return;
+    if (this.deps.runs && !this.deps.runs.idle()) return;
     try {
       this.apply(scheduled.target);
     } catch (error) {

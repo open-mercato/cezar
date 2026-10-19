@@ -205,7 +205,7 @@ describe('update when idle', () => {
       version: '0.12.0',
       entry: versionEntry('0.12.0', env),
       restart,
-      idle: () => idle,
+      runs: { idle: () => idle, activeRuns: () => (idle ? 0 : 1) },
       idlePollMs: 10,
       env,
       registry: new RegistryCache('@open-mercato/cezar', offline),
