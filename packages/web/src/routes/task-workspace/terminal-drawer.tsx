@@ -1,4 +1,4 @@
-import { Columns2Icon, Loader2Icon, PlusIcon, SquareIcon, TerminalIcon, XIcon } from 'lucide-react'
+import { Loader2Icon, PanelRightIcon, PlusIcon, SquareIcon, TerminalIcon, XIcon } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { createRunTerminal, getRunTerminal, stopRunTerminal, writeRunTerminal } from '@/api/client'
@@ -363,7 +363,7 @@ export function TerminalDrawer({
               onClick={onMoveToColumn}
               className="rounded text-soft-foreground hover:text-foreground"
             >
-              <Columns2Icon aria-hidden="true" className="size-3.5" />
+              <PanelRightIcon aria-hidden="true" className="size-3.5" />
             </Button>
           </IconTooltip>
         ) : null}
