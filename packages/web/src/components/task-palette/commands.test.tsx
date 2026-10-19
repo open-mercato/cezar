@@ -66,7 +66,6 @@ function workspace(overrides: Partial<TaskWorkspaceBridge> = {}): TaskWorkspaceB
     openViewBeside: vi.fn(),
     layouts: [{ name: 'Review', label: 'Review', active: false }],
     selectLayout: vi.fn(),
-    newLayout: vi.fn(),
     maximized: false,
     toggleMaximized: vi.fn(),
     splitView: null,

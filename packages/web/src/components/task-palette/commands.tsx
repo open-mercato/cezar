@@ -13,7 +13,6 @@ import {
   PanelBottomIcon,
   PencilIcon,
   PinIcon,
-  PlusIcon,
   SquareTerminalIcon,
   TerminalIcon,
   TextCursorInputIcon,
@@ -324,14 +323,6 @@ function layoutCommands({ workspace }: TaskCommandInput): TaskCommand[] {
     }
   })
   commands.push(
-    {
-      id: 'layout:new',
-      group: 'layout',
-      label: 'New layout',
-      icon: icon(PlusIcon),
-      keywords: ['layout', 'create'],
-      perform: workspace.newLayout,
-    },
     {
       id: 'full-view',
       group: 'layout',

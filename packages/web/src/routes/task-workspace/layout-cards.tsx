@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronDownIcon, MoreHorizontalIcon, NotebookTextIcon, PencilIcon, PlusIcon, XIcon } from 'lucide-react'
+import { CheckIcon, ChevronDownIcon, MoreHorizontalIcon, NotebookTextIcon, SaveIcon, XIcon } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
@@ -16,7 +16,16 @@ import { Input } from '@/components/ui/input'
 import { Link } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 
-import { layoutDisplayName, viewLabel, type ViewId, type WorkspaceLayout } from './layout-state'
+import {
+  isReservedLayoutName,
+  layoutDisplayName,
+  MAX_LAYOUT_NAME_LENGTH,
+  viewLabel,
+  WORKING_LAYOUT_NAME,
+  type SavedLayout,
+  type ViewId,
+  type WorkspaceLayout,
+} from './layout-state'
 import { stripTabs, type StripTab } from './strip'
 import { VIEW_ICONS } from './view-picker'
 
@@ -24,6 +33,7 @@ import { VIEW_ICONS } from './view-picker'
 const CARD_GAP = 2
 const NO_HINTS: ReadonlyMap<string, string> = new Map()
 const NO_VIEWS: readonly ViewId[] = []
+const NO_SAVED: readonly SavedLayout[] = []
 const MORE_BUTTON_WIDTH = 30
 
 /** The drag payload a view tab carries; the workspace's drop zones accept only this. */
@@ -38,8 +48,9 @@ const COLUMN_DRAG_TYPE = 'text/cez-column'
  *  - left, one underline tab per VIEW plus Notes (its own page, placed by `stripTabs`). A tab opens that view
  *    alone; dragged onto the workspace it splits the screen, and ⌥-click opens it beside what is
  *    showing. `onViews` lights a tab whose view is live elsewhere (the terminal drawer);
- *  - right, the LAYOUT menu: one compact button naming the saved layout that shows, whose menu
- *    switches, creates, renames and closes layouts.
+ *  - right, the LAYOUT menu: one compact button naming the layout that shows. Its menu opens the
+ *    layouts the user saved for every task, and saves what is on screen under a name — a layout
+ *    is never created behind the user's back (splitting edits the task's one working arrangement).
  *
  * Tabs and layouts are BUTTONS, not links: a layout is not a URL, and §5.3 keeps layout state out
  * of the address bar on purpose. Dropping a column header onto this row closes that column.
@@ -48,9 +59,11 @@ export function LayoutCards({
   layouts,
   active,
   onSelect,
-  onRename,
   onClose,
-  onCreate,
+  saved = NO_SAVED,
+  onApplySaved,
+  onSaveCurrent,
+  onDeleteSaved,
   fixedViews = [],
   fixedActive = null,
   onViews = NO_VIEWS,
@@ -74,10 +87,15 @@ export function LayoutCards({
   /** Tabs whose view is live without being the one that shows (the terminal drawer) — lit, not underlined. */
   onViews?: readonly ViewId[]
   onSelectFixed?: (view: ViewId) => void
+  /** This task's own layouts (the working arrangement, saved ones it opened) — select and close. */
   onSelect: (name: string) => void
-  onRename: (name: string, requested: string) => void
   onClose: (name: string) => void
-  onCreate: () => void
+  /** The layouts saved for every task, and what the Layout menu does with them. */
+  saved?: readonly SavedLayout[]
+  onApplySaved?: (layout: SavedLayout) => void
+  /** Save what is on screen under a name; absent where there is nothing to save. */
+  onSaveCurrent?: (name: string) => void
+  onDeleteSaved?: (name: string) => void
   /** The Notes page, a link among the view tabs. */
   notesHref?: string
   notesActive?: boolean
@@ -344,10 +362,13 @@ export function LayoutCards({
           <LayoutMenu
             layouts={layouts}
             active={fixedActive === null ? active : null}
+            saved={saved}
             onSelect={onSelect}
-            onRename={onRename}
             onClose={onClose}
-            onCreate={onCreate}
+            onApplySaved={onApplySaved}
+            onSaveCurrent={onSaveCurrent}
+            onDeleteSaved={onDeleteSaved}
+            suggestedName={suggestName(layouts, fixedActive === null ? active : null, fixedActive)}
           />
         </div>
       ) : null}
@@ -411,30 +432,46 @@ export function LayoutGlyph({ count, className }: { count: number; className?: s
   )
 }
 
+/** The name the save dialog offers: the layout's own when it has one worth keeping, else what it shows. */
+function suggestName(layouts: readonly WorkspaceLayout[], active: string | null, fixed: ViewId | null): string {
+  const current = active === null ? undefined : layouts.find((layout) => layout.name === active)
+  if (current && current.name !== WORKING_LAYOUT_NAME) return layoutDisplayName(current.name)
+  if (current) return current.columns.map((column) => viewLabel(column.view)).join(' + ')
+  return fixed ? `${viewLabel(fixed)} layout` : ''
+}
+
 /**
- * The saved layouts as ONE button: it names the layout that shows (or just "Layout" while a view
- * tab does), and its menu switches between them, makes a new one, and renames or closes them. A
- * menu rather than a segmented control, so a task with five layouts costs the row no more room
- * than a task with one. The X on each row closes immediately — §5.2: no confirmation, no undo.
+ * The layouts as ONE button: it names the layout that shows (or just "Layout" while a view tab
+ * does). Its menu opens a layout SAVED for every task, lists this task's own (the working
+ * arrangement, saved ones it opened) and saves what is on screen under a name the user picks.
  */
 function LayoutMenu({
   layouts,
   active,
+  saved,
   onSelect,
-  onRename,
   onClose,
-  onCreate,
+  onApplySaved,
+  onSaveCurrent,
+  onDeleteSaved,
+  suggestedName,
 }: {
   layouts: readonly WorkspaceLayout[]
-  /** The saved layout that shows, or null while a view tab does. */
+  /** This task's layout that shows, or null while a view tab does. */
   active: string | null
+  saved: readonly SavedLayout[]
   onSelect: (name: string) => void
-  onRename: (name: string, requested: string) => void
   onClose: (name: string) => void
-  onCreate: () => void
+  onApplySaved?: (layout: SavedLayout) => void
+  onSaveCurrent?: (name: string) => void
+  onDeleteSaved?: (name: string) => void
+  suggestedName: string
 }) {
   const current = active === null ? undefined : layouts.find((layout) => layout.name === active)
-  const [renaming, setRenaming] = useState<string | null>(null)
+  const savedNames = new Set(saved.map((layout) => layout.name))
+  // This task's own layouts that are not a saved one under the same name.
+  const local = layouts.filter((layout) => !savedNames.has(layout.name))
+  const [saving, setSaving] = useState(false)
 
   return (
     <>
@@ -447,7 +484,7 @@ function LayoutMenu({
             data-action="layouts"
             data-active-layout={current ? current.name : undefined}
             aria-label={current ? `Layout: ${layoutDisplayName(current.name)}` : 'Layouts'}
-            title="Layouts — switch, split or create (drag a tab onto the workspace to split)"
+            title="Layouts — open a saved one, or save what is on screen"
             className={cn('h-7 max-w-48 shrink-0 gap-1.5 px-2 text-[12.5px]', current ? 'text-foreground' : 'text-muted-foreground')}
           >
             <LayoutGlyph count={current?.columns.length ?? 2} />
@@ -455,119 +492,177 @@ function LayoutMenu({
             <ChevronDownIcon aria-hidden="true" className="size-3.5 opacity-60" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="max-h-80 w-60 overflow-y-auto">
-          <DropdownMenuLabel>Layouts</DropdownMenuLabel>
-          {layouts.length === 0 ? (
+        <DropdownMenuContent align="end" className="max-h-96 w-64 overflow-y-auto">
+          <DropdownMenuLabel>Saved layouts</DropdownMenuLabel>
+          {saved.length === 0 ? (
             <p className="px-2 pb-1.5 text-xs text-muted-foreground">
-              None yet — drag a tab onto the workspace, or make one below.
+              None yet — arrange the view (drag a tab onto it), then save it here. Saved layouts are offered in every
+              task.
             </p>
           ) : null}
-          {layouts.map((layout) => {
-            const shown = layoutDisplayName(layout.name)
-            const selected = layout.name === active
-            return (
-              <DropdownMenuItem
-                key={layout.name}
-                data-layout={layout.name}
-                data-active={selected ? '' : undefined}
-                onSelect={() => onSelect(layout.name)}
-                className="group/layout pr-1"
-              >
-                <LayoutGlyph count={layout.columns.length} />
-                <span className="min-w-0 flex-1 truncate">{shown}</span>
-                {selected ? <CheckIcon aria-hidden="true" className="size-3.5" /> : null}
-                {/* A button inside the item: its click is stopped so it closes without selecting. */}
-                <button
-                  type="button"
-                  aria-label={`Close layout ${shown}`}
-                  title="Close layout"
-                  className="flex size-5 items-center justify-center rounded-sm text-muted-foreground opacity-0 group-hover/layout:opacity-100 group-focus/layout:opacity-100 hover:bg-background hover:text-foreground"
-                  onPointerUp={(event) => event.stopPropagation()}
-                  onClick={(event) => {
-                    event.preventDefault()
-                    event.stopPropagation()
-                    onClose(layout.name)
-                  }}
-                >
-                  <XIcon aria-hidden="true" className="size-3.5" />
-                </button>
-              </DropdownMenuItem>
-            )
-          })}
-          <DropdownMenuSeparator />
-          {/* `data-action` rather than `data-slot`: the browser-level specs need a hook that is not the label. */}
-          <DropdownMenuItem data-action="new-layout" onSelect={() => onCreate()}>
-            <PlusIcon aria-hidden="true" />
-            New layout
-          </DropdownMenuItem>
-          {current ? (
+          {saved.map((layout) => (
+            <LayoutRow
+              key={`saved:${layout.name}`}
+              name={layout.name}
+              count={layout.columns.length}
+              selected={layout.name === active}
+              kind="saved"
+              onPick={() => onApplySaved?.(layout)}
+              remove={
+                onDeleteSaved
+                  ? { label: `Delete saved layout ${layout.name}`, run: () => onDeleteSaved(layout.name) }
+                  : undefined
+              }
+            />
+          ))}
+          {local.length > 0 ? (
             <>
-              <DropdownMenuItem data-action="rename-layout" onSelect={() => setRenaming(current.name)}>
-                <PencilIcon aria-hidden="true" />
-                Rename layout…
-              </DropdownMenuItem>
-              <DropdownMenuItem data-action="close-layout" onSelect={() => onClose(current.name)}>
-                <XIcon aria-hidden="true" />
-                Close layout
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>This task</DropdownMenuLabel>
+              {local.map((layout) => (
+                <LayoutRow
+                  key={`task:${layout.name}`}
+                  name={layoutDisplayName(layout.name)}
+                  count={layout.columns.length}
+                  selected={layout.name === active}
+                  kind="task"
+                  onPick={() => onSelect(layout.name)}
+                  remove={{ label: `Close layout ${layoutDisplayName(layout.name)}`, run: () => onClose(layout.name) }}
+                />
+              ))}
+            </>
+          ) : null}
+          {onSaveCurrent ? (
+            <>
+              <DropdownMenuSeparator />
+              {/* `data-action` rather than `data-slot`: the browser-level specs need a hook that is not the label. */}
+              <DropdownMenuItem data-action="save-layout" onSelect={() => setSaving(true)}>
+                <SaveIcon aria-hidden="true" />
+                Save current view as layout…
               </DropdownMenuItem>
             </>
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
-      <RenameLayoutDialog
-        name={renaming}
-        onCommit={(requested) => {
-          if (renaming !== null) onRename(renaming, requested)
-          setRenaming(null)
+      <SaveLayoutDialog
+        open={saving}
+        suggested={suggestedName}
+        taken={savedNames}
+        onCommit={(name) => {
+          setSaving(false)
+          onSaveCurrent?.(name)
         }}
-        onCancel={() => setRenaming(null)}
+        onCancel={() => setSaving(false)}
       />
     </>
   )
 }
 
-/** The rename. Enter commits, Escape abandons — and an empty value is an abandon rather than a
- *  nameless layout, which `renameLayout` enforces for every caller. */
-function RenameLayoutDialog({
+function LayoutRow({
   name,
+  count,
+  selected,
+  kind,
+  onPick,
+  remove,
+}: {
+  name: string
+  count: number
+  selected: boolean
+  kind: 'saved' | 'task'
+  onPick: () => void
+  remove?: { label: string; run: () => void }
+}) {
+  return (
+    <DropdownMenuItem
+      data-layout={name}
+      data-layout-kind={kind}
+      data-active={selected ? '' : undefined}
+      onSelect={onPick}
+      className="group/layout pr-1"
+    >
+      <LayoutGlyph count={count} />
+      <span className="min-w-0 flex-1 truncate">{name}</span>
+      {selected ? <CheckIcon aria-hidden="true" className="size-3.5" /> : null}
+      {remove ? (
+        // A button inside the item: its click is stopped so it removes without opening.
+        <button
+          type="button"
+          aria-label={remove.label}
+          title={remove.label}
+          className="flex size-5 items-center justify-center rounded-sm text-muted-foreground opacity-0 group-hover/layout:opacity-100 group-focus/layout:opacity-100 hover:bg-background hover:text-foreground"
+          onPointerUp={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            remove.run()
+          }}
+        >
+          <XIcon aria-hidden="true" className="size-3.5" />
+        </button>
+      ) : null}
+    </DropdownMenuItem>
+  )
+}
+
+/** Name what is on screen. A view tab's name, or the working arrangement's, is refused — those
+ *  are not layouts — and an existing name is replaced, which the dialog says before it happens. */
+function SaveLayoutDialog({
+  open,
+  suggested,
+  taken,
   onCommit,
   onCancel,
 }: {
-  name: string | null
-  onCommit: (requested: string) => void
+  open: boolean
+  suggested: string
+  taken: ReadonlySet<string>
+  onCommit: (name: string) => void
   onCancel: () => void
 }) {
   const [value, setValue] = useState('')
   useEffect(() => {
-    if (name !== null) setValue(layoutDisplayName(name))
-  }, [name])
+    if (open) setValue(suggested)
+  }, [open, suggested])
+  const name = value.trim()
+  const reserved = name !== '' && isReservedLayoutName(name)
 
   return (
-    <Dialog open={name !== null} onOpenChange={(open) => !open && onCancel()}>
+    <Dialog open={open} onOpenChange={(next) => !next && onCancel()}>
       <DialogContent className="sm:max-w-sm">
         <form
           className="flex flex-col gap-4"
           onSubmit={(event) => {
             event.preventDefault()
-            onCommit(value)
+            if (name !== '' && !reserved) onCommit(name)
           }}
         >
           <DialogHeader>
-            <DialogTitle>Rename layout</DialogTitle>
-            <DialogDescription>The name this layout shows in the Layout menu.</DialogDescription>
+            <DialogTitle>Save layout</DialogTitle>
+            <DialogDescription>Saved layouts are offered in every task, in every project.</DialogDescription>
           </DialogHeader>
-          <Input
-            autoFocus
-            aria-label="Layout name"
-            value={value}
-            onChange={(event) => setValue(event.target.value)}
-            onFocus={(event) => event.currentTarget.select()}
-          />
+          <div className="flex flex-col gap-1.5">
+            <Input
+              autoFocus
+              aria-label="Layout name"
+              maxLength={MAX_LAYOUT_NAME_LENGTH}
+              value={value}
+              onChange={(event) => setValue(event.target.value)}
+              onFocus={(event) => event.currentTarget.select()}
+            />
+            {reserved ? (
+              <p className="text-xs text-danger">That name belongs to a view tab — pick another.</p>
+            ) : taken.has(name) ? (
+              <p className="text-xs text-muted-foreground">Replaces the saved layout “{name}”.</p>
+            ) : null}
+          </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onCancel}>
               Cancel
             </Button>
-            <Button type="submit">Rename</Button>
+            <Button type="submit" disabled={name === '' || reserved}>
+              Save
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>

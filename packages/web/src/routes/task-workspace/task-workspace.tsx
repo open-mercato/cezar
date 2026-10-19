@@ -48,9 +48,19 @@ import { ThreadLoading } from '../task-thread/thread-loading'
 import { reduceThread } from '../task-thread/thread-state'
 import { readDrawerState, writeDrawerState, type DrawerState } from './drawer-state'
 import { LayoutCards } from './layout-cards'
-import { emptyBrowserState, FIXED_VIEW_ORDER, fixedViewOf, layoutDisplayName, VIEW_IDS, type ViewId, type WorkspaceColumn } from './layout-state'
+import {
+  emptyBrowserState,
+  FIXED_VIEW_ORDER,
+  fixedViewOf,
+  layoutDisplayName,
+  toSavedLayout,
+  VIEW_IDS,
+  type ViewId,
+  type WorkspaceColumn,
+} from './layout-state'
 import { FullViewExit, usePanelCover, WorkspaceMaximizeContext } from './maximize'
 import { stripEntries, stripTabs, useStripKeyHints } from './strip'
+import { useSavedLayouts } from './use-saved-layouts'
 import { useWorkspaceLayouts } from './use-workspace-layouts'
 import { AvailableViewsContext } from './view-picker'
 import { ViewDropZones } from './view-drop-zones'
@@ -148,7 +158,21 @@ function WorkspaceView({
   onMarkedUnread: (runId: string) => void
 }) {
   const layouts = useWorkspaceLayouts(run.id)
-  const { openDeepLink, addLayout, closeLayout, selectLayout, renameLayout, setColumnBrowser, openInBrowser } = layouts
+  const { openDeepLink, addLayout, closeLayout, selectLayout, setColumnBrowser, openInBrowser, applySaved, keepAs } = layouts
+  // Layouts saved for every task: nothing is saved until the user names one (Layout menu).
+  const savedLayouts = useSavedLayouts()
+  const { save: saveLayout, remove: deleteSavedLayout } = savedLayouts
+  const layoutState = layouts.state
+  const canSaveLayout = (layouts.layout?.columns.length ?? 0) > 0
+  const saveCurrentLayout = useCallback(
+    (name: string) => {
+      const layout = toSavedLayout(layoutState, name)
+      if (!layout) return
+      saveLayout(layout)
+      keepAs(layout.name)
+    },
+    [keepAs, layoutState, saveLayout],
+  )
 
   // Policy, read from the one place that knows it: no shell here means no Terminal anywhere.
   const terminalAllowed = useHealth().data?.capabilities?.terminal === true
@@ -318,9 +342,11 @@ function WorkspaceView({
         onViews={onViews}
         onSelectFixed={openDeepLink}
         onSelect={selectLayout}
-        onRename={renameLayout}
         onClose={closeLayout}
-        onCreate={createLayout}
+        saved={savedLayouts.saved}
+        onApplySaved={applySaved}
+        onSaveCurrent={canSaveLayout ? saveCurrentLayout : undefined}
+        onDeleteSaved={deleteSavedLayout}
         notesHref={`/tasks/${run.id}/notes`}
         onViewDragStart={startViewDrag}
         onViewDragEnd={endViewDrag}
@@ -338,9 +364,12 @@ function WorkspaceView({
       onViews,
       openDeepLink,
       selectLayout,
-      renameLayout,
       closeLayout,
-      createLayout,
+      savedLayouts.saved,
+      applySaved,
+      canSaveLayout,
+      saveCurrentLayout,
+      deleteSavedLayout,
       run.id,
       startViewDrag,
       endViewDrag,
@@ -501,7 +530,6 @@ function WorkspaceView({
         active: fixedActive === null && layout.name === layouts.state.active,
       })),
       selectLayout,
-      newLayout: createLayout,
       maximized,
       toggleMaximized,
       // Getters: the composer and split buttons mount after this commit (history loads), so they
