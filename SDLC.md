@@ -44,6 +44,7 @@ Pipeline labels are mutually exclusive: a PR carries at most one, and it names w
 | Meta | `needs-qa`, `skip-qa`, `qa-approved`, `qa-self-verified`, `in-progress` | additive | Process signals |
 | Priority | `priority-low`, `priority-medium`, `priority-high`, `priority-extreme` | one at a time; unset = medium | Urgency of the work |
 | Risk | `risk-low`, `risk-medium`, `risk-high` | one at a time; unset = medium | Blast radius of the change |
+| Backport | `backport release/vX.Y.x`, `backport main` | additive | Cherry-pick into that line once merged ([release lines](docs/publishing.md#release-lines)); add it to `priority-high`/`priority-extreme` fixes |
 
 Priority is how urgent the work is; risk is how dangerous the change is to ship. A one-line fix for a broken cockpit can be `priority-extreme` and `risk-low`; a large runner-seam refactor that can wait can be `priority-low` and `risk-high`. A PR inherits both from its source issue unless the scope clearly changed. When an automated skill adds or changes a pipeline or meta label, it leaves a short comment explaining why.
 

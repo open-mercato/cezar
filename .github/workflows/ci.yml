@@ -5,10 +5,12 @@ on:
     branches:
       - main
       - develop
+      - 'release/v*' # backports into a release line (docs/publishing.md § Release lines)
   push:
     branches:
       - main
       - develop
+      - 'release/v*'
   workflow_dispatch:
 
 permissions:

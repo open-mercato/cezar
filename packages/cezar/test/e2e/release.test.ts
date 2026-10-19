@@ -224,3 +224,17 @@ test('an unknown bump exits non-zero without touching the manifests', { timeout:
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('--dist-tag publishes an older line without moving latest', { timeout: 120_000 }, async () => {
+  const root = await makeFixture('0.1.5');
+  try {
+    await writeFile(join(root, 'github-output.txt'), '');
+    const { stdout } = await runScript(root, ['existing', '--dist-tag', 'latest-0.1', '--dry-run']);
+    assert.match(stdout, /dist-tag latest-0\.1/);
+    assert.ok(!/--tag latest(\s|$)/m.test(stdout), 'must not publish under latest');
+    assert.match(await readFile(join(root, 'github-output.txt'), 'utf8'), /^distTag=latest-0\.1$/m);
+    await assert.rejects(runScript(root, ['existing', '--dist-tag', '1.2.3', '--dry-run']));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

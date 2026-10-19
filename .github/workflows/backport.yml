@@ -1,0 +1,41 @@
+name: Backport
+
+# Cherry-picks a merged PR onto another line (docs/publishing.md § Release lines): label it
+# `backport release/vX.Y.x` (fix on main → a release line) or `backport main` (a hotfix that
+# landed on a release line first), before or after the merge. Each label opens one PR with
+# auto-merge requested; a conflict opens a draft with the conflict committed and instructions
+# on the original PR.
+on:
+  pull_request_target:
+    types: [closed, labeled]
+
+permissions:
+  contents: write # push the backport branch
+  pull-requests: write # open the backport PR and comment on the original
+
+jobs:
+  backport:
+    name: Backport
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # pull_request_target runs this base-branch copy with write access, so it must never check
+    # out or run the PR's code — the action only cherry-picks commits.
+    if: >-
+      github.event.pull_request.merged == true &&
+      (github.event.action == 'closed' || startsWith(github.event.label.name, 'backport '))
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+
+      - name: Open backport PRs
+        uses: korthout/backport-action@8560fb503c275d433c56f05a2f64850093baa9f7 # v4.7.0
+        with:
+          # A PR opened with GITHUB_TOKEN runs no CI, so RELEASE_TOKEN is preferred when set.
+          github_token: ${{ secrets.RELEASE_TOKEN || github.token }}
+          label_pattern: '^backport (main|release/v\d+\.\d+\.x)$'
+          auto_merge_enabled: true
+          auto_merge_method: squash
+          experimental: '{"conflict_resolution": "draft_commit_conflicts"}'
