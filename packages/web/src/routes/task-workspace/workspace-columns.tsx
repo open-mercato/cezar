@@ -64,12 +64,7 @@ export function WorkspaceColumns({
   columns,
   actions,
   renderView,
-  editable = false,
 }: {
-  /** A layout the user built: every window wears its header (name, menu, close) even when it is
-   *  the only one, because that header is how the layout is edited. A fixed card's lone view has
-   *  none. */
-  editable?: boolean
   columns: readonly WorkspaceColumn[]
   actions: ColumnActions
   renderView: (view: ViewId, index: number, column: WorkspaceColumn) => ReactNode
@@ -118,7 +113,6 @@ export function WorkspaceColumns({
       </div>
     )
   }
-  const headers = editable || columns.length > 1
   // While a window is waiting for its view, every window shares the row equally.
   const shown = columns.length + (pending === null ? 0 : 1)
   const widthOf = (column: WorkspaceColumn) => (pending === null ? column.width : 100 / shown)
@@ -204,21 +198,19 @@ export function WorkspaceColumns({
           </>
         ) : (
           <>
-            {editable ? (
-              <ColumnHeader
-                index={slot as number}
-                column={column}
-                count={columns.length}
-                actions={actions}
-                menu={columns.length > 1 ? columnMenu(slot as number, column) : null}
-                onSplit={() => {
-                  setPendingAt((slot as number) + 1)
-                  setNarrowIndex((slot as number) + 1)
-                }}
-                canSplit={canSplit}
-                grip={false}
-              />
-            ) : null}
+            <ColumnHeader
+              index={slot as number}
+              column={column}
+              count={columns.length}
+              actions={actions}
+              menu={columns.length > 1 ? columnMenu(slot as number, column) : null}
+              onSplit={() => {
+                setPendingAt((slot as number) + 1)
+                setNarrowIndex((slot as number) + 1)
+              }}
+              canSplit={canSplit}
+              grip={false}
+            />
             <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
               {renderView(column.view, slot as number, column)}
             </div>
@@ -258,37 +250,23 @@ export function WorkspaceColumns({
               onResize={actions.resizeColumns}
             />
           ) : null}
-          {/* A lone column needs no bar of its own: the layout tab above already names it, and
-              its menu moves to the edge strip. The bar returns with the second column, where it
-              is what tells the columns apart and what a column is dragged by. */}
-          {headers ? (
-            <ColumnHeader
-              index={index}
-              column={column}
-              count={columns.length}
-              actions={actions}
-              menu={columns.length > 1 ? columnMenu(index, column) : null}
-              onSplit={editable ? () => setPendingAt(index + 1) : undefined}
-              canSplit={canSplit}
-              trailing={index === columns.length - 1 ? <FullViewExit className="ml-1.5" /> : null}
-            />
-          ) : null}
-          {/* Where the way out of full view sits (top right, always on a bar that already exists):
-               - several columns: the last column's header, above — and the views below are told
-                 nothing about full view, so none of them draws a second one;
-               - a lone browser or Changes: the view's own strip, which renders it itself;
-               - a lone view with no strip of its own: pinned to the column's top-right corner. */}
-          {!headers && !VIEWS_WITH_OWN_BAR.has(column.view) ? (
-            <FullViewExit className="absolute top-2 right-3 z-20 bg-card shadow-sm" />
-          ) : null}
+          {/* Every window wears its bar, a lone one included: it names the view and splits it. The
+              full-view exit sits on the last bar, so the views below are told nothing about full
+              view and none of them draws a second one. */}
+          <ColumnHeader
+            index={index}
+            column={column}
+            count={columns.length}
+            actions={actions}
+            menu={columns.length > 1 ? columnMenu(index, column) : null}
+            onSplit={() => setPendingAt(index + 1)}
+            canSplit={canSplit}
+            trailing={index === columns.length - 1 ? <FullViewExit className="ml-1.5" /> : null}
+          />
           <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-            {headers ? (
-              <WorkspaceMaximizeContext.Provider value={null}>
-                {renderView(column.view, index, column)}
-              </WorkspaceMaximizeContext.Provider>
-            ) : (
-              renderView(column.view, index, column)
-            )}
+            <WorkspaceMaximizeContext.Provider value={null}>
+              {renderView(column.view, index, column)}
+            </WorkspaceMaximizeContext.Provider>
           </div>
         </div>,
       ])}
@@ -296,10 +274,6 @@ export function WorkspaceColumns({
     </div>
   )
 }
-
-/** The views whose own top strip carries the full-view exit — the browser's tabs, the Changes and
- *  Commits toolbars. */
-const VIEWS_WITH_OWN_BAR: ReadonlySet<ViewId> = new Set<ViewId>(['browser', 'changes', 'commits'])
 
 /** Name + menu + close (spec §5.1: the header identifies the view and carries its controls).
  *
@@ -319,7 +293,7 @@ function ColumnHeader({
 }: {
   /** Whether the window can be dragged to reorder — not on a narrow screen, which shows one. */
   grip?: boolean
-  /** Split this window: a new, empty one opens to its right. Absent on a fixed card. */
+  /** Split this window: a new, empty one opens to its right. */
   onSplit?: () => void
   canSplit?: boolean
   index: number
@@ -379,7 +353,14 @@ function ColumnHeader({
           <GripVerticalIcon aria-hidden="true" className="size-3.5" />
         </span>
       ) : null}
-      {/* The window's name IS its view switcher. */}
+      {/* The window's name IS its view switcher — except for a lone view, whose view the tab row
+          above already switches. */}
+      {count === 1 ? (
+        <span data-slot="column-name" className="flex h-6 min-w-0 items-center gap-1.5 text-xs font-medium text-muted-foreground">
+          <ViewIcon aria-hidden="true" className="size-3.5 shrink-0" />
+          <span className="truncate">{viewLabel(column.view)}</span>
+        </span>
+      ) : (
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
@@ -400,6 +381,7 @@ function ColumnHeader({
           <ViewItems onPick={(view) => actions.setColumnView(index, view)} disabled={column.view} />
         </DropdownMenuContent>
       </DropdownMenu>
+      )}
       <span
         draggable={count > 1 && grip}
         onDragStart={startDrag}
@@ -433,8 +415,8 @@ function ColumnHeader({
         </TooltipProvider>
       ) : null}
       {menu}
-      {/* Closing the last window is not a trap: the layout falls back to its tile picker. */}
-      {count >= 1 ? (
+      {/* No close on a lone view: there is nothing to close it into. */}
+      {count > 1 ? (
         <Button
           type="button"
           variant="ghost"

@@ -510,13 +510,24 @@ function WorkspaceView({
 
   const actions: ColumnActions = useMemo(
     () => ({
-      addColumn: layouts.addColumn,
+      // A view tab stays the one view it stands for: splitting it builds the working arrangement.
+      addColumn:
+        fixedActive === null ? layouts.addColumn : (view: ViewId) => dropView(view, columnCount, 'insert'),
       closeColumn: layouts.closeColumn,
       setColumnView: requestColumnView,
       resizeColumns: layouts.resizeColumns,
       moveColumn: layouts.moveColumn,
     }),
-    [layouts.addColumn, layouts.closeColumn, requestColumnView, layouts.resizeColumns, layouts.moveColumn],
+    [
+      fixedActive,
+      dropView,
+      columnCount,
+      layouts.addColumn,
+      layouts.closeColumn,
+      requestColumnView,
+      layouts.resizeColumns,
+      layouts.moveColumn,
+    ],
   )
 
   // A file or commit named in the chat opens beside it, in the window that remembers it by key.
@@ -712,7 +723,6 @@ function WorkspaceView({
                 columns={layouts.layout.columns}
                 actions={actions}
                 renderView={renderView}
-                editable={fixedActive === null}
               />
             ) : (
               <CenteredState

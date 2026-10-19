@@ -371,6 +371,24 @@ describe('the task workspace (main)', () => {
     await waitFor(() => expect(columnViews()).toEqual(['changes', 'terminal']))
   })
 
+  it('gives a lone view its bar — name and split, but no view switcher and no close', async () => {
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    const header = await waitFor(() => document.querySelector<HTMLElement>('[data-slot="workspace-column-header"]')!)
+    expect(header.querySelector('[data-slot="column-name"]')?.textContent).toBe('Chat')
+    expect(header.querySelector('[data-action="change-view"]')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Close Chat' })).toBeNull()
+
+    // Splitting the Chat tab builds the working arrangement; the Chat tab stays one view.
+    fireEvent.click(screen.getByRole('button', { name: 'Split view' }))
+    await pickTile('files')
+    await waitFor(() => expect(activeCard()).toBe('Custom'))
+    expect(columnViews()).toEqual(['session', 'files'])
+    expect(document.querySelectorAll('[data-action="change-view"]')).toHaveLength(2)
+    expect(screen.getByRole('button', { name: 'Close Chat' })).not.toBeNull()
+  })
+
   it('docks the drawer under any layout, and the ` key toggles it', async () => {
     stubFetch()
     renderWorkspace('changes')
