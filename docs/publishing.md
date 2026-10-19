@@ -83,18 +83,35 @@ reviewers). Without `NPM_TOKEN` it degrades to a loud dry run, and its
 `dry_run` input computes and builds a release without committing, publishing
 or tagging anything.
 
-### Hotfix from telemetry
+**Running a workflow:** GitHub → **Actions** → pick the workflow in the left
+sidebar → **Run workflow** → choose the branch in **Use workflow from** → tick
+`dry_run` to rehearse → **Run workflow**. A Release run then waits for the
+`production` environment approval (the run page shows *Review deployments*).
 
-1. Fix on `main` in a PR labelled `backport release/v0.15.x`.
-2. On merge, Backport opens the cherry-pick PR on `release/v0.15.x`; approve and
-   merge it once CI is green.
-3. Run **Release** from `release/v0.15.x` → `0.15.3` is on npm.
+### Hotfix from telemetry (a patch on the current line)
 
-### Next minor
+1. Open the fix PR against **`main`**, labelled `backport release/v0.16.x`
+   (the newest line — `git branch -r --list 'origin/release/v*'`). Merge it.
+2. The **Backport** workflow opens `[Backport release/v0.16.x] …` against the
+   line. Wait for CI, approve, merge. Repeat 1–2 for every fix that should ship.
+3. Actions → **Release** → *Use workflow from* **`release/v0.16.x`** → run
+   (optionally `dry_run` first) → approve the deployment. `0.16.1` is on npm.
+4. Merge the `docs(changelog): add the 0.16.1 entry` PR it opens on `main`.
 
-1. Run **Release cut** from `main` (main at `0.16.0` → `release/v0.16.x`, main → `0.17.0`).
-2. Stabilize on `release/v0.16.x` with backports.
-3. Run **Release** from `release/v0.16.x` → `0.16.0`, which moves `latest`.
+### Next minor (cut a new line)
+
+1. Actions → **Release cut** → *Use workflow from* **`main`** → run with
+   `dry_run`, check the summary (`release/v0.17.x`, main → `0.18.0`), then run
+   it again without.
+2. Merge the `chore(release): open 0.18.0 on main` PR it opens. Features keep
+   landing on `main` from here; only backports reach `release/v0.17.x`.
+3. Stabilize: fixes go to `main` labelled `backport release/v0.17.x`, as above.
+4. Actions → **Release** → *Use workflow from* **`release/v0.17.x`** → run →
+   approve. `0.17.0` is on npm and moves `latest`.
+5. Merge the changelog PR on `main`.
+
+The previous line keeps working: a fix labelled `backport release/v0.16.x` and a
+Release run from that branch publish `0.16.x` under `latest-0.16`.
 
 ## Nightlies
 
