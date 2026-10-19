@@ -58,7 +58,7 @@ Three workflows, no hand-edited versions:
 |---|---|---|
 | [`Release cut`](../.github/workflows/release-cut.yml) | `main` | With main at `X.Y.Z`: creates `release/vX.Y.x` at main's tip, adds the `backport release/vX.Y.x` label, and opens the PR moving main (manifests, cockpit, lockfile) to `X.(Y+1).0`. |
 | [`Release`](../.github/workflows/release.yml) | a `release/vX.Y.x` branch (the *Use workflow from* picker) | Bumps first: once `vX.Y.Z` is tagged the next patch is chosen (a fresh line's `X.Y.0` ships as committed). Stamps every manifest, the lockfile and `CHANGELOG.md`, commits that to the branch, then verifies, builds and publishes **that commit**, tags it, cuts the GitHub Release and opens a PR carrying the changelog entry to `main`. |
-| [`Backport`](../.github/workflows/backport.yml) | — (labels) | A merged PR labelled `backport release/vX.Y.x` is cherry-picked into a PR on that line; `backport main` forward-ports a hotfix that landed on a line first. Conflicts open a draft with instructions. |
+| [`Backport`](../.github/workflows/backport.yml) | — (labels) | A merged PR labelled `backport release/vX.Y.x` is cherry-picked into a PR on that line; `backport main` forward-ports a hotfix that landed on a line first. Conflicts open a draft with instructions. A PR from a fork is skipped (no secrets on `pull_request`): port it by hand. |
 
 **Dist-tags.** Only the newest line moves `latest`, which the cockpit's stable
 update channel follows. A patch to an older line publishes under
