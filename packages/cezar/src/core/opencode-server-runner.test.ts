@@ -10,6 +10,7 @@ import type { AgentEvent } from './agent-runner.ts';
 import {
   KILL_GRACE_MS,
   OpencodeServerRunner,
+  SERVER_START_MAX_MS,
   TURN_IDLE_GRACE_MS,
   opencodePermissionReply,
 } from './opencode-server-runner.ts';
@@ -206,6 +207,89 @@ describe('opencode serve startup', () => {
     await vi.advanceTimersByTimeAsync(30_000);
     expect(events).toContainEqual({ type: 'error', message: 'opencode: opencode serve did not report a listening URL within 30s' });
   });
+
+  // 2d01c3c9: a start that keeps printing (a one-time migration) was failed at a flat 30s.
+  it('keeps waiting while the server is still printing, up to the hard cap', async () => {
+    const child = silentChild();
+    const stderr = child.stderr as PassThrough;
+    spawnHook.override = () => child;
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: 'opencode', timeoutMs: 0 }).startSession(
+      { userPrompt: 'do it', cwd: process.cwd() },
+      (event) => events.push(event),
+    );
+    void session.result.catch(() => undefined);
+    const errorsSoFar = () => events.filter((e) => e.type === 'error');
+    for (let t = 0; t < SERVER_START_MAX_MS - 20_000; t += 20_000) {
+      stderr.write(`migrating ${t}\n`);
+      await vi.advanceTimersByTimeAsync(20_000);
+    }
+    expect(errorsSoFar()).toEqual([]);
+    stderr.write('still migrating\n');
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(errorsSoFar()).toEqual([{ type: 'error', message: `opencode: opencode serve did not report a listening URL within ${SERVER_START_MAX_MS / 1000}s` }]);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'note', message: expect.stringContaining('opencode serve stderr: migrating') }));
+  });
+
+  // The message is a telemetry group key, so it never carries the elapsed time.
+  it('fails with one fixed message when the server prints and then goes silent', async () => {
+    const child = silentChild();
+    spawnHook.override = () => child;
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: 'opencode', timeoutMs: 0 }).startSession(
+      { userPrompt: 'do it', cwd: process.cwd() },
+      (event) => events.push(event),
+    );
+    void session.result.catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(17_000);
+    (child.stderr as PassThrough).write('migrating\n');
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(events.filter((e) => e.type === 'error')).toEqual([
+      { type: 'error', message: 'opencode: opencode serve went silent for 30s without reporting a listening URL' },
+    ]);
+  });
+});
+
+describe('2d01c3c9 opencode serve that starts without the expected URL line', () => {
+  const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
+  const errors = (events: AgentEvent[]): AgentEvent[] => events.filter((e) => e.type === 'error');
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.each(['silent', 'stderr'])('runs the turn when the URL line is %s', async (mode) => {
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 }).startSession(
+      { userPrompt: 'check the tree', cwd: process.cwd(), env: { MOCK_START: mode } },
+      (e) => events.push(e),
+      { autoEndAfterFirstTurn: true },
+    );
+    const result = await session.result;
+    expect(errors(events)).toEqual([]);
+    expect(events.map((e) => e.type)).toContain('turn-end');
+    expect(result.sessionId).toBe('ses_mock_1');
+  }, 30_000);
+
+  it('never adopts a server on that port that serves another directory', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 0 }).startSession(
+      { userPrompt: 'check the tree', cwd: process.cwd(), env: { MOCK_START: 'silent', MOCK_PATH_DIR: tmpdir() } },
+      (e) => events.push(e),
+    );
+    // Real time for the real probes (setInterval is not faked) to reach it.
+    await new Promise<void>((r) => setImmediate(r));
+    const until = performance.now() + 2_000;
+    while (performance.now() < until) await new Promise<void>((r) => setImmediate(r));
+    expect(events.find((e) => e.type === 'session')).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(30_000);
+    vi.useRealTimers();
+    await session.result.catch(() => undefined);
+    expect(errors(events)).toEqual([{ type: 'error', message: 'opencode: opencode serve did not report a listening URL within 30s' }]);
+  }, 30_000);
 });
 
 /**

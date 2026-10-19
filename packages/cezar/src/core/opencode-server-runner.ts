@@ -38,7 +38,13 @@ export interface OpencodeRunnerOptions {
   timeoutMs?: number;
 }
 
-const SERVER_START_TIMEOUT_MS = 30_000;
+/** Startup fails after this long with no sign of life — re-armed by any output,
+ *  so a server busy with a one-time migration is not killed mid-way. */
+export const SERVER_START_TIMEOUT_MS = 30_000;
+/** Hard cap on startup however chatty the server is. */
+export const SERVER_START_MAX_MS = 180_000;
+/** How often the port cezar asked for is probed while waiting for the URL line. */
+export const SERVER_PROBE_INTERVAL_MS = 500;
 
 /** Grace between the teardown SIGTERM and the SIGKILL that follows it. */
 export const KILL_GRACE_MS = 4_000;
@@ -171,7 +177,7 @@ class OpencodeSession implements AgentSession {
     private readonly onEvent: ((event: AgentEvent) => void) | undefined,
     private readonly opts: SessionOptions,
   ) {
-    // Random high port; the actual bound URL is read back from stdout.
+    // Random high port; the bound URL is read back from the server's output or a `/path` probe.
     const port = 40000 + Math.floor(Math.random() * 20000);
     try {
       const env = buildChildEnv({ backend: 'opencode', extraEnv: spec.env });
@@ -209,8 +215,8 @@ class OpencodeSession implements AgentSession {
     this.child.stderr.setEncoding('utf8');
     this.child.stderr.on('data', (chunk: string) => stderrChunks.push(chunk));
 
-    // The server prints its URL on stdout once listening.
-    const urlReady = this.waitForServerUrl();
+    // The server prints its URL once listening (stdout or stderr), or answers on the requested port.
+    const urlReady = this.waitForServerUrl(port, stderrChunks);
 
     const limitMs = spec.timeoutMs ?? timeoutMs;
     let deadline: NodeJS.Timeout | undefined;
@@ -346,33 +352,82 @@ class OpencodeSession implements AgentSession {
 
   // ---- server lifecycle ---------------------------------------------------
 
-  private waitForServerUrl(): Promise<string> {
+  /**
+   * Resolve the server's base URL from whichever comes first: the URL line on
+   * stdout or stderr, or the port cezar asked for answering `GET /path` with
+   * this run's own directory (#1179 made a missing line fatal; a slow or
+   * differently-worded start must not be). Fails only on exit, on
+   * `SERVER_START_TIMEOUT_MS` of silence, or at `SERVER_START_MAX_MS`.
+   */
+  private waitForServerUrl(port: number, stderrChunks: readonly string[]): Promise<string> {
     return new Promise((resolve, reject) => {
+      const probeUrl = `http://127.0.0.1:${port}`;
+      const ownDir = canonicalPath(this.spec.cwd ?? process.cwd());
+      const probeAbort = new AbortController();
       let buffer = '';
-      const timer = setTimeout(() => {
+      let settled = false;
+      const fail = (message: string) => {
+        if (settled) return;
         cleanup();
-        reject(new Error(`opencode serve did not report a listening URL within ${SERVER_START_TIMEOUT_MS / 1000}s`));
-      }, SERVER_START_TIMEOUT_MS);
-      timer.unref?.();
+        // Local transcript only: the stderr tail can name paths, so it stays
+        // out of the error message that telemetry groups on.
+        const tail = stderrChunks.join('').trim().slice(-800);
+        if (tail) this.emit({ type: 'note', message: `opencode serve stderr: ${tail}` });
+        reject(new Error(message));
+      };
+      const succeed = (url: string) => {
+        if (settled) return;
+        cleanup();
+        resolve(url);
+      };
+      // Fixed messages, never the elapsed time: each distinct string is its own telemetry group.
+      let heardOutput = false;
+      const stallFail = () =>
+        fail(
+          heardOutput
+            ? `opencode serve went silent for ${SERVER_START_TIMEOUT_MS / 1000}s without reporting a listening URL`
+            : `opencode serve did not report a listening URL within ${SERVER_START_TIMEOUT_MS / 1000}s`,
+        );
+      let stall = setTimeout(stallFail, SERVER_START_TIMEOUT_MS);
+      stall.unref?.();
+      const cap = setTimeout(
+        () => fail(`opencode serve did not report a listening URL within ${SERVER_START_MAX_MS / 1000}s`),
+        SERVER_START_MAX_MS,
+      );
+      cap.unref?.();
       const onData = (chunk: string) => {
-        buffer += chunk;
-        const m = /https?:\/\/[\d.]+:\d+/.exec(buffer);
-        if (m) {
-          cleanup();
-          resolve(m[0]);
-        }
+        heardOutput = true;
+        clearTimeout(stall);
+        stall = setTimeout(stallFail, SERVER_START_TIMEOUT_MS);
+        stall.unref?.();
+        buffer = (buffer + chunk).slice(-4096);
+        const m = SERVER_URL_RE.exec(buffer);
+        if (m) succeed(m[0].replace('//localhost:', '//127.0.0.1:'));
       };
-      const onExit = () => {
-        cleanup();
-        reject(new Error('opencode serve exited before it started listening'));
-      };
+      const probe = setInterval(() => {
+        void opencodeRequest(`${probeUrl}/path`, { method: 'GET', signal: AbortSignal.any([probeAbort.signal, AbortSignal.timeout(2_000)]) })
+          .then((res) => {
+            if (res.status !== 200) return;
+            const dir = stringField(parseRecord(res.body), 'directory');
+            if (dir && canonicalPath(dir) === ownDir) succeed(probeUrl);
+          })
+          .catch(() => undefined);
+      }, SERVER_PROBE_INTERVAL_MS);
+      probe.unref?.();
+      const onExit = () => fail('opencode serve exited before it started listening');
       const cleanup = () => {
-        clearTimeout(timer);
+        settled = true;
+        clearTimeout(stall);
+        clearTimeout(cap);
+        clearInterval(probe);
+        probeAbort.abort();
         this.child.stdout.off('data', onData);
+        this.child.stderr.off('data', onData);
         this.child.off('exit', onExit);
       };
       this.child.stdout.setEncoding('utf8');
       this.child.stdout.on('data', onData);
+      this.child.stderr.on('data', onData);
       this.child.once('exit', onExit);
     });
   }
@@ -774,6 +829,18 @@ function canonicalPath(path: string): string {
       rest.push(basename(dir));
       dir = parent;
     }
+  }
+}
+
+/** The URL line opencode prints once listening — matched on stdout or stderr. */
+const SERVER_URL_RE = /https?:\/\/(?:[\d.]+|localhost):\d+/;
+
+function parseRecord(text: string): Record<string, unknown> {
+  try {
+    const value: unknown = JSON.parse(text);
+    return isRecord(value) ? value : {};
+  } catch {
+    return {};
   }
 }
 
