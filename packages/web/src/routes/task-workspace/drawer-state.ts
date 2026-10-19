@@ -108,33 +108,3 @@ export function writeDrawerState(taskId: string, state: DrawerState): void {
   }
 }
 
-/** Where the terminal opens: the bottom drawer, or a column beside the view. The LAST place the
- *  user put it, so moving the shells into a column makes the Terminal tab open a column from then
- *  on. One preference for every task — it is how this user likes their terminal, not task state. */
-export type TerminalPlacement = 'drawer' | 'column'
-
-const PLACEMENT_KEY = 'cez-terminal-placement'
-
-export function readTerminalPlacement(): TerminalPlacement {
-  try {
-    return localStorage.getItem(PLACEMENT_KEY) === 'column' ? 'column' : 'drawer'
-  } catch {
-    return 'drawer'
-  }
-}
-
-export function writeTerminalPlacement(placement: TerminalPlacement): void {
-  try {
-    localStorage.setItem(PLACEMENT_KEY, placement)
-  } catch {
-    // Private mode or a full quota: the choice holds for this visit.
-  }
-}
-
-/** Where a page that is not the workspace (Notes) sends the Terminal tab: the task with its drawer
- *  marked open, or — when the user keeps the shells in a column — the terminal's own route. */
-export function terminalPathFor(taskId: string): string {
-  if (readTerminalPlacement() === 'column') return `/tasks/${taskId}/terminal`
-  writeDrawerState(taskId, { ...readDrawerState(taskId), open: true })
-  return `/tasks/${taskId}`
-}

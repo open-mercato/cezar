@@ -21,9 +21,9 @@
 > - **Main's run header.** The layout strip fills the header's tab row (`RunHeader` `tabs` slot);
 >   there is no separate overview header mode. Notes keeps its own page, linked from the strip.
 >   Tab order (2026-10-19): Chat, Changes, Commits, Files, Graph, Notes, Preview, Terminal. The
->   Terminal tab TOGGLES the shells where they were last put — the drawer, or a column once a drag,
->   ⌥-click or "Move to column" put them there ("Move to bottom" puts them back); there is no
->   separate header button. Saved layouts are not cards on the strip but one compact
+>   Terminal tab opens the shells as a view of their own, like Preview; a drag or ⌥-click puts
+>   them beside the view. The drawer is the `` ` `` key's (and "Move to column" / "Move to bottom"
+>   move the shells between the two); there is no separate header button. Saved layouts are not cards on the strip but one compact
 >   `Layout` menu at its right end (switch, new, rename, close).
 >   `/tasks/:id/commits/:sha` stays a standalone page; inside a column, Commits picks in place.
 > - **`CEZ_TERMINAL`** unset follows `localHandoff` (on locally, off hosted) — main has no sign-in.

@@ -305,43 +305,26 @@ describe('the task workspace (main)', () => {
     })
   })
 
-  it('opens the terminal where it was last put: a column once moved there, the drawer once moved back', async () => {
+  it('opens the Terminal tab as a view of its own, like Preview — a click never adds it to what shows', async () => {
     stubFetch()
     renderWorkspace()
     await ready()
 
-    // Fresh: the tab docks the drawer.
     fireEvent.click(terminalTab()!)
-    expect((await screen.findByTestId('terminal')).dataset.fill).toBeUndefined()
-    fireEvent.click(terminalTab()!)
-    await waitFor(() => expect(screen.queryByTestId('terminal')).toBeNull())
+    await waitFor(() => expect(activeCard()).toBe('Terminal'))
+    expect(columnViews()).toEqual(['terminal'])
+    expect(screen.getByTestId('terminal').dataset.fill).toBe('')
 
-    // ⌥-click puts it in a column — and from then on the plain tab toggles a column.
+    // ⌥-click is the way to put it beside a view.
+    fireEvent.click(document.querySelector<HTMLElement>('[data-fixed="session"]')!)
+    await waitFor(() => expect(activeCard()).toBe('Chat'))
     fireEvent.click(terminalTab()!, { altKey: true })
     await waitFor(() => expect(columnViews()).toEqual(['session', 'terminal']))
-    fireEvent.click(terminalTab()!)
-    await waitFor(() => expect(columnViews()).not.toContain('terminal'))
-    expect(screen.queryByTestId('terminal')).toBeNull()
-    fireEvent.click(terminalTab()!)
-    await waitFor(() => expect(columnViews()).toContain('terminal'))
-    expect(screen.getAllByTestId('terminal')).toHaveLength(1)
 
-    // Moved back to the bottom: the column goes, the drawer opens, and the tab docks it again.
+    // A column's "Move to bottom" docks the same shells as the drawer.
     fireEvent.click(screen.getByRole('button', { name: 'Move to bottom' }))
     await waitFor(() => expect(columnViews()).not.toContain('terminal'))
     expect((await screen.findByTestId('terminal')).dataset.fill).toBeUndefined()
-    fireEvent.click(terminalTab()!)
-    await waitFor(() => expect(screen.queryByTestId('terminal')).toBeNull())
-    fireEvent.click(terminalTab()!)
-    expect((await screen.findByTestId('terminal')).dataset.fill).toBeUndefined()
-  })
-
-  it('does not remember a column the user did not put there (a deep link to the terminal)', async () => {
-    stubFetch()
-    renderWorkspace('terminal')
-    await ready()
-    await waitFor(() => expect(columnViews()).toEqual(['terminal']))
-    expect(localStorage.getItem('cez-terminal-placement')).toBeNull()
   })
 
   it('docks the drawer under any layout, and the ` key toggles it', async () => {
@@ -354,13 +337,11 @@ describe('the task workspace (main)', () => {
     fireEvent.keyDown(window, { key: '`' })
     const drawer = await screen.findByTestId('terminal')
     expect(drawer.dataset.fill).toBeUndefined()
+    // The tab is lit while the drawer is up; the view that shows stays.
     expect(terminalTab()?.hasAttribute('data-on')).toBe(true)
-    // The tab is the same toggle, and leaves the view that shows alone.
-    fireEvent.click(terminalTab()!)
-    await waitFor(() => expect(screen.queryByTestId('terminal')).toBeNull())
     expect(activeCard()).toBe('Changes')
-    fireEvent.click(terminalTab()!)
-    expect((await screen.findByTestId('terminal')).dataset.fill).toBeUndefined()
+    fireEvent.keyDown(window, { key: '`' })
+    await waitFor(() => expect(screen.queryByTestId('terminal')).toBeNull())
   })
 
   it('folds tabs until the row stops overflowing, so the Layout menu is never pushed out of the strip', async () => {

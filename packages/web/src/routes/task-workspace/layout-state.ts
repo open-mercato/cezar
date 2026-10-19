@@ -33,7 +33,7 @@ export const VIEW_IDS: readonly ViewId[] = ['session', 'changes', 'commits', 'fi
 
 /** The view tabs, left to right: Chat is home and Changes is what a task is reviewed by; the
  *  rarely opened Graph sits near the end, and Notes (its own page) lands before Preview
- *  (`strip.ts`). Terminal is last, and its tab TOGGLES the shells rather than opening a card. */
+ *  (`strip.ts`). Terminal is last; the ` key docks it as a drawer instead. */
 export const FIXED_VIEW_ORDER: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'graph', 'browser', 'terminal']
 
 /** The route each view tab deep-links to, for pages that are not the workspace (Notes). */

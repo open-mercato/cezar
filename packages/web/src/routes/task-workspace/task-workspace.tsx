@@ -46,14 +46,7 @@ import { useRunRecordReconcile } from '../task-thread/run-reconcile'
 import { ThreadView } from '../task-thread/task-thread'
 import { ThreadLoading } from '../task-thread/thread-loading'
 import { reduceThread } from '../task-thread/thread-state'
-import {
-  readDrawerState,
-  readTerminalPlacement,
-  writeDrawerState,
-  writeTerminalPlacement,
-  type DrawerState,
-  type TerminalPlacement,
-} from './drawer-state'
+import { readDrawerState, writeDrawerState, type DrawerState } from './drawer-state'
 import { LayoutCards } from './layout-cards'
 import { emptyBrowserState, FIXED_VIEW_ORDER, fixedViewOf, layoutDisplayName, VIEW_IDS, type ViewId, type WorkspaceColumn } from './layout-state'
 import { FullViewExit, usePanelCover, WorkspaceMaximizeContext } from './maximize'
@@ -234,14 +227,6 @@ function WorkspaceView({
   const { hints: keyHints, show: keysHeld } = useStripKeyHints(strip)
   const navigate = useNavigate()
 
-  // Where the Terminal tab opens the shells. Recorded only when the USER moves them — a column that
-  // merely shows (a deep link, a saved layout) must not repoint every task's terminal.
-  const [placement, setPlacement] = useState<TerminalPlacement>(readTerminalPlacement)
-  const place = useCallback((next: TerminalPlacement) => {
-    setPlacement(next)
-    writeTerminalPlacement(next)
-  }, [])
-
   // A view tab being dragged: the stage shows its drop zones until the drag ends. Set a tick late,
   // because changing the page under a drag that has only just started can cancel it.
   const [draggingView, setDraggingView] = useState<ViewId | null>(null)
@@ -253,18 +238,16 @@ function WorkspaceView({
   const dropViewHere = useCallback(
     (view: ViewId, at: number, mode: 'insert' | 'replace') => {
       setDraggingView(null)
-      if (view === 'terminal') place('column')
       dropView(view, at, mode)
     },
-    [dropView, place],
+    [dropView],
   )
   const openViewBeside = useCallback(
     (view: ViewId) => {
       const count = layouts.layout?.columns.length ?? 0
-      if (view === 'terminal') place('column')
       dropView(view, count, 'insert')
     },
-    [dropView, layouts.layout?.columns.length, place],
+    [dropView, layouts.layout?.columns.length],
   )
   const columnCount = layouts.layout?.columns.length ?? 0
   const closeColumnByDrop = fixedActive === null && columnCount > 1 ? layouts.closeColumn : undefined
@@ -303,37 +286,22 @@ function WorkspaceView({
   const cover = usePanelCover<HTMLDivElement>(maximized, exitMaximized)
   const maximize = useMemo(() => ({ maximized, toggle: toggleMaximized }), [maximized, toggleMaximized])
 
-  // The Terminal tab is a toggle that opens the shells where the user last put them: the bottom
-  // drawer, or a column beside the view (a drag, ⌥-click or "Move to column" puts them there).
+  // The Terminal tab opens the shells as a view, like Preview; a drag or ⌥-click puts them beside
+  // the view instead. The bottom drawer is the ` key's, and a column's "Move to bottom".
   const drawerOpen = drawer.open
-  const { closeColumn, openBeside: openBesideLayout } = layouts
+  const toggleDrawer = useCallback(() => {
+    if (!terminalColumnShown) updateDrawer({ open: !drawerOpen })
+  }, [drawerOpen, terminalColumnShown, updateDrawer])
+  const { closeColumn } = layouts
   const terminalColumns = layouts.layout?.columns
-  const hideTerminalColumn = useCallback(() => {
+  const moveTerminalToDrawer = useCallback(() => {
+    updateDrawer({ open: true })
     const index = terminalColumns?.findIndex((column) => column.view === 'terminal') ?? -1
     if (index < 0) return
     // A layout of the shells alone has nothing to fall back to but Chat.
     if (fixedActive !== null || terminalColumns!.length === 1) openDeepLink('session')
     else closeColumn(index)
-  }, [closeColumn, fixedActive, openDeepLink, terminalColumns])
-  const toggleTerminal = useCallback(() => {
-    if (terminalColumnShown) return hideTerminalColumn()
-    // No room for a column (the layout cap) falls back to the drawer rather than a dead click.
-    if (placement === 'column' && openBesideLayout('terminal')) return updateDrawer({ open: false })
-    updateDrawer({ open: !drawerOpen })
-  }, [drawerOpen, hideTerminalColumn, openBesideLayout, placement, terminalColumnShown, updateDrawer])
-  const moveTerminalToColumn = useCallback(() => {
-    place('column')
-    if (openBesideLayout('terminal')) updateDrawer({ open: false })
-  }, [openBesideLayout, place, updateDrawer])
-  const moveTerminalToDrawer = useCallback(() => {
-    place('drawer')
-    updateDrawer({ open: true })
-    hideTerminalColumn()
-  }, [hideTerminalColumn, place, updateDrawer])
-  const selectFixed = useCallback(
-    (view: ViewId) => (view === 'terminal' ? toggleTerminal() : openDeepLink(view)),
-    [openDeepLink, toggleTerminal],
-  )
+  }, [closeColumn, fixedActive, openDeepLink, terminalColumns, updateDrawer])
   const onViews = useMemo<readonly ViewId[]>(
     () => (drawerShown || terminalColumnShown ? ['terminal'] : []),
     [drawerShown, terminalColumnShown],
@@ -348,7 +316,7 @@ function WorkspaceView({
         fixedViews={fixedViews}
         fixedActive={fixedActive}
         onViews={onViews}
-        onSelectFixed={selectFixed}
+        onSelectFixed={openDeepLink}
         onSelect={selectLayout}
         onRename={renameLayout}
         onClose={closeLayout}
@@ -368,7 +336,7 @@ function WorkspaceView({
       fixedViews,
       fixedActive,
       onViews,
-      selectFixed,
+      openDeepLink,
       selectLayout,
       renameLayout,
       closeLayout,
@@ -408,10 +376,7 @@ function WorkspaceView({
    */
   const stripOrder = useMemo(
     () => [
-      // The Terminal tab toggles the drawer rather than switching to a card, so `[` `]` skip it.
-      ...fixedViews
-        .filter((view) => view !== 'terminal')
-        .map((view) => ({ select: () => openDeepLink(view), active: fixedActive === view })),
+      ...fixedViews.map((view) => ({ select: () => openDeepLink(view), active: fixedActive === view })),
       ...cardLayouts.map((layout) => ({
         select: () => selectLayout(layout.name),
         active: fixedActive === null && layout.name === layouts.state.active,
@@ -424,13 +389,13 @@ function WorkspaceView({
   const numbered = useMemo(
     () => [
       ...stripTabs(fixedViews).map((tab) =>
-        tab === 'notes' ? () => navigate(`/tasks/${run.id}/notes`) : () => selectFixed(tab),
+        tab === 'notes' ? () => navigate(`/tasks/${run.id}/notes`) : () => openDeepLink(tab),
       ),
     ],
-    [fixedViews, selectFixed, navigate, run.id],
+    [fixedViews, openDeepLink, navigate, run.id],
   )
-  const keys = useRef({ stripOrder, numbered, toggleMaximized, terminalAllowed, toggleTerminal })
-  keys.current = { stripOrder, numbered, toggleMaximized, terminalAllowed, toggleTerminal }
+  const keys = useRef({ stripOrder, numbered, toggleMaximized, terminalAllowed, toggleDrawer })
+  keys.current = { stripOrder, numbered, toggleMaximized, terminalAllowed, toggleDrawer }
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey || event.repeat || event.defaultPrevented) return
@@ -462,7 +427,7 @@ function WorkspaceView({
         input.focus()
       } else if (event.key === '`') {
         if (!now.terminalAllowed) return
-        now.toggleTerminal()
+        now.toggleDrawer()
       } else return
       event.preventDefault()
     }
@@ -476,7 +441,6 @@ function WorkspaceView({
   const columns = layouts.layout?.columns
   const requestColumnView = useCallback(
     (index: number, view: ViewId) => {
-      if (view === 'terminal') place('column')
       const leavingChanges = columns?.[index]?.view === 'changes'
       const lastChangesColumn = columns?.filter((column) => column.view === 'changes').length === 1
       if (leavingChanges && lastChangesColumn && diffComments.comments.length > 0) {
@@ -485,7 +449,7 @@ function WorkspaceView({
       }
       layouts.setColumnView(index, view)
     },
-    [columns, diffComments.comments.length, layouts.setColumnView, place],
+    [columns, diffComments.comments.length, layouts.setColumnView],
   )
 
   const actions: ColumnActions = useMemo(
@@ -529,7 +493,7 @@ function WorkspaceView({
       runId: run.id,
       views: fixedViews,
       activeView: fixedActive,
-      openView: selectFixed,
+      openView: openDeepLink,
       openViewBeside,
       layouts: cardLayouts.map((layout) => ({
         name: layout.name,
@@ -549,8 +513,11 @@ function WorkspaceView({
         allowed: terminalAllowed,
         open: drawerOpen,
         inColumn: terminalColumnShown,
-        toggle: toggleTerminal,
-        openInColumn: moveTerminalToColumn,
+        toggle: toggleDrawer,
+        openInColumn: () => {
+          updateDrawer({ open: false })
+          openBeside('terminal')
+        },
       },
       get focusComposer() {
         return composer() ? () => composer()?.focus() : null
@@ -746,7 +713,10 @@ function WorkspaceView({
             height={drawer.height}
             onHeightChange={(height) => updateDrawer({ height })}
             onClose={() => updateDrawer({ open: false })}
-            onMoveToColumn={moveTerminalToColumn}
+            onMoveToColumn={() => {
+              updateDrawer({ open: false })
+              openBeside('terminal')
+            }}
             onOpenInBrowser={openInBrowser}
           />
         </Suspense>

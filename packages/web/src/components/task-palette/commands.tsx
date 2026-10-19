@@ -27,7 +27,6 @@ import type { GitAction, GitActionId } from '@/lib/git-actions'
 import type { TaskWorkspaceBridge } from '@/lib/task-workspace-bridge'
 import { isRunActive, resumeHint, runActionFlags } from '@/routes/task-thread/run-actions'
 import { GIT_ACTION_ICONS } from '@/routes/task-git/git-toolbar'
-import { terminalPathFor } from '@/routes/task-workspace/drawer-state'
 import { FIXED_VIEW_ORDER, VIEW_PATHS, viewLabel, type ViewId } from '@/routes/task-workspace/layout-state'
 import { stripEntries, stripTabs, type StripEntry } from '@/routes/task-workspace/strip'
 import { VIEW_ICONS } from '@/routes/task-workspace/view-picker'
@@ -265,11 +264,8 @@ function viewCommands({ run, workspace, terminalAvailable }: TaskCommandInput, o
       icon: <Icon aria-hidden="true" />,
       keywords: ['view', 'go', 'tab', view],
       ...shortcutOf(view),
-      // Terminal's tab toggles the drawer (`openView`), so it is pressed while the shells show.
-      pressed: view === 'terminal' && workspace ? workspace.terminal.open || workspace.terminal.inColumn : workspace?.activeView === view,
-      perform: workspace
-        ? () => workspace.openView(view)
-        : () => on.navigate(view === 'terminal' ? terminalPathFor(run.id) : `${base}/${VIEW_PATHS[view]}`),
+      pressed: workspace?.activeView === view,
+      perform: workspace ? () => workspace.openView(view) : () => on.navigate(`${base}/${VIEW_PATHS[view]}`),
       ...(workspace ? { performBeside: () => workspace.openViewBeside(view) } : {}),
     }
   })
@@ -363,11 +359,12 @@ function layoutCommands({ workspace }: TaskCommandInput): TaskCommand[] {
     commands.push({
       id: 'terminal',
       group: 'layout',
-      label: terminal.open || terminal.inColumn ? 'Hide terminal' : 'Show terminal',
+      label: terminal.open ? 'Hide terminal' : 'Show terminal',
       icon: icon(PanelBottomIcon),
       keywords: ['shell', 'drawer'],
       shortcut: '`',
       pressed: terminal.open || terminal.inColumn,
+      ...(terminal.inColumn ? { unavailable: 'The terminal is open in a column of this layout' } : {}),
       perform: terminal.toggle,
     })
     if (!terminal.inColumn) {

@@ -37,8 +37,7 @@ const COLUMN_DRAG_TYPE = 'text/cez-column'
  *
  *  - left, one underline tab per VIEW plus Notes (its own page, placed by `stripTabs`). A tab opens that view
  *    alone; dragged onto the workspace it splits the screen, and ⌥-click opens it beside what is
- *    showing. A TOGGLE view (Terminal) does not open alone: its click is the parent's to answer
- *    (the drawer), and `onViews` marks it lit;
+ *    showing. `onViews` lights a tab whose view is live elsewhere (the terminal drawer);
  *  - right, the LAYOUT menu: one compact button naming the saved layout that shows, whose menu
  *    switches, creates, renames and closes layouts.
  *
@@ -72,7 +71,7 @@ export function LayoutCards({
   fixedViews?: readonly ViewId[]
   /** The view tab that is showing; no saved layout is active while one is. */
   fixedActive?: ViewId | null
-  /** Toggle tabs that are switched on (the terminal drawer, or its column) — lit, not underlined. */
+  /** Tabs whose view is live without being the one that shows (the terminal drawer) — lit, not underlined. */
   onViews?: readonly ViewId[]
   onSelectFixed?: (view: ViewId) => void
   onSelect: (name: string) => void
