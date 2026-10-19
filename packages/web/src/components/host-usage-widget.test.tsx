@@ -272,6 +272,29 @@ describe('HostUsageWidget', () => {
     expect(screen.queryByText('stale')).toBeNull()
   })
 
+  it('survives a back-to-back burst of frames without React #185 (telemetry 21762d83)', async () => {
+    // A throttled tab can be handed queued frames with no task between them, so React's default-
+    // lane work never runs. A per-frame setState in the stale effect left that work behind every
+    // sync commit, and the 52nd frame threw "Maximum update depth exceeded" from the push itself.
+    render(<HostUsageWidget />, { wrapper: wrapper([sample({ cpuPct: 12 })]) })
+    await waitFor(() => expect(screen.getByText('12%')).toBeTruthy())
+
+    const actEnvironment = (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false
+    let clock = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => (clock += 2_000)) // one receipt stamp per frame
+    try {
+      for (let index = 1; index <= 80; index++) {
+        pushFrame?.(sample({ cpuPct: 50, sampledAt: new Date(Date.UTC(2026, 8, 20, 0, 0, index * 2)).toISOString() }))
+        await Promise.resolve() // React's sync flush (a microtask), but no macrotask in between
+      }
+    } finally {
+      vi.restoreAllMocks()
+      ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = actEnvironment
+    }
+    await waitFor(() => expect(screen.getByText('50%')).toBeTruthy())
+  })
+
   it('keeps updating from the route when the hub refuses the host topic (#1363)', async () => {
     // The dev-proxy case: before the fix the glance sat on `sampling…`, or on one route answer the
     // Machine card had fetched, which then turned `stale` and never moved again.
