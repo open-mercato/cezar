@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
-import { DISPATCH_PROMPT, REVIEW_PROMPT, composeDispatchPrompt, dispatchIntentPrompt } from './prompts.ts';
+import { DISPATCH_PROMPT, REVIEW_PROMPT, SELF_MERGE_PROMPT, composeDispatchPrompt, dispatchIntentPrompt } from './prompts.ts';
 
 function containsRunnerToken(text: string, runner: string): boolean {
   return new RegExp(`(?:^|[^A-Za-z0-9_-])${runner}(?=$|[^A-Za-z0-9_-])`).test(text);
@@ -86,5 +86,30 @@ describe('the dispatch prompt', () => {
       expect(bare).not.toContain('Limits set by the user');
       expect(bare).not.toContain('Subtasks run with');
     });
+  });
+});
+
+/** A self-merge project (`config.selfMerge`) hands the base-branch merge to cezar. */
+describe('the dispatch prompt in a self-merge project', () => {
+  const guard = (prompt: string) => prompt.slice(prompt.indexOf('The Guard.'));
+
+  it('lists merging into the base branch as a Guard action by default', () => {
+    expect(guard(composeDispatchPrompt(undefined))).toContain('merging into the base branch');
+    expect(composeDispatchPrompt(undefined)).not.toContain(SELF_MERGE_PROMPT);
+  });
+
+  it('drops it from the Guard and says cezar merges on CEZ:DONE', () => {
+    const prompt = composeDispatchPrompt(undefined, undefined, { selfMerge: true });
+    const guardText = guard(prompt).split('\n')[0] ?? '';
+    expect(guardText).toContain('pushing to a shared branch, deleting a branch or a remote');
+    expect(guardText).not.toContain('base branch');
+    expect(prompt).toContain(SELF_MERGE_PROMPT);
+    expect(SELF_MERGE_PROMPT).toMatch(/Do not ask whether to merge into the base branch/);
+    // The agent still never merges into the base itself — cezar does.
+    expect(prompt).toMatch(/Never merge into the repository's base branch/);
+  });
+
+  it('keeps the review addendum on a self-merge review task', () => {
+    expect(composeDispatchPrompt('review', undefined, { selfMerge: true })).toContain(REVIEW_PROMPT);
   });
 });

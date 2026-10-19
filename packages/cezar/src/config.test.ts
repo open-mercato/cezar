@@ -373,3 +373,41 @@ describe('loadConfig machine-wide agent defaults', () => {
     expect(config.systemPrompt).toBe('be brief');
   });
 });
+
+/** `selfMerge` (agents-master I050 "Closer 2"): off unless a project turns it on. */
+describe('loadConfig selfMerge', () => {
+  let repoRoot: string;
+
+  beforeEach(() => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-config-'));
+    mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  const write = (value: unknown) =>
+    writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), JSON.stringify(value), 'utf8');
+
+  it('defaults to false with no checkCommand when no config file exists', async () => {
+    const config = await loadConfig(repoRoot);
+    expect(config.selfMerge).toBe(false);
+    expect(config.checkCommand).toBeUndefined();
+  });
+
+  it('roundtrips selfMerge and a trimmed checkCommand', async () => {
+    write({ selfMerge: true, checkCommand: '  npm test  ' });
+    const config = await loadConfig(repoRoot);
+    expect(config.selfMerge).toBe(true);
+    expect(config.checkCommand).toBe('npm test');
+  });
+
+  it('a bad value degrades to off without discarding the rest of the config', async () => {
+    write({ selfMerge: 'yes', checkCommand: 42, baseBranch: 'develop' });
+    const config = await loadConfig(repoRoot);
+    expect(config.selfMerge).toBe(false);
+    expect(config.checkCommand).toBeUndefined();
+    expect(config.baseBranch).toBe('develop');
+  });
+});

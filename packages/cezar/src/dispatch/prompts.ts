@@ -41,9 +41,24 @@ The Guard. Before anything irreversible, financial, or outside the scope you wer
 
 export const REVIEW_PROMPT = `Your KIND is review. You did not write the work you were given — you judge it. Read the diff of every branch or run named in your order's "Review of" line (git diff <fork point>..<branch>; the task's report.md and notes.md in the tree directory tell you what it claimed). Run the repository's tests and checks against that branch yourself and read the output. Judge the work against a checklist you try to FALSIFY: does the diff do what the order asked, does every claim in the report match the diff and the test output, does anything touch files outside the stated scope, is anything untested or destructive. Then report with --verdict: approve when the work does what its order asked and the evidence holds; changes with the exact findings (file and line) when it is close; reject when it is wrong or unsafe. You edit nothing on the reviewed branch and commit nothing of your own beyond your notes — a reviewer that fixes the code is no longer a reviewer. The verdict is required.`;
 
+/** The Guard's base-branch merge, which a self-merge project hands to cezar (`config.selfMerge`). */
+const GUARD_BASE_MERGE = 'merging into the base branch, ';
+
+export const SELF_MERGE_PROMPT = `Self-merge. This project lands work by direct merge: when this task ends with CEZ:DONE and its branch is ahead of the base branch, cezar merges it into the base branch itself, runs the project's check and pushes. Do not ask whether to merge into the base branch, and do not merge it yourself — commit your work and end with CEZ:DONE. If cezar cannot merge (a conflict, a failed check, a busy main checkout) it leaves the base untouched and hands the task back to the user with the reason.`;
+
+/** The dispatch instructions for a top-level task in a self-merge project: no base-branch merge in the Guard. */
+export function selfMergeDispatchPrompt(): string {
+  return `${DISPATCH_PROMPT.replace(GUARD_BASE_MERGE, '')}\n\n${SELF_MERGE_PROMPT}`;
+}
+
 /** The prompt part one task runs under: the dispatch instructions, plus the review addendum. */
-export function composeDispatchPrompt(kind: DispatchKind | undefined, intent?: DispatchIntent): string {
-  const base = kind === 'review' ? `${DISPATCH_PROMPT}\n\n${REVIEW_PROMPT}` : DISPATCH_PROMPT;
+export function composeDispatchPrompt(
+  kind: DispatchKind | undefined,
+  intent?: DispatchIntent,
+  opts: { selfMerge?: boolean } = {},
+): string {
+  const dispatch = opts.selfMerge ? selfMergeDispatchPrompt() : DISPATCH_PROMPT;
+  const base = kind === 'review' ? `${dispatch}\n\n${REVIEW_PROMPT}` : dispatch;
   return intent ? `${base}\n\n${dispatchIntentPrompt(intent)}` : base;
 }
 
