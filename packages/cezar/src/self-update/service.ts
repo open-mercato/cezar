@@ -22,6 +22,8 @@ const IDLE_POLL_MS = 5_000;
 export interface SelfUpdateDeps {
   pkgName: string;
   version: string;
+  /** What the dialog shows as running (`0.15.2-dev` for a checkout); update checks keep `version`. */
+  displayVersion?: string;
   /** The running entry file (`process.argv[1]`). */
   entry: string;
   /** Exit-or-reexec policy; the service only decides WHEN. */
@@ -112,7 +114,7 @@ export class SelfUpdateService {
     const { canSelfUpdate, reason } = this.capability();
     const trim = this.deps.trimPaths?.() ?? false;
     return {
-      version: this.deps.version,
+      version: this.deps.displayVersion ?? this.deps.version,
       installKind: this.installKind,
       entry: trim ? this.deps.entry.split(/[\\/]/).pop() ?? '' : this.deps.entry,
       canSelfUpdate,

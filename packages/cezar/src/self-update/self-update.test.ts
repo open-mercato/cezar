@@ -1,15 +1,21 @@
-import { existsSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { currentEntry, activate, activeId, assertSafeId, detectInstallKind, installId, listInstalled, versionDir, versionEntry, versionsDir, writeManifest } from './layout.ts';
+import { currentEntry, activate, activeId, assertSafeId, detectInstallKind, installId, runsFromCheckout, listInstalled, versionDir, versionEntry, versionsDir, writeManifest } from './layout.ts';
 import { fetchPackageDocument, RegistryCache, registryPath } from './registry.ts';
 import { SelfUpdateService } from './service.ts';
 import { restartArgs } from './restart.ts';
-import { classifyVersion, compareVersions, isNewer } from './semver.ts';
+import { classifyVersion, compareVersions, devVersion, isNewer } from './semver.ts';
 
 describe('semver', () => {
+  it('shows a checkout build as -dev of its release', () => {
+    expect(devVersion('0.15.2')).toBe('0.15.2-dev');
+    expect(devVersion('0.15.2-nightly.20261019.4')).toBe('0.15.2-dev');
+    expect(devVersion('0.15.2+cez-abc12345')).toBe('0.15.2-dev');
+  });
+
   it('orders releases numerically, not lexically', () => {
     expect(compareVersions('1.2.10', '1.2.9')).toBe(1);
     expect(compareVersions('0.11.1', '0.9.2')).toBe(1);
@@ -122,6 +128,23 @@ describe('managed layout', () => {
     writeFileSync(join(checkout, 'package.json'), '{}');
     expect(detectInstallKind(join(checkout, 'dist', 'index.js'), env)).toBe('checkout');
     expect(detectInstallKind(join(home, 'elsewhere', 'index.js'), env)).toBe('unknown');
+  });
+
+  // A worktree linked into versions/ is `managed` by path, yet runs a checkout's code.
+  it('counts a checkout linked as a version as running from a checkout', () => {
+    const checkout = join(home, 'repo', 'packages', 'cezar');
+    mkdirSync(join(checkout, 'src'), { recursive: true });
+    mkdirSync(join(checkout, 'dist'), { recursive: true });
+    writeFileSync(join(checkout, 'package.json'), '{}');
+    writeFileSync(join(checkout, 'dist', 'index.js'), '');
+    const link = join(versionDir('0.15.2+cez-abc12345', env), 'node_modules', '@open-mercato', 'cezar');
+    mkdirSync(join(link, '..'), { recursive: true });
+    symlinkSync(checkout, link, 'dir');
+    const entry = join(link, 'dist', 'index.js');
+    expect(detectInstallKind(entry, env)).toBe('managed');
+    expect(runsFromCheckout(entry, env)).toBe(true);
+    fakeInstall('0.15.1', '0.15.1', 'registry');
+    expect(runsFromCheckout(versionEntry('0.15.1', env), env)).toBe(false);
   });
 });
 
