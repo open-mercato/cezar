@@ -37,7 +37,11 @@ export function RepoSyncBar() {
       ) : (
         <span data-slot="repo-upstream" className="text-soft-foreground">detached HEAD</span>
       )}
-      <SyncCounts ahead={s.upstream ? s.ahead : s.outgoing.length} behind={s.behind} />
+      {s.upstream ? (
+        <SyncCounts ahead={s.ahead} behind={s.behind} />
+      ) : s.outgoing.length > 0 ? (
+        <SyncCounts ahead={s.outgoing.length} behind={null} />
+      ) : null}
       <span data-slot="repo-fetched" className="hidden text-soft-foreground sm:inline">
         {s.lastFetchedAt ? `fetched ${relativeTime(s.lastFetchedAt)}` : 'never fetched'}
       </span>

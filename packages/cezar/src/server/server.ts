@@ -6660,6 +6660,13 @@ export function createApp(deps: ServerDeps) {
   ): Promise<{ error: string } | { message: string; sync: RepoSync }> => {
     const info = await getRepoInfo(project.root);
     if (!info) return { error: 'not a git repository' };
+    // A pull moves HEAD and the working files: never under an in-place run's agent.
+    if (action === pullRepo || action === syncRepo) {
+      const live = project.store
+        .listRuns()
+        .some((r) => r.worktree === false && (r.status === 'running' || r.status === 'waiting'));
+      if (live) return { error: 'an in-place task is running in this checkout — wait for it to finish' };
+    }
     const result = await action(info.root);
     if (!result.ok) return { error: result.error };
     return { message: result.message, sync: await repoSyncStatus(info.root, taskOwnedBranches(project.store)) };

@@ -196,7 +196,8 @@ async function pullUnlocked(root: string): Promise<SyncActionResult> {
     if (!fetched.ok) return { ok: false, error: reason(fetched, 'git fetch failed') };
   }
   const counts = await git(root, ['rev-list', '--left-right', '--count', 'HEAD...@{u}']);
-  const [ahead = 0, behind = 0] = counts.ok ? counts.stdout.trim().split(/\s+/).map(Number) : [];
+  if (!counts.ok) return { ok: false, error: reason(counts, `could not compare HEAD with ${upstream}`) };
+  const [ahead = 0, behind = 0] = counts.stdout.trim().split(/\s+/).map(Number);
   if (behind === 0) return { ok: true, message: 'already up to date' };
   if (ahead > 0) {
     return {
