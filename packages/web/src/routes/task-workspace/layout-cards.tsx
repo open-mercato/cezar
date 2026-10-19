@@ -472,6 +472,9 @@ function LayoutMenu({
   // This task's own layouts that are not a saved one under the same name.
   const local = layouts.filter((layout) => !savedNames.has(layout.name))
   const [saving, setSaving] = useState(false)
+  // The menu closing into the dialog must not take focus back to its button (the name field has it).
+  const intoDialog = useRef(false)
+  const triggerRef = useRef<HTMLButtonElement>(null)
 
   return (
     <>
@@ -481,6 +484,7 @@ function LayoutMenu({
             type="button"
             variant="outline"
             size="sm"
+            ref={triggerRef}
             data-action="layouts"
             data-active-layout={current ? current.name : undefined}
             aria-label={current ? `Layout: ${layoutDisplayName(current.name)}` : 'Layouts'}
@@ -492,7 +496,15 @@ function LayoutMenu({
             <ChevronDownIcon aria-hidden="true" className="size-3.5 opacity-60" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="max-h-96 w-64 overflow-y-auto">
+        <DropdownMenuContent
+          align="end"
+          className="max-h-96 w-64 overflow-y-auto"
+          onCloseAutoFocus={(event) => {
+            if (!intoDialog.current) return
+            intoDialog.current = false
+            event.preventDefault()
+          }}
+        >
           <DropdownMenuLabel>Saved layouts</DropdownMenuLabel>
           {saved.length === 0 ? (
             <p className="px-2 pb-1.5 text-xs text-muted-foreground">
@@ -536,7 +548,13 @@ function LayoutMenu({
             <>
               <DropdownMenuSeparator />
               {/* `data-action` rather than `data-slot`: the browser-level specs need a hook that is not the label. */}
-              <DropdownMenuItem data-action="save-layout" onSelect={() => setSaving(true)}>
+              <DropdownMenuItem
+                data-action="save-layout"
+                onSelect={() => {
+                  intoDialog.current = true
+                  setSaving(true)
+                }}
+              >
                 <SaveIcon aria-hidden="true" />
                 Save current view as layout…
               </DropdownMenuItem>
@@ -553,6 +571,7 @@ function LayoutMenu({
           onSaveCurrent?.(name)
         }}
         onCancel={() => setSaving(false)}
+        returnFocus={() => triggerRef.current?.focus()}
       />
     </>
   )
@@ -579,6 +598,14 @@ function LayoutRow({
       data-layout-kind={kind}
       data-active={selected ? '' : undefined}
       onSelect={onPick}
+      // The row's × is pointer-only (a button inside a menu item is outside the arrow-key order),
+      // so Delete on the focused row does the same.
+      aria-keyshortcuts={remove ? 'Delete' : undefined}
+      onKeyDown={(event) => {
+        if (!remove || (event.key !== 'Delete' && event.key !== 'Backspace')) return
+        event.preventDefault()
+        remove.run()
+      }}
       className="group/layout pr-1"
     >
       <LayoutGlyph count={count} />
@@ -589,7 +616,7 @@ function LayoutRow({
         <button
           type="button"
           aria-label={remove.label}
-          title={remove.label}
+          title={`${remove.label} (Delete)`}
           className="flex size-5 items-center justify-center rounded-sm text-muted-foreground opacity-0 group-hover/layout:opacity-100 group-focus/layout:opacity-100 hover:bg-background hover:text-foreground"
           onPointerUp={(event) => event.stopPropagation()}
           onClick={(event) => {
@@ -613,7 +640,10 @@ function SaveLayoutDialog({
   taken,
   onCommit,
   onCancel,
+  returnFocus,
 }: {
+  /** Where focus goes when it closes — the menu item that opened it is gone by then. */
+  returnFocus: () => void
   open: boolean
   suggested: string
   taken: ReadonlySet<string>
@@ -629,7 +659,13 @@ function SaveLayoutDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onCancel()}>
-      <DialogContent className="sm:max-w-sm">
+      <DialogContent
+        className="sm:max-w-sm"
+        onCloseAutoFocus={(event) => {
+          event.preventDefault()
+          returnFocus()
+        }}
+      >
         <form
           className="flex flex-col gap-4"
           onSubmit={(event) => {

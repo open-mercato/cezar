@@ -502,6 +502,11 @@ describe('the task workspace (main)', () => {
     openLayoutMenu()
     fireEvent.click(await screen.findByRole('button', { name: 'Delete saved layout Review' }))
     await waitFor(() => expect(hostUiState.savedLayouts).toEqual([expect.objectContaining({ name: 'Debug' })]))
+
+    // The menu stays open after a ×. The row's × is pointer-only; Delete on the focused row does
+    // the same from the keyboard.
+    fireEvent.keyDown(await screen.findByRole('menuitem', { name: /Debug/ }), { key: 'Delete' })
+    await waitFor(() => expect(hostUiState.savedLayouts).toEqual([]))
   })
 })
 
