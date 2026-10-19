@@ -476,6 +476,7 @@ function WorkspaceView({
   const columns = layouts.layout?.columns
   const requestColumnView = useCallback(
     (index: number, view: ViewId) => {
+      if (view === 'terminal') place('column')
       const leavingChanges = columns?.[index]?.view === 'changes'
       const lastChangesColumn = columns?.filter((column) => column.view === 'changes').length === 1
       if (leavingChanges && lastChangesColumn && diffComments.comments.length > 0) {
@@ -484,7 +485,7 @@ function WorkspaceView({
       }
       layouts.setColumnView(index, view)
     },
-    [columns, diffComments.comments.length, layouts.setColumnView],
+    [columns, diffComments.comments.length, layouts.setColumnView, place],
   )
 
   const actions: ColumnActions = useMemo(
