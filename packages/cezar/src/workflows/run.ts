@@ -1106,6 +1106,9 @@ export class RunManager {
   // registering in `active`, so parallel-slot counting is never racy.
   private readonly queue: string[] = [];
   private readonly starting = new Set<string>();
+  // Runs cancelled inside that window: there is no `ActiveRun` to flag yet, so the starter checks
+  // here once it has one to build (`abandonCancelledStart`).
+  private readonly cancelledStarting = new Set<string>();
   // Runs parked at `waiting` (open session, ball in the user's court). They
   // don't consume a `maxParallel` slot (#347) — an idle claude process costs
   // memory but no tokens, queued work progressing matters more, and the idle
@@ -1311,6 +1314,7 @@ export class RunManager {
     this.monitoring.clear();
     this.unitParents.clear();
     this.starting.clear();
+    this.cancelledStarting.clear();
     this.queue.length = 0;
     this.pendingJobs.clear();
     this.pendingBranchNames.clear();
@@ -1771,6 +1775,7 @@ export class RunManager {
               const message = err instanceof Error ? err.message : String(err);
               this.failOwnedContinuation(runId, ownerToken, message);
               this.starting.delete(runId);
+              this.cancelledStarting.delete(runId);
             });
             continue;
           }
@@ -2094,6 +2099,18 @@ export class RunManager {
   }
 
   /** Fence a continuation failure to the async owner that started it. */
+  /**
+   * A run cancelled while still `starting` (see `cancelOne`): leave the window without a session,
+   * settling the way `dropActive` does — report to a parent, free the slot.
+   */
+  private abandonCancelledStart(runId: string): boolean {
+    if (!this.cancelledStarting.delete(runId)) return false;
+    this.starting.delete(runId);
+    this.reportSettledChildToParent(runId);
+    this.releaseSlot();
+    return true;
+  }
+
   private failOwnedContinuation(runId: string, ownerToken: symbol, message: string): void {
     const state = this.active.get(runId);
     if (!state || state.ownerToken !== ownerToken || state.cancelled) return;
@@ -3211,7 +3228,15 @@ export class RunManager {
       return true;
     }
     const state = this.active.get(runId);
-    if (!state) return false;
+    if (!state) {
+      // Dequeued but not yet registered: a continuation awaits its lifecycle gate first (#1495).
+      // Refusing here let the run start right after the user cancelled it.
+      if (!this.starting.has(runId)) return false;
+      this.cancelledStarting.add(runId);
+      this.store.updateRun(runId, { status: 'cancelled', finishedAt: new Date().toISOString(), currentStepId: undefined });
+      this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
+      return true;
+    }
     state.cancelled = true;
     this.clearIdleTimer(state);
     try {
@@ -3774,7 +3799,7 @@ export class RunManager {
     if (agentModelsLocked(this.repoRoot) && opts.model?.trim()) {
       return { ok: false, error: AGENT_MODELS_LOCKED_ERROR };
     }
-    if (this.active.has(runId)) return { ok: false, error: 'run is still active' };
+    if (this.active.has(runId) || this.starting.has(runId)) return { ok: false, error: 'run is still active' };
     const run = this.store.getRun(runId);
     if (!run) return { ok: false, error: 'not found' };
     // `review` is continuable too — that's the "Send back" path (spec 009).
@@ -3888,6 +3913,9 @@ export class RunManager {
       return { ok: true };
     }
     const ownerToken = Symbol('run-owner');
+    // Same window as a dequeued continuation: live (and cancellable) before `runContinuation`
+    // registers it in `active`.
+    this.starting.add(runId);
     void this.runContinuation(
       runId,
       stepId,
@@ -3902,6 +3930,8 @@ export class RunManager {
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         this.failOwnedContinuation(runId, ownerToken, message);
+        this.starting.delete(runId);
+        this.cancelledStarting.delete(runId);
       },
     );
     return { ok: true };
@@ -3934,6 +3964,7 @@ export class RunManager {
     // invisible to the enforcer forever. Best-effort; falls back to repoRoot.
     const beforePreparation = this.store.getRun(runId);
     const gatedContinuation = !!beforePreparation?.worktreePath && await this.lifecycle.requiresGate(runId).catch(() => true);
+    if (this.abandonCancelledStart(runId)) return;
     if (beforePreparation?.worktreePath && gatedContinuation) {
       // Keep the original continuation intent durable before any script can start.
       const preparing: ActiveRun = {
@@ -3950,7 +3981,10 @@ export class RunManager {
       }, preparationController.signal, {branch: beforePreparation.branch});
       if (preparing.cancelled) { this.dropActive(runId, preparing); return; }
       if (!gate.ready) { this.parkLifecycle(runId, preparing, gate.operationId); return; }
-    } else await rematerializeReclaimedWorktree(this.repoRoot, this.store, runId);
+    } else {
+      await rematerializeReclaimedWorktree(this.repoRoot, this.store, runId);
+      if (this.abandonCancelledStart(runId)) return;
+    }
     const record = this.store.getRun(runId);
     // A provider/account switch cannot resume the old provider-owned session. Reconstruct the
     // portable context from Cezar's durable record + redacted event stream before this new turn's

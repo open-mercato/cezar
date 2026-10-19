@@ -247,7 +247,9 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
     it('releases a settled child’s unspent budget to the parent', async () => {
       // Default slots: the parked parent and its child must both be able to run.
       const parent = await parkedRoot(5);
-      const first = dispatchOk(parent.id, order('mock:done quick', { max_cost: 4 }));
+      // Titled: the report quotes the title, and a `mock:done` in it would settle the parent's mock
+      // before the second dispatch below.
+      const first = dispatchOk(parent.id, order('mock:done quick', { max_cost: 4, title: 'quick' }));
       expect(refusal(parent.id, order('second', { max_cost: 3 }))).toMatch(/only \$[\d.]+ of the budget is left/);
       await waitFor(first.id, settled);
       // The first child settled far under its cap (a dry run costs cents at most), so its
