@@ -22,10 +22,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
 import { DevelopmentPanel, pullOfVersion } from './self-update-development'
+import { offerWhenIdle, targetName, WhenIdleButton } from './self-update-when-idle'
 
 /**
  * The dialog behind the footer's version chip (self-update PoC): which channel cezar follows,
@@ -123,14 +123,20 @@ export function SelfUpdateDialog({
             />
 
             {data.channel === 'development' ? (
-              <DevelopmentPanel data={data} onApply={(target) => apply.mutate(target)} applying={apply.isPending} />
+              <DevelopmentPanel
+                data={data}
+                onApply={(target) => apply.mutate(target)}
+                onSchedule={(target) => schedule.mutate(target)}
+                applying={apply.isPending || schedule.isPending}
+              />
             ) : (
               <VersionPicker
                 data={data}
                 picked={picked}
                 onPick={setPicked}
                 onApply={(version) => apply.mutate(version)}
-                applying={apply.isPending}
+                onSchedule={(version) => schedule.mutate(version)}
+                applying={apply.isPending || schedule.isPending}
               />
             )}
 
@@ -144,8 +150,8 @@ export function SelfUpdateDialog({
                 className="flex items-center justify-between gap-3 rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-[12.5px]"
               >
                 <p className="min-w-0">
-                  <span className="font-semibold">v{data.scheduled.target}</span> installs and restarts as soon as no task
-                  is running. You can close this window and keep working.
+                  {brandName} switches to <span className="font-semibold">{targetName(data.scheduled.target)}</span> as soon
+                  as no task is running. You can close this window and keep working.
                 </p>
                 <Button
                   variant="ghost"
@@ -160,7 +166,7 @@ export function SelfUpdateDialog({
               <p className="rounded-md border border-pending/50 bg-pending/10 px-3 py-2 text-[12.5px] text-foreground">
                 {data.activeRuns} task{data.activeRuns === 1 ? ' is' : 's are'} running. A restart interrupts
                 them; {brandName} re-queues or resumes them on the way back up.
-                {data.updateAvailable ? ' Update when idle waits for them to finish instead.' : null}
+                {' '}The &ldquo;when idle&rdquo; buttons wait for them to finish instead.
               </p>
             ) : null}
 
@@ -368,25 +374,12 @@ function LatestCard({
           {checking ? 'Checking…' : 'Check again'}
         </Button>
         {/* Only worth offering when a restart would interrupt something: idle, it applies at once. */}
-        {target && data.activeRuns > 0 && data.scheduled?.target !== target ? (
-          <TooltipProvider delayDuration={300}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onSchedule(target)}
-                  disabled={!data.canSelfUpdate || applying || jobBusy}
-                >
-                  Update when idle
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent data-slot="update-when-idle-tooltip" side="bottom" className="max-w-64">
-                Waits until no task is running or queued, then installs v{target} and restarts. Tasks waiting on
-                your reply don&apos;t hold it up. You can close this window and keep working.
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+        {offerWhenIdle(data, target) ? (
+          <WhenIdleButton
+            doing={`installs ${targetName(target)}`}
+            onClick={() => onSchedule(target)}
+            disabled={!data.canSelfUpdate || applying || jobBusy}
+          />
         ) : null}
         {target ? (
           <Button size="sm" onClick={() => onApply(target)} disabled={!data.canSelfUpdate || applying || jobBusy}>
@@ -403,12 +396,14 @@ function VersionPicker({
   picked,
   onPick,
   onApply,
+  onSchedule,
   applying,
 }: {
   data: SelfUpdateStatus
   picked: string
   onPick: (version: string) => void
   onApply: (version: string) => void
+  onSchedule: (version: string) => void
   applying: boolean
 }) {
   const jobBusy = data.job?.status === 'running' || data.job?.status === 'restarting'
@@ -457,6 +452,14 @@ function VersionPicker({
             ))}
           </SelectContent>
         </Select>
+        {selected && !selected.active && offerWhenIdle(data, selected.value) ? (
+          <WhenIdleButton
+            label="When idle"
+            doing={`${selected.installed ? 'switches to' : 'installs'} ${targetName(selected.value)}`}
+            onClick={() => onSchedule(selected.value)}
+            disabled={!data.canSelfUpdate || applying || jobBusy}
+          />
+        ) : null}
         <Button
           size="sm"
           variant="contrast"
