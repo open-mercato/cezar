@@ -371,12 +371,13 @@ describe('the task workspace (main)', () => {
     await waitFor(() => expect(columnViews()).toEqual(['changes', 'terminal']))
   })
 
-  it('gives a lone view its bar — name and split, but no view switcher and no close', async () => {
+  it('gives a lone view its bar — the split only: no name, no view switcher, no close', async () => {
     stubFetch()
     renderWorkspace()
     await ready()
     const header = await waitFor(() => document.querySelector<HTMLElement>('[data-slot="workspace-column-header"]')!)
-    expect(header.querySelector('[data-slot="column-name"]')?.textContent).toBe('Chat')
+    expect(header.textContent).not.toContain('Chat')
+    expect(header.querySelector('[data-action="split-view"]')).not.toBeNull()
     expect(header.querySelector('[data-action="change-view"]')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Close Chat' })).toBeNull()
 

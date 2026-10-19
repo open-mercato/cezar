@@ -353,14 +353,9 @@ function ColumnHeader({
           <GripVerticalIcon aria-hidden="true" className="size-3.5" />
         </span>
       ) : null}
-      {/* The window's name IS its view switcher — except for a lone view, whose view the tab row
-          above already switches. */}
-      {count === 1 ? (
-        <span data-slot="column-name" className="flex h-6 min-w-0 items-center gap-1.5 text-xs font-medium text-muted-foreground">
-          <ViewIcon aria-hidden="true" className="size-3.5 shrink-0" />
-          <span className="truncate">{viewLabel(column.view)}</span>
-        </span>
-      ) : (
+      {/* The window's name IS its view switcher — except on a lone view, which the tab row above
+          already names and switches: its bar carries only the split. */}
+      {count === 1 ? null : (
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
