@@ -175,6 +175,13 @@ npm run test:package # pack/install the release tarball and exercise the built C
 
 `npm test` and `npm run test:unit` are the fast unit gate: no server, no browser. They must stay that way. `npm run test:package` needs a completed `npm run build` (it packs the tarball).
 
+**Opening a fix PR — any bug fix, telemetry fixes included — also needs a backport decision.**
+Find the newest line (`git branch -r --list 'origin/release/v*'`); if the bug exists in that
+line's code (`git merge-base --is-ancestor <introducing commit> origin/release/vX.Y.x`, or just
+read the file there), label the PR `backport release/vX.Y.x`; otherwise say in the PR body why
+not. "The reported occurrence is already fixed on the line" is not a reason to skip when the code
+you are hardening is on it too. Rules: `SDLC.md` § Release lines and backports.
+
 **Run vitest through npm, never `npx vitest`.** It is a devDependency of this repo, so `npm test`
 uses the installed, version-pinned binary; `npx` will happily reach past it and fetch a different
 version from the registry, which is a slow, networked, silently-different test run. To narrow a run,
