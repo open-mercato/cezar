@@ -445,8 +445,10 @@ function parseCursorStatus(result: ProviderCommandResult): ProviderConnectionSta
   // The plain `status` answer of a CLI without `--format` (`cursorFallbackArgs`).
   if (result.exitCode === 0) {
     const lines = normalizedLines(result.stdout, result.stderr);
-    const connected = lines.some((line) => /^(?:✓\s*)?logged in as\b/.test(line));
-    const disconnected = lines.some((line) => line === 'not logged in');
+    // Tolerate a status glyph, "you are", "signed" and trailing punctuation across CLI releases.
+    const connected = lines.some((line) => /^(?:[✓✔]\s*)?(?:logged|signed) in as\b/.test(line));
+    const disconnected = lines.some((line) =>
+      /^(?:[✗✕×✘!]\s*)?(?:you are |you're )?not (?:logged|signed) in\b(?! as\b)/.test(line));
     if (connected !== disconnected) return connected ? 'connected' : 'disconnected';
   }
   // Malformed or unrecognized JSON is inconclusive, not a confirmed unauthenticated state —
@@ -455,9 +457,16 @@ function parseCursorStatus(result: ProviderCommandResult): ProviderConnectionSta
   return null;
 }
 
-/** Cursor CLIs before `status --format` (≤ 2026.01.28, verified) reject it with exit 1. */
+/**
+ * Cursor CLIs before `status --format` (≤ 2026.01.28, verified) reject it with exit 1
+ * (telemetry 8d304c50, 1cd541cc). Match any parser's wording, not just commander's.
+ */
+const REJECTED_FORMAT_FLAG =
+  /\b(?:unknown|unrecognized|unexpected|invalid)\b[^\n]*\b(?:option|argument|flag)s?\b[^\n]*?['"`]?(?:--)?format\b/i;
+
 function cursorFallbackArgs(result: ProviderCommandResult): readonly string[] | undefined {
-  return /unknown option '--format'/i.test(result.stderr) ? ['status'] : undefined;
+  if (result.exitCode === 0) return undefined;
+  return REJECTED_FORMAT_FLAG.test(`${result.stderr}\n${result.stdout}`) ? ['status'] : undefined;
 }
 
 /** Telemetry 8d304c50: an `agent` that answers neither shape is likely another program of that name. */
