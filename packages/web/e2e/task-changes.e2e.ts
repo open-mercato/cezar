@@ -263,7 +263,7 @@ describe('the Changes tab against a live dry run', () => {
       browser.evaluate(
         `document.querySelector('[data-slot="layout-card"][data-active]').textContent.trim()`,
       ),
-    ).toBe('Code')
+    ).toBe('Files')
   })
 
   it('below md the segments stay tappable and the diff forces unified+wrap (toggles gone)', () => {

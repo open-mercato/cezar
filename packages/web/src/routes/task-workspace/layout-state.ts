@@ -32,9 +32,9 @@ export type ViewId = 'session' | 'changes' | 'commits' | 'files' | 'browser' | '
 export const VIEW_IDS: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'browser', 'graph', 'terminal']
 
 /** The view tabs, left to right: Chat is home and Changes is what a task is reviewed by; the
- *  rarely opened Graph sits near the end. Terminal is last, and its tab TOGGLES the bottom drawer
- *  rather than opening a card — dragged onto the workspace it becomes a column like any view. */
-export const FIXED_VIEW_ORDER: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'browser', 'graph', 'terminal']
+ *  rarely opened Graph sits near the end, and Notes (its own page) lands before Preview
+ *  (`strip.ts`). Terminal is last, and its tab TOGGLES the shells rather than opening a card. */
+export const FIXED_VIEW_ORDER: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'graph', 'browser', 'terminal']
 
 /** The route each view tab deep-links to, for pages that are not the workspace (Notes). */
 export const VIEW_PATHS: Record<ViewId, string> = {
@@ -53,7 +53,7 @@ const VIEW_LABELS: Record<ViewId, string> = {
   session: 'Chat',
   changes: 'Changes',
   commits: 'Commits',
-  files: 'Code',
+  files: 'Files',
   // The task's app, with Design Mode (spec 2026-10-09-design-mode).
   browser: 'Preview',
   graph: 'Graph',
@@ -66,8 +66,8 @@ const LEGACY_AUTO_NAMES: Record<string, string> = {
   Czat: 'Chat',
   Zmiany: 'Changes',
   Commity: 'Commits',
-  Pliki: 'Code',
-  Files: 'Code',
+  Pliki: 'Files',
+  Code: 'Files',
   Przeglądarka: 'Preview',
   Browser: 'Preview',
   Graf: 'Graph',
@@ -86,9 +86,9 @@ export function layoutDisplayName(name: string): string {
 
 /** Names a view's born layout was SAVED under by earlier builds. A born layout is recognized by
  *  its name, so a relabelled view must keep answering to the old one — otherwise every existing
- *  task grows a stray `Files` card beside the `Code` one that replaced it. */
+ *  task grows a stray `Files` card beside the `Code` one it was briefly called. */
 const LEGACY_VIEW_NAMES: Partial<Record<ViewId, readonly string[]>> = {
-  files: ['Files'],
+  files: ['Code'],
   browser: ['Browser'],
 }
 

@@ -46,7 +46,7 @@ const widths = (state: WorkspaceState) => activeLayout(state)?.columns.map((colu
 const views = (state: WorkspaceState) => activeLayout(state)?.columns.map((column) => column.view)
 const names = (state: WorkspaceState) => state.layouts.map((layout) => layout.name)
 /** The six cards a task is born with, in order: one per view. */
-const BORN = ['Chat', 'Changes', 'Commits', 'Code', 'Preview', 'Graph']
+const BORN = ['Chat', 'Changes', 'Commits', 'Files', 'Preview', 'Graph']
 
 describe('defaultState', () => {
   it('opens a fresh task on Chat, with one full-width card per view behind it', () => {

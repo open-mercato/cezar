@@ -17,6 +17,7 @@ import { Link } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 
 import { layoutDisplayName, viewLabel, type ViewId, type WorkspaceLayout } from './layout-state'
+import { stripTabs, type StripTab } from './strip'
 import { VIEW_ICONS } from './view-picker'
 
 /** The row's `gap-0.5`, and the `…` button that folds the tabs that do not fit (28px + that gap). */
@@ -34,7 +35,7 @@ const COLUMN_DRAG_TYPE = 'text/cez-column'
  * The task's tab row (spec `2026-10-07-task-workspace` §5.2) — the row that REPLACES the header's
  * Session | Changes | Commits | Files tabs, in two parts:
  *
- *  - left, one underline tab per VIEW plus Notes, which keeps its own page. A tab opens that view
+ *  - left, one underline tab per VIEW plus Notes (its own page, placed by `stripTabs`). A tab opens that view
  *    alone; dragged onto the workspace it splits the screen, and ⌥-click opens it beside what is
  *    showing. A TOGGLE view (Terminal) does not open alone: its click is the parent's to answer
  *    (the drawer), and `onViews` marks it lit;
@@ -101,8 +102,8 @@ export function LayoutCards({
    * Two passes, both before paint: with `fit` unknown every tab is rendered (the row clips, so
    * nothing shows) and measured; the count is then stored and the row re-rendered with it.
    */
-  const items = fixedViews
-  const isActive = (view: ViewId) => fixedActive === view
+  const items: StripTab[] = notesHref ? stripTabs(fixedViews) : [...fixedViews]
+  const isActive = (tab: StripTab) => (tab === 'notes' ? notesActive : fixedActive === tab)
 
   const rootRef = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(0)
@@ -150,9 +151,9 @@ export function LayoutCards({
   useLayoutEffect(() => {
     const root = rootRef.current
     if (fit !== null || !root) return
-    const cards = [...root.querySelectorAll<HTMLElement>('[data-slot="layout-card"]')]
+    const cards = [...root.querySelectorAll<HTMLElement>('[data-strip-item]')]
     const widths = cards.map((card) => card.offsetWidth + CARD_GAP)
-    // What is on the row besides the tabs: the Notes tab and the layout menu.
+    // What is on the row besides the tabs: the layout menu.
     const chrome = [...root.querySelectorAll<HTMLElement>('[data-strip-chrome]')].reduce(
       (sum, node) => sum + node.offsetWidth + CARD_GAP,
       0,
@@ -182,7 +183,7 @@ export function LayoutCards({
   // tab strip may not do. Past the cut, it follows the leading tabs.
   const activeIndex = items.findIndex(isActive)
   if (activeIndex >= shownCount) visible = [...visible, items[activeIndex]!]
-  const overflow = items.filter((view) => !visible.includes(view))
+  const overflow = items.filter((tab) => !visible.includes(tab))
 
   // A column header held over the row: dropping it closes that column.
   const [closeTarget, setCloseTarget] = useState(false)
@@ -219,6 +220,27 @@ export function LayoutCards({
       }}
     >
       {visible.map((view) => {
+        if (view === 'notes') {
+          return (
+            <Link
+              key="notes"
+              to={notesHref!}
+              data-strip-item=""
+              aria-current={notesActive ? 'page' : undefined}
+              className={cn(
+                'relative -mb-px flex h-9 shrink-0 items-center gap-1.5 border-b-2 px-2.5 text-[13px] font-medium',
+                notesActive
+                  ? 'border-foreground text-foreground'
+                  : 'border-transparent text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <TabIcon hint={showKeyHints ? keyHints.get('view:notes') : undefined}>
+                <NotebookTextIcon aria-hidden="true" className="size-3.5 shrink-0" />
+              </TabIcon>
+              Notes
+            </Link>
+          )
+        }
         // The digit that selects this tab from the keyboard — its place on the whole row.
         const position = items.indexOf(view) + 1
         const Icon = VIEW_ICONS[view]
@@ -232,6 +254,7 @@ export function LayoutCards({
             type="button"
             variant="ghost"
             data-slot="layout-card"
+            data-strip-item=""
             data-fixed={view}
             data-active={selected ? 'true' : undefined}
             data-on={on ? '' : undefined}
@@ -286,6 +309,17 @@ export function LayoutCards({
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="max-h-72 w-56 overflow-y-auto">
             {overflow.map((view) => {
+              if (view === 'notes') {
+                return (
+                  <DropdownMenuItem key="notes" asChild>
+                    <Link to={notesHref!}>
+                      <NotebookTextIcon aria-hidden="true" />
+                      <span className="truncate">Notes</span>
+                      {keyHints.get('view:notes') ? <DropdownMenuShortcut>{keyHints.get('view:notes')}</DropdownMenuShortcut> : null}
+                    </Link>
+                  </DropdownMenuItem>
+                )
+              }
               const Icon = VIEW_ICONS[view]
               const hint = keyHints.get(`view:${view}`)
               return (
@@ -300,24 +334,6 @@ export function LayoutCards({
         </DropdownMenu>
       ) : null}
 
-      {notesHref ? (
-        <Link
-          to={notesHref}
-          data-strip-chrome=""
-          aria-current={notesActive ? 'page' : undefined}
-          className={cn(
-            'relative -mb-px flex h-9 shrink-0 items-center gap-1.5 border-b-2 px-2.5 text-[13px] font-medium',
-            notesActive
-              ? 'border-foreground text-foreground'
-              : 'border-transparent text-muted-foreground hover:text-foreground',
-          )}
-        >
-          <TabIcon hint={showKeyHints ? keyHints.get('view:notes') : undefined}>
-            <NotebookTextIcon aria-hidden="true" className="size-3.5 shrink-0" />
-          </TabIcon>
-          Notes
-        </Link>
-      ) : null}
 
       {closeTarget ? (
         <span className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 rounded bg-background px-2 py-0.5 text-xs font-medium text-foreground shadow-sm">

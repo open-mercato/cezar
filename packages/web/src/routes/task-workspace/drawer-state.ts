@@ -107,3 +107,26 @@ export function writeDrawerState(taskId: string, state: DrawerState): void {
     // Private mode or a full quota: the drawer still works for this visit.
   }
 }
+
+/** Where the terminal opens: the bottom drawer, or a column beside the view. The LAST place the
+ *  user put it, so moving the shells into a column makes the Terminal tab open a column from then
+ *  on. One preference for every task — it is how this user likes their terminal, not task state. */
+export type TerminalPlacement = 'drawer' | 'column'
+
+const PLACEMENT_KEY = 'cez-terminal-placement'
+
+export function readTerminalPlacement(): TerminalPlacement {
+  try {
+    return localStorage.getItem(PLACEMENT_KEY) === 'column' ? 'column' : 'drawer'
+  } catch {
+    return 'drawer'
+  }
+}
+
+export function writeTerminalPlacement(placement: TerminalPlacement): void {
+  try {
+    localStorage.setItem(PLACEMENT_KEY, placement)
+  } catch {
+    // Private mode or a full quota: the choice holds for this visit.
+  }
+}

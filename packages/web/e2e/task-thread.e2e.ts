@@ -401,9 +401,9 @@ describe('task thread', () => {
       { text: 'Chat', active: true },
       { text: 'Changes', active: false },
       { text: 'Commits', active: false },
-      { text: 'Code', active: false },
-      { text: 'Preview', active: false },
+      { text: 'Files', active: false },
       { text: 'Graph', active: false },
+      { text: 'Preview', active: false },
       { text: 'Terminal', active: false },
     ])
     // Notes keeps its own page, reached from the strip's trailing icon.

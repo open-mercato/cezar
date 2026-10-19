@@ -12,8 +12,10 @@ import { reviveState, type ViewId } from './layout-state'
 // The terminal needs xterm and a PTY; this suite is about the layout, so the view stands in and
 // says how it was mounted (a column fills, the drawer docks).
 vi.mock('./terminal-drawer', () => ({
-  TerminalDrawer: ({ runId, fill }: { runId: string; fill?: boolean }) => (
-    <section data-testid="terminal" data-run={runId} data-fill={fill ? '' : undefined} />
+  TerminalDrawer: ({ runId, fill, onMoveToDrawer }: { runId: string; fill?: boolean; onMoveToDrawer?: () => void }) => (
+    <section data-testid="terminal" data-run={runId} data-fill={fill ? '' : undefined}>
+      {onMoveToDrawer ? <button onClick={onMoveToDrawer}>Move to bottom</button> : null}
+    </section>
   ),
 }))
 vi.mock('../workflow-graph/task-graph', () => ({
@@ -168,7 +170,7 @@ describe('the task workspace (main)', () => {
     await ready()
 
     // Changes second; Terminal last, as a tab that toggles the drawer.
-    expect(cardNames()).toEqual(['Chat', 'Changes', 'Commits', 'Code', 'Preview', 'Terminal'])
+    expect(cardNames()).toEqual(['Chat', 'Changes', 'Commits', 'Files', 'Preview', 'Terminal'])
     expect(activeCard()).toBe('Chat')
     // One strip, never both: the old route links are gone from the header.
     expect(screen.queryByRole('link', { name: 'Changes' })).toBeNull()
@@ -294,16 +296,44 @@ describe('the task workspace (main)', () => {
     const terminal = await screen.findByTestId('terminal')
     expect(terminal.dataset.fill).toBe('')
     expect(terminal.dataset.run).toBe('r1')
-    // The Terminal tab stays lit while a column shows the shells, and opens no second view of them.
     expect(terminalTab()?.hasAttribute('data-on')).toBe(true)
-    fireEvent.click(terminalTab()!)
-    expect(screen.getAllByTestId('terminal')).toHaveLength(1)
 
     await waitFor(() => {
       const saved = reviveState(hostLayouts.r1 ?? null)
       const built = saved.layouts.find((layout) => layout.name === saved.active)
       expect(built?.columns.map((column) => column.view)).toEqual(['session', 'terminal'])
     })
+  })
+
+  it('opens the terminal where it was last put: a column once moved there, the drawer once moved back', async () => {
+    stubFetch()
+    renderWorkspace()
+    await ready()
+
+    // Fresh: the tab docks the drawer.
+    fireEvent.click(terminalTab()!)
+    expect((await screen.findByTestId('terminal')).dataset.fill).toBeUndefined()
+    fireEvent.click(terminalTab()!)
+    await waitFor(() => expect(screen.queryByTestId('terminal')).toBeNull())
+
+    // ⌥-click puts it in a column — and from then on the plain tab toggles a column.
+    fireEvent.click(terminalTab()!, { altKey: true })
+    await waitFor(() => expect(columnViews()).toEqual(['session', 'terminal']))
+    fireEvent.click(terminalTab()!)
+    await waitFor(() => expect(columnViews()).not.toContain('terminal'))
+    expect(screen.queryByTestId('terminal')).toBeNull()
+    fireEvent.click(terminalTab()!)
+    await waitFor(() => expect(columnViews()).toContain('terminal'))
+    expect(screen.getAllByTestId('terminal')).toHaveLength(1)
+
+    // Moved back to the bottom: the column goes, the drawer opens, and the tab docks it again.
+    fireEvent.click(screen.getByRole('button', { name: 'Move to bottom' }))
+    await waitFor(() => expect(columnViews()).not.toContain('terminal'))
+    expect((await screen.findByTestId('terminal')).dataset.fill).toBeUndefined()
+    fireEvent.click(terminalTab()!)
+    await waitFor(() => expect(screen.queryByTestId('terminal')).toBeNull())
+    fireEvent.click(terminalTab()!)
+    expect((await screen.findByTestId('terminal')).dataset.fill).toBeUndefined()
   })
 
   it('docks the drawer under any layout, and the ` key toggles it', async () => {

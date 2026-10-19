@@ -168,8 +168,11 @@ describe('views', () => {
     const { byId, on } = build(run('done'))
     byId.get('tab:2')?.perform()
     expect(on.navigate).toHaveBeenCalledWith('/tasks/r1/changes')
-    byId.get('tab:6')?.perform()
+    // Notes sits before Preview on the row, so it is the fifth tab.
+    byId.get('tab:5')?.perform()
     expect(on.navigate).toHaveBeenCalledWith('/tasks/r1/notes')
+    byId.get('tab:6')?.perform()
+    expect(on.navigate).toHaveBeenCalledWith('/tasks/r1/preview')
   })
 
   it('for a task not on screen they navigate to its routes, with no layout commands', () => {
@@ -186,7 +189,9 @@ describe('views', () => {
     expect(build(run('waiting'), { workspace: workspace({ focusComposer: null }) }).byId.has('reply')).toBe(false)
     const inColumn = workspace({ terminal: { allowed: true, open: false, inColumn: true, toggle: vi.fn(), openInColumn: vi.fn() } })
     const { byId } = build(run('done'), { workspace: inColumn })
-    expect(byId.get('terminal')?.unavailable).toMatch(/column/)
+    // The toggle hides the column too, so it is offered — as Hide.
+    expect(byId.get('terminal')?.label).toBe('Hide terminal')
+    expect(byId.get('terminal')?.unavailable).toBeUndefined()
     expect(byId.has('terminal-column')).toBe(false)
   })
 })

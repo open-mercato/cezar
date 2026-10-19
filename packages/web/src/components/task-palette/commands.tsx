@@ -28,7 +28,7 @@ import type { TaskWorkspaceBridge } from '@/lib/task-workspace-bridge'
 import { isRunActive, resumeHint, runActionFlags } from '@/routes/task-thread/run-actions'
 import { GIT_ACTION_ICONS } from '@/routes/task-git/git-toolbar'
 import { FIXED_VIEW_ORDER, VIEW_PATHS, viewLabel, type ViewId } from '@/routes/task-workspace/layout-state'
-import { stripEntries, type StripEntry } from '@/routes/task-workspace/strip'
+import { stripEntries, stripTabs, type StripEntry } from '@/routes/task-workspace/strip'
 import { VIEW_ICONS } from '@/routes/task-workspace/view-picker'
 
 /**
@@ -249,7 +249,13 @@ function gitCommands({ git, prUrl }: TaskCommandInput, on: TaskCommandHandlers):
 function viewCommands({ run, workspace, terminalAvailable }: TaskCommandInput, on: TaskCommandHandlers): TaskCommand[] {
   const base = `/tasks/${run.id}`
   const views = stripViews(run, workspace, terminalAvailable)
-  const commands: TaskCommand[] = views.map((view, index) => {
+  // A tab's number is its place on the row, Notes included (`stripTabs`).
+  const tabs = stripTabs(views)
+  const shortcutOf = (tab: ViewId | 'notes') => {
+    const at = tabs.indexOf(tab)
+    return workspace && at < 9 ? { shortcut: String(at + 1) } : {}
+  }
+  const commands: TaskCommand[] = views.map((view) => {
     const Icon = VIEW_ICONS[view]
     return {
       id: `view:${view}`,
@@ -257,7 +263,7 @@ function viewCommands({ run, workspace, terminalAvailable }: TaskCommandInput, o
       label: viewLabel(view),
       icon: <Icon aria-hidden="true" />,
       keywords: ['view', 'go', 'tab', view],
-      ...(workspace && index < 9 ? { shortcut: String(index + 1) } : {}),
+      ...shortcutOf(view),
       // Terminal's tab toggles the drawer (`openView`), so it is pressed while the shells show.
       pressed: view === 'terminal' && workspace ? workspace.terminal.open || workspace.terminal.inColumn : workspace?.activeView === view,
       perform: workspace ? () => workspace.openView(view) : () => on.navigate(`${base}/${VIEW_PATHS[view]}`),
@@ -270,7 +276,7 @@ function viewCommands({ run, workspace, terminalAvailable }: TaskCommandInput, o
     label: 'Notes',
     icon: icon(NotebookTextIcon),
     keywords: ['view', 'handoff'],
-    ...(workspace && views.length < 9 ? { shortcut: String(views.length + 1) } : {}),
+    ...shortcutOf('notes'),
     perform: () => on.navigate(`${base}/notes`),
   })
   return commands
@@ -354,12 +360,11 @@ function layoutCommands({ workspace }: TaskCommandInput): TaskCommand[] {
     commands.push({
       id: 'terminal',
       group: 'layout',
-      label: terminal.open ? 'Hide terminal' : 'Show terminal',
+      label: terminal.open || terminal.inColumn ? 'Hide terminal' : 'Show terminal',
       icon: icon(PanelBottomIcon),
       keywords: ['shell', 'drawer'],
       shortcut: '`',
       pressed: terminal.open || terminal.inColumn,
-      ...(terminal.inColumn ? { unavailable: 'The terminal is open in a column of this layout' } : {}),
       perform: terminal.toggle,
     })
     if (!terminal.inColumn) {
