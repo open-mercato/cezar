@@ -3282,7 +3282,8 @@ export class RunManager {
     const result = state?.session?.result;
     if (!this.isActive(runId)) return true;
     if (!this.cancel(runId)) return false;
-    if (!result) return !this.isActive(runId);
+    // A run cancelled while `starting` has no session yet: it leaves once its gate await returns.
+    if (!result) return this.cancelledStarting.has(runId) ? this.waitInactive(runId, 10_000) : !this.isActive(runId);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const settled = await Promise.race([
       result.then(() => true, () => true),
@@ -3290,6 +3291,12 @@ export class RunManager {
     ]);
     if (timer) clearTimeout(timer);
     return settled && !this.isActive(runId);
+  }
+
+  private async waitInactive(runId: string, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.isActive(runId) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
+    return !this.isActive(runId);
   }
 
   private parkLifecycle(runId: string, state: ActiveRun, operationId?: string): void {
@@ -3584,7 +3591,7 @@ export class RunManager {
     // the state — seconds before the session opens — so checking `starting`
     // alone would reopen exactly the drop this rung exists to close.
     const state = this.active.get(runId);
-    const startingUp = this.starting.has(runId) || (state !== undefined && !state.sessionEverOpened && !state.cancelled);
+    const startingUp = (this.starting.has(runId) && !this.cancelledStarting.has(runId)) || (state !== undefined && !state.sessionEverOpened && !state.cancelled);
     if (!startingUp) return false;
     const pending = this.deferredMessages.get(runId) ?? [];
     pending.push(content);

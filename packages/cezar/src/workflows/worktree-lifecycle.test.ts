@@ -385,10 +385,12 @@ describe('cancelling a continuation still awaiting its lifecycle gate', () => {
     expect(p.manager.isActive(run.id)).toBe(true);
     expect(p.manager.continueRun(run.id, {text: 'twice'})).toEqual({ok: false, error: 'run is still active'});
 
-    expect(p.manager.cancel(run.id)).toBe(true);
+    const cancelled = p.manager.cancelAndWait(run.id);
     expect(p.store.getRun(run.id)?.status).toBe('cancelled');
+    // Nothing may buffer for a session that will never open (it would leak into the next Continue).
+    expect(p.manager.deferMessage(run.id, [{type: 'text', text: 'late'}])).toBe(false);
     openGate!(false);
-    await wait(() => expect(p.manager.isActive(run.id)).toBe(false));
+    expect(await cancelled).toBe(true);
     await new Promise(resolve => setTimeout(resolve, 100));
     expect(launched.length).toBe(launchedBefore);
     expect(p.store.getRun(run.id)?.status).toBe('cancelled');
