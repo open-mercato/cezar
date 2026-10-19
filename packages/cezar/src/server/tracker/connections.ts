@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs, constants } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
+import { renameWithRetry } from '../../fs-rename.ts';
 import type { TrackerCredentials } from '@open-mercato/cezar-contract';
 import { cezarHomeDir, assertCezarHomeWriteIsSandboxed } from '../../paths.ts';
 import { connectionRecordSchema, decodeConnectionEnv, encodeConnectionEnv, type StoredTrackerConnection } from './connection-env.ts';
@@ -48,7 +49,7 @@ export class TrackerConnections {
     const temporary = path + '.' + randomUUID() + '.tmp';
     try {
       await fs.writeFile(temporary, text, { mode: 0o600, flag: 'wx' });
-      await fs.rename(temporary, path);
+      await renameWithRetry(temporary, path);
     } finally { await fs.unlink(temporary).catch(() => {}); }
   }
   private async locked<T>(id: string, action: () => Promise<T>): Promise<T> {

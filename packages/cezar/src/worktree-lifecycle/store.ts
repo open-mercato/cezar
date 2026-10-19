@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { renameWithRetry } from '../fs-rename.ts';
 import {
   lifecycleIdSchema, lifecycleOperationSchema, lifecycleOutputFrameSchema,
   runIdParamSchema, worktreeLifecycleRecordSchema,
@@ -49,7 +50,7 @@ export async function atomicLifecycleWrite(path: string, value: unknown): Promis
     const file = await fs.open(temporary, 'wx', 0o600);
     try { await file.writeFile(`${JSON.stringify(value, null, 2)}\n`); await file.sync(); }
     finally { await file.close(); }
-    await fs.rename(temporary, path);
+    await renameWithRetry(temporary, path);
     // Durable rename on platforms that support directory fsync.
     const directory = await fs.open(dirname(path), 'r').catch(() => null);
     if (directory) { try { await directory.sync(); } catch {} finally { await directory.close(); } }
@@ -208,7 +209,7 @@ export class LifecycleStore {
       while (bytes > OUTPUT_CAP && lines.length > 1) bytes -= Buffer.byteLength(lines.shift()!) + 1;
       await fs.mkdir(dirname(path), { recursive: true, mode: 0o700 });
       const temporary = `${path}.${randomUUID()}.tmp`;
-      try { await fs.writeFile(temporary, `${lines.join('\n')}\n`, { mode: 0o600, flag: 'wx' }); await fs.rename(temporary, path); }
+      try { await fs.writeFile(temporary, `${lines.join('\n')}\n`, { mode: 0o600, flag: 'wx' }); await renameWithRetry(temporary, path); }
       finally { await fs.unlink(temporary).catch(() => undefined); }
       return parsed;
     });
