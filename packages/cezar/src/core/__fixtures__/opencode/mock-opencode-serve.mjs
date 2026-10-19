@@ -26,6 +26,8 @@
 // `MOCK_LEGACY_PERMISSION=1` serves only the pre-rework session-scoped reply route.
 // `MOCK_NO_EVENT_BUS=1` in the environment makes `GET /event` 404 instead, for
 // the no-event-bus fallback.
+// `MOCK_START=silent` never prints the URL line; `MOCK_START=stderr` prints it on
+// stderr. `MOCK_PATH_DIR` overrides the `directory` `GET /path` reports.
 import { createServer } from 'node:http';
 
 const args = process.argv.slice(2);
@@ -68,6 +70,11 @@ const info = (extra) => ({
 
 const server = createServer((req, res) => {
   const url = req.url ?? '';
+  if (req.method === 'GET' && url === '/path') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ directory: process.env.MOCK_PATH_DIR ?? process.cwd() }));
+    return;
+  }
   if (req.method === 'GET' && url.startsWith('/event')) {
     if (process.env.MOCK_NO_EVENT_BUS === '1') {
       res.writeHead(404, { 'content-type': 'text/plain' });
@@ -299,6 +306,8 @@ const server = createServer((req, res) => {
 
 server.listen(port, hostname, () => {
   // The runner reads the bound URL back from stdout, like the real server.
-  console.log(`opencode server listening on http://${hostname}:${server.address().port}`);
+  const line = `opencode server listening on http://${hostname}:${server.address().port}`;
+  if (process.env.MOCK_START === 'stderr') console.error(line);
+  else if (process.env.MOCK_START !== 'silent') console.log(line);
 });
 process.on('SIGTERM', () => process.exit(0));
