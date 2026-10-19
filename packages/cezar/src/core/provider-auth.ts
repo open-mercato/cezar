@@ -105,6 +105,9 @@ interface ProviderDescriptor {
 }
 
 const COMMAND_TIMEOUT_MS = 10_000;
+/** A timed-out probe is asked once more with this budget: every CLI is probed at once, so a busy
+ *  host (Windows, agents running) can stall them all past 10s together (telemetry e316b141). */
+const RETRY_TIMEOUT_MS = 30_000;
 /**
  * How long a probe result stands before it is re-checked — deliberately ASYMMETRIC.
  *
@@ -1078,16 +1081,21 @@ export class ProviderAuthService {
     // Never pass a trailing `undefined`: the existing three- and four-argument calls are the
     // zero-config path and the injected test kit asserts them literally, so only a descriptor
     // that actually has a stdin payload reaches the five-argument form.
-    const run = (args: readonly string[] = descriptor.statusArgs): Promise<ProviderCommandResult> => {
+    const run = (
+      args: readonly string[] = descriptor.statusArgs,
+      timeoutMs = COMMAND_TIMEOUT_MS,
+    ): Promise<ProviderCommandResult> => {
       const stdin = descriptor.stdin?.();
       return stdin !== undefined
-        ? this.runCommand(executable, args, COMMAND_TIMEOUT_MS, env, stdin)
+        ? this.runCommand(executable, args, timeoutMs, env, stdin)
         : env === undefined
-          ? this.runCommand(executable, args, COMMAND_TIMEOUT_MS)
-          : this.runCommand(executable, args, COMMAND_TIMEOUT_MS, env);
+          ? this.runCommand(executable, args, timeoutMs)
+          : this.runCommand(executable, args, timeoutMs, env);
     };
     try {
       result = await run();
+      // A hang is reported only when it survives a second, longer ask outside the concurrent burst.
+      if (result.timedOut) result = await run(descriptor.statusArgs, RETRY_TIMEOUT_MS);
       // A CLI that exits 0 having printed nothing at all did not answer — `claude auth status
       // --json` does this intermittently (telemetry 35838a52). Ask once more before giving up.
       if (isSilentSuccess(result) && descriptor.parse(result) === null) result = await run();

@@ -1637,6 +1637,39 @@ describe('inconclusive probe reports', () => {
     }
   });
 
+  // Telemetry e316b141: claude and codex timed out together on a busy Windows host, then both
+  // answered `--version` at once — a stall from the concurrent burst, not a CLI defect.
+  it('asks a timed-out CLI once more with a longer budget', async () => {
+    const timeouts: number[] = [];
+    const onInconclusive = vi.fn();
+    const service = new ProviderAuthService({
+      runCommand: async (executable, _args, timeoutMs) => {
+        if (executable !== 'codex') return { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' };
+        timeouts.push(timeoutMs);
+        return timeouts.length === 1
+          ? { stdout: '', stderr: '', exitCode: null, timedOut: true }
+          : connectedResults.codex!;
+      },
+      onInconclusive,
+    });
+    const status = await service.status({ refresh: true });
+    expect(status.providers.find((row) => row.provider === 'codex')?.status).toBe('connected');
+    expect(timeouts).toEqual([10_000, 30_000]);
+    expect(onInconclusive).not.toHaveBeenCalled();
+  });
+
+  it('reports a timeout only once the longer second ask hung too', async () => {
+    const timeout = { stdout: '', stderr: '', exitCode: null, timedOut: true };
+    const runCommand = vi.fn(codexOnly(timeout));
+    const onInconclusive = vi.fn();
+    const service = new ProviderAuthService({ runCommand, onInconclusive });
+    const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'codex');
+    expect(row).toMatchObject({ status: 'unknown', hint: expect.stringContaining('timed out') });
+    expect(runCommand.mock.calls.filter(([executable, args]) => executable === 'codex' && args[0] !== '--version')
+      .map(([, , timeoutMs]) => timeoutMs)).toEqual([10_000, 30_000]);
+    expect(onInconclusive.mock.calls[0]?.[0]).toMatchObject({ reason: 'timeout' });
+  });
+
   it('tells an unexpected exit, a spawn error, a timeout and a throw apart', async () => {
     expect((await reasonsFor({ stdout: '', stderr: '', exitCode: 3 }))[0]?.reason).toBe('unexpected_exit');
     expect((await reasonsFor({ stdout: '', stderr: '', exitCode: null, errorCode: 'EINVAL' }))[0])
