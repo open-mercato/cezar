@@ -177,7 +177,7 @@ class OpencodeSession implements AgentSession {
     private readonly onEvent: ((event: AgentEvent) => void) | undefined,
     private readonly opts: SessionOptions,
   ) {
-    // Random high port; the actual bound URL is read back from stdout.
+    // Random high port; the bound URL is read back from the server's output or a `/path` probe.
     const port = 40000 + Math.floor(Math.random() * 20000);
     try {
       const env = buildChildEnv({ backend: 'opencode', extraEnv: spec.env });
@@ -215,7 +215,7 @@ class OpencodeSession implements AgentSession {
     this.child.stderr.setEncoding('utf8');
     this.child.stderr.on('data', (chunk: string) => stderrChunks.push(chunk));
 
-    // The server prints its URL on stdout once listening.
+    // The server prints its URL once listening (stdout or stderr), or answers on the requested port.
     const urlReady = this.waitForServerUrl(port, stderrChunks);
 
     const limitMs = spec.timeoutMs ?? timeoutMs;
@@ -361,7 +361,6 @@ class OpencodeSession implements AgentSession {
    */
   private waitForServerUrl(port: number, stderrChunks: readonly string[]): Promise<string> {
     return new Promise((resolve, reject) => {
-      const startedAt = Date.now();
       const probeUrl = `http://127.0.0.1:${port}`;
       const ownDir = canonicalPath(this.spec.cwd ?? process.cwd());
       const probeAbort = new AbortController();
@@ -381,13 +380,23 @@ class OpencodeSession implements AgentSession {
         cleanup();
         resolve(url);
       };
+      // Fixed messages, never the elapsed time: each distinct string is its own telemetry group.
+      let heardOutput = false;
       const stallFail = () =>
-        fail(`opencode serve did not report a listening URL within ${Math.round((Date.now() - startedAt) / 1000)}s`);
+        fail(
+          heardOutput
+            ? `opencode serve went silent for ${SERVER_START_TIMEOUT_MS / 1000}s without reporting a listening URL`
+            : `opencode serve did not report a listening URL within ${SERVER_START_TIMEOUT_MS / 1000}s`,
+        );
       let stall = setTimeout(stallFail, SERVER_START_TIMEOUT_MS);
       stall.unref?.();
-      const cap = setTimeout(stallFail, SERVER_START_MAX_MS);
+      const cap = setTimeout(
+        () => fail(`opencode serve did not report a listening URL within ${SERVER_START_MAX_MS / 1000}s`),
+        SERVER_START_MAX_MS,
+      );
       cap.unref?.();
       const onData = (chunk: string) => {
+        heardOutput = true;
         clearTimeout(stall);
         stall = setTimeout(stallFail, SERVER_START_TIMEOUT_MS);
         stall.unref?.();

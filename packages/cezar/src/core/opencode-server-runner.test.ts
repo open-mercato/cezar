@@ -231,6 +231,25 @@ describe('opencode serve startup', () => {
     expect(errorsSoFar()).toEqual([{ type: 'error', message: `opencode: opencode serve did not report a listening URL within ${SERVER_START_MAX_MS / 1000}s` }]);
     expect(events).toContainEqual(expect.objectContaining({ type: 'note', message: expect.stringContaining('opencode serve stderr: migrating') }));
   });
+
+  // The message is a telemetry group key, so it never carries the elapsed time.
+  it('fails with one fixed message when the server prints and then goes silent', async () => {
+    const child = silentChild();
+    spawnHook.override = () => child;
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: 'opencode', timeoutMs: 0 }).startSession(
+      { userPrompt: 'do it', cwd: process.cwd() },
+      (event) => events.push(event),
+    );
+    void session.result.catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(17_000);
+    (child.stderr as PassThrough).write('migrating\n');
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(events.filter((e) => e.type === 'error')).toEqual([
+      { type: 'error', message: 'opencode: opencode serve went silent for 30s without reporting a listening URL' },
+    ]);
+  });
 });
 
 describe('2d01c3c9 opencode serve that starts without the expected URL line', () => {
