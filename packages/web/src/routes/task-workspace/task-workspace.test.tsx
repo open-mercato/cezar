@@ -336,6 +336,14 @@ describe('the task workspace (main)', () => {
     expect((await screen.findByTestId('terminal')).dataset.fill).toBeUndefined()
   })
 
+  it('does not remember a column the user did not put there (a deep link to the terminal)', async () => {
+    stubFetch()
+    renderWorkspace('terminal')
+    await ready()
+    await waitFor(() => expect(columnViews()).toEqual(['terminal']))
+    expect(localStorage.getItem('cez-terminal-placement')).toBeNull()
+  })
+
   it('docks the drawer under any layout, and the ` key toggles it', async () => {
     stubFetch()
     renderWorkspace('changes')

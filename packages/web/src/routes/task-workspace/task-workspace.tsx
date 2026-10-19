@@ -234,6 +234,14 @@ function WorkspaceView({
   const { hints: keyHints, show: keysHeld } = useStripKeyHints(strip)
   const navigate = useNavigate()
 
+  // Where the Terminal tab opens the shells. Recorded only when the USER moves them — a column that
+  // merely shows (a deep link, a saved layout) must not repoint every task's terminal.
+  const [placement, setPlacement] = useState<TerminalPlacement>(readTerminalPlacement)
+  const place = useCallback((next: TerminalPlacement) => {
+    setPlacement(next)
+    writeTerminalPlacement(next)
+  }, [])
+
   // A view tab being dragged: the stage shows its drop zones until the drag ends. Set a tick late,
   // because changing the page under a drag that has only just started can cancel it.
   const [draggingView, setDraggingView] = useState<ViewId | null>(null)
@@ -245,16 +253,18 @@ function WorkspaceView({
   const dropViewHere = useCallback(
     (view: ViewId, at: number, mode: 'insert' | 'replace') => {
       setDraggingView(null)
+      if (view === 'terminal') place('column')
       dropView(view, at, mode)
     },
-    [dropView],
+    [dropView, place],
   )
   const openViewBeside = useCallback(
     (view: ViewId) => {
       const count = layouts.layout?.columns.length ?? 0
+      if (view === 'terminal') place('column')
       dropView(view, count, 'insert')
     },
-    [dropView, layouts.layout?.columns.length],
+    [dropView, layouts.layout?.columns.length, place],
   )
   const columnCount = layouts.layout?.columns.length ?? 0
   const closeColumnByDrop = fixedActive === null && columnCount > 1 ? layouts.closeColumn : undefined
@@ -296,14 +306,6 @@ function WorkspaceView({
   // The Terminal tab is a toggle that opens the shells where the user last put them: the bottom
   // drawer, or a column beside the view (a drag, ⌥-click or "Move to column" puts them there).
   const drawerOpen = drawer.open
-  const [placement, setPlacement] = useState<TerminalPlacement>(readTerminalPlacement)
-  const place = useCallback((next: TerminalPlacement) => {
-    setPlacement(next)
-    writeTerminalPlacement(next)
-  }, [])
-  useEffect(() => {
-    if (terminalColumnShown) place('column')
-  }, [terminalColumnShown, place])
   const { closeColumn, openBeside: openBesideLayout } = layouts
   const terminalColumns = layouts.layout?.columns
   const hideTerminalColumn = useCallback(() => {
@@ -315,13 +317,14 @@ function WorkspaceView({
   }, [closeColumn, fixedActive, openDeepLink, terminalColumns])
   const toggleTerminal = useCallback(() => {
     if (terminalColumnShown) return hideTerminalColumn()
-    if (placement === 'column') {
-      updateDrawer({ open: false })
-      openBesideLayout('terminal')
-      return
-    }
+    // No room for a column (the layout cap) falls back to the drawer rather than a dead click.
+    if (placement === 'column' && openBesideLayout('terminal')) return updateDrawer({ open: false })
     updateDrawer({ open: !drawerOpen })
   }, [drawerOpen, hideTerminalColumn, openBesideLayout, placement, terminalColumnShown, updateDrawer])
+  const moveTerminalToColumn = useCallback(() => {
+    place('column')
+    if (openBesideLayout('terminal')) updateDrawer({ open: false })
+  }, [openBesideLayout, place, updateDrawer])
   const moveTerminalToDrawer = useCallback(() => {
     place('drawer')
     updateDrawer({ open: true })
@@ -546,10 +549,7 @@ function WorkspaceView({
         open: drawerOpen,
         inColumn: terminalColumnShown,
         toggle: toggleTerminal,
-        openInColumn: () => {
-          updateDrawer({ open: false })
-          openBeside('terminal')
-        },
+        openInColumn: moveTerminalToColumn,
       },
       get focusComposer() {
         return composer() ? () => composer()?.focus() : null
@@ -745,10 +745,7 @@ function WorkspaceView({
             height={drawer.height}
             onHeightChange={(height) => updateDrawer({ height })}
             onClose={() => updateDrawer({ open: false })}
-            onMoveToColumn={() => {
-              updateDrawer({ open: false })
-              openBeside('terminal')
-            }}
+            onMoveToColumn={moveTerminalToColumn}
             onOpenInBrowser={openInBrowser}
           />
         </Suspense>

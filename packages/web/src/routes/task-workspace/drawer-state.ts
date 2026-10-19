@@ -130,3 +130,11 @@ export function writeTerminalPlacement(placement: TerminalPlacement): void {
     // Private mode or a full quota: the choice holds for this visit.
   }
 }
+
+/** Where a page that is not the workspace (Notes) sends the Terminal tab: the task with its drawer
+ *  marked open, or — when the user keeps the shells in a column — the terminal's own route. */
+export function terminalPathFor(taskId: string): string {
+  if (readTerminalPlacement() === 'column') return `/tasks/${taskId}/terminal`
+  writeDrawerState(taskId, { ...readDrawerState(taskId), open: true })
+  return `/tasks/${taskId}`
+}

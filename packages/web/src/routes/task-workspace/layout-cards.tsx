@@ -334,7 +334,6 @@ export function LayoutCards({
         </DropdownMenu>
       ) : null}
 
-
       {closeTarget ? (
         <span className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 rounded bg-background px-2 py-0.5 text-xs font-medium text-foreground shadow-sm">
           Drop to close this column
