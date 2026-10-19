@@ -139,6 +139,9 @@ const RETRY_TIMEOUT_MS = 30_000;
  */
 const CONNECTED_TTL_MS = 10 * 60_000;
 const UNSETTLED_TTL_MS = 60_000;
+/** How old a connected answer may be and still stand in for a probe that hung: a hang is no
+ *  evidence of a logout, and turning it into `unknown` refused runs on a busy host (b28d2993). */
+const TIMEOUT_BRIDGE_MS = 3 * CONNECTED_TTL_MS;
 
 /**
  * How long before the same provider may be self-checked again after a runtime rejection
@@ -664,6 +667,9 @@ export class ProviderAuthService {
    *  question, and sharing one slot would let whichever probe ran last speak for both. */
   private readonly completedProfiles = new Map<string, { status: ProviderStatus; timestamp: number }>();
   private readonly inFlightProfiles = new Map<string, Promise<ProviderStatus>>();
+  /** The last probe that answered connected, keyed by provider (default login) or `profileCacheKey`;
+   *  only {@link bridgeTimeout} reads it. */
+  private readonly lastConnected = new Map<string, { status: ProviderStatus; at: number; configDir: string | null }>();
 
   constructor(options?: {
     runCommand?: RunProviderCommand;
@@ -736,6 +742,7 @@ export class ProviderAuthService {
       authFailureId: current?.authFailureId ?? this.createAuthFailureId(),
     };
     this.runtimeFailures.set(provider, failure);
+    this.lastConnected.delete(provider);
     return {
       status: {
         provider,
@@ -762,6 +769,7 @@ export class ProviderAuthService {
       authFailureId: current?.authFailureId ?? this.createAuthFailureId(),
     };
     this.profileRuntimeFailures.set(key, failure);
+    this.lastConnected.delete(key);
     return {
       status: {
         provider,
@@ -911,8 +919,8 @@ export class ProviderAuthService {
   } {
     const generation = ++this.nextProbeGeneration;
     const raw = Promise.all(DESCRIPTORS.map((descriptor) => this.probe(descriptor)))
-      .then((providers) => {
-        const response = { providers };
+      .then((probed) => {
+        const response = { providers: probed.map((row) => this.bridgeTimeout(row.provider, row)) };
         if (!this.completed || generation >= this.completed.generation) {
           this.completed = { response, timestamp: this.now(), generation };
         }
@@ -962,10 +970,11 @@ export class ProviderAuthService {
     const startedAt = this.nextRuntimeFailureGeneration;
     const probe = this.probe(descriptorFor(provider), profile.configDir)
       .then((status) => {
-        const stamped: ProviderStatus = { ...status, profileId: profile.id };
+        const stamped = this.bridgeTimeout(key, { ...status, profileId: profile.id }, profile.configDir);
         this.completedProfiles.set(key, { status: stamped, timestamp: this.now() });
         const failure = this.profileRuntimeFailures.get(key);
-        if (failure && failure.generation <= startedAt && stamped.status === 'connected') {
+        // The FRESH answer only: a bridged hang is not evidence that the rejection was transient.
+        if (failure && failure.generation <= startedAt && status.status === 'connected') {
           this.profileRuntimeFailures.delete(key);
         }
         return this.withProfileFailure(stamped, profile.id);
@@ -993,11 +1002,34 @@ export class ProviderAuthService {
     this.completedProfiles.delete(profileCacheKey(provider, profileId));
   }
 
+  /**
+   * A probe that hung keeps the provider's last connected answer, if it is recent (b28d2993): every
+   * CLI is probed at once, and on a busy host a hang — even after #1517's longer re-ask — said
+   * nothing about the login, yet `unknown` made the action gate refuse every Start. Only a TIMEOUT
+   * is bridged; any answer the CLI actually gave, and every other inconclusive reason, stands.
+   */
+  private bridgeTimeout(key: string, status: ProviderStatus, configDir: string | null = null): ProviderStatus {
+    if (status.status === 'connected') {
+      this.lastConnected.set(key, { status, at: this.now(), configDir });
+      return status;
+    }
+    if (status.status !== 'unknown' || status.hint !== TIMEOUT_HINT) {
+      this.lastConnected.delete(key);
+      return status;
+    }
+    const last = this.lastConnected.get(key);
+    // A repointed account is a different login: its old answer is no bridge.
+    return last && last.configDir === configDir && this.now() - last.at <= TIMEOUT_BRIDGE_MS
+      ? last.status
+      : status;
+  }
+
   /** A REMOVED account takes its runtime incident with it, so a re-added one with the same id
    *  never inherits it. Not part of `forgetProfileStatus`: a refresh must keep the incident. */
   forgetProfile(provider: ProviderId, profileId: string): void {
     this.forgetProfileStatus(provider, profileId);
     this.profileRuntimeFailures.delete(profileCacheKey(provider, profileId));
+    this.lastConnected.delete(profileCacheKey(provider, profileId));
   }
 
   /**
