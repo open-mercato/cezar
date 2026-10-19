@@ -23,7 +23,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir, tmpdir } from 'node:os';
 import { cezarHomeDir } from './paths.ts';
-import { detectInstallKind } from './self-update/layout.ts';
+import { runsFromCheckout } from './self-update/layout.ts';
 import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from './workspace/config.ts';
 
 export const DEFAULT_TELEMETRY_URL = 'https://stats.openmercato.cloud';
@@ -165,7 +165,7 @@ export function telemetryVersion(raw: string, checkout = false): string {
  *  dev build whatever its package.json says. Resolves once the stored answer is known. */
 export async function initTelemetry(opts: { version: string }): Promise<void> {
   fullVersion = opts.version;
-  version = telemetryVersion(opts.version, detectInstallKind(process.argv[1] ?? '') === 'checkout');
+  version = telemetryVersion(opts.version, runsFromCheckout(process.argv[1] ?? ''));
   refreshProjectRoots();
   await loadTelemetryConsent();
 }

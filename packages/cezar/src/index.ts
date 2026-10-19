@@ -296,10 +296,11 @@ async function serveCommand(
   const providerRuntimeAuth = new ProviderRuntimeAuthObserver(providerAuth, (status) => {
     workspaceEvents.emit('provider-status', status);
   });
-  // Shown on health, the banner and telemetry; update checks compare the raw version.
+  // Shown on health and the banner; update checks compare the raw version.
   const version = shownVersion();
   // Opt-in telemetry: every send below is a no-op until the user agreed (docs/telemetry.md).
-  await initTelemetry({ version });
+  // It gets the raw version (`build.version_full`) and derives `-dev` itself.
+  await initTelemetry({ version: readOwnVersion() });
   installCrashReporter();
   track('app_start');
   startDailyPing();

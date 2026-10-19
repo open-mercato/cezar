@@ -450,11 +450,13 @@ fn update_cezar_command(app: AppHandle, window: WebviewWindow, shell: tauri::Sta
 }
 
 /// semver-ish ordering for what cezar publishes (`0.11.1`, `0.11.1-nightly.20260924.49`):
-/// numeric core, a release above any prerelease of the same core, then identifiers.
+/// numeric core, a release above any prerelease of the same core, then identifiers. A
+/// checkout's `0.15.2-dev` (#1530, display only) reads as its release, never as older.
 fn version_newer(candidate: &str, current: &str) -> bool {
     fn parse(raw: &str) -> Option<([u64; 3], Vec<String>)> {
         let raw = raw.trim().trim_start_matches('v').split('+').next()?;
         let (core, pre) = match raw.split_once('-') {
+            Some((core, "dev")) => (core, Vec::new()),
             Some((core, pre)) => (core, pre.split('.').map(str::to_owned).collect::<Vec<_>>()),
             None => (raw, Vec::new()),
         };
@@ -2074,6 +2076,13 @@ mod tests {
         assert_eq!(channel_tag(Some("nightly")), Some("nightly"));
         assert_eq!(channel_tag(Some("stable")), Some("latest"));
         assert_eq!(channel_tag(None), Some("latest"));
+    }
+
+    #[test]
+    fn a_checkout_dev_version_is_not_older_than_its_release() {
+        assert!(!version_newer("0.15.2", "0.15.2-dev"));
+        assert!(version_newer("0.15.3", "0.15.2-dev"));
+        assert!(version_newer("0.15.2", "0.15.2-nightly.20261019.4"));
     }
 
     #[test]

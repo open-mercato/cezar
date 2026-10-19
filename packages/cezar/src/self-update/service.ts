@@ -71,6 +71,11 @@ export class SelfUpdateService {
     this.pulls = new OpenPullsCache(deps.pulls ?? (() => fetchOpenPulls(CEZAR_REPO, { env: this.env })));
   }
 
+  /** The raw running version — what update checks compare, never the shown `-dev` one. */
+  get runningVersion(): string {
+    return this.deps.version;
+  }
+
   /** The configured channel: workspace config wins, then `CEZ_UPDATE_CHANNEL`, then stable. */
   async channel(): Promise<UpdateChannel> {
     const config = await loadWorkspaceConfig();

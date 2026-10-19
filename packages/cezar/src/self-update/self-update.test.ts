@@ -7,6 +7,7 @@ import { currentEntry, activate, activeId, assertSafeId, detectInstallKind, inst
 import { fetchPackageDocument, RegistryCache, registryPath } from './registry.ts';
 import { SelfUpdateService } from './service.ts';
 import { restartArgs } from './restart.ts';
+import { runSelfUpdateCommand } from './cli.ts';
 import { classifyVersion, compareVersions, devVersion, isNewer } from './semver.ts';
 
 describe('semver', () => {
@@ -280,6 +281,32 @@ describe('update when idle', () => {
     idle = true;
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(restart).toHaveBeenCalledTimes(1);
+  });
+
+  // A checkout shows `0.12.0-dev`; `cezar update` must still compare the raw `0.12.0`.
+  it('cezar update from a checkout of the latest release is already up to date', async () => {
+    vi.stubEnv('CEZ_HOME', home);
+    activate('0.12.1', env);
+    const registry = (async () =>
+      new Response(JSON.stringify({ 'dist-tags': { latest: '0.12.0' }, versions: { '0.12.0': {} } }), { status: 200 })) as unknown as typeof fetch;
+    const checkout = new SelfUpdateService({
+      pkgName: '@open-mercato/cezar',
+      version: '0.12.0',
+      displayVersion: '0.12.0-dev',
+      entry: join(home, 'repo', 'dist', 'index.js'),
+      restart,
+      env: { ...env, CEZ_UPDATE_CHANNEL: 'stable' },
+      registry: new RegistryCache('@open-mercato/cezar', registry),
+    });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(await runSelfUpdateCommand('update', [], { service: checkout, modifyPath: false })).toBe(0);
+      expect(log.mock.calls.flat().join('\n')).toContain('already up to date');
+      expect(activeId(env)).toBe('0.12.1');
+    } finally {
+      log.mockRestore();
+      vi.unstubAllEnvs();
+    }
   });
 
   it('refuses up front when this install cannot update itself', () => {
