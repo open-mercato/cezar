@@ -51,6 +51,14 @@ describe('the start recipe', () => {
     expect(effectiveStartApp(await readStartApp(dataDir, root))?.scope).toBe('project');
   });
 
+  it('refuses to save a team recipe over a malformed repo config instead of replacing it', async () => {
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, 'config.json'), '{ "baseBranch": "develop", ');
+
+    await expect(writeStartApp(dataDir, root, 'project', { services: ['npm run dev'] })).rejects.toThrow(/malformed/);
+    expect(readFileSync(join(dataDir, 'config.json'), 'utf8')).toBe('{ "baseBranch": "develop", ');
+  });
+
   it('reads a malformed recipe as none, and has nowhere to keep a personal one for an unregistered project', async () => {
     mkdirSync(dataDir, { recursive: true });
     writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ startApp: { services: [] } }));

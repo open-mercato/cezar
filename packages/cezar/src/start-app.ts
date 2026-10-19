@@ -3,6 +3,8 @@ import { join } from 'node:path';
 
 import { startAppRecipeSchema, type EffectiveStartApp, type StartAppRecipe, type StartAppState } from '@open-mercato/cezar-contract';
 
+import { LifecycleConfigError, readLifecycleConfigRaw, withLifecycleConfigLock } from './worktree-lifecycle/config.ts';
+import { atomicLifecycleWrite, LifecycleStoreError } from './worktree-lifecycle/store.ts';
 import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from './workspace/config.ts';
 
 /**
@@ -17,13 +19,18 @@ function parse(value: unknown): StartAppRecipe | null {
   return parsed.success ? parsed.data : null;
 }
 
-async function readRaw(dataDir: string): Promise<Record<string, unknown>> {
+function parseObject(text: string): Record<string, unknown> | null {
   try {
-    const parsed: unknown = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8'));
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+    const parsed: unknown = JSON.parse(text);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
   } catch {
-    return {};
+    return null;
   }
+}
+
+async function readRaw(dataDir: string): Promise<Record<string, unknown>> {
+  const text = await readFile(join(dataDir, 'config.json'), 'utf8').catch(() => null);
+  return (text === null ? null : parseObject(text)) ?? {};
 }
 
 export async function readStartApp(dataDir: string, root: string): Promise<StartAppState> {
@@ -49,12 +56,25 @@ export async function writeStartApp(
   recipe: StartAppRecipe | null,
 ): Promise<boolean> {
   if (scope === 'project') {
-    // Written the way `PUT /config` writes this file: plain, readable, committable.
-    const raw = await readRaw(dataDir);
-    if (recipe) raw[KEY] = recipe;
-    else delete raw[KEY];
-    await mkdir(dataDir, { recursive: true });
-    await writeFile(join(dataDir, 'config.json'), `${JSON.stringify(raw, null, 2)}\n`, 'utf8');
+    // Written the way `PUT /config` writes this file: under the config writers' shared lock, and a
+    // malformed file is refused rather than replaced by `{ startApp }`.
+    const apply = (raw: Record<string, unknown>) => {
+      if (recipe) raw[KEY] = recipe;
+      else delete raw[KEY];
+      return raw;
+    };
+    const path = join(dataDir, 'config.json');
+    try {
+      await withLifecycleConfigLock(root, async () => atomicLifecycleWrite(path, apply(await readLifecycleConfigRaw(root))));
+    } catch (error) {
+      // The lifecycle store refuses a symlinked data dir; the plain write `PUT /config` falls back to.
+      if (!(error instanceof LifecycleStoreError)) throw error;
+      const text = await readFile(path, 'utf8').catch(() => null);
+      const raw = text === null ? {} : parseObject(text);
+      if (!raw) throw new LifecycleConfigError('Project configuration is malformed; fix .ai/cezar/config.json first');
+      await mkdir(dataDir, { recursive: true });
+      await writeFile(path, `${JSON.stringify(apply(raw), null, 2)}\n`, 'utf8');
+    }
     return true;
   }
   let found = false;

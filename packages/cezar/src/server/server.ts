@@ -7284,9 +7284,11 @@ export function createApp(deps: ServerDeps) {
       if (refusal) return c.json({ error: refusal }, 409);
       const { root, dataDir } = c.get('project');
       const { scope, recipe } = c.req.valid('json');
-      if (!(await writeStartApp(dataDir, root, scope, recipe))) {
-        return c.json({ error: 'This project is not in your project list, so it cannot keep a recipe of your own.' }, 409);
-      }
+      try {
+        if (!(await writeStartApp(dataDir, root, scope, recipe))) {
+          return c.json({ error: 'This project is not in your project list, so it cannot keep a recipe of your own.' }, 409);
+        }
+      } catch (error) { return c.json({ error: error instanceof Error ? error.message : 'The start recipe could not be saved' }, 409); }
       return c.json(startAppStateSchema.parse(await readStartApp(dataDir, root)));
     })
     // Deliberately NOT policy-gated: stopping a shell is the one terminal action that reduces

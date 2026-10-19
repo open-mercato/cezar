@@ -119,11 +119,11 @@ export async function installCommand(worktree: string): Promise<string | null> {
   if ((await readIfPresent(join(worktree, 'package.json'))) === null) return null;
   const installed = await readdir(join(worktree, 'node_modules')).catch(() => [] as string[]);
   if (installed.some((name) => !name.startsWith('.'))) return null;
-  const has = async (name: string) => (await readdir(worktree).catch(() => [] as string[])).includes(name);
-  if (await has('pnpm-lock.yaml')) return 'pnpm install --frozen-lockfile';
-  if (await has('yarn.lock')) return 'yarn install --frozen-lockfile';
-  if ((await has('bun.lock')) || (await has('bun.lockb'))) return 'bun install --frozen-lockfile';
-  if (await has('package-lock.json')) return 'npm ci';
+  const files = new Set(await readdir(worktree).catch(() => [] as string[]));
+  if (files.has('pnpm-lock.yaml')) return 'pnpm install --frozen-lockfile';
+  if (files.has('yarn.lock')) return 'yarn install --frozen-lockfile';
+  if (files.has('bun.lock') || files.has('bun.lockb')) return 'bun install --frozen-lockfile';
+  if (files.has('package-lock.json')) return 'npm ci';
   return 'npm install';
 }
 
