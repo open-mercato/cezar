@@ -2487,3 +2487,37 @@ describe('RunStore — janitor cost once its answer is settled (#540)', () => {
     expect(store.getRun(run.id)?.referencedIssueCandidates).toEqual([issue(8)]);
   });
 });
+
+describe('RunStore — pruning spares live runs (telemetry 73c6e796)', () => {
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-prune-'));
+    vi.useFakeTimers({ toFake: ['Date'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('keeps an old running parent and its dispatch root when new runs push it past the cap', () => {
+    const store = RunStore.open(dataDir);
+    let clock = Date.parse('2026-01-01T00:00:00.000Z');
+    const create = (title: string) => {
+      vi.setSystemTime((clock += 1_000));
+      return store.createRun({ title, workflow: 'quick-task', task: title, steps: [] });
+    };
+    const root = create('root');
+    const parent = create('parent');
+    const stale = create('stale done run');
+    store.updateRun(root.id, { status: 'review', dispatch: { rootRunId: root.id } });
+    store.updateRun(parent.id, { status: 'running', dispatch: { rootRunId: root.id, parentRunId: root.id } });
+    store.updateRun(stale.id, { status: 'done' });
+    for (let i = 0; i < 300; i++) create(`filler ${i}`);
+
+    expect(store.getRun(parent.id)).toBeDefined();
+    expect(store.getRun(root.id)).toBeDefined();
+    expect(store.getRun(stale.id)).toBeUndefined();
+    // The dispatch path's next write after creating a child: it threw `unknown run` before.
+    expect(() => store.appendEvent(parent.id, { type: 'note', message: 'dispatched' })).not.toThrow();
+  });
+});

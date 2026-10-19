@@ -473,6 +473,8 @@ const MAX_RUNS_KEPT = 300;
 /** Every save rewrites the whole index, and a live run touches its record at event rate. */
 const SAVE_DEBOUNCE_MS = 1_000;
 const MAX_ARCHIVED_KEPT = 500;
+/** Statuses the run manager still acts on — a record in one of them must outlive pruning. */
+const LIVE_STATUSES: ReadonlySet<string> = new Set<RunStatus>(['queued', 'running', 'waiting']);
 
 // Any host: GitHub Enterprise lives on arbitrary domains (`isGithubHost` can't be asked from a regex).
 const PR_URL_RE = /https:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
@@ -1811,12 +1813,22 @@ export class RunStore extends EventEmitter {
     return this.runs.delete(id);
   }
 
+  /** A live run, and the dispatch parent/root of one, is never pruned: the run manager still
+   *  writes to it, and evicting a long-lived parent while it dispatched threw `unknown run`
+   *  (telemetry 73c6e796). The cap is a soft bound — live runs count toward it but never leave. */
   private pruneOldRuns(): void {
     const all = this.listRuns();
+    const pinned = new Set<string>();
+    for (const run of all) {
+      if (!LIVE_STATUSES.has(run.status)) continue;
+      pinned.add(run.id);
+      if (run.dispatch?.parentRunId) pinned.add(run.dispatch.parentRunId);
+      if (run.dispatch?.rootRunId) pinned.add(run.dispatch.rootRunId);
+    }
     const stalePool = [
       ...all.filter((r) => !r.archived).slice(MAX_RUNS_KEPT),
       ...all.filter((r) => r.archived).slice(MAX_ARCHIVED_KEPT),
-    ];
+    ].filter((r) => !pinned.has(r.id));
     for (const stale of stalePool) {
       this.forget(stale.id);
       try {
