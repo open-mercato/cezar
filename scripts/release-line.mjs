@@ -130,12 +130,11 @@ function github() {
 
 const files = () => [...changed].map(([p, content]) => ({ path: p, content }));
 
-async function openAutoMergedPr(gh, { branch, parentSha, message, title, body }) {
+async function openPr(gh, { branch, parentSha, message, title, body }) {
   const sha = await gh.commitFiles({ parentSha, files: files(), message });
   await gh.setBranch(branch, sha);
   const pr = await gh.openPullRequest({ head: branch, base: 'main', title, body });
-  const auto = await gh.enableAutoMerge(pr);
-  log(`${pr.html_url}${auto ? ' (auto-merge on)' : ' (auto-merge unavailable — merge it once green)'}`);
+  log(`opened ${pr.html_url}`);
   return pr.html_url;
 }
 
@@ -159,7 +158,7 @@ async function cut() {
     if (existing) log(`${releaseBranch} already exists at ${existing.slice(0, 12)} — left as it is`);
     else await gh.createBranch(releaseBranch, head);
     await gh.ensureLabel(`backport ${releaseBranch}`, 'c5def5', `Cherry-pick into ${releaseBranch} once merged`);
-    prUrl = await openAutoMergedPr(gh, {
+    prUrl = await openPr(gh, {
       branch: `chore/open-v${next}`,
       parentSha: head,
       message: `chore(release): open ${next} on main\n\n${releaseBranch} now carries ${current} and its patches.`,
@@ -258,7 +257,7 @@ async function announce() {
   if (carried !== mainChangelog) {
     changed.clear();
     changed.set('CHANGELOG.md', carried);
-    changelogPr = await openAutoMergedPr(gh, {
+    changelogPr = await openPr(gh, {
       branch: `chore/changelog-v${version}`,
       parentSha: mainSha,
       message: `docs(changelog): add the ${version} entry`,

@@ -71,14 +71,6 @@ export function githubClient({ token, repository }) {
       if (existing.length > 0) return existing[0];
       return ok('POST', `${r}/pulls`, { head, base, title, body });
     },
-    /** Best effort: auto-merge must be allowed in the repo settings. Returns whether it took. */
-    async enableAutoMerge(pr, method = 'SQUASH') {
-      const { status, data } = await call('POST', '/graphql', {
-        query: 'mutation($id: ID!, $m: PullRequestMergeMethod!) { enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: $m }) { clientMutationId } }',
-        variables: { id: pr.node_id, m: method },
-      });
-      return status === 200 && !data?.errors;
-    },
     async ensureLabel(name, color, description) {
       const { status } = await call('POST', `${r}/labels`, { name, color, description });
       if (status !== 201 && status !== 422) throw new Error(`creating label "${name}" → ${status}`);

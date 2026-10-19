@@ -2,9 +2,8 @@ name: Backport
 
 # Cherry-picks a merged PR onto another line (docs/publishing.md § Release lines): label it
 # `backport release/vX.Y.x` (fix on main → a release line) or `backport main` (a hotfix that
-# landed on a release line first), before or after the merge. Each label opens one PR with
-# auto-merge requested; a conflict opens a draft with the conflict committed and instructions
-# on the original PR.
+# landed on a release line first), before or after the merge. Each label opens one PR; a
+# conflict opens a draft with the conflict committed and instructions on the original PR.
 on:
   pull_request_target:
     types: [closed, labeled]
@@ -36,6 +35,4 @@ jobs:
           # A PR opened with GITHUB_TOKEN runs no CI, so RELEASE_TOKEN is preferred when set.
           github_token: ${{ secrets.RELEASE_TOKEN || github.token }}
           label_pattern: '^backport (main|release/v\d+\.\d+\.x)$'
-          auto_merge_enabled: true
-          auto_merge_method: squash
           experimental: '{"conflict_resolution": "draft_commit_conflicts"}'

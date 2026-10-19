@@ -82,8 +82,8 @@ or tagging anything.
 ### Hotfix from telemetry
 
 1. Fix on `main` in a PR labelled `backport release/v0.15.x`.
-2. On merge, Backport opens the cherry-pick PR on `release/v0.15.x`; CI runs and
-   it auto-merges once green and approved.
+2. On merge, Backport opens the cherry-pick PR on `release/v0.15.x`; approve and
+   merge it once CI is green.
 3. Run **Release** from `release/v0.15.x` → `0.15.3` is on npm.
 
 ### Next minor
@@ -207,17 +207,16 @@ On **GitHub** (this repository):
    *Contents* and *Pull requests* read/write on this repo. GitHub runs no CI on
    a PR opened with the workflow's own `GITHUB_TOKEN`, so without it the
    main-bump, changelog and backport PRs wait for a manual re-run of their checks.
-7. Settings → General → **Allow auto-merge**, so those PRs merge themselves once
-   green and approved (without it they stay open for a click).
-8. A ruleset for `release/v*` (no deletion, no force-push; PRs required) with the
+   Those PRs are never auto-merged: approve and merge them like any other.
+7. A ruleset for `release/v*` (no deletion, no force-push; PRs required) with the
    `RELEASE_TOKEN` identity on its bypass list — the Release workflow commits
    the version bump straight to the line through the API (GitHub-signed).
-9. Nothing else — the workflows declare their own `permissions:` blocks, so
+8. Nothing else — the workflows declare their own `permissions:` blocks, so
    repo-level Actions defaults can stay read-only.
 
 After the first stable publish under a new package name (post-rename only):
 
-10. Publish a final forwarding patch of the old scoped package and deprecate
+9. Publish a final forwarding patch of the old scoped package and deprecate
    it: `npm deprecate <old-name> "moved to <new-name> — npx cezar-run still works"`.
 
 ## Verifying a preview
