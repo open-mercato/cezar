@@ -107,4 +107,3 @@ export function writeDrawerState(taskId: string, state: DrawerState): void {
     // Private mode or a full quota: the drawer still works for this visit.
   }
 }
-

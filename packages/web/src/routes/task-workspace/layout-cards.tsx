@@ -687,7 +687,11 @@ function SaveLayoutDialog({
               onFocus={(event) => event.currentTarget.select()}
             />
             {reserved ? (
-              <p className="text-xs text-danger">That name belongs to a view tab — pick another.</p>
+              <p className="text-xs text-danger">
+                {name === WORKING_LAYOUT_NAME
+                  ? `“${WORKING_LAYOUT_NAME}” is the task's unsaved arrangement — pick another.`
+                  : 'That name belongs to a view tab — pick another.'}
+              </p>
             ) : taken.has(name) ? (
               <p className="text-xs text-muted-foreground">Replaces the saved layout “{name}”.</p>
             ) : null}
