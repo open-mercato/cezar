@@ -20,6 +20,10 @@
 >   counts as it. A terminal's detected address opens in a Preview column (§7).
 > - **Main's run header.** The layout strip fills the header's tab row (`RunHeader` `tabs` slot);
 >   there is no separate overview header mode. Notes keeps its own page, linked from the strip.
+>   Tab order (2026-10-19): Chat, Changes, Commits, Code, Preview, Graph, Terminal. The Terminal
+>   tab TOGGLES the drawer (it is the drawer's one control — no separate header button); dragged
+>   or ⌥-clicked it becomes a column. Saved layouts are not cards on the strip but one compact
+>   `Layout` menu at its right end (switch, new, rename, close).
 >   `/tasks/:id/commits/:sha` stays a standalone page; inside a column, Commits picks in place.
 > - **`CEZ_TERMINAL`** unset follows `localHandoff` (on locally, off hosted) — main has no sign-in.
 >   New shells do not receive brutus's per-task slot environment (`taskSlotEnv`).

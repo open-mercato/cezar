@@ -117,7 +117,7 @@ export function buildTaskCommands(input: TaskCommandInput, on: TaskCommandHandle
     ...openCommands(input, on),
     ...copyCommands(input, on),
   ]
-  const strip = stripEntries(stripViews(input.run, input.workspace))
+  const strip = stripEntries(stripViews(input.run, input.workspace, input.terminalAvailable))
   return [...commands, ...tabCommands(strip, commands)]
 }
 
@@ -248,7 +248,7 @@ function gitCommands({ git, prUrl }: TaskCommandInput, on: TaskCommandHandlers):
 /** On screen, views switch the workspace's columns; for another task they navigate to its route. */
 function viewCommands({ run, workspace, terminalAvailable }: TaskCommandInput, on: TaskCommandHandlers): TaskCommand[] {
   const base = `/tasks/${run.id}`
-  const views = stripViews(run, workspace)
+  const views = stripViews(run, workspace, terminalAvailable)
   const commands: TaskCommand[] = views.map((view, index) => {
     const Icon = VIEW_ICONS[view]
     return {
@@ -258,21 +258,12 @@ function viewCommands({ run, workspace, terminalAvailable }: TaskCommandInput, o
       icon: <Icon aria-hidden="true" />,
       keywords: ['view', 'go', 'tab', view],
       ...(workspace && index < 9 ? { shortcut: String(index + 1) } : {}),
-      pressed: workspace?.activeView === view,
+      // Terminal's tab toggles the drawer (`openView`), so it is pressed while the shells show.
+      pressed: view === 'terminal' && workspace ? workspace.terminal.open || workspace.terminal.inColumn : workspace?.activeView === view,
       perform: workspace ? () => workspace.openView(view) : () => on.navigate(`${base}/${VIEW_PATHS[view]}`),
       ...(workspace ? { performBeside: () => workspace.openViewBeside(view) } : {}),
     }
   })
-  if (terminalAvailable && !workspace) {
-    commands.push({
-      id: 'view:terminal',
-      group: 'views',
-      label: viewLabel('terminal'),
-      icon: icon(TerminalIcon),
-      keywords: ['view', 'shell'],
-      perform: () => on.navigate(`${base}/${VIEW_PATHS.terminal}`),
-    })
-  }
   commands.push({
     id: 'view:notes',
     group: 'views',
@@ -286,8 +277,11 @@ function viewCommands({ run, workspace, terminalAvailable }: TaskCommandInput, o
 }
 
 /** The views on a task's tab row: the workspace's, or — off it (Notes) — the same fixed set. */
-function stripViews(run: ApiRun, workspace: TaskWorkspaceBridge | null): readonly ViewId[] {
-  return workspace?.views ?? FIXED_VIEW_ORDER.filter((view) => view !== 'graph' || Boolean(run.workflowDef))
+function stripViews(run: ApiRun, workspace: TaskWorkspaceBridge | null, terminalAvailable: boolean): readonly ViewId[] {
+  return (
+    workspace?.views ??
+    FIXED_VIEW_ORDER.filter((view) => (view !== 'graph' || Boolean(run.workflowDef)) && (view !== 'terminal' || terminalAvailable))
+  )
 }
 
 /** `tab:N` — the tab row's Nth numbered tab (`stripEntries`: views, then Notes), like a browser's

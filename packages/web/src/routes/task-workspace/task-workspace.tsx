@@ -25,7 +25,6 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
-import { Separator } from '@/components/ui/separator'
 import { Link, useNavigate } from '@/lib/project-router'
 import { isUnread } from '@/lib/read-state'
 import { recordTaskVisit } from '@/lib/recent-tasks'
@@ -287,6 +286,21 @@ function WorkspaceView({
   const cover = usePanelCover<HTMLDivElement>(maximized, exitMaximized)
   const maximize = useMemo(() => ({ maximized, toggle: toggleMaximized }), [maximized, toggleMaximized])
 
+  // The Terminal tab is a toggle: it docks the drawer under whatever shows (a drag makes it a column
+  // instead). While a column already shows the shells there is nothing to toggle.
+  const drawerOpen = drawer.open
+  const selectFixed = useCallback(
+    (view: ViewId) => {
+      if (view !== 'terminal') return openDeepLink(view)
+      if (!terminalColumnShown) updateDrawer({ open: !drawerOpen })
+    },
+    [drawerOpen, openDeepLink, terminalColumnShown, updateDrawer],
+  )
+  const onViews = useMemo<readonly ViewId[]>(
+    () => (drawerShown || terminalColumnShown ? ['terminal'] : []),
+    [drawerShown, terminalColumnShown],
+  )
+
   // Memoized: `RunHeader` is memo'd on prop identity.
   const tabs = useMemo(
     () => (
@@ -295,7 +309,8 @@ function WorkspaceView({
         active={layouts.state.active}
         fixedViews={fixedViews}
         fixedActive={fixedActive}
-        onSelectFixed={openDeepLink}
+        onViews={onViews}
+        onSelectFixed={selectFixed}
         onSelect={selectLayout}
         onRename={renameLayout}
         onClose={closeLayout}
@@ -314,7 +329,8 @@ function WorkspaceView({
       layouts.state.active,
       fixedViews,
       fixedActive,
-      openDeepLink,
+      onViews,
+      selectFixed,
       selectLayout,
       renameLayout,
       closeLayout,
@@ -329,39 +345,9 @@ function WorkspaceView({
     ],
   )
 
-  const drawerOpen = drawer.open
   const trailing = useMemo(
     () => (
       <div className="mb-1 flex shrink-0 items-center gap-0.5">
-        {terminalAllowed ? (
-          // The terminal's ONE control: it opens the drawer under any view, and stays lit while
-          // the shells sit in a column of this layout instead.
-          <Button
-            variant="outline"
-            size="sm"
-            data-action="toggle-terminal"
-            aria-label={drawerOpen ? 'Hide terminal' : 'Show terminal'}
-            aria-pressed={drawerOpen || terminalColumnShown}
-            disabled={terminalColumnShown}
-            title={
-              terminalColumnShown
-                ? 'The terminal is open in a column of this layout'
-                : drawerOpen
-                  ? 'Hide terminal — processes keep running (`)'
-                  : 'Terminal (`)'
-            }
-            className={cn(
-              'shrink-0 disabled:opacity-100',
-              drawerOpen || terminalColumnShown ? 'bg-muted text-foreground' : 'text-muted-foreground',
-            )}
-            onClick={() => updateDrawer({ open: !drawerOpen })}
-          >
-            <TerminalIcon aria-hidden="true" />
-            <span className="max-lg:hidden">Terminal</span>
-            {terminalColumnShown ? <span className="text-xs font-normal text-muted-foreground max-xl:hidden">in column</span> : null}
-          </Button>
-        ) : null}
-        <Separator orientation="vertical" className="mx-1 data-[orientation=vertical]:h-5" />
         <Button
           variant="outline"
           size="sm"
@@ -376,7 +362,7 @@ function WorkspaceView({
         </Button>
       </div>
     ),
-    [drawerOpen, terminalAllowed, terminalColumnShown, toggleMaximized, updateDrawer],
+    [toggleMaximized],
   )
 
   /**
@@ -386,7 +372,10 @@ function WorkspaceView({
    */
   const stripOrder = useMemo(
     () => [
-      ...fixedViews.map((view) => ({ select: () => openDeepLink(view), active: fixedActive === view })),
+      // The Terminal tab toggles the drawer rather than switching to a card, so `[` `]` skip it.
+      ...fixedViews
+        .filter((view) => view !== 'terminal')
+        .map((view) => ({ select: () => openDeepLink(view), active: fixedActive === view })),
       ...cardLayouts.map((layout) => ({
         select: () => selectLayout(layout.name),
         active: fixedActive === null && layout.name === layouts.state.active,
@@ -398,10 +387,10 @@ function WorkspaceView({
   // is the number the tab wears. `[` `]` still step through every card, layouts included.
   const numbered = useMemo(
     () => [
-      ...fixedViews.map((view) => () => openDeepLink(view)),
+      ...fixedViews.map((view) => () => selectFixed(view)),
       () => navigate(`/tasks/${run.id}/notes`),
     ],
-    [fixedViews, openDeepLink, navigate, run.id],
+    [fixedViews, selectFixed, navigate, run.id],
   )
   const keys = useRef({ stripOrder, numbered, toggleMaximized, terminalAllowed, drawerOpen, updateDrawer })
   keys.current = { stripOrder, numbered, toggleMaximized, terminalAllowed, drawerOpen, updateDrawer }
@@ -502,7 +491,7 @@ function WorkspaceView({
       runId: run.id,
       views: fixedViews,
       activeView: fixedActive,
-      openView: openDeepLink,
+      openView: selectFixed,
       openViewBeside,
       layouts: cardLayouts.map((layout) => ({
         name: layout.name,

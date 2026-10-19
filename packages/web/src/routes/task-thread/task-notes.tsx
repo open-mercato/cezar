@@ -6,6 +6,7 @@ import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { useNavigate } from '@/lib/project-router'
 
 import { GitTabLoadError, GitTabLoading } from '../task-git/git-tab-loading'
+import { readDrawerState, writeDrawerState } from '../task-workspace/drawer-state'
 import { LayoutCards } from '../task-workspace/layout-cards'
 import { FIXED_VIEW_ORDER, VIEW_PATHS } from '../task-workspace/layout-state'
 import { stripEntries, useStripKeyHints } from '../task-workspace/strip'
@@ -54,7 +55,13 @@ function NotesHeader({ run }: { run: ApiRun }) {
         layouts={[]}
         active=""
         fixedViews={fixedViews}
-        onSelectFixed={(view) => navigate(`/tasks/${run.id}/${VIEW_PATHS[view]}`)}
+        onSelectFixed={(view) => {
+          // As on the workspace, the Terminal tab means the drawer: back to the task with it open.
+          if (view === 'terminal') {
+            writeDrawerState(run.id, { ...readDrawerState(run.id), open: true })
+            navigate(`/tasks/${run.id}`)
+          } else navigate(`/tasks/${run.id}/${VIEW_PATHS[view]}`)
+        }}
         onSelect={noop}
         onRename={noop}
         onClose={noop}

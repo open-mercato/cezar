@@ -136,7 +136,17 @@ function renderWorkspace(view?: ViewId) {
 
 const text = (element: Element | null | undefined) => element?.textContent?.replace(/\s+/g, ' ').trim()
 const cardNames = () => Array.from(document.querySelectorAll('[data-slot="layout-card"]')).map(text)
-const activeCard = () => text(document.querySelector('[data-slot="layout-card"][data-active]'))
+// The view tab that shows, else the saved layout the Layout menu names.
+const activeCard = () =>
+  text(document.querySelector('[data-slot="layout-card"][data-active]')) ??
+  document.querySelector('[data-action="layouts"][data-active-layout]')?.getAttribute('data-active-layout') ??
+  undefined
+const terminalTab = () => document.querySelector<HTMLElement>('[data-slot="layout-card"][data-fixed="terminal"]')
+
+async function newLayout() {
+  fireEvent.keyDown(screen.getByRole('button', { name: /^Layout/ }), { key: 'Enter' })
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'New layout' }))
+}
 const columnViews = () =>
   Array.from(document.querySelectorAll('[data-slot="workspace-column"]')).map((column) => column.getAttribute('data-view'))
 
@@ -157,8 +167,8 @@ describe('the task workspace (main)', () => {
     renderWorkspace()
     await ready()
 
-    // Terminal has no tab: the Terminal button is its one control.
-    expect(cardNames()).toEqual(['Chat', 'Changes', 'Commits', 'Code', 'Preview'])
+    // Changes second; Terminal last, as a tab that toggles the drawer.
+    expect(cardNames()).toEqual(['Chat', 'Changes', 'Commits', 'Code', 'Preview', 'Terminal'])
     expect(activeCard()).toBe('Chat')
     // One strip, never both: the old route links are gone from the header.
     expect(screen.queryByRole('link', { name: 'Changes' })).toBeNull()
@@ -179,8 +189,8 @@ describe('the task workspace (main)', () => {
     expect(hints()).toEqual([])
 
     fireEvent.keyDown(window, { key: 'Meta', metaKey: true })
-    // The five views, then Notes — saved layouts are not numbered.
-    await waitFor(() => expect(hints()).toEqual(['1', '2', '3', '4', '5', '6']))
+    // The six views, then Notes — saved layouts are not numbered.
+    await waitFor(() => expect(hints()).toEqual(['1', '2', '3', '4', '5', '6', '7']))
     fireEvent.keyUp(window, { key: 'Meta' })
     await waitFor(() => expect(hints()).toEqual([]))
     vi.unstubAllGlobals()
@@ -242,7 +252,7 @@ describe('the task workspace (main)', () => {
 
     expect(cardNames()).not.toContain('Terminal')
     expect(screen.queryByRole('button', { name: /terminal/i })).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'New layout' }))
+    await newLayout()
     await waitFor(() => expect(document.querySelector('[data-slot="view-tiles-stage"]')).not.toBeNull())
     expect(document.querySelector('[data-slot="view-tiles-stage"] [data-view="terminal"]')).toBeNull()
     // The Preview needs no shell: it is offered either way.
@@ -274,7 +284,7 @@ describe('the task workspace (main)', () => {
     renderWorkspace()
     await ready()
 
-    fireEvent.click(screen.getByRole('button', { name: 'New layout' }))
+    await newLayout()
     await pickTile('session')
     await waitFor(() => expect(columnViews()).toEqual(['session']))
     fireEvent.click(screen.getByRole('button', { name: 'Split view' }))
@@ -284,8 +294,10 @@ describe('the task workspace (main)', () => {
     const terminal = await screen.findByTestId('terminal')
     expect(terminal.dataset.fill).toBe('')
     expect(terminal.dataset.run).toBe('r1')
-    // The drawer toggle steps aside while a column already shows the shells.
-    expect(screen.getByRole('button', { name: 'Show terminal' }).hasAttribute('disabled')).toBe(true)
+    // The Terminal tab stays lit while a column shows the shells, and opens no second view of them.
+    expect(terminalTab()?.hasAttribute('data-on')).toBe(true)
+    fireEvent.click(terminalTab()!)
+    expect(screen.getAllByTestId('terminal')).toHaveLength(1)
 
     await waitFor(() => {
       const saved = reviveState(hostLayouts.r1 ?? null)
@@ -304,11 +316,16 @@ describe('the task workspace (main)', () => {
     fireEvent.keyDown(window, { key: '`' })
     const drawer = await screen.findByTestId('terminal')
     expect(drawer.dataset.fill).toBeUndefined()
-    fireEvent.click(screen.getByRole('button', { name: 'Hide terminal' }))
+    expect(terminalTab()?.hasAttribute('data-on')).toBe(true)
+    // The tab is the same toggle, and leaves the view that shows alone.
+    fireEvent.click(terminalTab()!)
     await waitFor(() => expect(screen.queryByTestId('terminal')).toBeNull())
+    expect(activeCard()).toBe('Changes')
+    fireEvent.click(terminalTab()!)
+    expect((await screen.findByTestId('terminal')).dataset.fill).toBeUndefined()
   })
 
-  it('folds cards until the row stops overflowing, so + is never pushed out of the strip', async () => {
+  it('folds tabs until the row stops overflowing, so the Layout menu is never pushed out of the strip', async () => {
     // jsdom lays nothing out: a 300px row whose content is 100px per card plus its two buttons.
     vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(300)
     vi.spyOn(Element.prototype, 'scrollWidth', 'get').mockImplementation(function (this: Element) {
@@ -321,18 +338,16 @@ describe('the task workspace (main)', () => {
 
     await waitFor(() => expect(cardNames().length).toBeLessThanOrEqual(2))
     expect(activeCard()).toBe('Chat')
-    expect(screen.getByRole('button', { name: /more layouts/ })).not.toBeNull()
-    expect(screen.getByRole('button', { name: 'New layout' })).not.toBeNull()
+    expect(screen.getByRole('button', { name: /more views/ })).not.toBeNull()
+    expect(screen.getByRole('button', { name: /^Layout/ })).not.toBeNull()
   })
 
   it('opens /terminal as its own card', async () => {
     stubFetch()
     renderWorkspace('terminal')
     expect((await screen.findByTestId('terminal')).dataset.fill).toBe('')
-    // No tab stands for it; the Terminal button stays lit while the shells fill a column.
-    const toggle = document.querySelector('[data-action="toggle-terminal"]') as HTMLButtonElement
-    expect(toggle.getAttribute('aria-pressed')).toBe('true')
-    expect(toggle.textContent).toContain('in column')
+    await waitFor(() => expect(activeCard()).toBe('Terminal'))
+    expect(terminalTab()?.getAttribute('aria-pressed')).toBe('true')
   })
 
   it('splits the screen when a view tab is dropped beside the chat', async () => {
@@ -368,6 +383,38 @@ describe('the task workspace (main)', () => {
       const built = saved.layouts.find((layout) => layout.name === 'Chat + Changes')
       expect(built?.columns.map((column) => column.view)).toEqual(['session', 'changes'])
     })
+  })
+
+  it('switches, renames and closes saved layouts from the one Layout menu', async () => {
+    hostLayouts.r1 = {
+      layouts: [
+        { name: 'Review', columns: [{ view: 'session', width: 50 }, { view: 'changes', width: 50 }] },
+        { name: 'Debug', columns: [{ view: 'files', width: 50 }, { view: 'terminal', width: 50 }] },
+      ],
+      active: 'Review',
+    }
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    await waitFor(() => expect(activeCard()).toBe('Review'))
+    const openMenu = () => fireEvent.keyDown(screen.getByRole('button', { name: /^Layout/ }), { key: 'Enter' })
+
+    openMenu()
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Debug/ }))
+    await waitFor(() => expect(activeCard()).toBe('Debug'))
+    expect(columnViews()).toEqual(['files', 'terminal'])
+
+    openMenu()
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Rename layout/ }))
+    const field = await screen.findByRole('textbox', { name: 'Layout name' })
+    fireEvent.change(field, { target: { value: 'Shell' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+    await waitFor(() => expect(activeCard()).toBe('Shell'))
+
+    openMenu()
+    fireEvent.click(await screen.findByRole('button', { name: 'Close layout Review' }))
+    await waitFor(() => expect(reviveState(hostLayouts.r1 ?? null).layouts.some((layout) => layout.name === 'Review')).toBe(false))
+    expect(activeCard()).toBe('Shell')
   })
 })
 

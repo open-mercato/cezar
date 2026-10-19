@@ -31,9 +31,10 @@ export type ViewId = 'session' | 'changes' | 'commits' | 'files' | 'browser' | '
 
 export const VIEW_IDS: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'browser', 'graph', 'terminal']
 
-/** The view tabs, left to right. Chat is home; the graph is the task's shape, so it is next.
- *  Terminal has no tab: its one control is the Terminal button, which opens the drawer. */
-export const FIXED_VIEW_ORDER: readonly ViewId[] = ['session', 'graph', 'changes', 'commits', 'files', 'browser']
+/** The view tabs, left to right: Chat is home and Changes is what a task is reviewed by; the
+ *  rarely opened Graph sits near the end. Terminal is last, and its tab TOGGLES the bottom drawer
+ *  rather than opening a card — dragged onto the workspace it becomes a column like any view. */
+export const FIXED_VIEW_ORDER: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'browser', 'graph', 'terminal']
 
 /** The route each view tab deep-links to, for pages that are not the workspace (Notes). */
 export const VIEW_PATHS: Record<ViewId, string> = {
