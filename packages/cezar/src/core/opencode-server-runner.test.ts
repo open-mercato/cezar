@@ -211,6 +211,7 @@ describe('opencode serve startup', () => {
   // 2d01c3c9: a start that keeps printing (a one-time migration) was failed at a flat 30s.
   it('keeps waiting while the server is still printing, up to the hard cap', async () => {
     const child = silentChild();
+    const stderr = child.stderr as PassThrough;
     spawnHook.override = () => child;
     vi.useFakeTimers();
     const events: AgentEvent[] = [];
@@ -221,11 +222,11 @@ describe('opencode serve startup', () => {
     void session.result.catch(() => undefined);
     const errorsSoFar = () => events.filter((e) => e.type === 'error');
     for (let t = 0; t < SERVER_START_MAX_MS - 20_000; t += 20_000) {
-      child.stderr.write(`migrating ${t}\n`);
+      stderr.write(`migrating ${t}\n`);
       await vi.advanceTimersByTimeAsync(20_000);
     }
     expect(errorsSoFar()).toEqual([]);
-    child.stderr.write('still migrating\n');
+    stderr.write('still migrating\n');
     await vi.advanceTimersByTimeAsync(20_000);
     expect(errorsSoFar()).toEqual([{ type: 'error', message: `opencode: opencode serve did not report a listening URL within ${SERVER_START_MAX_MS / 1000}s` }]);
     expect(events).toContainEqual(expect.objectContaining({ type: 'note', message: expect.stringContaining('opencode serve stderr: migrating') }));
