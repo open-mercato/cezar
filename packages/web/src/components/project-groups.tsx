@@ -117,6 +117,7 @@ export function ProjectGroups({
   bootProjectId,
   inboxAvailable = false,
   automationsAvailable = false,
+  terminalAvailable = false,
   inboxCount = null,
   skillsUpdateAvailable = false,
 }: {
@@ -128,6 +129,8 @@ export function ProjectGroups({
   /** `capabilities.automations` (#801) — workspace-wide, unlike the per-project forge gate:
    *  the opt-in is one env var on the one server that serves every group. */
   automationsAvailable?: boolean
+  /** `capabilities.terminal` — workspace-wide, like automations. */
+  terminalAvailable?: boolean
   inboxCount?: number | null
   skillsUpdateAvailable?: boolean
 }) {
@@ -245,6 +248,7 @@ export function ProjectGroups({
       now={now}
       inboxAvailable={inboxAvailable}
       automationsAvailable={automationsAvailable}
+      terminalAvailable={terminalAvailable}
       inboxCount={inboxCount}
       skillsUpdateAvailable={skillsUpdateAvailable}
       showTokens={metricVisibility.tokens}
@@ -351,6 +355,7 @@ function ProjectGroup({
   now,
   inboxAvailable,
   automationsAvailable,
+  terminalAvailable,
   inboxCount,
   skillsUpdateAvailable,
   showTokens,
@@ -376,6 +381,7 @@ function ProjectGroup({
   now: number
   inboxAvailable: boolean
   automationsAvailable: boolean
+  terminalAvailable: boolean
   inboxCount: number | null
   skillsUpdateAvailable: boolean
   showTokens: boolean
@@ -661,6 +667,7 @@ function ProjectGroup({
               forge: project.forge === 'github',
               inbox: inboxAvailable,
               automations: automationsAvailable,
+              terminal: terminalAvailable,
               tracker: project.tracker,
             }).map((item) => {
               // Only the active group can own the current URL: the flat route map is

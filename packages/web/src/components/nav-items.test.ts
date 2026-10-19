@@ -72,6 +72,7 @@ describe('NAV_ITEMS', () => {
       'Git',
       'GitHub',
       'Tracker',
+      'Terminal',
       'Automations',
       'Skills',
       'Workflows',
@@ -149,6 +150,12 @@ describe('visibleNavItems', () => {
   // whole point of #801 — every project with a GitHub remote used to see the tab.
   it('a forge alone does not bring Automations back', () => {
     expect(labelsOf({ forge: true, inbox: false })).not.toContain('Automations')
+  })
+
+  it('Terminal appears only when capabilities.terminal says so', () => {
+    expect(labelsOf({})).not.toContain('Terminal')
+    expect(labelsOf({ terminal: false })).not.toContain('Terminal')
+    expect(labelsOf({ terminal: true })).toContain('Terminal')
   })
 
   it('drops all three when nothing is available', () => {
