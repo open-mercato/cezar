@@ -13,7 +13,6 @@ import {
   PanelBottomIcon,
   PencilIcon,
   PinIcon,
-  PlusIcon,
   SquareTerminalIcon,
   TerminalIcon,
   TextCursorInputIcon,
@@ -28,7 +27,7 @@ import type { TaskWorkspaceBridge } from '@/lib/task-workspace-bridge'
 import { isRunActive, resumeHint, runActionFlags } from '@/routes/task-thread/run-actions'
 import { GIT_ACTION_ICONS } from '@/routes/task-git/git-toolbar'
 import { FIXED_VIEW_ORDER, VIEW_PATHS, viewLabel, type ViewId } from '@/routes/task-workspace/layout-state'
-import { stripEntries, type StripEntry } from '@/routes/task-workspace/strip'
+import { stripEntries, stripTabs, type StripEntry } from '@/routes/task-workspace/strip'
 import { VIEW_ICONS } from '@/routes/task-workspace/view-picker'
 
 /**
@@ -117,7 +116,7 @@ export function buildTaskCommands(input: TaskCommandInput, on: TaskCommandHandle
     ...openCommands(input, on),
     ...copyCommands(input, on),
   ]
-  const strip = stripEntries(stripViews(input.run, input.workspace))
+  const strip = stripEntries(stripViews(input.run, input.workspace, input.terminalAvailable))
   return [...commands, ...tabCommands(strip, commands)]
 }
 
@@ -248,8 +247,14 @@ function gitCommands({ git, prUrl }: TaskCommandInput, on: TaskCommandHandlers):
 /** On screen, views switch the workspace's columns; for another task they navigate to its route. */
 function viewCommands({ run, workspace, terminalAvailable }: TaskCommandInput, on: TaskCommandHandlers): TaskCommand[] {
   const base = `/tasks/${run.id}`
-  const views = stripViews(run, workspace)
-  const commands: TaskCommand[] = views.map((view, index) => {
+  const views = stripViews(run, workspace, terminalAvailable)
+  // A tab's number is its place on the row, Notes included (`stripTabs`).
+  const tabs = stripTabs(views)
+  const shortcutOf = (tab: ViewId | 'notes') => {
+    const at = tabs.indexOf(tab)
+    return workspace && at < 9 ? { shortcut: String(at + 1) } : {}
+  }
+  const commands: TaskCommand[] = views.map((view) => {
     const Icon = VIEW_ICONS[view]
     return {
       id: `view:${view}`,
@@ -257,37 +262,30 @@ function viewCommands({ run, workspace, terminalAvailable }: TaskCommandInput, o
       label: viewLabel(view),
       icon: <Icon aria-hidden="true" />,
       keywords: ['view', 'go', 'tab', view],
-      ...(workspace && index < 9 ? { shortcut: String(index + 1) } : {}),
+      ...shortcutOf(view),
       pressed: workspace?.activeView === view,
       perform: workspace ? () => workspace.openView(view) : () => on.navigate(`${base}/${VIEW_PATHS[view]}`),
       ...(workspace ? { performBeside: () => workspace.openViewBeside(view) } : {}),
     }
   })
-  if (terminalAvailable && !workspace) {
-    commands.push({
-      id: 'view:terminal',
-      group: 'views',
-      label: viewLabel('terminal'),
-      icon: icon(TerminalIcon),
-      keywords: ['view', 'shell'],
-      perform: () => on.navigate(`${base}/${VIEW_PATHS.terminal}`),
-    })
-  }
   commands.push({
     id: 'view:notes',
     group: 'views',
     label: 'Notes',
     icon: icon(NotebookTextIcon),
     keywords: ['view', 'handoff'],
-    ...(workspace && views.length < 9 ? { shortcut: String(views.length + 1) } : {}),
+    ...shortcutOf('notes'),
     perform: () => on.navigate(`${base}/notes`),
   })
   return commands
 }
 
 /** The views on a task's tab row: the workspace's, or — off it (Notes) — the same fixed set. */
-function stripViews(run: ApiRun, workspace: TaskWorkspaceBridge | null): readonly ViewId[] {
-  return workspace?.views ?? FIXED_VIEW_ORDER.filter((view) => view !== 'graph' || Boolean(run.workflowDef))
+function stripViews(run: ApiRun, workspace: TaskWorkspaceBridge | null, terminalAvailable: boolean): readonly ViewId[] {
+  return (
+    workspace?.views ??
+    FIXED_VIEW_ORDER.filter((view) => (view !== 'graph' || Boolean(run.workflowDef)) && (view !== 'terminal' || terminalAvailable))
+  )
 }
 
 /** `tab:N` — the tab row's Nth numbered tab (`stripEntries`: views, then Notes), like a browser's
@@ -325,14 +323,6 @@ function layoutCommands({ workspace }: TaskCommandInput): TaskCommand[] {
     }
   })
   commands.push(
-    {
-      id: 'layout:new',
-      group: 'layout',
-      label: 'New layout',
-      icon: icon(PlusIcon),
-      keywords: ['layout', 'create'],
-      perform: workspace.newLayout,
-    },
     {
       id: 'full-view',
       group: 'layout',

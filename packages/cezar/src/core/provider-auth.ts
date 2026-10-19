@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { extname, isAbsolute } from 'node:path';
 import { AGENT_MODELS_LOCKED_ENV } from './agent-model-policy.ts';
 import { profileEnv } from './agent-profiles.ts';
+import { isSignalTerminationExit } from './agent-runner.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
 import { resolveCursorAgentBin } from './cursor-bin.ts';
 import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
@@ -40,6 +41,8 @@ export interface ProviderCommandResult {
   exitCode: number | null;
   errorCode?: string;
   timedOut?: boolean;
+  /** The signal that killed the CLI, when one did and it was not cezar's own timeout. */
+  signal?: string;
 }
 
 export type RunProviderCommand = (
@@ -102,6 +105,9 @@ interface ProviderDescriptor {
 }
 
 const COMMAND_TIMEOUT_MS = 10_000;
+/** A timed-out probe is asked once more with this budget: every CLI is probed at once, so a busy
+ *  host (Windows, agents running) can stall them all past 10s together (telemetry e316b141). */
+const RETRY_TIMEOUT_MS = 30_000;
 /**
  * How long a probe result stands before it is re-checked — deliberately ASYMMETRIC.
  *
@@ -133,6 +139,9 @@ const COMMAND_TIMEOUT_MS = 10_000;
  */
 const CONNECTED_TTL_MS = 10 * 60_000;
 const UNSETTLED_TTL_MS = 60_000;
+/** How old a connected answer may be and still stand in for a probe that hung: a hang is no
+ *  evidence of a logout, and turning it into `unknown` refused runs on a busy host (b28d2993). */
+const TIMEOUT_BRIDGE_MS = 3 * CONNECTED_TTL_MS;
 
 /**
  * How long before the same provider may be self-checked again after a runtime rejection
@@ -163,6 +172,7 @@ function cacheTtlFor(rows: readonly ProviderStatus[]): number {
 }
 const UNKNOWN_HINT = 'Authentication could not be verified. Try again.';
 const TIMEOUT_HINT = 'Authentication check timed out. Try again.';
+const INTERRUPTED_HINT = 'Authentication check was interrupted. Try again.';
 const RUNTIME_AUTH_HINT =
   'Authentication was rejected during a run. Reconnect, then try again.';
 const ANSI_SEQUENCE = /\u001B\[[0-?]*[ -/]*[@-~]/g;
@@ -485,13 +495,15 @@ function defaultRunProviderCommand(
           signal?: string | null;
         }) | null;
         const code = commandError?.code;
+        const timedOut = commandError?.code === 'ETIMEDOUT'
+          || (commandError?.killed === true && commandError.signal === 'SIGTERM');
         resolve({
           stdout: String(stdout),
           stderr: String(stderr),
           exitCode: typeof code === 'number' ? code : error ? null : 0,
           errorCode: typeof code === 'string' ? code : undefined,
-          timedOut: commandError?.code === 'ETIMEDOUT'
-            || (commandError?.killed === true && commandError.signal === 'SIGTERM'),
+          timedOut,
+          ...(!timedOut && commandError?.signal ? { signal: commandError.signal } : {}),
         });
       },
     );
@@ -602,6 +614,14 @@ export function versionManagerShimMiss(result: ProviderCommandResult): string | 
   return null;
 }
 
+/**
+ * A probe stopped by a signal from outside — Ctrl-C reaches the whole foreground process group, so
+ * the CLI exits 130 while cezar shuts down (telemetry ce0c5d1f). Says nothing about the CLI.
+ */
+function wasInterrupted(result: ProviderCommandResult): boolean {
+  return !result.timedOut && (result.signal !== undefined || isSignalTerminationExit(result.exitCode));
+}
+
 function isSilentSuccess(result: ProviderCommandResult): boolean {
   return result.exitCode === 0 && !result.errorCode && !result.timedOut
     && result.stdout.trim() === '' && result.stderr.trim() === '';
@@ -647,6 +667,9 @@ export class ProviderAuthService {
    *  question, and sharing one slot would let whichever probe ran last speak for both. */
   private readonly completedProfiles = new Map<string, { status: ProviderStatus; timestamp: number }>();
   private readonly inFlightProfiles = new Map<string, Promise<ProviderStatus>>();
+  /** The last probe that answered connected, keyed by provider (default login) or `profileCacheKey`;
+   *  only {@link bridgeTimeout} reads it. */
+  private readonly lastConnected = new Map<string, { status: ProviderStatus; at: number; configDir: string | null }>();
 
   constructor(options?: {
     runCommand?: RunProviderCommand;
@@ -719,6 +742,7 @@ export class ProviderAuthService {
       authFailureId: current?.authFailureId ?? this.createAuthFailureId(),
     };
     this.runtimeFailures.set(provider, failure);
+    this.lastConnected.delete(provider);
     return {
       status: {
         provider,
@@ -745,6 +769,7 @@ export class ProviderAuthService {
       authFailureId: current?.authFailureId ?? this.createAuthFailureId(),
     };
     this.profileRuntimeFailures.set(key, failure);
+    this.lastConnected.delete(key);
     return {
       status: {
         provider,
@@ -894,8 +919,8 @@ export class ProviderAuthService {
   } {
     const generation = ++this.nextProbeGeneration;
     const raw = Promise.all(DESCRIPTORS.map((descriptor) => this.probe(descriptor)))
-      .then((providers) => {
-        const response = { providers };
+      .then((probed) => {
+        const response = { providers: probed.map((row) => this.bridgeTimeout(row.provider, row)) };
         if (!this.completed || generation >= this.completed.generation) {
           this.completed = { response, timestamp: this.now(), generation };
         }
@@ -945,10 +970,11 @@ export class ProviderAuthService {
     const startedAt = this.nextRuntimeFailureGeneration;
     const probe = this.probe(descriptorFor(provider), profile.configDir)
       .then((status) => {
-        const stamped: ProviderStatus = { ...status, profileId: profile.id };
+        const stamped = this.bridgeTimeout(key, { ...status, profileId: profile.id }, profile.configDir);
         this.completedProfiles.set(key, { status: stamped, timestamp: this.now() });
         const failure = this.profileRuntimeFailures.get(key);
-        if (failure && failure.generation <= startedAt && stamped.status === 'connected') {
+        // The FRESH answer only: a bridged hang is not evidence that the rejection was transient.
+        if (failure && failure.generation <= startedAt && status.status === 'connected') {
           this.profileRuntimeFailures.delete(key);
         }
         return this.withProfileFailure(stamped, profile.id);
@@ -976,11 +1002,34 @@ export class ProviderAuthService {
     this.completedProfiles.delete(profileCacheKey(provider, profileId));
   }
 
+  /**
+   * A probe that hung keeps the provider's last connected answer, if it is recent (b28d2993): every
+   * CLI is probed at once, and on a busy host a hang — even after #1517's longer re-ask — said
+   * nothing about the login, yet `unknown` made the action gate refuse every Start. Only a TIMEOUT
+   * is bridged; any answer the CLI actually gave, and every other inconclusive reason, stands.
+   */
+  private bridgeTimeout(key: string, status: ProviderStatus, configDir: string | null = null): ProviderStatus {
+    if (status.status === 'connected') {
+      this.lastConnected.set(key, { status, at: this.now(), configDir });
+      return status;
+    }
+    if (status.status !== 'unknown' || status.hint !== TIMEOUT_HINT) {
+      this.lastConnected.delete(key);
+      return status;
+    }
+    const last = this.lastConnected.get(key);
+    // A repointed account is a different login: its old answer is no bridge.
+    return last && last.configDir === configDir && this.now() - last.at <= TIMEOUT_BRIDGE_MS
+      ? last.status
+      : status;
+  }
+
   /** A REMOVED account takes its runtime incident with it, so a re-added one with the same id
    *  never inherits it. Not part of `forgetProfileStatus`: a refresh must keep the incident. */
   forgetProfile(provider: ProviderId, profileId: string): void {
     this.forgetProfileStatus(provider, profileId);
     this.profileRuntimeFailures.delete(profileCacheKey(provider, profileId));
+    this.lastConnected.delete(profileCacheKey(provider, profileId));
   }
 
   /**
@@ -1064,19 +1113,26 @@ export class ProviderAuthService {
     // Never pass a trailing `undefined`: the existing three- and four-argument calls are the
     // zero-config path and the injected test kit asserts them literally, so only a descriptor
     // that actually has a stdin payload reaches the five-argument form.
-    const run = (args: readonly string[] = descriptor.statusArgs): Promise<ProviderCommandResult> => {
+    const run = (
+      args: readonly string[] = descriptor.statusArgs,
+      timeoutMs = COMMAND_TIMEOUT_MS,
+    ): Promise<ProviderCommandResult> => {
       const stdin = descriptor.stdin?.();
       return stdin !== undefined
-        ? this.runCommand(executable, args, COMMAND_TIMEOUT_MS, env, stdin)
+        ? this.runCommand(executable, args, timeoutMs, env, stdin)
         : env === undefined
-          ? this.runCommand(executable, args, COMMAND_TIMEOUT_MS)
-          : this.runCommand(executable, args, COMMAND_TIMEOUT_MS, env);
+          ? this.runCommand(executable, args, timeoutMs)
+          : this.runCommand(executable, args, timeoutMs, env);
     };
     try {
       result = await run();
+      // A hang is reported only when it survives a second, longer ask outside the concurrent burst.
+      if (result.timedOut) result = await run(descriptor.statusArgs, RETRY_TIMEOUT_MS);
       // A CLI that exits 0 having printed nothing at all did not answer — `claude auth status
       // --json` does this intermittently (telemetry 35838a52). Ask once more before giving up.
       if (isSilentSuccess(result) && descriptor.parse(result) === null) result = await run();
+      // A signal meant for someone else (or the OOM killer) is not an answer: ask once more.
+      if (wasInterrupted(result) && descriptor.parse(result) === null) result = await run();
       const fallback = descriptor.parse(result) === null ? descriptor.fallbackArgs?.(result) : undefined;
       if (fallback) result = await run(fallback);
     } catch (error) {
@@ -1109,6 +1165,8 @@ export class ProviderAuthService {
     }
     const status = descriptor.parse(result);
     if (status !== null) return { provider: descriptor.id, status };
+    // Still interrupted: unknown, but unreported — there is no CLI defect to group on.
+    if (wasInterrupted(result)) return { provider: descriptor.id, status: 'unknown', hint: INTERRUPTED_HINT };
     const hint = descriptor.unrecognizedHint?.(result) ?? UNKNOWN_HINT;
     // Exit 0 and 1 are the codes vendors answer status with; anything else is the CLI failing.
     if (result.exitCode === 0 || result.exitCode === 1) return inconclusive('unrecognized_output', hint, result);

@@ -323,7 +323,7 @@ describe('the contract bounds, client-side', () => {
 })
 
 describe('Open in Browser on a fixed card', () => {
-  it('opens the pair layout and leaves the fixed card the one view it stands for', async () => {
+  it('opens the working arrangement and leaves the fixed card the one view it stands for', async () => {
     // `null` is a task never opened: the six born cards, Chat active.
     getRunLayouts.mockResolvedValue({ layouts: null })
     const hook = renderHook(() => useWorkspaceLayouts('r1'))
@@ -335,7 +335,7 @@ describe('Open in Browser on a fixed card', () => {
       answer = result.current.openInBrowser('http://localhost:3000/')
     })
     expect(answer).toBe(true)
-    expect(result.current.layout!.name).toBe('Chat + Preview')
+    expect(result.current.layout!.name).toBe('Custom')
     expect(result.current.layout!.columns.map((column) => column.view)).toEqual(['session', 'browser'])
     expect(result.current.layout!.columns[1]!.browser).toEqual({ tabs: ['http://localhost:3000/'], active: 0 })
     const chat = result.current.state.layouts.find((layout) => layout.name === 'Chat')!

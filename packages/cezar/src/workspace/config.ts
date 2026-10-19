@@ -1,8 +1,9 @@
 import { randomBytes } from 'node:crypto';
-import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, rmSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
+import { renameSyncWithRetry } from '../fs-rename.ts';
 // Contract VALUES, like `workspaceUiStateSchema` in workspace/migrations.ts: the tag bounds this
 // file must not `.catch` away are the same constants the PATCH route validates against, so they
 // are imported rather than repeated.
@@ -397,7 +398,7 @@ export function atomicWriteJsonSync(path: string, value: unknown): void {
     fsyncSync(fd);
     closeSync(fd);
     fd = -1;
-    renameSync(tmp, path);
+    renameSyncWithRetry(tmp, path);
   } catch (error) {
     if (fd !== -1) {
       try {

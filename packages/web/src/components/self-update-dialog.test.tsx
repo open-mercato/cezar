@@ -9,10 +9,14 @@ import { pullOfVersion } from '@/components/self-update-development'
 
 const applySelfUpdate = vi.hoisted(() => vi.fn())
 const setSelfUpdateChannel = vi.hoisted(() => vi.fn())
+const scheduleSelfUpdate = vi.hoisted(() => vi.fn())
+const cancelScheduledSelfUpdate = vi.hoisted(() => vi.fn())
 vi.mock('@/api/client', async (original) => ({
   ...(await original<typeof import('@/api/client')>()),
   applySelfUpdate,
   setSelfUpdateChannel,
+  scheduleSelfUpdate,
+  cancelScheduledSelfUpdate,
 }))
 
 const status: SelfUpdateStatus = {
@@ -35,6 +39,7 @@ const status: SelfUpdateStatus = {
     { version: '0.12.0-nightly.20260927.60', channel: 'nightly', publishedAt: '2026-09-27T03:17:00.000Z', installed: false },
   ],
   job: null,
+  scheduled: null,
   activeRuns: 0,
 }
 
@@ -176,6 +181,74 @@ describe('SelfUpdateDialog', () => {
       expect(dialog.textContent).toContain('2 tasks are running')
       await new Promise((resolve) => setTimeout(resolve, 20))
       expect(applySelfUpdate).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('update when idle', () => {
+    const release = {
+      installed: [{ id: '0.12.0', version: '0.12.0', source: 'registry' as const, installedAt: '2026-09-28T08:00:00.000Z', active: true }],
+    }
+    it('is offered only while a restart would interrupt tasks', async () => {
+      renderDialog({ ...release, updateAvailable: '0.12.1', activeRuns: 0 })
+      await screen.findByRole('dialog')
+      expect(screen.queryByRole('button', { name: 'Update when idle' })).toBeNull()
+    })
+
+    it('explains itself in a tooltip', async () => {
+      // Radix's tooltip arrow measures itself with a ResizeObserver; jsdom has no layout observer.
+      vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+      renderDialog({ ...release, updateAvailable: '0.12.1', activeRuns: 3 })
+      fireEvent.focus(await screen.findByRole('button', { name: 'Update when idle' }))
+      const tooltip = await screen.findByRole('tooltip')
+      expect(tooltip.textContent).toContain('Waits until no task is running or queued, then installs v0.12.1 and restarts')
+    })
+
+    it('schedules the update instead of restarting now', async () => {
+      applySelfUpdate.mockClear()
+      scheduleSelfUpdate.mockResolvedValue({
+        ...status,
+        ...release,
+        updateAvailable: '0.12.1',
+        activeRuns: 3,
+        scheduled: { target: '0.12.1', requestedAt: '2026-10-18T20:00:00.000Z' },
+      })
+      renderDialog({ ...release, updateAvailable: '0.12.1', activeRuns: 3 })
+      fireEvent.click(await screen.findByRole('button', { name: 'Update when idle' }))
+      await waitFor(() => expect(scheduleSelfUpdate).toHaveBeenCalledWith('0.12.1'))
+      const notice = await waitFor(() => {
+        const node = document.querySelector('[data-slot="self-update-scheduled"]')
+        expect(node).toBeTruthy()
+        return node!
+      })
+      expect(notice.textContent).toContain('v0.12.1 installs and restarts as soon as no task is running')
+      expect(screen.queryByRole('button', { name: 'Update when idle' })).toBeNull()
+      expect(applySelfUpdate).not.toHaveBeenCalled()
+    })
+
+    it('still shows the schedule and its Cancel after an earlier failed update', async () => {
+      renderDialog({
+        ...release,
+        updateAvailable: '0.12.1',
+        activeRuns: 3,
+        job: { status: 'failed', target: '0.12.1', startedAt: '2026-10-18T19:00:00.000Z', finishedAt: '2026-10-18T19:00:05.000Z', log: ['failed: offline'], error: 'offline' },
+        scheduled: { target: '0.12.1', requestedAt: '2026-10-18T20:00:00.000Z' },
+      })
+      await screen.findByRole('dialog')
+      expect(document.querySelector('[data-slot="self-update-scheduled"]')).toBeTruthy()
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy()
+    })
+
+    it('cancels a scheduled update', async () => {
+      cancelScheduledSelfUpdate.mockResolvedValue({ ...status, ...release, updateAvailable: '0.12.1', activeRuns: 3 })
+      renderDialog({
+        ...release,
+        updateAvailable: '0.12.1',
+        activeRuns: 3,
+        scheduled: { target: '0.12.1', requestedAt: '2026-10-18T20:00:00.000Z' },
+      })
+      fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+      await waitFor(() => expect(cancelScheduledSelfUpdate).toHaveBeenCalledTimes(1))
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Update when idle' })).toBeTruthy())
     })
   })
 

@@ -120,8 +120,8 @@ interface RunHeaderProps {
   continuationEngine?: ReactNode
   /** Replaces the route tab links — the task workspace's layout strip (spec `2026-10-07-task-workspace` §5.2). */
   tabs?: ReactNode
-  /** Right after the tab row's links or strip — the workspace's terminal toggle and full view. */
-  trailing?: ReactNode
+  /** Icon controls in the title row, just before the collapse button — the workspace's full view. */
+  headerActions?: ReactNode
   /** Span the whole window, like the workspace columns under it, instead of the reading measure. */
   wide?: boolean
 }
@@ -133,7 +133,7 @@ const headerPropComparators = {
   onMarkedUnread: (before, after) => before.onMarkedUnread === after.onMarkedUnread,
   continuationEngine: (before, after) => before.continuationEngine === after.continuationEngine,
   tabs: (before, after) => before.tabs === after.tabs,
-  trailing: (before, after) => before.trailing === after.trailing,
+  headerActions: (before, after) => before.headerActions === after.headerActions,
   wide: (before, after) => before.wide === after.wide,
   planTally: (before, after) => before.planTally?.done === after.planTally?.done &&
     before.planTally?.total === after.planTally?.total,
@@ -151,7 +151,7 @@ function RunHeaderView({
   onMarkedUnread,
   continuationEngine,
   tabs,
-  trailing,
+  headerActions,
   wide = false,
 }: RunHeaderProps) {
   const attention = deriveAttention(run)
@@ -206,6 +206,7 @@ function RunHeaderView({
             <span className="ml-auto flex shrink-0 items-center gap-2.5">
               {/* The run's state, top right, beside the git button it decides. */}
               <RunStatus attention={attention} queuePosition={queuePosition} />
+              {headerActions}
               {/* Desktop: fold the meta row, the step rail and the resume hint away, leaving the
                   title and the tabs. Phones have their own disclosure (#765) below. */}
               <Button
@@ -260,8 +261,10 @@ function RunHeaderView({
               // button is the title row's, top right. There is no Finish here: ending a waiting
               // session sits beside the "waiting for your reply" hint over the composer, and
               // accepting a review is the review panel's ✓ Accept.
+              // No `ml-auto` on the actions: the usage before them already pushes right, and a second
+              // auto margin would split the free space and strand cost and agent mid-row.
               actions={
-                <div data-slot="run-actions" className="ml-auto hidden items-center gap-1 md:flex">
+                <div data-slot="run-actions" className="hidden items-center gap-1 md:flex">
                   <TaskItemActions run={run} actions={actions} showRunControls={!composerOwnsRunControls} />
                   {/* Terminal is folded into the Open in… menu to save room. */}
                   <OpenInMenuForRun run={run} canResume={canTerminal} onResume={() => actions.terminal.mutate()} />
@@ -326,7 +329,6 @@ function RunHeaderView({
                 ) : null}
               </>
             )}
-            {trailing}
           </div>
 
           {run.steps.length > 0 ? (

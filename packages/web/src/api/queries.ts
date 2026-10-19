@@ -74,6 +74,8 @@ import {
   refreshSelfUpdate,
   setSelfUpdateChannel,
   applySelfUpdate,
+  scheduleSelfUpdate,
+  cancelScheduledSelfUpdate,
   checkSkillsUpdate,
   applySkillsUpdate,
   getWorktrees,
@@ -1588,7 +1590,9 @@ export function useSelfUpdate(enabled = true) {
     queryKey: workspaceQueryKeys.selfUpdate,
     queryFn: ({ signal }) => getSelfUpdate({ signal }),
     enabled,
-    refetchInterval: (query) => (query.state.data?.job?.status === 'running' ? 1_000 : false),
+    // A scheduled update can start while the dialog is open: watch for its job to appear.
+    refetchInterval: (query) =>
+      query.state.data?.job?.status === 'running' ? 1_000 : query.state.data?.scheduled ? 5_000 : false,
   })
 }
 
@@ -1631,6 +1635,22 @@ export function useApplySelfUpdate() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (version: string) => applySelfUpdate(version),
+    onSuccess: (state) => queryClient.setQueryData(workspaceQueryKeys.selfUpdate, state),
+  })
+}
+
+export function useScheduleSelfUpdate() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (version: string) => scheduleSelfUpdate(version),
+    onSuccess: (state) => queryClient.setQueryData(workspaceQueryKeys.selfUpdate, state),
+  })
+}
+
+export function useCancelScheduledSelfUpdate() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => cancelScheduledSelfUpdate(),
     onSuccess: (state) => queryClient.setQueryData(workspaceQueryKeys.selfUpdate, state),
   })
 }

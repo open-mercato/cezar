@@ -1,10 +1,11 @@
 import { existsSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { currentEntry, activate, activeId, assertSafeId, detectInstallKind, installId, listInstalled, versionDir, versionEntry, versionsDir, writeManifest } from './layout.ts';
-import { fetchPackageDocument, registryPath } from './registry.ts';
+import { fetchPackageDocument, RegistryCache, registryPath } from './registry.ts';
+import { SelfUpdateService } from './service.ts';
 import { restartArgs } from './restart.ts';
 import { classifyVersion, compareVersions, isNewer } from './semver.ts';
 
@@ -173,5 +174,93 @@ describe('activeId without a symlink', () => {
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+describe('update when idle', () => {
+  let home: string;
+  let env: NodeJS.ProcessEnv;
+  let idle: boolean;
+  let restart: ReturnType<typeof vi.fn<() => void>>;
+  let service: SelfUpdateService;
+
+  const fakeInstall = (id: string) => {
+    const entry = versionEntry(id, env);
+    mkdirSync(join(entry, '..'), { recursive: true });
+    writeFileSync(entry, '// entry\n');
+    writeManifest(id, { version: id, source: 'registry', installedAt: '2026-10-18T10:00:00Z' }, env);
+  };
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'cez-update-idle-'));
+    env = { ...process.env, CEZ_HOME: home };
+    fakeInstall('0.12.0');
+    fakeInstall('0.12.1');
+    activate('0.12.0', env);
+    idle = false;
+    restart = vi.fn<() => void>();
+    const offline = (async () => new Response('', { status: 503 })) as unknown as typeof fetch;
+    service = new SelfUpdateService({
+      pkgName: '@open-mercato/cezar',
+      version: '0.12.0',
+      entry: versionEntry('0.12.0', env),
+      restart,
+      idle: () => idle,
+      idlePollMs: 10,
+      env,
+      registry: new RegistryCache('@open-mercato/cezar', offline),
+    });
+  });
+  afterEach(() => {
+    service.cancelScheduled();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it('waits while tasks run, then installs and restarts once the workspace is idle', async () => {
+    service.scheduleWhenIdle('0.12.1');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect((await service.status()).scheduled?.target).toBe('0.12.1');
+    expect((await service.status()).job).toBeNull();
+    expect(activeId(env)).toBe('0.12.0');
+
+    idle = true;
+    await vi.waitFor(() => expect(restart).toHaveBeenCalledTimes(1), { timeout: 3_000 });
+    expect(activeId(env)).toBe('0.12.1');
+    const status = await service.status();
+    expect(status.scheduled).toBeNull();
+    expect(status.job?.status).toBe('restarting');
+  });
+
+  it('applies at once when nothing is running', async () => {
+    idle = true;
+    service.scheduleWhenIdle('0.12.1');
+    expect((await service.status()).scheduled).toBeNull();
+    expect((await service.status()).job?.target).toBe('0.12.1');
+  });
+
+  it('never applies a cancelled schedule', async () => {
+    service.scheduleWhenIdle('0.12.1');
+    service.cancelScheduled();
+    idle = true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const status = await service.status();
+    expect(status.scheduled).toBeNull();
+    expect(status.job).toBeNull();
+    expect(activeId(env)).toBe('0.12.0');
+  });
+
+  it('an explicit apply supersedes the schedule', async () => {
+    service.scheduleWhenIdle('0.12.1');
+    service.apply('0.12.1');
+    expect((await service.status()).scheduled).toBeNull();
+    await vi.waitFor(() => expect(restart).toHaveBeenCalledTimes(1), { timeout: 3_000 });
+    idle = true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(restart).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses up front when this install cannot update itself', () => {
+    const unmanaged = new SelfUpdateService({ pkgName: 'x', version: '0.12.0', entry: join(home, 'elsewhere.js'), restart, env });
+    expect(() => unmanaged.scheduleWhenIdle('0.12.1')).toThrow();
   });
 });

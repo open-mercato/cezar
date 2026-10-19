@@ -8,6 +8,10 @@ import {
   closeLayout,
   defaultState,
   dropView,
+  applySavedLayout,
+  keepAs,
+  toSavedLayout,
+  WORKING_LAYOUT_NAME,
   DEFAULT_LAYOUT_NAME,
   findLayout,
   fixedViewOf,
@@ -46,7 +50,7 @@ const widths = (state: WorkspaceState) => activeLayout(state)?.columns.map((colu
 const views = (state: WorkspaceState) => activeLayout(state)?.columns.map((column) => column.view)
 const names = (state: WorkspaceState) => state.layouts.map((layout) => layout.name)
 /** The six cards a task is born with, in order: one per view. */
-const BORN = ['Chat', 'Changes', 'Commits', 'Code', 'Preview', 'Graph']
+const BORN = ['Chat', 'Changes', 'Commits', 'Files', 'Preview', 'Graph']
 
 describe('defaultState', () => {
   it('opens a fresh task on Chat, with one full-width card per view behind it', () => {
@@ -347,24 +351,25 @@ describe('preferredActive', () => {
 describe('dropView', () => {
   const views = (state: WorkspaceState) => activeLayout(state)?.columns.map((column) => column.view)
 
-  it('splits a fixed card into a saved pair, leaving the fixed card one view', () => {
+  it('splits a fixed card into the working arrangement, leaving the fixed card one view', () => {
     const state = dropView(defaultState(), 'changes', 1, 'insert')
-    expect(state.active).toBe('Chat + Changes')
+    expect(state.active).toBe(WORKING_LAYOUT_NAME)
     expect(views(state)).toEqual(['session', 'changes'])
     expect(findLayout(state, 'Chat')?.columns.map((column) => column.view)).toEqual(['session'])
   })
 
-  it('reuses a saved layout with the same columns instead of minting another', () => {
+  it('never mints a layout: every split of a view tab reuses the one working arrangement', () => {
     const once = dropView(defaultState(), 'changes', 1, 'insert')
-    const again = dropView(selectLayout(once, 'Chat'), 'changes', 1, 'insert')
+    const again = dropView(selectLayout(once, 'Changes'), 'files', 1, 'insert')
     expect(again.layouts).toHaveLength(once.layouts.length)
-    expect(again.active).toBe('Chat + Changes')
+    expect(again.active).toBe(WORKING_LAYOUT_NAME)
+    expect(views(again)).toEqual(['changes', 'files'])
   })
 
   it('edits a layout the user built in place: insert, move, replace with swap', () => {
     const built = dropView(defaultState(), 'changes', 1, 'insert')
     const three = dropView(built, 'files', 0, 'insert')
-    expect(three.active).toBe('Chat + Changes')
+    expect(three.active).toBe(WORKING_LAYOUT_NAME)
     expect(views(three)).toEqual(['files', 'session', 'changes'])
     expect(activeLayout(three)?.columns.map((column) => column.width)).toEqual([33.33, 33.33, 33.34])
     // Already on screen: it moves rather than appearing twice.
@@ -376,6 +381,47 @@ describe('dropView', () => {
     const three = dropView(dropView(defaultState(), 'changes', 1, 'insert'), 'files', 2, 'insert')
     expect(dropView(three, 'commits', 0, 'insert')).toBe(three)
     expect(views(dropView(three, 'commits', 1, 'replace'))).toEqual(['session', 'commits', 'files'])
+  })
+})
+
+describe('saved layouts', () => {
+  const split = dropView(defaultState(), 'changes', 1, 'insert')
+
+  it('saves the arrangement only, and refuses a view tab’s name', () => {
+    expect(toSavedLayout(split, ' Review ')).toEqual({
+      name: 'Review',
+      columns: [
+        { view: 'session', width: 50 },
+        { view: 'changes', width: 50 },
+      ],
+    })
+    expect(toSavedLayout(split, 'Changes')).toBeNull()
+    expect(toSavedLayout(split, WORKING_LAYOUT_NAME)).toBeNull()
+  })
+
+  it('names what is on screen after it is saved; a view tab is copied, not renamed', () => {
+    const kept = keepAs(split, 'Review')
+    expect(kept.active).toBe('Review')
+    expect(findLayout(kept, WORKING_LAYOUT_NAME)).toBeUndefined()
+    const fromTab = keepAs(selectLayout(split, 'Files'), 'Files only')
+    expect(fixedViewOf(findLayout(fromTab, 'Files')!)).toBe('files')
+    expect(findLayout(fromTab, 'Files only')?.columns.map((column) => column.view)).toEqual(['files'])
+  })
+
+  it('opens a saved layout in a task, reusing the task’s copy while the arrangement is the same', () => {
+    const saved = { name: 'Review', columns: [{ view: 'changes' as const, width: 70 }, { view: 'files' as const, width: 30 }] }
+    const opened = applySavedLayout(defaultState(), saved)
+    expect(opened.active).toBe('Review')
+    expect(findLayout(opened)?.columns.map((column) => [column.view, column.width])).toEqual([
+      ['changes', 70],
+      ['files', 30],
+    ])
+    const again = applySavedLayout(selectLayout(opened, 'Chat'), saved)
+    expect(again.layouts).toHaveLength(opened.layouts.length)
+    const changed = applySavedLayout(opened, { ...saved, columns: [{ view: 'session', width: 100 }] })
+    expect(findLayout(changed, 'Review')?.columns.map((column) => column.view)).toEqual(['session'])
+    // A saved name that collides with a view tab is never applied over it.
+    expect(applySavedLayout(defaultState(), { ...saved, name: 'Chat' })).toEqual(defaultState())
   })
 })
 

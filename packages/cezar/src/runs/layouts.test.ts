@@ -112,6 +112,8 @@ describe('layouts and the run store', () => {
   it('removes the layouts of a run retention forgets', () => {
     const store = RunStore.open(dataDir);
     const first = store.createRun(input(0));
+    // A live (`queued`) run is never pruned (telemetry 73c6e796) — only a finished one is.
+    store.updateRun(first.id, { status: 'done' });
     writeRunLayouts(dataDir, first.id, ONE);
     for (let n = 1; n <= 320; n++) store.createRun(input(n));
     store.flush();

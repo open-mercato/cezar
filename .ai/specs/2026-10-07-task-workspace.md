@@ -20,6 +20,16 @@
 >   counts as it. A terminal's detected address opens in a Preview column (§7).
 > - **Main's run header.** The layout strip fills the header's tab row (`RunHeader` `tabs` slot);
 >   there is no separate overview header mode. Notes keeps its own page, linked from the strip.
+>   Tab order (2026-10-19): Chat, Changes, Commits, Files, Graph, Notes, Preview, Terminal. The
+>   Terminal tab opens the shells as a view of their own, like Preview; a drag or ⌥-click puts
+>   them beside the view. The drawer is the `` ` `` key's (and "Move to column" / "Move to bottom"
+>   move the shells between the two); there is no separate header button. Layouts are not cards on the strip but one compact
+>   `Layout` menu at its right end.
+>   **Saved layouts (2026-10-19):** nothing is named behind the user's back — splitting a view tab
+>   (drag, ⌥-click, a file opened from the chat) edits the task's ONE working arrangement,
+>   `Custom`. "Save current view as layout…" names it, and the arrangement (views + widths, no
+>   column state) is kept in `~/.cezar/ui-state.json` `savedLayouts`, offered in every task of
+>   every project. Opening one gives the task its own copy under that name.
 >   `/tasks/:id/commits/:sha` stays a standalone page; inside a column, Commits picks in place.
 > - **`CEZ_TERMINAL`** unset follows `localHandoff` (on locally, off hosted) — main has no sign-in.
 >   New shells do not receive brutus's per-task slot environment (`taskSlotEnv`).

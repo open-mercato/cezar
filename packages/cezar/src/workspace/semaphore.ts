@@ -182,6 +182,15 @@ export class WorkspaceSemaphore {
     return total;
   }
 
+  /** No slot held and nothing queued anywhere in the workspace — when "update when idle" may
+   *  restart. Waiting runs do not count (#347): they are parked on the user, and boot resumes them. */
+  idle(): boolean {
+    for (const participant of this.participants) {
+      if (participant.busySlots() > 0 || participant.oldestQueuedAt() !== null) return false;
+    }
+    return true;
+  }
+
   /** Cached workspace-wide parallel cap. */
   maxParallel(): number {
     return this.limits.maxParallel;

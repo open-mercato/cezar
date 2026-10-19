@@ -364,3 +364,35 @@ describe('RunManager worktree lifecycle admission', () => {
     expect(await p.manager.lifecycle.store.readWorktree(inPlace.id)).toBeNull();
   });
 });
+
+// A continuation awaits `requiresGate` before it registers in `active`; a cancel landing in that
+// window used to be refused, and the run then started anyway (nightly 39225790502).
+describe('cancelling a continuation still awaiting its lifecycle gate', () => {
+  it.each([
+    ['an explicit Continue', false],
+    ['a continuation dequeued by the pump', true],
+  ] as const)('settles %s as cancelled and never launches its session', async (_label, deferred) => {
+    const p = await project();
+    const run = p.manager.startRun(workflow, {task: 'gate window', runner: 'claude'});
+    await wait(() => expect(p.manager.isActive(run.id)).toBe(false));
+    let openGate: ((gated: boolean) => void) | undefined;
+    vi.spyOn(p.manager.lifecycle, 'requiresGate').mockImplementation(() => new Promise<boolean>(resolve => { openGate = resolve; }));
+    const launchedBefore = launched.length;
+
+    expect(p.manager.continueRun(run.id, {text: 'again'}, deferred)).toEqual({ok: true});
+    if (deferred) void (p.manager as unknown as {pump(): Promise<void>}).pump();
+    await wait(() => expect(openGate).toBeDefined());
+    expect(p.manager.isActive(run.id)).toBe(true);
+    expect(p.manager.continueRun(run.id, {text: 'twice'})).toEqual({ok: false, error: 'run is still active'});
+
+    const cancelled = p.manager.cancelAndWait(run.id);
+    expect(p.store.getRun(run.id)?.status).toBe('cancelled');
+    // Nothing may buffer for a session that will never open (it would leak into the next Continue).
+    expect(p.manager.deferMessage(run.id, [{type: 'text', text: 'late'}])).toBe(false);
+    openGate!(false);
+    expect(await cancelled).toBe(true);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(launched.length).toBe(launchedBefore);
+    expect(p.store.getRun(run.id)?.status).toBe('cancelled');
+  });
+});

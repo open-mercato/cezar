@@ -24,19 +24,19 @@ import type { DiffFileChange } from './types'
  *  - Per-file state (collapse, expanded context gaps) is the thing a reader actually mutates,
  *    so lifting it out of the card — which unmount now requires — is a small, closed change.
  * The remaining case the card granularity does NOT bound is ONE enormous file, whose rows are
- * a single item. That is what the per-row `content-visibility` in the card body covers.
+ * a single item. That is what the per-block `content-visibility` in the card body covers.
  */
 
 /** Rendered rows across all files, past which the file list goes through virtua. */
 export const DIFF_VIRTUALIZE_THRESHOLD = 1500
 
 /**
- * One diff row's height at `text-xs`/`leading-[1.7]` (12px × 1.7 ≈ 20.4px), rounded down.
- * Only ever a PLACEHOLDER: it seeds `contain-intrinsic-block-size` for never-yet-rendered
- * content and virtua's first estimate, and both correct themselves on real measurement. It
- * exists so the scrollbar starts at a sane length, not so it is exact.
+ * One unwrapped diff row's height at `text-xs`/`leading-[1.7]`: 12px × 1.7. A PLACEHOLDER — it
+ * seeds `contain-intrinsic-block-size` for never-yet-rendered content and virtua's first
+ * estimate, and both correct themselves on real measurement. Exact rather than rounded, because
+ * thousands of skipped rows multiply the error: 0.4px a row was ~1,500px over a 3,700-line file.
  */
-export const DIFF_ROW_ESTIMATE_PX = 20
+export const DIFF_ROW_ESTIMATE_PX = 20.4
 
 /** The card chrome above/below a body (sticky header + padding), for the same estimate. */
 const DIFF_CARD_CHROME_PX = 44
@@ -54,14 +54,29 @@ export function estimateFileRows(file: DiffFileChange): number {
   return firstHunk === -1 ? lines.length : lines.length - firstHunk
 }
 
-/** A card's placeholder height for `contain-intrinsic-block-size` / virtua's estimate. */
-export function estimateFileHeight(file: DiffFileChange): number {
-  return estimateFileRows(file) * DIFF_ROW_ESTIMATE_PX + DIFF_CARD_CHROME_PX
+/** A card's placeholder height for `contain-intrinsic-block-size` / virtua's estimate. A closed
+ *  card is its header plus at most the one-line note. */
+export function estimateFileHeight(file: DiffFileChange, open = true): number {
+  return Math.round((open ? estimateFileRows(file) : 1) * DIFF_ROW_ESTIMATE_PX) + DIFF_CARD_CHROME_PX
 }
 
-/** Total rendered rows across the changeset — the number the threshold rule is about. */
+/** Total rows across the changeset, open or not — the number the threshold rule is about. */
 export function diffRowCount(files: readonly DiffFileChange[]): number {
   return files.reduce((sum, file) => sum + estimateFileRows(file), 0)
+}
+
+/** Changed lines past which a file opens collapsed behind "Load diff". One such file's rows are
+ *  a single virtualized item, so it is what made opening a big change freeze the cockpit. */
+export const LARGE_DIFF_LINES = 400
+
+/** Lockfiles and build output: machine-written, rarely reviewed line by line. */
+const GENERATED_PATH = /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|Cargo\.lock|poetry\.lock|uv\.lock|composer\.lock|Gemfile\.lock|go\.sum)$|\.min\.(js|css)$|\.map$/
+
+/** Whether a file opens collapsed: too many changed lines, or generated. Binary and image files
+ *  render no rows, so they never need holding back. */
+export function isLargeDiff(file: DiffFileChange): boolean {
+  if (file.binary === true || file.image === true) return false
+  return file.adds + file.dels > LARGE_DIFF_LINES || GENERATED_PATH.test(file.path)
 }
 
 /**

@@ -683,7 +683,7 @@ const DIALOG_COMMANDS = new Set(['stop', 'delete', 'git:commit', 'git:commit-pus
 const needsGesture = (id: string) => id.startsWith('copy:') || id === 'open-pr'
 
 /** Whether ⇧↵ can bind a command: saved layouts are not bound by id. */
-const recordable = (id: string) => !id.startsWith('layout:') || id === 'layout:new'
+const recordable = (id: string) => !id.startsWith('layout:')
 
 /** A command's name for messages — the live row's label when it is listed, else the catalog's. */
 function bindableLabel(id: string, commands: readonly TaskCommand[] = []): string {

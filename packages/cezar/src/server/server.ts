@@ -47,7 +47,7 @@ import {
 } from '../automations/types.ts';
 import { trackerTriggerSchema, trackerAutomationOptionsSchema, trackerAutomationOptionsQuerySchema, automationScheduleSchema, localTimeZone, nextOccurrence } from '@open-mercato/cezar-contract';
 import type { IncomingMessage } from 'node:http';
-import { access, constants as fsConstants, mkdir, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { access, constants as fsConstants, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -270,6 +270,7 @@ import { ProjectContextError, ProjectContexts, type ProjectContext } from './pro
 import { reviewGateEnabled } from '../runs/review-gate.ts';
 import { readUiState, uiStatePath } from '../ui-state.ts';
 import { agentHomePaths, cezarHomeDir, expandTilde, isAbsolutePath } from '../paths.ts';
+import { renameWithRetry } from '../fs-rename.ts';
 import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { applyKeepAlive } from './keep-alive.ts';
@@ -2127,10 +2128,16 @@ export function createApp(deps: ServerDeps) {
     return prefixed === null ? null : `cd '${cwd}' && ${prefixed}`;
   };
 
-  /** A registered project's realpath'd root, or null when the id is unknown. */
+  /** A project's realpath'd root, or null when the id is unknown. The boot project resolves to
+   *  `bootRoot` even without a registry row — `resolveProjectScope` serves it the same way, and a
+   *  repo booted into a non-empty registry is never registered (telemetry d81f8db7). */
   const projectRootFor = async (projectId: string): Promise<string | null> => {
     try {
-      return (await loadWorkspaceConfig()).projects.find((p) => p.id === projectId)?.root ?? null;
+      const registry = (await loadWorkspaceConfig()).projects;
+      const registered = registry.find((p) => p.id === projectId)?.root;
+      if (registered !== undefined) return registered;
+      if (projectId !== 'default' && projectId !== (await resolveBootProject(registry))) return null;
+      return await realpath(bootRoot).catch(() => bootRoot);
     } catch {
       return null;
     }
@@ -2717,11 +2724,10 @@ export function createApp(deps: ServerDeps) {
         // checkout. No project to resolve, and therefore no 404 path.
         let root: string | null = null;
         if (projectId !== null) {
-          const resolvedId = projectId === 'default' ? await resolveBootProject() : projectId;
           // Keyed by repo ROOT, so the selection survives the registry being rebuilt and needs no
           // cross-reference into config.json. An unknown project is a 404 rather than an orphan
           // entry nobody will ever read.
-          root = await projectRootFor(resolvedId);
+          root = await projectRootFor(projectId);
           if (root === null) return c.json({ error: `unknown project: ${projectId}` }, 404);
         }
         // A user naming an account that does not exist gets told so — the opposite of how RUN
@@ -3402,7 +3408,7 @@ export function createApp(deps: ServerDeps) {
       return c.json(await selfUpdate.status());
     })
 
-    .post('/workspace/self-update/apply', jsonZodValidator(selfUpdateApplyRequestSchema, { message: 'body must be { version }' }), async (c) => {
+    .post('/workspace/self-update/apply', jsonZodValidator(selfUpdateApplyRequestSchema, { message: 'body must be { version, whenIdle? }' }), async (c) => {
       const { version: target } = c.req.valid('json');
       // SECURITY: a hosted cockpit may only move FORWARD. Installing a published package cannot
       // inject code, but installing an OLDER one can: every hosted-mode guard — the `/api/*`
@@ -3418,11 +3424,18 @@ export function createApp(deps: ServerDeps) {
         if (refusal) return c.json({ error: refusal }, 409);
       }
       try {
-        selfUpdate.apply(target);
+        if (c.req.valid('json').whenIdle) selfUpdate.scheduleWhenIdle(target);
+        else selfUpdate.apply(target);
       } catch (error) {
         if (error instanceof SelfUpdateBusyError) return c.json({ error: error.message }, 409);
         return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
       }
+      return c.json(await selfUpdate.status());
+    })
+
+    // Cancels a pending "update when idle"; a no-op when nothing is scheduled.
+    .delete('/workspace/self-update/scheduled', async (c) => {
+      selfUpdate.cancelScheduled();
       return c.json(await selfUpdate.status());
     });
 
@@ -3617,7 +3630,7 @@ export function createApp(deps: ServerDeps) {
       const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
       try {
         await writeFile(tmp, bytes, { mode: 0o600, flag: 'wx' });
-        await rename(tmp, path);
+        await renameWithRetry(tmp, path);
       } catch (error) {
         await unlink(tmp).catch(() => {});
         throw error;

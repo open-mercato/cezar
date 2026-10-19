@@ -297,12 +297,19 @@ export async function collectChanges(
       },
     );
 
-    const nameStatus = await git(dir, ['diff', '--name-status', '-z', '-M', base], env);
-    if (!nameStatus.ok) return { ok: false, error: gitReason(nameStatus, 'git diff failed') };
-    const numstat = await git(dir, ['diff', '--numstat', '-z', '-M', base], env);
-    if (!numstat.ok) return { ok: false, error: gitReason(numstat, 'git diff failed') };
-    const patchOut = await git(dir, ['diff', '--patch', '-M', '--no-color', base], env);
-    if (!patchOut.ok) return { ok: false, error: gitReason(patchOut, 'git diff failed') };
+    // Three independent read-only listings, run concurrently. `GIT_OPTIONAL_LOCKS=0` keeps them
+    // from racing each other for `index.lock` over the opportunistic stat refresh `git diff` writes,
+    // so that refresh is written once here instead — else every poll re-reads each stat-dirty file.
+    await git(dir, ['update-index', '-q', '--refresh'], env);
+    const readEnv = { ...env, GIT_OPTIONAL_LOCKS: '0' };
+    const [nameStatus, numstat, patchOut] = await Promise.all([
+      git(dir, ['diff', '--name-status', '-z', '-M', base], readEnv),
+      git(dir, ['diff', '--numstat', '-z', '-M', base], readEnv),
+      git(dir, ['diff', '--patch', '-M', '--no-color', base], readEnv),
+    ]);
+    for (const listing of [nameStatus, numstat, patchOut]) {
+      if (!listing.ok) return { ok: false, error: gitReason(listing, 'git diff failed') };
+    }
 
     return {
       ok: true,

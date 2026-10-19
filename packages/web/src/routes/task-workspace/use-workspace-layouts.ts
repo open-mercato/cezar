@@ -5,6 +5,8 @@ import { getRunLayouts, putRunLayouts } from '@/api/client'
 import {
   addColumn as addColumnTo,
   addLayout as addLayoutTo,
+  applySavedLayout as applySavedLayoutTo,
+  keepAs as keepAsIn,
   openBeside as openBesideOf,
   activeLayout as activeLayoutOf,
   closeColumn as closeColumnOf,
@@ -21,6 +23,7 @@ import {
   setColumnBrowser as setColumnBrowserOf,
   setColumnView as setColumnViewOf,
   type BrowserState,
+  type SavedLayout,
   type ViewId,
   type WorkspaceLayout,
   type WorkspaceState,
@@ -65,6 +68,10 @@ export interface WorkspaceLayouts {
   closeLayout: (name: string) => void
   selectLayout: (name: string) => void
   renameLayout: (name: string, requested: string) => void
+  /** Open a layout saved for every task (see `applySavedLayout`). */
+  applySaved: (saved: SavedLayout) => void
+  /** Name what is on screen in this task too, after it was saved (see `keepAs`). */
+  keepAs: (name: string) => void
   addColumn: (view: ViewId) => void
   closeColumn: (index: number) => void
   setColumnView: (index: number, view: ViewId) => void
@@ -320,6 +327,11 @@ export function useWorkspaceLayouts(taskId: string): WorkspaceLayouts {
       (name: string, requested: string) => setState((current) => renameLayoutOf(current, name, requested)),
       [],
     ),
+    applySaved: useCallback(
+      (saved: SavedLayout) => setState((current) => applySavedLayoutTo(current, saved)),
+      [],
+    ),
+    keepAs: useCallback((name: string) => setState((current) => keepAsIn(current, name)), []),
     addColumn: useCallback(
       (view: ViewId) => onActive((current, name) => addColumnTo(current, name, view)),
       [onActive],

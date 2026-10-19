@@ -135,7 +135,7 @@ describe('the Files tab against a live dry-run worktree', () => {
       browser.evaluate(
         `document.querySelector('[data-slot="layout-card"][data-active]').textContent.trim()`,
       ),
-    ).toBe('Code')
+    ).toBe('Files')
     // The real worktree root: the committed fixture files plus the src dir.
     expect(browser.count('[data-slot="files-file"][data-path="README.md"]')).toBe(1)
     expect(browser.count('[data-slot="files-file"][data-path="logo.png"]')).toBe(1)

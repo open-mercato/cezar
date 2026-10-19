@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router'
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
@@ -23,10 +23,13 @@ vi.mock('../workflow-graph/task-graph', () => ({
 const { TaskWorkspaceRoute, classifyReference } = await import('./task-workspace')
 
 let hostLayouts: Record<string, unknown> = {}
+/** `~/.cezar/ui-state.json`: where layouts saved for every task live (`savedLayouts`). */
+let hostUiState: Record<string, unknown> = {}
 
 beforeEach(() => {
   localStorage.clear()
   hostLayouts = {}
+  hostUiState = {}
   // jsdom lays nothing out; give the strip room so it does not fold every card into `…`.
   vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(2000)
 })
@@ -113,6 +116,10 @@ function stubFetch({ terminal = true }: { terminal?: boolean } = {}) {
           return jsonResponse({ layouts: hostLayouts[runId] })
         }
       }
+      if (path === '/api/v1/workspace/ui-state') {
+        if (method === 'PUT') hostUiState = { ...hostUiState, ...JSON.parse(String(init.body ?? '{}')) }
+        return jsonResponse(hostUiState)
+      }
       if (method === 'GET' && path === '/api/v1/runs') return jsonResponse([RUN])
       if (method === 'GET' && path === '/api/v1/repo') return jsonResponse(health(terminal).repo)
       return jsonResponse({ error: `unstubbed: ${path}` }, 404)
@@ -136,9 +143,16 @@ function renderWorkspace(view?: ViewId) {
 
 const text = (element: Element | null | undefined) => element?.textContent?.replace(/\s+/g, ' ').trim()
 const cardNames = () => Array.from(document.querySelectorAll('[data-slot="layout-card"]')).map(text)
-const activeCard = () => text(document.querySelector('[data-slot="layout-card"][data-active]'))
+// The view tab that shows, else the saved layout the Layout menu names.
+const activeCard = () =>
+  text(document.querySelector('[data-slot="layout-card"][data-active]')) ??
+  document.querySelector('[data-action="layouts"][data-active-layout]')?.getAttribute('data-active-layout') ??
+  undefined
+const terminalTab = () => document.querySelector<HTMLElement>('[data-slot="layout-card"][data-fixed="terminal"]')
+
+const openLayoutMenu = () => fireEvent.keyDown(screen.getByRole('button', { name: /^Layout/ }), { key: 'Enter' })
 const columnViews = () =>
-  Array.from(document.querySelectorAll('[data-slot="workspace-column"]')).map((column) => column.getAttribute('data-view'))
+  Array.from(document.querySelectorAll('[data-slot="workspace-layout"][data-active] [data-slot="workspace-column"]')).map((column) => column.getAttribute('data-view'))
 
 async function ready() {
   await waitFor(() => expect(document.querySelector('[data-route="task-workspace"]')).not.toBeNull())
@@ -157,8 +171,8 @@ describe('the task workspace (main)', () => {
     renderWorkspace()
     await ready()
 
-    // Terminal has no tab: the Terminal button is its one control.
-    expect(cardNames()).toEqual(['Chat', 'Changes', 'Commits', 'Code', 'Preview'])
+    // Changes second; Terminal last, as a tab that toggles the drawer.
+    expect(cardNames()).toEqual(['Chat', 'Changes', 'Commits', 'Files', 'Preview', 'Terminal'])
     expect(activeCard()).toBe('Chat')
     // One strip, never both: the old route links are gone from the header.
     expect(screen.queryByRole('link', { name: 'Changes' })).toBeNull()
@@ -179,8 +193,8 @@ describe('the task workspace (main)', () => {
     expect(hints()).toEqual([])
 
     fireEvent.keyDown(window, { key: 'Meta', metaKey: true })
-    // The five views, then Notes — saved layouts are not numbered.
-    await waitFor(() => expect(hints()).toEqual(['1', '2', '3', '4', '5', '6']))
+    // The six views, then Notes — saved layouts are not numbered.
+    await waitFor(() => expect(hints()).toEqual(['1', '2', '3', '4', '5', '6', '7']))
     fireEvent.keyUp(window, { key: 'Meta' })
     await waitFor(() => expect(hints()).toEqual([]))
     vi.unstubAllGlobals()
@@ -242,7 +256,11 @@ describe('the task workspace (main)', () => {
 
     expect(cardNames()).not.toContain('Terminal')
     expect(screen.queryByRole('button', { name: /terminal/i })).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'New layout' }))
+    // ⌥-click splits Chat into the working arrangement; its Split view opens the tile picker.
+    fireEvent.click(document.querySelector<HTMLElement>('[data-fixed="changes"]')!, { altKey: true })
+    await waitFor(() => expect(columnViews()).toEqual(['session', 'changes']))
+    const splits = screen.getAllByRole('button', { name: 'Split view' })
+    fireEvent.click(splits[splits.length - 1]!)
     await waitFor(() => expect(document.querySelector('[data-slot="view-tiles-stage"]')).not.toBeNull())
     expect(document.querySelector('[data-slot="view-tiles-stage"] [data-view="terminal"]')).toBeNull()
     // The Preview needs no shell: it is offered either way.
@@ -274,24 +292,100 @@ describe('the task workspace (main)', () => {
     renderWorkspace()
     await ready()
 
-    fireEvent.click(screen.getByRole('button', { name: 'New layout' }))
-    await pickTile('session')
-    await waitFor(() => expect(columnViews()).toEqual(['session']))
-    fireEvent.click(screen.getByRole('button', { name: 'Split view' }))
+    fireEvent.click(document.querySelector<HTMLElement>('[data-fixed="changes"]')!, { altKey: true })
+    await waitFor(() => expect(columnViews()).toEqual(['session', 'changes']))
+    const splits = screen.getAllByRole('button', { name: 'Split view' })
+    fireEvent.click(splits[splits.length - 1]!)
     await pickTile('terminal')
-    await waitFor(() => expect(columnViews()).toEqual(['session', 'terminal']))
+    await waitFor(() => expect(columnViews()).toEqual(['session', 'changes', 'terminal']))
 
     const terminal = await screen.findByTestId('terminal')
     expect(terminal.dataset.fill).toBe('')
     expect(terminal.dataset.run).toBe('r1')
-    // The drawer toggle steps aside while a column already shows the shells.
-    expect(screen.getByRole('button', { name: 'Show terminal' }).hasAttribute('disabled')).toBe(true)
+    expect(terminalTab()?.hasAttribute('data-on')).toBe(true)
 
     await waitFor(() => {
       const saved = reviveState(hostLayouts.r1 ?? null)
       const built = saved.layouts.find((layout) => layout.name === saved.active)
-      expect(built?.columns.map((column) => column.view)).toEqual(['session', 'terminal'])
+      expect(built?.columns.map((column) => column.view)).toEqual(['session', 'changes', 'terminal'])
     })
+  })
+
+  it('opens the Terminal tab as a view of its own, like Preview — a click never adds it to what shows', async () => {
+    stubFetch()
+    renderWorkspace()
+    await ready()
+
+    fireEvent.click(terminalTab()!)
+    await waitFor(() => expect(activeCard()).toBe('Terminal'))
+    expect(columnViews()).toEqual(['terminal'])
+    expect((await screen.findByTestId('terminal')).dataset.fill).toBe('')
+
+    // ⌥-click is the way to put it beside a view.
+    fireEvent.click(document.querySelector<HTMLElement>('[data-fixed="session"]')!)
+    await waitFor(() => expect(activeCard()).toBe('Chat'))
+    fireEvent.click(terminalTab()!, { altKey: true })
+    await waitFor(() => expect(columnViews()).toEqual(['session', 'terminal']))
+
+    // A column's "Move to bottom" docks the same shells as the drawer.
+    fireEvent.click(screen.getByRole('button', { name: 'Move to bottom' }))
+    await waitFor(() => expect(columnViews()).not.toContain('terminal'))
+    expect((await screen.findByTestId('terminal')).dataset.fill).toBeUndefined()
+  })
+
+  it('drops the Terminal tab beside the view it was opened from when the Terminal itself shows', async () => {
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    fireEvent.click(document.querySelector<HTMLElement>('[data-fixed="changes"]')!)
+    await waitFor(() => expect(activeCard()).toBe('Changes'))
+    fireEvent.click(terminalTab()!)
+    await waitFor(() => expect(activeCard()).toBe('Terminal'))
+
+    const data = new Map<string, string>()
+    const dataTransfer = {
+      setData: (type: string, value: string) => data.set(type, value),
+      getData: (type: string) => data.get(type) ?? '',
+      get types() {
+        return [...data.keys()]
+      },
+      effectAllowed: 'all',
+      dropEffect: 'none',
+    }
+    fireEvent.dragStart(terminalTab()!, { dataTransfer })
+    const right = await waitFor(() => {
+      const zones = document.querySelectorAll('[data-slot="view-drop-zones"] [data-drop-zone="insert"]')
+      expect(zones.length).toBe(2)
+      return zones[1]!
+    })
+    fireEvent.dragOver(right, { dataTransfer })
+    fireEvent.drop(right, { dataTransfer })
+    await waitFor(() => expect(columnViews()).toEqual(['changes', 'terminal']))
+
+    // ⌥-click from the Terminal does the same.
+    fireEvent.click(terminalTab()!)
+    await waitFor(() => expect(activeCard()).toBe('Terminal'))
+    fireEvent.click(terminalTab()!, { altKey: true })
+    await waitFor(() => expect(columnViews()).toEqual(['changes', 'terminal']))
+  })
+
+  it('gives a lone view its bar — the split only: no name, no view switcher, no close', async () => {
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    const header = await waitFor(() => document.querySelector<HTMLElement>('[data-slot="workspace-column-header"]')!)
+    expect(header.textContent).not.toContain('Chat')
+    expect(header.querySelector('[data-action="split-view"]')).not.toBeNull()
+    expect(header.querySelector('[data-action="change-view"]')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Close Chat' })).toBeNull()
+
+    // Splitting the Chat tab builds the working arrangement; the Chat tab stays one view.
+    fireEvent.click(screen.getByRole('button', { name: 'Split view' }))
+    await pickTile('files')
+    await waitFor(() => expect(activeCard()).toBe('Custom'))
+    expect(columnViews()).toEqual(['session', 'files'])
+    expect(document.querySelectorAll('[data-action="change-view"]')).toHaveLength(2)
+    expect(screen.getByRole('button', { name: 'Close Chat' })).not.toBeNull()
   })
 
   it('docks the drawer under any layout, and the ` key toggles it', async () => {
@@ -304,11 +398,14 @@ describe('the task workspace (main)', () => {
     fireEvent.keyDown(window, { key: '`' })
     const drawer = await screen.findByTestId('terminal')
     expect(drawer.dataset.fill).toBeUndefined()
-    fireEvent.click(screen.getByRole('button', { name: 'Hide terminal' }))
+    // The tab is lit while the drawer is up; the view that shows stays.
+    expect(terminalTab()?.hasAttribute('data-on')).toBe(true)
+    expect(activeCard()).toBe('Changes')
+    fireEvent.keyDown(window, { key: '`' })
     await waitFor(() => expect(screen.queryByTestId('terminal')).toBeNull())
   })
 
-  it('folds cards until the row stops overflowing, so + is never pushed out of the strip', async () => {
+  it('folds tabs until the row stops overflowing, so the Layout menu is never pushed out of the strip', async () => {
     // jsdom lays nothing out: a 300px row whose content is 100px per card plus its two buttons.
     vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(300)
     vi.spyOn(Element.prototype, 'scrollWidth', 'get').mockImplementation(function (this: Element) {
@@ -321,18 +418,121 @@ describe('the task workspace (main)', () => {
 
     await waitFor(() => expect(cardNames().length).toBeLessThanOrEqual(2))
     expect(activeCard()).toBe('Chat')
-    expect(screen.getByRole('button', { name: /more layouts/ })).not.toBeNull()
-    expect(screen.getByRole('button', { name: 'New layout' })).not.toBeNull()
+    expect(screen.getByRole('button', { name: /more views/ })).not.toBeNull()
+    expect(screen.getByRole('button', { name: /^Layout/ })).not.toBeNull()
   })
 
   it('opens /terminal as its own card', async () => {
     stubFetch()
     renderWorkspace('terminal')
     expect((await screen.findByTestId('terminal')).dataset.fill).toBe('')
-    // No tab stands for it; the Terminal button stays lit while the shells fill a column.
-    const toggle = document.querySelector('[data-action="toggle-terminal"]') as HTMLButtonElement
-    expect(toggle.getAttribute('aria-pressed')).toBe('true')
-    expect(toggle.textContent).toContain('in column')
+    await waitFor(() => expect(activeCard()).toBe('Terminal'))
+    expect(terminalTab()?.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('keeps a left layout mounted, hidden, so going back to Changes does not rebuild it', async () => {
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    const visible = () => document.querySelector('[data-slot="workspace-layout"][data-active]')
+    const select = (view: ViewId) =>
+      fireEvent.click(document.querySelector(`[data-slot="layout-card"][data-fixed="${view}"]`) as HTMLElement)
+
+    select('changes')
+    await waitFor(() => expect(columnViews()).toEqual(['changes']))
+    const changes = visible()
+
+    select('session')
+    await waitFor(() => expect(columnViews()).toEqual(['session']))
+    expect(changes?.isConnected).toBe(true)
+    expect(changes?.hasAttribute('data-active')).toBe(false)
+
+    select('changes')
+    await waitFor(() => expect(columnViews()).toEqual(['changes']))
+    expect(visible()).toBe(changes)
+  })
+
+  it('sends the \\ key to the layout on screen, never to a kept one hidden behind it', async () => {
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    // ⌥-click builds a split layout, whose windows carry Split view buttons.
+    fireEvent.click(document.querySelector<HTMLElement>('[data-fixed="changes"]')!, { altKey: true })
+    await waitFor(() => expect(columnViews()).toEqual(['session', 'changes']))
+
+    fireEvent.click(document.querySelector<HTMLElement>('[data-slot="layout-card"][data-fixed="changes"]')!)
+    await waitFor(() => expect(columnViews()).toEqual(['changes']))
+    const hidden = () => document.querySelector('[data-slot="workspace-layout"]:not([data-active])')
+    // The split layout is kept, hidden, with its Split view buttons still in the DOM.
+    expect(hidden()?.querySelector('[data-action="split-view"]')).not.toBeNull()
+
+    // The key splits the layout on screen — the hidden one sits later in the DOM, so a stage-wide
+    // lookup would have pressed ITS last Split view instead.
+    fireEvent.keyDown(document.body, { key: '\\' })
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="workspace-layout"][data-active] [data-slot="view-tiles-stage"]')).not.toBeNull(),
+    )
+  })
+
+  it('gives each task its own Changes view — the previous task\'s diff never renders under the next', async () => {
+    // Both tasks open on Changes. A guard: one ChangesView reused across them would let its
+    // deferred diff hand the second task's first render the first task's files.
+    const onChanges = { layouts: [{ name: 'Chat', columns: [{ view: 'session', width: 100 }] }, { name: 'Changes', columns: [{ view: 'changes', width: 100 }] }], active: 'Changes' }
+    hostLayouts = { r1: onChanges, r2: onChanges }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+        const path = String(input)
+        const run = /^\/api\/v1\/runs\/(r[12])(\/.*)?$/.exec(path)
+        if (path === '/api/v1/health') return jsonResponse(health(true))
+        if (path === '/api/v1/runs') return jsonResponse([RUN, { ...RUN, id: 'r2' }])
+        if (path === '/api/v1/repo') return jsonResponse(health(true).repo)
+        if (!run) return jsonResponse({ error: `unstubbed: ${path}` }, 404)
+        const [, id, rest = ''] = run
+        if (rest === '') return jsonResponse({ ...RUN, id })
+        if (rest === '/layouts') return jsonResponse({ layouts: (init.method ?? 'GET') === 'GET' ? hostLayouts[id!] : JSON.parse(String(init.body)) })
+        if (rest.startsWith('/drafts')) return jsonResponse({ surfaces: {} })
+        if (rest.startsWith('/changes')) return jsonResponse({ files: [], stat: { adds: 0, dels: 0, files: 0 } })
+        return jsonResponse([])
+      }),
+    )
+    let navigate: (to: string) => void = () => {}
+    function Navigator() {
+      const go = useNavigate()
+      navigate = (to) => void go(to)
+      return null
+    }
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/tasks/r1']}>
+          <Navigator />
+          <Routes>
+            <Route path="/tasks/:id" element={<TaskWorkspaceRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    const changesView = () => document.querySelector('[data-route="task-changes"]')
+    await waitFor(() => expect(changesView()).not.toBeNull())
+    const first = changesView()
+
+    navigate('/tasks/r2')
+    await waitFor(() => expect(document.querySelector('[data-route="task-workspace"]')?.getAttribute('data-run-id')).toBe('r2'))
+    await waitFor(() => expect(changesView()).not.toBeNull())
+    expect(changesView()).not.toBe(first)
+  })
+
+  it('never keeps a Preview layout once left — a hidden page would keep running', async () => {
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    fireEvent.click(document.querySelector('[data-slot="layout-card"][data-fixed="browser"]') as HTMLElement)
+    await waitFor(() => expect(columnViews()).toEqual(['browser']))
+    const preview = document.querySelector('[data-slot="workspace-layout"][data-active]')
+
+    fireEvent.click(document.querySelector('[data-slot="layout-card"][data-fixed="session"]') as HTMLElement)
+    await waitFor(() => expect(columnViews()).toEqual(['session']))
+    expect(preview?.isConnected).toBe(false)
   })
 
   it('splits the screen when a view tab is dropped beside the chat', async () => {
@@ -360,14 +560,58 @@ describe('the task workspace (main)', () => {
     fireEvent.dragOver(zones[1]!, { dataTransfer })
     fireEvent.drop(zones[1]!, { dataTransfer })
 
-    // The fixed Chat card stays one view; the pair lands in a saved layout of its own.
-    await waitFor(() => expect(activeCard()).toBe('Chat + Changes'))
+    // The fixed Chat card stays one view; the pair is the task's working arrangement, not a new layout.
+    await waitFor(() => expect(activeCard()).toBe('Custom'))
     expect(document.querySelector('[data-slot="view-drop-zones"]')).toBeNull()
     await waitFor(() => {
       const saved = reviveState(hostLayouts.r1 ?? null)
-      const built = saved.layouts.find((layout) => layout.name === 'Chat + Changes')
+      const built = saved.layouts.find((layout) => layout.name === 'Custom')
       expect(built?.columns.map((column) => column.view)).toEqual(['session', 'changes'])
     })
+  })
+
+  it('saves a layout only when the user names it, for every task, and opens it from the Layout menu', async () => {
+    hostUiState = { savedLayouts: [{ name: 'Debug', columns: [{ view: 'files', width: 60 }, { view: 'terminal', width: 40 }] }] }
+    stubFetch()
+    renderWorkspace()
+    await ready()
+
+    // Splitting names nothing: the task's working arrangement, and still one saved layout.
+    fireEvent.click(document.querySelector<HTMLElement>('[data-fixed="changes"]')!, { altKey: true })
+    await waitFor(() => expect(activeCard()).toBe('Custom'))
+    expect(hostUiState.savedLayouts).toHaveLength(1)
+
+    openLayoutMenu()
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Save current view as layout/ }))
+    const field = await screen.findByRole('textbox', { name: 'Layout name' })
+    expect((field as HTMLInputElement).value).toBe('Chat + Changes')
+    // A view tab's name is not a layout's.
+    fireEvent.change(field, { target: { value: 'Changes' } })
+    expect(screen.getByRole('button', { name: 'Save' }).hasAttribute('disabled')).toBe(true)
+    fireEvent.change(field, { target: { value: 'Review' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(activeCard()).toBe('Review'))
+    await waitFor(() =>
+      expect(hostUiState.savedLayouts).toEqual([
+        { name: 'Debug', columns: [{ view: 'files', width: 60 }, { view: 'terminal', width: 40 }] },
+        { name: 'Review', columns: [{ view: 'session', width: 50 }, { view: 'changes', width: 50 }] },
+      ]),
+    )
+
+    // A layout saved elsewhere opens here with its own arrangement.
+    openLayoutMenu()
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Debug/ }))
+    await waitFor(() => expect(activeCard()).toBe('Debug'))
+    expect(columnViews()).toEqual(['files', 'terminal'])
+
+    openLayoutMenu()
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete saved layout Review' }))
+    await waitFor(() => expect(hostUiState.savedLayouts).toEqual([expect.objectContaining({ name: 'Debug' })]))
+
+    // The menu stays open after a ×. The row's × is pointer-only; Delete on the focused row does
+    // the same from the keyboard.
+    fireEvent.keyDown(await screen.findByRole('menuitem', { name: /Debug/ }), { key: 'Delete' })
+    await waitFor(() => expect(hostUiState.savedLayouts).toEqual([]))
   })
 })
 
