@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
-import { renameWithRetry } from '../fs-rename.ts';
 import { dirname } from 'node:path';
+import { renameWithRetry } from '../fs-rename.ts';
 import { agentHomePaths } from '../paths.ts';
 import { ensureDataGitignore } from '../data-gitignore.ts';
 import { findConfigFile, type ConfigFileDef } from './catalog.ts';
