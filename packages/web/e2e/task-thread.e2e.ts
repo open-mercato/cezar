@@ -396,13 +396,14 @@ describe('task thread', () => {
       text: card.textContent.trim(),
       active: card.hasAttribute('data-active'),
     }))`) as Array<{ text: string; active: boolean }>
-    // A local cockpit allows a shell, so Terminal is a fixed card too.
+    // A local cockpit allows a shell, so Terminal (the drawer's toggle) is the last tab.
     expect(cards).toEqual([
       { text: 'Chat', active: true },
-      { text: 'Graph', active: false },
       { text: 'Changes', active: false },
       { text: 'Commits', active: false },
-      { text: 'Code', active: false },
+      { text: 'Files', active: false },
+      { text: 'Graph', active: false },
+      { text: 'Preview', active: false },
       { text: 'Terminal', active: false },
     ])
     // Notes keeps its own page, reached from the strip's trailing icon.

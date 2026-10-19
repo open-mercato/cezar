@@ -66,7 +66,6 @@ function workspace(overrides: Partial<TaskWorkspaceBridge> = {}): TaskWorkspaceB
     openViewBeside: vi.fn(),
     layouts: [{ name: 'Review', label: 'Review', active: false }],
     selectLayout: vi.fn(),
-    newLayout: vi.fn(),
     maximized: false,
     toggleMaximized: vi.fn(),
     splitView: null,
@@ -168,8 +167,11 @@ describe('views', () => {
     const { byId, on } = build(run('done'))
     byId.get('tab:2')?.perform()
     expect(on.navigate).toHaveBeenCalledWith('/tasks/r1/changes')
-    byId.get('tab:6')?.perform()
+    // Notes sits before Preview on the row, so it is the fifth tab.
+    byId.get('tab:5')?.perform()
     expect(on.navigate).toHaveBeenCalledWith('/tasks/r1/notes')
+    byId.get('tab:6')?.perform()
+    expect(on.navigate).toHaveBeenCalledWith('/tasks/r1/preview')
   })
 
   it('for a task not on screen they navigate to its routes, with no layout commands', () => {
@@ -177,7 +179,7 @@ describe('views', () => {
     byId.get('view:changes')?.perform()
     expect(on.navigate).toHaveBeenCalledWith('/tasks/r1/changes')
     byId.get('view:terminal')?.perform()
-    expect(on.navigate).toHaveBeenCalledWith('/tasks/r1/terminal')
+    expect(on.navigate).toHaveBeenLastCalledWith('/tasks/r1/terminal')
     expect(byId.has('view:graph')).toBe(false)
     expect(commands.some((command) => command.group === 'layout')).toBe(false)
   })

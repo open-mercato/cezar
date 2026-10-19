@@ -493,6 +493,10 @@ interface ActiveRun {
   idleTimer?: NodeJS.Timeout;
   /** The inactivity watchdog closed this session; a plain final wait is not success evidence. */
   idleClosed?: boolean;
+  /** The user pressed Finish on this owner; a repeat while it settles is the same request (6a3cecee). */
+  finishRequested?: boolean;
+  /** Review accepted while the engine was still tearing down; `dropActive` applies it. */
+  acceptReviewOnDrop?: boolean;
   monitoringWakeTimer?: NodeJS.Timeout;
   monitoringWakeIntervalMinutes?: number;
   monitoringWakeups?: number;
@@ -2139,6 +2143,10 @@ export class RunManager {
     // continuation (or another owner) may have claimed the same run id by the time that old
     // promise reaches finally; never let stale cleanup release the newer owner's slot.
     if (expectedState !== undefined && state !== expectedState) return;
+    if (state?.acceptReviewOnDrop && !state.cancelled && this.store.getRun(runId)?.status === 'review') {
+      this.store.updateRun(runId, { status: 'done' });
+      this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
+    }
     state?.releaseWorktree?.();
     state?.releaseRepoRoot?.();
     if (state) state.releaseRepoRoot = undefined;
@@ -3778,11 +3786,30 @@ export class RunManager {
       // other Finish (`done`, or `review` when the worktree holds changes)
       // instead of the `failed` an abandoned live park would settle as.
       if (state.askPark === 'waiting') state.askPark = 'abandoned';
+      state.finishRequested = true;
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'session closed by user' });
       state.session.end();
       return true;
     }
     const run = this.store.getRun(runId);
+    // The session already closed (agent's DONE, idle watchdog, an earlier Finish) but the engine
+    // has not settled yet, so the record still says `waiting`. Finish in that window is the same
+    // explicit intent as above — honor it on the settlement instead of answering 409 (6a3cecee).
+    if (state && !state.cancelled && state.sessionEverOpened && run?.status === 'waiting') {
+      state.idleClosed = undefined;
+      if (state.askPark === 'waiting') state.askPark = 'abandoned';
+      if (!state.finishRequested) {
+        state.finishRequested = true;
+        this.store.appendEvent(runId, { type: 'lifecycle', message: 'finished by user while the session was closing' });
+      }
+      return true;
+    }
+    // Settled at `review`, but still unwinding (autosave, teardown): accept once it lets go. A
+    // repeat of a Finish already pressed on this session is not an accept — it stays at review.
+    if (state && !state.cancelled && run?.status === 'review') {
+      if (!state.finishRequested) state.acceptReviewOnDrop = true;
+      return true;
+    }
     if (run?.status === 'review' && !this.isActive(runId)) {
       this.store.updateRun(runId, { status: 'done' });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
@@ -6523,6 +6550,9 @@ export class RunManager {
     const attach = (started: AgentSession, resume: boolean): AgentSession => {
       state.session = resume ? resumeGuard.track(started) : started;
       state.sessionEverOpened = true;
+      // A Finish pressed on an earlier step's session is not a repeat of one on this session.
+      state.finishRequested = undefined;
+      state.acceptReviewOnDrop = undefined;
       this.flushDeferred(runId);
       state.currentStepId = step.id;
       state.interrupt = () => started.interrupt();
@@ -6952,7 +6982,10 @@ export class RunManager {
    * the only place the diff and the draft-PR action live.
    */
   private async idleClosedFails(runId: string, state: ActiveRun): Promise<boolean> {
-    return state.idleClosed === true && !(await this.reviewGateApplies(runId));
+    if (state.idleClosed !== true) return false;
+    const reviewGate = await this.reviewGateApplies(runId);
+    // A Finish may land during that git await and clear the inactivity evidence (6a3cecee).
+    return state.idleClosed === true && !reviewGate;
   }
 
   /**

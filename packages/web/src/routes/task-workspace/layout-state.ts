@@ -31,9 +31,10 @@ export type ViewId = 'session' | 'changes' | 'commits' | 'files' | 'browser' | '
 
 export const VIEW_IDS: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'browser', 'graph', 'terminal']
 
-/** The view tabs, left to right. Chat is home; the graph is the task's shape, so it is next.
- *  Terminal has no tab: its one control is the Terminal button, which opens the drawer. */
-export const FIXED_VIEW_ORDER: readonly ViewId[] = ['session', 'graph', 'changes', 'commits', 'files', 'browser']
+/** The view tabs, left to right: Chat is home and Changes is what a task is reviewed by; the
+ *  rarely opened Graph sits near the end, and Notes (its own page) lands before Preview
+ *  (`strip.ts`). Terminal is last; the ` key docks it as a drawer instead. */
+export const FIXED_VIEW_ORDER: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'graph', 'browser', 'terminal']
 
 /** The route each view tab deep-links to, for pages that are not the workspace (Notes). */
 export const VIEW_PATHS: Record<ViewId, string> = {
@@ -52,7 +53,7 @@ const VIEW_LABELS: Record<ViewId, string> = {
   session: 'Chat',
   changes: 'Changes',
   commits: 'Commits',
-  files: 'Code',
+  files: 'Files',
   // The task's app, with Design Mode (spec 2026-10-09-design-mode).
   browser: 'Preview',
   graph: 'Graph',
@@ -65,8 +66,8 @@ const LEGACY_AUTO_NAMES: Record<string, string> = {
   Czat: 'Chat',
   Zmiany: 'Changes',
   Commity: 'Commits',
-  Pliki: 'Code',
-  Files: 'Code',
+  Pliki: 'Files',
+  Code: 'Files',
   Przeglądarka: 'Preview',
   Browser: 'Preview',
   Graf: 'Graph',
@@ -85,9 +86,9 @@ export function layoutDisplayName(name: string): string {
 
 /** Names a view's born layout was SAVED under by earlier builds. A born layout is recognized by
  *  its name, so a relabelled view must keep answering to the old one — otherwise every existing
- *  task grows a stray `Files` card beside the `Code` one that replaced it. */
+ *  task grows a stray `Files` card beside the `Code` one it was briefly called. */
 const LEGACY_VIEW_NAMES: Partial<Record<ViewId, readonly string[]>> = {
-  files: ['Files'],
+  files: ['Code'],
   browser: ['Browser'],
 }
 
@@ -722,7 +723,7 @@ export function openDeepLink(state: WorkspaceState, view: ViewId): WorkspaceStat
  *  - the active layout already shows that view: there;
  *  - it is a layout the user built and has room: a new window at its right;
  *  - otherwise (a fixed card, which stays the one view it stands for, or a full layout): the
- *    two-window layout named after the pair — `Chat + Files` — made the first time, reused after.
+ *    task's working arrangement (`WORKING_LAYOUT_NAME`) with the two of them.
  */
 export function openBeside(
   state: WorkspaceState,
@@ -737,21 +738,8 @@ export function openBeside(
     }
   }
   const from = current?.columns[0]?.view ?? 'session'
-  const name = `${viewLabel(from)} + ${viewLabel(view)}`
-  const pair = findLayout(state, name)
-  const index = pair ? pair.columns.findIndex((column) => column.view === view) : -1
-  if (pair && index >= 0) return { state: selectLayout(state, name), name, index }
-  // The pair would be one card past the host's cap: nowhere to put it.
-  if (state.layouts.length >= MAX_LAYOUTS) return null
-  const made = uniqueName(name, state.layouts)
-  return {
-    state: {
-      layouts: [...state.layouts, { name: made, columns: withEqualWidths([newColumn(from), newColumn(view)]) }],
-      active: made,
-    },
-    name: made,
-    index: 1,
-  }
+  const next = toWorking(state, [newColumn(from), newColumn(view)])
+  return next ? { state: next, name: WORKING_LAYOUT_NAME, index: 1 } : null
 }
 
 /**
@@ -759,8 +747,7 @@ export function openBeside(
  * (`replace`). A view already on screen MOVES there rather than appearing twice.
  *
  * A layout the user built is edited in place. A fixed card stays the one view it stands for, so
- * the result goes to a saved layout with exactly those columns — reused when one exists, minted
- * under the pair's name (`Chat + Code`) otherwise, as `openBeside` does.
+ * the result becomes the task's working arrangement, as `openBeside` does.
  */
 export function dropView(
   state: WorkspaceState,
@@ -787,14 +774,83 @@ export function dropView(
     return replaceLayout(state, current.name, { ...current, columns: withEqualWidths(next) })
   }
   if (next.length === 1) return openDeepLink(state, next[0]!.view)
-  const views = next.map((column) => column.view).join('|')
-  const saved = state.layouts.find(
-    (layout) => fixedViewOf(layout) === null && layout.columns.map((column) => column.view).join('|') === views,
-  )
-  if (saved) return selectLayout(state, saved.name)
+  return toWorking(state, next) ?? state
+}
+
+/**
+ * The task's ONE unsaved arrangement. Splitting a view tab (a drag, ⌥-click, a file opened from
+ * the chat) lands here instead of minting a named layout each time; naming it — and keeping it for
+ * every task — is the user's explicit "Save current view as layout…".
+ */
+export const WORKING_LAYOUT_NAME = 'Custom'
+
+/** Names a saved layout may not take: they belong to a view tab or to the working arrangement. */
+export function isReservedLayoutName(name: string): boolean {
+  const trimmed = name.trim()
+  return trimmed === WORKING_LAYOUT_NAME || VIEW_IDS.some((view) => isViewName(trimmed, view))
+}
+
+/** Show `columns` as the working arrangement, made the first time and overwritten after. */
+function toWorking(state: WorkspaceState, columns: WorkspaceColumn[]): WorkspaceState | null {
+  const layout = { name: WORKING_LAYOUT_NAME, columns: withEqualWidths(columns) }
+  if (findLayout(state, WORKING_LAYOUT_NAME)) {
+    return { ...replaceLayout(state, WORKING_LAYOUT_NAME, layout), active: WORKING_LAYOUT_NAME }
+  }
+  if (state.layouts.length >= MAX_LAYOUTS) return null
+  return { layouts: [...state.layouts, layout], active: WORKING_LAYOUT_NAME }
+}
+
+/** A layout saved for every task: its arrangement only (`savedWorkspaceLayoutSchema`). */
+export interface SavedLayout {
+  name: string
+  columns: readonly { view: ViewId; width: number }[]
+}
+
+/** The active layout as a saved one, or `null` when there is nothing to save. */
+export function toSavedLayout(state: WorkspaceState, name: string): SavedLayout | null {
+  const current = activeLayout(state)
+  const trimmed = name.trim().slice(0, MAX_LAYOUT_NAME_LENGTH)
+  if (!current || current.columns.length === 0 || trimmed === '' || isReservedLayoutName(trimmed)) return null
+  return { name: trimmed, columns: current.columns.map(({ view, width }) => ({ view, width })) }
+}
+
+/**
+ * Open a saved layout in this task. The task keeps its own copy (a Preview's tabs live there), so
+ * coming back to it finds the same columns — unless the saved arrangement changed since, which
+ * starts the copy afresh from it.
+ */
+export function applySavedLayout(state: WorkspaceState, saved: SavedLayout): WorkspaceState {
+  if (isReservedLayoutName(saved.name)) return state
+  const existing = findLayout(state, saved.name)
+  const views = saved.columns.map((column) => column.view).join('|')
+  if (existing && existing.columns.map((column) => column.view).join('|') === views) {
+    return selectLayout(state, saved.name)
+  }
+  const widths = normalizeWidths(saved.columns.map((column) => column.width))
+  const layout = {
+    name: saved.name,
+    columns: saved.columns.slice(0, MAX_COLUMNS).map((column, index) => ({ ...newColumn(column.view), width: widths[index] ?? 0 })),
+  }
+  if (existing) return { ...replaceLayout(state, saved.name, layout), active: saved.name }
   if (state.layouts.length >= MAX_LAYOUTS) return state
-  const name = uniqueName(next.map((column) => viewLabel(column.view)).join(' + '), state.layouts)
-  return { layouts: [...state.layouts, { name, columns: withEqualWidths(next) }], active: name }
+  return { layouts: [...state.layouts, layout], active: saved.name }
+}
+
+/**
+ * The task's side of "Save current view as layout…": the arrangement on screen now goes by that
+ * name here too (replacing a copy under it), so the Layout button names what was saved. A view
+ * tab stays the view it stands for, so its columns are copied rather than renamed.
+ */
+export function keepAs(state: WorkspaceState, name: string): WorkspaceState {
+  const current = activeLayout(state)
+  const trimmed = name.trim().slice(0, MAX_LAYOUT_NAME_LENGTH)
+  if (!current || trimmed === '' || isReservedLayoutName(trimmed) || current.name === trimmed) return state
+  const others = state.layouts.filter((layout) => layout.name !== trimmed)
+  if (fixedViewOf(current) !== null) {
+    const copy = { name: trimmed, columns: current.columns.map((column) => ({ ...column })) }
+    return { layouts: [...others, copy], active: trimmed }
+  }
+  return { layouts: others.map((layout) => (layout === current ? { ...layout, name: trimmed } : layout)), active: trimmed }
 }
 
 /** How many cards the strip paints before the rest fold into a `Pozostałe…` menu (confirmed

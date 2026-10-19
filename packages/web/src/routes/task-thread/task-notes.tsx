@@ -56,9 +56,7 @@ function NotesHeader({ run }: { run: ApiRun }) {
         fixedViews={fixedViews}
         onSelectFixed={(view) => navigate(`/tasks/${run.id}/${VIEW_PATHS[view]}`)}
         onSelect={noop}
-        onRename={noop}
         onClose={noop}
-        onCreate={noop}
         notesHref={`/tasks/${run.id}/notes`}
         notesActive
         showLayouts={false}
