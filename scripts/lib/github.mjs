@@ -71,6 +71,9 @@ export function githubClient({ token, repository }) {
       if (existing.length > 0) return existing[0];
       return ok('POST', `${r}/pulls`, { head, base, title, body });
     },
+    async addLabels(number, labels) {
+      await ok('POST', `${r}/issues/${number}/labels`, { labels });
+    },
     async ensureLabel(name, color, description) {
       const { status } = await call('POST', `${r}/labels`, { name, color, description });
       if (status !== 201 && status !== 422) throw new Error(`creating label "${name}" → ${status}`);

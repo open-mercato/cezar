@@ -67,6 +67,7 @@ const SET = {
   runAlias: 'alias-cezar-run',
 };
 const COMPANIONS = ['packages/web'];
+const SKIP_NOTES_LABEL = 'skip-changelog';
 
 const fail = (message) => {
   console.error(`release-line: ${message}`);
@@ -135,6 +136,9 @@ async function openPr(gh, { branch, parentSha, message, title, body }) {
   const sha = await gh.commitFiles({ parentSha, files: files(), message });
   await gh.setBranch(branch, sha);
   const pr = await gh.openPullRequest({ head: branch, base: 'main', title, body });
+  // Release bookkeeping stays out of generated notes (.github/release.yml excludes the label).
+  await gh.ensureLabel(SKIP_NOTES_LABEL, 'ededed', 'Left out of generated release notes');
+  await gh.addLabels(pr.number, [SKIP_NOTES_LABEL]);
   log(`opened ${pr.html_url}`);
   return pr.html_url;
 }

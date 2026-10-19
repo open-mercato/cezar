@@ -8,6 +8,7 @@ interface Client {
   commitFiles(input: { parentSha: string; files: { path: string; content: string }[]; message: string }): Promise<string>;
   openPullRequest(input: { head: string; base: string; title: string; body: string }): Promise<{ html_url: string }>;
   ensureLabel(name: string, color: string, description: string): Promise<void>;
+  addLabels(number: number, labels: string[]): Promise<void>;
   createRelease(input: { tag: string; sha: string; name: string; body: string; makeLatest: boolean }): Promise<boolean>;
 }
 
@@ -112,6 +113,12 @@ describe('githubClient', () => {
     await expect(client().ensureLabel('backport main', 'c5def5', 'd')).resolves.toBeUndefined();
     stubGitHub({ 'POST /repos/acme/app/labels': { status: 403, data: { message: 'Forbidden' } } });
     await expect(client().ensureLabel('backport main', 'c5def5', 'd')).rejects.toThrow(/403/);
+  });
+
+  it('adds labels to a PR through the issues API', async () => {
+    const calls = stubGitHub({ 'POST /repos/acme/app/issues/7/labels': { status: 200, data: [] } });
+    await client().addLabels(7, ['skip-changelog']);
+    expect(calls).toEqual([{ method: 'POST', path: '/repos/acme/app/issues/7/labels', body: { labels: ['skip-changelog'] } }]);
   });
 
   it('leaves an existing release alone and creates a missing one at the given commit', async () => {

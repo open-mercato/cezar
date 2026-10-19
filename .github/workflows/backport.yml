@@ -35,4 +35,9 @@ jobs:
           # A PR opened with GITHUB_TOKEN runs no CI, so RELEASE_TOKEN is preferred when set.
           github_token: ${{ secrets.RELEASE_TOKEN || github.token }}
           label_pattern: '^backport (main|release/v\d+\.\d+\.x)$'
+          # Release notes group PRs by these labels (.github/release.yml) and list their titles,
+          # so a backport keeps both; the `backport` label marks it in the PR list instead.
+          copy_labels_pattern: '^(bug|feature|security|refactor|dependencies|documentation|skip-changelog)$'
+          pull_title: '${pull_title}'
+          add_labels: backport
           experimental: '{"conflict_resolution": "draft_commit_conflicts"}'

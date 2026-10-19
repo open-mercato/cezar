@@ -68,7 +68,12 @@ latest — so a 0.15.4 after 0.16.0 never offers anyone a downgrade.
 **Changelog.** A hand-written entry wins: an existing `# X.Y.Z` heading is kept,
 and a leading `# Unreleased` on the line is renamed to the version (*Release
 cut* moves `main`'s `# Unreleased` to the new line, so it is never shipped twice). Otherwise the
-entry is GitHub's generated notes since the previous tag on that line.
+entry is GitHub's generated notes since the previous tag on that line, grouped by
+PR label per [`.github/release.yml`](../.github/release.yml) — `feature` → ✨ Features,
+`security` → 🔒 Security, `bug` → 🐛 Fixes, `refactor`/`dependencies`/`documentation`
+→ 🧹 Maintenance — with contributors credited. Backport PRs keep the original title and
+labels; the release workflows' own PRs carry `skip-changelog` and are left out. The
+same entry, plus the install command, is the GitHub Release body.
 
 **Re-runs are safe.** A version already tagged is skipped past, a package
 already on npm is not published again, and an existing GitHub Release, branch
