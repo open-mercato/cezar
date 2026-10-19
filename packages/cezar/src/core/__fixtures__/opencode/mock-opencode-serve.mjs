@@ -20,6 +20,10 @@
 //                 a server whose turn boundary the runner has to synthesize.
 //   `#drop-then-die` destroy the message POST's socket AND then close the event
 //                 bus: the drop was real, and the runner has to say so.
+//   `#permission <path>` ask `external_directory` for <path> and, like the
+//                 real server, finish the turn only once the prompt is answered;
+//                 the final text names the reply.
+// `MOCK_LEGACY_PERMISSION=1` serves only the pre-rework session-scoped reply route.
 // `MOCK_NO_EVENT_BUS=1` in the environment makes `GET /event` 404 instead, for
 // the no-event-bus fallback.
 import { createServer } from 'node:http';
@@ -42,6 +46,9 @@ const suffix = () => (turn <= 1 ? '' : `_t${turn}`);
 const messageId = () => `${MESSAGE_ID}${suffix()}`;
 
 let sse = null;
+/** The one prompt a turn is blocked on, and what answering it does. A single
+ *  slot compared by id — never a lookup keyed by the request URL. */
+let pendingPermission = null;
 const send = (event) => {
   if (sse) sse.write(`data: ${JSON.stringify(event)}\n\n`);
 };
@@ -80,6 +87,37 @@ const server = createServer((req, res) => {
       res.end(JSON.stringify({ id: SESSION_ID, title: 'cezar task' }));
       return;
     }
+    // The current reply route, or — under `MOCK_LEGACY_PERMISSION=1`, a server
+    // from before the permission rework — only the session-scoped one.
+    const legacy = process.env.MOCK_LEGACY_PERMISSION === '1';
+    const permissionReply = legacy
+      ? url.match(new RegExp(`^/session/${SESSION_ID}/permissions/([^/]+)$`))
+      : url.match(/^\/permission\/([^/]+)\/reply$/);
+    if (legacy && /^\/permission\//.test(url)) {
+      res.writeHead(404, { 'content-type': 'text/plain' });
+      res.end('not found');
+      return;
+    }
+    if (req.method === 'POST' && permissionReply) {
+      const pending = pendingPermission?.id === permissionReply[1] ? pendingPermission : null;
+      let reply;
+      try {
+        const parsed = JSON.parse(body);
+        reply = legacy ? parsed.response : parsed.reply;
+      } catch {
+        reply = undefined;
+      }
+      if (!pending || typeof reply !== 'string') {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end('{}');
+        return;
+      }
+      pendingPermission = null;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('true');
+      pending.finish(reply);
+      return;
+    }
     if (req.method === 'POST' && url === `/session/${SESSION_ID}/message`) {
       turn += 1;
       const MESSAGE_ID = messageId();
@@ -97,6 +135,35 @@ const server = createServer((req, res) => {
           : promptText.includes('#no-idle')
             ? 'no-idle'
             : 'default';
+
+      const asked = promptText.match(/#permission (\S+)/);
+      if (asked) {
+        const id = `per_mock_${turn}`;
+        pendingPermission = { id, finish: (reply) => {
+          send({
+            type: 'message.part.updated',
+            properties: {
+              part: { id: `prt_perm${suffix()}`, messageID: MESSAGE_ID, sessionID: SESSION_ID, type: 'text', text: `permission ${reply}`, time: { start: 1, end: 2 } },
+            },
+          });
+          setTimeout(() => send({ type: 'session.idle', properties: { sessionID: SESSION_ID } }), 20);
+        } };
+        send({ type: 'message.updated', properties: { info: info({}) } });
+        send({
+          type: 'permission.asked',
+          properties: {
+            id,
+            sessionID: SESSION_ID,
+            permission: 'external_directory',
+            patterns: [`${asked[1].replace(/\/[^/]*$/, '')}/*`],
+            metadata: { filepath: asked[1] },
+            always: [],
+          },
+        });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ info: info({}), parts: [] }));
+        return;
+      }
 
       // The other half of the #897 shape: the POST drops AND the session is
       // really gone. Swallowing the drop must not swallow this.

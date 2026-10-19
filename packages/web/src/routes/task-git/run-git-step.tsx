@@ -19,6 +19,8 @@ export interface RunGitStep {
   action: GitAction | null
   onAction: (id: GitActionId) => void
   dialogs: ReactNode
+  /** The commit dialog is up — the palette keeps its subject while it is. */
+  commitOpen: boolean
 }
 
 /**
@@ -144,6 +146,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   return {
     action: run.worktreePath ? action : null,
     onAction,
+    commitOpen,
     // Rendered by the host OUTSIDE any menu: a dialog mounted inside a dropdown's content would
     // close with the menu that opened it.
     dialogs: (

@@ -9,6 +9,7 @@ import {
   providersRequiredByWorkflow,
   recordedProfileFor,
   unavailableProviderMessage,
+  signedOutAccountMessage,
   withSelectedAccounts,
 } from './provider-action-gate.ts';
 
@@ -139,7 +140,7 @@ describe('withSelectedAccounts (telemetry ac53a6ef)', () => {
     });
 
     expect(unavailableProviderMessage(['claude'], judged)).toBeNull();
-    expect(judged.providers[0]).toEqual({ provider: 'claude', status: 'connected', enabled: true });
+    expect(judged.providers[0]).toEqual({ provider: 'claude', status: 'connected', enabled: true, profileId: 'work' });
     expect(service.profileStatus).toHaveBeenCalledWith('claude', { id: 'work', configDir: '/accounts/work' });
   });
 
@@ -153,8 +154,22 @@ describe('withSelectedAccounts (telemetry ac53a6ef)', () => {
       loadStore: async () => store(),
     });
 
-    expect(unavailableProviderMessage(['claude'], judged)).toMatch(/credentials are unavailable/);
+    // Names the account: "credentials are unavailable" sent users to a Providers card showing the
+    // default login connected — a dead end they retried and restarted the server on (0.15.2).
+    expect(unavailableProviderMessage(['claude'], judged)).toBe(
+      'Claude Code account "Work" is not signed in. Sign it in under Settings → Agent accounts, or choose another account for this task.',
+    );
     expect(service.forgetProfileStatus).toHaveBeenCalledWith('claude', 'work');
+  });
+
+  it('keeps the account label quotable, so the cockpit scrubber masks all of it', () => {
+    expect(signedOutAccountMessage('claude', 'My "work" login')).toMatch(/^Claude Code account "My work login" is/);
+  });
+
+  it('keeps the provider message for the discovered login, which Providers does describe', () => {
+    expect(unavailableProviderMessage(['claude'], defaultLoggedOut)).toBe(
+      'Claude Code credentials are unavailable. Authorize it in Settings → Agents → Providers.',
+    );
   });
 
   it('keeps the default row when no named account is selected', async () => {

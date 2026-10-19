@@ -593,6 +593,18 @@ describe('reduceThread — provider authorization recovery', () => {
     }])
   })
 
+  it('keeps the named agent account a rejection came from (telemetry 9e4a95db)', () => {
+    expect(reduceThread([
+      line(1, 'provider-auth-required', { provider: 'claude', authFailureId: 'incident-1', profileId: 'work' }),
+    ]).turns[0]?.items).toEqual([{
+      kind: 'provider-auth-required',
+      id: 'v1:1',
+      provider: 'claude',
+      authFailureId: 'incident-1',
+      profileId: 'work',
+    }])
+  })
+
   it('persists a junie authorization incident (the runner deliberately left unknown-but-usable)', () => {
     expect(reduceThread([
       line(1, 'provider-auth-required', {

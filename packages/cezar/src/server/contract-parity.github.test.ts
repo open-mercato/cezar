@@ -101,6 +101,7 @@ describe('src/contract github + repo schemas match the routes exactly', () => {
   // The repository file browser (#1279). `/repo/tree` is plain JSON; `/repo/files` carries the
   // same `?raw=1` bytes branch as `/runs/:id/files` and is excluded on the same terms.
   type RepoTree200 = InferResponseType<typeof client.api.v1.repo.tree.$get, 200>;
+  type RunTree200 = InferResponseType<(typeof client.api.v1.runs)[':id']['tree']['$get'], 200>;
   type RepoFiles200 = Exclude<
     InferResponseType<typeof client.api.v1.repo.files.$get, 200>,
     ArrayBuffer
@@ -126,6 +127,7 @@ describe('src/contract github + repo schemas match the routes exactly', () => {
     Assert<Exact<z.infer<typeof repoCommitPayloadSchema>, RunCommit200>>,
     Assert<Exact<z.infer<typeof worktreeEntrySchema>, RunFiles200>>,
     Assert<Exact<z.infer<typeof repoTreeSchema>, RepoTree200>>,
+    Assert<Exact<z.infer<typeof repoTreeSchema>, RunTree200>>,
     /**
      * `/repo/files` reuses `worktreeEntrySchema` but only its `file` member is REACHABLE: every
      * indexed path is a file, and the one case that resolves to a directory (a submodule) is a 409

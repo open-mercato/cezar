@@ -1,11 +1,12 @@
 import { MoreHorizontalIcon, NotebookTextIcon, PencilIcon, PlusIcon, XIcon } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
@@ -21,6 +22,7 @@ type StripItem =
 
 /** The row's `gap-0.5`, and the two icon buttons at the switcher's end (28px + that gap). */
 const CARD_GAP = 2
+const NO_HINTS: ReadonlyMap<string, string> = new Map()
 const NEW_BUTTON_WIDTH = 30
 const MORE_BUTTON_WIDTH = 30
 
@@ -60,6 +62,8 @@ export function LayoutCards({
   onViewDragEnd,
   onOpenBeside,
   onColumnDropClose,
+  keyHints = NO_HINTS,
+  showKeyHints = false,
 }: {
   layouts: readonly WorkspaceLayout[]
   active: string
@@ -83,6 +87,11 @@ export function LayoutCards({
   onOpenBeside?: (view: ViewId) => void
   /** A column header dropped on the row. Absent where the columns cannot be edited. */
   onColumnDropClose?: (index: number) => void
+  /** The shortcut that opens each tab, by tab id (`view:<id>`, `view:notes`, `layout:<name>` —
+   *  `strip.ts`) — `1` for ⌘1. Printed on the tabs while `showKeyHints` (⌘ held), and always in
+   *  the `…` menu. */
+  keyHints?: ReadonlyMap<string, string>
+  showKeyHints?: boolean
 }) {
   /*
    * The row never scrolls. Every card — fixed and saved alike — is one item, and the ones that do
@@ -224,6 +233,7 @@ export function LayoutCards({
         const Icon = VIEW_ICONS[item.view]
         const selected = isActive(item)
         const label = viewLabel(item.view)
+        const hint = keyHints.get(`view:${item.view}`)
         return (
           <Button
             key={item.key}
@@ -250,11 +260,13 @@ export function LayoutCards({
             }}
             onDragEnd={() => onViewDragEnd?.()}
             className={cn(
-              '-mb-px h-9 shrink-0 gap-1.5 rounded-none border-b-2 border-transparent px-2.5 text-[13px] font-medium text-muted-foreground hover:bg-transparent hover:text-foreground active:translate-y-0',
+              'relative -mb-px h-9 shrink-0 gap-1.5 rounded-none border-b-2 border-transparent px-2.5 text-[13px] font-medium text-muted-foreground hover:bg-transparent hover:text-foreground active:translate-y-0',
               selected && 'border-foreground text-foreground',
             )}
           >
-            <Icon aria-hidden="true" className="size-3.5 shrink-0" />
+            <TabIcon hint={showKeyHints ? hint : undefined}>
+              <Icon aria-hidden="true" className="size-3.5 shrink-0" />
+            </TabIcon>
             {label}
           </Button>
         )
@@ -266,13 +278,15 @@ export function LayoutCards({
           data-strip-chrome=""
           aria-current={notesActive ? 'page' : undefined}
           className={cn(
-            '-mb-px flex h-9 shrink-0 items-center gap-1.5 border-b-2 px-2.5 text-[13px] font-medium',
+            'relative -mb-px flex h-9 shrink-0 items-center gap-1.5 border-b-2 px-2.5 text-[13px] font-medium',
             notesActive
               ? 'border-foreground text-foreground'
               : 'border-transparent text-muted-foreground hover:text-foreground',
           )}
         >
-          <NotebookTextIcon aria-hidden="true" className="size-3.5 shrink-0" />
+          <TabIcon hint={showKeyHints ? keyHints.get('view:notes') : undefined}>
+            <NotebookTextIcon aria-hidden="true" className="size-3.5 shrink-0" />
+          </TabIcon>
           Notes
         </Link>
       ) : null}
@@ -337,6 +351,11 @@ export function LayoutCards({
                       <span className="truncate">
                         {item.kind === 'fixed' ? viewLabel(item.view) : layoutDisplayName(item.layout.name)}
                       </span>
+                      {keyHints.get(item.kind === 'fixed' ? `view:${item.view}` : `layout:${item.layout.name}`) ? (
+                        <DropdownMenuShortcut>
+                          {keyHints.get(item.kind === 'fixed' ? `view:${item.view}` : `layout:${item.layout.name}`)}
+                        </DropdownMenuShortcut>
+                      ) : null}
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
@@ -367,6 +386,30 @@ export function LayoutCards({
         </div>
       ) : null}
     </div>
+  )
+}
+
+/** A tab's icon, or while ⌘ is held the key that selects it. The strip's fit is measured from tab
+ *  widths, so a hint must never change one: a digit takes the icon's place at its size, a longer
+ *  chord floats over the tab's corner and the icon keeps its space. */
+function TabIcon({ hint, children }: { hint: string | undefined; children: ReactNode }) {
+  const kbdClass =
+    'pointer-events-none flex shrink-0 items-center justify-center rounded-[4px] bg-foreground font-mono text-[10px] leading-none font-semibold text-background'
+  if (!hint) return children
+  if (hint.length === 1) {
+    return (
+      <kbd data-slot="tab-key-hint" aria-hidden="true" className={cn(kbdClass, 'size-3.5')}>
+        {hint}
+      </kbd>
+    )
+  }
+  return (
+    <>
+      <span className="invisible flex shrink-0">{children}</span>
+      <kbd data-slot="tab-key-hint" aria-hidden="true" className={cn(kbdClass, 'absolute -top-1 right-0 z-10 h-4 px-1')}>
+        {hint}
+      </kbd>
+    </>
   )
 }
 

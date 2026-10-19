@@ -589,6 +589,7 @@ const PROVIDER_AUTH_COMPARE_FIELDS = {
   id: true,
   provider: true,
   authFailureId: true,
+  profileId: true,
 } satisfies Record<keyof ThreadProviderAuthRequired, true>
 
 const AGENT_UPDATE_COMPARE_FIELDS = {

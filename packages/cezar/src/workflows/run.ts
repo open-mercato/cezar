@@ -53,6 +53,7 @@ import {
   isImageMediaType,
   PENDING_ASK_MAX_QUESTIONS,
   sanitizeAttachmentName,
+  storedAttachmentExtension,
 } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentRunResult, ContentBlock } from '../core/agent-runner.ts';
 import { discoverSkills, type Skill } from '../skills.ts';
@@ -6894,7 +6895,10 @@ export class RunManager {
               this.persistAttachment(runId, b.source.media_type, b.source.data, 'pasted'), imageLibraryNames.get(b), imageLibraryWrites,
             )
           : b.type === 'file'
-            ? this.fileInAttachmentLibrary(this.persistAttachment(runId, b.mediaType, b.data, 'pasted'), b.name)
+            ? this.fileInAttachmentLibrary(
+                this.persistAttachment(runId, b.mediaType, b.data, 'pasted', storedAttachmentExtension(b.mediaType, b.name)),
+                b.name,
+              )
             : null,
       )
       .filter((saved): saved is PersistedAttachment => saved !== null);
@@ -7006,12 +7010,13 @@ export class RunManager {
     mediaType: string,
     data: string,
     namePrefix: string = 'screenshot',
+    ext: string = attachmentExtension(mediaType),
   ): PersistedAttachment | null {
     try {
       // One mapping, shared with the wire (`packages/contract`): an image keeps the extension it
-      // always had, a file gets `pdf`/`txt`/`md`, and both share the `pasted-<n>` numbering space
-      // below so a `pasted-3.md` can never collide with a `pasted-3.png`.
-      const ext = attachmentExtension(mediaType);
+      // always had, a file gets `pdf`/`txt`/`md` (a binary one its own, `storedAttachmentExtension`),
+      // and all share the `pasted-<n>` numbering space below so a `pasted-3.md` can never collide
+      // with a `pasted-3.png`.
       const dir = join(this.dataDir, 'runs', `${runId}-images`);
       mkdirSync(dir, { recursive: true });
       // Seed from the highest numeric suffix already on disk, NOT the file count:

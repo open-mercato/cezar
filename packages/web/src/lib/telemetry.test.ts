@@ -161,6 +161,20 @@ describe('scrubToastMessage', () => {
     expect(scrubToastMessage("can't open /Users/me/code/shop/README.md", [])).toBe("can't open <path>")
   })
 
+  /** Telemetry 0f1255b6: a refused attachment's name split one error into a group per file. */
+  it('masks file names, so every refusal of one kind is one error group', () => {
+    const scrub = (m: string) => scrubToastMessage(m, [])
+    expect(scrub('“Screenshot 2026-10-15 at 00.29.50.png” skipped — max 20 attachments per message')).toBe(
+      '<value> skipped — max 20 attachments per message',
+    )
+    expect(scrub('“image.png” skipped — max 20 attachments per message')).toBe(
+      '<value> skipped — max 20 attachments per message',
+    )
+    expect(scrub('image.png skipped — max 4 attachments per message')).toBe('<file> skipped — max 4 attachments per message')
+    expect(scrub('notes.v2.MD is too large (max 5 MB)')).toBe('<file> is too large (max 5 MB)')
+    expect(scrub('cezar 0.15.2 is out')).toBe('cezar 0.15.2 is out')
+  })
+
   it('masks the names and ids of known projects, longest first and whole words only', () => {
     expect(scrubToastMessage('Acme Shop already has the maximum of 8 tags', ['Acme Shop', 'acme-shop'])).toBe(
       '<project> already has the maximum of 8 tags',

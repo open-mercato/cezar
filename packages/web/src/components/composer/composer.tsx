@@ -33,7 +33,6 @@ import { cn } from '@/lib/utils'
 
 import {
   appendAttachment,
-  ATTACHMENT_ACCEPT,
   attachedImageBytes,
   fileToPendingAttachment,
   screenFiles,
@@ -469,6 +468,13 @@ export function Composer({
         closeMenu()
       }
     }
+    // `/` focuses the composer from anywhere in the task; Escape gives the keyboard back to the
+    // page, draft kept (spec 2026-10-17-task-palette). Not mid-IME: there Escape cancels the
+    // composition. No preventDefault, so a dialog around the composer still closes on it.
+    if (event.key === 'Escape' && !event.nativeEvent.isComposing && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      event.currentTarget.blur()
+      return
+    }
     const shouldSend = isSubmitShortcut({
       key: event.key,
       shiftKey: event.shiftKey,
@@ -781,19 +787,18 @@ function AttachButton({
         variant="ghost"
         size="icon-sm"
         aria-label="Attach files"
-        title="Attach an image, PDF, TXT or MD file (or paste a screenshot)"
+        title="Attach images or files (or paste a screenshot)"
         disabled={disabled}
         className="size-8 text-muted-foreground"
         onClick={() => inputRef.current?.click()}
       >
         <PaperclipIcon aria-hidden="true" className="size-[15px]" />
       </Button>
-      {/* Both spellings of every type: an OS dialog filters on the extension as often as on the
-          MIME type, and `accept="image/*,text/plain"` alone greys out a `.md` on Windows (#950). */}
+      {/* No `accept`: every file is taken (telemetry 48850f4a), and a filter greyed out ones the
+          composer would have accepted anyway (#950). */}
       <input
         ref={inputRef}
         type="file"
-        accept={ATTACHMENT_ACCEPT}
         multiple
         className="hidden"
         aria-hidden="true"

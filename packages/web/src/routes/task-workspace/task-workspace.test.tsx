@@ -166,6 +166,75 @@ describe('the task workspace (main)', () => {
     expect(hostLayouts.r1).toBeUndefined()
   })
 
+  it('holding ⌘ prints each tab’s number on it; a quick ⌘ press or letting go hides them', async () => {
+    vi.stubGlobal('navigator', { ...navigator, platform: 'MacIntel' })
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    const hints = () => Array.from(document.querySelectorAll('[data-slot="tab-key-hint"]')).map(text)
+
+    fireEvent.keyDown(window, { key: 'Meta', metaKey: true })
+    fireEvent.keyUp(window, { key: 'Meta' })
+    await new Promise((resolve) => setTimeout(resolve, 450))
+    expect(hints()).toEqual([])
+
+    fireEvent.keyDown(window, { key: 'Meta', metaKey: true })
+    // The five views, then Notes — saved layouts are not numbered.
+    await waitFor(() => expect(hints()).toEqual(['1', '2', '3', '4', '5', '6']))
+    fireEvent.keyUp(window, { key: 'Meta' })
+    await waitFor(() => expect(hints()).toEqual([]))
+    vi.unstubAllGlobals()
+  })
+
+  it('shows no tab numbers while a palette or dialog has the keyboard — ⌘N would not switch', async () => {
+    vi.stubGlobal('navigator', { ...navigator, platform: 'MacIntel' })
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    const hints = () => document.querySelectorAll('[data-slot="tab-key-hint"]').length
+
+    // Held while a dialog is already up: nothing.
+    const dialog = document.body.appendChild(Object.assign(document.createElement('div'), { role: 'dialog' }))
+    dialog.setAttribute('role', 'dialog')
+    fireEvent.keyDown(window, { key: 'Meta', metaKey: true })
+    await new Promise((resolve) => setTimeout(resolve, 450))
+    expect(hints()).toBe(0)
+    fireEvent.keyUp(window, { key: 'Meta' })
+    dialog.remove()
+
+    // Held, hints up — then ⌘K opens a palette: they go.
+    fireEvent.keyDown(window, { key: 'Meta', metaKey: true })
+    await waitFor(() => expect(hints()).toBeGreaterThan(0))
+    document.body.appendChild(dialog)
+    fireEvent.keyDown(window, { key: 'k', metaKey: true })
+    await waitFor(() => expect(hints()).toBe(0))
+    fireEvent.keyUp(window, { key: 'Meta' })
+    dialog.remove()
+    vi.unstubAllGlobals()
+  })
+
+  it('off a Mac, shows no tab numbers while the terminal has focus — Ctrl chords are the shell’s there', async () => {
+    vi.stubGlobal('navigator', { ...navigator, platform: 'Linux x86_64' })
+    stubFetch()
+    renderWorkspace()
+    await ready()
+    const hints = () => document.querySelectorAll('[data-slot="tab-key-hint"]').length
+    const term = document.body.appendChild(Object.assign(document.createElement('div'), { className: 'xterm' }))
+    const helper = term.appendChild(document.createElement('textarea'))
+    helper.focus()
+
+    fireEvent.keyDown(window, { key: 'Control', ctrlKey: true })
+    await new Promise((resolve) => setTimeout(resolve, 450))
+    expect(hints()).toBe(0)
+    fireEvent.keyUp(window, { key: 'Control' })
+
+    term.remove()
+    fireEvent.keyDown(window, { key: 'Control', ctrlKey: true })
+    await waitFor(() => expect(hints()).toBeGreaterThan(0))
+    fireEvent.keyUp(window, { key: 'Control' })
+    vi.unstubAllGlobals()
+  })
+
   it('offers no Terminal anywhere when the cockpit allows no shell', async () => {
     stubFetch({ terminal: false })
     renderWorkspace()

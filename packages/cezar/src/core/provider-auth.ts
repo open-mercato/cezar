@@ -5,6 +5,7 @@ import { extname, isAbsolute } from 'node:path';
 import { AGENT_MODELS_LOCKED_ENV } from './agent-model-policy.ts';
 import { profileEnv } from './agent-profiles.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
+import { resolveCursorAgentBin } from './cursor-bin.ts';
 import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
 import { probeJunieAuthentication } from './junie-auth-probe.ts';
 import { spawnableCommand } from './windows-shim.ts';
@@ -92,8 +93,10 @@ interface ProviderDescriptor {
    * spawn entirely removes that race instead of racing to out-guess it.
    */
   precheck?: () => ProviderConnectionState | undefined;
-  /** A more specific hint than "try again" for an exit-0/1 answer `parse` could not read. */
+  /** A more specific hint than "try again" for an answer `parse` could not read. */
   unrecognizedHint?: (result: ProviderCommandResult) => string | undefined;
+  /** Arguments to ask once more with when `statusArgs` was rejected by an older CLI. */
+  fallbackArgs?: (result: ProviderCommandResult) => readonly string[] | undefined;
   /** The `CEZ_*_BIN` override `executable` honours — only so a report can say the binary came from it. */
   overrideEnv: string;
 }
@@ -369,8 +372,10 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
   {
     id: 'cursor',
     overrideEnv: 'CEZ_CURSOR_AGENT_BIN',
-    executable: () => process.env.CEZ_CURSOR_AGENT_BIN ?? 'agent',
+    executable: () => resolveCursorAgentBin(),
     statusArgs: ['status', '--format', 'json'],
+    fallbackArgs: cursorFallbackArgs,
+    unrecognizedHint: cursorUnrecognizedHint,
     loginArgs: ['login'],
     updateArgs: ['update'],
     installHint:
@@ -427,10 +432,29 @@ function parseCursorStatus(result: ProviderCommandResult): ProviderConnectionSta
   } catch {
     /* fall through */
   }
+  // The plain `status` answer of a CLI without `--format` (`cursorFallbackArgs`).
+  if (result.exitCode === 0) {
+    const lines = normalizedLines(result.stdout, result.stderr);
+    const connected = lines.some((line) => /^(?:✓\s*)?logged in as\b/.test(line));
+    const disconnected = lines.some((line) => line === 'not logged in');
+    if (connected !== disconnected) return connected ? 'connected' : 'disconnected';
+  }
   // Malformed or unrecognized JSON is inconclusive, not a confirmed unauthenticated state —
   // return null so probe() reports 'unknown' instead of telling the user to reconnect an
   // account that was never actually checked.
   return null;
+}
+
+/** Cursor CLIs before `status --format` (≤ 2026.01.28, verified) reject it with exit 1. */
+function cursorFallbackArgs(result: ProviderCommandResult): readonly string[] | undefined {
+  return /unknown option '--format'/i.test(result.stderr) ? ['status'] : undefined;
+}
+
+/** Telemetry 8d304c50: an `agent` that answers neither shape is likely another program of that name. */
+function cursorUnrecognizedHint(result: ProviderCommandResult): string | undefined {
+  if (result.stdout.trim()) return undefined;
+  return 'The Cursor CLI did not answer its status check. Update it with `cursor-agent update`, or point '
+    + 'CEZ_CURSOR_AGENT_BIN at Cursor\'s `cursor-agent` if another program named `agent` comes first on PATH.';
 }
 
 function defaultRunProviderCommand(
@@ -555,6 +579,29 @@ function parsesAsJson(text: string): boolean {
   }
 }
 
+// asdf, mise, pyenv/rbenv/nodenv-style shims answering for a command no active version provides.
+const SHIM_MISS_PATTERNS = [
+  /\bNo (?:version is set|preset version installed|versions set) for (?:command |shim: )?\S+/i,
+  /\bTools? not installed for shim: \S+/i,
+  /\S+ is not a valid shim\b/i,
+  /^[a-z]+env: \S+: command not found$/im,
+];
+
+/**
+ * The shim's own line when the command on PATH is a version-manager shim with nothing behind it
+ * (telemetry f67df9d2: an asdf `pi` for Python 3.11.9). Nothing can run, so that is not-installed,
+ * not an inconclusive auth check. Only a failed exit counts: a real answer is never re-read.
+ */
+export function versionManagerShimMiss(result: ProviderCommandResult): string | null {
+  if (result.exitCode === 0 || result.exitCode === null) return null;
+  const output = `${result.stderr}\n${result.stdout}`;
+  for (const pattern of SHIM_MISS_PATTERNS) {
+    const match = output.match(pattern);
+    if (match) return match[0].trim().slice(0, 160);
+  }
+  return null;
+}
+
 function isSilentSuccess(result: ProviderCommandResult): boolean {
   return result.exitCode === 0 && !result.errorCode && !result.timedOut
     && result.stdout.trim() === '' && result.stderr.trim() === '';
@@ -577,6 +624,8 @@ export class ProviderAuthService {
    *  minute while a provider is logged out, and one broken install must not become a report a minute. */
   private readonly reportedInconclusive = new Set<string>();
   private readonly runtimeFailures = new Map<ProviderId, RuntimeAuthFailure>();
+  /** Named-account incidents, keyed by `profileCacheKey`; the default login uses `runtimeFailures`. */
+  private readonly profileRuntimeFailures = new Map<string, RuntimeAuthFailure>();
   /** One self-check at a time per provider, and not more often than the cooldown. Both guard the
    *  same thing — a CLI spawn per auth-shaped error line — from the two directions it can arrive
    *  from: concurrently, and in quick succession. */
@@ -679,6 +728,40 @@ export class ProviderAuthService {
       },
       transitioned: current === undefined,
     };
+  }
+
+  /**
+   * A runtime rejection on a NAMED agent account (telemetry 9e4a95db): latched on that account only.
+   * Raising the provider-wide latch instead blamed the default login, which was still signed in.
+   * Lifts when a probe of this account that started after the rejection answers connected — the
+   * pane's Check again, Connect's watch, or the action gate's verify-before-refuse.
+   */
+  reportProfileAuthFailure(provider: ProviderId, profileId: string): RuntimeAuthFailureReport | null {
+    if (process.env.CEZ_DRY_RUN === '1' || providerAuthChecksDisabled()) return null;
+    const key = profileCacheKey(provider, profileId);
+    const current = this.profileRuntimeFailures.get(key);
+    const failure: RuntimeAuthFailure = {
+      generation: ++this.nextRuntimeFailureGeneration,
+      authFailureId: current?.authFailureId ?? this.createAuthFailureId(),
+    };
+    this.profileRuntimeFailures.set(key, failure);
+    return {
+      status: {
+        provider,
+        status: 'disconnected',
+        hint: RUNTIME_AUTH_HINT,
+        authFailureId: failure.authFailureId,
+        profileId,
+      },
+      transitioned: current === undefined,
+    };
+  }
+
+  private withProfileFailure(status: ProviderStatus, profileId: string): ProviderStatus {
+    const failure = this.profileRuntimeFailures.get(profileCacheKey(status.provider, profileId));
+    return failure
+      ? { provider: status.provider, status: 'disconnected', hint: RUNTIME_AUTH_HINT, authFailureId: failure.authFailureId, profileId }
+      : status;
   }
 
   /** Clear only the incident the caller actually observed. A stale retry must
@@ -841,9 +924,8 @@ export class ProviderAuthService {
    *
    * Cached on the same asymmetric lifetime as `status()` (`cacheTtlFor`: minutes for a connected
    * answer, a minute for anything else), keyed by `(provider, profileId)` so two Claude accounts never read
-   * each other's answer. The runtime-auth latch is deliberately NOT applied: it is a coarse
-   * per-provider signal and stamping it onto every account of that provider would mark an
-   * untouched account as broken.
+   * each other's answer. The provider-wide runtime latch is deliberately NOT applied — it belongs
+   * to the default login; this account's own incident (`reportProfileAuthFailure`) is.
    */
   async profileStatus(
     provider: ProviderId,
@@ -854,14 +936,22 @@ export class ProviderAuthService {
     }
     const key = profileCacheKey(provider, profile.id);
     const cached = this.completedProfiles.get(key);
-    if (cached && this.now() - cached.timestamp < cacheTtlFor([cached.status])) return cached.status;
+    if (cached && this.now() - cached.timestamp < cacheTtlFor([cached.status])) {
+      return this.withProfileFailure(cached.status, profile.id);
+    }
     const pending = this.inFlightProfiles.get(key);
-    if (pending) return pending;
+    if (pending) return pending.then((status) => this.withProfileFailure(status, profile.id));
+    // A probe already running when a rejection arrived must not clear it (same rule as the default).
+    const startedAt = this.nextRuntimeFailureGeneration;
     const probe = this.probe(descriptorFor(provider), profile.configDir)
       .then((status) => {
         const stamped: ProviderStatus = { ...status, profileId: profile.id };
         this.completedProfiles.set(key, { status: stamped, timestamp: this.now() });
-        return stamped;
+        const failure = this.profileRuntimeFailures.get(key);
+        if (failure && failure.generation <= startedAt && stamped.status === 'connected') {
+          this.profileRuntimeFailures.delete(key);
+        }
+        return this.withProfileFailure(stamped, profile.id);
       })
       .finally(() => {
         if (this.inFlightProfiles.get(key) === probe) this.inFlightProfiles.delete(key);
@@ -886,6 +976,13 @@ export class ProviderAuthService {
     this.completedProfiles.delete(profileCacheKey(provider, profileId));
   }
 
+  /** A REMOVED account takes its runtime incident with it, so a re-added one with the same id
+   *  never inherits it. Not part of `forgetProfileStatus`: a refresh must keep the incident. */
+  forgetProfile(provider: ProviderId, profileId: string): void {
+    this.forgetProfileStatus(provider, profileId);
+    this.profileRuntimeFailures.delete(profileCacheKey(provider, profileId));
+  }
+
   /**
    * The cached answer for one account, or `undefined` when nothing is known yet — WITHOUT
    * spawning anything.
@@ -907,7 +1004,11 @@ export class ProviderAuthService {
     if (process.env.CEZ_DRY_RUN === '1') {
       return { provider, status: 'connected', profileId };
     }
-    return this.completedProfiles.get(profileCacheKey(provider, profileId))?.status;
+    const cached = this.completedProfiles.get(profileCacheKey(provider, profileId))?.status;
+    if (cached) return this.withProfileFailure(cached, profileId);
+    return this.profileRuntimeFailures.has(profileCacheKey(provider, profileId))
+      ? this.withProfileFailure({ provider, status: 'disconnected' }, profileId)
+      : undefined;
   }
 
   /** The cached default-profile rows, or `undefined` when the probe has never completed. Same
@@ -963,19 +1064,21 @@ export class ProviderAuthService {
     // Never pass a trailing `undefined`: the existing three- and four-argument calls are the
     // zero-config path and the injected test kit asserts them literally, so only a descriptor
     // that actually has a stdin payload reaches the five-argument form.
-    const run = (): Promise<ProviderCommandResult> => {
+    const run = (args: readonly string[] = descriptor.statusArgs): Promise<ProviderCommandResult> => {
       const stdin = descriptor.stdin?.();
       return stdin !== undefined
-        ? this.runCommand(executable, descriptor.statusArgs, COMMAND_TIMEOUT_MS, env, stdin)
+        ? this.runCommand(executable, args, COMMAND_TIMEOUT_MS, env, stdin)
         : env === undefined
-          ? this.runCommand(executable, descriptor.statusArgs, COMMAND_TIMEOUT_MS)
-          : this.runCommand(executable, descriptor.statusArgs, COMMAND_TIMEOUT_MS, env);
+          ? this.runCommand(executable, args, COMMAND_TIMEOUT_MS)
+          : this.runCommand(executable, args, COMMAND_TIMEOUT_MS, env);
     };
     try {
       result = await run();
       // A CLI that exits 0 having printed nothing at all did not answer — `claude auth status
       // --json` does this intermittently (telemetry 35838a52). Ask once more before giving up.
       if (isSilentSuccess(result) && descriptor.parse(result) === null) result = await run();
+      const fallback = descriptor.parse(result) === null ? descriptor.fallbackArgs?.(result) : undefined;
+      if (fallback) result = await run(fallback);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException | undefined)?.code;
       const thrown: ProviderCommandResult = {
@@ -995,13 +1098,21 @@ export class ProviderAuthService {
     }
     if (result.timedOut) return inconclusive('timeout', TIMEOUT_HINT, result);
     if (result.errorCode) return inconclusive('spawn_error', UNKNOWN_HINT, result);
+    const shimMiss = versionManagerShimMiss(result);
+    if (shimMiss) {
+      return {
+        provider: descriptor.id,
+        status: 'not-installed',
+        hint: `\`${executable}\` is a version-manager shim with no version active ("${shimMiss}"). `
+          + `${descriptor.installHint} Or point ${descriptor.overrideEnv} at the CLI.`,
+      };
+    }
     const status = descriptor.parse(result);
     if (status !== null) return { provider: descriptor.id, status };
+    const hint = descriptor.unrecognizedHint?.(result) ?? UNKNOWN_HINT;
     // Exit 0 and 1 are the codes vendors answer status with; anything else is the CLI failing.
-    if (result.exitCode === 0 || result.exitCode === 1) {
-      return inconclusive('unrecognized_output', descriptor.unrecognizedHint?.(result) ?? UNKNOWN_HINT, result);
-    }
-    return inconclusive('unexpected_exit', UNKNOWN_HINT, result);
+    if (result.exitCode === 0 || result.exitCode === 1) return inconclusive('unrecognized_output', hint, result);
+    return inconclusive('unexpected_exit', hint, result);
   }
 
   private reportInconclusive(

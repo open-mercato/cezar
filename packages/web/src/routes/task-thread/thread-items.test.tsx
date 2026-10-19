@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RunEvent } from '@open-mercato/cezar-api-client'
 import type { UiToolItem } from '@open-mercato/cezar-api-client'
 import { createQueryClient } from '@/api/query-client'
+import { workspaceQueryKeys } from '@/api/queries'
 
 import bashAndScreenshot from '../../../../cezar/src/core/__fixtures__/claude/bash-and-screenshot.expected.json'
 import failedAndDenied from '../../../../cezar/src/core/__fixtures__/claude/failed-and-denied.expected.json'
@@ -56,6 +57,34 @@ describe('ProviderAuthRequiredCard', () => {
     const link = screen.getByRole('link', { name: 'Open provider settings' })
     expect(link.getAttribute('href')).toBe('/p/acme/settings/agents#providers')
     expect(link.getAttribute('tabindex')).not.toBe('-1')
+  })
+
+  it('names the rejected agent account and links to Agent accounts (telemetry 9e4a95db)', () => {
+    // The listing never answers, so the label below can only come from the seeded cache.
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+    const client = createQueryClient()
+    client.setQueryData(workspaceQueryKeys.agentProfiles, { profiles: [
+      { id: 'work', provider: 'codex', label: 'Codex work' },
+      { id: 'work', provider: 'claude', label: 'Work login' },
+    ] })
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/p/acme/tasks/r1']}>
+          <ProviderAuthRequiredCard incident={{
+            kind: 'provider-auth-required',
+            id: 'v1:2',
+            provider: 'claude',
+            authFailureId: 'incident-1',
+            profileId: 'work',
+          }} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    expect(screen.getByRole('alert').textContent).toContain('This run needed Claude Code account “Work login” to be signed in')
+    expect(screen.queryByRole('link', { name: 'Open provider settings' })).toBeNull()
+    expect(screen.getByRole('link', { name: 'Open agent accounts' }).getAttribute('href')).toBe('/settings/global/accounts')
+    vi.unstubAllGlobals()
   })
 })
 

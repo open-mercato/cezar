@@ -32,7 +32,7 @@ from), `open_in` (which app), `add_project_opened` (which Add project dialog: `n
 `new_github`, `new_template`), `project_create_failed` (the step that failed, e.g.
 `folder_exists`, `github_create` — never the error text), `diff_comment_added`,
 `task_archived` / `task_unarchived` / `task_pinned` / `task_unpinned` (which button: `sidebar`,
-`tasks_table`, `all_tasks`, `task_view`; `bulk` for Archive finished, `api` for a non-cockpit
+`tasks_table`, `all_tasks`, `task_view`, `palette`, `shortcut`; `bulk` for Archive finished, `api` for a non-cockpit
 caller), `task_deleted` (with the task's status), `provider_login_opened` / `provider_login_not_opened` / `provider_connected`
 (what an agent's **Connect** did — the agent and an outcome such as `unknown`, `no_terminal` or
 `already_connected` — and whether the login it opened finished within 15 minutes),
@@ -51,7 +51,16 @@ following the server then found it `recovered`, `not_applied`, `unreachable` or 
 `attachments_sent` (how many attachments a sent message carried, as a bucket —
 `1`, `2-4`, `5-10`, `11-20` — never their names, types or contents), `attachments_restaged`
 (whether the automatic re-upload after an expired staged attachment was `recovered` or
-`failed`). Every label
+`failed`), and the command palettes' use: `palette_opened` (`command` for ⌘K, `task` or
+`task_switch` for ⌘P), `task_command_run` and `task_shortcut_used` (which task command ran — from
+a ⌘P row or from its keyboard shortcut — as a fixed command name such as `pin`, `git:push` or
+`view:changes`; saved layouts, Open-in targets and ⌘1–⌘9 are folded into `layout`, `open` and
+`tab`; counted in the tab and sent at most once a minute with how many times), `task_switched`
+(`enter`, `cycle`, `tab`, `cmdk`, `cmdk_tab`), `palette_mode_used` (`tasks`, `commands`, `files`,
+`pr_number`, `automation` — the shape of a search, never its text; a bare prefix such as the `@`
+⌘P pre-fills is not counted), `palette_dismissed` (the view a
+palette was closed from with nothing chosen) and `shortcut_rebound` (which command's shortcut was
+changed; a reset is not counted). Pins and archives also say `palette` or `shortcut` when they came from there. Every label
 comes from a closed set the server enforces.
 
 Error reports carry the error type, message and stack with your home directory, working

@@ -20,12 +20,12 @@ import {
 import type { ComponentType, SVGProps } from 'react'
 
 import type { Capabilities } from '@open-mercato/cezar-api-client'
-import { CenteredState } from '@/components/centered-state'
 import { AccountsSection } from './accounts-section'
 import { AgentConfigSection } from './agent-config-section'
 import { AgentsSection } from './agents-section'
 import { AppearanceSection } from './appearance'
 import { InstructionsSection } from './instructions-section'
+import { KeyboardSection } from './keyboard-section'
 import { BookmarkletsSection } from './bookmarklets-section'
 import { NotificationsSection } from './notifications-section'
 import { PrivacySection } from './privacy-section'
@@ -50,8 +50,8 @@ import { IntegrationsSection } from './integrations-section'
  * tasks, worktrees, bookmarklets) or the person/machine (appearance, notifications, host
  * resources, the project registry)?
  *
- * `hidden` sections are declared but not routed and not listed: keyboard remains a later
- * phase; MCP now lives inside Agent config as a per-agent subsection.
+ * `hidden` sections are declared but not routed and not listed: MCP now lives inside Agent
+ * config as a per-agent subsection.
  */
 
 export type SettingsSectionId =
@@ -88,21 +88,6 @@ export interface SettingsSection {
   scope: SettingsScope
   /** Declared but not yet implemented: no nav entry, no route (the URL is honestly a 404). */
   hidden?: boolean
-}
-
-/** A registry entry whose real section arrives in a later Step — routable, honest about it. */
-function comingSoon(title: string, Icon: ComponentType<SVGProps<SVGSVGElement>>): ComponentType {
-  return function ComingSoonSection() {
-    return (
-      <CenteredState
-        icon={<Icon />}
-        tone="neutral"
-        title={title}
-        subtitle="This section arrives in a later phase of the redesign."
-        heading="h2"
-      />
-    )
-  }
 }
 
 export const SETTINGS_SECTIONS: SettingsSection[] = [
@@ -197,6 +182,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     scope: 'global',
   },
   {
+    id: 'keyboard',
+    title: 'Keyboard',
+    description: 'Shortcuts for task commands.',
+    icon: KeyboardIcon,
+    component: KeyboardSection,
+    scope: 'global',
+  },
+  {
     id: 'resources',
     title: 'Resources',
     description: 'Parallel tasks and per-task memory limit, across every project.',
@@ -243,15 +236,6 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     icon: ShieldCheckIcon,
     component: PrivacySection,
     scope: 'global',
-  },
-  {
-    id: 'keyboard',
-    title: 'Keyboard',
-    description: 'Shortcuts.',
-    icon: KeyboardIcon,
-    component: comingSoon('Keyboard', KeyboardIcon),
-    scope: 'global',
-    hidden: true,
   },
 ]
 
