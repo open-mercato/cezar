@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { stepSecretsSchema } from '@open-mercato/cezar-contract';
-import { RUNNER_IDS } from '../core/agent-runner.ts';
+import { AGENT_TIMEOUT_MAX_MS, RUNNER_IDS } from '../core/agent-runner.ts';
 import type { WorkflowStepDef } from './types.ts';
 
 /**
@@ -60,6 +60,8 @@ export const graphNodeSchema = z.discriminatedUnion('type', [
     runner: z.enum(RUNNER_IDS).optional(),
     allowedTools: z.array(z.string()).optional(),
     bashAllowlist: z.array(z.string()).optional(),
+    /** The agent's wall-clock limit (#880), the same field as `workflowStepSchema.timeoutMs`. */
+    timeoutMs: z.number().int().min(0).max(AGENT_TIMEOUT_MAX_MS).optional(),
     /** Author-declared outcomes (D10/D17). The agent picks one by ending its turn with
      *  `CEZ:VERDICT <name>`; each becomes an output port in place of `done`. */
     verdicts: z.array(verdictName).min(1).optional(),

@@ -139,6 +139,7 @@ import { track } from '../telemetry.ts';
 import { UiEventSink } from '../runs/ui-event-sink.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import {
+  agentStepTimeoutMs,
   chainStepNote,
   DEFAULT_ALLOWED_TOOLS,
   retryableExit,
@@ -4782,6 +4783,7 @@ export class RunManager {
       emit,
       taskBackend,
       extraSystemPrompt,
+      agentTimeoutMs: config.agentTimeoutMs,
       startImages,
       startAttachments,
       resume: this.store.getRun(runId)?.graphState,
@@ -4907,13 +4909,15 @@ export class RunManager {
       emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void;
       taskBackend: RunnerId;
       extraSystemPrompt: string | undefined;
+      /** The repo's `agentTimeoutMs` (#880), the fallback for an agent node without its own. */
+      agentTimeoutMs: number | undefined;
       startImages: ContentBlock[] | undefined;
       startAttachments: PersistedAttachment[];
       /** The walk so far, when this run is being RESUMED after a restart (`graphState.cursor`). */
       resume?: RunRecord['graphState'];
     },
   ): Promise<string | null> {
-    const { input, skills, emit, taskBackend, extraSystemPrompt } = ctx;
+    const { input, skills, emit, taskBackend, extraSystemPrompt, agentTimeoutMs } = ctx;
     let { startImages, startAttachments } = ctx;
     // Resume only onto a node this graph still has; anything else starts the walk afresh.
     const resumeNode = ctx.resume?.cursor
@@ -5049,6 +5053,7 @@ export class RunManager {
           startImages,
           taskBackend,
           extraSystemPrompt,
+          agentStepTimeoutMs(rendered, agentTimeoutMs, isTerminalAgent(graph, node.id)),
           stepIdx >= 0 ? chainStepNote(workflow.steps, stepIdx) : undefined,
           startAttachments,
           resuming ? this.resumeInterruptedAgent(runId, node, backend, rendered, lastTurn) : { resumeSessionId: this.graphResumeSession(runId, node, backend, emit), lastTurn },
@@ -5088,6 +5093,7 @@ export class RunManager {
               undefined,
               taskBackend,
               extraSystemPrompt,
+              agentStepTimeoutMs(rendered, agentTimeoutMs, false),
               undefined,
               [],
               { resumeSessionId: own, lastTurn },
@@ -5979,6 +5985,9 @@ export class RunManager {
     images: ContentBlock[] | undefined,
     taskBackend: RunnerId,
     extraSystemPrompt: string | undefined,
+    /** The step's resolved wall-clock limit (`agentStepTimeoutMs`, #880): `0` for the
+     *  interactive step, `undefined` to keep the runner's built-in default. */
+    timeoutMs: number | undefined,
     /** The chain-boundary note for this step (#410), or undefined when the
      *  workflow has a single agent step and there is no boundary to explain. */
     chainNote: string | undefined,
@@ -6405,7 +6414,8 @@ export class RunManager {
           resume,
           // Interactive sessions have no wall clock — the idle timer rules.
           //
-          // A non-final step keeps its wall clock (`DEFAULT_RUN_TIMEOUT_MS`)
+          // A non-final step keeps its wall clock — the step's `timeoutMs`, else
+          // the repo's `agentTimeoutMs`, else `DEFAULT_RUN_TIMEOUT_MS` (#880) —
           // even though it may now park on a `CEZ:ASK` and sit open waiting for
           // an answer (#917). Dropping it for every intermediate step is the
           // wrong trade: it would leave a runaway step with nothing to stop it,
@@ -6414,7 +6424,7 @@ export class RunManager {
           // strand the run — both close the session, and a park whose session
           // closed unanswered settles as `failed` with a Continue button (see
           // the `askPark` branch in `execute`), never as a run stuck `waiting`.
-          timeoutMs: interactive ? 0 : undefined,
+          timeoutMs,
         },
         onEvent,
         {
