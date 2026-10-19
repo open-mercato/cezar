@@ -97,7 +97,7 @@ Any non-zero exit fails the gate and blocks the PR. `npm test` is the fast serve
 
 `main` is the next minor; each released minor lives on `release/vX.Y.x`, which takes fixes only ([docs/publishing.md § Release lines](docs/publishing.md#release-lines) has the workflows).
 
-- **Every PR targets `main`** — features, fixes, docs alike. Never open a PR against `release/v*` by hand, and never push to one.
+- **Every PR targets `main`** — features, fixes, docs alike. Never push to `release/v*`, and open a PR against one by hand only for the hotfix case below.
 - **A fix that users of the released line need gets `backport release/vX.Y.x`** (the newest line: `git branch -r --list 'origin/release/v*'`). Default to it for `priority-high`/`priority-extreme` bugs, regressions and telemetry fixes whose bug exists on that line; skip it for features, refactors, and bugs introduced after the cut. Put the label on the issue when triaging and on the PR when opening it — only the PR's label triggers the backport. The `backport …` labels are outside label normalization: never remove one.
 - **The Backport workflow does the cherry-pick** once the PR is merged and opens a PR into the line. Review it as a real PR: CI is green *and* the fix makes sense in that line's code. On a conflict it opens a draft — resolve it on that branch, or close it and port the fix by hand in a PR against the line where the code actually lives.
 - **A hotfix that cannot wait for `main`** may target `release/vX.Y.x` directly; label it `backport main` so it is forward-ported.
