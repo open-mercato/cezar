@@ -309,6 +309,20 @@ describe('buildCreateRunBody — the exact POST /api/v1/runs payloads legacy sen
     expect(JSON.parse(JSON.stringify(body))).toEqual({ task: 'do the thing', workflow: 'quick-task' })
   })
 
+  it('newBranch rides only an in-place single run (spec 2026-10-19-repo-git-sync)', () => {
+    const base = { task: 't', source: null, model: '', runner: 'claude' as const, defaultRunner: 'claude' as const, images: [] }
+    const wire = (opts: Partial<Parameters<typeof buildCreateRunBody>[0]>) =>
+      JSON.parse(JSON.stringify(buildCreateRunBody({ ...base, variants: 1, ...opts })))
+    expect(wire({ worktree: false, newBranch: true, branch: ' feat/x ' })).toMatchObject({
+      worktree: false,
+      newBranch: true,
+      branch: 'feat/x',
+    })
+    expect(wire({ worktree: false, newBranch: true, branch: '' })).not.toHaveProperty('branch')
+    expect(wire({ worktree: true, newBranch: true, branch: 'feat/x' })).not.toHaveProperty('newBranch')
+    expect(wire({ worktree: false, newBranch: true, variants: 2 })).not.toHaveProperty('newBranch')
+  })
+
   it('NO source → the built-in quick-task, because the route demands workflow XOR steps', () => {
     const body = buildCreateRunBody({
       task: 'just do it',

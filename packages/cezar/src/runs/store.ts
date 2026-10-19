@@ -376,6 +376,8 @@ export const runRecordSchema = z.object({
   /** Task worktree (spec 006) — absent for in-place runs and after explicit cleanup. */
   worktreePath: z.string().optional(),
   worktreeLifecycle: worktreeLifecycleProjectionSchema.optional(),
+  /** An in-place run that switched the repo checkout to `branch` before it started. */
+  inPlaceBranch: z.literal(true).optional(),
   /** The task's own branch, created off `baseBranch`: `cez/<id8>` unless branch naming
    *  instructions named it (spec 2026-10-11-branch-naming-instructions) — read it, never recompute it. */
   branch: z.string().optional(),

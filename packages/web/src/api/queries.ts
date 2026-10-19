@@ -100,13 +100,15 @@ import {
   putAgentConfigFile,
   retryProviderAuth,
   searchTrackerItems,
+  getRepoSync,
+  runRepoSyncAction,
 } from './client'
 import { queryScope, REFERENCE_STATUS_MAX, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
 import { useProjectScope } from './project-scope-context'
 import { isReferenceStatus } from '@/lib/reference-status'
 import { githubRepoBase } from '@/lib/tasks-table'
 import { normalizeTagsForDisplay } from '@/lib/project-tags'
-import type { ContinueOptions } from './client'
+import type { ContinueOptions, RepoSyncAction } from './client'
 import type {
   CheckoutProjectInput,
   CreateProjectInput,
@@ -239,6 +241,10 @@ export const queryKeys = {
     return [queryScope(), 'repo', 'changes'] as const
   },
   repoCommit: (sha: string) => [queryScope(), 'repo', 'commit', sha] as const,
+  /** Under `repo`, so a branch switch or a pull refreshes ahead/behind with everything else. */
+  get repoSync() {
+    return [queryScope(), 'repo', 'sync'] as const
+  },
   /** The Files sub-tab's path index (#1279) — also under `repo`, so a branch switch invalidates
    *  the tree along with the diff. */
   get repoTree() {
@@ -1364,6 +1370,32 @@ export function useRepo() {
   return useQuery({
     queryKey: queryKeys.repo,
     queryFn: ({ signal }) => getRepo({ signal }),
+  })
+}
+
+/** The main checkout's sync state (spec 2026-10-19-repo-git-sync). Offline on the server, so
+ *  refetching on focus is cheap — it catches a commit or `git pull` made in a terminal. */
+export function useRepoSync() {
+  return useQuery({
+    queryKey: queryKeys.repoSync,
+    queryFn: ({ signal }) => getRepoSync({ signal }),
+    refetchOnWindowFocus: true,
+  })
+}
+
+/** Fetch / pull / push / sync. The answer carries the fresh status; a pull also moved HEAD, so
+ *  the log, diff and tree under `repo` are refetched too. */
+export function useRepoSyncAction() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (action: RepoSyncAction) => runRepoSyncAction(action),
+    onSuccess: (result) => {
+      queryClient.setQueryData(queryKeys.repoSync, result.sync)
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.repo,
+        predicate: (q) => q.queryKey[2] !== 'sync',
+      })
+    },
   })
 }
 

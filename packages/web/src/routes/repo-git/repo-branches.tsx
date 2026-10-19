@@ -3,7 +3,8 @@ import { CheckIcon, GitBranchIcon, GitPullRequestIcon, PlusIcon } from 'lucide-r
 import { useState, type FormEvent } from 'react'
 
 import { createRepoBranch, putConfig } from '@/api/client'
-import { queryKeys, useGithub, useHealth } from '@/api/queries'
+import { queryKeys, useGithub, useHealth, useRepoSync } from '@/api/queries'
+import { BranchTrackingBadge } from './repo-sync-bar'
 import type { GithubItem, HealthResponse, RepoInfo, RepoResponse } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -24,6 +25,7 @@ import { cn, isHttpUrl } from '@/lib/utils'
  */
 export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: RepoInfo }) {
   const health = useHealth()
+  const sync = useRepoSync()
   const queryClient = useQueryClient()
   const onError = (error: Error) => toast(error.message, { tone: 'danger' })
 
@@ -96,6 +98,7 @@ export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: 
               <li key={name} data-slot="branch-row" data-branch={name} className="flex min-h-9 items-center gap-2 py-1">
                 <GitBranchIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
                 <span className={cn('min-w-0 truncate font-mono text-xs', current && 'font-semibold')}>{name}</span>
+                <BranchTrackingBadge name={name} sync={sync.data} />
                 {current ? (
                   <span
                     data-slot="branch-current"

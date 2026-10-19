@@ -151,6 +151,13 @@ describe('the new-task draft store', () => {
     expect(readDraft().text).toBe('fix it')
   })
 
+  it('clearStartedDraft spends the branch name but keeps the New branch toggle', () => {
+    writeDraft({ ...readDraft(), text: 'go', worktree: false, newBranch: true, branchName: 'feat/once' })
+    clearStartedDraft()
+    expect(readDraft()).toMatchObject({ worktree: false, newBranch: true })
+    expect(readDraft()).not.toHaveProperty('branchName')
+  })
+
   it('clearStartedDraft spends the text AND the source, keeping the way-of-working pills', () => {
     writeDraft({
       text: 'shipped',

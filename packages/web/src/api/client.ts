@@ -111,6 +111,8 @@ import type {
   UpdateProjectResponse,
   RemoveTodoResponse,
   RepoBranchResponse,
+  RepoSync,
+  RepoSyncActionResponse,
   RepoCommitPayload,
   RunCommitsResponse,
   RunHistoryContext,
@@ -2064,6 +2066,32 @@ export async function createRepoBranch(input: { name: string; from?: string }): 
     }),
     '/repo/branch',
   )
+}
+
+/** The main checkout against its remote (Source-Control view): offline, as last fetched. */
+export async function getRepoSync(opts?: ReadOptions): Promise<RepoSync> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].repo.sync.$get({ param: { projectId: queryScope() } }, init(opts)),
+    '/repo/sync',
+  )
+}
+
+export type RepoSyncAction = 'fetch' | 'pull' | 'push' | 'sync'
+
+/** Fetch / pull (fast-forward only) / push / sync the main checkout. A diverged branch, no
+ *  upstream or an auth failure is a 409 whose ApiError carries git's own reason. */
+export async function runRepoSyncAction(action: RepoSyncAction): Promise<RepoSyncActionResponse> {
+  const param = { param: { projectId: queryScope() } }
+  const repo = cez.api.v1.p[':projectId'].repo
+  const res =
+    action === 'fetch'
+      ? await repo.fetch.$post(param)
+      : action === 'pull'
+        ? await repo.pull.$post(param)
+        : action === 'push'
+          ? await repo.push.$post(param)
+          : await repo.sync.$post(param)
+  return unwrap(res, `/repo/${action}`)
 }
 
 // ---- plan mode (spec 008) -------------------------------------------------------------------

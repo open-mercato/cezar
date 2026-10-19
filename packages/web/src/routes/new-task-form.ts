@@ -335,6 +335,10 @@ export function buildCreateRunBody(opts: {
   /** false → run in the repo working tree, no worktree (single runs only). Sent only when
    *  explicitly off; the default (isolated worktree) stays implicit. */
   worktree?: boolean
+  /** With the worktree off: fork the checkout onto a new branch first, named `branch` when
+   *  given (spec 2026-10-19-repo-git-sync). Ignored with the worktree on or for variants. */
+  newBranch?: boolean
+  branch?: string
   /** true → autonomous run (never pauses for the user). Sent only when on. */
   autonomous?: boolean
   /** false → do not ask the agent for follow-up todos. Sent only when off. */
@@ -362,11 +366,14 @@ export function buildCreateRunBody(opts: {
     variants,
     images,
     worktree,
+    newBranch,
+    branch,
     autonomous,
     generateFollowups,
     todoId,
     dispatch,
   } = opts
+  const inPlace = worktree === false && variants <= 1 && !dispatch
   return {
     task,
     ...(source?.source === 'skill'
@@ -381,6 +388,7 @@ export function buildCreateRunBody(opts: {
     images: images.length > 0 ? [...images] : undefined,
     // Off only matters for a single run — variants always isolate.
     worktree: worktree === false && variants <= 1 ? false : undefined,
+    ...(inPlace && newBranch ? { newBranch: true, ...(branch?.trim() ? { branch: branch.trim() } : {}) } : {}),
     autonomous: autonomous === true ? true : undefined,
     generateFollowups: generateFollowups === false ? false : undefined,
     todoId: todoId || undefined,
@@ -394,7 +402,8 @@ export function buildCreateRunBody(opts: {
 export function buildAutomationTask(
   opts: Parameters<typeof buildCreateRunBody>[0],
 ): Omit<CreateRunInput, 'task' | 'images' | 'todoId'> & { prompt: string } {
-  const { task, images: _images, todoId: _todoId, ...body } = buildCreateRunBody(opts)
+  // A reusable template has no per-launch branch: an automation always runs with its own policy.
+  const { task, images: _images, todoId: _todoId, newBranch: _nb, branch: _b, ...body } = buildCreateRunBody(opts)
   return { prompt: task, ...body }
 }
 

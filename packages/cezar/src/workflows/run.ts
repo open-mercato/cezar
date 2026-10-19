@@ -67,6 +67,7 @@ import { loadConfig, resolveWorktreeRetention } from '../config.ts';
 import { deleteRunLayouts } from '../runs/layouts.ts';
 import {
   autosaveCommit,
+  branchFor,
   chooseForkBase,
   commitAll,
   pushBranch,
@@ -80,6 +81,7 @@ import {
 } from '../git-worktree.ts';
 import { commentOnIssue, commentOnPr, fetchGithubChecks, updatePr } from '../server/forge/github.ts';
 import { createDraftPr } from '../server/pr.ts';
+import { createOrSwitchBranch } from '../server/git-changes.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
@@ -741,6 +743,10 @@ export interface StartRunInput {
    *  working tree instead of an isolated worktree. Undefined/`true` keeps the
    *  default per-task worktree. Ignored for variants (they always isolate). */
   worktree?: boolean;
+  /** With `worktree: false`: switch the repo checkout to a branch forked from the base first
+   *  (spec 2026-10-19-repo-git-sync). `branch` names it; else the namer, else `cez/<id8>`. */
+  newBranch?: boolean;
+  branch?: string;
   /** Autonomous mode (#autonomous): the run never parks at `waiting` for the
    *  user — turn-ends auto-continue until the agent signals done or the safety
    *  cap is hit. No "needs you" is ever raised. */
@@ -1515,6 +1521,10 @@ export class RunManager {
     // Persist the full definition so a queued run survives a restart (#367) —
     // ad-hoc "(planned)" chains exist nowhere else to re-resolve from.
     this.store.updateRun(run.id, { workflowDef: workflow });
+    // On the record, not only the input: restart recovery rebuilds the run from it.
+    if (run.worktree === false && input.newBranch) {
+      this.store.updateRun(run.id, { inPlaceBranch: true, ...(input.branch ? { branch: input.branch } : {}) });
+    }
     // A pull-request head run (spec 2026-10-06-agentic-e2e-checks Phase 3): the fetched sha is
     // recorded as the fork point BEFORE the run is queued, so `execute` — and a restart that
     // revives the queued run — forks from it through the "recorded fork point wins" rule rather
@@ -4638,17 +4648,35 @@ export class RunManager {
       this.dropActive(runId, state);
       return;
     }
+    let switchInPlaceTo: string | undefined;
     if (repo && input.worktree === false) {
       // Composer opt-out: run in the repo working tree, no branch/worktree. The
       // repository-root lease serializes these runs by default; the explicit
       // CEZ_DISABLE_REPO_LOCK=1 escape hatch allows unsafe overlap.
-      // Pin the starting commit: the session's Changes and Commits views use it
-      // as their stable lower bound while reading the current working copy.
-      const startingCommit = await getHeadCommit(repo.root);
-      if (startingCommit) this.store.updateRun(runId, { baseBranch: startingCommit });
-      // In-place runs never fork, so nothing will ever read the namer's branch answer.
-      this.pendingBranchNames.delete(runId);
-      emit({ type: 'note', message: 'worktree off — running in the repo working tree' });
+      const recordedRun = this.store.getRun(runId);
+      if (recordedRun?.inPlaceBranch) {
+        // spec 2026-10-19-repo-git-sync: fork the checkout itself onto a task branch. A recorded
+        // branch that already exists (restart, or the user's own name) is switched to instead.
+        const branch =
+          recordedRun.branch ??
+          (await this.awaitGeneratedBranch(runId, config.branchNaming, (message) => emit({ type: 'note', message }))) ??
+          branchFor(runId);
+        if (state.cancelled) {
+          this.dropActive(runId, state);
+          return;
+        }
+        // Recorded now so a requeue keeps the name; switched once the repo-root lease is held.
+        this.store.updateRun(runId, { branch });
+        switchInPlaceTo = branch;
+      } else {
+        // In-place runs never fork, so nothing will ever read the namer's branch answer.
+        this.pendingBranchNames.delete(runId);
+        emit({ type: 'note', message: 'worktree off — running in the repo working tree' });
+        // Pin the starting commit: the session's Changes and Commits views use it
+        // as their stable lower bound while reading the current working copy.
+        const startingCommit = await getHeadCommit(repo.root);
+        if (startingCommit) this.store.updateRun(runId, { baseBranch: startingCommit });
+      }
     } else if (repo) {
       emit({
         type: 'note',
@@ -4759,6 +4787,29 @@ export class RunManager {
       // check also covers the explicit lock-bypass path, where the account may close while the
       // run is preparing its first step.
       if (this.requeueWhileHeld(runId, workflow, input, taskBackend, state)) return;
+    }
+    if (repo && switchInPlaceTo && !state.cancelled) {
+      // Re-read HEAD: the lease wait may have let another in-place run move the checkout.
+      const current = (await getRepoInfo(this.repoRoot))?.branch ?? repo.branch;
+      const base = await chooseForkBase(this.repoRoot, current, config.baseBranch, (message) =>
+        emit({ type: 'note', message }),
+      );
+      const switched = await createOrSwitchBranch(repo.root, switchInPlaceTo, base);
+      if (!switched.ok) {
+        const error = `could not switch the checkout to ${switchInPlaceTo}: ${switched.error}`;
+        this.store.updateRun(runId, { status: 'failed', error, finishedAt: new Date().toISOString(), currentStepId: undefined });
+        emit({ type: 'lifecycle', message: `run failed — ${error}` });
+        this.dropActive(runId, state);
+        return;
+      }
+      emit({
+        type: 'note',
+        message: switched.created
+          ? `worktree off — created ${switched.branch} from ${base} in the repo working tree`
+          : `worktree off — switched the repo working tree to ${switched.branch}`,
+      });
+      const startingCommit = await getHeadCommit(repo.root);
+      if (startingCommit) this.store.updateRun(runId, { baseBranch: startingCommit });
     }
 
     // Handoff journal (spec 007) — seeded after the worktree exists so the

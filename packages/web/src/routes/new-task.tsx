@@ -489,6 +489,8 @@ export function NewTaskRoute() {
         variants,
         images: submitted,
         worktree: worktreeOn,
+        newBranch: draft.newBranch,
+        branch: draft.branchName,
         autonomous: autonomousOn,
         generateFollowups: generateFollowupsOn,
         // #374: when the Inbox's "Run" sent us here, hand the entry's id back so the server
@@ -570,6 +572,7 @@ export function NewTaskRoute() {
               hasGit,
               dispatch: dispatchOn,
               autonomous: autonomousOn,
+              newBranch: draft.newBranch,
             })}
           </p>
         </header>
@@ -710,6 +713,14 @@ export function NewTaskRoute() {
                   onChange={(on) => update({ worktree: on })}
                 />
               ) : null}
+              {worktreeToggleShown && !worktreeOn ? (
+                <NewBranchToggle
+                  on={draft.newBranch === true}
+                  name={draft.branchName ?? ''}
+                  onChange={(on) => update({ newBranch: on })}
+                  onNameChange={(branchName) => update({ branchName })}
+                />
+              ) : null}
               <AutonomousToggle
                 on={autonomousOn}
                 onChange={(on) => update({ autonomous: on })}
@@ -846,6 +857,55 @@ function WorktreeToggle({
       )}
       Worktree
     </button>
+  )
+}
+
+/** In-place on a new branch (spec 2026-10-19-repo-git-sync): shown only with the worktree off.
+ *  Checked forks the checkout onto `name` (or a generated branch) from the base first. */
+function NewBranchToggle({
+  on,
+  name,
+  onChange,
+  onNameChange,
+}: {
+  on: boolean
+  name: string
+  onChange: (on: boolean) => void
+  onNameChange: (name: string) => void
+}) {
+  return (
+    <span className="flex items-center gap-1">
+      <button
+        type="button"
+        role="checkbox"
+        aria-checked={on}
+        data-slot="new-branch-toggle"
+        onClick={() => onChange(!on)}
+        title={
+          on
+            ? 'Switches the repo checkout to a new branch from the base before the agent starts'
+            : 'Runs on whatever branch is checked out — check to start a new branch from the base'
+        }
+        className={cn(chipClass, on && 'border-primary/60 text-foreground')}
+      >
+        {on ? (
+          <CheckIcon aria-hidden="true" className="size-3 shrink-0 text-primary" />
+        ) : (
+          <SquareIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
+        )}
+        New branch
+      </button>
+      {on ? (
+        <input
+          aria-label="New branch name"
+          data-slot="new-branch-name"
+          value={name}
+          placeholder="feat/… (auto)"
+          onChange={(event) => onNameChange(event.target.value)}
+          className="h-6 w-36 rounded-md border border-input bg-card px-2 font-mono text-[11px] outline-none focus-visible:border-ring"
+        />
+      ) : null}
+    </span>
   )
 }
 

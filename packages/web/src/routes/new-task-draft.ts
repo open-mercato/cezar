@@ -32,6 +32,11 @@ export interface NewTaskDraft {
   /** Worktree opt-out (#worktree-toggle): false runs in the repo working tree. null → the
    *  remembered `lastWorktree` / default (isolated worktree). */
   worktree: boolean | null
+  /** With the worktree off: fork the checkout onto a new branch from base first (spec
+   *  2026-10-19-repo-git-sync). Sticky; ignored while the worktree is on. */
+  newBranch?: boolean
+  /** The branch `newBranch` creates; empty → the namer's answer, else `cez/<id8>`. */
+  branchName?: string
   /** Autonomous (#autonomous): true never pauses for the user. null → remembered
    *  `lastAutonomous` / default (off). */
   autonomous: boolean | null
@@ -110,6 +115,8 @@ export function composerRunModeNote(input: {
    *  where the work happens than which tree the parent sits in. */
   dispatch?: boolean
   autonomous?: boolean
+  /** In-place on a fresh branch from base (spec 2026-10-19-repo-git-sync). */
+  newBranch?: boolean
 }): string {
   if (input.dispatch === true) {
     return input.autonomous === true
@@ -117,6 +124,9 @@ export function composerRunModeNote(input: {
       : 'Fans work out to subtasks in isolated worktrees.'
   }
   if (input.worktree) return 'Runs in an isolated worktree — review everything before it lands.'
+  if (input.hasGit && input.newBranch) {
+    return 'Runs in the repo working tree on a new branch from base — your checkout switches to it.'
+  }
   if (input.hasGit) return 'Runs in the repo working tree — your checkout is modified directly.'
   return 'Runs in place — no git repository detected, so there is no worktree to isolate in.'
 }
@@ -163,6 +173,8 @@ function normalize(raw: unknown): NewTaskDraft {
     model: typeof obj.model === 'string' ? obj.model : null,
     variants: obj.variants === 2 || obj.variants === 3 ? obj.variants : 1,
     worktree: typeof obj.worktree === 'boolean' ? obj.worktree : null,
+    ...(obj.newBranch === true ? { newBranch: true } : {}),
+    ...(typeof obj.branchName === 'string' && obj.branchName ? { branchName: obj.branchName } : {}),
     autonomous: typeof obj.autonomous === 'boolean' ? obj.autonomous : null,
     generateFollowups:
       typeof obj.generateFollowups === 'boolean' ? obj.generateFollowups : null,
@@ -252,7 +264,9 @@ export function writeDraft(next: NewTaskDraft, projectId: string | null = null):
  *  picked once ended up silently running every task after it. A fresh `/new` starts with no
  *  skill; picking one again is one click. */
 export function clearStartedDraft(projectId: string | null = null): void {
-  writeDraft({ ...readDraft(projectId), text: '', source: null }, projectId)
+  // A branch name is per-task — two tasks cannot both create it — while the toggle stays sticky.
+  const { branchName: _spent, ...kept } = readDraft(projectId)
+  writeDraft({ ...kept, text: '', source: null }, projectId)
 }
 
 /**

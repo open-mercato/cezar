@@ -266,6 +266,8 @@ import { checkoutRepo, type CloneRunner } from './checkout.ts';
 import { createProjectInputSchema } from '@open-mercato/cezar-contract';
 import { createProject, listGithubOwners, type CommandRunner } from './create-project.ts';
 import { ProjectContextError, ProjectContexts, type ProjectContext } from './project-context.ts';
+import { fetchRepo, pullRepo, pushRepo, repoSyncStatus, syncRepo, type SyncActionResult } from './repo-sync.ts';
+import type { RepoSync } from '@open-mercato/cezar-contract';
 import { reviewGateEnabled } from '../runs/review-gate.ts';
 import { readUiState, uiStatePath } from '../ui-state.ts';
 import { agentHomePaths, cezarHomeDir, expandTilde, isAbsolutePath } from '../paths.ts';
@@ -770,6 +772,10 @@ const startRunSchema = z
     // Composer worktree opt-out (#worktree-toggle): false runs in the repo
     // working tree. Ignored when variants > 1.
     worktree: z.boolean().optional(),
+    // With worktree:false, switch the checkout to a branch forked from base first
+    // (spec 2026-10-19-repo-git-sync); `branch` names it.
+    newBranch: z.boolean().optional(),
+    branch: z.string().trim().min(1).max(200).optional(),
     // Autonomous mode (#autonomous): the run never parks at `waiting` — it
     // auto-continues until the agent signals done. No "needs you" is raised.
     autonomous: z.boolean().optional(),
@@ -4657,6 +4663,8 @@ export function createApp(deps: ServerDeps) {
         images,
         systemPrompt: parsed.data.systemPrompt,
         worktree: parsed.data.worktree,
+        newBranch: parsed.data.newBranch,
+        branch: parsed.data.branch,
         autonomous: parsed.data.autonomous,
         // Opt-in inbox (#471): the capability is the ceiling, so a client asking
         // for follow-ups on a server that has them off gets a plain `false`
@@ -6642,6 +6650,21 @@ export function createApp(deps: ServerDeps) {
     overrideRules: z.boolean().optional().default(false),
   }).strict();
 
+  // Task branches are never a base: hide the named ones (no `cez/` prefix) by record. An in-place
+  // run's branch is the user's own checkout, so it stays listed.
+  const taskOwnedBranches = (store: ProjectContext['store']): Set<string> =>
+    new Set(store.listRuns().flatMap((r) => (r.branch && r.worktree !== false ? [r.branch] : [])));
+  const runRepoSyncAction = async (
+    project: ProjectContext,
+    action: (root: string) => Promise<SyncActionResult>,
+  ): Promise<{ error: string } | { message: string; sync: RepoSync }> => {
+    const info = await getRepoInfo(project.root);
+    if (!info) return { error: 'not a git repository' };
+    const result = await action(info.root);
+    if (!result.ok) return { error: result.error };
+    return { message: result.message, sync: await repoSyncStatus(info.root, taskOwnedBranches(project.store)) };
+  };
+
   // ---- chained family: repo / git (project-scoped) ----
   const repoRoutes = new Hono<ProjectApiEnv>()
     .get('/repo', async (c) => {
@@ -6656,8 +6679,7 @@ export function createApp(deps: ServerDeps) {
           checkedOutElsewhere: {},
           baseBranch: null,
         });
-      // Task branches are never a base: hide the named ones (no `cez/` prefix) by record.
-      const taskBranches = new Set(store.listRuns().flatMap((r) => (r.branch ? [r.branch] : [])));
+      const taskBranches = taskOwnedBranches(store);
       const [status, log, branches, held, config] = await Promise.all([
         getStatus(info.root),
         getLog(info.root),
@@ -6829,6 +6851,30 @@ export function createApp(deps: ServerDeps) {
       const result = await createOrSwitchBranch(info.root, parsed.data.name, parsed.data.from);
       if (!result.ok) return c.json({ error: result.error }, 409);
       return c.json({ branch: result.branch, created: result.created });
+    })
+
+    // Source-Control sync (spec 2026-10-19-repo-git-sync): offline status, explicit network.
+    .get('/repo/sync', async (c) => {
+      const { root: repoRoot, store } = c.get('project');
+      const info = await getRepoInfo(repoRoot);
+      if (!info) return c.json({ error: 'not a git repository' }, 409);
+      return c.json(await repoSyncStatus(info.root, taskOwnedBranches(store)));
+    })
+    .post('/repo/fetch', async (c) => {
+      const r = await runRepoSyncAction(c.get('project'), fetchRepo);
+      return 'error' in r ? c.json({ error: r.error }, 409) : c.json({ message: r.message, sync: r.sync });
+    })
+    .post('/repo/pull', async (c) => {
+      const r = await runRepoSyncAction(c.get('project'), pullRepo);
+      return 'error' in r ? c.json({ error: r.error }, 409) : c.json({ message: r.message, sync: r.sync });
+    })
+    .post('/repo/push', async (c) => {
+      const r = await runRepoSyncAction(c.get('project'), pushRepo);
+      return 'error' in r ? c.json({ error: r.error }, 409) : c.json({ message: r.message, sync: r.sync });
+    })
+    .post('/repo/sync', async (c) => {
+      const r = await runRepoSyncAction(c.get('project'), syncRepo);
+      return 'error' in r ? c.json({ error: r.error }, 409) : c.json({ message: r.message, sync: r.sync });
     });
 
   // An explicit "auto" default becomes `''` on the wire (#906): the empty id IS
