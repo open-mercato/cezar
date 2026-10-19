@@ -2127,10 +2127,16 @@ export function createApp(deps: ServerDeps) {
     return prefixed === null ? null : `cd '${cwd}' && ${prefixed}`;
   };
 
-  /** A registered project's realpath'd root, or null when the id is unknown. */
+  /** A project's realpath'd root, or null when the id is unknown. The boot project resolves to
+   *  `bootRoot` even without a registry row — `resolveProjectScope` serves it the same way, and a
+   *  repo booted into a non-empty registry is never registered (telemetry d81f8db7). */
   const projectRootFor = async (projectId: string): Promise<string | null> => {
     try {
-      return (await loadWorkspaceConfig()).projects.find((p) => p.id === projectId)?.root ?? null;
+      const registry = (await loadWorkspaceConfig()).projects;
+      const registered = registry.find((p) => p.id === projectId)?.root;
+      if (registered !== undefined) return registered;
+      if (projectId !== 'default' && projectId !== (await resolveBootProject(registry))) return null;
+      return await realpath(bootRoot).catch(() => bootRoot);
     } catch {
       return null;
     }
@@ -2717,11 +2723,10 @@ export function createApp(deps: ServerDeps) {
         // checkout. No project to resolve, and therefore no 404 path.
         let root: string | null = null;
         if (projectId !== null) {
-          const resolvedId = projectId === 'default' ? await resolveBootProject() : projectId;
           // Keyed by repo ROOT, so the selection survives the registry being rebuilt and needs no
           // cross-reference into config.json. An unknown project is a 404 rather than an orphan
           // entry nobody will ever read.
-          root = await projectRootFor(resolvedId);
+          root = await projectRootFor(projectId);
           if (root === null) return c.json({ error: `unknown project: ${projectId}` }, 404);
         }
         // A user naming an account that does not exist gets told so — the opposite of how RUN
