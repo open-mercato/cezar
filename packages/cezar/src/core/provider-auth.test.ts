@@ -470,6 +470,19 @@ describe('provider auth parsers', () => {
     await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'unknown' } });
   });
 
+  it.each([
+    ['not installed', { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' }, 'not-installed', 1],
+    ['hung', { stdout: '', stderr: '', exitCode: null, timedOut: true }, 'unknown', 2],
+  ] as const)('does not ask OpenCode with a private server when it is %s', async (_name, answer, status, calls) => {
+    const run = runner((executable) => executable === 'opencode'
+      ? answer
+      : { stdout: 'unrecognized', stderr: '', exitCode: 0 });
+    const service = new ProviderAuthService({ runCommand: run });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status } });
+    expect(vi.mocked(run).mock.calls.filter(([executable]) => executable === 'opencode')).toHaveLength(calls);
+  });
+
   it('does not re-ask OpenCode 1.x, which answered but rejects the 2.x flags', async () => {
     const run = runner((executable) => executable === 'opencode'
       ? { stdout: ['┌  Credentials ~/.local/share/opencode/auth.json', '└  credentials: many'].join('\n'), stderr: '', exitCode: 0 }

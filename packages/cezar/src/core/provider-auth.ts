@@ -111,7 +111,7 @@ interface ProviderDescriptor {
   precheck?: () => ProviderConnectionState | undefined;
   /** A more specific hint than "try again" for an answer `parse` could not read. */
   unrecognizedHint?: (result: ProviderCommandResult) => string | undefined;
-  /** Arguments to ask once more with when `statusArgs` was rejected by an older CLI. */
+  /** Arguments to ask once more with when the CLI answered `statusArgs` unreadably (a rejected flag, a failed service). */
   fallbackArgs?: (result: ProviderCommandResult) => readonly string[] | undefined;
   /**
    * Whether `executable` is not a working copy of this CLI (another program of that name, a shim
@@ -535,6 +535,8 @@ function cursorFallbackArgs(result: ProviderCommandResult): readonly string[] | 
  * whose `Credentials <path>` header shows it answered and which rejects both flags.
  */
 function openCodeFallbackArgs(result: ProviderCommandResult): readonly string[] | undefined {
+  // Only a CLI that answered: not installed, a spawn error, a hang or a signal is not a failed service.
+  if (result.errorCode || result.timedOut || result.exitCode === null) return undefined;
   if (normalizedLines(result.stdout).some((line) => /^[^a-z0-9]*credentials\s/.test(line))) return undefined;
   return ['auth', 'list', '--standalone', '--format', 'json'];
 }
