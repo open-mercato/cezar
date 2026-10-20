@@ -71,6 +71,7 @@ import type {
   RunDraftsResponse,
   SetRunDraftInput,
   FinishResponse,
+  LandResponse,
   FsBrowseResponse,
   GitCommitResponse,
   GitPushResponse,
@@ -1604,6 +1605,15 @@ export async function markAllRunsSeen(): Promise<MarkAllReadResponse> {
 }
 
 /** Close a waiting session gracefully — the run completes as done. 409 when nothing is open. */
+export async function landRun(id: string): Promise<LandResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].land.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/land'),
+  )
+}
+
 export async function finishRun(id: string): Promise<FinishResponse> {
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].finish.$post({

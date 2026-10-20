@@ -584,7 +584,7 @@ interface ActiveRun {
   releaseRepoRoot?: () => void;
   /** Auto-land policy of an in-place run (spec 2026-10-20-trunk-based-projects). Set at BOTH
    *  construction sites (`execute`, `runContinuation`) through `landingPolicy`. */
-  autoLand?: { checks: string[]; baseBranch?: string; attempts: number; inFlight?: boolean };
+  autoLand?: { checks: string[]; baseBranch?: string; attempts: number; inFlight?: Promise<LandResult> };
   /** A read-only Ask task: read-only tools, no repo-root lease. */
   readOnly?: boolean;
   /** An in-place run (`cwd === repoRoot`) that parked — on a question, or as a monitor waiting
@@ -611,6 +611,34 @@ interface ActiveRun {
 export const MAX_AUTO_CONTINUES = 40;
 /** Auto-land failures handed back to the agent before the run gives up (spec 2026-10-20-trunk-based-projects). */
 export const MAX_LAND_ATTEMPTS = 3;
+
+/** What the header's Commit step answers (`POST /runs/:id/land`). */
+export interface LandAnswer {
+  outcome: 'landed' | 'nothing' | 'failed' | 'busy' | 'unavailable';
+  message: string;
+  sha?: string;
+  pushed?: boolean;
+}
+
+function landFailurePrompt(outcome: Extract<LandResult, { result: 'failed' }>): string {
+  return `cezar could not land your changes — ${outcome.stage} failed:\n\n${outcome.error}\n\nFix this, then end your turn with CEZ:DONE again.`;
+}
+
+function landAnswer(outcome: LandResult, base: string, withAgent: boolean): LandAnswer {
+  if (outcome.result === 'landed') {
+    return {
+      outcome: 'landed',
+      message: `landed ${outcome.sha.slice(0, 8)} on ${base}${outcome.pushed ? ' and pushed' : ' (committed locally — no upstream)'}`,
+      sha: outcome.sha,
+      pushed: outcome.pushed,
+    };
+  }
+  if (outcome.result === 'nothing') return { outcome: 'nothing', message: 'nothing to commit' };
+  return {
+    outcome: 'failed',
+    message: withAgent ? `${outcome.stage} failed — sent back to the agent to fix` : `${outcome.stage} failed`,
+  };
+}
 /** The turn-end nudge text for `#autonomous`. Exported because `scripts/mock-claude.mjs`
  *  RECOGNISES this string to answer a nudge with `CEZ:DONE` (it matches the opening words, since
  *  the nudge carries no `mock:` marker of its own). Rewording it without updating that mock does
@@ -3811,7 +3839,7 @@ export class RunManager {
       return this.landWithAgent(runId, state, state.currentStepId, () => {
         state.finishRequested = true;
         state.session?.end();
-      });
+      }) !== undefined;
     }
     if (state?.session?.open) {
       this.clearIdleTimer(state);
@@ -7125,7 +7153,7 @@ export class RunManager {
    */
   private landOnDone(runId: string, state: ActiveRun, stepId: string | undefined, close: () => void): boolean {
     if (!state.autoLand || state.cancelled) return false;
-    if (state.autonomous) return this.landWithAgent(runId, state, stepId, close);
+    if (state.autonomous) return this.landWithAgent(runId, state, stepId, close) !== undefined;
     void hasUnlanded(this.repoRoot).then((pending) => {
       if (state.cancelled || this.active.get(runId) !== state) return;
       if (!pending) {
@@ -7154,20 +7182,25 @@ export class RunManager {
     this.releaseSlot();
   }
 
-  /** Land with the session still open, so a failure goes back to the agent to fix. */
-  private landWithAgent(runId: string, state: ActiveRun, stepId: string | undefined, close: () => void): boolean {
+  /** Land with the session still open, so a failure goes back to the agent to fix. The promise
+   *  of the landing, shared while one is in flight; undefined when the run has no landing policy. */
+  private landWithAgent(
+    runId: string,
+    state: ActiveRun,
+    stepId: string | undefined,
+    close: () => void,
+  ): Promise<LandResult> | undefined {
     const policy = state.autoLand;
-    if (!policy || state.cancelled) return false;
-    if (policy.inFlight) return true;
-    policy.inFlight = true;
-    void this.landNow(runId, policy)
+    if (!policy || state.cancelled) return undefined;
+    if (policy.inFlight) return policy.inFlight;
+    policy.inFlight = this.landNow(runId, policy)
       .catch((err: unknown): LandResult => ({ result: 'failed', stage: 'commit', error: err instanceof Error ? err.message : String(err) }))
       .then((outcome) => {
-        policy.inFlight = false;
-        if (state.cancelled || this.active.get(runId) !== state) return;
+        policy.inFlight = undefined;
+        if (state.cancelled || this.active.get(runId) !== state) return outcome;
         if (outcome.result !== 'failed') {
           close();
-          return;
+          return outcome;
         }
         policy.attempts += 1;
         if (policy.attempts >= MAX_LAND_ATTEMPTS) {
@@ -7177,20 +7210,67 @@ export class RunManager {
             message: `auto-land failed ${policy.attempts} times (${outcome.stage}) — the changes stay in the checkout`,
           });
           close();
-          return;
+          return outcome;
         }
-        const text = `cezar could not land your changes — ${outcome.stage} failed:\n\n${outcome.error}\n\nFix this, then end your turn with CEZ:DONE again.`;
-        if (!this.deliverMessage(runId, [{ type: 'text', text: this.store.redactRunText(runId, text) }], false)) {
+        if (!this.deliverMessage(runId, [{ type: 'text', text: this.store.redactRunText(runId, landFailurePrompt(outcome)) }], false)) {
           close();
-          return;
+          return outcome;
         }
         this.store.appendEvent(runId, {
           type: 'note',
           stepId,
           message: `auto-land failed at ${outcome.stage} — sent back to the agent (${policy.attempts}/${MAX_LAND_ATTEMPTS})`,
         });
+        return outcome;
       });
-    return true;
+    return policy.inFlight;
+  }
+
+  /**
+   * The header's Commit step on an in-place task (spec 2026-10-20-trunk-based-projects), in any
+   * state: with the session open it lands like Finish; with it closed it lands directly, and a
+   * failure reopens the task with the error so the agent fixes it. Never throws.
+   */
+  async land(runId: string): Promise<LandAnswer> {
+    const run = this.store.getRun(runId);
+    if (!run || run.worktree !== false || run.readOnly) {
+      return { outcome: 'unavailable', message: 'only a task that works in the checkout can commit to the base branch' };
+    }
+    const policy = await this.landingPolicy(run, await loadConfig(this.repoRoot));
+    if (!policy) return { outcome: 'unavailable', message: 'auto-land is not enabled for this project' };
+    const base = policy.baseBranch ?? (await getRepoInfo(this.repoRoot))?.branch ?? 'the base branch';
+    const state = this.active.get(runId);
+    if (state?.session?.open && run.status === 'waiting') {
+      this.clearIdleTimer(state);
+      state.idleClosed = undefined;
+      if (state.askPark === 'waiting') state.askPark = 'abandoned';
+      const landing = this.landWithAgent(runId, state, state.currentStepId, () => {
+        state.finishRequested = true;
+        state.session?.end();
+      });
+      if (!landing) return { outcome: 'busy', message: 'the task is stopping — try again in a moment' };
+      return landAnswer(await landing, base, true);
+    }
+    if (state || this.isActive(runId)) {
+      return { outcome: 'busy', message: 'the agent is still working — commit once its turn ends' };
+    }
+    if (this.repoRootBusy > 0) {
+      return { outcome: 'busy', message: 'another task is working in the checkout — commit once it is done' };
+    }
+    if (!(await hasUnlanded(this.repoRoot))) return { outcome: 'nothing', message: 'nothing to commit' };
+    const outcome = await this.landNow(runId, policy);
+    if (outcome.result === 'failed') {
+      // Help rather than refuse: the session is gone, so reopen the task with the error.
+      const reopened = this.continueRun(runId, { text: landFailurePrompt(outcome) });
+      return reopened.ok
+        ? { outcome: 'failed', message: `${outcome.stage} failed — sent back to the agent to fix` }
+        : { outcome: 'failed', message: `${outcome.stage} failed: ${this.store.redactRunText(runId, outcome.error).split('\n')[0]}` };
+    }
+    if (run.status !== 'done') {
+      this.store.updateRun(runId, { status: 'done', error: undefined });
+      this.store.appendEvent(runId, { type: 'lifecycle', message: 'changes landed' });
+    }
+    return landAnswer(outcome, base, false);
   }
 
   /** Accept an in-place run resting at `review`: land it when the project auto-lands, else the

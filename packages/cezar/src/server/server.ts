@@ -4920,6 +4920,20 @@ export function createApp(deps: ServerDeps) {
       return c.json({ finished: true });
     })
 
+    // An in-place task's Commit to the base branch (spec 2026-10-20-trunk-based-projects).
+    .post('/runs/:id/land', async (c) => {
+      const { store, manager } = c.get('project');
+      const id = c.req.param('id');
+      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+      const answer = await manager.land(id);
+      return c.json({
+        outcome: answer.outcome,
+        message: answer.message,
+        ...(answer.sha !== undefined ? { sha: answer.sha } : {}),
+        ...(answer.pushed !== undefined ? { pushed: answer.pushed } : {}),
+      });
+    })
+
     // "Continue" (spec 003): reopen a finished run's session in-process.
     .post('/runs/:id/continue', jsonZodValidator(continueSchema, { absent: ({}) }), async (c) => {
       const { root: repoRoot, store, manager } = c.get('project');

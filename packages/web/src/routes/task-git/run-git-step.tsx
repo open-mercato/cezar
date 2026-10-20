@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 
-import { ApiError, adoptRunPr, createRunPr, finishRun, pushRun } from '@/api/client'
+import { ApiError, adoptRunPr, createRunPr, landRun, pushRun } from '@/api/client'
 import { queryKeys, useConfig, useHealth, useRepo, useRunGitStatus } from '@/api/queries'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { useReferenceStatus } from '@/components/reference-status'
@@ -118,7 +118,14 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
     config.data?.landing === 'auto' &&
     config.data.landingBlocked === null
   const trunkBase = config.data?.baseBranch ?? repo.data?.info?.branch ?? 'main'
-  const status = useRunGitStatus(run.id, (Boolean(run.worktreePath) || trunk) && !finished, isRunActive(run.status))
+  // A trunk task reads the shared checkout, which other tasks land from too: keep it live.
+  const status = useRunGitStatus(run.id, (Boolean(run.worktreePath) || trunk) && !finished, isRunActive(run.status) || trunk)
+  const queryClientForStatus = useQueryClient()
+  // A turn that just ended (or a landing that just settled) changed what there is to commit; the
+  // last poll may predate it, and a stale "2 uncommitted" offers Commit on a clean tree.
+  useEffect(() => {
+    void queryClientForStatus.invalidateQueries({ queryKey: queryKeys.runs.gitStatus(run.id) })
+  }, [run.status, run.id, queryClientForStatus])
   const [commitOpen, setCommitOpen] = useState(false)
   const [commitAndPush, setCommitAndPush] = useState(false)
   // Every git step is a prompt to this task's own agent, through the same seam as the PR chip's
@@ -222,10 +229,12 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
     },
     onError,
   })
+  // One request, whatever state the task is in; the answer says what happened.
   const land = useMutation({
-    mutationFn: () => finishRun(run.id),
-    onSuccess: () => {
-      toast(`Landing on ${trunkBase} — committing, running the required checks and pushing`)
+    mutationFn: () => landRun(run.id),
+    onSuccess: (answer) => {
+      const text = answer.message.charAt(0).toUpperCase() + answer.message.slice(1)
+      toast(text, answer.outcome === 'busy' || answer.outcome === 'unavailable' ? { tone: 'danger' } : undefined)
       void invalidateRuns()
       void queryClient.invalidateQueries({ queryKey: queryKeys.runs.gitStatus(run.id) })
     },

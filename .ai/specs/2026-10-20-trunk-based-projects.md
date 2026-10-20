@@ -56,6 +56,13 @@ switches the checkout back) and, while the remote is ahead, **Update branch** (t
 the checkout, keeping the changes). `GET /runs/:id/git/status` answers for such a task from the
 checkout against its upstream, leaving `.ai/cezar/` out.
 
+Commit is `POST /runs/:id/land` (`manager.land`), one request whatever state the task is in: with
+the review park's session open it lands like Finish; with the session gone (review after an idle
+close, or done) it lands directly — refused only while another task holds the checkout; nothing
+to land answers "nothing to commit"; a failed landing with no session reopens the task with the
+error (Continue) so the agent fixes it. Every outcome is a 200 with a human message the button
+toasts.
+
 Landing:
 
 1. The checkout must be on a branch, and on `baseBranch` when one is configured.

@@ -105,6 +105,36 @@ describe('trunk-based projects', () => {
     expect(await clean()).toBe('');
   });
 
+  it('Commit lands from the review park, says nothing to commit after, and lands directly once the session is gone', async () => {
+    writeConfig({ taskWorkspace: 'in-place', landing: 'auto' });
+    writeFileSync(join(repoRoot, 'person.md'), 'Bjorn\n');
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:done' });
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+
+    expect(await manager.land(record.id)).toMatchObject({ outcome: 'landed' });
+    await waitFor(record.id, (r) => r?.status === 'done');
+    expect(await manager.land(record.id)).toEqual({ outcome: 'nothing', message: 'nothing to commit' });
+
+    // A later edit to the checkout: no session to land with, so the server lands it itself.
+    writeFileSync(join(repoRoot, 'person.md'), 'Bjorn, updated\n');
+    expect(await manager.land(record.id)).toMatchObject({ outcome: 'landed' });
+    expect(await clean()).toBe('');
+  });
+
+  it('Commit with no session reopens the task when a required check fails', async () => {
+    writeConfig({ taskWorkspace: 'in-place', landing: 'auto' });
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:done' });
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    await manager.land(record.id);
+    await waitFor(record.id, (r) => r?.status === 'done');
+    writeConfig({ taskWorkspace: 'in-place', landing: 'auto', requiredChecks: ['exit 1'] });
+    writeFileSync(join(repoRoot, 'person.md'), 'broken\n');
+    const answer = await manager.land(record.id);
+    expect(answer).toEqual({ outcome: 'failed', message: 'checks failed — sent back to the agent to fix' });
+    // The agent took it back; the mock answers without CEZ:DONE and parks for the user.
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+  });
+
   it('lands an autonomous task on CEZ:DONE without stopping for review', async () => {
     writeConfig({ taskWorkspace: 'in-place', landing: 'auto' });
     writeFileSync(join(repoRoot, 'person.md'), 'Bjorn\n');

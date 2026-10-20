@@ -610,6 +610,16 @@ export type DeleteRunResponse = z.infer<typeof deleteRunResponseSchema>;
 export const finishResponseSchema = z.object({ finished: z.literal(true) });
 export type FinishResponse = z.infer<typeof finishResponseSchema>;
 
+/** `POST /runs/:id/land` — an in-place task's Commit to the base branch (spec
+ *  2026-10-20-trunk-based-projects). Every outcome is a 200 carrying a human `message`. */
+export const landResponseSchema = z.object({
+  outcome: z.enum(['landed', 'nothing', 'failed', 'busy', 'unavailable']),
+  message: z.string(),
+  sha: z.string().optional(),
+  pushed: z.boolean().optional(),
+});
+export type LandResponse = z.infer<typeof landResponseSchema>;
+
 /** `POST /runs/:id/continue` — a refusal to reopen is a 409 carrying the engine's reason. */
 export const continueResponseSchema = z.object({ continued: z.literal(true) });
 export type ContinueResponse = z.infer<typeof continueResponseSchema>;
