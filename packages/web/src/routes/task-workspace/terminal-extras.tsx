@@ -1,4 +1,4 @@
-import { ChevronDownIcon, CircleIcon, ExternalLinkIcon, PlayIcon } from 'lucide-react'
+import { ChevronDownIcon, CircleIcon, ExternalLinkIcon, PanelRightIcon, PlayIcon } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 
 import { getRunTerminalCommands, getRunTerminalUrls } from '@/api/client'
@@ -21,7 +21,7 @@ import { cn } from '@/lib/utils'
  * and the commands its project defines.
  *
  * Neither does anything on its own. A detected address opens only when the user clicks
- * `Otwórz w Przeglądarce`, and a discovered command runs only when the user picks it — both are
+ * `Open in Browser` or `Open Preview`, and a discovered command runs only when the user picks it — both are
  * the spec's explicit rules, and both are why these are lists rather than automations.
  */
 
@@ -90,25 +90,35 @@ export function DetectedUrlsStrip({
           <span className="text-soft-foreground">
             {entry.running === true ? 'running' : entry.running === false ? 'not responding' : '…'}
           </span>
-          {/* §7 names this control literally — "The user clicks `Otwórz w Przeglądarce`" — so the
-              words are on it, not only in its tooltip. An icon alone was discoverable by hover
-              and by screen reader, and invisible to everyone reading the strip. */}
+          {/* Two destinations, both named on the control: the user's own browser (a new tab; the
+              desktop shell hands `_blank` to the default browser), and the task's Preview. */}
+          <Button
+            asChild
+            variant="ghost"
+            size="xs"
+            className="h-auto px-1.5 py-0.5 text-[length:inherit] hover:bg-background"
+          >
+            <a href={entry.url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${entry.url} in Browser`}>
+              <ExternalLinkIcon aria-hidden="true" className="size-3" />
+              <span>Open in Browser</span>
+            </a>
+          </Button>
           <Button
             type="button"
             variant="ghost"
             size="xs"
-            aria-label={`Open ${entry.url} in Browser`}
+            aria-label={`Open ${entry.url} in Preview`}
             onClick={() => setNoRoom(!onOpen(entry.url))}
             className="h-auto px-1.5 py-0.5 text-[length:inherit] hover:bg-background"
           >
-            <ExternalLinkIcon aria-hidden="true" className="size-3" />
-            <span>Open in Browser</span>
+            <PanelRightIcon aria-hidden="true" className="size-3" />
+            <span>Open Preview</span>
           </Button>
         </span>
       ))}
       {noRoom ? (
         <span className="text-xs text-muted-foreground">
-          No room to open it here — this layout has three columns, or its Browser is out of tabs.
+          No room to open it here — this layout has three columns, or its Preview is out of tabs.
         </span>
       ) : null}
     </div>
