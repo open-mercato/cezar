@@ -150,6 +150,10 @@ describe('landing commit messages (spec 2026-10-20-trunk-based-projects)', () =>
       { status: 'M', path: 'people/a.md' },
       { status: 'A', path: 'people/b.md' },
       { status: 'M', path: 'people/c.md' },
-    ])).toBe('Update 3 files in people/');
+    ])).toBe('Update 2 and add 1 files in people/');
+    expect(fallbackCommitMessage([
+      ...Array.from({ length: 19 }, (_, i) => ({ status: 'D', path: `vault/knowledge/reading/${i}.md` })),
+      ...Array.from({ length: 4 }, (_, i) => ({ status: 'M', path: `vault/knowledge/tools/${i}.md` })),
+    ])).toBe('Remove 19 and update 4 files in vault/knowledge/');
   });
 });

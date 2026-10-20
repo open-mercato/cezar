@@ -166,16 +166,39 @@ export interface StagedChange {
 
 const STAGED_PATCH_CAP = 12_000;
 
-/** A message from the file list alone: `Add meeting.md`, `Update a.md and b.md`, `Update 4 files in notes/`. */
+/**
+ * A message from the file list alone, when no model wrote one: what kind of change, how many,
+ * where — `Add meeting.md`, `Update a.md and b.md`, `Remove 19 and update 4 files in vault/knowledge/`.
+ */
 export function fallbackCommitMessage(files: StagedChange['files']): string {
   if (files.length === 0) return 'Update files';
-  const verbs = new Set(files.map((f) => (f.status.startsWith('A') ? 'Add' : f.status.startsWith('D') ? 'Remove' : f.status.startsWith('R') ? 'Rename' : 'Update')));
-  const verb = verbs.size === 1 ? [...verbs][0] : 'Update';
+  const verbOf = (status: string) =>
+    status.startsWith('A') ? 'add' : status.startsWith('D') ? 'remove' : status.startsWith('R') ? 'rename' : 'update';
+  const counts = new Map<string, number>();
+  for (const file of files) counts.set(verbOf(file.status), (counts.get(verbOf(file.status)) ?? 0) + 1);
+  const capital = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
   const names = files.map((f) => f.path.split('/').pop() ?? f.path);
-  if (files.length <= 2) return `${verb} ${names.join(' and ')}`;
-  const dirs = new Set(files.map((f) => f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/') + 1) : ''));
-  const dir = dirs.size === 1 ? [...dirs][0] : '';
-  return `${verb} ${files.length} files${dir ? ` in ${dir}` : ''}`;
+  if (files.length <= 2) {
+    const verb = counts.size === 1 ? capital([...counts.keys()][0] as string) : 'Update';
+    return `${verb} ${names.join(' and ')}`;
+  }
+  const order = ['add', 'update', 'rename', 'remove'];
+  const parts = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || order.indexOf(a[0]) - order.indexOf(b[0]))
+    .map(([verb, n]) => `${verb} ${n}`);
+  const head = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : (parts[0] as string);
+  const dir = commonDirectory(files.map((f) => f.path));
+  const message = `${capital(head)} files${dir ? ` in ${dir}` : ''}`;
+  return message.length <= 72 ? message : `${capital(head)} files`;
+}
+
+/** The deepest directory every path sits in, with a trailing slash; '' when they share none. */
+function commonDirectory(paths: string[]): string {
+  const dirs = paths.map((p) => p.split('/').slice(0, -1));
+  const first = dirs[0] ?? [];
+  let depth = 0;
+  while (depth < first.length && dirs.every((d) => d[depth] === first[depth])) depth += 1;
+  return depth ? `${first.slice(0, depth).join('/')}/` : '';
 }
 
 async function commitTask(

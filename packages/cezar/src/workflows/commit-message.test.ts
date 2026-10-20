@@ -27,4 +27,16 @@ describe('commit message (spec 2026-10-20-trunk-based-projects)', () => {
     expect(prompt).toContain('+hello');
     expect(prompt).toContain('context only');
   });
+
+  it('reports why it produced nothing, so a fallback is explainable', async () => {
+    const { generateCommitMessage } = await import('./commit-message.ts');
+    const previous = process.env.CEZ_AUTONAME;
+    process.env.CEZ_AUTONAME = '0';
+    try {
+      expect(await generateCommitMessage('/nowhere', { files: [{ status: 'A', path: 'a.md' }], patch: '' })).toEqual({ reason: 'model naming is off' });
+    } finally {
+      if (previous === undefined) delete process.env.CEZ_AUTONAME;
+      else process.env.CEZ_AUTONAME = previous;
+    }
+  });
 });

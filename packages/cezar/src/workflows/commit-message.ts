@@ -48,27 +48,38 @@ export function cleanSubject(raw: string): string | undefined {
   return subject;
 }
 
+/** Recent subjects as style examples — only ones that pass `cleanSubject` themselves, so a bad
+ *  subject already in history is never imitated. */
 async function recentSubjects(repoRoot: string): Promise<string[]> {
-  return new Promise((resolve) => {
-    execFile('git', ['log', '-8', '--format=%s'], { cwd: repoRoot, encoding: 'utf8' }, (err, stdout) =>
+  const lines = await new Promise<string[]>((resolve) => {
+    execFile('git', ['log', '-20', '--format=%s'], { cwd: repoRoot, encoding: 'utf8' }, (err, stdout) =>
       resolve(err ? [] : stdout.split('\n').map((l) => l.trim()).filter(Boolean)),
     );
   });
+  return lines.filter((line) => cleanSubject(JSON.stringify({ subject: line })) === line).slice(0, 8);
 }
+
+/** Why the last attempt produced no subject — recorded on the run so a fallback is explainable. */
+export type CommitMessageResult = { subject: string } | { subject?: undefined; reason: string };
 
 export async function generateCommitMessage(
   repoRoot: string,
   staged: StagedChange,
   intent?: string,
-): Promise<string | undefined> {
-  if (!autoNamingActive() || staged.files.length === 0) return undefined;
+): Promise<CommitMessageResult> {
+  if (!autoNamingActive()) return { reason: 'model naming is off' };
+  if (staged.files.length === 0) return { reason: 'nothing staged' };
+  let reason = 'no answer';
   try {
     const config = await loadConfig(repoRoot);
     const runner = createRunner(config.defaultRunner);
     const { env } = await resolveProfileEnvForRoot(repoRoot, config.defaultRunner);
-    const userPrompt = buildCommitMessagePrompt(staged, intent, await recentSubjects(repoRoot));
-    // One retry, like the namer: a junk answer gets a second chance, then the file-list fallback.
+    const prompt = buildCommitMessagePrompt(staged, intent, await recentSubjects(repoRoot));
+    // Two tries: the second says what was wrong with the first.
     for (let attempt = 0; attempt < 2; attempt++) {
+      const userPrompt = attempt === 0
+        ? prompt
+        : `${prompt}\n\nYour previous answer was rejected (${reason}). Answer with only {"subject": "<imperative summary, at most 72 characters>"}.`;
       const result = await runner.run({
         systemPrompt: COMMIT_MESSAGE_SYSTEM_PROMPT,
         userPrompt,
@@ -79,10 +90,11 @@ export async function generateCommitMessage(
         env: { ...env, CEZ_MOCK_ARGS_FILE: '' },
       });
       const subject = cleanSubject(result.text);
-      if (subject) return subject;
+      if (subject) return { subject };
+      reason = result.text.trim() ? `unusable answer: ${result.text.trim().slice(0, 120)}` : 'empty answer';
     }
-  } catch {
-    // runner unavailable — the file-list fallback
+  } catch (err) {
+    reason = err instanceof Error ? err.message : String(err);
   }
-  return undefined;
+  return { reason };
 }

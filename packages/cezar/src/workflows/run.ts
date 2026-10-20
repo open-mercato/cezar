@@ -7134,7 +7134,16 @@ export class RunManager {
     const env = { ...process.env, ...this.agentEnv(runId) };
     const outcome = await landInPlace(this.repoRoot, {
       // From the staged change itself: the title names the first request and goes stale.
-      describe: (staged) => generateCommitMessage(this.repoRoot, staged, this.latestRequest(runId)),
+      describe: async (staged) => {
+        const written = await generateCommitMessage(this.repoRoot, staged, this.latestRequest(runId));
+        if (written.subject === undefined && staged.files.length > 0) {
+          this.store.appendEvent(runId, {
+            type: 'note',
+            message: `commit message named from the files — ${this.store.redactRunText(runId, written.reason)}`,
+          });
+        }
+        return written.subject;
+      },
       baseBranch: policy.baseBranch,
       since: run?.baseBranch,
       checks: policy.checks,
