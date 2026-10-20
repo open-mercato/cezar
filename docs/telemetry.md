@@ -77,7 +77,9 @@ browser's own transport error (e.g. `TypeError: Load failed`), masked the same w
 Every error an agent shows in a task's thread is reported the same way, as an `AgentError` named
 by the agent (`opencode: OpenCode 1.18.0 or newer is required to use the free tier`), with whether
 it ended the session and whether it asks for a newer CLI. The text is masked first: quoted values,
-emails, URLs and slash-bearing names (paths, branches, `owner/repo`) become placeholders.
+emails, URLs and slash-bearing names (paths, branches, `owner/repo`) become placeholders, and
+times, dates and delays become `<time>` / `<n>`. A provider usage limit whose reset cezar can read
+is not reported — auto-resume handles it; one it cannot read is, under the code `usage_limit_unparsed`.
 
 When cezar cannot read whether an agent's CLI is signed in, it reports why (timed out, could not
 start, unexpected exit, unrecognised output) with the shape of the answer only: exit code, Node's
