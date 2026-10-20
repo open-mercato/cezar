@@ -10,6 +10,7 @@ import { Composer } from './composer'
 import {
   DICTATION_INSECURE,
   DICTATION_NO_SERVICE,
+  DICTATION_OLD_SHELL,
   dictationNotice,
   foldResults,
   formatElapsed,
@@ -258,6 +259,29 @@ describe('the dictation overlay (paseo pattern)', () => {
     expect(FakeRecognition.instances).toHaveLength(0)
     act(() => mic.focus())
     expect((await screen.findAllByText(DICTATION_INSECURE)).length).toBeGreaterThan(0)
+  })
+
+  // telemetry c55c7b0b: a macOS shell without the microphone entitlement refuses every start.
+  it('in a macOS app that predates the microphone entitlement the mic is disabled, never started', async () => {
+    stubSpeech()
+    vi.stubGlobal('__CEZ_DESKTOP__', { platform: 'macos' })
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+    renderComposer()
+    const mic = screen.getByLabelText('Start dictation')
+    expect(mic.getAttribute('aria-disabled')).toBe('true')
+    fireEvent.click(mic)
+    expect(FakeRecognition.instances).toHaveLength(0)
+    act(() => mic.focus())
+    expect((await screen.findAllByText(DICTATION_OLD_SHELL)).length).toBeGreaterThan(0)
+  })
+
+  it('in a macOS app with the entitlement a refusal points at System Settings, not the browser', async () => {
+    stubSpeech()
+    vi.stubGlobal('__CEZ_DESKTOP__', { platform: 'macos', microphone: true })
+    renderComposer()
+    act(() => startDictation().onerror!({ error: 'not-allowed' }))
+    expect(await screen.findByText(/System Settings → Privacy & Security/)).toBeTruthy()
+    expect(reportDictationFailed).toHaveBeenCalledWith('not-allowed')
   })
 
   it('a mic that will not start (permissions) toasts honestly instead of hanging the overlay', async () => {
