@@ -13,6 +13,7 @@ import {
   SERVER_START_MAX_MS,
   TURN_IDLE_GRACE_MS,
   opencodePermissionReply,
+  unsupportedServerMessage,
 } from './opencode-server-runner.ts';
 
 const spawnHook = vi.hoisted(() => ({ override: null as null | ((...args: unknown[]) => unknown) }));
@@ -289,6 +290,24 @@ describe('2d01c3c9 opencode serve that starts without the expected URL line', ()
     vi.useRealTimers();
     await session.result.catch(() => undefined);
     expect(errors(events)).toEqual([{ type: 'error', message: 'opencode: opencode serve did not report a listening URL within 30s' }]);
+  }, 30_000);
+});
+
+describe('dc1a91a6 an OpenCode 2.x server', () => {
+  const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
+
+  it('fails with an actionable message instead of a bare 405', async () => {
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 }).startSession(
+      { userPrompt: 'check the tree', cwd: process.cwd(), env: { MOCK_API: 'v2' } },
+      (e) => events.push(e),
+      { autoEndAfterFirstTurn: true },
+    );
+    await session.result;
+    expect(events.filter((e) => e.type === 'error')).toEqual([
+      { type: 'error', message: `opencode: ${unsupportedServerMessage(405)}` },
+    ]);
+    expect(unsupportedServerMessage(405)).toMatch(/OpenCode 2\.x .* not supported yet — install OpenCode 1\.x/);
   }, 30_000);
 });
 
