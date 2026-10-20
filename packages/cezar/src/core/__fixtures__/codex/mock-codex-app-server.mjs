@@ -201,6 +201,14 @@ rl.on('line', (line) => {
       emit({ method: 'turn/completed', params: { threadId: 'th_mock_1', turn: { id: turnId, status: 'completed' } } });
       return;
     }
+    // Current app-servers report a failure as `turn/completed` + status `failed` (run 903d6df4).
+    if (turnText.includes('mock:turn-completed-failed')) {
+      emit({ method: 'turn/completed', params: {
+        threadId: 'th_mock_1',
+        turn: { id: 'turn_mock_1', status: 'failed', error: { message: "The 'fable' model is not supported", codexErrorInfo: 'other' } },
+      } });
+      return;
+    }
     if (turnText.includes('mock:turn-failed')) {
       emit({ method: 'turn/failed', params: {
         turn: { id: 'turn_mock_1', status: 'failed' },
