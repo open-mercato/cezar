@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
+import { CEZAR_DATA_EXCLUDE } from '../data-gitignore.ts';
 import { gitHasIdentity, unresolvedConflicts } from '../git-worktree.ts';
 
 /**
@@ -29,7 +30,7 @@ export interface LandOptions {
 
 // cezar's own state never lands: committing `.ai/cezar/config.json` would track it, and a tracked
 // config can no longer grant auto-land.
-const PATHSPEC = ['--', '.', ':(exclude).ai/cezar'];
+const PATHSPEC = ['--', '.', CEZAR_DATA_EXCLUDE];
 const NETWORK_TIMEOUT_MS = 60_000;
 const CHECK_TIMEOUT_MS = 10 * 60_000;
 const CHECK_OUTPUT_TAIL = 8_000;

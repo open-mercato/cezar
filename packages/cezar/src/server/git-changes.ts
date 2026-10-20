@@ -3,6 +3,7 @@ import { rmSync } from 'node:fs';
 import { lstat, open, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
+import { CEZAR_DATA_EXCLUDE } from '../data-gitignore.ts';
 import { resolveTaskDiffBase, type RepointedHead } from '../git-diff-base.ts';
 import { isSafeGitRef } from '../git-refs.ts';
 import { resolveTaskRemotes, splitRemoteRef } from '../git-remotes.ts';
@@ -261,6 +262,8 @@ export async function collectChanges(
     intentToAdd?: boolean;
     taskBranch?: string;
     runStartedAt?: string;
+    /** Leave cezar's own `.ai/cezar/` out — an in-place task's Changes show what would land. */
+    excludeCezarData?: boolean;
   } = {},
 ): Promise<ChangesResult> {
   if (!isSafeGitRef(baseBranch)) return { ok: false, error: 'refusing option-like base ref' };
@@ -302,10 +305,11 @@ export async function collectChanges(
     // so that refresh is written once here instead — else every poll re-reads each stat-dirty file.
     await git(dir, ['update-index', '-q', '--refresh'], env);
     const readEnv = { ...env, GIT_OPTIONAL_LOCKS: '0' };
+    const scope = opts.excludeCezarData ? ['--', '.', CEZAR_DATA_EXCLUDE] : [];
     const [nameStatus, numstat, patchOut] = await Promise.all([
-      git(dir, ['diff', '--name-status', '-z', '-M', base], readEnv),
-      git(dir, ['diff', '--numstat', '-z', '-M', base], readEnv),
-      git(dir, ['diff', '--patch', '-M', '--no-color', base], readEnv),
+      git(dir, ['diff', '--name-status', '-z', '-M', base, ...scope], readEnv),
+      git(dir, ['diff', '--numstat', '-z', '-M', base, ...scope], readEnv),
+      git(dir, ['diff', '--patch', '-M', '--no-color', base, ...scope], readEnv),
     ]);
     for (const listing of [nameStatus, numstat, patchOut]) {
       if (!listing.ok) return { ok: false, error: gitReason(listing, 'git diff failed') };

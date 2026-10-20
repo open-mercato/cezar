@@ -221,6 +221,21 @@ describe('collectChanges — structured diff vs base', () => {
     expect(result.changes.files[0]?.patch).toContain('… (patch truncated)');
   });
 
+  it("excludeCezarData leaves cezar's own .ai/cezar files out of an in-place task's Changes", async () => {
+    writeFileSync(join(dir, 'tracked.txt'), 'a\n');
+    g(dir, 'add', '-A');
+    g(dir, 'commit', '-m', 'base');
+    mkdirSync(join(dir, '.ai/cezar'), { recursive: true });
+    for (const name of ['.gitignore', 'config.json', 'ui-state.json']) writeFileSync(join(dir, '.ai/cezar', name), '{}\n');
+    writeFileSync(join(dir, 'summary.md'), 'notes\n');
+
+    const scoped = await collectChanges(dir, 'main', { intentToAdd: false, excludeCezarData: true });
+    expect(scoped.ok && scoped.changes.files.map((f) => f.path)).toEqual(['summary.md']);
+    // The repo-wide view still shows everything.
+    const all = await collectChanges(dir, 'main', { intentToAdd: false });
+    expect(all.ok && all.changes.files.length).toBe(4);
+  });
+
   it('intentToAdd:false never stages into the index (#major-index-mutation)', async () => {
     writeFileSync(join(dir, 'tracked.txt'), 'a\n');
     g(dir, 'add', '-A');

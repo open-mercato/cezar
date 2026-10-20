@@ -5199,6 +5199,7 @@ export function createApp(deps: ServerDeps) {
         runStartedAt: run.startedAt,
         // A read-only GET against the user's real checkout must never modify its index.
         intentToAdd: run.worktreePath ? undefined : false,
+        excludeCezarData: !run.worktreePath,
       });
       if (!result.ok) return c.json({ error: result.error }, 409);
       return c.json(result.changes);
