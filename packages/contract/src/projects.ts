@@ -57,6 +57,9 @@ export const projectListEntrySchema = z.object({
    *  reach it; but it is not persisted, so the rows that edit the registry (Remove, Max parallel)
    *  do not apply and Settings offers "Add project" instead. Never present on a registry entry. */
   unregistered: z.literal(true).optional(),
+  /** Set with `unregistered` when the server would refuse to register this folder (`$HOME`, a
+   *  task worktree) — the cockpit disables "Add project" instead of offering a click that 400s. */
+  notAddable: z.literal(true).optional(),
   /**
    * Free-form labels grouping CONNECTED repositories — a `storefront` tag on the API, the web
    * app and the design system says those three are one piece of work spread over three repos.
