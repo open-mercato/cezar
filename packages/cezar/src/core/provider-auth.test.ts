@@ -27,6 +27,8 @@ import { PROVIDER_IDS } from './provider-auth.ts';
 import {
   ProviderAuthService,
   cliVersionFrom,
+  copilotAcpAnswered,
+  defaultRunProviderCommand,
   isRuntimeProviderAuthFailure,
   providerAuthChecksDisabled,
   versionManagerShimMiss,
@@ -1836,7 +1838,10 @@ describe('inconclusive probe reports', () => {
     const service = new ProviderAuthService({
       runCommand: async (executable, args) => {
         if (executable !== 'copilot') return { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' };
-        if (args[0] === '--version') return { stdout: 'copilot version: v1.34.1\n', stderr: '', exitCode: 0 };
+        if (args.includes('--version')) {
+          expect(args).toEqual(['--no-auto-update', '--version']);
+          return { stdout: 'copilot version: v1.34.1\n', stderr: '', exitCode: 0 };
+        }
         return { stdout: 'something that is not JSON-RPC\n', stderr: 'warning', exitCode: 0 };
       },
       onInconclusive,
@@ -1888,6 +1893,46 @@ describe('inconclusive probe reports', () => {
     });
     const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'copilot');
     expect(row).toMatchObject({ status: 'unknown', hint: 'Authentication could not be verified. Try again.' });
+  });
+
+  // Telemetry 298c2e1f: Copilot's ACP server exits on stdin EOF without answering a request still
+  // in flight, so a probe that closed stdin right after writing lost a slow `session/new`.
+  it('holds stdin open until an ACP server has answered session/new', async () => {
+    const server = [
+      "const rl = require('node:readline').createInterface({ input: process.stdin });",
+      "rl.on('line', (line) => { const { id } = JSON.parse(line);",
+      "  const answer = () => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result: id === 1 ? { sessionId: 's' } : {} }) + '\\n');",
+      '  if (id === 1) setTimeout(answer, 300); else answer(); });',
+      "rl.on('close', () => process.exit(0));",
+    ].join('\n');
+    const payload = '{"jsonrpc":"2.0","id":0,"method":"initialize"}\n{"jsonrpc":"2.0","id":1,"method":"session/new"}\n';
+    const result = await defaultRunProviderCommand(
+      process.execPath,
+      ['-e', server],
+      10_000,
+      undefined,
+      { payload, closeWhen: copilotAcpAnswered },
+    );
+    expect(result).toMatchObject({ exitCode: 0, timedOut: false });
+    expect(result.stdout).toContain('"sessionId":"s"');
+  });
+
+  it('closes a held-open stdin before the timeout when the answer never comes', async () => {
+    const result = await defaultRunProviderCommand(
+      process.execPath,
+      ['-e', "process.stdin.resume(); process.stdin.on('end', () => process.stdout.write('bye'));"],
+      2_500,
+      undefined,
+      { payload: 'not acp\n', closeWhen: copilotAcpAnswered },
+    );
+    expect(result).toMatchObject({ exitCode: 0, timedOut: false, stdout: 'bye' });
+  });
+
+  it('recognizes the session/new answer, result or error, and nothing earlier', () => {
+    expect(copilotAcpAnswered('{"jsonrpc":"2.0","id":0,"result":{}}\n')).toBe(false);
+    expect(copilotAcpAnswered('{"jsonrpc":"2.0","id":1,"result":{"sessionId":"x"}}')).toBe(true);
+    expect(copilotAcpAnswered('{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"Authentication required"}}')).toBe(true);
+    expect(copilotAcpAnswered('{"jsonrpc":"2.0","id":10,"result":{}}')).toBe(false);
   });
 
   it('reads a version with or without a leading v, never from inside a longer number', () => {

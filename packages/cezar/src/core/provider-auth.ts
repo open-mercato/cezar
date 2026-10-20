@@ -53,11 +53,22 @@ export type RunProviderCommand = (
    *  2026-07-29-agent-profiles). Optional so every existing caller and the test kit keep their
    *  three-argument signature; absent means the default profile, which needs nothing. */
   env?: Record<string, string>,
-  /** Written to the probe's stdin, which is then closed. Only Copilot needs it: the CLI ships no
-   *  non-interactive auth-status command, so its state is read by driving its ACP server. Optional
-   *  so every existing caller and the test kit keep their shorter signature. */
-  stdin?: string,
+  /** Written to the probe's stdin. Only Copilot needs it: the CLI ships no non-interactive
+   *  auth-status command, so its state is read by driving its ACP server. Optional so every
+   *  existing caller and the test kit keep their shorter signature. */
+  stdin?: ProviderStdin,
 ) => Promise<ProviderCommandResult>;
+
+export interface ProviderStdin {
+  payload: string;
+  /** Keep stdin open until stdout satisfies this; absent closes it right after the payload. A
+   *  server that exits on EOF drops requests still in flight (telemetry 298c2e1f). */
+  closeWhen?: (stdout: string) => boolean;
+}
+
+/** How long before its timeout a held-open stdin is closed anyway, so the CLI exits on EOF and
+ *  its answer is read as an answer rather than discarded as a hang. */
+const STDIN_CLOSE_MARGIN_MS = 2_000;
 
 /**
  * The explicit environment lock delegates model and credential configuration
@@ -83,7 +94,9 @@ interface ProviderDescriptor {
   installHint: string;
   parse: (result: ProviderCommandResult) => ProviderConnectionState | null;
   /** See {@link RunProviderCommand}'s `stdin`. */
-  stdin?: () => string;
+  stdin?: () => ProviderStdin;
+  /** Arguments that print the CLI's version for an inconclusive report; default `--version`. */
+  versionArgs?: readonly string[];
   /**
    * An answer available WITHOUT spawning the CLI at all, checked before `runCommand` — `undefined`
    * defers to the normal probe. Every other backend's own CLI self-reports API-key vs. subscription
@@ -318,8 +331,10 @@ function parsePiStatus(result: ProviderCommandResult): ProviderConnectionState |
  * server that answers the question definitively and cheaply: `session/new` returns a `sessionId`
  * for an entitled credential and the JSON-RPC error `-32000 "Authentication required"` without
  * one. Nothing is prompted, so no AI credits are spent, and the server exits when stdin closes.
+ * It exits on EOF without answering what is still in flight, so stdin stays open until
+ * `session/new` is answered (telemetry 298c2e1f: a slow `session/new` came back unanswered).
  */
-function copilotAcpProbeStdin(): string {
+function copilotAcpProbeStdin(): ProviderStdin {
   const initialize = {
     jsonrpc: '2.0',
     id: 0,
@@ -328,7 +343,16 @@ function copilotAcpProbeStdin(): string {
   };
   // A throwaway cwd: the probe must not touch the user's repo, and `session/new` requires one.
   const newSession = { jsonrpc: '2.0', id: 1, method: 'session/new', params: { cwd: tmpdir(), mcpServers: [] } };
-  return `${JSON.stringify(initialize)}\n${JSON.stringify(newSession)}\n`;
+  return {
+    payload: `${JSON.stringify(initialize)}\n${JSON.stringify(newSession)}\n`,
+    closeWhen: copilotAcpAnswered,
+  };
+}
+
+/** The `session/new` response (id 1) has arrived, as a result or an error. */
+export function copilotAcpAnswered(stdout: string): boolean {
+  return /"id"\s*:\s*1\s*,\s*"(?:result|error)"\s*:/.test(stdout)
+    || /"Authentication required"/i.test(stdout);
 }
 
 function parseCopilotStatus(result: ProviderCommandResult): ProviderConnectionState | null {
@@ -423,6 +447,8 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     installHint: 'Install GitHub Copilot CLI (`npm i -g @github/copilot`), then run `copilot login`.',
     parse: parseCopilotStatus,
     stdin: copilotAcpProbeStdin,
+    // The version of the binary the probe ran, not a cached newer package.
+    versionArgs: ['--no-auto-update', '--version'],
     unrecognizedHint: copilotUnrecognizedHint,
   },
 ];
@@ -476,16 +502,17 @@ function cursorUnrecognizedHint(result: ProviderCommandResult): string | undefin
     + 'CEZ_CURSOR_AGENT_BIN at Cursor\'s `cursor-agent` if another program named `agent` comes first on PATH.';
 }
 
-function defaultRunProviderCommand(
+export function defaultRunProviderCommand(
   executable: string,
   args: readonly string[],
   timeoutMs: number,
   env?: Record<string, string>,
-  stdin?: string,
+  stdin?: ProviderStdin,
 ): Promise<ProviderCommandResult> {
   // A Windows `.cmd` shim runs as `node <script>`: execFile throws EINVAL on the shim (a330744e).
   const [file, argv] = spawnableCommand(executable, args);
   return new Promise((resolve) => {
+    let closeTimer: NodeJS.Timeout | undefined;
     const child = execFile(
       file,
       argv,
@@ -499,6 +526,7 @@ function defaultRunProviderCommand(
         ...(env && Object.keys(env).length > 0 ? { env: { ...process.env, ...env } } : {}),
       },
       (error, stdout, stderr) => {
+        clearTimeout(closeTimer);
         const commandError = error as (NodeJS.ErrnoException & {
           killed?: boolean;
           signal?: string | null;
@@ -516,9 +544,29 @@ function defaultRunProviderCommand(
         });
       },
     );
+    // A CLI that exits before reading its payload must not crash cezar with an unhandled EPIPE.
+    child.stdin?.on('error', () => {});
     // Closing stdin is what makes a stdin-driven probe terminate at all: the Copilot ACP server
     // reads until EOF. A probe with no payload closes it immediately, exactly as before.
-    child.stdin?.end(stdin ?? '');
+    const closeWhen = stdin?.closeWhen;
+    if (!closeWhen || !child.stdin || !child.stdout) {
+      child.stdin?.end(stdin?.payload ?? '');
+      return;
+    }
+    const { stdin: input, stdout: output } = child;
+    let seen = '';
+    const close = (): void => {
+      clearTimeout(closeTimer);
+      output.off('data', onData);
+      input.end();
+    };
+    const onData = (chunk: Buffer | string): void => {
+      seen += String(chunk);
+      if (closeWhen(seen)) close();
+    };
+    output.on('data', onData);
+    closeTimer = setTimeout(close, Math.max(0, timeoutMs - STDIN_CLOSE_MARGIN_MS));
+    input.write(stdin.payload);
   });
 }
 
@@ -1209,9 +1257,10 @@ export class ProviderAuthService {
         stdoutJson: result ? parsesAsJson(result.stdout) : false,
         stderrBytes: result?.stderr.length ?? 0,
         cliVersion: async () => {
+          const versionArgs = descriptor.versionArgs ?? ['--version'];
           const answer = await (env === undefined
-            ? this.runCommand(executable, ['--version'], VERSION_TIMEOUT_MS)
-            : this.runCommand(executable, ['--version'], VERSION_TIMEOUT_MS, env));
+            ? this.runCommand(executable, versionArgs, VERSION_TIMEOUT_MS)
+            : this.runCommand(executable, versionArgs, VERSION_TIMEOUT_MS, env));
           return cliVersionFrom(answer.stdout) ?? cliVersionFrom(answer.stderr);
         },
       });
