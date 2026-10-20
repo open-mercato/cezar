@@ -1,5 +1,8 @@
+import { execFile } from 'node:child_process';
+import { z } from 'zod';
 import { loadConfig } from '../config.ts';
 import { createRunner } from '../core/runner-factory.ts';
+import { parseStructured } from '../planner.ts';
 import { autoNamingActive, NAMER_TIMEOUT_MS } from '../runs/auto-name.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
 import type { StagedChange } from './landing.ts';
@@ -14,29 +17,43 @@ import type { StagedChange } from './landing.ts';
 const SUBJECT_MAX = 72;
 
 export const COMMIT_MESSAGE_SYSTEM_PROMPT =
-  'You write git commit messages. Respond with ONLY the subject line: imperative mood, at most 72 ' +
-  'characters, no trailing period, no quotes, no prefix like "feat:". Describe what THIS change does ' +
-  'to the files, in the language the content is written in.';
+  'You write git commit subject lines. Respond with ONLY a JSON object: {"subject": string}. The subject ' +
+  'says what THIS change does, in the imperative mood ("Add …", "Summarize …", "Update …"), at most 72 ' +
+  'characters, one line, no trailing period. Match the style of the repository\'s recent subjects when ' +
+  'they show a convention (a prefix, a language, a format). Never comment on, judge or explain the ' +
+  'change, never ask a question, never address the reader.';
 
-export function buildCommitMessagePrompt(staged: StagedChange, intent?: string): string {
+const subjectSchema = z.object({ subject: z.string() });
+
+export function buildCommitMessagePrompt(staged: StagedChange, intent?: string, recent: string[] = []): string {
   const files = staged.files.map((f) => `${f.status}\t${f.path}`).join('\n');
   return [
-    intent ? `The request that produced it (context only): ${intent.slice(0, 500)}` : undefined,
+    recent.length ? `Recent commit subjects in this repository (style examples):\n${recent.join('\n')}` : undefined,
+    intent ? `The request that produced the change (context only): ${intent.slice(0, 500)}` : undefined,
     `Files:\n${files}`,
     `Diff:\n${staged.patch}`,
   ].filter(Boolean).join('\n\n');
 }
 
-/** The model's answer → one clean subject line, or undefined for junk. */
+/**
+ * The model's answer → a usable subject, or undefined. Refuses rather than repairs: a subject that
+ * had to be cut, or that reads as a remark about the change ("The names in … are a…"), is worse
+ * than the file-list fallback.
+ */
 export function cleanSubject(raw: string): string | undefined {
-  const line = raw
-    .split('\n')
-    .map((l) => l.trim())
-    .find((l) => l && !l.startsWith('```'));
-  if (!line) return undefined;
-  const subject = line.replace(/^["'`]|["'`]$/g, '').replace(/\.$/, '').trim();
-  if (!subject || /^cez-namer|^\{/.test(subject)) return undefined;
-  return subject.length > SUBJECT_MAX ? `${subject.slice(0, SUBJECT_MAX - 1).trimEnd()}…` : subject;
+  const parsed = parseStructured(raw, subjectSchema);
+  const subject = parsed?.subject.trim().replace(/\.$/, '').trim();
+  if (!subject || subject.length > SUBJECT_MAX || /[\n?…]/.test(subject)) return undefined;
+  if (/^(the|this|these|those|it|its|i|here|sure|okay|ok|there)\b/i.test(subject)) return undefined;
+  return subject;
+}
+
+async function recentSubjects(repoRoot: string): Promise<string[]> {
+  return new Promise((resolve) => {
+    execFile('git', ['log', '-8', '--format=%s'], { cwd: repoRoot, encoding: 'utf8' }, (err, stdout) =>
+      resolve(err ? [] : stdout.split('\n').map((l) => l.trim()).filter(Boolean)),
+    );
+  });
 }
 
 export async function generateCommitMessage(
@@ -49,17 +66,23 @@ export async function generateCommitMessage(
     const config = await loadConfig(repoRoot);
     const runner = createRunner(config.defaultRunner);
     const { env } = await resolveProfileEnvForRoot(repoRoot, config.defaultRunner);
-    const result = await runner.run({
-      systemPrompt: COMMIT_MESSAGE_SYSTEM_PROMPT,
-      userPrompt: buildCommitMessagePrompt(staged, intent),
-      cwd: repoRoot,
-      allowedTools: [],
-      model: config.defaultRunner === 'claude' ? config.namerModel : undefined,
-      timeoutMs: NAMER_TIMEOUT_MS,
-      env: { ...env, CEZ_MOCK_ARGS_FILE: '' },
-    });
-    return cleanSubject(result.text);
+    const userPrompt = buildCommitMessagePrompt(staged, intent, await recentSubjects(repoRoot));
+    // One retry, like the namer: a junk answer gets a second chance, then the file-list fallback.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await runner.run({
+        systemPrompt: COMMIT_MESSAGE_SYSTEM_PROMPT,
+        userPrompt,
+        cwd: repoRoot,
+        allowedTools: [],
+        model: config.defaultRunner === 'claude' ? config.namerModel : undefined,
+        timeoutMs: NAMER_TIMEOUT_MS,
+        env: { ...env, CEZ_MOCK_ARGS_FILE: '' },
+      });
+      const subject = cleanSubject(result.text);
+      if (subject) return subject;
+    }
   } catch {
-    return undefined;
+    // runner unavailable — the file-list fallback
   }
+  return undefined;
 }
