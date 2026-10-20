@@ -266,6 +266,22 @@ describe('provider status workspace query', () => {
     expect((result.current.error as ApiError).message).toBe('provider probe failed')
   })
 
+  it('retries a transient transport failure on a background provider read', async () => {
+    fetchMock
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(json(PROVIDERS))
+    const client = createQueryClient()
+    const { result } = renderHook(() => useProviderStatus(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true), { timeout: 5000 })
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
   it('enters the query error state for a malformed successful response', async () => {
     fetchMock.mockImplementation(async () =>
       json({ providers: [null], raw: 'do-not-render-this' }),
