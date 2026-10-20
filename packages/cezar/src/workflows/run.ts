@@ -582,7 +582,7 @@ interface ActiveRun {
    *  Worktree-backed runs never need it; root runs ordinarily do unless the
    *  explicit unsafe bypass is active. */
   releaseRepoRoot?: () => void;
-  /** Auto-land policy of an in-place run (spec 2026-10-20-knowledge-base-projects). Set at BOTH
+  /** Auto-land policy of an in-place run (spec 2026-10-20-trunk-based-projects). Set at BOTH
    *  construction sites (`execute`, `runContinuation`) through `landingPolicy`. */
   autoLand?: { checks: string[]; baseBranch?: string; attempts: number; inFlight?: boolean };
   /** A read-only Ask task: read-only tools, no repo-root lease. */
@@ -609,7 +609,7 @@ interface ActiveRun {
 /** Safety cap on autonomous auto-continues per run — stops a stuck agent from nudging forever.
  *  Exported so the tests assert against the real cap instead of restating `40`. */
 export const MAX_AUTO_CONTINUES = 40;
-/** Auto-land failures handed back to the agent before the run gives up (spec 2026-10-20-knowledge-base-projects). */
+/** Auto-land failures handed back to the agent before the run gives up (spec 2026-10-20-trunk-based-projects). */
 export const MAX_LAND_ATTEMPTS = 3;
 /** The turn-end nudge text for `#autonomous`. Exported because `scripts/mock-claude.mjs`
  *  RECOGNISES this string to answer a nudge with `CEZ:DONE` (it matches the opening words, since
@@ -763,7 +763,7 @@ export interface StartRunInput {
    *  (spec 2026-10-19-repo-git-sync). `branch` names it; else the namer, else `cez/<id8>`. */
   newBranch?: boolean;
   branch?: string;
-  /** A read-only Ask task (spec 2026-10-20-knowledge-base-projects): in place, read-only tools,
+  /** A read-only Ask task (spec 2026-10-20-trunk-based-projects): in place, read-only tools,
    *  no repo-root lease, never lands. Wins over `worktree`, `newBranch` and dispatch. */
   readOnly?: boolean;
   /** Autonomous mode (#autonomous): the run never parks at `waiting` for the
@@ -4666,7 +4666,7 @@ export class RunManager {
     // happened yet here, so the run goes back to the queue untouched (spec
     // 2026-08-03-auto-resume-after-usage-limit).
     if (this.requeueWhileHeld(runId, workflow, input, taskBackend)) return;
-    // The project's default workspace (spec 2026-10-20-knowledge-base-projects), for every caller
+    // The project's default workspace (spec 2026-10-20-trunk-based-projects), for every caller
     // that left it open — the composer, automations, the CLI. Never for variants, dispatch or a PR head.
     const defaultable = this.store.getRun(runId);
     if (
@@ -7033,7 +7033,7 @@ export class RunManager {
   }
 
   /**
-   * The auto-land policy of an in-place run (spec 2026-10-20-knowledge-base-projects), or
+   * The auto-land policy of an in-place run (spec 2026-10-20-trunk-based-projects), or
    * undefined. Like worktree scripts, a git-tracked config.json cannot grant it: pushing to the
    * base branch is the owner's permission, never the repository's.
    */

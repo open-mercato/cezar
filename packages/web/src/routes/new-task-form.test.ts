@@ -518,7 +518,7 @@ describe('buildAutomationTask', () => {
   })
 })
 
-describe('knowledge-base projects (spec 2026-10-20-knowledge-base-projects)', () => {
+describe('trunk-based projects (spec 2026-10-20-trunk-based-projects)', () => {
   const base = { task: 'x', source: null, model: '', runner: 'claude' as const, defaultRunner: 'claude' as const, images: [] }
   const wire = (opts: Partial<Parameters<typeof buildCreateRunBody>[0]>) =>
     JSON.parse(JSON.stringify(buildCreateRunBody({ ...base, variants: 1, ...opts })))

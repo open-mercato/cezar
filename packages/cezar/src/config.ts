@@ -141,11 +141,11 @@ const configSchema = z.object({
    */
   modelsLocked: z.boolean().optional().catch(undefined),
   /**
-   * Knowledge-base projects (spec 2026-10-20-knowledge-base-projects). Every key is optional and
-   * absent = today's code-project behavior. `profile` only labels the preset the cockpit applied;
+   * Trunk-based projects (spec 2026-10-20-trunk-based-projects). Every key is optional and
+   * absent = today's branch-per-task behavior. `profile` only labels the preset the cockpit applied;
    * the behavior comes from the individual keys below.
    */
-  profile: z.enum(['code', 'notes']).optional().catch(undefined),
+  profile: z.enum(['branches', 'trunk']).optional().catch(undefined),
   /** Where a task works unless the composer says otherwise: `in-place` = the repo checkout. */
   taskWorkspace: z.enum(['worktree', 'in-place']).optional().catch(undefined),
   /** How an in-place task's finished changes reach the base branch. `auto` commits, rebases,

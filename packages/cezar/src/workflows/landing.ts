@@ -2,7 +2,7 @@ import { execFile, spawn } from 'node:child_process';
 import { gitHasIdentity, unresolvedConflicts } from '../git-worktree.ts';
 
 /**
- * Auto-land for in-place tasks (spec 2026-10-20-knowledge-base-projects): commit what the task
+ * Auto-land for in-place tasks (spec 2026-10-20-trunk-based-projects): commit what the task
  * left, rebase on the checkout's upstream, run the project's required checks, push. Never
  * throws; every failure names its stage so the engine can hand it back to the agent.
  */

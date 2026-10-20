@@ -11,8 +11,8 @@ import { AppRoutes } from '@/routes'
 import { ThemeProvider } from '@/components/theme-provider'
 
 /**
- * Project settings → Tasks, knowledge-base fields (spec 2026-10-20-knowledge-base-projects): the
- * notes preset is one write, every key stays adjustable, and every save is a PUT to the
+ * Project settings → Tasks, trunk-based fields (spec 2026-10-20-trunk-based-projects): the
+ * trunk-based preset is one write, every key stays adjustable, and every save is a PUT to the
  * project-scoped `/api/v1/config`.
  */
 
@@ -91,25 +91,25 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('Project settings → Tasks: knowledge-base projects', () => {
-  it('shows the code-project defaults when nothing is configured', async () => {
+describe('Project settings → Tasks: trunk-based projects', () => {
+  it('shows the branch-per-task defaults when nothing is configured', async () => {
     serve()
     renderAt('/settings/tasks')
     await waitFor(() => expect(slot('tasks-profile')).not.toBeNull())
-    expect(slot<HTMLSelectElement>('tasks-profile')!.value).toBe('code')
+    expect(slot<HTMLSelectElement>('tasks-profile')!.value).toBe('branches')
     expect(slot<HTMLSelectElement>('tasks-workspace')!.value).toBe('')
     expect(slot<HTMLButtonElement>('tasks-landing')!.getAttribute('aria-checked')).toBe('false')
   })
 
-  it('applies the notes preset in one write, and clears it again', async () => {
+  it('applies the trunk-based preset in one write, and clears it again', async () => {
     serve()
     renderAt('/settings/tasks')
     await waitFor(() => expect(slot('tasks-profile')).not.toBeNull())
-    fireEvent.change(slot('tasks-profile')!, { target: { value: 'notes' } })
+    fireEvent.change(slot('tasks-profile')!, { target: { value: 'trunk' } })
     await waitFor(() => expect(puts()).toHaveLength(1))
-    expect(puts()[0]).toEqual({ profile: 'notes', taskWorkspace: 'in-place', landing: 'auto', reviewGate: false })
+    expect(puts()[0]).toEqual({ profile: 'trunk', taskWorkspace: 'in-place', landing: 'auto', reviewGate: false })
     await waitFor(() => expect(slot<HTMLButtonElement>('tasks-landing')!.getAttribute('aria-checked')).toBe('true'))
-    fireEvent.change(slot('tasks-profile')!, { target: { value: 'code' } })
+    fireEvent.change(slot('tasks-profile')!, { target: { value: 'branches' } })
     await waitFor(() => expect(puts()).toHaveLength(2))
     expect(puts()[1]).toMatchObject({ profile: null, taskWorkspace: null, landing: null })
   })

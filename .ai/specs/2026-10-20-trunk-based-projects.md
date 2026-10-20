@@ -1,24 +1,27 @@
-# Knowledge-base projects — trunk-based notes repos
+# Trunk-based projects — work in the checkout, land on the base branch
 
 Status: phase 1 implemented (2026-10-20). Server: `packages/cezar/src/workflows/landing.ts`, the
 landing/read-only wiring in `workflows/run.ts`, config keys in `config.ts`. Cockpit:
-`packages/web/src/routes/settings/knowledge-base-fields.tsx` (Settings → Tasks), the Ask chip and
+`packages/web/src/routes/settings/trunk-based-fields.tsx` (Settings → Tasks), the Ask chip and
 project defaults in `routes/new-task.tsx`.
 
 ## Problem
 
-A personal knowledge base kept in git (an Obsidian vault, journals, meeting and people notes) is
-fed by an agent: the user types raw input, answers a question or two, and expects the note filed,
-linked and saved. cezar's code model gets in the way: a branch per note to review and merge,
-agents may never land, two notes filed together conflict on the same daily note, and a question
-about the notes still gets a worktree to clean up.
+cezar's default is branch per task: an isolated worktree, a diff to review, a PR to merge, and
+agents never land. Some repositories are worked trunk-based instead — many small changes that
+should go straight to the base branch once they pass the repo's own checks: a knowledge base or
+docs repo fed by an agent, a config or data repo, a solo project. There the default gets in the
+way: a branch to review and merge per small change, no way to let agents land, parallel tasks
+that conflict on the same shared files, and a read-only question that still gets a worktree to
+clean up. cezar does not need to understand the content; the repo brings its own skills, schema
+and checks, cezar provides the lifecycle.
 
 ## Shape
 
-Every key lives in `.ai/cezar/config.json`, is optional, and absent means today's code-project
-behavior. **Settings → Tasks → Project type → Knowledge base / notes** writes the preset
-`{ profile: 'notes', taskWorkspace: 'in-place', landing: 'auto', reviewGate: false }`; every key
-stays adjustable on its own, and switching back to Code clears them.
+Every key lives in `.ai/cezar/config.json`, is optional, and absent means today's branch-per-task
+behavior. **Settings → Tasks → Development model → Trunk-based** writes the preset
+`{ profile: 'trunk', taskWorkspace: 'in-place', landing: 'auto', reviewGate: false }`; every key
+stays adjustable on its own, and switching back to Branch per task clears them.
 
 | Key | Effect |
 | --- | --- |
@@ -27,12 +30,12 @@ stays adjustable on its own, and switching back to Code clears them.
 | `requiredChecks: string[]` | Shell commands run in the checkout after the rebase, before every push. |
 | `defaultSkill`, `askSkill` | The composer preselects them when nothing is picked. |
 | `teamSkills` (API) | `false` writes `skillsRepos: []`. |
-| `systemPrompt` | Already existed (Settings → Instructions): the project-wide "read AGENTS.md, this is a knowledge base". |
+| `systemPrompt` | Already existed (Settings → Instructions): project-wide instructions every task gets (e.g. "read AGENTS.md first"). |
 
 ### Serialized writes
 
 In-place runs already share one repo-root lease (#438): a write task waits for the one before it,
-so two notes submitted together are filed one after the other. Nothing new was needed. A write
+so two tasks started together run one after the other. Nothing new was needed. A write
 task parked on a question keeps the lease, as before — its context describes the files as it left
 them.
 
@@ -49,7 +52,7 @@ On `CEZ:DONE`, both turn-end handlers call `landOnDone` before closing the sessi
    rebases once more.
 
 Step 2 commits whatever is dirty in the checkout, including edits the user made by hand while
-the task ran; in a notes repo the agent is the only writer, which is the premise of the mode.
+the task ran; in a trunk-based project agents are expected to be the only writers to the checkout.
 
 Without an upstream the local commit is the landing. A failure at any stage is sent into the
 open session ("fix this, then end with CEZ:DONE again") up to `MAX_LAND_ATTEMPTS` (3); after that
@@ -68,8 +71,8 @@ granted and that cezar, not the agent, pushes — the Guard's written permission
 
 `POST /runs { readOnly: true }` runs in the checkout with tools `Read, Grep, Glob`, a read-only
 system prompt, no repo-root lease (it runs beside a write task) and never lands. No branch, no
-worktree, nothing to clean up. The composer offers an **Ask** chip on in-place and notes
-projects; a notes project turns it on by itself when the message ends with `?`.
+worktree, nothing to clean up. The composer offers an **Ask** chip on in-place and trunk-based
+projects; a trunk-based project turns it on by itself when the message ends with `?`.
 
 **Limit:** only Claude enforces `allowedTools`. Codex, OpenCode and the others get the
 instruction but not the restriction (see #430); a write they make anyway is swept into the next

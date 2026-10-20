@@ -353,7 +353,7 @@ export function buildCreateRunBody(opts: {
    *  stays off the wire: its PRESENCE is what makes the server compose the dispatch-mode prompt
    *  and force the worktree. */
   dispatch?: DispatchIntent | null
-  /** A read-only Ask task (spec 2026-10-20-knowledge-base-projects) — single runs only. */
+  /** A read-only Ask task (spec 2026-10-20-trunk-based-projects) — single runs only. */
   readOnly?: boolean
   /** The project defaults to in-place, so an isolated worktree must be asked for explicitly. */
   inPlaceByDefault?: boolean
@@ -412,7 +412,7 @@ export function buildCreateRunBody(opts: {
 }
 
 /**
- * The project's preselected skill (spec 2026-10-20-knowledge-base-projects): its Ask skill for a
+ * The project's preselected skill (spec 2026-10-20-trunk-based-projects): its Ask skill for a
  * read-only task, else its default skill — only when that skill exists in the catalog.
  */
 export function projectDefaultSource(
@@ -424,7 +424,7 @@ export function projectDefaultSource(
   return name && skills.some((skill) => skill.name === name) ? { source: 'skill', ref: name } : null
 }
 
-/** A notes project asks by default when the message reads as a question. */
+/** A trunk-based project asks by default when the message reads as a question. */
 export function looksLikeQuestion(text: string): boolean {
   return /\?\s*$/.test(text.trim())
 }

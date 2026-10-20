@@ -378,10 +378,10 @@ export const runRecordSchema = z.object({
   worktreeLifecycle: worktreeLifecycleProjectionSchema.optional(),
   /** An in-place run that switched the repo checkout to `branch` before it started. */
   inPlaceBranch: z.literal(true).optional(),
-  /** In-place but a read-only Ask task (spec 2026-10-20-knowledge-base-projects): no lease, no
+  /** In-place but a read-only Ask task (spec 2026-10-20-trunk-based-projects): no lease, no
    *  writes, no landing. */
   readOnly: z.literal(true).optional(),
-  /** The last auto-land of an in-place run (spec 2026-10-20-knowledge-base-projects). */
+  /** The last auto-land of an in-place run (spec 2026-10-20-trunk-based-projects). */
   landing: z
     .object({
       status: z.enum(['landed', 'nothing', 'failed']),

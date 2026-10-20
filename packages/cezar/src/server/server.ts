@@ -778,7 +778,7 @@ const startRunSchema = z
     // (spec 2026-10-19-repo-git-sync); `branch` names it.
     newBranch: z.boolean().optional(),
     branch: z.string().trim().min(1).max(200).optional(),
-    // A read-only Ask task (spec 2026-10-20-knowledge-base-projects): in place, no lease, no writes.
+    // A read-only Ask task (spec 2026-10-20-trunk-based-projects): in place, no lease, no writes.
     readOnly: z.boolean().optional(),
     // Autonomous mode (#autonomous): the run never parks at `waiting` — it
     // auto-continues until the agent signals done. No "needs you" is raised.
@@ -7053,7 +7053,7 @@ export function createApp(deps: ServerDeps) {
             if (parsed.data.reviewGate === null) delete raw.reviewGate;
             else raw.reviewGate = parsed.data.reviewGate;
           }
-          // Knowledge-base keys (spec 2026-10-20-knowledge-base-projects): null or '' clears.
+          // Trunk-based keys (spec 2026-10-20-trunk-based-projects): null or '' clears.
           for (const key of ['profile', 'taskWorkspace', 'landing', 'defaultSkill', 'askSkill'] as const) {
             const value = parsed.data[key];
             if (value === undefined) continue;

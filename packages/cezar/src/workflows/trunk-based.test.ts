@@ -12,12 +12,12 @@ const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
 
 /**
- * Knowledge-base projects (spec 2026-10-20-knowledge-base-projects), driven dry through
+ * Trunk-based projects (spec 2026-10-20-trunk-based-projects), driven dry through
  * `scripts/mock-claude.mjs`: the project's default workspace puts a task in the checkout, a
  * `CEZ:DONE` lands what it left, a failing required check goes back to the agent, and a
  * read-only task runs beside a write task that holds the working-tree lease.
  */
-describe('knowledge-base projects', () => {
+describe('trunk-based projects', () => {
   let repoRoot: string;
   let store: RunStore;
   let manager: RunManager;
@@ -105,7 +105,7 @@ describe('knowledge-base projects', () => {
     expect(await head()).not.toBe(before);
   });
 
-  it('keeps the code-project default: no config, an isolated worktree, no landing', async () => {
+  it('keeps the branch-per-task default: no config, an isolated worktree, no landing', async () => {
     const record = manager.startRun(SINGLE_STEP, { task: 'mock:done' });
     await waitFor(record.id, (r) => r?.status === 'done');
     const done = store.getRun(record.id)!;

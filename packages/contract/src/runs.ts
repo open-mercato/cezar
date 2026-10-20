@@ -319,10 +319,10 @@ export const runRecordSchema = z.object({
   branch: z.string().optional(),
   /** An in-place run that switched the repo checkout to `branch` before it started. */
   inPlaceBranch: z.literal(true).optional(),
-  /** In-place but a read-only Ask task (spec 2026-10-20-knowledge-base-projects): no lease, no
+  /** In-place but a read-only Ask task (spec 2026-10-20-trunk-based-projects): no lease, no
    *  writes, no landing. */
   readOnly: z.literal(true).optional(),
-  /** The last auto-land of an in-place run (spec 2026-10-20-knowledge-base-projects). */
+  /** The last auto-land of an in-place run (spec 2026-10-20-trunk-based-projects). */
   landing: z
     .object({
       status: z.enum(['landed', 'nothing', 'failed']),
@@ -1122,7 +1122,7 @@ export const createRunInputBaseSchema = z
     newBranch: z.boolean().optional(),
     /** The branch `newBranch` creates; omit for the namer's answer, else `cez/<id8>`. */
     branch: z.string().trim().min(1).max(200).optional(),
-    /** true → a read-only Ask task (spec 2026-10-20-knowledge-base-projects): runs in the repo
+    /** true → a read-only Ask task (spec 2026-10-20-trunk-based-projects): runs in the repo
      *  checkout with read-only tools, takes no lease and never lands. */
     readOnly: z.boolean().optional(),
     /** true → autonomous run: never parks at "waiting"; auto-continues until done. */

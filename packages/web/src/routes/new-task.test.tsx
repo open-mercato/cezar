@@ -2300,14 +2300,14 @@ describe('the Dispatch toggle', () => {
   })
 })
 
-describe('knowledge-base projects (spec 2026-10-20-knowledge-base-projects)', () => {
-  const NOTES_SKILLS: Skill[] = [
+describe('trunk-based projects (spec 2026-10-20-trunk-based-projects)', () => {
+  const TRUNK_SKILLS: Skill[] = [
     ...SKILLS,
     { name: 'ingest', description: 'File a note', body: '', path: '/p/ingest.md', source: 'ai' },
     { name: 'ask', description: 'Answer from the notes', body: '', path: '/p/ask.md', source: 'ai' },
   ]
-  const NOTES_CONFIG: Partial<ConfigResponse> = {
-    profile: 'notes',
+  const TRUNK_CONFIG: Partial<ConfigResponse> = {
+    profile: 'trunk',
     taskWorkspace: 'in-place',
     landing: 'auto',
     defaultSkill: 'ingest',
@@ -2316,7 +2316,7 @@ describe('knowledge-base projects (spec 2026-10-20-knowledge-base-projects)', ()
   const note = () => document.querySelector('[data-slot="run-mode-note"]')?.textContent
 
   it('files a note in place with the default skill', async () => {
-    serve({ config: NOTES_CONFIG, skills: NOTES_SKILLS })
+    serve({ config: TRUNK_CONFIG, skills: TRUNK_SKILLS })
     renderNewTask()
     await pillReady('ingest')
     expect(note()).toContain('lands on the base branch')
@@ -2330,7 +2330,7 @@ describe('knowledge-base projects (spec 2026-10-20-knowledge-base-projects)', ()
   })
 
   it('asks a question read-only with the Ask skill', async () => {
-    serve({ config: NOTES_CONFIG, skills: NOTES_SKILLS })
+    serve({ config: TRUNK_CONFIG, skills: TRUNK_SKILLS })
     renderNewTask()
     await pillReady('ingest')
     fireEvent.change(textarea(), { target: { value: "what's open with Daniel?" } })
@@ -2341,7 +2341,7 @@ describe('knowledge-base projects (spec 2026-10-20-knowledge-base-projects)', ()
     expect(postedBody()).not.toHaveProperty('worktree')
   })
 
-  it('leaves a code project without the Ask chip', async () => {
+  it('leaves a branch-per-task project without the Ask chip', async () => {
     serve()
     renderNewTask()
     await pillReady()

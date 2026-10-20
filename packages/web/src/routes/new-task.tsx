@@ -196,16 +196,16 @@ export function NewTaskRoute() {
     skills.data !== undefined && workflows.data !== undefined && !uiState.isPending
   // The draft's pick alone — a fresh `/new` selects nothing (see `resolveSource` for what the
   // persisted `lastTask` preselection was load-bearing for, and why it is gone).
-  // Knowledge-base projects (spec 2026-10-20-knowledge-base-projects): an in-place project offers
-  // the Ask chip, a notes project asks on its own when the message is a question, and nothing
+  // Trunk-based projects (spec 2026-10-20-trunk-based-projects): an in-place project offers
+  // the Ask chip, a trunk-based project asks on its own when the message is a question, and nothing
   // picked falls back to the project's default (or Ask) skill.
   const inPlaceByDefault = config.data?.taskWorkspace === 'in-place'
-  const askOffered = repo.data?.info != null && (inPlaceByDefault || config.data?.profile === 'notes')
+  const askOffered = repo.data?.info != null && (inPlaceByDefault || config.data?.profile === 'trunk')
   const askWanted =
     askOffered &&
     draft.variants <= 1 &&
     draft.dispatch === null &&
-    (draft.readOnly ?? (config.data?.profile === 'notes' && looksLikeQuestion(draft.text)))
+    (draft.readOnly ?? (config.data?.profile === 'trunk' && looksLikeQuestion(draft.text)))
   const source =
     resolveSource(draft.source, skillList, workflowList) ??
     projectDefaultSource(config.data, askWanted, skillList)
@@ -843,7 +843,7 @@ function PillDivider() {
   return <span aria-hidden="true" className="mx-0.5 h-3.5 w-px shrink-0 bg-border max-md:hidden" />
 }
 
-/** The Ask chip (spec 2026-10-20-knowledge-base-projects): a read-only question about the
+/** The Ask chip (spec 2026-10-20-trunk-based-projects): a read-only question about the
  *  checkout — no branch, no lease, nothing lands. */
 function AskToggle({ on, auto, onChange }: { on: boolean; auto: boolean; onChange: (on: boolean) => void }) {
   return (

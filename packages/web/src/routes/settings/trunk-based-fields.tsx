@@ -10,15 +10,15 @@ import { useConfigSave } from './use-config-save'
 const selectClass =
   'block w-full max-w-md rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50'
 
-/** The "Knowledge base / notes" preset (spec 2026-10-20-knowledge-base-projects). Each key stays
- *  adjustable on its own below; switching back to Code clears every key the preset set. */
-export const NOTES_PRESET: SetConfigInput = {
-  profile: 'notes',
+/** The trunk-based preset (spec 2026-10-20-trunk-based-projects). Each key stays adjustable on
+ *  its own below; switching back to branch-per-task clears every key the preset set. */
+export const TRUNK_PRESET: SetConfigInput = {
+  profile: 'trunk',
   taskWorkspace: 'in-place',
   landing: 'auto',
   reviewGate: false,
 }
-export const CODE_PRESET: SetConfigInput = {
+export const BRANCHES_PRESET: SetConfigInput = {
   profile: null,
   taskWorkspace: null,
   landing: null,
@@ -27,44 +27,44 @@ export const CODE_PRESET: SetConfigInput = {
 }
 
 /**
- * Settings → Tasks, the knowledge-base half: project type, where tasks work, how finished work
+ * Settings → Tasks, the trunk-based half: development model, where tasks work, how finished work
  * lands, the checks it must pass, and the skills a new task starts with. Every default here is
- * today's code-project behavior.
+ * today's branch-per-task behavior.
  */
-export function KnowledgeBaseFields({ config }: { config: ConfigResponse }) {
+export function TrunkBasedFields({ config }: { config: ConfigResponse }) {
   const save = useConfigSave()
   const skills = useSkills()
   const skillNames = (skills.data ?? []).map((skill) => skill.name)
-  const notes = config.profile === 'notes'
+  const trunk = config.profile === 'trunk'
   const inPlace = config.taskWorkspace === 'in-place'
 
   return (
     <>
       <SettingsField
-        title="Project type"
-        hint="Knowledge base: tasks file notes straight into the checkout one at a time, and validated changes land on the base branch without a PR. Questions run read-only beside them. Every setting below stays adjustable."
+        title="Development model"
+        hint="Trunk-based: tasks work directly in the checkout one at a time, and changes that pass the required checks land on the base branch without a PR. Read-only questions run beside them. Every setting below stays adjustable."
       >
         <select
-          aria-label="Project type"
+          aria-label="Development model"
           data-slot="tasks-profile"
-          value={notes ? 'notes' : 'code'}
+          value={trunk ? 'trunk' : 'branches'}
           disabled={save.isPending}
           onChange={(event) => {
-            const toNotes = event.target.value === 'notes'
-            save.mutate(toNotes ? NOTES_PRESET : CODE_PRESET, {
-              onSuccess: () => toast(toNotes ? 'Knowledge-base defaults applied' : 'Code-project defaults restored'),
+            const toTrunk = event.target.value === 'trunk'
+            save.mutate(toTrunk ? TRUNK_PRESET : BRANCHES_PRESET, {
+              onSuccess: () => toast(toTrunk ? 'Trunk-based defaults applied' : 'Branch-per-task defaults restored'),
             })
           }}
           className={selectClass}
         >
-          <option value="code">Code (default) — a worktree and branch per task, review before merging</option>
-          <option value="notes">Knowledge base / notes — trunk-based, auto-land</option>
+          <option value="branches">Branch per task (default) — a worktree and branch per task, reviewed before merging</option>
+          <option value="trunk">Trunk-based — work in the checkout, land checked changes on the base branch</option>
         </select>
       </SettingsField>
 
       <SettingsField
         title="Where tasks work"
-        hint="In the checkout: no worktree or branch per task. Write tasks take turns on the working tree, so two notes filed together never conflict. The composer can still ask for a worktree per task."
+        hint="In the checkout: no worktree or branch per task. Write tasks take turns on the working tree, so two tasks started together never conflict. The composer can still ask for a worktree per task."
       >
         <select
           aria-label="Where tasks work"
@@ -118,7 +118,7 @@ export function KnowledgeBaseFields({ config }: { config: ConfigResponse }) {
 
       <SettingsField
         title="Default skills"
-        hint="Preselected in the composer when nothing is picked: one for a new task, one for a read-only question (the Ask chip). A notes project picks Ask on its own when the message ends with a question mark."
+        hint="Preselected in the composer when nothing is picked: one for a new task, one for a read-only question (the Ask chip). A trunk-based project picks Ask on its own when the message ends with a question mark."
       >
         <div className="flex flex-col gap-2 sm:flex-row">
           <SkillSelect
@@ -210,7 +210,7 @@ function RequiredChecksField({ config }: { config: ConfigResponse }) {
   return (
     <SettingsField
       title="Required checks"
-      hint="Shell commands, one per line, run in the checkout before every auto-land (e.g. node scripts/kb.ts validate). A failure goes back to the agent with its output."
+      hint="Shell commands, one per line, run in the checkout before every auto-land (e.g. npm test). A failure goes back to the agent with its output."
     >
       <textarea
         aria-label="Required checks"
@@ -218,7 +218,7 @@ function RequiredChecksField({ config }: { config: ConfigResponse }) {
         value={text}
         rows={3}
         spellCheck={false}
-        placeholder="node scripts/kb.ts validate"
+        placeholder="npm test"
         disabled={save.isPending}
         onChange={(event) => setText(event.target.value)}
         onBlur={commit}

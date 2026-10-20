@@ -433,9 +433,9 @@ export const configResponseSchema = z.object({
   /** Optional review gate (#489): null = no config key, the `CEZ_REVIEW_GATE` env default (OFF)
    *  decides. */
   reviewGate: z.boolean().nullable(),
-  /** Knowledge-base projects (spec 2026-10-20-knowledge-base-projects); null = the key is unset
-   *  and the code-project default applies. */
-  profile: z.enum(['code', 'notes']).nullable(),
+  /** Trunk-based projects (spec 2026-10-20-trunk-based-projects); null = the key is unset
+   *  and the branch-per-task default applies. */
+  profile: z.enum(['branches', 'trunk']).nullable(),
   taskWorkspace: z.enum(['worktree', 'in-place']).nullable(),
   landing: z.enum(['review', 'auto']).nullable(),
   /** Why `landing: auto` is not honored here (a git-tracked config.json), or null. */
@@ -498,9 +498,9 @@ export const setConfigInputSchema = z.object({
   liveTitleUpdates: z.boolean().nullable().optional(),
   /** null clears the key back to the env-default behavior (OFF). */
   reviewGate: z.boolean().nullable().optional(),
-  /** Knowledge-base keys (spec 2026-10-20-knowledge-base-projects): `null` clears each back to
-   *  the code-project default. */
-  profile: z.enum(['code', 'notes']).nullable().optional(),
+  /** Trunk-based keys (spec 2026-10-20-trunk-based-projects): `null` clears each back to
+   *  the branch-per-task default. */
+  profile: z.enum(['branches', 'trunk']).nullable().optional(),
   taskWorkspace: z.enum(['worktree', 'in-place']).nullable().optional(),
   landing: z.enum(['review', 'auto']).nullable().optional(),
   requiredChecks: z.array(z.string().trim().min(1).max(2_000)).max(10).nullable().optional(),

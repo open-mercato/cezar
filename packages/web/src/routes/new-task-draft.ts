@@ -46,8 +46,8 @@ export interface NewTaskDraft {
    *  `null` = off; `{}` = on with the engine's defaults; the keys are the limits the settings
    *  surface (long-press) set. Sticky like the other pills — it is a way of working. */
   dispatch: DispatchIntent | null
-  /** The Ask chip (spec 2026-10-20-knowledge-base-projects): a read-only task. Absent = the
-   *  project decides (a notes project asks when the message is a question). Per task, never sticky. */
+  /** The Ask chip (spec 2026-10-20-trunk-based-projects): a read-only task. Absent = the
+   *  project decides (a trunk-based project asks when the message is a question). Per task, never sticky. */
   readOnly?: boolean
 }
 
@@ -120,7 +120,7 @@ export function composerRunModeNote(input: {
   autonomous?: boolean
   /** In-place on a fresh branch from base (spec 2026-10-19-repo-git-sync). */
   newBranch?: boolean
-  /** A read-only Ask task (spec 2026-10-20-knowledge-base-projects). */
+  /** A read-only Ask task (spec 2026-10-20-trunk-based-projects). */
   readOnly?: boolean
   /** The project lands finished in-place work on its base branch itself. */
   autoLand?: boolean

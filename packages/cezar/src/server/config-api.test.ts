@@ -430,9 +430,9 @@ describe('reviewGate round-trip (optional review gate, #489)', () => {
   const rawFile = () =>
     JSON.parse(readFileSync(join(repoRoot, '.ai/cezar', 'config.json'), 'utf8')) as Record<string, unknown>;
 
-  it('PUT round-trips the knowledge-base keys and clears them on null (spec 2026-10-20-knowledge-base-projects)', async () => {
+  it('PUT round-trips the trunk-based keys and clears them on null (spec 2026-10-20-trunk-based-projects)', async () => {
     const on = (await (await put({
-      profile: 'notes',
+      profile: 'trunk',
       taskWorkspace: 'in-place',
       landing: 'auto',
       requiredChecks: ['node scripts/kb.ts validate'],
@@ -441,7 +441,7 @@ describe('reviewGate round-trip (optional review gate, #489)', () => {
       teamSkills: false,
     })).json()) as Record<string, unknown>;
     expect(on).toMatchObject({
-      profile: 'notes',
+      profile: 'trunk',
       taskWorkspace: 'in-place',
       landing: 'auto',
       landingBlocked: null,
