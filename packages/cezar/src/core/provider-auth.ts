@@ -6,7 +6,7 @@ import { AGENT_MODELS_LOCKED_ENV } from './agent-model-policy.ts';
 import { profileEnv } from './agent-profiles.ts';
 import { isSignalTerminationExit } from './agent-runner.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
-import { resolveCursorAgentBin } from './cursor-bin.ts';
+import { isForeignCursorAgent, resolveCursorAgentBin } from './cursor-bin.ts';
 import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
 import { probeJunieAuthentication } from './junie-auth-probe.ts';
 import { spawnableCommand } from './windows-shim.ts';
@@ -113,6 +113,11 @@ interface ProviderDescriptor {
   unrecognizedHint?: (result: ProviderCommandResult) => string | undefined;
   /** Arguments to ask once more with when `statusArgs` was rejected by an older CLI. */
   fallbackArgs?: (result: ProviderCommandResult) => readonly string[] | undefined;
+  /**
+   * Whether `executable` is another program sharing the CLI's name, judged from its `--version`
+   * semver. Asked only once the status answer is unreadable; `true` reports `not-installed`.
+   */
+  foreign?: (executable: string, version: string | null) => boolean;
   /** The `CEZ_*_BIN` override `executable` honours — only so a report can say the binary came from it. */
   overrideEnv: string;
 }
@@ -410,6 +415,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     statusArgs: ['status', '--format', 'json'],
     fallbackArgs: cursorFallbackArgs,
     unrecognizedHint: cursorUnrecognizedHint,
+    foreign: (executable, version) => isForeignCursorAgent(executable, version),
     loginArgs: ['login'],
     updateArgs: ['update'],
     installHint:
@@ -1224,6 +1230,23 @@ export class ProviderAuthService {
     if (status !== null) return { provider: descriptor.id, status };
     // Still interrupted: unknown, but unreported — there is no CLI defect to group on.
     if (wasInterrupted(result)) return { provider: descriptor.id, status: 'unknown', hint: INTERRUPTED_HINT };
+    if (descriptor.foreign) {
+      const version = await (env === undefined
+        ? this.runCommand(executable, descriptor.versionArgs ?? ['--version'], VERSION_TIMEOUT_MS)
+        : this.runCommand(executable, descriptor.versionArgs ?? ['--version'], VERSION_TIMEOUT_MS, env))
+        .catch(() => null);
+      const semver = version && !version.errorCode && !version.timedOut
+        ? cliVersionFrom(version.stdout) ?? cliVersionFrom(version.stderr)
+        : null;
+      if (descriptor.foreign(executable, semver)) {
+        return {
+          provider: descriptor.id,
+          status: 'not-installed',
+          hint: `\`${executable}\` on PATH is another program (version ${semver}), not this CLI. `
+            + `${descriptor.installHint} Or point ${descriptor.overrideEnv} at it.`,
+        };
+      }
+    }
     const hint = descriptor.unrecognizedHint?.(result) ?? UNKNOWN_HINT;
     // Exit 0 and 1 are the codes vendors answer status with; anything else is the CLI failing.
     if (result.exitCode === 0 || result.exitCode === 1) return inconclusive('unrecognized_output', hint, result);
