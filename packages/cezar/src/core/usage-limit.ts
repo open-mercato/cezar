@@ -184,6 +184,7 @@ function parseDatedReset(match: RegExpExecArray, now: number): number | null {
   const candidate = at(year);
   if (candidate === null) return null;
   // A day ago or more is last year's date read as this year's; minutes ago is a limit that lifted.
+  // A stale date rolled a year ahead fails `settle`'s one-week cap and reads as unparsed.
   return now - candidate > 24 * 60 * 60_000 ? at(year + 1) : candidate;
 }
 
