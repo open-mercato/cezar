@@ -21,7 +21,9 @@ function maskToken(token: string): string {
 }
 
 const MONTH = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?';
-const CLOCK = '\\d{1,2}(?::\\d{2}){1,2}(?:\\s*[ap]\\.?m\\.?)?|\\d{1,2}\\s*[ap]\\.?m\\.?(?!\\w)';
+// Bounded on both sides by non-digits so `127.0.0.1:3000` is not read as the clock `1:30`.
+const CLOCK =
+  '(?<![\\d.])\\d{1,2}(?::\\d{2}){1,2}(?!\\d)(?:\\s*[ap]\\.?m\\.?)?|(?<![\\d.])\\d{1,2}\\s*[ap]\\.?m\\.?(?!\\w)';
 /** A reset instant — `3:10pm (UTC)`, `Oct 24, 9am (Europe/Warsaw)`, ISO, the `|<epoch>` marker —
  *  with the zone it names: one per window and per user, so it split one limit into many groups. */
 const INSTANT_RE = new RegExp(

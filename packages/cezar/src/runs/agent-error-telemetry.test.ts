@@ -71,6 +71,8 @@ describe('scrubAgentErrorMessage', () => {
   it('leaves numbers that are not instants alone', () => {
     expect(scrubAgentErrorMessage('API Error: 529 Overloaded (request 12)', 'claude')).toBe('API Error: 529 Overloaded (request 12)');
     expect(scrubAgentErrorMessage('codex CLI 0.45.1 is too old', 'codex')).toBe('codex CLI 0.45.1 is too old');
+    expect(scrubAgentErrorMessage('connect ECONNREFUSED 127.0.0.1:3000 (fetch)', 'opencode'))
+      .toBe('connect ECONNREFUSED 127.0.0.1:3000 (fetch)');
   });
 
   it('stays fast on a long pathological line (stderr tails arrive unbounded)', () => {
