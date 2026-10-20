@@ -79,6 +79,16 @@ function emitRecoveredTurn(turnId) {
   emit({ method: 'turn/completed', params: { threadId: 'th_mock_1', turn: { id: turnId, status: 'completed' } } });
 }
 
+// `MOCK_CODEX_RESUME_LOCKED=<n>|always`: refuse the first n `thread/resume`s (or all of them)
+// with codex's active-writer error, as when a previous app-server still owns the thread.
+let lockedResumes = 0;
+function resumeLocked() {
+  const locked = process.env.MOCK_CODEX_RESUME_LOCKED;
+  if (!locked) return false;
+  lockedResumes += 1;
+  return locked === 'always' || lockedResumes <= Number(locked);
+}
+
 const ignoreEof = process.env.MOCK_CODEX_IGNORE_EOF === '1';
 if (ignoreEof) {
   process.on('SIGTERM', () => process.exit(143));
@@ -101,7 +111,7 @@ rl.on('line', (line) => {
       : { method: 'turn/failed', params: { turn: { id: 'turn_mock_1', status: 'failed' }, error: { message: 'bad answer' } } });
   } else if (msg.method === 'initialize') {
     emit({ id: msg.id, result: { userAgent: 'mock-codex/0.0.0' } });
-  } else if (msg.method === 'thread/start' || msg.method === 'thread/resume') {
+  } else if (msg.method === 'thread/start' || msg.method === 'thread/resume' || msg.method === 'thread/fork') {
     const expectedSandbox = process.env.CEZ_CODEX_NETWORK === '0' ? 'workspace-write' : 'danger-full-access';
     if (msg.params?.sandbox !== expectedSandbox || msg.params?.approvalPolicy !== 'never') {
       emit({ id: msg.id, error: { code: -32602, message: `expected ${expectedSandbox} auto permissions` } });
@@ -114,6 +124,11 @@ rl.on('line', (line) => {
     if (msg.method === 'thread/start') {
       emit({ method: 'thread/started', params: { thread: { id: 'th_mock_1' } } });
       emit({ id: msg.id, result: { thread: { id: 'th_mock_1' } } });
+    } else if (msg.method === 'thread/fork') {
+      emit({ id: msg.id, result: { thread: { id: `fork_of_${msg.params?.threadId ?? ''}` } } });
+    } else if (resumeLocked()) {
+      // Another live app-server still holds the thread's writer lock (codex-rs writer_lock.rs).
+      emit({ id: msg.id, error: { code: -32600, message: `thread ${msg.params?.threadId ?? ''} already has an active writer` } });
     } else if (process.env.MOCK_CODEX_REJECT_RESUME === '1') {
       emit({ id: msg.id, error: { code: -32603, message: `no rollout found for thread id ${msg.params?.threadId ?? ''}` } });
       rl.close();
