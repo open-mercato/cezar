@@ -82,7 +82,9 @@ struct Shell {
 const INIT_SCRIPT: &str = r#"
   (function () {
     var platform = "__PLATFORM__";
-    window.__CEZ_DESKTOP__ = { platform: platform };
+    // `microphone`: this shell is entitled to it — an older macOS one refuses every dictation
+    // (telemetry c55c7b0b), so the cockpit disables the mic there instead.
+    window.__CEZ_DESKTOP__ = { platform: platform, microphone: true };
     // At document start the root element may not exist yet; the flag is a convenience, the
     // rest of this script is not.
     if (document.documentElement) document.documentElement.dataset.cezDesktop = platform;
@@ -2125,6 +2127,20 @@ mod tests {
         assert!(!switcher_has_choices(0));
         assert!(!switcher_has_choices(1));
         assert!(switcher_has_choices(2));
+    }
+
+    #[test]
+    fn the_bundle_may_use_the_microphone_it_advertises() {
+        // telemetry c55c7b0b: hardened runtime + no usage strings = every dictation `not-allowed`.
+        let dir = env!("CARGO_MANIFEST_DIR");
+        let read = |name: &str| std::fs::read_to_string(format!("{dir}/{name}")).unwrap();
+        let conf: serde_json::Value = serde_json::from_str(&read("tauri.conf.json")).unwrap();
+        let entitlements = conf["bundle"]["macOS"]["entitlements"].as_str().unwrap();
+        assert!(read(entitlements).contains("com.apple.security.device.audio-input"));
+        let info = read("Info.plist");
+        assert!(info.contains("NSMicrophoneUsageDescription"));
+        assert!(info.contains("NSSpeechRecognitionUsageDescription"));
+        assert!(INIT_SCRIPT.contains("microphone: true"));
     }
 
     #[test]
