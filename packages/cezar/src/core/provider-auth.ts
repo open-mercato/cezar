@@ -111,7 +111,7 @@ interface ProviderDescriptor {
   precheck?: () => ProviderConnectionState | undefined;
   /** A more specific hint than "try again" for an answer `parse` could not read. */
   unrecognizedHint?: (result: ProviderCommandResult) => string | undefined;
-  /** Arguments to ask once more with when `statusArgs` was rejected by an older CLI. */
+  /** Arguments to ask once more with when the CLI answered `statusArgs` unreadably (a rejected flag, a failed service). */
   fallbackArgs?: (result: ProviderCommandResult) => readonly string[] | undefined;
   /**
    * Whether `executable` is not a working copy of this CLI (another program of that name, a shim
@@ -266,21 +266,40 @@ function parseCodexStatus(result: ProviderCommandResult): ProviderConnectionStat
   return null;
 }
 
+/** OpenCode 2.x `auth list --format json`: the integrations that have at least one connection. */
+function parseOpenCodeJson(stdout: string): ProviderConnectionState | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(value)) return null;
+  const wellFormed = value.every((entry) => typeof entry === 'object' && entry !== null
+    && Array.isArray((entry as { connections?: unknown }).connections)
+    && (entry as { connections: unknown[] }).connections.length > 0);
+  if (!wellFormed) return null;
+  return value.length > 0 ? 'connected' : 'disconnected';
+}
+
 function parseOpenCodeStatus(result: ProviderCommandResult): ProviderConnectionState | null {
   if (result.exitCode !== 0) return null;
+  if (/^\s*\[/.test(result.stdout)) return parseOpenCodeJson(result.stdout);
   const lines = normalizedLines(result.stdout);
   const storedSummaries = lines
     .map((line) => line.match(/^[^a-z0-9]*(\d+)\s+credentials?$/)?.[1])
     .filter((count): count is string => count !== undefined);
 
-  // OpenCode 2.x replaced the summary with one row per stored credential, with the literal
-  // `stored` state in the final column. Keep this shape deliberately narrow: a successful empty
-  // response is the valid no-credentials answer, while any other output without either the 1.x
+  // OpenCode 2.x replaced the summary with one row per connection, with its `stored` or
+  // `environment` type in the final column, and prints `No authenticated integrations` (2.0.28;
+  // an empty answer before that) when there is none. Any other output without either the 1.x
   // summary or 2.x rows remains inconclusive rather than being guessed as disconnected.
   if (storedSummaries.length === 0) {
-    if (lines.length === 0) return 'disconnected';
-    const storedRows = lines.filter((line) => /^.+\s{2,}.+\s+stored$/.test(line));
-    return storedRows.length === lines.length && storedRows.length > 0 ? 'connected' : null;
+    if (lines.length === 0 || (lines.length === 1 && lines[0] === 'no authenticated integrations')) {
+      return 'disconnected';
+    }
+    const rows = lines.filter((line) => /^.+\s{2,}.+\s+(?:stored|environment)$/.test(line));
+    return rows.length === lines.length && rows.length > 0 ? 'connected' : null;
   }
   if (storedSummaries.length !== 1) return null;
   const storedCount = Number(storedSummaries[0]);
@@ -404,6 +423,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     overrideEnv: 'CEZ_OPENCODE_BIN',
     executable: () => process.env.CEZ_OPENCODE_BIN ?? 'opencode',
     statusArgs: ['auth', 'list'],
+    fallbackArgs: openCodeFallbackArgs,
     loginArgs: ['auth', 'login'],
     updateArgs: ['upgrade'],
     installHint: 'Install OpenCode, then run `opencode auth login`.',
@@ -506,6 +526,19 @@ const REJECTED_FORMAT_FLAG =
 function cursorFallbackArgs(result: ProviderCommandResult): readonly string[] | undefined {
   if (result.exitCode === 0) return undefined;
   return REJECTED_FORMAT_FLAG.test(`${result.stderr}\n${result.stdout}`) ? ['status'] : undefined;
+}
+
+/**
+ * OpenCode 2.x answers `auth list` through its background service, so a service that cannot start
+ * (port taken, crashed) fails the probe with exit 1 and a one-line stderr (telemetry 107e44a9).
+ * Ask once more with a private server and the JSON format (both since 2.0.0). Not for OpenCode 1.x,
+ * whose `Credentials <path>` header shows it answered and which rejects both flags.
+ */
+function openCodeFallbackArgs(result: ProviderCommandResult): readonly string[] | undefined {
+  // Only a CLI that answered: not installed, a spawn error, a hang or a signal is not a failed service.
+  if (result.errorCode || result.timedOut || result.exitCode === null) return undefined;
+  if (normalizedLines(result.stdout).some((line) => /^[^a-z0-9]*credentials\s/.test(line))) return undefined;
+  return ['auth', 'list', '--standalone', '--format', 'json'];
 }
 
 /** Telemetry 8d304c50: an `agent` that answers neither shape is likely another program of that name. */

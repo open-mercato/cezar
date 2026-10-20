@@ -420,6 +420,79 @@ describe('provider auth parsers', () => {
     await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'disconnected' } });
   });
 
+  it.each([
+    ['No authenticated integrations', 'disconnected'],
+    ['OpenAI  OPENAI_API_KEY              environment', 'connected'],
+  ])('reads OpenCode 2.0.28 plain answer %s', async (stdout, status) => {
+    const run = runner((executable) => executable === 'opencode'
+      ? { stdout: `${stdout}\n`, stderr: '', exitCode: 0 }
+      : { stdout: 'unrecognized', stderr: '', exitCode: 0 });
+    const service = new ProviderAuthService({ runCommand: run });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status } });
+    expect(vi.mocked(run).mock.calls.filter(([executable]) => executable === 'opencode')).toHaveLength(1);
+  });
+
+  // Telemetry 107e44a9: OpenCode 2.x answers `auth list` through its background service; one that
+  // cannot start fails with exit 1 and a one-line stderr. A private server still answers.
+  it.each([
+    ['[]', 'disconnected'],
+    [JSON.stringify([{ id: 'opencode-go', name: 'OpenCode Go', connections: [{ type: 'credential', label: 'OpenCode Go' }] }]), 'connected'],
+  ])('asks OpenCode 2.x with a private server when its background service fails: %s', async (json, status) => {
+    const onInconclusive = vi.fn();
+    const run = runner((executable, args) => {
+      if (executable !== 'opencode') return { stdout: 'unrecognized', stderr: '', exitCode: 0 };
+      return args.includes('--standalone')
+        ? { stdout: `${json}\n`, stderr: '', exitCode: 0 }
+        : { stdout: '', stderr: 'Error: Server process exited with code 1\n', exitCode: 1 };
+    });
+    const service = new ProviderAuthService({ runCommand: run, onInconclusive });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status } });
+    expect(run).toHaveBeenCalledWith('opencode', ['auth', 'list', '--standalone', '--format', 'json'], expect.any(Number));
+    expect(onInconclusive).not.toHaveBeenCalledWith(expect.objectContaining({ provider: 'opencode' }));
+  });
+
+  it.each([
+    '{"connections":[]}',
+    '[{"id":"x","connections":[]}]',
+    '[null]',
+  ])('does not guess from malformed OpenCode JSON %s', async (json) => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable, args) => {
+        if (executable !== 'opencode') return { stdout: 'unrecognized', stderr: '', exitCode: 0 };
+        return args.includes('--standalone')
+          ? { stdout: json, stderr: '', exitCode: 0 }
+          : { stdout: '', stderr: 'Error: Server process exited with code 1\n', exitCode: 1 };
+      }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'unknown' } });
+  });
+
+  it.each([
+    ['not installed', { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' }, 'not-installed', 1],
+    ['hung', { stdout: '', stderr: '', exitCode: null, timedOut: true }, 'unknown', 2],
+  ] as const)('does not ask OpenCode with a private server when it is %s', async (_name, answer, status, calls) => {
+    const run = runner((executable) => executable === 'opencode'
+      ? answer
+      : { stdout: 'unrecognized', stderr: '', exitCode: 0 });
+    const service = new ProviderAuthService({ runCommand: run });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status } });
+    expect(vi.mocked(run).mock.calls.filter(([executable]) => executable === 'opencode')).toHaveLength(calls);
+  });
+
+  it('does not re-ask OpenCode 1.x, which answered but rejects the 2.x flags', async () => {
+    const run = runner((executable) => executable === 'opencode'
+      ? { stdout: ['┌  Credentials ~/.local/share/opencode/auth.json', '└  credentials: many'].join('\n'), stderr: '', exitCode: 0 }
+      : { stdout: 'unrecognized', stderr: '', exitCode: 0 });
+    const service = new ProviderAuthService({ runCommand: run });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'unknown' } });
+    expect(vi.mocked(run).mock.calls.filter(([executable]) => executable === 'opencode')).toHaveLength(1);
+  });
+
   it('does not guess from a malformed OpenCode 2.x credential row', async () => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable === 'opencode'
