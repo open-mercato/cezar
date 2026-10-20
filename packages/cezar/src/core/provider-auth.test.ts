@@ -30,6 +30,7 @@ import {
   cliVersionFrom,
   copilotAcpAnswered,
   defaultRunProviderCommand,
+  isDefinitiveProviderAuthFailure,
   isRuntimeProviderAuthFailure,
   providerAuthChecksDisabled,
   versionManagerShimMiss,
@@ -164,6 +165,17 @@ describe('runtime provider authentication failures', () => {
     'network connection reset',
   ])('does not turn unrelated failures into credential failures: %s', (message) => {
     expect(isRuntimeProviderAuthFailure(message)).toBe(false);
+  });
+
+  // Only a verdict a local status probe cannot contradict is definitive (telemetry 9e4a95db).
+  it.each([
+    ['claude: Failed to authenticate: OAuth session expired and could not be refreshed', true],
+    ['OAuth refresh token is no longer valid; run /login to re-authenticate', true],
+    ['Failed to authenticate. API Error: 401 OAuth access token has been revoked.', false],
+    ['Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh.', false],
+    ['OAuth access token could not be refreshed: another Claude Code process is holding the refresh lock', false],
+  ])('classifies %s as definitive: %s', (message, definitive) => {
+    expect(isDefinitiveProviderAuthFailure(message)).toBe(definitive);
   });
 });
 

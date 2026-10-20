@@ -1,4 +1,5 @@
 import {
+  isDefinitiveProviderAuthFailure,
   isRuntimeProviderAuthFailure,
   type ProviderAuthService,
   type ProviderId,
@@ -41,9 +42,12 @@ export function watchProviderRuntimeAuthFailures(
     // default login (telemetry 9e4a95db).
     const recorded = step?.profileId ?? recordedProfileFor(run, provider);
     const profileId = recorded && recorded !== DEFAULT_AGENT_ACCOUNT_ID ? recorded : undefined;
+    // A dead stored login is one the CLI's own status still calls connected, so it must not be
+    // self-checked away — that is how 9e4a95db came back after #1511.
+    const options = { definitive: isDefinitiveProviderAuthFailure(message) };
     const report = profileId
-      ? providerAuth.reportProfileAuthFailure(provider, profileId)
-      : providerAuth.reportRuntimeAuthFailure(provider);
+      ? providerAuth.reportProfileAuthFailure(provider, profileId, options)
+      : providerAuth.reportRuntimeAuthFailure(provider, options);
     if (!report) return;
     // `provider-status` rows fold into the default login's card, so an account incident stays off it.
     if (report.transitioned && !profileId) onProviderStatus(report.status);

@@ -838,7 +838,7 @@ export function useConnectAgentAccount() {
 }
 
 /**
- * Re-probe ONE account for real (`?refresh=1`), for the "Check again" the pane offers beside
+ * Re-probe ONE account for real (`?refresh=1&recheck=1`), for the "Check again" the pane offers beside
  * Connect — the affordance the cached-by-default listing is designed around.
  *
  * Writes the answer straight into the per-account status cache so the row updates without a second
@@ -847,7 +847,7 @@ export function useConnectAgentAccount() {
 export function useRecheckAgentAccount() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (routeId: string) => getAgentAccountStatus(routeId, { refresh: true }),
+    mutationFn: (routeId: string) => getAgentAccountStatus(routeId, { recheck: true }),
     retry: false,
     onSuccess: (answer, routeId) => {
       queryClient.setQueryData(workspaceQueryKeys.agentAccountStatus(routeId), answer)

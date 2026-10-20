@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentProfilesResponse, AgentProfileResponse } from '@open-mercato/cezar-contract';
+import type { AgentAccountStatusResponse, AgentProfilesResponse, AgentProfileResponse } from '@open-mercato/cezar-contract';
 import { agentAccountsPath } from '../paths.ts';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
@@ -601,6 +601,29 @@ describe('agent profiles API', () => {
       // `other` is still known, so it costs nothing.
       await apiRequest(app, '/api/v1/workspace/agent-profiles/other/status');
       expect(spawns.length).toBe(warmed + 1);
+    });
+
+    // New task's verify-before-refuse re-probes with `refresh=1`; only the pane's Check again
+    // (`recheck=1`) is the user's word that a dead login was replaced (telemetry 9e4a95db).
+    it('lifts a dead login on recheck=1 only, never on a bare refresh=1', async () => {
+      await send('POST', '/api/v1/workspace/agent-profiles', {
+        provider: 'claude',
+        label: 'work',
+        configDir: claudeDir('claude-work'),
+      });
+      const providerAuth = new ProviderAuthService({
+        runCommand: async () => ({ stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 }),
+      });
+      const app = makeApp({ providerAuth });
+      providerAuth.reportProfileAuthFailure('claude', 'work', { definitive: true });
+
+      const statusOf = async (query: string) => {
+        const res = await apiRequest(app, `/api/v1/workspace/agent-profiles/work/status?${query}`);
+        expect(res.status).toBe(200);
+        return ((await res.json()) as AgentAccountStatusResponse).status.status;
+      };
+      expect(await statusOf('refresh=1')).toBe('disconnected');
+      expect(await statusOf('recheck=1')).toBe('connected');
     });
   });
 

@@ -219,6 +219,19 @@ export function isRuntimeProviderAuthFailure(message: string): boolean {
     .some((pattern) => pattern.test(message));
 }
 
+/** Claude Code's own verdict after its token refresh was refused (`OAuthRefreshDeadError`), while
+ *  `claude auth status` keeps answering `loggedIn: true` from the token still on disk — so the
+ *  self-check cleared the latch and the next run failed the same way (telemetry 9e4a95db). The
+ *  "another process is refreshing" variant is transient and deliberately not matched. */
+const DEFINITIVE_AUTH_FAILURE_PATTERNS = [
+  /\boauth session expired and could not be refreshed\b/i,
+  /\brefresh token is no longer valid\b/i,
+] as const;
+
+export function isDefinitiveProviderAuthFailure(message: string): boolean {
+  return DEFINITIVE_AUTH_FAILURE_PATTERNS.some((pattern) => pattern.test(message));
+}
+
 function normalizedOutput(stdout: string): string {
   return stdout.replace(ANSI_SEQUENCE, '').trim().toLowerCase();
 }
@@ -631,6 +644,17 @@ function descriptorFor(provider: ProviderId): ProviderDescriptor {
 interface RuntimeAuthFailure {
   generation: number;
   authFailureId: string;
+  /** The vendor said its stored login is dead ({@link isDefinitiveProviderAuthFailure}): a status
+   *  probe reads that login locally and answers connected anyway, so no automatic probe lifts it. */
+  definitive?: boolean;
+  /** Generation of the user's own "Check again" on an account; probes started after it may lift. */
+  recheckedAt?: number;
+}
+
+/** Whether a connected probe that started at `startedAt` is evidence against `failure`. */
+function probeLifts(failure: RuntimeAuthFailure, startedAt: number): boolean {
+  if (failure.generation > startedAt) return false;
+  return !failure.definitive || (failure.recheckedAt !== undefined && failure.recheckedAt <= startedAt);
 }
 
 /** One authoritative runtime authentication incident. The identifier is opaque
@@ -837,12 +861,13 @@ export class ProviderAuthService {
     return this.startFreshProbe().visible;
   }
 
-  reportRuntimeAuthFailure(provider: ProviderId): RuntimeAuthFailureReport | null {
+  reportRuntimeAuthFailure(provider: ProviderId, options?: { definitive?: boolean }): RuntimeAuthFailureReport | null {
     if (process.env.CEZ_DRY_RUN === '1' || providerAuthChecksDisabled()) return null;
     const current = this.runtimeFailures.get(provider);
     const failure: RuntimeAuthFailure = {
       generation: ++this.nextRuntimeFailureGeneration,
       authFailureId: current?.authFailureId ?? this.createAuthFailureId(),
+      ...(options?.definitive || current?.definitive ? { definitive: true } : {}),
     };
     this.runtimeFailures.set(provider, failure);
     this.lastConnected.delete(provider);
@@ -861,15 +886,21 @@ export class ProviderAuthService {
    * A runtime rejection on a NAMED agent account (telemetry 9e4a95db): latched on that account only.
    * Raising the provider-wide latch instead blamed the default login, which was still signed in.
    * Lifts when a probe of this account that started after the rejection answers connected — the
-   * pane's Check again, Connect's watch, or the action gate's verify-before-refuse.
+   * pane's Check again, Connect's watch, or the action gate's verify-before-refuse. A definitive
+   * one lifts only after the user's own Check again ({@link recheckProfileAuthFailure}).
    */
-  reportProfileAuthFailure(provider: ProviderId, profileId: string): RuntimeAuthFailureReport | null {
+  reportProfileAuthFailure(
+    provider: ProviderId,
+    profileId: string,
+    options?: { definitive?: boolean },
+  ): RuntimeAuthFailureReport | null {
     if (process.env.CEZ_DRY_RUN === '1' || providerAuthChecksDisabled()) return null;
     const key = profileCacheKey(provider, profileId);
     const current = this.profileRuntimeFailures.get(key);
     const failure: RuntimeAuthFailure = {
       generation: ++this.nextRuntimeFailureGeneration,
       authFailureId: current?.authFailureId ?? this.createAuthFailureId(),
+      ...(options?.definitive || current?.definitive ? { definitive: true } : {}),
     };
     this.profileRuntimeFailures.set(key, failure);
     this.lastConnected.delete(key);
@@ -890,6 +921,13 @@ export class ProviderAuthService {
     return failure
       ? { provider: status.provider, status: 'disconnected', hint: RUNTIME_AUTH_HINT, authFailureId: failure.authFailureId, profileId }
       : status;
+  }
+
+  /** The user pressed Check again on this account: a probe started from now on may lift even a
+   *  definitive incident. Their click, not cezar's own probing, is the evidence of a fresh login. */
+  recheckProfileAuthFailure(provider: ProviderId, profileId: string): void {
+    const failure = this.profileRuntimeFailures.get(profileCacheKey(provider, profileId));
+    if (failure) failure.recheckedAt = ++this.nextRuntimeFailureGeneration;
   }
 
   /** Clear only the incident the caller actually observed. A stale retry must
@@ -929,7 +967,8 @@ export class ProviderAuthService {
   async verifyRuntimeAuthFailure(provider: ProviderId): Promise<ProviderStatus | null> {
     if (process.env.CEZ_DRY_RUN === '1' || providerAuthChecksDisabled()) return null;
     const failure = this.runtimeFailures.get(provider);
-    if (!failure) return null;
+    // The CLI's status reads the same dead login and would answer connected (telemetry 9e4a95db).
+    if (!failure || failure.definitive) return null;
     if (this.verifyingRuntimeFailures.has(provider)) return null;
     const lastVerifiedAt = this.lastRuntimeVerification.get(provider);
     if (lastVerifiedAt !== undefined && this.now() - lastVerifiedAt < RUNTIME_AUTH_VERIFY_COOLDOWN_MS) {
@@ -1077,7 +1116,7 @@ export class ProviderAuthService {
         this.completedProfiles.set(key, { status: stamped, timestamp: this.now() });
         const failure = this.profileRuntimeFailures.get(key);
         // The FRESH answer only: a bridged hang is not evidence that the rejection was transient.
-        if (failure && failure.generation <= startedAt && status.status === 'connected') {
+        if (failure && probeLifts(failure, startedAt) && status.status === 'connected') {
           this.profileRuntimeFailures.delete(key);
         }
         return this.withProfileFailure(stamped, profile.id);

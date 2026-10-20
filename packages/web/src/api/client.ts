@@ -2474,13 +2474,16 @@ export async function createAgentProfile(
  *  land. `refresh` drops the server's cached answer for this account and re-probes. */
 export async function getAgentAccountStatus(
   routeId: string,
-  opts?: ReadOptions & { refresh?: boolean },
+  opts?: ReadOptions & { refresh?: boolean; recheck?: boolean },
 ): Promise<AgentAccountStatusResponse> {
   return unwrap(
     await cez.api.v1.workspace['agent-profiles'][':id'].status.$get(
       {
         param: { id: encodeURIComponent(routeId) },
-        query: opts?.refresh ? { refresh: '1' } : {},
+        query: {
+          ...(opts?.refresh || opts?.recheck ? { refresh: '1' } : {}),
+          ...(opts?.recheck ? { recheck: '1' } : {}),
+        },
       },
       init(opts),
     ),

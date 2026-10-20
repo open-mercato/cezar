@@ -2615,12 +2615,17 @@ export function createApp(deps: ServerDeps) {
     .get(
       '/workspace/agent-profiles/:id/status',
       paramZodValidator(z.object({ id: z.string() })),
-      queryZodValidator(z.object({ refresh: queryValue.refine((v) => v === undefined || v === '1') }), { message: 'refresh must be 1 when provided' }),
+      queryZodValidator(z.object({
+        refresh: queryValue.refine((v) => v === undefined || v === '1'),
+        recheck: queryValue.refine((v) => v === undefined || v === '1'),
+      }), { message: 'refresh and recheck must be 1 when provided' }),
       async (c) => {
         if (!capabilities().localHandoff) return c.json(hostedProfileRefusal, 409);
         const account = await accountById(c.req.param('id'));
         if (!account) return c.json({ error: `unknown account: ${c.req.param('id')}` }, 404);
-        const refresh = c.req.valid('query').refresh === '1';
+        const query = c.req.valid('query');
+        const recheck = query.recheck === '1';
+        const refresh = query.refresh === '1' || recheck;
         // The discovered account's row is the one `GET /api/v1/providers/status` owns, so it comes
         // from there — enablement included, which a bare probe does not know about.
         if (account.isDefault) {
@@ -2629,8 +2634,10 @@ export function createApp(deps: ServerDeps) {
           return c.json({ status: row ?? { provider: account.provider, status: 'unknown' as const } });
         }
         // "Check again" re-probes THIS account only — the other accounts' warm answers are not
-        // invalidated by asking about this one.
+        // invalidated by asking about this one. Only `recheck` (the pane's button) may lift a dead
+        // login; New task's verify-before-refuse re-probes with `refresh` alone (telemetry 9e4a95db).
         if (refresh) providerAuth.forgetProfileStatus(account.provider, account.id);
+        if (recheck) providerAuth.recheckProfileAuthFailure(account.provider, account.id);
         return c.json({
           status: await providerAuth.profileStatus(account.provider, {
             id: account.id,
