@@ -740,12 +740,27 @@ never blocks startup; configured lifecycle transitions pause on malformed config
   "branchNaming": "your branch naming preferences",
                              // optional: task branches are named from the first prompt under these
                              // instructions (Settings → Instructions); absent = cez/<id8>
+  // Knowledge-base projects (Settings → Tasks → Project type); every key optional:
+  "taskWorkspace": "in-place", // tasks work in the checkout, write tasks one at a time
+  "landing": "auto",           // finished in-place tasks commit, rebase, run requiredChecks, push
+                               // (ignored while this file is tracked by git)
+  "requiredChecks": ["node scripts/kb.ts validate"],
+  "defaultSkill": "ingest",     // composer preselect; "askSkill" for read-only Ask tasks
   "startApp": { "services": ["npm run api", "npm run web"], "url": "http://localhost:5173" }
                              // optional: what the Preview's Start app runs, each service in its own
                              // terminal tab; url = the address to show (absent: the first one printed).
                              // A `startApp` in your project entry of ~/.cezar/config.json wins.
 }
 ```
+
+**Knowledge-base projects** (an Obsidian vault, meeting notes): set
+**Settings → Tasks → Project type** to *Knowledge base / notes*. Tasks then run
+in the repo checkout instead of a worktree, write tasks take turns so two notes
+never conflict, and a task that ends with `CEZ:DONE` is committed, rebased on the
+remote, checked with `requiredChecks` and pushed to the base branch. A failed
+rebase or check goes back to the agent. The composer's **Ask** chip starts a
+read-only question: no branch, no lease, runs beside a write task. Spec:
+`.ai/specs/2026-10-20-knowledge-base-projects.md`.
 
 Put the same `"modelsLocked": true` key in `~/.cezar/config.json` to apply it
 to every registered project. When the key is absent or `false` in both config

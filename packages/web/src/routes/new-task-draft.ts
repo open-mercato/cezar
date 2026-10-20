@@ -46,6 +46,9 @@ export interface NewTaskDraft {
    *  `null` = off; `{}` = on with the engine's defaults; the keys are the limits the settings
    *  surface (long-press) set. Sticky like the other pills — it is a way of working. */
   dispatch: DispatchIntent | null
+  /** The Ask chip (spec 2026-10-20-knowledge-base-projects): a read-only task. Absent = the
+   *  project decides (a notes project asks when the message is a question). Per task, never sticky. */
+  readOnly?: boolean
 }
 
 export interface ComposerRunModeInput {
@@ -117,7 +120,14 @@ export function composerRunModeNote(input: {
   autonomous?: boolean
   /** In-place on a fresh branch from base (spec 2026-10-19-repo-git-sync). */
   newBranch?: boolean
+  /** A read-only Ask task (spec 2026-10-20-knowledge-base-projects). */
+  readOnly?: boolean
+  /** The project lands finished in-place work on its base branch itself. */
+  autoLand?: boolean
 }): string {
+  if (input.readOnly === true && input.hasGit) {
+    return 'Asks a read-only question about the current checkout — no branch, nothing to clean up.'
+  }
   if (input.dispatch === true) {
     return input.autonomous === true
       ? 'Runs on its own and fans work out to subtasks — it will not pause for you.'
@@ -126,6 +136,9 @@ export function composerRunModeNote(input: {
   if (input.worktree) return 'Runs in an isolated worktree — review everything before it lands.'
   if (input.hasGit && input.newBranch) {
     return 'Runs in the repo working tree on a new branch from base — your checkout switches to it.'
+  }
+  if (input.hasGit && input.autoLand) {
+    return 'Runs in the repo working tree, one write task at a time — finished work is checked and lands on the base branch.'
   }
   if (input.hasGit) return 'Runs in the repo working tree — your checkout is modified directly.'
   return 'Runs in place — no git repository detected, so there is no worktree to isolate in.'
@@ -179,6 +192,7 @@ function normalize(raw: unknown): NewTaskDraft {
     generateFollowups:
       typeof obj.generateFollowups === 'boolean' ? obj.generateFollowups : null,
     dispatch: normalizeDispatchIntent(obj.dispatch),
+    ...(typeof obj.readOnly === 'boolean' ? { readOnly: obj.readOnly } : {}),
   }
 }
 
@@ -265,7 +279,7 @@ export function writeDraft(next: NewTaskDraft, projectId: string | null = null):
  *  skill; picking one again is one click. */
 export function clearStartedDraft(projectId: string | null = null): void {
   // A branch name is per-task — two tasks cannot both create it — while the toggle stays sticky.
-  const { branchName: _spent, ...kept } = readDraft(projectId)
+  const { branchName: _spent, readOnly: _asked, ...kept } = readDraft(projectId)
   writeDraft({ ...kept, text: '', source: null }, projectId)
 }
 

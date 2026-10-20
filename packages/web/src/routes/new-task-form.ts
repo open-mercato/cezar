@@ -353,6 +353,10 @@ export function buildCreateRunBody(opts: {
    *  stays off the wire: its PRESENCE is what makes the server compose the dispatch-mode prompt
    *  and force the worktree. */
   dispatch?: DispatchIntent | null
+  /** A read-only Ask task (spec 2026-10-20-knowledge-base-projects) — single runs only. */
+  readOnly?: boolean
+  /** The project defaults to in-place, so an isolated worktree must be asked for explicitly. */
+  inPlaceByDefault?: boolean
 }): CreateRunInput {
   const {
     task,
@@ -372,8 +376,11 @@ export function buildCreateRunBody(opts: {
     generateFollowups,
     todoId,
     dispatch,
+    readOnly,
+    inPlaceByDefault,
   } = opts
-  const inPlace = worktree === false && variants <= 1 && !dispatch
+  const asking = readOnly === true && variants <= 1 && !dispatch
+  const inPlace = worktree === false && variants <= 1 && !dispatch && !asking
   return {
     task,
     ...(source?.source === 'skill'
@@ -386,14 +393,40 @@ export function buildCreateRunBody(opts: {
     agentProfile: agentProfile || undefined,
     variants: variants > 1 ? variants : undefined,
     images: images.length > 0 ? [...images] : undefined,
-    // Off only matters for a single run — variants always isolate.
-    worktree: worktree === false && variants <= 1 ? false : undefined,
+    // Off only matters for a single run — variants always isolate. On is sent only against an
+    // in-place project default, which would otherwise win.
+    worktree: asking
+      ? undefined
+      : worktree === false && variants <= 1
+        ? false
+        : inPlaceByDefault && worktree !== false && variants <= 1
+          ? true
+          : undefined,
+    ...(asking ? { readOnly: true } : {}),
     ...(inPlace && newBranch ? { newBranch: true, ...(branch?.trim() ? { branch: branch.trim() } : {}) } : {}),
     autonomous: autonomous === true ? true : undefined,
     generateFollowups: generateFollowups === false ? false : undefined,
     todoId: todoId || undefined,
     dispatch: dispatch ?? undefined,
   }
+}
+
+/**
+ * The project's preselected skill (spec 2026-10-20-knowledge-base-projects): its Ask skill for a
+ * read-only task, else its default skill — only when that skill exists in the catalog.
+ */
+export function projectDefaultSource(
+  config: { defaultSkill?: string | null; askSkill?: string | null } | undefined,
+  readOnly: boolean,
+  skills: readonly Skill[],
+): TaskSource | null {
+  const name = (readOnly ? config?.askSkill : config?.defaultSkill) ?? null
+  return name && skills.some((skill) => skill.name === name) ? { source: 'skill', ref: name } : null
+}
+
+/** A notes project asks by default when the message reads as a question. */
+export function looksLikeQuestion(text: string): boolean {
+  return /\?\s*$/.test(text.trim())
 }
 
 /** The automation editor persists the exact New task serialization, with only the transport-
