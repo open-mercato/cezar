@@ -175,6 +175,15 @@ describe('scrubToastMessage', () => {
     expect(scrub('cezar 0.15.2 is out')).toBe('cezar 0.15.2 is out')
   })
 
+  /** Telemetry 5fc3ffbb, d77d0047: any file is attachable since #1510, not just images and text. */
+  it('masks document, archive and media file names too', () => {
+    const scrub = (m: string) => scrubToastMessage(m, [])
+    for (const name of ['offer_1.docx', 'budget.xlsx', 'backup.tar.gz', 'clip.mp4', 'deck.pptx', 'lista-opcje.jpg']) {
+      expect(scrub(`${name} skipped — max 4 attachments per message`)).toBe('<file> skipped — max 4 attachments per message')
+    }
+    expect(scrub('node.js and example.com stay')).toBe('node.js and example.com stay')
+  })
+
   it('masks the names and ids of known projects, longest first and whole words only', () => {
     expect(scrubToastMessage('Acme Shop already has the maximum of 8 tags', ['Acme Shop', 'acme-shop'])).toBe(
       '<project> already has the maximum of 8 tags',
