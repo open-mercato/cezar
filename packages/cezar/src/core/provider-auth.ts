@@ -1191,8 +1191,8 @@ export class ProviderAuthService {
     if (wasInterrupted(result)) return { provider: descriptor.id, status: 'unknown', hint: INTERRUPTED_HINT };
     if (descriptor.foreign) {
       const version = await (env === undefined
-        ? this.runCommand(executable, descriptor.versionArgs ?? ['--version'], VERSION_TIMEOUT_MS)
-        : this.runCommand(executable, descriptor.versionArgs ?? ['--version'], VERSION_TIMEOUT_MS, env))
+        ? this.runCommand(executable, ['--version'], VERSION_TIMEOUT_MS)
+        : this.runCommand(executable, ['--version'], VERSION_TIMEOUT_MS, env))
         .catch(() => null);
       // Only a clean answer decides; a spawn error, hang or signal says nothing about the binary.
       const decisive = version !== null && !version.errorCode && !version.timedOut
