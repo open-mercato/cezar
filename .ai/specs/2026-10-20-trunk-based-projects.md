@@ -41,7 +41,15 @@ them.
 
 ### Auto-land
 
-On `CEZ:DONE`, both turn-end handlers call `landOnDone` before closing the session:
+**When.** Only an autonomous task lands by itself. On `CEZ:DONE` both turn-end handlers call
+`landOnDone`: an autonomous run lands before its session closes; an interactive run with changes
+parks `waiting` instead, keeping its session and the working-tree lease, so the user reviews
+Changes, replies with corrections, and **Finish** lands it (2026-10-20, owner feedback: a summary
+must be reviewable and correctable before it reaches the repo). In an auto-land project the
+composer's "skills default autonomous" rule does not apply, so a project default skill never
+makes a task land unreviewed; an explicit Autonomous toggle or workspace default still does.
+
+Landing:
 
 1. The checkout must be on a branch, and on `baseBranch` when one is configured.
 2. Commit everything outside `.ai/cezar/` with the run title. cezar's own state never lands —
@@ -56,9 +64,11 @@ the task ran; in a trunk-based project agents are expected to be the only writer
 
 Without an upstream the local commit is the landing. A failure at any stage is sent into the
 open session ("fix this, then end with CEZ:DONE again") up to `MAX_LAND_ATTEMPTS` (3); after that
-the session closes and the run fails with the landing error. `settleSuccess` lands anything a run
-left behind that never reached `CEZ:DONE` (Finish, an idle close) and fails the run if that
-landing fails, so a run with unlanded work never wears a success badge. The outcome is recorded
+the session closes and the run fails with the landing error. A run that settles with unlanded
+work and no approval (an idle close of the review park) rests at `review`; Finish there lands it,
+unless another task holds the checkout (it would commit that task's edits too). An approved
+settle (autonomous, or Finish while the session was closing) that fails to land fails the run,
+so unlanded work never wears a success badge. The outcome is recorded
 on the run as `landing` (`status`, `sha`, `pushed`, `files`, or `stage` + `error`) and as notes.
 `CEZ_DRY_RUN=1` skips fetch and push.
 

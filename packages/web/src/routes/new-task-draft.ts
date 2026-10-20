@@ -76,6 +76,18 @@ export interface ComposerRunModeInput {
  * `configuredWorktree` carry the workspace run defaults; `'source-dependent'` autonomy means
  * skills default on and everything else off. */
 /**
+ * The autonomy default in an auto-land project (spec 2026-10-20-trunk-based-projects): an
+ * autonomous task lands without review, so "skills default autonomous" does not apply there. An
+ * explicit workspace default and the composer's own toggle still do.
+ */
+export function autoLandsUnreviewed(
+  configured: boolean | 'source-dependent',
+  autoLand: boolean,
+): boolean | 'source-dependent' {
+  return autoLand && configured === 'source-dependent' ? false : configured
+}
+
+/**
  * The draft's remembered Worktree choice, if it still applies: one made under a different project
  * `taskWorkspace` (or, for an older draft, before the project set one) yields to the project.
  */
@@ -154,7 +166,9 @@ export function composerRunModeNote(input: {
     return 'Runs in the repo working tree on a new branch from base — your checkout switches to it.'
   }
   if (input.hasGit && input.autoLand) {
-    return 'Runs in the repo working tree, one write task at a time — finished work is checked and lands on the base branch.'
+    return input.autonomous === true
+      ? 'Runs in the repo working tree, one write task at a time — finished work is checked and lands on the base branch.'
+      : 'Runs in the repo working tree, one write task at a time — review the changes, then Finish lands them on the base branch.'
   }
   if (input.hasGit) return 'Runs in the repo working tree — your checkout is modified directly.'
   return 'Runs in place — no git repository detected, so there is no worktree to isolate in.'

@@ -72,6 +72,7 @@ import {
 } from './new-task-autostart'
 import {
   clearStartedDraft,
+  autoLandsUnreviewed,
   composerRunModeNote,
   explicitWorktreeFor,
   handOffComposition,
@@ -340,10 +341,12 @@ export function NewTaskRoute() {
     explicitAutonomous: draft.autonomous,
     explicitWorktree: explicitWorktreeFor(draft, config.data?.taskWorkspace),
     interactive: selectedSkill?.interactive,
-    configuredAutonomous:
+    configuredAutonomous: autoLandsUnreviewed(
       workspaceConfig.data?.composerDefaults?.autonomous
       ?? workspaceConfig.data?.composerDefaults?.inheritedAutonomous
       ?? 'source-dependent',
+      config.data?.landing === 'auto',
+    ),
     configuredWorktree: config.data?.taskWorkspace
       ? config.data.taskWorkspace === 'worktree'
       : workspaceConfig.data?.composerDefaults?.worktree

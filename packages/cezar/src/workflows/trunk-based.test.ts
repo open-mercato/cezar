@@ -78,31 +78,52 @@ describe('trunk-based projects', () => {
 
   const head = async () => (await run('git', ['log', '-1', '--format=%H %s'], { cwd: repoRoot })).stdout.trim();
 
-  it('runs in the checkout by default and lands the change on CEZ:DONE', async () => {
+  const clean = async () =>
+    (await run('git', ['status', '--porcelain', '--', '.', ':(exclude).ai/cezar'], { cwd: repoRoot })).stdout;
+
+  it('parks an interactive task for review on CEZ:DONE and lands it on Finish', async () => {
     writeConfig({ taskWorkspace: 'in-place', landing: 'auto', requiredChecks: ['test -f person.md'] });
     writeFileSync(join(repoRoot, 'person.md'), 'Bjorn\n');
+    const before = await head();
     const record = manager.startRun(SINGLE_STEP, { task: '1on1 with Bjorn mock:done' });
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    const parked = store.getRun(record.id)!;
+    expect(parked).toMatchObject({ worktree: false });
+    expect(parked.worktreePath).toBeUndefined();
+    expect(parked.landing).toBeUndefined();
+    expect(notes(record.id).some((n) => n.startsWith('changes ready for review'))).toBe(true);
+    // Nothing committed yet: the user reviews the working-tree changes first.
+    expect(await head()).toBe(before);
+    expect(await clean()).not.toBe('');
+
+    expect(manager.finish(record.id)).toBe(true);
     await waitFor(record.id, (r) => r?.status === 'done');
     const done = store.getRun(record.id)!;
-    expect(done.worktree).toBe(false);
-    expect(done.worktreePath).toBeUndefined();
     expect(done.landing).toMatchObject({ status: 'landed', branch: 'main' });
     expect(done.landing?.files).toContain('person.md');
     expect(await head()).toContain(done.landing!.sha!);
-    expect((await run('git', ['status', '--porcelain', '--', '.', ':(exclude).ai/cezar'], { cwd: repoRoot })).stdout).toBe('');
+    expect(await clean()).toBe('');
   });
 
-  it('sends a failing required check back to the agent instead of landing', async () => {
+  it('lands an autonomous task on CEZ:DONE without stopping for review', async () => {
+    writeConfig({ taskWorkspace: 'in-place', landing: 'auto' });
+    writeFileSync(join(repoRoot, 'person.md'), 'Bjorn\n');
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:done', autonomous: true });
+    await waitFor(record.id, (r) => r?.status === 'done');
+    expect(store.getRun(record.id)?.landing).toMatchObject({ status: 'landed' });
+    expect(await clean()).toBe('');
+  });
+
+  it('sends a failing required check on Finish back to the agent instead of landing', async () => {
     writeConfig({ taskWorkspace: 'in-place', landing: 'auto', requiredChecks: ['exit 1'] });
     writeFileSync(join(repoRoot, 'person.md'), 'broken\n');
-    const before = await head();
     const record = manager.startRun(SINGLE_STEP, { task: 'file it mock:done' });
-    // The mock answers the failure without CEZ:DONE, so the run parks for the user.
     await waitFor(record.id, (r) => r?.status === 'waiting');
+    manager.finish(record.id);
+    await waitFor(record.id, (r) => r?.landing?.status === 'failed');
+    // The mock answers the failure without CEZ:DONE, so the run parks for the user again.
+    await waitFor(record.id, (r) => r?.status === 'waiting' && notes(record.id).some((n) => n.startsWith('auto-land failed at checks — sent back to the agent')));
     expect(store.getRun(record.id)?.landing).toMatchObject({ status: 'failed', stage: 'checks' });
-    expect(notes(record.id).some((n) => n.startsWith('auto-land failed at checks — sent back to the agent'))).toBe(true);
-    // The task's commit stays local, unpushed and unlanded; nothing reached a remote.
-    expect(await head()).not.toBe(before);
   });
 
   it('keeps the branch-per-task default: no config, an isolated worktree, no landing', async () => {

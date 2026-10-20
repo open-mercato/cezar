@@ -2164,7 +2164,11 @@ export class RunManager {
     // continuation (or another owner) may have claimed the same run id by the time that old
     // promise reaches finally; never let stale cleanup release the newer owner's slot.
     if (expectedState !== undefined && state !== expectedState) return;
-    if (state?.acceptReviewOnDrop && !state.cancelled && this.store.getRun(runId)?.status === 'review') {
+    const acceptReview = state?.acceptReviewOnDrop && !state.cancelled && this.store.getRun(runId)?.status === 'review';
+    // An in-place run's accept lands its changes (spec 2026-10-20-trunk-based-projects) — once
+    // the tree is released below, through the same path as Finish on a settled review.
+    const landOnAccept = acceptReview && this.store.getRun(runId)?.worktree === false;
+    if (acceptReview && !landOnAccept) {
       this.store.updateRun(runId, { status: 'done' });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
     }
@@ -2203,6 +2207,7 @@ export class RunManager {
     // resumed through the queue is already queued when the pump sweeps.
     this.reportSettledChildToParent(runId);
     this.releaseSlot();
+    if (landOnAccept) void this.finishReview(runId);
     // A run leaving the active registry is a terminal transition (done/review/
     // failed/cancelled) — the one moment the finished-worktree count can grow.
     // Enforce count-based retention (#483) here so a single hook covers every
@@ -3796,6 +3801,18 @@ export class RunManager {
       state.graphFinish();
       return true;
     }
+    if (state?.session?.open && state.autoLand && !state.autonomous) {
+      // A trunk-based interactive run: Finish is the user's approval to land (spec
+      // 2026-10-20-trunk-based-projects). A failure goes back to the agent; success closes.
+      this.clearIdleTimer(state);
+      state.idleClosed = undefined;
+      if (state.askPark === 'waiting') state.askPark = 'abandoned';
+      this.store.appendEvent(runId, { type: 'lifecycle', message: 'finished by user — landing the changes' });
+      return this.landWithAgent(runId, state, state.currentStepId, () => {
+        state.finishRequested = true;
+        state.session?.end();
+      });
+    }
     if (state?.session?.open) {
       this.clearIdleTimer(state);
       // Finish is explicit user intent, even if the watchdog callback already ran
@@ -3829,6 +3846,10 @@ export class RunManager {
     // repeat of a Finish already pressed on this session is not an accept — it stays at review.
     if (state && !state.cancelled && run?.status === 'review') {
       if (!state.finishRequested) state.acceptReviewOnDrop = true;
+      return true;
+    }
+    if (run?.status === 'review' && !this.isActive(runId) && run.worktree === false && !run.readOnly) {
+      void this.finishReview(runId);
       return true;
     }
     if (run?.status === 'review' && !this.isActive(runId)) {
@@ -4689,7 +4710,7 @@ export class RunManager {
     // read-only rule rides along, so a Continue (which reads the record) keeps it.
     const extraSystemPrompt = composeSystemPrompt(
       resolveExtraSystemPrompt(input.systemPrompt, config.systemPrompt),
-      state.autoLand ? landingPromptPart(state.autoLand.baseBranch, state.autoLand.checks) : undefined,
+      state.autoLand ? landingPromptPart(state.autoLand.baseBranch, state.autoLand.checks, state.autonomous === true) : undefined,
       state.readOnly ? READ_ONLY_PROMPT : undefined,
     ) || undefined;
     // Canonical provider/model identity (#405) — the normalised `provider/model`
@@ -7004,6 +7025,19 @@ export class RunManager {
    */
   private async settleSuccess(runId: string): Promise<void> {
     const landingError = await this.landBeforeSettle(runId);
+    if (landingError === 'review') {
+      this.store.updateRun(runId, {
+        status: 'review',
+        finishedAt: new Date().toISOString(),
+        currentStepId: undefined,
+        autoResumeAttempts: undefined,
+      });
+      this.store.appendEvent(runId, {
+        type: 'lifecycle',
+        message: 'changes ready for review — check Changes, Continue with corrections, or Finish to land them',
+      });
+      return;
+    }
     if (landingError) {
       this.store.updateRun(runId, {
         status: 'failed',
@@ -7085,11 +7119,43 @@ export class RunManager {
   }
 
   /**
-   * `CEZ:DONE` on an auto-land run: land before the session closes, and hand a failure back to
-   * the agent while it can still fix it. True when it took the turn over. Both turn-end handlers
-   * call it.
+   * `CEZ:DONE` on an auto-land run. An autonomous run lands before its session closes; an
+   * interactive one parks for review instead, and the user's Finish lands it (`finish`). True
+   * when it took the turn over. Both turn-end handlers call it.
    */
   private landOnDone(runId: string, state: ActiveRun, stepId: string | undefined, close: () => void): boolean {
+    if (!state.autoLand || state.cancelled) return false;
+    if (state.autonomous) return this.landWithAgent(runId, state, stepId, close);
+    void hasUnlanded(this.repoRoot).then((pending) => {
+      if (state.cancelled || this.active.get(runId) !== state) return;
+      if (!pending) {
+        close();
+        return;
+      }
+      this.parkForReview(runId, state, stepId);
+    });
+    return true;
+  }
+
+  /** The waiting park of an interactive auto-land run with changes: the session and the
+   *  working-tree lease stay, so the user can review, send corrections, or Finish to land. */
+  private parkForReview(runId: string, state: ActiveRun, stepId: string | undefined): void {
+    this.store.updateRun(runId, { status: 'waiting', activity: undefined });
+    if (stepId) this.store.updateStep(runId, stepId, { status: 'waiting' });
+    this.leaveMonitoring(runId);
+    this.clearMonitoringWakeTimer(state, runId);
+    this.store.appendEvent(runId, {
+      type: 'note',
+      stepId,
+      message: `changes ready for review — check Changes, reply with corrections, or Finish to land them on ${state.autoLand?.baseBranch ?? 'the base branch'}`,
+    });
+    this.waiting.add(runId);
+    this.armIdleTimer(runId, state);
+    this.releaseSlot();
+  }
+
+  /** Land with the session still open, so a failure goes back to the agent to fix. */
+  private landWithAgent(runId: string, state: ActiveRun, stepId: string | undefined, close: () => void): boolean {
     const policy = state.autoLand;
     if (!policy || state.cancelled) return false;
     if (policy.inFlight) return true;
@@ -7114,7 +7180,7 @@ export class RunManager {
           return;
         }
         const text = `cezar could not land your changes — ${outcome.stage} failed:\n\n${outcome.error}\n\nFix this, then end your turn with CEZ:DONE again.`;
-        if (!state.session?.sendMessage([{ type: 'text', text: this.store.redactRunText(runId, text) }])) {
+        if (!this.deliverMessage(runId, [{ type: 'text', text: this.store.redactRunText(runId, text) }], false)) {
           close();
           return;
         }
@@ -7127,16 +7193,56 @@ export class RunManager {
     return true;
   }
 
+  /** Accept an in-place run resting at `review`: land it when the project auto-lands, else the
+   *  ordinary accept. */
+  private async finishReview(runId: string): Promise<void> {
+    await this.landReviewed(runId);
+    const after = this.store.getRun(runId);
+    if (after?.status === 'review' && !(await this.landingPolicy(after, await loadConfig(this.repoRoot)))) {
+      this.store.updateRun(runId, { status: 'done' });
+      this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
+    }
+  }
+
+  /**
+   * Finish on a run resting at `review` with unlanded in-place changes: land them, then `done`.
+   * Refused while another task works in the checkout — it would commit that task's edits too.
+   */
+  private async landReviewed(runId: string): Promise<void> {
+    const run = this.store.getRun(runId);
+    const policy = run && (await this.landingPolicy(run, await loadConfig(this.repoRoot)));
+    if (!policy) return;
+    if (this.repoRootBusy > 0) {
+      this.store.appendEvent(runId, {
+        type: 'note',
+        message: 'not landed — another task is working in the checkout; Finish again once it is done',
+      });
+      return;
+    }
+    const outcome = await this.landNow(runId, policy);
+    if (outcome.result === 'failed') {
+      this.store.appendEvent(runId, {
+        type: 'note',
+        message: `not landed — ${outcome.stage} failed: ${this.store.redactRunText(runId, outcome.error).split('\n')[0]}. Continue the task to fix it, then Finish again.`,
+      });
+      return;
+    }
+    this.store.updateRun(runId, { status: 'done' });
+    this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — changes landed' });
+  }
+
   /**
    * The settle-time half of auto-land: a run that ends without a `CEZ:DONE` landing (Finish, an
    * idle close) still lands what it left, and a landing that never succeeded fails the run rather
    * than wearing a success badge. Answers the failure message, or undefined.
    */
-  private async landBeforeSettle(runId: string): Promise<string | undefined> {
+  private async landBeforeSettle(runId: string): Promise<string | 'review' | undefined> {
     const run = this.store.getRun(runId);
     if (!run || run.worktree !== false || run.readOnly) return undefined;
     const policy = await this.landingPolicy(run, await loadConfig(this.repoRoot));
     if (!policy || !(await hasUnlanded(this.repoRoot))) return undefined;
+    // Only an autonomous run or the user's Finish may land; anything else rests at review.
+    if (run.autonomous !== true && this.active.get(runId)?.finishRequested !== true) return 'review';
     const outcome = await this.landNow(runId, policy);
     return outcome.result === 'failed'
       ? `auto-land failed (${outcome.stage}): ${this.store.redactRunText(runId, outcome.error).split('\n')[0]}`

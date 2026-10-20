@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { PendingAttachment } from '@/components/composer/composer-attachments'
 
 import {
+  autoLandsUnreviewed,
   explicitWorktreeFor,
   clearStartedDraft,
   composerRunModeNote,
@@ -446,5 +447,13 @@ describe('explicitWorktreeFor (spec 2026-10-20-trunk-based-projects)', () => {
     expect(explicitWorktreeFor({ worktree: true }, 'in-place')).toBeNull()
     expect(explicitWorktreeFor({ worktree: true, worktreeBasis: 'default' }, 'in-place')).toBeNull()
     expect(explicitWorktreeFor({ worktree: null }, 'in-place')).toBeNull()
+  })
+})
+
+describe('autoLandsUnreviewed (spec 2026-10-20-trunk-based-projects)', () => {
+  it('keeps skills from defaulting autonomous in an auto-land project', () => {
+    expect(autoLandsUnreviewed('source-dependent', true)).toBe(false)
+    expect(autoLandsUnreviewed('source-dependent', false)).toBe('source-dependent')
+    expect(autoLandsUnreviewed(true, true)).toBe(true)
   })
 })
