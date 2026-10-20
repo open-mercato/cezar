@@ -135,7 +135,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     id: 'tasks',
     title: 'Tasks',
-    description: 'Base branch, review before finishing, live titles.',
+    description: 'Development model, landing, required checks, base branch, review, live titles.',
     icon: ListChecksIcon,
     component: TasksSection,
     scope: 'project',
