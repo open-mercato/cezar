@@ -2885,6 +2885,7 @@ export function createApp(deps: ServerDeps) {
             lastOpenedAt: '',
             source: 'local',
             unregistered: true,
+            ...((await shouldRegisterProject(root)) ? {} : { notAddable: true as const }),
             ...(await probeProjectStatus(root)),
           },
           ...projects,
