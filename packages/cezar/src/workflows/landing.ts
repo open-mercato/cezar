@@ -16,8 +16,9 @@ export type LandResult =
   | { result: 'failed'; stage: LandStage; error: string };
 
 export interface LandOptions {
-  /** Commit message for whatever the task left uncommitted. */
-  message: string;
+  /** Commit message for what the task left uncommitted, written from the staged change itself so
+   *  every landing describes its own commit. Absent, or answering nothing: `fallbackCommitMessage`. */
+  describe?: (staged: StagedChange) => Promise<string | undefined>;
   /** The project's configured base branch; the checkout must be on it. Unset = any branch. */
   baseBranch?: string;
   /** The task's starting commit — the lower bound of "files landed" when there is no upstream. */
@@ -108,7 +109,7 @@ export async function landInPlace(root: string, options: LandOptions): Promise<L
       error: `the checkout is on ${branch}, but this project lands on ${options.baseBranch}`,
     };
   }
-  const committed = await commitTask(root, options.message);
+  const committed = await commitTask(root, options.describe);
   if (committed.result === 'failed') return { result: 'failed', stage: 'commit', error: committed.error };
 
   const upstream = await upstreamOf(root);
@@ -157,9 +158,29 @@ export async function landInPlace(root: string, options: LandOptions): Promise<L
   return { result: 'failed', stage: 'push', error: 'git push was rejected twice' };
 }
 
+/** What a landing commit is about to record: name-status lines and a capped patch. */
+export interface StagedChange {
+  files: Array<{ status: string; path: string }>;
+  patch: string;
+}
+
+const STAGED_PATCH_CAP = 12_000;
+
+/** A message from the file list alone: `Add meeting.md`, `Update a.md and b.md`, `Update 4 files in notes/`. */
+export function fallbackCommitMessage(files: StagedChange['files']): string {
+  if (files.length === 0) return 'Update files';
+  const verbs = new Set(files.map((f) => (f.status.startsWith('A') ? 'Add' : f.status.startsWith('D') ? 'Remove' : f.status.startsWith('R') ? 'Rename' : 'Update')));
+  const verb = verbs.size === 1 ? [...verbs][0] : 'Update';
+  const names = files.map((f) => f.path.split('/').pop() ?? f.path);
+  if (files.length <= 2) return `${verb} ${names.join(' and ')}`;
+  const dirs = new Set(files.map((f) => f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/') + 1) : ''));
+  const dir = dirs.size === 1 ? [...dirs][0] : '';
+  return `${verb} ${files.length} files${dir ? ` in ${dir}` : ''}`;
+}
+
 async function commitTask(
   root: string,
-  message: string,
+  describe: LandOptions['describe'],
 ): Promise<{ result: 'committed'; sha: string } | { result: 'nothing' } | { result: 'failed'; error: string }> {
   const status = await git(root, ['status', '--porcelain', ...PATHSPEC]);
   if (!status.ok) return { result: 'failed', error: reason(status, 'git status failed') };
@@ -168,6 +189,17 @@ async function commitTask(
   if (unresolved) return { result: 'failed', error: `refusing to commit: ${unresolved}` };
   const add = await git(root, ['add', '-A', ...PATHSPEC]);
   if (!add.ok) return { result: 'failed', error: reason(add, 'git add failed') };
+  const nameStatus = await git(root, ['diff', '--cached', '--name-status']);
+  const files = nameStatus.stdout
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const parts = line.split('\t');
+      return { status: parts[0] ?? 'M', path: parts[parts.length - 1] ?? '' };
+    });
+  const patch = (await git(root, ['diff', '--cached', '--no-color'])).stdout.slice(0, STAGED_PATCH_CAP);
+  const described = describe ? await describe({ files, patch }).catch(() => undefined) : undefined;
+  const message = described?.trim() || fallbackCommitMessage(files);
   const identity = (await gitHasIdentity(root)) ? [] : ['-c', 'user.name=cezar', '-c', 'user.email=cezar@local'];
   const commit = await git(root, [...identity, 'commit', '--no-verify', '-m', message]);
   if (!commit.ok) return { result: 'failed', error: reason(commit, 'git commit failed') };

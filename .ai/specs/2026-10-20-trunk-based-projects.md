@@ -66,7 +66,10 @@ toasts.
 Landing:
 
 1. The checkout must be on a branch, and on `baseBranch` when one is configured.
-2. Commit everything outside `.ai/cezar/` with the run title (the task's Changes view leaves
+2. Commit everything outside `.ai/cezar/` with a message written from the staged change itself
+   (`commit-message.ts`: the namer model reads the file list and diff, the latest request only as
+   context; else `fallbackCommitMessage` from the file names). Never the run title — it names the
+   first request and goes stale across follow-ups (the task's Changes view leaves
    `.ai/cezar/` out the same way, so it shows exactly what will land). cezar's own state never lands —
    committing `config.json` would track it, and a tracked config cannot grant auto-land.
 3. With an upstream: fetch it, `git rebase @{u}`. A conflict aborts the rebase and names the files.

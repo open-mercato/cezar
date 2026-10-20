@@ -65,6 +65,7 @@ import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { readAgentModelProvider } from '../agent-config/models.ts';
 import { loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
 import { isLifecycleConfigTracked } from '../worktree-lifecycle/config.ts';
+import { generateCommitMessage } from './commit-message.ts';
 import { hasUnlanded, landInPlace, landingPromptPart, READ_ONLY_PROMPT, READ_ONLY_TOOLS, type LandResult } from './landing.ts';
 import { deleteRunLayouts } from '../runs/layouts.ts';
 import {
@@ -7113,6 +7114,16 @@ export class RunManager {
     return { checks: config.requiredChecks ?? [], baseBranch: config.baseBranch, attempts: 0 };
   }
 
+  /** The most recent thing the user asked this task for — context for a commit message. */
+  private latestRequest(runId: string): string | undefined {
+    const events = this.store.readEvents(runId);
+    for (let i = events.length - 1; i >= 0; i--) {
+      const event = events[i] as { type?: string; text?: unknown };
+      if (event.type === 'user-message' && typeof event.text === 'string' && event.text.trim()) return event.text;
+    }
+    return this.store.getRun(runId)?.task;
+  }
+
   /** Land now and record the outcome on the run. A `nothing` never overwrites an earlier result. */
   private async landNow(runId: string, policy: NonNullable<ActiveRun['autoLand']>): Promise<LandResult> {
     const run = this.store.getRun(runId);
@@ -7122,7 +7133,8 @@ export class RunManager {
     });
     const env = { ...process.env, ...this.agentEnv(runId) };
     const outcome = await landInPlace(this.repoRoot, {
-      message: run?.title?.trim() || 'cezar task',
+      // From the staged change itself: the title names the first request and goes stale.
+      describe: (staged) => generateCommitMessage(this.repoRoot, staged, this.latestRequest(runId)),
       baseBranch: policy.baseBranch,
       since: run?.baseBranch,
       checks: policy.checks,
