@@ -419,7 +419,7 @@ export function Composer({
             if (!next) dropped.push(a)
             return next ?? list
           }, messageImages)
-          for (const a of dropped) toast(`${a.name} removed — the restored message fills the attachment limit`, { tone: 'danger' })
+          for (const a of dropped) toast(`“${a.name}” removed — the restored message fills the attachment limit`, { tone: 'danger' })
           setImages(restored)
         }
       } finally {

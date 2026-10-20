@@ -417,8 +417,9 @@ let knownProjects: string[] = []
 
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
+// The composer takes any file since #1510, so the common document, archive and media types too.
 const FILE_NAME =
-  /(?<![\w./-])[\w-][\w.-]*\.(?:png|jpe?g|gif|webp|bmp|heic|svg|pdf|txt|md|markdown|log|html?|csv|tsv|json|ya?ml|zip)(?![\w.-])/gi
+  /(?<![\w./-])[\w-][\w.-]*\.(?:png|jpe?g|gif|webp|bmp|heic|avif|tiff?|ico|svg|pdf|txt|md|markdown|log|html?|csv|tsv|json|ya?ml|xml|rtf|docx?|xlsx?|pptx?|od[tsp]|zip|tar|t?gz|bz2|xz|7z|rar|mp[34]|mov|wav|webm|bin)(?![\w.-])/gi
 
 /** A toast's text without the user's data it interpolates (docs/telemetry.md, "What is never
  *  sent"): quoted values, emails, file names, API URLs (as their route shape), slash-bearing tokens — paths,
