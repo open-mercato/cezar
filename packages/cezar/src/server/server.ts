@@ -189,6 +189,7 @@ import {
   type DeleteDraftResponse,
 } from '@open-mercato/cezar-contract';
 import { toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
+import { checkoutGitStatus } from '../workflows/landing.ts';
 import { deleteUpload, readUpload, writeUpload } from '../uploads.ts';
 import { branchesCheckedOutElsewhere, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
 import { isReclaimable, reclaimWorktrees } from '../runs/retention.ts';
@@ -5356,8 +5357,13 @@ export function createApp(deps: ServerDeps) {
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
       const worktree = worktreeOf(run);
-      if (!worktree) return c.json({ error: NO_WORKTREE }, 409);
-      const result = await worktreeGitStatus(worktree, run.baseBranch);
+      // An in-place write task answers for the checkout itself, against its upstream (spec
+      // 2026-10-20-trunk-based-projects) — its git step is Commit to the base branch.
+      const inPlace = !worktree && run.worktree === false && !run.readOnly;
+      if (!worktree && !inPlace) return c.json({ error: NO_WORKTREE }, 409);
+      const result = worktree
+        ? await worktreeGitStatus(worktree, run.baseBranch)
+        : await checkoutGitStatus(c.get('project').root);
       if (!result.ok) return c.json({ error: result.error }, 409);
       return c.json({ uncommitted: result.uncommitted, unpushed: result.unpushed, behind: result.behind, ahead: result.ahead });
     })

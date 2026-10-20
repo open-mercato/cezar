@@ -176,6 +176,17 @@ export function updateBranchPrompt(base?: string): string {
   return name ? `Update branch from ${name}` : 'Update branch'
 }
 
+/** Create PR from an in-place task (spec 2026-10-20-trunk-based-projects): the work is uncommitted
+ *  in the checkout on the base branch, so the agent moves it to a branch and puts the checkout back. */
+export function inPlacePrPrompt(draft: boolean, base: string): string {
+  return `${draft ? 'Create draft PR' : 'Create PR'} against ${base} instead of landing: move these changes to a new branch, commit and push it, open the PR, then switch the checkout back to ${base}`
+}
+
+/** Update branch for an in-place task: bring the checkout up to date, keeping the task's changes. */
+export function inPlaceUpdatePrompt(base: string): string {
+  return `Update branch: pull the latest ${base} into the checkout (rebase, keeping these uncommitted changes)`
+}
+
 /** The Finish button's tooltip — review-gate accept reads differently from closing a session. */
 export function finishTitle(status: RunStatus): string {
   return status === 'review' ? 'Accept the changes without a PR' : 'Close the session'

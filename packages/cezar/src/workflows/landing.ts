@@ -182,6 +182,23 @@ export async function hasUnlanded(root: string): Promise<boolean> {
   return upstream ? (await count(root, `${upstream.ref}..HEAD`)) > 0 : false;
 }
 
+/**
+ * The checkout's git status for an in-place task's git step (spec 2026-10-20-trunk-based-projects):
+ * uncommitted files outside `.ai/cezar/`, and commits against the last-fetched upstream. Offline.
+ * `null` counts mean there is no upstream.
+ */
+export async function checkoutGitStatus(
+  root: string,
+): Promise<{ ok: true; uncommitted: number; unpushed: number | null; behind: number | null; ahead: number | null } | { ok: false; error: string }> {
+  const status = await git(root, ['status', '--porcelain', ...PATHSPEC]);
+  if (!status.ok) return { ok: false, error: reason(status, 'git status failed') };
+  const uncommitted = status.stdout.split('\n').filter((line) => line.trim()).length;
+  const upstream = await upstreamOf(root);
+  if (!upstream) return { ok: true, uncommitted, unpushed: null, behind: null, ahead: null };
+  const unpushed = await count(root, `${upstream.ref}..HEAD`);
+  return { ok: true, uncommitted, unpushed, behind: await count(root, `HEAD..${upstream.ref}`), ahead: unpushed };
+}
+
 async function runChecks(root: string, options: LandOptions): Promise<LandResult | undefined> {
   const run = options.runCheck ?? runShellCheck;
   for (const command of options.checks) {

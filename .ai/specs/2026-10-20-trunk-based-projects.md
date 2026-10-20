@@ -49,6 +49,13 @@ must be reviewable and correctable before it reaches the repo). In an auto-land 
 composer's "skills default autonomous" rule does not apply, so a project default skill never
 makes a task land unreviewed; an explicit Autonomous toggle or workspace default still does.
 
+**The header's git step** (where a worktree task shows Create PR) is **Commit to <base>** for an
+in-place write task in an auto-land project: the same land as Finish. Under its chevron: **Create
+PR** / **Create draft PR** (the agent moves the changes to a new branch, pushes, opens the PR and
+switches the checkout back) and, while the remote is ahead, **Update branch** (the agent rebases
+the checkout, keeping the changes). `GET /runs/:id/git/status` answers for such a task from the
+checkout against its upstream, leaving `.ai/cezar/` out.
+
 Landing:
 
 1. The checkout must be on a branch, and on `baseBranch` when one is configured.

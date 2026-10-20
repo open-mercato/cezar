@@ -7034,7 +7034,7 @@ export class RunManager {
       });
       this.store.appendEvent(runId, {
         type: 'lifecycle',
-        message: 'changes ready for review — check Changes, Continue with corrections, or Finish to land them',
+        message: 'changes ready for review — check Changes, Continue with corrections, or Commit (or Finish) to land them',
       });
       return;
     }
@@ -7147,7 +7147,7 @@ export class RunManager {
     this.store.appendEvent(runId, {
       type: 'note',
       stepId,
-      message: `changes ready for review — check Changes, reply with corrections, or Finish to land them on ${state.autoLand?.baseBranch ?? 'the base branch'}`,
+      message: `changes ready for review — check Changes, reply with corrections, or Commit to ${state.autoLand?.baseBranch ?? 'the base branch'} (or Finish) to land them`,
     });
     this.waiting.add(runId);
     this.armIdleTimer(runId, state);

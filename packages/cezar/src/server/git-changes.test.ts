@@ -607,6 +607,22 @@ describe('session git API routes', () => {
     expect((await apiRequest(app, `/api/v1/runs/${removed.id}/git/status`)).status).toBe(409);
   });
 
+  it('GET /git/status answers for an in-place write task from the checkout, never for a read-only one', async () => {
+    mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+    writeFileSync(join(repoRoot, '.ai/cezar/config.json'), '{}\n');
+    writeFileSync(join(repoRoot, 'summary.md'), 'notes\n');
+    const inPlace = store.createRun({ title: 'in place', workflow: 'quick-task', task: 'x', steps: [] });
+    store.updateRun(inPlace.id, { worktree: false });
+    const res = await apiRequest(app, `/api/v1/runs/${inPlace.id}/git/status`);
+    expect(res.status).toBe(200);
+    // cezar's own files are not the task's work; no upstream means null counts.
+    expect(await res.json()).toMatchObject({ uncommitted: 1, unpushed: null, behind: null });
+
+    const asked = store.createRun({ title: 'ask', workflow: 'quick-task', task: 'x', steps: [] });
+    store.updateRun(asked.id, { worktree: false, readOnly: true });
+    expect((await apiRequest(app, `/api/v1/runs/${asked.id}/git/status`)).status).toBe(409);
+  });
+
   it('GET /changes uses the persisted task branch to detect a repointed HEAD', async () => {
     writeFileSync(join(worktree, 'reviewed.txt'), 'reviewed branch history\n');
     g(worktree, 'add', '-A');

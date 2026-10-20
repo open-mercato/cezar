@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { RunStatus } from '@open-mercato/cezar-api-client'
 
-import { gitActionPolicy, type GitActionState } from './git-actions'
+import { gitActionPolicy, trunkGitActionPolicy, type GitActionState } from './git-actions'
 
 /**
  * The git action policy, pinned row by row. The run's git button renders whatever this returns —
@@ -188,5 +188,34 @@ describe('gitActionPolicy — a chosen step that cannot run right now says why',
       const action = gitActionPolicy(withState(extra))
       if (action && !action.enabled) expect(action.reason, JSON.stringify(extra)).toBeTruthy()
     }
+  })
+})
+
+describe('trunkGitActionPolicy (spec 2026-10-20-trunk-based-projects)', () => {
+  const forge = { kind: 'github', available: true } as GitActionState['forge']
+  const base = { status: 'waiting' as RunStatus, base: 'main', uncommitted: 2, unpushed: 0, behind: 0, forge }
+
+  it('offers Commit to the base branch, with Create PR under the chevron', () => {
+    const action = trunkGitActionPolicy(base)
+    expect(action).toMatchObject({ id: 'land', label: 'Commit to main', enabled: true })
+    expect(action?.alternatives?.map((a) => a.id)).toEqual(['create-pr', 'create-draft-pr'])
+  })
+
+  it('adds Update branch while the remote is ahead, and offers only that when nothing is pending', () => {
+    expect(trunkGitActionPolicy({ ...base, behind: 3 })?.alternatives?.map((a) => a.id)).toContain('update-branch')
+    expect(trunkGitActionPolicy({ ...base, uncommitted: 0, behind: 3 })).toMatchObject({ id: 'update-branch', enabled: true })
+    expect(trunkGitActionPolicy({ ...base, uncommitted: 0 })).toBeNull()
+    expect(trunkGitActionPolicy({ ...base, uncommitted: undefined })).toBeNull()
+  })
+
+  it('lands committed-but-unpushed work too, and waits while the agent works', () => {
+    expect(trunkGitActionPolicy({ ...base, uncommitted: 0, unpushed: 1 })).toMatchObject({ id: 'land', enabled: true })
+    expect(trunkGitActionPolicy({ ...base, status: 'running' })).toMatchObject({ id: 'land', enabled: false })
+  })
+
+  it('keeps Commit and disables Create PR without a forge', () => {
+    const action = trunkGitActionPolicy({ ...base, forge: null })
+    expect(action).toMatchObject({ id: 'land', enabled: true })
+    expect(action?.alternatives?.[0]).toMatchObject({ id: 'create-pr', enabled: false })
   })
 })
