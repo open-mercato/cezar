@@ -2630,7 +2630,10 @@ export function createApp(deps: ServerDeps) {
         }
         // "Check again" re-probes THIS account only — the other accounts' warm answers are not
         // invalidated by asking about this one.
-        if (refresh) providerAuth.forgetProfileStatus(account.provider, account.id);
+        if (refresh) {
+          providerAuth.forgetProfileStatus(account.provider, account.id);
+          providerAuth.recheckProfileAuthFailure(account.provider, account.id);
+        }
         return c.json({
           status: await providerAuth.profileStatus(account.provider, {
             id: account.id,
