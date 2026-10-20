@@ -378,6 +378,22 @@ export const runRecordSchema = z.object({
   worktreeLifecycle: worktreeLifecycleProjectionSchema.optional(),
   /** An in-place run that switched the repo checkout to `branch` before it started. */
   inPlaceBranch: z.literal(true).optional(),
+  /** In-place but a read-only Ask task (spec 2026-10-20-knowledge-base-projects): no lease, no
+   *  writes, no landing. */
+  readOnly: z.literal(true).optional(),
+  /** The last auto-land of an in-place run (spec 2026-10-20-knowledge-base-projects). */
+  landing: z
+    .object({
+      status: z.enum(['landed', 'nothing', 'failed']),
+      at: z.string(),
+      branch: z.string().optional(),
+      sha: z.string().optional(),
+      pushed: z.boolean().optional(),
+      files: z.array(z.string()).optional(),
+      stage: z.string().optional(),
+      error: z.string().optional(),
+    })
+    .optional(),
   /** The task's own branch, created off `baseBranch`: `cez/<id8>` unless branch naming
    *  instructions named it (spec 2026-10-11-branch-naming-instructions) — read it, never recompute it. */
   branch: z.string().optional(),

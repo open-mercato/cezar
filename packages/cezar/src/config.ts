@@ -140,6 +140,22 @@ const configSchema = z.object({
    * false preserves the ordinary per-runner model selector.
    */
   modelsLocked: z.boolean().optional().catch(undefined),
+  /**
+   * Knowledge-base projects (spec 2026-10-20-knowledge-base-projects). Every key is optional and
+   * absent = today's code-project behavior. `profile` only labels the preset the cockpit applied;
+   * the behavior comes from the individual keys below.
+   */
+  profile: z.enum(['code', 'notes']).optional().catch(undefined),
+  /** Where a task works unless the composer says otherwise: `in-place` = the repo checkout. */
+  taskWorkspace: z.enum(['worktree', 'in-place']).optional().catch(undefined),
+  /** How an in-place task's finished changes reach the base branch. `auto` commits, rebases,
+   *  runs `requiredChecks` and pushes; a git-tracked config.json cannot grant it. */
+  landing: z.enum(['review', 'auto']).optional().catch(undefined),
+  /** Shell commands every auto-land must pass, run in the checkout after the rebase. */
+  requiredChecks: z.array(z.string().trim().min(1).max(2_000)).max(10).optional().catch(undefined),
+  /** Skill the composer preselects for a new task, and for a read-only (Ask) task. */
+  defaultSkill: z.string().trim().min(1).max(200).optional().catch(undefined),
+  askSkill: z.string().trim().min(1).max(200).optional().catch(undefined),
 });
 
 export type CezConfig = z.infer<typeof configSchema>;

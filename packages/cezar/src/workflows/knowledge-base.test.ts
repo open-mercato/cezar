@@ -1,0 +1,141 @@
+import { execFile } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { RunStore, type RunRecord } from '../runs/store.ts';
+import { RunManager } from './run.ts';
+import type { WorkflowDef } from './types.ts';
+
+const run = promisify(execFile);
+const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
+
+/**
+ * Knowledge-base projects (spec 2026-10-20-knowledge-base-projects), driven dry through
+ * `scripts/mock-claude.mjs`: the project's default workspace puts a task in the checkout, a
+ * `CEZ:DONE` lands what it left, a failing required check goes back to the agent, and a
+ * read-only task runs beside a write task that holds the working-tree lease.
+ */
+describe('knowledge-base projects', () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let manager: RunManager;
+  const savedEnv: Record<string, string | undefined> = {};
+  const SINGLE_STEP: WorkflowDef = {
+    name: 'quick-task',
+    source: 'built-in',
+    steps: [{ id: 'task', name: 'Task', prompt: '{{task}}' }],
+  };
+
+  const writeConfig = (config: Record<string, unknown>) => {
+    mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+    writeFileSync(join(repoRoot, '.ai/cezar/config.json'), JSON.stringify(config));
+  };
+
+  beforeEach(async () => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-kb-'));
+    savedEnv.CEZ_DRY_RUN = process.env.CEZ_DRY_RUN;
+    process.env.CEZ_DRY_RUN = '1';
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, 'daily.md'), 'one\n');
+    await run('git', ['add', '-A'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    manager = new RunManager(store, repoRoot);
+  });
+
+  afterEach(() => {
+    for (const record of store.listRuns()) manager.cancel(record.id);
+    manager.dispose();
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  const waitFor = async (id: string, pred: (r: RunRecord | undefined) => boolean, ms = 20_000) => {
+    const deadline = Date.now() + ms;
+    while (!pred(store.getRun(id))) {
+      if (Date.now() > deadline) throw new Error(`condition not met in time (status ${store.getRun(id)?.status})`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  };
+
+  const notes = (id: string): string[] => {
+    const path = join(repoRoot, '.ai/cezar/runs', `${id}.ndjson`);
+    if (!existsSync(path)) return [];
+    return readFileSync(path, 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; message?: string })
+      .filter((e) => e.type === 'note')
+      .map((e) => e.message ?? '');
+  };
+
+  const head = async () => (await run('git', ['log', '-1', '--format=%H %s'], { cwd: repoRoot })).stdout.trim();
+
+  it('runs in the checkout by default and lands the change on CEZ:DONE', async () => {
+    writeConfig({ taskWorkspace: 'in-place', landing: 'auto', requiredChecks: ['test -f person.md'] });
+    writeFileSync(join(repoRoot, 'person.md'), 'Bjorn\n');
+    const record = manager.startRun(SINGLE_STEP, { task: '1on1 with Bjorn mock:done' });
+    await waitFor(record.id, (r) => r?.status === 'done');
+    const done = store.getRun(record.id)!;
+    expect(done.worktree).toBe(false);
+    expect(done.worktreePath).toBeUndefined();
+    expect(done.landing).toMatchObject({ status: 'landed', branch: 'main' });
+    expect(done.landing?.files).toContain('person.md');
+    expect(await head()).toContain(done.landing!.sha!);
+    expect((await run('git', ['status', '--porcelain', '--', '.', ':(exclude).ai/cezar'], { cwd: repoRoot })).stdout).toBe('');
+  });
+
+  it('sends a failing required check back to the agent instead of landing', async () => {
+    writeConfig({ taskWorkspace: 'in-place', landing: 'auto', requiredChecks: ['exit 1'] });
+    writeFileSync(join(repoRoot, 'person.md'), 'broken\n');
+    const before = await head();
+    const record = manager.startRun(SINGLE_STEP, { task: 'file it mock:done' });
+    // The mock answers the failure without CEZ:DONE, so the run parks for the user.
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    expect(store.getRun(record.id)?.landing).toMatchObject({ status: 'failed', stage: 'checks' });
+    expect(notes(record.id).some((n) => n.startsWith('auto-land failed at checks — sent back to the agent'))).toBe(true);
+    // The task's commit stays local, unpushed and unlanded; nothing reached a remote.
+    expect(await head()).not.toBe(before);
+  });
+
+  it('keeps the code-project default: no config, an isolated worktree, no landing', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:done' });
+    await waitFor(record.id, (r) => r?.status === 'done');
+    const done = store.getRun(record.id)!;
+    expect(done.worktree).toBeUndefined();
+    expect(done.worktreePath).toBeTruthy();
+    expect(done.landing).toBeUndefined();
+  });
+
+  it('runs a read-only task beside a write task that holds the working-tree lease', async () => {
+    writeConfig({ taskWorkspace: 'in-place', landing: 'auto' });
+    const writer = manager.startRun(SINGLE_STEP, { task: 'mock:ask' });
+    await waitFor(writer.id, (r) => r?.status === 'waiting');
+    const reader = manager.startRun(SINGLE_STEP, { task: 'what is open with Daniel? mock:done', readOnly: true });
+    await waitFor(reader.id, (r) => r?.status === 'done');
+    const answered = store.getRun(reader.id)!;
+    expect(answered).toMatchObject({ worktree: false, readOnly: true });
+    expect(answered.landing).toBeUndefined();
+    expect(answered.systemPrompt).toContain('READ-ONLY');
+    expect(notes(reader.id)).toContain('read-only — answering from the repo working tree, alongside any running task');
+    expect(store.getRun(writer.id)?.status).toBe('waiting');
+  });
+
+  it('does not let a git-tracked config grant auto-land', async () => {
+    writeConfig({ taskWorkspace: 'in-place', landing: 'auto' });
+    await run('git', ['add', '-f', '.ai/cezar/config.json'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'track config'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, 'person.md'), 'x\n');
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:done' });
+    await waitFor(record.id, (r) => r?.status === 'done');
+    expect(store.getRun(record.id)?.landing).toBeUndefined();
+    expect(notes(record.id).some((n) => n.startsWith('auto-land is off'))).toBe(true);
+  });
+});

@@ -778,6 +778,8 @@ const startRunSchema = z
     // (spec 2026-10-19-repo-git-sync); `branch` names it.
     newBranch: z.boolean().optional(),
     branch: z.string().trim().min(1).max(200).optional(),
+    // A read-only Ask task (spec 2026-10-20-knowledge-base-projects): in place, no lease, no writes.
+    readOnly: z.boolean().optional(),
     // Autonomous mode (#autonomous): the run never parks at `waiting` — it
     // auto-continues until the agent signals done. No "needs you" is raised.
     autonomous: z.boolean().optional(),
@@ -4667,6 +4669,7 @@ export function createApp(deps: ServerDeps) {
         worktree: parsed.data.worktree,
         newBranch: parsed.data.newBranch,
         branch: parsed.data.branch,
+        ...(parsed.data.readOnly ? { readOnly: true } : {}),
         autonomous: parsed.data.autonomous,
         // Opt-in inbox (#471): the capability is the ceiling, so a client asking
         // for follow-ups on a server that has them off gets a plain `false`
@@ -6956,6 +6959,17 @@ export function createApp(deps: ServerDeps) {
       // Optional review gate (#489): tri-state — null means "no config key, the
       // CEZ_REVIEW_GATE env default (OFF) decides".
       reviewGate: config.reviewGate ?? null,
+      profile: config.profile ?? null,
+      taskWorkspace: config.taskWorkspace ?? null,
+      landing: config.landing ?? null,
+      landingBlocked:
+        config.landing === 'auto' && (await isLifecycleConfigTracked(repoRoot).catch(() => true))
+          ? 'auto-land is not honored: .ai/cezar/config.json is tracked by git, and only local configuration can grant it'
+          : null,
+      requiredChecks: config.requiredChecks ?? [],
+      defaultSkill: config.defaultSkill ?? null,
+      askSkill: config.askSkill ?? null,
+      teamSkills: config.skillsRepos.length > 0,
     };
   };
   // ---- chained family: per-repo config (project-scoped) ----
@@ -7038,6 +7052,21 @@ export function createApp(deps: ServerDeps) {
           if (parsed.data.reviewGate !== undefined) {
             if (parsed.data.reviewGate === null) delete raw.reviewGate;
             else raw.reviewGate = parsed.data.reviewGate;
+          }
+          // Knowledge-base keys (spec 2026-10-20-knowledge-base-projects): null or '' clears.
+          for (const key of ['profile', 'taskWorkspace', 'landing', 'defaultSkill', 'askSkill'] as const) {
+            const value = parsed.data[key];
+            if (value === undefined) continue;
+            if (value === null || value === '') delete raw[key];
+            else raw[key] = value;
+          }
+          if (parsed.data.requiredChecks !== undefined) {
+            if (!parsed.data.requiredChecks?.length) delete raw.requiredChecks;
+            else raw.requiredChecks = parsed.data.requiredChecks;
+          }
+          if (parsed.data.teamSkills === false) raw.skillsRepos = [];
+          else if (parsed.data.teamSkills === true && Array.isArray(raw.skillsRepos) && raw.skillsRepos.length === 0) {
+            delete raw.skillsRepos;
           }
           if (parsed.data.memoryLimitMb !== undefined) {
             // null or 0 both mean "no ceiling" — drop the key back to the default.
