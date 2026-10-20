@@ -46,7 +46,8 @@ async function makeFixture(version: string, tags: string[]): Promise<string> {
   const git = (...args: string[]) => execFile('git', args, { cwd: root });
   await git('init', '-q', '-b', 'main');
   await git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init');
-  for (const tag of tags) await git('tag', tag);
+  // A global `tag.gpgSign=true` turns a lightweight tag into a signed one that needs a message.
+  for (const tag of tags) await git('-c', 'tag.gpgSign=false', 'tag', tag);
   return root;
 }
 
