@@ -108,6 +108,23 @@ export class OpencodeServerRunner implements AgentRunner {
   }
 }
 
+/** The server answered with a non-2xx status — an answer, unlike `OpencodeTransportError`. */
+class OpencodeStatusError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+    this.name = 'OpencodeStatusError';
+  }
+}
+
+/** The installed `opencode serve` has no 1.x session route — in practice OpenCode 2.x. */
+export function unsupportedServerMessage(status: number): string {
+  return (
+    `this OpenCode server has no POST /session route (HTTP ${status}). ` +
+    'OpenCode 2.x replaced the server API cezar drives and is not supported yet — ' +
+    'install OpenCode 1.x (npm install -g opencode-ai@1) to run OpenCode tasks.'
+  );
+}
+
 /** One live `opencode serve` process driving a single session. */
 class OpencodeSession implements AgentSession {
   readonly result: Promise<AgentRunResult>;
@@ -433,7 +450,17 @@ class OpencodeSession implements AgentSession {
   }
 
   private async bootstrap(): Promise<void> {
-    const created = await this.http('POST', '/session', { title: 'cezar task' });
+    let created: Record<string, unknown>;
+    try {
+      created = await this.http('POST', '/session', { title: 'cezar task' });
+    } catch (err) {
+      // OpenCode 2.x moved its whole server API under `/api` with new payloads
+      // and events, so its server refuses the 1.x route (telemetry dc1a91a6).
+      if (err instanceof OpencodeStatusError && (err.status === 404 || err.status === 405)) {
+        throw new Error(unsupportedServerMessage(err.status));
+      }
+      throw err;
+    }
     this.sessionId = stringField(created, 'id');
     if (!this.sessionId) throw new Error('opencode did not return a session id');
     this.emit({ type: 'session', sessionId: this.sessionId });
@@ -739,7 +766,7 @@ class OpencodeSession implements AgentSession {
     if (!this.baseUrl) throw new Error('opencode server not ready');
     const res = await opencodeRequest(`${this.baseUrl}${path}`, { method, body });
     if (res.status < 200 || res.status >= 300) {
-      throw new Error(`${method} ${path} → ${res.status} ${res.body.slice(0, 200)}`);
+      throw new OpencodeStatusError(res.status, `${method} ${path} → ${res.status} ${res.body.slice(0, 200)}`);
     }
     if (!res.body) return {};
     try {
