@@ -505,6 +505,19 @@ describe('provider auth parsers', () => {
     expect(vi.mocked(run).mock.calls.filter(([executable]) => executable === 'opencode')).toHaveLength(1);
   });
 
+  it('keeps OpenCode stderr-only CLI failures out of unrecognized-output telemetry', async () => {
+    const onInconclusive = vi.fn();
+    const run = runner((executable, args) => executable === 'opencode'
+      ? args.includes('--standalone')
+        ? { stdout: '', stderr: 'error: unknown flag --standalone\n', exitCode: 1 }
+        : { stdout: '', stderr: 'Error: Cannot start server\n', exitCode: 1 }
+      : { stdout: 'unrecognized', stderr: '', exitCode: 0 });
+    const service = new ProviderAuthService({ runCommand: run, onInconclusive });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'unknown' } });
+    expect(onInconclusive).not.toHaveBeenCalledWith(expect.objectContaining({ provider: 'opencode' }));
+  });
+
   it('does not guess from a malformed OpenCode 2.x credential row', async () => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable === 'opencode'
