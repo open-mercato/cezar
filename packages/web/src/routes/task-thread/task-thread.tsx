@@ -447,8 +447,12 @@ export function ThreadView({
 
         {/* The review gate (spec 009): a finished run with changes parks here — nothing
             auto-merges. The panel exists exactly while the run rests at `review`. */}
-        {/* Send back carries the drafted line comments, like the composer does. */}
-        {run.status === 'review' && !lifecycleGate ? <ReviewPanel run={run} diffComments={diffComments} /> : null}
+        {/* Send back carries the drafted line comments, like the composer does. An in-place task
+            (trunk-based, spec 2026-10-20-trunk-based-projects) gets no panel: corrections go through
+            the composer and landing through the header's Commit step. */}
+        {run.status === 'review' && !lifecycleGate && run.worktree !== false ? (
+          <ReviewPanel run={run} diffComments={diffComments} />
+        ) : null}
       </div>
 
       <AcceptCelebration status={run.status} />
