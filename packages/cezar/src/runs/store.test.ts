@@ -39,6 +39,40 @@ const LEGACY_RUN = {
   steps: [],
 };
 
+describe('RunStore — uncreatable data dir (telemetry 5af5aec6)', () => {
+  let parent: string;
+
+  beforeEach(() => {
+    parent = mkdtempSync(join(tmpdir(), 'cez-store-ro-'));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(parent, { recursive: true, force: true });
+  });
+
+  it('opens a working in-memory store instead of throwing, and persists once the dir becomes creatable', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // A FILE where `.ai` should be: mkdir fails on every platform and as root, like EPERM did.
+    const blocker = join(parent, '.ai');
+    writeFileSync(blocker, '');
+    const dataDir = join(blocker, 'cezar');
+
+    const store = RunStore.open(dataDir);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('task history in this project will not be saved'));
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    const live: unknown[] = [];
+    store.on('event', (e) => live.push(e));
+    expect(() => store.appendEvent(run.id, { type: 'note', text: 'one' })).not.toThrow();
+    expect(live).toHaveLength(1);
+    expect(store.getRun(run.id)?.id).toBe(run.id);
+
+    rmSync(blocker);
+    store.appendEvent(run.id, { type: 'note', text: 'two' });
+    expect(readFileSync(join(dataDir, 'runs', `${run.id}.ndjson`), 'utf8')).toContain('"text":"two"');
+  });
+});
+
 describe('RunStore — directional usage persistence', () => {
   let dataDir: string;
 

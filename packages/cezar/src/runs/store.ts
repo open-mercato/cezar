@@ -936,6 +936,9 @@ export class RunStore extends EventEmitter {
 
   getIndexReadHealth() { return { ...this.indexReadHealth }; }
 
+  /** `open` could not create `runs/`: events stay live-only instead of failing every run. */
+  private eventsUnwritable = false;
+
   /** The repository this project IS (#945), armed after `open()` by `setRepoHandle`. Undefined
    *  until it arrives and `null` when it cannot be known — both mean "unscoped", which is
    *  exactly the pre-#945 behavior. */
@@ -948,8 +951,16 @@ export class RunStore extends EventEmitter {
 
   /** See `reconcileLoadedRun` for what `keepLive` (#367) decides about live-looking rows. */
   static open(dataDir: string, opts?: { keepLive?: boolean }): RunStore {
-    mkdirSync(join(dataDir, 'runs'), { recursive: true });
     const store = new RunStore(dataDir);
+    // An uncreatable data dir (EPERM: Windows Controlled Folder Access, a read-only checkout) must
+    // not kill boot — the desktop shell relaunches into the same project every time (5af5aec6).
+    try {
+      mkdirSync(join(dataDir, 'runs'), { recursive: true });
+    } catch (err) {
+      store.eventsUnwritable = true;
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[cez] cannot create ${join(dataDir, 'runs')} (${message}); task history in this project will not be saved`);
+    }
     const indexPath = join(dataDir, 'runs.json');
     if (existsSync(indexPath)) {
       try {
@@ -1389,6 +1400,22 @@ export class RunStore extends EventEmitter {
     return count;
   }
 
+  private persistEvent(runId: string, event: RunEvent): void {
+    const line = `${JSON.stringify(event)}\n`;
+    if (!this.eventsUnwritable) {
+      appendFileSync(this.eventsPath(runId), line, 'utf8');
+      return;
+    }
+    // Degraded since `open` (already warned): retry, so access granted mid-session starts persisting.
+    try {
+      mkdirSync(join(this.dataDir, 'runs'), { recursive: true });
+      appendFileSync(this.eventsPath(runId), line, 'utf8');
+      this.eventsUnwritable = false;
+    } catch {
+      // live-only — the SSE stream still carries it
+    }
+  }
+
   appendEvent(runId: string, event: { type: string; stepId?: string; [key: string]: unknown }): RunEvent {
     const run = this.runs.get(runId);
     if (!run) throw new Error(`unknown run: ${runId}`);
@@ -1400,7 +1427,7 @@ export class RunStore extends EventEmitter {
     const full: RunEvent = this.redact({ ...event, seq, ts: new Date().toISOString() }, runId);
     // Sync append keeps event order without a write queue; local NDJSON
     // appends at agent-event rates are effectively free.
-    appendFileSync(this.eventsPath(runId), `${JSON.stringify(full)}\n`, 'utf8');
+    this.persistEvent(runId, full);
     this.emit('event', { runId, event: full });
     if (full.type === 'session.started' && typeof full.backend === 'string') this.sessionBackends.set(runId, full.backend);
     if ((full.type === 'error' || full.type === 'session.error') && typeof full.message === 'string') {
