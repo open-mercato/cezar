@@ -32,6 +32,9 @@ export interface NewTaskDraft {
   /** Worktree opt-out (#worktree-toggle): false runs in the repo working tree. null → the
    *  remembered `lastWorktree` / default (isolated worktree). */
   worktree: boolean | null
+  /** The project's `taskWorkspace` when `worktree` was chosen (spec 2026-10-20-trunk-based-projects):
+   *  changing the project setting retires the remembered choice. Absent on older drafts. */
+  worktreeBasis?: string
   /** With the worktree off: fork the checkout onto a new branch from base first (spec
    *  2026-10-19-repo-git-sync). Sticky; ignored while the worktree is on. */
   newBranch?: boolean
@@ -72,6 +75,19 @@ export interface ComposerRunModeInput {
  * run in place when the user or workspace policy opts out. `configuredAutonomous`/
  * `configuredWorktree` carry the workspace run defaults; `'source-dependent'` autonomy means
  * skills default on and everything else off. */
+/**
+ * The draft's remembered Worktree choice, if it still applies: one made under a different project
+ * `taskWorkspace` (or, for an older draft, before the project set one) yields to the project.
+ */
+export function explicitWorktreeFor(
+  draft: Pick<NewTaskDraft, 'worktree' | 'worktreeBasis'>,
+  taskWorkspace: string | null | undefined,
+): boolean | null {
+  if (draft.worktree === null) return null
+  const basis = draft.worktreeBasis ?? 'default'
+  return basis === (taskWorkspace ?? 'default') ? draft.worktree : null
+}
+
 export function resolveComposerRunMode(input: ComposerRunModeInput): {
   autonomous: boolean
   worktree: boolean
@@ -186,6 +202,7 @@ function normalize(raw: unknown): NewTaskDraft {
     model: typeof obj.model === 'string' ? obj.model : null,
     variants: obj.variants === 2 || obj.variants === 3 ? obj.variants : 1,
     worktree: typeof obj.worktree === 'boolean' ? obj.worktree : null,
+    ...(typeof obj.worktreeBasis === 'string' ? { worktreeBasis: obj.worktreeBasis } : {}),
     ...(obj.newBranch === true ? { newBranch: true } : {}),
     ...(typeof obj.branchName === 'string' && obj.branchName ? { branchName: obj.branchName } : {}),
     autonomous: typeof obj.autonomous === 'boolean' ? obj.autonomous : null,

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { PendingAttachment } from '@/components/composer/composer-attachments'
 
 import {
+  explicitWorktreeFor,
   clearStartedDraft,
   composerRunModeNote,
   handOffComposition,
@@ -432,5 +433,18 @@ describe('composerRunModeNote (#793)', () => {
     for (const hasGit of [true, false]) {
       expect(composerRunModeNote({ worktree: false, hasGit })).not.toContain('isolated worktree')
     }
+  })
+})
+
+describe('explicitWorktreeFor (spec 2026-10-20-trunk-based-projects)', () => {
+  it('keeps a choice made under the current project setting', () => {
+    expect(explicitWorktreeFor({ worktree: true, worktreeBasis: 'in-place' }, 'in-place')).toBe(true)
+    expect(explicitWorktreeFor({ worktree: false }, null)).toBe(false)
+  })
+
+  it('lets the project setting win over a choice made before it changed', () => {
+    expect(explicitWorktreeFor({ worktree: true }, 'in-place')).toBeNull()
+    expect(explicitWorktreeFor({ worktree: true, worktreeBasis: 'default' }, 'in-place')).toBeNull()
+    expect(explicitWorktreeFor({ worktree: null }, 'in-place')).toBeNull()
   })
 })

@@ -2341,6 +2341,18 @@ describe('trunk-based projects (spec 2026-10-20-trunk-based-projects)', () => {
     expect(postedBody()).not.toHaveProperty('worktree')
   })
 
+  it('lets the project default win over a Worktree choice remembered from before it changed', async () => {
+    localStorage.setItem('cez-new-task-draft', JSON.stringify({ worktree: true }))
+    serve({ config: TRUNK_CONFIG, skills: TRUNK_SKILLS })
+    renderNewTask()
+    await pillReady('ingest')
+    const chip = () => document.querySelector('[data-slot="worktree-toggle"]')
+    expect(chip()?.getAttribute('aria-checked')).toBe('false')
+    // Ticking it now is a choice made under this setting, so it sticks.
+    fireEvent.click(chip() as HTMLButtonElement)
+    await waitFor(() => expect(chip()?.getAttribute('aria-checked')).toBe('true'))
+  })
+
   it('leaves a branch-per-task project without the Ask chip', async () => {
     serve()
     renderNewTask()

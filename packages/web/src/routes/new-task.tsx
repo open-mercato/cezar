@@ -73,6 +73,7 @@ import {
 import {
   clearStartedDraft,
   composerRunModeNote,
+  explicitWorktreeFor,
   handOffComposition,
   readAttachments,
   readDraft,
@@ -337,7 +338,7 @@ export function NewTaskRoute() {
     hasGit,
     variants,
     explicitAutonomous: draft.autonomous,
-    explicitWorktree: draft.worktree,
+    explicitWorktree: explicitWorktreeFor(draft, config.data?.taskWorkspace),
     interactive: selectedSkill?.interactive,
     configuredAutonomous:
       workspaceConfig.data?.composerDefaults?.autonomous
@@ -733,7 +734,7 @@ export function NewTaskRoute() {
                       ? "Dispatch forks this task's commits — subtasks need a worktree"
                       : 'Parallel variants always use isolated worktrees'
                   }
-                  onChange={(on) => update({ worktree: on })}
+                  onChange={(on) => update({ worktree: on, worktreeBasis: config.data?.taskWorkspace ?? 'default' })}
                 />
               ) : null}
               {worktreeToggleShown && !worktreeOn && !askOn ? (
