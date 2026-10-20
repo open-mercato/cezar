@@ -6,7 +6,7 @@ import { AGENT_MODELS_LOCKED_ENV } from './agent-model-policy.ts';
 import { profileEnv } from './agent-profiles.ts';
 import { isSignalTerminationExit } from './agent-runner.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
-import { resolveCursorAgentBin } from './cursor-bin.ts';
+import { isForeignCursorAgent, resolveCursorAgentBin } from './cursor-bin.ts';
 import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
 import { probeJunieAuthentication } from './junie-auth-probe.ts';
 import { spawnableCommand } from './windows-shim.ts';
@@ -100,6 +100,12 @@ interface ProviderDescriptor {
   unrecognizedHint?: (result: ProviderCommandResult) => string | undefined;
   /** Arguments to ask once more with when `statusArgs` was rejected by an older CLI. */
   fallbackArgs?: (result: ProviderCommandResult) => readonly string[] | undefined;
+  /**
+   * Whether `executable` is not a working copy of this CLI (another program of that name, a shim
+   * with nothing behind it), judged from a clean `--version` answer. Asked only once the status
+   * answer is unreadable; `true` reports `not-installed` (telemetry 8d304c50, f67df9d2).
+   */
+  foreign?: (executable: string, version: ProviderCommandResult) => boolean;
   /** The `CEZ_*_BIN` override `executable` honours — only so a report can say the binary came from it. */
   overrideEnv: string;
 }
@@ -386,6 +392,10 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     statusArgs: ['status', '--format', 'json'],
     fallbackArgs: cursorFallbackArgs,
     unrecognizedHint: cursorUnrecognizedHint,
+    foreign: (executable, version) => isForeignCursorAgent(
+      executable,
+      version.exitCode === 0 ? cliVersionFrom(version.stdout) : null,
+    ),
     loginArgs: ['login'],
     updateArgs: ['update'],
     installHint:
@@ -402,6 +412,9 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     loginArgs: ['/login'],
     installHint: 'Install pi, then run `pi /login`.',
     parse: parsePiStatus,
+    // Real pi answers `--version` with exit 0, like detection requires; a `pi` that can't is a shim
+    // or another tool whose wording no pattern list keeps up with (telemetry f67df9d2, after #1504).
+    foreign: (_executable, version) => !process.env.CEZ_PI_BIN && version.exitCode !== 0,
   },
   {
     id: 'junie',
@@ -1176,6 +1189,23 @@ export class ProviderAuthService {
     if (status !== null) return { provider: descriptor.id, status };
     // Still interrupted: unknown, but unreported — there is no CLI defect to group on.
     if (wasInterrupted(result)) return { provider: descriptor.id, status: 'unknown', hint: INTERRUPTED_HINT };
+    if (descriptor.foreign) {
+      const version = await (env === undefined
+        ? this.runCommand(executable, descriptor.versionArgs ?? ['--version'], VERSION_TIMEOUT_MS)
+        : this.runCommand(executable, descriptor.versionArgs ?? ['--version'], VERSION_TIMEOUT_MS, env))
+        .catch(() => null);
+      // Only a clean answer decides; a spawn error, hang or signal says nothing about the binary.
+      const decisive = version !== null && !version.errorCode && !version.timedOut
+        && version.exitCode !== null && !wasInterrupted(version);
+      if (decisive && descriptor.foreign(executable, version)) {
+        return {
+          provider: descriptor.id,
+          status: 'not-installed',
+          hint: `\`${executable}\` on PATH is not a working ${descriptor.id} CLI. `
+            + `${descriptor.installHint} Or point ${descriptor.overrideEnv} at it.`,
+        };
+      }
+    }
     const hint = descriptor.unrecognizedHint?.(result) ?? UNKNOWN_HINT;
     // Exit 0 and 1 are the codes vendors answer status with; anything else is the CLI failing.
     if (result.exitCode === 0 || result.exitCode === 1) return inconclusive('unrecognized_output', hint, result);

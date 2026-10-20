@@ -1,6 +1,8 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolveCursorAgentBin } from './cursor-agent-runner.ts';
+import { isForeignCursorAgent } from './cursor-bin.ts';
+import { cliVersionFrom } from './provider-auth.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
 import { spawnableCommand } from './windows-shim.ts';
 
@@ -122,6 +124,14 @@ async function probeCursor(): Promise<BackendCheck> {
   const bin = resolveCursorAgentBin();
   try {
     const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });
+    // Cursor absent, another `agent` on PATH (telemetry 8d304c50) — don't offer a runner that can't run.
+    if (isForeignCursorAgent(bin, cliVersionFrom(stdout))) {
+      return {
+        name: 'cursor',
+        available: false,
+        hint: `\`${bin}\` resolves but doesn't look like the Cursor CLI (got: ${stdout.trim().slice(0, 80)}); install it (curl https://cursor.com/install -fsS | bash) or set CEZ_CURSOR_AGENT_BIN`,
+      };
+    }
     return {
       name: 'cursor',
       available: true,

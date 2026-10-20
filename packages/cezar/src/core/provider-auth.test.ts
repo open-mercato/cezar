@@ -16,7 +16,8 @@ vi.mock('./claude-bin.ts', async (importOriginal) => ({
   resolveClaudeBin: (env: NodeJS.ProcessEnv = process.env) => env.CEZ_CLAUDE_BIN || 'claude',
 }));
 // Same reason for Cursor: `cursor-bin.test.ts` covers the real PATH resolution.
-vi.mock('./cursor-bin.ts', () => ({
+vi.mock('./cursor-bin.ts', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./cursor-bin.ts')>(),
   resolveCursorAgentBin: () => process.env.CEZ_CURSOR_AGENT_BIN || 'agent',
 }));
 vi.mock('./junie-auth-probe.ts', () => ({
@@ -81,6 +82,7 @@ const originalEnv = {
   CEZ_PI_BIN: process.env.CEZ_PI_BIN,
   CURSOR_API_KEY: process.env.CURSOR_API_KEY,
   CEZ_COPILOT_BIN: process.env.CEZ_COPILOT_BIN,
+  CEZ_CURSOR_AGENT_BIN: process.env.CEZ_CURSOR_AGENT_BIN,
 };
 
 beforeEach(() => {
@@ -92,6 +94,7 @@ beforeEach(() => {
   delete process.env.CEZ_PI_BIN;
   delete process.env.CURSOR_API_KEY;
   delete process.env.CEZ_COPILOT_BIN;
+  delete process.env.CEZ_CURSOR_AGENT_BIN;
 });
 
 afterEach(() => {
@@ -651,6 +654,42 @@ describe('provider auth parsers', () => {
     const cursor = (await statuses(service)).cursor;
     expect(cursor?.status).toBe('unknown');
     expect(cursor?.hint).toContain('CEZ_CURSOR_AGENT_BIN');
+  });
+
+  // Telemetry 8d304c50 regressed after #1503: no Cursor at all, so resolution still ends at the foreign `agent`.
+  it('reports not-installed, unreported, when the only `agent` is another program', async () => {
+    const onInconclusive = vi.fn();
+    const runCommand = vi.fn<RunProviderCommand>(async (executable, args) => {
+      if (executable !== 'agent') return resultFor(executable);
+      return args.includes('--version')
+        ? { stdout: '0.2.22\n', stderr: '', exitCode: 0 }
+        : { stdout: '', stderr: 'usage: agent [-h] {run,serve}\nagent: error: invalid choice', exitCode: 2 };
+    });
+    const service = new ProviderAuthService({ runCommand, onInconclusive });
+
+    const cursor = (await statuses(service)).cursor;
+    expect(cursor?.status).toBe('not-installed');
+    expect(cursor?.hint).toContain('CEZ_CURSOR_AGENT_BIN');
+    expect(onInconclusive).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Cursor itself', 'agent', undefined, '2026.01.28-fd13201\n'],
+    ['an explicit override', 'agent', 'agent', '0.2.22\n'],
+    ['an unreadable version', 'agent', undefined, 'agent: error\n'],
+  ])('keeps an unreadable status unknown for %s', async (_label, executable, override, version) => {
+    if (override) process.env.CEZ_CURSOR_AGENT_BIN = override;
+    const onInconclusive = vi.fn();
+    const runCommand = vi.fn<RunProviderCommand>(async (bin, args) => {
+      if (bin !== executable) return resultFor(bin);
+      return args.includes('--version')
+        ? { stdout: version, stderr: '', exitCode: 0 }
+        : { stdout: '', stderr: 'boom', exitCode: 2 };
+    });
+    const service = new ProviderAuthService({ runCommand, onInconclusive });
+
+    await expect(statuses(service)).resolves.toMatchObject({ cursor: { status: 'unknown' } });
+    expect(onInconclusive).toHaveBeenCalledWith(expect.objectContaining({ provider: 'cursor', reason: 'unexpected_exit' }));
   });
 
   describe('Cursor CURSOR_API_KEY precheck', () => {
@@ -1867,6 +1906,41 @@ describe('inconclusive probe reports', () => {
     });
     expect(row?.hint).toContain('CEZ_PI_BIN');
     expect(onInconclusive).not.toHaveBeenCalled();
+  });
+
+  // f67df9d2 regressed in 0.16.0: the shim's stderr matched none of #1504's patterns. Whatever its
+  // wording, a `pi` that cannot answer `--version` is not a working pi.
+  it('reports a `pi` that cannot answer --version as not-installed, whatever its stderr says', async () => {
+    const onInconclusive = vi.fn();
+    const stderr = 'pi: shim has no active version (wanted python 3.11.9); try `tool install`\n';
+    const service = new ProviderAuthService({
+      runCommand: async (executable) => executable === 'pi'
+        ? { stdout: '', stderr, exitCode: 1 }
+        : resultFor(executable),
+      onInconclusive,
+    });
+    const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'pi');
+    expect(row).toMatchObject({ status: 'not-installed', hint: expect.stringContaining('CEZ_PI_BIN') });
+    expect(onInconclusive).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a pi that answers --version', undefined],
+    ['an explicit CEZ_PI_BIN', 'pi'],
+  ])('keeps a failed pi status unknown and reported for %s', async (_label, override) => {
+    if (override) process.env.CEZ_PI_BIN = override;
+    const onInconclusive = vi.fn();
+    const service = new ProviderAuthService({
+      runCommand: async (executable, args) => {
+        if (executable !== 'pi') return resultFor(executable);
+        if (args.includes('--version')) return override ? { stdout: '', stderr: 'boom', exitCode: 1 } : { stdout: '1.3.0\n', stderr: '', exitCode: 0 };
+        return { stdout: '', stderr: 'Error: provider config unreadable\n', exitCode: 1 };
+      },
+      onInconclusive,
+    });
+    const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'pi');
+    expect(row?.status).toBe('unknown');
+    expect(onInconclusive).toHaveBeenCalledWith(expect.objectContaining({ provider: 'pi', reason: 'unrecognized_output' }));
   });
 
   it('recognizes the mise and pyenv shim misses, and never re-reads a successful answer', () => {
