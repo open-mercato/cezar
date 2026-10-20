@@ -351,7 +351,7 @@ export class AutomationStore {
   }
 
   private load(): void {
-    mkdirSync(this.dataDir, { recursive: true });
+    // Read-only: every writer creates the dir itself, so an uncreatable one cannot fail boot (5af5aec6).
     this.loadDefinitions();
     this.stateFile = this.readJson(STATE, automationStateFileSchema, {
       version: 1,
