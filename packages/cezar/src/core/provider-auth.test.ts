@@ -1913,6 +1913,41 @@ describe('inconclusive probe reports', () => {
     expect(onInconclusive).not.toHaveBeenCalled();
   });
 
+  // f67df9d2 regressed in 0.16.0: the shim's stderr matched none of #1504's patterns. Whatever its
+  // wording, a `pi` that cannot answer `--version` is not a working pi.
+  it('reports a `pi` that cannot answer --version as not-installed, whatever its stderr says', async () => {
+    const onInconclusive = vi.fn();
+    const stderr = 'pi: shim has no active version (wanted python 3.11.9); try `tool install`\n';
+    const service = new ProviderAuthService({
+      runCommand: async (executable) => executable === 'pi'
+        ? { stdout: '', stderr, exitCode: 1 }
+        : resultFor(executable),
+      onInconclusive,
+    });
+    const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'pi');
+    expect(row).toMatchObject({ status: 'not-installed', hint: expect.stringContaining('CEZ_PI_BIN') });
+    expect(onInconclusive).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a pi that answers --version', undefined],
+    ['an explicit CEZ_PI_BIN', 'pi'],
+  ])('keeps a failed pi status unknown and reported for %s', async (_label, override) => {
+    if (override) process.env.CEZ_PI_BIN = override;
+    const onInconclusive = vi.fn();
+    const service = new ProviderAuthService({
+      runCommand: async (executable, args) => {
+        if (executable !== 'pi') return resultFor(executable);
+        if (args.includes('--version')) return override ? { stdout: '', stderr: 'boom', exitCode: 1 } : { stdout: '1.3.0\n', stderr: '', exitCode: 0 };
+        return { stdout: '', stderr: 'Error: provider config unreadable\n', exitCode: 1 };
+      },
+      onInconclusive,
+    });
+    const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'pi');
+    expect(row?.status).toBe('unknown');
+    expect(onInconclusive).toHaveBeenCalledWith(expect.objectContaining({ provider: 'pi', reason: 'unrecognized_output' }));
+  });
+
   it('recognizes the mise and pyenv shim misses, and never re-reads a successful answer', () => {
     expect(versionManagerShimMiss({ stdout: '', stderr: 'mise ERROR No version is set for shim: pi\nSet a global default version with one of the following:\nmise use -g python@3.11.9\n', exitCode: 1 }))
       .toBe('No version is set for shim: pi');

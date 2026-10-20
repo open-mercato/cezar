@@ -114,10 +114,11 @@ interface ProviderDescriptor {
   /** Arguments to ask once more with when `statusArgs` was rejected by an older CLI. */
   fallbackArgs?: (result: ProviderCommandResult) => readonly string[] | undefined;
   /**
-   * Whether `executable` is another program sharing the CLI's name, judged from its `--version`
-   * semver. Asked only once the status answer is unreadable; `true` reports `not-installed`.
+   * Whether `executable` is not a working copy of this CLI (another program of that name, a shim
+   * with nothing behind it), judged from a clean `--version` answer. Asked only once the status
+   * answer is unreadable; `true` reports `not-installed` (telemetry 8d304c50, f67df9d2).
    */
-  foreign?: (executable: string, version: string | null) => boolean;
+  foreign?: (executable: string, version: ProviderCommandResult) => boolean;
   /** The `CEZ_*_BIN` override `executable` honours — only so a report can say the binary came from it. */
   overrideEnv: string;
 }
@@ -415,7 +416,10 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     statusArgs: ['status', '--format', 'json'],
     fallbackArgs: cursorFallbackArgs,
     unrecognizedHint: cursorUnrecognizedHint,
-    foreign: (executable, version) => isForeignCursorAgent(executable, version),
+    foreign: (executable, version) => isForeignCursorAgent(
+      executable,
+      version.exitCode === 0 ? cliVersionFrom(version.stdout) : null,
+    ),
     loginArgs: ['login'],
     updateArgs: ['update'],
     installHint:
@@ -432,6 +436,9 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     loginArgs: ['/login'],
     installHint: 'Install pi, then run `pi /login`.',
     parse: parsePiStatus,
+    // Real pi answers `--version` with exit 0, like detection requires; a `pi` that can't is a shim
+    // or another tool whose wording no pattern list keeps up with (telemetry f67df9d2, after #1504).
+    foreign: (_executable, version) => !process.env.CEZ_PI_BIN && version.exitCode !== 0,
   },
   {
     id: 'junie',
@@ -1235,14 +1242,14 @@ export class ProviderAuthService {
         ? this.runCommand(executable, descriptor.versionArgs ?? ['--version'], VERSION_TIMEOUT_MS)
         : this.runCommand(executable, descriptor.versionArgs ?? ['--version'], VERSION_TIMEOUT_MS, env))
         .catch(() => null);
-      const semver = version && !version.errorCode && !version.timedOut
-        ? cliVersionFrom(version.stdout) ?? cliVersionFrom(version.stderr)
-        : null;
-      if (descriptor.foreign(executable, semver)) {
+      // Only a clean answer decides; a spawn error, hang or signal says nothing about the binary.
+      const decisive = version !== null && !version.errorCode && !version.timedOut
+        && version.exitCode !== null && !wasInterrupted(version);
+      if (decisive && descriptor.foreign(executable, version)) {
         return {
           provider: descriptor.id,
           status: 'not-installed',
-          hint: `\`${executable}\` on PATH is another program (version ${semver}), not this CLI. `
+          hint: `\`${executable}\` on PATH is not a working ${descriptor.id} CLI. `
             + `${descriptor.installHint} Or point ${descriptor.overrideEnv} at it.`,
         };
       }
