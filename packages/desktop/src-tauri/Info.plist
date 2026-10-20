@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged into the bundle's Info.plist by tauri-build. The composer's Dictation button records
+     through the webview's Web Speech API; macOS terminates an app that touches the microphone or
+     speech recognition without these usage strings. -->
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>cezar uses the microphone for dictation in the task composer.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>cezar turns your dictation into the text of a task.</string>
+</dict>
+</plist>
