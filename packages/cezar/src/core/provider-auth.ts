@@ -1309,6 +1309,11 @@ export class ProviderAuthService {
     if (status !== null) return { provider: descriptor.id, status };
     // Still interrupted: unknown, but unreported — there is no CLI defect to group on.
     if (wasInterrupted(result)) return { provider: descriptor.id, status: 'unknown', hint: INTERRUPTED_HINT };
+    // OpenCode 1.x can fail before producing an auth-list answer (for example, while starting its
+    // local service). That is an operational failure, not a new stdout format to fix.
+    if (descriptor.id === 'opencode' && result.exitCode === 1 && !result.stdout.trim() && result.stderr.trim()) {
+      return { provider: descriptor.id, status: 'unknown', hint: UNKNOWN_HINT };
+    }
     if (descriptor.foreign) {
       const version = await (env === undefined
         ? this.runCommand(executable, ['--version'], VERSION_TIMEOUT_MS)
