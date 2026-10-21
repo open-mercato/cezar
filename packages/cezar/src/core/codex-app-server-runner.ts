@@ -30,6 +30,7 @@ import {
 } from './codex-app-server-transport.ts';
 import {
   codexSessionStarted,
+  codexTurnError,
   createCodexUiState,
   mapCodexNotification,
   type CodexUiMapping,
@@ -623,14 +624,13 @@ class CodexSession implements AgentSession {
         // partial prose before the turn boundary (run.ts reads markers there).
         this.textCoalescer.flush();
         // A turn that ended on nothing but a context compaction (#955). Only a CLEAN
-        // boundary carries it: a `turn/failed` already emits an authoritative error, and
+        // boundary carries it: a failed turn already emits an authoritative error, and
         // stacking a "keep going" reason on top of it would be two verdicts for one turn.
-        const compacted = method === 'turn/completed' && this.compactionEndedTurn;
+        const turnError = codexTurnError(method, params);
+        const compacted = turnError === undefined && this.compactionEndedTurn;
         this.compactionEndedTurn = false;
-        if (method === 'turn/failed' && !this.terminatedByCezar) {
-          const error = params.error as Record<string, unknown> | undefined;
-          const message = stringField(error ?? {}, 'message') ?? 'codex turn failed';
-          this.emit({ type: 'error', message });
+        if (turnError !== undefined && !this.terminatedByCezar) {
+          this.emit({ type: 'error', message: turnError });
         }
         // The bare event when there is nothing extra to say, so every existing consumer
         // and every golden recording sees the exact frame it saw before (§7 additive).
