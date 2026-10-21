@@ -3,10 +3,15 @@
 #
 #   docker build -t registry.example.com/cezar-fleet:latest deploy/kubernetes
 #
+# To bake in a local checkout instead of the npm release, `npm pack` packages/cezar into this folder
+# and point CEZAR_PACKAGE at the tarball:
+# Pack on Linux/CI: a Windows checkout packs CRLF scripts that cannot run in the image.
+#   docker build --build-arg CEZAR_PACKAGE=/tmp/pkg/open-mercato-cezar-<version>.tgz -t cezar-fleet:dev deploy/kubernetes
+#
 # Agent CLIs are baked in at build time; add the ones you use (Cursor, OpenCode, ...) the same way.
 FROM node:22-slim
 
-ARG CEZAR_VERSION=latest
+ARG CEZAR_PACKAGE=@open-mercato/cezar@latest
 ARG INSTALL_AGENTS="@anthropic-ai/claude-code @openai/codex"
 
 # git for worktrees, curl/gnupg to add the GitHub CLI apt source, gh for clones and draft PRs.
@@ -17,7 +22,9 @@ RUN apt-get update \
  && apt-get update && apt-get install -y --no-install-recommends gh \
  && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @open-mercato/cezar@${CEZAR_VERSION} ${INSTALL_AGENTS} && npm cache clean --force
+# `Dockerfile` always matches the glob, so the COPY works with or without a tarball in the context.
+COPY Dockerfile *.tgz /tmp/pkg/
+RUN npm install -g ${CEZAR_PACKAGE} ${INSTALL_AGENTS} && npm cache clean --force
 
 # Everything stateful lives under /data (a PVC in the manifests): the workspace home, cloned repos and
 # the boot directory cezar serves from.

@@ -50,9 +50,23 @@ cezar fleet cancel <jobId>
 nodes + jobs.
 
 A node maps a job's repo to a project by **normalized remote URL** (`https://`, `ssh`, `git@` and
-`owner/repo` spellings all match). If it has none registered it clones the repo with `gh` into
-`CEZ_PROJECTS_DIR` (default `~/cezar/projects`) and registers it. Clone-by-URL is GitHub-only; for
-other forges pre-register the project on each node (`cezar projects add <dir>`).
+`owner/repo` spellings all match). If it has none registered it clones the repo into
+`CEZ_PROJECTS_DIR` (default `~/cezar/projects`), registers it, and open cockpits show the new project.
+GitHub repos (`owner/repo`, GitHub URLs) clone with `gh`; any other host (GitLab, Bitbucket, Gitea,
+self-hosted) clones with plain `git` from a **plain `https://` URL**: no credentials in the URL, no
+`ssh`/`file`/`ext::` transports, no option-like values (the job is refused otherwise). Private repos
+on other hosts need that node's own git credential helper.
+
+Finishing a job: on GitHub the node pushes the branch and opens a **draft PR** (`prUrl`). On other
+hosts there is no `gh pr create`, so it **pushes the branch** and reports its name (`branch`) and, for
+GitLab / Bitbucket / Gitea-style hosts, the branch's web page (`branchUrl`).
+
+## Cockpit panel
+
+When this instance has a fleet role, **Settings → Fleet** lists the nodes (free/max capacity, stale
+marker) and jobs (status, node, branch / PR / branch page, error) with a Cancel button, refreshed
+every few seconds. It is read-only apart from cancel. On a worker the cockpit server asks the hub
+with the token, so the token never reaches the browser. Without a fleet role the section is absent.
 
 ## Kubernetes
 
@@ -134,8 +148,11 @@ nodes, which only need to reach the hub's fleet port.
 
 - A job running longer than `CEZ_FLEET_JOB_TIMEOUT_MINUTES` (default 240) is failed and its run
   cancelled, so a hung or endlessly monitoring run cannot hold a slot and renew its lease forever.
-- Runs are tagged with their job (`fleetJobId`). When a node restarts it cancels the fleet runs it
-  recovered from its previous life: the hub has already requeued those jobs.
+- Runs are tagged with their job (`fleetJobId`). When a node restarts it **adopts** the live fleet runs
+  it recovered: the first heartbeat reports them, and if the hub still assigns the job to that node
+  (it restarted within the 60 s lease) they carry on; if the hub already requeued or reassigned the
+  job it answers `drop` and the node cancels the stale run. A run that had already finished when the
+  node went down is not adopted; its job requeues.
 - `--no-pr` jobs finish with the branch left on the node that ran them (it is not pushed).
 - A fleet-assigned job counts against the node's capacity from the moment it is handed over, also
   while it is cloning or queued behind the local limit.
@@ -146,7 +163,5 @@ nodes, which only need to reach the hub's fleet port.
 
 - Single hub, no HA. The queue is restart-safe through `jobs.json`; running jobs are kept if nodes
   re-report within a lease.
-- A restarted worker forgets which jobs it held; its leases expire and the jobs are requeued (the
-  old local run may linger on that node until you cancel it).
-- No shared filesystem and no node affinity or priorities. No cockpit panel yet — use
-  `cezar fleet status`.
+- No shared filesystem and no node affinity or priorities.
+- Submitting stays on the CLI / fleet API; the cockpit panel only views and cancels.

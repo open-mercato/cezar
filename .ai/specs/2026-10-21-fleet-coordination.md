@@ -73,6 +73,13 @@ Pull, not push: workers dial the hub, so a worker needs no inbound port and work
 ## Hygiene
 
 - Runtime limit: `CEZ_FLEET_JOB_TIMEOUT_MINUTES` (default 240) fails the job and cancels the run.
+- Adoption: a restarted node reports its recovered live fleet runs on its first heartbeat; the hub's
+  normal ownership rules decide (keep, or `drop` -> cancel).
+- Cockpit: `GET /api/v1/workspace/fleet` + `POST /api/v1/workspace/fleet/jobs/:id/cancel` (workspace
+  level, loopback cockpit) feed Settings -> Fleet, shown only with a fleet role; a worker proxies to
+  the hub with the token server-side.
+- Clone: GitHub via `gh`; any other host via `git clone` of a validated plain https URL. Non-GitHub
+  hosts get a pushed branch (`branch`, `branchUrl`) instead of a PR.
 - A cancel or drop that arrives while the node is still cloning cancels the run as soon as it exists.
 - Runs carry `fleetJobId`; a restarted node cancels recovered fleet runs (their jobs were requeued).
 - Queued-but-unstarted fleet runs count as used capacity. Capacity is read from `freeCapacity().main`
@@ -99,5 +106,5 @@ rebuilt from heartbeats. Workers hold no fleet state: a restarted worker's jobs 
 ## Non-goals
 
 No shared filesystem, no hub HA (single hub, restart-safe through `jobs.json`), no per-job
-priorities or node affinity, no cockpit panel yet (use `cezar fleet status`), no mid-run migration
+priorities or node affinity, no mid-run migration
 of a running job between nodes.
