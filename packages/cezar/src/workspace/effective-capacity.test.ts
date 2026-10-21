@@ -61,11 +61,11 @@ describe('effectiveCapacity (spec 2026-10-21-work-limits)', () => {
       memPerRunBytes: GiB,
       freeCpuCores: 100,
     });
-    // room 3 goes to main first; the sub-agent pool keeps what it already runs
-    expect(out).toEqual({ main: 5, subagent: 20, review: null });
+    // room 3 is shared by unused capacity (8 vs 30); the integer remainder goes to main
+    expect(out).toEqual({ main: 3, subagent: 22, review: null });
   });
 
-  it('allocates the headroom once: the sum of limits never exceeds busy + room (main, review, subagent order)', () => {
+  it('shares the headroom once, in proportion to unused capacity: the sum of limits never exceeds busy + room', () => {
     const input: CapacityInput = {
       configured: { main: 10, subagent: 10, review: 10 },
       busy: { main: 1, subagent: 2, review: 0 },
@@ -74,12 +74,15 @@ describe('effectiveCapacity (spec 2026-10-21-work-limits)', () => {
       freeCpuCores: 100,
     }; // room 8
     const out = effectiveCapacity(input);
-    expect(out).toEqual({ main: 9, subagent: 2, review: 1 }); // main takes 8; the floor keeps review at 1
+    expect(out).toEqual({ main: 5, subagent: 4, review: 2 }); // every pool grows, none is starved
     const room = headroomRuns(input)!;
-    const second = effectiveCapacity({ ...input, freeMemBytes: 14 * GiB }); // room 14: main 9 + review 5
-    expect(second).toEqual({ main: 10, subagent: 2, review: 5 });
+    const second = effectiveCapacity({ ...input, freeMemBytes: 14 * GiB }); // room 14
+    expect(second).toEqual({ main: 6, subagent: 6, review: 5 });
     expect(second.main + second.subagent! + second.review!).toBeLessThanOrEqual(3 + 14);
     expect(room).toBe(8);
+    expect(out.main + out.subagent! + out.review!).toBeLessThanOrEqual(3 + room);
+    // a pool that is already full takes none of the room
+    expect(effectiveCapacity({ ...input, busy: { main: 10, subagent: 0, review: 0 } }).main).toBe(10);
   });
 
   it('falls back to 1 GiB and 0.5 core per run when none is observed', () => {

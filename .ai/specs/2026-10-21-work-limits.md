@@ -72,9 +72,11 @@ effective = max(1, min(configured, busyInPool + headroom))      per pool
   (`stepScale`). A raise re-pumps the queue.
 - **Fail open**: no fresh host sample, or neither resource readable, returns the configured limits
   immediately (no slow ramp).
-- The headroom is computed once per sample and ALLOCATED across pools in the order main, review,
-  subagent (intake first; finishing a review frees a pipeline), so the sum of limits never exceeds
-  busy_total + room. The floor of 1 per pool is the one allowed overshoot.
+- The headroom is computed once per sample and SHARED across pools in proportion to each pool's
+  unused configured capacity (configured - busy); the integer remainder goes to main, then review,
+  then subagent. So the sum of limits never exceeds busy_total + room (the floor of 1 per pool is
+  the one overshoot). A first design gave main the room first; the live check showed that starves
+  both child pools at their floor whenever main is not full, which recreates the stall.
 - **Brake.** autoScale alone brakes starts to one per tick only once the room is below 2; with
   more room starts are admitted up to the effective limits immediately.
 - **Stale / config change.** `effectiveLimits()` ignores a reading older than a stale window; a

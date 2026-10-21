@@ -50,26 +50,39 @@ export function headroomRuns(input: CapacityInput): number | undefined {
 }
 
 /**
- * The headroom is computed once and ALLOCATED across pools, in this order: main (the intake and
- * root work everything else hangs off), then review (finishing a pipeline frees it), then
- * subagent. Each pool's effective limit = busy + its share of the room, capped at its configured
- * limit, so the sum of limits never exceeds busy_total + room. The one exception is the floor of
- * 1 per pool (a pool at zero is a dead end: parents park on children that can never start).
+ * The headroom is computed once and SHARED across pools in proportion to each pool's unused
+ * configured capacity (configured - busy), so a roomy main pool cannot eat the room the dispatched
+ * children need (live check: main-first starved both child pools at their floor of 1). Each pool's
+ * limit = busy + its share, capped at configured; the integer remainder goes to main, then review,
+ * then subagent. The sum of limits therefore never exceeds busy_total + room, except for the
+ * floor of 1 per pool (a pool at zero is a dead end: parents park on children that can never start).
  */
 export function effectiveCapacity(input: CapacityInput): PoolLimits {
   const room = headroomRuns(input);
   if (room === undefined) return input.configured;
-  let left = room;
-  const scale = (configured: number | null, busy: number): number | null => {
-    if (configured === null) return null;
-    const share = Math.min(left, Math.max(0, configured - busy));
-    left -= share;
-    return Math.max(1, Math.min(configured, busy + share));
+  const pools = (['main', 'review', 'subagent'] as const).flatMap((k) => {
+    const configured = input.configured[k];
+    return configured === null ? [] : [{ k, configured, busy: input.busy[k], unused: Math.max(0, configured - input.busy[k]) }];
+  });
+  const totalUnused = pools.reduce((n, p) => n + p.unused, 0);
+  const shares = new Map<string, number>();
+  let given = 0;
+  for (const p of pools) {
+    const share = totalUnused === 0 ? 0 : Math.min(p.unused, Math.floor((room * p.unused) / totalUnused));
+    shares.set(p.k, share);
+    given += share;
+  }
+  for (const p of pools) {
+    if (given >= room) break;
+    const extra = Math.min(room - given, p.unused - (shares.get(p.k) ?? 0));
+    shares.set(p.k, (shares.get(p.k) ?? 0) + extra);
+    given += extra;
+  }
+  const limit = (k: 'main' | 'review' | 'subagent'): number | null => {
+    const p = pools.find((x) => x.k === k);
+    return p ? Math.max(1, Math.min(p.configured, p.busy + (shares.get(k) ?? 0))) : null;
   };
-  const main = scale(input.configured.main, input.busy.main) as number;
-  const review = scale(input.configured.review, input.busy.review);
-  const subagent = scale(input.configured.subagent, input.busy.subagent);
-  return { main, subagent, review };
+  return { main: limit('main') as number, subagent: limit('subagent'), review: limit('review') };
 }
 
 /** Lower at once; raise only after `needCalm` consecutive samples that want more. */
