@@ -20,6 +20,7 @@ import type {
 import { TaskThreadRoute, ThreadView, liveTurnStart } from './task-thread'
 import { buildTranscriptRows, mainTranscriptSections } from './session-transcript'
 import { reduceThread, type ThreadTurn } from './thread-state'
+import quotaFailure from './__fixtures__/codex-usage-limit.json'
 
 afterEach(() => {
   act(() => resetToasts())
@@ -648,6 +649,22 @@ describe('ThreadView', () => {
     expect(sent.some((r) => r.path === '/api/v1/runs/r1/messages')).toBe(false)
     const toastEl = document.querySelector('[data-slot="toast"]')
     expect(toastEl?.textContent ?? '').not.toContain('run is still active')
+  })
+
+  it('renders the recorded Codex quota error once across the transcript and footer', () => {
+    const message = quotaFailure[0]!.message!
+    const { container } = renderView(
+      <ThreadView
+        run={run('failed', {
+          error: `continue failed: ${message}`,
+          autoResumeAt: '2026-10-16T14:39:30.000Z',
+        })}
+        thread={reduceThread(quotaFailure as RunEvent[])}
+      />,
+    )
+    expect(container.textContent!.split(message)).toHaveLength(2)
+    expect(document.querySelector('[data-slot="thread-footer"]')?.textContent).toBe('Session failed')
+    expect(screen.getByText(/this task resumes automatically at/)).toBeTruthy()
   })
 
   it('a failure already scheduled to resume itself offers no extra Continue', () => {
