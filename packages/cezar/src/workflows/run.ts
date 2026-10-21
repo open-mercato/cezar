@@ -224,7 +224,6 @@ const GRAPH_TAKEN_CAP = 500;
 /** Tail of an agent node's last turn kept as `{{nodes.<id>.summary}}`. */
 const NODE_SUMMARY_CAP = 4_000;
 import { freshContinuationContext } from './continuation-context.ts';
-import { ALERT_CREDENTIAL_VARS } from '../agent-gateway/alerts.ts';
 
 const CHECK_OUTPUT_CAP = 20_000;
 
@@ -7489,6 +7488,8 @@ export class RunManager {
     // login shell `runCheckStep` spawns sources the user's profile after this, so the guarantee
     // is about the server's environment, not about a profile that exports one of these names.
     const base: NodeJS.ProcessEnv = { ...process.env };
+    // A check runs repo-supplied scripts: cezar's own credentials (fleet/alert tokens) never reach it.
+    for (const key of Object.keys(base)) if (/^CEZ_.*_(TOKEN|SECRET)$/i.test(key)) delete base[key];
     for (const name of CHECK_CONTEXT_VARS) {
       // `CEZ_PROJECT_ID` is the one context name that is ALSO a documented CLI input
       // (BACKWARD_COMPATIBILITY.md §1 — `cez task`/`cez automation` address a cockpit with it),
@@ -7498,8 +7499,6 @@ export class RunManager {
       if (name === 'CEZ_PROJECT_ID' && !this.projectId) continue;
       delete base[name];
     }
-    // Alert-target credentials are cezar's, not the check's (spec 2026-10-21-agent-gateway-integrations).
-    for (const name of ALERT_CREDENTIAL_VARS) delete base[name];
     return { ...base, ...resolved.values, ...(await this.checkContextEnv(runId, state, step.id)) };
   }
 
