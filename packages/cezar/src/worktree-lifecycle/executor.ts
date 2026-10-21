@@ -4,6 +4,7 @@ import type { LifecycleOutputFrame, LifecycleProcessIdentity } from '@open-merca
 export type { LifecycleProcessIdentity } from '@open-mercato/cezar-contract';
 import { hostname } from 'node:os';
 import { promisify } from 'node:util';
+import { applyCpuPriority } from '../core/process-usage.ts';
 import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
 import { StreamRedaction } from '../runs/stream-redaction.ts';
 
@@ -26,6 +27,8 @@ export interface LifecycleExecutorOptions {
   bashPath?: string;
   /** Platform seam for process-supervision fixtures; defaults to the host. */
   platform?: NodeJS.Platform;
+  /** OS priority for the command's process tree (spec 2026-10-21-host-resource-limits). */
+  cpuPriority?: 'normal' | 'low' | 'idle';
 }
 export interface LifecycleExecutionResult {
   state: 'succeeded' | 'failed' | 'interrupted';
@@ -143,6 +146,7 @@ export async function executeLifecycleCommand(options: LifecycleExecutorOptions)
   const child = spawn(bash, ['-c', wrapper, bash, options.command, completionMarker], {
     cwd: options.cwd, env: process.env, detached: true, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
   });
+  if (child.pid !== undefined) applyCpuPriority(child.pid, options.cpuPriority ?? 'normal');
   const closed = new Promise<void>(resolve => child.once('close', () => { childClosed = true; resolve(); }));
   child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
   child.stdout.on('data', (chunk: string) => receive('stdout', chunk));
