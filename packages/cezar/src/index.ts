@@ -43,16 +43,16 @@ import { initWorkspace } from './workspace/boot.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 import { runProjectsCommand } from './workspace/projects-cli.ts';
 import { WorkspaceSemaphore } from './workspace/semaphore.ts';
+import { fleetConfigFromEnv } from './fleet/config.ts';
+import { runFleetCommand } from './fleet/fleet-cli.ts';
+import { startFleet } from './fleet/index.ts';
+import type { ProjectContexts } from './server/project-context.ts';
 import { flushTelemetry, initTelemetry, installCrashReporter, registerTelemetryContext, startDailyPing, track } from './telemetry.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
 import { runTelemetryCommand } from './telemetry-cli.ts';
 import { reportInconclusiveProbe } from './server/provider-telemetry.ts';
 import { runRunsCommand } from './runs/runs-cli.ts';
-import { fleetConfigFromEnv } from './fleet/config.ts';
-import { runFleetCommand } from './fleet/fleet-cli.ts';
-import { startFleet } from './fleet/index.ts';
-import type { ProjectContexts } from './server/project-context.ts';
 
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
 import { runSecretsCommand } from './workspace/secrets-cli.ts';
@@ -65,10 +65,10 @@ Usage:
   cezar task <create|report|list>  dispatch or report from inside a running task (CEZ_DISPATCH=0 turns it off)
   cezar automation <add|create|check|run|list|…>  create and manage automations (GitHub polls, schedules) on a running cockpit
   cezar runs list           list a running cockpit's tasks from a shell (CEZ_API_URL=http://127.0.0.1:4321)
-  cezar fleet <submit|status|cancel>  hand work to a fleet of cezar instances (opt-in: CEZ_FLEET_*, docs/fleet.md)
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)
+  cezar fleet <submit|status|cancel>  hand work to a fleet of cezar instances (opt-in: CEZ_FLEET_*, docs/fleet.md)
   cezar tracker-connections <list|remove ID>  inspect or delete local project credentials
   cezar secrets <list|set NAME|unset NAME>  this project's secrets (--workspace: the user's)
                             (set reads the value from stdin; agents never receive them)
@@ -125,6 +125,11 @@ async function main(): Promise<void> {
     process.exitCode = await runSecretsCommand(process.argv.slice(3));
     return;
   }
+  // `cezar fleet …` talks to a fleet hub over its token-guarded listener; its flags (--repo …) are its own.
+  if (process.argv[2] === 'fleet') {
+    process.exitCode = await runFleetCommand(process.argv.slice(3));
+    return;
+  }
   // `cez task …` (spec 2026-09-10-dispatch) has its own flags, so it is routed before the
   // cockpit's parser can refuse them. It only talks to an already-running cockpit.
   if (process.argv[2] === 'task') {
@@ -139,11 +144,6 @@ async function main(): Promise<void> {
   // Opt-in telemetry's terminal switch (docs/telemetry.md): no server, no repo needed.
   if (process.argv[2] === 'telemetry') {
     process.exitCode = await runTelemetryCommand(process.argv.slice(3));
-    return;
-  }
-  // `cezar fleet …` talks to a fleet hub over its token-guarded listener; its flags (--repo …) are its own.
-  if (process.argv[2] === 'fleet') {
-    process.exitCode = await runFleetCommand(process.argv.slice(3));
     return;
   }
   // `cez runs …` (#1080): the read-only twin for a person at a shell, same addressing.
