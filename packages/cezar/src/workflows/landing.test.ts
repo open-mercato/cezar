@@ -69,6 +69,22 @@ describe('landInPlace', () => {
     expect(git(remote, 'log', '--format=%s', 'main').split('\n')).toEqual(['mine', 'theirs', 'init']);
   });
 
+  it('rebases on a machine with no git identity (CI) using the fallback committer', async () => {
+    writeFileSync(join(other, 'project.md'), 'p\n');
+    git(other, 'add', '-A');
+    git(other, 'commit', '-qm', 'theirs');
+    git(other, 'push', '-q');
+    vi.stubEnv('GIT_CONFIG_GLOBAL', '/dev/null');
+    vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
+    vi.stubEnv('GIT_CONFIG_COUNT', '1');
+    vi.stubEnv('GIT_CONFIG_KEY_0', 'user.useConfigOnly');
+    vi.stubEnv('GIT_CONFIG_VALUE_0', 'true');
+    writeFileSync(join(checkout, 'person.md'), 'Bjorn\n');
+    const result = await landInPlace(checkout, { describe: async () => 'mine', checks: [] });
+    expect(result).toMatchObject({ result: 'landed', pushed: true, files: ['person.md'] });
+    expect(git(remote, 'log', '--format=%s', 'main').split('\n')).toEqual(['mine', 'theirs', 'init']);
+  });
+
   it('hands a rebase conflict back with the files, leaving no rebase in progress', async () => {
     writeFileSync(join(other, 'daily.md'), 'theirs\n');
     git(other, 'commit', '-qam', 'theirs');

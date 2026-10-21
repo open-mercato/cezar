@@ -109,7 +109,9 @@ export async function landInPlace(root: string, options: LandOptions): Promise<L
       error: `the checkout is on ${branch}, but this project lands on ${options.baseBranch}`,
     };
   }
-  const committed = await commitTask(root, options.describe);
+  // The commit AND the rebase that rewrites it need a committer; a machine with no identity gets cezar's.
+  const identity = (await gitHasIdentity(root)) ? [] : ['-c', 'user.name=cezar', '-c', 'user.email=cezar@local'];
+  const committed = await commitTask(root, options.describe, identity);
   if (committed.result === 'failed') return { result: 'failed', stage: 'commit', error: committed.error };
 
   const upstream = await upstreamOf(root);
@@ -131,7 +133,7 @@ export async function landInPlace(root: string, options: LandOptions): Promise<L
       const fetched = await git(root, ['fetch', upstream.remote, upstream.branch], NETWORK_TIMEOUT_MS);
       if (!fetched.ok) return { result: 'failed', stage: 'sync', error: `git fetch failed: ${reason(fetched, 'no answer')}` };
     }
-    const rebased = await git(root, ['rebase', upstream.ref]);
+    const rebased = await git(root, [...identity, 'rebase', upstream.ref]);
     if (!rebased.ok) {
       const conflicted = (await git(root, ['diff', '--name-only', '--diff-filter=U'])).stdout.trim().split('\n').filter(Boolean);
       await git(root, ['rebase', '--abort']);
@@ -204,6 +206,7 @@ function commonDirectory(paths: string[]): string {
 async function commitTask(
   root: string,
   describe: LandOptions['describe'],
+  identity: string[],
 ): Promise<{ result: 'committed'; sha: string } | { result: 'nothing' } | { result: 'failed'; error: string }> {
   const status = await git(root, ['status', '--porcelain', ...PATHSPEC]);
   if (!status.ok) return { result: 'failed', error: reason(status, 'git status failed') };
@@ -223,7 +226,6 @@ async function commitTask(
   const patch = (await git(root, ['diff', '--cached', '--no-color'])).stdout.slice(0, STAGED_PATCH_CAP);
   const described = describe ? await describe({ files, patch }).catch(() => undefined) : undefined;
   const message = described?.trim() || fallbackCommitMessage(files);
-  const identity = (await gitHasIdentity(root)) ? [] : ['-c', 'user.name=cezar', '-c', 'user.email=cezar@local'];
   const commit = await git(root, [...identity, 'commit', '--no-verify', '-m', message]);
   if (!commit.ok) return { result: 'failed', error: reason(commit, 'git commit failed') };
   return { result: 'committed', sha: (await git(root, ['rev-parse', 'HEAD'])).stdout.trim() };

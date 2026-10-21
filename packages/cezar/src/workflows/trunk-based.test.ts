@@ -135,6 +135,22 @@ describe('trunk-based projects', () => {
     await waitFor(record.id, (r) => r?.status === 'waiting');
   }, 30_000);
 
+  it('holds the working tree while a session-less Commit lands, so nothing else edits the checkout', async () => {
+    writeConfig({ taskWorkspace: 'in-place', landing: 'auto' });
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:done' });
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    await manager.land(record.id);
+    await waitFor(record.id, (r) => r?.status === 'done');
+    writeConfig({ taskWorkspace: 'in-place', landing: 'auto', requiredChecks: ['sleep 1'] });
+    writeFileSync(join(repoRoot, 'person.md'), 'later\n');
+    const landing = manager.land(record.id);
+    await new Promise((r) => setTimeout(r, 300));
+    // Mid-landing, the checkout is taken: another Commit — or a queued in-place task — waits.
+    expect(await manager.land(record.id)).toMatchObject({ outcome: 'busy' });
+    expect(await landing).toMatchObject({ outcome: 'landed' });
+    expect(await manager.land(record.id)).toEqual({ outcome: 'nothing', message: 'nothing to commit' });
+  }, 30_000);
+
   it('lands an autonomous task on CEZ:DONE without stopping for review', async () => {
     writeConfig({ taskWorkspace: 'in-place', landing: 'auto' });
     writeFileSync(join(repoRoot, 'person.md'), 'Bjorn\n');

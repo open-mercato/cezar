@@ -7287,8 +7287,15 @@ export class RunManager {
     if (this.repoRootBusy > 0) {
       return { outcome: 'busy', message: 'another task is working in the checkout — commit once it is done' };
     }
-    if (!(await hasUnlanded(this.repoRoot))) return { outcome: 'nothing', message: 'nothing to commit' };
-    const outcome = await this.landNow(runId, policy);
+    // Hold the tree while landing, so a task queued behind cannot edit the checkout mid-rebase.
+    const lease = this.chainRepoRoot();
+    let outcome: LandResult;
+    try {
+      if (!(await hasUnlanded(this.repoRoot))) return { outcome: 'nothing', message: 'nothing to commit' };
+      outcome = await this.landNow(runId, policy);
+    } finally {
+      lease.release();
+    }
     if (outcome.result === 'failed') {
       // Help rather than refuse: the session is gone, so reopen the task with the error.
       const reopened = this.continueRun(runId, { text: landFailurePrompt(outcome) });
@@ -7329,7 +7336,13 @@ export class RunManager {
       });
       return;
     }
-    const outcome = await this.landNow(runId, policy);
+    const lease = this.chainRepoRoot();
+    let outcome: LandResult;
+    try {
+      outcome = await this.landNow(runId, policy);
+    } finally {
+      lease.release();
+    }
     if (outcome.result === 'failed') {
       this.store.appendEvent(runId, {
         type: 'note',

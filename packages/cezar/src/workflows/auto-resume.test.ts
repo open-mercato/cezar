@@ -625,7 +625,8 @@ describe('a run stopped by a usage limit resumes itself', () => {
         { timeout: 20_000 },
       )
       .toBe('done');
-    expect(['done', 'review']).toContain(store.getRun(record.id)?.status);
+    // The run settles a beat after its last step (settle-time checks are async): poll it too.
+    await expect.poll(() => store.getRun(record.id)?.status, { timeout: 5_000 }).toMatch(/^(done|review)$/);
     const events = store.readEvents(record.id);
     expect(events.some((event) => String(event.message ?? '').includes('resuming automatically (1/12)'))).toBe(true);
   }, 40_000);
