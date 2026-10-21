@@ -1,4 +1,4 @@
-import { lazy, memo, Suspense } from 'react'
+import { lazy, memo, Suspense, useMemo } from 'react'
 import {
   matchPath,
   Navigate,
@@ -9,7 +9,7 @@ import {
   useParams,
 } from 'react-router'
 
-import { useHealth, useProjects } from './api/queries'
+import { useFleetPanel, useHealth, useProjects } from './api/queries'
 import { ProjectScopeProvider } from './api/project-scope-context'
 import { lazyRoute } from './lib/telemetry'
 import { bareRootLanding, locationToRestore, readStoredLastLocation } from './lib/last-location'
@@ -328,7 +328,13 @@ export function pageTitleContext(pathname: string): PageTitleContext {
  *  stay stable — they are what teammates paste, and the legacy flat URLs redirect onto them.
  */
 export const AppRoutes = memo(function AppRoutes() {
-  const capabilities = useHealth().data?.capabilities
+  const healthCapabilities = useHealth().data?.capabilities
+  const fleetEnabled = useFleetPanel().data?.enabled === true
+  // Fleet is opt-in: its Settings section exists only when this cezar has a fleet role.
+  const capabilities = useMemo(
+    () => (healthCapabilities ? { ...healthCapabilities, fleet: fleetEnabled } : undefined),
+    [healthCapabilities, fleetEnabled],
+  )
   return (
     <Routes>
       <Route path="/p/:projectId" element={<ProjectScopeRoute />}>

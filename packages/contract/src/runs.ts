@@ -283,6 +283,8 @@ export const runRecordSchema = z.object({
   untrustedHead: z.boolean().optional(),
   /** The fleet job this run executes (spec 2026-10-21-fleet-coordination). */
   fleetJobId: z.string().optional(),
+  /** Whether that job asked for a PR (read back when a restarted node adopts the run). */
+  fleetOpenPr: z.boolean().optional(),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),

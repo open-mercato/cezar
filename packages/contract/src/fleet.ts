@@ -27,6 +27,8 @@ export const fleetJobSchema = z.object({
   runId: z.string().optional(),
   branch: z.string().optional(),
   prUrl: z.string().optional(),
+  /** Web page of the pushed branch, when the host is not GitHub (no PR is opened there). */
+  branchUrl: z.string().optional(),
   error: z.string().optional(),
   leaseExpiresAt: z.string().optional(),
   attempts: z.number().int().nonnegative(),
@@ -63,6 +65,7 @@ export const fleetJobReportSchema = z.object({
   runId: z.string().optional(),
   branch: z.string().optional(),
   prUrl: z.string().optional(),
+  branchUrl: z.string().optional(),
   error: z.string().optional(),
 });
 export type FleetJobReport = z.infer<typeof fleetJobReportSchema>;
@@ -87,3 +90,24 @@ export const fleetStatusResponseSchema = z.object({
   jobs: z.array(fleetJobSchema),
 });
 export type FleetStatusResponse = z.infer<typeof fleetStatusResponseSchema>;
+
+/**
+ * `GET /api/v1/workspace/fleet` — the cockpit's read-only Fleet panel. `enabled: false` (with empty
+ * lists) when this instance has no fleet role; on a worker the cockpit server asks the hub with
+ * the token, which never reaches the browser. `error` is set when the hub could not be reached.
+ */
+export const fleetPanelSchema = z.object({
+  enabled: z.boolean(),
+  role: z.enum(['hub', 'worker']).optional(),
+  nodeId: z.string().optional(),
+  nodes: z.array(fleetNodeSchema),
+  jobs: z.array(fleetJobSchema),
+  error: z.string().optional(),
+});
+export type FleetPanel = z.infer<typeof fleetPanelSchema>;
+
+export const fleetJobParamsSchema = z.object({ id: z.string().min(1).max(100) });
+export type FleetJobParams = z.infer<typeof fleetJobParamsSchema>;
+
+export const fleetErrorSchema = z.object({ error: z.string() });
+export type FleetErrorResponse = z.infer<typeof fleetErrorSchema>;

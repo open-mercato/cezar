@@ -16,7 +16,7 @@ function setup(over: Partial<FleetRunHost> = {}) {
     start: async (j) => { runs.set(`run-${j.id}`, { status: 'running', branch: 'cez/abc' }); return `run-${j.id}`; },
     get: (id) => runs.get(id),
     cancel: (id) => { calls.push(`cancel ${id}`); },
-    cancelOrphans: async () => 0,
+    recover: async () => [],
     publish: async () => ({ ok: true, url: 'https://github.com/a/b/pull/1' }),
     ...over,
   };
@@ -174,12 +174,55 @@ describe('FleetWorker', () => {
     expect(last(t.sent).capacity.free).toBe(1);
   });
 
+  it('adopts a recovered run: reports it, and keeps it while the hub still assigns it here', async () => {
+    const t = setup();
+    t.runs.set('run-old', { status: 'running', branch: 'cez/old' });
+    t.worker.adopt([{ jobId: 'j9', runId: 'run-old', openPr: true }]);
+    await t.worker.tick();
+    expect(last(t.sent).jobs).toEqual([{ id: 'j9', status: 'running', runId: 'run-old', branch: 'cez/old' }]);
+    expect(t.calls).toEqual([]);
+    expect(t.worker.heldJobIds()).toEqual(['j9']);
+  });
+
+  it('cancels an adopted run the hub no longer assigns to this node', async () => {
+    const t = setup();
+    t.runs.set('run-old', { status: 'running' });
+    t.worker.adopt([{ jobId: 'j9', runId: 'run-old', openPr: true }]);
+    t.reply({ drop: ['j9'] });
+    await t.worker.tick();
+    expect(t.calls).toEqual(['cancel run-old']);
+    expect(t.worker.heldJobIds()).toEqual([]);
+  });
+
+  it('publishes an adopted run that finished while the node was down', async () => {
+    const t = setup();
+    t.runs.set('run-old', { status: 'review' });
+    t.worker.adopt([{ jobId: 'j9', runId: 'run-old', openPr: true }]);
+    await t.worker.tick();
+    await settle();
+    await t.worker.tick();
+    expect(reported(t.sent).j9).toMatchObject({ status: 'done', prUrl: 'https://github.com/a/b/pull/1' });
+  });
+
+  it('reports a pushed branch page for hosts without pull requests', async () => {
+    const t = setup({ publish: async () => ({ ok: true, branchUrl: 'https://gitlab.com/g/r/-/tree/cez/x' }) });
+    t.reply({ assigned: [job('j1')] });
+    await t.worker.tick();
+    await settle();
+    t.runs.set('run-j1', { status: 'done', branch: 'cez/x' });
+    await t.worker.tick();
+    await settle();
+    await t.worker.tick();
+    expect(reported(t.sent).j1).toMatchObject({ status: 'done', branch: 'cez/x', branchUrl: 'https://gitlab.com/g/r/-/tree/cez/x' });
+    expect(reported(t.sent).j1).not.toHaveProperty('prUrl');
+  });
+
   it('survives an unreachable hub and keeps its jobs for the next beat', async () => {
     let down = false;
     const t = setup();
     const flaky = new FleetWorker({
       nodeId: 'n1', version: '1',
-      host: { start: async () => 'r', get: () => ({ status: 'running' }), cancel: () => {}, cancelOrphans: async () => 0, publish: async () => ({ ok: false, error: 'x' }) },
+      host: { start: async () => 'r', get: () => ({ status: 'running' }), cancel: () => {}, recover: async () => [], publish: async () => ({ ok: false, error: 'x' }) },
       transport: async () => {
         if (down) throw new Error('down');
         return { assigned: [job('j1')], cancel: [], drop: [] };

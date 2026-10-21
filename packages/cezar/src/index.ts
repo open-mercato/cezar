@@ -46,6 +46,7 @@ import { WorkspaceSemaphore } from './workspace/semaphore.ts';
 import { fleetConfigFromEnv } from './fleet/config.ts';
 import { runFleetCommand } from './fleet/fleet-cli.ts';
 import { startFleet } from './fleet/index.ts';
+import { probeProjectStatus } from './workspace/projects.ts';
 import type { ProjectContexts } from './server/project-context.ts';
 import { flushTelemetry, initTelemetry, installCrashReporter, registerTelemetryContext, startDailyPing, track } from './telemetry.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
@@ -440,6 +441,8 @@ async function serveCommand(
         semaphore,
         boot: { root: repoRoot, dataDir: join(repoRoot, '.ai/cezar'), store, manager },
         context: (id) => contexts.context(id),
+        // A project a fleet job cloned shows up in open cockpits like one added from the UI.
+        onProjectAdded: (entry) => void probeProjectStatus(entry.root).then((probe) => workspaceEvents.emit('project-added', { project: { ...entry, ...probe } })),
       });
     });
   }

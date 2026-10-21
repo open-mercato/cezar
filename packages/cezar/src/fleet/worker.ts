@@ -11,16 +11,22 @@ import type { FleetHeartbeat, FleetHeartbeatResponse, FleetJob, FleetJobReport }
 export const HEARTBEAT_MS = 5_000;
 
 /** What the worker needs from a node's run machinery (`runs.ts` is the real one). */
+export interface RecoveredRun {
+  jobId: string;
+  runId: string;
+  openPr: boolean;
+}
+
 export interface FleetRunHost {
   /** Resolve the job's repo to a local project (cloning if needed) and start a run; returns the run id. */
   start(job: FleetJob): Promise<string>;
   /** The run's current state, or undefined when it is gone. */
   get(runId: string): { status: string; branch?: string; error?: string } | undefined;
   cancel(runId: string): void;
-  /** Cancel recovered runs of jobs this process does not hold; returns how many. */
-  cancelOrphans(): Promise<number>;
+  /** Live fleet runs recovered from this node's previous process, for the worker to adopt. */
+  recover(): Promise<RecoveredRun[]>;
   /** Push the run's branch and open a draft PR so the result survives an ephemeral pod. */
-  publish(runId: string): Promise<{ ok: true; url: string } | { ok: false; error: string }>;
+  publish(runId: string): Promise<{ ok: true; url?: string; branchUrl?: string } | { ok: false; error: string }>;
 }
 
 export interface FleetWorkerOptions {
@@ -43,6 +49,7 @@ interface Held {
   runId?: string;
   branch?: string;
   prUrl?: string;
+  branchUrl?: string;
   error?: string;
   status: FleetJobReport['status'];
   publishing: boolean;
@@ -89,6 +96,22 @@ export class FleetWorker {
   stop(): void {
     this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
+  }
+
+  /**
+   * Take over runs this node recovered after a restart. They are reported on the first heartbeat:
+   * if the hub still assigns the job here it carries on, otherwise it answers `drop` and the
+   * ordinary release path cancels the run.
+   */
+  adopt(recovered: readonly RecoveredRun[]): void {
+    const at = new Date().toISOString();
+    for (const r of recovered) {
+      if (this.held.has(r.jobId)) continue;
+      const job: FleetJob = {
+        id: r.jobId, repoUrl: '', task: '', openPr: r.openPr, status: 'running', attempts: 0, createdAt: at, updatedAt: at,
+      };
+      this.held.set(r.jobId, { job, runId: r.runId, status: 'running', publishing: false, startedAt: (this.options.now ?? Date.now)(), released: false });
+    }
   }
 
   /** Jobs this node currently holds (tests, status). */
@@ -202,7 +225,8 @@ export class FleetWorker {
     try {
       const result = await this.options.host.publish(held.runId);
       if (result.ok) {
-        held.prUrl = result.url;
+        if (result.url) held.prUrl = result.url;
+        if (result.branchUrl) held.branchUrl = result.branchUrl;
         held.status = 'done';
       } else if (NOTHING_TO_PROPOSE.test(result.error)) {
         held.status = 'done'; // the agent changed nothing: finished, no PR to open
@@ -224,6 +248,7 @@ function report(held: Held): FleetJobReport {
     ...(held.runId ? { runId: held.runId } : {}),
     ...(held.branch ? { branch: held.branch } : {}),
     ...(held.prUrl ? { prUrl: held.prUrl } : {}),
+    ...(held.branchUrl ? { branchUrl: held.branchUrl } : {}),
     ...(held.error ? { error: held.error } : {}),
   };
 }

@@ -166,6 +166,7 @@ import type {
   TrackerItemsResponse,
   TrackerKind, TrackerCredentials, TrackerConnectionResponse,
   SecretsList, SecretValueInput,
+  FleetPanel, FleetJob,
   E2eStatus, E2eSetupInput, E2eSetupResponse,
 } from '@open-mercato/cezar-api-client'
 import { parseProviderStatusResponse } from '@/lib/provider-status'
@@ -964,6 +965,15 @@ export async function saveWorkspaceSecret(name: string, input: SecretValueInput)
 }
 export async function removeWorkspaceSecret(name: string): Promise<void> {
   await expectNoContent(await cez.api.v1.workspace.secrets[':name'].$delete({ param: { name } }))
+}
+
+// ---- fleet panel (spec 2026-10-21-fleet-coordination) ----
+
+export async function getFleetPanel(opts?: ReadOptions): Promise<FleetPanel> {
+  return unwrap(await cez.api.v1.workspace.fleet.$get({}, init(opts)), '/workspace/fleet')
+}
+export async function cancelFleetJob(id: string): Promise<FleetJob> {
+  return unwrap(await cez.api.v1.workspace.fleet.jobs[':id'].cancel.$post({ param: { id } }), '/workspace/fleet/jobs/:id/cancel')
 }
 
 // ---- one-click e2e setup (spec 2026-10-10-e2e-one-click-setup) ----

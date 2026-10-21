@@ -84,6 +84,7 @@ export function applyReport(job: FleetJob | undefined, nodeId: string, report: F
     ...(report.runId ? { runId: report.runId } : {}),
     ...(report.branch ? { branch: report.branch } : {}),
     ...(report.prUrl ? { prUrl: report.prUrl } : {}),
+    ...(report.branchUrl ? { branchUrl: report.branchUrl } : {}),
     ...(report.error ? { error: report.error } : {}),
     updatedAt: iso(now),
   };
@@ -91,7 +92,7 @@ export function applyReport(job: FleetJob | undefined, nodeId: string, report: F
   // Terminal jobs need no lease; held ones are renewed by every report.
   if (done) delete next.leaseExpiresAt;
   else next.leaseExpiresAt = iso(now + LEASE_MS);
-  const changed = (['status', 'runId', 'branch', 'prUrl', 'error'] as const).some((k) => next[k] !== job[k]);
+  const changed = (['status', 'runId', 'branch', 'prUrl', 'branchUrl', 'error'] as const).some((k) => next[k] !== job[k]);
   return { action: 'ok', job: next, changed };
 }
 

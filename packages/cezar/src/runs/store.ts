@@ -315,6 +315,7 @@ export const runRecordSchema = z.object({
   /** Set on a run a fleet node started for a job (spec 2026-10-21-fleet-coordination), so a restarted
    *  node can tell the runs it recovered but no longer owns. */
   fleetJobId: z.string().optional().catch(undefined),
+  fleetOpenPr: z.boolean().optional().catch(undefined),
   /**
    * Exact deadline at which a run stopped by a provider USAGE LIMIT resumes itself
    * (spec 2026-08-03-auto-resume-after-usage-limit) — the reset instant the provider named plus a

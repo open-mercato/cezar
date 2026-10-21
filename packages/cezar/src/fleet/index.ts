@@ -4,6 +4,7 @@ import { FleetHub } from './hub.ts';
 import { loadJobs, saveJobs } from './jobs-store.ts';
 import { createFleetRunHost, type BootProject } from './runs.ts';
 import { startFleetServer } from './server.ts';
+import { setFleetView, hubView, remoteView } from './view.ts';
 import { FleetWorker } from './worker.ts';
 
 /** How often the hub looks for expired leases between heartbeats. */
@@ -46,6 +47,8 @@ export interface StartFleetDeps {
   semaphore: CapacitySource;
   boot: BootProject;
   context: (projectId: string) => Promise<BootProject>;
+  /** Announce a project a fleet job just cloned (the server's `project-added` event). */
+  onProjectAdded?: (project: { id: string; root: string }) => void;
   log?: (message: string) => void;
 }
 
@@ -56,6 +59,7 @@ export function startFleet(deps: StartFleetDeps): { stop(): void } {
   let transport: (heartbeat: FleetHeartbeat) => Promise<FleetHeartbeatResponse>;
   if (config.role === 'hub') {
     const hub = new FleetHub({ initialJobs: loadJobs(), persist: saveJobs });
+    setFleetView(hubView(hub, config.nodeId));
     const server = startFleetServer(hub, config.token, config.port, config.bind);
     const sweep = setInterval(() => hub.sweep(), SWEEP_MS);
     sweep.unref();
@@ -68,9 +72,10 @@ export function startFleet(deps: StartFleetDeps): { stop(): void } {
     log(`  fleet hub → :${config.port} (${config.bind}) as node ${config.nodeId}`);
   } else {
     transport = httpTransport(config.hubUrl, config.token);
+    setFleetView(remoteView(config.hubUrl, config.token, config.nodeId));
     log(`  fleet worker → ${config.hubUrl} as node ${config.nodeId}`);
   }
-  const host = createFleetRunHost({ boot: deps.boot, context: deps.context });
+  const host = createFleetRunHost({ boot: deps.boot, context: deps.context, onProjectAdded: deps.onProjectAdded });
   const worker = new FleetWorker({
     nodeId: config.nodeId,
     version: deps.version,
@@ -80,10 +85,14 @@ export function startFleet(deps: StartFleetDeps): { stop(): void } {
     jobTimeoutMs: config.jobTimeoutMs,
     log,
   });
-  // Runs this node recovered from its previous life belong to jobs the hub has since requeued.
+  // Runs this node recovered from its previous life are adopted: the first heartbeat reports them,
+  // and the hub either still assigns the job here (it carries on) or answers `drop` (cancelled).
   let stopped = false;
-  void host.cancelOrphans().then(
-    (n) => n > 0 && log(`  fleet: cancelled ${n} orphaned run(s) from the previous process`),
+  void host.recover().then(
+    (found) => {
+      worker.adopt(found);
+      if (found.length > 0) log(`  fleet: adopting ${found.length} run(s) from the previous process`);
+    },
     () => {},
   ).finally(() => {
     if (!stopped) worker.start();
@@ -91,6 +100,7 @@ export function startFleet(deps: StartFleetDeps): { stop(): void } {
   stops.push(() => {
     stopped = true;
     worker.stop();
+    setFleetView(undefined);
   });
   return { stop: () => stops.forEach((stop) => stop()) };
 }

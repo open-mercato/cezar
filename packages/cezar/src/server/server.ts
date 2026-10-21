@@ -17,6 +17,8 @@ import {
   terminalResizeSchema, terminalSessionParamsSchema, terminalSessionSchema, terminalStateSchema,
 } from '@open-mercato/cezar-contract';
 import { workspaceLayoutsResponseSchema, workspaceLayoutsSchema } from '@open-mercato/cezar-contract';
+import { fleetJobParamsSchema, type FleetPanel } from '@open-mercato/cezar-contract';
+import { getFleetView } from '../fleet/view.ts';
 import { deleteRunLayouts, readRunLayouts, writeRunLayouts } from '../runs/layouts.ts';
 import { discoverCommands, installCommand } from './terminal/commands.ts';
 import { effectiveStartApp, readStartApp, writeStartApp } from '../start-app.ts';
@@ -6378,6 +6380,36 @@ export function createApp(deps: ServerDeps) {
       return c.json({ runId: run.id }, 201);
     });
 
+  // ---- chained family: the fleet panel (workspace-level) -------------------
+  // Read-only view of the fleet (spec 2026-10-21-fleet-coordination) plus cancel. The token stays
+  // on this side: a worker's cockpit asks the hub itself. No fleet role, no data: `enabled: false`.
+  const fleetPanelRoutes = new Hono()
+    .get('/workspace/fleet', async (c) => {
+      const view = getFleetView();
+      if (!view) {
+        const none: FleetPanel = { enabled: false, nodes: [], jobs: [] };
+        return c.json(none, 200);
+      }
+      const base = { enabled: true, role: view.role, nodeId: view.nodeId };
+      try {
+        const body: FleetPanel = { ...base, ...(await view.status()) };
+        return c.json(body, 200);
+      } catch (error) {
+        const body: FleetPanel = { ...base, nodes: [], jobs: [], error: error instanceof Error ? error.message : String(error) };
+        return c.json(body, 200);
+      }
+    })
+    .post('/workspace/fleet/jobs/:id/cancel', paramZodValidator(fleetJobParamsSchema), async (c) => {
+      const view = getFleetView();
+      if (!view) return c.json({ error: 'fleet is not enabled on this cezar' }, 404);
+      try {
+        const job = await view.cancel(c.req.valid('param').id);
+        return job ? c.json(job, 200) : c.json({ error: 'not found' }, 404);
+      } catch (error) {
+        return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
+      }
+    });
+
   // ---- chained family: workspace secrets (workspace-level) ------------------
   // The user's own secrets, shared by every project — an LLM key for cezar's own features, a
   // token every project's checks need. Single-mount like every workspace family.
@@ -7711,6 +7743,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', previewRoutes)
     .route('/', workspaceConfigRoutes)
     .route('/', workspaceSecretsRoutes)
+    .route('/', fleetPanelRoutes)
     .route('/', fsBrowseRoutes)
     .route('/', automationChecksRoutes)
     .route('/', runsIndexRoutes)
