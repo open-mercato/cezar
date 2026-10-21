@@ -49,6 +49,10 @@ import { runAutomationCommand } from './automations/automation-cli.ts';
 import { runTelemetryCommand } from './telemetry-cli.ts';
 import { reportInconclusiveProbe } from './server/provider-telemetry.ts';
 import { runRunsCommand } from './runs/runs-cli.ts';
+import { fleetConfigFromEnv } from './fleet/config.ts';
+import { runFleetCommand } from './fleet/fleet-cli.ts';
+import { startFleet } from './fleet/index.ts';
+import type { ProjectContexts } from './server/project-context.ts';
 
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
 import { runSecretsCommand } from './workspace/secrets-cli.ts';
@@ -61,6 +65,7 @@ Usage:
   cezar task <create|report|list>  dispatch or report from inside a running task (CEZ_DISPATCH=0 turns it off)
   cezar automation <add|create|check|run|list|…>  create and manage automations (GitHub polls, schedules) on a running cockpit
   cezar runs list           list a running cockpit's tasks from a shell (CEZ_API_URL=http://127.0.0.1:4321)
+  cezar fleet <submit|status|cancel>  hand work to a fleet of cezar instances (opt-in: CEZ_FLEET_*, docs/fleet.md)
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)
@@ -137,6 +142,11 @@ async function main(): Promise<void> {
     return;
   }
   // `cez runs …` (#1080): the read-only twin for a person at a shell, same addressing.
+  // `cezar fleet …` talks to a fleet hub over its token-guarded listener; its flags (--repo …) are its own.
+  if (process.argv[2] === 'fleet') {
+    process.exitCode = await runFleetCommand(process.argv.slice(3));
+    return;
+  }
   if (process.argv[2] === 'runs') {
     process.exitCode = await runRunsCommand(process.argv.slice(3));
     return;
@@ -272,10 +282,13 @@ async function serveCommand(
   const manager = new RunManager(store, repoRoot, { semaphore, projectId: bootProjectId, resolveTrackerEnv: resolveTrackerAgentEnv });
   let httpServer: ReturnType<typeof startServer> | null = null;
   let stopping = false;
+  let fleet: { stop(): void } | undefined;
+  let fleetContexts: ProjectContexts | undefined;
   // Owned lifecycle scripts drain first; then the store and telemetry flush as before.
   const shutdown = (reason: 'signal' | 'supervisor_gone') => {
     if (stopping) process.exit(0); // a second Ctrl-C never waits on scripts or telemetry
     stopping = true;
+    fleet?.stop();
     store.flush({ pretty: true }); // before the drain too: a second Ctrl-C must not lose run state
     void (httpServer?.shutdownLifecycle() ?? manager.lifecycle.shutdown())
       .catch((error: unknown) => {
@@ -410,8 +423,26 @@ async function serveCommand(
     providerRuntimeAuth,
     workspaceEvents,
     selfUpdate,
+    onContexts: (contexts) => { fleetContexts = contexts; },
   }, port);
   httpServer.once('listening', () => manager.lifecycle.start());
+  // Fleet coordination is opt-in (CEZ_FLEET_*, spec 2026-10-21-fleet-coordination): nothing below
+  // runs, and no extra port opens, unless a role was asked for. A bad config degrades to a plain cezar.
+  const fleetConfig = fleetConfigFromEnv();
+  if (fleetConfig.role === 'invalid') console.error(`  ⚠ fleet disabled: ${fleetConfig.error}`);
+  else if (fleetConfig.role !== 'off') {
+    httpServer.once('listening', () => {
+      const contexts = fleetContexts;
+      if (!contexts) return;
+      fleet = startFleet({
+        config: fleetConfig,
+        version,
+        semaphore,
+        boot: { root: repoRoot, dataDir: join(repoRoot, '.ai/cezar'), store, manager },
+        context: (id) => contexts.context(id),
+      });
+    });
+  }
   const url = `http://localhost:${port}`;
 
   console.log(`\n  cezar v${version} — ${repoRoot}`);

@@ -352,6 +352,9 @@ export interface ServerDeps {
    *  context is seeded from `deps.{store,manager}` (which src/index.ts already
    *  recovered/pruned at startup) and the resolver short-circuits to it. */
   contexts?: ProjectContexts;
+  /** Handed the shared context map once `startServer` has built it — how the opt-in fleet worker
+   *  (spec 2026-10-21-fleet-coordination) reaches non-boot projects without a second map. */
+  onContexts?: (contexts: ProjectContexts) => void;
   /** Boot project's shared automation store. `startServer` injects the
    *  coordinator-owned instance so HTTP routes and the scheduler never cache
    *  separate views of the same project files. */
@@ -7766,6 +7769,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
     semaphore: deps.semaphore,
     automationStore: (projectId, root) => automationCoordinator.store(projectId, root)!,
   });
+  deps.onContexts?.(sharedContexts);
   // #801: GitHub automations are opt-in. Off, the flag must remove the BEHAVIOR and not merely
   // the UI — no scheduler, no GitHub polling, no launched runs — so every entry point into the
   // workspace scheduler below is gated on it. Read per call rather than captured, for the same

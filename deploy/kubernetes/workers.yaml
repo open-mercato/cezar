@@ -1,0 +1,60 @@
+# Worker nodes: each pod joins the hub, advertises its free capacity and runs the jobs it is handed.
+# A StatefulSet gives every pod its own PVC (cezar home + cloned repos) and a stable node id
+# (cezar-worker-0, -1, ...). Scale with `kubectl scale statefulset cezar-worker --replicas=N`.
+apiVersion: v1
+kind: Service
+metadata:
+  name: cezar-worker
+spec:
+  clusterIP: None # headless: required by the StatefulSet, nothing connects to workers
+  selector: { app: cezar-worker }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: cezar-worker
+spec:
+  serviceName: cezar-worker
+  replicas: 3
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels: { app: cezar-worker }
+  template:
+    metadata:
+      labels: { app: cezar-worker }
+    spec:
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: cezar
+          image: registry.example.com/cezar-fleet:latest # build deploy/kubernetes/Dockerfile
+          env:
+            - name: CEZ_FLEET_HUB_URL
+              value: http://cezar-hub:4330
+            - name: CEZ_FLEET_TOKEN
+              valueFrom: { secretKeyRef: { name: cezar-fleet, key: token } }
+            - name: CEZ_FLEET_NODE_ID
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+          envFrom:
+            # Agent CLI + `gh` credentials. Jobs never carry credentials; every node uses its own.
+            - secretRef: { name: cezar-agent-credentials, optional: true }
+          # Workers listen on nothing public; probe the loopback cockpit from inside the pod.
+          readinessProbe:
+            exec:
+              command: [node, -e, "fetch('http://127.0.0.1:4321/api/v1/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+            periodSeconds: 15
+          resources:
+            # Size for `maxParallel` concurrent agents (default 2): each agent CLI plus its tools
+            # (builds, test runs) is a few hundred MiB to a few GiB.
+            requests: { cpu: "2", memory: 4Gi }
+            limits: { cpu: "4", memory: 8Gi }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 50Gi
