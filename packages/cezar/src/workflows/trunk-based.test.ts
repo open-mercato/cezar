@@ -155,13 +155,16 @@ describe('trunk-based projects', () => {
     writeConfig({ taskWorkspace: 'in-place', landing: 'auto' });
     const before = await head();
     const record = manager.startRun(SINGLE_STEP, { task: 'mock:pause' });
-    await waitFor(record.id, (r) => r?.status === 'running' && notes(record.id).length > 0);
     writeFileSync(join(repoRoot, 'person.md'), 'half-done\n');
-    expect(manager.finish(record.id)).toBe(true);
+    // Finish answers false until the session is open; the mock's turn then holds ~2 s.
+    await waitFor(record.id, (r) => r?.status === 'running' && manager.finish(record.id), 1_500);
     await new Promise((r) => setTimeout(r, 300));
     expect(store.getRun(record.id)?.landing).toBeUndefined();
     expect(await head()).toBe(before);
-    await waitFor(record.id, (r) => r?.status === 'done' || r?.status === 'review' || r?.status === 'failed');
+    // Once the turn is over, settle lands what it left.
+    await waitFor(record.id, (r) => r?.status === 'done', 25_000);
+    expect(store.getRun(record.id)?.landing).toMatchObject({ status: 'landed' });
+    expect(await clean()).toBe('');
   }, 30_000);
 
   it('lands an autonomous task on CEZ:DONE without stopping for review', async () => {
