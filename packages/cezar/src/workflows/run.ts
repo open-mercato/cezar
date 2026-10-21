@@ -7488,8 +7488,8 @@ export class RunManager {
     // login shell `runCheckStep` spawns sources the user's profile after this, so the guarantee
     // is about the server's environment, not about a profile that exports one of these names.
     const base: NodeJS.ProcessEnv = { ...process.env };
-    // A check command runs repo-supplied scripts: it must not hold the fleet's shared secret.
-    delete base.CEZ_FLEET_TOKEN;
+    // A check runs repo-supplied scripts: cezar's own credentials (fleet/alert tokens) never reach it.
+    for (const key of Object.keys(base)) if (/^CEZ_.*_(TOKEN|SECRET)$/i.test(key)) delete base[key];
     for (const name of CHECK_CONTEXT_VARS) {
       // `CEZ_PROJECT_ID` is the one context name that is ALSO a documented CLI input
       // (BACKWARD_COMPATIBILITY.md §1 — `cez task`/`cez automation` address a cockpit with it),
