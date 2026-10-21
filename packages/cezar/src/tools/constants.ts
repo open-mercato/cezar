@@ -23,6 +23,9 @@ export const ANDROID_REPOSITORY_BASE = 'https://dl.google.com/android/repository
 export const ANDROID_REPOSITORY_MANIFEST = `${ANDROID_REPOSITORY_BASE}repository2-3.xml`;
 export const ANDROID_SYSIMG_MANIFEST = `${ANDROID_REPOSITORY_BASE}sys-img/google_apis/sys-img2-3.xml`;
 
+/** NDK Flutter 3.4x declares; used only when the installed Flutter does not say (flutter-ndk.ts reads it from the SDK). */
+export const ANDROID_NDK_FALLBACK = '28.2.13676358';
+
 /** Fallback API level / build-tools when the manifest is unavailable. */
 export const ANDROID_API_LEVEL = 35;
 export const ANDROID_BUILD_TOOLS = '35.0.0';

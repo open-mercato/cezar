@@ -91,6 +91,6 @@ emulator is left running after the tests so the next step or task reuses it; sto
 - First install downloads roughly 2-4 GB (JDK 190 MB, cmdline-tools 150-180 MB, system image ~1.5 GB, Flutter ~1 GB with precache). `tools/logs/android-emulator.log` has the emulator's output.
 - On Windows the SDK launchers are `.bat` files. In Git Bash call them by that name (`sdkmanager.bat --list`, or `cmd //c sdkmanager.bat …`); cezar itself runs them through `cmd.exe`.
 
-- The first Flutter Android build also fetches the NDK and a build-tools version Gradle asks for (about 1-2 GB, several minutes). `ensure` does not pre-install them: the version depends on the Flutter release and the project. On a real Windows run the first attempt failed with "sdkmanager did not install NDK"; installing it by hand (`sdkmanager.bat "ndk;<version from the error>"`) fixed it, and the next build worked.
+- `ensure` installs the NDK the installed Flutter release declares (read from its `FlutterExtension.kt`, fallback 28.2.13676358) into the Android SDK once both exist, because Flutter's own Gradle fetch of it failed on a fresh SDK. The first Android build still downloads a build-tools version Gradle asks for, which it does by itself (a minute or two). Runs with `flutter` or `android-sdk` named; needs installs enabled.
 
 To remove everything: delete `~/.cezar/tools`.

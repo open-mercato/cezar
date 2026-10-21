@@ -5,11 +5,12 @@ import { basename, delimiter, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { emulatorStart, emulatorStop, freeEmulatorPort, parseEmulators, usedEmulatorPorts } from './android.ts';
-import { ANDROID_CMDLINE_SHA256 } from './constants.ts';
+import { ANDROID_CMDLINE_SHA256, ANDROID_NDK_FALLBACK } from './constants.ts';
 import { type FlutterManifest, pickFlutterRelease } from './flutter.ts';
 import { iosRuntimes, pickSimulator, simulatorBoot, simulatorShutdown } from './ios.ts';
 import { javaMajor, pickJdkPackage } from './jdk.ts';
 import { parseBuildTools, parseCmdlineTools, parsePlatformLevels, parseSystemImageLevels, planFromManifests, resolveAndroidPlan } from './android-manifest.ts';
+import { flutterNdkVersion, parseNdkVersion } from './flutter-ndk.ts';
 import { withToolLock } from './lock.ts';
 import { TOOLS_PROMPT, toolsReachable } from './prompt.ts';
 import { applyToolsEnv, composeToolsEnv, ensureTools, expandIds, managedToolsEnv, statusAll } from './registry.ts';
@@ -68,7 +69,13 @@ function fakeMachine(options: { install?: boolean; arch?: string } = {}) {
           mk(dest!, 'cmdline-tools', 'bin', 'sdkmanager');
           mk(dest!, 'cmdline-tools', 'bin', 'avdmanager');
         }
-        if (archive.endsWith('flutter.tar.xz')) mk(dest!, 'flutter', 'bin', 'flutter');
+        if (archive.endsWith('flutter.tar.xz')) {
+          mk(dest!, 'flutter', 'bin', 'flutter');
+          // The line a real Flutter release carries (packages/flutter_tools/gradle/.../FlutterExtension.kt).
+          const kt = join(dest!, 'flutter', 'packages', 'flutter_tools', 'gradle', 'src', 'main', 'kotlin');
+          mkdirSync(kt, { recursive: true });
+          writeFileSync(join(kt, 'FlutterExtension.kt'), '    val ndkVersion: String = "27.1.12297006"\n');
+        }
         return OK;
       }
       if (name === 'java') return { code: 0, stdout: '', stderr: 'openjdk version "17.0.9" 2023-10-17' };
@@ -84,6 +91,7 @@ function fakeMachine(options: { install?: boolean; arch?: string } = {}) {
             if (pkg.startsWith('platforms;')) mkdirSync(join(sdk, 'platforms', pkg.slice('platforms;'.length)), { recursive: true });
             if (pkg === 'emulator') mk(sdk, 'emulator', 'emulator');
             if (pkg.startsWith('system-images;')) mkdirSync(join(sdk, ...pkg.split(';')), { recursive: true });
+            if (pkg.startsWith('ndk;')) mk(sdk, 'ndk', pkg.slice('ndk;'.length), 'source.properties');
           }
         }
         return OK;
@@ -581,6 +589,66 @@ describe('Android versions from the repository manifest', () => {
     const reports = await ensureTools(live, ['android-sdk']);
     expect(reports[1]).toMatchObject({ id: 'android-sdk', status: 'failed' });
     expect(reports[1]!.message).toContain('checksum mismatch');
+    cleanup();
+  });
+});
+
+describe('the NDK Flutter builds with', () => {
+  const NDK = '27.1.12297006';
+  const ndkCalls = (calls: string[]): string[] => calls.filter((c) => c.startsWith('sdkmanager') && c.includes('ndk;'));
+
+  it('reads the version from the Flutter release (Kotlin and Groovy layouts), else the fallback', () => {
+    expect(parseNdkVersion('  val ndkVersion: String = "28.2.13676358"')).toBe('28.2.13676358');
+    expect(parseNdkVersion('    String ndkVersion = "26.1.10909125"')).toBe('26.1.10909125');
+    expect(parseNdkVersion('var ndkVersion: String // from AGP')).toBeUndefined();
+    const dir = mkdtempSync(join(tmpdir(), 'cez-flutter-'));
+    try {
+      expect(flutterNdkVersion(dir)).toBe(ANDROID_NDK_FALLBACK);
+      const kt = join(dir, 'packages', 'flutter_tools', 'gradle', 'src', 'main', 'kotlin');
+      mkdirSync(kt, { recursive: true });
+      writeFileSync(join(kt, 'FlutterExtension.kt'), 'val ndkVersion: String = "29.0.1"\n');
+      expect(flutterNdkVersion(dir)).toBe('29.0.1');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('installs it when ensure brings Flutter and the SDK together, once, and not when installs are off', async () => {
+    const { ctx, calls, cleanup } = fakeMachine();
+    ANDROID_CMDLINE_SHA256.linux = BYTES_SHA;
+    const reports = await ensureTools(ctx, ['flutter', 'android-sdk']);
+    expect(reports.map((r) => r.status)).toEqual(['installed', 'installed', 'installed']);
+    expect(ndkCalls(calls)).toEqual([expect.stringContaining(`--install ndk;${NDK}`)]);
+    expect(existsSync(join(ctx.toolsDir, 'android-sdk', 'ndk', NDK, 'source.properties'))).toBe(true);
+    calls.length = 0;
+    await ensureTools(ctx, ['flutter', 'android-sdk']);
+    expect(ndkCalls(calls)).toEqual([]); // already there
+    cleanup();
+    const off = fakeMachine({ install: false });
+    await ensureTools({ ...off.ctx, install: true }, ['jdk']); // something installed, so the dirs exist
+    expect(ndkCalls(off.calls)).toEqual([]);
+    off.cleanup();
+  });
+
+  it('installs it for a Flutter that was there first when the SDK arrives later', async () => {
+    const { ctx, calls, cleanup } = fakeMachine();
+    ANDROID_CMDLINE_SHA256.linux = BYTES_SHA;
+    await ensureTools(ctx, ['flutter']); // no SDK yet: nothing to put an NDK in
+    expect(ndkCalls(calls)).toEqual([]);
+    await ensureTools(ctx, ['android-sdk']);
+    expect(ndkCalls(calls)).toHaveLength(1);
+    cleanup();
+  });
+
+  it('reports the tool failed, with the reason, when the NDK install fails', async () => {
+    const { ctx, cleanup } = fakeMachine();
+    ANDROID_CMDLINE_SHA256.linux = BYTES_SHA;
+    await ensureTools(ctx, ['flutter', 'android-sdk']);
+    rmSync(join(ctx.toolsDir, 'android-sdk', 'ndk'), { recursive: true });
+    const flaky = { ...ctx, exec: async (c: string, a: string[], o?: Parameters<ToolsContext['exec']>[2]) => (a.some((x) => x.startsWith('ndk;')) ? { code: 1, stdout: '', stderr: 'disk full' } : ctx.exec(c, a, o)) };
+    const reports = await ensureTools(flaky, ['flutter']);
+    expect(reports[0]).toMatchObject({ id: 'flutter', status: 'failed' });
+    expect(reports[0]!.message).toContain('disk full');
     cleanup();
   });
 });

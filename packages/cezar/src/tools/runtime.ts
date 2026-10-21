@@ -73,6 +73,12 @@ export interface ToolRecipe {
   env(ctx: ToolsContext, managedOnly?: boolean): ToolEnv;
   /** How to get the tool by hand, shown when installs are off or impossible. */
   hint(ctx: ToolsContext): string;
+  /**
+   * Runs after the tool is ready, when installs are on: completes anything that depends on a
+   * SIBLING tool (Flutter's NDK needs both Flutter and the Android SDK). Idempotent and cheap
+   * when there is nothing to do; a throw becomes the tool's `failed` report.
+   */
+  finish?(ctx: ToolsContext, env: NodeJS.ProcessEnv): Promise<void>;
 }
 
 export function isOn(value: string | undefined): boolean {

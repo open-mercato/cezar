@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { FLUTTER_MANIFEST_BASE, INSTALL_TIMEOUT_MS } from './constants.ts';
+import { ensureFlutterNdk } from './flutter-ndk.ts';
 import {
   type ToolEnv,
   type ToolRecipe,
@@ -93,6 +94,9 @@ export const flutterRecipe: ToolRecipe = {
     if (precache.code !== 0) ctx.log(`flutter precache did not finish (${precache.stderr.trim().split('\n').pop() ?? precache.code}); it will retry on first use`);
     const doctor = await ctx.exec(flutterBin(ctx), ['doctor'], { env, timeoutMs: 5 * 60_000 });
     if (doctor.stdout.trim()) ctx.log(`flutter doctor:\n${doctor.stdout.trim()}`);
+  },
+  async finish(ctx, env) {
+    await ensureFlutterNdk(ctx, env);
   },
   env(ctx): ToolEnv {
     return isFile(flutterBin(ctx))

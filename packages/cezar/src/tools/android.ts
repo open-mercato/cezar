@@ -1,4 +1,5 @@
 import { resolveAndroidPlan } from './android-manifest.ts';
+import { ensureFlutterNdk } from './flutter-ndk.ts';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -78,7 +79,7 @@ function sdkSource(ctx: ToolsContext, root: string): 'cezar' | 'system' {
   return root === managedSdkRoot(ctx) ? 'cezar' : 'system';
 }
 
-async function sdkmanager(ctx: ToolsContext, env: NodeJS.ProcessEnv, root: string, args: string[]): Promise<void> {
+export async function sdkmanager(ctx: ToolsContext, env: NodeJS.ProcessEnv, root: string, args: string[]): Promise<void> {
   const bin = cmdlineTool(ctx, root, 'sdkmanager');
   if (!bin) throw new Error(`sdkmanager not found under ${root}`);
   let lastBeat = 0;
@@ -138,6 +139,9 @@ export const androidSdkRecipe: ToolRecipe = {
     }
     await sdkmanager(ctx, env, root, ['--licenses']);
     await sdkmanager(ctx, env, root, ['--install', 'platform-tools', `platforms;android-${plan.apiLevel}`, `build-tools;${plan.buildTools}`]);
+  },
+  async finish(ctx, env) {
+    await ensureFlutterNdk(ctx, env); // a Flutter that is already here gets the NDK it builds with
   },
   env(ctx, managedOnly): ToolEnv {
     const root = sdkRoot(ctx, managedOnly);

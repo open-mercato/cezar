@@ -123,6 +123,13 @@ export async function ensureTools(ctx: ToolsContext, ids: readonly ToolId[]): Pr
         report = await installLocked(ctx, recipe);
       }
     }
+    if (ctx.install && recipe.finish && (report.status === 'ready' || report.status === 'installed')) {
+      try {
+        await recipe.finish(ctx, applyToolsEnv(ctx.env, composeToolsEnv(ctx), ctx.platform));
+      } catch (error) {
+        report = { ...report, status: 'failed', message: error instanceof Error ? error.message : String(error) };
+      }
+    }
     reports.set(id, report);
   }
   return expandIds(ids).map((id) => reports.get(id)!);

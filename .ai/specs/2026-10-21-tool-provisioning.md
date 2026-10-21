@@ -36,6 +36,7 @@ SDKs onto the machine or boots a device.
   are never reused or killed) and start on the first free even port. `simulator shutdown` stops only the
   device cezar booted (recorded in `tools/state/ios-simulator.json`). Fail-fast: a dead emulator process
   is reported with its log tail instead of waiting out the timeout.
+- **Flutter NDK.** A recipe may define `finish()`, run after the tool is ready when installs are on. `flutter` and `android-sdk` both use it to install the NDK the installed Flutter declares (`ndkVersion` in `FlutterExtension.kt`, else a pinned fallback) into the Android SDK, under a shared lock.
 - **Hardening.** The JDK comes from the Adoptium assets API with its SHA-256 verified; `sdkmanager`
   streams a heartbeat and retries once on a network error; staging dirs of dead processes are swept under
   the tool lock; stale-lock takeover is serialized by a guard file and re-checked under it, and a lock carries an owner token so release deletes only the holder's own file.
