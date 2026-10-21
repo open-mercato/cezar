@@ -38,7 +38,8 @@ export type FleetJob = z.infer<typeof fleetJobSchema>;
 export const fleetSubmitSchema = z.object({
   repoUrl: z.string().trim().min(1).max(500),
   task: z.string().trim().min(1).max(20_000),
-  baseBranch: z.string().trim().min(1).max(200).optional(),
+  // A plain branch name: no leading dash or dot, nothing exotic.
+  baseBranch: z.string().trim().regex(/^[A-Za-z0-9_][A-Za-z0-9._/-]{0,199}$/).optional(),
   workflowId: z.string().trim().min(1).max(200).optional(),
   runner: runnerSchema.optional(),
   model: z.string().trim().min(1).max(200).optional(),

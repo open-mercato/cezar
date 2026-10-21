@@ -141,12 +141,12 @@ async function main(): Promise<void> {
     process.exitCode = await runTelemetryCommand(process.argv.slice(3));
     return;
   }
-  // `cez runs …` (#1080): the read-only twin for a person at a shell, same addressing.
   // `cezar fleet …` talks to a fleet hub over its token-guarded listener; its flags (--repo …) are its own.
   if (process.argv[2] === 'fleet') {
     process.exitCode = await runFleetCommand(process.argv.slice(3));
     return;
   }
+  // `cez runs …` (#1080): the read-only twin for a person at a shell, same addressing.
   if (process.argv[2] === 'runs') {
     process.exitCode = await runRunsCommand(process.argv.slice(3));
     return;

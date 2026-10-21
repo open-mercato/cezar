@@ -37,7 +37,7 @@ spec:
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
           envFrom:
             # Agent CLI + `gh` credentials. Jobs never carry credentials; every node uses its own.
-            - secretRef: { name: cezar-agent-credentials, optional: true }
+            - secretRef: { name: cezar-agent-credentials }
           # Workers listen on nothing public; probe the loopback cockpit from inside the pod.
           readinessProbe:
             exec:

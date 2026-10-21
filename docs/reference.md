@@ -470,7 +470,7 @@ Useful environment variables:
 | Var | Effect |
 |---|---|
 | `CEZ_DRY_RUN=1` | Use the bundled mock instead of the real `claude` CLI — the entire cockpit works offline, for demos and development. |
-| `CEZ_FLEET_TOKEN`, `CEZ_FLEET_HUB=1`, `CEZ_FLEET_HUB_URL`, `CEZ_FLEET_NODE_ID`, `CEZ_FLEET_PORT`, `CEZ_FLEET_BIND` | Opt-in fleet coordination: several cezar instances share one job queue (`cezar fleet submit/status/cancel`). Off unless a role is set; the hub serves token-guarded `/api/v1/fleet/*` on a separate port (default 4330). See [Fleet](fleet.md). |
+| `CEZ_FLEET_TOKEN`, `CEZ_FLEET_HUB=1`, `CEZ_FLEET_HUB_URL`, `CEZ_FLEET_NODE_ID`, `CEZ_FLEET_PORT`, `CEZ_FLEET_BIND`, `CEZ_FLEET_JOB_TIMEOUT_MINUTES` | Opt-in fleet coordination: several cezar instances share one job queue (`cezar fleet submit/status/cancel`). Off unless a role is set; the hub serves token-guarded `/api/v1/fleet/*` on a separate port (default 4330). See [Fleet](fleet.md). |
 | `CEZ_TELEMETRY=0` | Block usage telemetry even after you opted in. Telemetry is opt-in — nothing is sent until you answer yes in the cockpit, Settings → Privacy or `cezar telemetry enable` ([docs/telemetry.md](telemetry.md)). `DO_NOT_TRACK=1` works too. `CEZ_TELEMETRY=1` only lifts the CI / test-runner / `CEZ_DRY_RUN=1` block; it never grants consent. |
 | `CEZ_INSTANCE_ID` | Internal server-install identity set automatically in generated systemd/launchd services; normally leave unset. It is surfaced additively by `/api/v1/health` for install verification. |
 | `CEZ_AGENT_MODELS_LOCKED=1` | Globally lock each runner to the model configured in its native Claude/Codex/OpenCode settings while keeping runner selection available. Exact `1` also delegates authentication and provider enablement to those native agents, so Cezar skips its credential probes and provider-disable preferences. Existing Cezar presets are preserved but ignored, and an environment change requires a restart. The config-file equivalent is `"modelsLocked": true` in global `~/.cezar/config.json` or one repository's `.ai/cezar/config.json`; config-file locks do not disable provider checks. |
@@ -574,6 +574,10 @@ says dispatch or automations are unavailable, and a fallback would let a task
 write to whatever cockpit owns the port. So a command run without it exits `2`
 and explains how to set it (inside a task, it tells the agent to stop and
 report instead).
+
+`cezar fleet submit|status|cancel` is the odd one out: it talks to a **fleet hub's**
+token-guarded listener (`CEZ_FLEET_HUB_URL` + `CEZ_FLEET_TOKEN`), not to the
+cockpit — see [Fleet](fleet.md).
 
 `cez runs` is read-only. Cancel, relaunch and archive from the cockpit, or call
 the API below.

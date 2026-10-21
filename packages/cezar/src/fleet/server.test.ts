@@ -53,6 +53,22 @@ describe('fleet listener', () => {
     expect(await res.json()).toHaveProperty('error');
   });
 
+  it('refuses a non-JSON content type and an oversized body before parsing', async () => {
+    const a = app();
+    const text = await a.request('/api/v1/fleet/jobs', { method: 'POST', body: 'task=x', headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'text/plain' } });
+    expect(text.status).toBe(400);
+    const big = JSON.stringify({ repoUrl: 'a/b', task: 'x'.repeat(300 * 1024) });
+    const res = await a.request('/api/v1/fleet/jobs', {
+      method: 'POST', body: big, headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json', 'content-length': String(big.length) },
+    });
+    expect(res.status).toBe(413);
+  });
+
+  it('refuses an option-like base branch', async () => {
+    const res = await call(app(), '/api/v1/fleet/jobs', { method: 'POST', body: JSON.stringify({ repoUrl: 'a/b', task: 't', baseBranch: '--upload-pack=x' }) }, TOKEN);
+    expect(res.status).toBe(400);
+  });
+
   it('exposes nothing outside /api/v1/fleet', async () => {
     for (const path of ['/api/v1/health', '/api/v1/runs', '/']) {
       expect((await call(app(), path, {}, TOKEN)).status).toBe(404);

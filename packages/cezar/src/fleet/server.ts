@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { serve, type ServerType } from '@hono/node-server';
 import { Hono, type MiddlewareHandler } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
 import { fleetHeartbeatSchema, fleetSubmitSchema } from '@open-mercato/cezar-contract';
 import { jsonZodValidator, paramZodValidator } from '../server/validators.ts';
@@ -31,14 +32,17 @@ export function fleetAuth(token: string): MiddlewareHandler {
   };
 }
 
+/** Bodies are capped before they are read: the token is shared, so a leaked one must not buy memory. */
+const limit = (maxSize: number) => bodyLimit({ maxSize, onError: (c) => c.json({ error: 'payload too large' }, 413) });
+
 const jobIdParam = z.object({ id: z.string().min(1).max(100) });
 
 export function createFleetApp(hub: FleetHub, token: string) {
   const routes = new Hono()
     .use('*', fleetAuth(token))
-    .post('/heartbeat', jsonZodValidator(fleetHeartbeatSchema), (c) => c.json(hub.heartbeat(c.req.valid('json'))))
+    .post('/heartbeat', limit(512 * 1024), jsonZodValidator(fleetHeartbeatSchema), (c) => c.json(hub.heartbeat(c.req.valid('json'))))
     .get('/status', (c) => c.json(hub.status()))
-    .post('/jobs', jsonZodValidator(fleetSubmitSchema), (c) => c.json(hub.submit(c.req.valid('json')), 201))
+    .post('/jobs', limit(256 * 1024), jsonZodValidator(fleetSubmitSchema), (c) => c.json(hub.submit(c.req.valid('json')), 201))
     .post('/jobs/:id/cancel', paramZodValidator(jobIdParam), (c) => {
       const job = hub.cancel(c.req.valid('param').id);
       return job ? c.json(job) : c.json({ error: 'not found' }, 404);

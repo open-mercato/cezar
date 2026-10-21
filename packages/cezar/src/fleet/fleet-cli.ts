@@ -12,6 +12,7 @@ import {
   type FleetSubmit,
 } from '@open-mercato/cezar-contract';
 import { FLEET_DEFAULT_PORT } from './config.ts';
+import { NODE_TTL_MS } from './scheduler.ts';
 import { getRepoInfo } from '../server/git.ts';
 
 export interface FleetCliEnv {
@@ -128,7 +129,8 @@ export async function runFleetCommand(
       }
       io.log(status.nodes.length === 0 ? 'no nodes' : 'nodes:');
       for (const n of status.nodes) {
-        io.log(`  ${n.nodeId}  ${n.capacity.free}/${n.capacity.max} free  v${n.version}  seen ${n.lastSeen}`);
+        const stale = Date.now() - Date.parse(n.lastSeen) > NODE_TTL_MS ? '  STALE' : '';
+        io.log(`  ${n.nodeId}  ${n.capacity.free}/${n.capacity.max} free  v${n.version}  seen ${n.lastSeen}${stale}`);
       }
       io.log(status.jobs.length === 0 ? 'no jobs' : 'jobs:');
       for (const job of status.jobs) io.log(`  ${line(job)}`);

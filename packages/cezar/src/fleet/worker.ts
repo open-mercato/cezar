@@ -17,6 +17,8 @@ export interface FleetRunHost {
   /** The run's current state, or undefined when it is gone. */
   get(runId: string): { status: string; branch?: string; error?: string } | undefined;
   cancel(runId: string): void;
+  /** Cancel recovered runs of jobs this process does not hold; returns how many. */
+  cancelOrphans(): Promise<number>;
   /** Push the run's branch and open a draft PR so the result survives an ephemeral pod. */
   publish(runId: string): Promise<{ ok: true; url: string } | { ok: false; error: string }>;
 }
@@ -30,6 +32,9 @@ export interface FleetWorkerOptions {
    *  steer the whole fleet's distribution. */
   capacity: () => { free: number; max: number };
   intervalMs?: number;
+  /** A job older than this is failed and its run cancelled. Unset = no limit (tests). */
+  jobTimeoutMs?: number;
+  now?: () => number;
   log?: (message: string) => void;
 }
 
@@ -41,6 +46,9 @@ interface Held {
   error?: string;
   status: FleetJobReport['status'];
   publishing: boolean;
+  startedAt: number;
+  /** Cancelled/dropped by the hub, possibly while `host.start()` was still cloning. */
+  released: boolean;
 }
 
 /** Run statuses that mean "still working" (autonomous runs never park at `waiting`). */
@@ -95,8 +103,11 @@ export class FleetWorker {
     try {
       this.pollRuns();
       const reports = [...this.held.values()].map(report);
-      // Jobs handed to us whose run is not created yet hold no slot in the semaphore, so count them.
-      const starting = [...this.held.values()].filter((h) => !h.runId && h.status === 'running').length;
+      // Jobs handed to us whose run is not created yet, or is queued behind the semaphore, hold no
+      // slot, so count them as used or the hub would over-assign.
+      const starting = [...this.held.values()].filter(
+        (h) => h.status === 'running' && (!h.runId || this.options.host.get(h.runId)?.status === 'queued'),
+      ).length;
       const { free, max } = this.options.capacity();
       let response: FleetHeartbeatResponse;
       try {
@@ -126,7 +137,7 @@ export class FleetWorker {
     for (const id of [...response.cancel, ...response.drop]) this.release(id);
     for (const job of response.assigned) {
       if (this.held.has(job.id)) continue; // redelivered assignment we already acted on
-      const held: Held = { job, status: 'running', publishing: false };
+      const held: Held = { job, status: 'running', publishing: false, startedAt: (this.options.now ?? Date.now)(), released: false };
       this.held.set(job.id, held);
       void this.begin(held);
     }
@@ -135,6 +146,8 @@ export class FleetWorker {
   private async begin(held: Held): Promise<void> {
     try {
       held.runId = await this.options.host.start(held.job);
+      // Cancelled while cloning: there was no run to stop then, so stop it now.
+      if (held.released) this.options.host.cancel(held.runId);
     } catch (error) {
       held.status = 'failed';
       held.error = error instanceof Error ? error.message : String(error);
@@ -144,6 +157,7 @@ export class FleetWorker {
   private release(jobId: string): void {
     const held = this.held.get(jobId);
     if (!held) return;
+    held.released = true;
     this.held.delete(jobId);
     if (held.runId) this.options.host.cancel(held.runId);
   }
@@ -151,7 +165,17 @@ export class FleetWorker {
   /** Map each held job's local run onto a job status. */
   private pollRuns(): void {
     for (const held of this.held.values()) {
-      if (!held.runId || held.status === 'done' || held.status === 'failed' || held.publishing) continue;
+      if (held.status === 'done' || held.status === 'failed' || held.publishing) continue;
+      const limit = this.options.jobTimeoutMs;
+      if (limit && (this.options.now ?? Date.now)() - held.startedAt > limit) {
+        // A hung or endlessly monitoring run would renew its lease forever.
+        held.status = 'failed';
+        held.error = `job exceeded the ${Math.round(limit / 60_000)} minute limit (CEZ_FLEET_JOB_TIMEOUT_MINUTES)`;
+        held.released = true;
+        if (held.runId) this.options.host.cancel(held.runId);
+        continue;
+      }
+      if (!held.runId) continue;
       const run = this.options.host.get(held.runId);
       if (!run) {
         held.status = 'failed';
@@ -170,8 +194,7 @@ export class FleetWorker {
 
   private async finish(held: Held): Promise<void> {
     if (!held.job.openPr || !held.runId) {
-      held.status = 'done';
-      if (held.runId) this.options.host.cancel(held.runId); // frees a parked session; no-op once settled
+      held.status = 'done'; // no PR was asked for: the branch stays on this node
       return;
     }
     held.publishing = true;

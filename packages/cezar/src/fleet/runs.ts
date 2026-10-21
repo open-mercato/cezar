@@ -1,5 +1,5 @@
-import { execFile } from 'node:child_process';
 import type { FleetJob } from '@open-mercato/cezar-contract';
+import { resolveBaseRef } from '../git-worktree.ts';
 import { parseRemote } from '../git-remotes.ts';
 import { readHandoff } from '../handoff.ts';
 import { expandTilde } from '../paths.ts';
@@ -33,28 +33,7 @@ export interface FleetRunHostDeps {
   /** The project this process booted in (served from `deps.manager`, not a second context). */
   boot: BootProject;
   /** Every other project: built lazily by the server's shared context map. */
-  context: (projectId: string) => Promise<ProjectContext>;
-}
-
-const FETCH_TIMEOUT_MS = 120_000;
-
-function fetchOrigin(root: string): Promise<void> {
-  if (process.env.CEZ_DRY_RUN === '1') return Promise.resolve();
-  return new Promise((resolve) => {
-    execFile('git', ['fetch', 'origin'], { cwd: root, timeout: FETCH_TIMEOUT_MS }, () => resolve());
-  });
-}
-
-function refExists(root: string, ref: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    execFile('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd: root }, (err) => resolve(!err));
-  });
-}
-
-/** The fork point for a requested base: the freshest `origin/<base>`, else the local branch. */
-async function forkPoint(root: string, base: string): Promise<string> {
-  for (const ref of [`origin/${base}`, base]) if (await refExists(root, ref)) return ref;
-  throw new Error(`base branch "${base}" not found in ${root}`);
+  context: (projectId: string) => Promise<BootProject>;
 }
 
 export function createFleetRunHost(deps: FleetRunHostDeps): FleetRunHost {
@@ -103,8 +82,10 @@ export function createFleetRunHost(deps: FleetRunHostDeps): FleetRunHost {
       if (!workflow) throw new Error(`unknown workflow "${name}" in ${project.root}`);
       let fork: string | undefined;
       if (job.baseBranch) {
-        await fetchOrigin(project.root);
-        fork = await forkPoint(project.root, job.baseBranch);
+        // Validates the ref (option-like values are refused) and picks the freshest of local/remote.
+        const resolved = await resolveBaseRef(project.root, job.baseBranch);
+        if (!resolved) throw new Error(`base branch "${job.baseBranch}" not found in ${project.root}`);
+        fork = resolved;
       }
       const run = project.manager.startRun(workflow, {
         task: job.task,
@@ -114,9 +95,27 @@ export function createFleetRunHost(deps: FleetRunHostDeps): FleetRunHost {
       });
       // The recorded fork point wins in `execute` (and is the PR base); written in the same tick,
       // before the run can read it.
-      if (fork) project.store.updateRun(run.id, { baseBranch: fork });
+      project.store.updateRun(run.id, { fleetJobId: job.id, ...(fork ? { baseBranch: fork } : {}) });
       owners.set(run.id, project);
       return run.id;
+    },
+
+    /** Startup: a run left over from a previous process of this node belongs to a job the hub has
+     *  already requeued (this process holds none yet), so stop it before it eats capacity. */
+    async cancelOrphans() {
+      const projects: BootProject[] = [deps.boot];
+      for (const entry of await listProjects()) {
+        if (entry.status === 'ok' && entry.root !== deps.boot.root) projects.push(await deps.context(entry.id).catch(() => deps.boot));
+      }
+      let cancelled = 0;
+      for (const project of new Set(projects)) {
+        for (const run of project.store.listRuns()) {
+          if (!run.fleetJobId || owners.has(run.id)) continue;
+          if (!['queued', 'waiting', 'running'].includes(run.status)) continue;
+          if (project.manager.cancel(run.id)) cancelled++;
+        }
+      }
+      return cancelled;
     },
 
     get(runId) {

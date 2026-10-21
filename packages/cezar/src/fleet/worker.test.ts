@@ -16,6 +16,7 @@ function setup(over: Partial<FleetRunHost> = {}) {
     start: async (j) => { runs.set(`run-${j.id}`, { status: 'running', branch: 'cez/abc' }); return `run-${j.id}`; },
     get: (id) => runs.get(id),
     cancel: (id) => { calls.push(`cancel ${id}`); },
+    cancelOrphans: async () => 0,
     publish: async () => ({ ok: true, url: 'https://github.com/a/b/pull/1' }),
     ...over,
   };
@@ -133,12 +134,52 @@ describe('FleetWorker', () => {
     expect(t.worker.heldJobIds()).toEqual([]);
   });
 
+  it('cancels the run when the hub cancels a job while its repo is still cloning', async () => {
+    let finishClone: (id: string) => void = () => {};
+    const t = setup({ start: () => new Promise((r) => { finishClone = r; }) });
+    t.reply({ assigned: [job('j1')] });
+    await t.worker.tick();
+    t.reply({ cancel: ['j1'] });
+    await t.worker.tick();
+    expect(t.calls).toEqual([]);
+    finishClone('run-late');
+    await settle();
+    expect(t.calls).toEqual(['cancel run-late']);
+  });
+
+  it('fails a job past the runtime limit and cancels its run', async () => {
+    const clock = { now: 0 };
+    const t = setup();
+    const worker = new FleetWorker({
+      nodeId: 'n1', version: '1', host: t.host, jobTimeoutMs: 1000, now: () => clock.now,
+      transport: async (hb) => { t.sent.push(hb); return t.sent.length === 1 ? { assigned: [job('j1')], cancel: [], drop: [] } : { assigned: [], cancel: [], drop: [] }; },
+      capacity: () => ({ free: 2, max: 2 }),
+    });
+    await worker.tick();
+    await settle();
+    clock.now = 5000;
+    await worker.tick();
+    expect(last(t.sent).jobs[0]).toMatchObject({ id: 'j1', status: 'failed' });
+    expect(last(t.sent).jobs[0]?.error).toContain('limit');
+    expect(t.calls).toEqual(['cancel run-j1']);
+  });
+
+  it('counts a run queued behind the local semaphore as used capacity', async () => {
+    const t = setup();
+    t.reply({ assigned: [job('j1')] });
+    await t.worker.tick();
+    await settle();
+    t.runs.set('run-j1', { status: 'queued' });
+    await t.worker.tick();
+    expect(last(t.sent).capacity.free).toBe(1);
+  });
+
   it('survives an unreachable hub and keeps its jobs for the next beat', async () => {
     let down = false;
     const t = setup();
     const flaky = new FleetWorker({
       nodeId: 'n1', version: '1',
-      host: { start: async () => 'r', get: () => ({ status: 'running' }), cancel: () => {}, publish: async () => ({ ok: false, error: 'x' }) },
+      host: { start: async () => 'r', get: () => ({ status: 'running' }), cancel: () => {}, cancelOrphans: async () => 0, publish: async () => ({ ok: false, error: 'x' }) },
       transport: async () => {
         if (down) throw new Error('down');
         return { assigned: [job('j1')], cancel: [], drop: [] };
@@ -157,6 +198,11 @@ describe('localCapacity', () => {
   it('is max minus busy, never negative', () => {
     expect(localCapacity({ maxParallel: () => 4, busy: () => 1 })).toEqual({ free: 3, max: 4 });
     expect(localCapacity({ maxParallel: () => 2, busy: () => 5 })).toEqual({ free: 0, max: 2 });
+  });
+  it('prefers the main pool when the semaphore has per-pool limits', () => {
+    expect(localCapacity({
+      maxParallel: () => 9, busy: () => 9, freeCapacity: () => ({ main: 2 }), effectiveLimits: () => ({ main: 3 }),
+    })).toEqual({ free: 2, max: 3 });
   });
 });
 

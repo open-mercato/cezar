@@ -36,10 +36,11 @@ spec:
             - name: CEZ_FLEET_TOKEN
               valueFrom: { secretKeyRef: { name: cezar-fleet, key: token } }
             - name: CEZ_FLEET_NODE_ID
-              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+              value: hub # stable across restarts (a pod name changes on every rollout)
           envFrom:
-            # GH_TOKEN, ANTHROPIC_API_KEY, ... — optional so the hub can start before they exist.
-            - secretRef: { name: cezar-agent-credentials, optional: true }
+            # GH_TOKEN, ANTHROPIC_API_KEY, ... Not optional: create the Secret first (secret.example.yaml), or the pod
+            # stays in CreateContainerConfigError instead of failing later at the first job.
+            - secretRef: { name: cezar-agent-credentials }
           ports:
             - name: fleet
               containerPort: 4330

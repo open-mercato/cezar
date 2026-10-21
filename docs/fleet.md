@@ -70,6 +70,8 @@ Service on the fleet port + PVC, and a worker StatefulSet (replicas N, a PVC per
      --from-literal=GH_TOKEN=<clone/push/PR token> \
      --from-literal=ANTHROPIC_API_KEY=<key>      # claude runner; OPENAI_API_KEY for codex
    ```
+   Create both Secrets before `kubectl apply`: the credentials Secret is required, so a missing one
+   shows up as `CreateContainerConfigError` rather than as a failed first job.
    Pods cannot do the interactive browser login the CLIs normally use, so give each agent CLI an
    API key (or mount its credentials) and `gh` a `GH_TOKEN` (the image runs `gh auth setup-git` so
    `git push` works). Jobs never carry credentials; every node uses its own.
@@ -127,6 +129,18 @@ nodes, which only need to reach the hub's fleet port.
   reach the port (NetworkPolicy, security group) in addition to the token.
 - An invalid fleet config (missing/short token, hub and worker both set) disables fleet mode with a
   warning; cezar still boots as a normal single instance.
+
+## Job limits and restarts
+
+- A job running longer than `CEZ_FLEET_JOB_TIMEOUT_MINUTES` (default 240) is failed and its run
+  cancelled, so a hung or endlessly monitoring run cannot hold a slot and renew its lease forever.
+- Runs are tagged with their job (`fleetJobId`). When a node restarts it cancels the fleet runs it
+  recovered from its previous life: the hub has already requeued those jobs.
+- `--no-pr` jobs finish with the branch left on the node that ran them (it is not pushed).
+- A fleet-assigned job counts against the node's capacity from the moment it is handed over, also
+  while it is cloning or queued behind the local limit.
+- Agents never receive `CEZ_FLEET_TOKEN` (or any `CEZ_*_TOKEN` / `CEZ_*_SECRET`): a prompt-injected
+  agent cannot queue work on the fleet. Check steps and cockpit terminals are stripped of it too.
 
 ## Limits
 

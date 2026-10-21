@@ -10,17 +10,23 @@ describe('fleetConfigFromEnv', () => {
   });
   it('configures a hub with defaults', () => {
     expect(fleetConfigFromEnv({ CEZ_FLEET_HUB: '1', CEZ_FLEET_TOKEN: TOKEN, CEZ_FLEET_NODE_ID: 'n' })).toEqual({
-      role: 'hub', token: TOKEN, nodeId: 'n', port: 4330, bind: '0.0.0.0',
+      role: 'hub', token: TOKEN, nodeId: 'n', port: 4330, bind: '0.0.0.0', jobTimeoutMs: 240 * 60_000,
     });
   });
   it('configures a worker and trims the hub URL', () => {
     expect(fleetConfigFromEnv({ CEZ_FLEET_HUB_URL: 'http://hub:4330/', CEZ_FLEET_TOKEN: TOKEN, CEZ_FLEET_NODE_ID: 'w' })).toEqual({
-      role: 'worker', token: TOKEN, nodeId: 'w', hubUrl: 'http://hub:4330',
+      role: 'worker', token: TOKEN, nodeId: 'w', hubUrl: 'http://hub:4330', jobTimeoutMs: 240 * 60_000,
     });
   });
   it('refuses a missing or short token for any role', () => {
     expect(fleetConfigFromEnv({ CEZ_FLEET_HUB: '1' })).toMatchObject({ role: 'invalid' });
     expect(fleetConfigFromEnv({ CEZ_FLEET_HUB_URL: 'http://h', CEZ_FLEET_TOKEN: 'short' })).toMatchObject({ role: 'invalid' });
+  });
+  it('reads the job timeout and refuses a non-positive one', () => {
+    const env = { CEZ_FLEET_HUB_URL: 'http://h', CEZ_FLEET_TOKEN: TOKEN };
+    expect(fleetConfigFromEnv({ ...env, CEZ_FLEET_JOB_TIMEOUT_MINUTES: '30' })).toMatchObject({ jobTimeoutMs: 30 * 60_000 });
+    expect(fleetConfigFromEnv({ ...env, CEZ_FLEET_JOB_TIMEOUT_MINUTES: '0' })).toMatchObject({ role: 'invalid' });
+    expect(fleetConfigFromEnv({ ...env, CEZ_FLEET_JOB_TIMEOUT_MINUTES: 'abc' })).toMatchObject({ role: 'invalid' });
   });
   it('refuses hub + worker at once, a non-http hub URL and a bad port', () => {
     expect(fleetConfigFromEnv({ CEZ_FLEET_HUB: '1', CEZ_FLEET_HUB_URL: 'http://h', CEZ_FLEET_TOKEN: TOKEN })).toMatchObject({ role: 'invalid' });

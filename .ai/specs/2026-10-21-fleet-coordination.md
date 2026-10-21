@@ -70,6 +70,16 @@ Pull, not push: workers dial the hub, so a worker needs no inbound port and work
 4. Publish (when `openPr`): `createDraftPr` (push + `gh pr create --draft`) so the result outlives
    an ephemeral pod. "Nothing to propose" finishes the job without a PR. Reports `branch`, `prUrl`.
 
+## Hygiene
+
+- Runtime limit: `CEZ_FLEET_JOB_TIMEOUT_MINUTES` (default 240) fails the job and cancels the run.
+- A cancel or drop that arrives while the node is still cloning cancels the run as soon as it exists.
+- Runs carry `fleetJobId`; a restarted node cancels recovered fleet runs (their jobs were requeued).
+- Queued-but-unstarted fleet runs count as used capacity. Capacity is read from `freeCapacity().main`
+  / `effectiveLimits().main` when the semaphore has per-pool limits, else `maxParallel - busy`.
+- Agents, check steps and cockpit terminals never see `CEZ_FLEET_TOKEN`; the agent env allowlist
+  drops every `CEZ_*_TOKEN` / `CEZ_*_SECRET`.
+
 ## State
 
 Hub: `cezarHomeDir()/fleet/jobs.json` (atomic tmp+rename, `0600`, zod-validated per entry; corrupt

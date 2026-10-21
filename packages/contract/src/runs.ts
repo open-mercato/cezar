@@ -281,6 +281,8 @@ export const runRecordSchema = z.object({
     .optional(),
   /** The PR head came from a fork: its check steps run without the project's or workspace's secrets. */
   untrustedHead: z.boolean().optional(),
+  /** The fleet job this run executes (spec 2026-10-21-fleet-coordination). */
+  fleetJobId: z.string().optional(),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
