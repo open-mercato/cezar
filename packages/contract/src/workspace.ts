@@ -56,7 +56,8 @@ export const workspaceConfigResponseSchema = z.object({
     memoryLimitMb: z.number().nullable(),
     /** OS priority of agent process trees (spec 2026-10-21-host-resource-limits). */
     agentCpuPriority: z.enum(['normal', 'low', 'idle']),
-    /** No new run starts while the host has less than `memoryMb` free or more than `cpuPct` busy. */
+    /** No new run starts while the host has less than `memoryMb` free or more than `cpuPct` busy.
+     *  The server accepts `memoryMb` 0 as off; the cockpit's floor is 256 MiB. */
     hostReserve: z.object({ memoryMb: z.number().nullable(), cpuPct: z.number().nullable() }),
     /** No new run starts while all agent trees together hold this much RAM. */
     totalAgentMemoryMb: z.number().nullable(),

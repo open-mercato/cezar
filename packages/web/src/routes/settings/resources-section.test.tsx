@@ -141,6 +141,17 @@ describe('Global settings → Resources', () => {
     })
   })
 
+  it('the preset keeps a custom reserve and priority already set', async () => {
+    serve({ agentCpuPriority: 'idle', hostReserve: { memoryMb: 4096, cpuPct: null } })
+    renderResources()
+    await waitFor(() => expect(document.querySelector('[data-slot="resources-responsive-preset"]')).not.toBeNull())
+    fireEvent.change(document.querySelector('[data-slot="resources-responsive-preset"]')!, { target: { value: 'on' } })
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({
+      resources: { agentCpuPriority: 'idle', hostReserve: { memoryMb: 4096, cpuPct: 90 } },
+    })
+  })
+
   it('saves the host headroom fields and rejects a value below the floor', async () => {
     serve({})
     renderResources()

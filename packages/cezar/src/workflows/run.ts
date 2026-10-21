@@ -1767,7 +1767,10 @@ export class RunManager {
           // FIFO among the runs that CAN start; a held one keeps its place in the queue rather
           // than being dequeued and re-queued (which would churn its position and its record).
           const next = this.queue.findIndex(startable);
-          if (next === -1) break; // nothing queued can start right now
+          if (next === -1) {
+            this.semaphore.noteHostDeferral();
+            break; // nothing queued can start right now
+          }
           const runId = this.queue.splice(next, 1)[0];
           if (!runId) break;
           this.semaphore.noteGatedStart();

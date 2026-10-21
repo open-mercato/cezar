@@ -15,6 +15,7 @@
  */
 
 import { execFile } from 'node:child_process';
+import { readdirSync } from 'node:fs';
 import { constants, setPriority } from 'node:os';
 import type { DashboardTelemetrySample } from '@open-mercato/cezar-contract';
 
@@ -138,10 +139,25 @@ const PRIORITY_VALUE = {
 /** Best-effort: EPERM, a dead pid or an unsupported platform just leave the priority alone. */
 export function applyCpuPriority(pid: number, priority: 'normal' | 'low' | 'idle'): void {
   if (priority === 'normal') return;
+  const value = PRIORITY_VALUE[priority];
   try {
-    setPriority(pid, PRIORITY_VALUE[priority]);
+    setPriority(pid, value);
   } catch {
     // never affect a run
+  }
+  // Linux: setpriority(PRIO_PROCESS) renices only the main thread, and a child forks from the
+  // thread that spawned it. Renice the threads that already exist too (best effort).
+  if (process.platform !== 'linux') return;
+  try {
+    for (const tid of readdirSync(`/proc/${pid}/task`)) {
+      try {
+        setPriority(Number(tid), value);
+      } catch {
+        // thread gone or not ours
+      }
+    }
+  } catch {
+    // no /proc
   }
 }
 

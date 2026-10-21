@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { HostUsage } from '@open-mercato/cezar-contract';
 import {
   WorkspaceSemaphore,
@@ -52,20 +52,24 @@ describe('agentMemoryBlock', () => {
 });
 
 describe('WorkspaceSemaphore host gate (spec 2026-10-21-host-resource-limits)', () => {
+  const rigs: WorkspaceSemaphore[] = [];
+  afterEach(() => rigs.splice(0).forEach((s) => s.dispose()));
   function rig(initial: Partial<WorkspaceResourceLimits>) {
     let sample: HostUsage | undefined;
     let nowMs = 0;
+    let stale = false;
     let agents: Record<string, { rssBytes: number }> = {};
     const hostListeners = new Set<() => void>();
     const agentListeners = new Set<() => void>();
     const host: NonNullable<WorkspaceSemaphoreOptions['host']> = {
-      current: () => sample,
+      current: () => (sample && { ...sample, sampledAt: new Date(stale ? 0 : nowMs).toISOString() }),
       subscribe: (l) => (hostListeners.add(l), () => hostListeners.delete(l)),
       agentUsage: () => agents,
       subscribeAgents: (l) => (agentListeners.add(l), () => agentListeners.delete(l)),
       now: () => nowMs,
     };
     const sem = new WorkspaceSemaphore({ initial, host });
+    rigs.push(sem);
     let busy = 0;
     let pumps = 0;
     const p: SemaphoreParticipant = {
@@ -76,7 +80,11 @@ describe('WorkspaceSemaphore host gate (spec 2026-10-21-host-resource-limits)', 
       },
     };
     sem.register(p);
-    const tick = () => [...hostListeners].forEach((l) => l());
+    // one sample period per tick: the clock advances so the per-period dedupe counts it
+    const tick = () => {
+      nowMs += 2_000;
+      [...hostListeners].forEach((l) => l());
+    };
     return {
       sem,
       host,
@@ -87,6 +95,7 @@ describe('WorkspaceSemaphore host gate (spec 2026-10-21-host-resource-limits)', 
       setSample: (u: HostUsage | undefined) => (sample = u),
       setAgents: (a: typeof agents) => (agents = a),
       setNow: (n: number) => (nowMs = n),
+      setStale: (v: boolean) => (stale = v),
       pumps: () => pumps,
     };
   }
@@ -113,7 +122,8 @@ describe('WorkspaceSemaphore host gate (spec 2026-10-21-host-resource-limits)', 
     r.setBusy(1);
     expect(r.sem.hostAdmits()).toBe(true); // no sample yet
     r.setSample(low);
-    r.setNow(60_000); // sample is a minute old
+    r.setNow(60_000);
+    r.setStale(true); // sample is a minute old
     expect(r.sem.hostAdmits()).toBe(true);
   });
 
@@ -122,6 +132,7 @@ describe('WorkspaceSemaphore host gate (spec 2026-10-21-host-resource-limits)', 
     r.setSample(low);
     r.setBusy(1);
     expect(r.sem.hostAdmits()).toBe(false);
+    r.sem.noteHostDeferral(); // what pump() records when it stops with runs queued
     r.tick();
     expect(r.pumps()).toBe(1);
   });
@@ -136,6 +147,46 @@ describe('WorkspaceSemaphore host gate (spec 2026-10-21-host-resource-limits)', 
     expect(r.sem.hostAdmits()).toBe(false);
     r.tick();
     expect(r.sem.hostAdmits()).toBe(true);
+  });
+
+  it('hostAdmits is a pure predicate: a refusal alone does not schedule a re-pump', () => {
+    const r = rig(reserve);
+    r.setSample(low);
+    r.setBusy(1);
+    expect(r.sem.hostAdmits()).toBe(false);
+    r.tick();
+    expect(r.pumps()).toBe(0);
+  });
+
+  it('limits a startup burst to one start before any sample exists, and a silent sampler lifts it', () => {
+    const r = rig(reserve);
+    r.setBusy(1);
+    expect(r.sem.hostAdmits()).toBe(true);
+    r.sem.noteGatedStart();
+    expect(r.sem.hostAdmits()).toBe(false); // no tick yet: the second start waits
+    r.setNow(60_000); // the sampler never reported
+    expect(r.sem.hostAdmits()).toBe(true);
+  });
+
+  it('counts one tick per sample period when both guards are on', () => {
+    const r = rig({ ...reserve, totalAgentMemoryMb: 100_000 });
+    r.setBusy(1);
+    r.sem.noteGatedStart();
+    expect(r.sem.hostAdmits()).toBe(false);
+    r.setNow(2_000);
+    [...r.hostListeners, ...r.agentListeners].forEach((l) => l()); // host + agents, same period
+    r.sem.noteGatedStart();
+    expect(r.sem.hostAdmits()).toBe(false);
+    r.setNow(4_000);
+    [...r.hostListeners, ...r.agentListeners].forEach((l) => l());
+    expect(r.sem.hostAdmits()).toBe(true);
+  });
+
+  it('dispose() unsubscribes both samplers', () => {
+    const r = rig({ ...reserve, totalAgentMemoryMb: 1000 });
+    expect(r.hostListeners.size + r.agentListeners.size).toBe(2);
+    r.sem.dispose();
+    expect(r.hostListeners.size + r.agentListeners.size).toBe(0);
   });
 
   it('caps the summed agent RSS', () => {

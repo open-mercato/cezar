@@ -1,7 +1,7 @@
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { HostUsage } from '@open-mercato/cezar-contract';
-import { currentHostUsage, HOST_SAMPLE_STALE_MS, onHostUsage } from '../core/host-usage.ts';
+import { currentHostUsage, HOST_SAMPLE_INTERVAL_MS, HOST_SAMPLE_STALE_MS, onHostUsage } from '../core/host-usage.ts';
 import { allUsage, onUsage, type ProcessUsage } from '../core/process-usage.ts';
 import { agentMemoryBlock, hostReserveBlock, type HostReserve } from './host-headroom.ts';
 import { DEFAULT_IDLE_TIMEOUT_MINUTES, DEFAULT_MONITORING_WAKE_MINUTES, loadWorkspaceConfig } from './config.ts';
@@ -203,6 +203,8 @@ export class WorkspaceSemaphore {
    *  burst of queued runs cannot all pass the same stale reading (spec 2026-10-21). */
   private ticks = 0;
   private startTick = -1;
+  private lastTickAt = Number.NEGATIVE_INFINITY;
+  private lastStartAt = Number.NEGATIVE_INFINITY;
   /** The gate turned a start away; the next tick re-pumps. */
   private hostDeferred = false;
 
@@ -230,7 +232,13 @@ export class WorkspaceSemaphore {
   /** Sample the host only while a guard is configured (zero cost by default). */
   private syncHostGate(): void {
     const onTick = () => {
-      this.ticks += 1;
+      // Host and agent samplers both fire every ~2 s: count ONE tick per sample period so the
+      // one-start-per-tick brake does not run at double rate with both guards on.
+      const at = this.host.now();
+      if (at - this.lastTickAt >= HOST_SAMPLE_INTERVAL_MS / 2) {
+        this.ticks += 1;
+        this.lastTickAt = at;
+      }
       if (!this.hostDeferred) return;
       this.hostDeferred = false;
       void this.release(); // pressure may have cleared
@@ -249,7 +257,20 @@ export class WorkspaceSemaphore {
       this.hostDeferred = false;
       this.ticks = 0;
       this.startTick = -1;
+      this.lastTickAt = Number.NEGATIVE_INFINITY;
     }
+  }
+
+  /** Stop sampling and forget gate state — teardown and tests. */
+  dispose(): void {
+    this.offHost?.();
+    this.offAgents?.();
+    this.offHost = null;
+    this.offAgents = null;
+    this.hostDeferred = false;
+    this.ticks = 0;
+    this.startTick = -1;
+    this.lastTickAt = Number.NEGATIVE_INFINITY;
   }
 
   /** Why a NEW run must wait for the host, or null (spec 2026-10-21-host-resource-limits).
@@ -260,8 +281,11 @@ export class WorkspaceSemaphore {
     const totalMb = this.totalAgentMemoryMb();
     if (!reserve && totalMb === null) return null;
     if (this.busy() === 0) return null;
-    // Brake only once ticks exist, so a sampler that never reports cannot freeze starts.
-    if (this.ticks > 0 && this.ticks === this.startTick) return 'waiting for a fresh reading after the last start';
+    // One start per sample period — including before the first sample exists, so a startup burst
+    // cannot all pass the fail-open. A sampler silent for a stale window lifts the brake (fail open).
+    if (this.ticks === this.startTick && this.host.now() - this.lastStartAt <= HOST_SAMPLE_STALE_MS) {
+      return 'waiting for a fresh reading after the last start';
+    }
     let usage = this.host.current();
     if (usage && this.host.now() - Date.parse(usage.sampledAt) > HOST_SAMPLE_STALE_MS) usage = undefined;
     return (
@@ -269,16 +293,21 @@ export class WorkspaceSemaphore {
     );
   }
 
-  /** Capacity predicate for `pump()`; remembers a refusal so the next tick re-pumps. */
+  /** Pure capacity predicate for `pump()`. */
   hostAdmits(): boolean {
-    if (this.hostBlock() === null) return true;
-    this.hostDeferred = true;
-    return false;
+    return this.hostBlock() === null;
+  }
+
+  /** `pump()` stopped with runs still queued: if the host is why, the next tick re-pumps. */
+  noteHostDeferral(): void {
+    if (this.hostBlock() !== null) this.hostDeferred = true;
   }
 
   /** `pump()` just dequeued a run through the gate. */
   noteGatedStart(): void {
-    if (this.reserve() || this.totalAgentMemoryMb() !== null) this.startTick = this.ticks;
+    if (!this.reserve() && this.totalAgentMemoryMb() === null) return;
+    this.startTick = this.ticks;
+    this.lastStartAt = this.host.now();
   }
 
   /** Join the shared counter. Returns the unregister handle — the manager's
