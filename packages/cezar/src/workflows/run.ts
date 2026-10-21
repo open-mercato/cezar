@@ -2468,8 +2468,9 @@ export class RunManager {
    * reason back as the route's 409 body. A parent that had no `dispatch` record becomes a root the
    * first time it dispatches: its tree directory is created and its brief written from its own
    * task text. The child forks its worktree off the parent's branch, inherits runner and model
-   * unless the order names others (a model only on the runner it was picked for), gets a budget carved out of the parent's, and always runs
-   * autonomously — a child parked at `waiting` after every turn would need a human per rung.
+   * unless the order names others (a model only on the runner it was picked for), gets a budget
+   * carved out of the parent's, and always runs autonomously — a child parked at `waiting` after
+   * every turn would need a human per rung.
    */
   dispatch(
     parentId: string,
