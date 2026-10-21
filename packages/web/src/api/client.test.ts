@@ -384,7 +384,7 @@ describe('workspace branding logo client', () => {
     reply({
       branding: { name: 'Acme', logoUrl: '/api/v1/workspace/branding-logo?v=abc' },
       browseRoot: '~/source', projectsDir: '~/projects', skillsAutoUpdate: null,
-      effectiveSkillsAutoUpdate: true,
+      effectiveSkillsAutoUpdate: true, toolsAutoInstall: false, effectiveToolsAutoInstall: false,
       composerDefaults: { autonomous: null, worktree: null, inheritedAutonomous: 'source-dependent', inheritedWorktree: true },
       resources: { maxParallel: 2, maxMonitoringSessions: 2, idleTimeoutMinutes: 15, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10 },
       agentDefaults: {},
@@ -436,7 +436,7 @@ describe('response parsing', () => {
     browseRoot: '~/',
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,
-    effectiveSkillsAutoUpdate: true,
+    effectiveSkillsAutoUpdate: true, toolsAutoInstall: false, effectiveToolsAutoInstall: false,
     composerDefaults: {
       autonomous: null,
       worktree: null,

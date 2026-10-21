@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, delimiter, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -9,10 +9,11 @@ import { ANDROID_CMDLINE_SHA256 } from './constants.ts';
 import { type FlutterManifest, pickFlutterRelease } from './flutter.ts';
 import { iosRuntimes, pickSimulator, simulatorBoot, simulatorShutdown } from './ios.ts';
 import { javaMajor, pickJdkPackage } from './jdk.ts';
+import { parseBuildTools, parseCmdlineTools, parsePlatformLevels, parseSystemImageLevels, planFromManifests, resolveAndroidPlan } from './android-manifest.ts';
 import { withToolLock } from './lock.ts';
 import { TOOLS_PROMPT, toolsReachable } from './prompt.ts';
 import { applyToolsEnv, composeToolsEnv, ensureTools, expandIds, managedToolsEnv, statusAll } from './registry.ts';
-import { type ExecResult, type ToolsContext, downloadFile, extractArchive, findOnPath, isOn } from './runtime.ts';
+import { type ExecResult, type ToolsContext, downloadFile, extractArchive, findOnPath, isOn, resolveInstallEnabled, setStoredToolsInstall, toolsInstallEnabled } from './runtime.ts';
 import { formatExports, runToolsCommand } from './tools-cli.ts';
 
 const BYTES = Buffer.from('fake archive bytes');
@@ -295,7 +296,7 @@ describe('ensure (offline, fake machine)', () => {
     ]);
     expect(urls[0]).toContain('api.adoptium.net/v3/assets/latest/17/hotspot?architecture=x64&image_type=jdk&os=linux');
     expect(urls[1]).toBe('https://dl.example/jdk.tar.gz');
-    expect(urls[2]).toContain('commandlinetools-linux-');
+    expect(urls.some((u) => u.includes('commandlinetools-linux-'))).toBe(true); // pinned: the fake serves no manifest
     const sdkCalls = calls.filter((c) => c.startsWith('sdkmanager'));
     expect(sdkCalls[0]).toContain('--licenses');
     expect(sdkCalls[1]).toContain('platform-tools platforms;android-35');
@@ -479,6 +480,125 @@ describe('cezar tools CLI', () => {
   });
 });
 
+const REPO_XML = readFileSync(new URL('./fixtures/repository2-3.excerpt.xml', import.meta.url), 'utf8');
+const SYSIMG_XML = readFileSync(new URL('./fixtures/sys-img2-3.excerpt.xml', import.meta.url), 'utf8');
+
+describe('Android versions from the repository manifest', () => {
+  it('picks the newest stable cmdline-tools, API level and build-tools, with the published sha1', () => {
+    const plan = planFromManifests(REPO_XML, SYSIMG_XML, 'linux', 'x86_64')!;
+    expect(plan).toMatchObject({ apiLevel: 36, buildTools: '36.1.0', source: 'manifest' });
+    expect(plan.cmdline).toEqual({
+      url: 'https://dl.google.com/android/repository/commandlinetools-linux-16111833_latest.zip',
+      checksum: 'e025545c62a8e64c7559119566a569fb1dec5f60',
+      algo: 'sha1',
+    });
+    expect(planFromManifests(REPO_XML, SYSIMG_XML, 'win', 'x86_64')!.cmdline.url).toContain('commandlinetools-win-16111833');
+    expect(planFromManifests(REPO_XML, SYSIMG_XML, 'mac_arm64', 'arm64-v8a')!.cmdline.url).toContain('mac_arm64-16111833');
+    expect(planFromManifests(REPO_XML, SYSIMG_XML, 'mac_x86_64', 'x86_64')!.cmdline.url).toContain('mac_x86_64-16111833');
+  });
+
+  it('ignores obsolete and preview entries, extension levels, and levels with no image for this CPU', () => {
+    expect(parsePlatformLevels(REPO_XML).sort()).toEqual([34, 35, 36]); // no -ext19, no obsolete duplicate
+    expect(parseBuildTools(REPO_XML, 36)).toBe('36.1.0'); // not the 37.0.0 or the 34.0.0-rc1 preview
+    expect(parseBuildTools(REPO_XML, 35)).toBe('35.0.0');
+    expect(parseSystemImageLevels(SYSIMG_XML, 'x86_64').sort()).toEqual([35, 36]); // 36.1 / 37.0 are not plain levels
+    // an image for a level whose platform package is absent is not selectable
+    const only37 = SYSIMG_XML.replaceAll('android-36;google_apis', 'android-37;google_apis');
+    expect(planFromManifests(REPO_XML, only37, 'linux', 'x86_64')!.apiLevel).toBe(35);
+    expect(parseCmdlineTools(REPO_XML, 'linux')!.sha1).not.toBe('');
+  });
+
+  it('answers undefined when the manifests have nothing usable', () => {
+    expect(planFromManifests('<nothing/>', SYSIMG_XML, 'linux', 'x86_64')).toBeUndefined();
+    expect(planFromManifests(REPO_XML, '<nothing/>', 'linux', 'x86_64')).toBeUndefined();
+  });
+
+  it('falls back to the pinned versions when the manifest cannot be fetched or parsed, and resolves once per context', async () => {
+    const down = fakeMachine();
+    let calls = 0;
+    const offline = { ...down.ctx, fetch: (async () => (calls++, Promise.reject(new Error('offline')))) as typeof fetch };
+    const plan = await resolveAndroidPlan(offline, 'x86_64');
+    expect(plan).toMatchObject({ source: 'pinned', apiLevel: 35, buildTools: '35.0.0' });
+    expect(plan.cmdline.algo).toBe('sha256');
+    expect(plan.cmdline.url).toContain('commandlinetools-linux-15859902');
+    expect(down.logs.some((l) => l.includes('using the pinned versions'))).toBe(true);
+    await resolveAndroidPlan(offline, 'x86_64');
+    expect(calls).toBe(2); // the two manifests, once
+    const garbled = { ...down.ctx, fetch: (async () => new Response('<html>nope</html>')) as typeof fetch };
+    expect((await resolveAndroidPlan(garbled, 'x86_64')).source).toBe('pinned');
+    down.cleanup();
+  });
+
+  it('installs the manifest versions end to end, verifying the sha1 it published', async () => {
+    const { ctx, calls, urls, cleanup } = fakeMachine();
+    const sha1 = createHash('sha1').update(BYTES).digest('hex');
+    const repo = REPO_XML.replace('e025545c62a8e64c7559119566a569fb1dec5f60', sha1);
+    const live = {
+      ...ctx,
+      fetch: (async (url: string | URL | Request) => {
+        const u = String(url);
+        urls.push(u);
+        if (u.endsWith('repository2-3.xml')) return new Response(repo);
+        if (u.endsWith('sys-img2-3.xml')) return new Response(SYSIMG_XML);
+        if (u.includes('/v3/assets/')) return Response.json([{ binary: { image_type: 'jdk', package: { link: 'https://dl.example/jdk.tar.gz', checksum: BYTES_SHA } } }]);
+        return new Response(BYTES);
+      }) as typeof fetch,
+    };
+    const reports = await ensureTools(live, ['android-emulator']);
+    expect(reports.map((r) => r.status)).toEqual(['installed', 'installed', 'installed']);
+    expect(urls.some((u) => u.includes('commandlinetools-linux-16111833_latest.zip'))).toBe(true);
+    const sdk = calls.filter((c) => c.startsWith('sdkmanager'));
+    expect(sdk.some((c) => c.includes('platforms;android-36') && c.includes('build-tools;36.1.0'))).toBe(true);
+    expect(sdk.some((c) => c.includes('system-images;android-36;google_apis;x86_64'))).toBe(true);
+    expect(calls.find((c) => c.startsWith('avdmanager'))).toContain('system-images;android-36;google_apis;x86_64');
+    // a later run keeps the installed image instead of churning the AVD
+    expect((await ensureTools(live, ['android-emulator'])).map((r) => r.status)).toEqual(['ready', 'ready', 'ready']);
+    cleanup();
+  });
+
+  it('rejects a cmdline-tools zip whose sha1 does not match the manifest', async () => {
+    const { ctx, cleanup } = fakeMachine();
+    const live = {
+      ...ctx,
+      fetch: (async (url: string | URL | Request) => {
+        const u = String(url);
+        if (u.endsWith('repository2-3.xml')) return new Response(REPO_XML); // the real sha1: BYTES will not match
+        if (u.endsWith('sys-img2-3.xml')) return new Response(SYSIMG_XML);
+        if (u.includes('/v3/assets/')) return Response.json([{ binary: { image_type: 'jdk', package: { link: 'https://dl.example/jdk.tar.gz', checksum: BYTES_SHA } } }]);
+        return new Response(BYTES);
+      }) as typeof fetch,
+    };
+    const reports = await ensureTools(live, ['android-sdk']);
+    expect(reports[1]).toMatchObject({ id: 'android-sdk', status: 'failed' });
+    expect(reports[1]!.message).toContain('checksum mismatch');
+    cleanup();
+  });
+});
+
+describe('install policy (Settings switch and CEZ_TOOL_INSTALL)', () => {
+  afterEach(() => setStoredToolsInstall(undefined));
+
+  it('lets the operator env win both ways, else the stored Settings switch, default off', () => {
+    expect(resolveInstallEnabled({}, undefined)).toBe(false);
+    expect(resolveInstallEnabled({}, false)).toBe(false);
+    expect(resolveInstallEnabled({}, true)).toBe(true);
+    expect(resolveInstallEnabled({ CEZ_TOOL_INSTALL: '1' }, false)).toBe(true);
+    expect(resolveInstallEnabled({ CEZ_TOOL_INSTALL: '0' }, true)).toBe(false);
+    expect(resolveInstallEnabled({ CEZ_TOOL_INSTALL: 'false' }, true)).toBe(false);
+    expect(resolveInstallEnabled({ CEZ_TOOL_INSTALL: 'garbage' }, true)).toBe(true);
+  });
+
+  it('makes the agent prompt follow the effective value', () => {
+    const env = { CEZ_BIN: '/x/cezar' };
+    expect(toolsReachable(env)).toBe(false);
+    setStoredToolsInstall(true);
+    expect(toolsInstallEnabled(env)).toBe(true);
+    expect(toolsReachable(env)).toBe(true);
+    expect(toolsReachable({ ...env, CEZ_TOOL_INSTALL: '0' })).toBe(false);
+    expect(toolsReachable({ CEZ_TOOL_INSTALL: '1' })).toBe(false); // still needs the cockpit entrypoint
+  });
+});
+
 describe('review fixes', () => {
   const asDarwin = (ctx: ToolsContext, exec: ToolsContext['exec']): ToolsContext => ({ ...ctx, platform: 'darwin', exec });
 
@@ -553,6 +673,22 @@ describe('review fixes', () => {
     await ensureTools(ctx, ['jdk']);
     expect(existsSync(dead)).toBe(false);
     expect(existsSync(other)).toBe(true);
+    cleanup();
+  });
+
+  it('releases only its own lock: a lock another owner took over is left in place', async () => {
+    const { ctx, cleanup } = fakeMachine();
+    const lock = join(ctx.toolsDir, '.locks', 'y.lock');
+    await withToolLock(ctx, 'y', async () => {
+      expect(readFileSync(lock, 'utf8').trim().split('\n')).toHaveLength(3); // pid, time, owner token
+    });
+    expect(existsSync(lock)).toBe(false); // our own release removes it
+    const stolen = `${process.pid}\n${Date.now()}\nsomeone-elses-token\n`;
+    await withToolLock(ctx, 'y', async () => {
+      writeFileSync(lock, stolen); // we were judged hung and replaced mid-work
+    });
+    expect(readFileSync(lock, 'utf8')).toBe(stolen);
+    expect(existsSync(`${lock}.release-${process.pid}`)).toBe(false);
     cleanup();
   });
 

@@ -218,6 +218,7 @@ import { readConfigFile, statConfigPath, writeConfigFile } from '../agent-config
 import { type AgentModelDefaults, readAgentModelDefaults } from '../agent-config/models.ts';
 import { listAgentConfig } from '../agent-config/service.ts';
 import { listConfigFiles, type AgentHomePaths } from '../agent-config/catalog.ts';
+import { resolveInstallEnabled, setStoredToolsInstall } from '../tools/runtime.ts';
 import { readAccountIdentity } from '../agent-config/account-identity.ts';
 import {
   PROJECT_ID_RE,
@@ -3485,6 +3486,8 @@ export function createApp(deps: ServerDeps) {
     projectsDir: config.projectsDir,
     skillsAutoUpdate: config.skillsAutoUpdate ?? null,
     effectiveSkillsAutoUpdate: effectiveSkillsAutoUpdate(config),
+    toolsAutoInstall: config.toolsAutoInstall === true,
+    effectiveToolsAutoInstall: resolveInstallEnabled(process.env, config.toolsAutoInstall),
     composerDefaults: {
       autonomous: config.composerDefaults.autonomous ?? null,
       worktree: config.composerDefaults.worktree ?? null,
@@ -3535,7 +3538,7 @@ export function createApp(deps: ServerDeps) {
 
     .put('/workspace/config', jsonZodValidator(() => setWorkspaceConfigInputSchema), async (c) => {
       const parsed = { data: c.req.valid('json') };
-      const { browseRoot, projectsDir, skillsAutoUpdate, composerDefaults, resources, agentDefaults, branding } = parsed.data;
+      const { browseRoot, projectsDir, skillsAutoUpdate, toolsAutoInstall, composerDefaults, resources, agentDefaults, branding } = parsed.data;
       for (const [configuredRoot, create] of [
         [browseRoot, false],
         [projectsDir, true],
@@ -3573,6 +3576,7 @@ export function createApp(deps: ServerDeps) {
           if (projectsDir !== undefined) config.projectsDir = projectsDir;
           if (skillsAutoUpdate === null) delete config.skillsAutoUpdate;
           else if (skillsAutoUpdate !== undefined) config.skillsAutoUpdate = skillsAutoUpdate;
+          if (toolsAutoInstall !== undefined) config.toolsAutoInstall = toolsAutoInstall;
           if (composerDefaults?.autonomous === null) delete config.composerDefaults.autonomous;
           else if (composerDefaults?.autonomous !== undefined) {
             config.composerDefaults.autonomous = composerDefaults.autonomous;
@@ -3620,6 +3624,7 @@ export function createApp(deps: ServerDeps) {
       // A resource change takes effect WITHOUT a restart: refresh the shared
       // semaphore's in-memory snapshot and pump every manager (step 2.5's hook).
       if (resources !== undefined) await deps.semaphore?.refresh();
+      setStoredToolsInstall(written.toolsAutoInstall);
       return c.json(workspaceConfigBody(written));
     })
 
@@ -7794,6 +7799,8 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
     hostname: deps.bindHost ?? '127.0.0.1',
   });
   applyKeepAlive(server);
+  // Boot read of the Settings switch for tool provisioning; every save refreshes it.
+  void loadWorkspaceConfig().then((config) => setStoredToolsInstall(config.toolsAutoInstall), () => undefined);
   const coordinator = new SkillsUpdateCoordinator(skillsUpdate, async () =>
     effectiveSkillsAutoUpdate(await loadWorkspaceConfig()));
   // Every registered project gets a handle (spec 2026-09-14): `github` only when the remote is

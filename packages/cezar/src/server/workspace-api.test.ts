@@ -94,7 +94,7 @@ describe('the workspace settings API (step 2.7)', () => {
       browseRoot: '~/',
       projectsDir: '~/cezar/projects',
       skillsAutoUpdate: null,
-      effectiveSkillsAutoUpdate: true,
+      effectiveSkillsAutoUpdate: true, toolsAutoInstall: false, effectiveToolsAutoInstall: false,
       composerDefaults: {
         autonomous: null,
         worktree: null,
@@ -290,7 +290,7 @@ describe('the workspace settings API (step 2.7)', () => {
       browseRoot: '~/',
       projectsDir: '~/cezar/projects',
       skillsAutoUpdate: null,
-      effectiveSkillsAutoUpdate: true,
+      effectiveSkillsAutoUpdate: true, toolsAutoInstall: false, effectiveToolsAutoInstall: false,
       composerDefaults: {
         autonomous: null,
         worktree: null,
@@ -373,7 +373,7 @@ describe('the workspace settings API (step 2.7)', () => {
     process.env.CEZ_SKILLS_AUTO_UPDATE = '0';
     expect((await (await getConfig()).json()) as WorkspaceConfigResponse).toMatchObject({
       skillsAutoUpdate: null,
-      effectiveSkillsAutoUpdate: false,
+      effectiveSkillsAutoUpdate: false, toolsAutoInstall: false, effectiveToolsAutoInstall: false,
     });
 
     const explicit = (await (await putConfig({ skillsAutoUpdate: true })).json()) as WorkspaceConfigResponse;
@@ -383,6 +383,27 @@ describe('the workspace settings API (step 2.7)', () => {
     const inherited = (await (await putConfig({ skillsAutoUpdate: null })).json()) as WorkspaceConfigResponse;
     expect(inherited).toMatchObject({ skillsAutoUpdate: null, effectiveSkillsAutoUpdate: false });
     expect(rawConfig().skillsAutoUpdate).toBeUndefined();
+  });
+
+  it('PUT stores the tool-install switch; CEZ_TOOL_INSTALL forces it either way', async () => {
+    const saved = process.env.CEZ_TOOL_INSTALL;
+    try {
+      delete process.env.CEZ_TOOL_INSTALL;
+      expect((await (await getConfig()).json()) as WorkspaceConfigResponse).toMatchObject({ toolsAutoInstall: false, effectiveToolsAutoInstall: false });
+      const on = (await (await putConfig({ toolsAutoInstall: true })).json()) as WorkspaceConfigResponse;
+      expect(on).toMatchObject({ toolsAutoInstall: true, effectiveToolsAutoInstall: true });
+      expect(rawConfig().toolsAutoInstall).toBe(true);
+      process.env.CEZ_TOOL_INSTALL = '0';
+      expect((await (await getConfig()).json()) as WorkspaceConfigResponse).toMatchObject({ toolsAutoInstall: true, effectiveToolsAutoInstall: false });
+      delete process.env.CEZ_TOOL_INSTALL;
+      await putConfig({ toolsAutoInstall: false });
+      process.env.CEZ_TOOL_INSTALL = '1';
+      expect((await (await getConfig()).json()) as WorkspaceConfigResponse).toMatchObject({ toolsAutoInstall: false, effectiveToolsAutoInstall: true });
+      expect((await putConfig({ toolsAutoInstall: 'yes' })).status).toBe(400);
+    } finally {
+      if (saved === undefined) delete process.env.CEZ_TOOL_INSTALL;
+      else process.env.CEZ_TOOL_INSTALL = saved;
+    }
   });
 
   it('PUT stores and independently clears composer defaults while exposing env inheritance', async () => {

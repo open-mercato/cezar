@@ -14,7 +14,16 @@ export const ANDROID_CMDLINE_SHA256: Record<string, string> = {
 export const androidCmdlineUrl = (flavor: string): string =>
   `https://dl.google.com/android/repository/commandlinetools-${flavor}-${ANDROID_CMDLINE_BUILD}_latest.zip`;
 
-/** The API level the emulator image and `platforms;` package are pinned to. */
+/**
+ * Google's official repository manifests. The live install resolves the newest stable
+ * command-line tools and API level from these (`android-manifest.ts`); the pins around here are
+ * only the fallback when they cannot be fetched or parsed.
+ */
+export const ANDROID_REPOSITORY_BASE = 'https://dl.google.com/android/repository/';
+export const ANDROID_REPOSITORY_MANIFEST = `${ANDROID_REPOSITORY_BASE}repository2-3.xml`;
+export const ANDROID_SYSIMG_MANIFEST = `${ANDROID_REPOSITORY_BASE}sys-img/google_apis/sys-img2-3.xml`;
+
+/** Fallback API level / build-tools when the manifest is unavailable. */
 export const ANDROID_API_LEVEL = 35;
 export const ANDROID_BUILD_TOOLS = '35.0.0';
 /** The one AVD cezar creates and boots. */

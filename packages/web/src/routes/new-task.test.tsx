@@ -165,7 +165,7 @@ const WORKSPACE_CONFIG: WorkspaceConfigResponse = {
   browseRoot: '~/',
   projectsDir: '~/cezar/projects',
   skillsAutoUpdate: null,
-  effectiveSkillsAutoUpdate: true,
+  effectiveSkillsAutoUpdate: true, toolsAutoInstall: false, effectiveToolsAutoInstall: false,
   composerDefaults: {
     autonomous: null,
     worktree: null,

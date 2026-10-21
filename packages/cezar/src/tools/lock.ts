@@ -1,4 +1,5 @@
-import { mkdir, open, readFile, rm, stat } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { link, mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { LOCK_STALE_MS, LOCK_WAIT_MS } from './constants.ts';
 import { type ToolsContext, pidAlive } from './runtime.ts';
@@ -74,10 +75,11 @@ export async function withToolLock<T>(ctx: ToolsContext, name: string, work: () 
   await mkdir(join(ctx.toolsDir, '.locks'), { recursive: true });
   const deadline = now() + (options.waitMs ?? LOCK_WAIT_MS);
   let announced = false;
+  const token = randomUUID(); // who owns the file: release only deletes OUR lock
   for (;;) {
     try {
       const handle = await open(path, 'wx', 0o600);
-      await handle.writeFile(`${process.pid}\n${now()}\n`);
+      await handle.writeFile(`${process.pid}\n${now()}\n${token}\n`);
       await handle.close();
       break;
     } catch (error) {
@@ -99,6 +101,23 @@ export async function withToolLock<T>(ctx: ToolsContext, name: string, work: () 
   try {
     return await work();
   } finally {
-    await rm(path, { force: true });
+    await releaseIfOwner(path, token);
   }
+}
+
+/**
+ * Delete the lock only if it is still ours. A plain `rm` would delete the lock of whoever took
+ * over after we were judged hung. Atomic compare: rename it aside (one winner), verify the token
+ * in what we moved, drop it if ours, otherwise put it back (`link` refuses to overwrite a newer one).
+ */
+async function releaseIfOwner(path: string, token: string): Promise<void> {
+  const aside = `${path}.release-${process.pid}-${token}`;
+  try {
+    await rename(path, aside);
+  } catch {
+    return; // already gone: taken over, and released by its new owner
+  }
+  const owned = (await readFile(aside, 'utf8').catch(() => '')).includes(token);
+  if (!owned) await link(aside, path).catch(() => undefined);
+  await rm(aside, { force: true });
 }

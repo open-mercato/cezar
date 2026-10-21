@@ -24,7 +24,7 @@ export interface ToolReport {
   message?: string;
 }
 
-export const ENABLE_HINT = 'cezar installs tools only when CEZ_TOOL_INSTALL=1 (set it in the environment that starts cezar)';
+export const ENABLE_HINT = 'cezar installs tools only when enabled: Settings → Resources → Test toolchains, or CEZ_TOOL_INSTALL=1 in the environment that starts cezar';
 
 /** Union of what every recipe contributes; PATH entries de-duplicated, later vars win. */
 export function composeToolsEnv(ctx: ToolsContext, managedOnly = false): ToolEnv {

@@ -2,7 +2,7 @@
 
 cezar can provision the toolchains a task needs to test a mobile app, so an agent that finds
 `flutter` missing installs it instead of giving up. Everything lives under `~/.cezar/tools`
-(`CEZ_HOME` moves it), needs no `sudo`, and is **off until you opt in** with `CEZ_TOOL_INSTALL=1`.
+(`CEZ_HOME` moves it), needs no `sudo`, and is **off until you opt in**: the switch in Settings → Resources → Test toolchains, or `CEZ_TOOL_INSTALL=1` in the environment that starts cezar (`CEZ_TOOL_INSTALL=0` forces it off).
 
 ```
 cezar tools list                      what is installed (jdk, android-sdk, android-emulator, ios-simulator, flutter)
@@ -13,19 +13,19 @@ cezar tools simulator boot|shutdown   iOS Simulator (macOS + Xcode)
 ```
 
 Progress goes to stderr; stdout is the answer (a table, JSON, or shell exports), so
-`eval "$(cezar tools env)"` works. Installs happen only when `CEZ_TOOL_INSTALL=1` is set in the environment that starts cezar (there is deliberately no per-call flag: agents run this CLI).
+`eval "$(cezar tools env)"` works. Installs happen only when enabled in Settings or by `CEZ_TOOL_INSTALL=1` in the environment that starts cezar (there is deliberately no per-call flag: agents run this CLI).
 
 ## What gets installed
 
 | id | What | Where | Notes |
 |---|---|---|---|
 | `jdk` | Temurin 17 (Adoptium assets API: newest 17 GA, SHA-256 checked) | `tools/jdk` | Needed by `sdkmanager`/`avdmanager`. A JDK 17+ already on the machine is used instead. |
-| `android-sdk` | cmdline-tools build 15859902 (SHA-256 checked), `platform-tools`, `platforms;android-35`, `build-tools;35.0.0`, licenses accepted | `tools/android-sdk` | An existing SDK (`ANDROID_HOME`, `ANDROID_SDK_ROOT`, Android Studio's default folder) is used and extended instead. |
+| `android-sdk` | newest stable cmdline-tools, `platform-tools`, the newest stable `platforms;android-N` that also has a google_apis image for this CPU, matching `build-tools`, licenses accepted. All resolved from Google's repository manifests, with the published checksum verified | `tools/android-sdk` | An existing SDK (`ANDROID_HOME`, `ANDROID_SDK_ROOT`, Android Studio's default folder) is used and extended instead. |
 | `android-emulator` | `emulator`, `system-images;android-35;google_apis;<x86_64 or arm64-v8a>`, AVD `cezar` (pixel_6) | SDK + `tools/android-avd` | The AVD lives under cezar's tools dir (`ANDROID_AVD_HOME`), never in your `~/.android/avd`. |
 | `ios-simulator` | **Detects** Xcode; with installs on, adds the iOS runtime (`xcodebuild -downloadPlatform iOS`) | system | macOS only. Xcode itself needs the App Store and an Apple ID: cezar cannot install it and says so. |
 | `flutter` | Flutter stable from the official release archive (SHA-256 checked), then `flutter precache` | `tools/flutter` | Sets `FLUTTER_ROOT`. `flutter doctor` output is logged after the install. |
 
-Pinned URLs and checksums are all in `packages/cezar/src/tools/constants.ts`.
+Android versions are read from Google's own manifests (`repository2-3.xml`, `sys-img2-3.xml`) at install time. If they cannot be fetched or parsed, cezar falls back to the pins in `packages/cezar/src/tools/constants.ts` (cmdline-tools 15859902, API 35) and logs that it did. The JDK is the newest Temurin 17 from the Adoptium API, Flutter the current stable from its release manifest.
 
 Extraction uses what the OS ships, no new dependency: `tar` for `.tar.gz`/`.tar.xz`; for zips,
 Windows `System32\tar.exe` (PowerShell `Expand-Archive` as fallback), macOS `tar`, Linux `unzip`
@@ -33,7 +33,7 @@ Windows `System32\tar.exe` (PowerShell `Expand-Archive` as fallback), macOS `tar
 
 ## Using it from a task
 
-When `CEZ_TOOL_INSTALL=1` and the cockpit is running (`serve` sets `CEZ_BIN`), every task's
+When installs are enabled and the cockpit is running (`serve` sets `CEZ_BIN`), every task's
 system prompt says the command exists. Tools cezar already installed are on the task's `PATH`
 (and on check steps' `PATH`) with `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `JAVA_HOME` and
 `FLUTTER_ROOT` set, with no flag needed. The agent runs:
@@ -90,6 +90,5 @@ emulator is left running after the tests so the next step or task reuses it; sto
 - The iOS Simulator cannot be installed, only used. Flutter on Linux also needs `git`, `curl`, `xz-utils`, `zip`, `libglu1-mesa`.
 - First install downloads roughly 2-4 GB (JDK 190 MB, cmdline-tools 150-180 MB, system image ~1.5 GB, Flutter ~1 GB with precache). `tools/logs/android-emulator.log` has the emulator's output.
 - On Windows the SDK launchers are `.bat` files. In Git Bash call them by that name (`sdkmanager.bat --list`, or `cmd //c sdkmanager.bat …`); cezar itself runs them through `cmd.exe`.
-- A workspace Settings toggle for `CEZ_TOOL_INSTALL` is not included; the env var is the switch.
 
 To remove everything: delete `~/.cezar/tools`.

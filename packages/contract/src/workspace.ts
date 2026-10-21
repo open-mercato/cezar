@@ -39,6 +39,10 @@ export const workspaceConfigResponseSchema = z.object({
   /** Stored override; `null` means inherit `CEZ_SKILLS_AUTO_UPDATE`, then true. */
   skillsAutoUpdate: z.boolean().nullable(),
   effectiveSkillsAutoUpdate: z.boolean(),
+  /** Stored Settings switch for tool provisioning (spec 2026-10-21-tool-provisioning); default false. */
+  toolsAutoInstall: z.boolean(),
+  /** What actually applies: `CEZ_TOOL_INSTALL=0` forces off, `=1` forces on, else the stored switch. */
+  effectiveToolsAutoInstall: z.boolean(),
   composerDefaults: z.object({
     autonomous: z.boolean().nullable(),
     worktree: z.boolean().nullable(),
@@ -93,6 +97,7 @@ export const setWorkspaceConfigInputSchema = z.object({
   browseRoot: z.string().trim().min(1).max(4096).optional(),
   projectsDir: z.string().trim().min(1).max(4096).optional(),
   skillsAutoUpdate: z.boolean().nullable().optional(),
+  toolsAutoInstall: z.boolean().optional(),
   composerDefaults: z
     .object({
       autonomous: z.boolean().nullable().optional(),

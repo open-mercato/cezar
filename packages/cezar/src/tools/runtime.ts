@@ -80,6 +80,31 @@ export function isOn(value: string | undefined): boolean {
   return v === '1' || v === 'true' || v === 'yes' || v === 'on';
 }
 
+function isOff(value: string | undefined): boolean {
+  const v = value?.trim().toLowerCase();
+  return v === '0' || v === 'false' || v === 'no' || v === 'off';
+}
+
+/**
+ * Are installs allowed? The operator's `CEZ_TOOL_INSTALL` wins both ways (`0` forces off, `1`
+ * forces on); with it unset, the Settings switch (`toolsAutoInstall` in `~/.cezar/config.json`)
+ * decides; default off.
+ */
+export function resolveInstallEnabled(env: NodeJS.ProcessEnv, stored: boolean | undefined): boolean {
+  if (isOff(env.CEZ_TOOL_INSTALL)) return false;
+  if (isOn(env.CEZ_TOOL_INSTALL)) return true;
+  return stored === true;
+}
+
+/** The Settings switch as the cockpit last read it (boot and every config save); undefined until then. */
+let storedInstall: boolean | undefined;
+export function setStoredToolsInstall(value: boolean | undefined): void {
+  storedInstall = value;
+}
+export function toolsInstallEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return resolveInstallEnabled(env, storedInstall);
+}
+
 /** Env names are case-insensitive on Windows (`Path`), so look the key up that way everywhere. */
 export function envKey(env: NodeJS.ProcessEnv, name: string): string {
   const upper = name.toUpperCase();
@@ -193,7 +218,7 @@ export function defaultContext(env: NodeJS.ProcessEnv = process.env): ToolsConte
     env,
     home: homedir(),
     toolsDir: join(cezarHomeDir(env), 'tools'),
-    install: isOn(env.CEZ_TOOL_INSTALL),
+    install: resolveInstallEnabled(env, storedInstall),
     exec: realExec(platform),
     spawnDetached(command, args, options) {
       mkdirSync(dirname(options.logFile), { recursive: true });
@@ -219,12 +244,12 @@ export function defaultContext(env: NodeJS.ProcessEnv = process.env): ToolsConte
   };
 }
 
-/** Stream a URL to `dest`, verifying `sha256` when the vendor publishes one. */
-export async function downloadFile(ctx: ToolsContext, url: string, dest: string, sha256?: string): Promise<void> {
+/** Stream a URL to `dest`, verifying the checksum (sha256, or sha1 where a manifest only has that) when given. */
+export async function downloadFile(ctx: ToolsContext, url: string, dest: string, checksum?: string, algo: 'sha256' | 'sha1' = 'sha256'): Promise<void> {
   ctx.log(`downloading ${url}`);
   const response = await ctx.fetch(url, { redirect: 'follow' });
   if (!response.ok || !response.body) throw new Error(`download failed (${response.status}) for ${url}`);
-  const hash = createHash('sha256');
+  const hash = createHash(algo);
   await mkdir(dirname(dest), { recursive: true });
   await pipeline(
     Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]),
@@ -236,7 +261,7 @@ export async function downloadFile(ctx: ToolsContext, url: string, dest: string,
     },
     createWriteStream(dest),
   );
-  if (sha256 && hash.digest('hex') !== sha256.toLowerCase()) {
+  if (checksum && hash.digest('hex') !== checksum.toLowerCase()) {
     await rm(dest, { force: true });
     throw new Error(`checksum mismatch for ${url}`);
   }

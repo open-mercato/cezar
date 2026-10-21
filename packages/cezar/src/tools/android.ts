@@ -1,14 +1,11 @@
+import { resolveAndroidPlan } from './android-manifest.ts';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
-  ANDROID_API_LEVEL,
-  ANDROID_BUILD_TOOLS,
-  ANDROID_CMDLINE_SHA256,
   AVD_NAME,
   EMULATOR_BOOT_TIMEOUT_MS,
   INSTALL_TIMEOUT_MS,
-  androidCmdlineUrl,
 } from './constants.ts';
 import { withToolLock } from './lock.ts';
 import {
@@ -65,7 +62,17 @@ export function cmdlineTool(ctx: ToolsContext, root: string, tool: 'sdkmanager' 
 }
 
 export const systemImageAbi = (ctx: ToolsContext): string => (ctx.arch === 'arm64' ? 'arm64-v8a' : 'x86_64');
-const imagePackage = (ctx: ToolsContext): string => `system-images;android-${ANDROID_API_LEVEL};google_apis;${systemImageAbi(ctx)}`;
+const imagePackage = (ctx: ToolsContext, apiLevel: number): string => `system-images;android-${apiLevel};google_apis;${systemImageAbi(ctx)}`;
+
+/** The newest google_apis image for this CPU already in `root` (the install picks the level; detect just reads what is there). */
+function installedImageLevel(ctx: ToolsContext, root: string): number | undefined {
+  const base = join(root, 'system-images');
+  const levels = (isDir(base) ? readdirSync(base) : [])
+    .map((name) => /^android-(\d+)$/.exec(name)?.[1])
+    .filter((n): n is string => n !== undefined && isDir(join(base, `android-${n}`, 'google_apis', systemImageAbi(ctx))))
+    .map(Number);
+  return levels.sort((a, b) => b - a)[0];
+}
 
 function sdkSource(ctx: ToolsContext, root: string): 'cezar' | 'system' {
   return root === managedSdkRoot(ctx) ? 'cezar' : 'system';
@@ -102,7 +109,7 @@ const TRANSIENT_NETWORK = /(UnknownHost|Unknown host|timed? ?out|Connection (res
 
 export const androidSdkRecipe: ToolRecipe = {
   id: 'android-sdk',
-  title: `Android SDK (platform-tools, API ${ANDROID_API_LEVEL})`,
+  title: 'Android SDK (platform-tools, newest stable platform)',
   requires: ['jdk'],
   unsupported: () => undefined,
   async detect(ctx) {
@@ -117,11 +124,12 @@ export const androidSdkRecipe: ToolRecipe = {
   },
   async install(ctx, env) {
     const root = sdkRoot(ctx) ?? managedSdkRoot(ctx);
+    const plan = await resolveAndroidPlan(ctx, systemImageAbi(ctx));
+    ctx.log(`Android: cmdline-tools and API ${plan.apiLevel} (${plan.source})`);
     if (!cmdlineTool(ctx, root, 'sdkmanager')) {
-      const flavor = ctx.platform === 'win32' ? 'win' : ctx.platform === 'darwin' ? (ctx.arch === 'arm64' ? 'mac_arm64' : 'mac_x86_64') : 'linux';
       await withStaging(ctx, 'android-sdk', async (staging) => {
         const archive = join(staging, 'cmdline-tools.zip');
-        await downloadFile(ctx, androidCmdlineUrl(flavor), archive, ANDROID_CMDLINE_SHA256[flavor]);
+        await downloadFile(ctx, plan.cmdline.url, archive, plan.cmdline.checksum, plan.cmdline.algo);
         const out = join(staging, 'out');
         await extractArchive(ctx, archive, out);
         // sdkmanager insists on `cmdline-tools/<version>/`; the zip's own folder is unversioned.
@@ -129,7 +137,7 @@ export const androidSdkRecipe: ToolRecipe = {
       });
     }
     await sdkmanager(ctx, env, root, ['--licenses']);
-    await sdkmanager(ctx, env, root, ['--install', 'platform-tools', `platforms;android-${ANDROID_API_LEVEL}`, `build-tools;${ANDROID_BUILD_TOOLS}`]);
+    await sdkmanager(ctx, env, root, ['--install', 'platform-tools', `platforms;android-${plan.apiLevel}`, `build-tools;${plan.buildTools}`]);
   },
   env(ctx, managedOnly): ToolEnv {
     const root = sdkRoot(ctx, managedOnly);
@@ -154,22 +162,25 @@ export const androidEmulatorRecipe: ToolRecipe = {
     if (!root) return { installed: false, note: 'no Android SDK found' };
     const missing = [
       !isFile(join(root, 'emulator', exeName(ctx, 'emulator'))) && 'emulator',
-      !isDir(join(root, 'system-images', `android-${ANDROID_API_LEVEL}`, 'google_apis', systemImageAbi(ctx))) && 'system image',
+      installedImageLevel(ctx, root) === undefined && 'system image',
       !isFile(join(avdHome(ctx), `${AVD_NAME}.ini`)) && `AVD "${AVD_NAME}"`,
     ].filter(Boolean);
     return missing.length
       ? { installed: false, path: root, note: `missing ${missing.join(', ')}` }
-      : { installed: true, version: `android-${ANDROID_API_LEVEL}`, path: join(avdHome(ctx), `${AVD_NAME}.ini`), source: sdkSource(ctx, root) };
+      : { installed: true, version: `android-${installedImageLevel(ctx, root)}`, path: join(avdHome(ctx), `${AVD_NAME}.ini`), source: sdkSource(ctx, root) };
   },
   async install(ctx, env) {
     const root = sdkRoot(ctx) ?? managedSdkRoot(ctx);
-    await sdkmanager(ctx, env, root, ['--install', 'emulator', imagePackage(ctx)]);
+    const plan = await resolveAndroidPlan(ctx, systemImageAbi(ctx));
+    // Keep an image that is already there (a later run must not churn a working AVD).
+    const image = imagePackage(ctx, installedImageLevel(ctx, root) ?? plan.apiLevel);
+    await sdkmanager(ctx, env, root, ['--install', 'emulator', image]);
     if (isFile(join(avdHome(ctx), `${AVD_NAME}.ini`))) return;
     const avdmanager = cmdlineTool(ctx, root, 'avdmanager');
     if (!avdmanager) throw new Error(`avdmanager not found under ${root}`);
     await mkdir(avdHome(ctx), { recursive: true });
     // "Do you wish to create a custom hardware profile?" -> no.
-    const result = await ctx.exec(avdmanager, ['create', 'avd', '--force', '-n', AVD_NAME, '-k', imagePackage(ctx), '-d', 'pixel_6'], {
+    const result = await ctx.exec(avdmanager, ['create', 'avd', '--force', '-n', AVD_NAME, '-k', image, '-d', 'pixel_6'], {
       env: { ...env, ANDROID_AVD_HOME: avdHome(ctx), ANDROID_SDK_ROOT: root },
       input: 'no\n',
       timeoutMs: 5 * 60_000,

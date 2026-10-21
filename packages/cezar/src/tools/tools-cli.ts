@@ -10,7 +10,8 @@ import {
   ensureTools,
   statusAll,
 } from './registry.ts';
-import { type ToolEnv, type ToolId, type ToolsContext, defaultContext } from './runtime.ts';
+import { loadWorkspaceConfig } from '../workspace/config.ts';
+import { type ToolEnv, type ToolId, type ToolsContext, defaultContext, setStoredToolsInstall } from './runtime.ts';
 
 /**
  * `cezar tools …` — provision and drive the toolchains a task needs to test mobile apps (spec
@@ -73,7 +74,7 @@ const READY = new Set(['ready', 'installed']);
 
 export async function runToolsCommand(
   args: string[],
-  baseCtx: ToolsContext = defaultContext(),
+  givenCtx?: ToolsContext,
   io: ToolsCliIo = { log: console.log, error: console.error },
 ): Promise<number> {
   let parsed;
@@ -100,6 +101,9 @@ export async function runToolsCommand(
     io.log(USAGE);
     return command || values.help ? 0 : 2;
   }
+  // A person at a shell gets the Settings switch too (`CEZ_TOOL_INSTALL` still wins); never fatal.
+  if (!givenCtx) await loadWorkspaceConfig().then((config) => setStoredToolsInstall(config.toolsAutoInstall), () => undefined);
+  const baseCtx = givenCtx ?? defaultContext();
   const ctx: ToolsContext = { ...baseCtx, log: io.error };
   const shell = pickShell(values.shell, ctx);
   if (!shell) {

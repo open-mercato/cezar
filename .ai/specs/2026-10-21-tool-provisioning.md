@@ -38,7 +38,7 @@ SDKs onto the machine or boots a device.
   is reported with its log tail instead of waiting out the timeout.
 - **Hardening.** The JDK comes from the Adoptium assets API with its SHA-256 verified; `sdkmanager`
   streams a heartbeat and retries once on a network error; staging dirs of dead processes are swept under
-  the tool lock; stale-lock takeover is serialized by a guard file and re-checked under it.
+  the tool lock; stale-lock takeover is serialized by a guard file and re-checked under it, and a lock carries an owner token so release deletes only the holder's own file.
 - **Agent integration.**
   - `agentEnv` and `checkStepEnv` add the PATH entries and `ANDROID_HOME`/`ANDROID_SDK_ROOT`/`JAVA_HOME`/
     `FLUTTER_ROOT`/`ANDROID_AVD_HOME` of tools **cezar installed** (`managedToolsEnv`: stat only, never
@@ -59,7 +59,8 @@ SDKs onto the machine or boots a device.
 | git clone or archive for Flutter? | Official archive. A `--depth 1` clone has no tags, so `flutter --version` reports `0.0.0-unknown`. |
 | System SDK vs cezar's own? | An existing SDK/JDK is used when complete; cezar installs only what is missing, into the SDK it resolved (its own when none exists). |
 | AVD location | `tools/android-avd` via `ANDROID_AVD_HOME`, so the user's AVD folder is untouched. |
-| Settings toggle | Skipped; it would add a contract field and UI for a flag that is set once. Env var only. |
+| Settings toggle | Added: `toolsAutoInstall` (default false) in `~/.cezar/config.json`, contract + `PUT /workspace/config`, a switch in Settings → Resources. Effective = `CEZ_TOOL_INSTALL` (`0` forces off, `1` forces on) else the switch. The cockpit gives tasks `CEZ_TOOL_INSTALL=1` when effectively on, and the prompt hint follows. |
+| Pins | Android cmdline-tools and API level are read from Google's repository manifests (sha1 verified); the constants are the offline fallback. |
 | `agent-device` / other npm tools | Skipped; `npx` already covers them and they are not a toolchain install. |
 
 ## Not covered / follow-ups

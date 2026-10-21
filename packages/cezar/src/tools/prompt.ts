@@ -1,14 +1,14 @@
-import { isOn } from './runtime.ts';
+import { toolsInstallEnabled } from './runtime.ts';
 import { TOOL_IDS } from './registry.ts';
 
 /**
- * The agent is told about `cezar tools` only when it can use it: installs are on
- * (`CEZ_TOOL_INSTALL`) AND the cockpit's own entrypoint (`CEZ_BIN`, set by `serve`) is known —
+ * The agent is told about `cezar tools` only when it can use it: installs are effectively on
+ * (`CEZ_TOOL_INSTALL` or the Settings switch) AND the cockpit's own entrypoint (`CEZ_BIN`, set by `serve`) is known —
  * a headless `cezar run` has no such path, and describing a command the agent cannot run would
  * only teach it to give up.
  */
 export function toolsReachable(env: NodeJS.ProcessEnv = process.env): boolean {
-  return isOn(env.CEZ_TOOL_INSTALL) && Boolean(env.CEZ_BIN);
+  return toolsInstallEnabled(env) && Boolean(env.CEZ_BIN);
 }
 
 export const TOOLS_PROMPT = `Test toolchains. If the task needs Flutter, the Android SDK/emulator, a JDK or the iOS Simulator and it is not installed, install it yourself instead of stopping — always through the cockpit's own binary:

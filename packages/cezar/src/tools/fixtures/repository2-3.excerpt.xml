@@ -1,0 +1,389 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Excerpt of https://dl.google.com/android/repository/repository2-3.xml recorded 2026-10-21; real <remotePackage> blocks, unedited. -->
+<sdk:sdk-repository xmlns:sdk="http://schemas.android.com/sdk/android/repo/repository2/03" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<remotePackage path="platforms;android-36-ext19">
+    <type-details xsi:type="sdk:platformDetailsType">
+      <api-level>36x</api-level>
+      <extension-level>19</extension-level>
+      <base-extension>false</base-extension>
+      <layoutlib api="15"/>
+    </type-details>
+    <revision>
+      <major>1</major>
+    </revision>
+    <display-name>Android SDK Platform 36-ext19</display-name>
+    <uses-license ref="android-sdk-license"/>
+    <channelRef ref="channel-0"/>
+    <archives>
+      <archive>
+        <complete>
+          <size>66057671</size>
+          <checksum type="sha1">52e240c229cf2ad561ee262ebdfff266e180c585</checksum>
+          <url>platform-36-ext19_r01.zip</url>
+        </complete>
+      </archive>
+    </archives>
+  </remotePackage>
+<remotePackage path="platforms;android-36">
+    <type-details xsi:type="sdk:platformDetailsType">
+      <api-level>36</api-level>
+      <extension-level>17</extension-level>
+      <base-extension>true</base-extension>
+      <layoutlib api="15"/>
+    </type-details>
+    <revision>
+      <major>2</major>
+    </revision>
+    <display-name>Android SDK Platform 36</display-name>
+    <uses-license ref="android-sdk-license"/>
+    <channelRef ref="channel-0"/>
+    <archives>
+      <archive>
+        <complete>
+          <size>65878410</size>
+          <checksum type="sha1">2c1a80dd4d9f7d0e6dd336ec603d9b5c55a6f576</checksum>
+          <url>platform-36_r02.zip</url>
+        </complete>
+      </archive>
+    </archives>
+  </remotePackage>
+<remotePackage path="platforms;android-35">
+    <type-details xsi:type="sdk:platformDetailsType">
+      <api-level>35</api-level>
+      <extension-level>13</extension-level>
+      <base-extension>true</base-extension>
+      <layoutlib api="15"/>
+    </type-details>
+    <revision>
+      <major>2</major>
+    </revision>
+    <display-name>Android SDK Platform 35</display-name>
+    <uses-license ref="android-sdk-license"/>
+    <channelRef ref="channel-0"/>
+    <archives>
+      <archive>
+        <complete>
+          <size>64273788</size>
+          <checksum type="sha1">0bb560a90a7a2cbd0dd8348224d518b638fe7949</checksum>
+          <url>platform-35_r02.zip</url>
+        </complete>
+      </archive>
+    </archives>
+  </remotePackage>
+<remotePackage path="platforms;android-34">
+    <type-details xsi:type="sdk:platformDetailsType">
+      <api-level>34</api-level>
+      <codename></codename>
+      <extension-level>7</extension-level>
+      <base-extension>true</base-extension>
+      <layoutlib api="15"/>
+    </type-details>
+    <revision>
+      <major>3</major>
+    </revision>
+    <display-name>Android SDK Platform 34</display-name>
+    <uses-license ref="android-sdk-license"/>
+    <channelRef ref="channel-0"/>
+    <archives>
+      <archive>
+        <complete>
+          <size>63180081</size>
+          <checksum type="sha1">1f2e9478d6a7601425ceaa553311dc43191f103d</checksum>
+          <url>platform-34-ext7_r03.zip</url>
+        </complete>
+      </archive>
+    </archives>
+  </remotePackage>
+<remotePackage obsolete="true" path="platforms;android-34">
+    <type-details xsi:type="sdk:platformDetailsType">
+      <api-level>34</api-level>
+      <codename></codename>
+      <extension-level>7</extension-level>
+      <base-extension>true</base-extension>
+      <layoutlib api="15"/>
+    </type-details>
+    <revision>
+      <major>2</major>
+    </revision>
+    <display-name>Android SDK Platform 34</display-name>
+    <uses-license ref="android-sdk-license"/>
+    <channelRef ref="channel-0"/>
+    <archives>
+      <archive>
+        <complete>
+          <size>63180079</size>
+          <checksum type="sha1">f09b07da8aea238a81b71d6fedb815e13aa13e58</checksum>
+          <url>platform-34-ext7_r02.zip</url>
+        </complete>
+      </archive>
+    </archives>
+  </remotePackage>
+<remotePackage path="build-tools;37.0.0">
+    <type-details xsi:type="generic:genericDetailsType"/>
+    <revision>
+      <major>37</major>
+      <minor>0</minor>
+      <micro>0</micro>
+    </revision>
+    <display-name>Android SDK Build-Tools 37</display-name>
+    <uses-license ref="android-sdk-license"/>
+    <channelRef ref="channel-0"/>
+    <archives>
+      <archive>
+        <complete>
+          <size>66135704</size>
+          <checksum type="sha1">70954e99f4c3d9d46ee70fa32624672fe7cd6ebe</checksum>
+          <url>build-tools_r37_linux.zip</url>
+        </complete>
+        <host-os>linux</host-os>
+      </archive>
+      <archive>
+        <complete>
+          <size>61077164</size>
+          <checksum type="sha1">e9c97e26b5b5678002e9d3fed632c841ae62d99f</checksum>
+          <url>build-tools_r37_windows.zip</url>
+        </complete>
+        <host-os>windows</host-os>
+      </archive>
+      <archive>
+        <complete>
+          <size>81933386</size>
+          <checksum type="sha1">eb080751b2b2028eb3604f571027d6f7b3c46321</checksum>
+          <url>build-tools_r37_macosx.zip</url>
+        </complete>
+        <host-os>macosx</host-os>
+      </archive>
+    </archives>
+  </remotePackage>
+<remotePackage path="build-tools;36.1.0">
+    <type-details xsi:type="generic:genericDetailsType"/>
+    <revision>
+      <major>36</major>
+      <minor>1</minor>
+      <micro>0</micro>
+    </revision>
+    <display-name>Android SDK Build-Tools 36.1</display-name>
+    <uses-license ref="android-sdk-license"/>
+    <channelRef ref="channel-0"/>
+    <archives>
+      <archive>
+        <complete>
+          <size>64195204</size>
+          <checksum type="sha1">936a0d6bd5ae3e2118a7567dddbc95ff67ed46e9</checksum>
+          <url>build-tools_r36.1_linux.zip</url>
+        </complete>
+        <host-os>linux</host-os>
+      </archive>
+      <archive>
+        <complete>
+          <size>59366211</size>
+          <checksum type="sha1">95f048ae758dad90617975fe3f787f038b03338c</checksum>
+          <url>build-tools_r36.1_windows.zip</url>
+        </complete>
+        <host-os>windows</host-os>
+      </archive>
+      <archive>
+        <complete>
+          <size>80527175</size>
+          <checksum type="sha1">d365b05ca1810ca92b428b92717865ad4188b5e1</checksum>
+          <url>build-tools_r36.1_macosx.zip</url>
+        </complete>
+        <host-os>macosx</host-os>
+      </archive>
+    </archives>
+  </remotePackage>
+<remotePackage path="build-tools;36.0.0">
+    <type-details xsi:type="generic:genericDetailsType"/>
+    <revision>
+      <major>36</major>
+      <minor>0</minor>
+      <micro>0</micro>
+    </revision>
+    <display-name>Android SDK Build-Tools 36</display-name>
+    <uses-license ref="android-sdk-license"/>
+    <channelRef ref="channel-0"/>
+    <archives>
+      <archive>
+        <complete>
+          <size>63737259</size>
+          <checksum type="sha1">b0b6376977657e8ad9b969bacf4093601da2c6fb</checksum>
+          <url>build-tools_r36_linux.zip</url>
+        </complete>
+        <host-os>linux</host-os>
+      </archive>
+      <archive>
+        <complete>
+          <size>58699878</size>
+          <checksum type="sha1">f16ccffd34de8790dede813a6c7d8e2c11a27b50</checksum>
+          <url>build-tools_r36_windows.zip</url>
+        </complete>
+        <host-os>windows</host-os>
+      </archive>
+      <archive>
+        <complete>
+          <size>79121749</size>
+          <checksum type="sha1">199ae0047ee61e842f8ee0c6d3918e44fb9a1f83</checksum>
+          <url>build-tools_r36_macosx.zip</url>
+        </complete>
+        <host-os>macosx</host-os>
+      </archive>
+    </archives>
+  </remotePackage>
+<remotePackage path="build-tools;35.0.0">
+    <type-details xsi:type="generic:genericDetailsType"/>
+    <revision>
+      <major>35</major>
+      <minor>0</minor>
+      <micro>0</micro>
+    </revision>
+    <display-name>Android SDK Build-Tools 35</display-name>
+    <uses-license ref="android-sdk-license"/>
+    <channelRef ref="channel-0"/>
+    <archives>
+      <archive>
+        <complete>
+          <size>61958799</size>
+          <checksum type="sha1">2cfaa0bbb2336e9ec18ed3ecea84fa2e2af607bc</checksum>
+          <url>build-tools_r35_linux.zip</url>
+        </complete>
+        <host-os>linux</host-os>
+      </archive>
+      <archive>
+        <complete>
+          <size>59878107</size>
+          <checksum type="sha1">af059bb67cf7786f45ee0db85e2d24985df1b4b6</checksum>
+          <url>build-tools_r35_windows.zip</url>
+        </complete>
+        <host-os>windows</host-os>
+      </archive>
+      <archive>
+        <complete>
+          <size>76857898</size>
+          <checksum type="sha1">93ab8ce91230e067b5add4bfa79919c52b27f072</checksum>
+          <url>build-tools_r35_macosx.zip</url>
+        </complete>
+        <host-os>macosx</host-os>
+      </archive>
+    </archives>
+  </remotePackage>
+<remotePackage path="build-tools;34.0.0-rc1">
+    <type-details xsi:type="generic:genericDetailsType"/>
+    <revision>
+      <major>34</major>
+      <minor>0</minor>
+      <micro>0</micro>
+      <preview>1</preview>
+    </revision>
+    <display-name>Android SDK Build-Tools 34-rc1</display-name>
+    <uses-license ref="android-sdk-preview-license"/>
+    <channelRef ref="channel-0"/>
+    <archives>
+      <archive>
+        <complete>
+          <size>60468599</size>
+          <checksum type="sha1">fec0a16d0c2fab6576fd58f6aa2e69a561ab1128</checksum>
+          <url>build-tools_r34-rc1-linux.zip</url>
+        </complete>
+        <host-os>linux</host-os>
+      </archive>
+      <archive>
+        <complete>
+          <size>62640488</size>
+          <checksum type="sha1">1e3847d449ce6124ffbf528db601f3dfab25e77e</checksum>
+          <url>build-tools_r34-rc1-macosx.zip</url>
+        </complete>
+        <host-os>macosx</host-os>
+      </archive>
+      <archive>
+        <complete>
+          <size>57791540</size>
+          <checksum type="sha1">73dca92f84827749882bd0ac501c4befdf3ab878</checksum>
+          <url>build-tools_r34-rc1-windows.zip</url>
+        </complete>
+        <host-os>windows</host-os>
+      </archive>
+    </archives>
+  </remotePackage>
+<remotePackage path="cmdline-tools;latest">
+    <type-details xsi:type="generic:genericDetailsType"/>
+    <revision>
+      <major>23</major>
+      <minor>0</minor>
+    </revision>
+    <display-name>Android SDK Command-line Tools (latest)</display-name>
+    <uses-license ref="android-sdk-license"/>
+    <channelRef ref="channel-0"/>
+    <archives>
+      <archive>
+        <complete>
+          <size>181052239</size>
+          <checksum type="sha1">e025545c62a8e64c7559119566a569fb1dec5f60</checksum>
+          <url>commandlinetools-linux-16111833_latest.zip</url>
+        </complete>
+        <host-os>linux</host-os>
+      </archive>
+      <archive>
+        <complete>
+          <size>155582504</size>
+          <checksum type="sha1">112cf9618794a997ff273537d55bee02c22abffe</checksum>
+          <url>commandlinetools-mac_x86_64-16111833_latest.zip</url>
+        </complete>
+        <host-os>macosx</host-os>
+        <host-arch>x64</host-arch>
+      </archive>
+      <archive>
+        <complete>
+          <size>155384151</size>
+          <checksum type="sha1">ad03dc49bfacfd52c110b14104ea548b8a07e830</checksum>
+          <url>commandlinetools-mac_arm64-16111833_latest.zip</url>
+        </complete>
+        <host-os>macosx</host-os>
+        <host-arch>aarch64</host-arch>
+      </archive>
+      <archive>
+        <complete>
+          <size>154957218</size>
+          <checksum type="sha1">57d04f2d75eb8e8fffc5000a987e5de4b5a63e9d</checksum>
+          <url>commandlinetools-win-16111833_latest.zip</url>
+        </complete>
+        <host-os>windows</host-os>
+      </archive>
+    </archives>
+  </remotePackage>
+<remotePackage obsolete="true" path="cmdline-tools;2.0">
+    <type-details xsi:type="generic:genericDetailsType"/>
+    <revision>
+      <major>2</major>
+      <minor>0</minor>
+    </revision>
+    <display-name>Android SDK Command-line Tools</display-name>
+    <uses-license ref="android-sdk-license"/>
+    <channelRef ref="channel-0"/>
+    <archives>
+      <archive>
+        <complete>
+          <size>86521858</size>
+          <checksum type="sha1">14b2114c6eae9e10686a18138d2bb468c46f8e0c</checksum>
+          <url>commandlinetools-linux-6514223_latest.zip</url>
+        </complete>
+        <host-os>linux</host-os>
+      </archive>
+      <archive>
+        <complete>
+          <size>86521848</size>
+          <checksum type="sha1">d45816955198c4dfd652584f4c0f1b0e86efb1b7</checksum>
+          <url>commandlinetools-mac-6514223_latest.zip</url>
+        </complete>
+        <host-os>macosx</host-os>
+      </archive>
+      <archive>
+        <complete>
+          <size>86506760</size>
+          <checksum type="sha1">e11b418c1d2d28589e9194915be2561f1e1e7a95</checksum>
+          <url>commandlinetools-win-6514223_latest.zip</url>
+        </complete>
+        <host-os>windows</host-os>
+      </archive>
+    </archives>
+  </remotePackage>
+</sdk:sdk-repository>

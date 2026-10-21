@@ -61,6 +61,7 @@ import { automationsReachable } from '../automations/builtin-skill.ts';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
 import { TOOLS_PROMPT, toolsReachable } from '../tools/prompt.ts';
 import { managedToolsEnv } from '../tools/registry.ts';
+import { toolsInstallEnabled } from '../tools/runtime.ts';
 import { getTeamSkillsCached, materializeSkillDir, waitForTeamSkills } from '../skills-remote.ts';
 import { provisionSkills } from '../skills-provision.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
@@ -1422,6 +1423,9 @@ export class RunManager {
       // Toolchains cezar provisioned (spec 2026-10-21-tool-provisioning): PATH in front, plus
       // ANDROID_HOME / JAVA_HOME / FLUTTER_ROOT. A stat-only read; `{}` until something was installed.
       ...managedToolsEnv(),
+      // The cockpit's EFFECTIVE install decision (env or the Settings switch), so `cezar tools ensure`
+      // inside the task agrees with what the prompt told it. Absent when installs are off.
+      ...(toolsInstallEnabled() ? { CEZ_TOOL_INSTALL: '1' } : {}),
       // The tree directory — brief, notes, inbox — for a run in a dispatch tree only.
       ...(dispatch ? { CEZ_TREE_DIR: treeDir(this.dataDir, dispatch.rootRunId) } : {}),
     };
@@ -7508,7 +7512,7 @@ export class RunManager {
       if (name === 'CEZ_PROJECT_ID' && !this.projectId) continue;
       delete base[name];
     }
-    return { ...base, ...managedToolsEnv(base), ...resolved.values, ...(await this.checkContextEnv(runId, state, step.id)) };
+    return { ...base, ...managedToolsEnv(base), ...(toolsInstallEnabled() ? { CEZ_TOOL_INSTALL: '1' } : {}), ...resolved.values, ...(await this.checkContextEnv(runId, state, step.id)) };
   }
 
   /**
