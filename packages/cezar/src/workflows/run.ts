@@ -2468,8 +2468,9 @@ export class RunManager {
    * reason back as the route's 409 body. A parent that had no `dispatch` record becomes a root the
    * first time it dispatches: its tree directory is created and its brief written from its own
    * task text. The child forks its worktree off the parent's branch, inherits runner and model
-   * unless the order names others, gets a budget carved out of the parent's, and always runs
-   * autonomously — a child parked at `waiting` after every turn would need a human per rung.
+   * unless the order names others (a model only on the runner it was picked for), gets a budget
+   * carved out of the parent's, and always runs autonomously — a child parked at `waiting` after
+   * every turn would need a human per rung.
    */
   dispatch(
     parentId: string,
@@ -2531,13 +2532,20 @@ export class RunManager {
         },
       ],
     };
+    const childRunner = input.runner ?? intent?.runner ?? parent.runner;
+    // An inherited model only follows its own runner: a codex parent's `gpt-*` handed to a
+    // `--runner claude` child fails at spawn (telemetry 43bdda11). Otherwise the child's runner picks.
+    const sameRunner = (runner: RunnerId | undefined) => (runner ?? 'claude') === (childRunner ?? 'claude');
+    const childModel = input.model
+      ?? (intent?.model && sameRunner(intent.runner ?? parent.runner) ? intent.model : undefined)
+      ?? (parent.model && sameRunner(parent.runner) ? parent.model : undefined);
     const record = this.startRun(opts.workflow ?? workflow, {
       // The tree directory lines are composed against the id the run is ABOUT to get: `startRun`
       // mints it, so the envelope is finished below once it exists.
       task: childTaskEnvelope(input, { id: parentId, branch: parent.branch }, ['{{TREE_PATHS}}']),
       systemPrompt: composeDispatchPrompt(input.kind),
-      runner: input.runner ?? intent?.runner ?? parent.runner,
-      ...(input.model ?? intent?.model ?? parent.model ? { model: input.model ?? intent?.model ?? parent.model } : {}),
+      runner: childRunner,
+      ...(childModel ? { model: childModel } : {}),
       autonomous: true,
       dispatch: {
         rootRunId,
@@ -6453,7 +6461,8 @@ export class RunManager {
     try {
       const normalized = normalizeModelForBackend(
         stepBackend,
-        agentModelsLocked(this.repoRoot) ? undefined : step.model ?? input.model,
+        // The task's model was picked for the task's runner; a step on another runner gets its own default.
+        agentModelsLocked(this.repoRoot) ? undefined : step.model ?? (stepBackend === taskBackend ? input.model : undefined),
         { configuredProvider: await configuredModelProvider(stepBackend, state.cwd) },
       );
       backendModel = normalized?.backendModel;
