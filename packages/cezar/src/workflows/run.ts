@@ -3838,9 +3838,16 @@ export class RunManager {
       state.graphFinish();
       return true;
     }
-    if (state?.session?.open && state.autoLand && !state.autonomous) {
+    if (
+      state?.session?.open &&
+      state.autoLand &&
+      !state.autonomous &&
+      !state.repoRootParked &&
+      this.store.getRun(runId)?.status === 'waiting'
+    ) {
       // A trunk-based interactive run: Finish is the user's approval to land (spec
-      // 2026-10-20-trunk-based-projects). A failure goes back to the agent; success closes.
+      // 2026-10-20-trunk-based-projects). A failure goes back to the agent; success closes. Mid-turn
+      // or parked off the tree, the ordinary Finish below closes first and settle lands after.
       this.clearIdleTimer(state);
       state.idleClosed = undefined;
       if (state.askPark === 'waiting') state.askPark = 'abandoned';
@@ -7237,7 +7244,7 @@ export class RunManager {
           this.store.appendEvent(runId, {
             type: 'note',
             stepId,
-            message: `auto-land failed ${policy.attempts} times (${outcome.stage}) — the changes stay in the checkout`,
+            message: `auto-land failed ${policy.attempts} times (${outcome.stage}) — not landed; fix it and Commit again`,
           });
           close();
           return outcome;
@@ -7271,6 +7278,9 @@ export class RunManager {
     const base = policy.baseBranch ?? (await getRepoInfo(this.repoRoot))?.branch ?? 'the base branch';
     const state = this.active.get(runId);
     if (state?.session?.open && run.status === 'waiting') {
+      if (state.repoRootParked) {
+        return { outcome: 'busy', message: 'this task lent the checkout to another task while it waits — commit once it resumes' };
+      }
       this.clearIdleTimer(state);
       state.idleClosed = undefined;
       if (state.askPark === 'waiting') state.askPark = 'abandoned';
@@ -7365,8 +7375,18 @@ export class RunManager {
     const policy = await this.landingPolicy(run, await loadConfig(this.repoRoot));
     if (!policy || !(await hasUnlanded(this.repoRoot))) return undefined;
     // Only an autonomous run or the user's Finish may land; anything else rests at review.
-    if (run.autonomous !== true && this.active.get(runId)?.finishRequested !== true) return 'review';
-    const outcome = await this.landNow(runId, policy);
+    const state = this.active.get(runId);
+    if (run.autonomous !== true && state?.finishRequested !== true) return 'review';
+    // Land only while holding the tree: this run's own lease, else a fresh one (restart recovery).
+    const holdsTree = Boolean(state?.releaseRepoRoot) && !state?.repoRootParked;
+    if (!holdsTree && this.repoRootBusy > 0) return 'review';
+    const lease = holdsTree ? undefined : this.chainRepoRoot();
+    let outcome: LandResult;
+    try {
+      outcome = await this.landNow(runId, policy);
+    } finally {
+      lease?.release();
+    }
     return outcome.result === 'failed'
       ? `auto-land failed (${outcome.stage}): ${this.store.redactRunText(runId, outcome.error).split('\n')[0]}`
       : undefined;

@@ -111,19 +111,23 @@ export async function landInPlace(root: string, options: LandOptions): Promise<L
   }
   // The commit AND the rebase that rewrites it need a committer; a machine with no identity gets cezar's.
   const identity = (await gitHasIdentity(root)) ? [] : ['-c', 'user.name=cezar', '-c', 'user.email=cezar@local'];
-  const committed = await commitTask(root, options.describe, identity);
-  if (committed.result === 'failed') return { result: 'failed', stage: 'commit', error: committed.error };
-
   const upstream = await upstreamOf(root);
   const dryRun = process.env.CEZ_DRY_RUN === '1';
   if (!upstream) {
-    // A local-only repository: the commit on the base branch IS the landing.
-    if (committed.result === 'nothing') return { result: 'nothing' };
+    // A local-only repository: the commit on the base branch IS the landing, so the checks gate
+    // the commit itself — a failed check must not leave it behind for a retry to call "nothing".
+    const pending = await git(root, ['status', '--porcelain', ...PATHSPEC]);
+    if (pending.ok && !pending.stdout.trim()) return { result: 'nothing' };
     const checked = await runChecks(root, options);
     if (checked) return checked;
+    const committed = await commitTask(root, options.describe, identity);
+    if (committed.result === 'failed') return { result: 'failed', stage: 'commit', error: committed.error };
+    if (committed.result === 'nothing') return { result: 'nothing' };
     const files = options.since ? await changedFiles(root, `${options.since}..HEAD`) : [];
     return { result: 'landed', branch, sha: committed.sha, pushed: false, files };
   }
+  const committed = await commitTask(root, options.describe, identity);
+  if (committed.result === 'failed') return { result: 'failed', stage: 'commit', error: committed.error };
   // Nothing new against the last-fetched upstream: no network, nothing to land.
   if (committed.result === 'nothing' && (await count(root, `${upstream.ref}..HEAD`)) === 0) return { result: 'nothing' };
 
@@ -133,7 +137,7 @@ export async function landInPlace(root: string, options: LandOptions): Promise<L
       const fetched = await git(root, ['fetch', upstream.remote, upstream.branch], NETWORK_TIMEOUT_MS);
       if (!fetched.ok) return { result: 'failed', stage: 'sync', error: `git fetch failed: ${reason(fetched, 'no answer')}` };
     }
-    const rebased = await git(root, [...identity, 'rebase', upstream.ref]);
+    const rebased = await git(root, [...identity, 'rebase', '--autostash', upstream.ref]);
     if (!rebased.ok) {
       const conflicted = (await git(root, ['diff', '--name-only', '--diff-filter=U'])).stdout.trim().split('\n').filter(Boolean);
       await git(root, ['rebase', '--abort']);

@@ -151,6 +151,19 @@ describe('trunk-based projects', () => {
     expect(await manager.land(record.id)).toEqual({ outcome: 'nothing', message: 'nothing to commit' });
   }, 30_000);
 
+  it('never lands mid-turn: Finish during a running turn closes first and lands after', async () => {
+    writeConfig({ taskWorkspace: 'in-place', landing: 'auto' });
+    const before = await head();
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:pause' });
+    await waitFor(record.id, (r) => r?.status === 'running' && notes(record.id).length > 0);
+    writeFileSync(join(repoRoot, 'person.md'), 'half-done\n');
+    expect(manager.finish(record.id)).toBe(true);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(store.getRun(record.id)?.landing).toBeUndefined();
+    expect(await head()).toBe(before);
+    await waitFor(record.id, (r) => r?.status === 'done' || r?.status === 'review' || r?.status === 'failed');
+  }, 30_000);
+
   it('lands an autonomous task on CEZ:DONE without stopping for review', async () => {
     writeConfig({ taskWorkspace: 'in-place', landing: 'auto' });
     writeFileSync(join(repoRoot, 'person.md'), 'Bjorn\n');

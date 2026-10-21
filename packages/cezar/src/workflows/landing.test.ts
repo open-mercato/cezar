@@ -136,6 +136,37 @@ describe('landInPlace', () => {
     const result = await landInPlace(local, { describe: async () => 'note', since, checks: [] });
     expect(result).toMatchObject({ result: 'landed', pushed: false, files: ['b.md'] });
   });
+
+  it('with no upstream, a failing check commits nothing, so the retry still sees the change', async () => {
+    const local = join(dir, 'local');
+    execFileSync('git', ['init', '-q', '-b', 'main', local]);
+    writeFileSync(join(local, 'a.md'), 'a\n');
+    git(local, 'add', '-A');
+    git(local, 'commit', '-qm', 'init');
+    const before = git(local, 'rev-parse', 'HEAD');
+    writeFileSync(join(local, 'b.md'), 'b\n');
+    const failing = async () => ({ ok: false, output: 'nope' });
+    expect(await landInPlace(local, { describe: async () => 'note', checks: ['x'], runCheck: failing })).toMatchObject({ result: 'failed', stage: 'checks' });
+    expect(git(local, 'rev-parse', 'HEAD')).toBe(before);
+    expect(await hasUnlanded(local)).toBe(true);
+  });
+
+  it('rebases while a tracked file under .ai/cezar has edits it leaves out', async () => {
+    execFileSync('mkdir', ['-p', join(checkout, '.ai/cezar/workflows')]);
+    writeFileSync(join(checkout, '.ai/cezar/workflows/w.yaml'), 'a: 1\n');
+    git(checkout, 'add', '-A');
+    git(checkout, 'commit', '-qm', 'workflow');
+    git(checkout, 'push', '-q');
+    git(other, 'pull', '-q');
+    writeFileSync(join(other, 'project.md'), 'p\n');
+    git(other, 'add', '-A');
+    git(other, 'commit', '-qm', 'theirs');
+    git(other, 'push', '-q');
+    writeFileSync(join(checkout, '.ai/cezar/workflows/w.yaml'), 'a: 2\n');
+    writeFileSync(join(checkout, 'person.md'), 'Bjorn\n');
+    expect(await landInPlace(checkout, { describe: async () => 'mine', checks: [] })).toMatchObject({ result: 'landed', pushed: true, files: ['person.md'] });
+    expect(readFileSync(join(checkout, '.ai/cezar/workflows/w.yaml'), 'utf8')).toBe('a: 2\n');
+  });
 });
 
 describe('landing commit messages (spec 2026-10-20-trunk-based-projects)', () => {
