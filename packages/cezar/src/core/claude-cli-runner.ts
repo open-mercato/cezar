@@ -133,6 +133,10 @@ export class ClaudeCliRunner implements AgentRunner {
       throw wrapSpawnError(err, this.bin);
     }
 
+    // A write into a child that already died fails as an async 'error' on the pipe, not a throw;
+    // unhandled it crashes cezar. The exit path owns settlement (same guard as codex/junie).
+    child.stdin.on('error', () => {});
+
     let stdinOpen = true;
     let autoEndTimer: NodeJS.Timeout | undefined;
     let eofTermTimer: NodeJS.Timeout | undefined;

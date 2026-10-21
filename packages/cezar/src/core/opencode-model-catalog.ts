@@ -143,6 +143,7 @@ function spawnOpencode(
   });
   // Nothing is ever written to it, and an open stdin is what makes a CLI that expects a TTY
   // sit and wait instead of printing its list.
+  child.stdin.on('error', () => {}); // a CLI that died first makes end() fail async; never crash
   child.stdin.end();
   return child;
 }

@@ -179,6 +179,8 @@ class CopilotAcpSession implements AgentSession {
           ? new Error(`\`${bin}\` not found on PATH — install GitHub Copilot CLI (npm i -g @github/copilot) and run \`copilot login\``)
           : error;
     });
+    // A write into a dead child fails as an async pipe 'error'; unhandled it crashes cezar.
+    this.child.stdin.on('error', () => {});
     this.child.stderr.setEncoding('utf8');
     this.child.stderr.on('data', (chunk: string) => this.stderr.push(chunk));
     this.client = new AcpClient(this.child.stdin, this.child.stdout, {

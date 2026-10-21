@@ -86,6 +86,8 @@ export class PiRunner implements AgentRunner {
     child.on('error', (error: NodeJS.ErrnoException) => {
       spawnError = wrapSpawnError(error, this.bin);
     });
+    // A write into a dead child fails as an async pipe 'error'; unhandled it crashes cezar.
+    child.stdin.on('error', () => {});
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => stderr.push(chunk));
 
