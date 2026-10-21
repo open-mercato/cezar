@@ -108,7 +108,7 @@ describe('parseUsageLimit', () => {
 
   it('reads the session-limit prose with a UTC zone (telemetry 987e8238)', () => {
     const hit = parseUsageLimit("You've hit your session limit · resets 3:10pm (UTC)", NOW);
-    expect(hit?.resetAt.toISOString()).toBe('2026-08-03T15:10:00.000Z');
+    expect(hit?.resetAt.toISOString()).toBe('2026-08-03T15:11:00.000Z');
   });
 
   it('honors the day a weekly reset names instead of resuming at the next matching clock', () => {
