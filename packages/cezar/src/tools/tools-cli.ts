@@ -22,12 +22,12 @@ import { type ToolEnv, type ToolId, type ToolsContext, defaultContext } from './
 const USAGE = `cezar tools — install and drive the toolchains a task needs (installs are opt-in: CEZ_TOOL_INSTALL=1)
 
   cezar tools list [--json]                 what is installed (alias: status)
-  cezar tools ensure <id…> [--install] [--json] [--shell bash|powershell]
-                                            detect; install what is missing when allowed; print env exports
+  cezar tools ensure <id…> [--json] [--shell bash|powershell]
+                                            detect; install what is missing when CEZ_TOOL_INSTALL=1; stdout = env exports (eval-safe), status on stderr
   cezar tools env [--shell bash|powershell] [--json]
                                             the PATH/ANDROID_HOME/JAVA_HOME/FLUTTER_ROOT exports for installed tools
   cezar tools emulator start|stop [--port 5554] [--timeout <s>]   headless Android emulator "cezar"
-  cezar tools simulator boot|shutdown [--device <name|udid>]      iOS Simulator (macOS + Xcode)
+  cezar tools simulator boot|shutdown [--device <name|udid>]      iOS Simulator (macOS + Xcode); shutdown stops only the one cezar booted
 
 ids: ${TOOL_IDS.join(' · ')}
 Tools install under ~/.cezar/tools (no sudo). Inside a task: node "$CEZ_BIN" tools ensure <id>`;
@@ -83,7 +83,6 @@ export async function runToolsCommand(
       allowPositionals: true,
       options: {
         json: { type: 'boolean' },
-        install: { type: 'boolean' },
         shell: { type: 'string' },
         port: { type: 'string' },
         timeout: { type: 'string' },
@@ -101,7 +100,7 @@ export async function runToolsCommand(
     io.log(USAGE);
     return command || values.help ? 0 : 2;
   }
-  const ctx: ToolsContext = { ...baseCtx, install: baseCtx.install || values.install === true, log: io.error };
+  const ctx: ToolsContext = { ...baseCtx, log: io.error };
   const shell = pickShell(values.shell, ctx);
   if (!shell) {
     io.error('--shell must be bash or powershell');
@@ -138,12 +137,9 @@ export async function runToolsCommand(
       const env = composeToolsEnv(ctx);
       if (json) print({ install: ctx.install, tools, env });
       else {
-        for (const report of tools) io.log(describe(report));
-        const lines = formatExports(env, shell, ctx.platform);
-        if (lines.length) {
-          io.log(`\n# environment for these tools — eval it, or run: tools env --shell ${shell}`);
-          for (const line of lines) io.log(line);
-        }
+        // Status is for people (stderr); stdout is ONLY the exports, so `eval "$(… tools ensure x)"` is safe.
+        for (const report of tools) io.error(describe(report));
+        for (const line of formatExports(env, shell, ctx.platform)) io.log(line);
       }
       return tools.every((t) => READY.has(t.status)) ? 0 : 1;
     }
@@ -181,8 +177,8 @@ export async function runToolsCommand(
       }
       try {
         if (action === 'shutdown') {
-          await simulatorShutdown(ctx, childEnv());
-          json ? print({ shutdown: true }) : io.log('simulators shut down');
+          const udid = await simulatorShutdown(ctx, childEnv(), { device: values.device });
+          json ? print({ shutdown: udid ?? null }) : io.log(udid ? `shut down ${udid}` : 'cezar has not booted a simulator; nothing to shut down');
           return 0;
         }
         const notReady = (await ensureTools(ctx, ['ios-simulator'])).find((t) => !READY.has(t.status));

@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { JDK_MAJOR, jdkUrl } from './constants.ts';
+import { JDK_MAJOR, jdkAssetsUrl } from './constants.ts';
 import {
   type ToolEnv,
   type ToolRecipe,
@@ -30,6 +30,15 @@ export function javaMajor(banner: string): number | undefined {
   if (!match) return undefined;
   const major = Number(match[1]);
   return major === 1 ? Number(match[2]) : major;
+}
+
+/** First JDK package (link + sha256) in an Adoptium `assets/latest` answer. */
+export function pickJdkPackage(assets: unknown): { link: string; checksum: string } | undefined {
+  for (const asset of Array.isArray(assets) ? assets : []) {
+    const pkg = (asset as { binary?: { image_type?: string; package?: { link?: string; checksum?: string } } }).binary;
+    if (pkg?.image_type === 'jdk' && pkg.package?.link && pkg.package.checksum) return { link: pkg.package.link, checksum: pkg.package.checksum };
+  }
+  return undefined;
 }
 
 function target(ctx: ToolsContext): { os: 'windows' | 'mac' | 'linux'; arch: 'x64' | 'aarch64' } | undefined {
@@ -65,9 +74,13 @@ export const jdkRecipe: ToolRecipe = {
   async install(ctx) {
     const t = target(ctx)!;
     const ext = t.os === 'windows' ? 'zip' : 'tar.gz';
+    const response = await ctx.fetch(jdkAssetsUrl(t.os, t.arch));
+    if (!response.ok) throw new Error(`Adoptium assets API unavailable (${response.status})`);
+    const pkg = pickJdkPackage(await response.json());
+    if (!pkg) throw new Error(`Adoptium lists no JDK ${JDK_MAJOR} for ${t.os}/${t.arch}`);
     await withStaging(ctx, 'jdk', async (staging) => {
       const archive = join(staging, `jdk.${ext}`);
-      await downloadFile(ctx, jdkUrl(t.os, t.arch), archive);
+      await downloadFile(ctx, pkg.link, archive, pkg.checksum);
       const out = join(staging, 'out');
       await extractArchive(ctx, archive, out);
       await moveInto(singleRoot(out), jdkDir(ctx));

@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createWriteStream, mkdirSync, openSync, readdirSync, statSync } from 'node:fs';
-import { mkdir, rename, rm } from 'node:fs/promises';
+import { mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -16,6 +16,8 @@ export interface ExecOptions {
   /** Written to stdin then closed — how license prompts are answered without a `yes |` shell pipe. */
   input?: string;
   timeoutMs?: number;
+  /** Called with each chunk of stdout/stderr as it arrives (progress for long installs). */
+  onOutput?: (chunk: string) => void;
 }
 export interface ExecResult {
   code: number;
@@ -35,7 +37,7 @@ export interface ToolsContext {
   /** Never rejects: a spawn failure is `code: -1` with the reason in `stderr`. */
   exec: (command: string, args: string[], options?: ExecOptions) => Promise<ExecResult>;
   /** Start a long-lived process (the emulator) that outlives this CLI; output goes to `logFile`. */
-  spawnDetached: (command: string, args: string[], options: { env: NodeJS.ProcessEnv; logFile: string }) => void;
+  spawnDetached: (command: string, args: string[], options: { env: NodeJS.ProcessEnv; logFile: string }) => { exitCode: () => number | null };
   fetch: typeof fetch;
   log: (line: string) => void;
   sleep: (ms: number) => Promise<void>;
@@ -164,8 +166,14 @@ export function realExec(platform: NodeJS.Platform): ToolsContext['exec'] {
             done({ code: -1, stdout, stderr: `${stderr}\ntimed out after ${Math.round(options.timeoutMs! / 1000)}s` });
           }, options.timeoutMs);
         }
-        child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString('utf8')));
-        child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString('utf8')));
+        child.stdout.on('data', (chunk: Buffer) => {
+          stdout += chunk.toString('utf8');
+          options.onOutput?.(chunk.toString('utf8'));
+        });
+        child.stderr.on('data', (chunk: Buffer) => {
+          stderr += chunk.toString('utf8');
+          options.onOutput?.(chunk.toString('utf8'));
+        });
         child.on('error', (error) => done({ code: -1, stdout, stderr: error.message }));
         child.on('close', (code) => done({ code: code ?? -1, stdout, stderr }));
         // A tool that exits before reading its prompts closes stdin on us: EPIPE is not a failure.
@@ -191,13 +199,19 @@ export function defaultContext(env: NodeJS.ProcessEnv = process.env): ToolsConte
       mkdirSync(dirname(options.logFile), { recursive: true });
       const log = openSync(options.logFile, 'a');
       const target = spawnTarget(command, args, platform);
-      spawn(target.file, target.args, {
+      const child = spawn(target.file, target.args, {
         env: options.env,
         detached: true,
         stdio: ['ignore', log, log],
         windowsHide: true,
         windowsVerbatimArguments: target.verbatim,
-      }).unref();
+      });
+      let exitCode: number | null = null;
+      // A spawn failure or an immediate exit (no hypervisor) must be visible to the caller's wait loop.
+      child.on('error', () => (exitCode = -1));
+      child.on('exit', (code) => (exitCode = code ?? -1));
+      child.unref();
+      return { exitCode: () => exitCode };
     },
     fetch,
     log: (line) => console.error(line),
@@ -281,6 +295,24 @@ export async function withStaging<T>(ctx: ToolsContext, id: string, work: (stagi
     return await work(staging);
   } finally {
     await rm(staging, { recursive: true, force: true });
+  }
+}
+
+export function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/** Remove `.staging-<id>-<pid>` dirs whose process is gone (a killed install). Call under the tool's lock. */
+export async function sweepStaging(ctx: ToolsContext, id: string): Promise<void> {
+  const prefix = `.staging-${id}-`;
+  for (const name of await readdir(ctx.toolsDir).catch(() => [] as string[])) {
+    const pid = name.startsWith(prefix) ? Number(name.slice(prefix.length)) : NaN;
+    if (Number.isSafeInteger(pid) && pid !== process.pid && !pidAlive(pid)) await rm(join(ctx.toolsDir, name), { recursive: true, force: true });
   }
 }
 

@@ -3,7 +3,7 @@ import { flutterRecipe } from './flutter.ts';
 import { iosSimulatorRecipe } from './ios.ts';
 import { jdkRecipe } from './jdk.ts';
 import { withToolLock } from './lock.ts';
-import { type ToolEnv, type ToolId, type ToolRecipe, type ToolsContext, defaultContext, envKey, pathDelimiter } from './runtime.ts';
+import { type ToolEnv, type ToolId, type ToolRecipe, type ToolsContext, defaultContext, envKey, pathDelimiter, sweepStaging } from './runtime.ts';
 
 /** The recipe registry, detection, `ensure` and environment composition. */
 
@@ -24,7 +24,7 @@ export interface ToolReport {
   message?: string;
 }
 
-export const ENABLE_HINT = 'cezar installs tools only when CEZ_TOOL_INSTALL=1 (or pass --install)';
+export const ENABLE_HINT = 'cezar installs tools only when CEZ_TOOL_INSTALL=1 (set it in the environment that starts cezar)';
 
 /** Union of what every recipe contributes; PATH entries de-duplicated, later vars win. */
 export function composeToolsEnv(ctx: ToolsContext, managedOnly = false): ToolEnv {
@@ -131,6 +131,7 @@ export async function ensureTools(ctx: ToolsContext, ids: readonly ToolId[]): Pr
 async function installLocked(ctx: ToolsContext, recipe: ToolRecipe): Promise<ToolReport> {
   try {
     return await withToolLock(ctx, recipe.id, async () => {
+      await sweepStaging(ctx, recipe.id);
       const already = await statusOf(ctx, recipe);
       if (already.status === 'ready') return already;
       ctx.log(`installing ${recipe.id}: ${recipe.title}`);

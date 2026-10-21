@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
@@ -74,10 +74,31 @@ function sdkSource(ctx: ToolsContext, root: string): 'cezar' | 'system' {
 async function sdkmanager(ctx: ToolsContext, env: NodeJS.ProcessEnv, root: string, args: string[]): Promise<void> {
   const bin = cmdlineTool(ctx, root, 'sdkmanager');
   if (!bin) throw new Error(`sdkmanager not found under ${root}`);
-  // `--licenses` and first installs prompt on stdin; a pile of "y" is the portable `yes |`.
-  const result = await ctx.exec(bin, [`--sdk_root=${root}`, ...args], { env, input: 'y\n'.repeat(80), timeoutMs: INSTALL_TIMEOUT_MS });
-  if (result.code !== 0) throw new Error(`sdkmanager ${args[0]} failed: ${(result.stderr || result.stdout).trim().split('\n').slice(-3).join(' | ')}`);
+  let lastBeat = 0;
+  // sdkmanager is silent for minutes on a big image; a line every few seconds shows it is alive.
+  const onOutput = (chunk: string): void => {
+    const line = chunk.split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean).pop();
+    if (line && Date.now() - lastBeat > 5_000) {
+      lastBeat = Date.now();
+      ctx.log(`sdkmanager: ${line}`);
+    }
+  };
+  for (let attempt = 1; ; attempt++) {
+    // `--licenses` and first installs prompt on stdin; a pile of "y" is the portable `yes |`.
+    const result = await ctx.exec(bin, [`--sdk_root=${root}`, ...args], { env, input: 'y\n'.repeat(80), timeoutMs: INSTALL_TIMEOUT_MS, onOutput });
+    if (result.code === 0) return;
+    const text = (result.stderr || result.stdout).trim();
+    // One retry for a dropped connection; sdkmanager resumes from what it already fetched.
+    if (attempt === 1 && TRANSIENT_NETWORK.test(text)) {
+      ctx.log('sdkmanager hit a network error; retrying once');
+      await ctx.sleep(3_000);
+      continue;
+    }
+    throw new Error(`sdkmanager ${args[0]} failed: ${text.split('\n').slice(-3).join(' | ')}`);
+  }
 }
+
+const TRANSIENT_NETWORK = /(UnknownHost|Unknown host|timed? ?out|Connection (reset|refused)|SocketException|SSLHandshake|Premature EOF|Unable to (download|connect)|Could not (resolve|connect))/i;
 
 export const androidSdkRecipe: ToolRecipe = {
   id: 'android-sdk',
@@ -98,7 +119,7 @@ export const androidSdkRecipe: ToolRecipe = {
     const root = sdkRoot(ctx) ?? managedSdkRoot(ctx);
     if (!cmdlineTool(ctx, root, 'sdkmanager')) {
       const flavor = ctx.platform === 'win32' ? 'win' : ctx.platform === 'darwin' ? (ctx.arch === 'arm64' ? 'mac_arm64' : 'mac_x86_64') : 'linux';
-      await withStaging(ctx, 'android-cmdline-tools', async (staging) => {
+      await withStaging(ctx, 'android-sdk', async (staging) => {
         const archive = join(staging, 'cmdline-tools.zip');
         await downloadFile(ctx, androidCmdlineUrl(flavor), archive, ANDROID_CMDLINE_SHA256[flavor]);
         const out = join(staging, 'out');
@@ -161,9 +182,21 @@ export const androidEmulatorRecipe: ToolRecipe = {
   hint: () => 'create an AVD in Android Studio, or run with CEZ_TOOL_INSTALL=1',
 };
 
+
 /** `adb devices` -> serials of emulators that are online. */
 export function parseEmulators(adbDevices: string): string[] {
   return [...adbDevices.matchAll(/^(emulator-\d+)\s+device\b/gm)].map((m) => m[1]!);
+}
+
+/** Console ports already taken by any emulator adb knows, whatever its state. */
+export function usedEmulatorPorts(adbDevices: string): number[] {
+  return [...adbDevices.matchAll(/^emulator-(\d+)\s/gm)].map((m) => Number(m[1]));
+}
+
+/** Emulator consoles use even ports 5554..5584 (the odd one beside it is adb's). */
+export function freeEmulatorPort(used: number[]): number | undefined {
+  for (let port = 5554; port <= 5584; port += 2) if (!used.includes(port) && !used.includes(port + 1)) return port;
+  return undefined;
 }
 
 function adbPath(ctx: ToolsContext): string {
@@ -178,10 +211,32 @@ async function bootCompleted(ctx: ToolsContext, adb: string, env: NodeJS.Process
   return result.stdout.trim() === '1';
 }
 
+/** The AVD an emulator runs (`adb emu avd name` answers "<name>\nOK"); undefined for a device we cannot ask. */
+async function avdNameOf(ctx: ToolsContext, adb: string, env: NodeJS.ProcessEnv, serial: string): Promise<string | undefined> {
+  const result = await ctx.exec(adb, ['-s', serial, 'emu', 'avd', 'name'], { env, timeoutMs: 15_000 });
+  return result.code === 0 ? result.stdout.split(/\r?\n/).map((l) => l.trim()).find(Boolean) : undefined;
+}
+
+/** Emulators running cezar's own AVD. Anything else (BlueStacks, the user's AVDs) is never touched. */
+async function cezarEmulators(ctx: ToolsContext, adb: string, env: NodeJS.ProcessEnv, devices: string): Promise<string[]> {
+  const ours: string[] = [];
+  for (const serial of parseEmulators(devices)) if ((await avdNameOf(ctx, adb, env, serial)) === AVD_NAME) ours.push(serial);
+  return ours;
+}
+
+function logTail(logFile: string, from: number): string {
+  try {
+    return readFileSync(logFile, 'utf8').slice(from).trim().split('\n').slice(-6).join(' | ');
+  } catch {
+    return '';
+  }
+}
+
 /**
- * Boot the `cezar` AVD headless and wait until Android finished booting. Idempotent: a booted
- * emulator that is already running (this agent's or a sibling's) is reused, and the run-lock
- * keeps two parallel agents from starting two. `env` is the composed tools env.
+ * Boot the `cezar` AVD headless and wait until Android finished booting. Idempotent: a running
+ * `cezar` emulator (this agent's or a sibling's) is reused, and the run-lock keeps two parallel
+ * agents from starting two. Any other emulator is left alone: ours takes the first free even port.
+ * `env` is the composed tools env. Fails fast, with the emulator's own log, if the process exits.
  */
 export async function emulatorStart(
   ctx: ToolsContext,
@@ -191,38 +246,53 @@ export async function emulatorStart(
   const adb = adbPath(ctx);
   const root = sdkRoot(ctx)!;
   const timeoutMs = options.timeoutMs ?? EMULATOR_BOOT_TIMEOUT_MS;
+  const logFile = join(ctx.toolsDir, 'logs', 'android-emulator.log');
   return withToolLock(ctx, 'android-emulator-run', async () => {
     await ctx.exec(adb, ['start-server'], { env, timeoutMs: 30_000 });
-    const list = await ctx.exec(adb, ['devices'], { env, timeoutMs: 15_000 });
-    for (const serial of parseEmulators(list.stdout)) {
-      if (await bootCompleted(ctx, adb, env, serial)) return { serial, reused: true };
+    const devices = (await ctx.exec(adb, ['devices'], { env, timeoutMs: 15_000 })).stdout;
+    const existing = (await cezarEmulators(ctx, adb, env, devices))[0];
+    let serial = existing;
+    let child: { exitCode: () => number | null } | undefined;
+    let logFrom = 0;
+    if (!serial) {
+      const port = options.port ?? freeEmulatorPort(usedEmulatorPorts(devices));
+      if (!port) throw new Error('no free emulator port (5554-5584 are all in use)');
+      serial = `emulator-${port}`;
+      if (ctx.platform === 'linux' && ctx.arch === 'x64' && !existsSync('/dev/kvm')) {
+        ctx.log('warning: /dev/kvm is not available; the emulator will be extremely slow or refuse to start');
+      }
+      try {
+        logFrom = statSync(logFile).size;
+      } catch {
+        // first start: no log yet
+      }
+      ctx.log(`starting emulator ${AVD_NAME} on port ${port} (log: ${logFile})`);
+      child = ctx.spawnDetached(
+        join(root, 'emulator', exeName(ctx, 'emulator')),
+        ['-avd', AVD_NAME, '-port', String(port), '-no-window', '-no-audio', '-no-snapshot-save', '-no-boot-anim', '-gpu', 'swiftshader_indirect'],
+        { env, logFile },
+      );
     }
-    const port = options.port ?? 5554;
-    const serial = `emulator-${port}`;
-    if (ctx.platform === 'linux' && ctx.arch === 'x64' && !existsSync('/dev/kvm')) {
-      ctx.log('warning: /dev/kvm is not available; the emulator will be extremely slow or refuse to start');
-    }
-    const logFile = join(ctx.toolsDir, 'logs', 'android-emulator.log');
-    ctx.log(`starting emulator ${AVD_NAME} on port ${port} (log: ${logFile})`);
-    ctx.spawnDetached(
-      join(root, 'emulator', exeName(ctx, 'emulator')),
-      ['-avd', AVD_NAME, '-port', String(port), '-no-window', '-no-audio', '-no-snapshot-save', '-no-boot-anim', '-gpu', 'swiftshader_indirect'],
-      { env, logFile },
-    );
     const started = Date.now();
-    const wait = await ctx.exec(adb, ['-s', serial, 'wait-for-device'], { env, timeoutMs });
-    if (wait.code !== 0) throw new Error(`emulator never connected to adb within ${Math.round(timeoutMs / 1000)}s (see ${logFile})`);
-    while (!(await bootCompleted(ctx, adb, env, serial))) {
-      if (Date.now() - started > timeoutMs) throw new Error(`emulator did not finish booting within ${Math.round(timeoutMs / 1000)}s (see ${logFile})`);
+    for (;;) {
+      if (await bootCompleted(ctx, adb, env, serial)) return { serial, reused: existing !== undefined };
+      const code = child?.exitCode();
+      if (code !== null && code !== undefined) {
+        throw new Error(`emulator exited with code ${code} before booting (no hardware acceleration?): ${logTail(logFile, logFrom) || `see ${logFile}`}`);
+      }
+      if (Date.now() - started > timeoutMs) {
+        throw new Error(`emulator did not finish booting within ${Math.round(timeoutMs / 1000)}s (see ${logFile})`);
+      }
       await ctx.sleep(2_000);
     }
-    return { serial, reused: false };
   });
 }
 
+/** Stop only the emulators running cezar's AVD. */
 export async function emulatorStop(ctx: ToolsContext, env: NodeJS.ProcessEnv): Promise<string[]> {
   const adb = adbPath(ctx);
-  const serials = parseEmulators((await ctx.exec(adb, ['devices'], { env, timeoutMs: 15_000 })).stdout);
+  const devices = (await ctx.exec(adb, ['devices'], { env, timeoutMs: 15_000 })).stdout;
+  const serials = await cezarEmulators(ctx, adb, env, devices);
   for (const serial of serials) await ctx.exec(adb, ['-s', serial, 'emu', 'kill'], { env, timeoutMs: 30_000 });
   return serials;
 }

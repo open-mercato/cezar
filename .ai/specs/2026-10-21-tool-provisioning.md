@@ -24,11 +24,21 @@ SDKs onto the machine or boots a device.
   Emulator start/boot take their own run-lock so parallel agents share one booted device.
 - **CLI** (`tools-cli.ts`, routed in `index.ts` like `telemetry`): in-process, no cockpit needed.
   `tools list|status`, `tools ensure <id…>`, `tools env`, `tools emulator start|stop`,
-  `tools simulator boot|shutdown`; `--json`, `--shell bash|powershell`, `--install`. Exit 0 ready, 1 not
+  `tools simulator boot|shutdown`; `--json`, `--shell bash|powershell`. Exit 0 ready, 1 not
   ready, 2 usage. Agents call it as `node "$CEZ_BIN" tools …` (the same entrypoint `cez task` uses).
 - **Opt-in.** `CEZ_TOOL_INSTALL=1` enables network installs (AGENTS.md § Zero config: network + disk).
-  Off, `ensure` only detects and prints what is missing and the flag to set. `--install` enables it for one
-  invocation — an explicit act by whoever types it.
+  Off, `ensure` only detects and prints what is missing and the variable to set. There is no per-call
+  flag: agents run this CLI (`CEZ_BIN` reaches them by default), so only the environment that starts
+  cezar, which the operator controls, can turn installs on.
+- **Output contract.** `ensure` writes status to stderr and ONLY shell exports to stdout, so
+  `eval "$(node "$CEZ_BIN" tools ensure flutter)"` is safe. `emulator start|stop` only ever touch an
+  emulator running the `cezar` AVD (checked with `adb emu avd name`; BlueStacks or the user's own AVDs
+  are never reused or killed) and start on the first free even port. `simulator shutdown` stops only the
+  device cezar booted (recorded in `tools/state/ios-simulator.json`). Fail-fast: a dead emulator process
+  is reported with its log tail instead of waiting out the timeout.
+- **Hardening.** The JDK comes from the Adoptium assets API with its SHA-256 verified; `sdkmanager`
+  streams a heartbeat and retries once on a network error; staging dirs of dead processes are swept under
+  the tool lock; stale-lock takeover is serialized by a guard file and re-checked under it.
 - **Agent integration.**
   - `agentEnv` and `checkStepEnv` add the PATH entries and `ANDROID_HOME`/`ANDROID_SDK_ROOT`/`JAVA_HOME`/
     `FLUTTER_ROOT`/`ANDROID_AVD_HOME` of tools **cezar installed** (`managedToolsEnv`: stat only, never
@@ -49,7 +59,7 @@ SDKs onto the machine or boots a device.
 | git clone or archive for Flutter? | Official archive. A `--depth 1` clone has no tags, so `flutter --version` reports `0.0.0-unknown`. |
 | System SDK vs cezar's own? | An existing SDK/JDK is used when complete; cezar installs only what is missing, into the SDK it resolved (its own when none exists). |
 | AVD location | `tools/android-avd` via `ANDROID_AVD_HOME`, so the user's AVD folder is untouched. |
-| Settings toggle | Skipped; it would add a contract field and UI for a flag that is set once. Env var and `--install` only. |
+| Settings toggle | Skipped; it would add a contract field and UI for a flag that is set once. Env var only. |
 | `agent-device` / other npm tools | Skipped; `npx` already covers them and they are not a toolchain install. |
 
 ## Not covered / follow-ups

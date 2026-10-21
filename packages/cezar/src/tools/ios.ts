@@ -1,3 +1,5 @@
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { INSTALL_TIMEOUT_MS } from './constants.ts';
 import { withToolLock } from './lock.ts';
 import { type ToolRecipe, type ToolsContext, findOnPath } from './runtime.ts';
@@ -5,7 +7,7 @@ import { type ToolRecipe, type ToolsContext, findOnPath } from './runtime.ts';
 /**
  * iOS Simulator (macOS only). Xcode itself cannot be installed unattended — it needs an Apple
  * ID and the App Store — so this recipe detects it, and with installs on only adds the missing
- * iOS simulator runtime (`xcodebuild -downloadPlatform iOS`, Xcode 14+).
+ * iOS simulator runtime (`xcodebuild -downloadPlatform iOS`, Xcode 15+).
  */
 
 const NEEDS_XCODE =
@@ -121,11 +123,30 @@ export async function simulatorBoot(
     // `-b` boots if needed and blocks until the device is fully ready.
     const status = await simctl(ctx, env, ['bootstatus', device.udid, '-b'], options.timeoutMs ?? 5 * 60_000);
     if (status.code !== 0) throw new Error(`simulator did not finish booting: ${(status.stderr || status.stdout).trim()}`);
+    if (!reused) {
+      mkdirSync(join(ctx.toolsDir, 'state'), { recursive: true });
+      writeFileSync(bootedFile(ctx), JSON.stringify({ udid: device.udid }));
+    }
     return { udid: device.udid, name: device.name, reused };
   });
 }
 
-export async function simulatorShutdown(ctx: ToolsContext, env: NodeJS.ProcessEnv): Promise<void> {
-  const result = await simctl(ctx, env, ['shutdown', 'all']);
+/** Shut down only the simulator cezar booted (or `--device`); one it found already running is not ours. */
+export async function simulatorShutdown(ctx: ToolsContext, env: NodeJS.ProcessEnv, options: { device?: string } = {}): Promise<string | undefined> {
+  const udid = options.device ?? readBooted(ctx);
+  if (!udid) return undefined;
+  const result = await simctl(ctx, env, ['shutdown', udid]);
   if (result.code !== 0 && !/current state: Shutdown/i.test(result.stderr)) throw new Error(`simctl shutdown failed: ${result.stderr.trim()}`);
+  rmSync(bootedFile(ctx), { force: true });
+  return udid;
+}
+
+const bootedFile = (ctx: ToolsContext): string => join(ctx.toolsDir, 'state', 'ios-simulator.json');
+
+function readBooted(ctx: ToolsContext): string | undefined {
+  try {
+    return (JSON.parse(readFileSync(bootedFile(ctx), 'utf8')) as { udid?: string }).udid;
+  } catch {
+    return undefined;
+  }
 }

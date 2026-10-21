@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os';
 import { basename, delimiter, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { emulatorStart, emulatorStop, parseEmulators } from './android.ts';
+import { emulatorStart, emulatorStop, freeEmulatorPort, parseEmulators, usedEmulatorPorts } from './android.ts';
 import { ANDROID_CMDLINE_SHA256 } from './constants.ts';
 import { type FlutterManifest, pickFlutterRelease } from './flutter.ts';
-import { iosRuntimes, pickSimulator } from './ios.ts';
-import { javaMajor } from './jdk.ts';
+import { iosRuntimes, pickSimulator, simulatorBoot, simulatorShutdown } from './ios.ts';
+import { javaMajor, pickJdkPackage } from './jdk.ts';
 import { withToolLock } from './lock.ts';
 import { TOOLS_PROMPT, toolsReachable } from './prompt.ts';
 import { applyToolsEnv, composeToolsEnv, ensureTools, expandIds, managedToolsEnv, statusAll } from './registry.ts';
@@ -24,7 +24,9 @@ function fakeMachine(options: { install?: boolean; arch?: string } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'cez-tools-'));
   const calls: string[] = [];
   const urls: string[] = [];
-  const state = { emulatorSpawned: false, booted: false };
+  const logs: string[] = [];
+  /** `foreign` is somebody else's emulator (BlueStacks) on 5554; `emulatorExit` simulates a process that died. */
+  const state = { emulatorSpawned: false, foreign: false, emulatorExit: null as number | null, sdkFailures: 0 };
   const mk = (...parts: string[]): void => {
     mkdirSync(join(...parts.slice(0, -1)), { recursive: true });
     writeFileSync(join(...parts), '');
@@ -43,12 +45,16 @@ function fakeMachine(options: { install?: boolean; arch?: string } = {}) {
     install: options.install ?? true,
     fetch: (async (url: string | URL | Request) => {
       urls.push(String(url));
+      if (String(url).includes('/v3/assets/')) {
+        return Response.json([{ binary: { image_type: 'jdk', package: { link: 'https://dl.example/jdk.tar.gz', checksum: BYTES_SHA } } }]);
+      }
       return String(url).endsWith('.json') ? Response.json(manifest) : new Response(BYTES);
     }) as typeof fetch,
-    log: () => undefined,
+    log: (line) => logs.push(line),
     sleep: async () => undefined,
     spawnDetached: () => {
       state.emulatorSpawned = true;
+      return { exitCode: () => state.emulatorExit };
     },
     async exec(command, args, opts = {}) {
       const name = basename(command);
@@ -67,6 +73,10 @@ function fakeMachine(options: { install?: boolean; arch?: string } = {}) {
       if (name === 'java') return { code: 0, stdout: '', stderr: 'openjdk version "17.0.9" 2023-10-17' };
       if (name === 'sdkmanager') {
         const sdk = args.find((a) => a.startsWith('--sdk_root='))!.slice('--sdk_root='.length);
+        if (args.includes('--install') && state.sdkFailures > 0) {
+          state.sdkFailures--;
+          return { code: 1, stdout: '', stderr: 'java.net.SocketException: Connection reset' };
+        }
         if (args.includes('--install')) {
           for (const pkg of args) {
             if (pkg === 'platform-tools') mk(sdk, 'platform-tools', 'adb');
@@ -82,14 +92,19 @@ function fakeMachine(options: { install?: boolean; arch?: string } = {}) {
         return OK;
       }
       if (name === 'adb') {
-        if (args[0] === 'devices') return { code: 0, stdout: `List of devices attached\n${state.emulatorSpawned ? 'emulator-5554\tdevice\n' : ''}`, stderr: '' };
-        if (args.includes('getprop')) return { code: 0, stdout: state.emulatorSpawned ? '1\n' : '', stderr: '' };
+        // Ours takes 5556 when a foreign emulator holds 5554, else 5554.
+        const ours = state.emulatorSpawned && !state.emulatorExit ? (state.foreign ? 'emulator-5556' : 'emulator-5554') : undefined;
+        const lines = [state.foreign && 'emulator-5554\tdevice', ours && `${ours}\tdevice`].filter(Boolean);
+        if (args[0] === 'devices') return { code: 0, stdout: `List of devices attached\n${lines.join('\n')}\n`, stderr: '' };
+        const serial = args[args.indexOf('-s') + 1];
+        if (args.includes('avd')) return { code: 0, stdout: `${serial === ours ? 'cezar' : 'BlueStacks'}\r\nOK\r\n`, stderr: '' };
+        if (args.includes('getprop')) return { code: 0, stdout: lines.some((l) => String(l).startsWith(`${serial}\t`)) ? '1\n' : '', stderr: '' };
         return OK;
       }
       return OK;
     },
   };
-  return { ctx, calls, urls, root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  return { ctx, calls, urls, logs, state, root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
 describe('pure helpers', () => {
@@ -224,16 +239,21 @@ describe('filesystem helpers', () => {
 describe('lock', () => {
   it('serializes holders of the same name and releases on failure', async () => {
     const { ctx, cleanup } = fakeMachine();
-    const order: string[] = [];
     const real = { ...ctx, sleep: (ms: number) => new Promise<void>((r) => setTimeout(r, Math.min(ms, 5))) };
-    const a = withToolLock(real, 'x', async () => {
-      order.push('a-start');
-      await new Promise((r) => setTimeout(r, 40));
-      order.push('a-end');
-    }, { pollMs: 5 });
-    const b = withToolLock(real, 'x', async () => void order.push('b'), { pollMs: 5 });
-    await Promise.all([a, b]);
-    expect(order).toEqual(['a-start', 'a-end', 'b']);
+    // Who wins is up to the filesystem; what must hold is that never two are inside at once.
+    let active = 0;
+    let maxActive = 0;
+    let ran = 0;
+    const contender = (): Promise<void> =>
+      withToolLock(real, 'x', async () => {
+        maxActive = Math.max(maxActive, ++active);
+        await new Promise((r) => setTimeout(r, 15));
+        active--;
+        ran++;
+      }, { pollMs: 3 });
+    await Promise.all([contender(), contender(), contender(), contender()]);
+    expect(maxActive).toBe(1);
+    expect(ran).toBe(4);
     await expect(withToolLock(real, 'x', async () => Promise.reject(new Error('boom')))).rejects.toThrow('boom');
     await withToolLock(real, 'x', async () => undefined); // free again
     cleanup();
@@ -273,8 +293,9 @@ describe('ensure (offline, fake machine)', () => {
       ['android-sdk', 'installed'],
       ['android-emulator', 'installed'],
     ]);
-    expect(urls[0]).toContain('api.adoptium.net/v3/binary/latest/17/ga/linux/x64');
-    expect(urls[1]).toContain('commandlinetools-linux-');
+    expect(urls[0]).toContain('api.adoptium.net/v3/assets/latest/17/hotspot?architecture=x64&image_type=jdk&os=linux');
+    expect(urls[1]).toBe('https://dl.example/jdk.tar.gz');
+    expect(urls[2]).toContain('commandlinetools-linux-');
     const sdkCalls = calls.filter((c) => c.startsWith('sdkmanager'));
     expect(sdkCalls[0]).toContain('--licenses');
     expect(sdkCalls[1]).toContain('platform-tools platforms;android-35');
@@ -424,16 +445,16 @@ describe('cezar tools CLI', () => {
   it('ensure without installs exits 1 and says how to enable them', async () => {
     const { ctx, cleanup } = fakeMachine({ install: false });
     expect(await runToolsCommand(['ensure', 'flutter'], ctx, io)).toBe(1);
-    expect(out.join('\n')).toContain('CEZ_TOOL_INSTALL=1');
+    expect(err.join('\n')).toContain('CEZ_TOOL_INSTALL=1');
+    expect(out).toEqual([]);
     cleanup();
   });
 
-  it('--install enables it for one call and prints exports for the result', async () => {
-    const { ctx, cleanup } = fakeMachine({ install: false });
-    expect(await runToolsCommand(['ensure', 'flutter', '--install', '--shell', 'bash'], ctx, io)).toBe(0);
-    const text = out.join('\n');
-    expect(text).toContain('installed');
-    expect(text).toContain('export FLUTTER_ROOT=');
+  it('with installs on, ensure prints exports on stdout and the result on stderr', async () => {
+    const { ctx, cleanup } = fakeMachine();
+    expect(await runToolsCommand(['ensure', 'flutter', '--shell', 'bash'], ctx, io)).toBe(0);
+    expect(err.join('\n')).toContain('installed');
+    expect(out.join('\n')).toContain('export FLUTTER_ROOT=');
     out.length = 0;
     expect(await runToolsCommand(['env', '--shell', 'powershell'], ctx, io)).toBe(0);
     expect(out.join('\n')).toContain('$env:FLUTTER_ROOT');
@@ -454,6 +475,152 @@ describe('cezar tools CLI', () => {
     ANDROID_CMDLINE_SHA256.linux = BYTES_SHA;
     expect(await runToolsCommand(['emulator', 'start', '--json'], ctx, io)).toBe(0);
     expect(JSON.parse(out.join('\n'))).toEqual({ serial: 'emulator-5554', reused: false });
+    cleanup();
+  });
+});
+
+describe('review fixes', () => {
+  const asDarwin = (ctx: ToolsContext, exec: ToolsContext['exec']): ToolsContext => ({ ...ctx, platform: 'darwin', exec });
+
+  it('never reuses or stops an emulator that is not cezar AVD, and takes the next free port', async () => {
+    const { ctx, calls, state, cleanup } = fakeMachine();
+    ANDROID_CMDLINE_SHA256.linux = BYTES_SHA;
+    await ensureTools(ctx, ['android-emulator']);
+    state.foreign = true; // BlueStacks holds emulator-5554
+    const env = applyToolsEnv(ctx.env, composeToolsEnv(ctx), ctx.platform);
+    expect(await emulatorStart(ctx, env)).toEqual({ serial: 'emulator-5556', reused: false });
+    expect(await emulatorStop(ctx, env)).toEqual(['emulator-5556']);
+    expect(calls.filter((c) => c.includes('emu kill'))).toEqual(['adb -s emulator-5556 emu kill']);
+    cleanup();
+  });
+
+  it('fails fast with the reason when the emulator process dies, instead of waiting out the timeout', async () => {
+    const { ctx, state, cleanup } = fakeMachine();
+    ANDROID_CMDLINE_SHA256.linux = BYTES_SHA;
+    await ensureTools(ctx, ['android-emulator']);
+    state.emulatorExit = 1;
+    const env = applyToolsEnv(ctx.env, composeToolsEnv(ctx), ctx.platform);
+    await expect(emulatorStart(ctx, env, { timeoutMs: 60_000 })).rejects.toThrow(/exited with code 1 before booting/);
+    cleanup();
+  });
+
+  it('picks even console ports around the ones in use', () => {
+    const devices = 'List of devices attached\nemulator-5554\tdevice\nemulator-5556\toffline\n';
+    expect(usedEmulatorPorts(devices)).toEqual([5554, 5556]);
+    expect(freeEmulatorPort([5554, 5556])).toBe(5558);
+    expect(freeEmulatorPort([])).toBe(5554);
+    expect(freeEmulatorPort(Array.from({ length: 16 }, (_, i) => 5554 + i * 2))).toBeUndefined();
+  });
+
+  it('retries sdkmanager once on a network error, and gives up on the second', async () => {
+    const a = fakeMachine();
+    ANDROID_CMDLINE_SHA256.linux = BYTES_SHA;
+    a.state.sdkFailures = 1;
+    expect((await ensureTools(a.ctx, ['android-sdk'])).map((r) => r.status)).toEqual(['installed', 'installed']);
+    expect(a.logs.some((l) => l.includes('retrying once'))).toBe(true);
+    a.cleanup();
+    const b = fakeMachine();
+    b.state.sdkFailures = 2;
+    const reports = await ensureTools(b.ctx, ['android-sdk']);
+    expect(reports[1]).toMatchObject({ status: 'failed' });
+    expect(reports[1]!.message).toContain('Connection reset');
+    b.cleanup();
+  });
+
+  it('verifies the JDK against the checksum Adoptium publishes', async () => {
+    const { ctx, cleanup } = fakeMachine();
+    const bad = {
+      ...ctx,
+      fetch: (async (url: string | URL | Request) =>
+        String(url).includes('/v3/assets/')
+          ? Response.json([{ binary: { image_type: 'jdk', package: { link: 'https://dl.example/jdk.tar.gz', checksum: 'deadbeef' } } }])
+          : new Response(BYTES)) as typeof fetch,
+    };
+    const [report] = await ensureTools(bad, ['jdk']);
+    expect(report).toMatchObject({ status: 'failed' });
+    expect(report!.message).toContain('checksum mismatch');
+    expect(existsSync(join(ctx.toolsDir, 'jdk'))).toBe(false);
+    expect(pickJdkPackage([])).toBeUndefined();
+    expect(pickJdkPackage([{ binary: { image_type: 'jre', package: { link: 'x', checksum: 'y' } } }])).toBeUndefined();
+    cleanup();
+  });
+
+  it('sweeps staging dirs of dead processes (under the lock) and leaves other tools alone', async () => {
+    const { ctx, cleanup } = fakeMachine();
+    const dead = join(ctx.toolsDir, '.staging-jdk-2147483646');
+    const other = join(ctx.toolsDir, '.staging-flutter-2147483646');
+    for (const d of [dead, other]) mkdirSync(d, { recursive: true });
+    await ensureTools(ctx, ['jdk']);
+    expect(existsSync(dead)).toBe(false);
+    expect(existsSync(other)).toBe(true);
+    cleanup();
+  });
+
+  it('keeps mutual exclusion when many waiters find the same dead lock', async () => {
+    const { ctx, cleanup } = fakeMachine();
+    mkdirSync(join(ctx.toolsDir, '.locks'), { recursive: true });
+    writeFileSync(join(ctx.toolsDir, '.locks', 'x.lock'), `2147483646\n${Date.now()}\n`);
+    let active = 0;
+    let maxActive = 0;
+    const real = { ...ctx, sleep: (ms: number) => new Promise<void>((r) => setTimeout(r, Math.min(ms, 3))) };
+    const one = (): Promise<void> =>
+      withToolLock(real, 'x', async () => {
+        maxActive = Math.max(maxActive, ++active);
+        await new Promise((r) => setTimeout(r, 10));
+        active--;
+      }, { pollMs: 2 });
+    await Promise.all(Array.from({ length: 6 }, one));
+    expect(maxActive).toBe(1);
+    cleanup();
+  });
+
+  it('shuts down only the simulator cezar booted', async () => {
+    const { ctx, calls, cleanup } = fakeMachine();
+    const devices = JSON.stringify({
+      devices: {
+        'com.apple.CoreSimulator.SimRuntime.iOS-18-2': [
+          { udid: 'U1', name: 'iPhone 16', state: 'Shutdown', isAvailable: true },
+          { udid: 'U2', name: 'iPhone 16 Pro', state: 'Booted', isAvailable: true },
+        ],
+      },
+    });
+    const mac = asDarwin(ctx, async (command, args) => {
+      calls.push(`${command} ${args.join(' ')}`);
+      return { code: 0, stdout: args.includes('devices') ? devices : '', stderr: '' };
+    });
+    expect(await simulatorShutdown(mac, {})).toBeUndefined(); // nothing booted by us
+    expect(calls).toEqual([]);
+    // U2 is already booted by someone else: reused, so not recorded and not ours to stop
+    expect((await simulatorBoot(mac, {})).reused).toBe(true);
+    expect(await simulatorShutdown(mac, {})).toBeUndefined();
+    // a device cezar boots itself is recorded and is the only one shut down
+    const shut = devices.replace('"state":"Booted"', '"state":"Shutdown"');
+    const mac2 = asDarwin(ctx, async (command, args) => {
+      calls.push(`${command} ${args.join(' ')}`);
+      return { code: 0, stdout: args.includes('devices') ? shut : '', stderr: '' };
+    });
+    expect((await simulatorBoot(mac2, {})).udid).toBe('U1');
+    expect(await simulatorShutdown(mac2, {})).toBe('U1');
+    expect(calls.filter((c) => c.includes('simctl shutdown'))).toEqual(['xcrun simctl shutdown U1']);
+    cleanup();
+  });
+
+  it('prints only shell exports on stdout from ensure, so eval is safe, and status on stderr', async () => {
+    const { ctx, cleanup } = fakeMachine();
+    const out: string[] = [];
+    const err: string[] = [];
+    const code = await runToolsCommand(['ensure', 'flutter', '--shell', 'bash'], ctx, { log: (l) => out.push(l), error: (l) => err.push(l) });
+    expect(code).toBe(0);
+    expect(out.length).toBeGreaterThan(0);
+    expect(out.every((l) => l.startsWith('export '))).toBe(true);
+    expect(err.join('\n')).toContain('flutter');
+    cleanup();
+  });
+
+  it('has no --install escape hatch: only the operator-controlled env var enables installs', async () => {
+    const { ctx, urls, cleanup } = fakeMachine({ install: false });
+    expect(await runToolsCommand(['ensure', 'flutter', '--install'], ctx, { log: () => undefined, error: () => undefined })).toBe(2);
+    expect(urls).toEqual([]);
     cleanup();
   });
 });

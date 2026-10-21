@@ -20,10 +20,13 @@ export const ANDROID_BUILD_TOOLS = '35.0.0';
 /** The one AVD cezar creates and boots. */
 export const AVD_NAME = 'cezar';
 
-/** Temurin 17 (sdkmanager needs >= 17), resolved by the Adoptium API to the newest 17 GA build. */
+/**
+ * Temurin 17 (sdkmanager needs >= 17). The Adoptium assets API names the newest 17 GA build with
+ * its package link and SHA-256, so the download can be verified.
+ */
 export const JDK_MAJOR = 17;
-export const jdkUrl = (os: 'windows' | 'mac' | 'linux', arch: 'x64' | 'aarch64'): string =>
-  `https://api.adoptium.net/v3/binary/latest/${JDK_MAJOR}/ga/${os}/${arch}/jdk/hotspot/normal/eclipse`;
+export const jdkAssetsUrl = (os: 'windows' | 'mac' | 'linux', arch: 'x64' | 'aarch64'): string =>
+  `https://api.adoptium.net/v3/assets/latest/${JDK_MAJOR}/hotspot?architecture=${arch}&image_type=jdk&os=${os}&vendor=eclipse`;
 
 /** Flutter's official release manifests; the stable hash in `current_release` names the archive. */
 export const FLUTTER_MANIFEST_BASE = 'https://storage.googleapis.com/flutter_infra_release/releases';
