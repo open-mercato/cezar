@@ -61,7 +61,25 @@ describe('effectiveCapacity (spec 2026-10-21-work-limits)', () => {
       memPerRunBytes: GiB,
       freeCpuCores: 100,
     });
-    expect(out).toEqual({ main: 5, subagent: 23, review: null });
+    // room 3 goes to main first; the sub-agent pool keeps what it already runs
+    expect(out).toEqual({ main: 5, subagent: 20, review: null });
+  });
+
+  it('allocates the headroom once: the sum of limits never exceeds busy + room (main, review, subagent order)', () => {
+    const input: CapacityInput = {
+      configured: { main: 10, subagent: 10, review: 10 },
+      busy: { main: 1, subagent: 2, review: 0 },
+      freeMemBytes: 8 * GiB,
+      memPerRunBytes: GiB,
+      freeCpuCores: 100,
+    }; // room 8
+    const out = effectiveCapacity(input);
+    expect(out).toEqual({ main: 9, subagent: 2, review: 1 }); // main takes 8; the floor keeps review at 1
+    const room = headroomRuns(input)!;
+    const second = effectiveCapacity({ ...input, freeMemBytes: 14 * GiB }); // room 14: main 9 + review 5
+    expect(second).toEqual({ main: 10, subagent: 2, review: 5 });
+    expect(second.main + second.subagent! + second.review!).toBeLessThanOrEqual(3 + 14);
+    expect(room).toBe(8);
   });
 
   it('falls back to 1 GiB and 0.5 core per run when none is observed', () => {

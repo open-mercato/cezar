@@ -48,6 +48,7 @@ function serve(resources: Partial<WorkspaceConfigResponse['resources']> = {}) {
       maxSubagents: null,
       maxReviewers: null,
       autoScale: false,
+      maxChildrenPerParent: 4,
       effective: { maxParallel: 2, maxSubagents: null, maxReviewers: null },
       agentCpuPriority: 'normal',
       hostReserve: { memoryMb: null, cpuPct: null },
@@ -192,6 +193,18 @@ describe('Global settings → Resources', () => {
     fireEvent.keyDown(pool()!, { key: 'Enter' })
     await waitFor(() => expect(puts()).toHaveLength(2))
     expect(puts()[1]?.body).toEqual({ resources: { maxSubagents: null } })
+  })
+
+  it('saves the per-task children cap (default 4, up to 32)', async () => {
+    serve({})
+    renderResources()
+    const field = () => document.querySelector<HTMLInputElement>('[data-slot="resources-max-children"]')
+    await waitFor(() => expect(field()).not.toBeNull())
+    expect(field()!.value).toBe('4')
+    fireEvent.change(field()!, { target: { value: '12' } })
+    fireEvent.keyDown(field()!, { key: 'Enter' })
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ resources: { maxChildrenPerParent: 12 } })
   })
 
   it('accepts up to 128 parallel tasks', async () => {

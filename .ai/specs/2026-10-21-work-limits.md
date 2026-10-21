@@ -36,9 +36,20 @@ count (spawn-parked, dispatch A5); parents that are still working are not.
   would recreate the deadlock per project. The non-git "one at a time" rule still counts every
   class. The worktree-lifecycle coordinator also gates on the main pool.
 - `SemaphoreParticipant.busyByClass` is optional; a participant without it counts as all `main`.
-- `DISPATCH_MAX_IN_FLIGHT` (4 children per parent) is unchanged. A pool larger than
-  `4 x parents running` will not fill: raise parents, not that constant. `DISPATCH_MAX_SUBTASKS`
-  (50 per root) is a total, not a concurrency, and also stays.
+- **Per-parent fan-out** is `resources.maxChildrenPerParent` (default 4 = the old
+  `DISPATCH_MAX_IN_FLIGHT`, range 1..32), so a pool larger than `4 x parents running` can fill.
+  `dispatch()` enforces `min(configured, intent.inFlight)`; the contract constant stays the default
+  and fallback, the intent's `inFlight` bound is the configured maximum (32), and the agent prompt
+  is composed with the effective value in `prepareDispatchSession`, the one function both
+  `ActiveRun` construction sites call. `DISPATCH_MAX_SUBTASKS` (50) only bounds the OPTIONAL
+  per-tree ceiling a user sets in the composer; with none set a tree is unbounded, so it does not
+  block ~100-process scale and stays a schema bound.
+- **Nested children.** A sub-agent that dispatches its own children and keeps running holds a slot of
+  its pool, so with `maxSubagents` full of such parents the grandchildren could never start. Rule: a
+  child of a child (depth >= 2) whose own pool is full borrows a main-pool slot when main has room
+  (`RunManager.borrowed`; it then counts against main, not its pool). The borrow is opportunistic,
+  so when both pools are full the stall remains; that needs the whole workspace saturated, and
+  raising either pool clears it.
 
 ## autoScale
 
@@ -61,8 +72,13 @@ effective = max(1, min(configured, busyInPool + headroom))      per pool
   (`stepScale`). A raise re-pumps the queue.
 - **Fail open**: no fresh host sample, or neither resource readable, returns the configured limits
   immediately (no slow ramp).
-- The headroom is shared, so two pools can each claim it; the one-gated-start-per-tick brake and
-  the next sample absorb that.
+- The headroom is computed once per sample and ALLOCATED across pools in the order main, review,
+  subagent (intake first; finishing a review frees a pipeline), so the sum of limits never exceeds
+  busy_total + room. The floor of 1 per pool is the one allowed overshoot.
+- **Brake.** autoScale alone brakes starts to one per tick only once the room is below 2; with
+  more room starts are admitted up to the effective limits immediately.
+- **Stale / config change.** `effectiveLimits()` ignores a reading older than a stale window; a
+  config change re-bases the limits on the current headroom.
 
 ## Exposure
 

@@ -53,8 +53,11 @@ export const dispatchPendingReportSchema = z.object({
 });
 export type DispatchPendingReport = z.infer<typeof dispatchPendingReportSchema>;
 
-/** The engine's own ceiling on children in flight per task; a user's `inFlight` may only lower it. */
+/** The default ceiling on children in flight per task (`resources.maxChildrenPerParent` overrides it
+ *  up to `DISPATCH_MAX_IN_FLIGHT_LIMIT`); a user's `inFlight` may only lower the effective one. */
 export const DISPATCH_MAX_IN_FLIGHT = 4;
+/** Largest `resources.maxChildrenPerParent` an operator may configure (spec 2026-10-21-work-limits). */
+export const DISPATCH_MAX_IN_FLIGHT_LIMIT = 32;
 /** The most subtasks a user may ask a root for through the composer. */
 export const DISPATCH_MAX_SUBTASKS = 50;
 
@@ -68,8 +71,8 @@ export const DISPATCH_MAX_SUBTASKS = 50;
 export const dispatchIntentSchema = z.strictObject({
   /** Ceiling on children under this ROOT, in total, across the whole tree. */
   maxSubtasks: z.number().int().min(1).max(DISPATCH_MAX_SUBTASKS).optional(),
-  /** Ceiling on children in flight per task — lowers the engine's own, never raises it. */
-  inFlight: z.number().int().min(1).max(DISPATCH_MAX_IN_FLIGHT).optional(),
+  /** Ceiling on children in flight per task — lowers the effective cap, never raises it. */
+  inFlight: z.number().int().min(1).max(DISPATCH_MAX_IN_FLIGHT_LIMIT).optional(),
   /** Runner for children whose order names none. Absent = the parent's. */
   runner: runnerSchema.optional(),
   /** Model for children whose order names none. Absent = the parent's. */

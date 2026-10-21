@@ -594,6 +594,27 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
       expect(semaphore.busyBy().main).toBe(1);
     }, 30_000);
 
+    it('a grandchild of a running sub-agent borrows a main slot when the sub-agent pool is full (no self-stall)', async () => {
+      const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 2, maxSubagents: 1 } });
+      const a = project('cez-pool-nested-', semaphore);
+      // A sub-agent that keeps RUNNING (polling) while it waits for its own child: it holds the
+      // only slot of the full sub-agent pool.
+      const sub = a.manager.startRun(SLOW, { task: 'sub-agent', ...child() });
+      await waitFor(() => a.store.getRun(sub.id)?.status === 'running', 'the sub-agent to run', 30_000);
+      expect(semaphore.freeCapacity().subagent).toBe(0);
+      // A sibling at depth 1 has no way around the full pool: it queues.
+      const sibling = a.manager.startRun(INSTANT, { task: 'sibling', ...child() });
+      // Its own child (depth 2) borrows from main, where there is room.
+      const grandchild = a.manager.startRun(INSTANT, {
+        task: 'grandchild',
+        dispatch: { rootRunId: 'root', parentRunId: sub.id },
+      });
+      await waitFor(() => settled.includes(a.store.getRun(grandchild.id)?.status ?? ''), 'the grandchild to finish', 30_000);
+      expect(a.store.getRun(grandchild.id)?.status).toBe('done');
+      expect(a.store.getRun(sub.id)?.status).toBe('running');
+      expect(a.store.getRun(sibling.id)?.status).toBe('queued');
+    }, 60_000);
+
     it('a full review pool queues the next review, and a slot freed there starts it', async () => {
       const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 4, maxReviewers: 1 } });
       const a = project('cez-pool-full-', semaphore);

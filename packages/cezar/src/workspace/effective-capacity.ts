@@ -50,19 +50,26 @@ export function headroomRuns(input: CapacityInput): number | undefined {
 }
 
 /**
- * Each pool's effective limit = min(configured, busy + headroom), never below 1 (a pool at zero
- * is a dead end: parents park on children that can never start). The headroom is shared, so two
- * pools can each claim it; the one-start-per-tick brake and the next sample absorb that.
+ * The headroom is computed once and ALLOCATED across pools, in this order: main (the intake and
+ * root work everything else hangs off), then review (finishing a pipeline frees it), then
+ * subagent. Each pool's effective limit = busy + its share of the room, capped at its configured
+ * limit, so the sum of limits never exceeds busy_total + room. The one exception is the floor of
+ * 1 per pool (a pool at zero is a dead end: parents park on children that can never start).
  */
 export function effectiveCapacity(input: CapacityInput): PoolLimits {
   const room = headroomRuns(input);
-  const scale = (configured: number, busy: number): number =>
-    room === undefined ? configured : Math.max(1, Math.min(configured, busy + room));
-  return {
-    main: scale(input.configured.main, input.busy.main),
-    subagent: input.configured.subagent === null ? null : scale(input.configured.subagent, input.busy.subagent),
-    review: input.configured.review === null ? null : scale(input.configured.review, input.busy.review),
+  if (room === undefined) return input.configured;
+  let left = room;
+  const scale = (configured: number | null, busy: number): number | null => {
+    if (configured === null) return null;
+    const share = Math.min(left, Math.max(0, configured - busy));
+    left -= share;
+    return Math.max(1, Math.min(configured, busy + share));
   };
+  const main = scale(input.configured.main, input.busy.main) as number;
+  const review = scale(input.configured.review, input.busy.review);
+  const subagent = scale(input.configured.subagent, input.busy.subagent);
+  return { main, subagent, review };
 }
 
 /** Lower at once; raise only after `needCalm` consecutive samples that want more. */

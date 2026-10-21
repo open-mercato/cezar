@@ -7,7 +7,7 @@ import { renameSyncWithRetry } from '../fs-rename.ts';
 // Contract VALUES, like `workspaceUiStateSchema` in workspace/migrations.ts: the tag bounds this
 // file must not `.catch` away are the same constants the PATCH route validates against, so they
 // are imported rather than repeated.
-import { MAX_CONCURRENCY, PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH } from '@open-mercato/cezar-contract';
+import { DISPATCH_MAX_IN_FLIGHT, DISPATCH_MAX_IN_FLIGHT_LIMIT, MAX_CONCURRENCY, PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH } from '@open-mercato/cezar-contract';
 import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
 import { assertCezarHomeWriteIsSandboxed, isAbsolutePath, workspaceConfigPath } from '../paths.ts';
 
@@ -131,6 +131,9 @@ const resourcesSchema = z
     maxSubagents: z.number().int().min(1).max(MAX_CONCURRENCY).nullable().default(null).catch(null),
     /** Own pool for dispatched `review` children. null = they share `maxParallel`. */
     maxReviewers: z.number().int().min(1).max(MAX_CONCURRENCY).nullable().default(null).catch(null),
+    /** Children one task may have in flight at once; 4 is the long-standing fixed cap
+     *  (`DISPATCH_MAX_IN_FLIGHT`). Raise it so large pools can actually fill. */
+    maxChildrenPerParent: z.number().int().min(1).max(DISPATCH_MAX_IN_FLIGHT_LIMIT).default(DISPATCH_MAX_IN_FLIGHT).catch(DISPATCH_MAX_IN_FLIGHT),
     /** Scale every pool down to what free memory and CPU can carry (reduction only). */
     autoScale: z.boolean().default(false).catch(false),
     /** OS scheduling priority for agent process trees (spec 2026-10-21-host-resource-limits).

@@ -111,6 +111,7 @@ describe('the workspace settings API (step 2.7)', () => {
         maxSubagents: null,
         maxReviewers: null,
         autoScale: false,
+        maxChildrenPerParent: 4,
         effective: { maxParallel: 2, maxSubagents: null, maxReviewers: null },
         agentCpuPriority: 'normal',
         hostReserve: { memoryMb: null, cpuPct: null },
@@ -319,6 +320,7 @@ describe('the workspace settings API (step 2.7)', () => {
         maxSubagents: 40,
         maxReviewers: 12,
         autoScale: false,
+        maxChildrenPerParent: 4,
         effective: { maxParallel: 5, maxSubagents: 40, maxReviewers: 12 },
         agentCpuPriority: 'low',
         hostReserve: { memoryMb: 3000, cpuPct: 85 },
@@ -398,6 +400,7 @@ describe('the workspace settings API (step 2.7)', () => {
       maxSubagents: null,
       maxReviewers: null,
       autoScale: false,
+      maxChildrenPerParent: 4,
       effective: { maxParallel: 5, maxSubagents: null, maxReviewers: null },
       agentCpuPriority: 'normal',
       hostReserve: { memoryMb: null, cpuPct: null },
@@ -449,7 +452,7 @@ describe('the workspace settings API (step 2.7)', () => {
   });
 
   it('rejects out-of-bounds resources with 400 and writes nothing', async () => {
-    for (const resources of [{ maxParallel: 0 }, { maxParallel: 129 }, { memoryLimitMb: -1 }, { maxSubagents: 0 }, { hostReserve: { cpuPct: 0 } }, { agentCpuPriority: 'turbo' }]) {
+    for (const resources of [{ maxParallel: 0 }, { maxParallel: 129 }, { memoryLimitMb: -1 }, { maxSubagents: 0 }, { maxChildrenPerParent: 33 }, { maxChildrenPerParent: 0 }, { hostReserve: { cpuPct: 0 } }, { agentCpuPriority: 'turbo' }]) {
       const res = await putConfig({ resources });
       expect(res.status, JSON.stringify(resources)).toBe(400);
       expect((await res.json()) as { error: string }).toHaveProperty('error');

@@ -772,8 +772,10 @@ task dispatched can have pools of their own: `resources.maxSubagents`
 its own pool does not count against `maxParallel`, so intake tasks holding every
 parallel slot can no longer starve the reviews they are waiting for; `null`
 (default) keeps today's shared behaviour. The per-project ceiling and the
-non-git rule apply to the main pool only, and the per-parent
-`DISPATCH_MAX_IN_FLIGHT` (4) is unchanged. `resources.autoScale` (default off)
+non-git rule apply to the main pool only. `resources.maxChildrenPerParent`
+(default **4**, up to 32) is how many children one task may have in flight. A
+child of a child whose own pool is full borrows a main-pool slot when main has
+room, so a running sub-agent cannot stall its own pool. `resources.autoScale` (default off)
 lowers every pool to `min(configured, busy + what free memory and CPU can
 carry)`, using the observed average agent tree (1 GiB / 0.5 core until one is
 measured) and the container limits when present; it only lowers, never stops

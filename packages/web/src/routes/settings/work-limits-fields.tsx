@@ -3,7 +3,7 @@ import { useEffect } from 'react'
 
 import { putWorkspaceConfig } from '@/api/client'
 import { workspaceQueryKeys } from '@/api/queries'
-import { MAX_CONCURRENCY, type SetWorkspaceConfigInput, type WorkspaceConfigResponse } from '@open-mercato/cezar-api-client'
+import { DISPATCH_MAX_IN_FLIGHT_LIMIT, MAX_CONCURRENCY, type SetWorkspaceConfigInput, type WorkspaceConfigResponse } from '@open-mercato/cezar-api-client'
 import { IntegerStepper } from '@/components/integer-stepper'
 import { toast } from '@/components/ui/toaster'
 import { SettingsField } from './settings-field'
@@ -85,6 +85,19 @@ export function WorkLimitsFields({ config }: { config: WorkspaceConfigResponse }
         'resources-max-reviewers',
         effective?.maxReviewers,
       )}
+      <SettingsField
+        title="Children per task"
+        hint="How many dispatched children a single task may have in flight. Raise it so large sub-agent and reviewer pools can actually fill; agents are told the value."
+      >
+        <IntegerStepper
+          aria-label="Children per task"
+          data-slot="resources-max-children"
+          value={r.maxChildrenPerParent ?? 4}
+          min={1}
+          max={DISPATCH_MAX_IN_FLIGHT_LIMIT}
+          onCommit={(n) => save.mutateAsync({ resources: { maxChildrenPerParent: n ?? 4 } })}
+        />
+      </SettingsField>
       <SettingsField
         title="Scale limits to free resources"
         hint="Lowers every limit above to what free memory and CPU can carry, measured from the agents already running. Never raises a limit, never stops a running task, never goes below one."

@@ -232,6 +232,19 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       expect(notes(parent.id).some((n) => n.includes('dispatch refused') && n.includes('the cap is 4'))).toBe(true);
     }, 40_000);
 
+    it('resources.maxChildrenPerParent raises the per-parent cap and the refusal names it', async () => {
+      reboot({ maxParallel: 1, maxMonitoringSessions: 0, maxChildrenPerParent: 6 });
+      const parent = await parkedRoot(20);
+      for (let i = 0; i < 5; i += 1) {
+        const child = store.createRun({ title: `in flight ${i}`, workflow: '(planned)', task: 't', steps: [] });
+        store.updateRun(child.id, { status: 'running', dispatch: childOf(parent.id) });
+      }
+      // Five in flight: the old fixed cap of 4 would refuse, the configured 6 admits the sixth.
+      expect(dispatchOk(parent.id, order('sixth')).id).toBeTruthy();
+      const reason = refusal(parent.id, order('seventh'));
+      expect(reason).toContain('the cap is 6');
+    }, 40_000);
+
     it('refuses a child that would overspend the parent, and hands an uncapped child the remainder', async () => {
       reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
       const parent = await parkedRoot(1);

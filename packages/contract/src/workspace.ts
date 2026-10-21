@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { worktreeLifecycleConfigSchema } from './worktree-lifecycle.ts';
 import { type Runner, runnerSchema } from './health.ts';
+import { DISPATCH_MAX_IN_FLIGHT_LIMIT } from './dispatch.ts';
 import { MAX_CONCURRENCY } from './projects.ts';
 import { MAX_SAVED_WORKSPACE_LAYOUTS, savedWorkspaceLayoutSchema } from './workspace-layouts.ts';
 
@@ -59,6 +60,8 @@ export const workspaceConfigResponseSchema = z.object({
     maxSubagents: z.number().nullable(),
     /** Own pool for dispatched review children; null = they share `maxParallel`. */
     maxReviewers: z.number().nullable(),
+    /** Children a single task may have in flight (default 4, the old fixed cap). */
+    maxChildrenPerParent: z.number(),
     /** Scale the pools down to what free memory and CPU can carry. */
     autoScale: z.boolean(),
     /** What admission uses right now: the configured limits, lowered when `autoScale` is on and
@@ -145,6 +148,7 @@ export const setWorkspaceConfigInputSchema = z.object({
       maxSubagents: z.number().int().min(1).max(MAX_CONCURRENCY).nullable().optional(),
       maxReviewers: z.number().int().min(1).max(MAX_CONCURRENCY).nullable().optional(),
       autoScale: z.boolean().optional(),
+      maxChildrenPerParent: z.number().int().min(1).max(DISPATCH_MAX_IN_FLIGHT_LIMIT).optional(),
       idleTimeoutMinutes: z.number().int().min(0).max(1440).nullable().optional(),
       monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().optional(),
       autoResumeOnUsageLimit: z.boolean().optional(),

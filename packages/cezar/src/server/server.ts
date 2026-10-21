@@ -3520,6 +3520,7 @@ export function createApp(deps: ServerDeps) {
       maxSubagents: config.resources.maxSubagents,
       maxReviewers: config.resources.maxReviewers,
       autoScale: config.resources.autoScale,
+      maxChildrenPerParent: config.resources.maxChildrenPerParent,
       effective: effectiveResources(config),
       agentCpuPriority: config.resources.agentCpuPriority,
       hostReserve: config.resources.hostReserve,
@@ -3615,6 +3616,7 @@ export function createApp(deps: ServerDeps) {
           if (resources?.maxSubagents !== undefined) config.resources.maxSubagents = resources.maxSubagents;
           if (resources?.maxReviewers !== undefined) config.resources.maxReviewers = resources.maxReviewers;
           if (resources?.autoScale !== undefined) config.resources.autoScale = resources.autoScale;
+          if (resources?.maxChildrenPerParent !== undefined) config.resources.maxChildrenPerParent = resources.maxChildrenPerParent;
           if (resources?.agentCpuPriority !== undefined) config.resources.agentCpuPriority = resources.agentCpuPriority;
           if (resources?.hostReserve?.memoryMb !== undefined) config.resources.hostReserve.memoryMb = resources.hostReserve.memoryMb;
           if (resources?.hostReserve?.cpuPct !== undefined) config.resources.hostReserve.cpuPct = resources.hostReserve.cpuPct;

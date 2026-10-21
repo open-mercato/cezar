@@ -126,6 +126,7 @@ function serve(answers: Answers = {}) {
       maxSubagents: null,
       maxReviewers: null,
       autoScale: false,
+      maxChildrenPerParent: 4,
       effective: { maxParallel: 2, maxSubagents: null, maxReviewers: null },
       agentCpuPriority: 'normal',
       hostReserve: { memoryMb: null, cpuPct: null },

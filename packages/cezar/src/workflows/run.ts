@@ -1146,6 +1146,8 @@ export class RunManager {
    * `enterMonitoring` / `leaveMonitoring` — nothing else writes either set.
    */
   private readonly unitParents = new Set<string>();
+  /** Nested children that started on a main-pool slot because their own pool was full. */
+  private readonly borrowed = new Set<string>();
   private readonly pendingJobs = new Map<string, { workflow: WorkflowDef; input: StartRunInput }>();
   /** The creation-time namer's branch answer per queued run (spec
    *  2026-10-11-branch-naming-instructions) — `execute` awaits it, bounded, before the fork. */
@@ -1640,9 +1642,16 @@ export class RunManager {
     return this.active.size + this.starting.size - ordinaryWaiting - exemptMonitoring - spawnParked;
   }
 
+  /** A child of a child: its parent is itself a dispatched task. */
+  private isNestedChild(runId: string): boolean {
+    const parentId = this.store.getRun(runId)?.dispatch?.parentRunId;
+    return parentId !== undefined && this.store.getRun(parentId)?.dispatch?.parentRunId !== undefined;
+  }
+
   /** The pool a run draws from (spec 2026-10-21-work-limits): its dispatch role, when that
    *  role has a pool of its own. */
   private poolOf(runId: string): PoolClass {
+    if (this.borrowed.has(runId)) return 'main';
     return this.semaphore.classify(this.store.getRun(runId)?.dispatch);
   }
 
@@ -1755,17 +1764,21 @@ export class RunManager {
         // Each candidate draws on its OWN pool (spec 2026-10-21-work-limits): a dispatched
         // review waits on review slots, not behind intake tasks holding `maxParallel`. The
         // per-project ceiling and the non-git rule bind the main pool only.
-        const capacity = (id: string) => {
-          const pool = this.poolOf(id);
-          return (
-            this.semaphore.poolHasRoom(pool) &&
-            (pool !== 'main' || this.busyByClass().main < projectMax) &&
-            (repo !== null || this.busySlots() < 1) &&
-            // Host headroom (spec 2026-10-21-host-resource-limits): last, so a refusal means the
-            // run was otherwise startable and the next telemetry tick re-pumps it.
-            this.semaphore.hostAdmits()
-          );
+        // The pool a candidate would start in, or null. A nested child (depth >= 2) whose own pool
+        // is full may borrow a main-pool slot when main has room: its parent is a running
+        // sub-agent that holds a slot of the full pool while waiting for it, so refusing would
+        // stall the pool on itself (spec 2026-10-21-work-limits, "Nested children").
+        const admission = (id: string): PoolClass | null => {
+          const fits = (p: PoolClass) =>
+            this.semaphore.poolHasRoom(p) && (p !== 'main' || this.busyByClass().main < projectMax);
+          const own = this.poolOf(id);
+          const pool = fits(own) ? own : own !== 'main' && this.isNestedChild(id) && fits('main') ? 'main' : null;
+          if (pool === null || (repo === null && this.busySlots() >= 1)) return null;
+          // Host headroom (spec 2026-10-21-host-resource-limits): last, so a refusal means the
+          // run was otherwise startable and the next telemetry tick re-pumps it.
+          return this.semaphore.hostAdmits() ? pool : null;
         };
+        const capacity = (id: string) => admission(id) !== null;
         // The usage-limit hold (spec 2026-08-03-auto-resume-after-usage-limit).
         //
         // A limit closes an ACCOUNT, not a run — so starting the next queued task walks it into
@@ -1808,6 +1821,7 @@ export class RunManager {
           }
           const runId = this.queue.splice(next, 1)[0];
           if (!runId) break;
+          if (admission(runId) === 'main' && this.poolOf(runId) !== 'main') this.borrowed.add(runId);
           this.semaphore.noteGatedStart();
           // A forced sweep has to reach the spawn: the gate inside `execute` asks the same
           // question and would send this run straight back to the queue.
@@ -2200,6 +2214,7 @@ export class RunManager {
     if (state) state.cancellationTimer = undefined;
     this.waiting.delete(runId);
     this.leaveMonitoring(runId);
+    this.borrowed.delete(runId);
     if (state) this.clearMonitoringWakeTimer(state, runId);
     this.active.delete(runId);
     // Session result has settled and its sink has flushed before terminal cleanup.
@@ -2293,7 +2308,11 @@ export class RunManager {
     if (!this.dispatchReachable()) return;
     const dispatch = this.store.getRun(runId)?.dispatch;
     // The intent block belongs to the ROOT the user started; a child reads its order instead.
-    state.dispatchPrompt = composeDispatchPrompt(dispatch?.kind, dispatch?.parentRunId ? undefined : dispatch?.intent);
+    state.dispatchPrompt = composeDispatchPrompt(
+      dispatch?.kind,
+      dispatch?.parentRunId ? undefined : dispatch?.intent,
+      this.semaphore.maxChildrenPerParent(),
+    );
   }
 
   /**
@@ -2531,10 +2550,11 @@ export class RunManager {
     // The user's limits, when the root was started with the composer's Dispatch toggle: they may
     // only tighten the engine's own caps, and the child defaults they name fill an order's gaps.
     const intent = runs.find((r) => r.id === (parent.dispatch?.rootRunId ?? parent.id))?.dispatch?.intent;
-    const inFlightCap = Math.min(MAX_CHILDREN_IN_FLIGHT, intent?.inFlight ?? MAX_CHILDREN_IN_FLIGHT);
+    const maxChildren = this.semaphore.maxChildrenPerParent();
+    const inFlightCap = Math.min(maxChildren, intent?.inFlight ?? maxChildren);
     const inFlight = inFlightChildren(runs, parentId).length;
     if (inFlight + 1 > inFlightCap) {
-      const refused = `${inFlight} child run${inFlight === 1 ? '' : 's'} already in flight; the cap is ${inFlightCap} per task${intent?.inFlight !== undefined && intent.inFlight < MAX_CHILDREN_IN_FLIGHT ? ' (set by the user)' : ''}. Wait for reports, then dispatch again.`;
+      const refused = `${inFlight} child run${inFlight === 1 ? '' : 's'} already in flight; the cap is ${inFlightCap} per task${intent?.inFlight !== undefined && intent.inFlight < maxChildren ? ' (set by the user)' : ''}. Wait for reports, then dispatch again.`;
       note(`dispatch refused — ${refused}`, 'danger');
       return { refused };
     }
@@ -2577,7 +2597,7 @@ export class RunManager {
       // The tree directory lines are composed against the id the run is ABOUT to get: `startRun`
       // mints it, so the envelope is finished below once it exists.
       task: childTaskEnvelope(input, { id: parentId, branch: parent.branch }, ['{{TREE_PATHS}}']),
-      systemPrompt: composeDispatchPrompt(input.kind),
+      systemPrompt: composeDispatchPrompt(input.kind, undefined, this.semaphore.maxChildrenPerParent()),
       runner: input.runner ?? intent?.runner ?? parent.runner,
       ...(input.model ?? intent?.model ?? parent.model ? { model: input.model ?? intent?.model ?? parent.model } : {}),
       autonomous: true,
@@ -3368,7 +3388,7 @@ export class RunManager {
     state.releaseWorktree?.();
     state.releaseRepoRoot?.();
     this.active.delete(runId); this.starting.delete(runId); this.waiting.delete(runId);
-    this.monitoring.delete(runId); this.unitParents.delete(runId);
+    this.monitoring.delete(runId); this.unitParents.delete(runId); this.borrowed.delete(runId);
     this.store.updateRun(runId, {status: 'waiting', error: `Worktree scripts need attention${operationId ? ` (${operationId})` : ''}`});
     this.store.appendEvent(runId, {type: 'note', message: `Worktree preparation paused${operationId ? ` — operation ${operationId}` : ''}; use Worktrees settings to Retry, Start task anyway, or Cancel task.`});
     this.releaseSlot();

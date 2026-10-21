@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
-import { DISPATCH_PROMPT, REVIEW_PROMPT, composeDispatchPrompt, dispatchIntentPrompt } from './prompts.ts';
+import { DISPATCH_PROMPT, REVIEW_PROMPT, composeDispatchPrompt, dispatchIntentPrompt, dispatchPromptFor } from './prompts.ts';
 
 function containsRunnerToken(text: string, runner: string): boolean {
   return new RegExp(`(?:^|[^A-Za-z0-9_-])${runner}(?=$|[^A-Za-z0-9_-])`).test(text);
@@ -47,6 +47,13 @@ describe('the dispatch prompt', () => {
     expect(DISPATCH_PROMPT).toContain('git merge --no-ff');
     expect(DISPATCH_PROMPT).toMatch(/Never merge into the repository's base branch/);
     expect(DISPATCH_PROMPT).toMatch(/At most 4 children in flight/);
+  });
+
+  it('tells the agent the configured per-parent cap, not a constant', () => {
+    expect(dispatchPromptFor(12)).toMatch(/At most 12 children in flight/);
+    expect(composeDispatchPrompt(undefined, undefined, 12)).toMatch(/At most 12 children in flight/);
+    expect(composeDispatchPrompt('review', undefined, 9)).toMatch(/At most 9 children in flight/);
+    expect(composeDispatchPrompt(undefined)).toBe(DISPATCH_PROMPT); // default is unchanged
   });
 
   it('treats a report as a claim and keeps the Guard and the tree directory', () => {

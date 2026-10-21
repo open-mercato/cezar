@@ -1,6 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { HostUsage } from '@open-mercato/cezar-contract';
+import { DISPATCH_MAX_IN_FLIGHT, type HostUsage } from '@open-mercato/cezar-contract';
 import { currentHostUsage, HOST_SAMPLE_INTERVAL_MS, HOST_SAMPLE_STALE_MS, onHostUsage } from '../core/host-usage.ts';
 import { allUsage, onUsage, type ProcessUsage } from '../core/process-usage.ts';
 import { agentMemoryBlock, hostReserveBlock, type HostReserve } from './host-headroom.ts';
@@ -76,6 +76,8 @@ export interface WorkspaceResourceLimits {
   maxReviewers?: number | null;
   /** Scale every pool down to what free memory and CPU can carry. Default off. */
   autoScale?: boolean;
+  /** Children one task may have in flight; absent = `DISPATCH_MAX_IN_FLIGHT` (4). */
+  maxChildrenPerParent?: number;
   /**
    * Per-project concurrency ceilings, keyed by realpath-normalized project
    * root (the registry stores normalized `root`). A root absent from the map
@@ -176,6 +178,7 @@ async function loadResourceLimits(): Promise<WorkspaceResourceLimits> {
     maxSubagents: resources.maxSubagents,
     maxReviewers: resources.maxReviewers,
     autoScale: resources.autoScale,
+    maxChildrenPerParent: resources.maxChildrenPerParent,
     agentCpuPriority: resources.agentCpuPriority,
     hostReserve: resources.hostReserve,
     totalAgentMemoryMb: resources.totalAgentMemoryMb,
@@ -359,6 +362,11 @@ export class WorkspaceSemaphore {
   /** True once a kind has a pool of its own; until then nothing needs classifying. */
   hasSeparatePools(): boolean {
     return !!this.limits.maxSubagents || !!this.limits.maxReviewers;
+  }
+
+  /** Per-parent fan-out cap enforced by `dispatch()` and told to the agent. */
+  maxChildrenPerParent(): number {
+    return this.limits.maxChildrenPerParent ?? DISPATCH_MAX_IN_FLIGHT;
   }
 
   autoScale(): boolean {
