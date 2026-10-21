@@ -59,6 +59,8 @@ import type { AgentEvent, AgentRunResult, ContentBlock } from '../core/agent-run
 import { discoverSkills, type Skill } from '../skills.ts';
 import { automationsReachable } from '../automations/builtin-skill.ts';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
+import { TOOLS_PROMPT, toolsReachable } from '../tools/prompt.ts';
+import { managedToolsEnv } from '../tools/registry.ts';
 import { getTeamSkillsCached, materializeSkillDir, waitForTeamSkills } from '../skills-remote.ts';
 import { provisionSkills } from '../skills-provision.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
@@ -573,6 +575,9 @@ interface ActiveRun {
    * the cockpit is reachable — a task that could not run `cez automation` is never told about it.
    */
   automationsPrompt?: string;
+  /** The `cezar tools` hint (spec 2026-10-21-tool-provisioning), set in `prepareAutomationsSession`
+   *  — so by BOTH construction sites. Present ⇔ `CEZ_TOOL_INSTALL` is on and `CEZ_BIN` is known. */
+  toolsPrompt?: string;
   /** Set by `dispatch()` during a turn, read and cleared at that turn's end: the run parks as a
    *  monitor for the children it just created. */
   dispatchedThisTurn?: boolean;
@@ -1413,7 +1418,10 @@ export class RunManager {
       ...(apiUrl && this.projectId ? { CEZ_PROJECT_ID: this.projectId } : {}),
       // The cockpit's OWN entrypoint, so an agent runs `node "$CEZ_BIN" task …` and never an older
       // `cez` that happens to be on its PATH without the command (observed on the first live run).
-      ...(apiUrl && process.env.CEZ_BIN ? { CEZ_BIN: process.env.CEZ_BIN } : {}),
+      ...((apiUrl || toolsReachable()) && process.env.CEZ_BIN ? { CEZ_BIN: process.env.CEZ_BIN } : {}),
+      // Toolchains cezar provisioned (spec 2026-10-21-tool-provisioning): PATH in front, plus
+      // ANDROID_HOME / JAVA_HOME / FLUTTER_ROOT. A stat-only read; `{}` until something was installed.
+      ...managedToolsEnv(),
       // The tree directory — brief, notes, inbox — for a run in a dispatch tree only.
       ...(dispatch ? { CEZ_TREE_DIR: treeDir(this.dataDir, dispatch.rootRunId) } : {}),
     };
@@ -2263,6 +2271,7 @@ export class RunManager {
    */
   private prepareAutomationsSession(state: ActiveRun): void {
     state.automationsPrompt = automationsReachable() ? AUTOMATIONS_PROMPT : undefined;
+    state.toolsPrompt = toolsReachable() ? TOOLS_PROMPT : undefined;
   }
 
   /**
@@ -4472,6 +4481,7 @@ export class RunManager {
           systemPrompt: composeSystemPrompt(
             dispatchPromptPart(state.dispatchPrompt, record?.systemPrompt),
             state.automationsPrompt,
+            state.toolsPrompt,
             record?.systemPrompt,
             generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
           ),
@@ -6505,6 +6515,7 @@ export class RunManager {
             systemPrompt,
             dispatchPromptPart(state.dispatchPrompt, extraSystemPrompt),
             state.automationsPrompt,
+            state.toolsPrompt,
             extraSystemPrompt,
             followupsEnabled() && input.generateFollowups !== false
               ? HANDOFF_INSTRUCTIONS
@@ -7497,7 +7508,7 @@ export class RunManager {
       if (name === 'CEZ_PROJECT_ID' && !this.projectId) continue;
       delete base[name];
     }
-    return { ...base, ...resolved.values, ...(await this.checkContextEnv(runId, state, step.id)) };
+    return { ...base, ...managedToolsEnv(base), ...resolved.values, ...(await this.checkContextEnv(runId, state, step.id)) };
   }
 
   /**

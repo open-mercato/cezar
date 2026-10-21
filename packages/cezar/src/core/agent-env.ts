@@ -187,6 +187,9 @@ const BASE_ALLOW_PREFIXES: readonly string[] = [
   'KOTLIN_',
   'ANDROID_',
   'SDKMAN_',
+  // Flutter / Dart (tool provisioning: FLUTTER_ROOT, PUB_CACHE)
+  'FLUTTER_',
+  'PUB_',
   // .NET / other
   'DOTNET_',
   'NUGET_',
