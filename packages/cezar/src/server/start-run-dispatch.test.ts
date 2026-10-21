@@ -9,6 +9,7 @@ import { apiRequest } from './loopback-request.testkit.ts';
 import { connectedProviderAuth } from './provider-auth.testkit.ts';
 import type { RunManager, StartRunInput } from '../workflows/run.ts';
 import type { WorkflowDef } from '../workflows/types.ts';
+import { DISPATCH_MAX_IN_FLIGHT_LIMIT } from '@open-mercato/cezar-contract';
 
 /**
  * `POST /runs` with the composer's Dispatch toggle (spec 2026-09-10-dispatch): the body's
@@ -70,7 +71,7 @@ describe('POST /runs and the dispatch intent', () => {
 
   it('400s an intent outside the contract: an unknown key, or a cap above the engine’s', async () => {
     expect((await post({ steps: [{ id: 'work', prompt: '{{task}}' }], task: 't', dispatch: { maxSubtask: 3 } })).status).toBe(400);
-    expect((await post({ steps: [{ id: 'work', prompt: '{{task}}' }], task: 't', dispatch: { inFlight: 9 } })).status).toBe(400);
+    expect((await post({ steps: [{ id: 'work', prompt: '{{task}}' }], task: 't', dispatch: { inFlight: DISPATCH_MAX_IN_FLIGHT_LIMIT + 1 } })).status).toBe(400);
     expect(inputs).toHaveLength(0);
   });
 });
