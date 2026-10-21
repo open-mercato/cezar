@@ -83,6 +83,8 @@ type Answers = {
   del?: { status: number; payload: unknown }
   /** Serve the boot folder as an unregistered row (and make it `bootProject`). */
   unregisteredBoot?: boolean
+  /** Flag that boot row `notAddable` (a `$HOME` / task-worktree launch folder). */
+  notAddable?: boolean
   /** What `POST /api/v1/projects` answers — the unregistered row's Add button. */
   post?: { status: number; payload: unknown }
 }
@@ -93,7 +95,10 @@ function serve(answers: Answers = {}) {
   const registry: ProjectsResponse = {
     // Copies, not the shared PROJECTS objects: the PATCH handler mutates entries.
     projects: answers.unregisteredBoot
-      ? [UNREGISTERED_BOOT, ...PROJECTS.map((p) => ({ ...p }))]
+      ? [
+          answers.notAddable ? { ...UNREGISTERED_BOOT, notAddable: true as const } : UNREGISTERED_BOOT,
+          ...PROJECTS.map((p) => ({ ...p })),
+        ]
       : PROJECTS.map((p) => ({ ...p })),
     bootProject: answers.unregisteredBoot ? UNREGISTERED_BOOT.id : 'cezar',
     projectsDir: '~/cezar/projects',
@@ -185,20 +190,22 @@ function serve(answers: Answers = {}) {
 }
 
 /** Seeds the step-3.2 route gates so the (unscoped) global settings shell renders immediately. */
-function gateSeededClient(unregisteredBoot = false) {
+function gateSeededClient(unregisteredBoot = false, notAddable = false) {
   const client = createQueryClient()
   const bootProject = unregisteredBoot ? UNREGISTERED_BOOT.id : 'cezar'
   client.setQueryData(queryKeys.health, { bootProject })
   client.setQueryData(workspaceQueryKeys.projects, {
-    projects: unregisteredBoot ? [UNREGISTERED_BOOT, ...PROJECTS] : PROJECTS,
+    projects: unregisteredBoot
+      ? [notAddable ? { ...UNREGISTERED_BOOT, notAddable: true as const } : UNREGISTERED_BOOT, ...PROJECTS]
+      : PROJECTS,
     bootProject,
     projectsDir: '~/cezar/projects',
   })
   return client
 }
 
-function renderProjects(unregisteredBoot = false) {
-  const client = gateSeededClient(unregisteredBoot)
+function renderProjects(unregisteredBoot = false, notAddable = false) {
+  const client = gateSeededClient(unregisteredBoot, notAddable)
   render(
     <QueryClientProvider client={client}>
       <ThemeProvider>
@@ -724,6 +731,17 @@ describe('Global settings → Projects', () => {
     await waitFor(() => expect(removeButton('scratch')).not.toBeNull())
     expect(maxParallelSelect('scratch')).not.toBeNull()
     expect(await screen.findByText(/scratch added to your projects/)).not.toBeNull()
+  })
+
+  it('disables Add for a served folder the server flags notAddable, sending no request', async () => {
+    serve({ unregisteredBoot: true, notAddable: true })
+    renderProjects(true, true)
+    await waitFor(() => expect(rows()).toHaveLength(4))
+
+    const add = row('scratch')!.querySelector<HTMLButtonElement>('[data-action="project-add-boot"]')!
+    expect(add.disabled).toBe(true)
+    fireEvent.click(add)
+    expect(requests.filter((r) => r.method === 'POST')).toEqual([])
   })
 
   it('surfaces the server’s refusal when the served folder is not addable', async () => {

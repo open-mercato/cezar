@@ -349,6 +349,48 @@ describe('watchProviderRuntimeAuthFailures', () => {
       expect(providerAuth.peekProfileStatus('claude', 'work')).toMatchObject({ status: 'disconnected' });
     });
 
+    // `claude auth status` answers `loggedIn: true` from the dead token still on disk, so the
+    // account's probes (here: every CLI connected) must not lift it until the user rechecks.
+    it('keeps a dead login latched through automatic probes until the user rechecks', async () => {
+      watch();
+      const run = store.createRun({
+        title: 'dead refresh token',
+        workflow: 'quick-task',
+        task: 'work',
+        runner: 'claude',
+        steps: [{ id: 'work', name: 'Work', kind: 'agent' }],
+      });
+      store.updateStep(run.id, 'work', { backend: 'claude', profileId: 'work' });
+      store.appendEvent(run.id, { type: 'error', stepId: 'work', message: MESSAGE });
+
+      // The action gate's verify-before-refuse: evict, then probe.
+      providerAuth.forgetProfileStatus('claude', 'work');
+      await expect(providerAuth.profileStatus('claude', { id: 'work', configDir: '/accounts/work' }))
+        .resolves.toMatchObject({ status: 'disconnected', authFailureId: 'auth-incident-1' });
+
+      // The pane's Check again.
+      providerAuth.forgetProfileStatus('claude', 'work');
+      providerAuth.recheckProfileAuthFailure('claude', 'work');
+      await expect(providerAuth.profileStatus('claude', { id: 'work', configDir: '/accounts/work' }))
+        .resolves.toEqual({ provider: 'claude', status: 'connected', profileId: 'work' });
+    });
+
+    it('still lifts an ordinary rejection on the next connected probe', async () => {
+      watch();
+      const run = store.createRun({
+        title: 'transient',
+        workflow: 'quick-task',
+        task: 'work',
+        runner: 'claude',
+        agentProfile: 'work',
+        steps: [],
+      });
+      store.appendEvent(run.id, { type: 'error', message: 'Failed to authenticate. API Error: 401 OAuth token has been revoked.' });
+
+      await expect(providerAuth.profileStatus('claude', { id: 'work', configDir: '/accounts/work' }))
+        .resolves.toMatchObject({ status: 'connected' });
+    });
+
     it('treats an explicit default account as the default login', () => {
       const onProviderStatus = watch();
       const run = store.createRun({
@@ -418,6 +460,35 @@ describe('watchProviderRuntimeAuthFailures', () => {
         providers: expect.arrayContaining([
           expect.objectContaining({ provider: 'claude', status: 'disconnected' }),
         ]),
+      });
+    });
+
+    it('does not self-check away a login the vendor called dead (telemetry 9e4a95db)', async () => {
+      // Every CLI answers connected — exactly what `claude auth status` says with a dead refresh token.
+      const onProviderStatus = watch();
+      const verifying = vi.spyOn(providerAuth, 'verifyRuntimeAuthFailure');
+      const run = store.createRun({ title: 'dead', workflow: 'quick-task', task: 'work', runner: 'claude', steps: [] });
+
+      store.appendEvent(run.id, {
+        type: 'error',
+        message: 'claude: Failed to authenticate: OAuth session expired and could not be refreshed',
+      });
+      await verifying.mock.results[0]!.value;
+      // A later ordinary auth line under the same incident does not soften it.
+      store.appendEvent(run.id, { type: 'note', message: 'unauthorized: 401 token expired' });
+
+      expect(onProviderStatus).toHaveBeenCalledTimes(1);
+      await expect(providerAuth.status({ refresh: true })).resolves.toMatchObject({
+        providers: expect.arrayContaining([
+          expect.objectContaining({ provider: 'claude', status: 'disconnected', authFailureId: 'auth-incident-1' }),
+        ]),
+      });
+      await expect(providerAuth.verifyRuntimeAuthFailure('claude')).resolves.toBeNull();
+
+      // Settings' Try again is the user's word that they signed in again.
+      expect(providerAuth.clearRuntimeAuthFailure('claude', 'auth-incident-1')).toBe(true);
+      await expect(providerAuth.status({ refresh: true })).resolves.toMatchObject({
+        providers: expect.arrayContaining([{ provider: 'claude', status: 'connected' }]),
       });
     });
 

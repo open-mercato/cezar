@@ -98,6 +98,23 @@ export function foldResults(
 
 export const DICTATION_INSECURE = 'Dictation needs https or localhost'
 export const DICTATION_NO_SERVICE = 'Dictation is not available in this browser'
+export const DICTATION_OLD_SHELL = 'Dictation needs a newer Cezar app — update it to use the microphone'
+
+/** The macOS desktop shell, when it hosts this page: `microphone` says whether it is entitled to
+ *  one. Shells before 0.1.10 are not, and macOS refuses every dictation there (telemetry c55c7b0b). */
+function macosShell(): { microphone: boolean } | null {
+  const shell = (window as { __CEZ_DESKTOP__?: { platform?: string; microphone?: boolean } }).__CEZ_DESKTOP__
+  if (shell?.platform !== 'macos' && document.documentElement.dataset.cezDesktop !== 'macos') return null
+  return { microphone: shell?.microphone === true }
+}
+
+/** Why the mic cannot work on this page before it is ever tried; null ⇒ it can. */
+function initialUnavailable(): string | null {
+  if (window.isSecureContext === false) return DICTATION_INSECURE
+  if (serviceRefused) return DICTATION_NO_SERVICE
+  if (macosShell()?.microphone === false) return DICTATION_OLD_SHELL
+  return null
+}
 
 /** What the composer tells the user when dictation stops on its own. `failure` is the browser's
  *  error code when it is one worth a red toast and a report; null for a benign stop. */
@@ -116,7 +133,9 @@ export function dictationNotice(code: string | undefined): DictationNotice | nul
       return { message: 'Dictation heard nothing — try again', failure: null }
     case 'not-allowed':
       return {
-        message: 'Dictation needs microphone access — allow it for this site in the browser settings',
+        message: macosShell()
+          ? 'Dictation needs microphone access — allow Cezar in System Settings → Privacy & Security → Microphone and Speech Recognition'
+          : 'Dictation needs microphone access — allow it for this site in the browser settings',
         failure: code,
       }
     case 'service-not-allowed':
@@ -148,10 +167,9 @@ export function useDictation(onNotice: (notice: DictationNotice) => void): Dicta
   const [supported] = React.useState(() => speechRecognitionCtor() !== undefined)
   // Web Speech gets the microphone only in a secure context — over plain http to a non-loopback
   // host (a hosted cockpit) every start ends in `not-allowed`. A refusing speech service
-  // (`service-not-allowed`) refuses again. Either way the mic stays, disabled, saying why.
-  const [unavailable, setUnavailable] = React.useState<string | null>(() =>
-    window.isSecureContext === false ? DICTATION_INSECURE : serviceRefused ? DICTATION_NO_SERVICE : null,
-  )
+  // (`service-not-allowed`) refuses again, and so does a macOS shell without the microphone
+  // entitlement. Either way the mic stays, disabled, saying why.
+  const [unavailable, setUnavailable] = React.useState<string | null>(initialUnavailable)
 
   const teardown = React.useCallback(() => {
     const recognition = recognitionRef.current

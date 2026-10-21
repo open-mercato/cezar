@@ -420,7 +420,7 @@ describe('the agent accounts section', () => {
       expect(row.querySelector('[data-action="account-recheck"]')).not.toBeNull()
     })
 
-    it('re-checks ONE account for real, with refresh=1', async () => {
+    it('re-checks ONE account for real, with refresh=1&recheck=1', async () => {
       serve({
         editable: true,
         profileCapableProviders: ['claude', 'codex'],
@@ -437,7 +437,7 @@ describe('the agent accounts section', () => {
       fireEvent.click(row.querySelector('[data-action="account-recheck"]')!)
 
       await waitFor(() =>
-        expect(requests.some((r) => r.url.includes('/status?refresh=1'))).toBe(true))
+        expect(requests.some((r) => r.url.includes('/status?refresh=1&recheck=1'))).toBe(true))
     })
   })
 

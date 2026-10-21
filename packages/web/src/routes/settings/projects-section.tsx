@@ -411,7 +411,12 @@ function ProjectRow({
           </Button>
         ) : null}
         {project.unregistered ? (
-          <AddBootProjectButton root={project.root} name={project.name} disabled={disabled} />
+          <AddBootProjectButton
+            root={project.root}
+            name={project.name}
+            disabled={disabled}
+            notAddable={project.notAddable === true}
+          />
         ) : (
           <Button
             type="button"
@@ -451,10 +456,13 @@ export function AddBootProjectButton({
   root,
   name,
   disabled = false,
+  notAddable = false,
 }: {
   root: string
   name: string
   disabled?: boolean
+  /** The server refuses this folder (`$HOME`, a task worktree): explain instead of 400-ing. */
+  notAddable?: boolean
 }) {
   const register = useRegisterProject()
   return (
@@ -464,8 +472,12 @@ export function AddBootProjectButton({
       size="sm"
       data-action="project-add-boot"
       aria-label={`Add ${name} to your projects`}
-      title="cezar is serving this folder — save it to your projects"
-      disabled={disabled || register.isPending}
+      title={
+        notAddable
+          ? 'Your home directory or a cezar task worktree cannot be a project — start cezar in a project folder, or use Open local folder'
+          : 'cezar is serving this folder — save it to your projects'
+      }
+      disabled={disabled || notAddable || register.isPending}
       onClick={() =>
         register.mutate(root, {
           onSuccess: () => toast(`${name} added to your projects`),

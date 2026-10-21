@@ -257,6 +257,20 @@ describe('workspace projects API', () => {
       expect((await loadWorkspaceConfig()).projects).toEqual([]);
     });
 
+    it('flags a boot folder the register route would refuse as notAddable (telemetry 48dc0f71)', async () => {
+      const worktree = join(repoRoot, '.ai', 'cezar', 'worktrees', 'task1');
+      mkdirSync(worktree, { recursive: true });
+
+      const body = await getProjects({ repoRoot: worktree });
+      expect(body.projects.find((p) => p.id === body.bootProject)).toMatchObject({
+        unregistered: true,
+        notAddable: true,
+      });
+      // An ordinary folder stays addable.
+      const ordinary = await getProjects();
+      expect(ordinary.projects[0]?.notAddable).toBeUndefined();
+    });
+
     it('omits the boot folder once the registry holds any project, and still names it', async () => {
       const other = await registerProject(otherRoot);
       const body = await getProjects();

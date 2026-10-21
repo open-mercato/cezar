@@ -1,3 +1,24 @@
+# 0.16.1 (2026-10-20)
+
+<!-- Release notes generated using configuration in .github/release.yml at c2d4ba0cb8769bb05640755fd18ccbf1016c836c -->
+
+## What's Changed
+### 🐛 Fixes
+* fix(desktop): load the task Preview in the app, keep colored ports in detected addresses (shell 0.1.9) by @patzick in https://github.com/open-mercato/cezar/pull/1545
+* fix(provider-auth): hold Copilot's probe stdin open until session/new is answered (telemetry 298c2e1f) by @patzick in https://github.com/open-mercato/cezar/pull/1547
+* fix(provider-auth): report Cursor and pi not-installed when the binary on PATH isn't the CLI (telemetry 8d304c50, f67df9d2) by @patzick in https://github.com/open-mercato/cezar/pull/1549
+* fix(codex): wait out or fork a thread another app-server still holds on resume (telemetry 4c9de01a) by @patzick in https://github.com/open-mercato/cezar/pull/1557
+* fix(telemetry): group usage-limit agent errors across reset instants; honor a weekly reset's day (telemetry 987e8238) by @patzick in https://github.com/open-mercato/cezar/pull/1562
+* fix(provider-auth): ask OpenCode 2.x with a private server when its background service fails (telemetry 107e44a9) by @patzick in https://github.com/open-mercato/cezar/pull/1563
+* fix(settings): disable Add project for a launch folder the server refuses (telemetry 48dc0f71) by @patzick in https://github.com/open-mercato/cezar/pull/1564
+* fix(telemetry): scrub every attachable file name from toast reports (telemetry 5fc3ffbb, d77d0047) by @patzick in https://github.com/open-mercato/cezar/pull/1565
+* fix(provider-auth): keep a dead Claude login latched instead of self-checking it away (telemetry 9e4a95db) by @patzick in https://github.com/open-mercato/cezar/pull/1566
+### Other changes
+* fix(desktop): let the macOS app use the microphone for dictation (shell 0.1.10, telemetry c55c7b0b) by @patzick in https://github.com/open-mercato/cezar/pull/1558
+
+
+**Full Changelog**: https://github.com/open-mercato/cezar/compare/v0.16.0...v0.16.1
+
 # 0.16.0 (2026-10-20)
 
 <!-- Release notes generated using configuration in .github/release.yml at c4c3ebab5f17426abaa8c4d2f54a12ffe3930da9 -->

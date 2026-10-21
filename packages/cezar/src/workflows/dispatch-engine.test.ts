@@ -290,6 +290,29 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       expect(store.getRun(explicit.id)?.dispatch?.budgetUsd).toBe(3);
     }, 40_000);
 
+    it('a child on another runner does not inherit the parent’s or the intent’s model (telemetry 43bdda11)', async () => {
+      reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
+      const parent = await parkedRoot(20);
+      store.updateRun(parent.id, { runner: 'codex', model: 'gpt-5.6-luna' });
+      // Same runner: the parent's model still follows.
+      const same = dispatchOk(parent.id, order('same runner', { max_cost: 1 }));
+      expect(store.getRun(same.id)?.runner).toBe('codex');
+      expect(store.getRun(same.id)?.model).toBe('gpt-5.6-luna');
+      store.updateRun(same.id, { status: 'done' });
+      // `--runner claude` with no `--model`: Claude picks its own default.
+      const switched = dispatchOk(parent.id, order('switched runner', { runner: 'claude', max_cost: 1 }));
+      expect(store.getRun(switched.id)?.runner).toBe('claude');
+      expect(store.getRun(switched.id)?.model).toBeUndefined();
+      store.updateRun(switched.id, { status: 'done' });
+      // An intent model belongs to the intent's runner, not to an order that names another.
+      store.updateRun(parent.id, { dispatch: { ...rootOf(parent.id, 20), intent: { runner: 'codex', model: 'gpt-5.6-terra' } } });
+      const fromIntent = dispatchOk(parent.id, order('intent runner', { max_cost: 1 }));
+      expect(store.getRun(fromIntent.id)?.model).toBe('gpt-5.6-terra');
+      store.updateRun(fromIntent.id, { status: 'done' });
+      const overIntent = dispatchOk(parent.id, order('over the intent', { runner: 'claude', max_cost: 1 }));
+      expect(store.getRun(overIntent.id)?.model).toBeUndefined();
+    }, 40_000);
+
     it('a root started with an intent runs in a worktree even when the composer opted out, and its prompt carries the intent block', async () => {
       const record = start('mock:monitoring the user asked for a fan-out', undefined, { worktree: false, dispatchIntent: { maxSubtasks: 5 } });
       await waitFor(record.id, (r) => r?.activity === 'monitoring');

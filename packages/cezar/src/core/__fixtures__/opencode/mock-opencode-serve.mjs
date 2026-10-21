@@ -28,6 +28,7 @@
 // the no-event-bus fallback.
 // `MOCK_START=silent` never prints the URL line; `MOCK_START=stderr` prints it on
 // stderr. `MOCK_PATH_DIR` overrides the `directory` `GET /path` reports.
+// `MOCK_API=v2` answers every non-`/api/` POST with 405, as OpenCode 2.x does.
 import { createServer } from 'node:http';
 
 const args = process.argv.slice(2);
@@ -89,6 +90,12 @@ const server = createServer((req, res) => {
   let body = '';
   req.on('data', (chunk) => (body += chunk));
   req.on('end', () => {
+    // OpenCode 2.x serves its API under `/api` and answers the 1.x routes with 405.
+    if (process.env.MOCK_API === 'v2' && !url.startsWith('/api/')) {
+      res.writeHead(405);
+      res.end();
+      return;
+    }
     if (req.method === 'POST' && url === '/session') {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ id: SESSION_ID, title: 'cezar task' }));

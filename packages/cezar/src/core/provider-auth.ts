@@ -6,7 +6,7 @@ import { AGENT_MODELS_LOCKED_ENV } from './agent-model-policy.ts';
 import { profileEnv } from './agent-profiles.ts';
 import { isSignalTerminationExit } from './agent-runner.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
-import { resolveCursorAgentBin } from './cursor-bin.ts';
+import { isForeignCursorAgent, resolveCursorAgentBin } from './cursor-bin.ts';
 import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
 import { probeJunieAuthentication } from './junie-auth-probe.ts';
 import { spawnableCommand } from './windows-shim.ts';
@@ -111,8 +111,14 @@ interface ProviderDescriptor {
   precheck?: () => ProviderConnectionState | undefined;
   /** A more specific hint than "try again" for an answer `parse` could not read. */
   unrecognizedHint?: (result: ProviderCommandResult) => string | undefined;
-  /** Arguments to ask once more with when `statusArgs` was rejected by an older CLI. */
+  /** Arguments to ask once more with when the CLI answered `statusArgs` unreadably (a rejected flag, a failed service). */
   fallbackArgs?: (result: ProviderCommandResult) => readonly string[] | undefined;
+  /**
+   * Whether `executable` is not a working copy of this CLI (another program of that name, a shim
+   * with nothing behind it), judged from a clean `--version` answer. Asked only once the status
+   * answer is unreadable; `true` reports `not-installed` (telemetry 8d304c50, f67df9d2).
+   */
+  foreign?: (executable: string, version: ProviderCommandResult) => boolean;
   /** The `CEZ_*_BIN` override `executable` honours — only so a report can say the binary came from it. */
   overrideEnv: string;
 }
@@ -213,6 +219,19 @@ export function isRuntimeProviderAuthFailure(message: string): boolean {
     .some((pattern) => pattern.test(message));
 }
 
+/** Claude Code's own verdict after its token refresh was refused (`OAuthRefreshDeadError`), while
+ *  `claude auth status` keeps answering `loggedIn: true` from the token still on disk — so the
+ *  self-check cleared the latch and the next run failed the same way (telemetry 9e4a95db). The
+ *  "another process is refreshing" variant is transient and deliberately not matched. */
+const DEFINITIVE_AUTH_FAILURE_PATTERNS = [
+  /\boauth session expired and could not be refreshed\b/i,
+  /\brefresh token is no longer valid\b/i,
+] as const;
+
+export function isDefinitiveProviderAuthFailure(message: string): boolean {
+  return DEFINITIVE_AUTH_FAILURE_PATTERNS.some((pattern) => pattern.test(message));
+}
+
 function normalizedOutput(stdout: string): string {
   return stdout.replace(ANSI_SEQUENCE, '').trim().toLowerCase();
 }
@@ -260,21 +279,40 @@ function parseCodexStatus(result: ProviderCommandResult): ProviderConnectionStat
   return null;
 }
 
+/** OpenCode 2.x `auth list --format json`: the integrations that have at least one connection. */
+function parseOpenCodeJson(stdout: string): ProviderConnectionState | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(value)) return null;
+  const wellFormed = value.every((entry) => typeof entry === 'object' && entry !== null
+    && Array.isArray((entry as { connections?: unknown }).connections)
+    && (entry as { connections: unknown[] }).connections.length > 0);
+  if (!wellFormed) return null;
+  return value.length > 0 ? 'connected' : 'disconnected';
+}
+
 function parseOpenCodeStatus(result: ProviderCommandResult): ProviderConnectionState | null {
   if (result.exitCode !== 0) return null;
+  if (/^\s*\[/.test(result.stdout)) return parseOpenCodeJson(result.stdout);
   const lines = normalizedLines(result.stdout);
   const storedSummaries = lines
     .map((line) => line.match(/^[^a-z0-9]*(\d+)\s+credentials?$/)?.[1])
     .filter((count): count is string => count !== undefined);
 
-  // OpenCode 2.x replaced the summary with one row per stored credential, with the literal
-  // `stored` state in the final column. Keep this shape deliberately narrow: a successful empty
-  // response is the valid no-credentials answer, while any other output without either the 1.x
+  // OpenCode 2.x replaced the summary with one row per connection, with its `stored` or
+  // `environment` type in the final column, and prints `No authenticated integrations` (2.0.28;
+  // an empty answer before that) when there is none. Any other output without either the 1.x
   // summary or 2.x rows remains inconclusive rather than being guessed as disconnected.
   if (storedSummaries.length === 0) {
-    if (lines.length === 0) return 'disconnected';
-    const storedRows = lines.filter((line) => /^.+\s{2,}.+\s+stored$/.test(line));
-    return storedRows.length === lines.length && storedRows.length > 0 ? 'connected' : null;
+    if (lines.length === 0 || (lines.length === 1 && lines[0] === 'no authenticated integrations')) {
+      return 'disconnected';
+    }
+    const rows = lines.filter((line) => /^.+\s{2,}.+\s+(?:stored|environment)$/.test(line));
+    return rows.length === lines.length && rows.length > 0 ? 'connected' : null;
   }
   if (storedSummaries.length !== 1) return null;
   const storedCount = Number(storedSummaries[0]);
@@ -398,6 +436,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     overrideEnv: 'CEZ_OPENCODE_BIN',
     executable: () => process.env.CEZ_OPENCODE_BIN ?? 'opencode',
     statusArgs: ['auth', 'list'],
+    fallbackArgs: openCodeFallbackArgs,
     loginArgs: ['auth', 'login'],
     updateArgs: ['upgrade'],
     installHint: 'Install OpenCode, then run `opencode auth login`.',
@@ -410,6 +449,10 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     statusArgs: ['status', '--format', 'json'],
     fallbackArgs: cursorFallbackArgs,
     unrecognizedHint: cursorUnrecognizedHint,
+    foreign: (executable, version) => isForeignCursorAgent(
+      executable,
+      version.exitCode === 0 ? cliVersionFrom(version.stdout) : null,
+    ),
     loginArgs: ['login'],
     updateArgs: ['update'],
     installHint:
@@ -426,6 +469,9 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     loginArgs: ['/login'],
     installHint: 'Install pi, then run `pi /login`.',
     parse: parsePiStatus,
+    // Real pi answers `--version` with exit 0, like detection requires; a `pi` that can't is a shim
+    // or another tool whose wording no pattern list keeps up with (telemetry f67df9d2, after #1504).
+    foreign: (_executable, version) => !process.env.CEZ_PI_BIN && version.exitCode !== 0,
   },
   {
     id: 'junie',
@@ -493,6 +539,19 @@ const REJECTED_FORMAT_FLAG =
 function cursorFallbackArgs(result: ProviderCommandResult): readonly string[] | undefined {
   if (result.exitCode === 0) return undefined;
   return REJECTED_FORMAT_FLAG.test(`${result.stderr}\n${result.stdout}`) ? ['status'] : undefined;
+}
+
+/**
+ * OpenCode 2.x answers `auth list` through its background service, so a service that cannot start
+ * (port taken, crashed) fails the probe with exit 1 and a one-line stderr (telemetry 107e44a9).
+ * Ask once more with a private server and the JSON format (both since 2.0.0). Not for OpenCode 1.x,
+ * whose `Credentials <path>` header shows it answered and which rejects both flags.
+ */
+function openCodeFallbackArgs(result: ProviderCommandResult): readonly string[] | undefined {
+  // Only a CLI that answered: not installed, a spawn error, a hang or a signal is not a failed service.
+  if (result.errorCode || result.timedOut || result.exitCode === null) return undefined;
+  if (normalizedLines(result.stdout).some((line) => /^[^a-z0-9]*credentials\s/.test(line))) return undefined;
+  return ['auth', 'list', '--standalone', '--format', 'json'];
 }
 
 /** Telemetry 8d304c50: an `agent` that answers neither shape is likely another program of that name. */
@@ -585,6 +644,17 @@ function descriptorFor(provider: ProviderId): ProviderDescriptor {
 interface RuntimeAuthFailure {
   generation: number;
   authFailureId: string;
+  /** The vendor said its stored login is dead ({@link isDefinitiveProviderAuthFailure}): a status
+   *  probe reads that login locally and answers connected anyway, so no automatic probe lifts it. */
+  definitive?: boolean;
+  /** Generation of the user's own "Check again" on an account; probes started after it may lift. */
+  recheckedAt?: number;
+}
+
+/** Whether a connected probe that started at `startedAt` is evidence against `failure`. */
+function probeLifts(failure: RuntimeAuthFailure, startedAt: number): boolean {
+  if (failure.generation > startedAt) return false;
+  return !failure.definitive || (failure.recheckedAt !== undefined && failure.recheckedAt <= startedAt);
 }
 
 /** One authoritative runtime authentication incident. The identifier is opaque
@@ -791,12 +861,13 @@ export class ProviderAuthService {
     return this.startFreshProbe().visible;
   }
 
-  reportRuntimeAuthFailure(provider: ProviderId): RuntimeAuthFailureReport | null {
+  reportRuntimeAuthFailure(provider: ProviderId, options?: { definitive?: boolean }): RuntimeAuthFailureReport | null {
     if (process.env.CEZ_DRY_RUN === '1' || providerAuthChecksDisabled()) return null;
     const current = this.runtimeFailures.get(provider);
     const failure: RuntimeAuthFailure = {
       generation: ++this.nextRuntimeFailureGeneration,
       authFailureId: current?.authFailureId ?? this.createAuthFailureId(),
+      ...(options?.definitive || current?.definitive ? { definitive: true } : {}),
     };
     this.runtimeFailures.set(provider, failure);
     this.lastConnected.delete(provider);
@@ -815,15 +886,21 @@ export class ProviderAuthService {
    * A runtime rejection on a NAMED agent account (telemetry 9e4a95db): latched on that account only.
    * Raising the provider-wide latch instead blamed the default login, which was still signed in.
    * Lifts when a probe of this account that started after the rejection answers connected — the
-   * pane's Check again, Connect's watch, or the action gate's verify-before-refuse.
+   * pane's Check again, Connect's watch, or the action gate's verify-before-refuse. A definitive
+   * one lifts only after the user's own Check again ({@link recheckProfileAuthFailure}).
    */
-  reportProfileAuthFailure(provider: ProviderId, profileId: string): RuntimeAuthFailureReport | null {
+  reportProfileAuthFailure(
+    provider: ProviderId,
+    profileId: string,
+    options?: { definitive?: boolean },
+  ): RuntimeAuthFailureReport | null {
     if (process.env.CEZ_DRY_RUN === '1' || providerAuthChecksDisabled()) return null;
     const key = profileCacheKey(provider, profileId);
     const current = this.profileRuntimeFailures.get(key);
     const failure: RuntimeAuthFailure = {
       generation: ++this.nextRuntimeFailureGeneration,
       authFailureId: current?.authFailureId ?? this.createAuthFailureId(),
+      ...(options?.definitive || current?.definitive ? { definitive: true } : {}),
     };
     this.profileRuntimeFailures.set(key, failure);
     this.lastConnected.delete(key);
@@ -844,6 +921,13 @@ export class ProviderAuthService {
     return failure
       ? { provider: status.provider, status: 'disconnected', hint: RUNTIME_AUTH_HINT, authFailureId: failure.authFailureId, profileId }
       : status;
+  }
+
+  /** The user pressed Check again on this account: a probe started from now on may lift even a
+   *  definitive incident. Their click, not cezar's own probing, is the evidence of a fresh login. */
+  recheckProfileAuthFailure(provider: ProviderId, profileId: string): void {
+    const failure = this.profileRuntimeFailures.get(profileCacheKey(provider, profileId));
+    if (failure) failure.recheckedAt = ++this.nextRuntimeFailureGeneration;
   }
 
   /** Clear only the incident the caller actually observed. A stale retry must
@@ -883,7 +967,8 @@ export class ProviderAuthService {
   async verifyRuntimeAuthFailure(provider: ProviderId): Promise<ProviderStatus | null> {
     if (process.env.CEZ_DRY_RUN === '1' || providerAuthChecksDisabled()) return null;
     const failure = this.runtimeFailures.get(provider);
-    if (!failure) return null;
+    // The CLI's status reads the same dead login and would answer connected (telemetry 9e4a95db).
+    if (!failure || failure.definitive) return null;
     if (this.verifyingRuntimeFailures.has(provider)) return null;
     const lastVerifiedAt = this.lastRuntimeVerification.get(provider);
     if (lastVerifiedAt !== undefined && this.now() - lastVerifiedAt < RUNTIME_AUTH_VERIFY_COOLDOWN_MS) {
@@ -1031,7 +1116,7 @@ export class ProviderAuthService {
         this.completedProfiles.set(key, { status: stamped, timestamp: this.now() });
         const failure = this.profileRuntimeFailures.get(key);
         // The FRESH answer only: a bridged hang is not evidence that the rejection was transient.
-        if (failure && failure.generation <= startedAt && status.status === 'connected') {
+        if (failure && probeLifts(failure, startedAt) && status.status === 'connected') {
           this.profileRuntimeFailures.delete(key);
         }
         return this.withProfileFailure(stamped, profile.id);
@@ -1224,6 +1309,28 @@ export class ProviderAuthService {
     if (status !== null) return { provider: descriptor.id, status };
     // Still interrupted: unknown, but unreported — there is no CLI defect to group on.
     if (wasInterrupted(result)) return { provider: descriptor.id, status: 'unknown', hint: INTERRUPTED_HINT };
+    // OpenCode 1.x can fail before producing an auth-list answer (for example, while starting its
+    // local service). That is an operational failure, not a new stdout format to fix.
+    if (descriptor.id === 'opencode' && result.exitCode === 1 && !result.stdout.trim() && result.stderr.trim()) {
+      return { provider: descriptor.id, status: 'unknown', hint: UNKNOWN_HINT };
+    }
+    if (descriptor.foreign) {
+      const version = await (env === undefined
+        ? this.runCommand(executable, descriptor.versionArgs ?? ['--version'], VERSION_TIMEOUT_MS)
+        : this.runCommand(executable, descriptor.versionArgs ?? ['--version'], VERSION_TIMEOUT_MS, env))
+        .catch(() => null);
+      // Only a clean answer decides; a spawn error, hang or signal says nothing about the binary.
+      const decisive = version !== null && !version.errorCode && !version.timedOut
+        && version.exitCode !== null && !wasInterrupted(version);
+      if (decisive && descriptor.foreign(executable, version)) {
+        return {
+          provider: descriptor.id,
+          status: 'not-installed',
+          hint: `\`${executable}\` on PATH is not a working ${descriptor.id} CLI. `
+            + `${descriptor.installHint} Or point ${descriptor.overrideEnv} at it.`,
+        };
+      }
+    }
     const hint = descriptor.unrecognizedHint?.(result) ?? UNKNOWN_HINT;
     // Exit 0 and 1 are the codes vendors answer status with; anything else is the CLI failing.
     if (result.exitCode === 0 || result.exitCode === 1) return inconclusive('unrecognized_output', hint, result);

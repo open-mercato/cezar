@@ -1,6 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -10,15 +11,21 @@ import type { AgentEvent } from './agent-runner.ts';
 import {
   KILL_GRACE_MS,
   OpencodeServerRunner,
+  SERVER_PORT_ATTEMPTS,
   SERVER_START_MAX_MS,
   TURN_IDLE_GRACE_MS,
   opencodePermissionReply,
+  unsupportedServerMessage,
 } from './opencode-server-runner.ts';
 
-const spawnHook = vi.hoisted(() => ({ override: null as null | ((...args: unknown[]) => unknown) }));
+const spawnHook = vi.hoisted(() => ({
+  override: null as null | ((...args: unknown[]) => unknown),
+  actual: null as null | ((...args: unknown[]) => unknown),
+}));
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
+  spawnHook.actual = actual.spawn as (...args: unknown[]) => unknown;
   return {
     ...actual,
     spawn: (...args: Parameters<typeof actual.spawn>) =>
@@ -232,6 +239,49 @@ describe('opencode serve startup', () => {
     expect(events).toContainEqual(expect.objectContaining({ type: 'note', message: expect.stringContaining('opencode serve stderr: migrating') }));
   });
 
+  function exitingChild(stderr: string): ChildProcessWithoutNullStreams {
+    const child = silentChild();
+    setTimeout(() => {
+      (child.stderr as PassThrough).end(stderr);
+      Object.assign(child, { exitCode: 1 });
+      child.emit('exit', 1, null);
+      child.emit('close', 1, null);
+    }, 5);
+    return child;
+  }
+
+  it('does not respawn a server that exited for a reason other than its port', async () => {
+    let spawns = 0;
+    spawnHook.override = () => (spawns += 1, exitingChild('Error: bad config\n'));
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: 'opencode', timeoutMs: 0 }).startSession(
+      { userPrompt: 'do it', cwd: process.cwd() },
+      (event) => events.push(event),
+    );
+    await session.result;
+    expect(spawns).toBe(1);
+    expect(events.filter((e) => e.type === 'error')).toEqual([
+      { type: 'error', message: 'opencode: opencode serve exited before it started listening' },
+    ]);
+    expect(events).toContainEqual({ type: 'note', message: 'opencode serve stderr: Error: bad config' });
+  });
+
+  it(`gives up after ${SERVER_PORT_ATTEMPTS} spawns that all lost their port`, async () => {
+    let spawns = 0;
+    spawnHook.override = () => (spawns += 1, exitingChild('Error: Unexpected error\n\nServeError\n'));
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: 'opencode', timeoutMs: 0 }).startSession(
+      { userPrompt: 'do it', cwd: process.cwd() },
+      (event) => events.push(event),
+    );
+    await session.result;
+    expect(spawns).toBe(SERVER_PORT_ATTEMPTS);
+    expect(events.filter((e) => e.type === 'error')).toEqual([
+      { type: 'error', message: 'opencode: opencode serve exited before it started listening' },
+    ]);
+    expect(events.filter((e) => e.type === 'note')).toHaveLength(1);
+  });
+
   // The message is a telemetry group key, so it never carries the elapsed time.
   it('fails with one fixed message when the server prints and then goes silent', async () => {
     const child = silentChild();
@@ -289,6 +339,24 @@ describe('2d01c3c9 opencode serve that starts without the expected URL line', ()
     vi.useRealTimers();
     await session.result.catch(() => undefined);
     expect(errors(events)).toEqual([{ type: 'error', message: 'opencode: opencode serve did not report a listening URL within 30s' }]);
+  }, 30_000);
+});
+
+describe('dc1a91a6 an OpenCode 2.x server', () => {
+  const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
+
+  it('fails with an actionable message instead of a bare 405', async () => {
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 }).startSession(
+      { userPrompt: 'check the tree', cwd: process.cwd(), env: { MOCK_API: 'v2' } },
+      (e) => events.push(e),
+      { autoEndAfterFirstTurn: true },
+    );
+    await session.result;
+    expect(events.filter((e) => e.type === 'error')).toEqual([
+      { type: 'error', message: `opencode: ${unsupportedServerMessage(405)}` },
+    ]);
+    expect(unsupportedServerMessage(405)).toMatch(/OpenCode 2\.x .* not supported yet — install OpenCode 1\.x/);
   }, 30_000);
 });
 
@@ -420,6 +488,42 @@ describe('#897 a turn that outlives its prompt POST', () => {
 
     expect(types(events)).toContain('turn-end');
     expect(fetchSpy).not.toHaveBeenCalled();
+  }, 30_000);
+
+  // The random port is in the OS ephemeral range, so it can already be taken (release 0.16.1 CI).
+  it('respawns on a fresh port when the random one is already taken', async () => {
+    const blocker = createServer();
+    let taken = 0;
+    for (let p = 40000 + Math.floor(Math.random() * 19000); !taken; p += 1) {
+      taken = await new Promise<number>((resolve) => {
+        blocker.once('error', () => resolve(0));
+        blocker.listen(p, '127.0.0.1', () => resolve(p));
+      });
+    }
+    try {
+      vi.spyOn(Math, 'random').mockReturnValueOnce((taken - 40000 + 0.5) / 20000);
+      const ports: string[] = [];
+      spawnHook.override = (file, args, options) => {
+        ports.push(String((args as string[]).at(-1)));
+        return spawnHook.actual!(file, args, options);
+      };
+      const runner = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 });
+      const { events, onEvent } = record();
+      const session = runner.startSession({ userPrompt: 'check the tree', cwd: process.cwd() }, onEvent, {
+        autoEndAfterFirstTurn: true,
+      });
+      await session.result;
+
+      expect(ports).toHaveLength(2);
+      expect(ports[0]).toBe(String(taken));
+      expect(ports[1]).not.toBe(String(taken));
+      expect(notes(events)).toEqual([]);
+      expect(errors(events)).toEqual([]);
+      expect(types(events)).toContain('turn-end');
+    } finally {
+      spawnHook.override = null;
+      await new Promise((resolve) => blocker.close(resolve));
+    }
   }, 30_000);
 
   /**

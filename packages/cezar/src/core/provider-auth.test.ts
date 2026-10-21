@@ -16,7 +16,8 @@ vi.mock('./claude-bin.ts', async (importOriginal) => ({
   resolveClaudeBin: (env: NodeJS.ProcessEnv = process.env) => env.CEZ_CLAUDE_BIN || 'claude',
 }));
 // Same reason for Cursor: `cursor-bin.test.ts` covers the real PATH resolution.
-vi.mock('./cursor-bin.ts', () => ({
+vi.mock('./cursor-bin.ts', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./cursor-bin.ts')>(),
   resolveCursorAgentBin: () => process.env.CEZ_CURSOR_AGENT_BIN || 'agent',
 }));
 vi.mock('./junie-auth-probe.ts', () => ({
@@ -29,6 +30,7 @@ import {
   cliVersionFrom,
   copilotAcpAnswered,
   defaultRunProviderCommand,
+  isDefinitiveProviderAuthFailure,
   isRuntimeProviderAuthFailure,
   providerAuthChecksDisabled,
   versionManagerShimMiss,
@@ -83,6 +85,7 @@ const originalEnv = {
   CEZ_PI_BIN: process.env.CEZ_PI_BIN,
   CURSOR_API_KEY: process.env.CURSOR_API_KEY,
   CEZ_COPILOT_BIN: process.env.CEZ_COPILOT_BIN,
+  CEZ_CURSOR_AGENT_BIN: process.env.CEZ_CURSOR_AGENT_BIN,
 };
 
 beforeEach(() => {
@@ -94,6 +97,7 @@ beforeEach(() => {
   delete process.env.CEZ_PI_BIN;
   delete process.env.CURSOR_API_KEY;
   delete process.env.CEZ_COPILOT_BIN;
+  delete process.env.CEZ_CURSOR_AGENT_BIN;
 });
 
 afterEach(() => {
@@ -161,6 +165,17 @@ describe('runtime provider authentication failures', () => {
     'network connection reset',
   ])('does not turn unrelated failures into credential failures: %s', (message) => {
     expect(isRuntimeProviderAuthFailure(message)).toBe(false);
+  });
+
+  // Only a verdict a local status probe cannot contradict is definitive (telemetry 9e4a95db).
+  it.each([
+    ['claude: Failed to authenticate: OAuth session expired and could not be refreshed', true],
+    ['OAuth refresh token is no longer valid; run /login to re-authenticate', true],
+    ['Failed to authenticate. API Error: 401 OAuth access token has been revoked.', false],
+    ['Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh.', false],
+    ['OAuth access token could not be refreshed: another Claude Code process is holding the refresh lock', false],
+  ])('classifies %s as definitive: %s', (message, definitive) => {
+    expect(isDefinitiveProviderAuthFailure(message)).toBe(definitive);
   });
 });
 
@@ -417,6 +432,92 @@ describe('provider auth parsers', () => {
     await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'disconnected' } });
   });
 
+  it.each([
+    ['No authenticated integrations', 'disconnected'],
+    ['OpenAI  OPENAI_API_KEY              environment', 'connected'],
+  ])('reads OpenCode 2.0.28 plain answer %s', async (stdout, status) => {
+    const run = runner((executable) => executable === 'opencode'
+      ? { stdout: `${stdout}\n`, stderr: '', exitCode: 0 }
+      : { stdout: 'unrecognized', stderr: '', exitCode: 0 });
+    const service = new ProviderAuthService({ runCommand: run });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status } });
+    expect(vi.mocked(run).mock.calls.filter(([executable]) => executable === 'opencode')).toHaveLength(1);
+  });
+
+  // Telemetry 107e44a9: OpenCode 2.x answers `auth list` through its background service; one that
+  // cannot start fails with exit 1 and a one-line stderr. A private server still answers.
+  it.each([
+    ['[]', 'disconnected'],
+    [JSON.stringify([{ id: 'opencode-go', name: 'OpenCode Go', connections: [{ type: 'credential', label: 'OpenCode Go' }] }]), 'connected'],
+  ])('asks OpenCode 2.x with a private server when its background service fails: %s', async (json, status) => {
+    const onInconclusive = vi.fn();
+    const run = runner((executable, args) => {
+      if (executable !== 'opencode') return { stdout: 'unrecognized', stderr: '', exitCode: 0 };
+      return args.includes('--standalone')
+        ? { stdout: `${json}\n`, stderr: '', exitCode: 0 }
+        : { stdout: '', stderr: 'Error: Server process exited with code 1\n', exitCode: 1 };
+    });
+    const service = new ProviderAuthService({ runCommand: run, onInconclusive });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status } });
+    expect(run).toHaveBeenCalledWith('opencode', ['auth', 'list', '--standalone', '--format', 'json'], expect.any(Number));
+    expect(onInconclusive).not.toHaveBeenCalledWith(expect.objectContaining({ provider: 'opencode' }));
+  });
+
+  it.each([
+    '{"connections":[]}',
+    '[{"id":"x","connections":[]}]',
+    '[null]',
+  ])('does not guess from malformed OpenCode JSON %s', async (json) => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable, args) => {
+        if (executable !== 'opencode') return { stdout: 'unrecognized', stderr: '', exitCode: 0 };
+        return args.includes('--standalone')
+          ? { stdout: json, stderr: '', exitCode: 0 }
+          : { stdout: '', stderr: 'Error: Server process exited with code 1\n', exitCode: 1 };
+      }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'unknown' } });
+  });
+
+  it.each([
+    ['not installed', { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' }, 'not-installed', 1],
+    ['hung', { stdout: '', stderr: '', exitCode: null, timedOut: true }, 'unknown', 2],
+  ] as const)('does not ask OpenCode with a private server when it is %s', async (_name, answer, status, calls) => {
+    const run = runner((executable) => executable === 'opencode'
+      ? answer
+      : { stdout: 'unrecognized', stderr: '', exitCode: 0 });
+    const service = new ProviderAuthService({ runCommand: run });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status } });
+    expect(vi.mocked(run).mock.calls.filter(([executable]) => executable === 'opencode')).toHaveLength(calls);
+  });
+
+  it('does not re-ask OpenCode 1.x, which answered but rejects the 2.x flags', async () => {
+    const run = runner((executable) => executable === 'opencode'
+      ? { stdout: ['┌  Credentials ~/.local/share/opencode/auth.json', '└  credentials: many'].join('\n'), stderr: '', exitCode: 0 }
+      : { stdout: 'unrecognized', stderr: '', exitCode: 0 });
+    const service = new ProviderAuthService({ runCommand: run });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'unknown' } });
+    expect(vi.mocked(run).mock.calls.filter(([executable]) => executable === 'opencode')).toHaveLength(1);
+  });
+
+  it('keeps OpenCode stderr-only CLI failures out of unrecognized-output telemetry', async () => {
+    const onInconclusive = vi.fn();
+    const run = runner((executable, args) => executable === 'opencode'
+      ? args.includes('--standalone')
+        ? { stdout: '', stderr: 'error: unknown flag --standalone\n', exitCode: 1 }
+        : { stdout: '', stderr: 'Error: Cannot start server\n', exitCode: 1 }
+      : { stdout: 'unrecognized', stderr: '', exitCode: 0 });
+    const service = new ProviderAuthService({ runCommand: run, onInconclusive });
+
+    await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'unknown' } });
+    expect(onInconclusive).not.toHaveBeenCalledWith(expect.objectContaining({ provider: 'opencode' }));
+  });
+
   it('does not guess from a malformed OpenCode 2.x credential row', async () => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable === 'opencode'
@@ -653,6 +754,42 @@ describe('provider auth parsers', () => {
     const cursor = (await statuses(service)).cursor;
     expect(cursor?.status).toBe('unknown');
     expect(cursor?.hint).toContain('CEZ_CURSOR_AGENT_BIN');
+  });
+
+  // Telemetry 8d304c50 regressed after #1503: no Cursor at all, so resolution still ends at the foreign `agent`.
+  it('reports not-installed, unreported, when the only `agent` is another program', async () => {
+    const onInconclusive = vi.fn();
+    const runCommand = vi.fn<RunProviderCommand>(async (executable, args) => {
+      if (executable !== 'agent') return resultFor(executable);
+      return args.includes('--version')
+        ? { stdout: '0.2.22\n', stderr: '', exitCode: 0 }
+        : { stdout: '', stderr: 'usage: agent [-h] {run,serve}\nagent: error: invalid choice', exitCode: 2 };
+    });
+    const service = new ProviderAuthService({ runCommand, onInconclusive });
+
+    const cursor = (await statuses(service)).cursor;
+    expect(cursor?.status).toBe('not-installed');
+    expect(cursor?.hint).toContain('CEZ_CURSOR_AGENT_BIN');
+    expect(onInconclusive).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Cursor itself', 'agent', undefined, '2026.01.28-fd13201\n'],
+    ['an explicit override', 'agent', 'agent', '0.2.22\n'],
+    ['an unreadable version', 'agent', undefined, 'agent: error\n'],
+  ])('keeps an unreadable status unknown for %s', async (_label, executable, override, version) => {
+    if (override) process.env.CEZ_CURSOR_AGENT_BIN = override;
+    const onInconclusive = vi.fn();
+    const runCommand = vi.fn<RunProviderCommand>(async (bin, args) => {
+      if (bin !== executable) return resultFor(bin);
+      return args.includes('--version')
+        ? { stdout: version, stderr: '', exitCode: 0 }
+        : { stdout: '', stderr: 'boom', exitCode: 2 };
+    });
+    const service = new ProviderAuthService({ runCommand, onInconclusive });
+
+    await expect(statuses(service)).resolves.toMatchObject({ cursor: { status: 'unknown' } });
+    expect(onInconclusive).toHaveBeenCalledWith(expect.objectContaining({ provider: 'cursor', reason: 'unexpected_exit' }));
   });
 
   describe('Cursor CURSOR_API_KEY precheck', () => {
@@ -1872,6 +2009,41 @@ describe('inconclusive probe reports', () => {
     });
     expect(row?.hint).toContain('CEZ_PI_BIN');
     expect(onInconclusive).not.toHaveBeenCalled();
+  });
+
+  // f67df9d2 regressed in 0.16.0: the shim's stderr matched none of #1504's patterns. Whatever its
+  // wording, a `pi` that cannot answer `--version` is not a working pi.
+  it('reports a `pi` that cannot answer --version as not-installed, whatever its stderr says', async () => {
+    const onInconclusive = vi.fn();
+    const stderr = 'pi: shim has no active version (wanted python 3.11.9); try `tool install`\n';
+    const service = new ProviderAuthService({
+      runCommand: async (executable) => executable === 'pi'
+        ? { stdout: '', stderr, exitCode: 1 }
+        : resultFor(executable),
+      onInconclusive,
+    });
+    const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'pi');
+    expect(row).toMatchObject({ status: 'not-installed', hint: expect.stringContaining('CEZ_PI_BIN') });
+    expect(onInconclusive).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a pi that answers --version', undefined],
+    ['an explicit CEZ_PI_BIN', 'pi'],
+  ])('keeps a failed pi status unknown and reported for %s', async (_label, override) => {
+    if (override) process.env.CEZ_PI_BIN = override;
+    const onInconclusive = vi.fn();
+    const service = new ProviderAuthService({
+      runCommand: async (executable, args) => {
+        if (executable !== 'pi') return resultFor(executable);
+        if (args.includes('--version')) return override ? { stdout: '', stderr: 'boom', exitCode: 1 } : { stdout: '1.3.0\n', stderr: '', exitCode: 0 };
+        return { stdout: '', stderr: 'Error: provider config unreadable\n', exitCode: 1 };
+      },
+      onInconclusive,
+    });
+    const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'pi');
+    expect(row?.status).toBe('unknown');
+    expect(onInconclusive).toHaveBeenCalledWith(expect.objectContaining({ provider: 'pi', reason: 'unrecognized_output' }));
   });
 
   it('recognizes the mise and pyenv shim misses, and never re-reads a successful answer', () => {
