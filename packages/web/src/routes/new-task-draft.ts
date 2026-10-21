@@ -168,7 +168,7 @@ export function composerRunModeNote(input: {
   if (input.hasGit && input.autoLand) {
     return input.autonomous === true
       ? 'Runs in the repo working tree, one write task at a time — finished work is checked and lands on the base branch.'
-      : 'Runs in the repo working tree, one write task at a time — review the changes, then Finish lands them on the base branch.'
+      : 'Runs in the repo working tree, one write task at a time — review the changes, then Commit lands them on the base branch.'
   }
   if (input.hasGit) return 'Runs in the repo working tree — your checkout is modified directly.'
   return 'Runs in place — no git repository detected, so there is no worktree to isolate in.'

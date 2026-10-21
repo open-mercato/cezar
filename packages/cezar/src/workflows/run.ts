@@ -585,7 +585,7 @@ interface ActiveRun {
   releaseRepoRoot?: () => void;
   /** Auto-land policy of an in-place run (spec 2026-10-20-trunk-based-projects). Set at BOTH
    *  construction sites (`execute`, `runContinuation`) through `landingPolicy`. */
-  autoLand?: { checks: string[]; baseBranch?: string; attempts: number; inFlight?: Promise<LandResult> };
+  autoLand?: { checks: string[]; baseBranch?: string; baseLabel: string; attempts: number; inFlight?: Promise<LandResult> };
   /** A read-only Ask task: read-only tools, no repo-root lease. */
   readOnly?: boolean;
   /** An in-place run (`cwd === repoRoot`) that parked — on a question, or as a monitor waiting
@@ -4754,7 +4754,7 @@ export class RunManager {
     // read-only rule rides along, so a Continue (which reads the record) keeps it.
     const extraSystemPrompt = composeSystemPrompt(
       resolveExtraSystemPrompt(input.systemPrompt, config.systemPrompt),
-      state.autoLand ? landingPromptPart(state.autoLand.baseBranch, state.autoLand.checks, state.autonomous === true) : undefined,
+      state.autoLand ? landingPromptPart(state.autoLand.baseLabel, state.autoLand.checks, state.autonomous === true) : undefined,
       state.readOnly ? READ_ONLY_PROMPT : undefined,
     ) || undefined;
     // Canonical provider/model identity (#405) — the normalised `provider/model`
@@ -7122,12 +7122,13 @@ export class RunManager {
     note?: (message: string) => void,
   ): Promise<ActiveRun['autoLand']> {
     if (!run || run.worktree !== false || run.readOnly || run.inPlaceBranch || config.landing !== 'auto') return undefined;
-    if (!(await getRepoInfo(this.repoRoot))) return undefined;
+    const repo = await getRepoInfo(this.repoRoot);
+    if (!repo) return undefined;
     if (await isLifecycleConfigTracked(this.repoRoot).catch(() => true)) {
       note?.('auto-land is off — .ai/cezar/config.json is tracked by git, and only local configuration can grant it');
       return undefined;
     }
-    return { checks: config.requiredChecks ?? [], baseBranch: config.baseBranch, attempts: 0 };
+    return { checks: config.requiredChecks ?? [], baseBranch: config.baseBranch, baseLabel: config.baseBranch ?? repo.branch, attempts: 0 };
   }
 
   /** The most recent thing the user asked this task for — context for a commit message. */
@@ -7212,7 +7213,7 @@ export class RunManager {
     this.store.appendEvent(runId, {
       type: 'note',
       stepId,
-      message: `changes ready for review — check Changes, reply with corrections, or Commit to ${state.autoLand?.baseBranch ?? 'the base branch'} (or Finish) to land them`,
+      message: `changes ready for review — check Changes, reply with corrections, or Commit to ${state.autoLand?.baseLabel ?? 'the base branch'} (or Finish) to land them`,
     });
     this.waiting.add(runId);
     this.armIdleTimer(runId, state);

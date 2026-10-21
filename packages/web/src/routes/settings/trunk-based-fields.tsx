@@ -86,7 +86,7 @@ export function TrunkBasedFields({ config }: { config: ConfigResponse }) {
         title="How changes land"
         hint={
           inPlace
-            ? 'Auto-land: a finished task waits for your review — check Changes, send corrections, then Finish to commit, rebase on the remote, run the required checks and push to the base branch. Autonomous tasks land on their own. A conflict or a failing check goes back to the agent. The agent is told this permission is granted.'
+            ? 'Auto-land: a finished task waits for your review — check Changes, send corrections, then use the task header\'s Commit to the base branch: it commits, rebases on the remote, runs the required checks and pushes. Autonomous tasks land on their own. A conflict or a failing check goes back to the agent. The agent is told this permission is granted.'
             : 'Auto-land applies to tasks that work in the checkout — set "Where tasks work" first.'
         }
       >

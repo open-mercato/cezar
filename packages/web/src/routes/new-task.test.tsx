@@ -2319,7 +2319,7 @@ describe('trunk-based projects (spec 2026-10-20-trunk-based-projects)', () => {
     serve({ config: TRUNK_CONFIG, skills: TRUNK_SKILLS })
     renderNewTask()
     await pillReady('ingest')
-    expect(note()).toContain('review the changes, then Finish lands them on the base branch')
+    expect(note()).toContain('review the changes, then Commit lands them on the base branch')
     fireEvent.change(textarea(), { target: { value: '1on1 with Bjorn, I owe him the deck by Friday' } })
     await startTask()
     expect(postedBody()).toMatchObject({
