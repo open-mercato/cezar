@@ -427,6 +427,17 @@ async function serveCommand(
     onContexts: (contexts) => { fleetContexts = contexts; },
   }, port);
   httpServer.once('listening', () => manager.lifecycle.start());
+  const url = `http://localhost:${port}`;
+
+  console.log(`\n  cezar v${version} — ${repoRoot}`);
+  console.log(`  ${repo ? `branch ${repo.branch}` : 'not a git repository (tasks run in place, one at a time; repo view is empty)'}`);
+  for (const check of checks) {
+    const mark = check.available ? '✓' : '✗';
+    const detail = check.available ? (check.version ?? 'ok') : (check.hint ?? 'missing');
+    console.log(`  ${mark} ${check.name.padEnd(6)} ${detail}`);
+  }
+  if (port !== preferredPort) console.log(`  (port ${preferredPort} was busy — using ${port})`);
+  console.log(`\n  cockpit → ${url}\n`);
   // Fleet coordination is opt-in (CEZ_FLEET_*, spec 2026-10-21-fleet-coordination): nothing below
   // runs, and no extra port opens, unless a role was asked for. A bad config degrades to a plain cezar.
   const fleetConfig = fleetConfigFromEnv();
@@ -446,17 +457,6 @@ async function serveCommand(
       });
     });
   }
-  const url = `http://localhost:${port}`;
-
-  console.log(`\n  cezar v${version} — ${repoRoot}`);
-  console.log(`  ${repo ? `branch ${repo.branch}` : 'not a git repository (tasks run in place, one at a time; repo view is empty)'}`);
-  for (const check of checks) {
-    const mark = check.available ? '✓' : '✗';
-    const detail = check.available ? (check.version ?? 'ok') : (check.hint ?? 'missing');
-    console.log(`  ${mark} ${check.name.padEnd(6)} ${detail}`);
-  }
-  if (port !== preferredPort) console.log(`  (port ${preferredPort} was busy — using ${port})`);
-  console.log(`\n  cockpit → ${url}\n`);
   // Silenced by CEZ_NO_BANNER=1 or by dismissing the cockpit's banner (#391).
   await printSkillsBanner(repoRoot);
   // The star ask's terminal line — same block, same two off switches.
