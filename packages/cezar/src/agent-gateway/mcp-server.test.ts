@@ -329,6 +329,11 @@ describe('cezar integrations print', () => {
     expect(openclaw).toContain('Out-File -Encoding utf8');
   });
 
+  it('quotes launch paths with spaces in the shell-neutral openclaw form (live-found: C:\\Program Files)', () => {
+    const text = openclawSnippet({ command: 'C:\\Program Files\\nodejs\\node.exe', args: ['C:\\my repo\\index.js', 'mcp'] });
+    expect(text).toContain('openclaw mcp add cezar --command "C:\\Program Files\\nodejs\\node.exe" --arg "C:\\my repo\\index.js" --arg mcp\n');
+  });
+
   it('says which cockpit it found (or that none runs) instead of hard-coding an address', () => {
     const found = { record: { url: 'http://127.0.0.1:5555', pid: 9, repoRoot: '/r', startedAt: 't' }, reason: 'the only running cockpit (pid 9)' };
     const withCockpit: string[] = [];

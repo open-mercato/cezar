@@ -67,6 +67,11 @@ export function skillMarkdown(_target: IntegrationTarget): string {
   return `---\nname: cezar\ndescription: ${JSON.stringify(DESCRIPTION)}\n---\n\n${SKILL_BODY}`;
 }
 
+/** Double quotes survive bash, PowerShell and cmd alike; only a value with whitespace ("C:\Program Files\nodejs") needs them. */
+function shellQuote(value: string): string {
+  return /\s/.test(value) ? `"${value}"` : value;
+}
+
 /** Why no `CEZ_API_URL` is printed: `cezar mcp` finds a running cockpit itself. */
 function discoveryNote(found: CockpitPick | undefined): string {
   return found
@@ -133,7 +138,7 @@ ${discoveryNote(found)}
 #    Optional — pin a cockpit: add "env":{"CEZ_API_URL":"${DEFAULT_COCKPIT_URL}"} / --env CEZ_API_URL=${DEFAULT_COCKPIT_URL}
 openclaw mcp set cezar '${server.replace(/'/g, `'\\''`)}'
 # Same thing without JSON quoting (PowerShell / cmd):
-openclaw mcp add cezar --command ${launch.command} ${launch.args.map((arg) => `--arg ${arg}`).join(' ')}
+openclaw mcp add cezar --command ${shellQuote(launch.command)} ${launch.args.map((arg) => `--arg ${shellQuote(arg)}`).join(' ')}
 openclaw mcp doctor --probe
 
 # 2) SKILL (optional, teaches the agent when/how to use the tools). bash:
