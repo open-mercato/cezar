@@ -289,6 +289,24 @@ export const TOOLS: Tool[] = [
   }),
 ];
 
+/**
+ * MCP tool annotations: hosts (OpenClaw's `mcp probe` says so) require approval for every tool that carries
+ * none. Reads are marked read-only; writes say whether they can discard work or publish it.
+ */
+const READ_ONLY = { readOnlyHint: true, openWorldHint: false } as const;
+const writes = (destructive: boolean) => ({ readOnlyHint: false, destructiveHint: destructive, openWorldHint: false });
+const ANNOTATIONS: Record<string, object> = {
+  cezar_list_projects: READ_ONLY,
+  cezar_list_workflows: READ_ONLY,
+  cezar_list_tasks: READ_ONLY,
+  cezar_get_task: READ_ONLY,
+  cezar_create_task: writes(false),
+  cezar_send_message: writes(false),
+  cezar_cancel_task: writes(true),
+  cezar_accept_review: writes(true),
+  cezar_open_pr: writes(true),
+};
+
 // ---- JSON-RPC ---------------------------------------------------------------------------------
 
 type Id = string | number | null;
@@ -333,7 +351,7 @@ export async function handleMessage(message: RpcMessage | RpcMessage[], deps: Mc
       return rpcResult(id, {});
     case 'tools/list':
       return rpcResult(id, {
-        tools: TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: z.toJSONSchema(t.schema, { io: 'input' }) })),
+        tools: TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: z.toJSONSchema(t.schema, { io: 'input' }), annotations: ANNOTATIONS[t.name] })),
       });
     case 'tools/call': {
       const name = message.params?.name;

@@ -1,4 +1,5 @@
 import { PassThrough } from 'node:stream';
+import { dirname, join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { describe, expect, it } from 'vitest';
 import { cockpitBase, handleMessage, serveMcp, TOOLS, type McpDeps } from './mcp-server.ts';
@@ -72,6 +73,12 @@ describe('cezar mcp protocol', () => {
     ]);
     expect(names).toHaveLength(TOOLS.length);
     for (const tool of reply.result.tools) expect(tool.inputSchema.type).toBe('object');
+    // Every tool is annotated (hosts demand approval for unannotated ones); reads are read-only, publishing writes destructive.
+    const byName = Object.fromEntries(reply.result.tools.map((t: { name: string; annotations?: Record<string, boolean> }) => [t.name, t.annotations]));
+    for (const name of names) expect(byName[name], name).toBeDefined();
+    for (const name of ['cezar_list_projects', 'cezar_list_workflows', 'cezar_list_tasks', 'cezar_get_task']) expect(byName[name].readOnlyHint, name).toBe(true);
+    for (const name of ['cezar_create_task', 'cezar_send_message']) expect(byName[name]).toMatchObject({ readOnlyHint: false, destructiveHint: false });
+    for (const name of ['cezar_cancel_task', 'cezar_accept_review', 'cezar_open_pr']) expect(byName[name]).toMatchObject({ readOnlyHint: false, destructiveHint: true });
     const create = reply.result.tools.find((t: { name: string }) => t.name === 'cezar_create_task');
     expect(create.inputSchema.required).toEqual(['task']);
   });
@@ -308,8 +315,11 @@ describe('stdio framing', () => {
 
 describe('cezar integrations print', () => {
   it('fills in the absolute launch command for this cezar', () => {
-    expect(resolveMcpLaunch('/usr/bin/node', '/opt/cezar/dist/index.js')).toEqual({ command: '/usr/bin/node', args: ['/opt/cezar/dist/index.js', 'mcp'] });
-    expect(resolveMcpLaunch('/usr/bin/node', '/src/index.ts')).toEqual({ command: 'cezar', args: ['mcp'] });
+    // The lean entry when the build has it (MCP hosts give `initialize` ~5 s; index.js loads the whole service first).
+    const lean = join(dirname('/opt/cezar/dist/index.js'), 'agent-gateway', 'mcp-main.js');
+    expect(resolveMcpLaunch('/usr/bin/node', '/opt/cezar/dist/index.js', () => true)).toEqual({ command: '/usr/bin/node', args: [lean] });
+    expect(resolveMcpLaunch('/usr/bin/node', '/opt/cezar/dist/index.js', () => false)).toEqual({ command: '/usr/bin/node', args: ['/opt/cezar/dist/index.js', 'mcp'] });
+    expect(resolveMcpLaunch('/usr/bin/node', '/src/index.ts', () => true)).toEqual({ command: 'cezar', args: ['mcp'] });
     const launch = { command: '/usr/bin/node', args: ['/opt/cezar/dist/index.js', 'mcp'] };
     const hermes = hermesSnippet(launch);
     expect(hermes).toContain('mcp_servers:');

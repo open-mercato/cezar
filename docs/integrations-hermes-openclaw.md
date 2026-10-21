@@ -23,6 +23,8 @@ Start the cockpit (`cezar`), then register the MCP server in the agent. No addre
 | `cezar_accept_review` | Accept the changes without a PR (review → done). Asynchronous: poll `cezar_get_task`. |
 | `cezar_open_pr` | Push the branch and open a (draft) PR through `gh`. Poll `cezar_get_task` for the url. |
 
+The printed launch is `node <dist>/agent-gateway/mcp-main.js`, a lean entry that answers `initialize` in about a second or two; `index.js mcp` loads the whole service first and can miss an MCP host's ~5 s handshake budget on a slow filesystem (OpenClaw gave up after 5 s in a Docker bind mount). Every tool carries MCP annotations (reads are read-only; cancel, accept and open-PR are destructive), so hosts that require approval for unannotated tools do not ask for the read-only ones.
+
 Tasks still end at cezar's review gate; nothing is merged. The cockpit has no auth of its own and binds to loopback, so the MCP server must run on the same machine as the cockpit. For an agent on another machine, run it over SSH instead of exposing the cockpit: `command: ssh`, `args: [<host>, cezar, mcp]` (discovery then runs on that host).
 
 ### Hermes Agent
@@ -59,7 +61,7 @@ Set the variables on the **cockpit process** (see `.env.example`; a repository `
 | `CEZ_ALERT_COCKPIT_URL` | Base URL for the link in the message. Default `http://127.0.0.1:<port>`. |
 | `CEZ_OPENCLAW_URL`, `CEZ_OPENCLAW_HOOK_TOKEN` | OpenClaw Gateway (default port 18789) and its `hooks.token`. |
 | `CEZ_OPENCLAW_AGENT_ID` | Optional target agent. |
-| `CEZ_OPENCLAW_CHANNEL` + `CEZ_OPENCLAW_TO` | Both or neither. Set: `/hooks/agent` runs an agent turn that messages you on that channel and can reply through the MCP tools. Unset: `/hooks/wake` system event. |
+| `CEZ_OPENCLAW_CHANNEL` + `CEZ_OPENCLAW_TO` | Both or neither. The channel must be configured in OpenClaw (an unconfigured one is a `400 channel must be last`). Set: `/hooks/agent` runs an agent turn that messages you on that channel and can reply through the MCP tools. Unset: `/hooks/wake` system event. |
 | `CEZ_OPENCLAW_SESSION_KEY_PREFIX` | With channel+to: `/hooks/agent` gets `sessionKey: <prefix>cezar:<project>:<task>` and `sessionMode: "persistent"`, so every alert and your replies about one task share one OpenClaw session that can call the cezar tools. Requires `hooks.allowRequestSessionKey: true` and `hooks.allowedSessionKeyPrefixes: ["<prefix>"]` in OpenClaw. |
 | `CEZ_HERMES_WEBHOOK_URL`, `CEZ_HERMES_WEBHOOK_SECRET` | Full Hermes route URL (port 8644) and the route's `secret`. |
 | `CEZ_DRY_RUN=1` | Log the request instead of sending. |

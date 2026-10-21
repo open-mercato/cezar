@@ -6,6 +6,8 @@
  * Print-only on purpose: cezar never edits another tool's config (AGENTS.md § Zero config — no
  * file to edit that the user did not choose to edit).
  */
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { DEFAULT_COCKPIT_URL } from '../cockpit-address.ts';
 import { discoverCockpit, type CockpitPick } from '../cockpit-registry.ts';
 
@@ -17,9 +19,20 @@ export interface McpLaunch {
   args: string[];
 }
 
-/** How a foreign process starts `cezar mcp`: this node + this entry file, so no PATH assumptions. */
-export function resolveMcpLaunch(execPath: string = process.execPath, entry: string | undefined = process.argv[1]): McpLaunch {
-  if (entry && /\.[cm]?js$/.test(entry)) return { command: execPath, args: [entry, 'mcp'] };
+/**
+ * How a foreign process starts `cezar mcp`: this node + a file, so no PATH assumptions. The lean
+ * `agent-gateway/mcp-main.js` beside the build when it exists (it answers `initialize` well inside an MCP
+ * host's ~5 s budget; `index.js` loads the whole service first), else `index.js mcp`, else a bare `cezar`.
+ */
+export function resolveMcpLaunch(
+  execPath: string = process.execPath,
+  entry: string | undefined = process.argv[1],
+  exists: (path: string) => boolean = existsSync,
+): McpLaunch {
+  if (entry && /\.[cm]?js$/.test(entry)) {
+    const lean = join(dirname(entry), 'agent-gateway', 'mcp-main.js');
+    return exists(lean) ? { command: execPath, args: [lean] } : { command: execPath, args: [entry, 'mcp'] };
+  }
   return { command: 'cezar', args: ['mcp'] };
 }
 
