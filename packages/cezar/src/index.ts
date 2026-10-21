@@ -49,6 +49,9 @@ import { runAutomationCommand } from './automations/automation-cli.ts';
 import { runTelemetryCommand } from './telemetry-cli.ts';
 import { reportInconclusiveProbe } from './server/provider-telemetry.ts';
 import { runRunsCommand } from './runs/runs-cli.ts';
+import { runMcpCommand } from './agent-gateway/mcp-server.ts';
+import { runAlertsCommand } from './agent-gateway/alerts-cli.ts';
+import { runIntegrationsCommand } from './agent-gateway/integrations.ts';
 
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
 import { runSecretsCommand } from './workspace/secrets-cli.ts';
@@ -61,6 +64,9 @@ Usage:
   cezar task <create|report|list>  dispatch or report from inside a running task (CEZ_DISPATCH=0 turns it off)
   cezar automation <add|create|check|run|list|…>  create and manage automations (GitHub polls, schedules) on a running cockpit
   cezar runs list           list a running cockpit's tasks from a shell (CEZ_API_URL=http://127.0.0.1:4321)
+  cezar mcp                 MCP server (stdio) so Hermes Agent / OpenClaw / any MCP client can drive a running cockpit
+  cezar integrations print <hermes|openclaw>  config to paste into that agent (MCP + alert webhook)
+  cezar alerts test         send a test alert to the OpenClaw / Hermes targets in the environment
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)
@@ -139,6 +145,20 @@ async function main(): Promise<void> {
   // `cez runs …` (#1080): the read-only twin for a person at a shell, same addressing.
   if (process.argv[2] === 'runs') {
     process.exitCode = await runRunsCommand(process.argv.slice(3));
+    return;
+  }
+  // Agent-gateway integrations (spec 2026-10-21-agent-gateway-integrations): all talk to or about a
+  // running cockpit, so like `cez runs` they are routed before the cockpit's parser.
+  if (process.argv[2] === 'mcp') {
+    process.exitCode = await runMcpCommand(process.argv.slice(3));
+    return;
+  }
+  if (process.argv[2] === 'alerts') {
+    process.exitCode = await runAlertsCommand(process.argv.slice(3));
+    return;
+  }
+  if (process.argv[2] === 'integrations') {
+    process.exitCode = runIntegrationsCommand(process.argv.slice(3));
     return;
   }
   const { values, positionals } = parseArgs({
