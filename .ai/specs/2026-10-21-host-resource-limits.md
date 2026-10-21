@@ -23,8 +23,7 @@ Defaults change nothing.
 
 - **Priority** is applied with `os.setPriority(pid)` in `registerRunProcess`, the one place an
   agent's root pid is known. Children spawned later inherit it (niceness on Unix, priority class on
-  Windows). EPERM / dead pid / unsupported platform are swallowed. Lifecycle and check-step
-  processes are NOT touched: they have no equally central spawn point and are short-lived.
+  Windows). EPERM / dead pid / unsupported platform are swallowed. 
 - **Admission** is one extra term in `pump()`'s capacity check (`WorkspaceSemaphore.hostAdmits()`),
   evaluated after the `maxParallel` terms so a refusal always means "otherwise startable".
 - **Reduction only.** The gate can delay a start, never raise a configured limit and never touch a
@@ -42,6 +41,13 @@ Defaults change nothing.
 - **Containers.** Memory headroom is `min(host available, memLimit - memUsed)` when a cgroup
   memory limit exists; CPU uses the cgroup's own `cpuPct` when present.
 
+- **Other spawns.** Workflow check steps (`runCheckStep`, repo test/build commands) and
+  worktree-lifecycle commands (`executeLifecycleCommand`) get the same best-effort renice
+  (`applyCpuPriority`, including the Linux per-thread pass) right after spawn. The lifecycle
+  coordinator's teardown queue honors the host gate like `pump()` (`hostAdmits`, one start per tick,
+  same liveness rule: it is a semaphore participant, so any running work or op counts as busy).
+  Setup (`prepare`) runs inline, outside that queue, and stays ungated. Planner / auto-name
+  one-shots are short and stay both ungated and at normal priority.
 - **Bounds.** The server accepts `memoryMb` / `totalAgentMemoryMb` 0 as "off" (and `memoryMb`
   up to 1 TiB); the cockpit refuses values under 256 MiB because a smaller guard would never
   admit real work. API callers may still send 0.
