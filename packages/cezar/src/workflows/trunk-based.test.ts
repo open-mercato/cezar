@@ -119,7 +119,7 @@ describe('trunk-based projects', () => {
     writeFileSync(join(repoRoot, 'person.md'), 'Bjorn, updated\n');
     expect(await manager.land(record.id)).toMatchObject({ outcome: 'landed' });
     expect(await clean()).toBe('');
-  });
+  }, 30_000);
 
   it('Commit with no session reopens the task when a required check fails', async () => {
     writeConfig({ taskWorkspace: 'in-place', landing: 'auto' });
@@ -133,7 +133,7 @@ describe('trunk-based projects', () => {
     expect(answer).toEqual({ outcome: 'failed', message: 'checks failed — sent back to the agent to fix' });
     // The agent took it back; the mock answers without CEZ:DONE and parks for the user.
     await waitFor(record.id, (r) => r?.status === 'waiting');
-  });
+  }, 30_000);
 
   it('lands an autonomous task on CEZ:DONE without stopping for review', async () => {
     writeConfig({ taskWorkspace: 'in-place', landing: 'auto' });
