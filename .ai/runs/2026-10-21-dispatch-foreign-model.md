@@ -34,6 +34,6 @@ A child task or workflow step that runs on a different runner than the one its m
 
 ### Phase 1: Fix inheritance
 
-- [ ] 1.1 Dispatch inherits a model only from a source on the same runner
-- [ ] 1.2 Workflow step inherits the task model only on the task's runner
-- [ ] 1.3 Regression tests
+- [x] 1.1 Dispatch inherits a model only from a source on the same runner — c408685c
+- [x] 1.2 Workflow step inherits the task model only on the task's runner — c408685c
+- [x] 1.3 Regression tests — c408685c
