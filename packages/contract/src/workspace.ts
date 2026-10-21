@@ -54,6 +54,12 @@ export const workspaceConfigResponseSchema = z.object({
     /** Resume a run a provider usage limit stopped, once the limit resets. Default `true`. */
     autoResumeOnUsageLimit: z.boolean(),
     memoryLimitMb: z.number().nullable(),
+    /** OS priority of agent process trees (spec 2026-10-21-host-resource-limits). */
+    agentCpuPriority: z.enum(['normal', 'low', 'idle']),
+    /** No new run starts while the host has less than `memoryMb` free or more than `cpuPct` busy. */
+    hostReserve: z.object({ memoryMb: z.number().nullable(), cpuPct: z.number().nullable() }),
+    /** No new run starts while all agent trees together hold this much RAM. */
+    totalAgentMemoryMb: z.number().nullable(),
     worktreeRetentionDefault: z.number(),
   }),
   /**
@@ -125,6 +131,14 @@ export const setWorkspaceConfigInputSchema = z.object({
       monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().optional(),
       autoResumeOnUsageLimit: z.boolean().optional(),
       memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
+      agentCpuPriority: z.enum(['normal', 'low', 'idle']).optional(),
+      hostReserve: z
+        .object({
+          memoryMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
+          cpuPct: z.number().int().min(1).max(100).nullable().optional(),
+        })
+        .optional(),
+      totalAgentMemoryMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
       worktreeRetentionDefault: z.number().int().min(0).max(1000).optional(),
     })
     .optional(),

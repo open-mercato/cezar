@@ -108,6 +108,9 @@ describe('the workspace settings API (step 2.7)', () => {
         monitoringWakeIntervalMinutes: 5,
         autoResumeOnUsageLimit: true,
         memoryLimitMb: null,
+        agentCpuPriority: 'normal',
+        hostReserve: { memoryMb: null, cpuPct: null },
+        totalAgentMemoryMb: null,
         worktreeRetentionDefault: 10,
       },
       // Machine-wide agent defaults (spec 2026-07-29-agent-profiles). EMPTY, not populated: absent
@@ -282,6 +285,9 @@ describe('the workspace settings API (step 2.7)', () => {
         monitoringWakeIntervalMinutes: 5,
         autoResumeOnUsageLimit: false,
         memoryLimitMb: 2048,
+        agentCpuPriority: 'low',
+        hostReserve: { memoryMb: 3000, cpuPct: 85 },
+        totalAgentMemoryMb: 8000,
       },
     });
     expect(res.status).toBe(200);
@@ -304,6 +310,9 @@ describe('the workspace settings API (step 2.7)', () => {
         monitoringWakeIntervalMinutes: 5,
         autoResumeOnUsageLimit: false,
         memoryLimitMb: 2048,
+        agentCpuPriority: 'low',
+        hostReserve: { memoryMb: 3000, cpuPct: 85 },
+        totalAgentMemoryMb: 8000,
         worktreeRetentionDefault: 10,
       },
       // Untouched by a resources write, and still empty — the two live in the same file but answer
@@ -322,6 +331,7 @@ describe('the workspace settings API (step 2.7)', () => {
     // asks, not just the file.
     expect(semaphore.autoResumeOnUsageLimit()).toBe(false);
     expect(semaphore.memoryLimitMb()).toBe(2048);
+    expect(semaphore.agentCpuPriority()).toBe('low');
   });
 
   it('#1232 PUT idle timeout persists, reloads, and reaches the live semaphore', async () => {
@@ -365,6 +375,9 @@ describe('the workspace settings API (step 2.7)', () => {
       monitoringWakeIntervalMinutes: 5,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
+      agentCpuPriority: 'normal',
+      hostReserve: { memoryMb: null, cpuPct: null },
+      totalAgentMemoryMb: null,
       worktreeRetentionDefault: 3,
     });
   });
@@ -412,7 +425,7 @@ describe('the workspace settings API (step 2.7)', () => {
   });
 
   it('rejects out-of-bounds resources with 400 and writes nothing', async () => {
-    for (const resources of [{ maxParallel: 0 }, { maxParallel: 17 }, { memoryLimitMb: -1 }]) {
+    for (const resources of [{ maxParallel: 0 }, { maxParallel: 17 }, { memoryLimitMb: -1 }, { hostReserve: { cpuPct: 0 } }, { agentCpuPriority: 'turbo' }]) {
       const res = await putConfig({ resources });
       expect(res.status, JSON.stringify(resources)).toBe(400);
       expect((await res.json()) as { error: string }).toHaveProperty('error');

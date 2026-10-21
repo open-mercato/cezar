@@ -15,6 +15,7 @@
  */
 
 import { execFile } from 'node:child_process';
+import { constants, setPriority } from 'node:os';
 import type { DashboardTelemetrySample } from '@open-mercato/cezar-contract';
 
 /** One aggregated sample for a run's process tree. */
@@ -127,10 +128,33 @@ const listeners = new Set<UsageListener>();
 let timer: NodeJS.Timeout | null = null;
 let sampling = false;
 
+/** `low` = nice 10 / BELOW_NORMAL, `idle` = nice 19 / IDLE class. Children spawned afterwards
+ *  inherit it (spec 2026-10-21-host-resource-limits). */
+const PRIORITY_VALUE = {
+  low: constants.priority.PRIORITY_BELOW_NORMAL,
+  idle: constants.priority.PRIORITY_LOW,
+} as const;
+
+/** Best-effort: EPERM, a dead pid or an unsupported platform just leave the priority alone. */
+export function applyCpuPriority(pid: number, priority: 'normal' | 'low' | 'idle'): void {
+  if (priority === 'normal') return;
+  try {
+    setPriority(pid, PRIORITY_VALUE[priority]);
+  } catch {
+    // never affect a run
+  }
+}
+
 /** Start tracking a run's process tree. A re-register (a run's next agent
  *  step) replaces the pid but keeps nothing else — peaks are per session and
- *  the engine maxes them into the run record on unregister. */
-export function registerRunProcess(runId: string, pid: number): void {
+ *  the engine maxes them into the run record on unregister. This is also the one place an
+ *  agent's root pid is known, so the CPU priority is applied here. */
+export function registerRunProcess(
+  runId: string,
+  pid: number,
+  priority: 'normal' | 'low' | 'idle' = 'normal',
+): void {
+  applyCpuPriority(pid, priority);
   entries.set(runId, { pid, peakRssBytes: 0, peakProcCount: 0 });
   if (!timer) {
     timer = setInterval(() => void sample(), SAMPLE_INTERVAL_MS);

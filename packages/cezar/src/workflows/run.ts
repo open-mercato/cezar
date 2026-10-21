@@ -1727,7 +1727,10 @@ export class RunManager {
         const capacity = () =>
           this.semaphore.busy() < maxParallel &&
           this.busySlots() < projectMax &&
-          (repo !== null || this.busySlots() < 1);
+          (repo !== null || this.busySlots() < 1) &&
+          // Host headroom (spec 2026-10-21-host-resource-limits): last, so a refusal means the
+          // run was otherwise startable and the next telemetry tick re-pumps it.
+          this.semaphore.hostAdmits();
         // The usage-limit hold (spec 2026-08-03-auto-resume-after-usage-limit).
         //
         // A limit closes an ACCOUNT, not a run — so starting the next queued task walks it into
@@ -1767,6 +1770,7 @@ export class RunManager {
           if (next === -1) break; // nothing queued can start right now
           const runId = this.queue.splice(next, 1)[0];
           if (!runId) break;
+          this.semaphore.noteGatedStart();
           // A forced sweep has to reach the spawn: the gate inside `execute` asks the same
           // question and would send this run straight back to the queue.
           if (forced) this.forceStarted.add(runId);
@@ -4505,7 +4509,7 @@ export class RunManager {
       state.sessionEverOpened = true;
       this.flushDeferred(runId);
       state.interrupt = () => started.interrupt();
-      if (started.pid !== undefined) registerRunProcess(runId, started.pid);
+      if (started.pid !== undefined) registerRunProcess(runId, started.pid, this.semaphore.agentCpuPriority());
       return started;
     };
     let session = launch(spawnSessionId, sessionId !== undefined, portableContext);
@@ -6560,7 +6564,7 @@ export class RunManager {
       this.flushDeferred(runId);
       state.currentStepId = step.id;
       state.interrupt = () => started.interrupt();
-      if (started.pid !== undefined) registerRunProcess(runId, started.pid);
+      if (started.pid !== undefined) registerRunProcess(runId, started.pid, this.semaphore.agentCpuPriority());
       return started;
     };
     try {
