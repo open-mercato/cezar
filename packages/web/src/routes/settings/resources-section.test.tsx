@@ -45,6 +45,10 @@ function serve(resources: Partial<WorkspaceConfigResponse['resources']> = {}) {
       monitoringWakeIntervalMinutes: null,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
+      maxSubagents: null,
+      maxReviewers: null,
+      autoScale: false,
+      effective: { maxParallel: 2, maxSubagents: null, maxReviewers: null },
       agentCpuPriority: 'normal',
       hostReserve: { memoryMb: null, cpuPct: null },
       totalAgentMemoryMb: null,
@@ -161,6 +165,51 @@ describe('Global settings → Resources', () => {
     })
   })
 
+  it('saves a separate sub-agent pool and an empty field returns it to sharing', async () => {
+    serve({ maxSubagents: 6 })
+    renderResources()
+    const pool = () => document.querySelector<HTMLInputElement>('[data-slot="resources-max-subagents"]')
+    await waitFor(() => expect(pool()).not.toBeNull())
+    expect(pool()!.value).toBe('6')
+
+    fireEvent.change(pool()!, { target: { value: '40' } })
+    fireEvent.keyDown(pool()!, { key: 'Enter' })
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ resources: { maxSubagents: 40 } })
+
+    fireEvent.change(pool()!, { target: { value: '' } })
+    fireEvent.keyDown(pool()!, { key: 'Enter' })
+    await waitFor(() => expect(puts()).toHaveLength(2))
+    expect(puts()[1]?.body).toEqual({ resources: { maxSubagents: null } })
+  })
+
+  it('accepts up to 128 parallel tasks', async () => {
+    serve({ maxParallel: 2 })
+    renderResources()
+    await waitFor(() => expect(parallelSelect()).not.toBeNull())
+    fireEvent.change(parallelSelect()!, { target: { value: '100' } })
+    fireEvent.keyDown(parallelSelect()!, { key: 'Enter' })
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ resources: { maxParallel: 100 } })
+  })
+
+  it('shows "effective X of Y" while autoScale has lowered a limit', async () => {
+    serve({
+      maxParallel: 8,
+      autoScale: true,
+      maxReviewers: 4,
+      effective: { maxParallel: 3, maxSubagents: null, maxReviewers: 4 },
+    })
+    renderResources()
+    await waitFor(() => expect(document.querySelector('[data-slot="resources-effective"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="resources-effective"]')!.textContent).toBe(
+      'Right now: tasks effective 3 of 8, reviewers 4.',
+    )
+    fireEvent.change(document.querySelector('[data-slot="resources-auto-scale"]')!, { target: { value: 'off' } })
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ resources: { autoScale: false } })
+  })
+
   it('saves maxParallel to the WORKSPACE config, never the per-repo one', async () => {
     serve({ maxParallel: 2 })
     renderResources()
@@ -224,9 +273,9 @@ describe('Global settings → Resources', () => {
     serve({ maxParallel: 2 })
     renderResources()
     await waitFor(() => expect(parallelSelect()).not.toBeNull())
-    fireEvent.change(parallelSelect()!, { target: { value: '40' } })
+    fireEvent.change(parallelSelect()!, { target: { value: '129' } })
     fireEvent.blur(parallelSelect()!)
-    expect(screen.getByText('Enter a whole number from 1 to 16.')).not.toBeNull()
+    expect(screen.getByText('Enter a whole number from 1 to 128.')).not.toBeNull()
     expect(puts()).toHaveLength(0)
   })
 

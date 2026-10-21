@@ -5,13 +5,14 @@ import { Link } from 'react-router'
 
 import { putWorkspaceConfig } from '@/api/client'
 import { useWorkspaceConfig, workspaceQueryKeys } from '@/api/queries'
-import type { SetWorkspaceConfigInput, WorkspaceConfigResponse } from '@open-mercato/cezar-api-client'
+import { MAX_CONCURRENCY, type SetWorkspaceConfigInput, type WorkspaceConfigResponse } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { IntegerStepper } from '@/components/integer-stepper'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { HostLimitsFields } from './host-limits-fields'
 import { MachineCard } from './machine-card'
+import { WorkLimitsFields } from './work-limits-fields'
 import { SettingsField } from './settings-field'
 
 /**
@@ -32,8 +33,8 @@ import { SettingsField } from './settings-field'
  */
 
 const MAX_PARALLEL_MIN = 1
-const MAX_PARALLEL_MAX = 16
-const MAX_MONITORING_MAX = 16
+const MAX_PARALLEL_MAX = MAX_CONCURRENCY
+const MAX_MONITORING_MAX = MAX_CONCURRENCY
 const IDLE_TIMEOUT_MAX = 1440
 const WAKE_INTERVAL_MIN = 1
 const WAKE_INTERVAL_MAX = 60
@@ -164,6 +165,8 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           .
         </p>
       </SettingsField>
+
+      <WorkLimitsFields config={config} />
 
       <SettingsField
         title="Waiting-session idle timeout"

@@ -564,4 +564,49 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
     );
     expect(a.store.getRun(second.id)?.status).toBe('done');
   }, 45_000);
+
+  // Spec 2026-10-21-work-limits: a dispatched review draws on its own pool.
+  describe('separate pools for dispatched children', () => {
+    const child = (kind?: 'review') => ({
+      dispatch: { rootRunId: 'root', parentRunId: 'parent', ...(kind ? { kind } : {}) },
+    });
+
+    it('without a pool a review child queues behind the main tasks (control)', async () => {
+      const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 1 } });
+      const a = project('cez-pool-shared-', semaphore);
+      const holder = a.manager.startRun(SLOW, { task: 'intake holds the only slot' });
+      await waitFor(() => a.store.getRun(holder.id)?.status === 'running', 'the holder to run', 30_000);
+      const review = a.manager.startRun(INSTANT, { task: 'review', ...child('review') });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(a.store.getRun(review.id)?.status).toBe('queued');
+    }, 30_000);
+
+    it('with maxReviewers a review runs beside a full main pool, and does not count against it', async () => {
+      const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 1, maxReviewers: 1 } });
+      const a = project('cez-pool-review-', semaphore);
+      const holder = a.manager.startRun(SLOW, { task: 'intake holds the only slot' });
+      await waitFor(() => a.store.getRun(holder.id)?.status === 'running', 'the holder to run', 30_000);
+      const review = a.manager.startRun(INSTANT, { task: 'review', ...child('review') });
+      await waitFor(() => settled.includes(a.store.getRun(review.id)?.status ?? ''), 'the review to finish', 30_000);
+      expect(a.store.getRun(review.id)?.status).toBe('done');
+      expect(a.store.getRun(holder.id)?.status).toBe('running');
+      expect(semaphore.busyBy().main).toBe(1);
+    }, 30_000);
+
+    it('a full review pool queues the next review, and a slot freed there starts it', async () => {
+      const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 4, maxReviewers: 1 } });
+      const a = project('cez-pool-full-', semaphore);
+      const first = a.manager.startRun(SLOW, { task: 'review one', ...child('review') });
+      await waitFor(() => a.store.getRun(first.id)?.status === 'running', 'review one to run');
+      expect(semaphore.busyBy()).toEqual({ main: 0, subagent: 0, review: 1 });
+      const second = a.manager.startRun(INSTANT, { task: 'review two', ...child('review') });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(a.store.getRun(second.id)?.status).toBe('queued');
+      // main work is unaffected by the full review pool
+      const main = a.manager.startRun(INSTANT, { task: 'main task' });
+      await waitFor(() => settled.includes(a.store.getRun(main.id)?.status ?? ''), 'the main task to finish', 30_000);
+      await waitFor(() => settled.includes(a.store.getRun(second.id)?.status ?? ''), 'review two after one freed', 30_000);
+      expect(a.store.getRun(second.id)?.status).toBe('done');
+    }, 45_000);
+  });
 });

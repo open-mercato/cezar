@@ -814,7 +814,7 @@ describe('workspace projects API', () => {
 
     it('rejects an out-of-range value with a 400 and persists nothing', async () => {
       const other = await registerProject(otherRoot);
-      for (const bad of [{ maxParallel: 0 }, { maxParallel: 99 }, { maxParallel: 1.5 }, {}]) {
+      for (const bad of [{ maxParallel: 0 }, { maxParallel: 129 }, { maxParallel: 1.5 }, {}]) {
         const { status } = await patch(other.id, bad);
         expect(status, JSON.stringify(bad)).toBe(400);
       }

@@ -132,7 +132,7 @@ import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, NAMER_TIMEO
 import { reviewGateEnabled } from '../runs/review-gate.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
 import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
-import { WorkspaceSemaphore, type AccountHolds } from '../workspace/semaphore.ts';
+import { WorkspaceSemaphore, type AccountHolds, type ClassCounts, type PoolClass } from '../workspace/semaphore.ts';
 import { SecretStore } from '../workspace/secrets.ts';
 import { PROJECT_ID_RE } from '../workspace/config.ts';
 import { prunePrHeadRefs } from '../automations/pr-head.ts';
@@ -1252,6 +1252,7 @@ export class RunManager {
     this.semaphore = options.semaphore ?? new WorkspaceSemaphore();
     this.offSemaphore = this.semaphore.register({
       busySlots: () => this.busySlots(),
+      busyByClass: () => this.busyByClass(),
       pump: () => this.pump(),
       oldestQueuedAt: () => this.oldestQueuedAt(),
       accountHolds: () => this.accountHolds(),
@@ -1260,7 +1261,7 @@ export class RunManager {
     this.lifecycle = new WorktreeLifecycleCoordinator(repoRoot, store, {
       semaphore: this.semaphore,
       deferCleanup: true,
-      busySlots: () => this.busySlots(),
+      busySlots: () => this.busyByClass().main,
       isActive: id => this.isActive(id),
       cancelAndWait: id => this.cancelAndWait(id),
       onWorktreeRemoved: () => this.sweepPrHeadRefs(),
@@ -1639,6 +1640,34 @@ export class RunManager {
     return this.active.size + this.starting.size - ordinaryWaiting - exemptMonitoring - spawnParked;
   }
 
+  /** The pool a run draws from (spec 2026-10-21-work-limits): its dispatch role, when that
+   *  role has a pool of its own. */
+  private poolOf(runId: string): PoolClass {
+    return this.semaphore.classify(this.store.getRun(runId)?.dispatch);
+  }
+
+  /**
+   * `busySlots()` split by pool, with the same exemptions applied per run. With no separate pool
+   * configured every run is `main`, and the answer is `busySlots()` itself, so the default path
+   * cannot drift from the single count it has always been.
+   */
+  private busyByClass(): ClassCounts {
+    const counts: ClassCounts = { main: 0, subagent: 0, review: 0 };
+    if (!this.semaphore.hasSeparatePools()) {
+      counts.main = this.busySlots();
+      return counts;
+    }
+    for (const id of this.active.keys()) counts[this.poolOf(id)] += 1;
+    for (const id of this.starting) counts[this.poolOf(id)] += 1;
+    for (const id of this.waiting) if (!this.monitoring.has(id)) counts[this.poolOf(id)] -= 1;
+    let watchers = this.semaphore.maxMonitoringSessions();
+    for (const id of this.monitoring) {
+      if (this.unitParents.has(id) || watchers-- > 0) counts[this.poolOf(id)] -= 1;
+    }
+    for (const pool of ['main', 'subagent', 'review'] as const) counts[pool] = Math.max(0, counts[pool]);
+    return counts;
+  }
+
   /**
    * Park a run in the monitoring set — the ONE entry, so `unitParents ⊆ monitoring` cannot be
    * half-applied across the two near-identical turn-end handlers (AGENTS.md § "Find every
@@ -1716,7 +1745,6 @@ export class RunManager {
       do {
         this.pumpAgain = false;
         const repo = await getRepoInfo(this.repoRoot);
-        const maxParallel = this.semaphore.maxParallel();
         // Per-project ceiling (spec 2026-07-22-per-project-concurrency): this
         // project never runs more than its own configured `maxParallel`; absent
         // an override it equals the workspace cap, so behavior is unchanged.
@@ -1724,13 +1752,20 @@ export class RunManager {
         // `waiting` runs don't hold a slot (#347) — see busySlots(). The check
         // below is the only slot gate: resumes never pass through it. A run
         // starts only under BOTH the workspace cap and this project's ceiling.
-        const capacity = () =>
-          this.semaphore.busy() < maxParallel &&
-          this.busySlots() < projectMax &&
-          (repo !== null || this.busySlots() < 1) &&
-          // Host headroom (spec 2026-10-21-host-resource-limits): last, so a refusal means the
-          // run was otherwise startable and the next telemetry tick re-pumps it.
-          this.semaphore.hostAdmits();
+        // Each candidate draws on its OWN pool (spec 2026-10-21-work-limits): a dispatched
+        // review waits on review slots, not behind intake tasks holding `maxParallel`. The
+        // per-project ceiling and the non-git rule bind the main pool only.
+        const capacity = (id: string) => {
+          const pool = this.poolOf(id);
+          return (
+            this.semaphore.poolHasRoom(pool) &&
+            (pool !== 'main' || this.busyByClass().main < projectMax) &&
+            (repo !== null || this.busySlots() < 1) &&
+            // Host headroom (spec 2026-10-21-host-resource-limits): last, so a refusal means the
+            // run was otherwise startable and the next telemetry tick re-pumps it.
+            this.semaphore.hostAdmits()
+          );
+        };
         // The usage-limit hold (spec 2026-08-03-auto-resume-after-usage-limit).
         //
         // A limit closes an ACCOUNT, not a run — so starting the next queued task walks it into
@@ -1756,7 +1791,7 @@ export class RunManager {
         const startable = (id: string): boolean => {
           const queued = this.store.getRun(id);
           if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude')) return false;
-          return capacity();
+          return capacity(id);
         };
         // The catalog as it is NOW (#1078), read once per sweep and only when a fresh run can
         // actually start — never inside the loop, whose dequeue must stay in one synchronous tick.

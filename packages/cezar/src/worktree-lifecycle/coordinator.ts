@@ -566,7 +566,7 @@ export class WorktreeLifecycleCoordinator {
   private async pump(): Promise<void> {
     if (this.disposed || !this.cleanupStarted) return;
     for (const [id] of this.queue) {
-      if (this.options.semaphore.busy() >= this.options.semaphore.maxParallel() || this.executing.size + this.options.busySlots() >= this.options.semaphore.projectMaxParallel(this.root)) break;
+      if (!this.options.semaphore.poolHasRoom('main') || this.executing.size + this.options.busySlots() >= this.options.semaphore.projectMaxParallel(this.root)) break;
       this.queue.delete(id); this.executing.add(id);
       void this.activate(id).finally(() => { this.executing.delete(id); void this.options.semaphore.release(); });
     }

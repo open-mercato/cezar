@@ -41,8 +41,8 @@ Three words, no jargon — **task**, **skill**, **chain**:
 Five moves that make the cockpit worth the browser tab:
 
 - 🗃️ **Queue + orchestration.** Start as many tasks as you like: cezar runs up to
-  `maxParallel` at once across every project (default **2**; a non-git directory
-  always runs one) and
+  `maxParallel` at once across every project (default **2**, up to **128**; a
+  non-git directory always runs one) and
   holds the rest in a FIFO queue with visible positions (`#1`, `#2`, …). Cancel a
   queued task before it starts; the queue even survives a cockpit restart —
   everything still `queued` is re-enqueued in order. It's the orchestration layer
@@ -764,6 +764,22 @@ root — live once in `~/.cezar/config.json`, alongside the
 **Settings → Resources** and **Settings → Projects**. A `maxParallel` left over
 in a repo's `.ai/cezar/config.json` is imported into the workspace file the
 first time cezar boots there, and ignored afterwards.
+
+**Work limits for large fleets** (Settings → Resources; defaults change nothing).
+`maxParallel` and `maxMonitoringSessions` go up to **128**. Tasks that another
+task dispatched can have pools of their own: `resources.maxSubagents`
+(`implement` children) and `resources.maxReviewers` (`review` children). A run in
+its own pool does not count against `maxParallel`, so intake tasks holding every
+parallel slot can no longer starve the reviews they are waiting for; `null`
+(default) keeps today's shared behaviour. The per-project ceiling and the
+non-git rule apply to the main pool only, and the per-parent
+`DISPATCH_MAX_IN_FLIGHT` (4) is unchanged. `resources.autoScale` (default off)
+lowers every pool to `min(configured, busy + what free memory and CPU can
+carry)`, using the observed average agent tree (1 GiB / 0.5 core until one is
+measured) and the container limits when present; it only lowers, never stops
+running work, never goes below one, falls back to the configured limits when
+telemetry is missing, and raises only after three calm samples. Settings shows
+"effective X of Y". Design: `.ai/specs/2026-10-21-work-limits.md`.
 
 **Keep this computer responsive** (Settings → Resources; all off by default).
 `resources.agentCpuPriority` (`normal`/`low`/`idle`) lowers the OS priority of
