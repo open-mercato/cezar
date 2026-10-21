@@ -143,6 +143,8 @@ export interface AlertTask {
   prUrl?: string;
   url?: string;
   question?: string;
+  /** needs-input without an ask: the agent's last message; failed: the run's error. Clipped. */
+  detail?: string;
 }
 
 export interface Alert {
@@ -154,6 +156,7 @@ export interface Alert {
 
 const TITLE_MAX = 200;
 const QUESTION_MAX = 600;
+const DETAIL_MAX = 280;
 
 function clip(text: string, max: number): string {
   const flat = text.replace(/\s+/g, ' ').trim();
@@ -174,8 +177,11 @@ export function formatQuestion(questions: readonly AskQuestionLike[]): string {
   );
 }
 
-export function taskFromRun(run: RunRecord, project: string, cockpitUrl?: string, question?: string): AlertTask {
+export function taskFromRun(run: RunRecord, project: string, cockpitUrl?: string, question?: string, lastMessage?: string): AlertTask {
   const prUrl = run.pullRequestUrl;
+  const awaiting = run.status === 'waiting' || Boolean(run.awaitingAnswerSince);
+  const detailSource = question ? undefined : awaiting ? lastMessage : run.status === 'failed' ? run.error : undefined;
+  const detail = detailSource ? clip(detailSource, DETAIL_MAX) : undefined;
   return {
     id: run.id,
     title: clip(run.titleSummary ?? run.title, TITLE_MAX),
@@ -185,6 +191,7 @@ export function taskFromRun(run: RunRecord, project: string, cockpitUrl?: string
     ...(prUrl ? { prUrl } : {}),
     ...(cockpitUrl ? { url: `${cockpitUrl.replace(/\/+$/, '')}/p/${encodeURIComponent(project)}/tasks/${encodeURIComponent(run.id)}` } : {}),
     ...(question ? { question } : {}),
+    ...(detail ? { detail } : {}),
   };
 }
 
@@ -201,6 +208,7 @@ export function alertText(alert: Alert): string {
   const { task, event } = alert;
   const lines = [`cezar: "${task.title}" ${HEADLINES[event]} (project ${task.project}, task ${task.id.slice(0, 8)})`];
   if (task.question) lines.push(`Question: ${task.question}`);
+  if (task.detail) lines.push(`${event === 'failed' ? 'Error' : 'Last message'}: ${task.detail}`);
   if (task.branch) lines.push(`Branch: ${task.branch}`);
   if (task.prUrl) lines.push(`PR: ${task.prUrl}`);
   if (task.url) lines.push(`Open: ${task.url}`);
@@ -378,19 +386,29 @@ export class RunAlerts {
     if (!this.enabled) return;
     const last = new Map<string, string>(store.listRuns().map((run) => [run.id, run.status]));
     const questions = new Map<string, string>();
+    const lastMessages = new Map<string, string>();
     store.on('event', ({ runId, event }) => {
-      if (event.type !== 'ask.requested' || !Array.isArray(event.questions)) return;
-      const text = formatQuestion(event.questions as AskQuestionLike[]);
-      if (text) questions.set(runId, text);
+      if (event.type === 'ask.requested' && Array.isArray(event.questions)) {
+        const text = formatQuestion(event.questions as AskQuestionLike[]);
+        if (text) questions.set(runId, text);
+        return;
+      }
+      // The agent's last words, for a needs-input that carries no structured question.
+      const item = event.item as { kind?: string; role?: string; text?: unknown } | undefined;
+      if (event.type === 'item.completed' && item?.kind === 'message' && item.role === 'assistant' && typeof item.text === 'string') lastMessages.set(runId, item.text);
+      else if (event.type === 'text' && typeof event.text === 'string') lastMessages.set(runId, event.text);
     });
     store.on('run', (run) => {
       const previous = last.get(run.id);
       last.set(run.id, run.status);
       const event = alertEventFor(previous, run);
       const question = event === 'needs-input' ? questions.get(run.id) : undefined;
-      if (run.status !== 'waiting' && run.status !== 'failed') questions.delete(run.id);
+      if (run.status !== 'waiting' && run.status !== 'failed') {
+        questions.delete(run.id);
+        lastMessages.delete(run.id);
+      }
       if (!event || !this.config.events.has(event)) return;
-      const alert: Alert = { event, at: this.deps.now(), task: taskFromRun(run, project, this.config.cockpitUrl ?? this.defaultCockpitUrl, question) };
+      const alert: Alert = { event, at: this.deps.now(), task: taskFromRun(run, project, this.config.cockpitUrl ?? this.defaultCockpitUrl, question, lastMessages.get(run.id)) };
       // Detached on purpose: the run engine must never wait on, or hear about, a gateway.
       void sendAlert(this.config, alert, this.deps).catch(() => undefined);
     });

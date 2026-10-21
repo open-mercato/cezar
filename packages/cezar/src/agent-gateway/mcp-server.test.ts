@@ -1,4 +1,5 @@
 import { PassThrough } from 'node:stream';
+import { parse as parseYaml } from 'yaml';
 import { describe, expect, it } from 'vitest';
 import { cockpitBase, handleMessage, serveMcp, TOOLS, type McpDeps } from './mcp-server.ts';
 import { INTEGRATION_TARGETS, hermesSnippet, openclawSnippet, resolveMcpLaunch, runIntegrationsCommand, skillMarkdown } from './integrations.ts';
@@ -75,6 +76,11 @@ describe('cezar mcp protocol', () => {
     expect(create.inputSchema.required).toEqual(['task']);
   });
 
+  it('answers a JSON-RPC batch with -32600 instead of dropping it', async () => {
+    const reply = (await handleMessage([{ jsonrpc: '2.0', id: 1, method: 'ping' }], deps)) as { error: { code: number } };
+    expect(reply.error.code).toBe(-32600);
+  });
+
   it('rejects unknown methods and unknown tools', async () => {
     expect((await rpc(deps, 'resources/list')).error?.code).toBe(-32601);
     expect((await rpc(deps, 'tools/call', { name: 'nope' })).error?.code).toBe(-32602);
@@ -134,6 +140,19 @@ describe('cezar mcp tools', () => {
       lastAgentMessage: 'I need to know the DB.',
       question: [{ question: 'Which DB?' }],
     });
+  });
+
+  it('cezar_get_task drops an answered ask: question only while the task waits', async () => {
+    const history = {
+      events: [{ seq: 1, ts: 't', type: 'ask.requested', requestId: 'r', questions: [{ header: 'DB', question: 'Which DB?', options: [{ label: 'pg' }, { label: 'sqlite' }] }] }],
+      itemCount: 1,
+      liveCursor: 'c',
+      asOfSeq: 1,
+      hasOlder: false,
+    };
+    const { deps } = harness({ 'GET /runs': [run('bbbb2222')], 'GET /runs/bbbb2222': run('bbbb2222', { status: 'running' }), 'GET /runs/bbbb2222/history': history });
+    const reply = await rpc(deps, 'tools/call', { name: 'cezar_get_task', arguments: { id: 'bbbb2222' } });
+    expect(JSON.parse(textOf(reply))).not.toHaveProperty('question');
   });
 
   it('cezar_get_task still answers when history fails, and rejects an unknown id', async () => {
@@ -236,17 +255,25 @@ describe('cezar integrations print', () => {
     const openclaw = openclawSnippet(launch);
     expect(openclaw).toContain(`openclaw mcp set cezar '{"command":"/usr/bin/node","args":["/opt/cezar/dist/index.js","mcp"]`);
     expect(openclaw).toContain('hooks: { enabled: true');
+    expect(openclaw).toContain('openclaw mcp add cezar --command /usr/bin/node --arg /opt/cezar/dist/index.js --arg mcp --env CEZ_API_URL=http://127.0.0.1:4321');
+    expect(openclaw).toContain('Out-File -Encoding utf8');
   });
 
   it('prints a skill with valid frontmatter per target and exits 2 on bad usage', () => {
     for (const target of INTEGRATION_TARGETS) {
       const lines: string[] = [];
       expect(runIntegrationsCommand(['print', target, '--skill'], (l) => lines.push(l))).toBe(0);
-      expect(lines[0]).toMatch(/^---\nname: cezar\ndescription: /);
-      expect(lines[0]).toContain('cezar_create_task');
+      const [, front, body] = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(lines[0]!)!;
+      const meta = parseYaml(front!) as Record<string, unknown>;
+      expect(meta.name).toBe('cezar');
+      expect(typeof meta.description).toBe('string');
+      expect(meta.description as string).toContain(': ');
+      // No PATH gate: the printed launch is absolute, so the skill must not hide when `cezar` is not on PATH.
+      expect(meta).not.toHaveProperty('metadata');
+      expect(body).toContain('cezar_create_task');
+      expect(body).toContain('lastAgentMessage');
     }
-    expect(skillMarkdown('openclaw')).toContain('"openclaw"');
-    expect(skillMarkdown('hermes')).not.toContain('openclaw');
+    expect(skillMarkdown('openclaw')).not.toContain('requires');
     expect(runIntegrationsCommand(['print', 'nope'], () => undefined)).toBe(2);
   });
 });

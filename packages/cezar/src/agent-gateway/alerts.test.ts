@@ -109,6 +109,11 @@ describe('payloads', () => {
     expect(text).toContain('Open: http://127.0.0.1:4321/p/shop/tasks/abcdef12-3456');
   });
 
+  it('needs-input without an ask carries the clipped last message; failed carries the error', () => {
+    expect(alertText(alert({ detail: 'I need the staging URL.' }))).toContain('Last message: I need the staging URL.');
+    expect(alertText(alert({ detail: 'npm test exited 1' }, 'failed'))).toContain('Error: npm test exited 1');
+  });
+
   it('OpenClaw without a destination posts a wake with bearer auth', () => {
     const request = openclawRequest({ url: 'http://gw/hooks', token: 'tok', agentId: 'main' }, alert());
     expect(request.url).toBe('http://gw/hooks/wake');
@@ -246,6 +251,26 @@ describe('RunAlerts.watch', () => {
     source.emit('run', record('a', 'waiting'));
     await vi.waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]!.body.task).toMatchObject({ question: 'Which DB? [pg / sqlite]' });
+  });
+
+  it('falls back to the last agent message, clipped, when no question was asked', async () => {
+    const { source, sent } = setup([record('a', 'running')]);
+    const long = 'x'.repeat(500);
+    source.emit('event', { runId: 'a', event: { type: 'item.completed', item: { kind: 'message', role: 'assistant', id: 'm', text: long } } });
+    source.emit('run', record('a', 'waiting'));
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    const task = sent[0]!.body.task as { detail: string; question?: string };
+    expect(task.question).toBeUndefined();
+    expect(task.detail).toHaveLength(280);
+    expect(sent[0]!.body.message).toContain('Last message: ');
+  });
+
+  it('sends the run error on failed, and never a stale last message', async () => {
+    const { source, sent } = setup([record('a', 'running')]);
+    source.emit('event', { runId: 'a', event: { type: 'text', text: 'working on it' } });
+    source.emit('run', record('a', 'failed', { error: 'agent crashed' }));
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect((sent[0]!.body.task as { detail: string }).detail).toBe('agent crashed');
   });
 
   it('skips events outside CEZ_ALERT_EVENTS and uses CEZ_ALERT_COCKPIT_URL for the link', async () => {

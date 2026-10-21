@@ -40,10 +40,12 @@ Do not use it for questions you can answer yourself.
 3. Do not poll in a tight loop. cezar sends an alert when a task needs input, reaches review or fails;
    otherwise check \`cezar_get_task\` occasionally. Statuses: queued, running, **waiting** (needs the user),
    **review** (changes ready), done, failed, cancelled.
-4. **waiting**: \`cezar_get_task\` returns \`question\` (the agent's choices). Ask the user, then send the answer
-   with \`cezar_send_message\`. Never invent an answer for the user.
+4. **waiting**: \`cezar_get_task\` returns \`question\` (the agent's choices); when there is none, read
+   \`lastAgentMessage\` to see what it needs. Ask the user, then send the answer with \`cezar_send_message\`.
+   Never invent an answer for the user.
 5. **review**: summarise \`lastAgentMessage\` and the branch for the user. Only with their go-ahead call
-   \`cezar_open_pr\` (draft by default) or \`cezar_accept_review\`. To request changes, \`cezar_send_message\`.
+   \`cezar_open_pr\` (draft by default) or \`cezar_accept_review\`; both complete asynchronously, so check
+   \`cezar_get_task\` afterwards for the PR url or \`done\`. To request changes, \`cezar_send_message\`.
 6. **failed**: report \`error\` and offer to retry with a clearer task or \`cezar_send_message\`.
 
 ## Rules
@@ -55,10 +57,13 @@ Do not use it for questions you can answer yourself.
 
 const DESCRIPTION = 'Drive the local cezar cockpit: start coding-agent tasks in a repository, check status, answer their questions, open PRs.';
 
-export function skillMarkdown(target: IntegrationTarget): string {
-  // OpenClaw gates a skill on declared requirements; `cezar` on PATH is what a bare `cezar mcp` needs.
-  const metadata = target === 'openclaw' ? 'metadata: { "openclaw": { "requires": { "bins": ["cezar"] } } }\n' : '';
-  return `---\nname: cezar\ndescription: ${DESCRIPTION}\n${metadata}---\n\n${SKILL_BODY}`;
+/**
+ * Same body for both agents. No `metadata.openclaw.requires.bins`: the MCP launch printed by
+ * `cezar integrations print` is an absolute node + entry path, so the skill must stay visible even
+ * when `cezar` is not on PATH. `description` is JSON-quoted: it contains ": ", which breaks plain YAML.
+ */
+export function skillMarkdown(_target: IntegrationTarget): string {
+  return `---\nname: cezar\ndescription: ${JSON.stringify(DESCRIPTION)}\n---\n\n${SKILL_BODY}`;
 }
 
 export function hermesSnippet(launch: McpLaunch): string {
@@ -101,6 +106,7 @@ platforms:
 # 4) SKILL (optional, teaches Hermes when/how to use the tools):
 #      mkdir -p ~/.hermes/skills/cezar
 #      cezar integrations print hermes --skill > ~/.hermes/skills/cezar/SKILL.md
+#    (PowerShell: create the folder, then  ... --skill | Out-File -Encoding utf8 <path>\\SKILL.md)
 # To let Hermes ACT on an alert instead of only relaying it, drop deliver_only and make the prompt
 # something like "{message} Ask me what to do." — the cezar_* tools are then available to that turn.
 `;
@@ -114,11 +120,14 @@ export function openclawSnippet(launch: McpLaunch): string {
 
 # 1) CONTROL: register cezar as an MCP server OpenClaw agents can call.
 openclaw mcp set cezar '${server.replace(/'/g, `'\\''`)}'
+# Same thing without JSON quoting (PowerShell / cmd):
+openclaw mcp add cezar --command ${launch.command} ${launch.args.map((arg) => `--arg ${arg}`).join(' ')} --env CEZ_API_URL=${DEFAULT_COCKPIT_URL}
 openclaw mcp doctor --probe
 
-# 2) SKILL (optional, teaches the agent when/how to use the tools):
+# 2) SKILL (optional, teaches the agent when/how to use the tools). bash:
 mkdir -p ~/.openclaw/skills/cezar
 cezar integrations print openclaw --skill > ~/.openclaw/skills/cezar/SKILL.md
+#    PowerShell: create the folder, then  ... --skill | Out-File -Encoding utf8 <path>\\SKILL.md
 
 # 3) ALERTS: enable OpenClaw's HTTP hooks in the OpenClaw config (they are off by default), then restart the gateway.
 #    Use a token dedicated to hooks, not the gateway token.

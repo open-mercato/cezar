@@ -100,7 +100,7 @@ function summarize(record: unknown): Record<string, unknown> | undefined {
 }
 
 /** Newest `CEZ:ASK` question and the agent's last message out of one history page. */
-function digestHistory(raw: unknown): { question?: unknown; lastAgentMessage?: string } {
+function digestHistory(raw: unknown, status: string): { question?: unknown; lastAgentMessage?: string } {
   const page = runHistoryPageSchema.safeParse(raw);
   if (!page.success) return {};
   let question: unknown;
@@ -111,8 +111,9 @@ function digestHistory(raw: unknown): { question?: unknown; lastAgentMessage?: s
       lastAgentMessage = event.item.text;
     } else if (event.type === 'text' && typeof event.text === 'string') lastAgentMessage = event.text;
   }
+  // An ask is live only while the task waits on it; once answered it is history, not a question.
   return {
-    ...(question ? { question } : {}),
+    ...(question && status === 'waiting' ? { question } : {}),
     ...(lastAgentMessage ? { lastAgentMessage: lastAgentMessage.length > 2_000 ? `…${lastAgentMessage.slice(-2_000)}` : lastAgentMessage } : {}),
   };
 }
@@ -191,7 +192,8 @@ export const TOOLS: Tool[] = [
       const record = await call(deps, 'GET', base);
       const summary = summarize(record) ?? { id: taskId };
       // History is context, not the answer: a failure there must not hide the status.
-      const digest = await call(deps, 'GET', `${base}/history`).then(digestHistory, () => ({}));
+      const status = String((summary as { status?: unknown }).status ?? '');
+      const digest = await call(deps, 'GET', `${base}/history`).then((page) => digestHistory(page, status), () => ({}));
       return { ...summary, ...digest };
     },
   }),
@@ -238,7 +240,7 @@ export const TOOLS: Tool[] = [
   }),
   tool({
     name: 'cezar_accept_review',
-    description: 'Accept a task\'s changes without opening a PR (review -> done), or close its open session. Only after the user agreed.',
+    description: 'Accept a task\'s changes without opening a PR (review -> done), or close its open session. Only after the user agreed. Completion is asynchronous: check cezar_get_task afterwards.',
     schema: z.object({ project: projectField, id: taskField }),
     run: async ({ project, id }, deps) => {
       const taskId = await resolveTaskId(deps, project, id);
@@ -248,7 +250,7 @@ export const TOOLS: Tool[] = [
   }),
   tool({
     name: 'cezar_open_pr',
-    description: 'Push a task\'s branch and open a pull request (draft by default) through gh. Only after the user agreed.',
+    description: 'Push a task\'s branch and open a pull request (draft by default) through gh. Only after the user agreed. Check cezar_get_task afterwards for the PR url.',
     schema: z.object({ project: projectField, id: taskField, draft: z.boolean().optional().describe('Default true.') }),
     run: async ({ project, id, draft }, deps) => {
       const taskId = await resolveTaskId(deps, project, id);
@@ -279,7 +281,9 @@ function packageVersion(): string {
 }
 
 /** One inbound frame -> the reply frame, or `undefined` for a notification (nothing to say). */
-export async function handleMessage(message: RpcMessage, deps: McpDeps): Promise<object | undefined> {
+export async function handleMessage(message: RpcMessage | RpcMessage[], deps: McpDeps): Promise<object | undefined> {
+  // MCP 2025-06-18 removed JSON-RPC batching; a silent drop would leave the caller waiting forever.
+  if (Array.isArray(message)) return rpcError(null, -32600, 'invalid request: batch requests are not supported');
   const { id, method } = message;
   if (typeof method !== 'string') return id === undefined ? undefined : rpcError(id, -32600, 'invalid request');
   // No id = notification (notifications/initialized, notifications/cancelled, …): never answered.
@@ -333,9 +337,9 @@ export async function serveMcp(deps: McpDeps, io: McpIo = { input: process.stdin
   const lines = createInterface({ input: io.input, crlfDelay: Infinity });
   for await (const line of lines) {
     if (!line.trim()) continue;
-    let message: RpcMessage;
+    let message: RpcMessage | RpcMessage[];
     try {
-      message = JSON.parse(line) as RpcMessage;
+      message = JSON.parse(line) as RpcMessage | RpcMessage[];
     } catch {
       io.write(JSON.stringify(rpcError(null, -32700, 'parse error')));
       continue;

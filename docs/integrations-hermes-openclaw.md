@@ -5,7 +5,7 @@ Two directions, both opt-in:
 - **Control** — `cezar mcp` is a stdio MCP server. Hermes Agent, OpenClaw (or any MCP client) calls it to start tasks, read status, answer a task's question, cancel, accept a review or open a PR on a **running cockpit**.
 - **Alerts** — the cockpit POSTs a short message to your Hermes webhook route and/or OpenClaw Gateway hook when a task needs input, reaches review or fails.
 
-`cezar integrations print <hermes|openclaw>` prints the exact config for each side (with this cezar's absolute path filled in). cezar never edits another tool's config.
+`cezar integrations print <hermes|openclaw>` prints the exact config for each side. From an installed build it fills in the absolute path of this node and cezar entry file; run from a source checkout it falls back to a bare `cezar`, which must then be on the agent's PATH. cezar never edits another tool's config.
 
 ## Control: `cezar mcp`
 
@@ -16,12 +16,12 @@ Start the cockpit (`cezar`), then register the MCP server in the agent. It finds
 | `cezar_list_projects` | Projects the cockpit serves. |
 | `cezar_list_workflows` | Workflows a task can run (default `quick-task`). |
 | `cezar_list_tasks` | Tasks, newest first; filter by `status`. |
-| `cezar_get_task` | Status, branch, PR url, error; the pending `question` and the agent's `lastAgentMessage`. Ids may be shortened. |
+| `cezar_get_task` | Status, branch, PR url, error; the pending `question` (only while the task waits) and the agent's `lastAgentMessage`. Ids may be shortened. |
 | `cezar_create_task` | Start a task (`task`, `project`, `workflow`, `runner`, `model`, `autonomous`). |
 | `cezar_send_message` | Answer a waiting task, steer a running one, send review feedback. |
 | `cezar_cancel_task` | Cancel. |
-| `cezar_accept_review` | Accept the changes without a PR (review → done). |
-| `cezar_open_pr` | Push the branch and open a (draft) PR through `gh`. |
+| `cezar_accept_review` | Accept the changes without a PR (review → done). Asynchronous: poll `cezar_get_task`. |
+| `cezar_open_pr` | Push the branch and open a (draft) PR through `gh`. Poll `cezar_get_task` for the url. |
 
 Tasks still end at cezar's review gate; nothing is merged. The cockpit has no auth of its own and binds to loopback, so the MCP server must run on the same machine as the cockpit. For an agent on another machine, run it over SSH instead of exposing the cockpit: `command: ssh`, `args: [<host>, cezar, mcp]`.
 
@@ -32,19 +32,22 @@ Add to `~/.hermes/config.yaml` ([Hermes MCP docs](https://hermes-agent.nousresea
 ```yaml
 mcp_servers:
   cezar:
-    command: "cezar"        # `cezar integrations print hermes` prints the absolute node + entry path
+    command: "cezar"        # `cezar integrations print hermes` prints the absolute node + entry path when it can
     args: ["mcp"]
 ```
 
-Optional skill: `mkdir -p ~/.hermes/skills/cezar && cezar integrations print hermes --skill > ~/.hermes/skills/cezar/SKILL.md`.
+Optional skill: `mkdir -p ~/.hermes/skills/cezar && cezar integrations print hermes --skill > ~/.hermes/skills/cezar/SKILL.md`. In PowerShell create the folder yourself and pipe with `| Out-File -Encoding utf8 <path>\SKILL.md` (a plain `>` writes UTF-16 on Windows PowerShell 5).
 
 ### OpenClaw
 
 ```bash
-openclaw mcp set cezar '{"command":"cezar","args":["mcp"]}'
+openclaw mcp set cezar '{"command":"cezar","args":["mcp"]}'        # bash
+openclaw mcp add cezar --command cezar --arg mcp           # shell-neutral (PowerShell, cmd)
 openclaw mcp doctor --probe
 mkdir -p ~/.openclaw/skills/cezar && cezar integrations print openclaw --skill > ~/.openclaw/skills/cezar/SKILL.md
 ```
+
+The printed snippets show both forms. PowerShell: same `Out-File -Encoding utf8` note as above.
 
 ## Alerts
 
@@ -92,11 +95,11 @@ Requests: `Authorization: Bearer <token>`; `/hooks/wake` body `{text, mode:"now"
 2. `CEZ_HERMES_WEBHOOK_URL=http://127.0.0.1:8644/webhooks/cezar`, `CEZ_HERMES_WEBHOOK_SECRET=<same secret>`.
 3. `cezar alerts test`.
 
-The body is `{"event_type":"cezar.task.<event>","message":"…","task":{id,title,status,project,branch?,prUrl?,url?,question?}}`, signed as Hermes' generic HMAC V2: `X-Webhook-Timestamp` (unix seconds) and `X-Webhook-Signature-V2` = hex HMAC-SHA256 of `<timestamp>.<body>`; `X-Request-ID` makes retries idempotent.
+The body is `{"event_type":"cezar.task.<event>","message":"…","task":{id,title,status,project,branch?,prUrl?,url?,question?,detail?}}`, signed as Hermes' generic HMAC V2: `X-Webhook-Timestamp` (unix seconds) and `X-Webhook-Signature-V2` = hex HMAC-SHA256 of `<timestamp>.<body>`; `X-Request-ID` makes retries idempotent.
 
 ## What leaves the machine
 
-Only when a target is configured: task title (≤200 chars), status, project id, branch, PR url, the cockpit link and, for needs-input, the agent's question and option labels (≤600 chars). Never the task prompt, transcript, diffs or secrets. The MCP server sends nothing anywhere except to the cockpit you point it at.
+Only when a target is configured: task title (≤200 chars), status, project id, branch, PR url, the cockpit link and, for needs-input, the agent's question and option labels (≤600 chars) — or, when it asked no structured question, its last message (≤280 chars) — and, for failed, the run's error (≤280 chars). Never the task prompt, transcript, diffs or secrets. The MCP server sends nothing anywhere except to the cockpit you point it at.
 
 ## Limits
 
