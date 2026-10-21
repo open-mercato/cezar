@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 import { runHistoryPageSchema, runRecordSchema, runStatusSchema } from '@open-mercato/cezar-contract';
 import { DEFAULT_COCKPIT_URL } from '../cockpit-address.ts';
+import { discoverCockpit, type CockpitPick } from '../cockpit-registry.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
 const SUPPORTED_PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'] as const;
@@ -23,6 +24,8 @@ const DEFAULT_WORKFLOW = 'quick-task';
 export interface McpEnv {
   CEZ_API_URL?: string;
   CEZ_PROJECT_ID?: string;
+  /** Set inside a cezar task: there, an absent CEZ_API_URL is a signal, never to be guessed around. */
+  CEZ_TASK_ID?: string;
 }
 
 export interface McpDeps {
@@ -30,17 +33,27 @@ export interface McpDeps {
   env: McpEnv;
   /** `--url`, ahead of `CEZ_API_URL`. */
   url?: string;
+  /** Running-cockpit lookup (`cockpit-registry.ts`), asked per request so a restarted cockpit is followed. */
+  discover?: () => CockpitPick | undefined;
 }
 
-/** `--url`, then `CEZ_API_URL`, then the cockpit's default address (the user asked for this server). */
-export function cockpitBase(deps: McpDeps): string {
-  return (deps.url ?? deps.env.CEZ_API_URL ?? DEFAULT_COCKPIT_URL).replace(/\/+$/, '');
+/**
+ * `--url`, then `CEZ_API_URL`, then a discovered running cockpit, then the documented default. Inside a
+ * task (`CEZ_TASK_ID`) only the explicit two count: `undefined` means "no cockpit was named".
+ */
+export function cockpitBase(deps: McpDeps): string | undefined {
+  const explicit = deps.url ?? deps.env.CEZ_API_URL;
+  if (explicit) return explicit.replace(/\/+$/, '');
+  if (deps.env.CEZ_TASK_ID) return undefined;
+  return (deps.discover?.()?.record.url ?? DEFAULT_COCKPIT_URL).replace(/\/+$/, '');
 }
 
 class ToolError extends Error {}
 
 async function call(deps: McpDeps, method: string, path: string, body?: unknown): Promise<unknown> {
-  const url = `${cockpitBase(deps)}/api/v1${path}`;
+  const base = cockpitBase(deps);
+  if (!base) throw new ToolError('CEZ_API_URL is not set — inside a cezar task the cockpit address is never guessed. Do not set it by hand; report that cezar control is unavailable.');
+  const url = `${base}/api/v1${path}`;
   let response: Response;
   try {
     response = await deps.fetch(url, {
@@ -50,7 +63,7 @@ async function call(deps: McpDeps, method: string, path: string, body?: unknown)
     });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    throw new ToolError(`cezar cockpit not reachable at ${cockpitBase(deps)} (${reason}). Start it with \`cezar\`, or set CEZ_API_URL.`);
+    throw new ToolError(`cezar cockpit not reachable at ${base} (${reason}). Start it with \`cezar\`, or set CEZ_API_URL.`);
   }
   const text = await response.text();
   let parsed: unknown = text;
@@ -118,13 +131,30 @@ function digestHistory(raw: unknown, status: string): { question?: unknown; last
   };
 }
 
+const FULL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MIN_PREFIX = 6;
+
+/** A full id is one GET; only a short prefix has to list the project's runs. */
 async function resolveTaskId(deps: McpDeps, project: string | undefined, idOrPrefix: string): Promise<string> {
+  if (FULL_ID.test(idOrPrefix)) {
+    try {
+      await call(deps, 'GET', `${scope(deps, project)}/runs/${encodeURIComponent(idOrPrefix)}`);
+    } catch (error) {
+      if (error instanceof ToolError && /refused: not found/.test(error.message)) throw new ToolError(`no task "${idOrPrefix}" in this project`);
+      throw error;
+    }
+    return idOrPrefix;
+  }
+  if (idOrPrefix.length < MIN_PREFIX) throw new ToolError(`task id "${idOrPrefix}" is too short — give the full id or at least ${MIN_PREFIX} characters of it`);
   const runs = await call(deps, 'GET', `${scope(deps, project)}/runs`);
-  const ids = (Array.isArray(runs) ? runs : []).map((run) => (run as { id?: unknown }).id).filter((id): id is string => typeof id === 'string');
-  if (ids.includes(idOrPrefix)) return idOrPrefix;
-  const matches = ids.filter((id) => id.startsWith(idOrPrefix));
-  if (matches.length === 1) return matches[0]!;
-  throw new ToolError(matches.length ? `task id "${idOrPrefix}" is ambiguous — use more characters` : `no task "${idOrPrefix}" in this project`);
+  const known = (Array.isArray(runs) ? runs : []).filter((run): run is { id: string; title?: unknown } => typeof (run as { id?: unknown })?.id === 'string');
+  const exact = known.find((run) => run.id === idOrPrefix);
+  if (exact) return exact.id;
+  const matches = known.filter((run) => run.id.startsWith(idOrPrefix));
+  if (matches.length === 1) return matches[0]!.id;
+  if (matches.length === 0) throw new ToolError(`no task "${idOrPrefix}" in this project`);
+  const shown = matches.slice(0, 8).map((run) => `${run.id.slice(0, 12)} ${typeof run.title === 'string' ? run.title.slice(0, 60) : ''}`.trimEnd());
+  throw new ToolError([`task id "${idOrPrefix}" is ambiguous — ${matches.length} tasks match:`, ...shown, 'Use more characters.'].join('\n'));
 }
 
 // ---- tools ------------------------------------------------------------------------------------
@@ -359,7 +389,9 @@ const USAGE = `cezar mcp — MCP server (stdio) that lets another agent drive a 
 
   cezar mcp [--url <cockpit url>]
 
-Reads CEZ_API_URL (default ${DEFAULT_COCKPIT_URL}) and optionally CEZ_PROJECT_ID.
+Cockpit: --url, else CEZ_API_URL, else a running cockpit found in ~/.cezar/cockpits (the one serving the
+current directory when several run), else ${DEFAULT_COCKPIT_URL}. Optional CEZ_PROJECT_ID picks a project.
+Inside a cezar task (CEZ_TASK_ID) nothing is guessed: CEZ_API_URL or --url is required.
 Remote agent host:  ssh <host> cezar mcp
 Config snippets for Hermes / OpenClaw:  cezar integrations print <hermes|openclaw>`;
 
@@ -374,6 +406,16 @@ export async function runMcpCommand(args: string[], env: McpEnv = process.env): 
     console.error(USAGE);
     return 2;
   }
-  await serveMcp({ fetch: (input, init) => fetch(input, init), env, url });
+  // Which cockpit was chosen (and why) goes to stderr, once per change: stdout is protocol frames only.
+  let announced = '';
+  const discover = () => {
+    const pick = discoverCockpit(env);
+    if (pick && pick.record.url !== announced) {
+      announced = pick.record.url;
+      console.error(`cezar mcp: using cockpit ${pick.record.url} — ${pick.reason}`);
+    }
+    return pick;
+  };
+  await serveMcp({ fetch: (input, init) => fetch(input, init), env, url, discover });
   return 0;
 }

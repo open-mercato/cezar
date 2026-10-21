@@ -43,6 +43,8 @@ export const DATA_GITIGNORE_ENTRIES = [
   'tracker.json.*.tmp',
   'tracker-association.lock/',
   'launch-key',
+  'alerts-outbox.ndjson', // alerts the OpenClaw/Hermes gateway has not acknowledged yet
+  'alerts-outbox.ndjson.tmp',
   'automations.json',
   'automations.json.tmp',
   'automation-state.json',

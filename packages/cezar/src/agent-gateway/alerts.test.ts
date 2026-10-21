@@ -7,6 +7,7 @@ import {
   alertConfigFromEnv,
   alertEventFor,
   alertText,
+  defaultAlertDeps,
   deliver,
   hermesRequest,
   openclawRequest,
@@ -152,6 +153,15 @@ describe('payloads', () => {
     alerts.watch(source, 'p');
     source.emit('run', run);
     return vi.waitFor(() => expect(sent).toHaveLength(1)).then(() => expect(sent[0]).not.toContain('SECRET'));
+  });
+});
+
+describe('defaultAlertDeps', () => {
+  it('CEZ_DRY_RUN mutes alerts unless the test-only CEZ_ALERTS_LIVE_IN_DRY_RUN=1 is also set', () => {
+    expect(defaultAlertDeps({ CEZ_DRY_RUN: '1' }).dryRun).toBe(true);
+    expect(defaultAlertDeps({ CEZ_DRY_RUN: '1', CEZ_ALERTS_LIVE_IN_DRY_RUN: '1' }).dryRun).toBe(false);
+    expect(defaultAlertDeps({ CEZ_ALERTS_LIVE_IN_DRY_RUN: '1' }).dryRun).toBe(false);
+    expect(defaultAlertDeps({}).dryRun).toBe(false);
   });
 });
 

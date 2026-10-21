@@ -159,9 +159,9 @@ describe('cezar mcp tools', () => {
     const { deps } = harness({ 'GET /runs': [run('aaaa1111')], 'GET /runs/aaaa1111': run('aaaa1111') });
     const ok = await rpc(deps, 'tools/call', { name: 'cezar_get_task', arguments: { id: 'aaaa1111' } });
     expect(JSON.parse(textOf(ok)).status).toBe('running');
-    const bad = await rpc(deps, 'tools/call', { name: 'cezar_get_task', arguments: { id: 'nope' } });
+    const bad = await rpc(deps, 'tools/call', { name: 'cezar_get_task', arguments: { id: 'nope00' } });
     expect(bad.result.isError).toBe(true);
-    expect(textOf(bad)).toMatch(/no task "nope"/);
+    expect(textOf(bad)).toMatch(/no task "nope00"/);
   });
 
   it('cezar_create_task posts the run with the default workflow', async () => {
@@ -179,10 +179,10 @@ describe('cezar mcp tools', () => {
       'POST /runs/t1xxxxxx/finish': { finished: true },
       'POST /runs/t1xxxxxx/pr': { url: 'https://github.com/o/r/pull/3', dryRun: false },
     });
-    await rpc(deps, 'tools/call', { name: 'cezar_send_message', arguments: { id: 't1', text: 'use pg' } });
-    expect(JSON.parse(textOf(await rpc(deps, 'tools/call', { name: 'cezar_cancel_task', arguments: { id: 't1' } })))).toEqual({ id: 't1xxxxxx', cancelled: true });
-    await rpc(deps, 'tools/call', { name: 'cezar_accept_review', arguments: { id: 't1' } });
-    const pr = await rpc(deps, 'tools/call', { name: 'cezar_open_pr', arguments: { id: 't1' } });
+    await rpc(deps, 'tools/call', { name: 'cezar_send_message', arguments: { id: 't1xxxx', text: 'use pg' } });
+    expect(JSON.parse(textOf(await rpc(deps, 'tools/call', { name: 'cezar_cancel_task', arguments: { id: 't1xxxx' } })))).toEqual({ id: 't1xxxxxx', cancelled: true });
+    await rpc(deps, 'tools/call', { name: 'cezar_accept_review', arguments: { id: 't1xxxx' } });
+    const pr = await rpc(deps, 'tools/call', { name: 'cezar_open_pr', arguments: { id: 't1xxxx' } });
     expect(JSON.parse(textOf(pr)).url).toBe('https://github.com/o/r/pull/3');
     const posts = calls.filter((c) => c.method === 'POST');
     expect(posts.map((c) => c.url.replace('http://127.0.0.1:4321/api/v1', ''))).toEqual([
@@ -212,13 +212,77 @@ describe('cezar mcp tools', () => {
 
 describe('cockpit discovery', () => {
   const fetchStub = (() => undefined) as never;
-  it('--url beats CEZ_API_URL beats the default; CEZ_PROJECT_ID scopes every call', async () => {
-    expect(cockpitBase({ fetch: fetchStub, env: {}, url: 'http://a:1/' })).toBe('http://a:1');
-    expect(cockpitBase({ fetch: fetchStub, env: { CEZ_API_URL: 'http://b:2/' } })).toBe('http://b:2');
+  const found = { record: { url: 'http://127.0.0.1:5555', pid: 9, repoRoot: '/r', startedAt: 't' }, reason: 'the only running cockpit (pid 9)' };
+
+  it('--url beats CEZ_API_URL beats a discovered cockpit beats the default; CEZ_PROJECT_ID scopes every call', async () => {
+    expect(cockpitBase({ fetch: fetchStub, env: {}, url: 'http://a:1/', discover: () => found })).toBe('http://a:1');
+    expect(cockpitBase({ fetch: fetchStub, env: { CEZ_API_URL: 'http://b:2/' }, discover: () => found })).toBe('http://b:2');
+    expect(cockpitBase({ fetch: fetchStub, env: {}, discover: () => found })).toBe('http://127.0.0.1:5555');
+    expect(cockpitBase({ fetch: fetchStub, env: {}, discover: () => undefined })).toBe('http://127.0.0.1:4321');
     expect(cockpitBase({ fetch: fetchStub, env: {} })).toBe('http://127.0.0.1:4321');
     const { deps, calls } = harness({ 'GET /p/proj/runs': [] }, { CEZ_PROJECT_ID: 'proj' });
     await rpc(deps, 'tools/call', { name: 'cezar_list_tasks', arguments: {} });
     expect(calls[0]!.url).toBe('http://127.0.0.1:4321/api/v1/p/proj/runs');
+  });
+});
+
+describe('cockpit discovery inside a task', () => {
+  it('never guesses: no explicit address means a tool error, and discovery is not even asked', async () => {
+    let asked = false;
+    const deps: McpDeps = { env: { CEZ_TASK_ID: 'run-1' }, fetch: (async () => { throw new Error('must not call'); }) as never, discover: () => { asked = true; return undefined; } };
+    expect(cockpitBase(deps)).toBeUndefined();
+    const reply = await rpc(deps, 'tools/call', { name: 'cezar_list_projects', arguments: {} });
+    expect(reply.result.isError).toBe(true);
+    expect(textOf(reply)).toMatch(/never guessed/);
+    expect(asked).toBe(false);
+    expect(cockpitBase({ ...deps, env: { CEZ_TASK_ID: 'run-1', CEZ_API_URL: 'http://c:3' } })).toBe('http://c:3');
+  });
+
+  it('uses the discovered cockpit for requests', async () => {
+    const urls: string[] = [];
+    const deps: McpDeps = {
+      env: {},
+      fetch: (async (input: string | URL | Request) => { urls.push(String(input)); return new Response('{"projects":[]}', { status: 200 }); }) as never,
+      discover: () => ({ record: { url: 'http://127.0.0.1:5555', pid: 9, repoRoot: '/r', startedAt: 't' }, reason: 'x' }),
+    };
+    await rpc(deps, 'tools/call', { name: 'cezar_list_projects', arguments: {} });
+    expect(urls).toEqual(['http://127.0.0.1:5555/api/v1/projects']);
+  });
+});
+
+describe('task id resolution', () => {
+  const uuid = '3f2b8c1e-5a4d-4e7f-9b21-0c6d7e8f9a10';
+
+  it('a full id is one direct GET — the run list is never fetched', async () => {
+    const { deps, calls } = harness({ [`GET /runs/${uuid}`]: run(uuid), [`POST /runs/${uuid}/cancel`]: { cancelled: true } });
+    const reply = await rpc(deps, 'tools/call', { name: 'cezar_cancel_task', arguments: { id: uuid } });
+    expect(JSON.parse(textOf(reply))).toEqual({ id: uuid, cancelled: true });
+    expect(calls.map((c) => c.url.replace('http://127.0.0.1:4321/api/v1', ''))).toEqual([`/runs/${uuid}`, `/runs/${uuid}/cancel`]);
+  });
+
+  it('a full id the cockpit does not know is a clear error', async () => {
+    const { deps } = harness({});
+    const reply = await rpc(deps, 'tools/call', { name: 'cezar_cancel_task', arguments: { id: uuid } });
+    expect(reply.result.isError).toBe(true);
+    expect(textOf(reply)).toBe(`no task "${uuid}" in this project`);
+  });
+
+  it('refuses a prefix shorter than 6 characters without calling the cockpit', async () => {
+    const { deps, calls } = harness({});
+    const reply = await rpc(deps, 'tools/call', { name: 'cezar_get_task', arguments: { id: 'abcde' } });
+    expect(reply.result.isError).toBe(true);
+    expect(textOf(reply)).toMatch(/too short.*at least 6/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('an ambiguous prefix lists the matches', async () => {
+    const { deps } = harness({ 'GET /runs': [run('abc12345-aaaa', { title: 'first task' }), run('abc12345-bbbb', { title: 'second task' }), run('zzz')] });
+    const reply = await rpc(deps, 'tools/call', { name: 'cezar_get_task', arguments: { id: 'abc123' } });
+    expect(reply.result.isError).toBe(true);
+    const text = textOf(reply);
+    expect(text).toMatch(/ambiguous — 2 tasks match/);
+    expect(text).toContain('abc12345-aaa first task');
+    expect(text).toContain('abc12345-bbb second task');
   });
 });
 
@@ -255,8 +319,24 @@ describe('cezar integrations print', () => {
     const openclaw = openclawSnippet(launch);
     expect(openclaw).toContain(`openclaw mcp set cezar '{"command":"/usr/bin/node","args":["/opt/cezar/dist/index.js","mcp"]`);
     expect(openclaw).toContain('hooks: { enabled: true');
-    expect(openclaw).toContain('openclaw mcp add cezar --command /usr/bin/node --arg /opt/cezar/dist/index.js --arg mcp --env CEZ_API_URL=http://127.0.0.1:4321');
+    expect(openclaw).toContain('openclaw mcp add cezar --command /usr/bin/node --arg /opt/cezar/dist/index.js --arg mcp\n');
+    // Discovery covers the address: CEZ_API_URL is an optional pin, never in the live config.
+    for (const text of [hermes, openclaw]) {
+      expect(text.split('\n').filter((line) => line.includes('CEZ_API_URL') && !line.trimStart().startsWith('#'))).toEqual([]);
+    }
+    expect(openclaw).not.toContain('"env"}');
+    expect(hermes).toContain('# env:');
     expect(openclaw).toContain('Out-File -Encoding utf8');
+  });
+
+  it('says which cockpit it found (or that none runs) instead of hard-coding an address', () => {
+    const found = { record: { url: 'http://127.0.0.1:5555', pid: 9, repoRoot: '/r', startedAt: 't' }, reason: 'the only running cockpit (pid 9)' };
+    const withCockpit: string[] = [];
+    runIntegrationsCommand(['print', 'hermes'], (l) => withCockpit.push(l), found);
+    expect(withCockpit[0]).toContain('Found now: http://127.0.0.1:5555');
+    const without: string[] = [];
+    runIntegrationsCommand(['print', 'openclaw'], (l) => without.push(l), undefined);
+    expect(without[0]).toContain('none runs right now');
   });
 
   it('prints a skill with valid frontmatter per target and exits 2 on bad usage', () => {

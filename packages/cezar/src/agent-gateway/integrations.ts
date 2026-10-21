@@ -7,6 +7,7 @@
  * file to edit that the user did not choose to edit).
  */
 import { DEFAULT_COCKPIT_URL } from '../cockpit-address.ts';
+import { discoverCockpit, type CockpitPick } from '../cockpit-registry.ts';
 
 export const INTEGRATION_TARGETS = ['hermes', 'openclaw'] as const;
 export type IntegrationTarget = (typeof INTEGRATION_TARGETS)[number];
@@ -66,18 +67,27 @@ export function skillMarkdown(_target: IntegrationTarget): string {
   return `---\nname: cezar\ndescription: ${JSON.stringify(DESCRIPTION)}\n---\n\n${SKILL_BODY}`;
 }
 
-export function hermesSnippet(launch: McpLaunch): string {
+/** Why no `CEZ_API_URL` is printed: `cezar mcp` finds a running cockpit itself. */
+function discoveryNote(found: CockpitPick | undefined): string {
+  return found
+    ? `# cezar mcp finds the running cockpit by itself (~/.cezar/cockpits). Found now: ${found.record.url} — ${found.reason}.`
+    : `# cezar mcp finds a running cockpit by itself (~/.cezar/cockpits); none runs right now — start one with: cezar`;
+}
+
+export function hermesSnippet(launch: McpLaunch, found?: CockpitPick): string {
   return `# Hermes Agent — cezar integration
 # Docs: https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp
 #       https://hermes-agent.nousresearch.com/docs/user-guide/messaging/webhooks
 
 # 1) CONTROL: let Hermes drive cezar. Add to ~/.hermes/config.yaml, then restart Hermes or /reload-mcp.
+${discoveryNote(found)}
 mcp_servers:
   cezar:
     command: ${JSON.stringify(launch.command)}
     args: ${JSON.stringify(launch.args)}
-    env:
-      CEZ_API_URL: ${JSON.stringify(DEFAULT_COCKPIT_URL)}
+    # Optional — pin a cockpit instead of discovering one (another user, a port-forward):
+    # env:
+    #   CEZ_API_URL: ${JSON.stringify(DEFAULT_COCKPIT_URL)}
 # Hermes on another machine than the cockpit: command: "ssh", args: ["<host>", "cezar", "mcp"]
 
 # 2) ALERTS: a webhook route that forwards cezar alerts to your chat without an LLM turn.
@@ -112,16 +122,18 @@ platforms:
 `;
 }
 
-export function openclawSnippet(launch: McpLaunch): string {
-  const server = JSON.stringify({ command: launch.command, args: launch.args, env: { CEZ_API_URL: DEFAULT_COCKPIT_URL } });
+export function openclawSnippet(launch: McpLaunch, found?: CockpitPick): string {
+  const server = JSON.stringify({ command: launch.command, args: launch.args });
   return `# OpenClaw — cezar integration
 # Docs: https://docs.openclaw.ai/cli/mcp/registry
 #       https://docs.openclaw.ai/automation/cron-jobs/webhooks
 
 # 1) CONTROL: register cezar as an MCP server OpenClaw agents can call.
+${discoveryNote(found)}
+#    Optional — pin a cockpit: add "env":{"CEZ_API_URL":"${DEFAULT_COCKPIT_URL}"} / --env CEZ_API_URL=${DEFAULT_COCKPIT_URL}
 openclaw mcp set cezar '${server.replace(/'/g, `'\\''`)}'
 # Same thing without JSON quoting (PowerShell / cmd):
-openclaw mcp add cezar --command ${launch.command} ${launch.args.map((arg) => `--arg ${arg}`).join(' ')} --env CEZ_API_URL=${DEFAULT_COCKPIT_URL}
+openclaw mcp add cezar --command ${launch.command} ${launch.args.map((arg) => `--arg ${arg}`).join(' ')}
 openclaw mcp doctor --probe
 
 # 2) SKILL (optional, teaches the agent when/how to use the tools). bash:
@@ -153,7 +165,11 @@ const USAGE = `cezar integrations — config for letting Hermes Agent / OpenClaw
 
 Nothing is written for you: cezar never edits another tool's config.`;
 
-export function runIntegrationsCommand(args: string[], log: (line: string) => void = console.log): number {
+export function runIntegrationsCommand(
+  args: string[],
+  log: (line: string) => void = console.log,
+  found: CockpitPick | undefined = discoverCockpit(process.env),
+): number {
   const [command, target, flag] = args;
   if (command !== 'print' || !(INTEGRATION_TARGETS as readonly string[]).includes(target ?? '')) {
     (command === 'help' || command === '--help' ? log : console.error)(USAGE);
@@ -161,6 +177,6 @@ export function runIntegrationsCommand(args: string[], log: (line: string) => vo
   }
   const which = target as IntegrationTarget;
   if (flag === '--skill') log(skillMarkdown(which).trimEnd());
-  else log((which === 'hermes' ? hermesSnippet(resolveMcpLaunch()) : openclawSnippet(resolveMcpLaunch())).trimEnd());
+  else log((which === 'hermes' ? hermesSnippet(resolveMcpLaunch(), found) : openclawSnippet(resolveMcpLaunch(), found)).trimEnd());
   return 0;
 }

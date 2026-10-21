@@ -49,6 +49,7 @@ import { runAutomationCommand } from './automations/automation-cli.ts';
 import { runTelemetryCommand } from './telemetry-cli.ts';
 import { reportInconclusiveProbe } from './server/provider-telemetry.ts';
 import { runRunsCommand } from './runs/runs-cli.ts';
+import { registerCockpit } from './cockpit-registry.ts';
 import { runMcpCommand } from './agent-gateway/mcp-server.ts';
 import { runAlertsCommand } from './agent-gateway/alerts-cli.ts';
 import { runIntegrationsCommand } from './agent-gateway/integrations.ts';
@@ -431,7 +432,11 @@ async function serveCommand(
     workspaceEvents,
     selfUpdate,
   }, port);
-  httpServer.once('listening', () => manager.lifecycle.start());
+  httpServer.once('listening', () => {
+    manager.lifecycle.start();
+    // Where `cezar mcp` finds this cockpit without CEZ_API_URL; removed on exit, ignored once the pid is dead.
+    if (!bindHost) registerCockpit({ url: `http://127.0.0.1:${port}`, repoRoot });
+  });
   const url = `http://localhost:${port}`;
 
   console.log(`\n  cezar v${version} — ${repoRoot}`);

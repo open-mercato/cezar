@@ -9,7 +9,7 @@ Two directions, both opt-in:
 
 ## Control: `cezar mcp`
 
-Start the cockpit (`cezar`), then register the MCP server in the agent. It finds the cockpit through `--url`, then `CEZ_API_URL`, then `http://127.0.0.1:4321`; `CEZ_PROJECT_ID` picks a default project.
+Start the cockpit (`cezar`), then register the MCP server in the agent. No address is needed: a running cockpit writes `~/.cezar/cockpits/<pid>.json` (removed on exit, ignored once its pid is dead) and `cezar mcp` reads it. Order: `--url`, `CEZ_API_URL`, a discovered cockpit, `http://127.0.0.1:4321`. With several cockpits running it picks the one serving the current directory, else the most recent, and prints which on stderr. Inside a cezar task (`CEZ_TASK_ID`) nothing is discovered or guessed: set `CEZ_API_URL` or `--url`. `CEZ_PROJECT_ID` picks a default project. Task ids: pass the full id (one request) or at least 6 characters of it; an ambiguous prefix lists the matches.
 
 | Tool | What it does |
 | --- | --- |
@@ -23,7 +23,7 @@ Start the cockpit (`cezar`), then register the MCP server in the agent. It finds
 | `cezar_accept_review` | Accept the changes without a PR (review → done). Asynchronous: poll `cezar_get_task`. |
 | `cezar_open_pr` | Push the branch and open a (draft) PR through `gh`. Poll `cezar_get_task` for the url. |
 
-Tasks still end at cezar's review gate; nothing is merged. The cockpit has no auth of its own and binds to loopback, so the MCP server must run on the same machine as the cockpit. For an agent on another machine, run it over SSH instead of exposing the cockpit: `command: ssh`, `args: [<host>, cezar, mcp]`.
+Tasks still end at cezar's review gate; nothing is merged. The cockpit has no auth of its own and binds to loopback, so the MCP server must run on the same machine as the cockpit. For an agent on another machine, run it over SSH instead of exposing the cockpit: `command: ssh`, `args: [<host>, cezar, mcp]` (discovery then runs on that host).
 
 ### Hermes Agent
 
@@ -60,8 +60,10 @@ Set the variables on the **cockpit process** (see `.env.example`; a repository `
 | `CEZ_OPENCLAW_URL`, `CEZ_OPENCLAW_HOOK_TOKEN` | OpenClaw Gateway (default port 18789) and its `hooks.token`. |
 | `CEZ_OPENCLAW_AGENT_ID` | Optional target agent. |
 | `CEZ_OPENCLAW_CHANNEL` + `CEZ_OPENCLAW_TO` | Both or neither. Set: `/hooks/agent` runs an agent turn that messages you on that channel and can reply through the MCP tools. Unset: `/hooks/wake` system event. |
+| `CEZ_OPENCLAW_SESSION_KEY_PREFIX` | With channel+to: `/hooks/agent` gets `sessionKey: <prefix>cezar:<project>:<task>` and `sessionMode: "persistent"`, so every alert and your replies about one task share one OpenClaw session that can call the cezar tools. Requires `hooks.allowRequestSessionKey: true` and `hooks.allowedSessionKeyPrefixes: ["<prefix>"]` in OpenClaw. |
 | `CEZ_HERMES_WEBHOOK_URL`, `CEZ_HERMES_WEBHOOK_SECRET` | Full Hermes route URL (port 8644) and the route's `secret`. |
 | `CEZ_DRY_RUN=1` | Log the request instead of sending. |
+| `CEZ_ALERTS_LIVE_IN_DRY_RUN=1` | Test only: deliver anyway under `CEZ_DRY_RUN=1` (mock agents, real gateway). |
 
 An alert fires on a status **transition** (not on every update, and not for statuses already on record when cezar starts). `waiting` is "needs input"; a session that ended on an unanswered question counts as needs-input too.
 
@@ -103,7 +105,7 @@ Only when a target is configured: task title (≤200 chars), status, project id,
 
 ## Limits
 
-- Delivery is best effort: 5 s timeout, one retry on a network error / 5xx / 429, then a one-line log. Nothing is queued across restarts.
+- Delivery: 5 s timeout, one retry on a network error / 5xx / 429. If it still fails, the alert (title, status, project, … — no token, no signature) is parked in `.ai/cezar/alerts-outbox.ndjson`, retried at boot and every 5 minutes with the same idempotency id (`X-Request-ID` / `idempotencyKey`) and a fresh signature, dropped after 24 h, at most 200 kept. A gateway that did receive the first try drops the duplicate.
 - Alerts carry no cockpit authentication; use HTTPS and a dedicated token/secret when the gateway is not on loopback.
 - The alert link is only as good as the address the cockpit knows about; behind a proxy set `CEZ_ALERT_COCKPIT_URL`.
 - No HTTP MCP transport; use ssh-stdio for remote agents.

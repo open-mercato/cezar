@@ -1639,12 +1639,13 @@ export function createApp(deps: ServerDeps) {
     return new RunAlerts(config, undefined, deps.cockpitUrl);
   })();
   if (runAlerts.enabled) {
-    runAlerts.watch(bootContext.store, bootContext.id);
+    runAlerts.watch(bootContext.store, bootContext.id, { dataDir: bootContext.dataDir });
+    deps.onDispose?.(() => runAlerts.dispose());
     for (const id of contexts.ids()) {
       const ctx = contexts.peek(id);
-      if (ctx) runAlerts.watch(ctx.store, ctx.id);
+      if (ctx) runAlerts.watch(ctx.store, ctx.id, { dataDir: ctx.dataDir });
     }
-    contexts.onContextBuilt((ctx) => runAlerts.watch(ctx.store, ctx.id));
+    contexts.onContextBuilt((ctx) => runAlerts.watch(ctx.store, ctx.id, { dataDir: ctx.dataDir }));
   }
 
   const app = new Hono();

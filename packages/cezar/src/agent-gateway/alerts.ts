@@ -11,6 +11,7 @@
  */
 import { createHmac } from 'node:crypto';
 import type { RunRecord } from '../runs/store.ts';
+import { AlertOutbox, entryKey, OUTBOX_RETRY_MS, type OutboxEntry } from './alerts-outbox.ts';
 
 export const ALERT_EVENTS = ['needs-input', 'review', 'done', 'failed', 'cancelled'] as const;
 export type AlertEvent = (typeof ALERT_EVENTS)[number];
@@ -26,6 +27,8 @@ export interface OpenClawTarget {
   url: string;
   token: string;
   agentId?: string;
+  /** `CEZ_OPENCLAW_SESSION_KEY_PREFIX`: one persistent OpenClaw session per task (needs `delivery`). */
+  sessionKeyPrefix?: string;
   /** Both or neither: a concrete channel (telegram, slack, …) and its recipient. */
   delivery?: { channel: string; to: string };
 }
@@ -96,9 +99,14 @@ export function alertConfigFromEnv(env: NodeJS.ProcessEnv = process.env): AlertC
       if (Boolean(channel) !== Boolean(to)) {
         warnings.push('CEZ_OPENCLAW_CHANNEL and CEZ_OPENCLAW_TO must be set together — alerts go to /hooks/wake instead');
       }
+      const sessionKeyPrefix = clean(env.CEZ_OPENCLAW_SESSION_KEY_PREFIX);
+      if (sessionKeyPrefix && !(channel && to)) {
+        warnings.push('CEZ_OPENCLAW_SESSION_KEY_PREFIX needs CEZ_OPENCLAW_CHANNEL + CEZ_OPENCLAW_TO (it applies to /hooks/agent) — ignored');
+      }
       config.openclaw = {
         url: base,
         token,
+        ...(sessionKeyPrefix && channel && to ? { sessionKeyPrefix } : {}),
         ...(clean(env.CEZ_OPENCLAW_AGENT_ID) ? { agentId: clean(env.CEZ_OPENCLAW_AGENT_ID) } : {}),
         ...(channel && to ? { delivery: { channel, to } } : {}),
       };
@@ -237,6 +245,7 @@ export function alertId(alert: Alert): string {
 }
 
 export function openclawRequest(target: OpenClawTarget, alert: Alert): AlertRequest {
+  // idempotencyKey / Idempotency-Key come from the alert alone, so an outbox retry repeats them.
   const headers = { 'content-type': 'application/json', authorization: `Bearer ${target.token}` };
   const text = alertText(alert);
   if (target.delivery) {
@@ -256,6 +265,11 @@ export function openclawRequest(target: OpenClawTarget, alert: Alert): AlertRequ
         deliver: true,
         channel: target.delivery.channel,
         to: target.delivery.to,
+        // Follow-ups about one task land in one session that can call the cezar MCP tools. OpenClaw
+        // requires hooks.allowRequestSessionKey + a hooks.allowedSessionKeyPrefixes entry for this.
+        ...(target.sessionKeyPrefix
+          ? { sessionKey: `${target.sessionKeyPrefix}cezar:${alert.task.project}:${alert.task.id}`, sessionMode: 'persistent' }
+          : {}),
         idempotencyKey: alertId(alert),
       }),
     };
@@ -268,11 +282,12 @@ export function openclawRequest(target: OpenClawTarget, alert: Alert): AlertRequ
   };
 }
 
-export function hermesRequest(target: HermesTarget, alert: Alert): AlertRequest {
+/** `nowMs` stamps the signature (Hermes accepts ±5 min); the request id still comes from the alert, so a late retry is a duplicate, not a new event. */
+export function hermesRequest(target: HermesTarget, alert: Alert, nowMs: number = alert.at): AlertRequest {
   // `message` is what a `deliver_only` route templates as `{message}`; `event_type` is what Hermes
   // reads as the event name (its `events:` filter), `task` is for routes that run an agent.
   const body = JSON.stringify({ event_type: `cezar.task.${alert.event}`, message: alertText(alert), task: alert.task });
-  const timestamp = String(Math.floor(alert.at / 1000));
+  const timestamp = String(Math.floor(nowMs / 1000));
   return {
     target: 'hermes',
     url: target.url,
@@ -286,10 +301,13 @@ export function hermesRequest(target: HermesTarget, alert: Alert): AlertRequest 
   };
 }
 
-export function alertRequests(config: AlertConfig, alert: Alert): AlertRequest[] {
+export type AlertTargetName = AlertRequest['target'];
+
+export function alertRequests(config: AlertConfig, alert: Alert, nowMs: number = alert.at, only?: readonly AlertTargetName[]): AlertRequest[] {
+  const wanted = (name: AlertTargetName) => !only || only.includes(name);
   return [
-    ...(config.openclaw ? [openclawRequest(config.openclaw, alert)] : []),
-    ...(config.hermes ? [hermesRequest(config.hermes, alert)] : []),
+    ...(config.openclaw && wanted('openclaw') ? [openclawRequest(config.openclaw, alert)] : []),
+    ...(config.hermes && wanted('hermes') ? [hermesRequest(config.hermes, alert, nowMs)] : []),
   ];
 }
 
@@ -311,7 +329,8 @@ export function defaultAlertDeps(env: NodeJS.ProcessEnv = process.env): AlertDep
     fetch: (input, init) => fetch(input, init),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now: () => Date.now(),
-    dryRun: env.CEZ_DRY_RUN === '1',
+    // Test-only escape hatch: a CEZ_DRY_RUN cockpit (mock agents) that must still deliver real alerts.
+    dryRun: env.CEZ_DRY_RUN === '1' && env.CEZ_ALERTS_LIVE_IN_DRY_RUN !== '1',
     log: (line) => console.warn(line),
   };
 }
@@ -323,14 +342,14 @@ export interface DeliveryResult {
   detail: string;
 }
 
-/** One request, one retry on a network error or 5xx/429. Never throws. */
-export async function deliver(request: AlertRequest, deps: AlertDeps): Promise<DeliveryResult> {
+/** One request, one retry (`attempts` 2) on a network error or 5xx/429. Never throws. */
+export async function deliver(request: AlertRequest, deps: AlertDeps, attempts: number = 2): Promise<DeliveryResult> {
   if (deps.dryRun) {
     deps.log(`[alerts] dry run — ${request.target} ${request.url} not sent: ${request.body}`);
     return { target: request.target, ok: true, detail: 'dry-run' };
   }
   let detail = '';
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (attempt > 0) await deps.sleep(RETRY_DELAY_MS);
     try {
       const response = await deps.fetch(request.url, {
@@ -351,10 +370,16 @@ export async function deliver(request: AlertRequest, deps: AlertDeps): Promise<D
   return { target: request.target, ok: false, detail };
 }
 
-export async function sendAlert(config: AlertConfig, alert: Alert, deps: AlertDeps): Promise<DeliveryResult[]> {
-  const results = await Promise.all(alertRequests(config, alert).map((request) => deliver(request, deps)));
+export async function sendAlert(
+  config: AlertConfig,
+  alert: Alert,
+  deps: AlertDeps,
+  opts: { only?: readonly AlertTargetName[]; attempts?: number; quiet?: boolean } = {},
+): Promise<DeliveryResult[]> {
+  const requests = alertRequests(config, alert, deps.now(), opts.only);
+  const results = await Promise.all(requests.map((request) => deliver(request, deps, opts.attempts)));
   for (const result of results) {
-    if (!result.ok) deps.log(`[alerts] ${result.target} alert for task ${alert.task.id.slice(0, 8)} not delivered — ${result.detail}`);
+    if (!result.ok && !opts.quiet) deps.log(`[alerts] ${result.target} alert for task ${alert.task.id.slice(0, 8)} not delivered — ${result.detail}`);
   }
   return results;
 }
@@ -376,8 +401,47 @@ export class RunAlerts {
     private readonly defaultCockpitUrl?: string,
   ) {}
 
+  private readonly timers: NodeJS.Timeout[] = [];
+  private flushing = false;
+
   get enabled(): boolean {
     return alertsConfigured(this.config);
+  }
+
+  /** Stop the retry timers (server shutdown / tests). */
+  dispose(): void {
+    for (const timer of this.timers.splice(0)) clearInterval(timer);
+  }
+
+  /**
+   * One pass over the outbox: a single attempt per owed delivery (the next pass is the retry), same
+   * idempotency ids, fresh signature. Delivered targets leave the file; the rest stay until they age out.
+   */
+  async flush(outbox: AlertOutbox): Promise<void> {
+    if (this.flushing) return;
+    this.flushing = true;
+    try {
+      const delivered = new Set<string>();
+      for (const entry of outbox.load()) {
+        const alert: Alert = { event: entry.event, at: entry.at, task: entry.task };
+        const results = await sendAlert(this.config, alert, this.deps, { only: entry.targets, attempts: 1, quiet: true });
+        for (const result of results) if (result.ok) delivered.add(`${entryKey(entry)}:${result.target}`);
+        // A target that is no longer configured will never answer: stop owing it.
+        for (const target of entry.targets) {
+          if ((target === 'openclaw' && !this.config.openclaw) || (target === 'hermes' && !this.config.hermes)) delivered.add(`${entryKey(entry)}:${target}`);
+        }
+      }
+      // Re-read: an alert appended while we were awaiting is not ours to drop.
+      const remaining = outbox.load().flatMap((entry): OutboxEntry[] => {
+        const targets = entry.targets.filter((target) => !delivered.has(`${entryKey(entry)}:${target}`));
+        return targets.length > 0 ? [{ ...entry, targets: targets as OutboxEntry['targets'] }] : [];
+      });
+      outbox.replace(remaining);
+    } catch {
+      // never into the run engine
+    } finally {
+      this.flushing = false;
+    }
   }
 
   /**
@@ -385,8 +449,16 @@ export class RunAlerts {
    * lazy project load never replays old transitions. The store drops its listeners when the
    * project context is torn down, so there is nothing to dispose here.
    */
-  watch(store: AlertSource, project: string): void {
+  watch(store: AlertSource, project: string, opts: { dataDir?: string } = {}): void {
     if (!this.enabled) return;
+    const outbox = opts.dataDir ? new AlertOutbox(opts.dataDir, this.deps.now) : undefined;
+    if (outbox) {
+      // Boot catches up on what the last process could not deliver; then every 5 minutes. unref: never keeps cezar alive.
+      void this.flush(outbox);
+      const timer = setInterval(() => void this.flush(outbox), OUTBOX_RETRY_MS);
+      timer.unref?.();
+      this.timers.push(timer);
+    }
     const last = new Map<string, string>(store.listRuns().map((run) => [run.id, run.status]));
     const questions = new Map<string, string>();
     const lastMessages = new Map<string, string>();
@@ -413,7 +485,12 @@ export class RunAlerts {
       if (!event || !this.config.events.has(event)) return;
       const alert: Alert = { event, at: this.deps.now(), task: taskFromRun(run, project, this.config.cockpitUrl ?? this.defaultCockpitUrl, question, lastMessages.get(run.id)) };
       // Detached on purpose: the run engine must never wait on, or hear about, a gateway.
-      void sendAlert(this.config, alert, this.deps).catch(() => undefined);
+      void sendAlert(this.config, alert, this.deps)
+        .then((results) => {
+          const failed = results.filter((result) => !result.ok).map((result) => result.target);
+          if (failed.length > 0) outbox?.append({ event: alert.event, at: alert.at, targets: failed, task: alert.task });
+        })
+        .catch(() => undefined);
     });
   }
 }
