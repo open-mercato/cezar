@@ -30,6 +30,8 @@ A child task or workflow step that runs on a different runner than the one its m
 
 ## Progress
 
+PR: #1592
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Fix inheritance
