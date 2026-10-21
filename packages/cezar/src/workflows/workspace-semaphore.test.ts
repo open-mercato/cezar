@@ -563,6 +563,7 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
       'the held run to start once the pressure cleared',
     );
     expect(a.store.getRun(second.id)?.status).toBe('done');
+    semaphore.dispose();
   }, 45_000);
 
   // Spec 2026-10-21-work-limits: a dispatched review draws on its own pool.

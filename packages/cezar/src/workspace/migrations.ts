@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { workspaceUiStateSchema } from '@open-mercato/cezar-contract';
+import { MAX_CONCURRENCY, workspaceUiStateSchema } from '@open-mercato/cezar-contract';
 import { cezarHomeDir, workspaceConfigPath } from '../paths.ts';
 import { readUiState } from '../ui-state.ts';
 import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from './config.ts';
@@ -63,7 +63,7 @@ async function readRepoResourceKeys(
   const raw = await readRawObject(join(repoRoot, '.ai/cezar', 'config.json'));
   const out: { maxParallel?: number; memoryLimitMb?: number } = {};
   const maxParallel = raw?.maxParallel;
-  if (typeof maxParallel === 'number' && Number.isInteger(maxParallel) && maxParallel >= 1 && maxParallel <= 16) {
+  if (typeof maxParallel === 'number' && Number.isInteger(maxParallel) && maxParallel >= 1 && maxParallel <= MAX_CONCURRENCY) {
     out.maxParallel = maxParallel;
   }
   const memoryLimitMb = raw?.memoryLimitMb;

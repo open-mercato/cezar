@@ -110,16 +110,18 @@ describe('stepScale hysteresis', () => {
 describe('WorkspaceSemaphore pools and autoScale', () => {
   function rig(initial: NonNullable<WorkspaceSemaphoreOptions['initial']>) {
     let sample: HostUsage | undefined;
+    let nowMs = 0;
+    let stale = false;
     let agents: Record<string, { rssBytes: number; cpuPct?: number }> = {};
     const listeners = new Set<() => void>();
     const sem = new WorkspaceSemaphore({
       initial,
       host: {
-        current: () => sample,
+        current: () => sample && { ...sample, sampledAt: new Date(stale ? 0 : nowMs).toISOString() },
         subscribe: (l) => (listeners.add(l), () => listeners.delete(l)),
         agentUsage: () => agents,
         subscribeAgents: () => () => undefined,
-        now: () => 0,
+        now: () => nowMs,
       },
     });
     let busy = { main: 0, subagent: 0, review: 0 };
@@ -135,7 +137,12 @@ describe('WorkspaceSemaphore pools and autoScale', () => {
     sem.register(p);
     return {
       sem,
-      tick: () => [...listeners].forEach((l) => l()),
+      tick: () => {
+        nowMs += 2_000;
+        [...listeners].forEach((l) => l());
+      },
+      setNow: (n: number) => (nowMs = n),
+      setStale: (v: boolean) => (stale = v),
       setSample: (u: HostUsage | undefined) => (sample = u),
       setAgents: (a: typeof agents) => (agents = a),
       setBusy: (b: Partial<typeof busy>) => (busy = { main: 0, subagent: 0, review: 0, ...b }),
@@ -207,6 +214,58 @@ describe('WorkspaceSemaphore pools and autoScale', () => {
     r.setBusy({});
     r.tick();
     expect(r.sem.effectiveLimits().main).toBe(1);
+  });
+
+  it('autoScale alone brakes starts only when the computed room is nearly gone', () => {
+    const roomy = rig({ maxParallel: 100, autoScale: true });
+    roomy.setBusy({ main: 1 });
+    roomy.setSample(host({ memAvailableBytes: 40 * GiB }));
+    roomy.tick();
+    for (let i = 0; i < 5; i++) {
+      expect(roomy.sem.hostAdmits()).toBe(true);
+      roomy.sem.noteGatedStart();
+    }
+    const tight = rig({ maxParallel: 100, autoScale: true });
+    tight.setBusy({ main: 1 });
+    tight.setSample(host({ memAvailableBytes: 1 * GiB })); // room 1
+    tight.tick();
+    expect(tight.sem.hostAdmits()).toBe(true);
+    tight.sem.noteGatedStart();
+    expect(tight.sem.hostAdmits()).toBe(false);
+    tight.tick();
+    expect(tight.sem.hostAdmits()).toBe(true);
+  });
+
+  it('a lowered limit does not stick when the sampler goes quiet', () => {
+    const r = rig({ maxParallel: 20, autoScale: true });
+    r.setSample(host({ memAvailableBytes: 0 }));
+    r.tick();
+    expect(r.sem.effectiveLimits().main).toBe(1);
+    r.setNow(60_000); // no further ticks
+    expect(r.sem.effectiveLimits().main).toBe(20);
+  });
+
+  it('a config change re-bases the limit on the current headroom instead of waiting for calm samples', async () => {
+    let configured = 4;
+    const r = rig({ maxParallel: 4, autoScale: true });
+    r.setSample(host({ memAvailableBytes: 30 * GiB }));
+    r.tick();
+    expect(r.sem.effectiveLimits().main).toBe(4);
+    const sem = new WorkspaceSemaphore({
+      load: async () => ({ maxParallel: configured, memoryLimitMb: null, autoScale: true }),
+      initial: { maxParallel: 4, autoScale: true },
+      host: {
+        current: () => host({ memAvailableBytes: 30 * GiB, sampledAt: new Date(0).toISOString() }),
+        subscribe: () => () => undefined,
+        agentUsage: () => ({}),
+        subscribeAgents: () => () => undefined,
+        now: () => 0,
+      },
+    });
+    configured = 20;
+    await sem.refresh();
+    expect(sem.effectiveLimits().main).toBe(12); // headroom (6 free cores / 0.5), not 4 for three more samples
+    sem.dispose();
   });
 
   it('autoScale fails open to the configured limits when telemetry is missing', () => {

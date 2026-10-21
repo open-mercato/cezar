@@ -1,5 +1,5 @@
 import type { UseMutationResult } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import type { SetWorkspaceConfigInput, WorkspaceConfigResponse } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
@@ -53,14 +53,25 @@ export function HostLimitsFields({ config, save }: { config: WorkspaceConfigResp
     total === (r.totalAgentMemoryMb || null)
   const responsive = priority !== 'normal' && (reserve.memoryMb ?? 0) > 0 && (reserve.cpuPct ?? 0) > 0
 
+  // An edit made elsewhere (another tab, a PUT) replaces the local drafts.
+  useEffect(() => setReserveMem(text(reserve.memoryMb)), [reserve.memoryMb])
+  useEffect(() => setReserveCpu(text(reserve.cpuPct)), [reserve.cpuPct])
+  useEffect(() => setTotalMem(text(r.totalAgentMemoryMb)), [r.totalAgentMemoryMb])
+
   const applyPreset = (on: boolean) => {
+    // On only fills what is empty: a custom reserve or priority the user already chose stays.
+    const memoryMb = reserve.memoryMb || RESPONSIVE_PRESET.hostReserve.memoryMb
+    const cpuPct = reserve.cpuPct || RESPONSIVE_PRESET.hostReserve.cpuPct
     const patch: SetWorkspaceConfigInput = on
-      ? { resources: RESPONSIVE_PRESET }
+      ? {
+          resources: {
+            agentCpuPriority: priority === 'normal' ? RESPONSIVE_PRESET.agentCpuPriority : priority,
+            hostReserve: { memoryMb, cpuPct },
+          },
+        }
       : { resources: { agentCpuPriority: 'normal', hostReserve: { memoryMb: null, cpuPct: null } } }
     save.mutate(patch, {
       onSuccess: () => {
-        setReserveMem(on ? String(RESPONSIVE_PRESET.hostReserve.memoryMb) : '')
-        setReserveCpu(on ? String(RESPONSIVE_PRESET.hostReserve.cpuPct) : '')
         toast(on ? 'Agents now run at low priority and leave headroom' : 'Agents run at normal priority')
       },
     })
@@ -105,7 +116,9 @@ export function HostLimitsFields({ config, save }: { config: WorkspaceConfigResp
           <option value="low">Low (below normal)</option>
           <option value="idle">Idle (only spare CPU)</option>
         </select>
-        <p className="text-[11px] text-soft-foreground">Applies to newly started agent steps.</p>
+        <p className="text-[11px] text-soft-foreground">
+          Best effort, for newly started agent steps: a process the OS refuses to renice keeps normal priority.
+        </p>
       </SettingsField>
 
       <SettingsField

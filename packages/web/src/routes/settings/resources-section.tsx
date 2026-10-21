@@ -198,7 +198,7 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           onCommit={(sessions) => save.mutateAsync({ resources: { maxMonitoringSessions: sessions ?? 0 } })}
         />
         <p className="text-[11px] text-soft-foreground">
-          Capacity: {config.resources.maxParallel} active + {config.resources.maxMonitoringSessions ?? 2} monitoring. Set 0 to make monitoring share active slots.
+          Capacity: {config.resources.maxParallel} active + {config.resources.maxMonitoringSessions ?? 2} monitoring{config.resources.maxSubagents ? ` + ${config.resources.maxSubagents} sub-agents` : ''}{config.resources.maxReviewers ? ` + ${config.resources.maxReviewers} reviewers` : ''}. Set 0 to make monitoring share active slots.
         </p>
       </SettingsField>
 

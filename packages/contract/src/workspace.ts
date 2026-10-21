@@ -70,7 +70,8 @@ export const workspaceConfigResponseSchema = z.object({
     }),
     /** OS priority of agent process trees (spec 2026-10-21-host-resource-limits). */
     agentCpuPriority: z.enum(['normal', 'low', 'idle']),
-    /** No new run starts while the host has less than `memoryMb` free or more than `cpuPct` busy. */
+    /** No new run starts while the host has less than `memoryMb` free or more than `cpuPct` busy.
+     *  The server accepts `memoryMb` 0 as off; the cockpit's floor is 256 MiB. */
     hostReserve: z.object({ memoryMb: z.number().nullable(), cpuPct: z.number().nullable() }),
     /** No new run starts while all agent trees together hold this much RAM. */
     totalAgentMemoryMb: z.number().nullable(),
@@ -508,7 +509,7 @@ export const setConfigInputSchema = z.object({
       pi: z.boolean().nullable().optional(),
     })
     .optional(),
-  maxParallel: z.number().int().min(1).max(16).optional(),
+  maxParallel: z.number().int().min(1).max(MAX_CONCURRENCY).optional(),
   /** null or 0 clears the ceiling back to "no limit". */
   memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
   /** Keep last N finished worktrees (#483); 0 = unlimited, null clears back to the default (10). */

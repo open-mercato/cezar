@@ -100,8 +100,8 @@ export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<C
             title="Max parallel tasks"
             hint={
               config.data
-                ? `How many of this project's tasks may run at once — leave it empty to inherit the workspace limit. The workspace limit (${config.data.resources.maxParallel}) still applies as an overall ceiling, so a higher value here has no extra effect until that one is raised.`
-                : "How many of this project's tasks may run at once — leave it empty to inherit the workspace limit. The workspace limit still applies as an overall ceiling."
+                ? `How many of this project's tasks may run at once — leave it empty to inherit the workspace limit. The workspace limit (${config.data.resources.maxParallel}) still applies as an overall ceiling for top-level tasks (dispatched sub-agents and reviews with their own pool are not counted against it), so a higher value here has no extra effect until that one is raised.`
+                : "How many of this project's tasks may run at once — leave it empty to inherit the workspace limit. The workspace limit still applies as an overall ceiling for top-level tasks."
             }
           >
             {config.data ? (

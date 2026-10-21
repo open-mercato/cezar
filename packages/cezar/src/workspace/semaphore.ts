@@ -1,7 +1,7 @@
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { HostUsage } from '@open-mercato/cezar-contract';
-import { currentHostUsage, HOST_SAMPLE_STALE_MS, onHostUsage } from '../core/host-usage.ts';
+import { currentHostUsage, HOST_SAMPLE_INTERVAL_MS, HOST_SAMPLE_STALE_MS, onHostUsage } from '../core/host-usage.ts';
 import { allUsage, onUsage, type ProcessUsage } from '../core/process-usage.ts';
 import { agentMemoryBlock, hostReserveBlock, type HostReserve } from './host-headroom.ts';
 import {
@@ -226,11 +226,16 @@ export class WorkspaceSemaphore {
    *  burst of queued runs cannot all pass the same stale reading (spec 2026-10-21). */
   private ticks = 0;
   private startTick = -1;
+  private lastTickAt = Number.NEGATIVE_INFINITY;
+  private lastStartAt = Number.NEGATIVE_INFINITY;
   /** The gate turned a start away; the next tick re-pumps. */
   private hostDeferred = false;
   /** autoScale's current effective limits (null = use the configured ones) and the calm-sample
    *  counters that gate a raise. */
   private scaled: PoolLimits | null = null;
+  private scaledAt = 0;
+  /** Headroom (runs) behind `scaled`; undefined when unreadable. */
+  private room: number | undefined;
   private calm = { main: 0, subagent: 0, review: 0 };
 
   constructor(options: WorkspaceSemaphoreOptions = {}) {
@@ -257,8 +262,15 @@ export class WorkspaceSemaphore {
   /** Sample the host only while a guard is configured (zero cost by default). */
   private syncHostGate(): void {
     const onTick = () => {
-      this.ticks += 1;
-      const raised = this.rescale();
+      // Host and agent samplers both fire every ~2 s: count ONE tick (and one autoScale step) per
+      // sample period so the brake and the calm counters do not run at double rate.
+      const at = this.host.now();
+      let raised = false;
+      if (at - this.lastTickAt >= HOST_SAMPLE_INTERVAL_MS / 2) {
+        this.ticks += 1;
+        this.lastTickAt = at;
+        raised = this.rescale();
+      }
       if (!this.hostDeferred && !raised) return;
       this.hostDeferred = false;
       void this.release(); // pressure may have cleared, or a pool grew
@@ -270,7 +282,7 @@ export class WorkspaceSemaphore {
       this.offHost = null;
     }
     if (!this.autoScale()) this.scaled = null;
-    else this.rescale();
+    else this.rescale(true);
     if (this.totalAgentMemoryMb() !== null && !this.offAgents) this.offAgents = this.host.subscribeAgents(onTick);
     else if (this.totalAgentMemoryMb() === null && this.offAgents) {
       this.offAgents();
@@ -280,7 +292,21 @@ export class WorkspaceSemaphore {
       this.hostDeferred = false;
       this.ticks = 0;
       this.startTick = -1;
+      this.lastTickAt = Number.NEGATIVE_INFINITY;
     }
+  }
+
+  /** Stop sampling and forget gate state — teardown and tests. */
+  dispose(): void {
+    this.offHost?.();
+    this.offAgents?.();
+    this.offHost = null;
+    this.offAgents = null;
+    this.hostDeferred = false;
+    this.ticks = 0;
+    this.startTick = -1;
+    this.lastTickAt = Number.NEGATIVE_INFINITY;
+    this.scaled = null;
   }
 
   /** Why a NEW run must wait for the host, or null (spec 2026-10-21-host-resource-limits).
@@ -289,10 +315,14 @@ export class WorkspaceSemaphore {
   hostBlock(): string | null {
     const reserve = this.reserve();
     const totalMb = this.totalAgentMemoryMb();
-    if (!reserve && totalMb === null && !this.autoScale()) return null;
+    const braking = this.brakeApplies();
+    if (!reserve && totalMb === null && !braking) return null;
     if (this.busy() === 0) return null;
-    // Brake only once ticks exist, so a sampler that never reports cannot freeze starts.
-    if (this.ticks > 0 && this.ticks === this.startTick) return 'waiting for a fresh reading after the last start';
+    // One start per sample period — including before the first sample exists, so a startup burst
+    // cannot all pass the fail-open. A sampler silent for a stale window lifts the brake (fail open).
+    if (braking && this.ticks === this.startTick && this.host.now() - this.lastStartAt <= HOST_SAMPLE_STALE_MS) {
+      return 'waiting for a fresh reading after the last start';
+    }
     let usage = this.host.current();
     if (usage && this.host.now() - Date.parse(usage.sampledAt) > HOST_SAMPLE_STALE_MS) usage = undefined;
     return (
@@ -300,16 +330,28 @@ export class WorkspaceSemaphore {
     );
   }
 
-  /** Capacity predicate for `pump()`; remembers a refusal so the next tick re-pumps. */
+  /** Pure capacity predicate for `pump()`. */
   hostAdmits(): boolean {
-    if (this.hostBlock() === null) return true;
-    this.hostDeferred = true;
-    return false;
+    return this.hostBlock() === null;
+  }
+
+  /** `pump()` stopped with runs still queued: if the host is why, the next tick re-pumps. */
+  noteHostDeferral(): void {
+    if (this.hostBlock() !== null) this.hostDeferred = true;
+  }
+
+  /** The one-start-per-tick brake: always with a reserve/total guard; with autoScale alone only
+   *  once the computed room is nearly gone, so a roomy machine still fills its pools at once. */
+  private brakeApplies(): boolean {
+    if (this.reserve() || this.totalAgentMemoryMb() !== null) return true;
+    return this.autoScale() && this.scaled !== null && this.room !== undefined && this.room < 2;
   }
 
   /** `pump()` just dequeued a run through the gate. */
   noteGatedStart(): void {
-    if (this.reserve() || this.totalAgentMemoryMb() !== null || this.autoScale()) this.startTick = this.ticks;
+    if (!this.brakeApplies()) return;
+    this.startTick = this.ticks;
+    this.lastStartAt = this.host.now();
   }
 
   // ---- pools (spec 2026-10-21-work-limits) ----
@@ -351,9 +393,15 @@ export class WorkspaceSemaphore {
     return total;
   }
 
-  /** The limits admission uses now: autoScale's when it has a fresh reading, else configured. */
+  /**
+   * The limits admission uses now, as `{main, subagent, review}` (null = that kind shares main):
+   * autoScale's while its reading is fresh, else the configured ones. Public, with `freeCapacity()`,
+   * for readouts and the fleet hub. A reading older than a stale window is dropped here, so
+   * silent telemetry can never leave a lowered limit stuck.
+   */
   effectiveLimits(): PoolLimits {
-    return this.scaled ?? this.configuredLimits();
+    if (this.scaled && this.host.now() - this.scaledAt <= HOST_SAMPLE_STALE_MS) return this.scaled;
+    return this.configuredLimits();
   }
 
   /** Limit of one pool; a pool without its own limit is the main pool. */
@@ -378,7 +426,7 @@ export class WorkspaceSemaphore {
 
   /** Recompute autoScale from the newest host sample. Returns true when any pool grew.
    *  Fails open: no fresh sample or nothing readable means the configured limits. */
-  private rescale(): boolean {
+  private rescale(reset = false): boolean {
     if (!this.autoScale()) return false;
     let usage = this.host.current();
     if (usage && this.host.now() - Date.parse(usage.sampledAt) > HOST_SAMPLE_STALE_MS) usage = undefined;
@@ -395,10 +443,19 @@ export class WorkspaceSemaphore {
       // Nothing readable: back to the configured limits at once, never a slow ramp.
       const wasLower = this.scaled !== null;
       this.scaled = null;
+      this.room = undefined;
       this.calm = { main: 0, subagent: 0, review: 0 };
       return wasLower;
     }
     const next = effectiveCapacity(input);
+    this.room = headroomRuns(input);
+    this.scaledAt = this.host.now();
+    if (reset) {
+      // A config change starts from the current headroom, not from the old scaled baseline.
+      this.scaled = next;
+      this.calm = { main: 0, subagent: 0, review: 0 };
+      return false;
+    }
     const prev = this.scaled ?? configured;
     let grew = false;
     const step = (pool: PoolClass): number | null => {

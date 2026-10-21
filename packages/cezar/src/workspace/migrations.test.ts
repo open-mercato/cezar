@@ -132,7 +132,7 @@ describe('workspace migrations', () => {
   });
 
   it('out-of-range repo values are not imported (defaults kept)', async () => {
-    writeRepoFile('config.json', { maxParallel: 99, memoryLimitMb: 12.5 });
+    writeRepoFile('config.json', { maxParallel: 129, memoryLimitMb: 12.5 });
     await runMigrations({ bootRepoRoot: repoRoot });
     const config = await loadWorkspaceConfig();
     expect(config.resources.maxParallel).toBe(2);

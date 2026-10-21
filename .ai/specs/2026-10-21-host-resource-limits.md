@@ -42,6 +42,15 @@ Defaults change nothing.
 - **Containers.** Memory headroom is `min(host available, memLimit - memUsed)` when a cgroup
   memory limit exists; CPU uses the cgroup's own `cpuPct` when present.
 
+- **Bounds.** The server accepts `memoryMb` / `totalAgentMemoryMb` 0 as "off" (and `memoryMb`
+  up to 1 TiB); the cockpit refuses values under 256 MiB because a smaller guard would never
+  admit real work. API callers may still send 0.
+- **Linux threads.** `setpriority(PRIO_PROCESS, pid)` renices only the main thread, so every
+  existing tid under `/proc/<pid>/task` is reniced too (best effort). A thread created later by
+  an already-forked child can still start at normal priority; the UI says "best effort".
+- **Startup.** With a reserve set but no sample yet, one start per pump period is admitted (same
+  brake), not an unlimited fail-open; a sampler silent for a stale window lifts the brake.
+
 ## Why `totalAgentMemoryMb` exists next to `hostReserve`
 
 `hostReserve` reacts to what the whole machine is doing (a browser can eat the headroom).

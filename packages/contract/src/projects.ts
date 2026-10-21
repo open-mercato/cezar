@@ -135,7 +135,7 @@ export const MAX_CONCURRENCY = 128;
  * happened (and cost a full config rewrite to do nothing).
  *
  * - `maxParallel` (spec 2026-07-22-per-project-concurrency): `null` clears the override back to
- *   "inherit the workspace cap"; an integer `1..16` pins it. The bounds mirror
+ *   "inherit the workspace cap"; an integer `1..128` pins it. The bounds mirror
  *   `workspaceProjectSchema` exactly, so a value this schema accepts can never be degraded away
  *   by the next load's `.catch`.
  * - `tags`: the whole list, replaced wholesale — there is no add-one/remove-one spelling,
