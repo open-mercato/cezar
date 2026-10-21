@@ -13,7 +13,7 @@ import { parseBuildTools, parseCmdlineTools, parsePlatformLevels, parseSystemIma
 import { withToolLock } from './lock.ts';
 import { TOOLS_PROMPT, toolsReachable } from './prompt.ts';
 import { applyToolsEnv, composeToolsEnv, ensureTools, expandIds, managedToolsEnv, statusAll } from './registry.ts';
-import { type ExecResult, type ToolsContext, downloadFile, extractArchive, findOnPath, isOn, resolveInstallEnabled, setStoredToolsInstall, toolsInstallEnabled } from './runtime.ts';
+import { type ExecResult, type ToolsContext, downloadFile, extractArchive, findOnPath, isOn, quoteForCmd, resolveInstallEnabled, setStoredToolsInstall, toolsInstallEnabled } from './runtime.ts';
 import { formatExports, runToolsCommand } from './tools-cli.ts';
 
 const BYTES = Buffer.from('fake archive bytes');
@@ -170,6 +170,16 @@ describe('pure helpers', () => {
 
   it('expands dependencies first, once', () => {
     expect(expandIds(['android-emulator', 'flutter', 'jdk'])).toEqual(['jdk', 'android-sdk', 'android-emulator', 'flutter']);
+  });
+});
+
+describe('cmd.exe quoting for .bat launchers', () => {
+  it('quotes the batch delimiters that would split a package id', () => {
+    expect(quoteForCmd('platforms;android-36')).toBe('"platforms;android-36"');
+    expect(quoteForCmd('--sdk_root=C:\\Users\\me\\sdk')).toBe('"--sdk_root=C:\\Users\\me\\sdk"');
+    expect(quoteForCmd('--install')).toBe('--install');
+    expect(quoteForCmd('a b')).toBe('"a b"');
+    expect(quoteForCmd('say "hi"')).toBe('"say ""hi"""');
   });
 });
 

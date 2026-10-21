@@ -105,7 +105,7 @@ async function sdkmanager(ctx: ToolsContext, env: NodeJS.ProcessEnv, root: strin
   }
 }
 
-const TRANSIENT_NETWORK = /(UnknownHost|Unknown host|timed? ?out|Connection (reset|refused)|SocketException|SSLHandshake|Premature EOF|Unable to (download|connect)|Could not (resolve|connect))/i;
+const TRANSIENT_NETWORK = /(UnknownHost|Unknown host|timed? ?out|Connection (reset|refused)|SocketException|SSLHandshake|Premature EOF|Unable to (download|connect)|Failed to connect|Could not (resolve|connect))/i;
 
 export const androidSdkRecipe: ToolRecipe = {
   id: 'android-sdk',

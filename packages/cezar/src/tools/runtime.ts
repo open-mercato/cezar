@@ -151,8 +151,9 @@ export function findOnPath(ctx: ToolsContext, name: string): string | undefined 
   return undefined;
 }
 
-function quoteForCmd(arg: string): string {
-  return /[\s"&|<>^%()]/.test(arg) ? `"${arg.replace(/"/g, '""')}"` : arg;
+/** `;` `,` `=` are batch-file argument delimiters: `platforms;android-36` reaches a `.bat` as two words unless quoted. */
+export function quoteForCmd(arg: string): string {
+  return /[\s"&|<>^%();,=]/.test(arg) ? `"${arg.replace(/"/g, '""')}"` : arg;
 }
 
 /** Node (>= 20.12) refuses to spawn `.bat`/`.cmd` directly on Windows, so those go through cmd.exe. */
