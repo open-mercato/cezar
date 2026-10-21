@@ -224,6 +224,7 @@ const GRAPH_TAKEN_CAP = 500;
 /** Tail of an agent node's last turn kept as `{{nodes.<id>.summary}}`. */
 const NODE_SUMMARY_CAP = 4_000;
 import { freshContinuationContext } from './continuation-context.ts';
+import { ALERT_CREDENTIAL_VARS } from '../agent-gateway/alerts.ts';
 
 const CHECK_OUTPUT_CAP = 20_000;
 
@@ -7497,6 +7498,8 @@ export class RunManager {
       if (name === 'CEZ_PROJECT_ID' && !this.projectId) continue;
       delete base[name];
     }
+    // Alert-target credentials are cezar's, not the check's (spec 2026-10-21-agent-gateway-integrations).
+    for (const name of ALERT_CREDENTIAL_VARS) delete base[name];
     return { ...base, ...resolved.values, ...(await this.checkContextEnv(runId, state, step.id)) };
   }
 

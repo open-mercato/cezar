@@ -382,8 +382,9 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
   /** `name` is matched normalized; the caller keeps the original spelling. */
   function allow(name: string): boolean {
     const key = name.toUpperCase();
-    // cezar's own namespace (CEZ_DRY_RUN plumbing, mock hooks, run wiring).
-    if (key.startsWith('CEZ_')) return true;
+    // cezar's own namespace (CEZ_DRY_RUN plumbing, mock hooks, run wiring) — except
+    // credentials cezar itself uses (fleet/alert tokens): an agent must never hold them.
+    if (key.startsWith('CEZ_')) return !/_(TOKEN|SECRET)$/.test(key);
     // Backend auth + gh handoff + the cloud creds an active Bedrock/Vertex
     // toggle needs: forwarded even though they are secrets — the backend cannot
     // authenticate without them. They are still redacted before anything

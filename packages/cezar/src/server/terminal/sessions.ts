@@ -5,6 +5,7 @@ import { foregroundCommand, hasForeground, type ProcessRow } from './foreground.
 import { descendantGroups, readProcessTreeSync, type TreeRow } from './process-tree.ts';
 import { loadPty, type PtyProcess } from './pty-module.ts';
 import { resolveShell } from './shells.ts';
+import { ALERT_CREDENTIAL_VARS } from '../../agent-gateway/alerts.ts';
 
 /**
  * Interactive terminal sessions, one PTY each, scoped to a task worktree (spec
@@ -487,6 +488,7 @@ function commandArgs(shell: string, command: string): string[] {
 function terminalEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value;
+  for (const name of ALERT_CREDENTIAL_VARS) delete env[name];
   env.TERM = 'xterm-256color';
   env.COLORTERM = 'truecolor';
   return env;

@@ -18,6 +18,9 @@ export type AlertEvent = (typeof ALERT_EVENTS)[number];
 /** Quiet by default: `done` follows `review` (the user just acted) and `cancelled` is the user's own act. */
 export const DEFAULT_ALERT_EVENTS: readonly AlertEvent[] = ['needs-input', 'review', 'failed'];
 
+/** Credentials of the alert targets: cezar's own, so no spawned process (agent, check, shell) gets them. */
+export const ALERT_CREDENTIAL_VARS = ['CEZ_OPENCLAW_HOOK_TOKEN', 'CEZ_HERMES_WEBHOOK_SECRET'] as const;
+
 export interface OpenClawTarget {
   /** Hooks base, e.g. `http://127.0.0.1:18789/hooks`. */
   url: string;
