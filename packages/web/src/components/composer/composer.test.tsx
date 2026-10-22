@@ -120,6 +120,24 @@ describe('submit shortcuts', () => {
     expect(classes).toContain('md:text-sm')
   })
 
+  it('autosizing while typing keeps the surrounding scroller where it was', () => {
+    const { textarea } = renderComposer()
+    const scroller = textarea.parentElement!
+    let top = 500
+    Object.defineProperty(scroller, 'scrollTop', { configurable: true, get: () => top, set: (v: number) => { top = v } })
+    // The browser's clamp: measuring the collapsed `auto` box shrinks the scroller's content.
+    Object.defineProperty(textarea, 'scrollHeight', {
+      configurable: true,
+      get: () => {
+        if (textarea.style.height === 'auto') top = 0
+        return 120
+      },
+    })
+    type(textarea, 'line one\nline two')
+    expect(textarea.style.height).toBe('120px')
+    expect(top).toBe(500)
+  })
+
   it('Enter sends the trimmed text and clears optimistically', async () => {
     const { onSubmit, textarea } = renderComposer()
     type(textarea, '  hello agent  ')
